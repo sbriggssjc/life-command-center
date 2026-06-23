@@ -683,6 +683,36 @@ WHERE jobname LIKE 'lcc-%-sync%'
 ORDER BY start_time DESC LIMIT 10;
 ```
 
+## Producer/Consumer (Consumption Layer) doctrine
+
+LCC produces work (research tasks, cadences, decisions, queue rows, inbox items) at ingestion
+scale and historically under-consumed it, so operator surfaces filled with un-worked noise
+that buried the actionable few (the worst failure mode: a 5,447 / 999+ badge that is mostly
+noise trains the operator to ignore the surface). Every code path that emits operator-facing
+work MUST satisfy all five invariants:
+
+1. **Value-gate the producer.** Emit a work item only above an actionability/value floor —
+   never one item per captured row. The floor is a single tunable knob (e.g. R60
+   `$500k` chain-task floor; R63 `CADENCE_SIGNAL_MIN_VALUE`).
+2. **Auto-retire + auto-resolve.** A scheduled sweep closes items whose premise has cleared
+   (data self-resolved) and auto-resolves the high-confidence subset, leaving only genuine
+   judgment calls for a human. Model: `lcc_refresh_decisions` auto-supersede. Reversible —
+   pause/skip with a reason, never hard-delete.
+3. **Surface actionable-only, value-ranked, capped.** The operator surface defaults to the
+   workable set (signal-bearing, value-ranked, top-N) with a "show all" toggle. A surfaced
+   count must reflect ACTIONABLE work, not raw producer output.
+4. **Close the loop from real activity.** Where an operator activity stream exists (Salesforce
+   / Outlook), drive the consumer from it (e.g. OUTREACH#1 SF-activity → cadence advance)
+   rather than a separate manual queue.
+5. **Honest counts.** Every badge/number is actionable work, not raw output.
+
+**No new producer ships without:** (a) a named consumer (human verdict, worker, or auto-sweep
+— if none, don't build the producer); (b) a value-gate; (c) an auto-retire predicate (+ which
+subset auto-resolves); (d) a ranked, capped surface whose count is actionable-only; (e) where
+possible, reality-driven advance. Instances: R60 (research), R62 (queue cadence), R63
+(cadence), R64 (Decision Center verdict lanes). A healthy worklist (inbox triage,
+match_disambiguation) is one whose consumer keeps pace; a graveyard is one without.
+
 ## sf_sync_log retention + disk-pressure alert (2026-05-29 outage fix)
 
 Sign-in to LCC broke with HTTP 500 "Database error granting user". Root
@@ -4806,3 +4836,79 @@ skipped**. DB applied live + committed; JS ships on the Railway redeploy.
 All closes are status-only (`skipped`, reason in `outcome`) — lower the floor and
 the producer re-seeds the still-incomplete above-floor chains. LCC-Opps only; no
 domain writes; no auth-schema touch.
+
+## R63 — make cadence track REAL relationships, not captured noise (2026-06-23)
+
+The cadence machinery (engine, draft, advance, reachability R10/R20,
+contact-acquisition R16, value-rank R34, the OUTREACH#1 SF-activity→advance
+bridge) is correct and complete — it was pointed at the wrong population.
+Grounded live on LCC Opps: **318 active cadences** (304 prospecting) + 519
+already paused; all 304 prospecting overdue, only 3 ever touched. Of the 318,
+only **133 carry any real BD signal** (126 SF-linked, 6 open opp, 4
+connected-value, 2 SF activity); ~185 were pure CoStar-capture noise (no SF
+link, no value, no opp, never contacted). Scott's real outreach reaches ~16
+distinct entities/60d — and those 3 were exactly the 3 ever touched. Same
+producer-gate + auto-retire doctrine as R60 (research) / R62 (queue). Companion
+to R62 (which moved cadence-touch bands OUT of the priority queue, making the
+Cadence Dashboard the sole home for cadence work).
+
+### The one signal predicate (single source of truth)
+`api/_shared/cadence-engine.js` `bdSignalFromFacts()` (pure) + `entityHasBdSignal()`
+(deps-injected gatherer, **fails CLOSED** on a gather error). REAL = any of: a
+Salesforce identity, connected/portfolio value ≥ floor (`CADENCE_SIGNAL_MIN_VALUE`,
+default $500k — the R60 knob shape), an open `bd_opportunity`, real SF activity,
+or a `buy_side` cadence (a P-BUYER relationship, real by construction). The
+producer gate, the grow path, and the SQL pause sweep all key on this predicate.
+
+### Unit 1 — gate the producer (stop seeding noise)
+The bulk producer of prospecting noise is `sidebar-pipeline.js`'s
+contact-cadence-seed (every new CoStar-captured **person** got a prospecting
+cadence via `getCadenceState`). Now it seeds a cadence ONLY when
+`entityHasBdSignal(entityId)` is true; a bare captured contact still lands in the
+**inbox triage** (so Scott can promote it) but gets NO auto-cadence — it earns
+one when promoted (open opp / SF-link / value) or from real outreach (Unit 3).
+The intentional producers are untouched: `bridgeInitiateCadence` (explicit
+operator BD action), `lcc_seed_onboarding_cadence` (fires on a prospect opp =
+signal), `lcc_seed_buyer_cadence` (buy_side = signal). The R5 buyer-SPE gate
+stays.
+
+### Unit 2 — pause the pure-capture noise (reversible sweep, applied live)
+Migration `20260623130000_lcc_r63_pause_no_signal_cadences.sql` —
+`lcc_r63_pause_no_signal_cadences(p_dry_run default true, p_floor default 500000)`
+pauses the no-signal, **never-touched**, active, non-buy_side set →
+`phase='paused'`, `metadata.pause_reason='no_bd_signal'`, prior phase stashed.
+Reversible (never a delete; reverse via the `pause_reason` tag), idempotent (the
+active-phase predicate excludes already-paused). SQL predicate mirrors Unit 1.
+**Applied live 2026-06-23:** dry-run 184 → real **184 paused**; active **318 →
+135** (the 133 signal-bearing + 1 buy_side + 1 touched); re-run dry-run = **0**
+(idempotent). After this the dashboard's "overdue" is a real signal, not
+99%-of-everything.
+
+### Unit 3 — grow the cadence from real outreach (the inversion)
+`sf-activity-ingest.js` `processSfActivityBatch`: on a freshly-inserted,
+non-reply outreach event (email/call/meeting) where **no cadence resolves** AND
+`entityHasBdSignal(entity)` is true, it SEEDS a cadence (`getCadenceState`) and
+ADVANCES it once (the R10 single advance owner; `call→phone` map). No
+double-advance — the SQL trigger already no-op'd on the insert (no cadence
+existed); an entity that ALREADY has a cadence is advanced by the trigger and JS
+skips. Best-effort, deps-injectable. So the cadence table GROWS from the people
+Scott actually contacts (small today ~16, but the correct forward mechanism).
+Summary gains `cadences_grown`.
+
+### Unit 4 — honest dashboard
+`getCadenceDashboard` default is now the **actionable** set (non-paused AND
+`contact_id IS NOT NULL` — outreach-ready; a contactless cadence is P-CONTACT
+acquisition work, not a draftable touch), value-ranked by `rank_value` (R34).
+`?include_all=1` (ops.js "Show all cadences" toggle) reveals everything (paused /
+no-signal / contactless). Response carries `mode`. Live actionable default =
+**119** (was ~318 noise).
+
+### Verified
+`test/cadence-signal-gate.test.mjs` (15 — pure classifier across every signal
+class + floor boundary; deps-injected gatherer signal/no-signal/fail-closed; env
+floor knob) + `test/sf-activity-ingest.test.mjs` +3 (Unit 3 grows for a real
+target / no-grow for a bare contact / no-grow when a cadence exists). `node
+--check` clean; `ls api/*.js | wc -l`=12; full suite **1349 pass / 0 fail / 6
+skipped**. DB sweep applied live (after dry-run) + committed; JS ships on the
+Railway redeploy. LCC-Opps only; no dia/gov writes; auth schema untouched.
+Reverse the sweep via `metadata.pause_reason='no_bd_signal'`.

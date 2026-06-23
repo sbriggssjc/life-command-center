@@ -2001,6 +2001,14 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
 async function getCadenceDashboard(req, res, user, workspaceId) {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
   const phase = req.query.phase ? String(req.query.phase).trim() : null;
+  // R63 Unit 4 — the default is the ACTIONABLE set so the operator sees real
+  // targets he can work right now, not 300 overdue captures. After the R63
+  // pause sweep the active (non-paused) set is already signal-bearing; the
+  // has-contact filter narrows it to the outreach-ready rows (a contactless
+  // cadence is P-CONTACT acquisition work, not a draftable touch). ?include_all=1
+  // is the toggle that shows everything (incl. paused / no-signal / contactless).
+  const includeAll = String(req.query.include_all || '') === '1'
+    || String(req.query.include_all || '').toLowerCase() === 'true';
   // R34 Unit 2: highest relationship value first (the column the view now
   // exposes — same source as the priority queue's rank_annual_rent), then
   // most-overdue. High-value owner relationships lead; brokers/small contacts
@@ -2010,15 +2018,19 @@ async function getCadenceDashboard(req, res, user, workspaceId) {
     + '&limit=' + limit;
   if (phase) {
     path += '&phase=eq.' + pgFilterVal(phase);
+  } else if (includeAll) {
+    // Show every active cadence except opted-out (paused + contactless included).
+    path += '&phase=neq.unsubscribed';
   } else {
     // R34 Unit 3: parked/opted-out cadences are not active work — keep them out
     // of the default dashboard (a paused >180d-overdue row leaves the set).
     // 'converted' (engaged) and 'dormant' (annual check-in) stay visible.
-    path += '&phase=not.in.(paused,unsubscribed)';
+    // R63 Unit 4: also require a contact — the default is the outreach-ready set.
+    path += '&phase=not.in.(paused,unsubscribed)&contact_id=not.is.null';
   }
   const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to load cadence dashboard', detail: r.data });
-  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null });
+  return res.status(200).json({ ok: true, items: Array.isArray(r.data) ? r.data : [], total: r.count ?? null, mode: includeAll ? 'all' : (phase ? 'phase' : 'actionable') });
 }
 
 // ============================================================================

@@ -3272,23 +3272,31 @@ window.pqResolveOwner = pqResolveOwner;
 // sent → record_send) for email-next rows, or "Log touch →" (the Unit-1 single
 // advance path) for call/vm-next rows. No sending integration — copy + mailto.
 // ============================================================================
-async function renderCadenceDashboard() {
+async function renderCadenceDashboard(showAll) {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
+  showAll = !!showAll;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-  var res = await opsApi('/api/operations?action=cadence_dashboard&limit=200');
+  var res = await opsApi('/api/operations?action=cadence_dashboard&limit=200' + (showAll ? '&include_all=1' : ''));
   if (!res.ok || !res.data || !res.data.ok) {
-    el.innerHTML = opsErrorState(res, 'renderCadenceDashboard()', 'Could not load the cadence dashboard');
+    el.innerHTML = opsErrorState(res, 'renderCadenceDashboard(' + (showAll ? 'true' : '') + ')', 'Could not load the cadence dashboard');
     return;
   }
   var items = Array.isArray(res.data.items) ? res.data.items : [];
   var total = res.data.total != null ? res.data.total : items.length;
+  // R63 Unit 4 — the default is the actionable (signal-bearing, has-contact)
+  // set; the toggle reveals everything (incl. paused / no-signal / contactless).
+  var toggleLbl = showAll ? 'Show actionable only' : 'Show all cadences';
   var html = '<div class="ops-header"><h2>Cadence Dashboard</h2>'
-    + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div>';
-  html += '<div class="rc-intro">Every active outreach cadence — phase, touch count, what is due, and the last outcome. '
-    + 'Work the overdue rows top-down: draft the next email or log the call; either advances the cadence.</div>';
-  if (!items.length) { html += '<div class="ops-empty">No active cadences. ✓</div>'; el.innerHTML = html; return; }
-  html += '<div class="q-item-meta" style="margin:6px 0">' + esc(String(total)) + ' active cadence' + (total === 1 ? '' : 's') + '</div>';
+    + '<div><button class="q-action" onclick="renderCadenceDashboard(' + (showAll ? '' : 'true') + ')">' + toggleLbl + '</button>'
+    + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div></div>';
+  html += '<div class="rc-intro">' + (showAll
+      ? 'Every cadence (incl. paused, no-signal, and contactless). The default view shows only actionable rows.'
+      : 'Your real relationships, value-ranked — phase, touch count, what is due, and the last outcome. '
+        + 'Work the overdue rows top-down: draft the next email or log the call; either advances the cadence.')
+    + '</div>';
+  if (!items.length) { html += '<div class="ops-empty">' + (showAll ? 'No cadences. ✓' : 'No actionable cadences. ✓') + '</div>'; el.innerHTML = html; return; }
+  html += '<div class="q-item-meta" style="margin:6px 0">' + esc(String(total)) + (showAll ? ' cadence' : ' actionable cadence') + (total === 1 ? '' : 's') + '</div>';
   items.forEach(function (it, ix) {
     var cid = it.cadence_id == null ? '' : String(it.cadence_id);
     var eid = it.entity_id == null ? '' : String(it.entity_id);
