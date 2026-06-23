@@ -42,9 +42,34 @@ describe('isClosingAnnouncement', () => {
     assert.equal(isClosingAnnouncement({ senderEmail: CLOSING_SENDER, subject: 'Deal Closing Announcement - US Renal - Covington, GA' }), true);
     assert.equal(isClosingAnnouncement({ senderEmail: 'Northmarq <salesforce@northmarq.com>', subject: 'Deal Closing Announcement - X' }), true);
   });
+
+  // Live failure mode (2026-06-23): PA's flagged-email payload carries a NULL
+  // sender, so the sender-only gate never fired. The direct SF email still
+  // carries an @sfdc.net message-id; the forwarded copy embeds an SF Opportunity
+  // link in the body. Either fingerprint (with the subject prefix) must pass.
+  it('matches on the @sfdc.net message-id when the sender is absent', () => {
+    assert.equal(isClosingAnnouncement({
+      senderEmail: null,
+      subject: 'Deal Closing Announcement - US Renal - Covington, GA',
+      messageId: '<ECqKN0...TH3I6100Ip-ERJLCTRCFCQfukyj2Lw@sfdc.net>',
+    }), true);
+  });
+  it('matches a forwarded copy via the SF Opportunity link in the body', () => {
+    assert.equal(isClosingAnnouncement({
+      senderEmail: null,
+      subject: 'FW: Deal Closing Announcement - US Renal - Covington, GA',
+      messageId: '<DS0PR05MB9718@DS0PR05MB9718.namprd05.prod.outlook.com>', // Outlook host
+      bodyHtml: '<a href="https://northmarqcapital.my.salesforce.com//lightning/r/Opportunity/006Vs00000IPJGQIA5/view">US Renal</a>',
+    }), true);
+  });
+
   it('rejects other senders / subjects', () => {
+    // Right subject but NO SF fingerprint anywhere → not a closing announcement.
     assert.equal(isClosingAnnouncement({ senderEmail: 'broker@cbre.com', subject: 'Deal Closing Announcement - X' }), false);
+    assert.equal(isClosingAnnouncement({ senderEmail: 'broker@cbre.com', subject: 'Deal Closing Announcement - X', messageId: '<abc@cbre.com>', bodyHtml: '<p>see attached</p>' }), false);
     assert.equal(isClosingAnnouncement({ senderEmail: CLOSING_SENDER, subject: 'New Listing - US Renal' }), false);
+    // SF fingerprint present but wrong subject → still rejected (subject is mandatory).
+    assert.equal(isClosingAnnouncement({ subject: 'New Listing', messageId: '<x@sfdc.net>' }), false);
     assert.equal(isClosingAnnouncement({}), false);
   });
 });
