@@ -173,7 +173,7 @@ const CHART_FOOTER_CAPTIONS = {
   asking_cap_quartiles_active:
     'Active-listing asking cap quartiles for the Total Market and the 10+ Year Term cohort. Read alongside the closed-sale cap-rate panel to gauge seller vs. clearing pricing. Dialysis: observed asking listings only (sale-anchored / synthetic reconstructions excluded); pre-2020 thins — read those quarters as indicative.',
   available_market_size_combo:
-    'Active inventory count (bars) and asking cap rate (line) for Total Market vs. 10+ Year Term cohort. The 10+ cohort cap line shows only when both cohorts have ≥3 in-band priced listings that quarter — when the non-core pool is thinner there is no meaningful contrast to draw. Dialysis: the count is distinct properties actually on the market (one property = one unit, deduped across multiple listings), gated to listings seen on-market recently — so it reads the true ~120 at the recent edge, not the larger listing-row tally. Pre-2020 is genuinely thin and shown as the honest history floor.',
+    'Active inventory count (bars) and asking cap rate (line) for Total Market vs. 10+ Year Term cohort. The 10+ cohort cap line shows only when both cohorts have ≥3 in-band priced listings that quarter — when the non-core pool is thinner there is no meaningful contrast to draw. Dialysis: the count is distinct properties actually on the market (one property = one unit, deduped across multiple listings), gated to listings seen on-market recently — so it reads the true ~120 at the recent edge, not the larger listing-row tally. Pre-2020 is genuinely thin and shown as the honest history floor. Active-listing coverage ramps over the record — single digits before 2017, ~25 distinct properties by 2019, most complete from 2024 as CoStar capture + URL verification matured (systematic availability verification began mid-2022). Read pre-2017 quarters as indicative, not a market signal; the chart deliberately does NOT start at 2022 — earlier real listings are shown, just flagged as sparse.',
   dom_price_change_active:
     'Days on market and price-change frequency on active listings. Pair with the asking cap quartiles panel to gauge seller alignment with clearing pricing. Dialysis: observed active listings only (distinct-property, last-seen-gated); pre-2020 thins — read those quarters as indicative.',
   buyer_class_pct_by_year:
@@ -197,11 +197,11 @@ const CHART_FOOTER_CAPTIONS = {
   lease_renewal_rate:
     'GSA lease outcomes by quarter (TTM): renewed, succeeding/superseding, expired, terminated.',
   lease_termination_rate:
-    'Termination rate as % of active leases (TTM).',
+    'Termination rate as % of active leases (TTM). Denominator is the holdover-inclusive GSA active-lease inventory (~8,000 leases) — expired-but-occupied holdovers count as active, and gsa_leases.termination_date is the GSA soft-term / early-termination OPTION date (populated on most leases), not a confirmed move-out — so the numerator counts leases reaching that termination option, not vacancies.',
   lease_structures:
     'Distribution of lease structures by initial term + firm-term combination ("10, 5" = 10-year initial / 5-year firm).',
   leased_inventory_by_state:
-    'Top states by total leased SF.',
+    'Top states by total leased GSA RSF, holdover-inclusive — the full ~8,000-lease GSA footprint (expired-but-occupied holdovers count as active inventory; the GSA TERMN option date is not treated as a lease end). Was previously a strict-expiration subset (~4,600); now the complete current footprint. Ranked by total RSF.',
   net_lease_spread:
     'Cap-rate spread over the 10-Year Treasury for Market / NM / Non-NM cohorts.',
   renewal_rent_growth:
