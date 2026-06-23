@@ -148,40 +148,63 @@ Lessor Phone, Janitorial, Utilities**. This is the **state equivalent of the GSA
 FRPP**: tenant (agency), premises, SF, lease term, **landlord/owner + direct contact**, expense
 responsibility. It is exactly the recurring inventory the federal side has and the state side lacks.
 
-### Proposed insertion point (to be confirmed when we start)
+### Schema decision — RESOLVED (refinement of Option A)
 
-- **Option A (preferred): consolidate into `gsa_leases`** — add `government_level`
-  (`Federal|State|Municipal`), `source_system` (`GSA|TFC|CA_SPI|…`), `state_lease_id`; reuse the
-  existing 4-tier `gsa_property_matcher`. One lease table, one matching pipeline.
-- **Option B: parallel `state_lease_inventory` table** — isolated, per-state ingest, same matcher.
-- New module(s) following `ingest_gsa_historical.py` shape: `ingest_state_leases.py` /
-  `ingest_texas_tfc.py` (Excel/ManagePath export), then CA SPI (open data) as the second state.
-- Field mapping (TFC → gov): Agency→`agency` (+ `government_type` via classifier), Lessor→
-  recorded/true owner + `contacts` (we already capture lessor email/phone — high BD value),
-  Start/End→lease term, Agency SF→`sf_leased`, County/Zip→location.
+Grounding the live gov schema (2026-06-23) showed the existing tables already hold the TFC shape
+with **no new tables and only one additive column** — so we write state inventory straight into the
+Excel-"Ownership"-sheet path rather than routing through `gsa_leases` (which has no `agency` column
+and is GSA-snapshot-shaped). The mapping:
+
+| TFC Agency Report | gov table.column |
+|---|---|
+| Prop ID (building) | `properties` (one row/building) — `state_lease_id` + synthetic `lease_number='TFC-TX-<propid>'` |
+| Agency (tenant) | `properties.agency` (primary = max SF) + `property_agencies` (one/agency — multi-tenant) + `leases.tenant_agency` |
+| Address/City/State/Zip/County | `properties.*` |
+| Agency SF | `properties.sf_leased` (building = Σ) + `property_agencies.sf_occupied` |
+| Start / End | `leases.commencement_date`/`expiration_date`, `properties.lease_commencement`/`_expiration` |
+| Lessor | `recorded_owners.name` → `properties.recorded_owner_id` |
+| Contact name/email/phone/address | `contacts` (`contact_type='landlord'`, linked `recorded_owner_id`) — **high BD value** |
+| — | `government_type='State'` (explicit; the classify trigger only fills NULLs so it isn't clobbered) |
+| — | `data_source='tfc_state_inventory'` on every row |
+
+`properties.lease_number` is UNIQUE → idempotent upsert; child tables are delete-then-insert scoped
+to `(property_id, data_source)`. CA SPI / other states reuse the same transform with a per-state
+column map.
 
 ### Work checklist — Topic 2
 
-- [ ] Decide Option A vs B (recommend A) and write the schema migration (discriminator columns).
-- [x] Strengthen the gov-side State classifier (`agency_enrichment_rules`) to match the Topic-1
-      vocabulary — `government-lease/sql/20260623_gov_state_agency_classifier_expansion.sql`
-      (additive, idempotent, evidence-tagged). Adds a Municipal `school district` rule (priority 31)
-      + a State program-name rule (priority 41); scoped tighter than LCC so it can't steal a federal
-      record (`comptroller`→`comptroller of public accounts|state comptroller`; wildlife drops
-      `service`). **Applied live to the gov DB (`scknotsqkcheojiaewwh`) 2026-06-23 + VERIFY pass:
-      32/32** — all 22 TX agencies (NULL → `State`), federal → `Federal`, municipal incl. Dallas ISD
-      → `Municipal`, private (Macy's/Nordstrom/Workforce Housing) → `NULL`. Baseline before apply:
-      all 16 spot-checked TX agencies were NULL.
-- [ ] Build `ingest_texas_tfc.py` (parse the TFC Agency Report shape) → properties/leases/owners/
-      contacts; idempotent (MD5 dedupe), logs to `run_log`/`ingestion_tracker` per project rules.
-- [ ] Run the 4-tier matcher over the new state leases; confirm `government_type='State'` lands and
-      investment scoring assigns State=4 (the tier becomes live, not dead).
-- [ ] Confirm the lessor contact (name/email/phone) flows to `contacts` for BD/outreach.
-- [ ] Decide cadence/recurrence for state feeds (TFC has no open API → manual export drop vs
-      scheduled; CA SPI is open data → scheduled).
-- [ ] (Stretch) second state — California SPI — to prove the module generalizes.
+- [x] **Schema decision + migration** — resolved to the property-direct path (above). Only additive
+      change: `properties.state_lease_id` + partial index
+      (`government-lease/sql/20260623_gov_state_lease_inventory.sql`). **Applied live to the gov DB
+      (`scknotsqkcheojiaewwh`) 2026-06-23.** Reversible (`DROP COLUMN`); no `gsa_leases` discriminator
+      needed.
+- [x] Strengthen the gov-side State classifier (`agency_enrichment_rules`) —
+      `government-lease/sql/20260623_gov_state_agency_classifier_expansion.sql`; **applied live +
+      VERIFY 32/32** (Topic-1 note). Municipal `school district` (p31) + State program rule (p41),
+      scoped tighter than LCC (`comptroller`→`comptroller of public accounts|state comptroller`;
+      wildlife drops `service`). Baseline before apply: all 16 spot-checked TX agencies NULL.
+- [x] **Build `ingest_texas_tfc.py`** — `government-lease/src/ingest_texas_tfc.py`. PURE
+      `transform_tfc(rows)` (groups by building, primary-by-SF, multi-agency, lessor→owner+contact,
+      synthetic key, `government_type='State'`) + a thin idempotent writer (`ingest_tfc`, upsert on
+      `lease_number`, child tables scope-replaced by `data_source`). `tests/unit/test_ingest_texas_tfc.py`
+      (6 cases) **pass**. **Validated on the REAL file:** 1,179 rows → **725 buildings / 997
+      agency-tenants / 549 distinct landlords / 553 lessor contacts (all w/ email)**; multi-agency
+      building 01271 grouped its 3 agencies with the right primary.
+- [ ] **LIVE DRAIN (gate):** run `ingest_tfc(<TFC file>)` against the gov DB (needs gov creds + the
+      TFC file in-repo / a workstation) — confirm 725 `State` properties land, the trigger leaves the
+      explicit `State` intact, lessor contacts populate `contacts`, and a re-run is idempotent.
+      Wire `start_ingestion_run`/`log_ingestion_error` into the live-drain (writer currently returns a
+      summary dict).
+- [ ] After the drain: confirm investment scoring assigns **State=4** on the new rows (the dead enum
+      goes live), and re-run the classifier backfill for any agency that landed `government_type` NULL.
+- [ ] De-dupe new state buildings against existing rows by `normalized_address` (most won't exist —
+      state is a new universe — but a few CoStar-captured state sales may already be present).
+- [ ] Cadence/recurrence: TFC has no open API → manual export drop; CA SPI is open data → scheduled.
+      Wire a state-inventory step into `run_pipeline.py`.
+- [ ] (Stretch) second state — California SPI — to prove the transform generalizes.
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS · schema + classifier live; ingest built + validated on the real file. LIVE
+DRAIN is the gate (needs gov creds + the TFC file in-repo / a workstation run).**
 
 ---
 
@@ -280,3 +303,12 @@ honest classification (surface `no_domain`/`State`, never guess).
   classifies `State` but carry `government_type=NULL` should be re-run through the classifier
   backfill once a state inventory feed lands (no state rows in the DB today to backfill).
   Proceeding to Topic 2.
+- **2026-06-23** — **Topic 2 schema + classifier live; ingest built + validated.** Resolved the
+  schema decision to the property-direct path (existing Ownership-sheet tables, no new tables);
+  added `properties.state_lease_id` (`government-lease/sql/20260623_gov_state_lease_inventory.sql`,
+  applied live to gov DB). Mirrored the State classifier vocabulary into `agency_enrichment_rules`
+  (applied live, VERIFY 32/32). Built `src/ingest_texas_tfc.py` (pure `transform_tfc` + thin
+  idempotent writer) with `tests/unit/test_ingest_texas_tfc.py` (6 pass); validated the transform on
+  the real TFC file → 725 buildings / 997 agency-tenants / 549 landlords / 553 lessor contacts. The
+  **live drain** (write 725 State properties to the gov DB) is the remaining Topic-2 gate — needs gov
+  creds + the TFC file in-repo / a workstation run.
