@@ -405,6 +405,7 @@ export const GOV_TENANT_PATTERNS = [
   /\busps\b/,  /\bpostal service\b/,
   /\barmy corps\b/,  /\bcoast guard\b/,  /\bcustoms\b/,  /\bcbp\b/,  /\btsa\b/,
   /\bprobation\b/,
+  /\bparole\b/,                                    // (TX) Dept of Criminal Justice — Parole Division/Supervision (live capture 2026-06-23, Haltom City 3912 NE 28th St)
   // Round 76ej.r (2026-05-05): expanded keyword set after the Mast One
   // capture (1040 University Boulevard) classified as no_domain. Its
   // tenant prose mentioned "Supreme Court of Virginia" and "Food and

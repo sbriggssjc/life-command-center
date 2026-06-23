@@ -1,6 +1,7 @@
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
+import { planDealSalePromotion } from "../_shared/sf-deal-promotion.ts";
 
 const PAYLOAD_VERSION = "sf-promotion-2026-05-v4";
 const LCC_WORKSPACE_ID = "a0000000-0000-0000-0000-000000000001";
@@ -124,7 +125,7 @@ Deno.serve(async (req: Request) => {
   const params = queryParams(req);
   const action = params.get("action");
   if (req.method === "GET" && !action) {
-    return jsonResponse(req, { service: "sf-promotion-worker", version: PAYLOAD_VERSION, scope: "Property, Comp, Listing, Deal", actions: ["run"], objects: ["property", "comp", "listing", "deal", "all"] });
+    return jsonResponse(req, { service: "sf-promotion-worker", version: PAYLOAD_VERSION, scope: "Property, Comp, Listing, Deal", actions: ["run"], objects: ["property", "comp", "listing", "deal", "all"], deal_sale_promotion: String(Deno.env.get("SF_DEAL_SALE_PROMOTION") || "").trim() !== "" });
   }
   if (!authenticateWebhook(req)) return errorResponse(req, "Unauthorized — missing or invalid X-PA-Webhook-Secret", 401);
   try {
@@ -248,9 +249,14 @@ async function promoteComp(vertical: Vertical, limit: number, enforce: boolean, 
 }
 
 async function promoteEntity(vertical: Vertical, kind: string, table: string, sfIdCol: string, selectCols: string, fields: string[], limit: number, runId: string, deadline: number): Promise<Record<string, unknown>> {
-  const vStats = { rows: 0, resolved: 0, unmatched: 0, fields_evaluated: 0, write: 0, skip: 0, conflict: 0, errors: 0, truncated: false, sample: [] as Record<string, unknown>[] };
+  const vStats = { rows: 0, resolved: 0, unmatched: 0, fields_evaluated: 0, write: 0, skip: 0, conflict: 0, errors: 0, sales_promoted: 0, sales_skipped: 0, truncated: false, sample: [] as Record<string, unknown>[] };
   const staged = await dbFetch(vertical, "GET", `${table}?process_status=eq.pending&select=${selectCols}&limit=${limit}`);
   const rows = Array.isArray(staged.data) ? staged.data as Record<string, unknown>[] : [];
+  // Closed-Won → sales_transactions promotion (deal path only). OFF by default;
+  // when the env is unset the deal branch behaves EXACTLY as before (field-merge
+  // only). First-drain discipline.
+  const saleProm = kind === "deal" && (vertical === "dia" || vertical === "gov") &&
+    String(Deno.env.get("SF_DEAL_SALE_PROMOTION") || "").trim() !== "";
   for (const row of rows) {
     if (Date.now() > deadline) { vStats.truncated = true; break; }
     vStats.rows++;
@@ -279,8 +285,75 @@ async function promoteEntity(vertical: Vertical, kind: string, table: string, sf
       else if (decision === "conflict") vStats.conflict++;
       else vStats.errors++;
     }
-    await dbFetch(vertical, "PATCH", `${table}?staging_id=eq.${row.staging_id}`, { process_status: resolution.propertyId ? "reported" : "review", linked_property_id: resolution.propertyId, match_method: resolution.method, processed: !!resolution.propertyId, processed_at: isoNow(), process_notes: `promotion ${runId} (${kind}) resolved via ${resolution.method}`, updated_at: isoNow() });
+
+    // ── Closed-Won → sales_transactions comp insert ──────────────────────────
+    let saleNote = "";
+    if (saleProm) {
+      const sale = await promoteDealSale(vertical, row, resolution.propertyId, runId);
+      if (sale.promoted) { vStats.sales_promoted++; saleNote = " | sale_promoted"; }
+      else { vStats.sales_skipped++; saleNote = ` | sale_skipped:${sale.reason}`; }
+      rowDecisions["__sale"] = sale.promoted ? "promoted" : `skipped:${sale.reason}`;
+    }
+
+    await dbFetch(vertical, "PATCH", `${table}?staging_id=eq.${row.staging_id}`, { process_status: resolution.propertyId ? "reported" : "review", linked_property_id: resolution.propertyId, match_method: resolution.method, processed: !!resolution.propertyId, processed_at: isoNow(), process_notes: `promotion ${runId} (${kind}) resolved via ${resolution.method}${saleNote}`, updated_at: isoNow() });
     if (vStats.sample.length < 3) vStats.sample.push({ staging_id: row.staging_id, record_pk: recordPk, method: resolution.method, decisions: rowDecisions });
   }
   return vStats;
+}
+
+// Closed-Won → sales_transactions comp insert for one deal staging row.
+// The DECISION (pure) lives in planDealSalePromotion; this wires the I/O:
+// the curated-comp check, the insert, and idempotent conflict handling.
+async function promoteDealSale(vertical: Vertical, row: Record<string, unknown>, propertyId: number | null, runId: string): Promise<{ promoted: boolean; reason: string }> {
+  const dom = vertical as "dia" | "gov";
+  const sfDealId = row.sf_deal_id ? String(row.sf_deal_id) : null;
+
+  // Pre-flight gate WITHOUT the DB lookups (cheap reasons first).
+  const pre = planDealSalePromotion(row, propertyId, dom, {});
+  if (!pre.promote && pre.reason !== "ok") {
+    // The only reasons that still need DB checks are existence/curated; all
+    // other skips are final here.
+    if (pre.reason !== "already_promoted" && pre.reason !== "curated_sale_exists") {
+      return { promoted: false, reason: pre.reason };
+    }
+  }
+
+  // Idempotency: a sales row already carries this sf_deal_id?
+  let existingSale = false;
+  if (sfDealId) {
+    const r = await dbFetch(vertical, "GET", `sales_transactions?sf_deal_id=eq.${encodeURIComponent(sfDealId)}&select=sf_deal_id&limit=1`);
+    existingSale = Array.isArray(r.data) && r.data.length > 0;
+  }
+
+  // Never clobber / duplicate a curated comp near this sale date: any
+  // sales_transactions row for this property within ±45 days that is NOT a
+  // salesforce_deal row (a CoStar / master-curated comp).
+  let curatedSaleExists = false;
+  const saleDate = row.expected_close_date ? String(row.expected_close_date) : null;
+  if (propertyId && saleDate && !existingSale) {
+    const lo = addDays(saleDate, -45);
+    const hi = addDays(saleDate, 45);
+    if (lo && hi) {
+      const r = await dbFetch(vertical, "GET", `sales_transactions?property_id=eq.${propertyId}&sale_date=gte.${lo}&sale_date=lte.${hi}&data_source=neq.salesforce_deal&select=sale_id&limit=1`);
+      curatedSaleExists = Array.isArray(r.data) && r.data.length > 0;
+    }
+  }
+
+  const plan = planDealSalePromotion(row, propertyId, dom, { existingSale, curatedSaleExists });
+  if (!plan.promote) return { promoted: false, reason: plan.reason };
+
+  const ins = await dbFetch(vertical, "POST", `sales_transactions`, [plan.saleRow]);
+  if (ins.ok) return { promoted: true, reason: "ok" };
+  // 409 = the partial unique index caught a concurrent/repeat insert → idempotent no-op.
+  if (ins.status === 409) return { promoted: false, reason: "already_promoted" };
+  console.error(`[sf-promotion-worker] sale insert failed (${vertical}, deal ${sfDealId}, run ${runId})`, ins.status, ins.data);
+  return { promoted: false, reason: `insert_failed_${ins.status}` };
+}
+
+// YYYY-MM-DD ± n days, returns YYYY-MM-DD (UTC) or null.
+function addDays(iso: string, n: number): string | null {
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 }

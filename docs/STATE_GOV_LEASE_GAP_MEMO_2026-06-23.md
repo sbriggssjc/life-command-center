@@ -315,8 +315,21 @@ deal with no federal cue defaults to `dia` + review (the state-routing gap).
 - [ ] Test (headless) + a gated live promotion of ONE real Closed-Won deal (fill-blanks, no-clobber,
       idempotent), same first-drain discipline as Topics 1/2.
 
-**Status: IN PROGRESS · decision (b) made + grounded (worker exists, sales-row insert is the gap);
-build is the next focused step.**
+**Status: ✅ BUILT (gated, awaiting Scott's migrations + drain) · 2026-06-23.** Closed-Won SF deals
+→ domain `sales_transactions` comp now built + pushed (3 repos). New pure helper
+`supabase/functions/_shared/sf-deal-promotion.ts` (`planDealSalePromotion`, single source of truth,
+19 tests) drives `sf-promotion-worker`'s deal path to INSERT a sale; `sf-config.ts routeVertical`
+gains state-gov cues (+`tenant_names`). Safety (all verified): env-gated **`SF_DEAL_SALE_PROMOTION`
+default OFF** (field-merge-only until set); **idempotent** via additive `sf_deal_id text` + partial
+unique index on gov + dia `sales_transactions` (migrations `sql/20260623_gov_sf_deal_sales_promotion.sql`,
+`Dialysis/.../20260623_dia_sf_deal_sales_promotion.sql`); **never-clobber** (skips `curated_sale_exists`
+within ±45d of a non-`salesforce_deal` comp); requires real `deal_price` ≥ $50k (no ask-price
+fallback); **never writes cap rate** (the existing trigger derives it). New comp flows to the BD
+spine via the existing `v_sales_transactions_portfolio` → `lcc_listing_events` sync (no new wiring).
+Full suite 1381 pass; 12 api files. **Scott's runbook:** apply the 2 domain migrations → deploy the
+edge function → set `SF_DEAL_SALE_PROMOTION` → capped gated drain (`?action=run`
+`{object:'deal',vertical:'gov',limit:25}`, then dia) → verify ONE `salesforce_deal` sale/deal with a
+trigger-derived cap rate, idempotent on re-run.
 
 ---
 
@@ -398,6 +411,12 @@ honest classification (surface `no_domain`/`State`, never guess).
   `government_type='State'`). Verified: CPS/APS → State/government; HHS/DFPS unchanged; a private
   "Allied Protective Services" security firm correctly does NOT classify gov. Test 5/5. Scott
   re-captures Sherman after the Railway redeploy to confirm it routes to the Government DB.
+- **2026-06-23** — **Topic 1 live-capture follow-up #2 (Parole):** Haltom City retail strip
+  (3912 NE 28th St) with a *Parole Supervision* tenant (TX Dept of Criminal Justice, Parole
+  Division) hit `no_domain`. Added `/\bparole\b/` to JS `GOV_TENANT_PATTERNS` (LCC) + a `\mparole\M`
+  State rule to gov `agency_enrichment_rules` (applied live; gov PR #306). Anchored so "Parolee
+  Apparel LLC" stays private. Test +2. Same recapture-after-deploy step as CPS.
+- **2026-06-23** — **Topic 3 / Phase 3 BUILT** (gated) — see the Topic-3 status block above.
 - **2026-06-23** — **TFC full-drain fix** (gov PR #306): the live full run hit `23505` on
   `uq_recorded_owners_canonical` — `recorded_owners` is unique on **`canonical_name`** (a
   normalized form), not `name`, so the name-based NOT-EXISTS guard missed owners colliding under a
