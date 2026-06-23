@@ -4,6 +4,19 @@ Capstone of the surface-by-surface audit. Ties together the cockpit fixes (R60�
 Consumption-Layer doctrine, the domain-pages redesign (Parts 1–3), and the Contacts/Entities +
 Research-workbench findings into one sequenced plan.
 
+## Phase status log (living — updated at each phase completion)
+- **Phase 0 (land the cockpit):** R60–R64 + doctrine merged + Railway redeployed; cockpit JS live.
+- **Phase 1 (routing foundation):** ✅ **SHIPPED + VERIFIED LIVE 2026-06-23** (PR #1306). Hash
+  routing live: bnav writes `#/<slug>`; Back/Forward switch pages; detail mirrors to
+  `?d=prop:<db>:<id>:<tab>`; tab-switch updates the segment; Back closes the detail without
+  exiting; **cold deep-link + reload re-open the exact property + tab** (verified on
+  `#/dia?d=prop:dia:24703:Overview` → "DaVita Deltona Dialysis", Overview tab). Empty hash →
+  Today (no regression). *Learning/adjustment:* clinic-only dia opens with no `property_id` are
+  NOT cold-deep-linkable yet (no stable id in the token) — they open normally in-app; revisit if
+  needed (give clinics a stable token) during Phase 4 zoom wiring. Substrate is ready for the
+  Phase-4 lateral back-stack + breadcrumb.
+- **Phase 2 (overview parity):** next.
+
 ## Two themes explain almost everything we found
 1. **The Consumption Layer is missing.** Across Today (research), Priority Queue (cadence
    bloat), Cadence (capture noise), Decision Center (verdict lanes), Research workbench
