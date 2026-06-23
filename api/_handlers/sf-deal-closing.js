@@ -37,19 +37,36 @@ function realtimePromoteEnabled() {
   return String(process.env.DEAL_CLOSING_PROMOTE ?? 'true').toLowerCase() !== 'false';
 }
 
-/** Map a closing record to the SF managed-package `raw_row` shape the promote reads. */
+/**
+ * Map a closing record to the SF managed-package `raw_row` shape the promote
+ * reads. CRITICAL: the field names MUST match what `<dia|gov>_promote_nm_comps`
+ * reads from `raw_row` — verified live 2026-06-23: the promote's closed_is_deal
+ * branch reads `Property_City__c` / `Property_State__c` /
+ * `Property_Address_Line_1__c` / `Tenant_Names_sjc__c` / `Deal_Price__c` /
+ * `CloseDate` / `Direct_Co_Broke_sjc__c`, the buyer name from
+ * `Buyer__c` (fallback `Buyer_Company_sjc__c`), and the seller from
+ * `Seller_Company_sjc__c`. (The earlier `City_sjc__c`/`State_sjc__c` keys were
+ * never read → the deal matched nothing and was held_no_property.)
+ */
 function buildRawRow(parsed, sfDealId) {
   const rr = {
     Id: sfDealId,
     Name: parsed.deal_name || null,
     StageName: 'Closed IS',
     Deal_Type__c: 'IS CM',
-    City_sjc__c: parsed.city || null,
-    State_sjc__c: parsed.state || null,
+    // City/State under the keys the promote's matcher actually reads.
+    Property_City__c: parsed.city || null,
+    Property_State__c: parsed.state || null,
+    // The announcement carries no street address; the promote keys creates on
+    // linked_property_id (set below), so a null street is fine.
+    Property_Address_Line_1__c: null,
     Tenant_Names_sjc__c: parsed.deal_name || null, // operator cue for classifyVertical / matcher
     Property_Type__c: parsed.property_type || null,
     Property_Type_Subtype__c: parsed.property_subtype || null,
     Seller_Company_sjc__c: parsed.seller_company || null,
+    // Buyer__c is the canonical buyer-NAME key the SF Object Sync uses; the
+    // promote-create reads coalesce(Buyer__c, Buyer_Company_sjc__c). Write both.
+    Buyer__c: parsed.buyer_company || null,
     Buyer_Company_sjc__c: parsed.buyer_company || null,
     // PRICE GATE: the promote reads raw_row->>'Deal_Price__c' (numeric string > 0).
     Deal_Price__c: parsed.sale_price != null ? String(parsed.sale_price) : null,
@@ -65,6 +82,76 @@ function buildRawRow(parsed, sfDealId) {
     _lcc_deal_team: parsed.deal_team || null,
   };
   return rr;
+}
+
+// PostgREST ilike wildcard. The brand value may contain spaces (e.g. "US Renal").
+function pgIlikeContains(v) {
+  return `*${String(v).replace(/[*,()]/g, ' ').trim()}*`;
+}
+
+/**
+ * Conservative deal→property resolver (CONTACT-SELECTION "never guess" posture).
+ *
+ * The announcement gives city/state + a tenant-brand prefix (e.g. "US Renal" in
+ * "US Renal - Covington, GA") but no street. The promote's CREATE path needs a
+ * `linked_property_id`, and its operator-token matcher can't help (it stoplists
+ * renal/dialysis/care...). So we resolve here: candidates in the EXACT
+ * city+state whose operator/tenant (dia) or agency (gov) CONTAINS the brand.
+ * Sets the link ONLY on a single confident match (collapsing an obvious
+ * same-address dup pair to the richest row). Multiple distinct matches or none
+ * ⇒ null → the promote holds it `held_no_property` for manual linking — never a
+ * wrong-property guess.
+ *
+ * @returns {Promise<number|null>}
+ */
+export async function resolveLinkedProperty(domain, parsed, deps = {}) {
+  const dq = deps.domainQuery || domainQuery;
+  const city = (parsed.city || '').trim();
+  const state = (parsed.state || '').trim().toUpperCase();
+  if (!city || !state) return null;
+
+  // Brand = the deal-name prefix before " - " (else the tenant string). Require
+  // ≥3 chars so a too-generic token never matches broadly.
+  const rawName = parsed.deal_name || parsed.tenant_name || '';
+  const brand = String(rawName).split(' - ')[0].trim();
+  const brandLc = brand.toLowerCase();
+  if (brandLc.length < 3) return null;
+
+  const matchCols = domain === 'gov' ? ['agency', 'agency_full_name'] : ['operator', 'tenant'];
+  const selectCols = ['property_id', 'address', ...matchCols].join(',');
+  const path = `properties?state=eq.${encodeURIComponent(state)}`
+    + `&city=ilike.${encodeURIComponent(city)}`
+    + `&select=${selectCols}&limit=50`;
+
+  let rows;
+  try {
+    const res = await dq(domain, 'GET', path);
+    if (!res || !res.ok) return null;
+    rows = Array.isArray(res.data) ? res.data : (res.body || []);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+
+  const hits = rows.filter(r =>
+    matchCols.some(c => String(r[c] || '').toLowerCase().includes(brandLc)));
+  if (hits.length === 0) return null;
+  if (hits.length === 1) return hits[0].property_id ?? null;
+
+  // >1 hit: collapse an obvious same-address dup pair; otherwise ambiguous → null.
+  const normAddr = a => String(a || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const addrs = new Set(hits.map(h => normAddr(h.address)));
+  if (addrs.size === 1) {
+    // dup pair / same building → pick the richest (a non-null match col), then lowest id.
+    const ranked = [...hits].sort((a, b) => {
+      const aRich = matchCols.some(c => a[c]) ? 0 : 1;
+      const bRich = matchCols.some(c => b[c]) ? 0 : 1;
+      if (aRich !== bRich) return aRich - bRich;
+      return (a.property_id ?? 0) - (b.property_id ?? 0);
+    });
+    return ranked[0].property_id ?? null;
+  }
+  return null; // genuinely ambiguous → never guess
 }
 
 /**
@@ -107,10 +194,22 @@ export async function stageClosingDeal(parsed, ctx = {}, deps = {}) {
       .digest('hex').slice(0, 16)}`;
 
   const priceMissing = !(parsed.sale_price > 0);
+
+  // Resolve the property so the promote's CREATE path can record the sale
+  // (it requires linked_property_id). Conservative single-confident-match;
+  // null ⇒ the promote holds it for manual linking (never a wrong guess).
+  let linkedPropertyId = null;
+  try {
+    linkedPropertyId = await resolveLinkedProperty(domain, parsed, deps);
+  } catch (err) {
+    console.warn('[deal-closing] property resolve failed:', err?.message || err);
+  }
+
   const row = {
     sf_deal_id: sfDealId,
     source_system: 'salesforce',
     import_batch: EMAIL_IMPORT_BATCH,
+    linked_property_id: linkedPropertyId,
     raw_row: buildRawRow(parsed, sfDealId),
     deal_name: parsed.deal_name || null,
     deal_type: 'IS CM',
@@ -154,7 +253,7 @@ export async function stageClosingDeal(parsed, ctx = {}, deps = {}) {
     }
   }
 
-  return { ok: true, domain, sf_deal_id: sfDealId, price_missing: priceMissing, staged: true, promote };
+  return { ok: true, domain, sf_deal_id: sfDealId, linked_property_id: linkedPropertyId, price_missing: priceMissing, staged: true, promote };
 }
 
 /**
