@@ -318,6 +318,14 @@ async function handleOutlookMessage(req, res) {
   // a full body via a "Get email (V3)" step (passed as body_text), prefer it
   // for URL scanning so we can find PDF links beyond the preview window.
   const bodyForUrlScan = firstNonEmpty(payload.body_text, payload.bodyText, bodyPreview, '');
+  // Richest available body for Deal-Closing-Announcement detection + parsing.
+  // Prefer the full HTML/text body (a forwarded SF announcement embeds the full
+  // table); fall back to the URL-scan/preview body. Used by isClosingAnnouncement
+  // (SF-link fingerprint) and ingestClosingAnnouncementEmail (the field parse).
+  const closingBodyText = firstNonEmpty(
+    payload.body_html, payload.bodyHtml, payload.body_text, payload.bodyText,
+    payload.body, bodyForUrlScan, bodyPreview, ''
+  );
   const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
   const receivedAtIso = isoOrNow(firstNonEmpty(payload.received_date_time, payload.receivedDateTime, payload.received_at));
   const sender = normalizeSender(firstNonEmpty(payload.from, payload.sender, payload.sender_email));
@@ -365,6 +373,51 @@ async function handleOutlookMessage(req, res) {
 
   if (existingCheck.ok && existingCheck.data?.length) {
     const existing = existingCheck.data[0];
+
+    // ── Deal Closing Announcement on a replay / re-flag ──────────────────────
+    // The inbox row already exists, so a re-flag of a closing announcement lands
+    // here (NOT the fresh path). Ingest the deal (idempotent on sf_deal_id) +
+    // tag the row, then return early — a closing announcement is a CLOSED comp,
+    // not a listing OM, so it must NEVER fall through to the OM re-stage below.
+    // Idempotent: skip the re-ingest once a successful deal_closing is recorded.
+    if (isClosingAnnouncement({ senderEmail: sender?.email, subject, messageId, bodyHtml: closingBodyText })) {
+      const priorOk = existing.metadata?.kind === 'deal_closing_announcement'
+        && existing.metadata?.deal_closing?.ok === true;
+      let closingResult = existing.metadata?.deal_closing || null;
+      if (!priorOk) {
+        try {
+          const { ingestClosingAnnouncementEmail } = await import('./_handlers/sf-deal-closing.js');
+          closingResult = await ingestClosingAnnouncementEmail({ html: closingBodyText });
+        } catch (err) {
+          console.error('[intake] deal-closing ingest (dedup) failed:', err?.message || err);
+        }
+        await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(existing.id)}`, {
+          metadata: {
+            ...(existing.metadata || {}),
+            kind: 'deal_closing_announcement',
+            deal_closing: closingResult
+              ? {
+                  ok: closingResult.ok,
+                  reason: closingResult.reason || null,
+                  domain: closingResult.domain || null,
+                  sf_deal_id: closingResult.sf_deal_id || null,
+                  price_missing: closingResult.price_missing || false,
+                  promote: closingResult.promote || null,
+                }
+              : { ok: false, reason: 'handler_error' },
+          },
+        }).catch(err => console.error('[intake] deal-closing dedup inbox patch failed:', err?.message));
+      }
+      return res.status(200).json({
+        ok: true,
+        deduplicated: true,
+        correlation_id: correlationId,
+        inbox_item_id: existing.id,
+        kind: 'deal_closing_announcement',
+        deal_closing: closingResult || { ok: false, reason: 'handler_error' },
+      });
+    }
+
     const bridgedIntakeId = existing.metadata?.bridged_to_intake_id || null;
     const stagingStartedAt = existing.metadata?.staging_started_at || null;
 
@@ -600,12 +653,11 @@ async function handleOutlookMessage(req, res) {
   // (PA fires this flow 3-6x — replays return early above) means the promote
   // is triggered at most once per flag event. (Part A — see
   // docs/architecture/sf_deal_closing_email_ingest_PLAN.md.)
-  if (isClosingAnnouncement({ senderEmail: sender?.email, subject })) {
-    const bodyHtml = firstNonEmpty(payload.body_html, payload.bodyHtml, payload.body, bodyForUrlScan, '');
+  if (isClosingAnnouncement({ senderEmail: sender?.email, subject, messageId, bodyHtml: closingBodyText })) {
     let closingResult = null;
     try {
       const { ingestClosingAnnouncementEmail } = await import('./_handlers/sf-deal-closing.js');
-      closingResult = await ingestClosingAnnouncementEmail({ html: bodyHtml });
+      closingResult = await ingestClosingAnnouncementEmail({ html: closingBodyText });
     } catch (err) {
       console.error('[intake] deal-closing ingest failed:', err?.message || err);
     }

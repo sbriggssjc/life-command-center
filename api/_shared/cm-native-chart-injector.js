@@ -2398,6 +2398,43 @@ function findFirstDenseYear(rows, fieldKey, minN, consecutive = 4) {
   return null;
 }
 
+// T1 (2026-06-23) — extend the cap / returns / term sales-history charts back
+// to their first REAL data row instead of a hardcoded or over-tuned year cutoff.
+// Receipts (2026-06-23, live dia + gov): the long-history data EXISTS years
+// earlier than the chart plotted; it was being dropped, not absent. Two root
+// causes the prior MIN_YEAR entries hid:
+//   • cap_rate_ttm_by_quarter / cash_leveraged_returns used
+//     findFirstDenseYear(rows,'transaction_count_ttm',15) — but those views
+//     carry NO transaction_count_ttm column, so the density helper ALWAYS
+//     returned null and silently degraded to a flat ?? 2009. gov cap is 12/12
+//     non-null from 2001-01; that whole 2001-2008 run was being clipped to 2009.
+//   • nm_vs_market_cap was pinned to a static 2020 and cap_rate_by_lease_term to
+//     2015/2019, clipping market history that runs continuously from 2001 / 2005.
+//
+// The honest, single, consistent rule — these views carry NO sample-count column,
+// so the VIEW is the robustness gate (it already NULLs periods it judges too thin,
+// e.g. dia cap is NULL 2002-2004): "first robust data row" = first row whose
+// plotted value is non-null. Interior thin periods stay gap-honest via
+// dispBlanksAs='gap' (no interpolation, nothing fabricated). For a multi-series
+// chart, scan ALL plotted series so the range starts at the EARLIEST non-null
+// across any of them — a long-history series (NM-vs-Market's market line back to
+// 2001) extends full-range while a thin overlay (the NM line, sparse until ~2014)
+// simply gaps until it begins. The data tab itself is unchanged (every 2001+ row
+// stays in the worksheet); only the chart's series range narrows to first data.
+function firstNonNullYear(rows, valueKeys) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const keys = Array.isArray(valueKeys) ? valueKeys : [valueKeys];
+  for (const r of rows) {  // rows arrive chronologically; first hit = earliest
+    if (!r) continue;
+    const pe = r.period_end ? new Date(r.period_end) : null;
+    if (!pe || Number.isNaN(pe.getTime())) continue;
+    for (const k of keys) {
+      if (r[k] != null) return pe.getUTCFullYear();
+    }
+  }
+  return null;
+}
+
 // R76 Layer A3 (2026-06-10) — dia cap-by-term cohort floor. The dia 4-cohort
 // fan only settles into a clean, ordered firm-term premium at ~2019: the ≤5 and
 // 8-12 cohorts stay modest-n through 2018 (≤5 n=2/4/4/10/21 across 2015-18) and
@@ -2451,8 +2488,15 @@ const MIN_YEAR_BY_TEMPLATE = {
   // where the master starts. A separate ~80bps methodology gap
   // (our 7.7-8.1% vs master 8.6-9.2% in 2009) is tracked in
   // audit/cm-style-audit/R69-USER-NOTES-2026-05-24.md.
-  cap_rate_ttm_by_quarter:      (rows) => findFirstDenseYear(rows, 'transaction_count_ttm', 15) ?? 2009,
-  cash_leveraged_returns:       (rows) => findFirstDenseYear(rows, 'transaction_count_ttm', 15) ?? 2009,
+  // T1 (2026-06-23) — extend to first non-null cap. These views have NO
+  // transaction_count_ttm column, so the old density check ALWAYS fell back to
+  // a flat 2009, clipping ~8yr of real data (gov cap_ttm is 12/12 from 2001;
+  // dia is sparse 2001 + NULL 2002-2004 → the line gaps there honestly).
+  cap_rate_ttm_by_quarter:      (rows) => firstNonNullYear(rows, ['ttm_weighted_cap_rate']),
+  cash_leveraged_returns:       (rows) => firstNonNullYear(rows, ['cash_return', 'leveraged_return_mid']),
+  // cost_of_capital is a treasury-vs-cap macro chart (not in the T1 cap/returns/
+  // term sales-history scope); its treasury leg has its own start, so it keeps
+  // the prior density/2009 fallback. Revisit separately if needed.
   cost_of_capital:              (rows) => findFirstDenseYear(rows, 'transaction_count_ttm', 15) ?? 2009,
   // R54 — cap_rate_top_bottom_quartile bumped from 2005 to 2007 because
   // 2005-2006 has 0-3 cap-rate samples per TTM window (sane band). With
@@ -2477,20 +2521,25 @@ const MIN_YEAR_BY_TEMPLATE = {
   // at 2017 (completeness — asking crosses inherently, no ordering floor); gov 2015.
   sold_cap_by_term_dot_plot:    capByTermFloor,
   asking_cap_by_term_dot_plot:  askByTermFloor,
-  // 2026-05-29 - the cap-by-term LINE chart was untrimmed (307 monthly
-  // points from 2001): thin pre-2015 cohorts made the lines erratic AND
-  // the 25-yr category count crowded out the quarterly x-axis labels.
-  // Match the dot-plot term variants (2015) so cohorts are dense + labels show.
-  cap_rate_by_lease_term:       capByTermFloor,  // R76 A3 — dia 2019 / gov 2015
-  // 2026-05-29 - bumped 2006 -> 2011. NM-tagged gov sales are absent in
-  // 2008-2009 and sparse in 2003/2007/2010, so the line rendered with
-  // gaps + erratic jumps. From 2011 it's continuous and the 9-mo MA reads
-  // smooth (matches the PDF). User: 'missing quite a bit of data ... moves
-  // erratically'.
-  // R66o — bumped 2011 -> 2020 to match the deck's Value Proposition Results
-  // window (Sep-20 to Dec-25). The recent 5-6yr window + 4.75-7.75% axis makes
-  // the NM-below-market gap legible; the 2011-19 history compressed it.
-  nm_vs_market_cap:             2020,
+  // T1 (2026-06-23) — the cap-by-term LINE chart extends to the first row any
+  // cohort has data (gov ~2005, dia ~2001 where the 10+/12+ cohort begins). Each
+  // bucket's line starts at its own first observation and gaps where thin (e.g.
+  // the dia ≤5yr bucket has no data before ~2014 → it simply gaps) — gap-honest,
+  // never interpolated. Superseded the R67/R76-A3 2015/2019 floors (which clipped
+  // a decade of real cohort history). The dot-plot variants stay on capByTermFloor
+  // (they are recent-window dispersion views, a different chart purpose).
+  cap_rate_by_lease_term:       (rows) => firstNonNullYear(rows, [
+    'cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm',
+    'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless', 'cap_5to10',
+  ]),
+  // T1 (2026-06-23) — NM-vs-Market: plot the MARKET line full-range (it runs
+  // 12/12 from 2001) and let the NM overlay begin where NM sales become
+  // non-trivial (~2014). Scanning BOTH series' first non-null makes the range
+  // start at 2001 (market present) while the NM line gaps until it begins — so
+  // the chart shows long-run market context with the NM overlay where it exists,
+  // rather than clipping the whole chart to the NM line's late start. Superseded
+  // the R66o static 2020 "Value Proposition window" floor.
+  nm_vs_market_cap:             (rows) => firstNonNullYear(rows, ['nm_cap_rate', 'market_cap_rate']),
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
   // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).

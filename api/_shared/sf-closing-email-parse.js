@@ -20,17 +20,37 @@
 
 /** Subject prefix + sender that identify a Deal Closing Announcement email. */
 export const CLOSING_SENDER = 'salesforce@northmarq.com';
-export const CLOSING_SUBJECT_RE = /^\s*deal closing announcement\b/i;
+export const CLOSING_SUBJECT_RE = /^\s*(?:(?:re|fw|fwd)\s*:\s*)*deal closing announcement\b/i;
+// Salesforce-originated message-id domains (the genuine SF send is from sfdc.net
+// / salesforce.com). Authoritative + always present on the direct announcement.
+export const CLOSING_SF_MESSAGE_ID_RE = /@[\w.-]*(?:sfdc\.net|salesforce\.com)\b/i;
+// SF fingerprint inside the (forwarded) body — the Opportunity/Account lightning
+// links or a bare salesforce.com host. Survives an Outlook forward (which strips
+// the sfdc.net message-id but embeds the full original body).
+const CLOSING_SF_BODY_RE = /\/lightning\/r\/(?:Opportunity|Account)\/|salesforce\.com|sfdc\.net/i;
 
 /**
- * Is this flagged email a Northmarq Deal Closing Announcement? Matches on
- * sender + subject (the embedded Opportunity link is a secondary signal the
- * caller may also check). Tolerant of a display-name wrapper on the sender.
+ * Is this flagged email a Northmarq Deal Closing Announcement?
+ *
+ * The subject prefix ("Deal Closing Announcement", possibly behind FW:/RE:) is
+ * MANDATORY (it's an SF-template-specific subject). Beyond that, at least one
+ * Salesforce fingerprint must be present — because Power Automate's flagged-email
+ * payload does NOT reliably carry the sender address (observed null live), so a
+ * sender-only gate silently never fires. Fingerprints, any one:
+ *   - sender contains salesforce@northmarq.com (primary, when PA sends it)
+ *   - the internet message-id is from sfdc.net / salesforce.com (direct SF send)
+ *   - the body carries an SF Opportunity/Account lightning link (covers forwards,
+ *     whose message-id is an Outlook host but whose body embeds the original)
+ * Tolerant of a display-name wrapper on the sender.
  */
-export function isClosingAnnouncement({ senderEmail, subject } = {}) {
-  const from = String(senderEmail || '').toLowerCase();
+export function isClosingAnnouncement({ senderEmail, subject, messageId, bodyHtml } = {}) {
   const subj = String(subject || '');
-  return from.includes(CLOSING_SENDER) && CLOSING_SUBJECT_RE.test(subj);
+  if (!CLOSING_SUBJECT_RE.test(subj)) return false;
+  const from = String(senderEmail || '').toLowerCase();
+  if (from.includes(CLOSING_SENDER)) return true;
+  if (CLOSING_SF_MESSAGE_ID_RE.test(String(messageId || ''))) return true;
+  if (CLOSING_SF_BODY_RE.test(String(bodyHtml || ''))) return true;
+  return false;
 }
 
 // ── decoding helpers ─────────────────────────────────────────────────────────

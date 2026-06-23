@@ -2837,19 +2837,17 @@ test('R69: data-aware MIN_YEAR — gov-shaped dense rows from 2005 produce 2005 
     'R69: gov-shaped dense rows keep dataStart at 5 (no trim)');
 });
 
-test('R69: data-aware MIN_YEAR — dia-shaped sparse early rows trim to first dense year', () => {
-  // Dia-shaped: 2001-2024 monthly. 2001-2008 = sparse (n=9-14, real
-  // master_m pre-2009 numbers). 2009+ = dense (n=25). The function
-  // should detect 2009 as the first year with 4+ consecutive months
-  // at n≥15.
+test('T1: cap_rate_ttm_by_quarter trims to the first NON-NULL cap row (value presence, not a sample-count/2009 floor)', () => {
+  // The cap_ttm view carries no transaction_count_ttm column, so the prior
+  // density check always fell back to a flat 2009. The trim now follows VALUE
+  // presence: cap NULL 2001-2004 (years the view gated off as too thin),
+  // non-null from 2005-01 → range starts at the first 2005 row, the rest gaps.
   const rows = [];
   for (let y = 2001; y <= 2024; y++) {
     for (let m = 1; m <= 12; m++) {
       rows.push({
         period_end: `${y}-${String(m).padStart(2, '0')}-28`,
-        ttm_weighted_cap_rate: 0.07,
-        // Sparse 9-14 through 2008, dense 25+ from 2009 onward
-        transaction_count_ttm: y < 2009 ? (9 + Math.floor((y - 2001) * 0.6)) : 25,
+        ttm_weighted_cap_rate: y < 2005 ? null : 0.07,
       });
     }
   }
@@ -2865,13 +2863,16 @@ test('R69: data-aware MIN_YEAR — dia-shaped sparse early rows trim to first de
     brand: { palette: {} },
     rows,
   });
-  // 2001-01 to 2008-12 = 96 sparse rows → dataStart 5 + 96 = 101
-  assert.equal(spec.spec.dataStart, 5 + 96,
-    'R69: dia-shaped sparse rows trim to first 2009 row');
+  // 2001-01 .. 2004-12 = 48 NULL rows trimmed → dataStart 5 + 48 = 53.
+  assert.equal(spec.spec.dataStart, 5 + 48,
+    'T1: cap_ttm starts at the first non-null cap row (2005), not the 2009 fallback');
 });
 
-test('R47 → R69: cap_rate_ttm_by_quarter shifts dataStart to first 2009 row (master parity)', () => {
-  const rows = mkRows(2001, 2024);
+test('T1: cap_rate_ttm_by_quarter with continuous data from 2001 is NOT trimmed (no 2009 clip)', () => {
+  // gov shape: cap non-null 12/12 from 2001 → first non-null = 2001 → no trim.
+  // Previously a missing transaction_count_ttm column degraded the density
+  // check to a flat 2009, dropping ~8 years of real gov data off the chart.
+  const rows = mkRows(2001, 2024);  // ttm_weighted_cap_rate non-null from 2001
   const spec = buildInjectionSpec({
     chart_template_id: 'cap_rate_ttm_by_quarter',
     tabName: 'Data_Cap_Avg',
@@ -2884,12 +2885,42 @@ test('R47 → R69: cap_rate_ttm_by_quarter shifts dataStart to first 2009 row (m
     brand: { palette: {} },
     rows,
   });
-  // R69: bumped 2005 → 2009 to match master Dialysis Comp Work
-  // MASTER.xlsx Charts tab which starts its "Cap (TTM)" series at row
-  // 23 = Sep-2009. 2001-01 to 2008-12 = 96 monthly rows before 2009-01.
-  // dataStart 5 + 96 = row 101.
-  assert.equal(spec.spec.dataStart, 5 + 96,
-    'R69: dataStart shifted to first 2009 row');
+  assert.equal(spec.spec.dataStart, 5,
+    'T1: continuous-from-2001 cap data plots from row 5');
+});
+
+test('T1: cap_rate_by_lease_term extends to the first cohort observation (not the 2015/2019 floor)', () => {
+  // Cohorts NULL 2001-2004, present from 2005 → range starts at the first row
+  // ANY cohort has data (2005). Each bucket gaps until its own first
+  // observation (e.g. a late-appearing ≤5yr bucket), never interpolated.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const has = y >= 2005;
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        cap_10plus:       has ? 0.062 : null,
+        cap_6to10:        has ? 0.068 : null,
+        cap_less5:        has ? 0.075 : null,
+        cap_outside_firm: has ? 0.085 : null,
+      });
+    }
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_lease_term',
+    tabName: 'Data_Cap_by_Term',
+    cols: [
+      { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
+      { key: 'cap_10plus', col: 'C' }, { key: 'cap_6to10', col: 'D' },
+      { key: 'cap_less5', col: 'E' }, { key: 'cap_outside_firm', col: 'F' },
+      { key: 'cap_12plus', col: 'G' }, { key: 'cap_8to12', col: 'H' },
+      { key: 'cap_6to8', col: 'I' }, { key: 'cap_5orless', col: 'J' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+  });
+  // 2001-01 .. 2004-12 = 48 all-NULL-cohort rows trimmed → dataStart 53.
+  assert.equal(spec.spec.dataStart, 5 + 48,
+    'T1: cap-by-term starts at the first cohort observation (2005)');
 });
 
 test('R47: bid_ask_spread trims to 2014 (TRUE-gap)', () => {
@@ -2990,9 +3021,22 @@ test('R73 D-#19: net_lease_spread floors at 2002 (earliest consistent treasury)'
   assert.equal(spec.spec.dataStart, 5 + 12, 'net-lease-spread floors at first 2002 row');
 });
 
-test('R66o: nm_vs_market_cap trims to 2020 (Value Proposition window)', () => {
-  const rows = mkRows(2001, 2024, 'nm_cap_rate');
-  for (const r of rows) r.market_cap_rate = 0.07;
+test('T1: nm_vs_market_cap extends to 2001 (market line full-range; NM overlay gaps until it begins)', () => {
+  // market_cap_rate runs 12/12 from 2001; nm_cap_rate is sparse, NULL until 2014.
+  // The range starts at the earliest non-null across BOTH series = 2001 (market),
+  // so the market line plots full-range while the NM line simply gaps until 2014
+  // (via dispBlanksAs='gap'). Superseded the R66o static-2020 clip that hid all
+  // pre-2020 market context.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        market_cap_rate: 0.07,                  // present from 2001
+        nm_cap_rate: y < 2014 ? null : 0.066,   // sparse — begins 2014
+      });
+    }
+  }
   const spec = buildInjectionSpec({
     chart_template_id: 'nm_vs_market_cap',
     tabName: 'Data_NM_vs_Market',
@@ -3006,9 +3050,8 @@ test('R66o: nm_vs_market_cap trims to 2020 (Value Proposition window)', () => {
     brand: { palette: {} },
     rows,
   });
-  // R66o bumped the cutoff 2011 → 2020 to match the deck's Value Proposition
-  // window (Sep-20 onward). 2001-01 to 2019-12 = 228 rows before 2020-01.
-  assert.equal(spec.spec.dataStart, 5 + 228, 'dataStart at first 2020 row');
+  assert.equal(spec.spec.dataStart, 5,
+    'T1: range starts at 2001 (market present); not clipped to the NM line start');
 });
 
 test('R47: template not in MIN_YEAR_BY_TEMPLATE keeps original dataStart', () => {
@@ -3063,9 +3106,11 @@ test('R47: if all rows are after cutoff, dataStart is unchanged', () => {
   assert.equal(spec.spec.dataStart, 5, 'when all rows after cutoff, no shift');
 });
 
-test('R47: chart XML series references shift to trimmed dataStart', async () => {
-  // End-to-end: build a workbook with cap_rate_ttm rows from 2001-2024,
-  // inject the chart, and confirm the series xml references row 53+ not 5+.
+test('T1: chart XML series references shift to the first non-null data row', async () => {
+  // End-to-end: cap NULL 2001-2004, non-null from 2005 → the series xml
+  // references start at row 53 (5 + 48 leading-NULL months), not the old
+  // flat-2009 row 101. The data tab keeps every 2001+ row; only the chart
+  // series range narrows to where real data begins.
   const wb = new ExcelJS.Workbook();
   wb.addWorksheet('Index').getCell('A1').value = 'Test';
   const sheet = wb.addWorksheet('Data_Cap_Avg');
@@ -3073,7 +3118,15 @@ test('R47: chart XML series references shift to trimmed dataStart', async () => 
   sheet.getCell('B4').value = 'Subspecialty';
   sheet.getCell('C4').value = 'Avg Cap Rate';
   sheet.getCell('C5').value = 'Avg Cap Rate';  // series title
-  const rows = mkRows(2001, 2024);
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        ttm_weighted_cap_rate: y < 2005 ? null : 0.07,
+      });
+    }
+  }
   for (let i = 0; i < rows.length; i++) {
     const r = sheet.getRow(5 + i);
     r.getCell(1).value = new Date(rows[i].period_end);
@@ -3095,11 +3148,11 @@ test('R47: chart XML series references shift to trimmed dataStart', async () => 
   const result = await injectNativeCharts(await wb.xlsx.writeBuffer(), [spec]);
   const zip = await JSZip.loadAsync(result);
   const xml = await zip.file('xl/charts/chart1.xml').async('string');
-  // R69: trimmed to 2009 = row 101 (5 + 96 pre-2009 months).
-  assert.match(xml, /'Data_Cap_Avg'!\$A\$101:\$A\$\d+/,
-    'R69: cat axis references start at row 101 (first 2009 row)');
-  assert.match(xml, /'Data_Cap_Avg'!\$C\$101:\$C\$\d+/,
-    'R69: val series references start at row 101');
+  // 2001-01 .. 2004-12 = 48 NULL rows → first plotted row = 5 + 48 = 53.
+  assert.match(xml, /'Data_Cap_Avg'!\$A\$53:\$A\$\d+/,
+    'T1: cat axis references start at the first non-null row (53)');
+  assert.match(xml, /'Data_Cap_Avg'!\$C\$53:\$C\$\d+/,
+    'T1: val series references start at the first non-null row (53)');
 });
 
 test('buildInjectionSpec: bid_ask_spread R66l — floating-bar combo when last_ask present', () => {
