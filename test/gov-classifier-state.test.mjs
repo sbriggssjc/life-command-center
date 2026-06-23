@@ -109,4 +109,28 @@ describe('Topic 1 — state-government tenant classification', () => {
       assert.ok(/\\b|\^|\$/.test(rx.source), `unanchored pattern: ${rx}`);
     }
   });
+
+  // Sale Comps page (/Comp/NNN/): the gov tenant lives ONLY in the comp's
+  // Sale Notes, which the parser nests at sales_history[].sale_notes_raw —
+  // NOT top-level metadata.sale_notes_raw. classifyDomain must read it.
+  // Live capture 2026-06-23 (3411 Horal, San Antonio — sold private→private,
+  // tenant = TX Health and Human Services Commission named only in Sale Notes).
+  it('classifies a gov-leased SALE COMP when the agency is only in sales_history[].sale_notes_raw', () => {
+    const horal = {
+      asset_type: 'Office', property_type: 'Office',
+      sales_history: [{
+        sale_date: '2025-05-29',
+        sale_notes_raw: 'A private individual sold this 20,248 square foot office building to Foresight Asset Management for an undisclosed price. At time of sale, this property was fully leased by the Texas Health And Human Services Commission.',
+      }],
+    };
+    assert.equal(classifyDomain(horal, {}), 'government');
+  });
+
+  it('does NOT classify a genuinely-private SALE COMP (no gov tenant in the sale notes)', () => {
+    const priv = {
+      asset_type: 'Office', property_type: 'Office',
+      sales_history: [{ sale_date: '2025-05-29', sale_notes_raw: 'A private investor sold this office building to a regional buyer for an undisclosed price.' }],
+    };
+    assert.equal(classifyDomain(priv, {}), null);
+  });
 });
