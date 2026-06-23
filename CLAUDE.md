@@ -4912,3 +4912,54 @@ target / no-grow for a bare contact / no-grow when a cadence exists). `node
 skipped**. DB sweep applied live (after dry-run) + committed; JS ships on the
 Railway redeploy. LCC-Opps only; no dia/gov writes; auth schema untouched.
 Reverse the sweep via `metadata.pause_reason='no_bd_signal'`.
+
+## R64 — Decision Center: surface actionable verdicts, gate the federated noise (Consumption Layer #4) (2026-06-23)
+
+First fix written explicitly against the Producer/Consumer doctrine. The Decision
+Center's auto-supersede lanes are HEALTHY (match_disambiguation 978 superseded /
+30 open; junk_entity_name 588 superseded + 1,082 skipped / 198 open — leave them),
+but its VERDICT lanes ACCUMULATED (decided_7d=0) because the **999+ nav badge was
+the federated DQ universe** (provenance_conflict ~3k + property_merge ~7k, list-
+federated/worked-on-demand) burying the ~451 genuinely-actionable verdicts. Same
+producer-gate + auto-resolve doctrine as R60/R62/R63.
+
+### Unit 1 + 4 — separate the surfaces, honest badge (JS, ships on Railway)
+`ops.js`: new `_DC_FEDERATED` set (kept in sync with `admin.js`
+`FEDERATED_DECISION_TYPES` — `test/decision-center-partition.test.mjs` guards the
+two match). `renderReviewConsolePage` now renders **two sections**: "Decisions
+that need you" (the bounded, seeded VERDICT lanes — its count drives the nav
+badge) and "Data-quality review · on demand" (the large/churning FEDERATED source-
+view lanes, its OWN honest count). `setReviewNavBadge`/`refreshReviewNavBadge` sum
+ONLY the verdict lanes (+ the SOS worklist) — the federated DQ backlog can never
+inflate the badge again (no more 999+). Badge 999+ → ~451 actionable.
+
+### Unit 2 — value-rank + cap (already satisfied)
+Seeded verdict lanes are already `order=rank_value.desc.nullslast` in
+`handleDecisionsList` and `renderDecisionLane` caps at top-50 with "X shown · N in
+this lane". No change needed — the operator works the highest-value owners first.
+
+### Unit 3 — auto-resolve the mechanically-SAFE subset (DB, applied live)
+`lcc_r64_auto_resolve_decisions(p_dry_run default true)` (migration
+`20260623140000`, isolated from `lcc_refresh_decisions` — it MERGES entities, so a
+failure must never break the auth-critical refresh sweep) + gentle cron
+`lcc-decision-auto-resolve` (`40 */6 * * *`). Reversible, idempotent, dry-run-first:
+- **sf_link_collision** — a 2-entity collision whose two entities normalize to the
+  SAME owner name (true duplicate, one SF id on a second shell) auto-MERGES the
+  sf_linked entity INTO the domain-owner via `lcc_merge_entity` (moves the SF id
+  onto the bridged owner). Distinct-name / >2-entity collisions ("which owner?")
+  stay open. **114 → 30** (84 auto-merged).
+- **map_sf_parent_account** — when the parent entity ALREADY carries exactly ONE
+  salesforce Account identity but `lcc_buyer_parents.sf_account_id` is null (a pure
+  wiring gap, no SF lookup), auto-MAPS it + clears `needs_sf_mapping` (releases the
+  held government_buyer sync). 0/>1 candidates stay open. **17 → 11** (6 auto-mapped).
+- **confirm_true_owner — KEPT HUMAN** (175, untouched) — never auto-confirm
+  ownership (the deliberate exception; value-ranking via Unit 2 is the only change).
+
+Verified live 2026-06-23: dry-run 84/6 → real apply 84 merges + 6 maps; idempotent
+re-run 0/0; load-bearing caches rebuild clean (priority_queue 1104,
+connected_value 3003, buyer_spe 754); spot-check (Western Nephrology) — loser
+tombstoned into winner, SF id moved to the bridged owner. Reverse a merge via the
+standard `merged_into_entity_id` tombstone path; reverse a map via
+`sf_account_id=null, needs_sf_mapping=true` (prior value in `effects`). `node
+--check` clean; `ls api/*.js | wc -l`=12; full suite 1351 pass / 0 fail / 6 skipped.
+LCC-Opps only; no dia/gov writes; auth schema untouched.
