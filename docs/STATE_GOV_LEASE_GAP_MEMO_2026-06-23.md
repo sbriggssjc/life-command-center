@@ -212,8 +212,9 @@ column map.
       Wire a state-inventory step into `run_pipeline.py`.
 - [ ] (Stretch) second state — California SPI — to prove the transform generalizes.
 
-**Status: IN PROGRESS · schema + classifier live; ingest built + validated on the real file. LIVE
-DRAIN is the gate (needs gov creds + the TFC file in-repo / a workstation run).**
+**Status: IN PROGRESS · schema + classifier live; ingest built + validated + gated-live. Full
+725-building bulk: SCOTT runs the one-command module drain on his workstation (decided 2026-06-23) —
+`python -m src.ingest_texas_tfc "<ActiveLeaseSummaryReport.xls>"` (`--dry-run` first).**
 
 ---
 
@@ -248,16 +249,70 @@ SF is intentionally the BD/outreach layer. Two valid resolutions — **decide, d
 - **(b) Close the loop:** add a promotion path (or reconcile) `sf_deal_staging` Closed-Won →
   `sales_transactions` so deals we brokered are captured as comps regardless of CoStar coverage.
 
+### Decision — RESOLVED (Scott, 2026-06-23): **(b) close the loop**
+
+> "We can ingest information from Salesforce, especially closed transactions. Those can absolutely
+> populate in our databases and the LCC. We want it to be a source of information that populates our
+> LCC universe, especially if it's new or confirmed information from elsewhere."
+
+So SF becomes a **populating source**, not just a BD/outreach mirror: a staged closed (Closed-Won)
+SF Opportunity → a `sales_transactions` comp in the right domain **+** the LCC BD spine
+(entity/owner). Doctrine guardrails (mirror R51/R53/R59): fill-blanks / never clobber a curated or
+CoStar comp; idempotent on `sf_deal_id`; gated through `lcc_merge_field`; a price is a fact only when
+SF carries it (no fabrication).
+
+### Grounding — RESOLVED (2026-06-23): the promotion worker EXISTS but stops short
+
+Correcting the initial investigation: `supabase/functions/sf-promotion-worker/index.ts` **does
+exist** and promotes property/comp/listing/**deal**. But for a **deal** it only `promoteEntity` →
+resolves a `property_id` and merges deal FIELDS into a `deal_provenance` record via `lcc_merge_field`
+— **it never inserts a `sales_transactions` row.** (Comp promotion writes to `comparable_sales` on
+dia, also not `sales_transactions`.) So the precise missing piece for (b) is the **sales-row insert
+from a Closed-Won deal**.
+
+The staging row already carries everything needed (`intake-salesforce/sf-config.ts` `deal.parsed`,
+confirmed against a real NorthMarq Opportunity 2026-05-15):
+`deal_price` (sold price) · `expected_close_date` (`CloseDate` = the sale date for Closed-Won) ·
+`buyer_company_name` / `seller_company_name` · `deal_cap_rate` / `noi` / `annual_rent` ·
+`stage` (`StageName` → gate on Closed-Won) · property resolution via `sf_property_id` /
+`linked_property_id` / `property_address`. Staging tables live in the **domain** DBs (gov/dia), not
+LCC Opps. Vertical routing (`routeVertical`) keys on federal-flavored gov signals → a TX **state**
+deal with no federal cue defaults to `dia` + review (the state-routing gap).
+
+### Build plan (b) — concrete
+
+1. **Sales-row promotion** (the headline): in `sf-promotion-worker` deal branch, when
+   `stage` ∈ Closed-Won **and** a `property_id` resolved **and** `deal_price` + a close date are
+   present → upsert a `sales_transactions` row (`sold_price`, `sale_date`=`expected_close_date`,
+   `buyer`/`seller`, `data_source='salesforce_deal'`), **idempotent on a deterministic key tied to
+   `sf_deal_id`**, **fill-blanks / never clobber** a CoStar/curated comp, gated through
+   `lcc_merge_field`. The existing cap-rate trigger then derives the cap rate (gov §12 doctrine —
+   don't trust the ingested `deal_cap_rate`). Env-flag gated for first-drain discipline.
+2. **State-aware routing**: extend `routeVertical` so a state-agency cue (reuse the Topic-1 vocab)
+   routes a deal to `gov` instead of defaulting `dia`.
+3. **Surface into the LCC universe**: the resolved property + buyer/seller already flow to the BD
+   spine via the existing entity/owner sync — confirm the new comp's buyer becomes/links an owner
+   entity (it should, via the sales→listing-events + owner sync), so the deal "populates the LCC
+   universe" per Scott's ask.
+
 ### Work checklist — Topic 3
 
-- [ ] Scott decides (a) vs (b). Record the decision here.
-- [ ] If (b): design `sf_deal_staging` → `sales_transactions` promotion (gated by `lcc_merge_field`,
-      fill-blanks, never clobber a curated/CoStar comp; idempotent on `sf_deal_id`).
-- [ ] If (b): add state-aware vertical routing in `sf-config.ts` so state deals route to `gov`.
-- [ ] If (a): document the decision + ensure Topics 1/2 carry the full burden (no silent reliance
-      on SF).
+- [x] Scott decides (a) vs (b) → **(b)** — SF as a populating source.
+- [x] Ground the live `sf_deal_staging` shape + the promotion worker (worker exists; stops at
+      `deal_provenance` field-merge; the sales-row insert is the gap; staging on gov/dia;
+      state deals mis-route to `dia`). **See grounding above.**
+- [ ] Build the Closed-Won `sf_deal_staging` → `sales_transactions` insert in `sf-promotion-worker`
+      (gated by `lcc_merge_field`, fill-blanks, never clobber a curated/CoStar comp; idempotent on
+      `sf_deal_id`; env-flag for first drain). Cap-rate derived by the trigger, not ingested.
+- [ ] Add state-aware vertical routing in `sf-config.ts routeVertical` (reuse Topic-1 vocab) so state
+      deals route to `gov`.
+- [ ] Confirm the new comp's buyer/seller populates the LCC universe (entity/owner) — "new or
+      confirmed" per Scott.
+- [ ] Test (headless) + a gated live promotion of ONE real Closed-Won deal (fill-blanks, no-clobber,
+      idempotent), same first-drain discipline as Topics 1/2.
 
-**Status: NOT STARTED · awaiting decision**
+**Status: IN PROGRESS · decision (b) made + grounded (worker exists, sales-row insert is the gap);
+build is the next focused step.**
 
 ---
 
