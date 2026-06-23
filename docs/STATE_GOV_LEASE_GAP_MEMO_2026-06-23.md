@@ -389,6 +389,15 @@ honest classification (surface `no_domain`/`State`, never guess).
   `ingest_tfc()` module on a workstation (the gated row 32505 coexists via ON CONFLICT/NOT EXISTS).
   Topic 2 = schema + classifier live, ingest built/validated/gated-live; full bulk + run-logging is
   the workstation step.
+- **2026-06-23** — **Topic 1 live-capture follow-up (CPS/APS):** Scott's Hempstead-portfolio
+  recapture confirmed property 1 (TX Health and Human Services) → Government DB, but property 2
+  (**Children's Protective Services**, Sherman TX) hit `Pipeline error: no_domain` — CPS/APS bare
+  program names weren't covered. Added an anchored `(child|children's|adult|family) protective
+  services` pattern to **both** the JS `GOV_TENANT_PATTERNS` (LCC PR #1301, fixes no_domain on
+  Railway redeploy) **and** the gov `agency_enrichment_rules` (gov PR #306, applied live — sets
+  `government_type='State'`). Verified: CPS/APS → State/government; HHS/DFPS unchanged; a private
+  "Allied Protective Services" security firm correctly does NOT classify gov. Test 5/5. Scott
+  re-captures Sherman after the Railway redeploy to confirm it routes to the Government DB.
 - **2026-06-23** — **TFC full-drain fix** (gov PR #306): the live full run hit `23505` on
   `uq_recorded_owners_canonical` — `recorded_owners` is unique on **`canonical_name`** (a
   normalized form), not `name`, so the name-based NOT-EXISTS guard missed owners colliding under a
