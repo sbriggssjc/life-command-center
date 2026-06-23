@@ -395,7 +395,7 @@ const ROLE_TO_RELATIONSHIP = {
 // Short acronyms use \b boundaries; multi-word phrases use plain includes via
 // the longer string naturally preventing substring collisions.
 
-const GOV_TENANT_PATTERNS = [
+export const GOV_TENANT_PATTERNS = [
   /\bgsa\b/,  /\bgeneral services administration\b/,  /\bveterans affairs\b/,
   /\bva\b/,   /\bsocial security\b/,  /\bssa\b/,  /\birs\b/,
   /\binternal revenue\b/,  /\bfbi\b/,  /\bdea\b/,
@@ -470,6 +470,41 @@ const GOV_TENANT_PATTERNS = [
   /\btax\s+court\b/,                              // U.S. Tax Court
   /\bappeals\s+court\b/,                          // Appeals Courts
   /\bcourt\s+of\s+appeals\b/,                     // Court of Appeals (alt phrasing)
+  // ── State / local government vocabulary (Gap Memo 2026-06-23, Topic 1) ──
+  // The list above is federal-centric; an audit against a real STATE lease
+  // corpus (Texas Facilities Commission "Agency Report", 1,179 leases) found
+  // 54% fell to no_domain because state-agency PROGRAM names and abbreviations
+  // weren't covered — including the trigger case "TX Health and Human Services"
+  // (the single largest tenant, 319 leases). The additions below are anchored
+  // and scoped to avoid false-positiving private tenants: NO bare "department"
+  // ("department store" is retail), NO bare "workforce" ("workforce housing" is
+  // multifamily), NO bare "lottery"/"commission"/"board".
+  /\bhuman services\b/,                           // (TX) Health & Human Services Commission — trigger case
+  /\bdept\.?\s+of\b/,                             // "Dept of"/"Dept. of" abbrev (Texas Dept of Criminal Justice)
+  /\bcomm(?:ission|\.)?\s+on\b/,                  // "Commission on"/"Comm. on" (Comm. on Environmental Quality)
+  /\bcriminal justice\b/,                         // Dept of Criminal Justice
+  /\bjuvenile justice\b/,                         // Juvenile Justice Department
+  /\bparks?\s+and\s+wildlife\b/,                  // Parks and Wildlife Department
+  /\bwildlife\s+(?:department|commission|service|resources?|conservation)\b/,
+  /\bcomptroller\b/,                              // Comptroller of Public Accounts / Office of the Comptroller
+  /\benvironmental quality\b/,                    // (TX) Commission on Environmental Quality
+  /\bconservation\s+(?:board|district|commission)\b/,  // Soil & Water Conservation Board
+  /\blottery commission\b/,                       // (TX) Lottery Commission
+  /\bland office\b/,                              // General Land Office
+  /\brailroad commission\b/,                      // (TX) Railroad Commission (oil & gas regulator)
+  /\bworkforce\s+(?:commission|solutions|development\s+board)\b/,  // Workforce Commission/Solutions
+  /\beducation agency\b/,                         // (TX) Education Agency
+  /\bschool district\b/,                          // independent school districts (municipal gov)
+  /\badministrative hearings\b/,                  // State Office of Administrative Hearings
+  /\bwater development board\b/,                  // (TX) Water Development Board
+  /\balcoholic beverage\s+(?:commission|control)\b/,   // (TX) Alcoholic Beverage Commission
+  /\blicensing\s+(?:and|&)\s+regulation\b/,       // Dept of Licensing & Regulation
+  /\bsecurities board\b/,                         // State Securities Board
+  /\banimal health commission\b/,                // (TX) Animal Health Commission
+  /\bboard of\s+\w+\s+examiners\b/,               // Board of Plumbing Examiners (licensing boards)
+  /\bpublic safety\b/,                            // Dept of Public Safety (state police), common across states
+  /\bstate board\b/,                             // State Board of <profession> (licensing boards)
+  /\bhistorical commission\b/,                    // (TX) Historical Commission
 ];
 
 const DIALYSIS_TENANT_PATTERNS = [
@@ -1194,7 +1229,7 @@ function dropTenantJunk(val) {
   return val;
 }
 
-function classifyDomain(metadata, entityFields) {
+export function classifyDomain(metadata, entityFields) {
   const textParts = [
     dropTenantJunk(metadata.tenant_name),
     dropTenantJunk(metadata.primary_tenant),
