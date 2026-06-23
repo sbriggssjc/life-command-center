@@ -439,3 +439,23 @@ honest classification (surface `no_domain`/`State`, never guess).
   session). Phase 3b (surface state `lessor_change` in the LCC **R53** `v_suspected_sale`
   Decision-Center lane), rent-$-ranking, and Phase-2 dataset URLs are documented follow-ups, out of
   scope. See gov `docs/STATE_LEASE_INVENTORY_PIPELINE_PLAN.md` §8–§10.
+- **2026-06-23** — **State engine Phase 3 normalizer APPLIED LIVE + lead-gen run DONE** (gov DB
+  `scknotsqkcheojiaewwh`): `state_norm_lessor_core` migration applied + verified live (114
+  lessor_change → 92 genuine / 22 churn reproduced by the deployed function; all 22 churn rows are
+  the same owner — c/o swaps / `LLC.`↔`,LLC` / "a Texas LLC" qualifier — 0 false-equals, 0 over-strip).
+  `python -m src.state_events_to_leads --source tx_tfc` then inserted **208 prospect_leads** from 577
+  events (92 lessor_change-genuine + 57 new_lease + 31 relocated + 28 footprint_reduction; 22 churn +
+  273 renewed + 68 removed + 6 agency_change consumed, no lead), **0 insert_failed / 0 dedupe_skipped**;
+  top suspected-sale lead = TFC-TX-01379 Huntsville → Tomball Partners (64,560 SF, LARGE, score 85).
+- **2026-06-23** — **State engine Phase 3b DONE + LIVE** (gov DB): the genuine state `lessor_change`
+  signal now surfaces in the LCC **R53** Decision-Center `suspected_sale` lane — **NO LCC code
+  change** (the lane reads gov `v_suspected_sale` and confirms via `gov_confirm_suspected_sale`).
+  gov migration `sql/20260623_gov_phase3b_state_suspected_sale.sql` (applied live + committed):
+  added a third `state_lessor_change` UNION branch to `v_suspected_sale` (existing gsa/deed branches
+  verbatim) + a registry column `state_lease_sources.lease_key_prefix` (`'TFC-TX-'`) so the lane join
+  is **registry-driven** — a future state's genuine lessor-changes flow in with no view edit.
+  Verified live: **92 `state_lessor_change` rows**, all property-linked, 92 unique subject_refs
+  (`susp:gov:<pid>:state_lessor_change`), **0 cross-signal collisions**; churn excluded by
+  `state_norm_lessor_core`; rows sort NULLS-LAST (TFC has no rent — rent-$-ranking remains the §10
+  follow-up). **Texas is now fully integrated** (ingest → snapshot → diff → events → leads +
+  in-app suspected-sale lane). See gov plan §11.
