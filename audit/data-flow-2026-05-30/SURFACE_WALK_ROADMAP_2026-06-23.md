@@ -26,8 +26,20 @@ Research-workbench findings into one sequenced plan.
   `api/_shared/allowlist.js` mirror + redeploy the dia Edge Function
   (`CLAUDECODE_PROMPT_UIP2b_allowlist_mv_dia_overview.md`). *Learning:* any new dia/gov
   frontend-read table/view/MV must be added to the `data-query` allowlist (both places) — a
-  recurring gap (cf. the QA-02 / R4-D allowlist-residue fixes already in that file). Mark Phase 2
-  DONE after the edge redeploy + a live render check.
+  recurring gap (cf. the QA-02 / R4-D allowlist-residue fixes already in that file).
+- **Phase 2 — UIP2b applied + edge redeployed 2026-06-23.** Claude Code added
+  `mv_dia_overview_stats` to `DIA_READ_TABLES` in the edge source + `allowlist.js` mirror
+  (branch `claude/sleepy-bell-cfgdbx`); Cowork redeployed the dia `data-query` Edge Function
+  **v23** (verify_jwt preserved). Verified live: no read regression (`diaQuery('properties')`
+  → 1000 rows; gov MV intact), `diaQuery('mv_dia_overview_stats')` → the row, and when
+  `renderDiaOverview` runs it populates `diaOverviewStats` and renders the value dashboard —
+  Portfolio at a Glance **$936M** projected rent / **12,280** active props / 45 operators, plus
+  **OPERATOR & GEOGRAPHIC BREAKDOWN** (DaVita 4,292 / Fresenius 3,519 / Independent 688 / US
+  Renal Care…). **Remaining:** a hands-off cold-load render check defeated the automation tab
+  (synthetic nav + 60s CDN cache + synthetic `.click()` not firing the real render path) —
+  needs Scott's 10-sec in-browser eyeball: open Dialysis → Overview, confirm the value blocks
+  render value-first (and gov reads still fine). Mark Phase 2 DONE after that eyeball; then
+  Phase 3.
 
 ## Two themes explain almost everything we found
 1. **The Consumption Layer is missing.** Across Today (research), Priority Queue (cadence
