@@ -2605,7 +2605,8 @@ function _dcAdvance() {
 // BD spine (property -> owner -> link -> lead -> cadence).
 function _pqBandColor(band) {
   var b = String(band || '').toUpperCase();
-  if (b === 'P0') return '#7A1020';
+  // R62: P0/P6/P7 (cadence-touch bands) no longer appear in the queue — outreach
+  // cadence moved to the Cadence Dashboard.
   if (b === 'P0.4') return '#B5651D';
   if (b === 'P0.5') return 'var(--red)';
   if (b === 'P-BUYER') return 'var(--purple)';
@@ -2665,8 +2666,9 @@ function _pqCtaState(it) {
   if (band === 'P-CONTACT' || reason === 'select_prospecting_contact') return 'select_contact';
   // P0.5 doctrine: explicitly needs an opportunity opened (resolution-complete).
   if (band === 'P0.5' || reason === 'open_bd_opportunity_needed') return 'open_opp';
-  // Bands that by definition carry an open opp + an overdue cadence touch.
-  if (band === 'P0' || band === 'P6' || band === 'P7') return 'log_touch';
+  // R62: the cadence-touch bands (P0/P6/P7) were removed from the queue — outreach
+  // cadence is worked on the Cadence Dashboard, not here. No band-specific "Log
+  // touch" CTA remains; the generic open-opportunity states handle the rest.
   if (oppResolved) {
     if (!hasOpp) return 'open_opp';
     return dueNow ? 'log_touch' : 'view_opp';
@@ -2788,7 +2790,7 @@ async function renderPriorityQueuePage(band) {
   var total = data.total || 0;
   var html = '<div class="ops-header"><h2>Priority Queue</h2>'
     + '<button class="q-action" onclick="renderNextBestTouchpoint()">Next best touchpoint →</button>'
-    + '<button class="q-action" onclick="renderCadenceDashboard()">Cadence dashboard →</button>'
+    + '<button class="q-action primary" onclick="renderCadenceDashboard()">Cadence dashboard →</button>'
     + '<button class="q-action" onclick="renderBdWorklist()">Top BD actions →</button>'
     + '<button class="q-action" onclick="renderContactQualifyWorklist()">Qualify contacts →</button></div>';
   html += '<div class="rc-intro">Start here. Your highest-leverage BD targets, most urgent band first. Each row routes straight to the property so you can resolve the owner, confirm the CRM link, and open a lead.</div>';
