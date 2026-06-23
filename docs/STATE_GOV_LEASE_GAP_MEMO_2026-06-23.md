@@ -459,3 +459,31 @@ honest classification (surface `no_domain`/`State`, never guess).
   `state_norm_lessor_core`; rows sort NULLS-LAST (TFC has no rent — rent-$-ranking remains the §10
   follow-up). **Texas is now fully integrated** (ingest → snapshot → diff → events → leads +
   in-app suspected-sale lane). See gov plan §11.
+- **2026-06-23** — **Sidebar classifier: read the SALE COMP's nested Sale Notes** (Topic-1 follow-up
+  #3). Live capture (3411 Horal, San Antonio — a gov-LEASED office sold **private→private**: buyer
+  Foresight Asset Mgmt, seller a private individual; tenant = TX Health & Human Services Commission)
+  hit `no_domain`. Root cause was NOT a classifier-pattern gap (HHSC already matches
+  `\bhuman services\b`): on a CoStar Sale Comps page (`/Comp/NNN/`), `content/costar.js` routes the
+  "Sale Notes" narrative **into the matching sale record** (`sales_history[].sale_notes_raw`), NOT
+  top-level `metadata.sale_notes_raw`, so the ONLY government signal never reached
+  `classifyDomain`'s `searchText`. Fix (`api/_handlers/sidebar-pipeline.js`): the `sales_history`
+  loop in BOTH search-text assemblies (domain + government_type) now also reads
+  `ev.sale_notes_raw` (mirrors the existing Round-76fh `ev.comments`/`ev.entities_text` reads).
+  One-line/additive, ships on the Railway redeploy. Verified: 3411 Horal → `government`; a private
+  office comp with no gov tenant → `null` (no false positive). Regression test added to
+  `test/gov-classifier-state.test.mjs` (7 pass); `node --check` clean; 12 functions.
+
+## Session wrap (2026-06-23) — where this is parked
+
+- **Texas state-lease engine: COMPLETE end-to-end.** ingest (TFC) → `state_lease_snapshots` →
+  `state_monthly_diff` → `state_lease_events` → `prospect_leads` (Phase 3, 208 leads live) → LCC R53
+  `suspected_sale` lane (Phase 3b, 92 live). Recurrence is **manual / folder-drop by Scott's choice**
+  (run `python -m src.run_pipeline --steps 44 --state-source tx_tfc --state-dir "<…/state/Texas>"`
+  when a new TFC report lands; idempotent). Phase 2 (auto-pull / scheduled task) is the documented
+  hands-off follow-up — gov plan §10.
+- **Next chat = add the next state.** The recipe is gov plan §9: a `state_lease_sources` row (with its
+  `lease_key_prefix`) + a thin parser adapter → snapshot/diff/leads **and** the suspected-sale lane
+  all flow automatically; the lessor normalizer + routing are reused.
+- **Open follow-ups (documented, not blocking):** rent enrichment for $-ranking the state leads/lane;
+  Phase 2 automation; finer-grained TX history (only July 2023 + June 2026 snapshots exist — check the
+  `Old/` folder for intermediate months).

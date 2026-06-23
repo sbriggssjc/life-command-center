@@ -1305,6 +1305,16 @@ export function classifyDomain(metadata, entityFields) {
     for (const ev of metadata.sales_history) {
       if (ev?.comments) textParts.push(String(ev.comments).substring(0, 300));
       if (ev?.entities_text) textParts.push(String(ev.entities_text).substring(0, 200));
+      // On a CoStar Sale Comps page (/Comp/NNN/), the parser routes the "Sale
+      // Notes" narrative INTO the matching sale record (sales_history[].
+      // sale_notes_raw), NOT top-level metadata.sale_notes_raw. For a
+      // government-LEASED comp sold private→private (3411 Horal, San Antonio:
+      // buyer Foresight Asset Mgmt, seller a private individual), the ONLY gov
+      // signal is the tenant named in those Sale Notes ("...fully leased by the
+      // Texas Health And Human Services Commission"). Without this read the
+      // capture classified no_domain even though the tenant matches a State
+      // agency pattern. 2026-06-23.
+      if (ev?.sale_notes_raw) textParts.push(String(ev.sale_notes_raw).substring(0, 300));
     }
   }
 
@@ -1390,6 +1400,16 @@ function classifyAllApplicableDomains(metadata, entityFields) {
     for (const ev of metadata.sales_history) {
       if (ev?.comments) textParts.push(String(ev.comments).substring(0, 300));
       if (ev?.entities_text) textParts.push(String(ev.entities_text).substring(0, 200));
+      // On a CoStar Sale Comps page (/Comp/NNN/), the parser routes the "Sale
+      // Notes" narrative INTO the matching sale record (sales_history[].
+      // sale_notes_raw), NOT top-level metadata.sale_notes_raw. For a
+      // government-LEASED comp sold private→private (3411 Horal, San Antonio:
+      // buyer Foresight Asset Mgmt, seller a private individual), the ONLY gov
+      // signal is the tenant named in those Sale Notes ("...fully leased by the
+      // Texas Health And Human Services Commission"). Without this read the
+      // capture classified no_domain even though the tenant matches a State
+      // agency pattern. 2026-06-23.
+      if (ev?.sale_notes_raw) textParts.push(String(ev.sale_notes_raw).substring(0, 300));
     }
   }
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
