@@ -2046,6 +2046,16 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 
 /* Review Console lanes (UX move #2b, 2026-05-31) */
 .rc-intro { font-size: 13px; color: var(--text3); max-width: 720px; margin: 0 0 16px; line-height: 1.5; }
+/* Decision Center — R64 two-section split (actionable verdicts vs DQ on-demand) */
+.rc-section { margin: 0 0 22px; }
+.rc-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px; }
+.rc-section-head h3 { font-size: 16px; font-weight: 700; color: var(--text); margin: 0; }
+.rc-section-count { font-size: 13px; font-weight: 600; color: var(--text2); white-space: nowrap; }
+.rc-section-sub { font-size: 12px; color: var(--text3); margin: 0 0 10px; line-height: 1.4; }
+.rc-section-tag { font-size: 11px; font-weight: 600; color: var(--text3); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.04em; }
+.rc-section-dq { opacity: 0.92; }
 /* Decision Center — SF-mapping pick-list (R7 Phase 2.1) */
 .dcsf { margin: 8px 0 4px; }
 .dcsf-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }

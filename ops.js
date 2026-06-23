@@ -1414,6 +1414,18 @@ window.renderOpsHealthPage = renderOpsHealthPage;
 // legacy review-count lanes follow under "More review work" until Phase 2
 // converts them. Each decision lane: question → subject+context card → 2-4
 // one-click verdicts → workable top-N by $ value, self-propelling.
+// R64 — the federated DATA-QUALITY decision types (large/churning source-view
+// universes worked on demand). Everything NOT in this set is a bounded, seeded
+// VERDICT lane whose count drives the nav badge. Keep in sync with
+// FEDERATED_DECISION_TYPES in api/admin.js — the two define the same partition.
+var _DC_FEDERATED = new Set([
+  'intake_disposition', 'property_merge', 'provenance_conflict', 'pending_update',
+  'cms_link_suspect', 'implausible_value', 'merge_duplicate_entities',
+  'caprate_review', 'bad_rent_lease', 'resolve_owner_parent',
+  'listing_event_action', 'owner_source_conflict', 'suspected_sale', 'loan_maturity',
+]);
+function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
+
 function _dcMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
 function _dcLaneCard(count, label, sub, onclick, tone) {
   const countStr = (typeof count === 'number') ? count.toLocaleString() : '—';
@@ -1492,35 +1504,60 @@ async function renderReviewConsolePage() {
 
   const laneOf = (typeof laneForDecisionType === 'function') ? laneForDecisionType : function () { return 'automation'; };
   const lanesDef = (typeof LCC_REVIEW_LANES !== 'undefined' && LCC_REVIEW_LANES) ? LCC_REVIEW_LANES : [];
-  const grouped = {};
-  SUBLANES.forEach(function (s) { const k = laneOf(s.dt) || 'automation'; (grouped[k] = grouped[k] || []).push(s); });
 
-  let totalOpen = 0;
-  html += '<div class="rc-lanes-grouped">';
-  // Render in lane-map order; fall back to a single flat group if the map didn't load.
-  (lanesDef.length ? lanesDef : [{ lane: '_all', title: 'Decisions', question: '' }]).forEach(function (L) {
-    const subs = (L.lane === '_all') ? SUBLANES : (grouped[L.lane] || []);
-    if (!subs.length) return;
-    const need = subs.reduce(function (a, s) { return a + subN(s); }, 0);
-    const handled = subs.reduce(function (a, s) { return a + subHandled(s); }, 0);
-    totalOpen += need;
-    html += '<div class="rc-glane' + (need > 0 ? '' : ' rc-lane-clear') + '">'
-      + '<div class="rc-glane-head"><div class="rc-glane-title">' + esc(L.title) + '</div>'
-      + '<div class="rc-glane-counts">'
-      + (need > 0 ? '<span class="rc-need">' + need + ' need you</span>' : '<span class="rc-clear">✓ clear</span>')
-      + (handled > 0 ? ' <span class="rc-handled">' + handled + ' handled</span>' : '')
-      + '</div></div>'
-      + (L.question ? '<div class="rc-glane-q">' + esc(L.question) + '</div>' : '')
-      + '<div class="rc-sublanes">';
-    subs.forEach(function (s) {
-      const n = subN(s);
-      html += '<button class="rc-sublane' + (n > 0 ? ' has-work' : '') + '" onclick="' + esc(s.open) + '">'
-        + '<span class="rc-sublane-label">' + esc(s.label) + '</span>'
-        + '<span class="rc-sublane-n">' + n + '</span></button>';
+  // R64 — TWO sections, TWO questions (Producer/Consumer invariants #3 + #5):
+  //   • VERDICT lanes (bounded, seeded) = the primary worklist; its count drives
+  //     the nav badge. The genuinely-actionable decisions, value-ranked + capped.
+  //   • DATA-QUALITY lanes (large/churning, federated source views) = a separate
+  //     "review on demand" group with its OWN honest count — it must NEVER inflate
+  //     the primary badge (the 999+ trap that buries the actionable verdicts).
+  function _renderLaneGroups(subsList) {
+    const grouped = {};
+    subsList.forEach(function (s) { const k = laneOf(s.dt) || 'automation'; (grouped[k] = grouped[k] || []).push(s); });
+    let need = 0, out = '<div class="rc-lanes-grouped">';
+    (lanesDef.length ? lanesDef : [{ lane: '_all', title: 'Decisions', question: '' }]).forEach(function (L) {
+      const subs = (L.lane === '_all') ? subsList : (grouped[L.lane] || []);
+      if (!subs.length) return;
+      const gneed = subs.reduce(function (a, s) { return a + subN(s); }, 0);
+      const ghandled = subs.reduce(function (a, s) { return a + subHandled(s); }, 0);
+      need += gneed;
+      out += '<div class="rc-glane' + (gneed > 0 ? '' : ' rc-lane-clear') + '">'
+        + '<div class="rc-glane-head"><div class="rc-glane-title">' + esc(L.title) + '</div>'
+        + '<div class="rc-glane-counts">'
+        + (gneed > 0 ? '<span class="rc-need">' + gneed + ' need you</span>' : '<span class="rc-clear">✓ clear</span>')
+        + (ghandled > 0 ? ' <span class="rc-handled">' + ghandled + ' handled</span>' : '')
+        + '</div></div>'
+        + (L.question ? '<div class="rc-glane-q">' + esc(L.question) + '</div>' : '')
+        + '<div class="rc-sublanes">';
+      subs.forEach(function (s) {
+        const n = subN(s);
+        out += '<button class="rc-sublane' + (n > 0 ? ' has-work' : '') + '" onclick="' + esc(s.open) + '">'
+          + '<span class="rc-sublane-label">' + esc(s.label) + '</span>'
+          + '<span class="rc-sublane-n">' + n + '</span></button>';
+      });
+      out += '</div></div>';
     });
-    html += '</div></div>';
-  });
-  html += '</div>';
+    out += '</div>';
+    return { html: out, need: need };
+  }
+
+  const verdictSubs = SUBLANES.filter(function (s) { return _dcIsVerdictLane(s.dt); });
+  const dqSubs = SUBLANES.filter(function (s) { return !_dcIsVerdictLane(s.dt); });
+  const verdictG = _renderLaneGroups(verdictSubs);
+  const dqG = _renderLaneGroups(dqSubs);
+  const totalOpen = verdictG.need; // the badge = ACTIONABLE verdicts only
+
+  html += '<div class="rc-section rc-section-primary">'
+    + '<div class="rc-section-head"><h3>Decisions that need you</h3>'
+    + '<span class="rc-section-count">' + verdictG.need.toLocaleString() + ' to decide</span></div>'
+    + '<div class="rc-section-sub">Bounded, value-ranked verdicts — work the highest-value items first.</div>'
+    + verdictG.html + '</div>';
+
+  html += '<div class="rc-section rc-section-dq">'
+    + '<div class="rc-section-head"><h3>Data-quality review <span class="rc-section-tag">on demand</span></h3>'
+    + '<span class="rc-section-count">' + dqG.need.toLocaleString() + ' in the queue</span></div>'
+    + '<div class="rc-section-sub">A large, mostly self-clearing data-quality backlog worked on demand — NOT part of the badge above.</div>'
+    + dqG.html + '</div>';
 
   if (typeof setReviewNavBadge === 'function') setReviewNavBadge(totalOpen);
 
@@ -1547,7 +1584,13 @@ window.setReviewNavBadge = setReviewNavBadge;
 async function refreshReviewNavBadge() {
   try {
     const [r, rc] = await Promise.all([opsApi('/api/decisions?summary=1'), opsApi('/api/review-counts')]);
-    let total = (r.ok && r.data && typeof r.data.total === 'number') ? r.data.total : 0;
+    // R64: the badge is ACTIONABLE verdicts only — sum the seeded (non-federated)
+    // lanes + the SOS owner-contact worklist. The large federated DQ universe is
+    // worked on demand and must never inflate the badge (the 999+ trap).
+    let total = 0;
+    if (r.ok && r.data && Array.isArray(r.data.lanes)) {
+      r.data.lanes.forEach(function (l) { if (_dcIsVerdictLane(l.decision_type)) total += Number(l.n) || 0; });
+    }
     if (rc.ok && rc.data && Array.isArray(rc.data.lanes)) {
       const s = rc.data.lanes.find(function (l) { return l.key === 'sos_owner_links'; });
       if (s && typeof s.count === 'number') total += s.count;
