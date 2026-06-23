@@ -49,6 +49,40 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 - `lcc_cron_post()` helper reads API key from Supabase Vault, POSTs via pg_net to Vercel or Edge endpoints
 - All rewrites defined in vercel.json — order matters (specific before catch-all)
 
+## Client routing (UI Phase 1) — hash is the source of truth
+
+The SPA uses **hash routing** (`location.hash`, not History clean URLs) so the
+Railway static/Express server needs **no catch-all rewrite**. The hash mirrors
+the current `{page, open-detail}`; existing in-app click handlers still work but
+now also drive the hash. Empty/unknown hash ⇒ Today (no regression). No PII in
+the URL — ids/tab/domain only, never names/emails/addresses.
+
+- **Scheme:** `#/<page-slug>[?d=<detail-token>]`
+  - detail-token `prop:<db>:<propertyId>:<encodedTab>` (→ `openUnifiedDetail`)
+    or `entity:<entityId>` (→ `openEntityDetail`). Tabs are `encodeURIComponent`'d.
+  - Example: `#/dia?d=prop:dia:24703:Overview`.
+- **slug↔pageId map:** `ROUTE_SLUG_TO_PAGE` in `app.js` (single source; reverse
+  `ROUTE_PAGE_TO_SLUG`; legacy aliases `ROUTE_PAGE_ALIAS` e.g. pageMyWork→pagePipeline).
+  `dia`/`gov` are bnav shortcuts that render `pageBiz`. Legacy PWA `#page=<id>`
+  (manifest.json shortcuts) is still parsed.
+- **Router entry points (`app.js`):**
+  - WRITE side: `navToFromMore` + the `.bnav` click handler call `_routeSetPageHash`;
+    `openUnifiedDetail`/`openEntityDetail` (detail.js) call `_routeSetDetailHash`;
+    `switchUnifiedTab` (detail.js) calls `_routeUpdateTabHash` (replace, so reload
+    keeps the tab); `closeDetail` (app.js) calls `_routeClearDetailHash`.
+  - READ side: `applyRoute()` is the single `hashchange` + initial-load handler.
+    It parses the hash (`_routeParseHash`, never throws) and drives the page via
+    `navTo` + the detail via `openUnifiedDetail`/`openEntityDetail`/`switchUnifiedTab`
+    — it does NOT duplicate the render paths.
+- **Loop guard:** `_routerApplying` is true while `applyRoute` runs, so the WRITE
+  helpers no-op; writers also skip when the desired hash equals the current one
+  (assigning an equal hash never re-fires `hashchange`). Opening a detail is a
+  PUSH; Back from an open detail removes the `?d=` segment → `applyRoute` closes
+  it (does not exit the app). Tab changes + closes use REPLACE (no history noise).
+- **Phase 4 (NOT built here):** the lateral back-stack, breadcrumb, and
+  entity-parity (the zoom-in/zoom-out model) ride on this same route shape.
+  Keep the detail-token parseable so Phase 4 can extend it with a lateral stack.
+
 ## OM Intake Pipeline — three channels, one shared path
 
 All three OM intake channels converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:

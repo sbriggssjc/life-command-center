@@ -1003,6 +1003,8 @@ function navToFromMore(pageId) {
   _setDisplay('diaInnerTabs', 'none');
   // Trigger page-specific loading
   handlePageLoad(pageId);
+  // Client routing (UI Phase 1): mirror the page into the hash.
+  _routeSetPageHash(pageId);
 }
 
 function toggleMoreDrawer() {
@@ -2100,6 +2102,7 @@ document.querySelectorAll('.bnav[data-page]').forEach(btn => {
       _setDisplay('bizSubTabs', 'flex');
       switchBizTab(domainShortcuts[targetPage]);
       handlePageLoad('pageBiz');
+      _routeSetPageHash(targetPage);
       return;
     }
     document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
@@ -2115,7 +2118,231 @@ document.querySelectorAll('.bnav[data-page]').forEach(btn => {
     _setDisplay('govInnerTabs', 'none');
     _setDisplay('diaInnerTabs', 'none');
     handlePageLoad(targetPage);
+    _routeSetPageHash(targetPage);
   });
+});
+
+// ============================================================
+// CLIENT ROUTING (UI Phase 1) — the hash is the source of truth for
+// {page, open-detail}. Additive + loop-guarded; needs no server change
+// (hash routing requires no Express catch-all rewrite).
+//
+// Scheme:  #/<page-slug>[?d=<detail-token>]
+//   detail-token = prop:<db>:<propertyId>:<encodedTab>   (openUnifiedDetail)
+//                | entity:<entityId>                      (openEntityDetail)
+//   No PII in the URL — ids / tab / domain only, never names/emails/addresses.
+//
+// Entry points: navTo + navToFromMore + the bnav click handler WRITE the hash
+// (guarded); the hashchange handler (applyRoute) READS it and drives the page
+// switch + detail open via the EXISTING render paths (it does not duplicate
+// them). The lateral back-stack + breadcrumb (the zoom-out model) are Phase 4,
+// built on this same route shape.
+// ============================================================
+const ROUTE_SLUG_TO_PAGE = {
+  today: 'pageHome',
+  priority: 'pagePriorityQueue',
+  dia: 'pageDia',
+  gov: 'pageGov',
+  pipeline: 'pagePipeline',
+  inbox: 'pageInbox',
+  decisions: 'pageReviewConsole',
+  research: 'pageResearch',
+  'data-quality': 'pageDataQuality',
+  messages: 'pageMessages',
+  contacts: 'pageContacts',
+  entities: 'pageEntities',
+  business: 'pageBiz',
+  metrics: 'pageMetrics',
+  calendar: 'pageCal',
+  'sync-health': 'pageSyncHealth',
+  'ops-health': 'pageOpsHealth',
+  settings: 'pageSettings'
+};
+const ROUTE_PAGE_TO_SLUG = Object.fromEntries(
+  Object.entries(ROUTE_SLUG_TO_PAGE).map(([slug, pageId]) => [pageId, slug])
+);
+// Legacy page aliases that redirect to a canonical page (mirror handlePageLoad).
+const ROUTE_PAGE_ALIAS = { pageMyWork: 'pagePipeline', pageTeamQueue: 'pagePipeline' };
+
+let _routerApplying = false;     // true while applyRoute() drives nav (loop guard)
+let _routeCurrentDetail = null;  // {kind,db,id,tab} for the open detail (tab sync)
+
+function _routePageToSlug(pageId) {
+  if (!pageId) return null;
+  const canon = ROUTE_PAGE_ALIAS[pageId] || pageId;
+  return ROUTE_PAGE_TO_SLUG[canon] || null;
+}
+
+function _routeParseDetail(token) {
+  if (!token) return null;
+  try {
+    const parts = String(token).split(':');
+    const kind = parts[0];
+    if (kind === 'prop') {
+      const db = parts[1] === 'gov' ? 'gov' : 'dia';
+      const id = parts[2];
+      if (!id) return null;
+      const tab = parts[3] ? decodeURIComponent(parts[3]) : null;
+      return { kind: 'prop', db, id, tab };
+    }
+    if (kind === 'entity') {
+      const id = parts.slice(1).join(':');
+      return id ? { kind: 'entity', id } : null;
+    }
+    return null;
+  } catch (_) { return null; }
+}
+
+// Parse location.hash into { page, detail }. Never throws on a malformed hash.
+function _routeParseHash(rawHash) {
+  try {
+    let h = String(rawHash || '');
+    if (h.startsWith('#')) h = h.slice(1);
+    if (!h) return { page: null, detail: null };
+    // Legacy PWA shortcut: #page=pageMyWork
+    if (h.startsWith('page=')) {
+      const pid = h.slice(5);
+      const canon = ROUTE_PAGE_ALIAS[pid] || pid;
+      return { page: (canon && document.getElementById(canon)) || ROUTE_PAGE_TO_SLUG[canon] ? canon : null, detail: null };
+    }
+    if (!h.startsWith('/')) return { page: null, detail: null };
+    h = h.slice(1);
+    let slug = h;
+    let detailToken = null;
+    const qIdx = h.indexOf('?');
+    if (qIdx >= 0) {
+      slug = h.slice(0, qIdx);
+      h.slice(qIdx + 1).split('&').forEach(pair => {
+        const eq = pair.indexOf('=');
+        if (eq > 0 && pair.slice(0, eq) === 'd') detailToken = pair.slice(eq + 1);
+      });
+    }
+    slug = slug.replace(/\/+$/, '').toLowerCase();
+    return { page: ROUTE_SLUG_TO_PAGE[slug] || null, detail: _routeParseDetail(detailToken) };
+  } catch (_) {
+    return { page: null, detail: null };
+  }
+}
+
+function _routeDetailIsOpen() {
+  const overlay = document.getElementById('detailOverlay');
+  return !!(overlay && overlay.classList.contains('open'));
+}
+
+function _routeIsPageActive(pageId) {
+  const canon = ROUTE_PAGE_ALIAS[pageId] || pageId;
+  // Domain shortcuts render pageBiz; "active" = pageBiz + the matching bnav.
+  if (canon === 'pageDia' || canon === 'pageGov') {
+    const b = document.querySelector('.bnav.active');
+    return !!(b && b.dataset.page === canon);
+  }
+  const ap = document.querySelector('.page.active');
+  return !!(ap && ap.id === canon);
+}
+
+function _routeSameDetail(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'prop') return a.db === b.db && String(a.id) === String(b.id);
+  if (a.kind === 'entity') return String(a.id) === String(b.id);
+  return false;
+}
+
+// Read the hash and drive the page + detail via the existing render paths.
+// Loop-guarded: _routerApplying suppresses the WRITE side while we apply.
+function applyRoute() {
+  const { page, detail } = _routeParseHash(location.hash);
+  _routerApplying = true;
+  try {
+    const targetPage = page || 'pageHome';
+    if (!_routeIsPageActive(targetPage) && typeof navTo === 'function') {
+      navTo(targetPage);
+    }
+    if (detail) {
+      if (!_routeSameDetail(detail, _routeCurrentDetail)) {
+        _routeCurrentDetail = detail;
+        if (detail.kind === 'prop' && typeof openUnifiedDetail === 'function') {
+          openUnifiedDetail(detail.db, { property_id: detail.id }, {}, detail.tab || undefined);
+        } else if (detail.kind === 'entity' && typeof openEntityDetail === 'function') {
+          openEntityDetail(detail.id);
+        }
+      } else if (detail.tab && _routeCurrentDetail && detail.tab !== _routeCurrentDetail.tab
+                 && typeof switchUnifiedTab === 'function') {
+        // Same detail, tab changed via Back/Forward across tabs.
+        _routeCurrentDetail = detail;
+        switchUnifiedTab(detail.tab);
+      }
+    } else if (_routeDetailIsOpen() && typeof closeDetail === 'function') {
+      // The detail segment is gone (e.g. Back from an open detail) → close it.
+      _routeCurrentDetail = null;
+      closeDetail();
+    }
+  } finally {
+    _routerApplying = false;
+  }
+}
+
+// --- hash WRITERS (no-op while the router is applying, and on an equal hash so
+// assigning never re-fires hashchange → no loop) ---
+function _routePush(newHash) {
+  if (location.hash === newHash) return;
+  location.hash = newHash;             // creates a history entry
+}
+function _routeReplace(newHash) {
+  if (location.hash === newHash) return;
+  try { history.replaceState(null, '', newHash); }
+  catch (_) { location.hash = newHash; }
+}
+
+function _routeSetPageHash(pageId) {
+  if (_routerApplying) return;
+  const slug = _routePageToSlug(pageId);
+  if (!slug) return;
+  _routeCurrentDetail = null;          // a page nav clears the tracked detail
+  _routePush('#/' + slug);
+}
+
+function _routeCurrentPageSlug() {
+  const parsed = _routeParseHash(location.hash);
+  if (parsed.page) return _routePageToSlug(parsed.page);
+  const ap = document.querySelector('.page.active');
+  return (ap && _routePageToSlug(ap.id)) || 'today';
+}
+
+function _routeSetDetailHash(detail, opts) {
+  if (_routerApplying || !detail) return;
+  let token;
+  if (detail.kind === 'prop') {
+    if (!detail.id) return;            // need a stable id to deep-link
+    token = 'prop:' + (detail.db === 'gov' ? 'gov' : 'dia') + ':' + detail.id +
+            ':' + encodeURIComponent(detail.tab || '');
+  } else if (detail.kind === 'entity') {
+    if (!detail.id) return;
+    token = 'entity:' + detail.id;
+  } else { return; }
+  _routeCurrentDetail = detail;        // set BEFORE the push so applyRoute no-ops
+  const newHash = '#/' + (_routeCurrentPageSlug() || 'today') + '?d=' + token;
+  if (opts && opts.replace) _routeReplace(newHash); else _routePush(newHash);
+}
+
+// Tab change inside an open property detail → update the tab segment (replace,
+// so reload keeps the tab and no history entry / loop is created).
+function _routeUpdateTabHash(tabName) {
+  if (_routerApplying || !_routeCurrentDetail || _routeCurrentDetail.kind !== 'prop') return;
+  _routeSetDetailHash(Object.assign({}, _routeCurrentDetail, { tab: tabName }), { replace: true });
+}
+
+// Drop the detail segment from the hash (e.g. the × / Back button in the panel).
+function _routeClearDetailHash() {
+  if (_routerApplying) return;
+  _routeCurrentDetail = null;
+  const parsed = _routeParseHash(location.hash);
+  if (!parsed.detail) return;          // nothing to clear
+  const slug = (parsed.page && _routePageToSlug(parsed.page)) || _routeCurrentPageSlug();
+  _routeReplace('#/' + (slug || 'today'));
+}
+
+window.addEventListener('hashchange', function () {
+  try { applyRoute(); } catch (_) { /* never throw on a malformed hash */ }
 });
 
 document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
@@ -5232,6 +5459,10 @@ function closeDetail() {
   _setHTML('detailHeader', '');
   _setHTML('detailTabs', '');
   _setHTML('detailBody', '');
+  // Client routing (UI Phase 1): drop the detail segment so the hash returns to
+  // the bare page route. No-op when the router itself drove this close (Back/
+  // Forward already changed the hash).
+  if (typeof _routeClearDetailHash === 'function') _routeClearDetailHash();
 }
 
 function switchDetailTab(tabName) {
@@ -6375,15 +6606,14 @@ function renderYieldSVG(container, data, range) {
 
 // Wire up chart range buttons
 document.addEventListener('DOMContentLoaded', () => {
-  // Hash-based deep linking for PWA shortcuts (e.g. #page=pageMyWork)
+  // Client routing (UI Phase 1): the hash is the source of truth for the
+  // current page + open detail. Re-hydrates from #/<slug>[?d=...] on load, and
+  // still honours the legacy PWA shortcut (#page=<id>). Deferred a tick so the
+  // ops/gov/dia render functions (separate scripts) are all defined.
   try {
-    const hash = location.hash;
-    if (hash && hash.startsWith('#page=')) {
-      const pageId = hash.slice(6);
-      if (/^[a-zA-Z]+$/.test(pageId) && document.getElementById(pageId)) {
-        setTimeout(function() { navTo(pageId); }, 0);
-      }
-    }
+    setTimeout(function () {
+      try { applyRoute(); } catch (_) { /* never block init on a malformed hash */ }
+    }, 0);
   } catch (_) { /* ignore hash parse errors */ }
 
   document.getElementById('yieldChartControls')?.addEventListener('click', (e) => {
