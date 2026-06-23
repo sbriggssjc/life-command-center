@@ -155,13 +155,38 @@ truncated to 2022). Also refined the `lease_termination_rate` and
 (~8,000) definition + the TERMN-option-date caveat. (`api/_shared/cm-excel-export.js`,
 ships on the Railway redeploy; `node --check` clean, 12 functions.)
 
-## Task 5 — config polish (not done; recommendations stand)
-Y-axis min/max fit-to-range (dia chart 2, gov 11); recolor the gov Rent Heat Map
-by State (`cm_gov_rent_heat_map`) via `cm_brand_tokens.json`; resolve the gov "Cap
-Rate by Remaining Lease Term" (asking) vs "…Closed Sales by Lease Term Remaining"
-(closed) duplicate — both appear intentional (asking vs closed); confirm with
-Scott before removing either. These need rendered-output verification; deferred to
-avoid changing working chart config blind.
+## Task 5 — config polish
+
+**Heat-map recolor — DONE.** The gov Rent Heat Map by State was rendering as flat
+navy bars (single fill) in BOTH the native Excel chart and the PNG fallback —
+that's the "current scheme hides the data" complaint (it's a heat map with no
+heat). Added `heatRampColors()` (`cm-native-chart-injector.js`): a pure pale-sky
+→ NM-Blue ramp by each state's `avg_rpsf`, applied as per-bar `<c:dPt>` fills in
+the native bar (guarded — absent `spec.colors` ⇒ byte-identical to every other
+bar chart) and as a `backgroundColor` array in the PNG renderer. Now the bars
+shade light→dark by rent. Test: `test/cm-heat-ramp.test.mjs` (4, incl. the
+cross-module import). Ships on the Railway redeploy; no view/data change.
+
+**Cap-by-term "duplicate" — confirmed NOT a dupe (don't delete blind).** Grounding
+the trio: `cap_rate_by_lease_term` ("Cap Rate by Remaining Lease Term",
+**closed-sale TTM LINE**, Data_Cap_by_Term) vs `sold_cap_by_term_dot_plot`
+("…Closed Sales by Lease Term Remaining", **closed-sale per-deal DOT** plot,
+Data_Sold_Cap_by_Term) vs `asking_cap_by_term_dot_plot` (**asking** dot plot,
+Data_Ask_Cap_by_Term). The two the reviewer flagged are both **closed-sale** — a
+time-trend LINE vs a recent-window dispersion DOT plot (complementary views, not
+the same chart); the genuine asking-vs-closed pair is the closed-dots vs the
+asking-dots. So all three are intentional. **Recommendation:** keep the closed
+LINE + the asking DOTS; the closed DOTS is the only candidate to drop if the deck
+wants one fewer term-cap panel — an editorial call for Scott, not a blind delete.
+
+**Y-axis min/max — mechanism confirmed; specific charts need naming.** The
+line/bar builders already accept `spec.yAxisRange:{min,max}` (`valAxScalingFrag`)
+— pinning is per-chart config, just not set on the flagged "dia chart 2 / gov 11".
+Those chart numbers aren't resolvable from the export code without the June-22
+review doc's numbering, and pinning a wrong range hurts more than it helps, so I
+held rather than guess. Tell me which two charts (or "all the cap-rate trend
+charts") and I'll add a fitted range — the classic win is a non-zero floor on the
+cap-rate line charts so 6–8% movement isn't flattened against a 0-based axis.
 
 ---
 
