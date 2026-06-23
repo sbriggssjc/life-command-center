@@ -726,7 +726,11 @@ async function handlePriorityQueueList(req, res) {
     }
   }
   // Stable doctrinal order for the chips.
-  const BAND_ORDER = ['P0','P0.4','P0.5','P-BUYER','P1','P2','P3','P4','P5','P6','P7','P-CONTACT','P8'];
+  // R62: the cadence-TOUCH bands (P0 developer_overdue / P6 onboarding_step_due /
+  // P7 steady_state_cadence_due) are no longer in v_priority_queue — outreach
+  // cadence lives on the Cadence Dashboard. The queue is BD pursuit + the two
+  // connect bands (P0.4 / P-CONTACT).
+  const BAND_ORDER = ['P0.4','P0.5','P-BUYER','P1','P2','P3','P4','P5','P-CONTACT','P8'];
   const counts = Object.keys(countMap)
     .sort((a, b) => (BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b)))
     .map(b => ({ band: b, n: countMap[b] }));
