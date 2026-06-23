@@ -5104,6 +5104,39 @@ function _udExportOperations() {
   const annualTx = hcrisTx || finTxExp || (rawTxExp ? Number(rawTxExp) : null) || (bestPatientCount ? bestPatientCount * 156 : null);
   const revPerTx = (estRevenue && annualTx) ? (Number(estRevenue) / annualTx) : null;
 
+  // ── Client-export specifics (net-lease framing) ──
+  // Headline census = concurrent (point-in-time) figure, which reconciles with
+  // chairs / utilization / treatments. The CMS annual snapshot count is a
+  // cumulative facility figure kept separate to avoid the 158-vs-31 contradiction
+  // the prior export shipped.
+  const concurrentCensus = (r.latest_estimated_patients != null) ? Number(r.latest_estimated_patients)
+        : (finDetail.patient_count != null ? Number(finDetail.patient_count) : null);
+  const cmsAnnualPatients = latestSnapshotPt > 0 ? latestSnapshotPt : null;
+  const censusHeadline = concurrentCensus != null ? concurrentCensus : bestPatientCount;
+  const utilPct = r.capacity_utilization_pct != null ? Number(r.capacity_utilization_pct) : null;
+  const demo = ext.demographics || null;
+  // Composite risk (reuse the in-app model so screen + export agree)
+  let leaseMonths = null;
+  if (lease.expiration_date) { const _ld = new Date(lease.expiration_date); leaseMonths = Math.round((_ld - new Date()) / (1000 * 60 * 60 * 24 * 30.44)); }
+  let riskScores = null, riskLevel = '', riskColor = B.muted;
+  try {
+    if (typeof _computeLeaseRisk === 'function') {
+      riskScores = _computeLeaseRisk(r, trends, quality, lease, leaseMonths, margin);
+      riskLevel = riskScores.total <= 25 ? 'Low' : riskScores.total <= 50 ? 'Moderate' : riskScores.total <= 75 ? 'High' : 'Critical';
+      riskColor = riskScores.total <= 25 ? '#2E7D32' : riskScores.total <= 50 ? '#B26A00' : riskScores.total <= 75 ? '#C75300' : '#B3261E';
+    }
+  } catch (_re) { riskScores = null; }
+  // Comparative rankings → percentile (higher = larger). County rank in
+  // v_property_rankings groups by county NAME only (ignores state), so it is
+  // intentionally excluded from the client export.
+  const _pctile = (rank, total) => (rank && total && total > 0) ? Math.max(1, Math.round(((total - rank) / total) * 100)) : null;
+  const _ord = n => { if (n == null) return ''; const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+  const rankRows = [
+    { scope: 'Tennessee', stAbbr: stateVal || 'State', patRank: r.state_patient_rank, revRank: r.state_revenue_rank, total: r.state_total },
+    { scope: 'National', stAbbr: 'National', patRank: r.national_patient_rank, revRank: r.national_revenue_rank, total: r.national_total },
+  ].filter(x => (x.patRank && x.total) || (x.revRank && x.total));
+  const operatorName = _esc(r.chain_organization || r.operator_name || (operator && operator.label) || 'N/A');
+
   // Hours
   let hoursBlock = '<p style="color:' + B.muted + ';font-style:italic">Hours data not available for this facility.</p>';
   if (hoursInfo && hoursInfo.hours_json) {
@@ -5136,7 +5169,7 @@ function _udExportOperations() {
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
   const doc = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${facilityName} \u2014 Clinic Operations Report | Northmarq</title>
+<html><head><meta charset="utf-8"><title>${facilityName} \u2014 Net-Lease Asset Profile | Northmarq</title>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
   @media print {
@@ -5192,69 +5225,120 @@ function _udExportOperations() {
   .star { color: #E97132; }
   .star-empty { color: ${B.border}; }
   .highlight { color: ${B.blue}; font-weight: 700; }
+
+  /* ── Net-lease export additions ── */
+  .snap { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 22px 0 8px; }
+  .sk { background: ${B.warmWhite}; border: 1px solid ${B.border}; border-radius: 6px; padding: 13px 14px; }
+  .sk .l { font-size: 8.5px; text-transform: uppercase; letter-spacing: .9px; color: ${B.muted}; font-weight: 700; margin-bottom: 5px; }
+  .sk .v { font-family: ${B.headingFont}; font-size: 19px; font-weight: 700; color: ${B.navy}; line-height: 1.1; }
+  .sk .v small { font-size: 11px; font-weight: 600; color: ${B.muted}; }
+  .sk.accent { background: ${B.blue}; border-color: ${B.blue}; }
+  .sk.accent .l { color: rgba(255,255,255,.8); }
+  .sk.accent .v { color: #fff; }
+  .ctx { display: block; color: ${B.muted}; font-weight: 400; font-size: 11px; margin-top: 2px; }
+  h2 .note { float: right; text-transform: none; letter-spacing: 0; font-size: 10.5px; color: ${B.muted}; font-weight: 600; font-family: ${B.bodyFont}; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { border: 1px solid ${B.border}; border-radius: 6px; overflow: hidden; margin-bottom: 6px; }
+  .card .ch { background: ${B.blueTint}; color: ${B.navy}; font-family: ${B.headingFont}; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
+  .card .data-table { margin: 0; }
+  .card .data-table td:first-child { width: 140px; }
+  .bar { display: inline-block; width: 120px; height: 9px; background: ${B.border}; border-radius: 5px; overflow: hidden; vertical-align: middle; margin-right: 8px; }
+  .bar i { display: block; height: 100%; background: ${B.blue}; }
+  .pill { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 10px; letter-spacing: .3px; }
+  .pill.good { background: #E5F1E6; color: #2E7D32; }
+  .pill.warn { background: #FBF0DF; color: #B26A00; }
+  .pill.bad  { background: #FBE6E4; color: #B3261E; }
+  .pill.neutral { background: ${B.blueTint}; color: ${B.blue}; }
+  .callout { background: ${B.blueTint}; border-left: 4px solid ${B.blue}; border-radius: 0 6px 6px 0; padding: 12px 16px; font-size: 12.5px; margin: 10px 0 4px; }
+  .callout b { color: ${B.navy}; }
+  .rank-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; font-size: 12.5px; }
+  .rank-row .rl { width: 74px; flex-shrink: 0; color: ${B.muted}; font-weight: 600; }
+  .rank-track { flex: 1; height: 18px; background: ${B.warmWhite}; border: 1px solid ${B.border}; border-radius: 4px; position: relative; overflow: hidden; }
+  .rank-track i { position: absolute; left: 0; top: 0; bottom: 0; background: ${B.lightBlue}; opacity: .55; }
+  .rank-track span { position: absolute; left: 8px; top: 0; line-height: 18px; font-size: 11px; color: ${B.navy}; font-weight: 600; }
+  .rank-pct { width: 120px; flex-shrink: 0; text-align: right; color: ${B.bodyText}; font-weight: 600; font-size: 11.5px; }
+  .risk-wrap { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: center; }
+  .rcmp { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; }
+  .rcmp .rcl { width: 158px; flex-shrink: 0; color: ${B.muted}; font-weight: 600; }
+  .rcmp .rct { flex: 1; height: 6px; background: ${B.warmWhite}; border: 1px solid ${B.border}; border-radius: 3px; overflow: hidden; }
+  .rcmp .rct i { display: block; height: 100%; }
+  .rcmp .rcv { width: 26px; text-align: right; font-weight: 700; }
+  .comp-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+  .comp-table th { background: ${B.blueTint}; color: ${B.navy}; border-bottom: 2px solid ${B.blue}; padding: 8px 12px; }
+  .comp-table td { padding: 6px 12px; border-bottom: 1px solid ${B.border}; }
 </style></head><body>
 
 <button class="print-btn no-print" onclick="window.print()">\u{1F5A8} Print / Save PDF</button>
 
 <!-- Northmarq branded header -->
 <div class="nmq-header">
-  <img src="${B.logoUrl}" alt="Northmarq" onerror="this.parentElement.innerHTML='<span style=\\'font-family:${B.headingFont};font-size:20px;font-weight:700;letter-spacing:1px\\'>NORTHMARQ</span><span class=\\'report-type\\'>Clinic Operations Report</span>'">
-  <div class="report-type">Clinic Operations Report</div>
+  <img src="${B.logoUrl}" alt="Northmarq" onerror="this.parentElement.innerHTML='<span style=\\'font-family:${B.headingFont};font-size:20px;font-weight:700;letter-spacing:1px\\'>NORTHMARQ</span><span class=\\'report-type\\'>Dialysis Net-Lease &middot; Asset Profile</span>'">
+  <div class="report-type">Dialysis Net-Lease &middot; Asset Profile</div>
 </div>
 
 <!-- Title -->
 <div class="title-section">
   <h1>${facilityName}</h1>
-  <div class="subtitle">${address}${ccn ? ' &nbsp;\u00B7&nbsp; CCN ' + ccn : ''} &nbsp;\u00B7&nbsp; ${today}</div>
+  <div class="subtitle">${address}${operatorName && operatorName !== 'N/A' ? ' &nbsp;\u00B7&nbsp; ' + operatorName : ''}${ccn ? ' &nbsp;\u00B7&nbsp; CCN ' + ccn : ''} &nbsp;\u00B7&nbsp; ${today}</div>
 </div>
 
 <div class="content">
 
-<!-- Property identifiers (so the deliverable carries enough context to
-     stand alone if it's printed and detached from the analysis stack). -->
-<h2>Property Details</h2>
-<table class="data-table">
-  <tr><td>Address</td><td>${_esc(addrLine || 'N/A')}</td></tr>
-  <tr><td>City, State ZIP</td><td>${_esc([cityVal, stateVal].filter(Boolean).join(', ') + (zipVal ? ' ' + zipVal : '')) || 'N/A'}</td></tr>
-  <tr><td>Property ID</td><td>${propertyId ? _esc(String(propertyId)) : 'N/A'}</td></tr>
-  <tr><td>CMS Facility ID (CCN)</td><td>${ccn ? _esc(String(ccn)) : 'N/A'}</td></tr>
-  <tr><td>Operator</td><td>${_esc(r.operator_name || r.chain_organization || (operator && operator.label) || 'N/A')}</td></tr>
-  <tr><td>Dialysis Stations</td><td>${stationsVal ? Number(stationsVal).toLocaleString() : 'N/A'}</td></tr>
-  <tr><td>Building Size</td><td>${fmtSf(buildingSize)}</td></tr>
-  <tr><td>Year Built</td><td>${yearBuilt ? _esc(String(yearBuilt)) + (yearReno ? ' (renovated ' + _esc(String(yearReno)) + ')' : '') : 'N/A'}</td></tr>
-  <tr><td>Land Area</td><td>${fmtLand(landArea)}</td></tr>
-  ${buildingType ? '<tr><td>Building Type</td><td>' + _esc(buildingType) + '</td></tr>' : ''}
-</table>
-
-<!-- KPIs -->
-<div class="kpi-grid">
-  <div class="kpi"><div class="kpi-label">Est. Annual Revenue</div><div class="kpi-value">${fmtDollar(estRevenue)}</div></div>
-  <div class="kpi"><div class="kpi-label">Operating Margin</div><div class="kpi-value">${fmtPct(margin)}</div></div>
-  <div class="kpi"><div class="kpi-label">Patient Census</div><div class="kpi-value">${bestPatientCount ? bestPatientCount.toLocaleString() : 'N/A'}</div></div>
-  <div class="kpi"><div class="kpi-label">CMS Star Rating</div><div class="kpi-value">${starVal != null ? '<span class="star">' + '\u2605'.repeat(Math.floor(starVal)) + '</span><span class="star-empty">' + '\u2606'.repeat(5 - Math.floor(starVal)) + '</span>' : 'N/A'}</div></div>
-  <div class="kpi"><div class="kpi-label">Census Trend</div><div class="kpi-value">${trendDir}</div></div>
-  <div class="kpi"><div class="kpi-label">Lease Expiration</div><div class="kpi-value">${leaseExp}</div></div>
+<!-- Investment snapshot -->
+<div class="snap">
+  <div class="sk accent"><div class="l">Operator / Tenant</div><div class="v" style="font-size:15px">${operatorName}</div></div>
+  <div class="sk"><div class="l">Asset Type</div><div class="v" style="font-size:14px">${_esc(property.property_type || 'Single-tenant medical')}${buildingSize ? '<br><small>' + Number(buildingSize).toLocaleString() + ' SF</small>' : ''}</div></div>
+  <div class="sk"><div class="l">Capacity Utilization</div><div class="v">${utilPct != null ? utilPct.toFixed(1) + '%' : 'N/A'}</div></div>
+  <div class="sk"><div class="l">Est. Annual Revenue</div><div class="v">${estRevenue ? '$' + (Number(estRevenue) / 1e6).toFixed(2) + 'M' : 'N/A'}</div></div>
+  <div class="sk"><div class="l">Est. Operating Margin</div><div class="v">${fmtPct(margin)}</div></div>
+  <div class="sk"><div class="l">Dialysis Stations</div><div class="v">${stationsVal ? Number(stationsVal).toLocaleString() : 'N/A'} <small>chairs</small></div></div>
+  <div class="sk"><div class="l">CMS Star Rating</div><div class="v">${starVal != null ? '<span class="star">' + '\u2605'.repeat(Math.floor(starVal)) + '</span><span class="star-empty">' + '\u2606'.repeat(5 - Math.floor(starVal)) + '</span>' : 'N/A'}</div></div>
+  <div class="sk"><div class="l">Census Trend</div><div class="v">${trendDir}</div></div>
 </div>
 
-<h2>Financial Performance</h2>
+<div class="callout"><b>At a glance &mdash;</b> A ${stationsVal ? stationsVal + '-station ' : ''}${operatorName && operatorName !== 'N/A' ? operatorName + ' ' : ''}in-center hemodialysis facility${utilPct != null ? ' running at <b>' + utilPct.toFixed(1) + '% of modeled operating capacity</b>' : ''}${(competitors.length === 0 && r.county) ? ', and the <b>only CMS-certified dialysis provider in ' + _esc(r.county) + ' County' + (stateVal ? ', ' + _esc(stateVal) : '') + '</b>' : ''}. Estimated facility revenue is <b>${fmtDollar(estRevenue)}</b>${annualTx ? ' on ~' + annualTx.toLocaleString() + ' annual treatments' : ''}${(payerMix.private_pct != null || r.payer_mix_private_pct != null) ? ', with a commercial/private payer share of <b>' + Number(payerMix.private_pct != null ? payerMix.private_pct : r.payer_mix_private_pct).toFixed(1) + '%</b>' : ''}.</div>
+
+<!-- Tenant & Operator -->
+<h2>Tenant &amp; Operator <span class="note">Source: CMS &middot; operator SEC filings</span></h2>
 <table class="data-table">
-  <tr><td>Estimated Annual Revenue</td><td>${fmtDollar(estRevenue)}</td></tr>
-  <tr><td>Estimated Operating Costs</td><td>${fmtDollar(bestCosts)}</td></tr>
-  <tr><td>Estimated Operating Profit</td><td>${fmtDollar(bestProfit)}</td></tr>
-  <tr><td>Operating Margin</td><td>${fmtPct(margin)}</td></tr>
-  <tr><td>Treatments / Year</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}</td></tr>
-  <tr><td>Revenue / Treatment</td><td>${revPerTx ? '$' + revPerTx.toFixed(0) : 'N/A'}</td></tr>
+  <tr><td>Operator</td><td>${operatorName}</td></tr>
+  <tr><td>Service Modality</td><td>In-center hemodialysis</td></tr>
+  ${stationsVal ? '<tr><td>Dialysis Stations</td><td>' + Number(stationsVal).toLocaleString() + '</td></tr>' : ''}
 </table>
 
-<h2>Capacity & Operations</h2>
+<!-- Facility Financial Performance -->
+<h2>Facility Financial Performance <span class="note">Source: CMS/HCRIS &middot; operator filings</span></h2>
 <table class="data-table">
-  <tr><td>Dialysis Stations</td><td>${stationsVal ? stationsVal : 'N/A'}</td></tr>
-  <tr><td>Patient Census</td><td>${bestPatientCount ? bestPatientCount.toLocaleString() : 'N/A'}</td></tr>
-  <tr><td>Patients / Chair</td><td>${bestPatientCount && stationsVal ? (bestPatientCount / Number(stationsVal)).toFixed(1) : 'N/A'}</td></tr>
-  <tr><td>Capacity Utilization</td><td>${r.capacity_utilization_pct != null ? Number(r.capacity_utilization_pct).toFixed(1) + '%' : 'N/A'}</td></tr>
-  <tr><td>Operator</td><td>${r.operator_name || r.chain_organization || 'N/A'}</td></tr>
-  <tr><td>Census Trend</td><td>${trendDir}${r.patient_yoy_pct != null ? ' (' + (Number(r.patient_yoy_pct) >= 0 ? '+' : '') + Number(r.patient_yoy_pct).toFixed(1) + '% YoY)' : ''}</td></tr>
+  <tr><td>Est. Facility Revenue (annual)</td><td>${fmtDollar(estRevenue)}</td></tr>
+  <tr><td>Revenue / Treatment (blended)</td><td>${revPerTx ? '$' + revPerTx.toFixed(0) : 'N/A'}<span class="ctx">Weighted by this facility's payer mix.</span></td></tr>
+  <tr><td>Est. Operating Profit</td><td>${fmtDollar(bestProfit)}</td></tr>
+  <tr><td>Operating Margin</td><td>${fmtPct(margin)}${r.ttm_operating_margin != null ? '<span class="ctx">CMS/HCRIS trailing-twelve-month margin: ' + (Number(r.ttm_operating_margin) * (Math.abs(Number(r.ttm_operating_margin)) < 1 ? 100 : 1)).toFixed(1) + '%.</span>' : ''}</td></tr>
+  <tr><td>Annual Treatments</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}<span class="ctx">CMS/HCRIS reported.</span></td></tr>
 </table>
+
+<!-- Demand & Capacity -->
+<h2>Demand &amp; Capacity <span class="note">Source: CMS &middot; HCRIS-derived estimates</span></h2>
+<div class="grid2">
+  <div class="card">
+    <div class="ch">Treatment Demand</div>
+    <table class="data-table">
+      <tr><td>Dialysis Stations</td><td>${stationsVal ? Number(stationsVal).toLocaleString() : 'N/A'}</td></tr>
+      <tr><td>Patients in Treatment <span style="font-size:11px;color:${B.muted}">(concurrent)</span></td><td><strong>${censusHeadline != null ? censusHeadline.toLocaleString() : 'N/A'}</strong></td></tr>
+      <tr><td>Patients / Chair</td><td>${(censusHeadline != null && stationsVal) ? (censusHeadline / Number(stationsVal)).toFixed(1) : 'N/A'}</td></tr>
+      <tr><td>Capacity Utilization</td><td>${utilPct != null ? '<span class="bar"><i style="width:' + Math.min(100, utilPct).toFixed(0) + '%"></i></span>' + utilPct.toFixed(1) + '%' : 'N/A'}</td></tr>
+      <tr><td>Treatments / Year</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <div class="ch">Catchment Context</div>
+    <table class="data-table">
+      <tr><td>CMS Reported Patients <span style="font-size:11px;color:${B.muted}">(annual)</span></td><td>${cmsAnnualPatients != null ? cmsAnnualPatients.toLocaleString() : 'N/A'}<span class="ctx">Cumulative distinct patients per CMS reporting &mdash; not a point-in-time count (see definitions).</span></td></tr>
+      <tr><td>Census Trend</td><td>${trendDir}${r.patient_yoy_pct != null ? ' (' + (Number(r.patient_yoy_pct) >= 0 ? '+' : '') + Number(r.patient_yoy_pct).toFixed(1) + '% YoY)' : ''}</td></tr>
+      ${(competitors.length === 0 && r.county) ? '<tr><td>County Competition</td><td>Sole facility in ' + _esc(r.county) + ' County</td></tr>' : ''}
+    </table>
+  </div>
+</div>
+${(cmsAnnualPatients != null && censusHeadline != null && cmsAnnualPatients > censusHeadline * 1.5) ? '<div class="callout"><b>Reconciling the two patient figures &mdash;</b> The facility treats roughly <b>' + censusHeadline.toLocaleString() + ' patients at a time</b> &mdash; the figure that reconciles with chairs, utilization, and annual treatments. CMS separately reports <b>' + cmsAnnualPatients.toLocaleString() + '</b> distinct patients served over its annual reporting window, a cumulative count (new starts, transfers, short-stay) shown here as catchment depth, not chair load.</div>' : ''}
 
 <h2>Hours of Operation</h2>
 ${hoursBlock}
@@ -5276,36 +5360,23 @@ ${hoursBlock}
   <tr><td>Commercial / Private</td><td>${payerMix.private_pct != null ? Number(payerMix.private_pct).toFixed(1) + '%' : (r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct).toFixed(1) + '%' : 'N/A')}</td></tr>
 </table>
 
-${competitors.length > 0 ? (() => {
-  const opCts = {};
-  let totChairs = 0, totPts = 0;
-  competitors.forEach(c => {
-    const op = c.chain_organization || 'Independent';
-    opCts[op] = (opCts[op] || 0) + 1;
-    if (c.number_of_chairs) totChairs += Number(c.number_of_chairs);
-    if (c.latest_estimated_patients) totPts += Number(c.latest_estimated_patients);
-  });
-  const opList = Object.entries(opCts).sort((a, b) => b[1] - a[1]).map(([op, ct]) => op + ' (' + ct + ')').join(', ');
-  const rows = competitors.map(c =>
-    '<tr><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + '">' + (c.facility_name || '') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + '">' + (c.city || '') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + '">' + (c.chain_organization || 'Independent') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + ';text-align:right">' + (c.number_of_chairs || '\u2014') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + ';text-align:right">' + (c.latest_estimated_patients ? Number(c.latest_estimated_patients).toLocaleString() : '\u2014') +
-    '</td></tr>'
-  ).join('');
-  return '<div class="page-break"></div>' +
-    '<h2>Competitive Landscape \u2014 ' + (r.county || '') + ' County</h2>' +
-    '<p style="font-size:12px;color:' + B.muted + ';margin-bottom:12px">' + competitors.length + ' competing facilities &nbsp;\u00B7&nbsp; ' + totChairs.toLocaleString() + ' total chairs &nbsp;\u00B7&nbsp; ' + totPts.toLocaleString() + ' patients<br><strong style="color:' + B.bodyText + '">Operators:</strong> ' + opList + '</p>' +
-    '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-    '<thead><tr style="background:' + B.blueTint + '">' +
-    '<th style="text-align:left;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Facility</th>' +
-    '<th style="text-align:left;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">City</th>' +
-    '<th style="text-align:left;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Operator</th>' +
-    '<th style="text-align:right;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Chairs</th>' +
-    '<th style="text-align:right;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Patients</th>' +
-    '</tr></thead><tbody>' + rows + '</tbody></table>';
-})() : ''}
+<div class="page-break"></div>
+${rankRows.length > 0 ? ('<h2>Comparative Benchmarking <span class="note">Source: CMS' + (r.national_total ? ' &middot; ' + Number(r.national_total).toLocaleString() + ' U.S. facilities' : '') + '</span></h2><p style="font-size:12px;color:' + B.muted + ';margin-bottom:10px">Percentile shows where this facility ranks among peers (higher = larger).' + ((competitors.length === 0 && r.county) ? ' County-level ranking is omitted where the facility is the only one in its county.' : '') + '</p>' + rankRows.map(function(rs){ var out=''; var pp=_pctile(rs.patRank, rs.total); var rp=_pctile(rs.revRank, rs.total); if (pp!=null) out += '<div class="rank-row"><div class="rl">' + rs.scope + '</div><div class="rank-track"><i style="width:' + pp + '%"></i><span>By patients &middot; #' + Number(rs.patRank).toLocaleString() + ' of ' + Number(rs.total).toLocaleString() + '</span></div><div class="rank-pct">' + _ord(pp) + ' pctile</div></div>'; if (rp!=null) out += '<div class="rank-row"><div class="rl"></div><div class="rank-track"><i style="width:' + rp + '%;background:' + B.blue + ';opacity:.45"></i><span>By revenue &middot; #' + Number(rs.revRank).toLocaleString() + ' of ' + Number(rs.total).toLocaleString() + '</span></div><div class="rank-pct">' + _ord(rp) + ' pctile</div></div>'; return out; }).join('')) : ''}
+
+${riskScores ? ('<h2>Risk Assessment <span class="note">Composite lease-renewal model &middot; 0 (low) \u2013 100 (high)</span></h2><div class="risk-wrap"><div style="text-align:center"><svg width="190" height="112" viewBox="0 0 190 112"><path d="M 22 96 A 73 73 0 0 1 168 96" fill="none" stroke="' + B.blueTint + '" stroke-width="14" stroke-linecap="round"/><path d="M 22 96 A 73 73 0 0 1 168 96" fill="none" stroke="' + riskColor + '" stroke-width="14" stroke-linecap="round" stroke-dasharray="' + (Math.max(0, Math.min(100, riskScores.total)) / 100 * 229.3).toFixed(1) + ' 229.3"/><text x="95" y="86" text-anchor="middle" font-family="' + B.headingFont + '" font-size="34" font-weight="700" fill="' + riskColor + '">' + riskScores.total + '</text><text x="95" y="104" text-anchor="middle" font-family="' + B.bodyFont + '" font-size="11" fill="' + B.muted + '">out of 100</text></svg><div style="margin-top:6px"><span class="pill ' + (riskScores.total <= 25 ? 'good' : riskScores.total <= 50 ? 'warn' : 'bad') + '">' + riskLevel + ' Risk</span></div></div><div>' + [['Patient Trend (30%)', riskScores.patientTrend], ['Financial Health (25%)', riskScores.financial], ['Quality Metrics (20%)', riskScores.quality], ['Lease Expiration (15%)', riskScores.leaseExp], ['Market Conditions (10%)', riskScores.market]].map(function(p){ var val=p[1]; var c = val <= 25 ? '#2E7D32' : val <= 50 ? '#B26A00' : val <= 75 ? '#C75300' : '#B3261E'; return '<div class="rcmp"><div class="rcl">' + p[0] + '</div><div class="rct"><i style="width:' + val + '%;background:' + c + '"></i></div><div class="rcv" style="color:' + c + '">' + val + '</div></div>'; }).join('') + '<p style="font-size:11px;color:' + B.muted + ';margin-top:6px">Lower component scores indicate lower risk; see definitions for inputs.</p></div></div>') : ''}
+
+${demo ? ('<h2>Demand Demographics' + (demo.zip_code ? ' &mdash; ZIP ' + _esc(String(demo.zip_code)) : '') + ' <span class="note">Source: U.S. Census ACS' + (demo.data_year ? ' (' + demo.data_year + ')' : '') + '</span></h2><table class="data-table">' + (demo.total_population != null ? '<tr><td>Catchment Population</td><td>' + Number(demo.total_population).toLocaleString() + '</td></tr>' : '') + (demo.population_65_plus_pct != null ? '<tr><td>Population Age 65+</td><td>' + (demo.population_65_plus != null ? Number(demo.population_65_plus).toLocaleString() + ' &middot; ' : '') + Number(demo.population_65_plus_pct).toFixed(1) + '%<span class="ctx">ESRD prevalence rises sharply with age; the 65+ share is a structural demand indicator.</span></td></tr>' : '') + (demo.median_household_income != null ? '<tr><td>Median Household Income</td><td>$' + Number(demo.median_household_income).toLocaleString() + '</td></tr>' : '') + (demo.uninsured_rate != null ? '<tr><td>Uninsured Rate</td><td>' + Number(demo.uninsured_rate).toFixed(1) + '%</td></tr>' : '') + (demo.poverty_rate != null ? '<tr><td>Poverty Rate</td><td>' + Number(demo.poverty_rate).toFixed(1) + '%</td></tr>' : '') + '</table>') : ''}
+
+${(function(){ var geoComps = (ext.geo && ext.geo.subject_geocoded && Array.isArray(ext.geo.nearby_competitors)) ? ext.geo.nearby_competitors : []; var useGeo = geoComps.length > 0; var list = useGeo ? geoComps : competitors; var h = '<h2>Market Position <span class="note">Source: CMS Provider of Services</span></h2>'; h += '<table class="data-table"><tr><td>In-County Competition</td><td>' + (competitors.length === 0 ? ('None &mdash; sole CMS-certified dialysis facility' + (r.county ? ' in ' + _esc(r.county) + ' County' : '')) : (competitors.length + ' other ' + (competitors.length === 1 ? 'facility' : 'facilities') + (r.county ? ' in ' + _esc(r.county) + ' County' : ''))) + '</td></tr></table>'; if (list.length > 0) { var rows = list.map(function(c){ var name = useGeo ? (c.address || c.facility_name || '\u2014') : (c.facility_name || ''); var city = (c.city || '') + (useGeo && c.state ? ', ' + c.state : ''); var op = c.operator || c.chain_canonical || c.chain_organization || 'Independent'; var chairs = c.number_of_chairs != null ? Number(c.number_of_chairs).toLocaleString() : '\u2014'; var pts = c.latest_estimated_patients != null ? Number(c.latest_estimated_patients).toLocaleString() : '\u2014'; var dist = (useGeo && c.distance_miles != null) ? ' <span style="color:' + B.muted + '">(' + Number(c.distance_miles).toFixed(1) + ' mi)</span>' : ''; var rent = (c.rent_psf != null) ? '$' + Number(c.rent_psf).toFixed(2) : '\u2014'; return '<tr><td>' + name + dist + '</td><td>' + city + '</td><td>' + op + '</td><td style="text-align:right">' + chairs + '</td><td style="text-align:right">' + pts + '</td><td style="text-align:right">' + rent + '</td></tr>'; }).join(''); h += '<table class="comp-table"><thead><tr><th style="text-align:left">' + (useGeo ? 'Nearest Facility' : 'Facility') + '</th><th style="text-align:left">City</th><th style="text-align:left">Operator</th><th style="text-align:right">Chairs</th><th style="text-align:right">Patients</th><th style="text-align:right">Rent PSF</th></tr></thead><tbody>' + rows + '</tbody></table><p style="font-size:11px;color:' + B.muted + ';margin-top:6px">Rent / PSF is shown where a confirmed lease comp exists.</p>'; } else if (competitors.length === 0) { h += '<p style="font-size:12px;color:' + B.muted + ';margin-top:6px">No competing dialysis facility operates within the county; nearest facilities are in adjacent counties.</p>'; } return h; })()}
+
+<h2>Property Details</h2>
+<table class="data-table">
+  <tr><td>Address</td><td>${_esc([addrLine, cityVal, stateVal, zipVal].filter(Boolean).join(', ') || 'N/A')}</td></tr>
+  <tr><td>Building Size</td><td>${fmtSf(buildingSize)}</td></tr>
+  <tr><td>Land Area</td><td>${fmtLand(landArea)}</td></tr>
+  <tr><td>Property Type</td><td>${_esc(property.property_type || buildingType || 'N/A')}</td></tr>
+  <tr><td>Year Built</td><td>${yearBuilt ? _esc(String(yearBuilt)) + (yearReno ? ' (renovated ' + _esc(String(yearReno)) + ')' : '') : 'N/A'}</td></tr>
+</table>
 
 <div class="methodology">
   <strong>Methodology & Data Sources</strong><br><br>
@@ -5313,6 +5384,12 @@ ${competitors.length > 0 ? (() => {
   Revenue estimates are derived from a 4-payer blended reimbursement model applied to estimated annual treatment volume. Payer-specific rates reflect current CMS reimbursement schedules: Medicare ~$279/treatment, Medicaid ~$225/treatment, Commercial/Private ~$1,100/treatment, and Other ~$250/treatment. The blended average is approximately $357/treatment. Treatment volume assumes 156 treatments per patient per year (3x weekly, 52 weeks).<br><br>
   <strong style="color:${B.navy}">Treatment Volume</strong><br>
   Annual treatment counts follow a data-priority hierarchy: (1) HCRIS cost report actuals, (2) XGBoost primary financial model estimates, (3) CMS-reported trailing twelve month totals, (4) modeled from patient census (patients \u00D7 156). The chair-based capacity model (stations \u00D7 3 shifts \u00D7 5.5 days \u00D7 52 weeks \u00D7 65% utilization) has been validated against reported figures with a median accuracy of 1.00x across 7,115 facilities.<br><br>
+  <strong style="color:${B.navy}">Capacity Utilization</strong><br>
+  Capacity Utilization is a modeled estimate of treatment volume against the facility's estimated operating capacity (stations &times; shifts &times; operating days &times; a standard utilization factor) &mdash; <em>not</em> a real-time occupancy reading. A figure near 90% indicates the facility is modeled to run close to its practical chair throughput; it does not mean that share of chairs is filled at any single moment.<br><br>
+  <strong style="color:${B.navy}">Patient Counts</strong><br>
+  "Patients in Treatment (concurrent)" is the estimated point-in-time census (HCRIS-derived) and is the figure that reconciles with chairs, utilization, and annual treatments. "CMS Reported Patients (annual)" is the cumulative count of distinct patients served over CMS's reporting window and is typically several times larger; it is shown as catchment depth only.<br><br>
+  <strong style="color:${B.navy}">Comparative Benchmarking</strong><br>
+  Percentile rank among CMS-certified dialysis facilities by estimated patient volume and revenue, within the state and nationally (higher percentile = larger facility). County-level ranking is omitted where the facility is the only one in its county.<br><br>
   <strong style="color:${B.navy}">Operating Costs & Margins</strong><br>
   Operating costs are sourced from: (1) CMS HCRIS facility cost reports (actual facility-level data), or (2) derived from revenue minus operating profit where HCRIS data is unavailable or reflects known Medicare-only allocation quirks. Margins are calculated as operating profit divided by revenue.<br><br>
   <strong style="color:${B.navy}">Revenue Projections</strong><br>
@@ -5330,7 +5407,7 @@ ${competitors.length > 0 ? (() => {
 <!-- Northmarq branded footer -->
 <div class="nmq-footer">
   <div><strong>Northmarq</strong> &nbsp;\u00B7&nbsp; Confidential &nbsp;\u00B7&nbsp; ${today}</div>
-  <div class="sources">Sources: CMS Dialysis Facility Compare, USRDS, CMS HCRIS, MedPAC Reports, Google Places</div>
+  <div class="sources">Sources: CMS Dialysis Facility Compare, CMS HCRIS, CMS Provider of Services, USRDS, MedPAC, operator 10-K filings, U.S. Census ACS, Google Places</div>
 </div>
 
 </body></html>`;
@@ -14405,6 +14482,17 @@ async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
     .slice(0, 40) || 'subject';
   const fname = `LCC_LeaseComps_${db === 'gov' ? 'GOV' : 'DIA'}_${slug}_${today}.xlsx`;
   const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Free the object URL after the click handler had a chance to read it.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+window._udExportLeaseComps = _udExportLeaseComps;blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = fname;
