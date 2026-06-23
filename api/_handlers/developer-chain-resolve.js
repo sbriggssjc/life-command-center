@@ -80,6 +80,33 @@ const MAX_DRYRUN_SAMPLE = 750;
 const VIEW_COLS =
   'property_id,is_build_to_suit,current_developer,cur_true_owner_name,owner_links,earliest_owner,earliest_start';
 
+// R60 Unit 2B — close structurally-unresolvable trace tasks instead of leaving
+// them queued forever (the flood the audit found). A not-resolved classification
+// is either TERMINAL (no automated path can ever resolve it → close as skipped,
+// stamped outcome.terminal so the R46/R60 producer never re-seeds it) or RETRY
+// (a transient/contingent failure → keep queued, markAttempted, re-tried after
+// REATTEMPT_DAYS). `ambiguous_generic_org` is terminal ONLY when no external
+// developer-research source is configured (env DEVELOPER_CHAIN_EXTERNAL_RESEARCH);
+// with one wired it stays retryable (UW#6 deed deep-parse may extend the chain).
+const TERMINAL_REASONS = new Set([
+  'already_resolved',       // developer already known on the property — nothing to do
+  'no_chain',               // owner_links<=1, nothing to trace (UW#6 territory)
+  'origin_equals_current',  // earliest == current owner — no real chain to trace
+  'guard_rejected',         // origin name is structural garbage
+  'origin_not_developer',   // bank/lender/REIT/financier/agency at origin
+  'origin_is_person',       // prior LANDOWNER, not the developer
+  'entity_guard_rejected',  // resolvable-shaped but the dev name fails the mint guards
+]);
+const EXTERNAL_RESEARCH = !!(process.env.DEVELOPER_CHAIN_EXTERNAL_RESEARCH
+  && !/^(0|false|off|no)$/i.test(String(process.env.DEVELOPER_CHAIN_EXTERNAL_RESEARCH)));
+
+/** Pure: does a not-resolved reason mean "close the task" (terminal) or "keep
+ *  queued and retry later" (transient/contingent)? Exported for tests. */
+export function chainResolveDisposition(reason, opts = {}) {
+  if (reason === 'ambiguous_generic_org') return opts.externalResearch ? 'retry' : 'terminal';
+  return TERMINAL_REASONS.has(reason) ? 'terminal' : 'retry';
+}
+
 // --- developer-vs-not classification regexes (the JS judgment) ---------------
 // Reject classes: the origin is genuinely NOT a developer.
 const BANK_LENDER_RE =
@@ -271,6 +298,16 @@ async function completeTask(task, outcome, deps) {
   });
 }
 
+// R60 Unit 2B — close a structurally-unresolvable task (skipped, stamped
+// outcome.terminal so the producer's seed never re-creates it). Reversible.
+async function closeTaskTerminal(task, reason, deps) {
+  await deps.opsQuery('PATCH', `research_tasks?id=eq.${task.id}`, {
+    status: 'skipped',
+    completed_at: deps.now,
+    outcome: { source: 'chain_resolution', terminal: true, reason, closed_at: deps.now },
+  });
+}
+
 // Stamp a not-resolved task so it isn't re-classified every tick — but stays
 // QUEUED (honest; UW#6 may extend its chain). Merges into existing metadata.
 async function markAttempted(task, reason, deps) {
@@ -428,7 +465,7 @@ export async function handleDeveloperChainResolveTick(req, res) {
   };
 
   const started = Date.now();
-  const summary = { ok: true, domain: 'gov', processed: 0, resolved: 0, not_resolved: 0, errors: 0, results: [] };
+  const summary = { ok: true, domain: 'gov', processed: 0, resolved: 0, not_resolved: 0, terminal_closed: 0, errors: 0, results: [] };
   for (const t of eligible) {
     if (Date.now() - started > WALL_CLOCK_MS) break;
     let out;
@@ -443,8 +480,18 @@ export async function handleDeveloperChainResolveTick(req, res) {
     if (out.outcome === 'resolved' || out.outcome === 'already_resolved') summary.resolved += 1;
     else {
       summary.not_resolved += 1;
-      // Keep the task QUEUED (honest) but stamp it so it isn't re-classified every tick.
-      try { await markAttempted(t, out.reason || out.outcome, deps); } catch (_e) { /* soft */ }
+      const reason = out.reason || out.outcome;
+      // Terminal → close (drains the unresolvable backlog, never re-seeded).
+      // Retryable → keep QUEUED + stamp so it isn't re-classified every tick.
+      try {
+        if (chainResolveDisposition(reason, { externalResearch: EXTERNAL_RESEARCH }) === 'terminal') {
+          await closeTaskTerminal(t, reason, deps);
+          summary.terminal_closed += 1;
+          out.closed = 'terminal';
+        } else {
+          await markAttempted(t, reason, deps);
+        }
+      } catch (_e) { /* soft */ }
     }
     summary.results.push(out);
   }

@@ -12,6 +12,7 @@ import {
   cleanDeveloperName,
   classifyDeveloperOrigin,
   processChainResolveRow,
+  chainResolveDisposition,
 } from '../api/_handlers/developer-chain-resolve.js';
 
 describe('classifyDeveloperOrigin', () => {
@@ -215,5 +216,53 @@ describe('processChainResolveRow', () => {
     assert.equal(out.reason, 'origin_is_person');
     assert.equal(calls.ensure.length, 0, 'never minted the person as a developer entity');
     assert.equal(calls.patch.length, 0, 'never wrote');
+  });
+});
+
+// ── R60 Unit 2B — disposition: close terminal buckets, keep transient queued ──
+describe('R60 chainResolveDisposition', () => {
+  it('closes the structurally-terminal buckets', () => {
+    for (const r of ['already_resolved', 'no_chain', 'origin_equals_current',
+                     'guard_rejected', 'origin_not_developer', 'origin_is_person',
+                     'entity_guard_rejected']) {
+      assert.equal(chainResolveDisposition(r), 'terminal', r);
+    }
+  });
+
+  it('keeps transient/contingent failures queued for retry', () => {
+    for (const r of ['blocked_by_provenance', 'write_failed', 'something_unknown']) {
+      assert.equal(chainResolveDisposition(r), 'retry', r);
+    }
+  });
+
+  it('ambiguous_generic_org is terminal only when no external research is configured', () => {
+    assert.equal(chainResolveDisposition('ambiguous_generic_org'), 'terminal');
+    assert.equal(chainResolveDisposition('ambiguous_generic_org', { externalResearch: false }), 'terminal');
+    assert.equal(chainResolveDisposition('ambiguous_generic_org', { externalResearch: true }), 'retry');
+  });
+
+  it('every classifier not-resolve reason maps to terminal or retry', () => {
+    const cases = [
+      { current_developer: 'Hines', earliest_owner: 'x', owner_links: 3 },
+      { earliest_owner: '', owner_links: 0 },
+      { earliest_owner: 'Acme LLC', cur_true_owner_name: 'Acme LLC', owner_links: 2 },
+      { earliest_owner: 'Wells Fargo Bank NA', owner_links: 2 },
+      { earliest_owner: 'Gary Brown', owner_links: 2 },
+      { earliest_owner: 'Smith Holdings LLC', owner_links: 2 },
+    ];
+    for (const c of cases) {
+      const cls = classifyDeveloperOrigin(c);
+      assert.equal(cls.resolve, false, JSON.stringify(c));
+      assert.ok(['terminal', 'retry'].includes(chainResolveDisposition(cls.reason)), cls.reason);
+    }
+  });
+
+  it('a resolvable origin (dev keyword / BTS) is NOT a terminal close', () => {
+    const kw = classifyDeveloperOrigin({ earliest_owner: 'Ryan Development Co', owner_links: 2 });
+    assert.equal(kw.resolve, true);
+    assert.equal(kw.tier, 'developer_keyword');
+    const bts = classifyDeveloperOrigin({ earliest_owner: 'Chandler Property', owner_links: 2, is_build_to_suit: true });
+    assert.equal(bts.resolve, true);
+    assert.equal(bts.tier, 'bts_origin');
   });
 });
