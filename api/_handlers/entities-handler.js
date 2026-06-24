@@ -137,6 +137,36 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(200).json({ rollup, properties });
     }
 
+    // UI Phase 5 — "Owners Missing a Contact" value-ranked BD worklist.
+    // GET /api/entities?action=owner_worklist[&min_value=&limit=&offset=]
+    //   rows ← v_owner_contact_worklist (contactless valued owners, value-ranked).
+    // Defaults to the workable high-value set (min_value); returns the actionable
+    // count (matching the filter) AND the full clean universe so the surface can
+    // show an honest "X of N" (Consumption-Layer doctrine). The row action runs
+    // the EXISTING CONTACT-SELECTION picker via the 4B owner detail Contacts tab.
+    if (action === 'owner_worklist') {
+      const minValue = Math.max(0, Number(req.query.min_value) || 0);
+      const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 200);
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      const base = `v_owner_contact_worklist?workspace_id=eq.${workspaceId}`;
+      const filt = minValue > 0 ? `&rank_value=gte.${minValue}` : '';
+      const rowPath = base +
+        `&select=entity_id,owner_name,rank_value,property_count,primary_domain,is_cross_vertical,enrichment_action,bench_size` +
+        filt + `&order=rank_value.desc.nullslast&limit=${limit}&offset=${offset}`;
+      const [rowsRes, universeRes] = await Promise.all([
+        opsQuery('GET', rowPath, undefined, { countMode: 'exact' }),
+        opsQuery('GET', base + '&select=entity_id', undefined, { countMode: 'exact' }),
+      ]);
+      return res.status(200).json({
+        rows: (rowsRes.ok && Array.isArray(rowsRes.data)) ? rowsRes.data : [],
+        actionable_count: rowsRes.count ?? (rowsRes.data?.length || 0),
+        universe_count: universeRes.count ?? null,
+        min_value: minValue,
+        limit,
+        offset,
+      });
+    }
+
     // Single entity with related data
     if (id) {
       const result = await opsQuery('GET',
