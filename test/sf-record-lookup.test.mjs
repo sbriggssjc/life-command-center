@@ -88,10 +88,11 @@ describe('planMissingCompFetch', () => {
 });
 
 describe('lookupSfRecordsByIds (injected fetch)', () => {
-  function fakeFetch(records, capture) {
+  function fakeFetch(records, capture, headerCapture) {
     return async (_url, opts) => {
       const body = JSON.parse(opts.body);
       if (capture) capture.push(body);
+      if (headerCapture) headerCapture.push(opts.headers || {});
       return { ok: true, text: async () => JSON.stringify({ ok: true, records }) };
     };
   }
@@ -110,6 +111,17 @@ describe('lookupSfRecordsByIds (injected fetch)', () => {
     assert.equal(captured[0].filter, "Id eq 'a1' or Id eq 'a2'");
     assert.equal(captured[1].filter, "Id eq 'a3'");
     assert.ok(captured.every((b) => !/\bIN\b/.test(b.filter)));
+  });
+
+  it('sends ONLY Content-Type — no auth header (Azure SAS refuses extra schemes)', async () => {
+    const headers = [];
+    await lookupSfRecordsByIds({
+      objectType: 'Comp__c', fields: 'Id', ids: ['a1'],
+      fetchImpl: fakeFetch([], [], headers),
+    });
+    assert.deepEqual(Object.keys(headers[0]), ['Content-Type']);
+    assert.equal(headers[0].Authorization, undefined);
+    assert.equal(headers[0]['X-Shared-Secret'], undefined);
   });
 
   it('reports a per-batch failure without throwing', async () => {
