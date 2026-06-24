@@ -41,6 +41,28 @@ Research-workbench findings into one sequenced plan.
   tab segment (`entity:<id>:<tab>`). Owner is now a first-class zoom object on the 4A stack.
   (Final owner→property push click untested — Chrome connection dropped mid-check — but portfolio
   rows confirmed clickable + 4A push mechanic already verified; low risk.) **4C remains.**
+- **Phase 4 Slice 4C — ✅ DONE / VERIFIED LIVE 2026-06-24** (PR #1330). Verified on DaVita Deltona
+  (prop 24703): Deal History sale row shows "Open detail ↗" → `openSubDetail` pushed
+  `sub:sale:dia:14751` (breadcrumb grew "DaVita Deltona › Sale — $13.7M · Jan 15 2020", sub-detail
+  showed BTS/$13.7M/9.80% cap/R59 parties); `detailBack()` ascended back to `prop:dia:24703:Deal
+  History` (not a close). `_udSourceLink` present; "View source" correctly absent on a
+  sales_transactions-only sale (no fabricated link). **Zoom model 4A–4C COMPLETE + verified live.**
+  Original built/pending entry:
+- **Phase 4 Slice 4C (sub-record drill + source access + polish) — ⏳ BUILT, pending redeploy
+  verify 2026-06-24** (PR #1330). Unit 1: uniform "View source ↗" (`_udSourceLink`) on sale/lease/
+  listing rows → real doc (intake artifact signed PDF / source_url / SF deep-link), only when a
+  source exists. Unit 2: `sub:<kind>:<db>:<id>` descriptor → `openSubDetail` pushes a lease/sale
+  sub-detail on the 4A stack (breadcrumb grows, Back ascends). Unit 3: Enter/Space zoom-in, Esc →
+  detailBack, iOS gesture rides 4A history. Deferred (low-ROI): standalone per-sub-record pages +
+  per-sub-record next-actions. Suite 1462 pass; 12 api files. **Zoom model 4A–4C documented
+  complete in CLAUDE.md.** Verify live after redeploy (source links open real docs; lease/sale
+  rows drill + breadcrumb; Enter/Esc).
+- **🏁 ROADMAP STATUS:** Phases 0–5 + 4A/4B/4C all built (Phase 4C pending its redeploy verify).
+  The surface-walk arc is complete: cockpit (R60–R64), routing, Overview parity, tab/naming
+  unification, full zoom model, and the owners-missing-contact BD worklist — plus the parallel data
+  track (dia tile fixes, CMS root-cause + timeout fix, GH-Actions cost trims). Remaining loose ends:
+  4C live-verify, the cost-trim merges (#7320/#1326), the CMS re-run confirmation, and any optional
+  follow-ups (5b adapters, Research-workbench convergence was Phase 6 / deferred).
 - **Phase 5 + 5b — ✅ DONE / VERIFIED LIVE 2026-06-24** (PR #1323). Contacts page leads with
   "Owners Missing a Contact" — verified live: **"358 valued owners ≥ $1M need a contact · 3,521
   total contactless"** (honest actionable+universe counts matching `v_owner_contact_worklist`),
