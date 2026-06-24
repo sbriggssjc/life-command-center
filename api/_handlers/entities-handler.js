@@ -55,6 +55,88 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
   if (req.method === 'GET') {
     const { id, action, q, entity_type, domain } = req.query;
 
+    // UI Phase 4B — authoritative per-entity portfolio from the BD spine.
+    // GET /api/entities?action=portfolio&id=<uuid>
+    //   rollup  ← v_entity_portfolio_all (one row; count / Σ rent / domains)
+    //   props   ← lcc_entity_portfolio_facts ⋈ lcc_property_attributes
+    // Replaces the old fuzzy v_ownership_current true_owner=ilike name-match in
+    // openEntityDetail (SPEs / renamed owners mismatched). Each property row is a
+    // 4A zoom target (clicking opens openUnifiedDetail). MUST run before the
+    // `if (id)` single-entity early-return below.
+    if (action === 'portfolio' && id) {
+      // Confirm the entity belongs to this workspace before exposing its portfolio.
+      const entRes = await opsQuery('GET',
+        `entities?id=eq.${id}&workspace_id=eq.${workspaceId}&select=id,name`);
+      if (!entRes.ok || !entRes.data?.length) {
+        return res.status(404).json({ error: 'Entity not found' });
+      }
+
+      const [rollupRes, factsRes] = await Promise.all([
+        opsQuery('GET',
+          `v_entity_portfolio_all?entity_id=eq.${id}&workspace_id=eq.${workspaceId}` +
+          `&select=entity_id,name,owner_role,primary_domain,total_property_count,current_property_count,` +
+          `dia_property_count,gov_property_count,is_cross_vertical,current_annual_rent_total,avg_cap_rate,` +
+          `earliest_acquisition_date,latest_acquisition_date&limit=1`),
+        opsQuery('GET',
+          `lcc_entity_portfolio_facts?entity_id=eq.${id}` +
+          `&select=source_domain,source_property_id,is_current,annual_rent,sale_price,cap_rate,` +
+          `ownership_start_date,ownership_end_date,ownership_source` +
+          `&order=is_current.desc,annual_rent.desc.nullslast&limit=500`)
+      ]);
+
+      const rollup = (rollupRes.ok && rollupRes.data?.length) ? rollupRes.data[0] : null;
+      const facts = (factsRes.ok && Array.isArray(factsRes.data)) ? factsRes.data : [];
+
+      // Batch-fetch property attributes for address / tenant / city. The two
+      // mirrors share (source_domain, source_property_id) but carry no declared
+      // FK, so PostgREST can't embed — fetch per-domain id sets + merge in JS.
+      const idsByDomain = {};
+      for (const f of facts) {
+        const dom = f.source_domain;
+        if (!dom || f.source_property_id == null) continue;
+        (idsByDomain[dom] = idsByDomain[dom] || []).push(String(f.source_property_id));
+      }
+      const attrMap = {};
+      await Promise.all(Object.entries(idsByDomain).map(async ([dom, ids]) => {
+        const uniq = Array.from(new Set(ids));
+        // Chunk to keep the in.() list within URL limits.
+        for (let i = 0; i < uniq.length; i += 200) {
+          const chunk = uniq.slice(i, i + 200);
+          const inList = chunk.map(v => encodeURIComponent(v)).join(',');
+          const ar = await opsQuery('GET',
+            `lcc_property_attributes?source_domain=eq.${encodeURIComponent(dom)}` +
+            `&source_property_id=in.(${inList})` +
+            `&select=source_domain,source_property_id,address,city,state,tenant_short,tenant_label,` +
+            `building_type,asset_class,annual_rent,noi`);
+          if (ar.ok && Array.isArray(ar.data)) {
+            for (const a of ar.data) attrMap[a.source_domain + ':' + a.source_property_id] = a;
+          }
+        }
+      }));
+
+      const properties = facts.map(f => {
+        const a = attrMap[f.source_domain + ':' + f.source_property_id] || {};
+        return {
+          source_domain: f.source_domain,
+          source_property_id: f.source_property_id,
+          is_current: f.is_current,
+          annual_rent: f.annual_rent != null ? Number(f.annual_rent) : (a.annual_rent != null ? Number(a.annual_rent) : null),
+          sale_price: f.sale_price != null ? Number(f.sale_price) : null,
+          cap_rate: f.cap_rate != null ? Number(f.cap_rate) : null,
+          ownership_start_date: f.ownership_start_date || null,
+          ownership_end_date: f.ownership_end_date || null,
+          address: a.address || null,
+          city: a.city || null,
+          state: a.state || null,
+          tenant: a.tenant_label || a.tenant_short || null,
+          building_type: a.building_type || null,
+          asset_class: a.asset_class || null,
+        };
+      });
+
+      return res.status(200).json({ rollup, properties });
+    }
+
     // Single entity with related data
     if (id) {
       const result = await opsQuery('GET',
