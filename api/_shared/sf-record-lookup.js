@@ -130,7 +130,7 @@ export function normalizeCompRecords(records) {
  * @param {{objectType:string, fields:string, ids:string[], batchSize?:number,
  *          requestIdSeed?:string, fetchImpl?:Function, deadline?:number}} args
  */
-export async function lookupSfRecordsByIds({ objectType, fields, ids, batchSize = 100, requestIdSeed = 't4c', fetchImpl, deadline = 0 } = {}) {
+export async function lookupSfRecordsByIds({ objectType, fields, ids, batchSize = 20, requestIdSeed = 't4c', fetchImpl, deadline = 0 } = {}) {
   if (!isSfRecordLookupConfigured() && !fetchImpl) return { ok: false, reason: 'sf_record_lookup_not_configured' };
   const batches = chunk(Array.isArray(ids) ? ids : [], batchSize);
   const records = [];

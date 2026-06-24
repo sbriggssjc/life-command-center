@@ -136,7 +136,11 @@ export async function handleSfRecordLookupTick(req, res) {
 
   const dryRun = req.method === 'GET';
   const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit || '1000', 10)));      // max comp IDs to fetch this tick
-  const batchSize = Math.min(100, Math.max(1, parseInt(req.query.batch_size || '100', 10))); // <=100/batch (filter-length safe)
+  // <=20/batch by default: a 100-Id `eq ... or ...` SOQL overruns the synchronous
+  // PA flow's response window (502 NoResponse). Override via ?batch_size= (1..100)
+  // with NO redeploy. Batches run sequentially (concurrency 1) — overlapping calls
+  // to the sync flow also risk NoResponse.
+  const batchSize = Math.min(100, Math.max(1, parseInt(req.query.batch_size || '20', 10)));
   const objectType = String(req.query.object_type || DEFAULT_OBJECT_TYPE);                 // reusable seam
   const fields = String(req.query.fields || DEFAULT_FIELDS);
   const requested = String(req.query.domain || 'both').toLowerCase();
