@@ -115,7 +115,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   const bodyEl = document.getElementById('detailBody');
 
   if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
+    <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
         <div class="detail-title">${esc(title)}</div>
@@ -155,6 +155,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // clinic-only opens (no property_id) are not deep-linked this phase.
   if (typeof _routeSetDetailHash === 'function' && ids && ids.property_id) {
     _routeSetDetailHash({ kind: 'prop', db, id: ids.property_id, tab: activeTab });
+  }
+  // UI Phase 4: reconcile the back-stack so a lateral/drill hop pushes a new
+  // level (and the breadcrumb updates immediately). Uses the fallback-derived
+  // title as the crumb label; refined to the real title once data loads below.
+  if (typeof _detailStackSync === 'function' && ids && ids.property_id) {
+    _detailStackSync({ kind: 'prop', db, id: ids.property_id, tab: activeTab }, title);
   }
 
   // Show spinner in body
@@ -527,6 +533,10 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Update header with real data (page_title or fallback to tenant/address)
     if (synthProperty) {
       const realTitle = synthProperty.page_title || synthProperty.facility_name || fallback.tenant_operator || fallback.agency || synthProperty.address || fallback.address || '(Unknown)';
+      // UI Phase 4: refine this level's breadcrumb crumb to the loaded title.
+      if (typeof _detailStackSetLabel === 'function' && (propertyId || ids.property_id)) {
+        _detailStackSetLabel({ kind: 'prop', db, id: propertyId || ids.property_id }, realTitle);
+      }
       const loc2 = (synthProperty.city || '') + (synthProperty.state ? ', ' + synthProperty.state : '');
       // QA-12 (2026-05-18): drop the city subtitle when the title already
       // embeds it (page_title often does), so the panel doesn't show
@@ -11960,6 +11970,10 @@ async function openEntityDetail(entityId) {
   if (typeof _routeSetDetailHash === 'function') {
     _routeSetDetailHash({ kind: 'entity', id: entityId });
   }
+  // UI Phase 4: reconcile the back-stack (entity is a first-class zoom level).
+  if (typeof _detailStackSync === 'function') {
+    _detailStackSync({ kind: 'entity', id: entityId });
+  }
 
   const headerEl = document.getElementById('detailHeader');
   const tabsEl = document.getElementById('detailTabs');
@@ -11967,7 +11981,7 @@ async function openEntityDetail(entityId) {
 
   // Loading state
   if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
+    <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
         <div class="detail-title">Loading entity...</div>
@@ -12043,6 +12057,10 @@ async function openEntityDetail(entityId) {
     // Render header
     const typeBadge = (entity.entity_type || 'org').toUpperCase();
     const statusColor = entity.status === 'active' ? 'var(--green)' : 'var(--text3)';
+    // UI Phase 4: refine this level's breadcrumb crumb to the loaded entity name.
+    if (typeof _detailStackSetLabel === 'function' && entity.name) {
+      _detailStackSetLabel({ kind: 'entity', id: entityId }, entity.name);
+    }
     if (headerEl) headerEl.innerHTML = `
       <div class="detail-header-info">
         <div style="flex:1;min-width:0">
@@ -14482,17 +14500,6 @@ async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
     .slice(0, 40) || 'subject';
   const fname = `LCC_LeaseComps_${db === 'gov' ? 'GOV' : 'DIA'}_${slug}_${today}.xlsx`;
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fname;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  // Free the object URL after the click handler had a chance to read it.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-window._udExportLeaseComps = _udExportLeaseComps;blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = fname;
