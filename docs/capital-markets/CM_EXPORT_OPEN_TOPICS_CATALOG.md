@@ -148,11 +148,18 @@ Henry Ford, …) — never assigned an operator (hard guard verified, 0 leaks); 
   `On_Market_Date__c`, LCC backfills. Bypasses the tenant filter + pagination entirely; reusable for
   property/comp/listing/company lookups. Prompts: `CLAUDE_CODE_PROMPT_T4c_sf_record_lookup.md` (LCC) +
   `PA_FLOW_SF_RECORD_LOOKUP_BUILD.md` (the PA flow build for Scott).
-- **~1,882 held listings have NO comp link at all** (dia 1349 / gov 533) — the ID lookup won't reach
+- ✅ **ID-lookup recovery COMPLETE (2026-06-24, verified live).** Auth path resolved (PA HTTP trigger →
+  "Anyone"/SAS sig; worker sends SAS-only, no extra auth header; `batch_size=20` to fit the sync flow's
+  response window — 100 overran it with 502 NoResponse). 3 ticks drained the full still-held SF-linked
+  backlog: **628 listings dated** (dia +304 → 337 `sf_on_market_date`; gov +324 → 382), retained map
+  674 → 1,303, `still_missing_after_tick=0`. Independently gated: counts reconcile, dates 2014→2026,
+  **0 `synthetic_from_sale`/curated touched**, reversible under `t4c_recovery_lookup`. Post-deploy:
+  regenerate the flow's SAS key (the `sig` leaked into chat) + refresh `SF_RECORD_LOOKUP_URL`.
+- **~1,882 held listings have NO comp link at all** (dia 1349 / gov 533) — the ID lookup can't reach
   these; they stay honestly held (future CoStar/platform date or genuinely dateless). Item 3 holds them
   out of the timing axis.
 
-**Working order (sequential, Scott): T4c ID-lookup recovery → T4c Item 3 (de-surge gate) → T2 → T7 → T8 → T10.**
+**Working order (sequential, Scott): ✅ T4c recovery (done) → T4c Item 3 (the de-surge gate, OPEN) → T2 → T7 → T8 → T10.**
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking

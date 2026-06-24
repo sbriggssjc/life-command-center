@@ -24,7 +24,8 @@ import { queryParams, parseBody, isoNow, isoFuture, estimateTokens, toArray } fr
 
 const VALID_PACKET_TYPES = new Set([
   "contact", "property", "pursuit", "deal",
-  "daily_briefing", "listing_marketing", "comp_analysis"
+  "daily_briefing", "listing_marketing", "comp_analysis",
+  "cortex_context"
 ]);
 
 const PACKET_TTL_HOURS: Record<string, number> = {
@@ -34,7 +35,8 @@ const PACKET_TTL_HOURS: Record<string, number> = {
   deal: 4,
   daily_briefing: 1,
   listing_marketing: 6,
-  comp_analysis: 72
+  comp_analysis: 72,
+  cortex_context: 1
 };
 
 // ── Main Handler ───────────────────────────────────────────────────────────
@@ -147,12 +149,12 @@ async function handleAssemble(
   req: Request, body: Record<string, unknown> | null,
   workspaceId: string, userId: string
 ): Promise<Response> {
-  const { packet_type, entity_id, entity_type, surface_hint, force_refresh, max_tokens } = (body || {}) as Record<string, unknown>;
+  const { packet_type, entity_id, entity_type, surface_hint, force_refresh, max_tokens, domain } = (body || {}) as Record<string, unknown>;
 
   if (!packet_type || !VALID_PACKET_TYPES.has(packet_type as string)) {
     return errorResponse(req, `Invalid or missing packet_type. Use: ${[...VALID_PACKET_TYPES].join(", ")}`, 400);
   }
-  if (packet_type !== "daily_briefing" && !entity_id) {
+  if (packet_type !== "daily_briefing" && packet_type !== "cortex_context" && !entity_id) {
     return errorResponse(req, "entity_id is required for non-briefing packet types", 400);
   }
 
@@ -160,7 +162,7 @@ async function handleAssemble(
     const result = await assembleSinglePacket({
       packet_type: packet_type as string,
       entity_id: (entity_id as string) || null,
-      entity_type: (entity_type as string) || null,
+      entity_type: (packet_type === "cortex_context" ? (((domain as string) || "global")) : ((entity_type as string) || null)),
       surface_hint: (surface_hint as string) || null,
       force_refresh: !!force_refresh,
       max_tokens: (max_tokens as number) || null,
@@ -473,6 +475,27 @@ async function assembleSinglePacket(params: AssembleParams) {
     }
   }
 
+  // Cache check for cortex_context (domain carried in entity_type)
+  if (!force_refresh && packet_type === "cortex_context") {
+    const cortexFilter =
+      `context_packets?packet_type=eq.cortex_context` +
+      `&requesting_user=eq.${pgFilterVal(userId)}` +
+      `&entity_type=eq.${pgFilterVal(entity_type || "global")}` +
+      `&invalidated=eq.false` +
+      `&expires_at=gt.${pgFilterVal(isoNow())}` +
+      `&order=assembled_at.desc&limit=1`;
+    const cached = await opsQuery("GET", cortexFilter);
+    if (cached.ok && cached.data?.length > 0) {
+      const pkt = cached.data[0];
+      return {
+        packet_id: pkt.id, packet_type: pkt.packet_type, entity_id: null,
+        assembled_at: pkt.assembled_at, expires_at: pkt.expires_at, cache_hit: true,
+        token_count: pkt.token_count, payload: pkt.payload,
+        assembly_meta: { sources_queried: [], fields_missing: [], compression_applied: false, duration_ms: Date.now() - startMs }
+      };
+    }
+  }
+
   // Step 2 — Assemble fresh packet
   let payload: Record<string, unknown>;
   let sourcesQueried: string[];
@@ -487,6 +510,9 @@ async function assembleSinglePacket(params: AssembleParams) {
       break;
     case "daily_briefing":
       ({ payload, sourcesQueried, fieldsMissing } = await assembleDailyBriefingPacket(workspaceId, userId));
+      break;
+    case "cortex_context":
+      ({ payload, sourcesQueried, fieldsMissing } = await assembleCortexPacket(entity_type || "global", max_tokens));
       break;
     default:
       ({ payload, sourcesQueried, fieldsMissing } = await assembleGenericPacket(packet_type, entity_id!, workspaceId));
@@ -764,5 +790,66 @@ async function assembleGenericPacket(packetType: string, entityId: string, works
     active_items: toArray(relatedActionsRes.data)
   };
 
+  return { payload, sourcesQueried, fieldsMissing };
+}
+
+
+// ── Cortex Context Packet Assembly (Build A1) ──────────────────────────────
+// Serves the Cortex Tier-1 brain slice from public.cortex_documents.
+// Boundary: private docs (e.g. personal Health/Finance) are included ONLY when
+// the requested domain is 'personal'. Canonical source stays in OneDrive.
+async function assembleCortexPacket(domain: string, maxTokens: number | null) {
+  const sourcesQueried = ["cortex_documents"];
+  const fieldsMissing: string[] = [];
+  const allowPrivate = domain === "personal";
+
+  const res = await opsQuery(
+    "GET",
+    "cortex_documents?select=doc_id,domain,title,version,last_updated,sensitivity,body_md&order=doc_id.asc"
+  );
+  const docsRaw = toArray(res.data) as Array<Record<string, unknown>>;
+  const docs = docsRaw.filter(
+    (d) =>
+      (d.domain === "global" || d.domain === domain) &&
+      (allowPrivate || d.sensitivity !== "private")
+  );
+  if (docs.length === 0) fieldsMissing.push("cortex_documents:" + domain);
+
+  const provenance = docs.map((d) => ({
+    doc_id: d.doc_id, version: d.version, last_updated: d.last_updated, domain: d.domain
+  }));
+
+  // Priority for token-budget trimming (lower = keep first); domain doc = 4.
+  const PRIORITY: Record<string, number> = {
+    "01_CONTEXT-SPINE": 1, "04_ORCHESTRATION": 2, "02_AGENT-REGISTRY": 3,
+    "03_DOMAIN-MAP": 5, "00_CORTEX-CHARTER": 6, "05_ARCHITECTURE-PRINCIPLES": 7,
+    "06_ARCHITECTURE-AND-BUILD-PLAN": 8
+  };
+  const rank = (d: Record<string, unknown>) =>
+    (String(d.domain) !== "global" ? 4 : (PRIORITY[String(d.doc_id)] ?? 9));
+  const ordered = [...docs].sort((a, b) => rank(a) - rank(b));
+
+  const sections: Array<Record<string, unknown>> = [];
+  let runningTokens = 0;
+  for (const d of ordered) {
+    const body = String(d.body_md || "");
+    const t = estimateTokens({ body });
+    if (maxTokens && runningTokens + t > maxTokens && sections.length > 0) continue;
+    runningTokens += t;
+    sections.push({
+      doc_id: d.doc_id, domain: d.domain, title: d.title,
+      version: d.version, last_updated: d.last_updated, body_md: body
+    });
+  }
+
+  const payload: Record<string, unknown> = {
+    kind: "cortex_context",
+    requested_domain: domain,
+    boundary: allowPrivate ? "personal (private docs included)" : "private docs excluded",
+    docs: sections,
+    provenance,
+    note: "Cortex Tier-1 brain slice. Canonical source: OneDrive Personal _FileSystem Cortex. " +
+          "Entity-context nesting (entity_id) is a follow-up (A1.1)."
+  };
   return { payload, sourcesQueried, fieldsMissing };
 }
