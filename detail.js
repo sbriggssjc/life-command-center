@@ -11955,7 +11955,18 @@ async function _entityApiFetch(url) {
 /**
  * Open entity detail panel by entity ID (from ops DB).
  */
-async function openEntityDetail(entityId) {
+// UI Phase 4B — owner/entity detail parity. The owner is a first-class zoom
+// object: it renders the SAME slide-over shell as the property detail
+// (openUnifiedDetail) — a real tab bar (Overview · Portfolio · Contacts ·
+// Activity), the shared completeness rail + Next-Step banner, and it rides the
+// SAME 4A back-stack/breadcrumb. The portfolio is sourced from the
+// authoritative BD spine (lcc_entity_portfolio_facts via /api/entities?action=
+// portfolio), NOT a fuzzy v_ownership_current name-match, and the Next-Step
+// reads v_priority_queue_enriched (the SAME truth as the Priority Queue /
+// Decision Center). `initialTab` lets a reload / deep-link restore the open tab.
+const ENTITY_DETAIL_TABS = ['Overview', 'Portfolio', 'Contacts', 'Activity'];
+
+async function openEntityDetail(entityId, initialTab) {
   _entityDetailCache = null;
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
@@ -11964,20 +11975,25 @@ async function openEntityDetail(entityId) {
   panel.style.display = 'block';
   overlay.classList.add('open');
 
-  // Client routing (UI Phase 1): mirror the open entity into the hash so a
-  // reload / deep-link re-opens it. Loop-guarded (no-op when the router drove
-  // this open).
+  const activeTab = ENTITY_DETAIL_TABS.includes(initialTab) ? initialTab : ENTITY_DETAIL_TABS[0];
+
+  // Client routing (UI Phase 1 + 4B): mirror the open entity + tab into the hash
+  // so a reload / deep-link re-opens this exact view. Loop-guarded.
   if (typeof _routeSetDetailHash === 'function') {
-    _routeSetDetailHash({ kind: 'entity', id: entityId });
+    _routeSetDetailHash({ kind: 'entity', id: entityId, tab: activeTab });
   }
   // UI Phase 4: reconcile the back-stack (entity is a first-class zoom level).
   if (typeof _detailStackSync === 'function') {
-    _detailStackSync({ kind: 'entity', id: entityId });
+    _detailStackSync({ kind: 'entity', id: entityId, tab: activeTab });
   }
 
   const headerEl = document.getElementById('detailHeader');
   const tabsEl = document.getElementById('detailTabs');
   const bodyEl = document.getElementById('detailBody');
+
+  // Reset the shared rail / Next-Step / next-action chrome so a prior property's
+  // content never lingers under the entity panel while it loads.
+  _entityHideRailChrome();
 
   // Loading state
   if (headerEl) headerEl.innerHTML = `
@@ -11990,6 +12006,7 @@ async function openEntityDetail(entityId) {
       <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
     </div>
     <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+  if (tabsEl) tabsEl.innerHTML = '';
   if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading entity details...</p></div>';
 
   try {
@@ -12007,52 +12024,19 @@ async function openEntityDetail(entityId) {
 
     const contacts = contactsData?.contacts || [];
 
-    // Fetch activities for this entity
-    const activitiesPromise = _entityApiFetch('/api/activities?entity_id=' + encodeURIComponent(entityId) + '&order=occurred_at.desc&limit=20')
-      .then(d => d?.activities || []).catch(() => []);
-
-    // Fetch portfolio and transactions in parallel (from Gov and Dia DBs)
-    const portfolioPromises = [];
-    const transactionPromises = [];
-    const entityName = entity.name || '';
-
-    // Search both DBs for properties owned by this entity
-    if (typeof govQuery === 'function') {
-      portfolioPromises.push(
-        govQuery('v_ownership_current', '*', { filter: 'true_owner=ilike.*' + encodeURIComponent(entityName) + '*', limit: 50 }).catch(() => ({ data: [] }))
-      );
-      transactionPromises.push(
-        govQuery('v_sales_comps', '*', { filter: 'or=(buyer_name.ilike.*' + encodeURIComponent(entityName) + '*,seller_name.ilike.*' + encodeURIComponent(entityName) + '*)', order: 'sale_date.desc', limit: 30 }).catch(() => ({ data: [] }))
-      );
-    }
-    if (typeof diaQuery === 'function') {
-      portfolioPromises.push(
-        diaQuery('v_ownership_current', '*', { filter: 'true_owner=ilike.*' + encodeURIComponent(entityName) + '*', limit: 50 }).catch(() => [])
-      );
-      transactionPromises.push(
-        diaQuery('v_sales_comps', '*', { filter: 'or=(buyer_name.ilike.*' + encodeURIComponent(entityName) + '*,seller_name.ilike.*' + encodeURIComponent(entityName) + '*)', order: 'sale_date.desc', limit: 30 }).catch(() => [])
-      );
-    }
-
-    const [portfolioResults, transactionResults, activities] = await Promise.all([
-      Promise.allSettled(portfolioPromises),
-      Promise.allSettled(transactionPromises),
-      activitiesPromise
+    // UI Phase 4B — authoritative portfolio (BD spine), activities, and the
+    // entity-level priority band (the Next-Step truth). All best-effort.
+    const [portfolioData, activities, band] = await Promise.all([
+      _entityApiFetch('/api/entities?action=portfolio&id=' + encodeURIComponent(entityId)).catch(() => null),
+      _entityApiFetch('/api/activities?entity_id=' + encodeURIComponent(entityId) + '&order=occurred_at.desc&limit=20')
+        .then(d => d?.activities || []).catch(() => []),
+      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null)
     ]);
 
-    // Normalize results
-    const extractArr = (r) => {
-      if (!r || r.status !== 'fulfilled') return [];
-      const v = r.value;
-      return Array.isArray(v) ? v : (v?.data || []);
-    };
+    const portfolio = (portfolioData && Array.isArray(portfolioData.properties)) ? portfolioData.properties : [];
+    const rollup = (portfolioData && portfolioData.rollup) || null;
 
-    let portfolio = [];
-    for (const r of portfolioResults) portfolio = portfolio.concat(extractArr(r));
-    let transactions = [];
-    for (const r of transactionResults) transactions = transactions.concat(extractArr(r));
-
-    _entityDetailCache = { entity, contacts, portfolio, transactions, activities, type: 'entity' };
+    _entityDetailCache = { entity, entityId, contacts, portfolio, rollup, activities, band, type: 'entity' };
 
     // Render header
     const typeBadge = (entity.entity_type || 'org').toUpperCase();
@@ -12062,6 +12046,7 @@ async function openEntityDetail(entityId) {
       _detailStackSetLabel({ kind: 'entity', id: entityId }, entity.name);
     }
     if (headerEl) headerEl.innerHTML = `
+      <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
       <div class="detail-header-info">
         <div style="flex:1;min-width:0">
           <div class="detail-title">${esc(entity.name)}</div>
@@ -12073,21 +12058,25 @@ async function openEntityDetail(entityId) {
           </div>
         </div>
         <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
-        <button class="detail-close" onclick="closeDetail()">&times;</button>
-      </div>`;
+      </div>
+      <button class="detail-close" onclick="closeDetail()">&times;</button>`;
 
-    // Render tabs
-    const tabs = ['Overview', 'Activity', 'Portfolio', 'Transactions'];
-    if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
-      '<button class="detail-tab ' + (t === 'Overview' ? 'active' : '') + '" onclick="_switchEntityTab(\'' + t + '\')">' + t + '</button>'
+    // Render tabs (property-detail grammar)
+    if (tabsEl) tabsEl.innerHTML = ENTITY_DETAIL_TABS.map(t =>
+      '<button class="detail-tab ' + (t === activeTab ? 'active' : '') + '" onclick="switchEntityTab(decodeURIComponent(\'' + encodeURIComponent(t) + '\'))">' + esc(t) + '</button>'
     ).join('');
 
-    if (bodyEl) bodyEl.innerHTML = _renderEntityTab('Overview');
+    // Shared rail + Next-Step (next-action at the owner level).
+    _entityRenderCompletenessRail();
+    _entityRenderNextStep();
+
+    if (bodyEl) bodyEl.innerHTML = _renderEntityTab(activeTab);
   } catch (err) {
     console.error('Entity detail error:', err);
     if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading entity: ' + esc(err.message) + '</div>';
   }
 }
+window.openEntityDetail = openEntityDetail;
 
 /** Open entity detail by name search (when only name is available) */
 async function openEntityDetailByName(name) {
@@ -12273,23 +12262,29 @@ async function openContactDetailByName(name) {
   }
 }
 
-// ── Entity Tab Switching ──
-function _switchEntityTab(tabName) {
+// ── Entity Tab Switching (UI Phase 4B — mirrors switchUnifiedTab) ──
+function switchEntityTab(tabName) {
   if (!_entityDetailCache || _entityDetailCache.type !== 'entity') return;
+  // Mirror the tab into the hash (replace, so reload keeps it / no history noise),
+  // exactly like the property detail's switchUnifiedTab.
+  if (typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
   document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
   const bodyEl = document.getElementById('detailBody');
   if (bodyEl) bodyEl.innerHTML = _renderEntityTab(tabName);
 }
+window.switchEntityTab = switchEntityTab;
+// Back-compat alias (older onclick handlers referenced the underscore form).
+function _switchEntityTab(tabName) { return switchEntityTab(tabName); }
 
 function _renderEntityTab(tab) {
   if (!_entityDetailCache) return '<div class="detail-empty">No data loaded</div>';
   switch (tab) {
     case 'Overview': return _entityTabOverview();
-    case 'Activity': return _entityTabActivity();
     case 'Portfolio': return _entityTabPortfolio();
-    case 'Transactions': return _entityTabTransactions();
+    case 'Contacts': return _entityTabContacts();
+    case 'Activity': return _entityTabActivity();
     default: return '<div class="detail-empty">Unknown tab</div>';
   }
 }
@@ -12299,6 +12294,9 @@ function _entityTabOverview() {
   const c = _entityDetailCache;
   const e = c.entity;
   const contacts = c.contacts || [];
+  const rollup = c.rollup || null;
+  const propCount = rollup && rollup.total_property_count != null
+    ? Number(rollup.total_property_count) : (c.portfolio?.length || 0);
 
   let html = '';
 
@@ -12327,41 +12325,27 @@ function _entityTabOverview() {
     html += '</div></div>';
   }
 
-  // Contacts section
-  if (contacts.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">Contacts (' + contacts.length + ')</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:8px">';
-    for (const ct of contacts) {
-      html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openContactDetail(\'' + esc(ct.id) + '\')">';
-      html += '<div style="display:flex;align-items:center;gap:8px">';
-      html += '<div style="width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">';
-      html += esc((ct.full_name || ct.display_name || '?')[0].toUpperCase());
-      html += '</div>';
-      html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-weight:600;color:var(--text)">' + esc(ct.full_name || ct.display_name || 'Unknown') + '</div>';
-      html += '<div style="font-size:11px;color:var(--text2)">' + esc(ct.title || '') + '</div>';
-      html += '</div>';
-      html += '<div style="text-align:right;font-size:11px;color:var(--text3)">';
-      if (ct.email) html += '<div>' + esc(ct.email) + '</div>';
-      if (ct.phone) html += '<div>' + esc(ct.phone) + '</div>';
-      html += '</div></div></div>';
-    }
-    html += '</div></div>';
-  } else {
-    html += '<div class="detail-section"><div class="detail-section-title">Contacts</div>';
-    html += '<div style="color:var(--text3);font-size:12px;padding:8px 0">No contacts linked to this entity.</div></div>';
-  }
-
-  // Quick stats
+  // Quick stats (portfolio count + Σ rent from the authoritative rollup)
+  const rollupRent = rollup && rollup.current_annual_rent_total != null ? Number(rollup.current_annual_rent_total) : null;
   html += '<div class="detail-section"><div class="detail-section-title">Summary</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-top:4px">';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + (c.portfolio?.length || 0) + '</div><div class="t-meta3">Properties</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + contacts.length + '</div><div class="t-meta3">Contacts</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.transactions?.length || 0) + '</div><div class="t-meta3">Transactions</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--yellow, #eab308)">' + (c.activities?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Portfolio\')"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + propCount + '</div><div class="t-meta3">Properties</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:16px;font-weight:700;color:var(--green)">' + (rollupRent ? _entityFmtMoney(rollupRent) : '—') + '</div><div class="t-meta3">Portfolio Rent</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Contacts\')"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + contacts.length + '</div><div class="t-meta3">Contacts</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Activity\')"><div style="font-size:20px;font-weight:700;color:var(--yellow, #eab308)">' + (c.activities?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
   html += '</div></div>';
 
   return html;
+}
+
+// Compact $ formatter for the entity rollup figures.
+function _entityFmtMoney(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return '—';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(v >= 10e6 ? 0 : 1) + 'M';
+  if (v >= 1e3) return '$' + Math.round(v / 1e3) + 'K';
+  return '$' + Math.round(v);
 }
 
 // ── Entity Activity Tab ──
@@ -12399,33 +12383,62 @@ function _entityTabActivity() {
   return html;
 }
 
-// ── Entity Portfolio Tab ──
+// ── Entity Portfolio Tab (UI Phase 4B — authoritative BD-spine portfolio) ──
+// Sourced from lcc_entity_portfolio_facts ⋈ lcc_property_attributes (via
+// /api/entities?action=portfolio), NOT a fuzzy v_ownership_current name-match.
+// A rollup header (count / Σ rent / domains) over a per-property list where each
+// row is a 4A zoom target — openUnifiedDetail PUSHes onto the back-stack.
 function _entityTabPortfolio() {
-  const portfolio = _entityDetailCache?.portfolio || [];
-  if (!portfolio.length) return '<div class="detail-empty">No properties found for this entity.</div>';
+  const c = _entityDetailCache;
+  const portfolio = c?.portfolio || [];
+  const rollup = c?.rollup || null;
 
-  let html = '<div class="detail-section"><div class="detail-section-title">Ownership Portfolio (' + portfolio.length + ')</div>';
+  let html = '';
+
+  // Rollup header (matches the queue/P-BUYER rollup the owner ranks on).
+  if (rollup) {
+    const total = rollup.total_property_count != null ? Number(rollup.total_property_count) : portfolio.length;
+    const current = rollup.current_property_count != null ? Number(rollup.current_property_count) : null;
+    const rent = rollup.current_annual_rent_total != null ? Number(rollup.current_annual_rent_total) : null;
+    const domains = [];
+    if (rollup.dia_property_count) domains.push(Number(rollup.dia_property_count) + ' DIA');
+    if (rollup.gov_property_count) domains.push(Number(rollup.gov_property_count) + ' GOV');
+    html += '<div class="detail-section"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--accent)">' + total + '</div><div class="t-meta3">Properties' + (current != null && current !== total ? ' (' + current + ' current)' : '') + '</div></div>';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:16px;font-weight:700;color:var(--green)">' + _entityFmtMoney(rent) + '</div><div class="t-meta3">Annual Rent</div></div>';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:13px;font-weight:600;color:var(--text)">' + (domains.length ? esc(domains.join(' · ')) : '—') + '</div><div class="t-meta3">Mix</div></div>';
+    html += '</div></div>';
+  }
+
+  if (!portfolio.length) {
+    html += '<div class="detail-empty">No properties in the BD portfolio for this owner.</div>';
+    return html;
+  }
+
+  html += '<div class="detail-section"><div class="detail-section-title">Properties (' + portfolio.length + ')</div>';
   html += '<div style="display:flex;flex-direction:column;gap:6px">';
 
   for (const p of portfolio) {
-    const addr = p.address || p.property_address || '(No address)';
+    const addr = p.address || '(No address)';
     const loc = (p.city || '') + (p.city && p.state ? ', ' : '') + (p.state || '');
-    const propType = p.property_type || p.asset_type || '';
-    const tenant = p.tenant_name || p.tenant_operator || p.facility_name || '';
-    const db = p.domain === 'government' ? 'gov' : 'dia';
-    const pid = p.property_id;
+    const db = (p.source_domain === 'gov' || p.source_domain === 'government') ? 'gov' : 'dia';
+    const pid = p.source_property_id;
+    const tenant = p.tenant || '';
+    const rent = p.annual_rent != null ? _entityFmtMoney(p.annual_rent) : '';
+    const badge = db.toUpperCase();
+    const dim = p.is_current === false ? 'opacity:0.6;' : '';
 
-    html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + (pid ? 'cursor:pointer' : '') + '"';
-    if (pid) html += ' onclick="openUnifiedDetail(\'' + esc(db) + '\', {property_id:' + pid + '})"';
+    html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + dim + (pid != null ? 'cursor:pointer' : '') + '"';
+    if (pid != null) html += ' onclick="openUnifiedDetail(\'' + esc(db) + '\', {property_id:\'' + esc(String(pid)) + '\'})"';
     html += '>';
     html += '<div style="display:flex;gap:12px;align-items:flex-start">';
     html += '<div style="flex:1;min-width:0">';
     html += '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(addr) + '</div>';
-    html += '<div style="font-size:11px;color:var(--text2)">' + esc(loc) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text2)">' + esc(loc) + (tenant ? ' · ' + esc(tenant) : '') + (p.is_current === false ? ' · former' : '') + '</div>';
     html += '</div>';
     html += '<div style="text-align:right;font-size:11px;flex-shrink:0">';
-    if (propType) html += '<div class="t-muted3">' + esc(propType) + '</div>';
-    if (tenant) html += '<div style="color:var(--accent)">' + esc(tenant) + '</div>';
+    html += '<div><span style="font-size:9px;padding:1px 6px;border-radius:8px;background:' + (db === 'gov' ? 'var(--gov-green)' : 'var(--purple)') + ';color:#fff">' + badge + '</span></div>';
+    if (rent) html += '<div style="color:var(--green);margin-top:3px">' + rent + '</div>';
     html += '</div></div></div>';
   }
 
@@ -12433,43 +12446,283 @@ function _entityTabPortfolio() {
   return html;
 }
 
-// ── Entity Transactions Tab ──
-function _entityTabTransactions() {
-  const transactions = _entityDetailCache?.transactions || [];
-  const entityName = _entityDetailCache?.entity?.name || '';
-  if (!transactions.length) return '<div class="detail-empty">No transactions found for this entity.</div>';
+// ── Entity Contacts Tab (UI Phase 4B) ──
+// Lists the people at this owner; when there are none, surfaces the
+// acquire-contact CTA that reuses the P-CONTACT / buyer picker endpoints
+// (?action=buyer_contacts → select_prospecting_contact). This is where Phase 5's
+// "owner missing a contact" gets resolved.
+function _entityTabContacts() {
+  const c = _entityDetailCache;
+  const contacts = c?.contacts || [];
 
-  let html = '<div class="detail-section"><div class="detail-section-title">Transaction History (' + transactions.length + ')</div>';
-
-  // Table header
-  html += '<div style="display:flex;gap:8px;padding:6px 12px;font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);letter-spacing:0.5px">';
-  html += '<div style="flex:0.7">Date</div>';
-  html += '<div style="flex:1.5">Address</div>';
-  html += '<div style="flex:0.8;text-align:right">Price</div>';
-  html += '<div style="flex:0.5;text-align:center">Role</div>';
-  html += '</div>';
-
-  for (const t of transactions) {
-    const date = _fmtDate(t.sale_date || t.transfer_date);
-    const addr = t.address || t.property_address || '(Unknown)';
-    const price = t.sale_price || t.price;
-    const buyerName = (t.buyer_name || '').toLowerCase();
-    const sellerName = (t.seller_name || '').toLowerCase();
-    const nameL = entityName.toLowerCase();
-    const role = buyerName.includes(nameL) ? 'Buyer' : (sellerName.includes(nameL) ? 'Seller' : '—');
-    const roleColor = role === 'Buyer' ? 'var(--green)' : (role === 'Seller' ? 'var(--red, #ef4444)' : 'var(--text3)');
-
-    html += '<div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--border);font-size:12px;align-items:center">';
-    html += '<div style="flex:0.7;color:var(--text2)">' + esc(date) + '</div>';
-    html += '<div style="flex:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">' + esc(addr) + '</div>';
-    html += '<div style="flex:0.8;text-align:right;color:var(--green);font-weight:600">' + (price ? fmt(price) : '—') + '</div>';
-    html += '<div style="flex:0.5;text-align:center"><span style="font-size:10px;padding:2px 6px;border-radius:8px;background:' + roleColor + '22;color:' + roleColor + ';font-weight:600">' + esc(role) + '</span></div>';
+  let html = '';
+  if (contacts.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">Contacts (' + contacts.length + ')</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:8px">';
+    for (const ct of contacts) {
+      html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openContactDetail(\'' + esc(ct.id) + '\')">';
+      html += '<div style="display:flex;align-items:center;gap:8px">';
+      html += '<div style="width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">';
+      html += esc((ct.full_name || ct.display_name || '?')[0].toUpperCase());
+      html += '</div>';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-weight:600;color:var(--text)">' + esc(ct.full_name || ct.display_name || 'Unknown') + '</div>';
+      html += '<div style="font-size:11px;color:var(--text2)">' + esc(ct.title || '') + '</div>';
+      html += '</div>';
+      html += '<div style="text-align:right;font-size:11px;color:var(--text3)">';
+      if (ct.email) html += '<div>' + esc(ct.email) + '</div>';
+      if (ct.phone) html += '<div>' + esc(ct.phone) + '</div>';
+      html += '</div></div></div>';
+    }
+    html += '</div>';
+    html += '<div style="margin-top:10px"><button class="dns-cta" onclick="_entityAcquireContact()">+ Add / acquire contact →</button></div>';
+    html += '</div>';
+  } else {
+    html += '<div class="detail-section"><div class="detail-section-title">Contacts</div>';
+    html += '<div style="color:var(--text3);font-size:12px;padding:8px 0 12px">No contacts linked to this owner yet — acquire one to make outreach actionable.</div>';
+    html += '<button class="dns-cta" onclick="_entityAcquireContact()">Select / acquire contact →</button>';
     html += '</div>';
   }
-
-  html += '</div>';
+  // Host for the inline picker (rendered by _entityAcquireContact).
+  html += '<div id="entityContactPickerHost"></div>';
   return html;
 }
+
+// ============================================================================
+// UI Phase 4B — owner-level completeness rail + Next-Step (shared chrome)
+// Mirrors the property detail's _udRenderCompletenessRail / _udRenderNextStep,
+// but reads the entity cache. Both write the SAME persistent DOM elements
+// (#detailCompletenessRail / #detailNextStep) so the owner zooms identically.
+// ============================================================================
+
+// Hide the shared rail / Next-Step / next-action chrome (a fresh entity open, so
+// a prior property's rail never lingers under the entity panel).
+function _entityHideRailChrome() {
+  ['detailCompletenessRail', 'detailNextStep', 'detailNextActionBar'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+  });
+}
+
+// Connection chips: SF Account link · ≥1 linked contact · portfolio value known.
+function _entityRenderCompletenessRail() {
+  const rail = document.getElementById('detailCompletenessRail');
+  if (!rail) return;
+  const c = _entityDetailCache;
+  if (!c || c.type !== 'entity') { rail.style.display = 'none'; rail.innerHTML = ''; return; }
+  const e = c.entity || {};
+  const extIds = e.external_identities || [];
+  const hasSf = extIds.some(x => String(x.source_system || '').toLowerCase() === 'salesforce'
+    && String(x.source_type || '').toLowerCase() === 'account');
+  const hasContact = (c.contacts || []).length > 0;
+  const rollupRent = c.rollup && c.rollup.current_annual_rent_total != null ? Number(c.rollup.current_annual_rent_total) : 0;
+  const hasValue = rollupRent > 0;
+
+  const done = [hasSf, hasContact, hasValue].filter(Boolean).length;
+  const chip = (label, ok, onclick) =>
+    '<span class="cr-chip" ' + (ok ? 'style="cursor:default"' : (onclick ? 'onclick="' + onclick + '"' : '')) + '>'
+      + (ok ? '✓ ' : '+ ') + esc(label) + '</span>';
+
+  const parts = [];
+  parts.push('<div class="cr-summary"><span class="cr-label">Connections</span>'
+    + '<span class="cr-score">' + done + '</span><span class="cr-score-band cr-band-'
+    + (done >= 2 ? 'good' : done === 1 ? 'fair' : 'poor') + '">of 3</span></div>');
+  parts.push('<div class="cr-chips">');
+  parts.push(chip('Salesforce account', hasSf, null));
+  parts.push(chip('Contact', hasContact, 'switchEntityTab(&quot;Contacts&quot;)'));
+  parts.push(chip('Portfolio value', hasValue, 'switchEntityTab(&quot;Portfolio&quot;)'));
+  parts.push('</div>');
+  rail.innerHTML = parts.join('');
+  rail.style.display = '';
+}
+
+// Next-action at the owner level — reads the entity's priority band (the SAME
+// v_priority_queue_enriched truth as the Priority Queue / Decision Center).
+function _entityRenderNextStep() {
+  const bar = document.getElementById('detailNextStep');
+  if (!bar) return;
+  const c = _entityDetailCache;
+  if (!c || c.type !== 'entity') { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const band = c.band || null;
+  const pb = band && band.priority_band ? String(band.priority_band).toUpperCase() : null;
+  const reason = band ? String(band.reason || '') : '';
+  const oppOpen = !!(band && band.open_opportunity);
+  const cadenceDue = band && band.cadence_next_touch_due ? band.cadence_next_touch_due : null;
+  const trueOwner = band && band.resolve_true_owner_name ? band.resolve_true_owner_name : null;
+  const connected = band ? band.resolve_is_connected : null;
+
+  let step;
+  if (pb === 'P0.4' || reason === 'resolve_ownership_control') {
+    step = {
+      label: 'Resolve ownership & control',
+      sub: trueOwner ? ('True owner: ' + trueOwner + ' — link a Salesforce account / contact.')
+                     : 'Identify the true owner/parent and link a CRM account / contact.',
+      cta: 'Select contact →', onclick: 'switchEntityTab(&quot;Contacts&quot;);_entityAcquireContact()'
+    };
+  } else if (pb === 'P-BUYER' || /^repeat_buyer/.test(reason)) {
+    step = {
+      label: 'Open Government Buyer opportunity',
+      sub: 'Repeat buyer — pursue on the parent account, then pick the prospecting contact.',
+      cta: 'Open Government Buyer →', onclick: '_entityOpenGovBuyer()'
+    };
+  } else if (pb === 'P-CONTACT' || reason === 'select_prospecting_contact') {
+    step = {
+      label: 'Select prospecting contact',
+      sub: 'No reachable contact yet — acquire one to make outreach actionable.',
+      cta: 'Select contact →', onclick: 'switchEntityTab(&quot;Contacts&quot;);_entityAcquireContact()'
+    };
+  } else if (pb === 'P0.5' || reason === 'open_bd_opportunity_needed') {
+    step = {
+      label: 'Open a BD opportunity', sub: 'Owner resolved & connected — open the lead.',
+      cta: null, onclick: null
+    };
+  } else if (cadenceDue) {
+    step = { label: 'Cadence touch due', sub: 'Next touch ' + _fmtDate(cadenceDue) + '.', cta: null, onclick: null };
+  } else if (oppOpen) {
+    step = { label: 'Lead is live ✓', sub: 'Open BD opportunity on this owner.', cta: null, onclick: null };
+  } else if (pb) {
+    step = { label: _entityBandLabel(reason), sub: 'BD priority for this owner.', cta: null, onclick: null };
+  } else {
+    step = { label: 'Connected — no action', sub: 'No active BD action for this owner right now.', cta: null, onclick: null };
+  }
+
+  let h = '<div class="dns-row">';
+  h += '<span class="dns-flag">▶ Next step</span>';
+  h += '<div class="dns-text"><div class="dns-label">' + esc(step.label) + '</div><div class="dns-sub">' + esc(step.sub) + '</div></div>';
+  if (step.cta && step.onclick) h += '<button type="button" class="dns-cta" onclick="event.stopPropagation();' + step.onclick + '">' + esc(step.cta) + '</button>';
+  h += '</div>';
+  bar.innerHTML = h;
+  bar.style.display = '';
+}
+
+// Plain-language label for a band reason (mirrors ops.js _pqReason essentials).
+function _entityBandLabel(reason) {
+  const map = {
+    developer_overdue: 'Onboarding touch overdue (developer)',
+    resolve_ownership_control: 'Resolve ownership & control',
+    open_bd_opportunity_needed: 'Needs a BD opportunity opened',
+    select_prospecting_contact: 'No reachable contact — select one',
+    onboarding_cadence_due: 'Onboarding touch due',
+    steady_state_cadence_due: 'Steady-state touch overdue',
+    recent_acquisition_streak: 'Active acquirer (recent buying streak)',
+    aging_building: 'Aging building (replacement candidate)'
+  };
+  const r = String(reason || '');
+  if (map[r]) return map[r];
+  return r ? r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'BD priority';
+}
+
+// ── Entity contact acquire (reuses the P-CONTACT / buyer picker endpoints) ──
+async function _entityAcquireContact() {
+  const c = _entityDetailCache;
+  if (!c || !c.entityId) return;
+  // Ensure the Contacts tab is showing so the host element exists.
+  const activeTab = document.querySelector('#detailTabs .detail-tab.active');
+  if (!activeTab || activeTab.textContent.trim() !== 'Contacts') switchEntityTab('Contacts');
+  const host = document.getElementById('entityContactPickerHost');
+  if (host) host.innerHTML = '<div style="padding:12px;color:var(--text2)"><span class="spinner"></span> Loading candidate contacts…</div>';
+  const data = await _udApiGet('/api/operations?action=buyer_contacts&entity_id=' + encodeURIComponent(c.entityId));
+  if (!data || data.ok === false) {
+    if (host) host.innerHTML = '<div style="padding:12px;color:var(--red,#ef4444)">Could not load contacts.</div>';
+    return;
+  }
+  _entityDetailCache._contactCandidates = data;
+  if (host) host.innerHTML = _entityContactPickerHTML(data);
+}
+window._entityAcquireContact = _entityAcquireContact;
+
+function _entityContactPickerHTML(d) {
+  let h = '<div class="detail-section" style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px">';
+  h += '<div class="detail-section-title">Who is the prospecting contact?</div>';
+  const sec = (title, rows, kind) => {
+    if (!rows || !rows.length) return '';
+    let s = '<div style="font-size:11px;font-weight:600;color:var(--text3);margin:8px 0 4px;text-transform:uppercase">' + esc(title) + '</div>';
+    rows.forEach((cn, i) => {
+      const sub = [cn.title, cn.email].filter(Boolean).join(' · ');
+      s += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)">'
+        + '<div style="min-width:0"><b>' + esc(cn.name || 'Unnamed') + '</b>'
+        + (sub ? ' <span style="font-size:11px;color:var(--text2)">' + esc(sub) + '</span>' : '') + '</div>'
+        + '<button class="dns-cta" onclick="_entityContactPick(&quot;' + kind + '&quot;,' + i + ')">Select</button></div>';
+    });
+    return s;
+  };
+  h += sec('Linked to this account', d.related, 'related');
+  if (d.sf_contacts && d.sf_contacts.length) {
+    h += sec('Salesforce contacts', d.sf_contacts, 'sf');
+  } else {
+    const msg = {
+      no_account: 'Not yet mapped to a Salesforce account.',
+      not_configured: 'Salesforce lookup not configured.',
+      unavailable: 'Salesforce contact lookup unavailable — add the contact manually.',
+      no_contacts: 'No Salesforce contacts on this account yet.'
+    }[d.sf_status];
+    if (msg) h += '<div style="font-size:11px;color:var(--text3);margin-top:6px">' + esc(msg) + '</div>';
+  }
+  h += sec('Name-matched humans (link on select)', d.name_matches, 'name');
+  h += '<div style="margin-top:10px"><button class="dns-cta" onclick="_entityContactAddNew()">+ Add new contact…</button></div>';
+  h += '</div>';
+  return h;
+}
+
+function _entityContactPick(kind, i) {
+  const d = (_entityDetailCache && _entityDetailCache._contactCandidates) || {};
+  const arr = kind === 'related' ? d.related : kind === 'sf' ? d.sf_contacts : d.name_matches;
+  const cn = (arr || [])[i];
+  if (!cn) return;
+  const payload = (kind === 'sf')
+    ? { sf_contact_id: cn.sf_contact_id, contact_name: cn.name }
+    : { contact_entity_id: cn.entity_id, contact_name: cn.name };
+  _entityContactSubmit(payload, cn.name);
+}
+window._entityContactPick = _entityContactPick;
+
+async function _entityContactAddNew() {
+  const nm = (typeof lccPrompt === 'function')
+    ? await lccPrompt('Add a new prospecting contact at this owner.\n\nFull name:', '')
+    : (typeof prompt === 'function' ? prompt('New contact name:') : '');
+  if (nm == null) return;
+  const v = String(nm || '').trim();
+  if (!v) { if (typeof showToast === 'function') showToast('Enter the contact name.', 'error'); return; }
+  _entityContactSubmit({ new_contact_name: v }, v);
+}
+window._entityContactAddNew = _entityContactAddNew;
+
+async function _entityContactSubmit(payload, displayName) {
+  const c = _entityDetailCache;
+  if (!c || !c.entityId) return;
+  const body = Object.assign({ entity_id: c.entityId }, payload);
+  const res = await _udApiPost('/api/operations?action=select_prospecting_contact', body);
+  // The endpoint links person→entity FIRST (which connects the owner), then
+  // tries to stamp the contact onto an active cadence. A connect-band owner
+  // often has NO cadence yet, so the link succeeds but the endpoint returns
+  // `no_active_cadence`. That's a soft success here — the connect (the owner-
+  // detail goal) happened; the cadence stamp is a bonus only when one exists.
+  const linked = res && (res.ok || res.error === 'no_active_cadence');
+  if (linked) {
+    const note = (res && res.error === 'no_active_cadence') ? ' (no active cadence to attach)' : '';
+    if (typeof showToast === 'function') showToast('Contact ' + (res.contact_name || displayName || '') + ' linked' + note, 'success');
+    // Reopen the owner on the Contacts tab so contacts + band + rail refresh.
+    openEntityDetail(c.entityId, 'Contacts');
+  } else {
+    if (typeof showToast === 'function') showToast('Could not select contact: ' + ((res && res.error) || 'unknown'), 'error');
+  }
+}
+
+// Open a Government Buyer opportunity on the parent (reuses the existing op),
+// then route to the contact step (the buy-side next action).
+async function _entityOpenGovBuyer() {
+  const c = _entityDetailCache;
+  if (!c || !c.entityId) return;
+  const res = await _udApiPost('/api/operations?action=open_government_buyer', { entity_id: c.entityId });
+  if (res && (res.ok || res.already_open)) {
+    if (typeof showToast === 'function') showToast(res.already_open ? 'Government Buyer opportunity already open' : 'Government Buyer opportunity opened', 'success');
+    switchEntityTab('Contacts');
+    _entityAcquireContact();
+  } else {
+    if (typeof showToast === 'function') showToast('Could not open opportunity: ' + ((res && res.error) || 'unknown'), 'error');
+  }
+}
+window._entityOpenGovBuyer = _entityOpenGovBuyer;
 
 // ── Contact Detail Tab ──
 function _renderContactTab(contact) {

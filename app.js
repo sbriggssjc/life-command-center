@@ -2195,8 +2195,13 @@ function _routeParseDetail(token) {
       return { kind: 'prop', db, id, tab };
     }
     if (kind === 'entity') {
-      const id = parts.slice(1).join(':');
-      return id ? { kind: 'entity', id } : null;
+      // entity:<uuid>[:<encodedTab>] — UUIDs carry no colons, so parts[1] is the
+      // full id and parts[2] (when present) is the tab. Phase 4B added the tab
+      // segment so a reload keeps the open entity tab; the bare `entity:<uuid>`
+      // form still parses (tab=null).
+      const id = parts[1];
+      const tab = parts[2] ? decodeURIComponent(parts[2]) : null;
+      return id ? { kind: 'entity', id, tab } : null;
     }
     return null;
   } catch (_) { return null; }
@@ -2276,13 +2281,19 @@ function applyRoute() {
         if (detail.kind === 'prop' && typeof openUnifiedDetail === 'function') {
           openUnifiedDetail(detail.db, { property_id: detail.id }, {}, detail.tab || undefined);
         } else if (detail.kind === 'entity' && typeof openEntityDetail === 'function') {
-          openEntityDetail(detail.id);
+          openEntityDetail(detail.id, detail.tab || undefined);
         }
-      } else if (detail.tab && _routeCurrentDetail && detail.tab !== _routeCurrentDetail.tab
-                 && typeof switchUnifiedTab === 'function') {
+      } else if (detail.tab && _routeCurrentDetail && detail.tab !== _routeCurrentDetail.tab) {
         // Same detail, tab changed via Back/Forward across tabs.
+        const prevTab = _routeCurrentDetail.tab;
         _routeCurrentDetail = detail;
-        switchUnifiedTab(detail.tab);
+        if (detail.kind === 'prop' && typeof switchUnifiedTab === 'function') {
+          switchUnifiedTab(detail.tab);
+        } else if (detail.kind === 'entity' && typeof switchEntityTab === 'function') {
+          switchEntityTab(detail.tab);
+        } else {
+          _routeCurrentDetail.tab = prevTab; // no handler — leave tracker unchanged
+        }
       }
     } else if (_routeDetailIsOpen() && typeof closeDetail === 'function') {
       // The detail segment is gone (e.g. Back from an open detail) → close it.
@@ -2335,7 +2346,8 @@ function _routeSetDetailHash(detail, opts) {
             ':' + encodeURIComponent(detail.tab || '');
   } else if (detail.kind === 'entity') {
     if (!detail.id) return;
-    token = 'entity:' + detail.id;
+    token = 'entity:' + detail.id +
+            (detail.tab ? ':' + encodeURIComponent(detail.tab) : '');
   } else { return; }
   _routeCurrentDetail = detail;        // set BEFORE the push so applyRoute no-ops
   const newHash = '#/' + (_routeCurrentPageSlug() || 'today') + '?d=' + token;
@@ -2345,7 +2357,10 @@ function _routeSetDetailHash(detail, opts) {
 // Tab change inside an open property detail → update the tab segment (replace,
 // so reload keeps the tab and no history entry / loop is created).
 function _routeUpdateTabHash(tabName) {
-  if (_routerApplying || !_routeCurrentDetail || _routeCurrentDetail.kind !== 'prop') return;
+  // Phase 4B: works for both `prop` and `entity` details (both carry a tab
+  // segment). Replace, so reload keeps the tab and no history entry is added.
+  if (_routerApplying || !_routeCurrentDetail ||
+      (_routeCurrentDetail.kind !== 'prop' && _routeCurrentDetail.kind !== 'entity')) return;
   _routeSetDetailHash(Object.assign({}, _routeCurrentDetail, { tab: tabName }), { replace: true });
 }
 

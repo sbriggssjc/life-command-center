@@ -99,10 +99,32 @@ the URL — ids/tab/domain only, never names/emails/addresses.
   re-renders) is hidden at depth ≤ 1, collapses the middle to `… ▸ prev ▸ current`
   when deep. **Deeper-than-top levels are not persisted across reload** (the hash
   holds only the top descriptor — best-effort by design).
-- **Phase 4 Slices 4B/4C (NOT built):** entity/owner detail parity onto the same
-  shell+stack (4B) and sub-record drill (lease/sale/deed) + next-action-everywhere
-  (4C) ride this same descriptor stack. Keep the detail-token + descriptor shape
-  parseable so they can extend it.
+- **Phase 4 Slice 4B (BUILT) — entity/owner detail parity (one detail grammar):**
+  `openEntityDetail(entityId, initialTab)` (detail.js) now renders the SAME
+  slide-over shell as `openUnifiedDetail`: real `#detailTabs` (Overview · Portfolio
+  · Contacts · Activity via `switchEntityTab`, name-keyed like `switchUnifiedTab`),
+  the shared completeness rail (`#detailCompletenessRail`) + Next-Step
+  (`#detailNextStep`), and it rides the SAME 4A back-stack/breadcrumb. The entity
+  detail-token now carries a tab segment — `entity:<id>[:<encodedTab>]` (parsed in
+  `_routeParseDetail`, written in `_routeSetDetailHash`); `_routeUpdateTabHash`
+  generalized to prop+entity (replace, so reload keeps the tab); `applyRoute`
+  passes the tab to `openEntityDetail` + drives a same-detail tab change through
+  `switchEntityTab`. **Portfolio is authoritative** — sourced from the BD spine
+  via `GET /api/entities?action=portfolio&id=<uuid>` (entities-handler:
+  `lcc_entity_portfolio_facts` ⋈ `lcc_property_attributes` for the per-property
+  rows + `v_entity_portfolio_all` for the rollup), NOT the old fuzzy
+  `v_ownership_current true_owner=ilike` name-match (SPEs / renamed owners
+  mismatched). Each portfolio row is a 4A zoom target (`openUnifiedDetail` PUSHes).
+  **Next-Step reads `v_priority_queue_enriched`** via `/api/priority-band?entity_id=`
+  — the SAME truth as the Priority Queue / Decision Center (Resolve ownership &
+  control · Select prospecting contact · Open Government Buyer · Cadence touch due ·
+  Lead is live · Connected — no action). The Contacts tab's acquire CTA reuses the
+  P-CONTACT/buyer picker endpoints (`?action=buyer_contacts` →
+  `select_prospecting_contact`; a `no_active_cadence` reply is a soft success — the
+  person→entity link is the connect). No new api/*.js (≤12); no migration.
+- **Phase 4 Slice 4C (NOT built):** sub-record drill (lease/sale/deed) +
+  next-action-everywhere ride this same descriptor stack. Keep the detail-token +
+  descriptor shape parseable so they can extend it.
 
 ## OM Intake Pipeline — three channels, one shared path
 
