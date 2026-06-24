@@ -122,9 +122,49 @@ the URL — ids/tab/domain only, never names/emails/addresses.
   P-CONTACT/buyer picker endpoints (`?action=buyer_contacts` →
   `select_prospecting_contact`; a `no_active_cadence` reply is a soft success — the
   person→entity link is the connect). No new api/*.js (≤12); no migration.
-- **Phase 4 Slice 4C (NOT built):** sub-record drill (lease/sale/deed) +
-  next-action-everywhere ride this same descriptor stack. Keep the detail-token +
-  descriptor shape parseable so they can extend it.
+- **Phase 4 Slice 4C (BUILT, 2026-06-24) — sub-record drill (lease/sale) +
+  source-document access (L5) + zoom polish. The zoom model (4A–4C) is COMPLETE.**
+  Client-only (`detail.js` + `app.js`); no api/*.js (≤12); no migration.
+  - **Unit 1 — source-document access (L5):** `_udSourceLink(record)` (detail.js)
+    returns a uniform "View source ↗" affordance that opens the ACTUAL doc/record,
+    surfacing ONLY sources already on the record (never fabricated; `''` when none):
+    `intake_artifact_path`→`openIntakeArtifact` (1-hour signed PDF), the first real
+    https `source_url`/`listing_url`/`url`/`deed_url`/`document_url`/`tracked_urls[0]`
+    → new tab, or `sf_account_id`/`salesforce_id` → SF Lightning deep-link
+    (`_SF_BASE`). Each link `stopPropagation`s so it never triggers the Unit-2 row
+    drill. Wired into `_salesRenderSale` + `_salesRenderCombined` (Deal History
+    sales) and the lease sub-detail; listings already surface source via
+    `buildCollateralIcons`.
+  - **Unit 2 — drill lease/sale onto the 4A stack:** a new descriptor kind
+    `sub:<recordKind>:<db>:<id>` (`lease`|`sale`), parseable like the prop/entity
+    tokens (`_routeParseDetail`/`_routeSetDetailHash`/`_routeSameDetail`/`_stackSame`/
+    `_stackDefaultLabel`/`_detailStackSync` push all handle it; `applyRoute`
+    dispatches `kind==='sub'` → `openSubDetail`). `openSubDetail(recordKind,db,id)`
+    (detail.js) repaints the SAME slide-over (header `← Back` + cleared tab bar +
+    body), PUSHes the `?d=` entry, and `_detailStackSync`s so the breadcrumb grows
+    and Back/breadcrumb ascend to the parent. The record resolves from the parent's
+    in-memory caches (`_udCache.leases` / `_salesCache.transactions`) when drilled
+    in-app (no fetch); a cold deep-link best-effort fetches (`v_lease_detail` /
+    `sales_transactions`→`property_sale_events`). The parent `_udCache` is left
+    intact so ascending re-renders the property. **Deeper-than-top levels are not
+    persisted across reload** (the hash holds only the top descriptor — same
+    best-effort design as 4A). A Rent Roll tenant header → `Open ↗`
+    (`_udRenderLeaseSubDetail`: full terms / escalations / guarantor / expiration +
+    Unit-1 source). A Deal History sale row → `Open detail ↗`
+    (`_udRenderSaleSubDetail`: entity-linked parties + price + cap-rate provenance
+    [`cap_rate_quality`/`cap_rate_noi_source_table`] + Unit-1 source). Contacts +
+    related-properties already drill via 4B — left as-is.
+  - **Unit 3 — zoom polish:** drill rows are `.ud-zoom-link[tabindex=0][data-zoom]`;
+    a detail.js keydown handler opens the sub-detail on Enter/Space (mirrors the
+    owner/tenant-link pattern). The global Escape handler (app.js) now routes to
+    `detailBack()` when the detail panel is open (zoom OUT one level; closes at
+    depth 1) instead of a hard `closeDetail()`. The iOS back-gesture rides the 4A
+    history integration (each open PUSHes a hash entry → `history.back` →
+    `applyRoute` reconciles the stack → ascends one level, not exit).
+  - **Deferred (low-ROI, NOT built):** full standalone detail "pages" per
+    sub-record type, and per-sub-record next-actions (the property + owner already
+    carry the 4B completeness-rail + Next-Step). The descriptor stays parseable if
+    revisited.
 
 ## OM Intake Pipeline — three channels, one shared path
 
