@@ -138,6 +138,23 @@ capped row-fetch `.length` or a fragile post-render `setTxt`.
 - **Ops (Scott):** #7 re-run/repair the CMS ingestion pipeline (DialysisProject); clears stale
   movers + freshness.
 
+## Live verification (post-redeploy, 2026-06-23)
+PR #1318 merged + live. Verified on the dia Overview (via `goToDiaTab('overview')`):
+- **Unit 1 SJC tiles — ✅ FIXED.** Closed Sales = **62** (persists, no "..."); cache pattern holds.
+- **Unit 2 Financial — ✅ FIXED.** `diaFinancialEstimates` loads (**8,511**); no "none available".
+- **Unit 3 Lease Coverage — ⚠️ PARTIAL.** Headline **34.3%** correct (no more false 100%). BUT the
+  sub still reads **"0 clinics need lease backfill"** — wrong. The "need backfill" count is
+  inconsistent across the UI: Lease Coverage sub **0**, Action Item **1,000** (capped fetch),
+  Research-Pipeline "Lease Backfill" tile **0**, true `v_clinic_lease_backfill_candidates` =
+  **3,035**. → **Follow-up:** wire all three "need backfill" surfaces to the SAME `count=exact`
+  (3,035), never the capped `.length`/0.
+- **Unit 4 Verification — ✅ FIXED.** Headlines **"28 overdue (30d+)"** (was 0).
+- **Unit 5 Clickable recent sales — ✅ FIXED** (functional). 10 rows render, each has `onclick`
+  → property/SF deal. Cosmetic nit: row `cursor` is `auto`, not `pointer` (no click affordance).
+
+Net: 4/5 fully fixed; Unit 3 headline fixed with a residual sub-count + a one-line cursor nit →
+small follow-up (`CLAUDECODE_PROMPT_DIA_TILES_fix2` or fold into Phase 3).
+
 ## Bottom line
 The dia Overview's value dashboard is correct (Phase 2). The broken tiles are render/fetch bugs
 (capped-`.length` headlines that collapse on timeout, stranded async `setTxt` fills, a loader

@@ -68,15 +68,16 @@ vertical-aware) + drop the 9-mo MA & density floor for dia so it tracks raw TTM 
 separate and stay. Level-only diffs (cap_rate_final clamped [4-12%] vs manual raw SOLD CAP; ~13mo vs
 12mo window) don't affect movement — keep cap_rate_final (cleaner) but match window/buckets/no-MA.
 
-### T4 — Available / active deal-count history & consistency  ·  P1
-**Notes:** dia 5, 8, 11, 12 · gov 27, 29, 30. Scott still sees counts "significantly lower prior to 2025"
-/ "fall off prior to 2025" / "market should add >20 deals/month, especially recently." **Grounded:** the
-canonical count is fixed (119 consistent across dia availability charts); BUT active-listing *capture*
-genuinely began **2022-07**, so pre-2022 is sparse by collection, not formula. Scott pushes back that
-there should be more history. **Action:** (a) re-confirm whether any pre-2022 availability is recoverable
-(CoStar history, sold-listing inference) or is a true collection floor — state it definitively;
-(b) check the monthly "added to market" count (note 29 — >20/mo expected) for an under-count bug;
-(c) confirm the 2025 spike (note 11) is real vs an artifact.
+### T4 — Available / "added-to-market" deal counts  ·  P1  ·  ⏳ PROMPT ISSUED
+**Notes:** dia 5, 8, 11, 12 · gov 27, 29, 30. **VERDICT (grounded 2026-06-23): TWO metrics conflated.**
+(1) **Point-in-time ACTIVE count** = genuine collection floor at **2022-07** (canonical 119); can't
+fabricate earlier. (2) **"Added to market"/new-listings** = RECOVERABLE — `available_listings.listing_date`
+runs back to ≥2018 at **~25-29/mo** (Scott's ">20/mo" is correct), but the chart appears to derive
+"added" from the 2022+ active-capture → undercounts pre-2022 (the fall-off). Plus a **2026 spike** (698
+listings / 58-per-mo vs 26 in 2025) and a **586 raw-active vs 119 canonical** gap to explain.
+**Action:** `CLAUDE_CODE_PROMPT_T4_available_counts.md` — compute "added/mo" from `listing_date` (recover
+~25-29/mo history, dia+gov); keep point-in-time active honestly floored at 2022; explain the 2026 spike
+(real vs capture-rate artifact) + reconcile 586-vs-119. Awaiting CC.
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking

@@ -47,6 +47,18 @@ Research-workbench findings into one sequenced plan.
   bottom. Brand-consistent, mirrors gov. **Follow-on:** Scott's eyeball surfaced a set of
   broken/mis-categorized dia Overview tiles → spun out as the "dia Overview tile audit"
   (DIA_OVERVIEW_TILE_AUDIT_2026-06-23.md), tracked separately from the Phase 3 IA work.
+- **dia Overview tile audit — ✅ DONE / VERIFIED LIVE 2026-06-23** (PR #1318). 4/5 broken tiles
+  fully fixed live (SJC summary cache → 62; financial loader → 8,511; Lease Coverage → 34.3% no
+  false 100%; Verification → 28 overdue headline; recent sales clickable). 2 residuals
+  (Lease-Coverage sub backfill 0→3,035 via count=exact; recent-sale row cursor) folded into Phase
+  3 Unit 0. Spot-checks resolved (742 listings real+dialysis-scoped, 144 stale tail; SJC = SF
+  brokered deals ≠ market comps). OPS: CMS ingestion stalled since 2026-03-27 (firing but hanging);
+  hang-guard shipped (DialysisProject PR #7319); Scott to kick the GH Actions fallback re-run.
+- **Phase 3 (tab set + naming unification) — DRAFTED 2026-06-23**
+  (CLAUDECODE_PROMPT_UIP3_tab_naming_unification.md). Unit 0 = the 2 dia-tile residuals; Units 1-5
+  = rename dia Prospects→Pipeline; promote dia Ownership + gov Activity + gov Properties to
+  top-level tabs; unify the grouping tier/order (Reference group holds the domain specialties).
+  Client-only, routing-safe (sub-tabs aren't hashed). Awaiting Claude Code build + redeploy.
 
 ## Two themes explain almost everything we found
 1. **The Consumption Layer is missing.** Across Today (research), Priority Queue (cadence
