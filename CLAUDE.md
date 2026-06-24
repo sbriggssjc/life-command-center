@@ -5339,3 +5339,56 @@ Live read-only: all 37 runnable worklist rows resolve a pivot
 contacts-ui); `ls api/*.js | wc -l`=12. No new api/*.js; no migration; reversible
 (every attach is a relationship row + the pivot pointer). JS ships on the Railway
 redeploy. LCC-Opps only; no dia/gov writes.
+
+## CM market-entry date — ONE canonical field: `on_market_date` (T4c Item 3, 2026-06-24)
+
+**`available_listings.on_market_date` is THE authoritative market-entry date** on both
+dia (`zqzrriwuavgrquhisnoa`) + gov (`scknotsqkcheojiaewwh`). Every consumer that means
+"when did this come to market" — the Capital-Markets **timing / DOM / added / new-to-market
+/ inventory-ramp** series, exports, and any cap-markets calc — reads `on_market_date`, NOT
+`listing_date`. `listing_date` is **raw capture (may be ingest-clock/fake) — audit /
+reversibility only**; never read it for market timing. Column COMMENTs on both DBs encode
+this contract; **do NOT add a `listing_date` fallback to any timing path** (that re-imports
+the fake ingest-clock surge). `on_market_date` already materializes the synthetic /
+sale-anchor / curated / historical dates, so no fallback is needed; rows with
+`on_market_date IS NULL` (the unrecoverable HELD set) drop off the time axis (de-surge) —
+a NULL is honest.
+
+**Doctrine (Scott, 2026-06-24) — the ONE exception:** the **point-in-time CURRENT
+active/available STOCK count** ("how many on the market now") stays on the **freshness
+gate** (active status + `last_verified_at` recency + `consecutive_check_failures` < 3),
+NOT `on_market_date`. So:
+- **Point-in-time available count** (dia `cm_dialysis_active_listings_m/_q` membership →
+  the canonical ~119; gov `cm_gov_available_by_term_summary` / `cm_gov_available_cap_dot`,
+  `off_market_date IS NULL` → ~44) keeps its **listing_date freshness gate** — do NOT
+  switch membership to `on_market_date`.
+- **`on_market_date` drives** the flow/timing metrics AND the **historical active-over-time
+  SPAN** (each listing active across `on_market_date → off_market_date`): gov
+  `cm_gov_market_turnover_m` + `cm_gov_inventory_backlog_m` `active_count` (eff windows),
+  the `added_*` ramp, `cm_*_new_to_market_q`, and DOM
+  (`cm_dialysis_dom_pct_ask_m/_q`; `cm_dialysis_active_listings_m/_q.days_on_market` =
+  `period_end - on_market_date`).
+
+**Published history is NOT frozen** (Scott's explicit call, 2026-06-24, "let real dates
+rewrite history"): recovered Salesforce on-market dates plot at their TRUE month even when
+that lands in an already-published quarter — so the new-to-market / added / ramp / DOM /
+gov-active-span series shift in published months as the now-known dates become visible
+(gov added ~+2,700 across ~135 months, etc.). This is intentional; do not re-freeze.
+
+**Migrations:** `supabase/migrations/20260624_cm_t4c_item3_{gov,dia}_on_market_date_timing.sql`
+(view defs only — reversible by re-creating the prior `listing_date`-anchored bodies; no
+domain-row writes). **Operational/audit readers of `listing_date` are intentionally LEFT
+as-is** (they are not market-timing): `cm_dialysis_listing_verification_status` /
+`_listings_review_queue` (listing age for verification), `cm_dialysis_inventory_snapshot_kpis`
+(passthrough column; its DOM rides `active_listings`), gov `cm_gov_available_by_term_summary`
+/ `_available_cap_dot` (passthrough columns), and the `v_*` data-quality / verification /
+next-best-action / consolidate-candidate / round68 views. The CM export builders
+(`api/capital-markets.js` `fetchView`, `api/_shared/cm-excel-export.js`,
+`cm-native-chart-injector.js`) read the cm_* views BY NAME and carry **no direct
+`listing_date`** read — repointing the views is the single lever.
+
+**FOLLOW-UP (surfaced, not built):** dia has no `on_market_date → off_market_date`
+active-over-time SPAN series like gov's (`cm_dialysis_inventory_backlog_m.active_count`
+derives from the canonical point-in-time `active_listings` per the 2026-06-22 chart audit).
+Adding a dedicated dia span line (gov's eff CTE is the template) without re-diverging the
+canonical available count is a separate call.
