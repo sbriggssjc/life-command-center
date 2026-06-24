@@ -57,47 +57,53 @@
   <!-- Government inner tabs (shown when Government sub-tab is active) -->
   <div class="domain-tab-groups" id="govTabGroups" style="display:none">
     <button class="domain-tab-group active" data-domain="government" data-group="overview">Overview</button>
-    <button class="domain-tab-group" data-domain="government" data-group="pipeline">Pipeline</button>
+    <button class="domain-tab-group" data-domain="government" data-group="deals">Deals</button>
+    <button class="domain-tab-group" data-domain="government" data-group="inventory">Inventory</button>
     <button class="domain-tab-group" data-domain="government" data-group="research">Research</button>
     <button class="domain-tab-group" data-domain="government" data-group="reference">Reference</button>
     <button class="domain-tab-group" data-domain="government" data-group="capital-markets">Capital Markets</button>
   </div>
   <div class="gov-inner-tabs" id="govInnerTabs" style="display:none">
     <button class="gov-inner-tab active" data-gov-tab="overview">Overview</button>
-    <button class="gov-inner-tab" data-gov-tab="search">Search</button>
-    <button class="gov-inner-tab" data-gov-tab="ownership">Ownership</button>
-    <button class="gov-inner-tab" data-gov-tab="pipeline">Pipeline</button>
+    <button class="gov-inner-tab" data-gov-tab="prospects">Pipeline</button>
+    <button class="gov-inner-tab" data-gov-tab="pipeline">Leads</button>
     <button class="gov-inner-tab" data-gov-tab="sales">Sales</button>
-    <button class="gov-inner-tab" data-gov-tab="prospects">Prospects</button>
     <button class="gov-inner-tab" data-gov-tab="leases">Leases</button>
     <button class="gov-inner-tab" data-gov-tab="loans">Loans</button>
+    <button class="gov-inner-tab" data-gov-tab="ownership">Ownership</button>
     <button class="gov-inner-tab" data-gov-tab="players">Players</button>
+    <button class="gov-inner-tab" data-gov-tab="properties">Properties</button>
+    <button class="gov-inner-tab" data-gov-tab="search">Search</button>
     <button class="gov-inner-tab" data-gov-tab="research">Research</button>
+    <button class="gov-inner-tab" data-gov-tab="activity">Activity</button>
+    <button class="gov-inner-tab" data-gov-tab="gsaintel">GSA / FRPP Intel</button>
     <button class="gov-inner-tab" data-gov-tab="capital-markets">Capital Markets</button>
   </div>
 
   <!-- Dialysis inner tabs (shown when Dialysis sub-tab is active) -->
   <div class="domain-tab-groups" id="diaTabGroups" style="display:none">
     <button class="domain-tab-group active" data-domain="dialysis" data-group="overview">Overview</button>
-    <button class="domain-tab-group" data-domain="dialysis" data-group="pipeline">Pipeline</button>
+    <button class="domain-tab-group" data-domain="dialysis" data-group="deals">Deals</button>
+    <button class="domain-tab-group" data-domain="dialysis" data-group="inventory">Inventory</button>
     <button class="domain-tab-group" data-domain="dialysis" data-group="research">Research</button>
     <button class="domain-tab-group" data-domain="dialysis" data-group="reference">Reference</button>
     <button class="domain-tab-group" data-domain="dialysis" data-group="capital-markets">Capital Markets</button>
   </div>
   <div class="gov-inner-tabs" id="diaInnerTabs" style="display:none">
     <button class="gov-inner-tab active" data-dia-tab="overview">Overview</button>
-    <button class="gov-inner-tab" data-dia-tab="search">Search</button>
-    <button class="gov-inner-tab" data-dia-tab="properties">Properties</button>
-    <button class="gov-inner-tab" data-dia-tab="changes">CMS Data</button>
-    <button class="gov-inner-tab" data-dia-tab="inventory">Inventory Changes</button>
-    <button class="gov-inner-tab" data-dia-tab="npi">NPI Intel</button>
+    <button class="gov-inner-tab" data-dia-tab="prospects">Pipeline</button>
     <button class="gov-inner-tab" data-dia-tab="sales">Sales</button>
     <button class="gov-inner-tab" data-dia-tab="leases">Leases</button>
     <button class="gov-inner-tab" data-dia-tab="loans">Loans</button>
+    <button class="gov-inner-tab" data-dia-tab="ownership">Ownership</button>
     <button class="gov-inner-tab" data-dia-tab="players">Players</button>
+    <button class="gov-inner-tab" data-dia-tab="properties">Properties</button>
+    <button class="gov-inner-tab" data-dia-tab="search">Search</button>
     <button class="gov-inner-tab" data-dia-tab="research">Research</button>
-    <button class="gov-inner-tab" data-dia-tab="prospects">Prospects</button>
     <button class="gov-inner-tab" data-dia-tab="activity">Activity</button>
+    <button class="gov-inner-tab" data-dia-tab="changes">CMS Data</button>
+    <button class="gov-inner-tab" data-dia-tab="inventory">Inventory Changes</button>
+    <button class="gov-inner-tab" data-dia-tab="npi">NPI Intel</button>
     <button class="gov-inner-tab" data-dia-tab="capital-markets">Capital Markets</button>
   </div>
 
@@ -493,6 +499,7 @@
 <div class="detail-overlay" id="detailOverlay" onclick="if(event.target===this)closeDetail()"></div>
 <div class="detail-panel" id="detailPanel">
   <div class="detail-header" id="detailHeader"></div>
+  <div class="detail-breadcrumb" id="detailBreadcrumb" style="display:none"></div>
   <div class="detail-tabs" id="detailTabs"></div>
   <div class="completeness-rail" id="detailCompletenessRail" style="display:none"></div>
   <div class="detail-next-step" id="detailNextStep" style="display:none"></div>

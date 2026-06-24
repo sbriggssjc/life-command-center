@@ -7798,6 +7798,242 @@ function renderGovResearch() {
   return html;
 }
 
+// ============================================================================
+// UI Phase 3 — GSA / FRPP Intel standalone tab (promoted from Overview §11)
+// Recomputes its values from the same globals renderGovOverview uses
+// (govOverviewStats MV + govData.* page-capped arrays) so it stays in sync with
+// the Overview section without coupling to that function's locals.
+// ============================================================================
+function renderGovGsaIntel() {
+  const mv = (typeof govOverviewStats !== 'undefined') ? govOverviewStats : null;
+  const gsaEvents = (typeof govData !== 'undefined' && govData.gsaEvents) || [];
+  const gsaSnapshots = (typeof govData !== 'undefined' && govData.gsaSnapshots) || [];
+  const frpp = (typeof govData !== 'undefined' && govData.frppRecords) || [];
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+
+  const gsaEventsYTD = mv ? (mv.gsa_events_ytd || 0) : gsaEvents.filter(e => e.event_date && new Date(e.event_date) >= yearStart).length;
+  const gsaEventsTotal = mv ? (mv.gsa_events_total || 0) : gsaEvents.length;
+  const gsaEventTypes = {};
+  gsaEvents.forEach(e => { gsaEventTypes[e.event_type] = (gsaEventTypes[e.event_type] || 0) + 1; });
+  const totalGsaRent = mv ? Number(mv.gsa_current_annual_rent || 0) : gsaSnapshots.reduce((s, s2) => s + (s2.annual_rent || 0), 0);
+  const gsaLeasesTracked = mv ? (mv.gsa_leases_tracked || gsaSnapshots.length) : gsaSnapshots.length;
+  const frppCountTotal = mv ? (mv.frpp_total || (govData && govData.frppCount) || frpp.length) : ((govData && govData.frppCount) || frpp.length);
+  const frppTotalSF = mv ? Number(mv.frpp_total_sf || 0) : frpp.reduce((s, r) => s + (r.square_feet || 0), 0);
+  const frppTotalRent = mv ? Number(mv.frpp_total_rent || 0) : frpp.reduce((s, r) => s + (r.annual_rent_to_lessor || 0), 0);
+  const frppAgencies = mv ? (mv.frpp_distinct_agencies || 0) : new Set(frpp.map(r => r.using_agency).filter(Boolean)).size;
+
+  let html = '<div class="biz-section">';
+  html += govSectionHeader('GSA Lease Intelligence', '📋', 'search');
+  html += '<div class="gov-grid gov-grid-4">';
+  const _gsaLoading = !mv && !(govData && govData._phase2Loaded);
+  const _gsaSk = '…';
+  html += govCard({ title: 'GSA Events YTD', value: _gsaLoading ? _gsaSk : fmtN(gsaEventsYTD), sub: _gsaLoading ? 'loading…' : (now.getFullYear() + ' of ' + fmtN(gsaEventsTotal) + ' tracked'), color: 'blue' });
+  html += govCard({ title: 'GSA Total Rent', value: _gsaLoading ? _gsaSk : ('$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M'), sub: _gsaLoading ? 'loading…' : (fmtN(gsaLeasesTracked) + ' leases tracked'), color: 'green' });
+  html += govCard({ title: 'FRPP Square Feet', value: _gsaLoading ? _gsaSk : (fmtN(Math.round(frppTotalSF / 1e6)) + 'M'), sub: _gsaLoading ? 'loading…' : (fmtN(frppCountTotal) + ' federal properties'), color: 'cyan' });
+  html += govCard({ title: 'FRPP Agencies', value: _gsaLoading ? _gsaSk : fmtN(frppAgencies), sub: _gsaLoading ? 'loading…' : ('$' + fmtN(Math.round(frppTotalRent / 1e6)) + 'M annual rent'), color: 'purple' });
+  html += '</div>';
+
+  if (Object.keys(gsaEventTypes).length > 0) {
+    html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">GSA Event Types</div>';
+    const maxEvt = Math.max(...Object.values(gsaEventTypes));
+    html += inlineBar(Object.entries(gsaEventTypes).sort((a,b) => b[1] - a[1]).map(([type, count]) => ({
+      label: type, value: count, display: fmtN(count), barColor: '#22d3ee', labelWidth: 120, valueWidth: 35
+    })), maxEvt);
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+// ============================================================================
+// UI Phase 3 — gov Properties inventory tab (INVENTORY group). Mirrors the dia
+// Properties pattern (paginated, value-first) against gov data via govQuery.
+// Value-first default order = gross_rent DESC (the consumption-layer doctrine).
+// ============================================================================
+var GOV_PROPERTIES_PAGE_SIZE = 25;
+var govPropertiesPage = 0;
+var govPropertiesSearch = '';
+var govPropertiesSort = { col: 'gross_rent', dir: 'desc' };
+var govPropertiesData = null;
+var govPropertiesTotalCount = 0;
+var govPropertiesRequestId = 0;
+
+function _govPropsOrder() {
+  var col = govPropertiesSort.col || 'gross_rent';
+  var dir = govPropertiesSort.dir || 'desc';
+  var textCol = (col === 'address' || col === 'city' || col === 'state' || col === 'agency');
+  return col + '.' + dir + (textCol ? '' : '.nullslast');
+}
+
+function _govPropsFilters() {
+  // Base: exclude archived so the inventory matches the Overview "active" headline
+  // (gov has essentially no null-status rows, per R23 grounding).
+  var filter = 'status=neq.archived', filter2 = null;
+  if (govPropertiesSearch) {
+    var sq = govPropertiesSearch.replace(/%/g, '').replace(/\\/g, '');
+    filter2 = 'or(address.ilike.*' + sq + '*,city.ilike.*' + sq + '*,state.ilike.*' + sq + '*,agency.ilike.*' + sq + '*)';
+  }
+  return { filter: filter, filter2: filter2 };
+}
+
+async function renderGovProperties() {
+  var inner = document.getElementById('bizPageInner');
+  if (!inner) return;
+
+  if (govPropertiesData === null) {
+    inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading properties...</p></div>';
+  }
+
+  var order = _govPropsOrder();
+  var filters = _govPropsFilters();
+  var offset = govPropertiesPage * GOV_PROPERTIES_PAGE_SIZE;
+  var requestId = ++govPropertiesRequestId;
+
+  try {
+    var result = await govQuery('properties',
+      'property_id,address,city,state,agency,sf_leased,gross_rent,year_built,status', {
+        order: order, filter: filters.filter, filter2: filters.filter2,
+        limit: GOV_PROPERTIES_PAGE_SIZE, offset: offset
+      });
+    if (requestId !== govPropertiesRequestId) return; // stale
+    govPropertiesData = result.data || [];
+    govPropertiesTotalCount = result.count || 0;
+  } catch (e) {
+    if (requestId !== govPropertiesRequestId) return;
+    console.error('Gov properties load error:', e);
+    govPropertiesData = [];
+    govPropertiesTotalCount = 0;
+  }
+
+  var pageRows = govPropertiesData;
+  var totalCount = govPropertiesTotalCount;
+  var totalPages = Math.max(1, Math.ceil(totalCount / GOV_PROPERTIES_PAGE_SIZE));
+
+  var html = '<div class="biz-section">';
+  html += '<div style="padding:10px 14px;background:rgba(108,140,255,0.08);border-radius:8px;border-left:3px solid #6c8cff;margin-bottom:16px;font-size:13px;color:var(--text);line-height:1.4"><strong>Properties</strong> — Browse the active government-leased property inventory, value-ranked by annual rent. Click any row to view property detail, ownership, and lease terms.</div>';
+
+  html += '<div class="gov-grid gov-grid-3" style="margin-bottom:16px;">';
+  html += govCard({ title: 'Active Properties', value: fmtN(totalCount), sub: 'archived excluded', color: 'blue' });
+  html += '</div>';
+
+  // Search bar
+  html += '<div style="margin:16px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+  html += '<input type="text" id="govPropsSearchInput" placeholder="Search address, city, state, agency..." value="' + esc(govPropertiesSearch) + '" style="flex:1;min-width:200px;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;" />';
+  html += '<span style="font-size:12px;color:var(--text3);">' + fmtN(totalCount) + ' results</span>';
+  html += '</div>';
+
+  // Sort toolbar — value (gross_rent) is the default/primary sort
+  var SORT_COLS = [
+    { col: 'gross_rent', label: 'Rent' },
+    { col: 'address', label: 'Address' },
+    { col: 'city', label: 'City' },
+    { col: 'state', label: 'State' },
+    { col: 'agency', label: 'Agency' },
+    { col: 'sf_leased', label: 'SF' },
+    { col: 'year_built', label: 'Year Built' }
+  ];
+  var sortArrow = function(col) {
+    if (govPropertiesSort.col !== col) return '';
+    return govPropertiesSort.dir === 'asc' ? ' ▲' : ' ▼';
+  };
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">';
+  html += '<span style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-right:4px;">Sort:</span>';
+  SORT_COLS.forEach(function(s) {
+    var active = govPropertiesSort.col === s.col;
+    html += '<button class="pill' + (active ? ' active' : '') + '" data-gov-prop-sort-col="' + s.col + '" style="font-size:11px;padding:4px 10px;">' + s.label + sortArrow(s.col) + '</button>';
+  });
+  html += '</div>';
+
+  // Card grid
+  html += '<div style="overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:10px;max-height:70vh;padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;">';
+  pageRows.forEach(function(r, _ri) {
+    var title = r.address || '—';
+    var locParts = [];
+    if (r.city) locParts.push(r.city);
+    if (r.state) locParts.push(r.state);
+    var locLine = locParts.join(', ');
+    var metaParts = [];
+    if (r.sf_leased && parseFloat(r.sf_leased) > 0) metaParts.push(fmtN(Math.round(parseFloat(r.sf_leased))) + ' SF');
+    if (r.year_built) metaParts.push('Built ' + r.year_built);
+    var rentVal = r.gross_rent && parseFloat(r.gross_rent) > 0 ? '$' + fmtN(Math.round(parseFloat(r.gross_rent))) + ' rent' : '';
+    html += '<div class="prop-card clickable-row" data-gov-prop-idx="' + _ri + '" style="cursor:pointer;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--s2);display:flex;flex-direction:column;gap:3px;">';
+    html += '<div class="prop-card-title" style="font-size:14px;font-weight:700;color:var(--text);line-height:1.3;overflow:hidden;text-overflow:ellipsis;">' + esc(title) + '</div>';
+    if (locLine) html += '<div class="prop-card-sub" style="font-size:12px;color:var(--text2);">' + esc(locLine) + '</div>';
+    if (r.agency) html += '<div class="prop-card-tenant" style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(r.agency) + '</div>';
+    if (rentVal || metaParts.length) {
+      var line = [rentVal].concat(metaParts).filter(Boolean).join(' | ');
+      html += '<div class="prop-card-meta" style="font-size:11px;color:var(--text2);font-family:\'JetBrains Mono\',monospace;margin-top:4px;">' + esc(line) + '</div>';
+    }
+    html += '</div>';
+  });
+  if (pageRows.length === 0) {
+    html += '<div style="grid-column:1/-1;text-align:center;padding:32px;color:var(--text3);">No properties to display</div>';
+  }
+  html += '</div>';
+
+  // Pagination
+  if (totalPages > 1) {
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;color:var(--text2);">';
+    html += '<span>Page ' + (govPropertiesPage + 1) + ' of ' + fmtN(totalPages) + ' (' + fmtN(totalCount) + ' total)</span>';
+    html += '<div style="display:flex;gap:6px;">';
+    html += '<button class="pill' + (govPropertiesPage === 0 ? '' : ' active') + '" data-gov-props-page="prev"' + (govPropertiesPage === 0 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>&laquo; Prev</button>';
+    html += '<button class="pill' + (govPropertiesPage >= totalPages - 1 ? '' : ' active') + '" data-gov-props-page="next"' + (govPropertiesPage >= totalPages - 1 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>Next &raquo;</button>';
+    html += '</div></div>';
+  }
+  html += '</div>';
+
+  inner.innerHTML = html;
+
+  // Row click → unified detail
+  document.querySelectorAll('[data-gov-prop-idx]').forEach(function(card) {
+    card.addEventListener('click', function() {
+      var idx = parseInt(this.dataset.govPropIdx, 10);
+      var row = pageRows[idx];
+      if (row && row.property_id && typeof openUnifiedDetail === 'function') {
+        openUnifiedDetail('gov', { property_id: Number(row.property_id) }, row);
+      }
+    });
+  });
+  // Pagination
+  document.querySelectorAll('[data-gov-props-page]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (this.dataset.govPropsPage === 'prev' && govPropertiesPage > 0) govPropertiesPage--;
+      else if (this.dataset.govPropsPage === 'next') govPropertiesPage++;
+      renderGovProperties();
+    });
+  });
+  // Sort pills
+  document.querySelectorAll('[data-gov-prop-sort-col]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var col = this.dataset.govPropSortCol;
+      if (govPropertiesSort.col === col) {
+        govPropertiesSort.dir = govPropertiesSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        govPropertiesSort = { col: col, dir: (col === 'address' || col === 'city' || col === 'state' || col === 'agency') ? 'asc' : 'desc' };
+      }
+      govPropertiesPage = 0;
+      renderGovProperties();
+    });
+  });
+  // Search (debounced)
+  var searchInput = document.getElementById('govPropsSearchInput');
+  if (searchInput) {
+    var debounce;
+    searchInput.addEventListener('input', function(e) {
+      clearTimeout(debounce);
+      debounce = setTimeout(function() {
+        govPropertiesSearch = e.target.value.trim();
+        govPropertiesPage = 0;
+        renderGovProperties();
+        var restored = document.getElementById('govPropsSearchInput');
+        if (restored) { restored.focus(); restored.setSelectionRange(restored.value.length, restored.value.length); }
+      }, 400);
+    });
+  }
+}
+
 function renderGovTab() {
   const el = document.getElementById('bizPageInner');
   if (!el) return;
@@ -7832,6 +8068,19 @@ function renderGovTab() {
       return;
     case 'players':
       html = renderGovPlayers();
+      break;
+    case 'properties':
+      renderGovProperties(); // async — renders directly to DOM (UI Phase 3 INVENTORY tab)
+      return;
+    case 'activity':
+      // UI Phase 3 — gov Activity promoted to a first-class RESEARCH tab.
+      // Reuses the existing Government-Outreach block (renderGovOutreachInner).
+      html = renderGovOutreachInner();
+      break;
+    case 'gsaintel':
+      // UI Phase 3 — GSA / FRPP Intel promoted from an Overview section to a
+      // standalone REFERENCE tab.
+      html = renderGovGsaIntel();
       break;
     case 'research':
       html = renderGovResearch();
