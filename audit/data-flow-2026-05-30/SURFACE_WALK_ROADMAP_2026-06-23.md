@@ -54,11 +54,20 @@ Research-workbench findings into one sequenced plan.
   3 Unit 0. Spot-checks resolved (742 listings real+dialysis-scoped, 144 stale tail; SJC = SF
   brokered deals ≠ market comps). OPS: CMS ingestion stalled since 2026-03-27 (firing but hanging);
   hang-guard shipped (DialysisProject PR #7319); Scott to kick the GH Actions fallback re-run.
-- **Phase 3 (tab set + naming unification) — DRAFTED 2026-06-23**
-  (CLAUDECODE_PROMPT_UIP3_tab_naming_unification.md). Unit 0 = the 2 dia-tile residuals; Units 1-5
-  = rename dia Prospects→Pipeline; promote dia Ownership + gov Activity + gov Properties to
-  top-level tabs; unify the grouping tier/order (Reference group holds the domain specialties).
-  Client-only, routing-safe (sub-tabs aren't hashed). Awaiting Claude Code build + redeploy.
+- **Phase 3 (tab set + naming unification) — ✅ DONE / VERIFIED LIVE 2026-06-23** (PR #1320).
+  Both domains now carry the IDENTICAL primary tier **Overview · Deals · Inventory · Research ·
+  Reference · Capital Markets** (verified live). Mapping decisions implemented + confirmed: shared
+  triage = **"Pipeline"** on both (`prospects`/`renderDomainProspects`); gov scored-leads =
+  gov-only **"Leads"** (`pipeline`/`renderGovPipeline`); dia **Ownership** promoted to top-level;
+  gov **Properties** (new paginated value-first list — **13,311** non-archived, reconciles with
+  the Overview MV's 13,309; **0 null-status**, so no silent drop) + gov **Activity** (outreach
+  feed) + gov **GSA / FRPP Intel** (promoted from Overview section; "67,452 of 275,878 GSA
+  events") all render live. dia Reference = CMS Data / Inventory Changes / NPI Intel.
+  **Unit 0:** 0b recent-sale rows now pointer+clickable ✓ (duplicate-`<tr>`-attr root cause
+  fixed); 0a Lease Coverage headline 34.3% ✓ and sub no longer the misleading "0" — shows
+  "1,000+ need backfill" (the capped fallback; the exact ~3,035 count=exact didn't resolve on the
+  synthetic render — confirm on a real load it reads 3,035, else a tiny follow-up). Suite 1395
+  green, 12 api files, routing untouched.
 
 ## Two themes explain almost everything we found
 1. **The Consumption Layer is missing.** Across Today (research), Priority Queue (cadence

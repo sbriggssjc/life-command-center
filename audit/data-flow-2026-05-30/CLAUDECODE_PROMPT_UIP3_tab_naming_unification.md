@@ -37,7 +37,8 @@ Grouping tier → sub-tabs (the `syncDomainTabGroup` groups):
 - **INVENTORY:** `Properties` · `Search`
 - **RESEARCH:** `Research` · `Activity`
 - **REFERENCE (domain-specific):** dia → `CMS Data` · `Inventory Changes` · `NPI Intel`;
-  gov → `GSA / FRPP Intel`
+  gov → `GSA / FRPP Intel` · `Lease Events` (see Unit 6 — gov Reference is built, not just
+  regrouped; counts may differ from dia by design — Reference is the domain-specialty group)
 - **CAPITAL MARKETS:** `Capital Markets`
 Identical primary structure; only the Reference group differs by domain.
 
@@ -86,6 +87,23 @@ Make both domains' grouping pills + sub-tab order match the unified set above (v
 (`CMS Data`/`Inventory Changes`/`NPI Intel`) and gov's `GSA / FRPP Intel` sit under **Reference**
 as the only domain-specific exception. Don't reorder within a tab's content — just the tab
 strip + groups.
+
+## Unit 6 — build gov's REFERENCE group (it's promotion, not regrouping)
+gov has NO standalone domain-specialty tabs today — its GSA/FRPP intel lives only as a section
+inside `renderGovOverview`. Create the gov REFERENCE group with TWO tabs (both surface
+already-loaded data — light lift, no new pipeline):
+- **`GSA / FRPP Intel`** — promote the existing GSA Lease Intelligence + FRPP section out of
+  `renderGovOverview` into a standalone tab (`data-gov-tab="gsa-intel"` → a `renderGovGsaIntel`
+  that reuses the existing section render). Leave at most a compact teaser in Overview (or drop it
+  from Overview now that it has a home), consistent with how Unit 4 moves Activity out.
+- **`Lease Events`** — a tab over `gsa_lease_events` (new lease / expiration / renewal /
+  relocation / footprint-reduction lifecycle events) — the gov MIRROR of dia's "Inventory
+  Changes," high BD value (expirations = deal triggers). The data is already loaded for Overview;
+  render it as a card/table feed like dia's Inventory Changes tab. If `gsa_lease_events` is NOT
+  readily renderable in this round, ship `GSA / FRPP Intel` alone and leave a `// TODO Lease
+  Events` — don't block Phase 3 on it.
+- **Do NOT** build a raw "GSA Data" browser tab to mirror dia "CMS Data" — deferred (net-new,
+  low payoff). gov Reference = 2 tabs vs dia's 3 is intentional.
 
 ## Boundaries / verify
 - Client only; ≤12 api/*.js; no migration. Keep `data-*-tab` dispatch ids stable; relabel display

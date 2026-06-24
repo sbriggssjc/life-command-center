@@ -75,9 +75,22 @@ fabricate earlier. (2) **"Added to market"/new-listings** = RECOVERABLE — `ava
 runs back to ≥2018 at **~25-29/mo** (Scott's ">20/mo" is correct), but the chart appears to derive
 "added" from the 2022+ active-capture → undercounts pre-2022 (the fall-off). Plus a **2026 spike** (698
 listings / 58-per-mo vs 26 in 2025) and a **586 raw-active vs 119 canonical** gap to explain.
-**Action:** `CLAUDE_CODE_PROMPT_T4_available_counts.md` — compute "added/mo" from `listing_date` (recover
-~25-29/mo history, dia+gov); keep point-in-time active honestly floored at 2022; explain the 2026 spike
-(real vs capture-rate artifact) + reconcile 586-vs-119. Awaiting CC.
+**Action:** `CLAUDE_CODE_PROMPT_T4_available_counts.md`. **CC verified: "added/mo" already correct**
+(uses listing_date, ~25-29/mo). **Reconciliation: the June batch = 477 DISTINCT real properties, 0 dups,
+0 previously-active → real inventory we hadn't captured; prior ~116 was UNDERcounting.** **DECISION
+(Scott "accurate everywhere"): accuracy-first, NOT suppress** — point-in-time count reflects real
+inventory + a one-time coverage-catch-up annotation; neutralize the fake June capture-dates ONLY for the
+added-per-month + DOM series; stale-listing guard; re-examine gov's ≥20 guard for the inverse
+(undercount). Directive in the T4 prompt §DECISION. Awaiting CC implementation.
+**T4b (Scott pivot 2026-06-23): recover REAL on-market dates instead of annotating the step.** Grounded:
+the ~462 June-batch listings are **OM/flyer-intake-derived** (`intake_artifact_type` om/flyer/brochure;
+`listing_date_source='capture_date_fallback'`; artifact paths dated April+), NOT CoStar — so their true
+"came to market" date ≈ the OM intake received date, recoverable from intake metadata and spread across
+real months. `CLAUDE_CODE_PROMPT_T4b_om_intake_listing_dates.md`: backfill `listing_date` from the OM
+intake date → organic ramp, no surge, no annotation; hold the genuinely-unrecoverable; de-dupe OM-intake
+vs CoStar (no double-count); keep the 12mo+3-fail freshness gate. Awaiting CC.
+
+**Working order (sequential, Scott): T4 (+T4b) → T2 → T7 → T8 → T10.**
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking

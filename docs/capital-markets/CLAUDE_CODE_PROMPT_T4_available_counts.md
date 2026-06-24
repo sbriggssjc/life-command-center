@@ -49,6 +49,24 @@ numbers in the same shape.
   property → one count).
 - Reversible; no fabricated points; the genuine 2022 active-floor is preserved, not papered over.
 
+## DECISION — dia June-2026 bulk-capture treatment (Scott: "accurate representation everywhere", 2026-06-23)
+Reconciliation receipts (live): all 735 active rows are **distinct properties (0 duplicates)**; the
+June 6-11 batch = **477 distinct properties, 0 of which were active before Q1** — i.e. **real, distinct
+inventory we simply hadn't captured yet**, not dupes/re-captures. So the prior ~116 was UNDERCOUNTING.
+**Treat accuracy-first — do NOT apply a suppress-guard to the count (that would hide real inventory):**
+1. **Point-in-time active count:** let it reflect the real captured inventory (~590-735). Add a ONE-TIME
+   "coverage catch-up" annotation at the Q2-2026 step so it reads as our capture catching up, not a
+   market surge. Do not floor/suppress it to ~118.
+2. **Date-dependent series (added-per-month + DOM):** the June capture-dates are FAKE — neutralize them.
+   The batch must NOT register as ~469 listings "added in June," and DOM must NOT be computed from the
+   capture date (they'd show fake ~0-day DOM). Where the true list date is unknown, EXCLUDE these rows
+   from the added/DOM series rather than use the fake date.
+3. **Stale guard (accuracy cuts both ways):** confirm the bulk pull ingested only genuinely
+   currently-on-market listings; exclude any that are actually sold/withdrawn but mislabeled active.
+4. **gov:** re-examine gov's existing ≥20 suppress-guard under the same principle — if it's suppressing
+   real gov inventory, gov is UNDERcounting too; align gov to the same accuracy-first treatment.
+
 ## Boundaries
-Distinguish "added" (recoverable from listing_date) from "active-as-of" (real 2022 floor) — do not
-conflate them. Verification-first on the spike; only normalize if it's proven a capture artifact.
+Distinguish "added" (recoverable from listing_date) from "active-as-of" (real inventory, annotate the
+coverage step). Do not suppress real distinct inventory. Neutralize fake capture-dates only for the
+date-dependent (added/DOM) series. Reversible.
