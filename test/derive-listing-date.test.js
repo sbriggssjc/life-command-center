@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { deriveListingDate } from '../api/_handlers/sidebar-pipeline.js';
+import { deriveOnMarketDate } from '../api/_shared/listing-date.js';
 
 // Fixed capture instant so assertions are deterministic: 2026-06-02T00:00:00Z
 const NOW = Date.parse('2026-06-02T00:00:00.000Z');
@@ -58,5 +59,61 @@ describe('deriveListingDate — CoStar on-market signal → listing_date', () =>
     const r = deriveListingDate(undefined, NOW);
     assert.equal(r.listing_date, '2026-06-02');
     assert.ok(r.listing_date <= '2026-06-02');
+  });
+});
+
+// T4c: on_market_date provenance — evidence only, never the processing clock.
+describe('deriveOnMarketDate — market-entry evidence, HOLD on none', () => {
+  it('explicit on-market date → high confidence', () => {
+    const r = deriveOnMarketDate({ listing_date: '2025-01-07' }, { nowMs: NOW });
+    assert.equal(r.on_market_date, '2025-01-07');
+    assert.equal(r.source, 'on_market_date');
+    assert.equal(r.confidence, 'high');
+  });
+
+  it('days_on_market → medium (capture − DOM)', () => {
+    const r = deriveOnMarketDate({ days_on_market: 30 }, { nowMs: NOW });
+    assert.equal(r.on_market_date, '2026-05-03');
+    assert.equal(r.source, 'days_on_market');
+    assert.equal(r.confidence, 'medium');
+  });
+
+  it('email Date (the go-forward signal) when no on-market/DOM → medium', () => {
+    const r = deriveOnMarketDate({ source_email_date: '2026-04-25T13:00:00Z' }, { nowMs: NOW });
+    assert.equal(r.on_market_date, '2026-04-25');
+    assert.equal(r.source, 'email_received');
+    assert.equal(r.confidence, 'medium');
+  });
+
+  it('NO evidence → HELD (null), never the capture clock', () => {
+    const r = deriveOnMarketDate({}, { nowMs: NOW });
+    assert.equal(r.on_market_date, null);
+    assert.equal(r.source, 'date_unknown_held');
+    assert.equal(r.confidence, 'none');
+  });
+
+  it('mass-forward guard suppresses the email-date tier → HELD', () => {
+    const r = deriveOnMarketDate({ source_email_date: '2026-04-25T13:00:00Z' }, { nowMs: NOW, massForward: true });
+    assert.equal(r.on_market_date, null);
+    assert.equal(r.source, 'date_unknown_held');
+  });
+
+  it('mass-forward guard does NOT suppress explicit on-market / DOM evidence', () => {
+    const r1 = deriveOnMarketDate({ listing_date: '2025-01-07' }, { nowMs: NOW, massForward: true });
+    assert.equal(r1.on_market_date, '2025-01-07');
+    const r2 = deriveOnMarketDate({ days_on_market: 30 }, { nowMs: NOW, massForward: true });
+    assert.equal(r2.on_market_date, '2026-05-03');
+  });
+
+  it('a future email date is ignored → HELD (no future market date)', () => {
+    const r = deriveOnMarketDate({ source_email_date: '2026-12-31' }, { nowMs: NOW });
+    assert.equal(r.on_market_date, null);
+    assert.equal(r.source, 'date_unknown_held');
+  });
+
+  it('DOM out of range is not a signal → HELD (not the clock)', () => {
+    const r = deriveOnMarketDate({ days_on_market: 5000 }, { nowMs: NOW });
+    assert.equal(r.on_market_date, null);
+    assert.equal(r.source, 'date_unknown_held');
   });
 });

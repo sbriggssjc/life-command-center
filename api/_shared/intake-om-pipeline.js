@@ -413,18 +413,35 @@ export async function stageOmIntake(input, auth, workspaceId) {
 
   // ---- 7. Bridge to staged_intake_items + staged_intake_artifacts on LCC Opps
   //     intake_id reuses inbox_items.id for 1:1 correlation.
+  // T4c (2026-06-24): capture the email's true Date + message-id at ingest so
+  // the on-market-date ladder's step 1 (earliest email received) becomes a
+  // LOCAL read instead of a Gmail round-trip, and a mass re-forward of the
+  // mailbox (which clusters created_at) can never move a market date — the
+  // signal is the immutable email Date, taken earliest. NULL for non-email /
+  // when the PA flow doesn't yet supply it (graceful — the column stays NULL).
+  const emailCtx = input.email_context || {};
+  // Use the RAW email Date only (never the now()-coalesced received_at) — a
+  // missing date stays NULL (HELD), so the processing clock is never a market
+  // signal.
+  const sourceEmailDate = input.channel === 'email'
+    ? (emailCtx.received_at_raw || emailCtx.sent_at_raw || null)
+    : null;
   const stageRes = await opsQuery('POST', 'staged_intake_items', {
     intake_id:           inboxItemId,
     workspace_id:        wsId,
     source_type:         input.channel === 'email' ? 'email' : 'copilot',
-    internet_message_id: null,
+    internet_message_id: emailCtx.internet_message_id ?? null,
+    source_email_date:   sourceEmailDate,
     status:              'queued',
     raw_payload: {
-      file_name:     input.file_name,
-      inbox_item_id: inboxItemId,
-      channel:       input.channel,
-      seed_data:     input.seed_data ?? null,
-      copilot:       input.copilot_metadata ?? null,
+      file_name:        input.file_name,
+      inbox_item_id:    inboxItemId,
+      channel:          input.channel,
+      seed_data:        input.seed_data ?? null,
+      copilot:          input.copilot_metadata ?? null,
+      // mirror into seed_data so the extractor→promoter chain can feed it to
+      // deriveOnMarketDate (the email-received on-market tier) for the listing.
+      source_email_date: sourceEmailDate,
     },
   });
 

@@ -821,6 +821,10 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 // R70 B3/B4: no true list-date signal in the verify path —
                 // tag as capture-fallback so new-to-market counts can exclude it.
                 listing_date_source: 'capture_date_fallback',
+                // T4c: no market-entry evidence in the verify path → on_market_date
+                // HELD (null) so the row is excluded from the timing/DOM series.
+                on_market_date_source: 'date_unknown_held',
+                on_market_date_confidence: 'none',
                 last_price: Number(asking_price),
                 current_cap_rate: cap_rate != null ? Number(cap_rate) : null,
                 listing_url: safeSourceUrlForCreate,
@@ -833,6 +837,8 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 listing_status: 'active',
                 listing_date: new Date().toISOString().slice(0, 10),
                 listing_date_source: 'capture_date_fallback',
+                on_market_date_source: 'date_unknown_held',
+                on_market_date_confidence: 'none',
                 asking_price: Number(asking_price),
                 asking_cap_rate: cap_rate != null ? Number(cap_rate) : null,
                 source_url: safeSourceUrlForCreate,

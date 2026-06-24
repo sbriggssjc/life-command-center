@@ -42,7 +42,7 @@ import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIden
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
-import { deriveListingDate } from '../_shared/listing-date.js';
+import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
@@ -204,6 +204,14 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     ? { listing_date: omEst.om_created_estimate, source: 'om_lease_inference' }
     : deriveListingDate(snapshot);
   const listingDate = ld.listing_date;
+  // T4c (2026-06-24): on_market_date is the TIMING truth (charts read it),
+  // sourced ONLY from market-entry evidence — never the processing clock. The
+  // lease-math inference is real evidence (medium); else the explicit on-market
+  // signal / DOM / email date; else HELD (null) so the row is excluded from the
+  // added-per-month + DOM series rather than stamped into the ingest month.
+  const om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+    ? { on_market_date: omEst.om_created_estimate, source: 'om_lease_inference', confidence: 'medium' }
+    : deriveOnMarketDate(snapshot);
 
   // Round 76ej.f (2026-05-04): capture the source listing URL on the
   // available_listings row so the LCC UI has a clickable "View Listing"
@@ -240,6 +248,9 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     listing_status:     'active',
     listing_date:       listingDate,
     listing_date_source: ld.source,
+    on_market_date:           om.on_market_date,
+    on_market_date_source:    om.source,
+    on_market_date_confidence: om.confidence,
     first_seen_at:      new Date().toISOString(),
     last_seen_at:       new Date().toISOString(),
     // Link back to the Supabase Storage object that seeded this listing
@@ -273,6 +284,10 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     ? { listing_date: omEst.om_created_estimate, source: 'om_lease_inference' }
     : deriveListingDate(snapshot);
   const listingDate = ld.listing_date;
+  // T4c (2026-06-24): on_market_date provenance (see buildGovListingRow).
+  const om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+    ? { on_market_date: omEst.om_created_estimate, source: 'om_lease_inference', confidence: 'medium' }
+    : deriveOnMarketDate(snapshot);
 
   // Bug G fix (2026-04-25): denormalize price_per_sf onto the listing row
   // so the Sales/Available table's Price/SF column populates without a
@@ -316,6 +331,9 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     status:             'active',
     listing_date:       listingDate,
     listing_date_source: ld.source,
+    on_market_date:           om.on_market_date,
+    on_market_date_source:    om.source,
+    on_market_date_confidence: om.confidence,
     last_seen:          new Date().toISOString().slice(0, 10),
     is_active:          true,
     seller_name:        firstOf(snapshot.seller_name) || null,
