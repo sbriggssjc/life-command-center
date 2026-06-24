@@ -132,7 +132,27 @@ Henry Ford, …) — never assigned an operator (hard guard verified, 0 leaks); 
 **109** plausibly-dialysis residual surfaced in `v_property_operator_review` (not guessed). Reversible via
 `operator_status`. Suite 1449/0, ≤12 api/*.js. gov has no operator column (tenant=agency) → N/A. ✅ GATED.
 
-**Working order (sequential, Scott): T4c Item 3 (de-surge gate) → T2 → T7 → T8 → T10.**
+- **Recovery progress (2026-06-24):** root cause of the thin sync FOUND + FIXED — the PA "SF → LCC:
+  Object Sync" flow's `Get_Deals` step used invalid OData `StageName IN 'Closed IS'` (this connector's
+  filter is OData: `eq`/`gt`/`contains`/`or` — no `IN`); fixed to `StageName eq 'Closed IS'`, which
+  un-broke the whole sync (comps/properties/deals now sync incrementally again — recurrence fixed). A
+  full Comp crawl (watermark `addDays(utcNow(),-9999)`, reverted to `-7` after) lifted the retained
+  `lcc_sf_comp_on_market` map to **674 comps / 555 with OMD**; backfilled **+23 net-new** held listings
+  (20 dia / 3 gov, tag `t4c_recovery_crawl`, reversible) → **~91 held listings now carry real SF dates**.
+- **Broad crawl is EXHAUSTED at 674** — two full-crawl runs did NOT grow the distinct comp count
+  (the `Get Comps` tenant-keyword filter `Tenant_Name2__c contains(Dialysis/DaVita/Fresenius/…)` tops out
+  at 674; the **~560 still-needed held-linked comps don't match it**). Re-running the broad crawl can't
+  reach them.
+- **Path for the remaining ~560: an ID-based lookup flow** (Scott's idea). New PA "SF → LCC: Record
+  Lookup by ID" flow + an LCC missing-ID worker — LCC sends the exact comp IDs it's missing, SF returns
+  `On_Market_Date__c`, LCC backfills. Bypasses the tenant filter + pagination entirely; reusable for
+  property/comp/listing/company lookups. Prompts: `CLAUDE_CODE_PROMPT_T4c_sf_record_lookup.md` (LCC) +
+  `PA_FLOW_SF_RECORD_LOOKUP_BUILD.md` (the PA flow build for Scott).
+- **~1,882 held listings have NO comp link at all** (dia 1349 / gov 533) — the ID lookup won't reach
+  these; they stay honestly held (future CoStar/platform date or genuinely dateless). Item 3 holds them
+  out of the timing axis.
+
+**Working order (sequential, Scott): T4c ID-lookup recovery → T4c Item 3 (de-surge gate) → T2 → T7 → T8 → T10.**
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking
