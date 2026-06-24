@@ -79,9 +79,30 @@ the URL — ids/tab/domain only, never names/emails/addresses.
   (assigning an equal hash never re-fires `hashchange`). Opening a detail is a
   PUSH; Back from an open detail removes the `?d=` segment → `applyRoute` closes
   it (does not exit the app). Tab changes + closes use REPLACE (no history noise).
-- **Phase 4 (NOT built here):** the lateral back-stack, breadcrumb, and
-  entity-parity (the zoom-in/zoom-out model) ride on this same route shape.
-  Keep the detail-token parseable so Phase 4 can extend it with a lateral stack.
+- **Phase 4 Slice 4A (BUILT) — back-stack + breadcrumb (the zoom model):**
+  `_detailStack` (app.js) mirrors the chain of open detail levels — each entry is
+  a re-openable descriptor (`{kind,db,id,tab}`, the detail-token shape) + a human
+  `label` captured from the rendered title (labels can't ride the hash — no PII).
+  One stack level == one `?d=` history entry: every open already PUSHes via
+  `_routeSetDetailHash`, so the in-panel **"← Back"** (`detailBack()`) and the
+  breadcrumb crumbs drive `history.back()`/`history.go()`, and `applyRoute` (the
+  single hashchange reader) reconciles the stack from the incoming descriptor —
+  match → truncate (a Back/jump), else → push (a Forward / new lateral hop).
+  Reconciliation (`_detailStackSync`) is idempotent on the current top, so a
+  direct click (which syncs synchronously for an instant breadcrumb) and the async
+  `applyRoute` it provokes never double-mutate. `openUnifiedDetail` +
+  `openEntityDetail` call `_detailStackSync` at open (and `_detailStackSetLabel`
+  after the real title loads); their in-header `.detail-back` now calls
+  `detailBack()` (was `closeDetail` — the bug 4A fixes). `closeDetail` (×) and a
+  page nav (`_routeSetPageHash`) call `_detailStackReset()` → clears the trail.
+  The breadcrumb (`#detailBreadcrumb`, a central bar that survives header
+  re-renders) is hidden at depth ≤ 1, collapses the middle to `… ▸ prev ▸ current`
+  when deep. **Deeper-than-top levels are not persisted across reload** (the hash
+  holds only the top descriptor — best-effort by design).
+- **Phase 4 Slices 4B/4C (NOT built):** entity/owner detail parity onto the same
+  shell+stack (4B) and sub-record drill (lease/sale/deed) + next-action-everywhere
+  (4C) ride this same descriptor stack. Keep the detail-token + descriptor shape
+  parseable so they can extend it.
 
 ## OM Intake Pipeline — three channels, one shared path
 

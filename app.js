@@ -2267,6 +2267,10 @@ function applyRoute() {
       navTo(targetPage);
     }
     if (detail) {
+      // Phase 4: reconcile the back-stack from the incoming descriptor (Back →
+      // truncate to an existing level, Forward/new → push). Idempotent on the
+      // current top, so a direct-click open that already synced is a no-op here.
+      if (typeof _detailStackSync === 'function') _detailStackSync(detail);
       if (!_routeSameDetail(detail, _routeCurrentDetail)) {
         _routeCurrentDetail = detail;
         if (detail.kind === 'prop' && typeof openUnifiedDetail === 'function') {
@@ -2283,7 +2287,11 @@ function applyRoute() {
     } else if (_routeDetailIsOpen() && typeof closeDetail === 'function') {
       // The detail segment is gone (e.g. Back from an open detail) → close it.
       _routeCurrentDetail = null;
+      if (typeof _detailStackReset === 'function') _detailStackReset();
       closeDetail();
+    } else if (typeof _detailStackReset === 'function' && _detailStack.length) {
+      // Bare page route with no open detail → drop any stale trail.
+      _detailStackReset();
     }
   } finally {
     _routerApplying = false;
@@ -2307,6 +2315,7 @@ function _routeSetPageHash(pageId) {
   const slug = _routePageToSlug(pageId);
   if (!slug) return;
   _routeCurrentDetail = null;          // a page nav clears the tracked detail
+  if (typeof _detailStackReset === 'function') _detailStackReset();  // Phase 4: drop the zoom trail
   _routePush('#/' + slug);
 }
 
@@ -2349,6 +2358,143 @@ function _routeClearDetailHash() {
   const slug = (parsed.page && _routePageToSlug(parsed.page)) || _routeCurrentPageSlug();
   _routeReplace('#/' + (slug || 'today'));
 }
+
+// ============================================================
+// UI Phase 4 — Slice 4A: detail back-stack + breadcrumb (the zoom model)
+// ============================================================
+// `_detailStack` mirrors the chain of open detail "levels" — a lateral hop
+// (property → its owner → the owner's other property) or a drill pushes a new
+// level; ascending pops one. Each entry is a re-openable descriptor (the same
+// {kind,db,id,tab} shape as the Phase-1 detail-token) plus a human `label` for
+// the breadcrumb (labels can't live in the hash — no PII in the URL — so they
+// are captured at open time from the rendered title).
+//
+// It rides the Phase-1 hash/history substrate: every open already PUSHes a
+// `?d=` history entry via `_routeSetDetailHash`, so one stack level == one
+// history entry. The in-panel "← Back" and breadcrumb crumbs drive
+// `history.back()` / `history.go()`, and `applyRoute` (the single hashchange
+// reader) reconciles the stack from the incoming descriptor — match → truncate
+// (a Back), else → push (a Forward / new hop). Reconciliation is idempotent, so
+// a direct click (which syncs synchronously) and the async applyRoute it
+// triggers never double-mutate.
+let _detailStack = [];   // [{kind, db, id, tab, label}]
+
+function _stackSame(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'prop') return a.db === b.db && String(a.id) === String(b.id);
+  return String(a.id) === String(b.id);   // entity
+}
+
+function _stackDefaultLabel(d) {
+  if (!d) return 'Detail';
+  if (d.kind === 'prop') return 'Property ' + d.id;
+  return 'Entity ' + d.id;
+}
+
+function _stackTrunc(s, max) {
+  s = String(s == null ? '' : s);
+  max = max || 26;
+  return s.length > max ? s.slice(0, max - 1).trimEnd() + '…' : s;
+}
+
+// Reconcile the stack so `desc` is the current top. `labelHint` refines the
+// entry's label when provided. Idempotent: re-syncing the current top only
+// updates its tab/label (never grows the stack), so the direct-click sync and
+// the applyRoute it provokes converge. Renders the breadcrumb.
+function _detailStackSync(desc, labelHint) {
+  if (!desc || !desc.kind || desc.id == null || desc.id === '') return;
+  const top = _detailStack[_detailStack.length - 1];
+  if (top && _stackSame(top, desc)) {
+    if (desc.tab) top.tab = desc.tab;
+    if (labelHint) top.label = labelHint;
+  } else {
+    const idx = _detailStack.findIndex(e => _stackSame(e, desc));
+    if (idx >= 0) {
+      // Back/Forward landed on an existing earlier level → drop everything above.
+      _detailStack.length = idx + 1;
+      if (desc.tab) _detailStack[idx].tab = desc.tab;
+      if (labelHint) _detailStack[idx].label = labelHint;
+    } else {
+      _detailStack.push({
+        kind: desc.kind,
+        db: desc.kind === 'prop' ? (desc.db === 'gov' ? 'gov' : 'dia') : null,
+        id: String(desc.id),
+        tab: desc.tab || null,
+        label: labelHint || _stackDefaultLabel(desc)
+      });
+    }
+  }
+  _renderDetailBreadcrumb();
+}
+
+// Refine an existing entry's label (e.g. after the detail's real title loads).
+function _detailStackSetLabel(desc, label) {
+  if (!desc || !label) return;
+  const e = _detailStack.find(x => _stackSame(x, desc));
+  if (e && e.label !== label) { e.label = label; _renderDetailBreadcrumb(); }
+}
+
+// Clear the stack + hide the breadcrumb (a full close or a page nav).
+function _detailStackReset() {
+  if (!_detailStack.length) { _renderDetailBreadcrumb(); return; }
+  _detailStack = [];
+  _renderDetailBreadcrumb();
+}
+
+// Render the breadcrumb from the stack. Hidden at depth <= 1 (a single crumb
+// adds chrome without a trail — the header title + × already say where you are).
+function _renderDetailBreadcrumb() {
+  const el = document.getElementById('detailBreadcrumb');
+  if (!el) return;
+  const n = _detailStack.length;
+  if (n <= 1) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const crumb = (e, i, isLast) =>
+    '<button class="detail-bc-crumb' + (isLast ? ' current' : '') + '"' +
+    (isLast ? ' aria-current="page"' : ' onclick="_detailBreadcrumbJump(' + i + ')"') +
+    ' title="' + esc(e.label) + '">' + esc(_stackTrunc(e.label)) + '</button>';
+  let items;
+  if (n <= 3) {
+    items = _detailStack.map((e, i) => crumb(e, i, i === n - 1));
+  } else {
+    // Deep stack: collapse the middle to "… ▸ prev ▸ current".
+    items = [
+      crumb(_detailStack[0], 0, false),
+      '<span class="detail-bc-sep">…</span>',
+      crumb(_detailStack[n - 2], n - 2, false),
+      crumb(_detailStack[n - 1], n - 1, true)
+    ];
+  }
+  el.style.display = 'flex';
+  el.innerHTML =
+    '<button class="detail-bc-back" onclick="detailBack()" title="Back one level">←<span>Back</span></button>' +
+    '<nav class="detail-bc-trail">' + items.join('<span class="detail-bc-sep">›</span>') + '</nav>';
+}
+
+// Jump to crumb `i` — pop `(depth-1-i)` history entries; applyRoute then
+// truncates the stack + re-opens that level. No-op on the current (last) crumb.
+function _detailBreadcrumbJump(i) {
+  const n = _detailStack.length;
+  if (i < 0 || i >= n - 1) return;
+  try { history.go(-(n - 1 - i)); }
+  catch (_) { detailBack(); }
+}
+
+// The honest "← Back": ascend ONE level when there's a trail, else close.
+// At depth >= 2 we drove the pushes ourselves, so history.back() lands on the
+// previous level (browser Back == panel Back). At depth 1 there may be no app
+// history entry below (a deep-link landing), so close directly to avoid leaving
+// the app.
+function detailBack() {
+  if (_detailStack.length > 1) {
+    try { history.back(); return; } catch (_) { /* fall through to close */ }
+  }
+  if (typeof closeDetail === 'function') closeDetail();
+}
+window.detailBack = detailBack;
+window._detailBreadcrumbJump = _detailBreadcrumbJump;
+window._detailStackSync = _detailStackSync;
+window._detailStackSetLabel = _detailStackSetLabel;
+window._detailStackReset = _detailStackReset;
 
 window.addEventListener('hashchange', function () {
   try { applyRoute(); } catch (_) { /* never throw on a malformed hash */ }
@@ -5472,6 +5618,8 @@ function closeDetail() {
   // the bare page route. No-op when the router itself drove this close (Back/
   // Forward already changed the hash).
   if (typeof _routeClearDetailHash === 'function') _routeClearDetailHash();
+  // Phase 4: × clears the whole zoom trail.
+  if (typeof _detailStackReset === 'function') _detailStackReset();
 }
 
 function switchDetailTab(tabName) {

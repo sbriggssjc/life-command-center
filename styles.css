@@ -423,6 +423,17 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
    shrink their padding so the last tab ("Activity Log") is reachable without
    horizontal scroll on a standard-width window. flex-wrap replaces the
    overflow-x scroll that was clipping the final tab behind a scroll arrow. */
+/* UI Phase 4 (Slice 4A) — detail back-stack breadcrumb (the zoom trail).
+   Centrally managed chrome that persists across header re-renders. */
+.detail-breadcrumb { display: flex; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--border); background: var(--s1); position: sticky; top: 0; z-index: 2; min-width: 0; }
+.detail-bc-back { display: flex; align-items: center; gap: 4px; flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--text1); font-size: 13px; font-weight: 500; padding: 4px 10px; border-radius: 8px; cursor: pointer; }
+.detail-bc-back:hover { background: var(--s2); }
+.detail-bc-trail { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; flex: 1; }
+.detail-bc-crumb { background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 500; padding: 2px 4px; border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.detail-bc-crumb:hover { background: var(--s2); text-decoration: underline; }
+.detail-bc-crumb.current { color: var(--text2); font-weight: 600; cursor: default; }
+.detail-bc-crumb.current:hover { background: none; text-decoration: none; }
+.detail-bc-sep { flex-shrink: 0; color: var(--text3); font-size: 12px; }
 .detail-tabs { display: flex; flex-wrap: wrap; row-gap: 2px; border-bottom: 1px solid var(--border); background: var(--s1); position: sticky; top: 0; z-index: 1; }
 .detail-tab { flex: 0 1 auto; padding: 10px 12px; font-size: 12px; font-weight: 500; color: var(--text3); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s; }
 .detail-tab:hover { color: var(--text2); }
