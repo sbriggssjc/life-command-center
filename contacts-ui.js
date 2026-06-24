@@ -209,6 +209,14 @@ function buildOwnersWorklist() {
   return h;
 }
 
+// Phase 5b: enrichment_actions the owner-contact-enrich worker can run in one
+// click (SOS / address-reverse / public-IR / manager-drill / deed). manual_research
+// has no automated lookup → no run button (the picker / research path applies).
+const WORKLIST_RUNNABLE = new Set([
+  'sos_manager_lookup', 'address_reverse_lookup', 'public_company_ir',
+  'find_person_at_manager', 'parse_deed_signatory'
+]);
+
 function buildWorklistCard(o) {
   const val = (o.rank_value != null && Number(o.rank_value) > 0)
     ? '$' + Math.round(Number(o.rank_value)).toLocaleString() : '—';
@@ -217,7 +225,13 @@ function buildWorklistCard(o) {
   const dom = (o.primary_domain || '').toUpperCase();
   const xv = o.is_cross_vertical ? 'cross-vertical' : '';
   const meta = [dom, xv, props].filter(Boolean).join(' · ');
-  return `<div class="uc-card" onclick="openWorklistOwner(decodeURIComponent('${encodeURIComponent(o.entity_id)}'))">
+  const eid = encodeURIComponent(o.entity_id);
+  // One-click enrichment when there's an automated lookup to run; else the card
+  // click opens the 4B owner detail Contacts tab (manual pick).
+  const runBtn = WORKLIST_RUNNABLE.has(o.enrichment_action)
+    ? `<button class="btn-cancel uc-worklist-run" data-eid="${eid}" onclick="event.stopPropagation(); runWorklistEnrich(decodeURIComponent('${eid}'), this)">Run lookup</button>`
+    : '';
+  return `<div class="uc-card" onclick="openWorklistOwner(decodeURIComponent('${eid}'))">
     <div class="uc-card-center">
       <div class="uc-card-name">${esc(o.owner_name || 'Unnamed owner')}</div>
       <div class="uc-card-meta">${esc(meta)}</div>
@@ -226,8 +240,53 @@ function buildWorklistCard(o) {
     <div class="uc-card-right">
       <div class="uc-score uc-heat-hot">${val}</div>
       <div class="uc-card-activity">portfolio value</div>
+      ${runBtn}
     </div>
   </div>`;
+}
+
+// Run the owner-contact-enrich worker for ONE owner (Phase 5b). On a confident
+// attach the owner gains a contact → retire the row. Honest about the
+// not-yet-configured external adapters (the row is queued for manual research).
+async function runWorklistEnrich(entityId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  try {
+    const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
+    if (LCC_USER.workspace_id) opts.headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const res = await fetch(`/api/owner-contact-enrich-tick?entity_id=${encodeURIComponent(entityId)}`, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.detail || res.statusText);
+    const msg = worklistEnrichMessage(data);
+    if (typeof showToast === 'function') showToast(msg.text, msg.kind);
+    if (data.outcome === 'attached' || data.outcome === 'already_linked') {
+      _cui.worklist = _cui.worklist.filter(o => o.entity_id !== entityId);
+      _cui.worklistActionable = Math.max(0, (_cui.worklistActionable || 0) - 1);
+      _cui.worklistUniverse = Math.max(0, (_cui.worklistUniverse || 0) - 1);
+      renderContactsPage();
+    } else if (btn) {
+      btn.disabled = false; btn.textContent = 'Run lookup';
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Lookup failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Run lookup'; }
+  }
+}
+if (typeof window !== 'undefined') window.runWorklistEnrich = runWorklistEnrich;
+
+function worklistEnrichMessage(d) {
+  switch (d && d.outcome) {
+    case 'attached':              return { text: 'Contact attached: ' + (d.contact_name || 'resolved') + ' — owner connected.', kind: 'ok' };
+    case 'already_linked':        return { text: 'Owner already has a contact — retiring.', kind: 'ok' };
+    case 'manager_drillthrough':  return { text: 'Routed to find a person at the manager firm.', kind: 'ok' };
+    case 'public_ir_manual':      return { text: 'Public-company IR — look up the investor-relations contact.', kind: '' };
+    case 'manual_research_queued': return { text: 'Automated lookup not configured yet — queued for manual research.', kind: '' };
+    case 'manual_research_pending': return { text: 'Already queued for manual research.', kind: '' };
+    case 'manual_research':       return { text: 'Surfaced for manual research.', kind: '' };
+    case 'guard_rejected':        return { text: 'No usable contact found (rejected by the name guards).', kind: '' };
+    case 'no_pivot':              return { text: 'No enrichment signals for this owner — pick a contact manually.', kind: '' };
+    case 'error':                 return { text: 'Lookup error: ' + (d.error || 'unknown'), kind: 'error' };
+    default:                      return { text: 'Lookup ran (' + ((d && d.outcome) || 'done') + ').', kind: '' };
+  }
 }
 
 function worklistHint(o) {

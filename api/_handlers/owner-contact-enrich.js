@@ -208,6 +208,18 @@ export async function processOwnerEnrichmentRow(row, deps) {
   return { entity_id: row.entity_id, outcome: 'manual_research', action: action || null };
 }
 
+/**
+ * Classify what class a pivot row WOULD hit — shared by the batch dry-run and the
+ * Phase 5b single-owner preview so the two never drift. Pure.
+ */
+export function classifyEnrichRow(row, looksPersonImpl) {
+  const looksPerson = looksPersonImpl || looksLikePersonName;
+  if (row.active_contact_entity_id) return 'already_linked';
+  if (row.active_contact_name && looksPerson(row.active_contact_name)) return 'attach_person';
+  if (row.active_contact_name && Number(row.active_authority_level) <= 2) return 'manager_drillthrough';
+  return row.enrichment_action || 'manual_research';
+}
+
 function buildDeps() {
   // Real Slice-4 adapters; each no-ops `unconfigured` without its webhook (and,
   // for SOS, an enabled per-state parser), so unconfigured behavior is identical
@@ -252,6 +264,46 @@ export async function handleOwnerContactEnrichTick(req, res) {
   const auth = await authenticate(req);
   if (!auth.ok) return res.status(auth.status || 401).json({ error: auth.error || 'unauthorized' });
 
+  // ---- Phase 5b: single-owner one-click run (the worklist "Run lookup" CTA) ----
+  // POST &entity_id=<uuid> → ensure the owner's pivot (seed from
+  // v_owner_active_contact) and run processOwnerEnrichmentRow on that ONE row.
+  // GET &entity_id=<uuid> → non-mutating preview (which class it WOULD hit).
+  // Reuses the exact batch core; no fork. Safe by construction (the enrich worker
+  // only attaches a guard-passed person or queues research — never guess-fills).
+  const entityId = req.query.entity_id;
+  if (entityId) {
+    const pivotSel = 'owner_contact_pivot?select=entity_id,owner_name,workspace_id,'
+      + 'active_contact_name,active_contact_entity_id,active_authority_level,'
+      + 'active_contact_role,enrichment_action,status&entity_id=eq.'
+      + pgFilterVal(entityId) + '&limit=1';
+
+    if (req.method === 'GET') {
+      const pr = await opsQuery('GET', pivotSel);
+      const row = (pr.ok && Array.isArray(pr.data)) ? pr.data[0] : null;
+      if (!row) return res.status(200).json({ ok: true, single: true, preview: true, would: 'no_pivot' });
+      return res.status(200).json({ ok: true, single: true, preview: true, would: classifyEnrichRow(row),
+        adapters: { sos: isConfiguredSos(), address: isConfiguredAddress(), deed: isConfiguredDeed() } });
+    }
+
+    // POST → ensure the pivot exists (idempotent; seeds from v_owner_active_contact)
+    await opsQuery('POST', 'rpc/lcc_ensure_owner_pivot', { p_entity_id: entityId });
+    const pr = await opsQuery('GET', pivotSel);
+    const row = (pr.ok && Array.isArray(pr.data)) ? pr.data[0] : null;
+    if (!row) {
+      return res.status(404).json({ ok: false, single: true, outcome: 'no_pivot',
+        detail: 'owner has no contact-selection pivot (not bridged with domain signals)' });
+    }
+    const deps = buildDeps();
+    let out;
+    try { out = await processOwnerEnrichmentRow(row, deps); }
+    catch (e) { out = { entity_id: entityId, outcome: 'error', error: String(e && e.message || e) }; }
+    if (out.outcome === 'attached') {
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+    }
+    return res.status(200).json({ ok: true, single: true, ...out,
+      adapters: { sos: isConfiguredSos(), address: isConfiguredAddress(), deed: isConfiguredDeed() } });
+  }
+
   const dryRun = req.method === 'GET';
   const limit = Math.min(parseInt(req.query.limit, 10) || 25, 200);
 
@@ -271,9 +323,7 @@ export async function handleOwnerContactEnrichTick(req, res) {
   if (dryRun) {
     const byAction = {};
     for (const row of rows) {
-      const k = row.active_contact_name && looksLikePersonName(row.active_contact_name) ? 'attach_person'
-        : (row.active_contact_name && Number(row.active_authority_level) <= 2) ? 'manager_drillthrough'
-        : (row.enrichment_action || 'manual_research');
+      const k = classifyEnrichRow(row);
       byAction[k] = (byAction[k] || 0) + 1;
     }
     return res.status(200).json({ ok: true, dry_run: true, candidates: rows.length, by_action: byAction,

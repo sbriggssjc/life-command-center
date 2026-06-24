@@ -5253,3 +5253,49 @@ skipped**. Migration additive + reversible (DROP VIEW → zero trace); JS ships 
 the Railway redeploy. LCC-Opps only; no dia/gov writes; auth schema untouched.
 The acquisition engine + floating-person linking (12 remain) are already done —
 this is the missing surface. Phase 5 done.
+
+### Phase 5b — one-click-run the owner-contact-enrich worker from a worklist row (2026-06-24)
+
+Closes the loop on the worklist owners where there's no SF contact to pick but an
+automated lookup exists. Grounded live: of the 3,521 clean worklist owners, **37
+carry a runnable enrichment hint** (20 `sos_manager_lookup`, 16
+`address_reverse_lookup`, 1 `public_company_ir`) — all 37 already have an
+`owner_contact_pivot` row. The operator clicks **"Run lookup"** on the row and the
+EXISTING owner-contact-enrich worker runs for that one owner.
+
+- **Single-owner mode (reuse, not fork)** — `handleOwnerContactEnrichTick`
+  (`owner-contact-enrich.js`) gains an `entity_id` branch: `POST
+  /api/owner-contact-enrich-tick?entity_id=<uuid>` ensures the owner's pivot
+  (`rpc/lcc_ensure_owner_pivot`, idempotent — seeds from `v_owner_active_contact`)
+  then runs the SAME `processOwnerEnrichmentRow` on that ONE row; `GET
+  &entity_id=` is a non-mutating preview (`classifyEnrichRow`). The batch
+  drain/cron path is byte-identical. New exported `classifyEnrichRow(row)` is the
+  single classifier shared by the batch dry-run AND the single-owner preview (no
+  drift). Safe by construction: the worker only attaches a guard-passed person or
+  queues research — never guess-fills.
+- **The CTA** (`contacts-ui.js`) — worklist rows whose `enrichment_action` is in
+  `WORKLIST_RUNNABLE` (sos / address / public_ir / find_person_at_manager / deed)
+  render a **"Run lookup"** button (`stopPropagation` so it doesn't open the
+  detail). `runWorklistEnrich` POSTs the single-owner endpoint; on `attached` it
+  retires the row (drops it + decrements the counts) and refreshes the queue
+  cache; `worklistEnrichMessage` is **honest** about the not-yet-configured
+  external adapters (a SOS/address run today → `manual_research_queued` →
+  "Automated lookup not configured yet — queued for manual research"; public_ir →
+  the manual IR path). Rows with no automated lookup keep the manual "Select
+  contact →" pick (the Phase-5 flow).
+- **Activation:** the SOS / address / deed / web-search adapters stay
+  feature-flagged on `OWNER_ENRICH_SOS_URL` / `_ADDRESS_URL` / `_DEED_URL` /
+  `_WEBSEARCH_URL` (the find_contacts_by_account rollout pattern) — until those PA
+  webhooks land, a one-click run queues manual research (the loop is wired; the
+  external egress is the post-deploy piece). The attach-named-person /
+  manager-drill-through classes resolve today with no config.
+
+### Verified (2026-06-24)
+Live read-only: all 37 runnable worklist rows resolve a pivot
+(`active_contact_entity_id` null) so the single-owner run has a row to process;
+`classifyEnrichRow` returns the enrichment_action. `test/owner-contact-enrich.test.mjs`
+12 → 17 (+`classifyEnrichRow`: already-linked / attach_person / manager_drillthrough
+/ sos hint / manual_research). `node --check` clean (owner-contact-enrich,
+contacts-ui); `ls api/*.js | wc -l`=12. No new api/*.js; no migration; reversible
+(every attach is a relationship row + the pivot pointer). JS ships on the Railway
+redeploy. LCC-Opps only; no dia/gov writes.
