@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { processOwnerEnrichmentRow } from '../api/_handlers/owner-contact-enrich.js';
+import { processOwnerEnrichmentRow, classifyEnrichRow } from '../api/_handlers/owner-contact-enrich.js';
 
 function recordingDeps(overrides = {}) {
   const calls = { ensure: [], link: [], stamp: [], patch: [] };
@@ -149,5 +149,25 @@ describe('processOwnerEnrichmentRow', () => {
     const out = await processOwnerEnrichmentRow(
       { ...ownerBase, active_contact_name: null, enrichment_action: 'public_company_ir', active_contact_entity_id: null }, deps);
     assert.equal(out.outcome, 'public_ir_manual');
+  });
+});
+
+// Phase 5b — the shared classifier used by the batch dry-run AND the single-owner
+// preview (they must never drift).
+describe('classifyEnrichRow', () => {
+  it('already-linked short-circuits', () => {
+    assert.equal(classifyEnrichRow({ active_contact_entity_id: 'x' }), 'already_linked');
+  });
+  it('a named person → attach_person', () => {
+    assert.equal(classifyEnrichRow({ active_contact_name: 'Jane Smith', active_authority_level: 3 }), 'attach_person');
+  });
+  it('a controlling firm (authority<=2, not a person name) → manager_drillthrough', () => {
+    assert.equal(classifyEnrichRow({ active_contact_name: 'Acme Management LLC', active_authority_level: 2 }), 'manager_drillthrough');
+  });
+  it('contactless with a SOS hint → the enrichment_action', () => {
+    assert.equal(classifyEnrichRow({ enrichment_action: 'sos_manager_lookup' }), 'sos_manager_lookup');
+  });
+  it('contactless with no signals → manual_research', () => {
+    assert.equal(classifyEnrichRow({}), 'manual_research');
   });
 });
