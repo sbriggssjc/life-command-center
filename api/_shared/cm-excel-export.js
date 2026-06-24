@@ -111,6 +111,12 @@ const FMT = {
 // they remain accurate across export rotations. If a PDF deliverable
 // needs date-stamped tagline text, that's a per-rotation override that
 // could be wired through brand tokens or a dedicated catalog column.
+// One-time restatement note (T4c Item 3, 2026-06-24) appended to the supply-side
+// timing/DOM/ramp captions: these series now read each listing's evidence-based
+// on-market date, not the data-load date, so prior periods are revised.
+const CM_ONMARKET_RESTATEMENT_NOTE =
+  ' Note (restated 2026-06-24): market-entry timing now reads each listing’s evidence-based on-market date (Salesforce / CoStar / platform), not the data-load date — so prior periods are revised as newly-recovered on-market dates land at their true month, and listings with no verifiable on-market date are excluded.';
+
 const CHART_FOOTER_CAPTIONS = {
   valuation_index:
     'Tracks the dialysis valuation index (line) over time vs YoY % change (bars). The index blends comparable cap-rate trends with changes in market rent and replacement cost to normalize values through cycles.',
@@ -159,9 +165,14 @@ const CHART_FOOTER_CAPTIONS = {
   asking_cap_by_term_dot_plot:
     'Asking cap-rate cohorts by remaining lease term (active listings, TTM). Starts 2017, where all four cohorts have continuous coverage (the ≤5- and 6-8-year cohorts do not exist in the active-listing record before then). Asking caps are seller pricing, not closed-sale evidence, so the cohorts do not form a clean term-premium ladder — the lines cross across years even at high counts; read levels, not strict ordering. Dialysis: observed asking listings only — sale-anchored / synthetic reconstructions are excluded so the line is not contaminated with closed-sale caps; recent cohorts are deep (hundreds of pooled obs), but pre-2020 thins and should be read as indicative.',
   dom_and_pct_of_ask:
-    'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line). Improving % of ask + flat/falling DOM signals tightening bid/ask.',
+    'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line). Improving % of ask + flat/falling DOM signals tightening bid/ask.' + CM_ONMARKET_RESTATEMENT_NOTE,
   dom_and_pct_of_ask_monthly:
-    'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line).',
+    'Days on market (TTM, bars) paired with sale price as % of asking price (TTM, line).' + CM_ONMARKET_RESTATEMENT_NOTE,
+  // Round 19 — Market activity (supply-side timing/ramp). Restatement note appended.
+  inventory_backlog:
+    'Listings added vs sold per month (bars) with active inventory and months-of-supply.' + CM_ONMARKET_RESTATEMENT_NOTE,
+  market_turnover:
+    'Market turnover — TTM sales over the active for-sale universe, with active inventory and months-of-supply.' + CM_ONMARKET_RESTATEMENT_NOTE,
   bid_ask_spread:
     'Bid-ask spread on closed sales: last asking cap rate vs. achieved cap rate. Tightening = sellers and buyers converging.',
   bid_ask_spread_monthly:
