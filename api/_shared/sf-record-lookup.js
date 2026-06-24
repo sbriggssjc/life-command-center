@@ -13,13 +13,16 @@
 // unit-tested here, not hand-built in PA). The flow holds the SF OAuth.
 //
 // ENV:
-//   SF_RECORD_LOOKUP_URL    — full signed URL of the PA "SF -> LCC: Record
-//                             Lookup by ID" flow HTTP trigger (treat as secret).
-//   SF_RECORD_LOOKUP_SECRET — optional shared secret; sent as the
-//                             `X-Shared-Secret` header for the flow to validate.
+//   SF_RECORD_LOOKUP_URL — full SAS-signed URL of the PA "SF -> LCC: Record
+//                          Lookup by ID" flow HTTP trigger (the `?sig=` IS the
+//                          authentication — treat the whole URL as a secret).
+//
+// AUTH: the endpoint is Azure SAS-signed and REFUSES any additional auth scheme
+// ("must be authenticated only by Shared Access scheme"). So the POST sends ONLY
+// Content-Type + the JSON body — NO Authorization / X-* auth header.
 //
 // FLOW CONTRACT (what LCC posts / what PA returns):
-//   POST <SF_RECORD_LOOKUP_URL>   [header X-Shared-Secret: <secret> if set]
+//   POST <SF_RECORD_LOOKUP_URL>   (Content-Type: application/json only)
 //   { "object_type": "Comp__c",
 //     "fields": "Id,On_Market_Date__c,CreatedDate",
 //     "filter": "Id eq 'a1Y...' or Id eq 'a1Y...' or ...",
@@ -70,8 +73,11 @@ async function callRecordLookupFlow(body, fetchImpl) {
   // An injected fetch (tests) doesn't need the real URL; production does.
   if (!url && !fetchImpl) return { ok: false, reason: 'sf_record_lookup_not_configured' };
   const f = fetchImpl || ((u, o, t) => fetchWithTimeout(u, o, t));
+  // The flow URL is an Azure SAS-signed endpoint: its `?sig=` IS the
+  // authentication and the endpoint REFUSES any additional auth scheme ("must
+  // be authenticated only by Shared Access scheme"). So send ONLY
+  // Content-Type + the JSON body — never an Authorization or X-* auth header.
   const headers = { 'Content-Type': 'application/json' };
-  if (process.env.SF_RECORD_LOOKUP_SECRET) headers['X-Shared-Secret'] = process.env.SF_RECORD_LOOKUP_SECRET;
 
   let res;
   try {

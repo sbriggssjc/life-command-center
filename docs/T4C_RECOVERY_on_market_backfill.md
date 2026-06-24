@@ -182,7 +182,7 @@ later serve property / listing / company lookups by Id.
 ### The flow contract (LCC ↔ the PA "SF → LCC: Record Lookup by ID" flow)
 
 ```
-POST {SF_RECORD_LOOKUP_URL}   [header X-Shared-Secret: <SF_RECORD_LOOKUP_SECRET> if set]
+POST {SF_RECORD_LOOKUP_URL}   (Content-Type: application/json only — no auth header)
 { "object_type": "Comp__c",
   "fields": "Id,On_Market_Date__c,CreatedDate",
   "filter": "Id eq 'a1Y…' or Id eq 'a1Y…' or …",
@@ -194,8 +194,10 @@ POST {SF_RECORD_LOOKUP_URL}   [header X-Shared-Secret: <SF_RECORD_LOOKUP_SECRET>
 
 ### Env
 - `SF_RECORD_LOOKUP_URL` — the PA record-lookup flow HTTP trigger (NEW; built by
-  Scott per `PA_FLOW_SF_RECORD_LOOKUP_BUILD.md`). POST no-ops without it.
-- `SF_RECORD_LOOKUP_SECRET` — optional shared secret; sent as `X-Shared-Secret`.
+  Scott per `PA_FLOW_SF_RECORD_LOOKUP_BUILD.md`). The `?sig=` IS the auth — the
+  Azure SAS endpoint refuses any extra auth scheme, so the worker sends ONLY
+  `Content-Type: application/json` + the JSON body (no Authorization / X-* auth
+  header). POST no-ops without the URL.
 - `SF_RECORD_LOOKUP_BUDGET_MS` — per-tick wall-clock budget (default 22000).
 
 ### Runbook (operational — handed to Scott; needs the live flow)
