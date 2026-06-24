@@ -164,7 +164,9 @@ Sequence (POST):
 1. Read `v_lcc_missing_comp_ids`; per domain fetch the still-held listing set
    (`available_listings.on_market_date_source='unestablished'`) and intersect →
    `planMissingCompFetch` (pure) yields the still-held missing comp IDs (the ~560).
-2. Chunk to ≤100/batch, build `Id eq '…' or …`, POST each to
+2. Chunk to **20/batch** (default; `?batch_size=` overrides 1..100 with no
+   redeploy — a 100-Id `eq … or …` SOQL overruns the synchronous PA flow →
+   502 NoResponse), build `Id eq '…' or …`, POST each (sequentially) to
    `SF_RECORD_LOOKUP_URL` (shared-secret header) — `lookupSfRecordsByIds`,
    time-budgeted (`SF_RECORD_LOOKUP_BUDGET_MS`, default 22s).
 3. `lcc_upsert_sf_comp_on_market` lands the returned dates (prune-proof) — the
