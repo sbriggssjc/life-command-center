@@ -77,6 +77,7 @@
     { "source": "/api/owner-contact-enrich-tick", "destination": "/api/operations?_route=owner-contact-enrich-tick" },
     { "source": "/api/developer-chain-resolve-tick", "destination": "/api/operations?_route=developer-chain-resolve-tick" },
     { "source": "/api/contact-writeback-tick", "destination": "/api/operations?_route=contact-writeback-tick" },
+    { "source": "/api/sf-record-lookup-tick", "destination": "/api/operations?_route=sf-record-lookup-tick" },
     { "source": "/api/live-ingest", "destination": "/api/sync?_route=live-ingest" },
     { "source": "/api/loopnet-ingest", "destination": "/api/sync?_route=loopnet-ingest" },
     { "source": "/api/lead-health", "destination": "/api/sync?_route=lead-health" },

@@ -217,6 +217,15 @@ export default withErrorHandler(async function handler(req, res) {
     return handleDeveloperChainResolveTick(req, res);
   }
 
+  // T4c — ID-based SF record lookup (via vercel.json _route=sf-record-lookup-tick).
+  // GET=dry-run (missing-ID count + batch plan) / POST=drain (fetch missing
+  // Comp__c On_Market_Date__c by Id, land the retained map, re-run the
+  // fill-held-only backfill). Authenticates internally.
+  if (req.query._route === 'sf-record-lookup-tick') {
+    const { handleSfRecordLookupTick } = await import('./_handlers/sf-record-lookup.js');
+    return handleSfRecordLookupTick(req, res);
+  }
+
   // R52 — Salesforce contact writeback (via vercel.json
   // _route=contact-writeback-tick). GET=dry-run (?summary=1 for coverage) /
   // POST=drain (gated on SF_CONTACT_WRITEBACK). Pushes emailable LCC persons

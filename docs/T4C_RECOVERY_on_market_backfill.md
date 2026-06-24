@@ -131,6 +131,98 @@ Or drop the whole recovery: `DROP TABLE lcc_sf_comp_on_market` +
   **not** pursued: no deterministic non-fuzzy key exists, and fuzzy
   address/tenant matching risks dating a re-listing with a stale vintage.
 
+## T4c.lookup — ID-based SF record lookup (recover the ~560 the crawl can't reach)
+
+The broad PA Comp crawl is **exhausted at 674 comps**: the `Get Comps`
+tenant-keyword filter (`Tenant_Name2__c contains(Dialysis/DaVita/Fresenius/…)`)
+tops out there and two full crawls did NOT grow it — the still-held SF-linked
+comps that don't match the keyword are unreachable that way. The fix (Scott's
+design) is an **ID-based lookup**: LCC sends the exact comp IDs it's missing, a
+PA flow returns each `On_Market_Date__c`, LCC lands them in the retained map and
+re-runs the (existing, reversible) fill-held-only backfill.
+
+> The lookup connector filter is **OData** (`eq`/`gt`/`contains`/`or`) — there is
+> **no `IN`** (that was the `Get_Deals` bug). So the ID lookup is an
+> `Id eq 'x' or Id eq 'y' …` chain, NOT `Id IN (…)`. LCC owns + unit-tests the
+> filter string so PA stays trivial.
+
+### Artifacts (LCC Opps; migration `20260624140000_lcc_t4c_missing_comp_ids.sql`)
+
+| Artifact | Purpose |
+|----------|---------|
+| `v_lcc_missing_comp_ids` (view) | Comp IDs linked to a promoted dia/gov listing NOT yet in `lcc_sf_comp_on_market` — the LCC-derivable missing set (live: 376 dia / 354 gov = 730). The worker narrows this to STILL-HELD listings domain-side. |
+| `lcc_upsert_sf_comp_on_market(jsonb)` (RPC) | Lands lookup results in the retained map with the SAME ON CONFLICT semantics as the hourly harvest (keep latest non-null OMD, earliest CreatedDate). |
+
+### Worker — `?_route=sf-record-lookup-tick` (sub-route of operations.js)
+
+`api/_handlers/sf-record-lookup.js`. **GET = dry-run** (compute the missing-ID
+count + batch plan; no POST, no writes). **POST = drain**: fetch the still-held
+missing OMDs by Id, `lcc_upsert_sf_comp_on_market`, then re-run the domain
+`lcc_apply_on_market_backfill(payload, false, 't4c_recovery_lookup')`.
+
+Sequence (POST):
+1. Read `v_lcc_missing_comp_ids`; per domain fetch the still-held listing set
+   (`available_listings.on_market_date_source='unestablished'`) and intersect →
+   `planMissingCompFetch` (pure) yields the still-held missing comp IDs (the ~560).
+2. Chunk to ≤100/batch, build `Id eq '…' or …`, POST each to
+   `SF_RECORD_LOOKUP_URL` (shared-secret header) — `lookupSfRecordsByIds`,
+   time-budgeted (`SF_RECORD_LOOKUP_BUDGET_MS`, default 22s).
+3. `lcc_upsert_sf_comp_on_market` lands the returned dates (prune-proof) — the
+   existing `v_lcc_on_market_backfill_map` then picks them up automatically.
+4. Per domain, build the payload from `v_lcc_on_market_backfill_map` and call the
+   domain `lcc_apply_on_market_backfill(…, false, 't4c_recovery_lookup')`.
+   Reports dia/gov `updated` + the still-missing residual.
+
+**Feature-flagged** on `SF_RECORD_LOOKUP_URL` — POST is a clear 503 no-op when
+unset (GET dry-run works without it). Runs server-side (the PA flow holds the SF
+OAuth). **Reusable seam:** `object_type` + `fields` are `?`-params (default
+`Comp__c` / `Id,On_Market_Date__c,CreatedDate`) so the same worker + flow can
+later serve property / listing / company lookups by Id.
+
+### The flow contract (LCC ↔ the PA "SF → LCC: Record Lookup by ID" flow)
+
+```
+POST {SF_RECORD_LOOKUP_URL}   [header X-Shared-Secret: <SF_RECORD_LOOKUP_SECRET> if set]
+{ "object_type": "Comp__c",
+  "fields": "Id,On_Market_Date__c,CreatedDate",
+  "filter": "Id eq 'a1Y…' or Id eq 'a1Y…' or …",
+  "request_id": "<uuid>" }
+
+→ { "ok": true, "records": [ { "Id": "a1Y…", "On_Market_Date__c": "2026-01-22", "CreatedDate": "…" }, … ] }
+```
+(The client also tolerates a bare `{records:[…]}` or the OData `{value:[…]}`.)
+
+### Env
+- `SF_RECORD_LOOKUP_URL` — the PA record-lookup flow HTTP trigger (NEW; built by
+  Scott per `PA_FLOW_SF_RECORD_LOOKUP_BUILD.md`). POST no-ops without it.
+- `SF_RECORD_LOOKUP_SECRET` — optional shared secret; sent as `X-Shared-Secret`.
+- `SF_RECORD_LOOKUP_BUDGET_MS` — per-tick wall-clock budget (default 22000).
+
+### Runbook (operational — handed to Scott; needs the live flow)
+1. `GET /api/sf-record-lookup-tick` — dry-run: reports `missing_comps_held`
+   (~560) + the batch plan. Safe, no SF call.
+2. `POST /api/sf-record-lookup-tick` — drain: with the flow live, most of the
+   ~560 resolve an OMD, land in `lcc_sf_comp_on_market`, and date their held
+   listings (`source='sf_on_market_date'`, batch_tag `t4c_recovery_lookup`).
+3. Repeat until the dry-run `missing_comps_held` stops shrinking; the residual
+   (comps SF has no OMD for) is reported and held — never fabricated.
+
+### Reversibility
+Revert a lookup-drain backfill exactly like the original recovery, with the
+lookup batch tag (per domain DB):
+```sql
+UPDATE public.available_listings a
+SET on_market_date            = l.prior_on_market_date,
+    on_market_date_source     = l.prior_source,
+    on_market_date_confidence = l.prior_confidence
+FROM public.lcc_on_market_backfill_log l
+WHERE a.listing_id::text = l.listing_id
+  AND l.batch_tag = 't4c_recovery_lookup'
+  AND a.on_market_date_source = 'sf_on_market_date';
+```
+`SF_RECORD_LOOKUP_URL` unset ⇒ the worker is inert. Drop
+`v_lcc_missing_comp_ids` + `lcc_upsert_sf_comp_on_market` to remove the LCC side.
+
 ## NOT in this step (next gate)
 
 Item 3 — repointing the dia+gov added/DOM/ramp **timing views** at
