@@ -30,8 +30,9 @@ name: Supabase Advisor Audit
 #                          anon/service_role keys)
 
 on:
-  schedule:
-    - cron: '0 14 * * *'   # 14:00 UTC daily — 30min after cron-heartbeat
+  # Scheduled run retired 2026-06 — this check now runs as a step in the
+  # consolidated daily-db-checks.yml (one runner for all four daily checks).
+  # Kept here as a workflow_dispatch-only manual escape hatch.
   workflow_dispatch:
 
 concurrency:
