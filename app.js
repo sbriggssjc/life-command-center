@@ -2203,6 +2203,15 @@ function _routeParseDetail(token) {
       const tab = parts[2] ? decodeURIComponent(parts[2]) : null;
       return id ? { kind: 'entity', id, tab } : null;
     }
+    if (kind === 'sub') {
+      // Phase 4C sub-record drill: sub:<recordKind>:<db>:<id> (lease | sale).
+      // No tab segment — a sub-detail is a single focused view.
+      const recordKind = parts[1];
+      const db = parts[2] === 'gov' ? 'gov' : 'dia';
+      const id = parts.slice(3).join(':');   // ids carry no ':' but rejoin defensively
+      if (!recordKind || !id) return null;
+      return { kind: 'sub', recordKind, db, id };
+    }
     return null;
   } catch (_) { return null; }
 }
@@ -2258,6 +2267,7 @@ function _routeSameDetail(a, b) {
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'prop') return a.db === b.db && String(a.id) === String(b.id);
   if (a.kind === 'entity') return String(a.id) === String(b.id);
+  if (a.kind === 'sub') return a.recordKind === b.recordKind && a.db === b.db && String(a.id) === String(b.id);
   return false;
 }
 
@@ -2282,6 +2292,9 @@ function applyRoute() {
           openUnifiedDetail(detail.db, { property_id: detail.id }, {}, detail.tab || undefined);
         } else if (detail.kind === 'entity' && typeof openEntityDetail === 'function') {
           openEntityDetail(detail.id, detail.tab || undefined);
+        } else if (detail.kind === 'sub' && typeof openSubDetail === 'function') {
+          // Phase 4C: focused lease/sale sub-detail (best-effort from cache, else fetch).
+          openSubDetail(detail.recordKind, detail.db, detail.id);
         }
       } else if (detail.tab && _routeCurrentDetail && detail.tab !== _routeCurrentDetail.tab) {
         // Same detail, tab changed via Back/Forward across tabs.
@@ -2348,6 +2361,10 @@ function _routeSetDetailHash(detail, opts) {
     if (!detail.id) return;
     token = 'entity:' + detail.id +
             (detail.tab ? ':' + encodeURIComponent(detail.tab) : '');
+  } else if (detail.kind === 'sub') {
+    // Phase 4C sub-record drill — no tab segment.
+    if (!detail.recordKind || detail.id == null || detail.id === '') return;
+    token = 'sub:' + detail.recordKind + ':' + (detail.db === 'gov' ? 'gov' : 'dia') + ':' + detail.id;
   } else { return; }
   _routeCurrentDetail = detail;        // set BEFORE the push so applyRoute no-ops
   const newHash = '#/' + (_routeCurrentPageSlug() || 'today') + '?d=' + token;
@@ -2397,12 +2414,14 @@ let _detailStack = [];   // [{kind, db, id, tab, label}]
 function _stackSame(a, b) {
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'prop') return a.db === b.db && String(a.id) === String(b.id);
+  if (a.kind === 'sub') return a.recordKind === b.recordKind && a.db === b.db && String(a.id) === String(b.id);
   return String(a.id) === String(b.id);   // entity
 }
 
 function _stackDefaultLabel(d) {
   if (!d) return 'Detail';
   if (d.kind === 'prop') return 'Property ' + d.id;
+  if (d.kind === 'sub') return (d.recordKind === 'lease' ? 'Lease ' : 'Sale ') + d.id;
   return 'Entity ' + d.id;
 }
 
@@ -2432,7 +2451,8 @@ function _detailStackSync(desc, labelHint) {
     } else {
       _detailStack.push({
         kind: desc.kind,
-        db: desc.kind === 'prop' ? (desc.db === 'gov' ? 'gov' : 'dia') : null,
+        recordKind: desc.recordKind || null,   // Phase 4C sub-record drill
+        db: (desc.kind === 'prop' || desc.kind === 'sub') ? (desc.db === 'gov' ? 'gov' : 'dia') : null,
         id: String(desc.id),
         tab: desc.tab || null,
         label: labelHint || _stackDefaultLabel(desc)
@@ -7860,7 +7880,13 @@ document.addEventListener('keydown', (e) => {
       e.target.blur();
       return;
     }
-    closeDetail();
+    // Phase 4C: Esc zooms OUT one level (detailBack ascends the 4A stack; at
+    // depth 1 it closes). Falls back to a plain close when the panel is shut.
+    if (typeof _routeDetailIsOpen === 'function' && _routeDetailIsOpen() && typeof detailBack === 'function') {
+      detailBack();
+    } else {
+      closeDetail();
+    }
     closeLogCall();
     if (typeof closeLogReschedule === 'function') closeLogReschedule();
     if (typeof closeAssignModal === 'function') closeAssignModal();

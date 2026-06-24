@@ -2659,6 +2659,7 @@ function _udTabRentRoll() {
   const leasesForRoll = leases.length > 0 ? leases : [{}];
   let html = '';
   const property = _udCache.property || {};
+  const _rrDb = _udCache.db;   // Phase 4C — for the per-lease drill link
 
   // ── Group leases by tenant (parent_lease_id chain) ─────────────────────
   // A "chain" is the original lease + all extensions/renewals that share a
@@ -2729,6 +2730,13 @@ function _udTabRentRoll() {
       html += ' <span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--red);color:#fff;font-weight:600;margin-left:6px">Expired</span>';
     }
     html += '</div>';
+    // Phase 4C Unit 2 — zoom into a focused lease sub-detail (full terms,
+    // escalations, guarantor, source) on the 4A back-stack.
+    if (_rrDb && activeTerm && activeTerm.lease_id != null) {
+      const _lid = String(activeTerm.lease_id);
+      const _encLid = encodeURIComponent(_lid);
+      html += `<a href="javascript:void(0)" class="ud-zoom-link" tabindex="0" data-zoom="lease:${esc(_rrDb)}:${esc(_lid)}" onclick="openSubDetail('lease','${esc(_rrDb)}',decodeURIComponent('${_encLid}'))" style="font-size:11px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap" title="Open lease detail">Open ↗</a>`;
+    }
     if (activeTerm.guarantor || em.guarantor) {
       html += `<div class="t-meta3">Guarantor: <span class="t-body">${esc(activeTerm.guarantor || em.guarantor)}</span></div>`;
     }
@@ -7913,6 +7921,62 @@ function _salesBuildTimeline(listings, txns) {
   return events;
 }
 
+// UI Phase 4C Unit 1 — uniform "View source ↗" affordance for a sub-record row
+// (sale / lease / listing / deed / document). Surfaces ONLY sources already
+// present ON the record — never fabricates a URL — and returns '' when there is
+// no real source, so a dead "View source" button never renders. Each link
+// stops propagation so it never triggers a row-level drill (Unit 2).
+//   • intake_artifact_path → openIntakeArtifact (1-hour signed download)
+//   • source_url / listing_url / url / deed_url / document_url / tracked_urls[0]
+//     → external doc / listing page in a new tab
+//   • a Salesforce Account id on the record → SF Lightning deep-link
+function _udSourceLink(record) {
+  if (!record) return '';
+  const linkStyle = 'font-size:11px;color:var(--accent);text-decoration:none;white-space:nowrap';
+  const stop = 'event.stopPropagation()';
+  const links = [];
+
+  // 1) Staged artifact (OM / flyer / lease PDF).
+  const artifact = record.intake_artifact_path || null;
+  if (artifact && typeof openIntakeArtifact === 'function') {
+    const label = record.intake_artifact_type === 'flyer' ? 'Flyer'
+      : record.intake_artifact_type === 'marketing_brochure' ? 'Brochure'
+      : record.intake_artifact_type === 'lease' ? 'Lease doc'
+      : 'Source doc';
+    links.push(`<a href="javascript:void(0)" onclick="${stop};openIntakeArtifact(${JSON.stringify(artifact).replace(/"/g, '&quot;')})" style="${linkStyle}" title="Open the staged document (1-hour signed link)">📄 ${esc(label)} ↗</a>`);
+  }
+
+  // 2) First real https document / listing / deed URL on the record.
+  const urlCandidates = [];
+  ['source_url', 'listing_url', 'url', 'deed_url', 'document_url', 'costar_url', 'page_url'].forEach(f => {
+    if (record[f]) urlCandidates.push(record[f]);
+  });
+  if (Array.isArray(record.tracked_urls)) urlCandidates.push(...record.tracked_urls);
+  let firstUrl = null;
+  for (const u of urlCandidates) {
+    if (u && /^https?:\/\//i.test(String(u).trim())) { firstUrl = String(u).trim(); break; }
+  }
+  if (firstUrl) {
+    let host = '';
+    try { host = new URL(firstUrl).hostname.replace(/^www\./, ''); } catch (_) { /* */ }
+    const label = host.includes('crexi') ? 'Crexi'
+      : host.includes('loopnet') ? 'LoopNet'
+      : host.includes('costar') ? 'CoStar'
+      : host.includes('sharepoint') ? 'SharePoint'
+      : (host || 'Source');
+    links.push(`<a href="${safeHref(firstUrl)}" target="_blank" rel="noopener noreferrer" onclick="${stop}" style="${linkStyle}" title="${esc(firstUrl)}">🔗 ${esc(label)} ↗</a>`);
+  }
+
+  // 3) Salesforce Account deep-link, when an id is already on the record.
+  const sfAcct = record.sf_account_id || record.sf_company_id || record.salesforce_id || null;
+  if (sfAcct && typeof _SF_BASE === 'string') {
+    links.push(`<a href="${_SF_BASE}/Account/${encodeURIComponent(sfAcct)}/view" target="_blank" rel="noopener noreferrer" onclick="${stop}" style="font-size:11px;color:#00a1e0;text-decoration:none;white-space:nowrap" title="Open in Salesforce">☁ Salesforce ↗</a>`);
+  }
+
+  if (!links.length) return '';
+  return `<span class="ud-source-links" style="display:inline-flex;gap:12px;flex-wrap:wrap;align-items:center">${links.join('')}</span>`;
+}
+
 function _salesRenderListing(l) {
   const status = _salesListingStatus(l, null);
   const autoClosed = _salesListingAutoClosedAgainstPriorSale(l);
@@ -8023,6 +8087,9 @@ function _salesRenderSale(s) {
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
+  // Phase 4C Unit 1 — open the actual source doc/record when one is on file.
+  const _srcLink = _udSourceLink(s);
+  if (_srcLink) html += `<div style="margin-top:6px">${_srcLink}</div>`;
   html += _dhRenderNotesOrDup(s);
 
   return html;
@@ -8151,6 +8218,9 @@ function _salesRenderCombined(l, s) {
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
+  // Phase 4C Unit 1 — source doc/record from the sale, else the listing.
+  const _srcLinkC = _udSourceLink(s) || _udSourceLink(l);
+  if (_srcLinkC) html += `<div style="margin-top:6px">${_srcLinkC}</div>`;
   // Render sale notes (Tier 6 dedup applies). When the sale has no notes but
   // the listing does (rare on combined cards), surface those instead.
   if (s.notes) {
@@ -8469,6 +8539,13 @@ function _udTabDealHistory() {
       if (ev.listing && ev.sale) html += _udDealRenderCombined(ev.listing, ev.sale);
       else if (ev.sale) html += _udDealRenderSale(ev.sale);
       else if (ev.listing) html += _udDealRenderListing(ev.listing);
+      // Phase 4C Unit 2 — a sale row zooms into a focused sale sub-detail
+      // (parties, price, cap-rate provenance, source) on the 4A back-stack.
+      if (ev.sale && db && (ev.sale.sale_id != null || ev.sale.id != null)) {
+        const _sid = String(ev.sale.sale_id != null ? ev.sale.sale_id : ev.sale.id);
+        const _encSid = encodeURIComponent(_sid);
+        html += `<div style="margin-top:10px;text-align:right"><a href="javascript:void(0)" class="ud-zoom-link" tabindex="0" data-zoom="sale:${esc(db)}:${esc(_sid)}" onclick="openSubDetail('sale','${esc(db)}',decodeURIComponent('${_encSid}'))" style="font-size:11px;font-weight:600;color:var(--accent);text-decoration:none" title="Open sale detail">Open detail ↗</a></div>`;
+      }
     } else {
       html += _udDealRenderOwnership(ev.chain, db, ev.isCurrent === true);
     }
@@ -11901,6 +11978,197 @@ window._udBtnGuard = _udBtnGuard;
 window._udActionBtnGuard = _udActionBtnGuard;
 window.openUnifiedDetail = openUnifiedDetail;
 window.switchUnifiedTab = switchUnifiedTab;
+
+// ============================================================
+// UI Phase 4C — sub-record drill (lease / sale) on the 4A back-stack
+// ============================================================
+// A focused, read-only view of one lease or sale, opened from a Rent Roll lease
+// row or a Deal History sale row. It rides the SAME hash + back-stack substrate
+// as property/entity details: opening PUSHes a `?d=sub:<kind>:<db>:<id>` history
+// entry, "← Back" / the breadcrumb ascend to the parent property, and the iOS
+// back-gesture pops one level (history.back → applyRoute reconciles). The record
+// is resolved from the parent's in-memory caches when drilled in-app (no fetch);
+// a cold deep-link best-effort fetches it. The parent `_udCache` is left intact
+// so ascending re-renders the property without a reload.
+
+function _udSubResolveFromCache(kind, db, id) {
+  const sid = String(id);
+  if (kind === 'lease') {
+    const leases = (_udCache && Array.isArray(_udCache.leases)) ? _udCache.leases : [];
+    return leases.find(l => l && String(l.lease_id) === sid) || null;
+  }
+  if (kind === 'sale') {
+    const txns = (typeof _salesCache !== 'undefined' && _salesCache && Array.isArray(_salesCache.transactions))
+      ? _salesCache.transactions : [];
+    return txns.find(s => s && String(s.sale_id != null ? s.sale_id : s.id) === sid) || null;
+  }
+  return null;
+}
+
+async function _udSubFetch(kind, db, id) {
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+  const enc = encodeURIComponent(id);
+  if (kind === 'lease') {
+    const r = await qFn('v_lease_detail', '*', { filter: `lease_id=eq.${enc}`, limit: 1 });
+    const arr = Array.isArray(r) ? r : (r && r.data) || [];
+    return arr[0] || null;
+  }
+  if (kind === 'sale') {
+    let r = await qFn('sales_transactions', '*', { filter: `sale_id=eq.${enc}`, limit: 1 }).catch(() => null);
+    let arr = Array.isArray(r) ? r : (r && r.data) || [];
+    if (!arr.length) {
+      r = await qFn('property_sale_events', '*', { filter: `id=eq.${enc}`, limit: 1 }).catch(() => null);
+      arr = Array.isArray(r) ? r : (r && r.data) || [];
+    }
+    return arr[0] || null;
+  }
+  return null;
+}
+
+function _udSubLabel(kind, rec, id) {
+  if (kind === 'lease') {
+    const t = rec && (rec.tenant || rec.tenant_name);
+    return t ? 'Lease — ' + t : 'Lease ' + id;
+  }
+  if (kind === 'sale') {
+    const d = rec && rec.sale_date ? _fmtDate(rec.sale_date) : null;
+    const p = rec ? (rec.price != null ? rec.price : (rec.sold_price != null ? rec.sold_price : rec.sale_price)) : null;
+    if (p != null) return 'Sale — ' + fmt(p) + (d ? ' · ' + d : '');
+    return d ? 'Sale — ' + d : 'Sale ' + id;
+  }
+  return String(id);
+}
+
+function _udRenderLeaseSubDetail(l, db) {
+  const em = (_udCache && _udCache.entityMeta) || {};
+  let html = '<div class="detail-section"><div class="detail-section-title">Lease Terms</div><div class="detail-grid">';
+  html += _row('Tenant', l.tenant || l.tenant_name || em.tenant_name);
+  html += _row('Commencement', _fmtDate(l.lease_start || l.lease_commencement || em.lease_commencement));
+  html += _row('Expiration', _fmtDate(l.lease_expiration || em.lease_expiration));
+  if (l.term_remaining_years != null) {
+    const n = Number(l.term_remaining_years);
+    html += _udLeaseRowH('Term Remaining', n < 0 ? '<span style="color:var(--red)">Expired</span>' : esc(n.toFixed(1) + ' yrs remaining'));
+  } else {
+    const tr = termRemaining(l.lease_expiration || em.lease_expiration);
+    if (tr) html += _udLeaseRowH('Term Remaining', tr === 'Expired' ? '<span style="color:var(--red)">Expired</span>' : esc(tr));
+  }
+  html += _rowMoney('Annual Rent', l.annual_rent != null ? l.annual_rent : em.annual_rent);
+  html += _rowMoney('Rent / SF', l.rent_psf != null ? l.rent_psf : em.rent_per_sf);
+  html += _row('Expense Structure', l.expense_structure || em.expense_structure);
+  html += _row('Renewal Options', l.renewal_options || em.renewal_options);
+  html += _row('Guarantor', l.guarantor || em.guarantor);
+  html += _row('Guarantor Type', l.guarantor_type);
+  const escVal = (l.rent_cagr != null) ? esc((Number(l.rent_cagr) * 100).toFixed(2) + '%')
+    : (em.rent_escalations ? esc(String(em.rent_escalations)) : null);
+  html += _udLeaseRowH('Escalations', escVal);
+  html += _row('Initial Term', l.initial_term_years ? Number(l.initial_term_years).toFixed(1) + ' yrs' : null);
+  html += _row('Total Term', l.total_term_years ? Number(l.total_term_years).toFixed(1) + ' yrs' : null);
+  html += _row('Termination', _fmtDate(l.termination_date));
+  html += _row('Data Source', l.data_source);
+  html += '</div></div>';
+  const srcLink = _udSourceLink(l);
+  if (srcLink) html += `<div class="detail-section"><div class="detail-section-title">Source Document</div>${srcLink}</div>`;
+  return html;
+}
+
+function _udRenderSaleSubDetail(s, db) {
+  // Reuse the entity-linked sale card (buyer/seller/broker become links).
+  let html = '<div class="detail-section">';
+  html += (typeof _udDealRenderSale === 'function') ? _udDealRenderSale(s) : _salesRenderSale(s);
+  html += '</div>';
+
+  // Cap-rate provenance (R59 / 76ek): quality + the NOI source table.
+  const quality = s.cap_rate_quality || null;
+  const noiTable = s.cap_rate_noi_source_table || null;
+  if (quality || noiTable) {
+    html += '<div class="detail-section"><div class="detail-section-title">Cap-Rate Provenance</div><div class="detail-grid">';
+    if (quality) html += _row('Quality', quality);
+    if (noiTable) html += _row('NOI Source', noiTable);
+    html += '</div></div>';
+  }
+
+  const srcLink = _udSourceLink(s);
+  if (srcLink) html += `<div class="detail-section"><div class="detail-section-title">Source Document</div>${srcLink}</div>`;
+  return html;
+}
+
+async function openSubDetail(recordKind, db, id, record) {
+  if (db === 'dialysis') db = 'dia';
+  if (db === 'government') db = 'gov';
+  if (!recordKind || id == null || id === '') return;
+
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+  if (!panel || !overlay || !bodyEl) return;
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  // Resolve from the parent's caches first (drill-in-app — no fetch).
+  let rec = record || _udSubResolveFromCache(recordKind, db, id);
+  const label0 = _udSubLabel(recordKind, rec, id);
+
+  if (headerEl) headerEl.innerHTML = `
+    <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
+    <div class="detail-header-info">
+      <div style="flex:1;min-width:0">
+        <div class="detail-title" id="udSubTitle">${esc(label0)}</div>
+        <div class="detail-subtitle">${recordKind === 'lease' ? 'Lease detail' : 'Sale detail'}</div>
+      </div>
+      <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
+    </div>
+    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+  if (tabsEl) tabsEl.innerHTML = '';   // a sub-detail is a single focused view — no tab bar
+
+  // Hash PUSH + back-stack reconcile (one stack level == one ?d= history entry).
+  if (typeof _routeSetDetailHash === 'function') {
+    _routeSetDetailHash({ kind: 'sub', recordKind, db, id: String(id) });
+  }
+  if (typeof _detailStackSync === 'function') {
+    _detailStackSync({ kind: 'sub', recordKind, db, id: String(id) }, label0);
+  }
+
+  if (rec) {
+    bodyEl.innerHTML = recordKind === 'lease' ? _udRenderLeaseSubDetail(rec, db) : _udRenderSaleSubDetail(rec, db);
+    return;
+  }
+
+  // Cold deep-link: best-effort fetch (the top descriptor is all the hash carries).
+  bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading…</p></div>';
+  try { rec = await _udSubFetch(recordKind, db, id); } catch (_) { rec = null; }
+  if (rec) {
+    const label1 = _udSubLabel(recordKind, rec, id);
+    const titleEl = document.getElementById('udSubTitle');
+    if (titleEl) titleEl.textContent = label1;
+    if (typeof _detailStackSetLabel === 'function') {
+      _detailStackSetLabel({ kind: 'sub', recordKind, db, id: String(id) }, label1);
+    }
+    bodyEl.innerHTML = recordKind === 'lease' ? _udRenderLeaseSubDetail(rec, db) : _udRenderSaleSubDetail(rec, db);
+  } else {
+    bodyEl.innerHTML = `<div class="detail-empty" style="padding:36px;text-align:center">
+      <div style="font-size:14px;color:var(--text2);margin-bottom:8px">This ${esc(recordKind)} isn't loaded.</div>
+      <div style="font-size:12px;color:var(--text3)">Open it from its property's ${recordKind === 'lease' ? 'Rent Roll' : 'Deal History'} tab.</div>
+    </div>`;
+  }
+}
+window.openSubDetail = openSubDetail;
+
+// Phase 4C Unit 3 — keyboard zoom-in: Enter/Space on a focused drill row opens
+// its sub-detail (mirrors the owner/tenant-link keyboard pattern). Esc (zoom-out)
+// is handled by the global Escape→detailBack handler in app.js.
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target && e.target.closest && e.target.closest('.ud-zoom-link[data-zoom]');
+  if (!el) return;
+  e.preventDefault();
+  try {
+    const parts = String(el.getAttribute('data-zoom') || '').split(':');
+    if (parts.length >= 3) openSubDetail(parts[0], parts[1], parts.slice(2).join(':'));
+  } catch (_) { /* ignore */ }
+});
+
 window.showUnifiedDetail = showUnifiedDetail;
 window.refreshDetailPanel = refreshDetailPanel;
 window._udSubmitLogCall = _udSubmitLogCall;
