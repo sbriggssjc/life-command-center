@@ -44,6 +44,7 @@ import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceCont
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
 import { deriveListingDate } from '../_shared/listing-date.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
+import { deriveOperatorFromTenant } from '../_shared/operator-normalize.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
@@ -684,7 +685,7 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
     'dialysis',
     'GET',
     `properties?property_id=eq.${Number(propertyId)}` +
-    `&select=tenant,year_built,lot_sf,building_size,land_area,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source,parcel_number&limit=1`
+    `&select=tenant,operator,year_built,lot_sf,building_size,land_area,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source,parcel_number&limit=1`
   );
   if (!existing.ok || !Array.isArray(existing.data) || !existing.data.length) {
     return { ok: false, skipped: 'property_not_found', property_id: propertyId };
@@ -703,6 +704,21 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
   const tenantStr = canonicalizeTenant(String(tenantRaw).trim());
   if ((current.tenant == null || current.tenant === '') && tenantStr.length >= 2 && tenantStr.length < 200) {
     patch.tenant = tenantStr;
+  }
+
+  // operator — derive the canonical dialysis operator from the tenant string
+  // (the same deterministic alias map used by the one-time fill-blanks backfill;
+  // single source = api/_shared/operator-normalize.js). Fill-blanks only, and
+  // ONLY when the tenant matches a known dialysis-operator family — a
+  // non-dialysis tenant can never be force-assigned a dialysis operator. Derive
+  // off the patched tenant when we just filled it, else the existing tenant.
+  if (current.operator == null || current.operator === '') {
+    const opTenant = patch.tenant || current.tenant;
+    const { operator, status } = deriveOperatorFromTenant(opTenant);
+    if (status === 'matched' && operator) {
+      patch.operator = operator;
+      patch.operator_status = 'tenant_derived';
+    }
   }
 
   // year_built — only fill if NULL, range-validate
