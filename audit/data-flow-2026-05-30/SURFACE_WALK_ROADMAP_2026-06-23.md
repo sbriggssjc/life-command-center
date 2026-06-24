@@ -15,6 +15,32 @@ Research-workbench findings into one sequenced plan.
   NOT cold-deep-linkable yet (no stable id in the token) — they open normally in-app; revisit if
   needed (give clinics a stable token) during Phase 4 zoom wiring. Substrate is ready for the
   Phase-4 lateral back-stack + breadcrumb.
+- **Phase 4 Slice 4A (back-stack + breadcrumb) — ✅ DONE / VERIFIED LIVE 2026-06-23** (branch
+  claude/festive-feynman-x6zn64). The core zoom bug is fixed: in-panel **"← Back" now ascends one
+  level** instead of exiting. Verified live: open property A → open property B (lateral push) →
+  breadcrumb shows "DaVita Deltona › Farmington Dialysis" with a ←Back control; `detailBack()`
+  pops B→A (title returns, panel stays open); `×` closes fully; breadcrumb hidden at depth 1; hash
+  reconciles to the popped level (`?d=prop:dia:24703:Overview`). Rides the Phase-1 history/hash
+  substrate (1 stack level = 1 history entry; `_detailStack` in app.js; `applyRoute` reconciles).
+  Also fixed a pre-existing detail.js tail corruption (branch-local; deployed main was already
+  clean — verified). **4B (entity-detail parity) + 4C (sub-record drill + next-action everywhere)
+  remain.** *Cache-busting — checked, already correct (NO fix needed):* server.js rewrites
+  index.html asset refs to `?v=${DEPLOY_VERSION}` where DEPLOY_VERSION = `RAILWAY_GIT_COMMIT_SHA`
+  prefix (deploy-unique); index.html is `no-cache, must-revalidate`. Verified live — page loaded
+  `detail.js?v=a6ff7b09ac42` matching the freshly-served index.html token, with 4A code present.
+  The recurring live-verify staleness was **deploy-rollover timing** (checking in the seconds
+  after "redeploy is live," before the new token reached my tab), not a missing mechanism.
+- **Phase 4 Slice 4B (entity/owner detail parity) — ✅ DONE / VERIFIED LIVE 2026-06-23** (PR #1322).
+  Verified on SMBC Leasing & Finance Inc: opens the **tabbed property-detail shell** (Overview ·
+  Portfolio · Contacts · Activity, ENTITY badge); Portfolio sourced from the authoritative
+  `lcc_entity_portfolio_facts` (**126 properties / $16M rent**, real per-property rows w/
+  operator+domain+rent, all clickable push targets) — replaces the old fuzzy `true_owner ilike`
+  name-match (new `?action=portfolio` sub-route on entities-handler, no new api/*.js); completeness
+  rail (**✓ Contact ✓ Portfolio value**) + **Next-Step** reading `v_priority_queue_enriched`
+  ("Recent Acquisition Streak: 12 — BD priority", SMBC's real band); entity hash token carries a
+  tab segment (`entity:<id>:<tab>`). Owner is now a first-class zoom object on the 4A stack.
+  (Final owner→property push click untested — Chrome connection dropped mid-check — but portfolio
+  rows confirmed clickable + 4A push mechanic already verified; low risk.) **4C remains.**
 - **Phase 2 (overview parity):** ⏳ **SHIPPED, ONE BLOCKER 2026-06-23.** Code + data verified
   live: served + running `renderDiaOverview` contains the new value blocks (Portfolio at a
   Glance, Lease Expiration Risk, Operator Breakdown); the dia MV `mv_dia_overview_stats` is live
