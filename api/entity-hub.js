@@ -76,7 +76,8 @@ export default async function handler(req, res) {
 
   const entityActions = new Set([
     'search', 'duplicates', 'quality', 'quality_details',
-    'link', 'add_alias', 'set_precedence', 'process_sidebar_extraction'
+    'link', 'add_alias', 'set_precedence', 'process_sidebar_extraction',
+    'portfolio', 'owner_worklist'
   ]);
 
   if (contactActions.has(action)) {

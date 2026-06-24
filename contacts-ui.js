@@ -38,8 +38,16 @@ let _cui = {
   mergeQueueTotal: 0,
   // Data quality
   dataQuality: null,
-  // Sub-tab
-  subTab: 'list'  // 'list' | 'hot_leads' | 'merge_queue' | 'data_quality'
+  // UI Phase 5 — "Owners Missing a Contact" BD worklist
+  worklist: [],
+  worklistActionable: 0,
+  worklistUniverse: 0,
+  worklistMinValue: 1000000,   // default to the workable ≥$1M set; toggle = show all
+  worklistLimit: 50,
+  worklistLoading: false,
+  worklistLoaded: false,
+  // Sub-tab — the page LEADS with the owner BD worklist (its primary job)
+  subTab: 'worklist'  // 'worklist' | 'list' | 'hot_leads' | 'merge_queue' | 'data_quality'
 };
 
 // ---- API helpers ----
@@ -61,7 +69,13 @@ async function contactsApi(method, action, params = {}, body = null) {
 
 // ---- Main page render ----
 function renderContactsPage() {
-  if (!_cui.loaded && !_cui.loading) {
+  // The worklist tab loads from a different endpoint than the contacts list.
+  if (_cui.subTab === 'worklist') {
+    if (!_cui.worklistLoaded && !_cui.worklistLoading) {
+      loadOwnersWorklist();
+      return; // loadOwnersWorklist re-renders when done
+    }
+  } else if (!_cui.loaded && !_cui.loading) {
     loadContactsList();
     return; // loadContactsList will call renderContactsPage when done
   }
@@ -71,18 +85,23 @@ function renderContactsPage() {
   bindContactsEvents();
 }
 
-function buildContactsPage() {
-  let h = '';
-
-  // Sub-tab bar
-  h += '<div class="uc-tabs">';
+// Single source of truth for the sub-tab bar (reused by the spinner states).
+function ucTabsBar() {
+  let h = '<div class="uc-tabs">';
+  h += ucTab('worklist', 'Owners Missing a Contact');
   h += ucTab('list', 'All Contacts');
   h += ucTab('hot_leads', 'Hot Leads');
   h += ucTab('merge_queue', 'Merge Queue');
   h += ucTab('data_quality', 'Data Quality');
   h += '</div>';
+  return h;
+}
+
+function buildContactsPage() {
+  let h = ucTabsBar();
 
   switch (_cui.subTab) {
+    case 'worklist':   h += buildOwnersWorklist(); break;
     case 'list':       h += buildContactsList(); break;
     case 'hot_leads':  h += buildContactsList(); break;
     case 'merge_queue': h += buildMergeQueue(); break;
@@ -99,6 +118,7 @@ function ucTab(id, label) {
 
 function switchContactsTab(tab) {
   _cui.subTab = tab;
+  if (tab === 'worklist' && !_cui.worklistLoaded) loadOwnersWorklist();
   if (tab === 'merge_queue' && _cui.mergeQueue.length === 0) loadMergeQueue();
   if (tab === 'data_quality' && !_cui.dataQuality) loadDataQuality();
   if (tab === 'hot_leads' && _cui.orderBy !== 'engagement_score.desc') {
@@ -114,6 +134,136 @@ function switchContactsTab(tab) {
   }
   renderContactsPage();
 }
+
+// ============================================================
+// OWNERS MISSING A CONTACT — value-ranked BD worklist (UI Phase 5)
+//
+// Surfaces valued owners (current portfolio rollup rent > 0) with no one to call
+// (no linked person, no Salesforce Contact). Value-gated, value-ranked, capped,
+// honest counts. Each row opens the 4B owner detail Contacts tab where the
+// EXISTING CONTACT-SELECTION picker (acquire CTA) lives — no duplicate engine.
+// Acquiring/linking a contact retires the owner from the worklist (the view
+// drops it on the next read).
+// ============================================================
+
+async function loadOwnersWorklist() {
+  _cui.worklistLoading = true;
+  const el = document.getElementById('contactsContent');
+  if (el) el.innerHTML = ucTabsBar() + '<div class="loading"><span class="spinner"></span></div>';
+  try {
+    const params = { action: 'owner_worklist', limit: _cui.worklistLimit };
+    if (_cui.worklistMinValue > 0) params.min_value = _cui.worklistMinValue;
+    const qs = new URLSearchParams(params).toString();
+    const opts = { headers: { 'Content-Type': 'application/json' } };
+    if (LCC_USER.workspace_id) opts.headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const res = await fetch(`/api/entities?${qs}`, opts);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    const data = await res.json();
+    _cui.worklist = data.rows || [];
+    _cui.worklistActionable = data.actionable_count || 0;
+    _cui.worklistUniverse = data.universe_count || 0;
+    _cui.worklistLoaded = true;
+  } catch (e) {
+    console.error('Failed to load owner worklist:', e);
+    if (typeof showToast === 'function') showToast('Failed to load worklist: ' + e.message, 'error');
+    _cui.worklist = [];
+  }
+  _cui.worklistLoading = false;
+  renderContactsPage();
+}
+
+function buildOwnersWorklist() {
+  const showingAll = _cui.worklistMinValue <= 0;
+  let h = '';
+
+  // Header + honest counts + scope toggle
+  h += '<div class="uc-filters">';
+  h += `<div class="uc-section-header" style="margin:0 0 4px">Owners Missing a Contact</div>`;
+  h += `<div class="uc-card-meta" style="margin-bottom:8px">Valued owners with no one to call — value-ranked. Open one to pick a contact; that retires the row.</div>`;
+  h += '<div class="uc-filter-row">';
+  const label = showingAll ? 'owners need a contact' : 'valued owners ≥ $1M need a contact';
+  const total = _cui.worklistUniverse ? ` · ${_cui.worklistUniverse.toLocaleString()} total contactless` : '';
+  h += `<span class="uc-count">${(_cui.worklistActionable || 0).toLocaleString()} ${label}${total}</span>`;
+  h += `<button class="btn-cancel" onclick="toggleWorklistScope()">${showingAll ? 'Show ≥ $1M only' : 'Show all'}</button>`;
+  h += '</div></div>';
+
+  if (_cui.worklistLoading) {
+    h += '<div class="loading"><span class="spinner"></span></div>';
+    return h;
+  }
+  if (_cui.worklist.length === 0) {
+    h += '<div class="uc-empty">No owners missing a contact in this range.</div>';
+    return h;
+  }
+
+  h += '<div class="uc-list">';
+  _cui.worklist.forEach(o => { h += buildWorklistCard(o); });
+  h += '</div>';
+
+  if (_cui.worklist.length < (_cui.worklistActionable || 0)) {
+    h += `<div class="uc-pagination"><span>Showing top ${_cui.worklist.length} of ${(_cui.worklistActionable || 0).toLocaleString()}</span></div>`;
+  }
+  return h;
+}
+
+function buildWorklistCard(o) {
+  const val = (o.rank_value != null && Number(o.rank_value) > 0)
+    ? '$' + Math.round(Number(o.rank_value)).toLocaleString() : '—';
+  const pc = Number(o.property_count) || 0;
+  const props = pc ? `${pc} propert${pc === 1 ? 'y' : 'ies'}` : '';
+  const dom = (o.primary_domain || '').toUpperCase();
+  const xv = o.is_cross_vertical ? 'cross-vertical' : '';
+  const meta = [dom, xv, props].filter(Boolean).join(' · ');
+  return `<div class="uc-card" onclick="openWorklistOwner(decodeURIComponent('${encodeURIComponent(o.entity_id)}'))">
+    <div class="uc-card-center">
+      <div class="uc-card-name">${esc(o.owner_name || 'Unnamed owner')}</div>
+      <div class="uc-card-meta">${esc(meta)}</div>
+      <div class="uc-card-badges">${worklistHint(o)}</div>
+    </div>
+    <div class="uc-card-right">
+      <div class="uc-score uc-heat-hot">${val}</div>
+      <div class="uc-card-activity">portfolio value</div>
+    </div>
+  </div>`;
+}
+
+function worklistHint(o) {
+  const map = {
+    sos_manager_lookup: 'SOS manager lookup',
+    address_reverse_lookup: 'Address reverse lookup',
+    public_company_ir: 'Public-company IR',
+    find_person_at_manager: 'Find person at manager',
+    parse_deed_signatory: 'Deed signatory',
+    manual_research: 'Manual research'
+  };
+  const a = o.enrichment_action;
+  const label = (a && map[a]) ? map[a] : 'Select contact →';
+  const title = (a && map[a]) ? 'Suggested enrichment' : 'Open to acquire a contact';
+  return `<span class="uc-src-badge" style="background:var(--accent);color:#fff" title="${esc(title)}">${esc(label)}</span>`;
+}
+
+// Open the 4B owner detail on the Contacts tab — where the existing
+// CONTACT-SELECTION acquire CTA lives. Mark the worklist stale so it re-reads
+// (and retires the row) when the operator returns.
+function openWorklistOwner(entityId) {
+  _cui.worklistLoaded = false;
+  if (typeof openEntityDetail === 'function') {
+    openEntityDetail(entityId, 'Contacts');
+  } else if (typeof showToast === 'function') {
+    showToast('Owner detail is unavailable here', 'error');
+  }
+}
+if (typeof window !== 'undefined') window.openWorklistOwner = openWorklistOwner;
+
+function toggleWorklistScope() {
+  _cui.worklistMinValue = _cui.worklistMinValue > 0 ? 0 : 1000000;
+  _cui.worklistLoaded = false;
+  loadOwnersWorklist();
+}
+if (typeof window !== 'undefined') window.toggleWorklistScope = toggleWorklistScope;
 
 // ============================================================
 // CONTACTS LIST
@@ -293,7 +443,7 @@ async function loadContactsList() {
   _cui.loading = true;
   // Show spinner without re-entering renderContactsPage
   const el = document.getElementById('contactsContent');
-  if (el) el.innerHTML = '<div class="uc-tabs">' + ucTab('list', 'All Contacts') + ucTab('hot_leads', 'Hot Leads') + ucTab('merge_queue', 'Merge Queue') + ucTab('data_quality', 'Data Quality') + '</div><div class="loading"><span class="spinner"></span></div>';
+  if (el) el.innerHTML = ucTabsBar() + '<div class="loading"><span class="spinner"></span></div>';
   try {
     const params = {
       contact_class: _cui.classFilter,

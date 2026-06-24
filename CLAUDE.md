@@ -5180,3 +5180,76 @@ renders the ownership panel; gov "Properties" lists properties value-first; gov
 "Activity" shows the outreach feed; gov "GSA / FRPP Intel" renders the intel
 section; gov "Leads" (was Pipeline) renders the scored-lead pipeline; Unit 0 lease
 count reads ~3,035 consistently + recent-sale rows show a pointer cursor.
+
+## UI Phase 5 — "Owners Missing a Contact" value-ranked BD worklist (2026-06-24)
+
+The #1 direct-BD gap: the BD spine is owner-centric, but valued owners with NO
+human to call were surfaced nowhere as a ranked worklist. P-CONTACT only covers
+cadence-bearing contactless owners; `v_owner_active_contact` only the
+bridged-with-domain-signals slice — the big value-bearing middle (valued owner,
+no cadence, no contact) was invisible. Grounded live 2026-06-24: **3,826 owners
+with a current portfolio rollup rent > 0 carry no linked person AND no Salesforce
+Contact; 507 of those ≥ $1M.** After the honest exclusions the clean worklist is
+**3,521 (358 ≥ $1M)**. **Floating persons = 12** (R39/R40 dedup + entity-link
+solved the audit's ~4,447) — NOT a Phase-5 workstream. The acquisition engine
+already exists (the CONTACT-SELECTION picker + the owner-contact-enrich worker) —
+Phase 5 adds the **value-ranked worklist VIEW + the operator SURFACE**, not new
+acquisition logic. Consumption-Layer doctrine throughout. Client + one additive
+LCC-Opps view; no new api/*.js (≤12).
+
+### Unit 1 — the worklist view (LCC Opps, additive, applied live)
+`v_owner_contact_worklist` (migration
+`20260721130000_lcc_phase5_owner_contact_worklist.sql`, SECURITY INVOKER,
+read-only): one row per contactless valued owner.
+- **value-GATE:** `v_entity_portfolio_all.current_annual_rent_total > 0`.
+- **contactless:** NO `entity_relationships` edge to a `person` entity via
+  `associated_with`/`contact_at`/`works_at` AND no
+  `external_identities(salesforce, Contact)`.
+- **rank_value** = `COALESCE(NULLIF(rollup,0), lcc_entity_connected_value)` (R34
+  value sources); ordered `rank_value DESC NULLS LAST`. Carries `property_count`,
+  `primary_domain`/`is_cross_vertical`, `enrichment_action` + `bench_size`
+  (LEFT JOIN `v_owner_active_contact` — the CONTACT-SELECTION hint when the owner
+  is bridged with domain signals; NULL ⇒ acquire/research).
+- **Exclusions (honest worklist):** `lcc_is_operator_owner_name` (the R8
+  operator-as-owner artifact), `metadata.junk_name_flagged`, and **buyer-SPE /
+  buyer-parent** (`lcc_buyer_spe_resolved` / `lcc_buyer_parents` — they run the
+  P-BUYER buy-side flow, not prospecting). So the worklist does NOT carry an
+  `is_buyer_parent` column — those rows are excluded outright (the P-BUYER lane
+  is their surface), which is why the column the prompt listed is intentionally
+  absent.
+- **Auto-retire is structural** (a view): an owner that gains a person link / SF
+  Contact drops out on the next read — no sweep needed. Drop the view → zero trace.
+
+### Unit 2 + 3 — the surface + the action (client only)
+- **Read endpoint:** `GET /api/entities?action=owner_worklist[&min_value=&limit=&offset=]`
+  (`entities-handler.js`, the LCC-Opps/`opsQuery` reader, workspace-scoped) →
+  `{rows, actionable_count, universe_count, min_value, limit, offset}`. Defaults to
+  the workable high-value set; returns BOTH the filtered actionable count and the
+  full clean universe so the surface shows an honest "X of N" (Consumption-Layer).
+  `owner_worklist` added to entity-hub's `entityActions` set.
+- **Surface:** `contacts-ui.js` — the Contacts/Entities page now LEADS with an
+  **"Owners Missing a Contact"** tab (`subTab` default `'worklist'`); the existing
+  All Contacts / Hot Leads / Merge Queue / Data Quality become secondary tabs.
+  Each row: owner name · domain · property count · the enrichment hint · value
+  (rank_value). Defaults to **≥ $1M** with a **"Show all"** toggle; the headline
+  count is actionable (e.g. "358 valued owners ≥ $1M need a contact · 3,521 total
+  contactless"), NEVER the raw producer output.
+- **Action (no duplicate engine):** a row click → `openEntityDetail(entity_id,
+  'Contacts')` — the 4B owner detail Contacts tab, where the EXISTING
+  CONTACT-SELECTION acquire CTA (`?action=buyer_contacts` →
+  `select_prospecting_contact`) already lives. Acquiring/linking a contact retires
+  the row (the Unit-1 view drops it on the next read; `openWorklistOwner` marks the
+  worklist stale so the revisit re-reads). The `enrichment_action` hint surfaces
+  the suggested next step (sos_manager_lookup / address_reverse_lookup /
+  public_company_ir / …) where the owner-contact-enrich worker handles it.
+
+### Verified (2026-06-24)
+View applied live (universe 3,521 / ≥$1M 358 / 37 with an enrichment hint); top
+rows are real high-value contactless owners (Cira Square Master Tenant $34.4M,
+LCPC Pentagon $34.3M, Two Independence Hana $29.5M …) with `rank_value` matching
+`v_entity_portfolio_all`. `node --check` clean (entities-handler, entity-hub,
+contacts-ui); `ls api/*.js | wc -l`=12; full suite **1395 pass / 0 fail / 6
+skipped**. Migration additive + reversible (DROP VIEW → zero trace); JS ships on
+the Railway redeploy. LCC-Opps only; no dia/gov writes; auth schema untouched.
+The acquisition engine + floating-person linking (12 remain) are already done —
+this is the missing surface. Phase 5 done.
