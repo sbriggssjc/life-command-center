@@ -1116,6 +1116,15 @@ function renderDiaTab() {
         inner.innerHTML = renderDiaResearch();
       }
       break;
+    case 'ownership':
+      // UI Phase 3 — Ownership promoted to a first-class DEALS tab. Reuses the
+      // existing ownership research panel (was buried as a Research-workbench
+      // mode); the panel self-binds + re-renders via renderDiaTab(), so it works
+      // standalone. The Research-mode entry (diaResearchMode='ownership') still
+      // works unchanged.
+      if (diaOwnershipBacklog === null && !diaOwnershipBacklogLoading) loadDiaOwnershipBacklog();
+      inner.innerHTML = renderDiaOwnershipResearch();
+      break;
     case 'prospects':
       // Render dialysis-domain prospects from domain-classified opportunities
       if (typeof renderDomainProspects === 'function' && window._mktOpportunities) {
@@ -1344,7 +1353,10 @@ function _diaLeaseCoverage() {
     ? diaData.leaseBackfillCount : null;
   const capped = (typeof diaData !== 'undefined' && diaData.leaseBackfillRows)
     ? diaData.leaseBackfillRows.length : 0;
-  const sub = (cnt != null)
+  // UI Phase 3 Unit 0a — use the count=exact backlog (v_clinic_lease_backfill_
+  // candidates, ~3,035) when it loaded with a positive value; a 0/null probe
+  // result falls back to the capped page so the sub never reads a misleading "0".
+  const sub = (cnt != null && cnt > 0)
     ? fmtN(cnt) + ' clinics need lease backfill'
     : (capped >= 1000 ? '1,000+ need backfill' : fmtN(capped) + ' need backfill');
   return { pct, sub };
@@ -1721,11 +1733,15 @@ function renderDiaOverview() {
           recentRows.forEach(r => {
             const pid = Number(r.linked_property_id) || 0;
             const sfId = r.sf_deal_id ? String(r.sf_deal_id) : '';
+            // UI Phase 3 Unit 0b — use the shared .clickable-row class (cursor:
+            // pointer + hover) so the click is discoverable. The old inline
+            // style="cursor:pointer" was a SECOND style attr on a <tr> that
+            // already had style="border-top…" → the browser ignored it.
             let rowAttr = '';
             if (pid) {
-              rowAttr = ' onclick="openUnifiedDetail(\'dialysis\',{property_id:' + pid + '},null,\'sales\')" style="cursor:pointer" title="Open property detail"';
+              rowAttr = ' class="clickable-row" onclick="openUnifiedDetail(\'dialysis\',{property_id:' + pid + '},null,\'sales\')" title="Open property detail"';
             } else if (sfId) {
-              rowAttr = ' onclick="window.open(\'https://northmarqcapital.lightning.force.com/lightning/r/Opportunity/' + encodeURIComponent(sfId) + '/view\',\'_blank\',\'noopener\')" style="cursor:pointer" title="Open deal in Salesforce"';
+              rowAttr = ' class="clickable-row" onclick="window.open(\'https://northmarqcapital.lightning.force.com/lightning/r/Opportunity/' + encodeURIComponent(sfId) + '/view\',\'_blank\',\'noopener\')" title="Open deal in Salesforce"';
             }
             t += '<tr style="border-top:1px solid var(--border)"' + rowAttr + '>'
               + '<td style="padding:4px 8px">' + esc((r.deal_name || '—').substring(0, 48)) + '</td>'
@@ -1833,6 +1849,11 @@ function renderDiaOverview() {
   const npiActionableCount = Math.max(0, npiSignalCount - npiAutoResolvable);
   const propQueueLen = diaData.propertyReviewQueue?.length || 0;
   const leaseBackfillLen = diaData.leaseBackfillRows?.length || 0;
+  // UI Phase 3 Unit 0a — the honest backlog size = the count=exact probe
+  // (v_clinic_lease_backfill_candidates, ~3,035), never the 1,000-row capped
+  // page. Falls back to the capped length only when the probe didn't load.
+  const leaseBackfillExact = (diaData.leaseBackfillCount != null && diaData.leaseBackfillCount > 0)
+    ? diaData.leaseBackfillCount : leaseBackfillLen;
   const researchDone = diaData.researchOutcomes?.length || 0;
 
   // Compute patient stats from v_facility_patient_counts_latest (loaded async) or inventory diff as fallback
@@ -1887,10 +1908,10 @@ function renderDiaOverview() {
   }
 
   // Highlight 3: Lease backfill needed
-  if (leaseBackfillLen > 20) {
+  if (leaseBackfillExact > 20) {
     diaHighlights.push({
       icon: '📋', color: '#22d3ee', urgency: 'info',
-      title: leaseBackfillLen + ' clinic' + (leaseBackfillLen > 1 ? 's' : '') + ' need lease backfill',
+      title: fmtN(leaseBackfillExact) + ' clinic' + (leaseBackfillExact > 1 ? 's' : '') + ' need lease backfill',
       detail: 'Missing lease data — prioritize high-value clinics',
       action: 'Backfill Leases', tab: 'research'
     });
@@ -2104,7 +2125,7 @@ function renderDiaOverview() {
   html += sectionHeader('Research Pipeline', '🔬', 'research');
   html += '<div class="dia-grid dia-grid-4">';
   html += infoCard({ title: 'Property Queue', value: fmtN(propQueueLen), sub: 'pending review', color: 'yellow', tab: 'research' });
-  html += infoCard({ title: 'Lease Backfill', value: fmtN(leaseBackfillLen), sub: 'missing lease data', color: 'orange', tab: 'research' });
+  html += infoCard({ title: 'Lease Backfill', value: fmtN(leaseBackfillExact), sub: 'missing lease data', color: 'orange', tab: 'research' });
   html += infoCard({ title: 'Completed Reviews', value: fmtN(researchDone), sub: 'outcomes logged', color: 'green', tab: 'research' });
   const reconStatus = diaData.reconciliation?.run_status || 'unknown';
   const reconDate = diaData.reconciliation?.started_at ? new Date(diaData.reconciliation.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';

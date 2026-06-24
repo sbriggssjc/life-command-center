@@ -5069,3 +5069,71 @@ new api/*.js (`ls api/*.js | wc -l`=12); reversible (drop the MV → dia value
 blocks degrade to skeleton, every other section unchanged). `node --check` clean
 (dialysis.js, gov.js); full suite **1356 pass / 0 fail / 6 skipped**. JS ships on
 the Railway redeploy; the dia MV + cron are live on the dia DB.
+
+## UI Phase 3 — tab set + naming unification (dia ↔ gov) (2026-06-24, COMPLETE)
+
+Both domain pages now navigate identically — one grouping tier, one order, one
+name per concept. Client-only (`app.js`, `index.html`, `dialysis.js`, `gov.js`);
+no migration; no new api/*.js (`ls api/*.js | wc -l`=12). Page-level hash routing
+(Phase 1) is unaffected — `data-*-tab` dispatch ids are STABLE; only display text
++ group membership changed, plus a few additive tabs.
+
+### The unified grouping tier (BOTH domains — `GOV_TAB_GROUPS`/`DIA_TAB_GROUPS` in app.js)
+`overview` → Overview · `deals` → Pipeline · Sales · Leases · Loans · Ownership ·
+Players (gov also: Leads) · `inventory` → Properties · Search · `research` →
+Research · Activity · `reference` → (dia: CMS Data · Inventory Changes · NPI
+Intel; gov: GSA / FRPP Intel) · `capital-markets` → Capital Markets. The pills are
+identical; only the domain-specific REFERENCE group differs. **Future tab work
+stays mirrored** — new tabs go in this order on BOTH pages; domain-only surfaces
+go under REFERENCE.
+
+### Pipeline / Leads mapping (the one cross-domain naming decision — Scott, 2026-06-24)
+"Pipeline" = the SHARED prospect triage (`renderDomainProspects`, tab id
+**`prospects`**) on both domains (Unit 1 relabel: dia's old "Prospects" →
+"Pipeline"). gov keeps its richer scored-leads surface (`renderGovPipeline`, tab
+id **`pipeline`**) as a gov-only **"Leads"** tab in DEALS — an honest
+specialization, not a duplicate. Tab ids unchanged so the gov tab-click
+special-case (`currentGovTab==='prospects'` → renderDomainProspects) still routes
+correctly.
+
+### New / promoted tabs
+- **dia Ownership** (Unit 2, DEALS) — `case 'ownership'` in `renderDiaTab` renders
+  the existing `renderDiaOwnershipResearch()` panel standalone (it self-binds +
+  re-renders via `renderDiaTab`). The Research-workbench ownership MODE
+  (`diaResearchMode='ownership'`) still works unchanged.
+- **gov Properties** (Unit 3, INVENTORY) — new `renderGovProperties()` (gov.js):
+  paginated inventory via `govQuery('properties', …)`, **value-first default order
+  `gross_rent DESC`** (consumption-layer doctrine), search + sort pills +
+  pagination, row → `openUnifiedDetail('gov',{property_id})`. Excludes archived
+  (`status=neq.archived`) to match the Overview "active" headline. State vars
+  `govProperties*` + `_govPropsOrder`/`_govPropsFilters` mirror the dia pattern.
+- **gov Activity** (Unit 4, RESEARCH) — `case 'activity'` renders the existing
+  `renderGovOutreachInner()` (the Government-Outreach block) standalone.
+- **gov GSA / FRPP Intel** (Unit 6, REFERENCE) — new `renderGovGsaIntel()` (gov.js)
+  recomputes the Overview §11 GSA section from the same globals (govOverviewStats
+  MV + govData.* arrays). The Overview section is **kept** too (UI Phase 2 doctrine
+  — GSA Intel sits above the footer); the tab is an additional surface. **Lease
+  Events** (gsa_lease_events, the gov mirror of dia Inventory Changes) was
+  DEFERRED per Scott (deferrable; not a light lift).
+
+### Unit 0 — dia-tile residuals (DIA_OVERVIEW_TILE_AUDIT_2026-06-23)
+- **0a** — all three "need lease backfill" surfaces now read the count=exact
+  backlog (`diaData.leaseBackfillCount`, v_clinic_lease_backfill_candidates,
+  ~3,035), never the 1,000-row capped page: the Lease Coverage card sub
+  (treats a 0/null probe as "not loaded" → capped fallback, never a misleading
+  "0"), the Research-Pipeline "Lease Backfill" tile, and the Action Item
+  highlight (new `leaseBackfillExact` var). Falls back to the capped length only
+  when the probe didn't load.
+- **0b** — `#sjcRecentDeals` clickable rows now use the shared `.clickable-row`
+  class (cursor:pointer + hover). Root cause: the old inline `style="cursor:pointer"`
+  was a SECOND `style` attribute on a `<tr>` that already had `style="border-top…"`,
+  so the browser ignored it.
+
+### Verified
+`node --check` clean (app.js, gov.js, dialysis.js); `ls api/*.js | wc -l`=12.
+Live after redeploy: both domains show the same tab strip + groups + order; dia
+"Pipeline" (was Prospects) renders the prospect triage; dia "Ownership" tab
+renders the ownership panel; gov "Properties" lists properties value-first; gov
+"Activity" shows the outreach feed; gov "GSA / FRPP Intel" renders the intel
+section; gov "Leads" (was Pipeline) renders the scored-lead pipeline; Unit 0 lease
+count reads ~3,035 consistently + recent-sale rows show a pointer cursor.

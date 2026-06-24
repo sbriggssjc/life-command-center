@@ -236,19 +236,28 @@ let govData = {
   loans: []
 };
 
+// UI Phase 3 — one unified tab set + order across dia ↔ gov. The grouping tier
+// (the domain-tab-group pills) is identical on both domains; only the
+// domain-specific REFERENCE group differs. "Pipeline" = the shared prospect
+// triage (renderDomainProspects, tab id `prospects`) on both; gov keeps its
+// richer scored-leads surface as a gov-only "Leads" (tab id `pipeline`,
+// renderGovPipeline). Tab ids stay STABLE for dispatch — only display text +
+// group membership change. See CLAUDE.md "Client routing" / domain-pages note.
 const GOV_TAB_GROUPS = {
-  overview: ['overview', 'search'],
-  pipeline: ['pipeline', 'sales', 'prospects'],
-  research: ['research', 'ownership'],
-  reference: ['leases', 'loans', 'players'],
+  overview: ['overview'],
+  deals: ['prospects', 'pipeline', 'sales', 'leases', 'loans', 'ownership', 'players'],
+  inventory: ['properties', 'search'],
+  research: ['research', 'activity'],
+  reference: ['gsaintel'],
   'capital-markets': ['capital-markets']
 };
 
 const DIA_TAB_GROUPS = {
-  overview: ['overview', 'search', 'changes', 'npi'],
-  pipeline: ['activity', 'sales', 'prospects'],
-  research: ['research'],
-  reference: ['leases', 'loans', 'players'],
+  overview: ['overview'],
+  deals: ['prospects', 'sales', 'leases', 'loans', 'ownership', 'players'],
+  inventory: ['properties', 'search'],
+  research: ['research', 'activity'],
+  reference: ['changes', 'inventory', 'npi'],
   'capital-markets': ['capital-markets']
 };
 
@@ -2405,7 +2414,7 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
   } else if (currentBizTab === 'dialysis') {
     if (!diaConnected) {
       currentDiaTab = 'activity';
-      currentDiaGroup = groupForTab('activity', DIA_TAB_GROUPS, 'pipeline');
+      currentDiaGroup = groupForTab('activity', DIA_TAB_GROUPS, 'research');
       syncDomainTabGroup('dialysis', currentDiaTab);
       renderBizContent();
     } else {
