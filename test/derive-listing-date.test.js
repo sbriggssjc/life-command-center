@@ -88,14 +88,14 @@ describe('deriveOnMarketDate — market-entry evidence, HOLD on none', () => {
   it('NO evidence → HELD (null), never the capture clock', () => {
     const r = deriveOnMarketDate({}, { nowMs: NOW });
     assert.equal(r.on_market_date, null);
-    assert.equal(r.source, 'date_unknown_held');
+    assert.equal(r.source, 'unestablished');
     assert.equal(r.confidence, 'none');
   });
 
   it('mass-forward guard suppresses the email-date tier → HELD', () => {
     const r = deriveOnMarketDate({ source_email_date: '2026-04-25T13:00:00Z' }, { nowMs: NOW, massForward: true });
     assert.equal(r.on_market_date, null);
-    assert.equal(r.source, 'date_unknown_held');
+    assert.equal(r.source, 'unestablished');
   });
 
   it('mass-forward guard does NOT suppress explicit on-market / DOM evidence', () => {
@@ -108,12 +108,12 @@ describe('deriveOnMarketDate — market-entry evidence, HOLD on none', () => {
   it('a future email date is ignored → HELD (no future market date)', () => {
     const r = deriveOnMarketDate({ source_email_date: '2026-12-31' }, { nowMs: NOW });
     assert.equal(r.on_market_date, null);
-    assert.equal(r.source, 'date_unknown_held');
+    assert.equal(r.source, 'unestablished');
   });
 
   it('DOM out of range is not a signal → HELD (not the clock)', () => {
     const r = deriveOnMarketDate({ days_on_market: 5000 }, { nowMs: NOW });
     assert.equal(r.on_market_date, null);
-    assert.equal(r.source, 'date_unknown_held');
+    assert.equal(r.source, 'unestablished');
   });
 });

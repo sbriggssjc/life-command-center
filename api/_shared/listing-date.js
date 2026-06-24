@@ -55,7 +55,7 @@ export function deriveListingDate(metadata = {}, nowMs = Date.now()) {
 // `on_market_date` is the TIMING truth — what the supply-side / DOM charts
 // read — and it is sourced ONLY from real market-entry EVIDENCE, NEVER the
 // processing clock. When no evidence exists the row is HELD (on_market_date
-// NULL, source 'date_unknown_held') and excluded from the added-per-month +
+// NULL, source 'unestablished') and excluded from the added-per-month +
 // DOM series; a NULL is honest, a fabricated load-date is the "surge".
 //
 // The mass-forward guard: when a batch of ingests shares a near-identical
@@ -71,7 +71,7 @@ export function deriveListingDate(metadata = {}, nowMs = Date.now()) {
 //   2. platform days-on-market (CoStar/RCA "days on market") — medium
 //   3. email Date the OM arrived on (metadata.email_date / source_email_date,
 //      ≤ capture) — medium; the go-forward signal captured at ingest
-//   4. otherwise HELD (null / 'date_unknown_held' / 'none')
+//   4. otherwise HELD (null / 'unestablished' / 'none')
 // ============================================================================
 
 /** A listing_date_source that is REAL market-entry evidence (vs a clock
@@ -101,7 +101,7 @@ export const HELD_LISTING_DATE_SOURCES = Object.freeze([
   'capture_date_fallback', 'date_unknown', 'date_unknown_r70b34', 'date_unknown_held', null,
 ]);
 
-const HELD = Object.freeze({ on_market_date: null, source: 'date_unknown_held', confidence: 'none' });
+const HELD = Object.freeze({ on_market_date: null, source: 'unestablished', confidence: 'none' });
 
 /**
  * Derive the on-market date + provenance from a fresh capture's metadata.

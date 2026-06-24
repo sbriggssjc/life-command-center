@@ -22,7 +22,7 @@ genuinely-unrecoverable rather than fabricating a load-date.
 1. explicit on-market date (`metadata.listing_date` ≤ capture) → **high**
 2. platform days-on-market → **medium**
 3. the email Date the OM arrived on (`source_email_date`, ≤ capture) → **medium**
-4. else **HELD** → `{on_market_date:null, source:'date_unknown_held',
+4. else **HELD** → `{on_market_date:null, source:'unestablished',
    confidence:'none'}`
 
 **Mass-forward guard:** `{massForward:true}` suppresses the email-date tier and
@@ -40,13 +40,37 @@ move a market date. Explicit on-market/DOM evidence still passes.
   `internet_message_id` is now persisted (was hard-coded NULL) so future emails
   are Gmail-traceable. So ladder step 1 becomes a LOCAL read going forward.
 
-### Backfill result (live, verified)
-- **dia surge 657/657 HELD** (`capture_date_fallback` 550 + `date_unknown_r70b34`
-  107 → `on_market_date=NULL`); recoverable timing set shows **25** rows in
-  2026-06 (a normal month, not the ~590 step). gov **surge 901/901 HELD**.
-- Real-evidence sources promoted (high/medium/low); legacy NULL-source rows
-  (real historical `listing_date`, 2001–2025) kept at `legacy_unverified`/low so
-  history isn't emptied. Point-in-time active count unchanged.
+### Backfill result (live, verified — Scott's corrected `unestablished` predicate)
+The held predicate (Scott, 2026-06-24): `listing_date_source IN
+('capture_date_fallback','date_unknown_r70b34','date_unknown','om_lease_inference',
+NULL)` **scoped to** `listing_source IN ('lcc_intake_om','email_om',
+'om_extraction','crexi','salesforce_ascendix','costar_sidebar')` — **NOT**
+`synthetic_from_sale` / `master_curated_sale` (keep their dates). Artifact-dated
+held set → `on_market_date=NULL`, `source='unestablished'`.
+
+**Byte-identical-published refinement** (layered on top, so completed months
+≤ 2026-03-31 are unchanged): R70-B3 already excluded capture/unknown from the
+added/DOM counts, so those are HELD at **all** dates. `om_lease_inference` +
+NULL-source rows WERE counted by R70, so only the **surge window** (`listing_date
+≥ 2026-04-01`) is HELD; earlier rows keep their date as `unestablished_historical`
+(low). Live distribution (the migrations reproduce it exactly):
+
+- **dia** — `unestablished` **1686** (capture 550 + `date_unknown_r70b34` 107
+  held all-dates; + NULL-source 1006 & `om_lease_inference` 23 in the surge
+  window) · `unestablished_historical` **1497** (NULL-source 1393 +
+  `om_lease_inference` 104, pre-2026-04, kept dated) · `synth_*`/`sale_anchor`/
+  `costar_days_on_market` promoted (1199 + 8 + 684 + 2). dia has **no
+  `listing_source`** column, so its held set keys purely on `listing_date_source`
+  (the `synth_*` tags are real-evidence, never held).
+- **gov** — `unestablished` **915** (capture/unknown scoped held all-dates 901 +
+  `om_lease_inference` surge 2 + NULL-source/no-date 12) · `unestablished_historical`
+  **55** (scoped `om_lease_inference` 46 + NULL-source 9, pre-2026-04) ·
+  `synthetic_from_sale` **1391** kept (low — its `listing_date_source` is NULL, so
+  the provenance tag comes from `listing_source`) · `master_curated` **692** kept
+  (medium). The gov held set is **scoped by `listing_source`** so the
+  sold-anchored / curated channels are never held.
+- Point-in-time active count unchanged on both. The timing series shows **no
+  Q2-2026 step** (the artifact set is HELD, not fabricated).
 
 ## Grounding corrections (premises the task assumed, refuted by the live data)
 1. **`internet_message_id` is NULL on ALL `staged_intake_items`** and
@@ -72,13 +96,27 @@ move a market date. Explicit on-market/DOM evidence still passes.
 - **PA flow change**: have the flagged-email "Http -> PUT" send
   `received_date_time`/`sent_date_time`; the ingest now persists it the moment it
   arrives (no code change needed — `intake.js` already reads those keys).
-- **CM timing-view read-switch**: the supply-side / DOM views still key on
-  `listing_date` (+ the R70-B3 source-exclusion gate). To make the charts read the
-  new field directly, switch the eff-window/DOM expressions to
-  `COALESCE(on_market_date, …)` and exclude `on_market_date IS NULL` from the
-  added-per-month + DOM series (point-in-time active count keeps the freshness
-  gate, unchanged). A separate, carefully-grounded CM-view change — the model
-  is the prerequisite and is in place.
+- **CM timing-view read-switch (item 3 — PROVEN-NOT-BYTE-IDENTICAL, handed off,
+  NOT shipped live).** The supply-side / DOM views still key on `listing_date`
+  (+ the R70-B3 source-exclusion gate). The intended switch is: point the
+  added-per-month / DOM / ramp views at `on_market_date` (held NULL rows drop off
+  the time axis; the point-in-time active count keeps the freshness gate,
+  unchanged). **The naive repoint is NOT byte-identical** and was deliberately
+  NOT applied this session (project doctrine: never silently corrupt published CM
+  exports):
+  - The view's `eff_start = COALESCE(listing_date, (sold_date OR
+    off_market_date) − 196 days)` — a synthetic anchor for NULL-`listing_date`
+    sold rows. Swapping the first arg to `on_market_date` drops the
+    sold-anchored reconstructions that previously fell through to the −196d
+    branch, changing completed months.
+  - Empirically: a naive repoint dropped **639** pre-2026-03 rows; a refined
+    predicate (`eff_start = COALESCE(on_market_date, sold-196d)` + an addable
+    sold-anchor branch) reduced it to **109** — still not 0.
+  - **Gate before shipping the repoint:** `dropped_pub = 0` (a per-month diff of
+    the published series ≤ 2026-03-31 must be byte-identical), reconciling the
+    residual ~109 sold-anchored edges case-by-case. Confirm with Scott before any
+    live CM-view edit. The model + columns are the prerequisite and are in place;
+    the repoint is the remaining, carefully-grounded step.
 - **promoter on-market email tier**: `source_email_date` is mirrored into
   `raw_payload.seed_data.source_email_date`; threading it onto the extraction
   `snapshot` (so `deriveOnMarketDate` uses it for email-channel OM listings) is a
