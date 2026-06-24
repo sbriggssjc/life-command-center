@@ -41,6 +41,17 @@ Research-workbench findings into one sequenced plan.
   tab segment (`entity:<id>:<tab>`). Owner is now a first-class zoom object on the 4A stack.
   (Final owner→property push click untested — Chrome connection dropped mid-check — but portfolio
   rows confirmed clickable + 4A push mechanic already verified; low risk.) **4C remains.**
+- **Phase 5 (Owners-Missing-a-Contact BD worklist) — ⏳ VIEW LIVE + VERIFIED; surface pending
+  redeploy 2026-06-23** (PR #1323). `v_owner_contact_worklist` applied live to LCC Opps — verified:
+  **3,521 contactless valued owners / 358 ≥ $1M / top $34M** (Cira Square $34.4M, LCPC Pentagon
+  $34.3M); value-gated (rollup rent>0, rank = COALESCE(rollup, connected_value)), excludes
+  operator-as-owner / junk / buyer-parents, auto-retires structurally. Surface (Units 2/3, on
+  redeploy): `GET /api/entities?action=owner_worklist` (honest actionable+universe counts) +
+  `contacts-ui.js` leads with an "Owners Missing a Contact" tab (≥$1M default, show-all, row →
+  4B owner detail → existing CONTACT-SELECTION picker). No new acquisition logic; ≤12 api/*.js;
+  reversible. **Scope correction (grounded):** floating persons = 12 (R39/R40 solved it; dropped
+  from scope); engine pre-existed — Phase 5 was the missing surface. *Offered follow-up (Phase 5b):*
+  one-click-run the `owner-contact-enrich` worker (SOS/address lookup) straight from a worklist row.
 - **Phase 2 (overview parity):** ⏳ **SHIPPED, ONE BLOCKER 2026-06-23.** Code + data verified
   live: served + running `renderDiaOverview` contains the new value blocks (Portfolio at a
   Glance, Lease Expiration Risk, Operator Breakdown); the dia MV `mv_dia_overview_stats` is live
