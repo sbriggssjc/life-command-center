@@ -1,0 +1,430 @@
+name: Daily DB Checks
+
+# GitHub Actions minute trim (2026-06): consolidates four formerly-separate
+# daily check workflows into ONE workflow / ONE job, so the day's checks cost a
+# single runner startup instead of four. Each check is a self-contained step
+# guarded with `if: always()`, so a failure (or hard error) in one check does
+# NOT skip the others, and each check keeps its original GitHub-issue alerting
+# (open-or-comment on a per-check label). A final aggregator step fails the run
+# (red) if any check reported a problem.
+#
+# Consolidated from (their `schedule:` triggers have been removed — they remain
+# as workflow_dispatch-only manual escape hatches):
+#   - address-normalize-drift-check.yml      (was 13:00 UTC)
+#   - field-source-priority-schema-check.yml (was 13:15 UTC)
+#   - cron-heartbeat-check.yml               (was 13:30 UTC)
+#   - supabase-advisor-check.yml             (was 14:00 UTC; matrix → in-step loop)
+#
+# Required secrets (Settings → Environments → Production) — union of the four:
+#   DIA_SUPABASE_URL / DIA_SUPABASE_KEY        anon keys (RPCs are SECURITY DEFINER)
+#   GOV_SUPABASE_URL / GOV_SUPABASE_KEY
+#   LCC_SUPABASE_URL / LCC_SERVICE_ROLE_KEY    service_role (restricted RPCs/views)
+#   SUPABASE_ACCESS_TOKEN                      Personal Access Token (Management API)
+#
+# These secrets live under the Production environment, so the job declares
+# `environment: Production` — otherwise they render to empty strings.
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # 13:00 UTC daily — one run covers all four checks
+  workflow_dispatch:
+
+concurrency:
+  group: daily-db-checks
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  checks:
+    name: Daily DB health checks
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 15
+    steps:
+      # Needed so `gh` can resolve repo context for label/issue commands below.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      # ───────────────────────── Check 1: address normalizer drift ──────────
+      # Compares dia.dia_normalize_address vs gov.normalize_address_txt via the
+      # get_address_normalize_signature() RPC on each DB. Same MD5 = identical
+      # normalization rules; mismatch = silent match-quality regression risk.
+      - name: 'addr: address normalizer drift'
+        if: always()
+        env:
+          DIA_URL: ${{ secrets.DIA_SUPABASE_URL }}
+          DIA_KEY: ${{ secrets.DIA_SUPABASE_KEY }}
+          GOV_URL: ${{ secrets.GOV_SUPABASE_URL }}
+          GOV_KEY: ${{ secrets.GOV_SUPABASE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for v in DIA_URL DIA_KEY GOV_URL GOV_KEY; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::$v secret not set"
+              echo "Confirm it exists under Settings -> Environments -> Production,"
+              echo "and that this job has 'environment: Production' set."
+              exit 1
+            fi
+          done
+
+          sig() {
+            curl -fsS -X POST "$1/rest/v1/rpc/get_address_normalize_signature" \
+              -H "apikey: $2" -H "Authorization: Bearer $2" \
+              -H "Content-Type: application/json" -d '{}' | tr -d '"'
+          }
+          DIA=$(sig "$DIA_URL" "$DIA_KEY")
+          GOV=$(sig "$GOV_URL" "$GOV_KEY")
+          echo "Dia: $DIA"
+          echo "Gov: $GOV"
+          if [[ "$DIA" == "$GOV" ]]; then
+            echo "OK — both DBs report identical normalizer signature ($DIA)."
+            exit 0
+          fi
+
+          echo "::error::Address normalizer DRIFT detected!"
+          echo "::error::dia.dia_normalize_address md5=$DIA"
+          echo "::error::gov.normalize_address_txt md5=$GOV"
+
+          BODY=$(cat <<EOF
+          The daily Address Normalizer Drift Check detected a mismatch between the
+          two address-normalizer functions. Cross-domain matching depends on
+          byte-equivalent normalization rules, so this is a silent match-quality
+          regression risk until resolved.
+
+          - \`dia.dia_normalize_address\`   md5: \`$DIA\`
+          - \`gov.normalize_address_txt\`   md5: \`$GOV\`
+
+          Spec: [\`docs/architecture/address_normalization_spec.md\`](../blob/main/docs/architecture/address_normalization_spec.md)
+          Run: $RUN_URL
+
+          To resolve: align both function bodies and confirm the next scheduled
+          run (or a manual \`workflow_dispatch\`) reports a single matching md5,
+          then close this issue.
+          EOF
+          )
+
+          if ! gh label list --search address-normalizer-drift --json name --jq '.[].name' | grep -qx address-normalizer-drift; then
+            gh label create address-normalizer-drift \
+              --color B60205 \
+              --description "Auto-opened by daily-db-checks workflow"
+          fi
+          EXISTING=$(gh issue list --label address-normalizer-drift --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            echo "Found existing drift issue #$EXISTING; appending comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "Address normalizer drift detected ($(date -u +%Y-%m-%d))" \
+              --label address-normalizer-drift \
+              --body "$BODY"
+          fi
+          echo "addr" >> /tmp/failed_checks
+
+      # ──────────────────── Check 2: field_source_priority schema validity ──
+      # Refresh dia + gov column caches into LCC Opps, then audit
+      # v_field_source_priority_invalid_columns. Empty = all good.
+      - name: 'fsp: field-source-priority schema validity'
+        if: always()
+        env:
+          DIA_URL: ${{ secrets.DIA_SUPABASE_URL }}
+          DIA_KEY: ${{ secrets.DIA_SUPABASE_KEY }}
+          GOV_URL: ${{ secrets.GOV_SUPABASE_URL }}
+          GOV_KEY: ${{ secrets.GOV_SUPABASE_KEY }}
+          LCC_URL: ${{ secrets.LCC_SUPABASE_URL }}
+          LCC_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for v in DIA_URL DIA_KEY GOV_URL GOV_KEY LCC_URL LCC_KEY; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::$v secret not set"
+              echo "Confirm it exists under Settings -> Environments -> Production,"
+              echo "and that this job has 'environment: Production' set."
+              exit 1
+            fi
+          done
+
+          refresh_one() {
+            local domain="$1" src_url="$2" src_key="$3"
+            echo "Pulling $domain column list..."
+            local cols cnt payload result
+            cols=$(curl -fsS -X POST "$src_url/rest/v1/rpc/list_public_columns" \
+              -H "apikey: $src_key" -H "Authorization: Bearer $src_key" \
+              -H "Content-Type: application/json" -d '{}')
+            cnt=$(echo "$cols" | jq 'length')
+            echo "  → $cnt rows"
+            if (( cnt < 100 )); then
+              echo "::error::$domain returned only $cnt columns — sanity check failed"
+              exit 1
+            fi
+            echo "Pushing $domain to LCC Opps..."
+            payload=$(jq -nc --arg d "$domain" --argjson c "$cols" '{p_domain: $d, p_columns: $c}')
+            result=$(curl -fsS -X POST "$LCC_URL/rest/v1/rpc/refresh_domain_table_columns" \
+              -H "apikey: $LCC_KEY" -H "Authorization: Bearer $LCC_KEY" \
+              -H "Content-Type: application/json" -d "$payload")
+            echo "  → $result"
+          }
+          refresh_one dia "$DIA_URL" "$DIA_KEY"
+          refresh_one gov "$GOV_URL" "$GOV_KEY"
+
+          ROWS=$(curl -fsS \
+            "$LCC_URL/rest/v1/v_field_source_priority_invalid_columns?select=target_table,field_name,source,priority,nearby_columns&order=target_table,field_name" \
+            -H "apikey: $LCC_KEY" -H "Authorization: Bearer $LCC_KEY")
+          COUNT=$(echo "$ROWS" | jq 'length')
+          echo "Invalid rules: $COUNT"
+          if (( COUNT == 0 )); then
+            echo "OK — no field_source_priority rules reference nonexistent columns."
+            exit 0
+          fi
+          echo "$ROWS" | jq -r '.[] | "  - \(.target_table).\(.field_name) [src=\(.source)] nearby: \(.nearby_columns // "none")"'
+          echo "$ROWS" > /tmp/invalid_rules.json
+
+          DETAILS=$(jq -r '.[] | "- `\(.target_table).\(.field_name)` (source: `\(.source)`, priority: \(.priority))\n  nearby columns: \(.nearby_columns // "_none — name doesn'\''t look like a column on this table_")"' /tmp/invalid_rules.json)
+          BODY=$(cat <<EOF
+          The daily field-source-priority schema-validity audit detected
+          rules registered against columns that don't exist on the target
+          domain table.
+
+          $DETAILS
+
+          To resolve: either rename the rule's \`field_name\` to the
+          correct column (see the *nearby columns* hint), or delete the
+          rule if the writer was never going to populate that column.
+
+          Run: $RUN_URL
+          Doc: [\`docs/architecture/field_source_priority_ramp_plan.md\`](../blob/main/docs/architecture/field_source_priority_ramp_plan.md)
+          EOF
+          )
+
+          if ! gh label list --search field-source-priority-schema-drift --json name --jq '.[].name' | grep -qx field-source-priority-schema-drift; then
+            gh label create field-source-priority-schema-drift \
+              --color D93F0B \
+              --description "Auto-opened by daily-db-checks workflow"
+          fi
+          EXISTING=$(gh issue list --label field-source-priority-schema-drift --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            echo "Found existing issue #$EXISTING; appending comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "field_source_priority schema drift ($(date -u +%Y-%m-%d))" \
+              --label field-source-priority-schema-drift \
+              --body "$BODY"
+          fi
+          echo "fsp" >> /tmp/failed_checks
+
+      # ─────────────────────────── Check 3: pg_cron heartbeat ───────────────
+      # lcc_audit_cron_health() returns one row per active job that is stale
+      # (>25h since last success), failing (any non-success in 24h), or has no
+      # run history in 7 days.
+      - name: 'cron: pg_cron heartbeat'
+        if: always()
+        env:
+          LCC_URL: ${{ secrets.LCC_SUPABASE_URL }}
+          LCC_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for v in LCC_URL LCC_KEY; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::$v secret not set"
+              echo "Confirm it exists under Settings -> Environments -> Production,"
+              echo "and that this job has 'environment: Production' set."
+              exit 1
+            fi
+          done
+
+          ROWS=$(curl -fsS -X POST "$LCC_URL/rest/v1/rpc/lcc_audit_cron_health" \
+            -H "apikey: $LCC_KEY" -H "Authorization: Bearer $LCC_KEY" \
+            -H "Content-Type: application/json" -d '{}')
+          COUNT=$(echo "$ROWS" | jq 'length')
+          echo "Unhealthy jobs: $COUNT"
+          if (( COUNT == 0 )); then
+            echo "OK — all active pg_cron jobs are healthy."
+            exit 0
+          fi
+          echo "$ROWS" | jq -r '.[] | "  - \(.jobname) [\(.problem)] last_success=\(.last_success_at // "never") hrs_since=\(.hours_since_last_success // "n/a") recent_failures=\(.recent_failures)"'
+          echo "$ROWS" > /tmp/cron_health.json
+
+          DETAILS=$(jq -r '.[] | "- `\(.jobname)` (schedule: `\(.schedule)`) — **\(.problem)**\n  last successful run: \(.last_success_at // "_never in last 7 days_")\n  hours since: \(.hours_since_last_success // "_n/a_")\n  non-success runs in last 24h: \(.recent_failures)"' /tmp/cron_health.json)
+          BODY=$(cat <<EOF
+          The daily cron heartbeat audit found Supabase pg_cron jobs on
+          LCC Opps that are either stale, failing, or have no run history.
+
+          $DETAILS
+
+          ## What "stale", "failing", and "no_runs_7d" mean
+
+          - **stale**: last successful run was more than 25 hours ago. Every
+            active LCC pg_cron job runs at least daily, so this is suspicious.
+          - **failing**: at least one non-success run in the last 24 hours.
+            Check \`cron.job_run_details.return_message\` for the error.
+          - **no_runs_7d**: no entries in \`cron.job_run_details\` at all in
+            the last 7 days. The job is registered but pg_cron isn't picking
+            it up — most often a syntax error in \`cron.job.command\`.
+
+          ## Triage commands
+
+          \`\`\`sql
+          -- Recent run history for all flagged jobs:
+          SELECT j.jobname, jrd.start_time, jrd.status,
+                 left(jrd.return_message, 200) AS detail
+          FROM cron.job_run_details jrd
+          JOIN cron.job j ON j.jobid = jrd.jobid
+          WHERE jrd.start_time > now() - interval '48 hours'
+          ORDER BY jrd.start_time DESC;
+          \`\`\`
+
+          Run: $RUN_URL
+          Audit RPC: \`public.lcc_audit_cron_health()\`
+          EOF
+          )
+
+          if ! gh label list --search cron-heartbeat-stale --json name --jq '.[].name' | grep -qx cron-heartbeat-stale; then
+            gh label create cron-heartbeat-stale \
+              --color D93F0B \
+              --description "Auto-opened by daily-db-checks workflow"
+          fi
+          EXISTING=$(gh issue list --label cron-heartbeat-stale --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            echo "Found existing issue #$EXISTING; appending comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "pg_cron heartbeat: $(jq 'length' /tmp/cron_health.json) unhealthy job(s) ($(date -u +%Y-%m-%d))" \
+              --label cron-heartbeat-stale \
+              --body "$BODY"
+          fi
+          echo "cron" >> /tmp/failed_checks
+
+      # ─────────────────────── Check 4: Supabase advisor audit ──────────────
+      # Daily ERROR-level advisor diff across the 3 projects (was a matrix; now
+      # an in-step loop so the three projects share this one runner). New ERROR
+      # findings not in the per-project allowlist open a per-project tracking
+      # issue. Each project is independent (a failure in one does not abort the
+      # others — mirrors the old `fail-fast: false`).
+      - name: 'advisor: Supabase advisor audit'
+        if: always()
+        env:
+          PAT: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${PAT:-}" ]]; then
+            echo "::error::SUPABASE_ACCESS_TOKEN secret not set"
+            echo "Confirm it exists under Settings -> Environments -> Production,"
+            echo "and that this job has 'environment: Production' set."
+            exit 1
+          fi
+
+          audit_project() {
+            local PROJECT="$1" REF="$2"
+            echo "=== Auditing $PROJECT ($REF) ==="
+            local ALLOWLIST="audit/supabase-advisor-allowlist.${PROJECT}.json"
+            if [[ ! -f "$ALLOWLIST" ]]; then
+              echo "::error::Allowlist not found at $ALLOWLIST"
+              return 1
+            fi
+
+            local HTTP_STATUS
+            HTTP_STATUS=$(curl -sS -o /tmp/raw.json -w '%{http_code}' \
+              -H "Authorization: Bearer $PAT" \
+              "https://api.supabase.com/v1/projects/${REF}/advisors/security")
+            if [[ "$HTTP_STATUS" != "200" ]]; then
+              echo "::error::Supabase Management API returned HTTP $HTTP_STATUS for ${PROJECT} (${REF})"
+              echo "Response body:"; cat /tmp/raw.json; echo
+              echo "Confirm SUPABASE_ACCESS_TOKEN is a valid Personal Access Token."
+              return 1
+            fi
+
+            jq '(if type == "array" then . else (.lints // []) end) | map(select(.level=="ERROR")) | map({name, detail: (.detail | gsub("\\\\`"; ""))}) | sort_by(.name + .detail)' \
+              /tmp/raw.json > /tmp/current.json
+            local CURRENT ALLOWED NEW
+            CURRENT=$(jq 'length' /tmp/current.json)
+            ALLOWED=$(jq '.lints | length' "$ALLOWLIST")
+            echo "Current ERROR findings: $CURRENT (allowlisted: $ALLOWED)"
+            jq --slurpfile allow "$ALLOWLIST" '. - $allow[0].lints' /tmp/current.json > /tmp/new.json
+            NEW=$(jq 'length' /tmp/new.json)
+            echo "New (un-allowlisted) findings: $NEW"
+            if (( NEW == 0 )); then
+              echo "OK — no new ERROR findings on $PROJECT."
+              return 0
+            fi
+            jq -r '.[] | "  - [\(.name)] \(.detail)"' /tmp/new.json
+
+            local DETAILS BODY LABEL EXISTING
+            DETAILS=$(jq -r '.[] | "- **\(.name)**\n  \(.detail | gsub("\\\\`"; "`"))"' /tmp/new.json)
+            BODY=$(cat <<EOF
+          The daily Supabase advisor audit detected ERROR-level
+          findings on \`$PROJECT\` (project \`$REF\`) that are not
+          in \`audit/supabase-advisor-allowlist.${PROJECT}.json\`.
+
+          $DETAILS
+
+          ## How to resolve
+
+          For each finding above, either:
+
+          1. **Fix the underlying issue** — enable RLS, revoke anon/
+             authenticated grants, switch SECURITY DEFINER to SECURITY
+             INVOKER, etc. The next workflow run will see the finding
+             gone and clear the alert.
+
+          2. **Allowlist it** as intentional — append the \`{name, detail}\`
+             pair to \`audit/supabase-advisor-allowlist.${PROJECT}.json\`
+             with a comment explaining why.
+
+          To regenerate the allowlist from scratch (after a fix batch):
+          \`node scripts/bootstrap-advisor-allowlist.mjs\`.
+
+          Run: $RUN_URL
+          Dashboard: https://supabase.com/dashboard/project/${REF}/advisors/security
+          EOF
+            )
+            LABEL="supabase-advisor-drift-${PROJECT}"
+            if ! gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL"; then
+              gh label create "$LABEL" \
+                --color D93F0B \
+                --description "Auto-opened by daily-db-checks workflow ($PROJECT)"
+            fi
+            EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              echo "Found existing issue #$EXISTING; appending comment."
+              gh issue comment "$EXISTING" --body "$BODY"
+            else
+              gh issue create \
+                --title "Supabase advisor drift on $PROJECT: $(jq 'length' /tmp/new.json) new ERROR finding(s) ($(date -u +%Y-%m-%d))" \
+                --label "$LABEL" \
+                --body "$BODY"
+            fi
+            return 1
+          }
+
+          ADVISOR_FAILED=0
+          audit_project lcc-opps xengecqvemvfknjvbvrq || ADVISOR_FAILED=1
+          audit_project gov      scknotsqkcheojiaewwh || ADVISOR_FAILED=1
+          audit_project dia      zqzrriwuavgrquhisnoa || ADVISOR_FAILED=1
+          if (( ADVISOR_FAILED == 1 )); then
+            echo "advisor" >> /tmp/failed_checks
+          fi
+
+      # ──────────────────────── Aggregate: fail the run if any check failed ──
+      - name: Fail run on any unhealthy check
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -s /tmp/failed_checks ]]; then
+            echo "::error::One or more daily checks reported a problem:"
+            sort -u /tmp/failed_checks | sed 's/^/  - /'
+            exit 1
+          fi
+          echo "All daily checks passed."

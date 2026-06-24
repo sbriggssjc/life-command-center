@@ -21,8 +21,9 @@ name: Address Normalizer Drift Check
 # and the preflight (correctly) reports them as missing.
 
 on:
-  schedule:
-    - cron: '0 13 * * *'   # 13:00 UTC daily — well after any nightly migration window
+  # Scheduled run retired 2026-06 — this check now runs as a step in the
+  # consolidated daily-db-checks.yml (one runner for all four daily checks).
+  # Kept here as a workflow_dispatch-only manual escape hatch.
   workflow_dispatch:
 
 concurrency:

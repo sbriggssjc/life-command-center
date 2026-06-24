@@ -17,8 +17,9 @@ name: Cron Heartbeat Check
 #   LCC_SERVICE_ROLE_KEY   service_role key (RPC is restricted to it)
 
 on:
-  schedule:
-    - cron: '30 13 * * *'   # 13:30 UTC daily — 15 min after field-source-priority audit
+  # Scheduled run retired 2026-06 — this check now runs as a step in the
+  # consolidated daily-db-checks.yml (one runner for all four daily checks).
+  # Kept here as a workflow_dispatch-only manual escape hatch.
   workflow_dispatch:
 
 concurrency:
