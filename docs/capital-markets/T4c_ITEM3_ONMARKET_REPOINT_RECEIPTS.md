@@ -79,12 +79,20 @@ Left held: 584 truly-dateless-open + 194 off-market-not-sold (no verifiable date
   the intentionally-held 194 off-not-sold + the benign 196d→175d offset.
 - Point-in-time active count unchanged (**118** — these are sold, excluded from
   `active_listings`).
-- **DOM side-effect (surfaced, NOT changed):** these rows carry a non-synthetic
-  `data_source`, so they flow into `cm_dialysis_dom_pct_ask_m/_q` at a circular imputed
-  175-day DOM — exactly like the pre-existing `sale_anchor_est_175` rows. The dia
-  DOM-of-sold population is now ~60% imputed (876/1,453). If observed-only DOM is wanted,
-  exclude the sale-anchored `on_market_date_source` set from those two views (separate,
-  blessed change — it materially thins DOM to the 577 observed rows).
+- **DOM made observed-only (DONE, 2026-06-24)** — migration
+  `supabase/migrations/dialysis/20260624_dia_t4c_item3_dom_pct_ask_observed_only.sql`.
+  DOM from an imputed/sale-anchored date is circular (= the offset), so
+  `cm_dialysis_dom_pct_ask_m/_q` now exclude every imputed `on_market_date_source`
+  (`NOT LIKE 'synth%'/'sale_anchor%'` + the existing `synthetic_from_sale` exclusion),
+  keeping only observed dates (`sf_on_market_date` / `costar_days_on_market` /
+  `unestablished_historical` / real captured). Evidence: dropped sources sit at the
+  175 offset (synth_held sd 0; sale_anchor 91% exactly 175); the kept set
+  (unestablished_historical, 785) spreads naturally (avg 478, sd 738, 432 distinct).
+  After: DOM reflects observed time-to-sell (recent avg ~241d monthly / ~288d quarterly,
+  was pinned ~175). The existing `n_sales>=10` density floor + gap-honest rendering keep
+  thin periods as honest NULL gaps (78 monthly / 26 quarterly non-null since 2020); `_q`
+  gained the floor (it had none). **gov DOM** reads `sales_transactions` reported DOM
+  (avg 232, sd 175, 385 distinct, no 175 spike) — no sale-anchored exposure, NOT touched.
 
 ## Reversibility
 View defs only — re-create the prior `listing_date`-anchored bodies to revert; no
