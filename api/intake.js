@@ -327,7 +327,12 @@ async function handleOutlookMessage(req, res) {
     payload.body, bodyForUrlScan, bodyPreview, ''
   );
   const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
-  const receivedAtIso = isoOrNow(firstNonEmpty(payload.received_date_time, payload.receivedDateTime, payload.received_at));
+  // RAW received date (null when the email genuinely carries none) — distinct
+  // from the now()-coalesced `receivedAtIso`. T4c: only a REAL email Date may
+  // become an on-market signal; the processing clock must never (see
+  // email_context.received_at_raw → staged_intake_items.source_email_date).
+  const receivedAtRaw = firstNonEmpty(payload.received_date_time, payload.receivedDateTime, payload.received_at) || null;
+  const receivedAtIso = isoOrNow(receivedAtRaw);
   const sender = normalizeSender(firstNonEmpty(payload.from, payload.sender, payload.sender_email));
   const hasAttachments = Boolean(firstNonEmpty(payload.has_attachments, payload.hasAttachments, false));
   const attachmentCount = Array.isArray(payload.attachments) ? payload.attachments.length : null;
@@ -352,6 +357,7 @@ async function handleOutlookMessage(req, res) {
     body_snippet: (bodyForUrlScan || bodyPreview || '').toString().slice(0, 500) || null,
     web_link: deepLink,
     received_at: receivedAtIso,
+    received_at_raw: receivedAtRaw,
     from: sender?.email || null,
     to: firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null),
   };
