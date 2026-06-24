@@ -36,21 +36,52 @@
    "active inventory, date unknown"). A NULL is honest; a fabricated load-date is the surge.
 
 ## The evidence ladder (same logic for backfill AND every future ingest, highest confidence first)
-1. **Earliest email received date.** Trace `available_listings.intake_artifact_path →
+1. **Salesforce `Comp__c.On_Market_Date__c`** — keyed by the `sf_entity_id` already stored on each intake
+   (in `staged_intake_items.raw_payload`). This is Northmarq's own human-recorded on-market date for the
+   comp — deal-specific and authoritative, so it OUTRANKS platform first-seen and the email heuristic.
+   Source `salesforce_comp`, highest confidence. **Run server-side** (see §Execution) — the SF OAuth lives
+   in the app, not in a CC session.
+2. **CoStar / LoopNet / RCA** "date listed" / days-on-market when a `listing_url` or platform match exists.
+   Source `costar`/`loopnet`/`rca`.
+3. **Earliest email received date.** Trace `available_listings.intake_artifact_path →
    staged_intake_artifacts → staged_intake_items.internet_message_id → Gmail`, read the message Date
-   header, and take the **EARLIEST** message for that property (original send, ignore the mass-forward).
-   Source `email_earliest`, high confidence. *This is the answer to "how do I handle the ~403
-   genuinely-June-ingested" — they are June-INGESTED, not June-on-market; their earliest email date is the
-   real anchor and for many predates June.*
-2. **CoStar / LoopNet / RCA** "date listed" / days-on-market when a `listing_url` or platform match exists
-   — the canonical market date; overrides #1 where present. Source `costar`/`loopnet`/`rca`.
-3. **Salesforce** listing/opportunity list date or stage-change date. Source `salesforce`.
+   header, take the **EARLIEST** message for that property (original send, ignore the mass-forward). Source
+   `email_earliest`. *Resolves the "~403 genuinely-June-ingested" tail SF doesn't cover — they are
+   June-INGESTED, not June-on-market; the earliest email date predates June for many.*
 4. **Fallback** — `om_first_received_at` (earliest receipt), tagged `om_received_fallback`, LOW confidence,
    only when 1–3 fail. **Never the mass-forward `created_at`.** Where even this is unrecoverable, HOLD:
    `on_market_date` NULL, excluded from the timing series — do not invent a date.
 
-The artifact-path date (`lcc-om-uploads/YYYY-MM-DD/`) is a weak proxy for #4 only — prefer the actual
-email Date via the message-id, which is more precise and not subject to re-upload.
+The artifact-path date (`lcc-om-uploads/YYYY-MM-DD/`) is a weak proxy for #4 only.
+
+## Session scope — sandbox (now) vs app (deferred)
+None of the ladder sources are runnable in a CC sandbox (SF + Gmail + CoStar/RCA all live behind the app's
+OAuth/connectors; verified there is NO persisted email Date locally — `staged_intake_items` holds only
+`internet_message_id`, and the artifact-path date itself clusters in June). So **do not run the recovery in
+this session and do not fabricate.** In-session (no OAuth) deliverables:
+1. The model change (the `on_market_date`/source/confidence fields; kill the silent
+   `listing_date = created_at/'capture_date_fallback'` default; add `source_email_date` for ongoing capture).
+2. **The honest de-surge — hold the fake-dated set out of the TIMING series.** In the dia + gov
+   added-per-month / DOM / ramp views, the fake set (`listing_source IN ('lcc_intake_om','email_om',
+   'om_extraction')` × `listing_date_source IN ('capture_date_fallback','date_unknown_r70b34','date_unknown',
+   'om_lease_inference', NULL)`) is treated as `on_market_date = NULL` → excluded from the timing axis, while
+   KEPT in the freshness-gated point-in-time active count. Zero invented dates; de-surges the chart today.
+   Supersedes both the "count the ingest date" interim and the "`last_seen` entry-anchor" stopgap.
+3. Build (do NOT run) the server-side recovery worker + ongoing email-Date capture + mass-forward guard.
+4. Verify published history (≤2026-03-31) byte-identical; series no longer steps at Q2-2026 because the
+   fake set is HELD, not because of a fabricated date.
+Deferred to the app (OAuth): running the recovery worker, which progressively fills `on_market_date`; held
+rows then re-enter the timing series at their real months.
+
+## Execution (where each source runs)
+The recovery is a **server-side LCC backfill worker** (sub-route, ≤12 api/*.js; GET=dry-run / POST=drain;
+capped; reversible — same posture as geocode-tick / llc-research-tick), NOT a CC-session query. It runs on
+Railway where the SF OAuth/client already exists (reuse the comp-sync / ascendix / activity-ingest client).
+Per row in the fake-dated set, it walks the ladder: SF `Comp__c.On_Market_Date__c` by `sf_entity_id` first
+(step 1), then platform, then the Gmail message-id traceback, then hold. Scott triggers + gates it on the
+deployed app; CC builds it but cannot run the SF query from its session (expected). The **dry-run reports
+coverage** — how many of the ~404 gov active + dia 657 carry a populated `On_Market_Date__c` (sf_entity_id
+lives in `raw_payload`, so the dry-run is the only way to measure SF reach vs. platform/email/hold).
 
 ## Backfill sequence (now)
 - **Phase 1 (biggest win, data you already own):** message-id → Gmail traceback for the email-sourced set;
@@ -70,6 +101,22 @@ email Date via the message-id, which is more precise and not subject to re-uploa
   the on-market date is now sourced from the immutable email Date / platform — and the rule takes the
   EARLIEST message — re-forwarding the whole mailbox again cannot move any market date.
 - The availability-checker should keep flipping stale rows to off_market so the active set self-corrects.
+
+## gov scope (grounded 2026-06-24 — important: do NOT touch the sales-proxy)
+The gov change this round is the SAME intake-date recovery as dia, NOT a sentinel/synthetic change.
+Breakdown of gov `available_listings`:
+- **Leave alone (intended history):** `synthetic_from_sale` (1,391, all `is_active=false`, 2012–2025 — the
+  deliberate sales-proxy) and `master_curated_sale` (692, `is_active=false`, back to 1997 — curated import).
+  Excluding these would delete real turnover history. The earlier "exclude synthetic_from_sale / replace the
+  ≥20 sentinel" steer is **RETRACTED** — `synthetic_from_sale` is the intended proxy, the 2014-10-22 cluster
+  is already correctly handled, and the sentinel is doing no harm. **Leave the ≥20 sentinel as-is.**
+- **T4c target (the real mirror of dia 657):** `listing_source IN ('lcc_intake_om','email_om',
+  'om_extraction')` with `listing_date_source IN ('capture_date_fallback','date_unknown_r70b34',
+  'om_lease_inference', NULL)` — ~404 active `capture_date_fallback` + 80 active `date_unknown` + inactive
+  tail (119+63) + `om_lease_inference` (48, a lease-derived guess, also not a true on-market date — include,
+  lower-stakes). Recover via the email-date ladder (step 1), then platform/SF, hold where unrecoverable.
+- **Platform-batch unknowns:** `crexi` (all stamped 2026-03-12) and `salesforce_ascendix` (all 2026-03-31)
+  get their date from the platform/SF (ladder steps 2/3), not email.
 
 ## Relationship to T4 (the already-correct baseline)
 T4 is at a safe baseline (real inventory included, no suppress-guard, no published quarter touched). This

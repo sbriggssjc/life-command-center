@@ -41,6 +41,14 @@ Research-workbench findings into one sequenced plan.
   tab segment (`entity:<id>:<tab>`). Owner is now a first-class zoom object on the 4A stack.
   (Final owner→property push click untested — Chrome connection dropped mid-check — but portfolio
   rows confirmed clickable + 4A push mechanic already verified; low risk.) **4C remains.**
+- **Phase 5 + 5b — ✅ DONE / VERIFIED LIVE 2026-06-24** (PR #1323). Contacts page leads with
+  "Owners Missing a Contact" — verified live: **"358 valued owners ≥ $1M need a contact · 3,521
+  total contactless"** (honest actionable+universe counts matching `v_owner_contact_worklist`),
+  ≥$1M/show-all toggle, rows → 4B owner detail → CONTACT-SELECTION picker. 5b "Run lookup"
+  one-click enrich wired for the ~37 runnable-hint owners (shows on filter-down; not in the ≥$1M
+  default since those are lower-value). The zoom + BD-worklist arc (Phases 1–5 + 4A/4B) is
+  complete; **4C (sub-record drill) is the last optional zoom slice.** Superseding the earlier
+  entry below:
 - **Phase 5 (Owners-Missing-a-Contact BD worklist) — ⏳ VIEW LIVE + VERIFIED; surface pending
   redeploy 2026-06-23** (PR #1323). `v_owner_contact_worklist` applied live to LCC Opps — verified:
   **3,521 contactless valued owners / 358 ≥ $1M / top $34M** (Cira Square $34.4M, LCPC Pentagon
