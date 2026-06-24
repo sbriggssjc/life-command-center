@@ -91,6 +91,7 @@ export const REAL_LISTING_DATE_SOURCES = Object.freeze({
   om_lease_inference:                        'medium',
   sale_anchor_est_175:                       'low',
   synth_sale_minus_median_dom:               'low',
+  synth_sale_minus_median_dom_held:          'low',
   synth_sale_minus_median_dom_clamped_r70d10:'low',
   om_received_fallback:                      'low',
 });

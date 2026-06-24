@@ -68,6 +68,24 @@ captions (ships on the Railway redeploy).
   like gov's (its `active_count` is the canonical point-in-time count, 06-22 audit). Adding
   a dedicated dia span line (gov's `eff` CTE is the template) is a separate call.
 
+## Follow-up DONE — sale-anchor the held SOLD dia listings (2026-06-24)
+Of the 1,349 held-NULL dia listings, **571 are genuinely SOLD** (carry `sold_date`) =
+real inventory dropped from the historical series. Migration
+`supabase/migrations/dialysis/20260624_dia_t4c_item3_sale_anchor_held_sold.sql`
+sale-anchors them: `on_market_date = sold_date − 175` (the existing dia cohort imputed
+DOM), distinct reversible source `synth_sale_minus_median_dom_held` (confidence `low`).
+Left held: 584 truly-dateless-open + 194 off-market-not-sold (no verifiable date).
+- **dia `added` net delta vs old series: −6,411 → −1,360 (~79% restored).** Residual =
+  the intentionally-held 194 off-not-sold + the benign 196d→175d offset.
+- Point-in-time active count unchanged (**118** — these are sold, excluded from
+  `active_listings`).
+- **DOM side-effect (surfaced, NOT changed):** these rows carry a non-synthetic
+  `data_source`, so they flow into `cm_dialysis_dom_pct_ask_m/_q` at a circular imputed
+  175-day DOM — exactly like the pre-existing `sale_anchor_est_175` rows. The dia
+  DOM-of-sold population is now ~60% imputed (876/1,453). If observed-only DOM is wanted,
+  exclude the sale-anchored `on_market_date_source` set from those two views (separate,
+  blessed change — it materially thins DOM to the 577 observed rows).
+
 ## Reversibility
 View defs only — re-create the prior `listing_date`-anchored bodies to revert; no
 domain-row writes; ≤12 api/*.js (the only JS is the caption note).
