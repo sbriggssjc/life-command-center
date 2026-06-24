@@ -26,8 +26,9 @@ name: Field-Source-Priority Schema Validity Check
 # Job declares `environment: Production` so they actually get injected.
 
 on:
-  schedule:
-    - cron: '15 13 * * *'   # 13:15 UTC daily — 15 min after the address-normalize-drift run
+  # Scheduled run retired 2026-06 — this check now runs as a step in the
+  # consolidated daily-db-checks.yml (one runner for all four daily checks).
+  # Kept here as a workflow_dispatch-only manual escape hatch.
   workflow_dispatch:
 
 concurrency:

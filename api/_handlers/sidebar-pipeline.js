@@ -41,7 +41,7 @@ import { validateSaleIngest, validateContactIngest } from '../_shared/ingest-con
 // Round 77d (2026-06-02): listing_date derivation moved to a shared module so
 // the CoStar sidebar and the OM-intake promoter stay consistent. Re-exported
 // here for the existing test/derive-listing-date.test.js import path.
-import { deriveListingDate } from '../_shared/listing-date.js';
+import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 export { deriveListingDate };
 
 // ============================================================================
@@ -9738,6 +9738,11 @@ async function upsertDialysisListings(propertyId, metadata) {
     listingDateSource === 'days_on_market' ? 'costar_days_on_market' :
     null;
 
+  // T4c (2026-06-24): on_market_date provenance — the TIMING truth the charts
+  // read, from CoStar's real on-market signal (never the capture clock). HELD
+  // (null) when CoStar carried no date/DOM → excluded from the timing series.
+  const om = deriveOnMarketDate(metadata);
+
   const record = stripNulls({
     property_id: propertyIdInt,
     initial_price: insertAskingSuppressed ? null : newInsertAsking,
@@ -9746,6 +9751,9 @@ async function upsertDialysisListings(propertyId, metadata) {
     cap_rate: listingCapRate,
     listing_date: derivedListingDate,
     listing_date_source: listingDateSourceTag,
+    on_market_date: om.on_market_date,
+    on_market_date_source: om.source,
+    on_market_date_confidence: om.confidence,
     status: 'Active',
     is_active: true,
     seller_name: cleanSalesPartyValue(sellerContact?.name),
@@ -10040,13 +10048,24 @@ async function upsertGovListings(propertyId, entity, metadata) {
 
   // Derive listing_date from the most recent is_current sale, else today
   let listingDate = new Date().toISOString().split('T')[0];
+  let currentSaleDatePart = null;
   if (Array.isArray(metadata.sales_history)) {
     const currentSale = metadata.sales_history.find(s => s.is_current === true);
     if (currentSale?.sale_date) {
       const parsed = parseDate(currentSale.sale_date);
-      if (parsed) listingDate = parsed.split('T')[0];
+      if (parsed) { listingDate = parsed.split('T')[0]; currentSaleDatePart = listingDate; }
     }
   }
+  // T4c (2026-06-24): on_market_date is the TIMING truth (charts read it),
+  // sourced ONLY from evidence — never the `today` fallback above. Prefer
+  // CoStar's on-market/DOM signal; else the current-sale anchor; else HELD
+  // (null) → excluded from the added-per-month + DOM series.
+  const om0 = deriveOnMarketDate(metadata);
+  const om = om0.on_market_date
+    ? om0
+    : (currentSaleDatePart
+        ? { on_market_date: currentSaleDatePart, source: 'sale_anchor', confidence: 'low' }
+        : om0);
 
   // Find broker / seller contacts
   const contacts = metadata.contacts || [];
@@ -10101,6 +10120,9 @@ async function upsertGovListings(propertyId, entity, metadata) {
     asking_cap_rate: listingCapRate,
     asking_price_psf: safeGovPricePsf,
     listing_date: listingDate,
+    on_market_date: om.on_market_date,
+    on_market_date_source: om.source,
+    on_market_date_confidence: om.confidence,
     listing_status: 'Active',
     days_on_market: parseIntSafe(metadata.days_on_market),
     tenant_agency: tenantAgency,
