@@ -68,29 +68,71 @@ vertical-aware) + drop the 9-mo MA & density floor for dia so it tracks raw TTM 
 separate and stay. Level-only diffs (cap_rate_final clamped [4-12%] vs manual raw SOLD CAP; ~13mo vs
 12mo window) don't affect movement — keep cap_rate_final (cleaner) but match window/buckets/no-MA.
 
-### T4 — Available / "added-to-market" deal counts  ·  P1  ·  ⏳ PROMPT ISSUED
-**Notes:** dia 5, 8, 11, 12 · gov 27, 29, 30. **VERDICT (grounded 2026-06-23): TWO metrics conflated.**
-(1) **Point-in-time ACTIVE count** = genuine collection floor at **2022-07** (canonical 119); can't
-fabricate earlier. (2) **"Added to market"/new-listings** = RECOVERABLE — `available_listings.listing_date`
-runs back to ≥2018 at **~25-29/mo** (Scott's ">20/mo" is correct), but the chart appears to derive
-"added" from the 2022+ active-capture → undercounts pre-2022 (the fall-off). Plus a **2026 spike** (698
-listings / 58-per-mo vs 26 in 2025) and a **586 raw-active vs 119 canonical** gap to explain.
-**Action:** `CLAUDE_CODE_PROMPT_T4_available_counts.md`. **CC verified: "added/mo" already correct**
-(uses listing_date, ~25-29/mo). **Reconciliation: the June batch = 477 DISTINCT real properties, 0 dups,
-0 previously-active → real inventory we hadn't captured; prior ~116 was UNDERcounting.** **DECISION
-(Scott "accurate everywhere"): accuracy-first, NOT suppress** — point-in-time count reflects real
-inventory + a one-time coverage-catch-up annotation; neutralize the fake June capture-dates ONLY for the
-added-per-month + DOM series; stale-listing guard; re-examine gov's ≥20 guard for the inverse
-(undercount). Directive in the T4 prompt §DECISION. Awaiting CC implementation.
-**T4b (Scott pivot 2026-06-23): recover REAL on-market dates instead of annotating the step.** Grounded:
-the ~462 June-batch listings are **OM/flyer-intake-derived** (`intake_artifact_type` om/flyer/brochure;
-`listing_date_source='capture_date_fallback'`; artifact paths dated April+), NOT CoStar — so their true
-"came to market" date ≈ the OM intake received date, recoverable from intake metadata and spread across
-real months. `CLAUDE_CODE_PROMPT_T4b_om_intake_listing_dates.md`: backfill `listing_date` from the OM
-intake date → organic ramp, no surge, no annotation; hold the genuinely-unrecoverable; de-dupe OM-intake
-vs CoStar (no double-count); keep the 12mo+3-fail freshness gate. Awaiting CC.
+### T4 — Available / "added-to-market" deal counts  ·  P1  ·  ✅ CLOSED at baseline (confirm-and-stop)
+**Notes:** dia 5, 8, 11, 12 · gov 27, 29, 30. **VERDICT: TWO metrics conflated** — (1) point-in-time
+ACTIVE count (collection floor 2022-07), (2) "added/mo" (recoverable from `listing_date`, ~25-29/mo,
+**CC verified already correct**). **Final resolution (2026-06-24): T4 = confirm-and-stop at BASELINE,
+zero view edits** (dia `43fff57`, gov `3e2ce0f`; the interim DOM/freshness/suppress edits were reverted).
+Grounded findings, all KEEP-as-is: the latent intake-fake-date leak touches **no published quarter**;
+gov `synthetic_from_sale` is a **load-bearing historical inventory proxy** (50 of 100 props at 2020 are
+real sales-derived inventory — a blanket exclusion would cut older-year inventory ~50%) → kept; the **≥20
+sentinel** already correctly excludes the 2014-10-22 import artifact (42 rows, all synthetic, all sold)
+and suppresses no real inventory → kept (the "record-class test" idea retired); "added" history clean;
+freshness gate holds (733/735 fresh). The June "surge" is an **ingestion-provenance** problem, owned
+entirely by T4c (below) so the two chats don't collide on the timing views.
 
-**Working order (sequential, Scott): T4 (+T4b) → T2 → T7 → T8 → T10.**
+**T4b — SUPERSEDED by T4c.** (The OM-intake date-recovery idea; the mechanism was corrected — see T4c.)
+
+### T4c — On-market-date PROVENANCE model + SF recovery  ·  P1  ·  ⏳ Item 1 LIVE, Item 3 (de-surge) pending gate
+`CLAUDE_CODE_PROMPT_T4c_onmarket_date_provenance.md`. **Reframe (Scott 2026-06-24): the surge is a
+process/ingestion problem, not data.** Root cause grounded: the fake-dated rows are a **Salesforce
+`Comp__c` backfill pushed through the OM pipeline** (caller `sabriggs@northmarq.com`) — NOT a Gmail
+mailbox forward (`internet_message_id` is NULL on all 7,666 intakes, so the message-id traceback is
+dead). The **authoritative on-market date is `Comp__c.On_Market_Date__c`**, keyed by `seed_data.sf_entity_id`
+on each intake.
+- **Model:** separate `ingested_at` / `on_market_date` (+`_source`/`_confidence`); never default
+  `listing_date = created_at`. **Held predicate** = artifact/clock-dated intake rows →
+  `on_market_date NULL, source='unestablished'`; **explicitly NOT** `synthetic_from_sale` /
+  `master_curated` (keep their dates).
+- **Item 1 — provenance columns + backfill alignment: LIVE on all 3 DBs + committed** (`bc54157` on
+  `claude/busy-tesla-bmmh90`, PR #1327). Live counts reproduced (dia 1686/1497; gov 915/55/1391/692);
+  the step-3 bug that would have wrongly dropped synthetic/master to HELD is fixed; idempotent
+  (`WHERE on_market_date_source IS NULL`); reversible (drop 3 cols). Suite 1403/0. ✅ **GATED PASS.**
+- **Recovery source — needs a FULL `Comp__c` pull, NOT just `sf_sync_log` (corrected 2026-06-24).**
+  `Comp__c.On_Market_Date__c` IS mirrored locally in `sf_sync_log.payload` (top-level `->>'Id'` = comp id,
+  `->>'On_Market_Date__c'` = real date, verified spread 2014→2026, 96.9% pre-June) — **but `sf_sync_log`
+  prunes terminal rows to a rolling ~30-day window, so it holds only 535 distinct comps (453 with OMD) vs
+  the 941 needed = ~48% coverage.** (CC's "97%" was 97% *of what's in the log*, not of the 941.) So
+  backfilling from `sf_sync_log` ALONE leaves ~half still held. **Fix = trigger a full dia+gov `Comp__c`
+  sync pull** (extend `intake-salesforce` to retain the complete comp set incl. `On_Market_Date__c`),
+  then backfill locally keyed by `sf_entity_id`, `source='sf_on_market_date'`, reversible, hold residual.
+  This is the durable Step-3 work brought forward (also fixes recurrence). One-shot SF report (Id,
+  On_Market_Date__c, CreatedDate) is the fast manual fallback. **Linkage caveat:** dia links ~554/657 via
+  `promotion_listing_id`; **gov ~232/901** (gov intakes carry only an artifact path, no
+  `promotion_listing_id`) → gov under-covers until the intake→listing linkage is widened (separate task;
+  the dates are in hand once the full pull lands, linkage is the gap). Prompt:
+  `CLAUDE_CODE_PROMPT_T4c_sf_comp_pull_backfill.md`.
+- **Item 3 — timing-view repoint (THE actual visible de-surge): NOT shipped, pending gate.** CC found a
+  naive `COALESCE(on_market_date, …)` repoint is **proven NOT byte-identical** — it drops 639→109
+  pre-2026-03 sold-anchored rows (the views use `eff_start = COALESCE(listing_date, sold−196d)`, so
+  nulling held rows breaks the synthetic sold anchor). Correctly **held per doctrine** (don't move
+  published history). **GATE before shipping: `dropped_pub = 0`** — the corrected repoint must preserve
+  the sold−196d anchor for sold rows and hold ONLY the artifact-dated ACTIVE rows. ⚠ **Until Item 3
+  ships, the live chart still steps at Q2-2026 close** (columns are live but the views still read
+  `listing_date`). Needs Scott's go to build the byte-identical repoint.
+- **Item 4 — recovery worker / `source_email_date` capture / mass-forward guard: built, feature-flagged
+  OFF** (`3a36fb2`, inert until `{massForward:true}` / PA sends `received_date_time`).
+
+### Operator normalization (tenant → operator)  ·  ✅ COMPLETE (2026-06-24)
+`CLAUDE_CODE_PROMPT_operator_normalization.md`. Deterministic anchored alias map
+(`api/_shared/operator-normalize.js`, single source) applied at-ingest + one-time fill-blanks backfill,
+**live on dia**. **579** blank-operator dialysis rows mapped (DaVita 268 / Fresenius 245 / USRC 44 /
+DCI 7 / ARA 2 / Satellite 1); **55** non-dialysis tenants flagged `non_dialysis` (Staples, Planet Fitness,
+Henry Ford, …) — never assigned an operator (hard guard verified, 0 leaks); **0** curated overwritten;
+**109** plausibly-dialysis residual surfaced in `v_property_operator_review` (not guessed). Reversible via
+`operator_status`. Suite 1449/0, ≤12 api/*.js. gov has no operator column (tenant=agency) → N/A. ✅ GATED.
+
+**Working order (sequential, Scott): T4c Item 3 (de-surge gate) → T2 → T7 → T8 → T10.**
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking
