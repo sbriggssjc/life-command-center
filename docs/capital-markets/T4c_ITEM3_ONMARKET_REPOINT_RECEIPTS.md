@@ -50,9 +50,19 @@ unexpected/third source moved.
   `active_listings` excludes them (fake-future `listing_date` < the freshness gate); gov
   `available_by_term` does not key on any date (stayed 44).
 - Recovered rows mostly **lack `off_market_date`** (gov 316/382, dia 291/337 open,
-  `is_active`) → open-ended spans to *now* in the active-over-time SPAN; **81 gov are
-  stale** (`last_verified_at` NULL or > 12 mo). **Follow-up DQ (not blocking):** close
-  stale recovered spans (set `off_market_date`) so the historical span ends correctly.
+  `is_active`) → open-ended spans in the active-over-time SPAN. **Gov stale spans CLOSED
+  (DONE, 2026-06-24)** — migration
+  `supabase/migrations/government/20260624_gov_t4c_item3_close_stale_recovered_spans.sql`.
+  The stale-open set (off NULL + last_verified_at NULL/>12mo) had drifted 81→41 as a
+  verification cron re-verified the rest; the remaining 41 were never verified
+  (last_verified_at NULL; updated_at/created_at = the recent import, no real signal), so
+  each span is closed at `on_market_date` (the only confirmed evidence) with
+  `off_market_reason='unverified_assumed_off'`. Removes the unverified active tail (11 of
+  41 were inflating the recent edge) + drops them from current-available, while
+  new_to_market / added are PRESERVED (they key on `on_market_date` eff_start + the addable
+  flag, not `off_market_date`). Reversible via the reason marker. dia open recovered spans
+  are not closed (dia uses the freshness gate for current stock; its open spans don't feed
+  a gov-style active-over-time series — the 06-22 audit follow-up).
 
 ## Restatement footnote
 `api/_shared/cm-excel-export.js` `CM_ONMARKET_RESTATEMENT_NOTE` appended to the
@@ -79,12 +89,20 @@ Left held: 584 truly-dateless-open + 194 off-market-not-sold (no verifiable date
   the intentionally-held 194 off-not-sold + the benign 196d→175d offset.
 - Point-in-time active count unchanged (**118** — these are sold, excluded from
   `active_listings`).
-- **DOM side-effect (surfaced, NOT changed):** these rows carry a non-synthetic
-  `data_source`, so they flow into `cm_dialysis_dom_pct_ask_m/_q` at a circular imputed
-  175-day DOM — exactly like the pre-existing `sale_anchor_est_175` rows. The dia
-  DOM-of-sold population is now ~60% imputed (876/1,453). If observed-only DOM is wanted,
-  exclude the sale-anchored `on_market_date_source` set from those two views (separate,
-  blessed change — it materially thins DOM to the 577 observed rows).
+- **DOM made observed-only (DONE, 2026-06-24)** — migration
+  `supabase/migrations/dialysis/20260624_dia_t4c_item3_dom_pct_ask_observed_only.sql`.
+  DOM from an imputed/sale-anchored date is circular (= the offset), so
+  `cm_dialysis_dom_pct_ask_m/_q` now exclude every imputed `on_market_date_source`
+  (`NOT LIKE 'synth%'/'sale_anchor%'` + the existing `synthetic_from_sale` exclusion),
+  keeping only observed dates (`sf_on_market_date` / `costar_days_on_market` /
+  `unestablished_historical` / real captured). Evidence: dropped sources sit at the
+  175 offset (synth_held sd 0; sale_anchor 91% exactly 175); the kept set
+  (unestablished_historical, 785) spreads naturally (avg 478, sd 738, 432 distinct).
+  After: DOM reflects observed time-to-sell (recent avg ~241d monthly / ~288d quarterly,
+  was pinned ~175). The existing `n_sales>=10` density floor + gap-honest rendering keep
+  thin periods as honest NULL gaps (78 monthly / 26 quarterly non-null since 2020); `_q`
+  gained the floor (it had none). **gov DOM** reads `sales_transactions` reported DOM
+  (avg 232, sd 175, 385 distinct, no 175 spike) — no sale-anchored exposure, NOT touched.
 
 ## Reversibility
 View defs only — re-create the prior `listing_date`-anchored bodies to revert; no
