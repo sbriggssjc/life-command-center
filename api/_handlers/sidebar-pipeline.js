@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, isJunkEntityName } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
@@ -508,6 +508,19 @@ export const GOV_TENANT_PATTERNS = [
   /\bstate board\b/,                             // State Board of <profession> (licensing boards)
   /\bhistorical commission\b/,                    // (TX) Historical Commission
 ];
+
+// Max chars of a sales_history[].sale_notes_raw narrative scanned for the
+// domain keyword sets. The CoStar "Sale Notes" narrative is a free-text
+// paragraph that frequently LEADS with a long physical-description preamble
+// (building count, SF, acreage, vintage) and only names the government/medical
+// TENANT in the back half. The original 300-char cap (added to "avoid bloating
+// the search string") silently truncated that tenant signal, dropping whole
+// captures to no_domain — e.g. the SVEA New Mexico portfolio (40 NM office
+// buildings) whose notes put "Government tenants … The State of New Mexico …
+// leased to the GSA" past char ~325, so /\bstate of\b/ + /\bgsa\b/ never saw
+// it. 4000 chars covers a real sale-notes paragraph end-to-end while still
+// bounding pathological input. 2026-06-25.
+export const SALE_NOTES_CLASSIFY_MAXLEN = 4000;
 
 const DIALYSIS_TENANT_PATTERNS = [
   /\bfresenius\b/,  /\bfresnius\b/,  // common misspelling from CoStar OCR
@@ -1314,7 +1327,10 @@ export function classifyDomain(metadata, entityFields) {
       // Texas Health And Human Services Commission"). Without this read the
       // capture classified no_domain even though the tenant matches a State
       // agency pattern. 2026-06-23.
-      if (ev?.sale_notes_raw) textParts.push(String(ev.sale_notes_raw).substring(0, 300));
+      // 2026-06-25: scan the FULL notes (up to SALE_NOTES_CLASSIFY_MAXLEN) —
+      // the prior 300-char cap dropped portfolio captures whose gov tenant
+      // signal sits behind a long physical-description preamble.
+      if (ev?.sale_notes_raw) textParts.push(String(ev.sale_notes_raw).substring(0, SALE_NOTES_CLASSIFY_MAXLEN));
     }
   }
 
@@ -1409,7 +1425,7 @@ function classifyAllApplicableDomains(metadata, entityFields) {
       // Texas Health And Human Services Commission"). Without this read the
       // capture classified no_domain even though the tenant matches a State
       // agency pattern. 2026-06-23.
-      if (ev?.sale_notes_raw) textParts.push(String(ev.sale_notes_raw).substring(0, 300));
+      if (ev?.sale_notes_raw) textParts.push(String(ev.sale_notes_raw).substring(0, SALE_NOTES_CLASSIFY_MAXLEN));
     }
   }
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
@@ -2056,11 +2072,19 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
   const classified = classifyDomainWithDiag(metadata, entity);
 
   if (classified) {
-    // Positive keyword match — update if it changed
-    if (classified !== entity.domain) {
+    // Positive keyword match — update if it changed. entities.domain is
+    // CHECK-constrained to the canonical short form (gov/dia/lcc/cre), but the
+    // classifier returns the long form ('government'/'dialysis') that the
+    // propagation router (propagateToDomainDb / getDomainCredentials) needs.
+    // Write the canonical value to the column (a raw 'government' silently
+    // 23514's chk_entities_domain, so the column never persisted from this
+    // path and only got set later by the bridge); keep returning the long
+    // form for the caller's routing. 2026-06-25.
+    const canonicalDomain = canonicalEntityDomain(classified);
+    if (canonicalDomain !== entity.domain) {
       await opsQuery('PATCH',
         `entities?id=eq.${entity.id}&workspace_id=eq.${workspaceId}`,
-        { domain: classified, updated_at: new Date().toISOString() }
+        { domain: canonicalDomain, updated_at: new Date().toISOString() }
       );
     }
     return classified;
@@ -3205,6 +3229,22 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
     }
   } catch (err) {
     console.warn('[sidebar-pipeline] field provenance recording failed (non-fatal):', err?.message);
+  }
+
+  // Step 5z (2026-06-25): explode a Bulk/Portfolio Sale's constituent Properties
+  // table into per-property rows. The subject property above carried the deal
+  // aggregate (now nulled by the isPortfolioAggregateSale guard); each
+  // constituent is matched-or-created by normalized address and gets its OWN
+  // per-property price from the table. Gated on the extension capturing
+  // portfolio_properties[]; fully fail-safe (never breaks the subject write).
+  if (Array.isArray(metadata.portfolio_properties) && metadata.portfolio_properties.length > 1) {
+    try {
+      results.records.portfolio_constituents =
+        await unpackPortfolioConstituents(domain, entity, metadata, provCollect);
+    } catch (err) {
+      console.warn('[portfolio-unpack] failed (non-fatal):', err?.message);
+      results.records.portfolio_constituents = { error: err?.message || String(err) };
+    }
   }
 
   return { propagated: true, ...results };
@@ -4409,6 +4449,107 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
   return count;
 }
 
+// A "Bulk/Portfolio Sale" stamps the WHOLE deal's aggregate price onto the one
+// subject property the sidebar captured — implausible as that property's
+// per-property sold_price and corrupting NBA value + cap-rate math (the SVEA
+// New Mexico portfolio: a $119.08M deal aggregate landing on 445 Camino Del Rey
+// Dr, whose real per-property price was $8.02M). detectSalePriceBleed() only
+// catches this once a SECOND constituent property arrives with the same
+// price+date — the FIRST/only capture has no sibling — so this is the
+// self-evident signal read straight off the sale itself. A per-property-
+// allocated record (set by the portfolio unpacker, which carries the row's own
+// real price from the Properties table) is exempt via _per_property_allocated.
+export function isPortfolioAggregateSale(sale) {
+  if (!sale || sale._per_property_allocated) return false;
+  const cond = String(sale.sale_condition || '').toLowerCase();
+  if (/\b(bulk|portfolio)\b/.test(cond)) return true;
+  const ttype = String(sale.transaction_type || sale.sale_type || '').toLowerCase();
+  if (/\bportfolio\b/.test(ttype)) return true;
+  const notes = String(sale.sale_notes_raw || '').toLowerCase();
+  // "...the sale of 40 suburban office buildings...", "portfolio of 12 properties"
+  if (/\bsale of\s+\d{1,3}\s+[\w-]+\s+(?:office\s+)?(?:building|propert|asset|facilit)/.test(notes)) return true;
+  if (/\bportfolio of\s+\d{1,3}\b/.test(notes)) return true;
+  return false;
+}
+
+// ── Portfolio constituent unpacking (Bulk/Portfolio Sale) ───────────────────
+//
+// A CoStar Bulk/Portfolio Sale Comp page captures one SUBJECT property + the
+// whole deal aggregate, plus (via the extension's _portfolio-parse.js) a
+// portfolio_properties[] table of every constituent. These pure helpers turn
+// the deal + each constituent into the {entity, metadata} inputs the existing
+// upsertDomainProperty + upsertDomainSales writers consume — so constituents
+// ride the SAME address-normalized match/create/dedupe + sale-write path as any
+// capture, each carrying its OWN per-property price (not the deal aggregate).
+
+// Pick the deal-level fields off the subject's most-recent (portfolio) sale.
+export function derivePortfolioDeal(metadata) {
+  const hist = Array.isArray(metadata.sales_history) ? metadata.sales_history : [];
+  // Prefer an explicit Bulk/Portfolio row; else the most-recent dated sale.
+  let deal = hist.find((s) => isPortfolioAggregateSale(s));
+  if (!deal) {
+    let best = null; let bestT = -Infinity;
+    for (const s of hist) {
+      const t = new Date(s && s.sale_date).getTime();
+      if (Number.isFinite(t) && t > bestT) { bestT = t; best = s; }
+    }
+    deal = best || hist[0] || {};
+  }
+  return {
+    sale_date:        deal.sale_date || metadata.sale_date || null,
+    buyer:            deal.buyer || deal.buyer_name || metadata.buyer || metadata.buyer_name || null,
+    seller:           deal.seller || deal.seller_name || metadata.seller || metadata.seller_name || null,
+    sale_condition:   deal.sale_condition || null,
+    sale_notes_raw:   deal.sale_notes_raw || metadata.sale_notes_raw || null,
+    total_deal_price: deal.sale_price || metadata.sale_price || null,
+    asset_type:       metadata.asset_type || null,
+    document_links:   Array.isArray(deal.document_links) ? deal.document_links : null,
+  };
+}
+
+// Build the {entity, metadata} inputs for ONE constituent. Its own table price
+// is the per-property allocation; _per_property_allocated exempts it from the
+// aggregate-null guard. The deal's sale notes ride along so the constituent
+// classifies into the same domain (gov tenant signal lives in the notes).
+export function buildConstituentInputs(domain, deal, c) {
+  if (!c || !c.address) return null;
+  const sizeKey = domain === 'government' ? 'rba' : 'building_size';
+  const priceNum = (c.sale_price != null && Number.isFinite(Number(c.sale_price)))
+    ? Number(c.sale_price) : null;
+  const sale = {
+    sale_date:        deal.sale_date || null,
+    sale_price:       priceNum != null ? `$${priceNum.toLocaleString('en-US')}` : null,
+    buyer:            deal.buyer || null,
+    seller:           deal.seller || null,
+    sale_condition:   deal.sale_condition || null,
+    sale_notes_raw:   deal.sale_notes_raw || null,
+    transaction_type: 'Portfolio',
+    document_links:   deal.document_links || undefined,
+    _per_property_allocated: true,
+    _portfolio_constituent:  true,
+  };
+  const entity = {
+    address: c.address,
+    city:    c.city || null,
+    state:   c.state || null,
+    name:    c.address,
+    domain,
+  };
+  const metadata = {
+    address:        c.address,
+    city:           c.city || null,
+    state:          c.state || null,
+    asset_type:     deal.asset_type || null,
+    property_type:  c.property_type || null,
+    ...(c.size_sf != null ? { [sizeKey]: c.size_sf, square_footage: c.size_sf } : {}),
+    // Carry the deal narrative so the constituent classifies into the same
+    // domain as the parent capture (the gov tenant signal is in the notes).
+    sale_notes_raw: deal.sale_notes_raw || null,
+    sales_history:  [sale],
+  };
+  return { entity, metadata };
+}
+
 function classifySaleType(sale) {
   // C2 Part C (2026-05-27): consult multiple signals, not just the
   // sale.sale_type/transaction_type CoStar field (which is empty 90%+ of
@@ -4925,6 +5066,39 @@ async function resolveCapRateProvenance(domain, propertyId, sale, metadata) {
  * Upsert sales transactions in the domain database.
  * Matches by property_id + sale_date + sold_price for deduplication.
  */
+// Explode a Bulk/Portfolio Sale into per-property rows. Each constituent is
+// matched-or-created by normalized address (reusing upsertDomainProperty's
+// dedupe + junk-address guards) and gets its own allocated sale written via
+// upsertDomainSales. Fully fail-safe: a single bad constituent is skipped and
+// never aborts the others or the subject write. Idempotent — a re-capture
+// resolves the same property_ids and fill-blanks the same sales.
+// NOTE: the live auto-create path needs a first-capture gate (the extension
+// portfolio_properties[] parse is verified against synthetic lines, not the
+// live CoStar DOM). 2026-06-25.
+async function unpackPortfolioConstituents(domain, entity, metadata, provCollect) {
+  const constituents = Array.isArray(metadata.portfolio_properties)
+    ? metadata.portfolio_properties : [];
+  const deal = derivePortfolioDeal(metadata);
+  const out = { count: constituents.length, matched_or_created: 0, sales_written: 0, skipped: 0, property_ids: [] };
+  for (const c of constituents) {
+    try {
+      const inputs = buildConstituentInputs(domain, deal, c);
+      if (!inputs) { out.skipped++; continue; }
+      const cPropertyId = await upsertDomainProperty(domain, inputs.entity, inputs.metadata);
+      if (!cPropertyId) { out.skipped++; continue; }
+      out.matched_or_created++;
+      out.property_ids.push(cPropertyId);
+      const n = await upsertDomainSales(domain, cPropertyId, inputs.entity, inputs.metadata, provCollect);
+      out.sales_written += (n || 0);
+    } catch (err) {
+      console.warn(`[portfolio-unpack] constituent "${c && c.address}" failed (non-fatal):`, err?.message);
+      out.skipped++;
+    }
+  }
+  console.log(`[portfolio-unpack] ${domain}: ${out.matched_or_created}/${out.count} constituents resolved, ${out.sales_written} sales written, ${out.skipped} skipped`);
+  return out;
+}
+
 async function upsertDomainSales(domain, propertyId, entity, metadata, provCollect) {
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
@@ -5014,10 +5188,17 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // (never auto-null on magnitude alone). soldPrice itself is left intact for
     // matching/broker logic; only the WRITTEN value (writeSoldPrice) changes.
     const saleBleed = await detectSalePriceBleed(domain, propertyId, soldPrice, datePart);
+    // 2026-06-25: fold in the self-evident Bulk/Portfolio signal so the
+    // first/only constituent property of a portfolio capture is caught BEFORE a
+    // sibling arrives (the gap detectSalePriceBleed's comment documents).
+    if (!saleBleed.isAggregate && isPortfolioAggregateSale(sale)) {
+      saleBleed.isAggregate = true;
+      saleBleed.portfolioAggregate = true;
+    }
     const writeSoldPrice = saleBleed.isAggregate ? null : soldPrice;
     const saleBleedExclude = saleBleed.isAggregate || saleBleed.overCeiling;
     if (saleBleed.isAggregate) {
-      console.log(`[sale-price-bleed] property=${propertyId} price=${soldPrice} date=${datePart} — portfolio aggregate detected (duplicate price+date on another property); nulling per-property price`);
+      console.log(`[sale-price-bleed] property=${propertyId} price=${soldPrice} date=${datePart} — ${saleBleed.portfolioAggregate ? 'bulk/portfolio sale aggregate (single-property capture)' : 'portfolio aggregate detected (duplicate price+date on another property)'}; nulling per-property price`);
     } else if (saleBleed.overCeiling) {
       console.log(`[sale-price-bleed] property=${propertyId} price=${soldPrice} date=${datePart} — over per-domain ceiling; flagged for human review (price retained)`);
     }
@@ -5238,7 +5419,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           // QA1: record the bleed/oversize reason (gov has no notes column).
           ...(saleBleedExclude ? {
             sales_exclusion_reason: saleBleed.isAggregate
-              ? `[portfolio-aggregate] per-property price ${soldPrice} on ${datePart} matched another property's sale; nulled — not a valid single-property sale price`
+              ? (saleBleed.portfolioAggregate
+                  ? `[portfolio-aggregate] ${soldPrice} on ${datePart} is a Bulk/Portfolio deal aggregate, not this property's price; nulled — capture all constituents for per-property prices`
+                  : `[portfolio-aggregate] per-property price ${soldPrice} on ${datePart} matched another property's sale; nulled — not a valid single-property sale price`)
               : `[oversized-sale-review] sold_price ${soldPrice} exceeds the $${SALE_PRICE_BLEED_CEILING.government.toLocaleString()} gov ceiling; flagged for human review (price retained)`,
           } : {}),
           // Financing details from deed entry.
@@ -5327,7 +5510,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
           // QA1: record the bleed/oversize reason inline in dia notes.
           saleBleed.isAggregate
-            ? `[portfolio-aggregate] per-property price ${soldPrice} on ${datePart} matched another property's sale; nulled — not a valid single-property sale price`
+            ? (saleBleed.portfolioAggregate
+                ? `[portfolio-aggregate] ${soldPrice} on ${datePart} is a Bulk/Portfolio deal aggregate, not this property's price; nulled — capture all constituents for per-property prices`
+                : `[portfolio-aggregate] per-property price ${soldPrice} on ${datePart} matched another property's sale; nulled — not a valid single-property sale price`)
             : (saleBleed.overCeiling
               ? `[oversized-sale-review] sold_price ${soldPrice} exceeds the $${SALE_PRICE_BLEED_CEILING.dialysis.toLocaleString()} dia ceiling; flagged for human review (price retained)`
               : null),
