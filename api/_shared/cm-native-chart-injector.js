@@ -209,6 +209,56 @@ function fitCapAxisRange(rows, cols) {
 }
 const PCT_OF_ASK_RANGE        = { min: 0.85,  max: 1.05  };
 
+// T2 (2026-06-25) — data-driven fit for the SECONDARY / percent / rate axes
+// (the non-cap-family cousin of fitCapAxisRange). Scott's per-chart review:
+// several %/rate axes were hardcoded to ranges that didn't match the data —
+// some clipped the line, some crushed it into a band of whitespace. This fits
+// the axis to the PLOTTED values (the caller passes the values it actually
+// charts) ± a small pad, rounded to clean bounds, with a readable-band floor so
+// a near-flat series still gets headroom. Returns null when there's nothing to
+// fit (< 2 finite points) so the caller falls back to its prior literal — no
+// regression. Both surfaces share this helper (the renderer imports it) and each
+// passes its OWN plotted window, so the native chart + PNG stay in step.
+//   kind 'percent' : ~1pt pad, snap to whole-percent bounds, clamp [0,1],
+//                    MIN_BAND 4pt so a flat line isn't a hairline.
+//   kind 'rate'    : zero-floored rate line — pin min 0, ceiling = peak +
+//                    ~15% headroom rounded up to the next whole percent.
+//   kind 'cap'     : 0.5% step (mirrors fitCapAxisRange) for cohort cap lines
+//                    fitted over an explicit (already-cropped) value array.
+function fitDataAxisRange(values, kind = 'percent') {
+  const vals = (Array.isArray(values) ? values : [])
+    .map(Number)
+    .filter((v) => Number.isFinite(v));
+  if (vals.length < 2) return null;
+  const r6 = (n) => Math.round(n * 1e6) / 1e6;
+  const mn = Math.min(...vals);
+  const mx = Math.max(...vals);
+  if (kind === 'rate') {
+    const max = Math.max(0.02, Math.ceil((mx * 1.15) / 0.01) * 0.01);
+    return { min: 0, max: r6(max) };
+  }
+  if (kind === 'cap') {
+    const STEP = 0.005;
+    let min = Math.max(0, Math.floor(mn / STEP) * STEP);
+    let max = Math.ceil(mx / STEP) * STEP;
+    if (max - min < STEP) max = min + STEP;
+    return { min: r6(min), max: r6(max) };
+  }
+  // percent (default)
+  const PAD = 0.01;
+  const GRID = 0.01;
+  const MIN_BAND = 0.04;
+  let min = Math.max(0, Math.floor((mn - PAD) / GRID) * GRID);
+  let max = Math.min(1, Math.ceil((mx + PAD) / GRID) * GRID);
+  if (max - min < MIN_BAND) {
+    const mid = (min + max) / 2;
+    min = Math.max(0, mid - MIN_BAND / 2);
+    max = Math.min(1, mid + MIN_BAND / 2);
+  }
+  if (max <= min) max = Math.min(1, min + GRID);
+  return { min: r6(min), max: r6(max) };
+}
+
 // Emit <c:scaling> block with optional min/max. If both are undefined
 // returns the default orientation-only scaling. otherwise embeds the
 // pinned range.
@@ -2204,6 +2254,7 @@ export {
   buildDrawingXml,
   heatRampColors,
   fitCapAxisRange,
+  fitDataAxisRange,
 };
 
 // ----------------------------------------------------------------------------
@@ -2658,6 +2709,7 @@ export function buildInjectionSpec(args) {
     ? minYearEntry(args.rows)
     : minYearEntry;
   let effectiveStart = args.dataStart;
+  let trimOffset = 0;
   if (minYear && Array.isArray(args.rows) && args.rows.length > 0) {
     // Find first row at or after the cutoff year. Rows arrive in
     // chronological order from the view; first match is the offset.
@@ -2671,8 +2723,17 @@ export function buildInjectionSpec(args) {
     // Don't shift past the end (safety — keep at least 1 row visible)
     if (offset < args.rows.length) {
       effectiveStart = args.dataStart + offset;
+      trimOffset = offset;
     }
   }
+  // T2 (2026-06-25) — the PLOTTED window (rows actually referenced by the
+  // chart). The data tab keeps every 2001+ row, but the chart references
+  // [effectiveStart, dataEnd]; the data-fit axis helpers must see only those
+  // rows so the fitted axis matches what the chart shows ("respecting
+  // dataStart" — Scott). Falls back to all rows when there's no trim.
+  const fitRows = (Array.isArray(args.rows) && trimOffset > 0)
+    ? args.rows.slice(trimOffset)
+    : args.rows;
   // R57 — preserve the ORIGINAL header row even when R47's axis trim
   // shifted dataStart forward. The header row in the worksheet is at a
   // fixed location set by cm-excel-export.js (row 4 by default; or 27
@@ -2681,8 +2742,8 @@ export function buildInjectionSpec(args) {
   // so they continue showing column header text ("Top Quartile") and
   // not numeric cell values from the trimmed first data row.
   const innerArgs = effectiveStart !== args.dataStart
-    ? { ...args, dataStart: effectiveStart, headerRowOverride: args.dataStart - 1 }
-    : args;
+    ? { ...args, dataStart: effectiveStart, headerRowOverride: args.dataStart - 1, fitRows }
+    : { ...args, fitRows };
   const result = buildInjectionSpecInner(innerArgs);
   if (result && result.spec && args.title) {
     result.spec.title = args.title;
@@ -2862,7 +2923,11 @@ function shiftHelperColRefs(spec, oldFirst, newFirst, helperCount) {
   }
 }
 
-function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title, headerRowOverride, vertical }) {
+function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, dataEnd, brand, rows, title, headerRowOverride, vertical, fitRows }) {
+  // T2 — rows actually plotted by the chart (cropped to the MIN_YEAR window by
+  // the wrapper). Used only by the data-fit axis helpers; defaults to all rows
+  // for direct callers/tests that don't pass it.
+  const plottedRows = Array.isArray(fitRows) ? fitRows : (Array.isArray(rows) ? rows : []);
   const palette = brand?.palette || {};
   const navy   = (palette.nm_navy   || '#003DA5').replace('#', '');
   const sky    = (palette.nm_sky    || '#62B5E5').replace('#', '');
@@ -3314,6 +3379,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           ? { min: 0.0525, max: 0.08 }   // dia
           : { min: 0.055, max: 0.0775 }; // gov
       }
+      // T2 (2026-06-25) — sold_cap_by_term was SQUEEZED: the shared capFit fits
+      // over ALL rows (dia all-years cohorts span 5.0–9.8%) → a 5–10% axis even
+      // though the displayed 2019+ window only runs ~5.5–7.5%. Fit the cohort
+      // lines over the PLOTTED window instead so the axis hugs the shown data.
+      // Scoped to sold_cap only — cap_rate_by_lease_term + the asking variant
+      // (both out of scope for this round) keep the shared capFit||cohortRange.
+      const soldCapFit = (chart_template_id === 'sold_cap_by_term_dot_plot')
+        ? fitDataAxisRange(plottedRows.flatMap((r) => series.map((s) => r[s.key])), 'cap')
+        : null;
       return {
         tabName,
         spec: {
@@ -3323,7 +3397,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           dataStart, dataEnd,
           // R37 P2 — 4-line cohort caps: 4-11% pin (renderer line ~874)
           // CM audit Task 5 — data-fit overrides the hand-tuned cohortRange.
-          yAxisRange: capFit || cohortRange,
+          yAxisRange: soldCapFit || capFit || cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: series.map(s => ({
@@ -3428,7 +3502,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // 300 ceiling was clipping it. % of ask max is 95.85%, fits 84-96%.
           yLeftNumFmt:  VAL_FMT_INTEGER,
           yLeftRange:   (vertical === 'dialysis' ? { min: 0, max: 450 } : undefined),
-          yRightRange:  (vertical === 'dialysis' ? { min: 0.84, max: 0.96 } : PCT_OF_ASK_RANGE),
+          // T2 (2026-06-25) — data-fit the % of Ask right axis to the plotted
+          // window (dia was clipping above 0.96 / below 0.84; gov was crushed
+          // into 0.85–1.05 whitespace). Falls back to the prior literal.
+          yRightRange:  fitDataAxisRange(plottedRows.map((r) => r.pct_of_ask), 'percent')
+                        || (vertical === 'dialysis' ? { min: 0.84, max: 0.96 } : PCT_OF_ASK_RANGE),
           yRightNumFmt: VAL_FMT_PERCENT_1DP,
           barSeries: [
             { titleCol: domCol, titleRow: headerRow, valCol: domCol, color: sky,
@@ -5023,8 +5101,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           barGrouping: 'stacked',
           yLeftNumFmt:  VAL_FMT_INTEGER,
           yRightNumFmt: VAL_FMT_PERCENT_1DP,
-          // Soft-term rate runs ~1-19% over history (avg 8%); pin 0-25%.
-          yRightRange:  { min: 0, max: 0.25 },
+          // T2 (2026-06-25) — data-fit the rate-line right axis. The line never
+          // exceeds ~9% over the plotted window, so the static 0-25% ceiling
+          // crushed all the movement into the bottom third. Fit to peak + ~15%
+          // headroom (→ ~0-10%); fall back to the prior 0-25% literal.
+          yRightRange:  fitDataAxisRange(plottedRows.map((r) => r.terminated_outside_firm_term_pct), 'rate')
+                        || { min: 0, max: 0.25 },
           barSeries,
           lineSeries: [
             { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: 'D97706' },
