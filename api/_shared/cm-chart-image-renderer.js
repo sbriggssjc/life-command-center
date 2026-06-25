@@ -18,7 +18,7 @@
 // Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
-import { heatRampColors } from './cm-native-chart-injector.js';
+import { heatRampColors, fitDataAxisRange } from './cm-native-chart-injector.js';
 
 const QUICKCHART_URL =
   process.env.CM_QUICKCHART_URL || 'https://quickchart.io/chart';
@@ -932,7 +932,11 @@ function buildChartConfig(chart, brand) {
             // R66n/R66t — % of ask 84-96%; DOM widened 300 -> 450 (gated n>=10,
             // smoothed; recent climb to 345/411 is real slowdown, was clipping).
             yLeftRange:   (isDia ? { min: 0, max: 450 } : undefined),
-            yRightRange:  (isDia ? { min: 0.84, max: 0.96 } : PCT_OF_ASK_RANGE),
+            // T2 (2026-06-25) — data-fit the % of Ask right axis to the plotted
+            // window (dia was clipping above 0.96 / below 0.84; gov was crushed
+            // into 0.85–1.05 whitespace). Falls back to the prior literal.
+            yRightRange:  fitDataAxisRange(rows.map(r => r.pct_of_ask), 'percent')
+                          || (isDia ? { min: 0.84, max: 0.96 } : PCT_OF_ASK_RANGE),
           });
           // Annotations: peak/trough/last on % of Ask line.
           // Round 17 — pin annotations to the right-axis ('y1') so
@@ -1750,8 +1754,12 @@ function buildChartConfig(chart, brand) {
       const hasSoftTermRate = softTermRate.some(v => v != null);
       const opts = hasSoftTermRate
         ? comboOpts({ yLeftFormat: AXIS_FORMAT_INTEGER, yRightFormat: AXIS_FORMAT_PERCENT_1DP,
-                      // Soft-term rate runs ~1-19% over history (avg 8%); pin 0-25%.
-                      yRightRange: { min: 0, max: 0.25 } })
+                      // T2 (2026-06-25) — data-fit the rate-line right axis. The
+                      // line never exceeds ~9% over the plotted window, so the
+                      // static 0-25% ceiling crushed the movement into the bottom
+                      // third. Fit to peak + ~15% headroom (→ ~0-10%); fall back
+                      // to the prior 0-25% literal.
+                      yRightRange: fitDataAxisRange(softTermRate, 'rate') || { min: 0, max: 0.25 } })
         : commonOpts({ yAxisFormat: AXIS_FORMAT_INTEGER });
       opts.scales.x.stacked = true;
       opts.scales.y.stacked = true;
