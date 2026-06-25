@@ -226,11 +226,20 @@ and believes 2013 was >8,000. **Action:** make the inventory-over-time chart a *
 count** per period (not cumulative); validate the historical level (was it ≥8,000 in 2013?); reconcile
 the annual expiration/termination counts against the active denominator (the 1,500 vs 8,000 ratio).
 
-### T9 — Data anomalies to investigate  ·  P2
-**Notes:** dia 6 (funky 2022-23) · gov 26 (2018/19 avg = upper quartile — statistically impossible
-without a data issue) · gov 28 (funky x-axis). **Grounded:** dia 2023-24 dip already explained (capture
-lag); the 2022-23 "funky," the gov avg==upper-quartile, and the gov x-axis glitch are not yet examined.
-**Action:** investigate each — the avg==upper-quartile one is the clearest data/calc bug signal.
+### T9 — Cap-rate data anomalies  ·  P2  ·  ⏳ PROMPT ISSUED (`CLAUDE_CODE_PROMPT_T9_cap_data_anomalies.md`)
+**June-25 cap-data cluster (grounded 2026-06-24), 3 units — investigate-then-fix, data before axis:**
+1. **gov core-cap dot outliers** — `cm_gov_core_cap_dot_q` (←`cm_gov_core_cap_rate_dots`, firm≥6, cap
+   0.04-0.12): n=503, p50 6.95% / p95 8.0% / max 11.97%; **6 sales in the 9-12% band** (visible outliers)
+   + **13 more >12%** already filtered. Re-derive cap=NOI/price → correct/exclude errors, keep real
+   high-caps; then ceiling ~9% (T2 fitDataAxisRange).
+2. **gov cap-by-term** — `cm_gov_cap_by_term_m` has **`cap_6to10`==`cap_5to10` (duplicate cols)**, round
+   pins (0.075), `cap_outside_firm` all NULL → dup-column bug + small-sample. Dedup cohorts, density-floor
+   thin buckets, report bucket-n. (Same review on `_q`/`sold_cap_by_term_dot` which carry a window MA.)
+3. **dia asking-cap quartiles static** — `cm_dialysis_asking_cap_quartiles_active_m` pinned
+   (`lower_q_core`=0.061, `lower_q_total`≈0.0586 for months). Investigate stale/clustered/small-pool
+   asking caps; remediate if a data bug, document if real; **axis deferred** until the data answer.
+**Earlier T9 sub-notes (not yet examined, lower priority):** dia 6 (funky 2022-23), gov 26 (avg==upper
+quartile — clearest calc-bug signal), gov 28 (funky x-axis). Fold into the data review if related.
 
 ### T10 — Chart design / type  ·  P3 (mostly quick)
 **Notes:** dia 15 (remove the **Undisclosed Term** bar — confirmed present, 38 listings) · gov 24
