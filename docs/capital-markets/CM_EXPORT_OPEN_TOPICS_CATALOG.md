@@ -34,13 +34,25 @@ the real bug; these charts stay floored where the data is genuinely sparse/degen
 complete and correct as shipped — no further change. (So when these charts still "start late" in the
 next export, that is intended, not a miss.)
 
-### T2 — Y-axis fitting on the non-cap charts  ·  P1
-**Notes:** dia 3 (% of ask), 4, 10, 13 · gov (various trendlines). **Grounded:** the cap-rate auto-fit
-DID land (Cap Avg 5.0-9.0%, Quartile 5.0-9.5%, NM-vs-Market 5.5-9.0%, term buckets fitted). BUT the
-auto-fit only targeted the cap band [0.2%-30%], so it **missed**: the **% of asking price** secondary
-axis on "Days on Market & % of Ask" (still 0-450 DOM scale; % line crushed), renewal/termination-rate
-%s, and other non-cap percent trendlines. **Action:** extend the fitted-axis logic to non-cap percent
-series (% of ask ~85-105%, renewal rates, returns) and secondary axes — same data-driven floor/ceiling.
+### T2 — Y-axis fitting on the non-cap charts  ·  P1  ·  ⏳ PROMPT ISSUED (axis split from data)
+**Grounded against the June-25 export (Scott's per-chart notes 2026-06-24).** The "% of ask crushed under
+the 0-450 DOM scale" headline was ALREADY fixed (the native injector + PNG renderer put % on a fitted
+secondary right axis, injector ~3431) — the June-23 note was stale. The REAL residuals are
+mis-RANGED axes (clip or whitespace), split from genuine DATA issues:
+**Pure axis fixes — `CLAUDE_CODE_PROMPT_T2_axis_fit.md` (do now, config-only, both injector + PNG):**
+1. dia `dom_and_pct_of_ask` % axis `{0.84,0.96}` CLIPS (data 0.78-0.99; line exits top 2016-17 / bottom
+   2015) → widen to ~{0.78,1.00}/data-fit.
+2. gov `dom_and_pct_of_ask` % axis `{0.85,1.05}` TOO WIDE (line only 0.92-0.97) → tighten ~{0.90,1.00}.
+3. gov `lease_termination_rate` rate-line ceiling 25% TOO HIGH (line <10%) → ~{0,0.10}.
+4. dia `sold_cap_by_term_dot_plot` cap axis `{0.05,0.10}` SQUEEZED (data 5.5-7.5%) → ~{0.055,0.075}.
+**DATA issues — queued (Scott: resolve data before y-axis):**
+- dia Asking Cap Quartiles (active) flat (core+overall) → **T9** (active-cap data static).
+- dia Asking Cap by Lease Term moves too smoothly → **T3b-asking** (apply the T3 sold-side de-smoothing /
+  bucket fix to the ASKING side; the sold side now "moves like it's more accurate").
+- gov Cap by Remaining Lease Term "all over the place" → **T9** (data review).
+- gov core cap dot plot 5-6 outliers to investigate/exclude, then ~9% ceiling → **T9** then axis.
+- gov Lease Termination COUNTS bar — wants ACTIVE leases per interval over time (>1,750 in 2013; looks
+  like only currently-active projected back) → **T8** (point-in-time historical active-lease count).
 
 ### T3 — Cap-by-term: VIEW FORMULA correct (verified) ✅  ·  but T3b export-mapping inconsistency found ⚠
 **Notes:** dia 7, 13, 14 · gov 19, 31.
@@ -159,7 +171,29 @@ Henry Ford, …) — never assigned an operator (hard guard verified, 0 leaks); 
   these; they stay honestly held (future CoStar/platform date or genuinely dateless). Item 3 holds them
   out of the timing axis.
 
-**Working order (sequential, Scott): ✅ T4c recovery (done) → T4c Item 3 (the de-surge gate, OPEN) → T2 → T7 → T8 → T10.**
+- ✅ **T4c Item 3 + closeout COMPLETE (2026-06-24, data side, PR #1333).** Canonical `on_market_date`
+  repoint of all CM timing/DOM/ramp/span series (both DBs); `listing_date` demoted to raw/audit
+  (column COMMENTs + audit of readers). **Restate, accuracy-first** — recovered + sale-anchored dates plot
+  at true historical months; isolation-proven (recovered-excluded = byte-identical to old for
+  new-to-market + gov added; remaining published delta = intended held-NULL de-surge + recovered
+  restatement). **Sale-anchored 571 genuinely-sold dia held listings** (`sold−175`, source
+  `synth_sale_minus_median_dom_held`) → dia `added` −6,411 → −1,360 (residual = 194 off-not-sold held, no
+  verifiable date, correctly held). **DOM-of-sold observed-only** (dia: excludes `synth%`/`sale_anchor%`
+  imputed sources that were 54% pinned at 175; gov verified no exposure — reads `sales_transactions`).
+  **Current active/available STOCK count stays freshness-gated** (dia 118, gov 44 — NOT switched to
+  on_market_date). 41 stale gov recovered spans closed at `on_market_date`. Restatement footnote on
+  supply-side captions. All reversible; ≤12 api/*.js.
+- ✅ **T4c EXPORT GATE: PASS (June 25 exports, verified 2026-06-24).** dia available **118** / gov **44**
+  (freshness-gated, NOT tripled); no artifact surge (dia ramps 11→118; gov 101→116→95); restate visible —
+  **gov +5,200 historical active-months** (Jun18 126→171, Jun20 121→170, Jun22 100→133 = recovered real
+  listings at true months), dia net ~flat (de-surge ↔ sale-anchor offset, composition corrected); DOM off
+  the 175 plateau (dia sold 224→303 / active 167→346; gov natural 118–184, untouched); canonical
+  `on_market_date` drives timing on both DBs. **T4c CLOSED end-to-end.**
+- ⏳ **Closeouts:** (a) merge PR #1333 + #1329 (ships the restatement caption footnote — confirm it renders
+  on the post-merge export); (b) regenerate the PA flow SAS key (leaked `sig`) + refresh
+  `SF_RECORD_LOOKUP_URL`.
+
+**Working order (sequential, Scott): ✅ T4 / T4b / T4c (DONE) → ▶ T2 (active) → T7 → T8 → T10.**
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking
