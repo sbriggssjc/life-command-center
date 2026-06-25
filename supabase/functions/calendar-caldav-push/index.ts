@@ -161,10 +161,19 @@ function normalizeTitle(row: Record<string, unknown>): string {
   const fallbackEmoji = String(row.emoji ?? "").trim();
   const cleaned = clean(String(row.subject ?? "")) || "(untitled)";
 
-  // 1) content rule (highest priority match) — restyle to the standard
+  // 1) AUTHORITATIVE registry template wins (e.g. TeamSnap "{emoji} {kid} soccer: {summary}"
+  //    with kid from the registry, or business "{summary}"). Content rules must NOT override
+  //    these — otherwise a TeamSnap "… - PDA" loses the kid (kid lives in the registry, not the title).
+  if (row.title_template) {
+    let body = applyTemplate(String(row.title_template), row) || cleaned;
+    if (fallbackEmoji && !body.startsWith(fallbackEmoji)) body = fallbackEmoji + " " + body;
+    return body.replace(/\s+/g, " ").trim();
+  }
+
+  // 2) content rule (for events with no registry template — manual/shared-calendar entries)
   const rule = RULES.find((r) => r.re.test(cleaned));
   if (rule) {
-    const kid = detectKid(cleaned);
+    const kid = detectKid(cleaned) || (row.calendar_kid ? String(row.calendar_kid) : null);
     if (rule.format === "kid_sport") {
       let detail = cleaned;
       if (kid) detail = detail.replace(new RegExp("\\b" + kid + "\\b", "ig"), " ");
@@ -181,10 +190,8 @@ function normalizeTitle(row: Record<string, unknown>): string {
     return (rule.emoji + " " + cleaned).trim(); // plain
   }
 
-  // 2) no rule -> registry behavior (title_template or subject) + domain emoji
-  const tpl = row.title_template ? String(row.title_template) : null;
-  let body = tpl ? applyTemplate(tpl, row) : cleaned;
-  if (!body) body = "(untitled)";
+  // 3) fallback -> domain emoji + cleaned subject
+  let body = cleaned;
   if (fallbackEmoji && !body.startsWith(fallbackEmoji)) body = fallbackEmoji + " " + body;
   return body;
 }
