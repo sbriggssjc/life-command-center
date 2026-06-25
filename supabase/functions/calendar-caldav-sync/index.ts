@@ -16,9 +16,19 @@ async function dav(method: string, url: string, body?: string, depth = "0") {
   const headers: Record<string, string> = { Authorization: AUTH, "User-Agent": "cortex-caldav/1.0" };
   if (body) headers["Content-Type"] = "application/xml; charset=utf-8";
   if (method === "PROPFIND" || method === "REPORT") headers["Depth"] = depth;
-  const r = await fetch(url, { method, headers, body });
-  const text = await r.text();
-  return { status: r.status, text, finalUrl: r.url };
+  let target = url;
+  for (let hop = 0; hop < 5; hop++) {
+    const r = await fetch(target, { method, headers, body, redirect: "manual" });
+    if ([301,302,303,307,308].includes(r.status)) {
+      const loc = r.headers.get("location"); await r.text();
+      if (!loc) return { status: r.status, text: "", finalUrl: target };
+      target = loc.startsWith("http") ? loc : new URL(target).origin + loc;
+      continue;
+    }
+    const text = (await r.text()).replace(/(<\/?)[A-Za-z][\w.-]*:/g, "$1");
+    return { status: r.status, text, finalUrl: target };
+  }
+  return { status: 508, text: "too many redirects", finalUrl: target };
 }
 
 function rxAll(re: RegExp, s: string): string[] {
@@ -63,14 +73,14 @@ async function discoverCalendars() {
   // 1. principal
   let r = await dav("PROPFIND", "https://caldav.icloud.com/",
     `<d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>`);
-  const principal = rxAll(/<current-user-principal>[\s\S]*?<href>([^<]+)<\/href>/gi, r.text)[0];
+  const principal = rxAll(/current-user-principal[^>]*>[\s\S]*?<href[^>]*>([^<]+)<\/href>/gi, r.text)[0];
   if (!principal) throw new Error("no principal (status " + r.status + ")");
   const base = new URL(r.finalUrl || "https://caldav.icloud.com/");
   const principalUrl = principal.startsWith("http") ? principal : base.origin + principal;
   // 2. calendar-home-set
   r = await dav("PROPFIND", principalUrl,
     `<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set/></d:prop></d:propfind>`);
-  const home = rxAll(/calendar-home-set>[\s\S]*?<href>([^<]+)<\/href>/gi, r.text)[0];
+  const home = rxAll(/calendar-home-set[^>]*>[\s\S]*?<href[^>]*>([^<]+)<\/href>/gi, r.text)[0];
   if (!home) throw new Error("no calendar-home");
   const homeUrl = home.startsWith("http") ? home : new URL(principalUrl).origin + home;
   // 3. list calendars (displayname + resourcetype)
@@ -80,8 +90,8 @@ async function discoverCalendars() {
   const blocks = r.text.split(/<response[ >]/i).slice(1);
   for (const b of blocks) {
     if (!/calendar\b/i.test(b)) continue; // resourcetype contains <calendar/>
-    const href = (b.match(/<href>([^<]+)<\/href>/i) || [])[1];
-    const name = (b.match(/<displayname>([^<]*)<\/displayname>/i) || [])[1];
+    const href = (b.match(/<href[^>]*>([^<]+)<\/href>/i) || [])[1];
+    const name = (b.match(/<displayname[^>]*>([^<]*)<\/displayname>/i) || [])[1];
     if (href && name) cals.push({ href: href.startsWith("http") ? href : new URL(homeUrl).origin + href, name });
   }
   return cals;
@@ -104,9 +114,12 @@ async function ingestCalendar(cal: { href: string; name: string }) {
              start_time: s.iso, end_time: en.iso, location: e.LOCATION || null, is_all_day: s.allDay,
              calendar_name: tag, synced_at: new Date().toISOString() };
   }).filter((x) => x.start_time);
-  if (rows.length) await rest("calendar_events?on_conflict=id", { method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
-  return { calendar: cal.name, events: vevents.length, upserted: rows.length };
+  const seen = new Map<string, Record<string, unknown>>();
+  for (const r of rows) seen.set(r.id as string, r);   // dedupe recurring/dup UIDs within the batch
+  const dedup = [...seen.values()];
+  if (dedup.length) await rest("calendar_events?on_conflict=id", { method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(dedup) });
+  return { calendar: cal.name, events: vevents.length, upserted: dedup.length };
 }
 
 Deno.serve(async (req: Request) => {
