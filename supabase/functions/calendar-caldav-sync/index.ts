@@ -140,10 +140,11 @@ Deno.serve(async (req: Request) => {
   if (!APPLE_ID || !APPLE_PW) return Response.json({ ok: false, error: "APPLE_ID / APPLE_APP_PASSWORD secrets not set" }, { status: 400 });
   try {
     const allCals = await discoverCalendars();
-    // EXCLUDE Cortex's own write-back target(s) — reading them back would create a feedback loop.
-    const WRITE_TARGETS = new Set([(Deno.env.get("CORTEX_CAL_NAME") || "Cortex").toLowerCase()]);
-    const cals = allCals.filter((c) => !WRITE_TARGETS.has(String(c.name).trim().toLowerCase()));
-    if (req.method === "GET") return Response.json({ service: "calendar-caldav-sync", calendars: cals.map((c) => c.name), excluded: allCals.filter((c) => WRITE_TARGETS.has(String(c.name).trim().toLowerCase())).map((c) => c.name) });
+    // EXCLUDE all of Cortex's own write-back calendars (the single "Cortex" + every
+    // "Cortex – <Domain>") — reading them back would create a feedback loop.
+    const isWriteTarget = (n: string) => /^cortex\b/i.test(String(n).trim());
+    const cals = allCals.filter((c) => !isWriteTarget(c.name));
+    if (req.method === "GET") return Response.json({ service: "calendar-caldav-sync", calendars: cals.map((c) => c.name), excluded: allCals.filter((c) => isWriteTarget(c.name)).map((c) => c.name) });
     const results = [];
     for (const c of cals) { try { results.push(await ingestCalendar(c)); } catch (e) { results.push({ calendar: c.name, error: String((e as Error).message) }); } }
     return Response.json({ ok: true, calendars_found: cals.length, results });

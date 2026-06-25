@@ -22,6 +22,21 @@ const AUTH = "Basic " + btoa(APPLE_ID + ":" + APPLE_PW);
 const CAL_NAME = Deno.env.get("CORTEX_CAL_NAME") || "Cortex";
 const DOMAIN_FILTER = (Deno.env.get("CORTEX_PUSH_DOMAINS") || "").split(",").map((s) => s.trim()).filter(Boolean);
 
+// Per-domain colored iCloud calendars. iOS colors PER CALENDAR (not per event),
+// so one calendar per domain = distinct colors that sync to iPhone/Mac/Outlook.
+const DOMAIN_CALS: Record<string, { name: string; color: string }> = {
+  business: { name: "Cortex – Work",     color: "#1BADF8FF" }, // blue
+  family:   { name: "Cortex – Family",   color: "#34C759FF" }, // green
+  coaching: { name: "Cortex – Coaching", color: "#FF9500FF" }, // orange
+  personal: { name: "Cortex – Personal", color: "#AF52DEFF" }, // purple
+  home:     { name: "Cortex – Home",     color: "#A2845EFF" }, // brown
+  travel:   { name: "Cortex – Travel",   color: "#5AC8FAFF" }, // teal
+};
+const DEFAULT_CAL = { name: "Cortex – Other", color: "#8E8E93FF" }; // graphite
+function calSpecForDomain(domain: string | null | undefined) {
+  return (domain && DOMAIN_CALS[domain]) || DEFAULT_CAL;
+}
+
 // ---- CalDAV transport (mirrors calendar-caldav-sync: redirect-safe, ns-stripped) ----
 async function dav(method: string, url: string, body?: string, depth = "0", extra: Record<string, string> = {}) {
   const headers: Record<string, string> = { Authorization: AUTH, "User-Agent": "cortex-caldav-push/1.0", ...extra };
@@ -68,27 +83,48 @@ async function homeUrl(): Promise<string> {
   if (!home) throw new Error("no calendar-home");
   return home.startsWith("http") ? home : new URL(principalUrl).origin + home;
 }
-async function findOrCreateCalendar(home: string): Promise<string> {
+// List every calendar in the home as {href, name}.
+async function listCalendars(home: string): Promise<{ href: string; name: string }[]> {
   const r = await dav("PROPFIND", home,
     `<d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/></d:prop></d:propfind>`, "1");
   const origin = new URL(home).origin;
+  const out: { href: string; name: string }[] = [];
   for (const b of r.text.split(/<response[ >]/i).slice(1)) {
     if (!/calendar\b/i.test(b)) continue;
     const href = (b.match(/<href[^>]*>([^<]+)<\/href>/i) || [])[1];
     const name = (b.match(/<displayname[^>]*>([^<]*)<\/displayname>/i) || [])[1];
-    if (href && name && name.trim().toLowerCase() === CAL_NAME.toLowerCase())
-      return href.startsWith("http") ? href : origin + href;
+    if (href && name) out.push({ href: href.startsWith("http") ? href : origin + href, name: name.trim() });
   }
-  // not found -> MKCALENDAR a fresh one
-  const slug = "cortex-" + crypto.randomUUID().slice(0, 8);
-  const calUrl = home.replace(/\/$/, "") + "/" + slug + "/";
-  const mk = await dav("MKCALENDAR", calUrl,
-    `<c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop>` +
-    `<d:displayname>${CAL_NAME}</d:displayname>` +
-    `<c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set>` +
-    `</d:prop></d:set></c:mkcalendar>`);
-  if (mk.status >= 400) throw new Error("MKCALENDAR failed " + mk.status + ": " + mk.text.slice(0, 200));
+  return out;
+}
+async function setCalendarColor(calUrl: string, color: string) {
+  await dav("PROPPATCH", calUrl,
+    `<d:propertyupdate xmlns:d="DAV:" xmlns:i="http://apple.com/ns/ical/"><d:set><d:prop>` +
+    `<i:calendar-color>${color}</i:calendar-color></d:prop></d:set></d:propertyupdate>`);
+}
+// Find or create a calendar by display name; set its color. Cached per run.
+const _calCache = new Map<string, string>();
+async function findOrCreateCalendarByName(home: string, name: string, color?: string): Promise<string> {
+  if (_calCache.has(name)) return _calCache.get(name)!;
+  const cals = await listCalendars(home);
+  let calUrl = cals.find((c) => c.name.toLowerCase() === name.toLowerCase())?.href;
+  if (!calUrl) {
+    const slug = "cortex-" + crypto.randomUUID().slice(0, 8);
+    calUrl = home.replace(/\/$/, "") + "/" + slug + "/";
+    const mk = await dav("MKCALENDAR", calUrl,
+      `<c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop>` +
+      `<d:displayname>${name}</d:displayname>` +
+      `<c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set>` +
+      `</d:prop></d:set></c:mkcalendar>`);
+    if (mk.status >= 400) throw new Error("MKCALENDAR '" + name + "' failed " + mk.status + ": " + mk.text.slice(0, 160));
+    if (color) await setCalendarColor(calUrl, color);
+  }
+  _calCache.set(name, calUrl);
   return calUrl;
+}
+async function calForDomain(home: string, domain: string | null | undefined): Promise<string> {
+  const spec = calSpecForDomain(domain);
+  return await findOrCreateCalendarByName(home, spec.name, spec.color);
 }
 
 // ---- normalization: registry conventions -> one consistent title everywhere ----
@@ -168,7 +204,6 @@ function uidFor(eventId: string): string {
 
 async function run(dryRun: boolean, limit = 0, ORDER_ASC = false) {
   const home = await homeUrl();
-  const calUrl = await findOrCreateCalendar(home);
 
   // desired set
   let q = "v_calendar_events_merged?select=id,subject,start_time,end_time,location,is_all_day,cortex_domain,calendar_sport,calendar_kid,emoji,color,title_template,canonical_source&order=start_time." + (ORDER_ASC ? "asc" : "desc");
@@ -181,7 +216,7 @@ async function run(dryRun: boolean, limit = 0, ORDER_ASC = false) {
   const ledgerBy = new Map<string, Record<string, unknown>>();
   for (const l of ledger) ledgerBy.set(String(l.event_id), l);
 
-  const res = { calendar: calUrl, total: rows.length, created: 0, updated: 0, unchanged: 0, deleted: 0, errors: [] as string[] };
+  const res = { calendars: {} as Record<string, string>, total: rows.length, created: 0, updated: 0, unchanged: 0, moved: 0, deleted: 0, errors: [] as string[] };
   const desiredIds = new Set<string>();
 
   for (const row of rows) {
@@ -192,10 +227,16 @@ async function run(dryRun: boolean, limit = 0, ORDER_ASC = false) {
     const hash = await hashOf(stableSig(row, uid));
     const prev = ledgerBy.get(eventId);
     const title = normalizeTitle(row);
-    if (prev && prev.deleted_at == null && prev.content_hash === hash) { res.unchanged++; continue; }
+    // target calendar for this event's domain
+    const targetCal = await calForDomain(home, row.cortex_domain as string | null);
+    res.calendars[calSpecForDomain(row.cortex_domain as string).name] = targetCal;
+    const inRightCal = !!prev?.href && String(prev.href).startsWith(targetCal);
+    if (prev && prev.deleted_at == null && prev.content_hash === hash && inRightCal) { res.unchanged++; continue; }
     if (dryRun) { prev ? res.updated++ : res.created++; continue; }
-    const href = (prev?.href as string) || (calUrl.replace(/\/$/, "") + "/" + uid + ".ics");
+    const href = inRightCal ? (prev!.href as string) : (targetCal.replace(/\/$/, "") + "/" + uid + ".ics");
     try {
+      // Migrating to a different (domain) calendar: delete the old resource first.
+      if (prev?.href && !inRightCal) { try { await dav("DELETE", String(prev.href), undefined, "0"); res.moved++; } catch { /* ignore */ } }
       // iCloud throttles bulk writes with 503/429 — retry with backoff so cron converges quietly.
       let put = await dav("PUT", href, ics, "0", { "Content-Type": "text/calendar; charset=utf-8" });
       for (let attempt = 0; (put.status === 503 || put.status === 429) && attempt < 4; attempt++) {
@@ -235,8 +276,54 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   try {
     if (req.method === "GET" && url.searchParams.get("probe") === "1") {
-      const home = await homeUrl(); const calUrl = await findOrCreateCalendar(home);
-      return Response.json({ service: "calendar-caldav-push", calendar: calUrl, cal_name: CAL_NAME });
+      const home = await homeUrl();
+      const cals = await listCalendars(home);
+      return Response.json({ service: "calendar-caldav-push", domain_calendars: DOMAIN_CALS, existing: cals.map((c) => c.name) });
+    }
+    // Admin: list event summaries in a named calendar (to inspect leftovers safely).
+    if (req.method === "GET" && url.searchParams.get("inspect")) {
+      const want = String(url.searchParams.get("inspect")).toLowerCase();
+      const home = await homeUrl();
+      const cals = await listCalendars(home);
+      const cal = cals.find((c) => c.name.trim().toLowerCase() === want);
+      if (!cal) return Response.json({ ok: false, error: "no calendar named " + want });
+      const rep = await dav("REPORT", cal.href,
+        `<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-data/></d:prop>` +
+        `<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>`, "1");
+      const datas = rxAll(/<calendar-data[^>]*>([\s\S]*?)<\/calendar-data>/gi, rep.text)
+        .map((d) => d.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
+      const items = datas.map((d) => ({
+        summary: (d.match(/SUMMARY:(.+)/) || [])[1]?.trim(),
+        dtstart: (d.match(/DTSTART[^:]*:(.+)/) || [])[1]?.trim(),
+        uid: (d.match(/UID:(.+)/) || [])[1]?.trim(),
+      }));
+      return Response.json({ ok: true, calendar: cal.name, count: items.length, items });
+    }
+    // Admin: delete a named calendar outright (post-migration cleanup of the legacy "Cortex").
+    if (req.method === "GET" && url.searchParams.get("retire_force")) {
+      const want = String(url.searchParams.get("retire_force")).toLowerCase();
+      const home = await homeUrl();
+      const cals = await listCalendars(home);
+      const cal = cals.find((c) => c.name.trim().toLowerCase() === want);
+      if (!cal) return Response.json({ ok: false, error: "no calendar named " + want });
+      const del = await dav("DELETE", cal.href, undefined, "0");
+      return Response.json({ ok: del.status < 400, calendar: cal.name, status: del.status });
+    }
+    // Admin: delete the legacy single "Cortex" calendar once it's empty (post-migration).
+    if (req.method === "GET" && url.searchParams.get("retire_empty") === "1") {
+      const home = await homeUrl();
+      const cals = await listCalendars(home);
+      const out: string[] = [];
+      for (const c of cals) {
+        if (c.name.trim().toLowerCase() !== CAL_NAME.toLowerCase()) continue; // only the bare legacy "Cortex"
+        const rep = await dav("REPORT", c.href,
+          `<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/></d:prop>` +
+          `<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>`, "1");
+        const count = (rep.text.match(/<response[ >]/gi) || []).length;
+        if (count === 0) { const del = await dav("DELETE", c.href, undefined, "0"); out.push(c.name + " -> DELETE " + del.status); }
+        else out.push(c.name + " -> kept (" + count + " events)");
+      }
+      return Response.json({ ok: true, retired: out });
     }
     const dryRun = url.searchParams.get("dry") === "1";
     const limit = parseInt(url.searchParams.get("limit") || "0", 10) || 0;
