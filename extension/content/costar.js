@@ -127,6 +127,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
 
     let address = null;
     let headingEl = null;
+    let headingOccupant = null;
 
     for (const sel of ['h1', 'h2', 'h3']) {
       const el = document.querySelector(sel);
@@ -136,6 +137,26 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
           address = parsed;
           headingEl = el;
           break;
+        }
+      }
+    }
+
+    // Round 76 (2026-06-25): capture the heading's OCCUPANT suffix. CoStar
+    // sale-comp headings are "<address> - <property/occupant name>", e.g.
+    // "13838 Buffalo Speedway - State of Texas". parseAddress keeps only the
+    // street and drops the suffix — but that suffix is frequently the ONLY
+    // government/operator tenant signal on the Summary page (the Tenant tab is
+    // separate, and the Sale Notes may not name the tenant). We stash it into
+    // building_name (read by the domain classifier) so "State of Texas" →
+    // government instead of no_domain.
+    if (headingEl) {
+      const segs = (headingEl.textContent || '').trim()
+        .split(/\s+[-–—|]\s+/).map((s) => s.trim()).filter(Boolean);
+      if (segs.length > 1) {
+        const tail = segs.slice(1).join(' - ').trim();
+        // Guard: a real occupant/property name, not a second address or junk.
+        if (tail && tail.length >= 3 && tail.length <= 80 && !/^\d/.test(tail)) {
+          headingOccupant = tail;
         }
       }
     }
@@ -192,6 +213,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
 
     if (!lines) lines = getPageLines();
     const data = extractFields(lines, url);
+    // Fill building_name from the heading occupant suffix when the structured
+    // field didn't capture one (the "13838 Buffalo Speedway - State of Texas"
+    // gov signal). Fill-blanks only — never clobber a real building name.
+    if (headingOccupant && !data.building_name) {
+      data.building_name = headingOccupant;
+    }
     // Run BOTH contact extractors (DOM-based captures mailto:/tel: icon
     // links; text-based catches older layouts and blocks that don't have
     // explicit contact links) and merge the results. Running only one
@@ -484,7 +511,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 23,
+        _version: 24,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
