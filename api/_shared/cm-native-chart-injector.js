@@ -174,6 +174,8 @@ const CAP_AXIS_FIT_TEMPLATES = new Set([
   'cap_rate_top_bottom_quartile',
   'nm_vs_market_cap',
   'cap_rate_by_lease_term',
+  'core_cap_rate_dot_plot',   // T9 (2026-06-25): data-fit the core-sold-cap scatter
+                              // (~9% ceiling once the inflated derived caps are excluded)
   'sold_cap_by_term_dot_plot',
   'asking_cap_by_term_dot_plot',
   'asking_cap_quartiles_active',
@@ -3663,7 +3665,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           tabName,
           dataStart, dataEnd,
           // R37 P2 — y axis cap rate 4-12% (renderer line ~2071).
-          yAxisRange: CAP_RATE_DOT_RANGE,
+          // T9 (2026-06-25) — data-fit the cap axis over the PLOTTED dots so
+          // the ceiling hugs the (now error-free) sold-cap range (~9%) instead
+          // of the static 4-12%. The inflated derived cap_rate_history outliers
+          // are excluded upstream in cm_gov_core_cap_rate_dots, so the fit is
+          // honest. Falls back to the literal when the fit is empty.
+          yAxisRange: capFit || CAP_RATE_DOT_RANGE,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           // R67 — pin x-axis to data range (was auto-scaled).
           xAxisRange,
