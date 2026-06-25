@@ -2229,7 +2229,7 @@ function extractSourceFields(ctx) {
 //   - Other arrays not in the list: fresh wins (default spread).
 function mergeMetadataPreservingArrays(existing, fresh) {
   const merged = { ...(existing || {}), ...(fresh || {}) };
-  const PRESERVE_IF_FRESH_EMPTY = ['tenants', 'contacts', 'sales_history', 'documents', 'document_links', 'pdf_extracted_texts'];
+  const PRESERVE_IF_FRESH_EMPTY = ['tenants', 'contacts', 'sales_history', 'documents', 'document_links', 'pdf_extracted_texts', 'portfolio_properties'];
   for (const key of PRESERVE_IF_FRESH_EMPTY) {
     const existingVal = existing && existing[key];
     const freshVal    = fresh    && fresh[key];
@@ -2388,6 +2388,13 @@ function buildMetadata(ctx, domain) {
     tenants: ctx.tenants || [],
     contacts: ctx.contacts || [],
     sales_history: ctx.sales_history || [],
+    // Bulk/Portfolio Sale Comp constituent table (content/_portfolio-parse.js
+    // → costar.js accumulated.portfolio_properties). MUST be whitelisted here
+    // or the captured 40-row table is silently dropped before reaching the
+    // pipeline — the same class of bug as the `loans` drop below (2026-06-25).
+    // The pipeline's propagateToDomainDbDirect unpacks this into per-property
+    // constituents when length > 1.
+    portfolio_properties: ctx.portfolio_properties || [],
     // Round 76ev (2026-05-13): forward the rca.js Financing-block payload
     // through to the backend. Without this whitelist entry the entire
     // metadata.loans[] array was being dropped here, so upsertDomainLoans's
