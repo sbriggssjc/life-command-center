@@ -484,7 +484,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 21,
+        _version: 22,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
