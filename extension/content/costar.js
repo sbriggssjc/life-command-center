@@ -436,6 +436,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     if (location.state) accumulated.state = location.state;
     if (location.zip) accumulated.zip = location.zip;
 
+    // ── Bulk/Portfolio Sale: capture the constituent Properties table ─────────
+    // A portfolio Sale Comp page (e.g. "SVEA New Mexico Portfolio: 40 Office &
+    // Retail Properties Sold") lists every constituent in a Properties table.
+    // Without this the whole 40-property deal collapsed to the one subject
+    // address. Parser lives in content/_portfolio-parse.js (loaded before this
+    // script; importable in Node tests). Fails closed → [] on a non-portfolio
+    // page or an unexpected grid shape. 2026-06-25.
+    if (globalThis.__lccPortfolioParse) {
+      const portfolioProps = globalThis.__lccPortfolioParse.parsePortfolioProperties(lines);
+      if (portfolioProps.length > 1) accumulated.portfolio_properties = portfolioProps;
+    }
+
     // ── Derive top-level sale_date / sale_price from most recent in history ──
     // sales_history is authoritative: always prefer the most recent sale's
     // data over stat-card values, which can show a different (older) sale.
@@ -454,8 +466,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         // recent sales_history entry — CoStar's "Sale Price" stat card
         // sometimes shows a different (older) sale than the most recent.
         if (mostRecent.sale_date) accumulated.sale_date = mostRecent.sale_date;
-        if (mostRecent.sale_price) accumulated.sale_price = mostRecent.sale_price;
-        if (!accumulated.cap_rate && mostRecent.cap_rate) accumulated.cap_rate = mostRecent.cap_rate;
+        // A Bulk/Portfolio sale's price+cap are the DEAL aggregate, not this
+        // property's — promoting them stamps the whole-portfolio number onto the
+        // single subject property (the $119M SVEA aggregate landing on one
+        // $8M building). Keep them on the sales_history row (the deal record)
+        // but never promote to the property's top-level fields. 2026-06-25.
+        const condStr = String(mostRecent.sale_condition || '').toLowerCase();
+        const isPortfolioAgg = /\b(bulk|portfolio)\b/.test(condStr)
+          || (accumulated.portfolio_properties && accumulated.portfolio_properties.length > 1);
+        if (mostRecent.sale_price && !isPortfolioAgg) accumulated.sale_price = mostRecent.sale_price;
+        if (!accumulated.cap_rate && mostRecent.cap_rate && !isPortfolioAgg) accumulated.cap_rate = mostRecent.cap_rate;
       }
     }
 

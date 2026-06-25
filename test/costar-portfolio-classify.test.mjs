@@ -23,6 +23,8 @@ import assert from 'node:assert/strict';
 import {
   classifyDomain,
   isPortfolioAggregateSale,
+  derivePortfolioDeal,
+  buildConstituentInputs,
   SALE_NOTES_CLASSIFY_MAXLEN,
 } from '../api/_handlers/sidebar-pipeline.js';
 
@@ -105,5 +107,88 @@ describe('isPortfolioAggregateSale — single-capture aggregate guard', () => {
   it('is null/garbage tolerant', () => {
     assert.equal(isPortfolioAggregateSale(null), false);
     assert.equal(isPortfolioAggregateSale({}), false);
+  });
+});
+
+describe('derivePortfolioDeal — deal-level fields off the subject sale', () => {
+  const metadata = {
+    asset_type: 'government_leased',
+    sales_history: [
+      { sale_date: 'Jan 5, 2022', sale_price: '$119,082,570', sale_condition: 'Bulk/Portfolio Sale',
+        buyer: 'SVEA Real Estate Group', seller: 'Community Development Commission',
+        sale_notes_raw: SVEA_NOTES },
+    ],
+  };
+  const deal = derivePortfolioDeal(metadata);
+
+  it('extracts the Bulk/Portfolio sale row', () => {
+    assert.equal(deal.sale_date, 'Jan 5, 2022');
+    assert.equal(deal.total_deal_price, '$119,082,570');
+    assert.equal(deal.buyer, 'SVEA Real Estate Group');
+    assert.equal(deal.seller, 'Community Development Commission');
+    assert.equal(deal.asset_type, 'government_leased');
+    assert.ok(deal.sale_notes_raw.includes('State of New Mexico'));
+  });
+
+  it('falls back to the most-recent dated sale when none is flagged portfolio', () => {
+    const d = derivePortfolioDeal({ sales_history: [
+      { sale_date: '2019-01-01', sale_price: '$1' },
+      { sale_date: '2021-06-01', sale_price: '$9' },
+    ]});
+    assert.equal(d.total_deal_price, '$9');
+  });
+});
+
+describe('buildConstituentInputs — per-property allocation', () => {
+  const deal = {
+    sale_date: 'Jan 5, 2022', buyer: 'SVEA Real Estate Group',
+    seller: 'Community Development Commission', sale_condition: 'Bulk/Portfolio Sale',
+    sale_notes_raw: SVEA_NOTES, asset_type: 'government_leased',
+  };
+  const constituent = {
+    address: '445 Camino Del Rey Dr', city: 'Los Lunas', state: 'NM',
+    property_type: 'Office', size_sf: 46635, sale_price: 8022379,
+  };
+
+  it('maps the constituent + writes its OWN per-property price (not the aggregate)', () => {
+    const { entity, metadata } = buildConstituentInputs('government', deal, constituent);
+    assert.equal(entity.address, '445 Camino Del Rey Dr');
+    assert.equal(entity.city, 'Los Lunas');
+    assert.equal(entity.state, 'NM');
+    assert.equal(entity.domain, 'government');
+    const sale = metadata.sales_history[0];
+    assert.equal(sale.sale_price, '$8,022,379');
+    assert.equal(sale.sale_date, 'Jan 5, 2022');
+    assert.equal(sale.buyer, 'SVEA Real Estate Group');
+  });
+
+  it('flags the sale _per_property_allocated so the aggregate guard exempts it', () => {
+    const { metadata } = buildConstituentInputs('government', deal, constituent);
+    const sale = metadata.sales_history[0];
+    assert.equal(sale._per_property_allocated, true);
+    // even though the deal is a Bulk/Portfolio sale, this allocated row is NOT
+    // treated as an aggregate (its price is the real per-property figure)
+    assert.equal(isPortfolioAggregateSale(sale), false);
+  });
+
+  it('carries the deal notes so the constituent classifies into the same domain', () => {
+    const { metadata } = buildConstituentInputs('government', deal, constituent);
+    assert.equal(classifyDomain(metadata, { name: metadata.address }), 'government');
+  });
+
+  it('uses rba for gov and building_size for dia', () => {
+    assert.equal(buildConstituentInputs('government', deal, constituent).metadata.rba, 46635);
+    assert.equal(buildConstituentInputs('dialysis', deal, constituent).metadata.building_size, 46635);
+  });
+
+  it('returns null for a constituent without an address', () => {
+    assert.equal(buildConstituentInputs('government', deal, { city: 'X', state: 'NM' }), null);
+    assert.equal(buildConstituentInputs('government', deal, null), null);
+  });
+
+  it('tolerates a missing per-property price (no price written)', () => {
+    const { metadata } = buildConstituentInputs('government', deal,
+      { address: '1 Main St', state: 'NM' });
+    assert.equal(metadata.sales_history[0].sale_price, null);
   });
 });

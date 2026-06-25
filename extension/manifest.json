@@ -49,6 +49,7 @@
       ],
       "js": [
         "content/_sale-merge.js",
+        "content/_portfolio-parse.js",
         "content/costar.js"
       ],
       "run_at": "document_idle",
