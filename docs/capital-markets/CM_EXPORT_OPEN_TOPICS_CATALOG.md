@@ -226,7 +226,19 @@ and believes 2013 was >8,000. **Action:** make the inventory-over-time chart a *
 count** per period (not cumulative); validate the historical level (was it ≥8,000 in 2013?); reconcile
 the annual expiration/termination counts against the active denominator (the 1,500 vs 8,000 ratio).
 
-### T9 — Cap-rate data anomalies  ·  P2  ·  ⏳ PROMPT ISSUED (`CLAUDE_CODE_PROMPT_T9_cap_data_anomalies.md`)
+### T9 — Cap-rate data anomalies  ·  P2  ·  ✅ GATED PASS (PR #1339, 2026-06-25)
+**Verified live:** Unit 1 — all 19 high-cap "outliers" were `cap_rate_history` DERIVATION errors (portfolio
+price-splits + gross-rent-as-NOI), 0 real; 176 rows tagged `is_anomaly` (reversible); `cm_gov_core_cap_rate_dots`
+now falls back to validated `sold_cap_rate` → max 11.97%→**8.76%**, 0 over 9%, count **503→683** (+180 REAL
+comps recovered from out-of-band, not a clip), axis data-fit ~9% (ships on redeploy). Unit 2 —
+`cm_gov_cap_by_term_m` rebuilt (2-yr TTM, median, n≥5 floor, ±3mo MA, dedup cap_5to10→alias, cap_outside_firm
+repopulated) → cohorts move, 0 pins. Unit 3 — dia asking quartiles are genuinely sticky (0/141 ever changed
+last_cap_rate, 392d median DOM) → documented, axis untouched. DB live + reversible; JS on redeploy.
+**Surfaced for Scott (not changed):** (a) gov cap-by-term **[5,6)yr cohort gap** — legend decision (relabel
+`<5`→`<6` or `6-10`→`5-10` to make contiguous); (b) possible **stale-active/zombie dia listings** (392d median
+DOM) — listing-freshness DQ, worth a look.
+**(superseded the original T9 sub-notes block below.)**
+### T9-orig (earlier sub-notes, lower priority)
 **June-25 cap-data cluster (grounded 2026-06-24), 3 units — investigate-then-fix, data before axis:**
 1. **gov core-cap dot outliers** — `cm_gov_core_cap_dot_q` (←`cm_gov_core_cap_rate_dots`, firm≥6, cap
    0.04-0.12): n=503, p50 6.95% / p95 8.0% / max 11.97%; **6 sales in the 9-12% band** (visible outliers)
