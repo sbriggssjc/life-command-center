@@ -249,4 +249,4 @@ export async function handleBDLogCompletion(body: { task_title: string; bd_categ
 
 export async function handleBDConfig() { const d = getDialysisClient(); const { data, error } = await d.from("bd_config").select("*").order("sort_order"); if (error) return jsonResponse({ error: "Failed to load BD config" }, 500); return jsonResponse({ config: data }); }
 
-export async function handleBDConfigUpdate(body: { category: string; daily_target: number }) { const { category, daily_target } = body; if (
+export async function handleBDConfigUpdate(body: { category: string; daily_target: number }) { const { category, daily_target } = body; if (!category || daily_target === undefined) return jsonResponse({ error: "category and daily_target required" }, 400); const d = getDialysisClient(); const { data, error } = await d.from("bd_config").update({ daily_target, updated_at: new Date().toISOString() }).eq("category", category).select().single(); if (error) return jsonResponse({ error: "Failed to update config", details: error.message }, 500); return jsonResponse({ success: true, config: data }); }
