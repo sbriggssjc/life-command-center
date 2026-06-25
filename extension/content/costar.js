@@ -163,36 +163,51 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       console.log('[LCC CoStar] resolved address:', address);
     }
 
-    // Round 76 (2026-06-25): capture the heading's OCCUPANT suffix, INDEPENDENT
-    // of which path resolved the address. CoStar sale-comp headings are
-    // "<address> - <property/occupant name>", e.g.
+    // Round 76 (2026-06-25): capture the OCCUPANT suffix of the
+    // "<address> - <property/occupant name>" title — e.g.
     // "13838 Buffalo Speedway - State of Texas". parseAddress keeps only the
     // street and drops the suffix — but that suffix is frequently the ONLY
     // government/operator tenant signal on the Summary page (the Tenant tab is
     // separate, and the Sale Notes may not name the tenant). We stash it into
     // building_name (read by the domain classifier) so "State of Texas" →
-    // government instead of no_domain. NOTE: this scans ALL h1/h2/h3 rather
-    // than relying on the single querySelector('h1') that resolved the address
-    // — the property title is often a *second* heading, and the address itself
-    // may have resolved via the page-lines / title fallback (headingEl null).
+    // government instead of no_domain.
+    //
+    // CoStar renders that visual title in a NON-heading element (verified live:
+    // for 13838 the address resolved via the page-lines / title fallback, not an
+    // <h1>), so a querySelector('h1') scan finds nothing. Scan a broad candidate
+    // set instead — document.title (the browser tab carries the full
+    // "… | <address> - <occupant>"), every h1/h2/h3, AND the visible page lines
+    // (getPageLines already surfaces the heading text) — and match the segment
+    // that IS the resolved address, taking the FOLLOWING segment as the occupant.
     if (address) {
-      const addrFirst = String(address).split(/[,|]/)[0].trim().toLowerCase();
-      for (const el of document.querySelectorAll('h1, h2, h3')) {
-        const txt = (el.textContent || '').trim();
-        if (!txt) continue;
-        const segs = txt.split(/\s+[-–—|]\s+/).map((s) => s.trim()).filter(Boolean);
-        if (segs.length < 2) continue;
-        // The first segment must be the resolved address (the heading that
-        // carries "<address> - <occupant>"), so we never grab an unrelated
-        // heading's tail.
-        const head = segs[0].toLowerCase();
-        if (addrFirst && !(head.includes(addrFirst) || addrFirst.includes(head))) continue;
-        const tail = segs.slice(1).join(' - ').trim();
-        // Guard: a real occupant/property name, not a second address or junk.
-        if (tail && tail.length >= 3 && tail.length <= 80 && !/^\d/.test(tail)) {
-          headingOccupant = tail;
-          console.log('[LCC CoStar] heading occupant →', headingOccupant);
-          break;
+      const addrLc = String(address).split(/[,|]/)[0].trim().toLowerCase();
+      if (addrLc) {
+        if (!lines) lines = getPageLines();
+        const candidates = [
+          document.title,
+          ...Array.from(document.querySelectorAll('h1, h2, h3')).map((el) => el.textContent || ''),
+          ...lines,
+        ];
+        for (const raw of candidates) {
+          const txt = (raw || '').trim();
+          if (!txt || txt.toLowerCase().indexOf(addrLc) === -1) continue;
+          const segs = txt.split(/\s+[-–—|]\s+/).map((s) => s.trim()).filter(Boolean);
+          if (segs.length < 2) continue;
+          // Find the segment that IS the resolved address; the occupant is the
+          // NEXT segment (so "Sale Comps | 13838 Buffalo Speedway - State of
+          // Texas" yields "State of Texas", not "Sale Comps").
+          const idx = segs.findIndex((s) => {
+            const sl = s.toLowerCase();
+            return sl === addrLc || sl.includes(addrLc) || addrLc.includes(sl);
+          });
+          if (idx === -1 || idx === segs.length - 1) continue;
+          const tail = segs[idx + 1].trim();
+          // Guard: a real occupant/property name, not a second address or junk.
+          if (tail && tail.length >= 3 && tail.length <= 80 && !/^\d/.test(tail)) {
+            headingOccupant = tail;
+            console.log('[LCC CoStar] heading occupant →', headingOccupant);
+            break;
+          }
         }
       }
     }
@@ -525,7 +540,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 25,
+        _version: 26,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
