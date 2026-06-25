@@ -892,7 +892,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // Crk, Creek, Hill, Bnd, Bend, Run. Without Expy, addresses like
     // "2700 S Central Expy" failed validation, which broke findSplitAddressInLines'
     // post-combine validation step on a 2026-04 CoStar capture in McKinney TX.
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
+    // Round 76: added pky (CoStar abbreviates Parkway as "Pky" in headings,
+    // e.g. "5155 Flynn Pky" — without it the address parses to null and the
+    // sidebar falls back to the empty "unsupported site" state), plus tpke/
+    // turnpike, byp/bypass, xing/crossing. All require a leading street number
+    // (enforced by the digit-prefix guard in parseAddress) so false positives
+    // are unlikely.
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
     // Salt Lake City-style grid addresses have no street-type word.
     // Form: <building#> <dir> <grid#> <dir> — e.g. "3854 W 5400 S",
     // "3000 E 7800 S". Without this branch, Taylorsville/SLC properties
@@ -964,7 +970,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // DOES match the Highway/Route forms, so evaluating both the split-combine
     // (a) and the single-line parse (b) in document order makes the top-of-page
     // subject win regardless of suffix shape.
-    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
