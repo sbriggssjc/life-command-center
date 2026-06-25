@@ -5149,11 +5149,53 @@ function _udExportOperations() {
   // intentionally excluded from the client export.
   const _pctile = (rank, total) => (rank && total && total > 0) ? Math.max(1, Math.round(((total - rank) / total) * 100)) : null;
   const _ord = n => { if (n == null) return ''; const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+  // State full-name map — the benchmarking scope label was previously hardcoded
+  // to "Tennessee" regardless of the property's actual state.
+  const _US_STATES = { AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',DC:'District of Columbia',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming',PR:'Puerto Rico' };
+  const stateLabel = _US_STATES[String(stateVal || '').toUpperCase()] || (stateVal || 'State');
   const rankRows = [
-    { scope: 'Tennessee', stAbbr: stateVal || 'State', patRank: r.state_patient_rank, revRank: r.state_revenue_rank, total: r.state_total },
-    { scope: 'National', stAbbr: 'National', patRank: r.national_patient_rank, revRank: r.national_revenue_rank, total: r.national_total },
+    { scope: stateLabel, patRank: r.state_patient_rank, revRank: r.state_revenue_rank, total: r.state_total },
+    { scope: 'National', patRank: r.national_patient_rank, revRank: r.national_revenue_rank, total: r.national_total },
   ].filter(x => (x.patRank && x.total) || (x.revRank && x.total));
   const operatorName = _esc(r.chain_organization || r.operator_name || (operator && operator.label) || 'N/A');
+
+  // ── Census trend (consistent definition) ──
+  // The pipeline's patient_yoy_pct compares this year's CONCURRENT census (e.g. 47)
+  // against last year's ANNUAL/cumulative CMS count (e.g. 297) — mismatched
+  // definitions that can read a misleading −80%+. Prefer the clean 3-yr trend;
+  // else derive an annual YoY from year-over-year CMS snapshots (same definition),
+  // dropping the order-of-magnitude glitch rows.
+  function _annualSnapshotYoY(hist) {
+    if (!Array.isArray(hist) || hist.length < 2) return null;
+    const ys = {};
+    hist.forEach(function(h){ const d = String(h.snapshot_date || ''); const v = Number(h.total_patients || 0); if (!d || !(v > 0)) return; const y = d.slice(0,4); const ye = /-12-31$/.test(d); if (!ys[y] || (ye && !ys[y].ye) || (ye === ys[y].ye && d >= ys[y].d)) ys[y] = { d:d, v:v, ye:ye }; });
+    const years = Object.keys(ys).sort();
+    if (years.length < 2) return null;
+    let i = years.length - 1;
+    while (i >= 1 && ys[years[i]].v === ys[years[i-1]].v && Number(years[i]) >= new Date().getFullYear()) i--;
+    if (i < 1) return null;
+    const cur = ys[years[i]].v, prev = ys[years[i-1]].v;
+    if (!(prev > 0) || cur > prev * 4 || cur < prev / 4) return null;
+    return { pct: ((cur - prev) / prev) * 100, curYear: years[i], prevYear: years[i-1] };
+  }
+  const trend3yr = (r.patient_trend_3yr != null && isFinite(Number(r.patient_trend_3yr))) ? Number(r.patient_trend_3yr) : null;
+  const annualYoY = _annualSnapshotYoY(patientHistory);
+  const censusTrendPct = (trend3yr != null) ? trend3yr : (annualYoY ? annualYoY.pct : null);
+  const censusTrendLabel = (trend3yr != null) ? 'over 3 yr' : (annualYoY ? 'YoY' : '');
+  const trendDirClean = (censusTrendPct == null)
+    ? String(trends.trend_direction || trendDir || 'stable').toLowerCase()
+    : (censusTrendPct > 2 ? 'growth' : censusTrendPct < -2 ? 'decline' : 'stable');
+  const trendDirDisp = trendDirClean.charAt(0).toUpperCase() + trendDirClean.slice(1);
+  const isDecline = (censusTrendPct != null && censusTrendPct <= -8);
+  // Newly-opened nearby facilities (possible demand-shift driver) — within ~10 mi,
+  // certified within ~36 months. certification_date is enriched onto the geo
+  // competitors in the ops loader.
+  const recentNearby = (ext.geo && Array.isArray(ext.geo.nearby_competitors)) ? ext.geo.nearby_competitors.filter(function(c){
+    if (!c.certification_date) return false;
+    var cd = new Date(c.certification_date); if (isNaN(cd.getTime())) return false;
+    var months = (Date.now() - cd.getTime()) / (1000*60*60*24*30.44);
+    return months >= 0 && months <= 36 && (c.distance_miles == null || Number(c.distance_miles) <= 10);
+  }).sort(function(a,b){ return (Number(a.distance_miles)||0) - (Number(b.distance_miles)||0); }).slice(0,3) : [];
 
   // Hours
   let hoursBlock = '<p style="color:' + B.muted + ';font-style:italic">Hours data not available for this facility.</p>';
@@ -5311,7 +5353,7 @@ function _udExportOperations() {
   <div class="sk"><div class="l">Est. Operating Margin</div><div class="v">${fmtPct(margin)}</div></div>
   <div class="sk"><div class="l">Dialysis Stations</div><div class="v">${stationsVal ? Number(stationsVal).toLocaleString() : 'N/A'} <small>chairs</small></div></div>
   <div class="sk"><div class="l">CMS Star Rating</div><div class="v">${starVal != null ? '<span class="star">' + '\u2605'.repeat(Math.floor(starVal)) + '</span><span class="star-empty">' + '\u2606'.repeat(5 - Math.floor(starVal)) + '</span>' : 'N/A'}</div></div>
-  <div class="sk"><div class="l">Census Trend</div><div class="v">${trendDir}</div></div>
+  <div class="sk"><div class="l">Census Trend</div><div class="v">${trendDirDisp}</div></div>
 </div>
 
 <div class="callout"><b>At a glance &mdash;</b> A ${stationsVal ? stationsVal + '-station ' : ''}${operatorName && operatorName !== 'N/A' ? operatorName + ' ' : ''}in-center hemodialysis facility${utilPct != null ? ' running at <b>' + utilPct.toFixed(1) + '% of modeled operating capacity</b>' : ''}${(competitors.length === 0 && r.county) ? ', and the <b>only CMS-certified dialysis provider in ' + _esc(r.county) + ' County' + (stateVal ? ', ' + _esc(stateVal) : '') + '</b>' : ''}. Estimated facility revenue is <b>${fmtDollar(estRevenue)}</b>${annualTx ? ' on ~' + annualTx.toLocaleString() + ' annual treatments' : ''}${(payerMix.private_pct != null || r.payer_mix_private_pct != null) ? ', with a commercial/private payer share of <b>' + Number(payerMix.private_pct != null ? payerMix.private_pct : r.payer_mix_private_pct).toFixed(1) + '%</b>' : ''}.</div>
@@ -5351,7 +5393,7 @@ function _udExportOperations() {
     <div class="ch">Catchment Context</div>
     <table class="data-table">
       <tr><td>CMS Reported Patients <span style="font-size:11px;color:${B.muted}">(annual)</span></td><td>${cmsAnnualPatients != null ? cmsAnnualPatients.toLocaleString() : 'N/A'}<span class="ctx">Cumulative distinct patients per CMS reporting &mdash; not a point-in-time count (see definitions).</span></td></tr>
-      <tr><td>Census Trend</td><td>${trendDir}${r.patient_yoy_pct != null ? ' (' + (Number(r.patient_yoy_pct) >= 0 ? '+' : '') + Number(r.patient_yoy_pct).toFixed(1) + '% YoY)' : ''}</td></tr>
+      <tr><td>Census Trend</td><td>${trendDirDisp}${censusTrendPct != null ? ' (' + (censusTrendPct >= 0 ? '+' : '') + censusTrendPct.toFixed(1) + '% ' + censusTrendLabel + ')' : ''}</td></tr>
       ${(competitors.length === 0 && r.county) ? '<tr><td>County Competition</td><td>Sole facility in ' + _esc(r.county) + ' County</td></tr>' : ''}
     </table>
   </div>
