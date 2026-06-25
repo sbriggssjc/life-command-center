@@ -57,6 +57,40 @@ import { verifyApiKey } from './property-handler.js';
 // current Railway auto-generated subdomain in case the env var is missing.
 const VERCEL_BASE = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app';
 
+// B1: SharePoint host for deal-doc deep links. Set in Vercel prod env. If unset,
+// document results still return (with url:null) so search stays useful.
+const SHAREPOINT_HOST = process.env.SHAREPOINT_HOST || process.env.SHAREPOINT_LINK_URL || '';
+
+function basename(pth) {
+  if (!pth) return '(file)';
+  const parts = String(pth).split('/');
+  return parts[parts.length - 1] || String(pth);
+}
+
+// Reshape a folder_feed_seen row into the unified search item shape (type=document).
+function buildDocItem(row, searchTerm) {
+  const pth = row.server_relative_path || '';
+  const hint = row.subject_hint || {};
+  const cityState = [hint.city, hint.state].filter(Boolean).join(', ');
+  const year = row.modified_at ? String(row.modified_at).slice(0, 4) : null;
+  const dtype = row.detected_type && row.detected_type !== 'unknown' ? row.detected_type : null;
+  const subParts = [cityState, hint.vertical, dtype, year].filter(Boolean);
+  const fname = basename(pth);
+  // Cap doc score below entity matches so the property card outranks its files.
+  const score = Math.min(computeScore(searchTerm, { name: fname, canonical_name: pth }), 70);
+  const domain = hint.vertical === 'gov' ? 'government'
+    : hint.vertical === 'dia' ? 'dialysis' : (hint.vertical || null);
+  return {
+    id: `doc:${row.id}`,
+    type: 'document',
+    title: fname,
+    subtitle: subParts.join(' \u00b7 ') || null,
+    domain,
+    url: SHAREPOINT_HOST && pth ? `${SHAREPOINT_HOST}${encodeURI(pth)}` : null,
+    score,
+  };
+}
+
 function enc(v) {
   return encodeURIComponent(String(v));
 }
@@ -224,6 +258,11 @@ export async function searchHandler(req, res) {
     (!type || type === 'all' || type === 'asset') &&
     getDomainCredentials('dialysis') != null;
 
+  // ── B1: deal documents (folder_feed_seen, Team Briggs SharePoint index) ──
+  // Fourth federated source. Returned as type=document. Included unless the
+  // caller restricts to a non-document type.
+  const includeDocs = (!type || type === 'all' || type === 'document');
+
   // ── Build PostgREST path for entities (ops DB) ──────────────────────────
   // Expanded from the original name/canonical_name-only filter to also
   // match address/city/state. Without this, searches like "Tulsa" return
@@ -261,7 +300,17 @@ export async function searchHandler(req, res) {
         `&limit=${limit}&order=address`
       : null;
 
-    const [entitiesResult, govQueryResult, diaQueryResult] = await Promise.all([
+    // B1: folder_feed_seen stores vertical as 'gov'/'dia'; map the API domain.
+    const docVertical = normalizedDomain === 'government' ? 'gov'
+      : normalizedDomain === 'dialysis' ? 'dia' : null;
+    const docsPath = includeDocs
+      ? `folder_feed_seen?or=(server_relative_path.ilike.*${encTerm}*,subject_hint->>city.ilike.*${encTerm}*,subject_hint->>tenant_brand.ilike.*${encTerm}*)` +
+        `&select=id,server_relative_path,subject_hint,vertical,detected_type,modified_at` +
+        (docVertical ? `&vertical=eq.${enc(docVertical)}` : '') +
+        `&order=last_seen_at.desc&limit=${limit}`
+      : null;
+
+    const [entitiesResult, govQueryResult, diaQueryResult, docsResult] = await Promise.all([
       opsQuery('GET', path),
       govPath
         ? domainQuery('government', 'GET', govPath).catch((err) => {
@@ -275,7 +324,16 @@ export async function searchHandler(req, res) {
             return null;
           })
         : Promise.resolve(null),
+      docsPath
+        ? opsQuery('GET', docsPath).catch((err) => {
+            console.error(`[search] docs query threw for q="${term}":`, err?.message || err);
+            return null;
+          })
+        : Promise.resolve(null),
     ]);
+    if (docsPath && docsResult && docsResult.ok === false) {
+      console.error(`[search] docs query failed for q="${term}" status=${docsResult.status}:`, docsResult.data);
+    }
 
     // Surface PostgREST-level failures (e.g. missing column, bad filter) that
     // domainQuery() returns as { ok:false, status, data } rather than throwing.
@@ -303,24 +361,26 @@ export async function searchHandler(req, res) {
       rows: entitiesResult?.data || [],
       govRows: Array.isArray(govQueryResult?.data) ? govQueryResult.data : [],
       diaRows: Array.isArray(diaQueryResult?.data) ? diaQueryResult.data : [],
+      docRows: Array.isArray(docsResult?.data) ? docsResult.data : [],
     };
   }
 
   // Try the cleaned term first (e.g. "Tulsa"), fall back to the raw term
   // (e.g. "Tulsa OK") if the cleaned variant returns nothing.
   let searchTerm = hasCleanVariant ? cleanTerm : rawSearchTerm;
-  let { rows, govRows, diaRows } = await runSearch(searchTerm);
+  let { rows, govRows, diaRows, docRows } = await runSearch(searchTerm);
   if (
     rows.length === 0 &&
     govRows.length === 0 &&
     diaRows.length === 0 &&
+    docRows.length === 0 &&
     hasCleanVariant
   ) {
     console.log(
       `[search] clean term "${cleanTerm}" returned 0; falling back to raw q="${rawSearchTerm}"`
     );
     searchTerm = rawSearchTerm;
-    ({ rows, govRows, diaRows } = await runSearch(searchTerm));
+    ({ rows, govRows, diaRows, docRows } = await runSearch(searchTerm));
   }
 
   // ── Reshape into unified UI search results ────────────────────────────────
@@ -393,6 +453,11 @@ export async function searchHandler(req, res) {
     });
   }
 
+  // B1: append deal-document results (type=document).
+  for (const d of docRows) {
+    items.push(buildDocItem(d, searchTerm));
+  }
+
   // Sort by score descending, stable on title ascending
   items.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -405,7 +470,7 @@ export async function searchHandler(req, res) {
   console.log(
     `[search] results: ${trimmed.length} for q="${searchTerm}" ` +
     `(entities: ${rows.length}, gov_properties: ${govRows.length}, ` +
-    `dia_properties: ${diaRows.length})`
+    `dia_properties: ${diaRows.length}, docs: ${docRows.length})`
   );
 
   res.status(200).json(trimmed);
