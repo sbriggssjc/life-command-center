@@ -19,7 +19,21 @@ async function rest(path: string, init?: RequestInit) {
   return txt ? JSON.parse(txt) : null;
 }
 
-function icsDateToISO(value: string, isDateOnly: boolean): { iso: string | null; allDay: boolean } {
+// Scott's home zone — used for floating ICS times (no Z, no TZID).
+const DEFAULT_TZ = "America/Chicago";
+
+// Convert a wall-clock time in an IANA zone to a true-UTC ISO string (DST-aware).
+function zonedWallToUtcISO(y: number, mo: number, d: number, h: number, mi: number, s: number, tz: string): string {
+  const utcGuess = Date.UTC(y, mo - 1, d, h, mi, s);
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const p: Record<string, string> = {};
+  for (const part of dtf.formatToParts(new Date(utcGuess))) p[part.type] = part.value;
+  const asTz = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute, +p.second);
+  return new Date(utcGuess - (asTz - utcGuess)).toISOString(); // subtract the zone offset
+}
+
+function icsDateToISO(value: string, isDateOnly: boolean, tzid?: string): { iso: string | null; allDay: boolean } {
   if (!value) return { iso: null, allDay: false };
   const v = value.trim();
   if (isDateOnly || /^\d{8}$/.test(v)) {
@@ -28,7 +42,10 @@ function icsDateToISO(value: string, isDateOnly: boolean): { iso: string | null;
   }
   const m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
   if (!m) return { iso: null, allDay: false };
-  return { iso: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${m[7] ? "Z" : ""}`, allDay: false };
+  if (m[7]) return { iso: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`, allDay: false }; // explicit UTC
+  // wall-clock in TZID (or assume Central if floating) -> convert to UTC
+  const iso = zonedWallToUtcISO(+m[1], +m[2], +m[3], +m[4], +m[5], +m[6], tzid || DEFAULT_TZ);
+  return { iso, allDay: false };
 }
 
 function parseICS(text: string) {
@@ -45,6 +62,8 @@ function parseICS(text: string) {
     const namePart = line.slice(0, ci); const value = line.slice(ci + 1);
     const name = namePart.split(";")[0].toUpperCase();
     if (namePart.toUpperCase().includes("VALUE=DATE")) curAllDay[name] = true;
+    const tzm = namePart.match(/TZID=([^;:]+)/i);
+    if (tzm) cur[name + "::TZID"] = tzm[1];
     cur[name] = value;
   }
   return events;
@@ -63,8 +82,8 @@ async function ingestFeed(row: Record<string, unknown>) {
   const vevents = parseICS(text);
   const rows = vevents.map((e: Record<string, unknown>) => {
     const allDay = e.__allDay as Record<string, boolean>;
-    const s = icsDateToISO(String(e.DTSTART || ""), !!allDay?.DTSTART);
-    const en = icsDateToISO(String(e.DTEND || ""), !!allDay?.DTEND);
+    const s = icsDateToISO(String(e.DTSTART || ""), !!allDay?.DTSTART, e["DTSTART::TZID"] as string | undefined);
+    const en = icsDateToISO(String(e.DTEND || ""), !!allDay?.DTEND, e["DTEND::TZID"] as string | undefined);
     const uid = String(e.UID || crypto.randomUUID());
     return {
       id: "ics-" + uid.replace(/[^A-Za-z0-9_.@-]/g, "_"),

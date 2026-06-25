@@ -46,13 +46,25 @@ async function rest(path: string, init?: RequestInit) {
   return t ? JSON.parse(t) : null;
 }
 
-function icsDate(v: string, dateOnly: boolean) {
+const DEFAULT_TZ = "America/Chicago"; // Scott's home zone for floating ICS times
+function zonedWallToUtcISO(y: number, mo: number, d: number, h: number, mi: number, s: number, tz: string): string {
+  const utcGuess = Date.UTC(y, mo - 1, d, h, mi, s);
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const p: Record<string, string> = {};
+  for (const part of dtf.formatToParts(new Date(utcGuess))) p[part.type] = part.value;
+  const asTz = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute, +p.second);
+  return new Date(utcGuess - (asTz - utcGuess)).toISOString();
+}
+function icsDate(v: string, dateOnly: boolean, tzid?: string) {
   if (!v) return { iso: null as string | null, allDay: false };
   if (dateOnly || /^\d{8}$/.test(v)) {
     const m = v.match(/^(\d{4})(\d{2})(\d{2})/); return m ? { iso: `${m[1]}-${m[2]}-${m[3]}T00:00:00`, allDay: true } : { iso: null, allDay: true };
   }
   const m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
-  return m ? { iso: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${m[7] || ""}`, allDay: false } : { iso: null, allDay: false };
+  if (!m) return { iso: null as string | null, allDay: false };
+  if (m[7]) return { iso: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`, allDay: false };
+  return { iso: zonedWallToUtcISO(+m[1], +m[2], +m[3], +m[4], +m[5], +m[6], tzid || DEFAULT_TZ), allDay: false };
 }
 function parseICS(text: string) {
   const u = text.replace(/\r\n[ \t]/g, "").replace(/\n[ \t]/g, "");
@@ -64,6 +76,8 @@ function parseICS(text: string) {
     const ci = line.indexOf(":"); if (ci === -1) continue;
     const np = line.slice(0, ci); const name = np.split(";")[0].toUpperCase();
     if (np.toUpperCase().includes("VALUE=DATE")) ad[name] = true;
+    const tzm = np.match(/TZID=([^;:]+)/i);
+    if (tzm) cur[name + "::TZID"] = tzm[1];
     cur[name] = line.slice(ci + 1);
   }
   return out;
@@ -108,7 +122,7 @@ async function ingestCalendar(cal: { href: string; name: string }) {
   const tag = "icloud:" + cal.name;
   const rows = vevents.map((e: Record<string, unknown>) => {
     const ad = e.__ad as Record<string, boolean>;
-    const s = icsDate(String(e.DTSTART || ""), !!ad?.DTSTART); const en = icsDate(String(e.DTEND || ""), !!ad?.DTEND);
+    const s = icsDate(String(e.DTSTART || ""), !!ad?.DTSTART, e["DTSTART::TZID"] as string | undefined); const en = icsDate(String(e.DTEND || ""), !!ad?.DTEND, e["DTEND::TZID"] as string | undefined);
     const uid = String(e.UID || crypto.randomUUID());
     return { id: "caldav-" + uid.replace(/[^A-Za-z0-9_.@-]/g, "_"), subject: e.SUMMARY || null,
              start_time: s.iso, end_time: en.iso, location: e.LOCATION || null, is_all_day: s.allDay,
@@ -125,8 +139,11 @@ async function ingestCalendar(cal: { href: string; name: string }) {
 Deno.serve(async (req: Request) => {
   if (!APPLE_ID || !APPLE_PW) return Response.json({ ok: false, error: "APPLE_ID / APPLE_APP_PASSWORD secrets not set" }, { status: 400 });
   try {
-    const cals = await discoverCalendars();
-    if (req.method === "GET") return Response.json({ service: "calendar-caldav-sync", calendars: cals.map((c) => c.name) });
+    const allCals = await discoverCalendars();
+    // EXCLUDE Cortex's own write-back target(s) — reading them back would create a feedback loop.
+    const WRITE_TARGETS = new Set([(Deno.env.get("CORTEX_CAL_NAME") || "Cortex").toLowerCase()]);
+    const cals = allCals.filter((c) => !WRITE_TARGETS.has(String(c.name).trim().toLowerCase()));
+    if (req.method === "GET") return Response.json({ service: "calendar-caldav-sync", calendars: cals.map((c) => c.name), excluded: allCals.filter((c) => WRITE_TARGETS.has(String(c.name).trim().toLowerCase())).map((c) => c.name) });
     const results = [];
     for (const c of cals) { try { results.push(await ingestCalendar(c)); } catch (e) { results.push({ calendar: c.name, error: String((e as Error).message) }); } }
     return Response.json({ ok: true, calendars_found: cals.length, results });
