@@ -210,14 +210,37 @@ Municipal = 29 (2014-2023) — but **sparse** (gaps between quarters) and Munici
 **Action:** make the chart render the sparse points (markers / gap-aware line) so they're visible, and
 investigate the Municipal post-2023 stop (real or tagging). Don't drop the series.
 
-### T7 — Gov Returns Index too smooth (suspected formula error)  ·  P1
-**Note:** gov 20. "Does not move like dialysis or our PDF/Excel — so much smoother, like a formula error."
-+ extend to 1997. **Grounded:** dia returns index is fitted (4-13%); gov's is anomalously smooth vs dia.
-**Action:** diff the gov vs dia Returns-Index calc — find why gov is smoother (different window, an
-index that compounds out volatility, or a denominator bug). Extend the x-axis to match the volume/cap
-history (~1997-2001).
+### T7 — Gov Returns Index too smooth + extend to 1997  ·  P1  ·  ▶ PROMPT WRITTEN (2026-06-25)
+**Note:** gov 20. "Does not move like dialysis or our PDF/Excel — so much smoother, like a formula error." +
+extend to 1997.
+**Grounded live 2026-06-25 — premise corrected: NO gov-specific bug.** `cm_gov_returns_indexes_m` and
+`cm_dialysis_returns_indexes_m` use **byte-identical formulas** (TTM cap blend + n≥4 gate + a 7-month centered
+MA `ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING`). Both are **double-smoothed** (TTM inputs + redundant MA) — the
+MA strips ~64% of real movement: gov MoM 12.47→4.53 bps, dia 15.27→5.58 bps. Residual gov<dia is **genuine
+market** (gov caps ~22% less volatile than dia, not a formula diff). Range 2001-01→2026-03, capped by the
+master mat start (NOT data — 60 capped sales in 1997-2000, ~15/yr).
+**Prompt:** `CLAUDE_CODE_PROMPT_T7_returns_index_desmooth_extend.md`.
+**Scope (Scott decided 2026-06-25): de-smooth BOTH gov + dia (Unit 1, ship now); DEFER the 1997 extension
+(Unit 2).** Unit 1 — remove the 7-mo MA from gov + dia returns `_m`/`_q` → real movement restored (gov ≈12 /
+dia ≈15 bps/mo), gov stays genuinely smoother. History window unchanged (2001→2026). Unit 2 (1997 extension
+via the shared `cm_gov_market_quarterly_master_m_mat`) deferred to a separate audited change.
 
-### T8 — Gov active-lease-over-time: rebuild from inventory snapshots  ·  P1  ·  ▶ PROMPT WRITTEN (2026-06-25)
+### T8 — Gov active-lease-over-time: rebuild from inventory snapshots  ·  P1  ·  ✅ GATED PASS (PR #319, 2026-06-25)
+**Verified live:** counts bar repointed from the broken cumulative-by-start (1,840→7,849 RISING) to the true
+snapshot point-in-time inventory — **2013-01 = 8,845 declining to 2026-03 = 7,495** (the real GSA footprint
+SHRINKS). 159 months, min 7,339 / max 8,846, 0 below 7,000. Rate denominator (`leases_outside_firm_term`)
+repointed to the snapshot Succeeding/Extension sub-cohort; rate range 0.0004–0.0924 (T2 axis auto-refits
+0–11% data-drivenly). **Fix in gate:** a corrupt partial snapshot (`gsa_snapshots` 2019-02 = 11 of 8,051
+keys) caused a single-month plunge → added a `HAVING count(*)>=5000` plausibility guard on `snap_agg`
+(real inventory never <7,300) so the carry-forward skips it (2019-02 → 8,054). Non-corrupt months
+byte-identical; view-only, reversible; ~1.95s REST-safe. Unit 3 (events-based termination numerator) reported
+not shipped (termination_date undercounts departures ~5–6×) — Scott's call if/when to switch.
+**Surfaced for re-ingest (data debt, not view-only):** corrupt partial source ingests — `gsa_snapshots`
+2019-02; `gsa_inventory_snapshot_lines` 2019-02/2022-10/2022-11. Validated header `record_count` is the
+truth; re-ingest those months so other consumers are correct. (GitHub issue offered.)
+**(prompt + gate addendum: `CLAUDE_CODE_PROMPT_T8_active_lease_inventory_from_snapshots.md`)**
+
+### T8-orig — prompt-written note (superseded)  ·  (2026-06-25)
 **Notes:** gov 21, 22 — Scott: "should be >1,750 active GSA leases in 2013; it's as though we only show
 currently-active projected back."
 **Grounded live 2026-06-25 — confirmed + worse (the chart is INVERTED):** `cm_gov_lease_termination_rate_m`'s
