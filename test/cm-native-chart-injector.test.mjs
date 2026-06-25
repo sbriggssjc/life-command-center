@@ -25,6 +25,7 @@ import {
   buildComboChartXml,
   buildSingleBarChartXml,
   buildDoughnutChartXml,
+  fitDataAxisRange,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -507,6 +508,91 @@ test('R37 P2: buildInjectionSpec ports renderer ranges/formats to specs', () => 
   });
   assert.deepEqual(bcp.spec.yAxisRange, { min: 0, max: 1 });
   assert.equal(bcp.spec.valAxNumFmt, '0%');
+});
+
+test('T2: fitDataAxisRange — percent / rate / cap kinds', () => {
+  // percent: ~1pt pad, snap to whole percent, clamp [0,1], cover the data
+  assert.deepEqual(fitDataAxisRange([0.7825, 0.84, 0.95, 0.9858], 'percent'),
+    { min: 0.77, max: 1 }, 'dia % of ask covers 0.78-0.99, no clip');
+  assert.deepEqual(fitDataAxisRange([0.9106, 0.93, 0.9635], 'percent'),
+    { min: 0.9, max: 0.98 }, 'gov % of ask fills ~0.90-0.98 (not 0.85-1.05)');
+  // rate: zero-floored, ceiling = peak + ~15% rounded up to next whole percent
+  assert.deepEqual(fitDataAxisRange([0.0027, 0.04, 0.0861], 'rate'),
+    { min: 0, max: 0.1 }, 'gov termination rate ~0-0.10 (not 0-0.25)');
+  // cap: 0.5% step (mirrors fitCapAxisRange)
+  assert.deepEqual(fitDataAxisRange([0.0568, 0.062, 0.0749], 'cap'),
+    { min: 0.055, max: 0.075 }, 'dia sold-cap-by-term tightens to 5.5-7.5%');
+  // flat series still gets a readable 4pt band
+  const flat = fitDataAxisRange([0.95, 0.951, 0.952], 'percent');
+  assert.ok(flat.max - flat.min >= 0.039, 'near-flat percent gets a min band');
+  // < 2 finite points → null (caller keeps its literal — no regression)
+  assert.equal(fitDataAxisRange([0.9], 'percent'), null);
+  assert.equal(fitDataAxisRange([null, undefined, NaN], 'rate'), null);
+  assert.equal(fitDataAxisRange(undefined, 'cap'), null);
+});
+
+test('T2: buildInjectionSpec data-fits the % / rate / sold-cap axes from rows', () => {
+  const cols = (keys) => keys.map((k, i) => ({ key: k, col: String.fromCharCode(65 + i) }));
+  const months = (n, build) => Array.from({ length: n }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}-28`,
+    ...build(i),
+  }));
+
+  // dom_and_pct_of_ask — % of Ask right axis fits the plotted pct_of_ask
+  const domRows = months(48, (i) => ({ avg_dom: 200 + i, pct_of_ask: 0.87 + (i % 10) * 0.008 }));
+  const dom = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask', tabName: 'Data_DOM_Ask',
+    cols: cols(['period_end', 'subspecialty', 'avg_dom', 'median_dom', 'pct_of_ask']),
+    dataStart: 5, dataEnd: 52, brand: { palette: {} }, rows: domRows, vertical: 'dialysis',
+  });
+  assert.ok(dom.spec.yRightRange.min >= 0.85 && dom.spec.yRightRange.min <= 0.87,
+    `dom right axis floor hugs the data (got ${dom.spec.yRightRange.min})`);
+  assert.ok(dom.spec.yRightRange.max <= 0.96,
+    `dom right axis ceiling no longer crushed wide (got ${dom.spec.yRightRange.max})`);
+  assert.notDeepEqual(dom.spec.yRightRange, { min: 0.85, max: 1.05 }, 'not the wide literal');
+
+  // lease_termination_rate — rate-line right axis fits to ~0-10%, not 0-25%
+  const termRows = months(48, (i) => ({
+    total_leases_active: 8000, leases_outside_firm_term: 2000,
+    terminated_outside_firm_term_pct: 0.01 + (i % 9) * 0.009, // peaks ~0.082
+  }));
+  const term = buildInjectionSpec({
+    chart_template_id: 'lease_termination_rate', tabName: 'Data_Term_Rate',
+    cols: cols(['period_end', 'total_leases_active', 'leases_outside_firm_term',
+                'terminated_outside_firm_term_pct']),
+    dataStart: 5, dataEnd: 52, brand: { palette: {} }, rows: termRows,
+  });
+  assert.equal(term.spec.yRightRange.min, 0, 'rate axis floored at 0');
+  assert.ok(term.spec.yRightRange.max <= 0.12 && term.spec.yRightRange.max < 0.25,
+    `rate ceiling lowered toward ~0.10 (got ${term.spec.yRightRange.max})`);
+
+  // sold_cap_by_term_dot_plot (dia) — cohort cap axis hugs the plotted window,
+  // not the all-rows 5-10% squeeze.
+  const soldRows = months(36, (i) => ({
+    cap_12plus: 0.058 + (i % 6) * 0.002, cap_8to12: 0.06 + (i % 5) * 0.0018,
+    cap_6to8: 0.062 + (i % 4) * 0.0015, cap_5orless: 0.064 + (i % 3) * 0.0012,
+  }));
+  const sold = buildInjectionSpec({
+    chart_template_id: 'sold_cap_by_term_dot_plot', tabName: 'Data_Sold_Cap_by_Term',
+    cols: cols(['period_end', 'subspecialty', 'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless',
+                'cap_10plus', 'cap_5to10', 'cap_less5', 'cap_outside_firm']),
+    dataStart: 5, dataEnd: 40, brand: { palette: {} }, rows: soldRows, vertical: 'dialysis',
+  });
+  assert.ok(sold.spec.yAxisRange.max <= 0.08,
+    `dia sold-cap ceiling no longer 0.10 (got ${sold.spec.yAxisRange.max})`);
+  assert.ok(sold.spec.yAxisRange.min >= 0.05,
+    `dia sold-cap floor hugs data (got ${sold.spec.yAxisRange.min})`);
+});
+
+test('T2: axis-fit falls back to the prior literal when no rows are supplied', () => {
+  const cols = (keys) => keys.map((k, i) => ({ key: k, col: String.fromCharCode(65 + i) }));
+  // No rows → fitDataAxisRange returns null → prior gov literal preserved.
+  const dom = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask', tabName: 'Data_DOM_Ask',
+    cols: cols(['period_end', 'subspecialty', 'avg_dom', 'median_dom', 'pct_of_ask']),
+    dataStart: 5, dataEnd: 60, brand: { palette: {} },
+  });
+  assert.deepEqual(dom.spec.yRightRange, { min: 0.85, max: 1.05 }, 'gov fallback literal intact');
 });
 
 test('R37 P1: catAxNumFmt empty string suppresses numFmt entirely', async () => {
