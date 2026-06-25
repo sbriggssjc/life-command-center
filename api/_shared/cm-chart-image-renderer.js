@@ -2215,7 +2215,20 @@ function buildChartConfig(chart, brand) {
           ],
         },
         options: (() => {
-          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.04, max: 0.12 } });
+          // T9 (2026-06-25) — data-fit the cap (y) axis over the plotted dots
+          // (snap to 0.5% grid) so the ceiling hugs the now error-free sold-cap
+          // range (~9%) instead of the static 4-12%. Mirrors the injector's
+          // fitCapAxisRange for core_cap_rate_dot_plot so PNG == Excel-native.
+          const capYs = dots.map(d => Number(d.y)).filter(v => Number.isFinite(v) && v >= 0.002 && v <= 0.30);
+          let capDotRange = { min: 0.04, max: 0.12 };
+          if (capYs.length >= 2) {
+            const STEP = 0.005;
+            const lo = Math.max(0, Math.floor(Math.min(...capYs) / STEP) * STEP);
+            let hi = Math.ceil(Math.max(...capYs) / STEP) * STEP;
+            if (hi <= lo) hi = lo + STEP;
+            capDotRange = { min: Math.round(lo * 1e6) / 1e6, max: Math.round(hi * 1e6) / 1e6 };
+          }
+          const o = commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: capDotRange });
           o.scales.x = {
             type: 'time',
             time: { unit: 'year' },
