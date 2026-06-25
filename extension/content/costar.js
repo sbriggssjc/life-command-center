@@ -484,7 +484,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 22,
+        _version: 23,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
@@ -918,7 +918,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // turnpike, byp/bypass, xing/crossing. All require a leading street number
     // (enforced by the digit-prefix guard in parseAddress) so false positives
     // are unlikely.
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
+    // Round 76 (2026-06-25): added speedway/spdwy. "Buffalo Speedway" (a major
+    // Houston road) parsed to null because "Speedway" wasn't a known street type
+    // (and \bway\b can't match inside "Speedway"), so the sidebar fell back to the
+    // empty "unsupported site" state on 13838 Buffalo Speedway (Comp 5194120).
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
     // Salt Lake City-style grid addresses have no street-type word.
     // Form: <building#> <dir> <grid#> <dir> — e.g. "3854 W 5400 S",
     // "3000 E 7800 S". Without this branch, Taylorsville/SLC properties
@@ -990,7 +994,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // DOES match the Highway/Route forms, so evaluating both the split-combine
     // (a) and the single-line parse (b) in document order makes the top-of-page
     // subject win regardless of suffix shape.
-    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
