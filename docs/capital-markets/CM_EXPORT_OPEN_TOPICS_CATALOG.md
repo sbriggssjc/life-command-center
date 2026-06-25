@@ -217,14 +217,21 @@ investigate the Municipal post-2023 stop (real or tagging). Don't drop the serie
 index that compounds out volatility, or a denominator bug). Extend the x-axis to match the volume/cap
 history (~1997-2001).
 
-### T8 — Gov lease inventory + event-count magnitude  ·  P1
-**Notes:** gov 21, 22. (21) "1,500 expirations/terminations/yr vs 8,000 inventory — formula/storage
-issue." (22) "Inventory now grows over time; we want point-in-time active count; believe >8,000 were
-active in 2013." **Grounded:** Task-1 set active inventory to ~7,849 holdover-inclusive (point in time
-now). Scott now sees the *time series* growing and wants a true point-in-time-active count per period,
-and believes 2013 was >8,000. **Action:** make the inventory-over-time chart a **point-in-time active
-count** per period (not cumulative); validate the historical level (was it ≥8,000 in 2013?); reconcile
-the annual expiration/termination counts against the active denominator (the 1,500 vs 8,000 ratio).
+### T8 — Gov active-lease-over-time: rebuild from inventory snapshots  ·  P1  ·  ▶ PROMPT WRITTEN (2026-06-25)
+**Notes:** gov 21, 22 — Scott: "should be >1,750 active GSA leases in 2013; it's as though we only show
+currently-active projected back."
+**Grounded live 2026-06-25 — confirmed + worse (the chart is INVERTED):** `cm_gov_lease_termination_rate_m`'s
+`active` CTE counts `gsa_leases WHERE lease_effective<=period_end` with **no upper bound** = a cumulative
+ramp of TODAY's table by start date. True point-in-time (from snapshots): **2013-01 = 8,845** active leases,
+declining to **2026-02 = 7,348** — the real GSA footprint SHRINKS; the chart shows a false RISE 1,840→7,849.
+**The data is already stored:** `gsa_snapshots` (149 monthly snapshots, 2013-01→2026-06, `snapshot_date` +
+`lease_number` + `latest_action`) and `gsa_inventory_snapshots`/`_lines` (record_count == distinct lease_number,
+verified). So "active at period t = distinct lease_number in the snapshot ≤ t" — Scott's "compare unique lease
+keys over time," exact. **Prompt:** `CLAUDE_CODE_PROMPT_T8_active_lease_inventory_from_snapshots.md`.
+Unit 1 (must, display-only, no rate impact) repoint the COUNTS bar to the snapshot inventory; Unit 2 (rec.)
+repoint the rate denominator (`leases_outside_firm_term`) to the snapshot Succeeding/Extension sub-cohort +
+re-fit the T2 termination-rate axis; Unit 3 (investigate) events-based termination numerator
+(`gsa_lease_events` 'disappeared') — report before changing. View-only, reversible, gov.
 
 ### T9 — Cap-rate data anomalies  ·  P2  ·  ✅ GATED PASS (PR #1339, 2026-06-25)
 **Verified live:** Unit 1 — all 19 high-cap "outliers" were `cap_rate_history` DERIVATION errors (portfolio
