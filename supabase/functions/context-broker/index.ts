@@ -799,7 +799,7 @@ async function assembleGenericPacket(packetType: string, entityId: string, works
 // Boundary: private docs (e.g. personal Health/Finance) are included ONLY when
 // the requested domain is 'personal'. Canonical source stays in OneDrive.
 async function assembleCortexPacket(domain: string, maxTokens: number | null) {
-  const sourcesQueried = ["cortex_documents"];
+  const sourcesQueried = ["cortex_documents", "cortex_memory"];
   const fieldsMissing: string[] = [];
   const allowPrivate = domain === "personal";
 
@@ -842,12 +842,28 @@ async function assembleCortexPacket(domain: string, maxTokens: number | null) {
     });
   }
 
+  // A3: recent cross-domain Cortex memory (decisions/outcomes/preferences),
+  // boundary-aware — private memory only in a personal pack.
+  let memory: Array<Record<string, unknown>> = [];
+  try {
+    const memRes = await opsQuery(
+      "GET",
+      `cortex_memory?active=eq.true&or=(domain.eq.global,domain.eq.${encodeURIComponent(domain)})` +
+      `&select=created_at,domain,kind,summary,detail,sensitivity&order=created_at.desc&limit=25`
+    );
+    const memRaw = toArray(memRes.data) as Array<Record<string, unknown>>;
+    memory = memRaw
+      .filter((m) => allowPrivate || m.sensitivity !== "private")
+      .map((m) => ({ created_at: m.created_at, domain: m.domain, kind: m.kind, summary: m.summary, detail: m.detail }));
+  } catch (_) { /* memory best-effort */ }
+
   const payload: Record<string, unknown> = {
     kind: "cortex_context",
     requested_domain: domain,
     boundary: allowPrivate ? "personal (private docs included)" : "private docs excluded",
     docs: sections,
     provenance,
+    memory,
     note: "Cortex Tier-1 brain slice. Canonical source: OneDrive Personal _FileSystem Cortex. " +
           "Entity-context nesting (entity_id) is a follow-up (A1.1)."
   };
