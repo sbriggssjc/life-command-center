@@ -59,7 +59,7 @@ const VERCEL_BASE = process.env.LCC_BASE_URL || 'https://tranquil-delight-produc
 
 // B1: SharePoint host for deal-doc deep links. Set in Vercel prod env. If unset,
 // document results still return (with url:null) so search stays useful.
-const SHAREPOINT_HOST = process.env.SHAREPOINT_HOST || process.env.SHAREPOINT_LINK_URL || '';
+const SHAREPOINT_HOST = process.env.SHAREPOINT_HOST || 'https://northmarq.sharepoint.com';
 
 function basename(pth) {
   if (!pth) return '(file)';
