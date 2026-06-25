@@ -91,8 +91,8 @@
     return cells.some((c) => STATE_RE.test(c));
   }
 
-  function parsePortfolioProperties(lines) {
-    if (!Array.isArray(lines)) return [];
+  // FORM A — a real <table>: each row is one tab-separated innerText line.
+  function parseTabTable(lines) {
     let headerAt = -1;
     let idx = null;
     for (let i = 0; i < lines.length; i++) {
@@ -115,16 +115,83 @@
       }
       const row = rowFromCells(cells, idx);
       if (!isPlausibleConstituent(row, cells)) {
-        if (out.length > 0) break; // first non-row after the body ends the table
+        if (out.length > 0) break;
         continue;
       }
-      // Dedupe identical (address|state) rows within the same capture.
-      const key = `${(row.address || '').toLowerCase()}|${(row.state || '').toUpperCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(row);
+      pushUnique(out, seen, row);
     }
     return out;
+  }
+
+  function pushUnique(out, seen, row) {
+    const key = `${(row.address || '').toLowerCase()}|${(row.state || '').toUpperCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(row);
+  }
+
+  // Header column labels (single-cell lines) for the div-grid form.
+  const HEADER_LABEL = new Set([
+    'address', 'city', 'state', 'property type', 'type', 'rating', 'size', 'sf',
+    'rba', 'sale price', 'price', 'price/area', 'price/sf', 'price status',
+  ]);
+  // Lines that end the constituent table (next page section).
+  const SECTION_END_RE = /^(transaction details|portfolio|buyer|seller|map|contacts|documents|sources|my notes|photos?|loan|financ|©|by using this)/i;
+  const PTYPE_RE = /^(office|retail|industrial|flex|medical|mob|land|mixed[\s-]?use|multifamily|hospitality|self[\s-]?storage|special purpose)\b/i;
+  // City: alpha/space/.'- only, not a 2-letter state, not a property type.
+  const CITY_RE = /^[A-Za-z][A-Za-z .'’-]+$/;
+
+  // FORM B — a div grid: innerText puts each CELL on its own line (no tabs).
+  // Anchor on address-shaped lines and read each constituent's fields from the
+  // lines up to the next address. Tolerant of a collapsed/odd cell (e.g. the
+  // star Rating column) because it matches by VALUE shape, not fixed offset.
+  function parseDivGrid(lines) {
+    // Require the Address/City/State header labels to start (fails closed).
+    let start = -1;
+    for (let i = 0; i + 2 < lines.length; i++) {
+      if (lines[i].toLowerCase() === 'address') {
+        const look = lines.slice(i + 1, i + 6).map((x) => x.toLowerCase());
+        if (look.includes('city') && look.includes('state')) { start = i; break; }
+      }
+    }
+    if (start === -1) return [];
+    let j = start;
+    while (j < lines.length && HEADER_LABEL.has(lines[j].toLowerCase())) j++;
+
+    const out = [];
+    const seen = new Set();
+    let cur = null;
+    const flush = () => {
+      if (cur && cur.address && cur.state && cur.sale_price != null) pushUnique(out, seen, cur);
+      cur = null;
+    };
+    for (; j < lines.length; j++) {
+      const ln = lines[j];
+      if (SECTION_END_RE.test(ln)) break;
+      if (ADDRESS_RE.test(ln)) { flush(); cur = blankRow(ln); continue; }
+      if (!cur) continue;
+      if (cur.state == null && STATE_RE.test(ln)) { cur.state = ln; continue; }
+      const sz = parseSize(ln);
+      if (cur.size_sf == null && sz != null) { cur.size_sf = sz; continue; }
+      const pr = parsePrice(ln);
+      if (cur.sale_price == null && pr != null) { cur.sale_price = pr; continue; }
+      if (cur.property_type == null && PTYPE_RE.test(ln)) { cur.property_type = ln; continue; }
+      // City is the first plain-alpha line after the address (before state).
+      if (cur.city == null && cur.state == null && CITY_RE.test(ln) && !PTYPE_RE.test(ln)) { cur.city = ln; continue; }
+    }
+    flush();
+    return out;
+  }
+
+  function blankRow(address) {
+    return { address, city: null, state: null, property_type: null, size_sf: null, sale_price: null };
+  }
+
+  function parsePortfolioProperties(lines) {
+    if (!Array.isArray(lines)) return [];
+    const tab = parseTabTable(lines);
+    if (tab.length > 0) return tab;
+    return parseDivGrid(lines); // div-grid fallback
   }
 
   const api = {
