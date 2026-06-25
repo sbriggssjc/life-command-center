@@ -138,12 +138,54 @@ function applyTemplate(tpl: string, row: Record<string, unknown>): string {
   };
   return tpl.replace(/\{(\w+)\}/g, (_, k) => map[k] ?? "").replace(/\s+/g, " ").trim();
 }
+// ---- content-aware title rules (config-driven, from cortex_title_rules) ----
+type TitleRule = { priority: number; emoji: string | null; label: string | null; format: string; re: RegExp };
+let RULES: TitleRule[] = [];
+let KIDS: string[] = [];
+async function loadTitleRules() {
+  const rows: Record<string, unknown>[] = (await rest(
+    "cortex_title_rules?select=kind,priority,pattern,emoji,label,format&active=eq.true&order=priority.desc")) || [];
+  RULES = []; KIDS = [];
+  for (const r of rows) {
+    if (r.kind === "kids") { KIDS = String(r.pattern).split(",").map((s) => s.trim()).filter(Boolean); continue; }
+    try { RULES.push({ priority: Number(r.priority), emoji: r.emoji as string, label: r.label as string, format: String(r.format), re: new RegExp(String(r.pattern), "i") }); } catch { /* skip bad regex */ }
+  }
+}
+const TYPO: [RegExp, string][] = [[/\bleason\b/gi, "Lesson"], [/\bpracitce\b/gi, "Practice"], [/\blessson\b/gi, "Lesson"]];
+function clean(s: string): string { let o = String(s ?? "").replace(/\s+/g, " ").trim(); for (const [re, rep] of TYPO) o = o.replace(re, rep); return o; }
+function capFirst(s: string): string { return /[A-Za-z]/.test(s.charAt(0)) ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+function detectKid(s: string): string | null { for (const k of KIDS) if (new RegExp("\\b" + k + "\\b", "i").test(s)) return k; return null; }
+const SPORT_NOUNS = /\b(soccer|basketball|bball|football|baseball|tennis)\b/ig;
+
 function normalizeTitle(row: Record<string, unknown>): string {
-  const emoji = String(row.emoji ?? "").trim();
+  const fallbackEmoji = String(row.emoji ?? "").trim();
+  const cleaned = clean(String(row.subject ?? "")) || "(untitled)";
+
+  // 1) content rule (highest priority match) — restyle to the standard
+  const rule = RULES.find((r) => r.re.test(cleaned));
+  if (rule) {
+    const kid = detectKid(cleaned);
+    if (rule.format === "kid_sport") {
+      let detail = cleaned;
+      if (kid) detail = detail.replace(new RegExp("\\b" + kid + "\\b", "ig"), " ");
+      detail = detail.replace(SPORT_NOUNS, " ").replace(/\s+/g, " ").replace(/^[\s\-:–]+/, "").trim();
+      const head = (kid ? kid + " " : "") + (rule.label || "");
+      return (rule.emoji + " " + capFirst(head.trim()) + (detail ? ": " + capFirst(detail) : "")).trim();
+    }
+    if (rule.format === "kid_activity") {
+      let detail = cleaned;
+      if (kid) detail = detail.replace(new RegExp("\\b" + kid + "\\b", "ig"), " ").replace(/\s+/g, " ").trim();
+      detail = detail.replace(/^[\s\-:–]+/, "").trim();
+      return (rule.emoji + " " + (kid ? kid + " " : "") + capFirst(detail || rule.label || "")).trim();
+    }
+    return (rule.emoji + " " + cleaned).trim(); // plain
+  }
+
+  // 2) no rule -> registry behavior (title_template or subject) + domain emoji
   const tpl = row.title_template ? String(row.title_template) : null;
-  let body = tpl ? applyTemplate(tpl, row) : String(row.subject ?? "").trim();
+  let body = tpl ? applyTemplate(tpl, row) : cleaned;
   if (!body) body = "(untitled)";
-  if (emoji && !body.startsWith(emoji)) body = emoji + " " + body;   // emoji-first identity on every surface
+  if (fallbackEmoji && !body.startsWith(fallbackEmoji)) body = fallbackEmoji + " " + body;
   return body;
 }
 
@@ -204,6 +246,7 @@ function uidFor(eventId: string): string {
 
 async function run(dryRun: boolean, limit = 0, ORDER_ASC = false) {
   const home = await homeUrl();
+  await loadTitleRules(); // content-aware title normalization (config-driven)
 
   // desired set
   let q = "v_calendar_events_merged?select=id,subject,start_time,end_time,location,is_all_day,cortex_domain,calendar_sport,calendar_kid,emoji,color,title_template,canonical_source&order=start_time." + (ORDER_ASC ? "asc" : "desc");
@@ -279,6 +322,17 @@ Deno.serve(async (req: Request) => {
       const home = await homeUrl();
       const cals = await listCalendars(home);
       return Response.json({ service: "calendar-caldav-push", domain_calendars: DOMAIN_CALS, existing: cals.map((c) => c.name) });
+    }
+    // Admin: preview before/after normalized titles WITHOUT writing.
+    if (req.method === "GET" && url.searchParams.get("preview") === "1") {
+      await loadTitleRules();
+      const n = parseInt(url.searchParams.get("n") || "30", 10) || 30;
+      const filt = url.searchParams.get("source"); // optional canonical_source filter
+      let q = "v_calendar_events_merged?select=subject,emoji,title_template,calendar_sport,calendar_kid,cortex_domain,canonical_source,start_time&order=start_time.desc&limit=" + n;
+      if (filt) q += "&canonical_source=eq." + encodeURIComponent(filt);
+      const rows: Record<string, unknown>[] = (await rest(q)) || [];
+      return Response.json({ ok: true, kids: KIDS, rules: RULES.length,
+        items: rows.map((r) => ({ raw: r.subject, normalized: normalizeTitle(r), source: r.canonical_source })) });
     }
     // Admin: list event summaries in a named calendar (to inspect leftovers safely).
     if (req.method === "GET" && url.searchParams.get("inspect")) {
