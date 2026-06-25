@@ -14,8 +14,9 @@ async function rest(path: string, init?: RequestInit) {
     headers: { apikey: KEY, Authorization: "Bearer " + KEY, "Content-Type": "application/json",
                ...(init?.headers || {}) },
   });
-  if (!r.ok) throw new Error("rest " + r.status + ": " + (await r.text()));
-  return r.status === 204 ? null : r.json();
+  const txt = await r.text();
+  if (!r.ok) throw new Error("rest " + r.status + ": " + txt);
+  return txt ? JSON.parse(txt) : null;
 }
 
 function icsDateToISO(value: string, isDateOnly: boolean): { iso: string | null; allDay: boolean } {
