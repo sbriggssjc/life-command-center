@@ -77,6 +77,26 @@ change without surfacing that diff — it would further move the rate line.
 - `_q` (quarterly) variant repointed consistently with `_m`. Reversible (restore the prior view defs).
   No domain-row writes. ≤12 api/*.js. gov only.
 
+## GATE FOLLOW-UP (2026-06-25, independent verification — one required fix)
+The rebuild verified correct (2013-01 = 8,845 → 2026-02 = 7,348, matches `gsa_inventory_snapshots.record_count`;
+159 months; rate 0.0004–0.0924; `_q` consistent). **One blocker:** `min(total_leases_active) = 11` at
+**2019-02** — a visible single-month plunge. Cause: the per-lease snapshot sources have partial-ingest months
+that the carry-forward landed on instead of skipping:
+- `gsa_snapshots` 2019-02 → **11** distinct keys (should be 8,051)
+- `gsa_inventory_snapshot_lines` 2019-02 → **0** rows, 2022-10 → 3,000, 2022-11 → 750
+- only the validated header `gsa_inventory_snapshots.record_count` is correct for all (8,051/7,714/7,714)
+
+**Required fix — plausibility guard on the carry-forward:** when picking the most-recent snapshot ≤ period_end
+(for BOTH `total_leases_active` and the Unit-2 `leases_outside_firm_term` sub-cohort), **skip any snapshot whose
+distinct-key count is implausibly thin** (e.g. below a fixed floor like 5,000 — the real inventory never drops
+below ~7,300 — or below ~50% of the previous good snapshot) and carry forward the last GOOD snapshot. That lands
+2019-02 at ~8,051 (from 2019-01) and protects that month's rate denominator too. Re-verify
+`min(total_leases_active)` is back in the ~7,300–8,846 band with no thin-month dip.
+**Surfaced (separate, data-repair, not view-only):** `gsa_snapshots` 2019-02 + `gsa_inventory_snapshot_lines`
+2019-02/2022-10/2022-11 are corrupt partial ingests — re-ingest those snapshot months from source (the header
+record_count is the validated truth) so all consumers of those per-lease tables are correct. Out of T8's
+view-only scope; flag for a follow-up.
+
 ## Boundaries / scope
 - gov lease termination/active-inventory views only. The `cm_gov_inventory_backlog_m` / `market_turnover`
   views are the LISTINGS flow (already on `on_market_date`, T4c) — a different inventory; do NOT touch them.
