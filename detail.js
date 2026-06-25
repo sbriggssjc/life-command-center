@@ -1299,6 +1299,21 @@ async function _udRenderOperationsAsync(bodyEl) {
     let _geo = null;
     if (_geoPropId) { try { _geo = await _udLoadPropertyGeo('dia', _geoPropId); } catch (_e) { _geo = null; } }
 
+    // Enrich nearby competitors with certification_date so the export can flag
+    // newly-opened facilities as a possible demand-shift driver when a clinic's
+    // census is declining. Additive + graceful — never blocks the tab.
+    if (_geo && Array.isArray(_geo.nearby_competitors) && _geo.nearby_competitors.length) {
+      const _nearMids = _geo.nearby_competitors.map(c => c.medicare_id).filter(Boolean);
+      if (_nearMids.length) {
+        try {
+          const _certRows = await diaQuery('medicare_clinics', 'medicare_id,certification_date,facility_name', { filter: `medicare_id=in.(${_nearMids.map(m => encodeURIComponent(m)).join(',')})`, limit: 50 }).catch(() => []);
+          const _certMap = {};
+          (_certRows || []).forEach(cr => { _certMap[cr.medicare_id] = cr; });
+          _geo.nearby_competitors.forEach(c => { const cr = c.medicare_id && _certMap[c.medicare_id]; if (cr) { c.certification_date = cr.certification_date; if (!c.facility_name) c.facility_name = cr.facility_name; } });
+        } catch (_ce) { /* additive; never break the tab */ }
+      }
+    }
+
     _opsExtraCache = {
       medicare_id: clinicId,
       patientHistory: patientHistory || [],
@@ -5074,11 +5089,33 @@ function _udExportOperations() {
   const B = NMQ_BRAND;
 
   // Derive key values (same logic as _udTabOperations)
-  const estRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
-  const bestProfit = finDetail.estimated_operating_profit || r.ttm_operating_profit;
-  let margin = null;
-  if (bestProfit && estRevenue && Number(estRevenue) > 0) margin = (Number(bestProfit) / Number(estRevenue)) * 100;
-  else if (r.ttm_operating_margin != null) { margin = Number(r.ttm_operating_margin); if (Math.abs(margin) > 0 && Math.abs(margin) < 1) margin *= 100; }
+  // Financial basis — present ONE consistent basis. The prior export mixed
+  // estimated_annual_revenue (a chair-CAPACITY model that overstates revenue for
+  // under-utilized clinics) with the HCRIS actual operating profit, producing a
+  // nonsensical margin (e.g. $7.6M est. revenue ÷ $522k HCRIS profit = 6.9%, and
+  // $1,156/treatment). Prefer HCRIS actuals (reflect real treatment volume); else
+  // the estimated model kept internally consistent (its own revenue + profit).
+  const _ttmMargin = (r.ttm_operating_margin != null) ? (Math.abs(Number(r.ttm_operating_margin)) < 1 ? Number(r.ttm_operating_margin) : Number(r.ttm_operating_margin) / 100) : null;
+  const _ttmProfit = (r.ttm_operating_profit != null) ? Number(r.ttm_operating_profit) : null;
+  const _estRev = (finDetail.estimated_annual_revenue != null) ? Number(finDetail.estimated_annual_revenue) : (r.estimated_annual_revenue != null ? Number(r.estimated_annual_revenue) : null);
+  const _estProfit = (finDetail.estimated_operating_profit != null) ? Number(finDetail.estimated_operating_profit)
+        : (finDetail.estimated_annual_profit != null) ? Number(finDetail.estimated_annual_profit)
+        : (r.estimated_annual_profit != null) ? Number(r.estimated_annual_profit) : null;
+  let finBasis, estRevenue, bestProfit, margin;
+  if (_ttmProfit != null && _ttmMargin != null && _ttmMargin > 0) {
+    finBasis = 'hcris';
+    estRevenue = _ttmProfit / _ttmMargin;   // the revenue base the HCRIS margin is computed against
+    bestProfit = _ttmProfit;
+    margin = _ttmMargin * 100;
+  } else if (_estRev != null && _estProfit != null && _estRev > 0) {
+    finBasis = 'estimated';
+    estRevenue = _estRev; bestProfit = _estProfit; margin = (_estProfit / _estRev) * 100;
+  } else {
+    finBasis = 'partial';
+    estRevenue = (_estRev != null) ? _estRev : (r.ttm_revenue != null ? Number(r.ttm_revenue) : null);
+    bestProfit = (_ttmProfit != null) ? _ttmProfit : _estProfit;
+    margin = (bestProfit != null && estRevenue) ? (Number(bestProfit) / Number(estRevenue)) * 100 : (_ttmMargin != null ? _ttmMargin * 100 : null);
+  }
   const latestSnapshotPt = patientHistory.length > 0 ? Number(patientHistory[patientHistory.length - 1].total_patients || 0) : 0;
   const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
@@ -5109,17 +5146,18 @@ function _udExportOperations() {
   let leaseExp = 'N/A';
   if (lease.expiration_date) { const d = new Date(lease.expiration_date); leaseExp = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
 
-  // Reconcile costs & treatments (same hierarchy as tab)
-  const hcrisCost = costRpt && costRpt.total_costs ? Number(costRpt.total_costs) : 0;
-  const hcrisRev = costRpt && costRpt.total_patient_revenue ? Number(costRpt.total_patient_revenue) : 0;
-  const hcrisCostEqRev = hcrisCost > 0 && hcrisRev > 0 && Math.abs(hcrisCost - hcrisRev) < 1;
-  let bestCosts = null;
-  if (hcrisCost > 0 && !hcrisCostEqRev) bestCosts = hcrisCost;
-  else if (estRevenue && bestProfit) bestCosts = Number(estRevenue) - Number(bestProfit);
+  // Costs & treatments follow the chosen basis so revenue / treatments / margin
+  // all reconcile (costs = revenue − profit on the SAME basis).
+  const bestCosts = (estRevenue != null && bestProfit != null) ? Number(estRevenue) - Number(bestProfit) : null;
   const hcrisTx = costRpt && costRpt.total_treatments ? Number(costRpt.total_treatments) : null;
   const finTxExp = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
-  const rawTxExp = r.estimated_annual_treatments || r.ttm_total_treatments;
-  const annualTx = hcrisTx || finTxExp || (rawTxExp ? Number(rawTxExp) : null) || (bestPatientCount ? bestPatientCount * 156 : null);
+  let annualTx;
+  if (finBasis === 'estimated') {
+    annualTx = (r.estimated_annual_treatments != null) ? Number(r.estimated_annual_treatments) : (finTxExp || hcrisTx || (bestPatientCount ? bestPatientCount * 156 : null));
+  } else {
+    // hcris / partial basis → actual reported treatment volume
+    annualTx = (r.ttm_total_treatments != null) ? Number(r.ttm_total_treatments) : (hcrisTx || finTxExp || (bestPatientCount ? bestPatientCount * 156 : null));
+  }
   const revPerTx = (estRevenue && annualTx) ? (Number(estRevenue) / annualTx) : null;
 
   // ── Client-export specifics (net-lease framing) ──
@@ -5139,7 +5177,12 @@ function _udExportOperations() {
   let riskScores = null, riskLevel = '', riskColor = B.muted;
   try {
     if (typeof _computeLeaseRisk === 'function') {
-      riskScores = _computeLeaseRisk(r, trends, quality, lease, leaseMonths, margin);
+      // The risk model's Patient-Trend factor reads r.patient_yoy_pct, which the
+      // pipeline computes from mismatched concurrent-vs-annual counts (can read
+      // −80%+ and peg the factor at max). Feed it the clean 3-yr trend annualized
+      // (÷3) so the gauge isn't distorted by that artifact. Export-only.
+      const _rRisk = Object.assign({}, r, { patient_yoy_pct: (r.patient_trend_3yr != null && isFinite(Number(r.patient_trend_3yr))) ? Number(r.patient_trend_3yr) / 3 : r.patient_yoy_pct });
+      riskScores = _computeLeaseRisk(_rRisk, trends, quality, lease, leaseMonths, margin);
       riskLevel = riskScores.total <= 25 ? 'Low' : riskScores.total <= 50 ? 'Moderate' : riskScores.total <= 75 ? 'High' : 'Critical';
       riskColor = riskScores.total <= 25 ? '#2E7D32' : riskScores.total <= 50 ? '#B26A00' : riskScores.total <= 75 ? '#C75300' : '#B3261E';
     }
@@ -5369,11 +5412,11 @@ function _udExportOperations() {
 <!-- Facility Financial Performance -->
 <h2>Facility Financial Performance <span class="note">Source: CMS/HCRIS &middot; operator filings</span></h2>
 <table class="data-table">
-  <tr><td>Est. Facility Revenue (annual)</td><td>${fmtDollar(estRevenue)}</td></tr>
+  <tr><td>Est. Facility Revenue (annual)</td><td>${fmtDollar(estRevenue)}<span class="ctx">${finBasis === 'hcris' ? 'Derived from CMS/HCRIS reported actuals (treatment volume &times; net revenue).' : finBasis === 'estimated' ? 'Estimated (chair-capacity model).' : 'Estimated.'}</span></td></tr>
   <tr><td>Revenue / Treatment (blended)</td><td>${revPerTx ? '$' + revPerTx.toFixed(0) : 'N/A'}<span class="ctx">Weighted by this facility's payer mix.</span></td></tr>
   <tr><td>Est. Operating Profit</td><td>${fmtDollar(bestProfit)}</td></tr>
-  <tr><td>Operating Margin</td><td>${fmtPct(margin)}${r.ttm_operating_margin != null ? '<span class="ctx">CMS/HCRIS trailing-twelve-month margin: ' + (Number(r.ttm_operating_margin) * (Math.abs(Number(r.ttm_operating_margin)) < 1 ? 100 : 1)).toFixed(1) + '%.</span>' : ''}</td></tr>
-  <tr><td>Annual Treatments</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}<span class="ctx">CMS/HCRIS reported.</span></td></tr>
+  <tr><td>Operating Margin</td><td>${fmtPct(margin)}${finBasis === 'estimated' ? (r.ttm_operating_margin != null ? '<span class="ctx">Estimated model; CMS/HCRIS TTM margin ' + (Number(r.ttm_operating_margin) * (Math.abs(Number(r.ttm_operating_margin)) < 1 ? 100 : 1)).toFixed(1) + '%.</span>' : '') : '<span class="ctx">CMS/HCRIS reported actuals (operating profit &divide; net patient revenue).</span>'}</td></tr>
+  <tr><td>Annual Treatments</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}<span class="ctx">${finBasis === 'estimated' ? 'Modeled at chair capacity.' : 'CMS/HCRIS reported.'}</span></td></tr>
 </table>
 
 <!-- Demand & Capacity -->
@@ -5399,6 +5442,7 @@ function _udExportOperations() {
   </div>
 </div>
 ${(cmsAnnualPatients != null && censusHeadline != null && cmsAnnualPatients > censusHeadline * 1.5) ? '<div class="callout"><b>Reconciling the two patient figures &mdash;</b> The facility treats roughly <b>' + censusHeadline.toLocaleString() + ' patients at a time</b> &mdash; the figure that reconciles with chairs, utilization, and annual treatments. CMS separately reports <b>' + cmsAnnualPatients.toLocaleString() + '</b> distinct patients served over its annual reporting window, a cumulative count (new starts, transfers, short-stay) shown here as catchment depth, not chair load.</div>' : ''}
+${(isDecline && recentNearby.length > 0) ? ('<div class="callout"><b>Census context &mdash;</b> The CMS-reported patient base has declined approximately ' + Math.abs(censusTrendPct).toFixed(0) + '% ' + censusTrendLabel + '. Newly-certified dialysis capacity has opened nearby during this period, which can redistribute catchment demand: ' + recentNearby.map(function(c){ var nm = _esc(c.facility_name || c.tenant || c.address || 'a nearby facility'); var cd = new Date(c.certification_date); var when = cd.toLocaleDateString('en-US', { month:'short', year:'numeric' }); var mi = (c.distance_miles != null) ? Number(c.distance_miles).toFixed(1) + ' mi' : ''; return nm + ' (certified ' + when + (mi ? ', ' + mi : '') + ')'; }).join('; ') + '.</div>') : ''}
 
 <h2>Hours of Operation</h2>
 ${hoursBlock}
@@ -15073,4 +15117,4 @@ async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-window._udExportLeaseComps = _udExportLeaseComps;
+window._udExportLeaseComps = _udExportLeaseComps;indow._udExportLeaseComps = _udExportLeaseComps;ortLeaseComps;
