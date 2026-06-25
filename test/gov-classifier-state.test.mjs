@@ -35,6 +35,7 @@ const STATE_AGENCIES_THAT_MUST_CLASSIFY_GOV = [
   'TX DEPT OF HOUSING & COMM AFFAIRS',       // 1
   'TEXAS ALCOHOLIC BEVERAGE COMMISSION',     // 1
   "Children's Protective Services",          // CPS — live capture 2026-06-23 (Sherman TX)
+  "Texas Children's Protective",             // CPS — CoStar truncates the TENANTS panel (no "Services"); live capture 2026-06-25 (Lubbock TX 1622 10th St)
   'Child Protective Services',               // CPS
   'Adult Protective Services',               // APS
   'Parole Supervision',                      // TX Dept of Criminal Justice, Parole Division — live capture 2026-06-23 (Haltom City)
