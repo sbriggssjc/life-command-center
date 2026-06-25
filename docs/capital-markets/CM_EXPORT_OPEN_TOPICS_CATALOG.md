@@ -47,8 +47,11 @@ mis-RANGED axes (clip or whitespace), split from genuine DATA issues:
 4. dia `sold_cap_by_term_dot_plot` cap axis `{0.05,0.10}` SQUEEZED (data 5.5-7.5%) → ~{0.055,0.075}.
 **DATA issues — queued (Scott: resolve data before y-axis):**
 - dia Asking Cap Quartiles (active) flat (core+overall) → **T9** (active-cap data static).
-- dia Asking Cap by Lease Term moves too smoothly → **T3b-asking** (apply the T3 sold-side de-smoothing /
-  bucket fix to the ASKING side; the sold side now "moves like it's more accurate").
+- dia Asking Cap by Lease Term moves too smoothly → **T3b-asking ⏳ PROMPT ISSUED**
+  (`CLAUDE_CODE_PROMPT_T3b_asking_cap_by_term_desmooth.md`). GROUNDED: `cm_dialysis_asking_cap_by_term_m`
+  still carries a **7-mo centered MA** (`OVER w ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING`) on top of the
+  2-yr TTM + n≥5 gate; the sold view (`cm_dialysis_sold_cap_by_term_dot`) has NO window fn (T3 removed it).
+  Fix = drop the `OVER w` MA, select gated TTM directly (mirror sold); keep TTM/n≥5/4-bucket. View-only.
 - gov Cap by Remaining Lease Term "all over the place" → **T9** (data review).
 - gov core cap dot plot 5-6 outliers to investigate/exclude, then ~9% ceiling → **T9** then axis.
 - gov Lease Termination COUNTS bar — wants ACTIVE leases per interval over time (>1,750 in 2013; looks
