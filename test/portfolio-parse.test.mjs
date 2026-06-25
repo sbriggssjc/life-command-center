@@ -66,10 +66,30 @@ describe('parsePortfolioProperties — robustness', () => {
     assert.deepEqual(parsePortfolioProperties(['Summary', 'Buyer', 'Seller']), []);
   });
 
-  it('returns [] for a div-grid (one cell per line) — needs-verification path', () => {
-    // No tabs -> 1-cell lines -> no header match -> [] (never fabricates).
+  it('parses a div-grid (one cell per line) via the line-block fallback', () => {
+    // CoStar's React grid renders each CELL on its own innerText line (no tabs).
+    const grid = [
+      'Properties',
+      'Address', 'City', 'State', 'Property Type', 'Rating', 'Size', 'Sale Price', 'Price/Area', 'Price Status',
+      '445 Camino Del Rey Dr', 'Los Lunas', 'NM', 'Office', '★★★☆☆', '46,635 SF', '$8,022,379', '$172.02/SF', 'A',
+      '39 Plaza La Prensa', 'Santa Fe', 'NM', 'Office', '43,084 SF', '$7,565,784', '$175.61/SF', 'A',
+      'Transaction Details', 'Sale Date', 'Jan 5, 2022',
+    ];
+    const rows = parsePortfolioProperties(grid);
+    assert.equal(rows.length, 2);
+    assert.deepEqual(
+      { a: rows[0].address, c: rows[0].city, s: rows[0].state, t: rows[0].property_type,
+        sf: rows[0].size_sf, p: rows[0].sale_price },
+      { a: '445 Camino Del Rey Dr', c: 'Los Lunas', s: 'NM', t: 'Office', sf: 46635, p: 8022379 });
+    // Row 2 had its Rating cell collapsed out (innerText drops empties) — still
+    // parsed correctly because fields match by value shape, not fixed offset.
+    assert.equal(rows[1].sale_price, 7565784);
+    assert.ok(rows.every((r) => r.sale_price !== 119082570));
+  });
+
+  it('div-grid fails closed when a row has no price (incomplete capture)', () => {
     assert.deepEqual(parsePortfolioProperties(
-      ['Properties', 'Address', 'City', 'State', '445 Camino Del Rey Dr', 'Los Lunas', 'NM']), []);
+      ['Address', 'City', 'State', '445 Camino Del Rey Dr', 'Los Lunas', 'NM']), []);
   });
 
   it('dedupes identical address|state rows within one capture', () => {
