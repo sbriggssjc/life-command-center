@@ -6923,7 +6923,7 @@ function renderTodaySchedule() {
   if (allDay.length > 0) {
     html += '<div class="sched-alldays">';
     for (const ev of allDay) {
-      html += `<div class="sched-event allday"><div class="sched-ev-title">${esc(ev.subject || '(No title)')}</div></div>`;
+      html += `<div class="sched-event allday" style="border-left:3px solid ${ev.color || '#8E8E93'}"><div class="sched-ev-title">${esc(ev.subject || '(No title)')}</div></div>`;
     }
     html += '</div>';
   }
@@ -6950,7 +6950,7 @@ function renderTodaySchedule() {
     const top = ((evStartMin - startMin) / 60) * hrHeight;
     const height = Math.max(((evEndMin - evStartMin) / 60) * hrHeight, 22);
     const timeLabel = formatTime(ev.start_time) + ' - ' + formatTime(ev.end_time);
-    html += `<div class="sched-event" style="top:${top}px;height:${height}px">`;
+    html += `<div class="sched-event" style="top:${top}px;height:${height}px;border-left:3px solid ${ev.color || '#8E8E93'}">`;
     html += `<div class="sched-ev-title">${esc(ev.subject || '(No title)')}</div>`;
     if (height > 28) html += `<div class="sched-ev-time">${timeLabel}</div>`;
     html += '</div>';
@@ -7861,7 +7861,7 @@ function renderCalendarFull() {
             ? `<span class="cal-task">Task @ ${formatTime(ev.start_time)}</span>`
             : `${formatTime(ev.start_time)} – ${formatTime(ev.end_time)}`);
       const cancelStyle = canceled ? ' style="opacity:0.4;text-decoration:line-through"' : '';
-      html += `<div class="cal-item"${cancelStyle}><div class="cal-time">${time}</div><div><div class="cal-subj">${esc(ev.subject || '(No title)')}</div>${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}${ev.organizer_name ? `<div class="cal-loc">Organizer: ${esc(ev.organizer_name)}</div>` : ''}</div></div>`;
+      html += `<div class="cal-item" style="border-left:3px solid ${ev.color || '#8E8E93'};padding-left:8px${canceled ? ';opacity:0.4;text-decoration:line-through' : ''}"><div class="cal-time">${time}</div><div><div class="cal-subj">${esc(ev.subject || '(No title)')}</div>${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}${ev.organizer_name ? `<div class="cal-loc">Organizer: ${esc(ev.organizer_name)}</div>` : ''}</div></div>`;
     }
     html += '</div>';
   }

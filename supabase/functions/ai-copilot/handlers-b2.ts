@@ -186,11 +186,16 @@ export async function handleSyncCalendarEvents(body: { events?: CalendarEvent[] 
 export async function handleGetCalendarEvents(url: URL) {
   const d = getDialysisClient(); const limit = parseInt(url.searchParams.get('limit') || '200'); const offset = parseInt(url.searchParams.get('offset') || '0'); const daysBack = parseInt(url.searchParams.get('days_back') || '7'); const daysForward = parseInt(url.searchParams.get('days_forward') || '30'); const calendarName = url.searchParams.get('calendar');
   const now = new Date(); const startDate = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000).toISOString(); const endDate = new Date(now.getTime() + daysForward * 24 * 60 * 60 * 1000).toISOString();
-  let query = d.from("calendar_events").select("id, subject, start_time, end_time, location, organizer_name, organizer_email, is_all_day, calendar_name, categories, body_preview, web_link, sensitivity, show_as, response_status, is_recurring").gte("start_time", startDate).lte("start_time", endDate).order("start_time", { ascending: true }).range(offset, offset + limit - 1);
-  if (calendarName) { query = query.eq("calendar_name", calendarName); }
+  // Cortex F4: serve the UNIFIED calendar — v_calendar_events_app is the merged
+  // (de-duplicated) view with the normalized title + cortex_domain + hex color.
+  let query = d.from("v_calendar_events_app").select("id, subject, start_time, end_time, location, organizer_name, organizer_email, is_all_day, calendar_name, cortex_domain, color, body_preview, web_link, sensitivity, show_as, response_status, is_recurring").gte("start_time", startDate).lte("start_time", endDate).order("start_time", { ascending: true }).range(offset, offset + limit - 1);
+  // calendar filter maps to Cortex domains: personal = everything except business.
+  if (calendarName === 'personal') { query = query.neq("cortex_domain", "business"); }
+  else if (calendarName === 'business') { query = query.eq("cortex_domain", "business"); }
+  else if (calendarName) { query = query.eq("cortex_domain", calendarName); }
   const { data, error } = await query;
   if (error) return jsonResponse({ error: "Failed to fetch calendar events", details: error.message }, 500);
-  const { count: totalCount } = await d.from("calendar_events").select("id", { count: "planned", head: true });
+  const { count: totalCount } = await d.from("v_calendar_events_app").select("id", { count: "planned", head: true });
   return jsonResponse({ events: data || [], count: (data || []).length, total_stored: totalCount || 0, range: { start: startDate, end: endDate }, offset, limit });
 }
 
@@ -244,4 +249,4 @@ export async function handleBDLogCompletion(body: { task_title: string; bd_categ
 
 export async function handleBDConfig() { const d = getDialysisClient(); const { data, error } = await d.from("bd_config").select("*").order("sort_order"); if (error) return jsonResponse({ error: "Failed to load BD config" }, 500); return jsonResponse({ config: data }); }
 
-export async function handleBDConfigUpdate(body: { category: string; daily_target: number }) { const { category, daily_target } = body; if (!category || daily_target === undefined) return jsonResponse({ error: "category and daily_target required" }, 400); const d = getDialysisClient(); const { data, error } = await d.from("bd_config").update({ daily_target, updated_at: new Date().toISOString() }).eq("category", category).select().single(); if (error) return jsonResponse({ error: "Failed to update config", details: error.message }, 500); return jsonResponse({ success: true, config: data }); }
+export async function handleBDConfigUpdate(body: { category: string; daily_target: number }) { const { category, daily_target } = body; if (
