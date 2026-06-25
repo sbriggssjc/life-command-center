@@ -141,26 +141,6 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
     }
 
-    // Round 76 (2026-06-25): capture the heading's OCCUPANT suffix. CoStar
-    // sale-comp headings are "<address> - <property/occupant name>", e.g.
-    // "13838 Buffalo Speedway - State of Texas". parseAddress keeps only the
-    // street and drops the suffix — but that suffix is frequently the ONLY
-    // government/operator tenant signal on the Summary page (the Tenant tab is
-    // separate, and the Sale Notes may not name the tenant). We stash it into
-    // building_name (read by the domain classifier) so "State of Texas" →
-    // government instead of no_domain.
-    if (headingEl) {
-      const segs = (headingEl.textContent || '').trim()
-        .split(/\s+[-–—|]\s+/).map((s) => s.trim()).filter(Boolean);
-      if (segs.length > 1) {
-        const tail = segs.slice(1).join(' - ').trim();
-        // Guard: a real occupant/property name, not a second address or junk.
-        if (tail && tail.length >= 3 && tail.length <= 80 && !/^\d/.test(tail)) {
-          headingOccupant = tail;
-        }
-      }
-    }
-
     let lines = null;
     if (!address) {
       lines = getPageLines();
@@ -181,6 +161,40 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         (lines || []).filter(l => /^\d/.test(l)).slice(0, 3));
     } else {
       console.log('[LCC CoStar] resolved address:', address);
+    }
+
+    // Round 76 (2026-06-25): capture the heading's OCCUPANT suffix, INDEPENDENT
+    // of which path resolved the address. CoStar sale-comp headings are
+    // "<address> - <property/occupant name>", e.g.
+    // "13838 Buffalo Speedway - State of Texas". parseAddress keeps only the
+    // street and drops the suffix — but that suffix is frequently the ONLY
+    // government/operator tenant signal on the Summary page (the Tenant tab is
+    // separate, and the Sale Notes may not name the tenant). We stash it into
+    // building_name (read by the domain classifier) so "State of Texas" →
+    // government instead of no_domain. NOTE: this scans ALL h1/h2/h3 rather
+    // than relying on the single querySelector('h1') that resolved the address
+    // — the property title is often a *second* heading, and the address itself
+    // may have resolved via the page-lines / title fallback (headingEl null).
+    if (address) {
+      const addrFirst = String(address).split(/[,|]/)[0].trim().toLowerCase();
+      for (const el of document.querySelectorAll('h1, h2, h3')) {
+        const txt = (el.textContent || '').trim();
+        if (!txt) continue;
+        const segs = txt.split(/\s+[-–—|]\s+/).map((s) => s.trim()).filter(Boolean);
+        if (segs.length < 2) continue;
+        // The first segment must be the resolved address (the heading that
+        // carries "<address> - <occupant>"), so we never grab an unrelated
+        // heading's tail.
+        const head = segs[0].toLowerCase();
+        if (addrFirst && !(head.includes(addrFirst) || addrFirst.includes(head))) continue;
+        const tail = segs.slice(1).join(' - ').trim();
+        // Guard: a real occupant/property name, not a second address or junk.
+        if (tail && tail.length >= 3 && tail.length <= 80 && !/^\d/.test(tail)) {
+          headingOccupant = tail;
+          console.log('[LCC CoStar] heading occupant →', headingOccupant);
+          break;
+        }
+      }
     }
 
     const identifier = address || document.title || url;
@@ -511,7 +525,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 24,
+        _version: 25,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
