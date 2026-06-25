@@ -86,7 +86,7 @@ function buildDocItem(row, searchTerm) {
     title: fname,
     subtitle: subParts.join(' \u00b7 ') || null,
     domain,
-    url: SHAREPOINT_HOST && pth ? `${SHAREPOINT_HOST}${encodeURI(pth)}` : null,
+    url: SHAREPOINT_HOST && pth ? `${SHAREPOINT_HOST}${String(pth).split('/').map(encodeURIComponent).join('/')}` : null,
     score,
   };
 }
