@@ -137,7 +137,18 @@ const INGEST_SOURCES = {
       idField: 'id',
       jobType: 'outlook.message.extract',
       requireSourceUser: true,
-      skipIf:  (raw) => Boolean(raw.isDraft) // drafts aren't real touches
+      // Drop drafts + clearly-automated junk (no-reply/notifications/bounces, auto-replies,
+      // calendar-response noise) at ingest so it never queues or stores. CoStar alerts are
+      // KEPT (CRE deal signals). Marketing/listing mail is NOT filtered here (handled separately).
+      skipIf:  (raw) => {
+        if (raw.isDraft) return true;
+        const from = String(raw.from || '').toLowerCase();
+        const subj = String(raw.subject || '');
+        if (from.includes('costar')) return false;
+        if (/(no-?reply|do-?not-?reply|donotreply|notifications?@|mailer-daemon|postmaster|@.*\.notify\b|mailer@|automated@)/.test(from)) return true;
+        if (/^(automatic reply|auto[- ]?reply|out of office|out-of-office|undeliverable|delivery (failure|status notification|has failed)|returned mail|read:|accepted:|declined:|tentative:|canceled:|cancelled:)/i.test(subj)) return true;
+        return false;
+      }
     }
   },
   calendar: {
