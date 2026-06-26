@@ -29,12 +29,17 @@ import { appendActivityEvent } from './activity-events.js';
 function lower(s) { return s ? String(s).toLowerCase() : null; }
 
 function extractEmail(graphAddress) {
-  // Graph emailAddress shape: { address, name }
-  return lower(graphAddress?.emailAddress?.address);
+  // Accept Graph shape { emailAddress: { address } }, plain { address }, or a bare string.
+  if (graphAddress == null) return null;
+  if (typeof graphAddress === 'string') return lower(graphAddress.trim());
+  return lower(graphAddress?.emailAddress?.address || graphAddress?.address);
 }
 
-function extractRecipients(arr) {
-  return (arr || []).map(extractEmail).filter(Boolean);
+function extractRecipients(v) {
+  // Accept an array (of strings or {emailAddress:{address}}) OR a ';'/',' separated string
+  // (the Office 365 Outlook connector returns recipients as a delimited string).
+  if (typeof v === 'string') return v.split(/[;,]/).map((s) => lower(s.trim())).filter(Boolean);
+  return (v || []).map(extractEmail).filter(Boolean);
 }
 
 /**
