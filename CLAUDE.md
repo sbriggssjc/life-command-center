@@ -5514,3 +5514,69 @@ untouched. JS ships on the Railway redeploy.
 ~52 pre-2026-06-19 `note` backlog SF events (correspondence predating the
 OUTREACH#1 categorization fix) never advanced their cadences; most are admin/
 deal-execution emails, so a one-shot re-categorize+advance is marginal. Skipped.
+
+## Contact-acquisition → cadence seed — make high-value owners workable outreach (2026-06-26)
+
+The outreach work-surface (the focus session) and contact-acquisition both exist
+but didn't connect for the owners that MATTER. Grounded live: the
+draftable/active cadence set is the low-value person tail (top ~$598k, **0
+cadences ≥ $1M**), while **357 owners ≥ $1M are contactless** (the "Owners Missing
+a Contact" worklist, top ~$27M). Contact-acquisition (the owner-contact-enrich
+worker, the worklist/P-CONTACT picker, contact-qualify) *links a person* to an
+owner then stamps the contact onto an **existing** active cadence
+(`stampContactOnActiveCadence`, `onlyContactless`) — **but a high-value owner has
+no cadence to stamp**, so after it gains a contact it sits connected/reachable yet
+ABSENT from the value-ranked focus session. The supply (contacts) and the consumer
+(the focus surface) existed; the wire did not.
+
+### The one rule (one place, all acquisition paths inherit it)
+`api/_shared/contact-attach.js` — when `stampContactOnActiveCadence` finds **no
+active cadence**, it now seeds ONE prospecting cadence via
+`maybeSeedValuableCadence` (default on; `seedIfValuable=true`). All three
+acquisition callers route through this single choke point and inherit it
+unchanged: `owner-contact-enrich.js attachPersonToOwner` (worklist enrichment),
+`operations.js bridgeSelectProspectingContact` (worklist/P-CONTACT picker), and
+`operations.js performContactQualify`'s `stampCadence` dep.
+- **Value-gate (REUSE, not invent):** `entityHasBdSignal` — the SAME R63
+  predicate (Salesforce identity / open opp / SF activity / connected or portfolio
+  value ≥ `CADENCE_SIGNAL_MIN_VALUE`, default $500k). A newly-contacted high-value
+  owner passes by construction (it has value). Below the floor → NO seed (no
+  low-value cadence spam — preserves R63). **Fails CLOSED** on a signal-check error.
+- **Seed via the EXISTING path** (`getCadenceState`): phase `prospecting`,
+  `contact_id`/`sf_contact_id` set so it's immediately reachable + draftable,
+  `next_touch_due = now()` so it surfaces in the focus session.
+- **Idempotent / never a duplicate:** `getCadenceState` GET-first + the
+  unique-index race-retry means an existing cadence (even a paused / converted
+  one) is FOUND, not duplicated; only a freshly-CREATED row (`is_new`) counts as a
+  seed (`maybeSeedValuableCadence` returns `no_active_cadence` for a found
+  non-active row → that paused/converted cadence is left UNTOUCHED, the prior
+  no-action behaviour). No `ON CONFLICT` reactivation of a deliberately-paused row.
+- **Single advance owner preserved** — seeding only CREATES the cadence; every
+  advance still goes through `advanceCadence` exclusively.
+- A below-floor owner still gets the person LINK (that happened upstream); the
+  stamp returns `no_active_cadence` exactly as before (e.g. `bridgeSelectProspectingContact`'s
+  404, `performContactQualify`'s self-stamp fallback) — byte-identical for the
+  low-value path.
+
+### Boundaries / verified (headless 2026-06-26)
+LCC-Opps only; no dia/gov writes; auth schema untouched. No new api/*.js
+(`ls api/*.js | wc -l`=12); no migration (cadence columns + the
+`uq_cadence_contact_property` index pre-exist). `node --check` clean
+(contact-attach, cadence-engine, operations, owner-contact-enrich,
+contact-acquisition); no circular import (contact-attach → cadence-engine only).
+`test/contact-qualify.test.mjs` +8 (`maybeSeedValuableCadence`: high-value →
+exactly one prospecting cadence with the contact set + `next_touch_due`;
+low-value → no seed [`below_value_floor`, seed never attempted]; existing paused
+cadence → not a seed, untouched; signal-check error → fails closed; +
+`stampContactOnActiveCadence` seed-branch wiring: seeds when valuable, no-seed
+below floor, `seedIfValuable:false` never seeds, existing active cadence → stamp
+not seed). Full suite **1550 pass / 0 fail / 6 skipped**. JS ships on the Railway
+redeploy.
+
+### After deploy (verify live)
+Run the free-attach drain + this wire: a ≥$1M contactless owner, once it gains a
+contact, gets a prospecting cadence and appears value-ranked at/near the TOP of
+the outreach focus surface — the focus list's top value rises from ~$598k toward
+the $1M+ owners. The acquire-contact worklist → workable-cadence focus chain is
+now whole: contactless $1M+ owner → acquire contact → seed cadence → value-ranked
+focus card → worked.
