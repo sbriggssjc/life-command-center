@@ -324,6 +324,40 @@ export. Also: the auto-scrape `inferred_active` cron re-stamps `last_verified_at
 class, worth addressing in T9d.
 **(prompt: `CLAUDE_CODE_PROMPT_T9c_phantom_freshness_stale_sf_comps.md`)**
 
+### T9d — dia listing currency: provenance-first date recovery (REFRAMED 2026-06-26 — old prompt DO NOT RELAY)
+**⚠️ REFRAMED after Scott's correction (2026-06-26):** a listing URL/live check is NOT the only evidence of an
+available deal — an OM, flyer, email summary, fax, comp, or CoStar capture IS the evidence. The first prompt
+(`CLAUDE_CODE_PROMPT_T9d_dia_listing_currency_rearchitecture.md`) would EXCLUDE evidenced-but-URL-less listings
+— **WRONG, do not relay it.** Grounding confirms: of the 183 NULL-on_market held actives, **91 carry an intake
+artifact** (offering_memorandum/om/flyer/marketing_brochure/email_update/comp), 134 carry a listing_date — real
+evidenced deals, not junk. The actual corruption is the mass-email import stamping a single 2026-06
+`capture_date_fallback` date on historically-received OMs (the Q2 surge), whose TRUE receipt date sits behind
+`intake_artifact_path`. **Revised direction (CONSTRUCTIVE, T4c analog — pending Scott's confirm):** (1) KEEP
+every provenance-backed listing (no URL requirement); (2) RECOVER the true on-market date from the source
+document (intake artifact received/email date, earliest evidence) to replace the fake import date → Q2
+de-surges constructively, count stays honest; (3) kill the `inferred_active` phantom `last_verified_at`;
+(4) honest exit/age-out as a GENEROUS backstop only (lost-track deals), never pruning evidenced inventory.
+Count does NOT collapse to ~73 (that ignored OM/email evidence). Accept it's a best-effort count (commercial
+has no MLS). **A new prompt will be written along these lines after Scott confirms the counting philosophy +
+the earliest-evidence date rule.**
+**The root behind T9b/T9c.** The dia available/active count rests on an unreliable currency proxy
+(`COALESCE(last_seen,url_last_checked,last_verified_at,listing_date)>=period-120`) — every term compromised:
+**0 of 323 active listings EVER had a real URL check** (no live re-verification exists), `last_verified_at`
+phantom-stamped by the auto-scrape `inferred_active` cron, `last_seen` a frozen ingest stamp, `listing_date`
+often a fake `capture_date_fallback`. Genuine-signal current ≈ 73-87 vs published 122; impending 2026-06-30
+balloons to 272. 140/323 have `on_market_date`, **183 are NULL**. **Scott chose the full re-architecture
+(2026-06-26), accepting a published restatement.**
+**Prompt:** `CLAUDE_CODE_PROMPT_T9d_dia_listing_currency_rearchitecture.md`. Unit 1 rebuild the core membership
+(`cm_dialysis_active_listings_m`/`_q` + `_inventory_snapshot_kpis`) on authoritative entry (`on_market_date`)
++ exit (`off_market_date`/`sold_date`) + MAX_DOM_CAP (p90 closed DOM ~1356d), retiring the proxy + the
+`listing_date` entry gate (downstream available/DOM/asking-cap/size/turnover/backlog inherit). Unit 2 resolve
+the 183 NULL-on_market held actives from REAL signals only, else exclude (no fabrication). Unit 3 stop the
+`inferred_active` phantom `last_verified_at` + sweep the T9c residual (8609 + unestablished_historical
+siblings). Unit 4 restatement (footnoted) + before/after (2026-03 122→genuine, 2026-06 272→genuine, **asking-cap
+quartiles finally unstick** = the ultimate T9 fix). Reversible, dia, ≤12 api/*.js. **TIMING: Q2 export ~4 days
+out; if it can't land fully-verified in time, HOLD Q2 rather than ship a half-applied restatement.**
+DQ views (`cm_dialysis_listing_verification_status`/`_listings_review_queue`) legitimately keep the columns.
+
 ### T9c-orig — prompt-written note (superseded)
 **The other half of the zombie problem (T9b = sold half; T9c = no-sale half).** Grounded live: 337
 available_listings have `on_market_date_source='sf_on_market_date'` (T4c recovery); **ALL 337 carry a
