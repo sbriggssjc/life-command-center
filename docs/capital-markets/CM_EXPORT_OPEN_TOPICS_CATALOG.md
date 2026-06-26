@@ -281,6 +281,23 @@ last_cap_rate, 392d median DOM) → documented, axis untouched. DB live + revers
 `<5`→`<6` or `6-10`→`5-10` to make contiguous); (b) possible **stale-active/zombie dia listings** (392d median
 DOM) — listing-freshness DQ, worth a look.
 **(superseded the original T9 sub-notes block below.)**
+
+### T9b — dia listing-lifecycle cleanup + fix close-on-sale (zombie-active listings)  ·  P1  ·  ▶ PROMPT WRITTEN (2026-06-25)
+**From T9 Unit 3** (sticky asking quartiles; "active" DOM really ~2,019d median). **Grounded live: a status↔
+off_market_date integrity break.** `available_listings off_market_date IS NULL` by status: active 685 (295
+DOM>730d), off_market **400**, superseded **128**, sold **77**. **363 open listings are on SOLD properties**
+(77 sold-status all w/ a sale; 286 of 295 active-zombies; 105 superseded; 50 off_market) yet open + "verified"
+THIS MONTH (May–Jun 2026) → the freshness gate is NOT confirming on-market; close-on-sale triggers
+(`trg_close_listing_on_sale`, `trg_listing_close_if_sold`, fns `close_listing_on_sale`/
+`fn_sale_event_mark_listings_sold`) have a matching gap. **528 off_market/superseded carry NULL
+off_market_date** (never closed). **Scott: full cleanup + pipeline fix (2026-06-25).**
+**Prompt:** `CLAUDE_CODE_PROMPT_T9b_dia_listing_lifecycle_cleanup.md`. Unit 1 close sold-property listings
+(off_market_date=sale date, ~363); Unit 2 close off_market/superseded w/ NULL date (~478, from
+last_verified_at/reason, flag estimates); Unit 3 diagnose+fix the close-on-sale trigger gap + stop
+verification re-stamping sold-property listings; Unit 4 before/after (active count, canonical
+`cm_dialysis_active_listings_m` headline, asking-cap pool + T9 quartile unstick, DOM). Reversible, no
+fabricated dates, dia only, ≤12 api/*.js. EXIT-side only (don't touch T4c on_market_date / gov).
+
 ### T9-orig (earlier sub-notes, lower priority)
 **June-25 cap-data cluster (grounded 2026-06-24), 3 units — investigate-then-fix, data before axis:**
 1. **gov core-cap dot outliers** — `cm_gov_core_cap_dot_q` (←`cm_gov_core_cap_rate_dots`, firm≥6, cap
