@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { processOwnerEnrichmentRow, classifyEnrichRow } from '../api/_handlers/owner-contact-enrich.js';
+import { processOwnerEnrichmentRow, classifyEnrichRow, normalizePersonName } from '../api/_handlers/owner-contact-enrich.js';
 
 function recordingDeps(overrides = {}) {
   const calls = { ensure: [], link: [], stamp: [], patch: [] };
@@ -149,6 +149,75 @@ describe('processOwnerEnrichmentRow', () => {
     const out = await processOwnerEnrichmentRow(
       { ...ownerBase, active_contact_name: null, enrichment_action: 'public_company_ir', active_contact_entity_id: null }, deps);
     assert.equal(out.outcome, 'public_ir_manual');
+  });
+});
+
+// 2026-06-26 — free-attach drain fix: LAST-FIRST/all-caps name handling +
+// silent-churn guard (every processed row advances the pivot so the FIFO drains).
+describe('processOwnerEnrichmentRow — name normalization + silent-churn guard', () => {
+  it('attaches a "LAST FIRST" all-caps recorder name, minted as "First Last"', async () => {
+    const { deps, calls } = recordingDeps();
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: 'LOMANGINO CHARLES', active_authority_level: 2, active_contact_role: 'MGR', active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'attached');
+    assert.equal(calls.ensure[0].sourceType, 'person');               // person, NOT org
+    assert.equal(calls.ensure[0].seedFields.name, 'Charles Lomangino'); // reordered + title-cased
+    assert.equal(out.contact_entity_id, 'person-Charles Lomangino');
+    // the pivot PATCH writes the clean name + advances updated_at
+    const pivotPatch = calls.patch.find(([m, p]) => m === 'PATCH' && p.includes('owner_contact_pivot'));
+    assert.equal(pivotPatch[2].active_contact_name, 'Charles Lomangino');
+    assert.ok(pivotPatch[2].updated_at);
+  });
+
+  it('normalizes an all-caps name carrying a middle initial', async () => {
+    const { deps, calls } = recordingDeps();
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: 'MOTISI MEEGAN T', active_authority_level: 2, active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'attached');
+    assert.equal(calls.ensure[0].seedFields.name, 'Meegan T Motisi');
+  });
+
+  it('a guard-rejected "person" advances the pivot (no re-churn) and is NEVER minted as an org', async () => {
+    const { deps, calls } = recordingDeps();
+    deps.ensureEntityLink = async (a) => { calls.ensure.push(a); return { ok: false, skipped: 'junk_entity_name' }; };
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: 'View Less', active_authority_level: 2, active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'guard_rejected');
+    // only ONE ensureEntityLink call, and it was a PERSON — never fell into the
+    // manager-drill branch to mint the person name as an organization.
+    assert.equal(calls.ensure.length, 1);
+    assert.equal(calls.ensure[0].sourceType, 'person');
+    // the silent-churn guard stamped the pivot: updated_at advanced + disposition.
+    const pivotPatch = calls.patch.find(([m, p]) => m === 'PATCH' && p.includes('owner_contact_pivot'));
+    assert.ok(pivotPatch, 'pivot must be stamped so the FIFO does not re-serve the stuck row');
+    assert.ok(pivotPatch[2].updated_at);
+    assert.equal(pivotPatch[2].enrichment_action, 'manual_research');
+    assert.equal(out.disposition, undefined);                          // disposition is internal, stripped before return
+  });
+
+  it('a non-attaching external terminal still advances the pivot', async () => {
+    const { deps, calls } = recordingDeps({ sosLookup: async () => ({ ok: false, reason: 'unconfigured' }) });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, enrichment_action: 'sos_manager_lookup', active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'manual_research');
+    const pivotPatch = calls.patch.find(([m, p]) => m === 'PATCH' && p.includes('owner_contact_pivot'));
+    assert.ok(pivotPatch && pivotPatch[2].updated_at, 'external terminal must advance updated_at');
+  });
+});
+
+describe('normalizePersonName', () => {
+  it('reorders all-caps LAST FIRST → First Last', () => {
+    assert.equal(normalizePersonName('LOMANGINO CHARLES'), 'Charles Lomangino');
+    assert.equal(normalizePersonName('POPACK MOSHE'), 'Moshe Popack');
+    assert.equal(normalizePersonName('MOTISI MEEGAN T'), 'Meegan T Motisi');
+  });
+  it('leaves a mixed-case name in its existing order', () => {
+    assert.equal(normalizePersonName('Anil Goel'), 'Anil Goel');
+    assert.equal(normalizePersonName('Henry John A IV'), 'Henry John A IV');
+  });
+  it('is a no-op on non-strings / blanks', () => {
+    assert.equal(normalizePersonName(null), null);
+    assert.equal(normalizePersonName('   '), '   ');
   });
 });
 
