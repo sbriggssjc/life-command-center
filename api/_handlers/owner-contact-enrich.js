@@ -77,10 +77,57 @@ function webhookFetcher(envKey) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Person-name normalization (2026-06-26) — clean the minted contact name.
+// ---------------------------------------------------------------------------
+// Recorded-owner manager/agent picks arrive as ALL-CAPS "LAST FIRST [MIDDLE]"
+// (deed/recorder convention: "LOMANGINO CHARLES", "MOTISI MEEGAN T"). They pass
+// looksLikePersonName fine, but minting them verbatim leaves an all-caps,
+// wrong-order entity name. Normalize to "First [Middle] Last" before the gate
+// AND before minting so the attached decision-maker reads as a human name.
+// Conservative: only an ALL-CAPS multi-token name is reordered (the recorder
+// signal); a mixed-case name ("Anil Goel", "Henry John A IV") keeps its order
+// and is left untouched. Never fabricates — only re-cases / re-orders the tokens
+// already on the record.
+function titleCaseToken(tok) {
+  if (/^(?:II|III|IV|VI{0,3}|JR|SR)\.?$/i.test(tok)) {                 // generational suffix
+    return tok.replace(/\.$/, '').toUpperCase() + (tok.endsWith('.') ? '.' : '');
+  }
+  if (/^[A-Za-z]\.?$/.test(tok)) return tok.toUpperCase();             // bare initial "T" / "T."
+  return tok.charAt(0).toUpperCase() + tok.slice(1).toLowerCase();
+}
+
+export function normalizePersonName(raw) {
+  if (typeof raw !== 'string') return raw;
+  const t = raw.trim().replace(/\s+/g, ' ');
+  if (!t) return raw;
+  const tokens = t.split(' ');
+  const isAllCaps = !/[a-z]/.test(t) && /[A-Z]/.test(t);
+  // Reorder LAST→end only for an all-caps 2–4 token name (the recorder signal).
+  const ordered = (isAllCaps && tokens.length >= 2 && tokens.length <= 4)
+    ? [...tokens.slice(1), tokens[0]]
+    : tokens;
+  return ordered.map(titleCaseToken).join(' ');
+}
+
+// Advance the pivot's updated_at (and optionally record a disposition) so the
+// batch's `order=updated_at.asc` FIFO always progresses. This is the silent-churn
+// guard: a processed row that does NOT attach must change state, or it re-serves
+// at the head of the queue every tick and starves the attachable tail. Best-effort.
+async function touchPivot(deps, entityId, patch) {
+  try {
+    await deps.opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(entityId),
+      { ...(patch || {}), updated_at: new Date().toISOString() });
+    return true;
+  } catch (_e) { return false; }
+}
+
 /**
  * Attach a resolved person to the owner: ensureEntityLink (guards) →
  * link person→owner → stamp the contactless cadence → point the pivot at the
  * new contact entity. Shared by the attach class + a successful external resolve.
+ * Returns a granular outcome so a non-attach surfaces WHY (guard_rejected /
+ * link_failed / patch_failed) instead of a silent no-op.
  */
 async function attachPersonToOwner(row, personName, role, deps, via) {
   const ensure = deps.ensureEntityLink;
@@ -91,84 +138,78 @@ async function attachPersonToOwner(row, personName, role, deps, via) {
     seedFields: { name: personName, entity_type: 'person', domain: 'lcc' },
   });
   if (!link || !link.ok || !link.entityId) {
-    return { ok: false, outcome: 'guard_rejected', skipped: link && link.skipped };
+    return { ok: false, outcome: 'guard_rejected',
+      reason: (link && (link.skipped || link.error)) || 'no_entity', skipped: link && link.skipped };
   }
   const contactEntityId = link.entityId;
-  await deps.linkPersonToEntity({
+  const linkRes = await deps.linkPersonToEntity({
     workspaceId: row.workspace_id, entityId: row.entity_id, contactEntityId,
     role: role || 'owner_contact', via: via || 'contact_selection',
   });
+  if (linkRes && linkRes.ok === false && !linkRes.existed) {
+    return { ok: false, outcome: 'link_failed', contact_entity_id: contactEntityId,
+      reason: linkRes.skipped || linkRes.detail || 'link_failed' };
+  }
   // Fill a contactless cadence only — never clobber an existing prospecting contact.
   await deps.stampContactOnActiveCadence({ entityId: row.entity_id, contactEntityId, onlyContactless: true });
-  await deps.opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(row.entity_id),
-    { active_contact_entity_id: contactEntityId, updated_at: new Date().toISOString() });
+  const patch = await deps.opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(row.entity_id),
+    { active_contact_entity_id: contactEntityId, active_contact_name: personName, updated_at: new Date().toISOString() });
+  if (!patch || !patch.ok) {
+    return { ok: false, outcome: 'patch_failed', contact_entity_id: contactEntityId,
+      reason: (patch && patch.data) || 'pivot_patch_failed' };
+  }
   return { ok: true, outcome: 'attached', contact_entity_id: contactEntityId, contact_name: personName };
 }
 
-/**
- * Process ONE owner pivot row. Pure orchestration over injected deps.
- * @param row {entity_id, owner_name, workspace_id, active_contact_name,
- *             active_contact_entity_id, active_authority_level, active_contact_role,
- *             enrichment_action}
- */
-export async function processOwnerEnrichmentRow(row, deps) {
-  const looksPerson = deps.looksLikePersonName || looksLikePersonName;
+// Outcomes that already advanced the pivot's updated_at (attach PATCHes the
+// contact pointer; the manager drill PATCHes enrichment_action). `already_linked`
+// returns before the finalize. Everything else is stamped by the silent-churn
+// guard so the FIFO progresses.
+const ADVANCED_OUTCOMES = new Set(['attached', 'manager_drillthrough', 'already_linked']);
 
-  if (row.active_contact_entity_id) {
-    return { entity_id: row.entity_id, outcome: 'already_linked' };
-  }
-
-  // (a) ATTACH a named active contact (a real person).
-  if (row.active_contact_name && looksPerson(row.active_contact_name)) {
-    const r = await attachPersonToOwner(row, row.active_contact_name, row.active_contact_role, deps, 'contact_selection');
-    return { entity_id: row.entity_id, ...r };
-  }
-
-  // (b) MANAGER-ENTITY DRILL-THROUGH: controlling-role pick is a FIRM.
-  if (row.active_contact_name && Number(row.active_authority_level) <= 2) {
-    const org = await deps.ensureEntityLink({
-      workspaceId: row.workspace_id, sourceType: 'organization', domain: 'lcc',
-      seedFields: { name: row.active_contact_name, entity_type: 'organization', domain: 'lcc' },
+// (b) MANAGER-ENTITY DRILL-THROUGH: the controlling-role pick is a FIRM (a
+// management company, not a person). Register the org + a manager edge and route
+// the pivot to find a PERSON at the manager. Never mints the firm as a person.
+async function runManagerDrillthrough(row, deps) {
+  const org = await deps.ensureEntityLink({
+    workspaceId: row.workspace_id, sourceType: 'organization', domain: 'lcc',
+    seedFields: { name: row.active_contact_name, entity_type: 'organization', domain: 'lcc' },
+  });
+  if (org && org.ok && org.entityId) {
+    await deps.linkPersonToEntity({
+      workspaceId: row.workspace_id, entityId: row.entity_id, contactEntityId: org.entityId,
+      role: 'manager', via: 'contact_selection_drillthrough',
     });
-    if (org && org.ok && org.entityId) {
-      await deps.linkPersonToEntity({
-        workspaceId: row.workspace_id, entityId: row.entity_id, contactEntityId: org.entityId,
-        role: 'manager', via: 'contact_selection_drillthrough',
-      });
-      await deps.opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(row.entity_id),
-        { enrichment_action: 'find_person_at_manager', updated_at: new Date().toISOString() });
-      return { entity_id: row.entity_id, outcome: 'manager_drillthrough', manager_entity_id: org.entityId };
-    }
-    return { entity_id: row.entity_id, outcome: 'guard_rejected', skipped: org && org.skipped };
+    await deps.opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(row.entity_id),
+      { enrichment_action: 'find_person_at_manager', updated_at: new Date().toISOString() });
+    return { entity_id: row.entity_id, outcome: 'manager_drillthrough', manager_entity_id: org.entityId };
   }
+  return { entity_id: row.entity_id, outcome: 'guard_rejected',
+    reason: (org && org.skipped) || 'org_rejected', skipped: org && org.skipped };
+}
 
-  // (c) EXTERNAL ENRICHMENT for the contactless — ordered chain (Scott's
-  // amendment 2026-06-20): cross-ref (free) → public-IR terminal → routed
-  // adapter (deed/SOS/address) → web search → manual-research worklist. Each
-  // step that can't resolve records WHY, so the worklist row carries full
-  // breadcrumbs. First confident resolve wins; the unresolvable tail is
-  // SURFACED (worklist), never dropped or guess-filled.
+// (c) EXTERNAL ENRICHMENT for the contactless — ordered chain (Scott's amendment
+// 2026-06-20): cross-ref (free) → public-IR terminal → routed adapter
+// (deed/SOS/address) → web search → manual-research worklist. Each step that
+// can't resolve records WHY; the unresolvable tail is SURFACED, never guess-filled.
+async function runExternalEnrichment(row, deps) {
   const action = row.enrichment_action;
   const tried = [];
 
   // 1. Cross-reference — reuse a principal already resolved on a sibling owner.
-  //    Free, zero external; run FIRST.
   const xref = await (deps.crossRef || defaultCrossRef)(row);
   if (xref && xref.ok && xref.person_name) {
-    const r = await attachPersonToOwner(row, xref.person_name, xref.role || 'principal', deps, 'cross_reference');
+    const r = await attachPersonToOwner(row, normalizePersonName(xref.person_name), xref.role || 'principal', deps, 'cross_reference');
     return { entity_id: row.entity_id, source: 'cross_reference', ...r };
   }
   tried.push({ method: 'cross_reference', reason: (xref && xref.reason) || 'no_sibling' });
 
-  // 2. Public-company IR — a known-IR-contact MANUAL path (not a scraper), its
-  //    own terminal (reached only after the free cross-ref).
+  // 2. Public-company IR — a known-IR-contact MANUAL path (not a scraper).
   if (action === 'public_company_ir') {
     return { entity_id: row.entity_id, outcome: 'public_ir_manual', action };
   }
 
-  // 3. Backoff: a manual row already OPEN ⇒ the external methods were tried on a
-  //    prior tick — don't re-hammer (cross-ref above is the only worthwhile retry
-  //    as siblings resolve over time).
+  // 3. Backoff: a manual row already OPEN ⇒ externals were tried before.
   if (deps.manualResearch && typeof deps.manualResearch.check === 'function') {
     const open = await deps.manualResearch.check(row);
     if (open && open.open) return { entity_id: row.entity_id, outcome: 'manual_research_pending' };
@@ -186,7 +227,7 @@ export async function processOwnerEnrichmentRow(row, deps) {
   if (routed) {
     const res = await routed.run(row);
     if (res && res.ok && res.person_name) {
-      const r = await attachPersonToOwner(row, res.person_name, res.role || routed.role, deps, routed.source + '_lookup');
+      const r = await attachPersonToOwner(row, normalizePersonName(res.person_name), res.role || routed.role, deps, routed.source + '_lookup');
       return { entity_id: row.entity_id, source: routed.source, ...r };
     }
     tried.push({ method: routed.source, reason: (res && res.reason) || 'no_result' });
@@ -195,7 +236,7 @@ export async function processOwnerEnrichmentRow(row, deps) {
   // 5. Free web search.
   const web = await (deps.webSearch || defaultWebSearch)(row);
   if (web && web.ok && web.person_name) {
-    const r = await attachPersonToOwner(row, web.person_name, web.role || 'principal', deps, 'web_search');
+    const r = await attachPersonToOwner(row, normalizePersonName(web.person_name), web.role || 'principal', deps, 'web_search');
     return { entity_id: row.entity_id, source: 'web', ...r };
   }
   tried.push({ method: 'web_search', reason: (web && web.reason) || 'no_result' });
@@ -209,13 +250,66 @@ export async function processOwnerEnrichmentRow(row, deps) {
 }
 
 /**
+ * Process ONE owner pivot row. Pure orchestration over injected deps.
+ * @param row {entity_id, owner_name, workspace_id, active_contact_name,
+ *             active_contact_entity_id, active_authority_level, active_contact_role,
+ *             enrichment_action}
+ */
+export async function processOwnerEnrichmentRow(row, deps) {
+  const looksPerson = deps.looksLikePersonName || looksLikePersonName;
+  const normalize = deps.normalizePersonName || normalizePersonName;
+
+  if (row.active_contact_entity_id) {
+    return { entity_id: row.entity_id, outcome: 'already_linked' };
+  }
+
+  const personName = row.active_contact_name ? normalize(row.active_contact_name) : null;
+  const isPerson = !!(personName && looksPerson(personName));
+  let out;
+
+  if (isPerson) {
+    // (a) ATTACH a named active contact (a real person), minted with a clean name.
+    const r = await attachPersonToOwner(row, personName, row.active_contact_role, deps, 'contact_selection');
+    out = { entity_id: row.entity_id, ...r };
+    // A guard-rejected / failed "person" is research work — NOT a firm. Do not
+    // fall through to the manager-drill branch and mint the person name as an org.
+    if (out.outcome !== 'attached') {
+      out.disposition = { enrichment_action: 'manual_research',
+        active_source: 'attach_failed:' + (r.reason || r.outcome || 'unknown') };
+    }
+  } else if (row.active_contact_name && Number(row.active_authority_level) <= 2) {
+    // (b) MANAGER-ENTITY DRILL-THROUGH: the pick is a FIRM, not a person.
+    out = await runManagerDrillthrough(row, deps);
+    if (out.outcome !== 'manager_drillthrough') {
+      out.disposition = { enrichment_action: 'manual_research',
+        active_source: 'drillthrough_failed:' + (out.reason || 'unknown') };
+    }
+  } else {
+    // (c) EXTERNAL ENRICHMENT chain (contactless / non-person picks).
+    out = await runExternalEnrichment(row, deps);
+  }
+
+  // Silent-churn guard (2026-06-26): every processed row that did NOT already
+  // advance the pivot is stamped here so the FIFO `order=updated_at.asc` batch
+  // always progresses and the named tail drains, instead of re-serving the same
+  // stuck oldest rows every tick. Honest: a non-attach changes state (advances
+  // updated_at + records the disposition) but NEVER fabricates a contact.
+  if (out && !ADVANCED_OUTCOMES.has(out.outcome)) {
+    await touchPivot(deps, row.entity_id, out.disposition);
+    delete out.disposition;
+  }
+  return out;
+}
+
+/**
  * Classify what class a pivot row WOULD hit — shared by the batch dry-run and the
  * Phase 5b single-owner preview so the two never drift. Pure.
  */
 export function classifyEnrichRow(row, looksPersonImpl) {
   const looksPerson = looksPersonImpl || looksLikePersonName;
   if (row.active_contact_entity_id) return 'already_linked';
-  if (row.active_contact_name && looksPerson(row.active_contact_name)) return 'attach_person';
+  const personName = row.active_contact_name ? normalizePersonName(row.active_contact_name) : null;
+  if (personName && looksPerson(personName)) return 'attach_person';
   if (row.active_contact_name && Number(row.active_authority_level) <= 2) return 'manager_drillthrough';
   return row.enrichment_action || 'manual_research';
 }
@@ -332,17 +426,24 @@ export async function handleOwnerContactEnrichTick(req, res) {
 
   const deps = buildDeps();
   const started = Date.now();
-  const summary = { processed: 0, attached: 0, drillthrough: 0, unconfigured: 0, skipped: 0, results: [] };
+  const summary = { processed: 0, attached: 0, drillthrough: 0, failed: 0, skipped: 0, results: [] };
   let attachedAny = false;
+  const FAIL_OUTCOMES = new Set(['guard_rejected', 'link_failed', 'patch_failed', 'error']);
   for (const row of rows) {
     if (Date.now() - started > WALL_CLOCK_MS) break;
     let out;
     try { out = await processOwnerEnrichmentRow(row, deps); }
-    catch (e) { out = { entity_id: row.entity_id, outcome: 'error', error: String(e && e.message || e) }; }
+    catch (e) {
+      out = { entity_id: row.entity_id, outcome: 'error', error: String(e && e.message || e) };
+      // A throw before the in-row finalize would leave updated_at frozen and the
+      // row would re-serve at the head of the FIFO forever — advance it so the
+      // batch always progresses (silent-churn guard, defense-in-depth).
+      await touchPivot(deps, row.entity_id, { active_source: 'error:' + String(e && e.message || e).slice(0, 80) });
+    }
     summary.processed += 1;
     if (out.outcome === 'attached') { summary.attached += 1; attachedAny = true; }
     else if (out.outcome === 'manager_drillthrough') summary.drillthrough += 1;
-    else if (out.outcome === 'enrichment_unconfigured') summary.unconfigured += 1;
+    else if (FAIL_OUTCOMES.has(out.outcome)) summary.failed += 1;
     else summary.skipped += 1;
     summary.results.push(out);
   }
