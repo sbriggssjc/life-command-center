@@ -24,6 +24,7 @@
 // ============================================================================
 
 import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
+import { entityHasBdSignal, getCadenceState } from './cadence-engine.js';
 
 // Active cadence phases — the ones the priority queue treats as a live next
 // action (must match the reachability/cadence bands + the picker query).
@@ -79,13 +80,77 @@ export async function stampCadenceContactById(cadenceId, { contactEntityId, sfCo
 }
 
 /**
+ * When an acquisition path links a contact to an owner that has NO active
+ * cadence, seed ONE prospecting cadence — but ONLY when the owner clears the
+ * R63 BD-value floor. This is the wire between contact-acquisition (which
+ * supplies the contact) and the outreach work-surface (which consumes a
+ * value-ranked cadence): a $1M+ contactless owner gains a contact and would
+ * otherwise sit connected-but-cadence-less, absent from the focus session.
+ * Seeding it makes it workable outreach.
+ *
+ * Boundaries (Producer/Consumer doctrine):
+ *   - VALUE-GATE (reuse, not invent): `entityHasBdSignal` — the SAME R63
+ *     predicate (Salesforce identity / open opp / SF activity / connected or
+ *     portfolio value ≥ floor). A newly-contacted high-value owner passes by
+ *     construction (it has value). Below the floor → NO seed (no low-value
+ *     cadence spam — preserves R63).
+ *   - IDEMPOTENT: seeds via `getCadenceState`, whose GET-first + race-retry
+ *     means an existing cadence (even a paused / converted one) is FOUND, not
+ *     duplicated. Only a freshly-CREATED row (`is_new`) counts as a seed; an
+ *     existing non-active cadence is left untouched (keep prior no-action
+ *     behaviour — never silently reactivate a paused row).
+ *   - SINGLE ADVANCE OWNER: seeding only CREATES the cadence (phase
+ *     `prospecting`, contact set, `next_touch_due=now` so it surfaces); every
+ *     advance still goes through `advanceCadence` exclusively.
+ *
+ * deps injectable for tests: { signalCheck, seedCadence } default to the live
+ * `entityHasBdSignal` / `getCadenceState`.
+ *
+ * @returns {Promise<{ok:boolean, seeded?:boolean, cadenceId?:string,
+ *   cadenceOppId?:string|null, cadenceNextDue?:string|null, reason?:string}>}
+ */
+export async function maybeSeedValuableCadence({ entityId, contactEntityId, sfContactId, floor, deps = {} }) {
+  if (!entityId) return { ok: false, reason: 'no_entity' };
+  const signalCheck = deps.signalCheck || entityHasBdSignal;
+  const seedCadence = deps.seedCadence || getCadenceState;
+  let hasSignal = false;
+  try {
+    hasSignal = await signalCheck(entityId, { floor });
+  } catch (_e) {
+    return { ok: false, reason: 'signal_check_failed' };
+  }
+  if (!hasSignal) return { ok: false, reason: 'below_value_floor' };
+  const seed = await seedCadence(
+    { entity_id: entityId, contact_id: contactEntityId || null, sf_contact_id: sfContactId || null },
+    {}
+  );
+  if (!seed || !seed.ok || !seed.cadence) return { ok: false, reason: 'seed_failed', detail: seed && seed.error };
+  // An existing (e.g. paused) cadence was found, not created — leave it as-is.
+  if (!seed.is_new) return { ok: false, reason: 'no_active_cadence' };
+  return {
+    ok: true, seeded: true,
+    cadenceId: seed.cadence.id,
+    cadenceOppId: seed.cadence.bd_opportunity_id || null,
+    cadenceNextDue: seed.cadence.next_touch_due || null,
+  };
+}
+
+/**
  * Resolve the entity's most-overdue active cadence and stamp the contact onto
  * it. Used by the HTTP P-CONTACT picker (which doesn't carry a cadence id).
  *
- * @returns {Promise<{ok:boolean, cadenceId?:string, cadenceOppId?:string|null,
- *                     cadenceNextDue?:string|null, reason?:string, detail?:any}>}
+ * When no active cadence exists and `seedIfValuable` is set (the default — all
+ * acquisition paths inherit it), a prospecting cadence is seeded for a
+ * value-floor owner (see `maybeSeedValuableCadence`) so the freshly-contacted
+ * high-value owner becomes workable outreach instead of stranding
+ * connected-but-cadence-less. Below the floor it returns `no_active_cadence`
+ * exactly as before (the person→entity link already happened upstream).
+ *
+ * @returns {Promise<{ok:boolean, seeded?:boolean, cadenceId?:string,
+ *                     cadenceOppId?:string|null, cadenceNextDue?:string|null,
+ *                     reason?:string, detail?:any}>}
  */
-export async function stampContactOnActiveCadence({ entityId, contactEntityId, sfContactId, onlyContactless = false }) {
+export async function stampContactOnActiveCadence({ entityId, contactEntityId, sfContactId, onlyContactless = false, seedIfValuable = true, floor, deps = {} }) {
   if (!contactEntityId && !sfContactId) return { ok: true, reason: 'no_contact_to_stamp' };
   // R28: onlyContactless restricts the target to a cadence that has no contact
   // yet, so qualifying a captured contact onto an owner never clobbers an
@@ -96,7 +161,15 @@ export async function stampContactOnActiveCadence({ entityId, contactEntityId, s
     + contactlessFilter
     + '&order=next_touch_due.asc.nullslast&select=id,bd_opportunity_id,next_touch_due,metadata&limit=1');
   const cadRow = (cadGet.ok && Array.isArray(cadGet.data)) ? cadGet.data[0] : null;
-  if (!cadRow) return { ok: false, reason: 'no_active_cadence' };
+  if (!cadRow) {
+    // No active cadence — seed one when the owner is BD-valuable (the wire from
+    // contact-acquisition → the value-ranked outreach surface).
+    if (seedIfValuable && entityId) {
+      const seeded = await maybeSeedValuableCadence({ entityId, contactEntityId, sfContactId, floor, deps });
+      if (seeded.ok) return seeded;
+    }
+    return { ok: false, reason: 'no_active_cadence' };
+  }
   const upd = await stampCadenceContactById(cadRow.id, { contactEntityId, sfContactId, existingMetadata: cadRow.metadata });
   if (!upd.ok) return { ok: false, reason: 'cadence_attach_failed', detail: upd.detail };
   return { ok: true, cadenceId: cadRow.id, cadenceOppId: cadRow.bd_opportunity_id || null, cadenceNextDue: cadRow.next_touch_due || null };

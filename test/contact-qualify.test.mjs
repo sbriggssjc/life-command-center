@@ -9,7 +9,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { performContactQualify, filterQualifiableContacts } from '../api/operations.js';
-import { stampContactOnActiveCadence } from '../api/_shared/contact-attach.js';
+import { stampContactOnActiveCadence, maybeSeedValuableCadence } from '../api/_shared/contact-attach.js';
 
 const UUID_A = '11111111-1111-1111-1111-111111111111'; // inbox item
 const UUID_P = '22222222-2222-2222-2222-222222222222'; // person
@@ -176,7 +176,170 @@ describe('stampContactOnActiveCadence onlyContactless filter (R28)', () => {
       }
       throw new Error('unexpected ' + m + ' ' + u);
     };
-    await stampContactOnActiveCadence({ entityId: UUID_OWNER, contactEntityId: UUID_P });
+    await stampContactOnActiveCadence({ entityId: UUID_OWNER, contactEntityId: UUID_P, seedIfValuable: false });
     assert.doesNotMatch(getUrl, /contact_id=is\.null/);
+  });
+});
+
+// ── Value-gated cadence seed: contact-acquisition → outreach surface wire ────
+// When a contactless owner gains a contact and has NO active cadence, seed ONE
+// prospecting cadence ONLY if it clears the R63 BD-value floor — so a $1M+ owner
+// becomes workable outreach instead of stranding connected-but-cadence-less.
+describe('maybeSeedValuableCadence (value-gated seed)', () => {
+  const NEW_CAD = 'cad-seeded-1';
+
+  // A seed dep that mimics getCadenceState: a fresh CREATE (is_new) carries the
+  // contact + a now-ish next_touch_due; an existing row would return is_new:false.
+  function seedDep(behaviour = 'create') {
+    return async (ids /*, propertyInfo */) => {
+      if (behaviour === 'fail') return { ok: false, error: 'insert_failed' };
+      if (behaviour === 'existing') {
+        return { ok: true, is_new: false, cadence: { id: 'cad-paused', phase: 'paused', contact_id: null } };
+      }
+      return {
+        ok: true, is_new: true,
+        cadence: {
+          id: NEW_CAD, phase: 'prospecting', bd_opportunity_id: null,
+          contact_id: ids.contact_id || null, sf_contact_id: ids.sf_contact_id || null,
+          next_touch_due: new Date().toISOString(),
+        },
+      };
+    };
+  }
+
+  it('high-value owner (signal=true) seeds exactly one prospecting cadence with the contact set', async () => {
+    let seedCalls = 0;
+    const r = await maybeSeedValuableCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P,
+      deps: {
+        signalCheck: async () => true,
+        seedCadence: async (ids, pi) => { seedCalls += 1; return seedDep('create')(ids, pi); },
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.seeded, true);
+    assert.equal(r.cadenceId, NEW_CAD);
+    assert.ok(r.cadenceNextDue, 'seeded cadence carries next_touch_due (surfaces in focus session)');
+    assert.equal(seedCalls, 1, 'exactly one cadence created');
+  });
+
+  it('low-value owner (signal=false) gains a contact but NO cadence is seeded', async () => {
+    let seedCalls = 0;
+    const r = await maybeSeedValuableCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P,
+      deps: {
+        signalCheck: async () => false,
+        seedCadence: async () => { seedCalls += 1; return seedDep('create')(); },
+      },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'below_value_floor');
+    assert.equal(seedCalls, 0, 'seed never attempted below the floor (no spam)');
+  });
+
+  it('existing (paused) cadence found → not a seed, left untouched (no duplicate)', async () => {
+    const r = await maybeSeedValuableCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P,
+      deps: { signalCheck: async () => true, seedCadence: seedDep('existing') },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'no_active_cadence');
+    assert.notEqual(r.seeded, true);
+  });
+
+  it('fails closed on a signal-check error (no seed)', async () => {
+    let seedCalls = 0;
+    const r = await maybeSeedValuableCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P,
+      deps: {
+        signalCheck: async () => { throw new Error('boom'); },
+        seedCadence: async () => { seedCalls += 1; return seedDep('create')(); },
+      },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'signal_check_failed');
+    assert.equal(seedCalls, 0);
+  });
+});
+
+describe('stampContactOnActiveCadence → seed branch wiring', () => {
+  const originalFetch = global.fetch;
+  beforeEach(() => { process.env.OPS_SUPABASE_URL = 'https://ops.example.com'; process.env.OPS_SUPABASE_KEY = 'k'; });
+  afterEach(() => { global.fetch = originalFetch; });
+
+  // No active cadence (GET returns []) → the seed deps decide. A valuable owner
+  // seeds; the stamp returns the seeded cadence id instead of no_active_cadence.
+  it('no active cadence + valuable owner → seeds, returns seeded cadence', async () => {
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url); const m = (opts.method || 'GET').toUpperCase();
+      if (u.includes('/touchpoint_cadence') && m === 'GET') {
+        return { ok: true, status: 200, headers: { get: () => '0-0/0' }, async text() { return JSON.stringify([]); } };
+      }
+      throw new Error('unexpected ' + m + ' ' + u);
+    };
+    const r = await stampContactOnActiveCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P,
+      deps: {
+        signalCheck: async () => true,
+        seedCadence: async (ids) => ({ ok: true, is_new: true, cadence: { id: 'cad-new', next_touch_due: new Date().toISOString(), contact_id: ids.contact_id } }),
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.seeded, true);
+    assert.equal(r.cadenceId, 'cad-new');
+  });
+
+  it('no active cadence + low-value owner → no_active_cadence (no seed)', async () => {
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url); const m = (opts.method || 'GET').toUpperCase();
+      if (u.includes('/touchpoint_cadence') && m === 'GET') {
+        return { ok: true, status: 200, headers: { get: () => '0-0/0' }, async text() { return JSON.stringify([]); } };
+      }
+      throw new Error('unexpected ' + m + ' ' + u);
+    };
+    const r = await stampContactOnActiveCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P,
+      deps: { signalCheck: async () => false, seedCadence: async () => { throw new Error('should not seed'); } },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'no_active_cadence');
+  });
+
+  it('seedIfValuable:false → never seeds even when no active cadence', async () => {
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url); const m = (opts.method || 'GET').toUpperCase();
+      if (u.includes('/touchpoint_cadence') && m === 'GET') {
+        return { ok: true, status: 200, headers: { get: () => '0-0/0' }, async text() { return JSON.stringify([]); } };
+      }
+      throw new Error('unexpected ' + m + ' ' + u);
+    };
+    const r = await stampContactOnActiveCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P, seedIfValuable: false,
+      deps: { signalCheck: async () => { throw new Error('should not check'); } },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'no_active_cadence');
+  });
+
+  it('existing active cadence → stamps it, no seed (no duplicate)', async () => {
+    let seeded = false;
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url); const m = (opts.method || 'GET').toUpperCase();
+      if (u.includes('/touchpoint_cadence') && m === 'GET') {
+        return { ok: true, status: 200, headers: { get: () => '0-0/1' }, async text() { return JSON.stringify([{ id: 'cad-x', bd_opportunity_id: null, next_touch_due: null, metadata: {} }]); } };
+      }
+      if (u.includes('/touchpoint_cadence') && m === 'PATCH') {
+        return { ok: true, status: 200, headers: { get: () => '0-0/1' }, async text() { return JSON.stringify([{}]); } };
+      }
+      throw new Error('unexpected ' + m + ' ' + u);
+    };
+    const r = await stampContactOnActiveCadence({
+      entityId: UUID_OWNER, contactEntityId: UUID_P,
+      deps: { signalCheck: async () => { seeded = true; return true; }, seedCadence: async () => { seeded = true; return {}; } },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.cadenceId, 'cad-x');
+    assert.notEqual(r.seeded, true);
+    assert.equal(seeded, false, 'seed path never reached when an active cadence exists');
   });
 });
