@@ -145,8 +145,8 @@ const INGEST_SOURCES = {
         const from = String(raw.from || '').toLowerCase();
         const subj = String(raw.subject || '');
         if (from.includes('costar')) return false;
-        if (/(no-?reply|do-?not-?reply|donotreply|notifications?@|mailer-daemon|postmaster|@.*\.notify\b|mailer@|automated@)/.test(from)) return true;
-        if (/^(automatic reply|auto[- ]?reply|out of office|out-of-office|undeliverable|delivery (failure|status notification|has failed)|returned mail|read:|accepted:|declined:|tentative:|canceled:|cancelled:)/i.test(subj)) return true;
+        if (/(no-?reply|do-?not-?reply|donotreply|notifications?@|@.*\.notify\b|automated@)/.test(from)) return true; // bounces (mailer-daemon/postmaster) kept = contact hygiene
+        if (/^(automatic reply|auto[- ]?reply|out of office|out-of-office|read:|accepted:|declined:|tentative:|canceled:|cancelled:)/i.test(subj)) return true; // undeliverables kept
         return false;
       }
     }
