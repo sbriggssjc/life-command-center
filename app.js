@@ -7833,6 +7833,34 @@ function renderTeamPulse() {
 // ============================================================
 // CALENDAR PAGE
 // ============================================================
+async function captureEvent() {
+  const titleEl = document.getElementById('capTitle');
+  const whenEl = document.getElementById('capWhen');
+  const domEl = document.getElementById('capDomain');
+  const msg = document.getElementById('capMsg');
+  const title = (titleEl && titleEl.value || '').trim();
+  const when = (whenEl && whenEl.value) || '';
+  const domain = (domEl && domEl.value) || 'family';
+  if (!title || !when) { if (msg) msg.textContent = 'Enter a title and a date/time'; return; }
+  if (msg) msg.textContent = 'Adding\u2026';
+  try {
+    const res = await fetch('https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/calendar-capture', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title, start: when, domain: domain })
+    });
+    const d = await res.json();
+    if (d.status === 'created') {
+      if (msg) msg.textContent = '\u2713 Added \u2014 syncs to your calendar shortly';
+      if (titleEl) titleEl.value = '';
+      setTimeout(() => { try { loadCalendar(); } catch (e) {} }, 600);
+    } else if (d.status === 'duplicate') {
+      if (msg) msg.textContent = 'Already on your calendar \u2014 not duplicated';
+    } else {
+      if (msg) msg.textContent = 'Error: ' + (d.error || 'could not add');
+    }
+  } catch (e) { if (msg) msg.textContent = 'Error: ' + e.message; }
+}
+
 function renderCalendarFull() {
   const calEl = document.getElementById('calendarFull');
   if (!calEl) return;

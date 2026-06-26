@@ -15,6 +15,11 @@ const URL_ = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const DEFAULT_TZ = "America/Chicago";
 const DOMAINS = ["business", "family", "coaching", "personal", "home", "travel"];
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-lcc-key",
+};
 
 async function rest(path: string, init?: RequestInit) {
   const r = await fetch(URL_ + "/rest/v1/" + path, {
@@ -58,20 +63,22 @@ async function sha1(s: string) {
   return Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, "0")).join("").slice(0, 16);
 }
 
+function J(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...CORS } }); }
 Deno.serve(async (req: Request) => {
-  if (req.method !== "POST") return Response.json({ ok: false, error: "POST required" }, { status: 405 });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+  if (req.method !== "POST") return J({ ok: false, error: "POST required" }, 405);
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return Response.json({ ok: false, error: "invalid JSON" }, { status: 400 }); }
+  try { body = await req.json(); } catch { return J({ ok: false, error: "invalid JSON" }, 400); }
 
   const title = String(body.title || "").trim();
   const domain = String(body.domain || "").trim().toLowerCase();
   const tz = String(body.tz || DEFAULT_TZ);
-  if (!title) return Response.json({ ok: false, error: "title required" }, { status: 400 });
-  if (!DOMAINS.includes(domain)) return Response.json({ ok: false, error: "domain must be one of " + DOMAINS.join("/") }, { status: 400 });
+  if (!title) return J({ ok: false, error: "title required" }, 400);
+  if (!DOMAINS.includes(domain)) return J({ ok: false, error: "domain must be one of " + DOMAINS.join("/") }, 400);
 
   const allDay = !!body.all_day;
   const startISO = toUtc(String(body.start || ""), tz);
-  if (!startISO) return Response.json({ ok: false, error: "could not parse start" }, { status: 400 });
+  if (!startISO) return J({ ok: false, error: "could not parse start" }, 400);
   const endISO = body.end ? toUtc(String(body.end), tz) : new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
   const location = body.location ? String(body.location) : null;
 
@@ -96,11 +103,11 @@ Deno.serve(async (req: Request) => {
     body_preview: "[Cortex capture]", synced_at: new Date().toISOString(), tz_normalized_at: new Date().toISOString(),
   };
 
-  if (body.dry_run) return Response.json({ ok: true, dry_run: true, would_insert: row, duplicate_of: duplicate });
-  if (duplicate) return Response.json({ ok: true, status: "duplicate",
+  if (body.dry_run) return J({ ok: true, dry_run: true, would_insert: row, duplicate_of: duplicate });
+  if (duplicate) return J({ ok: true, status: "duplicate",
     message: "Already on your calendar (" + (duplicate.calendar_name) + ") — not added again.", duplicate_of: duplicate, candidate: row });
 
   await rest("calendar_events?on_conflict=id", { method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify([row]) });
-  return Response.json({ ok: true, status: "created", id, event: row, classified: { domain, kid, sport } });
+  return J({ ok: true, status: "created", id, event: row, classified: { domain, kid, sport } });
 });
