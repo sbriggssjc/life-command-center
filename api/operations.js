@@ -307,6 +307,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
       case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
+      case 'snooze_cadence':     return await bridgeSnoozeCadence(req, res, user, workspaceId);
+      case 'set_contact_email':  return await bridgeSetContactEmail(req, res, user, workspaceId);
 
       // Workflow actions
       case 'promote_to_shared':  return await promoteToShared(req, res, user, workspaceId);
@@ -321,7 +323,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity, advance_cadence. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity, open_government_buyer'
+          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity, advance_cadence, snooze_cadence, set_contact_email. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity, open_government_buyer'
         });
     }
   }
@@ -611,6 +613,69 @@ async function bridgeAdvanceCadence(req, res, user, workspaceId) {
     activity_logged: activityLogged,
     recommendation: advanceResult.recommendation
   });
+}
+
+// ============================================================================
+// BRIDGE: Snooze a cadence (the outreach focus-session Skip/Snooze)
+//
+// Defers next_touch_due WITHOUT counting a touch — a card the operator won't
+// work right now should not silently re-serve next session, but a snooze is NOT
+// a touch (it never advances current_touch / engagement counters, so it cannot
+// pollute the self-improvement loops). Records a reversible reason in metadata.
+// Reached via POST /api/operations?action=snooze_cadence.
+// ============================================================================
+async function bridgeSnoozeCadence(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const cadenceId = String(b.cadence_id || '').trim();
+  if (!cadenceId) return res.status(400).json({ error: 'cadence_id is required' });
+  let days = parseInt(b.days, 10);
+  if (!isFinite(days) || days < 1) days = 5;
+  if (days > 365) days = 365;
+  const reason = b.reason ? String(b.reason).slice(0, 200) : 'focus_skip';
+
+  const r = await opsQuery('GET',
+    `touchpoint_cadence?id=eq.${pgFilterVal(cadenceId)}&workspace_id=eq.${pgFilterVal(workspaceId)}&limit=1`);
+  const cad = (r.ok && Array.isArray(r.data)) ? r.data[0] : null;
+  if (!cad) return res.status(404).json({ error: 'Cadence not found' });
+
+  const due = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  const meta = Object.assign({}, cad.metadata || {}, {
+    snooze: { at: new Date().toISOString(), days, reason, by: user.id }
+  });
+  const patch = await opsQuery('PATCH',
+    `touchpoint_cadence?id=eq.${pgFilterVal(cadenceId)}&workspace_id=eq.${pgFilterVal(workspaceId)}`,
+    { next_touch_due: due, metadata: meta, updated_at: new Date().toISOString() });
+  if (!patch.ok) return res.status(patch.status || 500).json({ error: 'Failed to snooze cadence', detail: patch.data });
+
+  // Slice-1 staleness contract — let the deferred row leave the actionable set.
+  try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+  return res.status(200).json({ ok: true, cadence_id: cadenceId, next_touch_due: due, days });
+}
+
+// ============================================================================
+// BRIDGE: Set a contact entity's email (inline "add email" in the draft card)
+//
+// The outreach draft resolves the recipient from the cadence's contact entity
+// (R20). When that contact carries no email (phone-only persons / unresolved
+// contacts), the operator can type one inline; this saves it onto the contact
+// entity (fill-blank-or-overwrite of the email field only) so the draft mailto
+// resolves and future drafts "just work". Never fabricates — only stores what
+// the operator typed. Reached via POST /api/operations?action=set_contact_email.
+// ============================================================================
+async function bridgeSetContactEmail(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const entityId = String(b.entity_id || '').trim();
+  const email = String(b.email || '').trim();
+  if (!entityId) return res.status(400).json({ error: 'entity_id is required' });
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'a valid email is required' });
+  }
+  const r = await opsQuery('PATCH',
+    `entities?id=eq.${pgFilterVal(entityId)}&workspace_id=eq.${pgFilterVal(workspaceId)}`,
+    { email, updated_at: new Date().toISOString() });
+  if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to save email', detail: r.data });
+  return res.status(200).json({ ok: true, entity_id: entityId, email });
 }
 
 // ============================================================================

@@ -3331,7 +3331,8 @@ async function renderCadenceDashboard(showAll) {
   // set; the toggle reveals everything (incl. paused / no-signal / contactless).
   var toggleLbl = showAll ? 'Show actionable only' : 'Show all cadences';
   var html = '<div class="ops-header"><h2>Cadence Dashboard</h2>'
-    + '<div><button class="q-action" onclick="renderCadenceDashboard(' + (showAll ? '' : 'true') + ')">' + toggleLbl + '</button>'
+    + '<div><button class="q-action primary" onclick="renderOutreachFocus()">▶ Focus mode</button>'
+    + '<button class="q-action" onclick="renderCadenceDashboard(' + (showAll ? '' : 'true') + ')">' + toggleLbl + '</button>'
     + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div></div>';
   html += '<div class="rc-intro">' + (showAll
       ? 'Every cadence (incl. paused, no-signal, and contactless). The default view shows only actionable rows.'
@@ -3370,7 +3371,7 @@ async function renderCadenceDashboard(showAll) {
     if (isEmail && cid && eid && tmpl) {
       action = '<button class="q-action primary" onclick="cadDraft(' + jsStringArg(cid) + ',' + jsStringArg(eid)
         + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
-        + ',' + jsStringArg(it.contact_email || '') + ', this)">Draft email →</button>';
+        + ',' + jsStringArg(it.contact_email || '') + ',' + jsStringArg(it.contact_id || '') + ', this)">Draft email →</button>';
     } else if (cid && eid) {
       action = '<button class="q-action primary" onclick="cadLogTouch(' + jsStringArg(cid) + ',' + jsStringArg(eid)
         + ',' + jsStringArg(nt || 'call') + ', this)">Log touch →</button>';
@@ -3389,6 +3390,150 @@ async function renderCadenceDashboard(showAll) {
   el.innerHTML = html;
 }
 window.renderCadenceDashboard = renderCadenceDashboard;
+
+// ============================================================================
+// Outreach FOCUS MODE — work the actionable cadences one card at a time.
+//
+// The cadence dashboard (above) is the list; focus mode is the knock-it-out
+// flow. It loads the SAME actionable, value-ranked cadence set and serves ONE
+// card at a time: who + WHY (value / overdue / last touch), then the next
+// action. Email-next → Draft → Copy / Open in mail / Mark sent (advances the
+// cadence via the single advanceCadence owner) → auto-advance to the next card.
+// Call/VM-next → Log touch → next. Skip → snooze (so it doesn't re-serve) →
+// next. Reuses cadDraft / cadMarkSent / cadLogTouch — no second advance owner.
+// Session progress shows "worked / total · $ touched".
+// ============================================================================
+async function renderOutreachFocus() {
+  var el = document.getElementById('priorityQueueContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/operations?action=cadence_dashboard&limit=200');
+  if (!res.ok || !res.data || !res.data.ok) {
+    el.innerHTML = opsErrorState(res, 'renderOutreachFocus()', 'Could not load your outreach list');
+    return;
+  }
+  // The server already orders by rank_value desc, then most-overdue (R34). Keep
+  // only rows with a workable cadence + entity. Highest-value first.
+  var items = (Array.isArray(res.data.items) ? res.data.items : [])
+    .filter(function (it) { return it && it.cadence_id && it.entity_id; });
+  window._focusQ = items;
+  window._focusIx = 0;
+  window._focusWorked = 0;
+  window._focusValue = 0;
+  el.innerHTML = '<div class="ops-header"><h2>Work Your Outreach</h2>'
+    + '<div><button class="q-action" onclick="renderCadenceDashboard()">View full list</button>'
+    + '<button class="q-action" onclick="renderPriorityQueuePage(window._pqCurrentBand || undefined)">← Back to queue</button></div></div>'
+    + '<div class="rc-intro">One prospect at a time, highest value first. Draft the next email (Copy / Open in mail / Mark sent) or log the call — either advances the cadence and brings up the next card. Skip to snooze a card you won’t work right now.</div>'
+    + '<div id="focusProgress" class="q-item-meta" style="margin:6px 0"></div>'
+    + '<div id="focusCardSlot"></div>';
+  _focusRenderCard();
+}
+window.renderOutreachFocus = renderOutreachFocus;
+
+function _focusProgressBar() {
+  var q = window._focusQ || [];
+  var total = q.length;
+  var worked = window._focusWorked || 0;
+  var val = window._focusValue || 0;
+  var ix = Math.min(window._focusIx || 0, total);
+  var valStr = (val > 0) ? ' · ' + _dcMoney(val) + ' touched' : '';
+  var pct = total ? Math.round((worked / total) * 100) : 0;
+  return '<div><b>' + worked + '</b> of <b>' + total + '</b> worked' + valStr
+    + (ix < total ? ' · on #' + (ix + 1) : '') + '</div>'
+    + '<div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:4px">'
+    + '<div style="height:100%;width:' + pct + '%;background:var(--nm-blue,#003DA5)"></div></div>';
+}
+
+function _focusRenderCard() {
+  var prog = document.getElementById('focusProgress');
+  var slot = document.getElementById('focusCardSlot');
+  if (!slot) return;
+  if (prog) prog.innerHTML = _focusProgressBar();
+  var q = window._focusQ || [];
+  var ix = window._focusIx || 0;
+  if (ix >= q.length) {
+    slot.innerHTML = '<div class="q-item pq-hero"><div class="q-item-header">'
+      + '<span class="q-item-title">✓ Session complete</span></div>'
+      + '<div class="q-item-meta">You worked ' + (window._focusWorked || 0) + ' of ' + q.length
+      + ' prospect' + (q.length === 1 ? '' : 's') + (window._focusValue > 0 ? ' · ' + _dcMoney(window._focusValue) + ' in reach' : '') + '.</div>'
+      + '<div class="q-actions"><button class="q-action primary" onclick="renderOutreachFocus()">Reload outreach</button>'
+      + '<button class="q-action" onclick="renderCadenceDashboard()">View full list</button></div></div>';
+    return;
+  }
+  var it = q[ix];
+  var cid = String(it.cadence_id);
+  var eid = String(it.entity_id);
+  var overdue = Number(it.days_overdue);
+  var dueLbl = it.next_touch_due
+    ? (isFinite(overdue) && overdue > 0 ? esc(String(overdue)) + 'd overdue' : 'due ' + new Date(it.next_touch_due).toLocaleDateString())
+    : 'no next touch';
+  var nt = String(it.next_touch_type || '').toLowerCase();
+  var isEmail = (nt === 'email' || nt === '');
+  var lastOutcome = it.last_touch_type
+    ? ('last: ' + esc(it.last_touch_type) + (it.last_touch_at ? ' ' + new Date(it.last_touch_at).toLocaleDateString() : ''))
+    : 'never touched';
+  // WHY this prospect matters (value / overdue / phase / last touch).
+  var why = [];
+  var valStr = _dcMoney(it.rank_value);
+  if (valStr) {
+    var pc = Number(it.rank_property_count);
+    why.push(valStr + (isFinite(pc) && pc > 0 ? ' (' + pc + ' propert' + (pc === 1 ? 'y' : 'ies') + ')' : ''));
+  }
+  why.push(esc(it.phase || '—'));
+  why.push('touch ' + esc(String(it.current_touch != null ? it.current_touch : 0)));
+  why.push(esc(dueLbl));
+  why.push(lastOutcome);
+  var tmpl = it.next_touch_template ? String(it.next_touch_template) : '';
+  var primary;
+  if (isEmail && tmpl) {
+    primary = '<button class="q-action primary" onclick="cadDraft(' + jsStringArg(cid) + ',' + jsStringArg(eid)
+      + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
+      + ',' + jsStringArg(it.contact_email || '') + ',' + jsStringArg(it.contact_id || '') + ', this)">Draft email →</button>';
+  } else {
+    primary = '<button class="q-action primary" onclick="cadLogTouch(' + jsStringArg(cid) + ',' + jsStringArg(eid)
+      + ',' + jsStringArg(nt || 'call') + ', this)">Log ' + esc(nt || 'call') + ' →</button>';
+  }
+  var skip = '<button class="q-action" onclick="focusSkip(' + jsStringArg(cid) + ', this)">Skip / snooze</button>';
+  slot.innerHTML = '<div class="q-item pq-hero" data-cad-id="' + esc(cid) + '" data-focus="1" data-rank="'
+      + esc(String(Number(it.rank_value) || 0)) + '">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(it.entity_name || 'Cadence') + '</span>'
+    + '<div class="q-item-badges">' + (it.review_flag ? '<span class="q-badge pri-high" title="Active cadence > 90 days overdue">⚠ review</span>' : '')
+    + '<span class="q-badge">' + esc(it.next_touch_type || 'email') + '</span></div></div>'
+    + '<div class="q-item-meta">' + esc(why.join(' · ')) + '</div>'
+    + '<div class="q-actions">' + primary + skip + '</div></div>';
+}
+window._focusRenderCard = _focusRenderCard;
+
+// Called by the shared cadMarkSent / cadLogTouch on success when the card is in
+// focus mode — count the worked prospect + its value, then bring up the next.
+function _focusActionDone(card) {
+  if (!card || !card.closest || !card.closest('#focusCardSlot')) return false;
+  window._focusWorked = (window._focusWorked || 0) + 1;
+  var rank = Number(card.getAttribute && card.getAttribute('data-rank'));
+  if (isFinite(rank) && rank > 0) window._focusValue = (window._focusValue || 0) + rank;
+  window._focusIx = (window._focusIx || 0) + 1;
+  setTimeout(_focusRenderCard, 650);
+  return true;
+}
+window._focusActionDone = _focusActionDone;
+
+// Skip = snooze the card a few days so it doesn't silently re-serve this session
+// or tomorrow, then advance. A snooze is NOT a touch (no engagement counters).
+async function focusSkip(cadenceId, btn) {
+  var card = (btn && btn.closest) ? btn.closest('.q-item') : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Snoozing…'; }
+  var res = await opsPost('/api/operations?action=snooze_cadence', { cadence_id: cadenceId, days: 5, reason: 'focus_skip' });
+  if (!res.ok || !res.data || !res.data.ok) {
+    showToast('Could not snooze: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Skip / snooze'; }
+    return;
+  }
+  showToast('Snoozed 5 days', 'info');
+  // Skipped, not worked — advance without crediting value.
+  window._focusIx = (window._focusIx || 0) + 1;
+  _focusRenderCard();
+}
+window.focusSkip = focusSkip;
 
 // ============================================================================
 // R55 Unit 2 — Top BD actions: the one unified, value-ranked BD worklist.
@@ -3637,7 +3782,7 @@ async function bulkQualifyContacts(btn) {
 window.bulkQualifyContacts = bulkQualifyContacts;
 
 // Generate the next-touch email inline (no sending — copy / mailto / mark sent).
-async function cadDraft(cadenceId, entityId, templateId, name, domain, contactEmail, btn) {
+async function cadDraft(cadenceId, entityId, templateId, name, domain, contactEmail, contactId, btn) {
   var card = (btn && btn.closest) ? btn.closest('.q-item') : null;
   if (btn) { btn.disabled = true; btn.textContent = 'Drafting…'; }
   var body = {
@@ -3658,15 +3803,22 @@ async function cadDraft(cadenceId, entityId, templateId, name, domain, contactEm
   var host = card.querySelector('.cad-draft');
   if (!host) { host = document.createElement('div'); host.className = 'cad-draft'; card.appendChild(host); }
   // Stash the rendered draft on the card for record_send + edit capture.
-  card._cadDraft = { templateId: templateId, entityId: entityId, domain: domain || '', subject: subject, body: bodyText };
+  // contactEntityId lets the no-email branch save a typed recipient onto the
+  // contact entity (so the draft resolves AND future drafts "just work").
+  card._cadDraft = { templateId: templateId, entityId: entityId, domain: domain || '', subject: subject, body: bodyText,
+    contactId: (contactId || entityId) };
   // R20: resolve the recipient from the cadence's contact entity (= the person,
-  // incl. a person who is their own contact). Falls back to an empty to: when
-  // the contact carries no email (phone-only persons / unresolved contacts).
+  // incl. a person who is their own contact). When the contact carries no email
+  // (phone-only persons / unresolved contacts) we offer an inline "add email"
+  // that saves onto the contact — never a dead mailto. Copy is always available.
   var to = (contactEmail || '').trim();
   var mailto = 'mailto:' + encodeURIComponent(to) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyText);
   var recipientLine = to
     ? '<div class="cad-draft-to"><b>To:</b> ' + esc(to) + '</div>'
-    : '<div class="cad-draft-to q-item-meta">No recipient email on file — add a "To:" in your mail client.</div>';
+    : '<div class="cad-draft-to q-item-meta">No recipient email on file. '
+      + '<input class="cad-draft-email" type="email" placeholder="add recipient email" '
+      + 'style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);min-width:200px">'
+      + ' <button class="q-action" onclick="cadSaveEmail(this)">Save</button></div>';
   host.innerHTML = recipientLine
     + '<div class="cad-draft-subj"><b>Subject:</b> ' + esc(subject) + '</div>'
     + '<textarea class="cad-draft-body" rows="8" style="width:100%;margin:6px 0">' + esc(bodyText) + '</textarea>'
@@ -3692,6 +3844,34 @@ function cadCopyDraft(btn) {
 }
 window.cadCopyDraft = cadCopyDraft;
 
+// Inline "add email" — save a typed recipient onto the cadence's contact entity
+// so the draft mailto resolves and future drafts carry it. Never a dead draft.
+async function cadSaveEmail(btn) {
+  var card = (btn && btn.closest) ? btn.closest('.q-item') : null;
+  var d = card ? card._cadDraft : null;
+  var input = card ? card.querySelector('.cad-draft-email') : null;
+  var email = input ? String(input.value || '').trim() : '';
+  if (!d || !d.contactId) { showToast('No contact to save the email on', 'error'); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showToast('Enter a valid email', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  var res = await opsPost('/api/operations?action=set_contact_email', { entity_id: d.contactId, email: email });
+  if (!res.ok || !res.data || !res.data.ok) {
+    showToast('Could not save email: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    return;
+  }
+  var toLine = card ? card.querySelector('.cad-draft-to') : null;
+  if (toLine) { toLine.className = 'cad-draft-to'; toLine.innerHTML = '<b>To:</b> ' + esc(email); }
+  // Refresh the "Open in mail" link so it carries the new recipient.
+  var ta = card ? card.querySelector('.cad-draft-body') : null;
+  var bodyTxt = ta ? ta.value : (d.body || '');
+  var a = card ? card.querySelector('.cad-draft a.q-action') : null;
+  if (a) a.setAttribute('href', 'mailto:' + encodeURIComponent(email)
+    + '?subject=' + encodeURIComponent(d.subject || '') + '&body=' + encodeURIComponent(bodyTxt));
+  showToast('Recipient saved', 'success');
+}
+window.cadSaveEmail = cadSaveEmail;
+
 // Mark sent → record_send (which advances via the Unit-1 single advance path).
 async function cadMarkSent(cadenceId, btn) {
   var card = btn.closest('.q-item');
@@ -3714,6 +3894,7 @@ async function cadMarkSent(cadenceId, btn) {
     if (actions) actions.innerHTML = '<span class="q-badge">✓ Sent & recorded' + (advanced ? ' — cadence advanced' : '') + '</span>';
     if (card) card.classList.add('resolved');
     showToast(advanced ? 'Sent — cadence advanced' : 'Sent & recorded', 'success');
+    if (typeof _focusActionDone === 'function') _focusActionDone(card);
   } else {
     showToast('Could not record send: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Mark sent →'; }
@@ -3734,6 +3915,7 @@ async function cadLogTouch(cadenceId, entityId, touchType, btn) {
     if (actions) actions.innerHTML = '<span class="q-badge">✓ Touch logged — cadence advanced</span>';
     if (card) card.classList.add('resolved');
     showToast('Touch logged', 'success');
+    if (typeof _focusActionDone === 'function') _focusActionDone(card);
   } else {
     showToast('Could not log touch: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Log touch →'; }

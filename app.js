@@ -1050,6 +1050,7 @@ function handlePageLoad(pageId) {
       if (!dailyBriefingLoaded) loadDailyBriefingData();
       renderNextBestActionPanel();
       if (!nbaLoaded) loadNextBestActionData();
+      if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp();
       if (typeof renderTodayBdActions === 'function') renderTodayBdActions();
       break;
     case 'pagePipeline':
@@ -7595,6 +7596,52 @@ function _todayBdFallback(msg) {
     + ' <button class="retry-btn" onclick="renderTodayBdActions(true)">Retry</button>'
     + ' <button class="retry-btn" onclick="navTo(&quot;pagePriorityQueue&quot;);setTimeout(function(){if(typeof renderBdWorklist===&quot;function&quot;)renderBdWorklist();},300)">View all →</button></div>';
 }
+// Work Your Outreach — the Today on-ramp (2026-06-26). An honest, actionable
+// count of reachable, value-ranked prospect cadences DUE, with a button that
+// lands directly in the focus session (ops.js renderOutreachFocus). N = overdue
+// actionable cadences, $X = sum of their rank_value (in-reach value); both are
+// the workable set, never raw producer output. Reuses the cadence_dashboard
+// action — same data the focus session works.
+let _outreachOnrampLoaded = false;
+let _outreachOnrampInFlight = false;
+async function renderOutreachOnramp(force) {
+  const el = document.getElementById('outreachOnrampContent');
+  if (!el) return;
+  if (_outreachOnrampLoaded && !force) return;
+  if (_outreachOnrampInFlight) return;
+  if (typeof opsApi !== 'function') { setTimeout(() => renderOutreachOnramp(force), 300); return; }
+  _outreachOnrampInFlight = true;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  try {
+    const res = await Promise.race([
+      opsApi('/api/operations?action=cadence_dashboard&limit=200'),
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 12000)),
+    ]);
+    if (!res.ok || !res.data || !res.data.ok) {
+      el.innerHTML = '<div class="nba-empty">Outreach list unavailable. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+      return;
+    }
+    _outreachOnrampLoaded = true;
+    const items = Array.isArray(res.data.items) ? res.data.items : [];
+    if (!items.length) { el.innerHTML = '<div class="nba-empty">No prospects to work right now. ✓</div>'; return; }
+    const overdue = items.filter((it) => Number(it.days_overdue) > 0).length;
+    const valueSum = items.reduce((s, it) => { const v = Number(it.rank_value); return s + (isFinite(v) && v > 0 ? v : 0); }, 0);
+    const money = (x) => { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; };
+    const valStr = valueSum > 0 ? ' · ' + money(valueSum) + ' in reach' : '';
+    const dueLabel = overdue > 0 ? ('<strong>' + overdue + '</strong> due') : ('<strong>' + items.length + '</strong> ready');
+    el.innerHTML = '<div class="nba-meta"><span class="nba-count">' + dueLabel
+      + (overdue > 0 && items.length !== overdue ? ' · ' + items.length + ' total ready' : '') + valStr + '</span></div>'
+      + '<button type="button" class="nba-viewall" style="margin-top:8px;font-weight:600;color:var(--nm-blue,#003DA5)" '
+      + 'onclick="navTo(\'pagePriorityQueue\');setTimeout(function(){if(typeof renderOutreachFocus===\'function\')renderOutreachFocus();},300)">'
+      + '▶ Start working →</button>';
+  } catch (e) {
+    el.innerHTML = '<div class="nba-empty">Outreach list unavailable. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+  } finally {
+    _outreachOnrampInFlight = false;
+  }
+}
+window.renderOutreachOnramp = renderOutreachOnramp;
+
 async function renderTodayBdActions(force) {
   const el = document.getElementById('todayBdActionsContent');
   if (!el) return;
@@ -9032,8 +9079,8 @@ function bootApp() {
       applyFeatureFlags();
       autoConnectCredentials().then(() => {
         Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData(), loadNextBestActionData()])
-          .then(() => { updateGreeting(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
-          .catch(() => { updateGreeting(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+          .then(() => { updateGreeting(); if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
+          .catch(() => { updateGreeting(); if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
       });
     });
   });
