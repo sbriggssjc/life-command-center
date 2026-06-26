@@ -922,7 +922,7 @@ async function loadDiaData() {
     // Now merged into single Promise.all — cuts load time roughly in half
     var [freshness, invSummary, invChanges, moversUpRaw, moversDownRaw,
          npiSignalSummary, npiSignals, propQueue, leaseQueue, leaseCountRes, outcomes, recon,
-         sfActivities
+         sfActivities, patientAsOfRows
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
       diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
@@ -943,7 +943,12 @@ async function loadDiaData() {
         filter: 'or(assigned_to.ilike.*largent*,assigned_to.ilike.*martin*,assigned_to.ilike.*briggs*,assigned_to.ilike.*berwaldt*)',
         order: 'activity_date.desc',
         limit: 5000
-      }).catch(function() { return []; })
+      }).catch(function() { return []; }),
+      // The mom view's snapshot_date is the newest GENUINE CMS reporting period
+      // (12-31 re-stamps excluded) — i.e. the honest "as of" date for the patient
+      // tiles. Read it directly (the delta-filtered movers queries above return
+      // nothing when there is no new period, so they can't carry the date).
+      diaQuery('v_facility_patient_counts_mom', 'snapshot_date', { limit: 1 }).catch(function() { return []; })
     ]);
 
     // Assign core data
@@ -978,6 +983,10 @@ async function loadDiaData() {
       ? leaseCountRes.count : null;
     diaData.researchOutcomes = outcomes || [];
     diaData.sfActivities = sfActivities || [];
+    // Honest "as of" period for the CMS patient-count tiles (the newest GENUINE
+    // reporting period, not a year-end re-stamp). null when unavailable.
+    diaData.patientAsOf = (patientAsOfRows && patientAsOfRows[0] && patientAsOfRows[0].snapshot_date)
+      ? patientAsOfRows[0].snapshot_date : null;
     if (recon && recon.length > 0) {
       diaData.reconciliation = recon[0];
     }
@@ -2040,13 +2049,38 @@ function renderDiaOverview() {
 
   // Clinical Metrics
   html += sectionHeader('Clinical Metrics', '📊', 'changes');
+  // Honest "as of" caption — patient counts are a CMS reporting-period series,
+  // published periodically (≈annually), NOT a nightly feed. Decoupled from the
+  // nightly ingestion timestamp so the tiles never imply stale live data.
+  (function(){
+    var a = _diaPatientAsOfLabel();
+    html += '<div style="font-size:11px;color:var(--text3);margin:-2px 0 8px;padding-left:2px">'
+      + 'CMS patient data' + (a ? ' as of <strong>' + a + '</strong>' : '')
+      + ' · CMS publishes this dataset periodically (≈annually), not nightly'
+      + '</div>';
+  })();
   html += '<div id="diaOverviewPatientMetrics">' + renderPatientMetricsInner() + '</div>';
   html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
   html += infoCard({ title: 'Inventory Changes', value: fmtN(addedCount + removedCount), sub: '+' + fmtN(addedCount) + ' added · -' + fmtN(removedCount) + ' removed', color: addedCount > removedCount ? 'green' : 'red', tab: 'changes' });
   html += infoCard({ title: 'NPI Signals', value: fmtN(npiActionableCount), sub: npiAutoResolvable > 0 ? fmtN(npiAutoResolvable) + ' auto-resolved · ' + fmtN(npiActionableCount) + ' need review' : 'need human review', color: 'orange', tab: 'npi' });
-  html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name && diaData.moversUp[0].facility_name !== 'null' ? diaData.moversUp[0].facility_name : diaData.moversUp[0].clinic_name || diaData.moversUp[0].address || 'Unknown Clinic').substring(0,30) : 'no data', color: 'green', tab: 'changes' });
+  const _diaAsOfMover = _diaPatientAsOfLabel();
+  const _diaHasMovers = (diaData.moversUp && diaData.moversUp.length) || (diaData.moversDown && diaData.moversDown.length);
+  html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name && diaData.moversUp[0].facility_name !== 'null' ? diaData.moversUp[0].facility_name : diaData.moversUp[0].clinic_name || diaData.moversUp[0].address || 'Unknown Clinic').substring(0,30) : ('no new CMS period' + (_diaAsOfMover ? ' since ' + _diaAsOfMover : '')), color: 'green', tab: 'changes' });
   html += '</div>';
 
+  // Top Movers — only real period-over-period movement (the mom view excludes
+  // CMS year-end re-stamps). When there is no new genuine CMS reporting period,
+  // show an honest empty-state instead of a list of <1% backfill noise. It
+  // re-populates automatically when CMS publishes a new period.
+  if (!_diaHasMovers) {
+    html += '<div class="dia-info-card" style="margin-top:10px;padding:14px 16px;cursor:default">'
+      + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:8px">Patient Volume Movers</div>'
+      + '<div style="font-size:12px;color:var(--text2);line-height:1.5">No new CMS reporting period'
+      + (_diaAsOfMover ? ' since <strong>' + _diaAsOfMover + '</strong>' : '')
+      + ' — patient volumes unchanged. CMS publishes this dataset periodically (≈annually); '
+      + 'Top Movers updates automatically when the next period is released.</div>'
+      + '</div>';
+  } else {
   // Top Movers mini-charts
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">';
   html += '<div class="dia-info-card" onclick="goToDiaTab(\'changes\')" style="cursor:pointer;padding:14px 16px">';
@@ -2077,6 +2111,7 @@ function renderDiaOverview() {
   });
   html += '</div>';
   html += '</div>';
+  } // end real-movers branch (else: honest "no new CMS period" empty-state above)
 
   // ═══════════════════════════════════════════════
   // SECTION 3: CLINIC FINANCIALS (async)
@@ -2450,6 +2485,19 @@ function renderOnMarketInner() {
   return h;
 }
 
+// Format the CMS patient-data "as of" period (e.g. "Mar 2025") from
+// diaData.patientAsOf. Parsed manually to avoid Date() timezone drift on a
+// bare YYYY-MM-DD. Returns '' when unknown.
+function _diaPatientAsOfLabel() {
+  var s = (typeof diaData !== 'undefined' && diaData) ? diaData.patientAsOf : null;
+  if (!s || typeof s !== 'string') return '';
+  var m = s.match(/^(\d{4})-(\d{2})/);
+  if (!m) return '';
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var mi = parseInt(m[2], 10) - 1;
+  return (months[mi] || '') + ' ' + m[1];
+}
+
 function renderPatientMetricsInner() {
   const ptSrc = diaPatientCounts && diaPatientCounts.length > 0 ? diaPatientCounts : null;
   if (!ptSrc) {
@@ -2475,7 +2523,7 @@ function renderPatientMetricsInner() {
   const statesSub = topStates.map(([st, cnt]) => st + ': ' + fmtN(cnt)).join(' · ');
   return '<div class="dia-grid dia-grid-4">' +
     infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avg), sub: fmtN(total) + ' annual treated · ~' + fmtN(estConcurrentAvg) + ' concurrent est.', color: 'blue', tab: 'changes' }) +
-    infoCard({ title: 'Clinics Reporting', value: fmtN(ptSrc.length), sub: 'from CMS patient counts (deduped)', color: 'green', tab: 'changes' }) +
+    infoCard({ title: 'Clinics Reporting', value: fmtN(ptSrc.length), sub: (function(){ var a=_diaPatientAsOfLabel(); return 'CMS patient counts' + (a ? ' · as of ' + a : ''); })(), color: 'green', tab: 'changes' }) +
     infoCard({ title: 'Annual Treated', value: fmtN(total), sub: '~' + fmtN(estConcurrent) + ' est. concurrent (ESRD prev.)', color: 'purple', tab: 'changes' }) +
     renderTopStatesRankedCard(topStates) +
     '</div>';

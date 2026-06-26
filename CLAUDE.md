@@ -5392,3 +5392,42 @@ active-over-time SPAN series like gov's (`cm_dialysis_inventory_backlog_m.active
 derives from the canonical point-in-time `active_listings` per the 2026-06-22 chart audit).
 Adding a dedicated dia span line (gov's eff CTE is the template) without re-diverging the
 canonical available count is a separate call.
+
+## dia Overview patient tiles — honest CMS reporting-period labeling (2026-06-25)
+
+`public.facility_patient_counts` (Dialysis_DB `zqzrriwuavgrquhisnoa`) is a CMS
+**reporting-period** time-series, NOT a nightly feed. Grounded live 2026-06-25:
+the newest GENUINE CMS reporting period is **~2025-03** (snapshot `2025-03-01`);
+the later `snapshot_date`s that end in **`12-31`** (`2025-12-31`, `2026-12-31`,
+`2024-12-31`) are annual claims-window-END **re-stamps** carrying near-identical
+data (only 63/123/164 of ~7,554 facilities differ — <2%; deltas ±135). CMS
+publishes this dataset roughly **annually**; re-running ingestion only adds rows
+when a genuinely-new `claims_date`→`snapshot_date` lands (see the Dialysis-repo
+CLAUDE.md note). So the patient tiles must NOT imply a stale nightly feed.
+
+- **`v_facility_patient_counts_mom` (rewritten, dia migration
+  `supabase/migrations/dialysis/20260625_dia_patient_counts_mom_genuine_period.sql`,
+  applied live):** compares the **two most recent GENUINE monthly periods**
+  system-wide (top-2 distinct `snapshot_date` with `to_char(...,'MM-DD')<>'12-31'`)
+  — a fixed-pair, NOT per-facility `lag` over the raw series (which picked up the
+  interleaved year-end re-stamps). Column shape is **byte-identical** (all
+  consumers unchanged: the Overview Top Movers tile, `copilot-chat`, the
+  `api/operations.js` daily briefing). Today returns **0 non-zero deltas**
+  (2025-03-01 vs 2025-02-01 are identical) — the honest "no new period" state —
+  and **auto-populates** when CMS publishes a real new period (the top-2 shift).
+  `snapshot_date` on the view = the newest genuine period = the "as of" date.
+  Reversible (re-create the prior body).
+- **`dialysis.js` (client only):** loads the as-of period from the mom view's
+  `snapshot_date` (`diaData.patientAsOf`; `_diaPatientAsOfLabel()` → e.g.
+  "Mar 2025"). The Clinical Metrics section + "Clinics Reporting" card are
+  captioned "CMS patient data as of <period> · published periodically (≈annually),
+  not nightly". The **Top Movers** tile renders an honest empty-state ("No new CMS
+  reporting period since <period> — patient volumes unchanged …") instead of
+  ranking <1% re-stamp noise; it re-populates automatically on a new period.
+- **No active ">60d stale patient" alarm existed on the Overview** (grounding
+  refined the premise): `v_source_health_dashboard.cms_patient_counts` is
+  `never_run`/Unknown and `dialysis.js` surfaced no patient "as of"/staleness
+  indicator — the fix is honest LABELING + the empty-state, not removing an alarm.
+  The clinic/listing/sales nightly freshness surfaces are untouched.
+- **Do NOT** fabricate a synthetic newer snapshot, rank `12-31` re-stamp deltas,
+  or label patient data by the nightly-ingestion timestamp.
