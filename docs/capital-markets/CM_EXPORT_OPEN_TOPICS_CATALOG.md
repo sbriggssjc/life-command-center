@@ -301,7 +301,30 @@ cron) → candidate **T9c**. (b) The **T9 sticky asking-cap quartiles only margi
 resolved. (c) **99 orphan rows** (provenance-less off-market) — CC's noted DQ follow-up.
 **(prompt: `CLAUDE_CODE_PROMPT_T9b_dia_listing_lifecycle_cleanup.md`)**
 
-### T9c — phantom-freshness on SF-recovered comps + close stale no-live-signal listings  ·  P2  ·  ▶ PROMPT WRITTEN (2026-06-26)
+### T9c — phantom-freshness on SF-recovered comps + close stale no-live-signal listings  ·  P2  ·  ✅ GATED PASS (PR #1351, 2026-06-26)
+**Verified live.** Unit 1: removed the `last_seen` stamp from `intake-promoter.js buildDiaListingRow` +
+cleared phantom `last_seen` on 335 no-genuine-capture SF rows (2 real-URL rows preserved). Unit 2: closed 135
+stale no-live-signal comps (status=withdrawn, off_market_date=LEAST(on_market+1356d p90-DOM cap, today),
+`withdrawn_inferred_stale`, flagged; 0 future-dated; 0 wrong-status); 28 recent SF comps preserved. Reversible
+(`t9c_listing_backup` 335 rows). Suite 1542 pass; 12 api files. **Grounding corrections (CC, verified):** the
+SF apply path (`lcc_apply_on_market_backfill`) was ALREADY clean — the phantom writers were the OM-harvest
+(`last_seen`) + auto-scrape `inferred_active` cron (`last_verified_at`). **Published 2026-03-31 byte-identical
+(122)** — the SF comps were never members there (fake future `listing_date`). **The real impact is the
+IMPENDING 2026-06-30 quarter: active would balloon 122→405; T9c defuses it to 272 (SF 161→28, median DOM
+1328→545d) — before Q2 publishes (4 days out).**
+**TWO RESIDUALS:**
+(a) **1 row missed** — `listing_id 8609` (`unestablished_historical`, DOM 1452>cap, still active, phantom
+last_seen uncleared): CC scoped to `sf_on_market_date`, missed the `unestablished_historical` siblings.
+Trivial sweep (same close+clear).
+(b) **→ T9d (the next domino, mildly time-sensitive):** the residual 2026-06-30 count (272 vs published ~122)
+is dominated by **110 rows (85 non-SF) carrying the fake `capture_date_fallback` `listing_date`** which
+independently passes the currency proxy (`COALESCE(last_seen,url_last_checked,last_verified_at,listing_date)`).
+Re-key the currency proxy on authoritative `on_market_date` (or park the fake listing_dates) before the Q2
+export. Also: the auto-scrape `inferred_active` cron re-stamps `last_verified_at` with no URL — same phantom
+class, worth addressing in T9d.
+**(prompt: `CLAUDE_CODE_PROMPT_T9c_phantom_freshness_stale_sf_comps.md`)**
+
+### T9c-orig — prompt-written note (superseded)
 **The other half of the zombie problem (T9b = sold half; T9c = no-sale half).** Grounded live: 337
 available_listings have `on_market_date_source='sf_on_market_date'` (T4c recovery); **ALL 337 carry a
 harvest-stamped `last_seen` (2026-05/06)** though only 1 has a URL/real check — a phantom "still-current"
