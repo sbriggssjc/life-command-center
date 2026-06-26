@@ -335,7 +335,13 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     on_market_date:           om.on_market_date,
     on_market_date_source:    om.source,
     on_market_date_confidence: om.confidence,
-    last_seen:          new Date().toISOString().slice(0, 10),
+    // T9c (2026-06-26): do NOT stamp last_seen at OM/comp promotion. last_seen is
+    // reserved for a GENUINE live sighting (availability-checker URL probe / sidebar
+    // live capture). Ingesting an OM document is not seeing the listing live, so
+    // stamping last_seen=today here minted phantom freshness on historical SF-recovered
+    // comps (no URL, never url-checked) and fooled the canonical currency gate
+    // (COALESCE(last_seen, url_last_checked, last_verified_at, listing_date) >= period_end-120d).
+    // Leave last_seen unset on promotion; the verification system owns it.
     is_active:          true,
     seller_name:        firstOf(snapshot.seller_name) || null,
     listing_url:        listingUrl,

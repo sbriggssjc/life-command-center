@@ -115,6 +115,22 @@
         <div class="greeting-date" id="greetingDate"></div>
         <div class="home-layout">
           <div class="home-main">
+            <!-- Work Your Outreach — the daily on-ramp into the outreach focus
+                 session (2026-06-26). Honest, actionable count of reachable,
+                 value-ranked prospect cadences due, landing directly in the
+                 card-at-a-time focus flow (renderOutreachFocus). Distinct from the
+                 cockpits below: this is "go knock out today's touches". -->
+            <div class="widget" id="outreachOnrampWidget">
+              <div class="widget-title">
+                Work Your Outreach
+                <div class="nba-controls">
+                  <button type="button" class="nba-refresh-btn" onclick="renderOutreachOnramp(true)" title="Refresh">↻</button>
+                </div>
+              </div>
+              <div class="nba-subhead">Your reachable, value-ranked prospect cadences — knock them out one at a time.</div>
+              <div id="outreachOnrampContent"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
+
             <!-- Top Data Gaps to Close — cross-domain data-quality gap queue, ranked
                  by property value (R25 Unit 5, 2026-06-15). This is the DATA-GAP
                  cockpit: highest-value records missing ownership/agency data. It is
