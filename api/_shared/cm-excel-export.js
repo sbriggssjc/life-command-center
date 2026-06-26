@@ -117,6 +117,31 @@ const FMT = {
 const CM_ONMARKET_RESTATEMENT_NOTE =
   ' Note (restated 2026-06-24): market-entry timing now reads each listing’s evidence-based on-market date (Salesforce / CoStar / platform), not the data-load date — so prior periods are revised as newly-recovered on-market dates land at their true month, and listings with no verifiable on-market date are excluded.';
 
+// T9d (2026-06-26, dialysis only) — the dia active-listing series was rebuilt
+// onto an AUTHORITATIVE currency basis: a listing is "available" at a period
+// only between its evidence-based on-market date and its off-market / sold exit
+// (capped at the p90 days-on-market). The prior last_seen/last_verified/
+// listing_date "currency proxy" (which had no live URL re-verification) is
+// retired, so dia active-listing counts, DOM, and asking-cap quartiles are
+// restated and listings with no verifiable on-market date are excluded.
+const CM_DIA_LISTING_CURRENCY_NOTE =
+  ' Note (dialysis, restated 2026-06-26): active-listing membership now reads each listing’s evidence-based on-market → off-market/sold span (currency proxy retired); counts, DOM and asking caps are restated and listings with no verifiable on-market date are excluded.';
+
+// dia active-listing charts whose membership/metrics come from
+// cm_dialysis_active_listings_m/_q (T9d-restated). The note is appended ONLY
+// when vertical === 'dialysis' (gov exports are unaffected).
+const CM_DIA_LISTING_CURRENCY_CHARTS = new Set([
+  'on_market_snapshot',
+  'available_by_tenant_count_donut',
+  'available_by_tenant_volume_donut',
+  'available_by_term_summary',
+  'asking_cap_quartiles_active',
+  'available_market_size_combo',
+  'dom_price_change_active',
+  'inventory_backlog',
+  'market_turnover',
+]);
+
 const CHART_FOOTER_CAPTIONS = {
   valuation_index:
     'Tracks the dialysis valuation index (line) over time vs YoY % change (bars). The index blends comparable cap-rate trends with changes in market rent and replacement cost to normalize values through cycles.',
@@ -1386,7 +1411,13 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       // Footer caption strip — pale blue full-width bar with italic
       // summary text in row 23 (between the chart image and the title).
       // Mirrors the PDF tagline boxes at the bottom of each chart page.
-      const captionText = CHART_FOOTER_CAPTIONS[chart.chart_template_id];
+      let captionText = CHART_FOOTER_CAPTIONS[chart.chart_template_id];
+      // T9d: append the dia active-listing currency restatement note (dia only).
+      if (captionText && vertical === 'dialysis'
+          && CM_DIA_LISTING_CURRENCY_CHARTS.has(chart.chart_template_id)
+          && !captionText.includes('restated 2026-06-26')) {
+        captionText += CM_DIA_LISTING_CURRENCY_NOTE;
+      }
       if (captionText) {
         const captionRow = 23;
         const lastCol = 14;  // span A:N (14 columns)
