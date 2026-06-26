@@ -210,7 +210,20 @@ Municipal = 29 (2014-2023) — but **sparse** (gaps between quarters) and Munici
 **Action:** make the chart render the sparse points (markers / gap-aware line) so they're visible, and
 investigate the Municipal post-2023 stop (real or tagging). Don't drop the series.
 
-### T7 — Gov Returns Index too smooth + extend to 1997  ·  P1  ·  ▶ PROMPT WRITTEN (2026-06-25)
+### T7 — Gov Returns Index too smooth + extend to 1997  ·  P1  ·  ✅ GATED PASS — Unit 1 (PR #1348, 2026-06-25)
+**Verified live (both DBs):** the redundant 7-mo centered MA removed from `cm_gov_returns_indexes_m` +
+`cm_dialysis_returns_indexes_m`; output now == the gated TTM blend exactly (gov 303/303 rows match raw within
+5.5e-17 epsilon, 0 real diffs; dia 256 non-null match, 0 real diffs). n≥4 gaps preserved (dia 47 NULL gaps,
+gov 0 sub-n4 months). History window unchanged (2001→2026). No window fn remains in `_m` OR `_q`. **Grounding
+correction (CC, confirmed):** the `_q` views never carried the MA (quarterly-sourced, no TTM, different column
+set: cash_return_upper/lower) — correctly left untouched (rewriting them would break the export column
+contract). Movement restored ~61% (matches the ~63/64% estimate; CC's absolute bps differ from my stddev
+figures only by metric definition — avg-abs-MoM vs stddev + NULL-gap fragmentation). Data-layer, live on next
+export (no redeploy); reversible (prior MA body in the migration header). **Unit 2 (extend to 1997) deferred
+by Scott** — separate audited change to the shared `cm_gov_market_quarterly_master_m_mat`.
+**(prompt: `CLAUDE_CODE_PROMPT_T7_returns_index_desmooth_extend.md`)**
+
+### T7-orig — prompt-written note (superseded)
 **Note:** gov 20. "Does not move like dialysis or our PDF/Excel — so much smoother, like a formula error." +
 extend to 1997.
 **Grounded live 2026-06-25 — premise corrected: NO gov-specific bug.** `cm_gov_returns_indexes_m` and
