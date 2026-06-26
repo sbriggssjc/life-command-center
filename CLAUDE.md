@@ -5431,3 +5431,86 @@ CLAUDE.md note). So the patient tiles must NOT imply a stale nightly feed.
   The clinic/listing/sales nightly freshness surfaces are untouched.
 - **Do NOT** fabricate a synthetic newer snapshot, rank `12-31` re-stamp deltas,
   or label patient data by the nightly-ingestion timestamp.
+
+## Outreach work-surface — Today on-ramp + focus-mode session (2026-06-26)
+
+The outreach PLUMBING was verified working (advance bridge 0 failures; correctly-
+categorized SF events advance 27/27; OUTREACH#1 categorization fix live). The gap
+was WORK, not mechanics: ~197 actionable cadences, ~190 overdue, but only ~9 ever
+touched — the value-ranked prospect list was sitting unworked. This round makes it
+a daily-driver surface. **Reuses R10 Unit 4 (`cadence_dashboard` action +
+`cadDraft`/`cadMarkSent`/`cadLogTouch` + the `?_route=draft` generate/record_send
+endpoints) + R34 value-ranking + the single `advanceCadence` advance owner.** No
+new api/*.js (≤12); no migration; no sending integration (mailto/copy — Scott
+sends from his mail client, "Mark sent" records the touch).
+
+### Grounding refuted two prompt premises (live LCC Opps 2026-06-26)
+- **Unit 2 recipient gap is already closed** — all 197 actionable cadences carry a
+  resolved `contact_email` (R20 Unit 3). The "~32% have no recipient" premise does
+  NOT hold for the has-contact actionable set. Kept Unit 2 only as a robustness
+  safety net (inline add-email) for the rare phone-only contact.
+- **Value premise differs** — the actionable (draftable) cadence set is mostly
+  low/no-value person contacts (top $598k, sum ~$1.35M; 0 ≥ $1M). The high-value
+  owners ($27M+) are the **contactLESS** set — the "Owners Missing a Contact"
+  worklist (UI Phase 5), NOT the cadence focus list. So the Today on-ramp shows
+  HONEST numbers (overdue count + in-reach $ of the focus set), never a fabricated
+  $27M. The two surfaces stay distinct (a contactless high-value owner is
+  acquisition work, not a draftable touch).
+
+### Unit 1 — Today on-ramp ("Work Your Outreach")
+First widget on the Home page (`index.html` `#outreachOnrampWidget`); `app.js`
+`renderOutreachOnramp()` reads the `cadence_dashboard` action (the actionable set),
+shows the HONEST count — **N due** (overdue actionable) + **$X in reach** (sum
+`rank_value`, null→0, shown only when > 0) — and a **"▶ Start working →"** button
+that navigates to the Priority Queue page and lands DIRECTLY in the focus session
+(`renderOutreachFocus`), not the generic dashboard. Wired into
+`handlePageLoad('pageHome')` + the boot paths.
+
+### Unit 3 — focus-mode session (`ops.js` `renderOutreachFocus`)
+Renders into `priorityQueueContent` (reached from the Today on-ramp OR the new
+**"▶ Focus mode"** button on the Cadence Dashboard header). One card at a time,
+highest `rank_value` first (the server already orders the dashboard):
+- The card shows WHO + WHY (value · phase · touch N · overdue · last touch).
+- **Email-next** → `cadDraft` (subject + editable body + the R20-resolved
+  recipient) → Copy / Open in mail (`mailto:`) / **Mark sent** → `cadMarkSent` →
+  `record_send` → `advanceCadence` (the single advance owner; record_send writes no
+  activity row, so no trigger double-advance) → **auto-advances to the next card**.
+- **Call/VM-next** → **Log <type>** → `cadLogTouch` → `advance_cadence` → next.
+- **Skip / snooze** → `focusSkip` → `snooze_cadence` (defers `next_touch_due` 5d,
+  records `metadata.snooze` reason — NOT a touch, never bumps engagement counters)
+  → advances WITHOUT crediting value, so a skipped card doesn't silently re-serve.
+- Session progress: `_focusProgressBar` ("worked / total · $ touched · on #k") with
+  a fill bar; the end shows a completion summary + "Reload outreach".
+- **The advance hook (`_focusActionDone`) lives in the SHARED `cadMarkSent` /
+  `cadLogTouch`** (one guarded call each), firing only when the settled card is
+  inside `#focusCardSlot` — so the plain Cadence Dashboard keeps its in-place
+  settle behavior (no auto-advance there). Single advance owner preserved.
+
+### Unit 2 — recipient resolution robustness (rarely hit today)
+`cadDraft` now threads the contact entity id (`contact_id`, fallback to the
+cadence entity). When the contact carries no email, the draft renders an inline
+**"add recipient email"** input + Save (`cadSaveEmail` → POST
+`?action=set_contact_email` → PATCH `entities.email`) instead of a dead `mailto:`;
+on save the "To:" line + the mailto link refresh. Copy is always available. Never
+fabricates an address — only stores what the operator types.
+
+### New backend actions (`api/operations.js`, no new api/*.js)
+- `POST ?action=snooze_cadence {cadence_id, days=5, reason}` →
+  `bridgeSnoozeCadence`: PATCH `touchpoint_cadence` `next_touch_due`/`metadata.snooze`
+  + refresh the queue cache (Slice-1 staleness). Reversible (clear the snooze /
+  reset `next_touch_due`); never advances a touch.
+- `POST ?action=set_contact_email {entity_id, email}` → `bridgeSetContactEmail`:
+  PATCH `entities.email` (validated). Workspace-scoped.
+
+### Verified
+`node --check` clean (operations.js, ops.js, app.js); `ls api/*.js | wc -l`=12;
+full suite **1542 pass / 0 fail / 6 skipped**. Live column gate on LCC Opps:
+`touchpoint_cadence.next_touch_due`/`metadata` + `entities.email` all present,
+nullable, correct types (the snooze PATCH mirrors `bridgeAdvanceCadence`; the email
+PATCH mirrors `bridgeUpdateEntity`). LCC-Opps only; no dia/gov writes; auth schema
+untouched. JS ships on the Railway redeploy.
+
+### Follow-up (low ROI — NOT done)
+~52 pre-2026-06-19 `note` backlog SF events (correspondence predating the
+OUTREACH#1 categorization fix) never advanced their cadences; most are admin/
+deal-execution emails, so a one-shot re-categorize+advance is marginal. Skipped.
