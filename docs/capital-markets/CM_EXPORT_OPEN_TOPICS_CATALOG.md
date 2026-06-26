@@ -301,6 +301,23 @@ cron) → candidate **T9c**. (b) The **T9 sticky asking-cap quartiles only margi
 resolved. (c) **99 orphan rows** (provenance-less off-market) — CC's noted DQ follow-up.
 **(prompt: `CLAUDE_CODE_PROMPT_T9b_dia_listing_lifecycle_cleanup.md`)**
 
+### T9c — phantom-freshness on SF-recovered comps + close stale no-live-signal listings  ·  P2  ·  ▶ PROMPT WRITTEN (2026-06-26)
+**The other half of the zombie problem (T9b = sold half; T9c = no-sale half).** Grounded live: 337
+available_listings have `on_market_date_source='sf_on_market_date'` (T4c recovery); **ALL 337 carry a
+harvest-stamped `last_seen` (2026-05/06)** though only 1 has a URL/real check — a phantom "still-current"
+signal. The canonical currency gate (`COALESCE(last_seen,url_last_checked,last_verified_at,listing_date) >=
+period_end-120d`) is fooled by it. **163** are status=active/off_market_date NULL, on-market 2017-2024 (median
+DOM ~6.4yr), no live signal; **164 carry caps → they anchor the T9 sticky asking-cap quartiles** (T9b couldn't
+reach them, no sale); 11 leak into the canonical 2026-03 count (122). **Scott chose structural fix only
+(2026-06-26)** — no SF round-trip.
+**Prompt:** `CLAUDE_CODE_PROMPT_T9c_phantom_freshness_stale_sf_comps.md`. Unit 1 stop the harvest stamping
+`last_seen`/`last_verified_at` (reserved for genuine checks) + clear the phantom on existing rows; Unit 2 close
+the 163 no-live-signal SF comps (real sale date if any, else inferred on_market+max-DOM-cap, flagged
+`withdrawn_inferred_stale`), preserve genuinely-current; Unit 3 verify quartiles unstick + canonical ~122→~111
++ DOM drops. Reversible (`t9c_*` backup), EXIT-side only, dia, ≤12 api/*.js. **Surfaced latent:** the currency
+proxy also trusts `listing_date` (can be fake 2026-06 capture_date_fallback) — optional belt-and-suspenders to
+key it on authoritative `on_market_date`, flagged for Scott not bundled.
+
 ### T9b-orig — prompt-written note (superseded)
 **From T9 Unit 3** (sticky asking quartiles; "active" DOM really ~2,019d median). **Grounded live: a status↔
 off_market_date integrity break.** `available_listings off_market_date IS NULL` by status: active 685 (295

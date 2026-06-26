@@ -1,3 +1,20 @@
+# ⛔ WITHDRAWN 2026-06-26 — PREMISE INVALID, DO NOT BUILD
+
+**Stand down.** Claude Code correctly flagged, and Cowork verified live, that the
+expired ≥0.95 `property_id` rows are high-confidence **EXCLUSIONS** (`new_value`
+IS NULL — "≥95% sure this record has NO government property to link"), NOT link
+proposals. Confirmed: 496/496 expired ≥0.95 sales rows have `new_value=NULL`.
+There is **no high-confidence property-LINK subset** anywhere (the genuine link
+proposals — sam_lease_opportunities/federal_lease_awards, ~100 pending — are all
+LOW-confidence), and an auto-resolution path already applies the matches the
+matcher is confident about (`auto_resolved`=768). So there are no
+"computed-and-discarded connections" to recover; the unlinked sales are correctly
+unlinked. The root error was reading `confidence` as confidence-in-a-link when it
+is confidence-in-the-decision (including "confidently no match"). Build cancelled.
+Original (invalid) prompt retained below for the record only.
+
+---
+
 # Claude Code (GovernmentProject) — auto-apply high-confidence property_id matches (stop discarding computed connections)
 
 ## Why (grounded live on the gov DB `scknotsqkcheojiaewwh`, 2026-06-26)
