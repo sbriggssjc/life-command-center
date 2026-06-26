@@ -282,7 +282,26 @@ last_cap_rate, 392d median DOM) → documented, axis untouched. DB live + revers
 DOM) — listing-freshness DQ, worth a look.
 **(superseded the original T9 sub-notes block below.)**
 
-### T9b — dia listing-lifecycle cleanup + fix close-on-sale (zombie-active listings)  ·  P1  ·  ▶ PROMPT WRITTEN (2026-06-25)
+### T9b — dia listing-lifecycle cleanup + fix close-on-sale (zombie-active listings)  ·  P1  ·  ✅ GATED PASS (2026-06-26)
+**Verified live (dia):** 0 rows status∈(sold/off_market/superseded) with NULL off_market_date; 0 open active
+listings on a clean market sale; backup `t9b_listing_backup_20260626` (1,291 rows) reversible. Unit 1 closed
+361 sold-property zombies (off_market_date=sale date, no fabrication); Unit 2 backfilled 473 terminal NULL
+dates (374 from a real-event ladder, 99 reclassified `orphan` — provenance-less, no date invented). Unit 3
+root-caused the close-on-sale gap (3 bugs: 12-mo sale window; trigger fired only on UPDATE OF listing/status
+cols so the verification last_verified_at re-stamp never ran the sold-check → freshness gate re-stamped
+sold-property listings active forever; guards keyed on fake `listing_date` not `on_market_date`) + a latent
+property_id cast bug — fixed + synthetic-tested. De-surge: raw open active 685→457, DOM median 1,913→1,331d.
+EXIT-side only; T4c on_market_date + gov untouched.
+**Surfaced residuals (NOT a T9b miss — separate mechanism, flagged for follow-up):**
+(a) **167 long-DOM active listings, no sale, median DOM 6.4yr, 160 "fresh-verified"** — close-on-sale can't
+touch them (no sale); the availability-checker/URL-probe still isn't a reliable on-market signal for no-sale
+listings. Needs a **withdrawal-detection / age-based off-market path** (overlaps the LCC availability-checker
+cron) → candidate **T9c**. (b) The **T9 sticky asking-cap quartiles only marginally improved** (0.0700→0.0709)
+— the quartile pool is small and ~16 of these stale-cap listings dominate it; fully unsticking needs (a)
+resolved. (c) **99 orphan rows** (provenance-less off-market) — CC's noted DQ follow-up.
+**(prompt: `CLAUDE_CODE_PROMPT_T9b_dia_listing_lifecycle_cleanup.md`)**
+
+### T9b-orig — prompt-written note (superseded)
 **From T9 Unit 3** (sticky asking quartiles; "active" DOM really ~2,019d median). **Grounded live: a status↔
 off_market_date integrity break.** `available_listings off_market_date IS NULL` by status: active 685 (295
 DOM>730d), off_market **400**, superseded **128**, sold **77**. **363 open listings are on SOLD properties**
