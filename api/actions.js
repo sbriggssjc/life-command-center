@@ -102,15 +102,17 @@ async function resolveEntityEmail(entityId) {
 //    + recent thread (preview-only). POST enqueues a deeper targeted Outlook pull. ──
 async function handleEmailRelationship(req, res, user, workspaceId) {
   const { entity_id } = req.query;
-  if (!entity_id) return res.status(400).json({ error: 'entity_id required' });
-
-  const em = await resolveEntityEmail(entity_id);
+  // Accept an explicit email (contact panel) OR resolve it from an entity_id (entity panel).
+  let em = req.query.email ? String(req.query.email).trim().toLowerCase() : null;
+  if (!em && entity_id) em = await resolveEntityEmail(entity_id);
 
   if (req.method === 'POST') {
-    if (!em) return res.status(404).json({ error: 'No email on file for this entity' });
+    const bodyEmail = (req.body && req.body.email) ? String(req.body.email).trim().toLowerCase() : null;
+    const addr = bodyEmail || em;
+    if (!addr) return res.status(404).json({ error: 'No email on file for this contact' });
     await opsQuery('POST', 'cortex_discovery_requests',
-      { addr: em, entity_id, requested_by: user.email || user.id, status: 'pending' });
-    return res.status(202).json({ queued: true, email: em });
+      { addr, entity_id: entity_id || null, requested_by: user.email || user.id, status: 'pending' });
+    return res.status(202).json({ queued: true, email: addr });
   }
 
   if (!em) return res.status(200).json({ email: null, summary: null, recent: [] });

@@ -27,6 +27,7 @@ let _cui = {
   selectedSources: [],
   selectedEngagement: null,
   selectedHistory: [],
+  selectedEmailRel: null,
   detailTab: 'overview',
   // Messaging state
   messages: [],
@@ -584,6 +585,7 @@ async function openContactDetail(id) {
     _cui.selectedContact = data.contact;
     _cui.selectedSources = data.sources;
     _cui.selectedEngagement = data.engagement;
+    _cui.selectedEmailRel = null;
     _cui.detailTab = 'overview';
 
     // Also load history in background
@@ -591,6 +593,9 @@ async function openContactDetail(id) {
       _cui.selectedHistory = h.history || [];
       if (_cui.detailTab === 'history') renderContactDetailBody();
     }).catch(e => console.warn('[Contacts] History load failed:', e.message));
+
+    // Cortex W3 — load the email relationship (by address) in background
+    if (data.contact && data.contact.email) loadContactEmailRel(data.contact.email);
 
     renderContactDetailFull();
   } catch (e) {
@@ -678,6 +683,9 @@ function buildContactOverview() {
   h += engagementStat('Last Meeting', eng?.last_meeting ? relativeDate(eng.last_meeting) : 'Never');
   h += '</div></div>';
 
+  // Cortex W3 — Email Relationship (corrected direction + recent thread + pull trigger)
+  h += buildEmailRelCard(c);
+
   // Contact info
   h += '<div class="detail-section">';
   h += '<div class="detail-section-title">Contact Info</div>';
@@ -741,6 +749,68 @@ function engagementStat(label, value, heat) {
     <div class="uc-eng-lbl">${label}</div>
   </div>`;
 }
+
+// ---- Cortex W3 — Email Relationship card (contact Overview) ----
+async function loadContactEmailRel(email) {
+  _cui.selectedEmailRel = null;
+  try {
+    const opts = { headers: {} };
+    if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) opts.headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const res = await fetch('/api/email-relationship?email=' + encodeURIComponent(email), opts);
+    if (res.ok) {
+      _cui.selectedEmailRel = await res.json();
+      if (_cui.detailTab === 'overview') renderContactDetailBody();
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+function buildEmailRelCard(c) {
+  if (!c || !c.email) return '';
+  const rel = _cui.selectedEmailRel;
+  let h = '<div class="detail-section"><div class="detail-section-title">\u{1F4E7} Email Relationship</div>';
+  if (!rel) {
+    h += '<div class="uc-empty" style="padding:10px 0">Loading email history…</div>';
+  } else {
+    const s = rel.summary || {};
+    const total = Number(s.total || 0);
+    if (total > 0) {
+      h += '<div class="detail-grid">';
+      h += engagementStat('Total', total);
+      h += engagementStat('You sent', Number(s.sent || 0));
+      h += engagementStat('Received', Number(s.received || 0));
+      h += '</div>';
+      if (s.first_at && s.last_at) h += '<div style="font-size:11px;color:var(--text2);margin-top:4px">' + esc(rel.email) + ' · ' + relativeDate(s.first_at) + ' → ' + relativeDate(s.last_at) + '</div>';
+      const recent = rel.recent || [];
+      if (recent.length) {
+        h += '<div class="uc-msg-list" style="margin-top:8px">';
+        recent.slice(0, 8).forEach(m => {
+          const out = m.dir === 'out';
+          h += '<div class="uc-msg ' + (out ? 'uc-msg-sent' : 'uc-msg-received') + '"><div class="uc-msg-body"><b>' + esc(m.subject || '(no subject)') + '</b>' + (m.preview ? '<br>' + esc(m.preview) : '') + '</div><div class="uc-msg-time">' + (out ? 'sent' : 'recv') + (m.received_at ? ' · ' + new Date(m.received_at).toLocaleDateString() : '') + '</div></div>';
+        });
+        h += '</div>';
+      }
+    } else {
+      h += '<div class="uc-empty" style="padding:10px 0">No email history pulled yet for ' + esc(rel.email) + '.</div>';
+    }
+  }
+  h += '<button id="cuiPullBtn" class="btn-cancel" style="margin-top:8px" onclick="cuiPullHistory(decodeURIComponent(\'' + encodeURIComponent(c.email) + '\'))">\u{1F50D} Pull more from Outlook</button>';
+  h += '</div>';
+  return h;
+}
+
+async function cuiPullHistory(email) {
+  const btn = document.getElementById('cuiPullBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
+  try {
+    const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
+    if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) opts.headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    opts.body = JSON.stringify({ email });
+    const res = await fetch('/api/email-relationship', opts);
+    const d = await res.json().catch(() => ({}));
+    if (btn) btn.textContent = d.queued ? '✓ Queued — pulls on next sync' : (d.error || 'Unable to queue');
+  } catch (e) { if (btn) { btn.textContent = 'Error — try again'; btn.disabled = false; } }
+}
+window.cuiPullHistory = cuiPullHistory;
 
 function detailRow(label, value) {
   return `<div class="detail-row"><div class="detail-lbl">${label}</div><div class="detail-val">${value}</div></div>`;
