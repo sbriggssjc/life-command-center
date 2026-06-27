@@ -647,6 +647,37 @@ async function assembleContactPacket(entityId: string, workspaceId: string) {
   const touchpoints = toArray(touchpointRes.data);
   const activePursuits = toArray(pursuitsRes.data);
 
+  // ── F4d W4: email relationship (join email_bodies by the contact's address) ──
+  let emailRelationship: Record<string, unknown> | null = null;
+  let contactEmail = (entity.email || "").toString().toLowerCase().trim();
+  if (!contactEmail) {
+    const ucRes = await opsQuery("GET", `unified_contacts?entity_id=eq.${pgFilterVal(entityId)}&select=email&limit=1`);
+    contactEmail = ((ucRes.data?.[0] as Record<string, unknown>)?.email || "").toString().toLowerCase().trim();
+  }
+  if (contactEmail) {
+    sourcesQueried.push("email_bodies");
+    const [erRes, recentRes] = await Promise.all([
+      opsQuery("POST", "rpc/lcc_email_relationship", { p_email: contactEmail }),
+      opsQuery("GET", `email_bodies?or=(from_email.eq.${contactEmail},to_emails.cs.{${contactEmail}})&order=received_at.desc&limit=15&select=subject,body_preview,received_at,is_sent`)
+    ]);
+    const stats = ((Array.isArray(erRes.data) ? erRes.data[0] : erRes.data) || {}) as Record<string, unknown>;
+    const recent = toArray(recentRes.data);
+    const total = Number(stats.total || 0);
+    if (total > 0 || recent.length) {
+      emailRelationship = {
+        email: contactEmail,
+        total, sent: Number(stats.sent || 0), received: Number(stats.received || 0),
+        first_contact: stats.first_at ? String(stats.first_at).split("T")[0] : null,
+        last_email: stats.last_at ? String(stats.last_at).split("T")[0] : null,
+        recent: recent.map((m: Record<string, unknown>) => ({
+          date: String(m.received_at || "").split("T")[0],
+          dir: m.is_sent ? "sent" : "received",
+          subject: m.subject, preview: m.body_preview
+        }))
+      };
+    }
+  }
+
   const touchpointCount = touchpoints.length;
   const lastTouch = (touchpoints[0] as Record<string, unknown>)?.created_at as string || null;
   const lastTouchDate = lastTouch ? lastTouch.split("T")[0] : null;
@@ -683,7 +714,8 @@ async function assembleContactPacket(entityId: string, workspaceId: string) {
     last_touch_date: lastTouchDate,
     touchpoint_count: touchpointCount,
     days_since_last_touch: daysSinceLastTouch,
-    activity_timeline: activityTimeline
+    activity_timeline: activityTimeline,
+    email_relationship: emailRelationship
   };
 
   return { payload, sourcesQueried, fieldsMissing };
