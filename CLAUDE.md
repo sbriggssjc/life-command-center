@@ -5580,3 +5580,74 @@ the outreach focus surface — the focus list's top value rises from ~$598k towa
 the $1M+ owners. The acquire-contact worklist → workable-cadence focus chain is
 now whole: contactless $1M+ owner → acquire contact → seed cadence → value-ranked
 focus card → worked.
+
+## Web-search enrichment service — the search proxy that unlocks high-value contact acquisition (2026-06-27)
+
+The owner-contact-enrich worker's web-search adapter
+(`api/_shared/web-search-enrich.js::buildWebSearchAdapter` /
+`extractPrincipalCandidates`) is the worker's **catch-all enrichment step**
+(step 5 in `owner-contact-enrich.js`, AFTER the routed sos/address/deed
+adapters). It does deterministic, **labeled-role-cue-anchored**, human-name-
+guarded (`looksLikePersonName` + `isImplausiblePersonName`) principal extraction
+over a normalized search-result list — **no LLM, no snippet name-grabbing, no
+guess-attach** (a confident labeled hit ⇒ attach a guard-checked contact; no
+confident match ⇒ the owner falls to the manual worklist). It just needed its
+deferred `search()` fetcher wired to a real provider. Because web-search is the
+catch-all, configuring it covers ALL `enrichment_action` types (sos + address +
+deed + web), unlocking the **357 ≥$1M contactless owners** (and the broader
+~3,520 tail).
+
+### The proxy — `supabase/functions/owner-contact-websearch/` (edge fn, NOT api/*.js)
+A thin free-tier search proxy (the docai-ocr / SHAREPOINT_FETCH_URL webhook
+pattern). It does NOT parse names / call an LLM — the LCC parser does that. Its
+only job is to run a web search and return `[{title,snippet,url}]`.
+- **Contract:** `webhookFetcher('OWNER_ENRICH_WEBSEARCH_URL')`
+  (`owner-contact-enrich.js`) POSTs `{ args: [query, row] }` and feeds the JSON
+  response straight into `extractPrincipalCandidates`, so the response is a
+  **BARE array** `[{title,snippet,url}]` (top ~10), NOT an object. The query is
+  already composed by the adapter (`"<owner> <state> <city> manager managing
+  member registered agent"`).
+- **`normalize.js`** (pure ESM, no Deno/Node APIs — imported by BOTH `index.ts`
+  AND the node test, no drift): `normalizeBraveResults` / `normalizeSerperResults`
+  / `normalizeProviderResults(provider, json, max)`. Brave `web.results[]`
+  (`title`/`description`→snippet/`url`) is the default; Serper `organic[]`
+  (`title`/`snippet`/`link`→url) is the alternative — provider is a small switch
+  on `WEBSEARCH_PROVIDER`. Malformed/unknown → `[]`.
+- **`index.ts`** (`Deno.serve`): `GET` = health (`{ok,ready,configured}`, no
+  spend); `POST` = read `args[0]` query → run the provider search (~8s timeout)
+  → `normalizeProviderResults` → return the array. **Resilient:** unconfigured /
+  provider error / rate-limit / empty / bad-JSON → `[]` (200), never throws into
+  the worker. **Auth:** `webhookFetcher` sends no header, so the shared secret
+  rides in the configured URL's `?key=<secret>` (checked against
+  `OWNER_ENRICH_WEBSEARCH_SECRET`); deploy `--no-verify-jwt`. No secret env ⇒
+  transitional-open + warn (docai-ocr posture). A bad key → 401 (visible
+  misconfig → adapter `search_error`).
+
+### Env / activation (post-merge, Scott + Cowork)
+Scott provisions a free **Brave Search API** key (`BRAVE_SEARCH_API_KEY`; ~2,000
+q/mo free — or Serper via `SERPER_API_KEY` + `WEBSEARCH_PROVIDER=serper`); Cowork
+deploys the edge fn (Supabase MCP, `--no-verify-jwt`) and Scott sets the function
+secret + `OWNER_ENRICH_WEBSEARCH_SECRET`, then on Railway sets
+`OWNER_ENRICH_WEBSEARCH_URL=https://<ops-ref>.supabase.co/functions/v1/owner-contact-websearch?key=<secret>`.
+Until then the adapter stays `unconfigured` (exact current behavior —
+deploy-order safe). Optional knobs: `WEBSEARCH_MAX_RESULTS` (10),
+`WEBSEARCH_TIMEOUT_MS` (8000), `WEBSEARCH_COUNTRY` (us).
+
+### Verify live (Cowork, after activation)
+Fire `lcc_cron_post('/api/owner-contact-enrich-tick?limit=25', …)`: the web step
+returns results for a real high-value owner, the parser extracts a labeled
+principal (or abstains → manual), the worker attaches a guard-passed contact, a
+value-floor owner gets a seeded cadence, and a ≥$1M owner appears in the
+work-surface focus session (top value climbing toward the $1M+ owners).
+Spot-check a couple of attached names against their source URL (no wrong-person
+attaches).
+
+### Boundaries / verified (headless 2026-06-27)
+The LCC parser/guards/confidence are DONE — the proxy is ONLY a search fetcher
+(do not rebuild/loosen them). Free-tier provider; resilient to failure;
+reversible (each attach = a person entity + relationship + pivot pointer; unset
+the env to disable). `test/owner-contact-websearch.test.mjs` (12: Brave/Serper
+field-mapping, cap, malformed→[], provider switch, never-throws, end-to-end
+proxy→parser). `node --check` clean (normalize.js); `ls api/*.js | wc -l`=12 (the
+edge fn is NOT an api/*.js); no migration; full suite **1562 pass / 0 fail / 6
+skipped**.
