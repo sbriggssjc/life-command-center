@@ -102,15 +102,17 @@ async function resolveEntityEmail(entityId) {
 //    + recent thread (preview-only). POST enqueues a deeper targeted Outlook pull. ──
 async function handleEmailRelationship(req, res, user, workspaceId) {
   const { entity_id } = req.query;
-  if (!entity_id) return res.status(400).json({ error: 'entity_id required' });
-
-  const em = await resolveEntityEmail(entity_id);
+  // Accept an explicit email (contact panel) OR resolve it from an entity_id (entity panel).
+  let em = req.query.email ? String(req.query.email).trim().toLowerCase() : null;
+  if (!em && entity_id) em = await resolveEntityEmail(entity_id);
 
   if (req.method === 'POST') {
-    if (!em) return res.status(404).json({ error: 'No email on file for this entity' });
+    const bodyEmail = (req.body && req.body.email) ? String(req.body.email).trim().toLowerCase() : null;
+    const addr = bodyEmail || em;
+    if (!addr) return res.status(404).json({ error: 'No email on file for this contact' });
     await opsQuery('POST', 'cortex_discovery_requests',
-      { addr: em, entity_id, requested_by: user.email || user.id, status: 'pending' });
-    return res.status(202).json({ queued: true, email: em });
+      { addr, entity_id: entity_id || null, requested_by: user.email || user.id, status: 'pending' });
+    return res.status(202).json({ queued: true, email: addr });
   }
 
   if (!em) return res.status(200).json({ email: null, summary: null, recent: [] });
@@ -129,6 +131,26 @@ async function handleEmailRelationship(req, res, user, workspaceId) {
   }));
 
   return res.status(200).json({ email: em, summary, recent });
+}
+
+// ── Cortex W3 — discovery queue drain endpoint for the Power Automate flow ──
+//   GET  /api/discovery-queue?limit=10  → atomically claims pending requests (→ processing),
+//                                          returns [{addr, entity_id}] for the flow to pull.
+//   POST /api/discovery-queue {addr, status} → marks that request done (or error).
+async function handleDiscoveryQueue(req, res, user, workspaceId) {
+  if (req.method === 'POST') {
+    const { addr, status } = req.body || {};
+    if (!addr) return res.status(400).json({ error: 'addr required' });
+    const final = (status === 'error') ? 'error' : 'done';
+    await opsQuery('PATCH',
+      `cortex_discovery_requests?addr=eq.${encodeURIComponent(String(addr).toLowerCase())}&status=eq.processing`,
+      { status: final, completed_at: new Date().toISOString() });
+    return res.status(200).json({ ok: true, addr, status: final });
+  }
+  // GET — claim a batch
+  const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+  const r = await opsQuery('POST', 'rpc/cortex_claim_discovery', { p_limit: limit });
+  return res.status(200).json({ requests: r.data || [] });
 }
 
 export default withErrorHandler(async function handler(req, res) {
@@ -152,6 +174,11 @@ export default withErrorHandler(async function handler(req, res) {
   // Cortex W3 — unified email relationship (summary + recent thread; POST enqueues a deeper Outlook pull)
   if (req.query._route === 'email-relationship') {
     return handleEmailRelationship(req, res, user, workspaceId);
+  }
+
+  // Cortex W3 — discovery queue drain (Power Automate: GET claims a batch, POST marks one done)
+  if (req.query._route === 'discovery-queue') {
+    return handleDiscoveryQueue(req, res, user, workspaceId);
   }
 
   // GET

@@ -149,3 +149,38 @@ export function deriveOnMarketDate(metadata = {}, opts = {}) {
   // 4. no evidence — HOLD (never the processing clock)
   return { ...HELD };
 }
+
+// ============================================================================
+// T9d (2026-06-27): recover the on-market date from the artifact's STORAGE PATH.
+//
+// OM/flyer artifacts are uploaded at intake to `lcc-om-uploads/YYYY-MM-DD/<uuid>-…`
+// where the date segment is the OM's RECEIPT date (when it was first staged) — a
+// real source-document date, NOT the listing-promotion clock. The mass-email
+// harvest stamped a fake-recent capture_date_fallback `listing_date` and HELD
+// `on_market_date` (null), but the artifact path still carries the true receipt
+// date. This is the same real evidence the T9d Unit-1 migration recovers
+// retroactively; wiring it at the ingest path keeps NEW promotions accurate so
+// the surge cannot recur (Unit 3 — the durable, forward-safe half).
+//
+// Stricter than \d{4}-\d{2}-\d{2} so an invalid date segment never yields a bad
+// date; never returns a future date (a path date after capture is rejected).
+// ============================================================================
+const ARTIFACT_PATH_DATE_RE =
+  /\/((?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))\//;
+
+/**
+ * Parse the OM-receipt date from an artifact storage path.
+ * @param {string|null|undefined} storagePath  e.g. 'lcc-om-uploads/2026-04-26/uuid-OM.pdf'
+ * @param {number} [nowMs]  capture instant in ms (injectable for tests)
+ * @returns {{on_market_date: string, source: string, confidence: string}|null}
+ *          null when the path carries no parseable date (or it is in the future)
+ */
+export function omReceiptDateFromArtifactPath(storagePath, nowMs = Date.now()) {
+  if (typeof storagePath !== 'string' || !storagePath) return null;
+  const m = ARTIFACT_PATH_DATE_RE.exec(storagePath);
+  if (!m) return null;
+  const d = m[1];
+  const capturePart = new Date(nowMs).toISOString().split('T')[0];
+  if (d > capturePart) return null; // a receipt date after the clock is not evidence
+  return { on_market_date: d, source: 'om_receipt', confidence: 'medium' };
+}

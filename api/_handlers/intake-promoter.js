@@ -42,7 +42,7 @@ import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIden
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
-import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
+import { deriveListingDate, deriveOnMarketDate, omReceiptDateFromArtifactPath } from '../_shared/listing-date.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { deriveOperatorFromTenant } from '../_shared/operator-normalize.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
@@ -210,9 +210,17 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
   // lease-math inference is real evidence (medium); else the explicit on-market
   // signal / DOM / email date; else HELD (null) so the row is excluded from the
   // added-per-month + DOM series rather than stamped into the ingest month.
-  const om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+  let om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
     ? { on_market_date: omEst.om_created_estimate, source: 'om_lease_inference', confidence: 'medium' }
     : deriveOnMarketDate(snapshot);
+  // T9d (2026-06-27): when no market-entry signal was found in the snapshot
+  // (deriveOnMarketDate HELD), recover the on-market date from the artifact's
+  // storage-path receipt date (lcc-om-uploads/YYYY-MM-DD/…) — a real
+  // source-document date, never the ingest clock. Forward-safe so the
+  // capture_date_fallback surge cannot re-form (see Unit 1 retroactive recovery).
+  if (!om.on_market_date) {
+    om = omReceiptDateFromArtifactPath(artifact?.storage_path) || om;
+  }
 
   // Round 76ej.f (2026-05-04): capture the source listing URL on the
   // available_listings row so the LCC UI has a clickable "View Listing"
@@ -286,9 +294,14 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     : deriveListingDate(snapshot);
   const listingDate = ld.listing_date;
   // T4c (2026-06-24): on_market_date provenance (see buildGovListingRow).
-  const om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+  let om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
     ? { on_market_date: omEst.om_created_estimate, source: 'om_lease_inference', confidence: 'medium' }
     : deriveOnMarketDate(snapshot);
+  // T9d (2026-06-27): recover from the artifact storage-path receipt date when
+  // HELD (see buildGovListingRow). The real OM-receipt date, never the clock.
+  if (!om.on_market_date) {
+    om = omReceiptDateFromArtifactPath(artifact?.storage_path) || om;
+  }
 
   // Bug G fix (2026-04-25): denormalize price_per_sf onto the listing row
   // so the Sales/Available table's Price/SF column populates without a
