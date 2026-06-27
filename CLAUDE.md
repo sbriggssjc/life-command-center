@@ -5361,7 +5361,12 @@ NOT `on_market_date`. So:
 - **Point-in-time available count** (dia `cm_dialysis_active_listings_m/_q` membership →
   the canonical ~119; gov `cm_gov_available_by_term_summary` / `cm_gov_available_cap_dot`,
   `off_market_date IS NULL` → ~44) keeps its **listing_date freshness gate** — do NOT
-  switch membership to `on_market_date`.
+  switch membership to `on_market_date`. **⚠️ SUPERSEDED FOR dia by T9d (2026-06-27):**
+  the dia `cm_dialysis_active_listings_m/_q` membership now keys on `on_market_date` +
+  exits + a generous DOM age-out (the freshness gate's `last_seen` was phantom-stamped and
+  the `listing_date` was a fake `capture_date_fallback` — both inflated the count). The
+  canonical dia count was deliberately RESTATED (Q1-2026 ~119/122 → ~195). The **gov**
+  freshness gate is UNCHANGED (this exception still holds for gov). See the T9d section.
 - **`on_market_date` drives** the flow/timing metrics AND the **historical active-over-time
   SPAN** (each listing active across `on_market_date → off_market_date`): gov
   `cm_gov_market_turnover_m` + `cm_gov_inventory_backlog_m` `active_count` (eff windows),
@@ -5651,3 +5656,80 @@ field-mapping, cap, malformed→[], provider switch, never-throws, end-to-end
 proxy→parser). `node --check` clean (normalize.js); `ls api/*.js | wc -l`=12 (the
 edge fn is NOT an api/*.js); no migration; full suite **1562 pass / 0 fail / 6
 skipped**.
+
+## T9d — provenance-first dia listing currency: recover dates, keep every evidenced deal (2026-06-27)
+
+Replaces the rejected exclusion-based T9d (reverted). **Doctrine (Scott, 2026-06-26):** a
+listing is an "available for sale" deal if we hold ANY real source (OM / flyer / email /
+fax / comp / CoStar-RCA capture). A live URL is NOT required (commercial has no MLS — never
+100%). So: KEEP every provenance-backed listing, recover its true on-market date from the
+document, infer exits conservatively, and window currency = **entry + exit + a generous
+age-out backstop** (NOT a live re-check — 0/323 dia listings were ever URL-checked). dia
+`zqzrriwuavgrquhisnoa`. Constructive, reversible, no fabricated dates, dia only, ≤12 api/*.js.
+
+### The recovery key (grounded live 2026-06-27)
+OM/flyer artifacts are stored at intake under `lcc-om-uploads/YYYY-MM-DD/<uuid>-…` where the
+date segment is the OM's **receipt date**. **242/242** NULL-`on_market_date` listings that
+carry an artifact have a parseable path date (their `created_at` is NULL; their `listing_date`
+is the fake `capture_date_fallback`). The path date is real evidence recoverable **entirely
+within dia** — no cross-DB lookup to LCC `staged_intake_items` needed.
+
+### Unit 1 — recover on_market_date from provenance (dia migration `20260627_dia_t9d_…`)
+- **`om_receipt`** (NEW source, confidence `medium`): fill `on_market_date` for the 242 held
+  (`unestablished`) rows from the artifact path date (T4c `sf_on_market_date` rows kept as-is;
+  genuine capture / `unestablished_historical` untouched).
+- **`date_uncertain`** (NEW source, confidence `none`): the provenance-backed-but-undated
+  remainder (270 rows — intake-artifact-type / OM-email-harvest `listing_date_source` /
+  data_source / seller / broker / raw_text) is KEPT + flagged, `on_market_date` left NULL so
+  it drops off the time axis **honestly, never deleted**. Rows with NO provenance at all
+  (270, 24 of them active) stay `unestablished` — the only excludable set.
+- `listing_date` is LEFT RAW/audit (never overwritten). Reversible: full prior mutable state
+  in `t9d_listing_omd_backup` (782 rows). Idempotent (a replay recovers 0).
+
+### Unit 2 — currency model: keep every deal, window it (membership rebuild)
+`cm_dialysis_active_listings_m`/`_q` membership is now: **`on_market_date` present + non-
+synthetic (real provenance) AND `on_market_date <= period_end` AND no exit by `period_end`
+(`off_market_date`/`sold_date`) AND `(period_end - on_market_date) <= 1356d`** (the p90 closed
+DOM — a generous lost-track AGE-OUT backstop, NOT a pruner). **RETIRED:** the
+`last_seen`/`url_last_checked`/`last_verified_at`/`listing_date` currency PROXY, the
+`listing_date` entry gate, AND the `is_active`/status TODAY-state gate (verified 0 closed-
+no-exit rows sneak in; point-in-time availability = entry + exits). **KEPT:** the synthetic
+guards (`data_source<>'synthetic_from_sale'`, `listing_date_source NOT LIKE 'sale_anchor%'`)
++ a NEW `on_market_date_source NOT LIKE 'synth%'` guard (catches the 571 `…_held` synth-dated
+rows the data_source guard misses). `days_on_market = period_end - on_market_date` is now
+honest. **This supersedes the 2026-06-24 "keep the dia freshness gate" exception (gov
+unchanged).**
+
+### Unit 3 — fix the ingest path so this stays accurate (the durable half)
+`api/_shared/listing-date.js` `omReceiptDateFromArtifactPath(storagePath)` (pure, tested);
+`intake-promoter.js` `buildDiaListingRow` + `buildGovListingRow` now, when `deriveOnMarketDate`
+HOLDs (no snapshot signal), fall back to the artifact storage-path receipt date
+(`om_receipt`/`medium`) instead of leaving it HELD — so a newly-ingested OM lands at its real
+on-market date and the `capture_date_fallback` surge cannot re-form. Never a future date.
+
+### Unit 4 — close-on-sale landmine + orphan repair
+`fn_listing_close_if_sold` hardened: anchor the sale-match window on `COALESCE(on_market_date,
+listing_date)` (was "any past sale" when `on_market_date` was NULL → could close against an
+old/unrelated pre-market-entry sale); `v_ref IS NULL ⇒ never auto-close`; bound the match
+BOTH sides (`v_ref-90d … LEAST(today, v_ref+1356+180d)`); guard a dangling txn id. Repaired
+the orphaned `property_sale_events.sales_transaction_id=5701` (NULLed; 414 such danglers total
+— surfaced for a separate sweep).
+
+### Verified live (2026-06-27)
+0 rows deleted (5080 → 5080). Recovery: 242 `om_receipt`, 270 `date_uncertain` (kept), 270
+no-provenance `unestablished`; 0 surprise auto-closes during recovery; orphan 5701 repaired;
+re-run recovers 0 (idempotent). **2026-03-31** (the published quarter): 122 → **195** distinct
+properties — a deliberate, footnoted **restatement** (Scott: 122 was "fabricated"); the
+canonical Round-74 set reconciles at 195 across `inventory_backlog_m.active_count` /
+`available_market_size_q` / `available_by_term_bucket`. **2026-06-30** (impending): the fake
+surge 273 → **230** honest (92 `om_receipt` real recent OMs + 28 sf + ~108 historical; the
+no-recoverable-date rows correctly drop off the axis but are KEPT/surfaced as `date_uncertain`).
+DOM at 2026-03-31: median 504.5d (was ~1328), p90 1052, max 1329 (≤ cap); cap median 6.48%.
+`node --check` clean (listing-date.js, intake-promoter.js); listing tests 42/42; ≤12 api/*.js.
+DB applied live + committed; JS ships on the Railway redeploy.
+
+### Reversibility / boundaries
+Reverse rows from `t9d_listing_omd_backup`; restore the prior view bodies (Round 74 / T4c) +
+the prior `fn_listing_close_if_sold` + re-set pse 5701. No domain deletions; gov pipelines +
+gov CM views untouched; auth schema untouched. The 270 `date_uncertain` + the 414 remaining
+orphan pse danglers are SURFACED for follow-up, not silently dropped.
