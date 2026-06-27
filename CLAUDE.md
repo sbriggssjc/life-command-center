@@ -5822,3 +5822,55 @@ Reverse rows from `t9d_listing_omd_backup`; restore the prior view bodies (Round
 the prior `fn_listing_close_if_sold` + re-set pse 5701. No domain deletions; gov pipelines +
 gov CM views untouched; auth schema untouched. The 270 `date_uncertain` + the 414 remaining
 orphan pse danglers are SURFACED for follow-up, not silently dropped.
+
+## ORE Phase 1 Unit C — capture deed grantee/grantor mailing addresses (2026-06-27)
+
+Owner mailing/notice addresses — the signal Scott's ownership cross-match keys on — existed for
+<1% of owners even though we parse deeds constantly: `parseDeedText` (`api/_handlers/deed-parser.js`)
+FOUND the "whose address is" / "after recording return to" addresses, then `leadingEntityName()`
+**stripped** them during party-name extraction, and `deed_records` had no address column — so
+~100% of deed-borne owner addresses were discarded. This is the address dimension that made the
+CONTACT-SELECTION cross-reference resolver's `same_address` strategy return 0.
+
+### Keep, don't strip (parser)
+A new shared `partySpanBeforeMarker()` feeds BOTH the name extractor (`leadingEntityName` →
+cleaned NAME, **byte-identical** — the R59b OCR-trim + deed-of-trust-null tests still pass) AND a
+new `extractPartyAddress()` (the "whose address is …" tail). `extractReturnToAddress()` is a
+GUARDED grantee fallback for the "after recording return to / mail tax statements to" block
+(rejects title/escrow-company blocks; stops at a secondary directive header like "Send Tax Bills
+to"). `parseAddressParts()` best-effort-splits {street,city,state,zip}; the full string is always
+kept. `parseDeedText` now sets `grantee_address`/`grantor_address` (+ `_parsed`).
+
+### Store (audit) + propagate (actionable)
+- `processDeedDocument` Step 3 writes the full strings to `deed_records.grantee_address`/
+  `.grantor_address`; the structured parts already ride `extracted_data.deed_extraction`.
+- `propagateDeedToBd` Unit C: the grantee owner is resolved once (shared with the Unit-1b
+  ownership_history append), then `writeOwnerMailingAddress` (`sidebar-pipeline.js`, wired into the
+  `document-text.js` PROD_DEPS) fills the owner mailing address **fill-blanks** + provenance
+  `source='recorded_deed'` via `shouldWriteField`: **gov** → new `recorded_owners.mailing_address`;
+  **dia** → the existing `recorded_owners.address`/`city`/`state`. Gated on the dep (absent ⇒
+  no-op, byte-identical to pre-Unit-C) AND a guard-passed grantee (`granteePassesOwnerGuards` — a
+  brokerage/federal/junk grantee never gets an owner write). Reversible; idempotent.
+
+### Migrations (additive, applied live)
+gov `government-lease/sql/20260627_gov_ore_phase1c_deed_party_addresses.sql` (deed_records
+addr cols + recorded_owners.mailing_address), dia
+`Dialysis/supabase/migrations/20260627_dia_ore_phase1c_deed_party_addresses.sql` (deed_records
+addr cols), LCC `supabase/migrations/20260627120000_lcc_ore_phase1c_deed_address_priority.sql`
+(`recorded_deed`=3 field_source_priority on gov.recorded_owners.mailing_address +
+dia.recorded_owners.address/city/state). DB-first (apply before the Railway redeploy of the
+parser); `v_field_provenance_unranked` unchanged.
+
+### Re-parse rides the deed OCR backfill
+Forward deeds capture addresses automatically. The existing corpus needs the R58
+`document-text-tick` deed drain (OCR scanned deeds → re-run the now-address-capturing parser);
+gated on `OPENAI_API_KEY`/Document AI + CoStar-CDN reach (operational, handed to Scott) — Unit C
+does NOT duplicate it.
+
+### Verified (2026-06-27)
+Dry-run (read-only) re-parsed the 11 dia deeds carrying an address marker → 5/11 grantee + 1/11
+grantor addresses, all clean + correctly parsed; caught + fixed a return-to over-capture (deed
+1797). `test/deed-parser.test.mjs` (+address capture, name-no-regression, Unit C propagation) +
+`test/owner-deed-propagation.test.mjs` (+`writeOwnerMailingAddress`). `node --check` clean; `ls
+api/*.js | wc -l`=12; full suite **1607 pass / 0 fail / 6 skipped**. JS ships on the Railway
+redeploy. Full design: `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md` (Phase 1 Unit C).

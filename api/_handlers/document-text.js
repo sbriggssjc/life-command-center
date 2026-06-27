@@ -39,7 +39,7 @@ import { processDeedDocument, propagateStoredDeedExtraction } from './deed-parse
 // testable; the worker injects the production wiring.
 import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
-import { granteePassesOwnerGuards, resolveDeedRecordedOwner } from './sidebar-pipeline.js';
+import { granteePassesOwnerGuards, resolveDeedRecordedOwner, writeOwnerMailingAddress } from './sidebar-pipeline.js';
 import { openResearchTask } from '../_shared/research-task.js';
 
 /**
@@ -300,6 +300,9 @@ const PROD_DEPS = {
   // just { domainQuery } keep the exact pre-R59 deed behavior.
   granteePassesOwnerGuards,
   resolveRecordedOwner: (domain, name) => resolveDeedRecordedOwner(domain, name, { domainQuery }),
+  // ORE Unit C — fill-blanks the grantee mailing address onto recorded_owners
+  // (uses buildDeedPropagationDeps internally: domainQuery + domainPatch + shouldWriteField).
+  writeOwnerMailingAddress: (a) => writeOwnerMailingAddress(a),
   ensureEntityLink,
   insertEntityRelationship,
   opsQuery,
