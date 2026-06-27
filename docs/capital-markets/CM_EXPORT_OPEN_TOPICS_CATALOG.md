@@ -324,7 +324,37 @@ export. Also: the auto-scrape `inferred_active` cron re-stamps `last_verified_at
 class, worth addressing in T9d.
 **(prompt: `CLAUDE_CODE_PROMPT_T9c_phantom_freshness_stale_sf_comps.md`)**
 
-### T9d — dia listing currency: provenance-first date recovery (REFRAMED 2026-06-26 — old prompt DO NOT RELAY)
+### T9d — dia listing currency: provenance-first date recovery  ·  P1  ·  ✅ GATED PASS (T9d3, PR #1359/#7329, 2026-06-27)
+**VERIFIED LIVE (T9d3 fix):** om_receipt 242→0 (0 dated-2026, surge driver gone); date_uncertain 270→512
+(+242 kept evidenced, off-axis, NO fabricated dates); total 5080→5080 (0 evidenced deals dropped); 2026-03 =
+195 split **62 confirmed / 134 assumed_active** (new `currency_basis` column + `cm_dialysis_currency_basis_m`
+— the cap inference SURFACED, not hidden; CC honestly reported the real 134, not my ~87 estimate); 2026-06-30
+surge 230→~138 (modeled; view caps at last-completed-qtr); ingest forward-safe via `source_email_date` (new
+flow) else date_uncertain, never the upload/capture date; reversible (242-row `t9d_fix` backup); suite 1589
+pass; 12 api. **Honest takeaway: ~69% of the dia "available" count is cap-inferred (134/195 no exit signal)
+— dialysis exits are rarely recorded; now visible via currency_basis.** Kept T9d2 Units 2 (entry/exit/cap)
++ 4 (close-on-sale + orphan 5701). Full arc: REVERT (restored ~122, T4c intact) → T9d2 (right model, wrong
+date source) → T9d3 (real-signal dates, date_uncertain rest, forward-safe, inference surfaced).
+**Follow-ups:** recover historical true dates (OM-PDF parse / Gmail re-harvest) → date_uncertain→dated;
+merge PR #1357/#1359 (JS ingest) on Railway redeploy.
+**Exit-signal recovery — GROUNDED, low-yield, DESCOPED (2026-06-27):** of 134 assumed_active, sales give 0
+usable exits (75 have a sale but all PRE-date the listing = re-listings); only ~25 are SF-linked (recoverable
+only if Comp__c has a sold/off-market field), ~9 have a URL (bot-blocked), 108 unestablished_historical have
+no channel. So a full exit-harvest reaches ~25/134 — not worth it; going-forward close-on-sale (T9d4 hardened)
+shrinks it automatically. Scott chose the bounded pointer cleanup instead.
+
+### T9e — repair 413 dangling property_sale_events→sales_transactions pointers + prevent recurrence  ·  P2  ·  ▶ PROMPT WRITTEN (2026-06-27)
+**Surfaced in T9d (CC fixed 1, `5701`).** `property_sale_events.sales_transaction_id` has **413** pointers to
+deleted `sales_transactions` rows (orphaned by the prior ~350-row sale cleanup that didn't null referencers) —
+the `fn_listing_close_if_sold` landmine's cousin. All carry own price (events have independent data; only the
+pointer is broken). Split: **86 uniquely re-linkable** (one sale on property within 31d), **103 ambiguous**
+(multi-candidate → price/date/name tiebreak else null+flag), **224 no-date orphans** (sale gone → null pointer,
+keep event). **Prompt:** `CLAUDE_CODE_PROMPT_T9e_property_sale_events_orphans.md`. Unit 1 re-link 86
+(price-guarded ±2%); Unit 2 tiebreak the 103; Unit 3 null the 224 (keep data); Unit 4 add FK ON DELETE SET
+NULL (forward guard); Unit 5 verify fn_listing_close_if_sold tolerates it. Reversible (`t9e_*` backup),
+idempotent, dia, ≤12 api/*.js. **Gate: 0 dangling after; no sales/listing rows altered.**
+
+### T9d-archived — REFRAMED 2026-06-26 (old exclusion prompt DO NOT RELAY)
 **⚠️ REFRAMED after Scott's correction (2026-06-26):** a listing URL/live check is NOT the only evidence of an
 available deal — an OM, flyer, email summary, fax, comp, or CoStar capture IS the evidence. The first prompt
 (`CLAUDE_CODE_PROMPT_T9d_dia_listing_currency_rearchitecture.md`) would EXCLUDE evidenced-but-URL-less listings
