@@ -342,7 +342,9 @@ has no MLS). **UPDATE 2026-06-26 — the exclusion version WAS run (do-not-relay
 REVERTED.** CC shipped the rejected exclusion approach: excluded 135 OM/flyer/email-evidenced listings,
 CLEARED on_market_date on 43 evidenced deals, collapsed active 121→75 / 272→30 (verified live). **Gate FAIL.**
 Two prompts now drive the fix (Scott approved the order):
-1. **`CLAUDE_CODE_PROMPT_T9d_REVERT.md`** (urgent) — restore the 110 cleared on_market_dates from
+1. **`CLAUDE_CODE_PROMPT_T9d_REVERT.md`** ✅ DONE + VERIFIED (PR #7328, 2026-06-27): active 2026-03 75→121,
+   110 dates restored (0 NULL), T4c intact (337 sf rows — CC reverted deltas not blind git-body, preserving
+   T4c), trigger enabled, inferred_active fix kept, PR #1354 held, backup retained. — restore the 110 cleared on_market_dates from
    `cm_dia_t9d_on_market_sweep_backup` (prior_on_market_date/source/conf), restore the pre-T9d view bodies
    from git, KEEP the `inferred_active` phantom-`last_verified_at` fix (good), HOLD PR #1354 footnote, keep
    the backup table. Back to ~122.
