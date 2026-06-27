@@ -348,7 +348,19 @@ Two prompts now drive the fix (Scott approved the order):
    `cm_dia_t9d_on_market_sweep_backup` (prior_on_market_date/source/conf), restore the pre-T9d view bodies
    from git, KEEP the `inferred_active` phantom-`last_verified_at` fix (good), HOLD PR #1354 footnote, keep
    the backup table. Back to ~122.
-2. **`CLAUDE_CODE_PROMPT_T9d2_provenance_first_currency.md`** (the real fix) — provenance-first: recover the
+3. **`CLAUDE_CODE_PROMPT_T9d3_fix_om_dates.md`** — T9d2 GATE FAIL (Unit 1): the `om_receipt` "recovery" used the
+   `lcc-om-uploads/YYYY-MM-DD/` BUCKET-UPLOAD date = the 2026 mass-import date (all 242 dated 2026-04→06; 92
+   still surge 2026-06-30 → the de-surge was illusory). True original email date is UNRECOVERABLE for the batch
+   (`staged_intake_items.source_email_date` populated for only 8/7679 = new-flow). **Fix (Scott 2026-06-27,
+   accuracy/no-fabrication):** re-classify the 242 to `date_uncertain` (NULL on_market, off-axis, kept as
+   evidenced inventory, NOT the 2026 upload date) → 2026-06-30 ~230→~138; ingest forward uses
+   `source_email_date` (new flow captures it) else date_uncertain, never the upload/capture_date_fallback date;
+   KEEP the evidence-based p90 (1356d) cap but SURFACE confirmed-vs-assumed_active (the ~87 cap-dependent at
+   2026-03 visible, not hidden). Keep T9d2 Units 2 & 4. Historical true-date recovery (OM-PDF parse / Gmail
+   re-harvest) = separate optional project. **Gate on: 0 om_receipt-dated-2026 rows; 0 evidenced deals dropped.**
+
+2. **`CLAUDE_CODE_PROMPT_T9d2_provenance_first_currency.md`** (⚠️ Unit 1 superseded by T9d3 — om_receipt date
+   source was wrong) — provenance-first: recover the
    true on-market date from each listing's intake artifact (OM/email/flyer receipt date behind
    `intake_artifact_path`, earliest evidence) — T4c analog; KEEP every evidenced deal; currency = entry +
    exit + GENEROUS age-out backstop (window each deal honestly, accurate now AND over time); **fix the INGEST
