@@ -5657,6 +5657,95 @@ proxy→parser). `node --check` clean (normalize.js); `ls api/*.js | wc -l`=12 (
 edge fn is NOT an api/*.js); no migration; full suite **1562 pass / 0 fail / 6
 skipped**.
 
+## Owner cross-reference resolver — reuse a contact from a RELATED owner (2026-06-27)
+
+The FRONT of Scott's ownership-resolution chain, done FREE on the records we
+already hold. Scott's real method for an owner's decision-maker is a public-records
+chain: County (LLC → owner + address) → State SOS (managing member / registered
+agent) → **cross-match the overlapping names/addresses against our existing
+contact/company records + naming structure** → web/people-search only LAST (for
+phone/email, once identity is known). The owner-contact-enrich worker's cross-ref
+step (step 1 of external enrichment, ahead of SOS/address/deed/web) was a no-op
+stub; this round makes it real. Web search (Brave) stays the parked last step.
+
+### The resolver (DB engine + JS adapter)
+- **`lcc_resolve_owner_cross_reference(p_entity_id uuid)`** (LCC Opps, migration
+  `20260722140000`): for a CONTACTLESS owner, returns the SINGLE best reusable
+  person from a RELATED owner, or no row. Three strategies, priority order:
+  - **`same_asset`** — a co-owner of the SAME property (`owns`-edge to a shared
+    asset entity). The LCC-grounded form of "shared records/address" (see below).
+  - **`same_parent`** — the R5/R6 `lcc_resolve_buyer_parent` parent / SPE family.
+  - **`naming_core`** — a DISTINCTIVE shared name-core (whole-token overlap):
+    multi-token core OR a distinctive single token (≥ 8 chars, not in an
+    industry/geo denylist). Picks the SOURCE owner's own designated active contact
+    (its pivot `active_contact_entity_id`) first, then a title-seniority-ranked
+    BD/principal (Starwood REIT reuses Starwood Capital Group's designated contact).
+  - Guarded in SQL (`lcc_looks_like_person` / `lcc_is_rejected_contact_name`,
+    never reuses an operator's contacts) AND the JS adapter re-applies
+    `looksLikePersonName`/`isImplausiblePersonName` (defense-in-depth). No confident
+    match ⇒ `no_sibling` → the worker flows on to SOS/web/manual, never a guess.
+  - **R7 caching:** the guards are per-row-expensive, so the reusable-contact set
+    is materialized into `lcc_reusable_owner_contacts` (cache table, ~599 rows,
+    `first_token`-indexed for the naming prefilter) refreshed by cron
+    `lcc-reusable-owner-contacts-refresh` (hourly :23). Empty cache ⇒ resolver
+    returns nothing (cache-or-live safe; a stalled cron only costs YIELD).
+- **`api/_shared/owner-cross-reference.js`** — `buildCrossRefAdapter({opsQuery})`
+  (the worker's `crossRef` dep; calls the RPC + JS guards) + `crossRefDryRun`
+  (sizing) + pure naming-policy helpers (`sharedCoreOf` / `isDistinctiveSharedCore`
+  / `namingCoreMatches` / `isReusablePersonName`, unit-tested). Wired into
+  `owner-contact-enrich.js` `buildDeps()`; an attach records
+  `via='cross_reference:<strategy>'` + the source entity for provenance.
+- **Dry-run** (`GET /api/owner-contact-enrich-tick?xref_dryrun=1[&min_value=&limit=]`
+  → `lcc_cross_reference_worklist_preview`): sizes the per-strategy yield over the
+  value-ranked contactless worklist (no writes) + a sample of (owner → reused
+  contact, source) pairs, BEFORE any real run. Bounded to the value-ranked head
+  (`same_parent`'s per-row buyer-parent resolution makes a full 3,519-row sweep
+  ~53s; the ≥$1M head [357] is ~6.5s — use min_value to bound it).
+
+### Unit 2 — extend pivot-ensure to non-bridged high-value worklist owners
+Grounded: the naming-resolvable owners (Starwood ×2, Palestra) are bridged but
+carry NO captured manager/agent signal, so they were NOT in `v_owner_active_contact`
+and `lcc_ensure_owner_pivot` was a no-op for them → the enrichment worker (and its
+cross-ref step) could never reach them. `lcc_ensure_owner_pivot` now falls back to
+a minimal `manual_research` pivot (`active_source='worklist_fallback'`) for a
+valued contactless WORKLIST owner with no signals — additive (only creates MORE
+pivots), bounded to worklist owners, reversible. (The original Unit-2 premise —
+"pull captured signals into pivots for high-value owners" — was already satisfied:
+0 of the 49 signal-bearing worklist owners lacked a pivot.)
+
+### Grounded yield (honest — small today, correct mechanism)
+Live 2026-06-27: owner entities carry NO notice/recorded address in LCC (0/3,519),
+so "shared address" is reinterpreted as same_asset (0 on the worklist — assets are
+single-owner). Only ~66 owner entities have any reusable person contact (mostly
+buyer parents, EXCLUDED from the worklist), so same_parent ≈ 0 on the worklist.
+**naming_core is the real, SAFE yield: Starwood REIT/Property Trust → Starwood
+Capital Group (Adam Kamlet); Palestra Properties → Palestra Real Estate Partners
+(Vincent Curran)** — ≥$1M = 2, full worklist = 3. The guard correctly REJECTS the
+wrong-family single-common-token matches grounding surfaced (Thomas Properties →
+Thomas Taft Jr; Healthcare Trust → Healthcare Property Advisors; Sage Hills → Sage
+Capital). The yield grows as the contact graph densifies (web-search / SF
+acquisition attach contacts to more owners) and across the broader/pivot population.
+
+### Verified live (2026-06-27, reversible / 0 residue)
+Resolver resolves the 3 owners (all naming_core; Starwood reuses Starwood Capital's
+OWN designated decision-maker). Attach round-trip: with the reused-contact edge,
+Palestra LEAVES the contactless worklist (`in_worklist_with_contact=false`);
+reverting restores it; 0 residue (edge + fallback pivot deleted). Unit-2 ensure
+creates a reachable fallback pivot for the non-signal owner.
+`test/owner-cross-reference.test.mjs` (25: naming policy keeps Starwood/Palestra,
+rejects Thomas/Healthcare/Sage; adapter hit/no_sibling/guard_rejected/no_entity/
+error; dry-run tally + guard-drop). `node --check` clean; `ls api/*.js | wc -l`=12;
+full suite **1587 pass / 0 fail / 6 skipped**. DB applied live + committed; JS
+ships on the Railway redeploy. LCC-Opps only; no dia/gov writes; auth schema
+untouched.
+
+### After deploy (Cowork verifies live)
+`GET /api/owner-contact-enrich-tick?xref_dryrun=1&min_value=0` sizes the yield;
+the worker's batch/Phase-5b run attaches the Starwood/Palestra reused contacts to
+the high-value owners, seeds a cadence (the `maybeSeedValuableCadence` wire), and
+they surface in the outreach focus session. Spot-check the reused person against
+its source owner (no wrong-family reuse). Reverse a batch via the
+`via='cross_reference:*'` relationship metadata + the `worklist_fallback` pivots.
 ## T9d — provenance-first dia listing currency: recover dates, keep every evidenced deal (2026-06-27)
 
 Replaces the rejected exclusion-based T9d (reverted). **Doctrine (Scott, 2026-06-26):** a

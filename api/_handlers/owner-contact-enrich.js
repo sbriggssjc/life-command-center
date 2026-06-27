@@ -38,6 +38,7 @@ import { buildDeedParseAdapter, isDeedAdapterConfigured } from '../_shared/deed-
 import { buildSosLookupAdapter, isSosAdapterConfigured } from '../_shared/sos-lookup.js';
 import { buildAddressReverseAdapter, isAddressAdapterConfigured } from '../_shared/address-reverse.js';
 import { buildWebSearchAdapter, isWebSearchAdapterConfigured } from '../_shared/web-search-enrich.js';
+import { buildCrossRefAdapter, crossRefDryRun } from '../_shared/owner-cross-reference.js';
 import { buildManualResearchProducer, MANUAL_RESEARCH_TYPE } from '../_shared/manual-research-worklist.js';
 
 const WALL_CLOCK_MS = 20000;
@@ -196,11 +197,15 @@ async function runExternalEnrichment(row, deps) {
   const action = row.enrichment_action;
   const tried = [];
 
-  // 1. Cross-reference — reuse a principal already resolved on a sibling owner.
+  // 1. Cross-reference — reuse a contact already established on a RELATED owner
+  // (same_asset / same_parent / naming_core). The strategy rides the attach `via`
+  // for provenance ('cross_reference:<strategy>'); the source entity is reported.
   const xref = await (deps.crossRef || defaultCrossRef)(row);
   if (xref && xref.ok && xref.person_name) {
-    const r = await attachPersonToOwner(row, normalizePersonName(xref.person_name), xref.role || 'principal', deps, 'cross_reference');
-    return { entity_id: row.entity_id, source: 'cross_reference', ...r };
+    const via = 'cross_reference:' + (xref.strategy || 'unknown');
+    const r = await attachPersonToOwner(row, normalizePersonName(xref.person_name), xref.role || 'principal', deps, via);
+    return { entity_id: row.entity_id, source: 'cross_reference', strategy: xref.strategy || null,
+      source_entity_id: xref.source_entity_id || null, source_owner_name: xref.source_owner_name || null, ...r };
   }
   tried.push({ method: 'cross_reference', reason: (xref && xref.reason) || 'no_sibling' });
 
@@ -325,10 +330,12 @@ function buildDeps() {
     sosLookup: buildSosLookupAdapter({ fetch: webhookFetcher('OWNER_ENRICH_SOS_URL') }),
     addressLookup: buildAddressReverseAdapter({ fetch: webhookFetcher('OWNER_ENRICH_ADDRESS_URL') }),
     webSearch: buildWebSearchAdapter({ search: webhookFetcher('OWNER_ENRICH_WEBSEARCH_URL') }),
-    // crossRef: the free sibling-reuse resolver. The production cross-DB sibling
-    // query (shared notice_address / property cluster / true-owner family) needs
-    // its own grounding and is the post-deploy piece; until then the chain's
-    // cross-ref step no-ops (`no_sibling`) and the row flows to the worklist.
+    // crossRef: the free sibling-reuse resolver (the FRONT of Scott's chain).
+    // Resolves a contactless owner's decision-maker by reusing a contact already
+    // established on a RELATED owner (same_asset / same_parent / naming_core),
+    // guarded + provenance-tagged. Runs over the LCC entity graph (no egress);
+    // no confident match ⇒ the row flows on to SOS/web/manual.
+    crossRef: buildCrossRefAdapter({ opsQuery }),
     manualResearch: buildManualResearchProducer(buildManualResearchDeps()),
   };
 }
@@ -363,6 +370,16 @@ export async function handleOwnerContactEnrichTick(req, res) {
   // cron AND the Phase 5b "Run lookup" CTA) still 401'd, so this worker never ran.
   const user = await authenticate(req, res);
   if (!user) return; // authenticate already sent the 401
+
+  // ---- Cross-reference dry-run: size the FREE sibling-reuse yield over the
+  // value-ranked contactless worklist BEFORE any real run (no writes). Reports
+  // per-strategy counts + a sample of (owner → reused contact, source) pairs so
+  // the yield can be eyeballed for correctness. Defaults to the ≥$1M head.
+  if (req.query.xref_dryrun) {
+    const minValue = req.query.min_value != null ? Number(req.query.min_value) : 1000000;
+    const out = await crossRefDryRun({ opsQuery }, { minValue, limit: req.query.limit });
+    return res.status(out && out.ok ? 200 : 500).json({ ok: !!(out && out.ok), xref_dryrun: true, ...out });
+  }
 
   // ---- Phase 5b: single-owner one-click run (the worklist "Run lookup" CTA) ----
   // POST &entity_id=<uuid> → ensure the owner's pivot (seed from
