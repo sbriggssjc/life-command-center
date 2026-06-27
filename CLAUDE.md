@@ -5874,3 +5874,63 @@ grantor addresses, all clean + correctly parsed; caught + fixed a return-to over
 `test/owner-deed-propagation.test.mjs` (+`writeOwnerMailingAddress`). `node --check` clean; `ls
 api/*.js | wc -l`=12; full suite **1607 pass / 0 fail / 6 skipped**. JS ships on the Railway
 redeploy. Full design: `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md` (Phase 1 Unit C).
+## T9d FIX — om_receipt was the IMPORT date, not the market-entry date (2026-06-27)
+
+The first T9d round (above) recovered `on_market_date` for 242 held dia listings
+from the artifact storage path `lcc-om-uploads/YYYY-MM-DD/…`. **That path date is
+the IMPORT date, not the OM's true email date** — for the mass-forwarded historical
+batch all 242 landed 2026-04-25 → 2026-06-23, **re-creating the very surge T9d set
+out to remove** (92 inflated the impending 2026-06-30 count). The true original
+email date is NOT recoverable: `staged_intake_items.source_email_date` is empty for
+the historical batch (populated only for the 8 new-flow items). dia
+`zqzrriwuavgrquhisnoa`. Reversible, no fabricated dates, dia only, ≤12 api/*.js.
+**Kept T9d2 Unit 2 (entry/exit/cap model) + Unit 4 (close-on-sale + pse 5701) as-is.**
+
+### Unit 1 FIX — reclassify the 242 `om_receipt` rows → `date_uncertain`
+Migration `supabase/migrations/dialysis/20260627_dia_t9d_fix_om_receipt_date_uncertain.sql`
+(applied live): NULL `on_market_date`, set `on_market_date_source='date_uncertain'`
+(confidence `none`) — KEPT as evidenced inventory (we hold the OM) but OFF the time
+axis. **Never use the upload/path/`capture_date_fallback` date as a market-entry
+date.** Reversible from `t9d_listing_omd_backup` (NEW `batch_tag='t9d_fix'`,
+change_kind `fix_om_receipt_to_date_uncertain`, 242 rows). Idempotent (a re-run
+reclassifies 0 / inserts 0).
+
+### Unit 2b — surface the cap inference (confirmed vs assumed_active)
+`cm_dialysis_active_listings_m`/`_q` gain an APPENDED `currency_basis` column (the
+entry/exit/cap membership model is UNCHANGED; only the inner CTE now carries
+`off_market_date`/`sold_date` to compute it):
+- **`confirmed`** = a recorded exit AFTER period_end (`off_market_date`/`sold_date`
+  > period_end) → positively observed on-market at period_end (entered ≤ pe, left
+  > pe). The cap is irrelevant to these.
+- **`assumed_active`** = no recorded exit → membership rests on "we never saw it
+  leave," bounded solely by the 1356d age-out cap. These are the cap-dependent
+  rows the report now makes visible.
+New summary view **`cm_dialysis_currency_basis_m`** (period_end → confirmed /
+assumed_active counts, both listing- and distinct-property-grained) so the
+cap-dependent set is a first-class, visible number, not hidden.
+
+### Unit 3 FIX — ingest is forward-safe (never the upload path / clock)
+`api/_shared/listing-date.js`: **`omReceiptDateFromArtifactPath` REMOVED** (the
+rejected path-date helper). `api/_handlers/intake-promoter.js`: `promoteListing`
+fetches `staged_intake_items.source_email_date` and threads it to
+`buildDia/GovListingRow`; the builders derive `on_market_date` from a GENUINE
+signal only — explicit on-market date / DOM / `source_email_date` (all via
+`deriveOnMarketDate`) — and HOLD as `date_uncertain` otherwise. **Never the upload
+path / `capture_date_fallback` / today**, so the surge cannot re-form.
+
+### Verified live (2026-06-27)
+`om_receipt` 242 → **0** (0 dated 2026); `date_uncertain` 270 → **512** (+242);
+total listings **5080 → 5080 (0 evidenced deals dropped)**; backup `t9d_fix` = 242
+(reversible); idempotent re-run = 0/0. **2026-03-31** (published quarter):
+**195 distinct properties** (canonical Round-74 count intact) — **61 confirmed /
+134 assumed_active** (the auditor's "~87 cap-dependent" was an estimate; the actual
+no-recorded-exit count is 134, reported honestly). **2026-06-30** (impending): the
+fake surge **230 → 138** properties — gone. `node --check` clean (intake-promoter,
+listing-date); listing tests green; full suite **1589 pass / 0 fail / 6 skipped**;
+`ls api/*.js | wc -l`=12. DB applied live + committed; JS ships on the Railway
+redeploy.
+
+### Reversibility / boundaries
+Reverse via `t9d_listing_omd_backup` (`batch_tag='t9d_fix'`) + `DROP VIEW
+cm_dialysis_currency_basis_m` + re-create the two membership views from the prior
+T9d migration. No domain deletions; gov untouched; auth schema untouched.

@@ -42,7 +42,7 @@ import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIden
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
-import { deriveListingDate, deriveOnMarketDate, omReceiptDateFromArtifactPath } from '../_shared/listing-date.js';
+import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { deriveOperatorFromTenant } from '../_shared/operator-normalize.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
@@ -171,7 +171,7 @@ async function recordOmFieldsProvenance(ctx, fieldValues, perFieldConfidence = {
 // 1. AVAILABLE_LISTINGS MAPPERS (per domain)
 // ============================================================================
 
-function buildGovListingRow(intakeId, snapshot, match, artifact) {
+function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate) {
   const state = normalizeState(snapshot.state);
   // Multi-broker OMs make these ARRAY-valued — coerce to a human-joined string
   // before any scalar string op or text-column write (Round 77f).
@@ -212,14 +212,16 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
   // added-per-month + DOM series rather than stamped into the ingest month.
   let om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
     ? { on_market_date: omEst.om_created_estimate, source: 'om_lease_inference', confidence: 'medium' }
-    : deriveOnMarketDate(snapshot);
-  // T9d (2026-06-27): when no market-entry signal was found in the snapshot
-  // (deriveOnMarketDate HELD), recover the on-market date from the artifact's
-  // storage-path receipt date (lcc-om-uploads/YYYY-MM-DD/…) — a real
-  // source-document date, never the ingest clock. Forward-safe so the
-  // capture_date_fallback surge cannot re-form (see Unit 1 retroactive recovery).
+    : deriveOnMarketDate({ ...snapshot, source_email_date: snapshot.source_email_date ?? sourceEmailDate });
+  // T9d FIX (2026-06-27): the artifact storage-path date is the IMPORT date, not
+  // the market-entry date — NEVER use it (nor the capture clock / today). The
+  // genuine signals are the explicit on-market date / DOM / the email Date the OM
+  // arrived on (staged_intake_items.source_email_date, threaded in here), all
+  // handled by deriveOnMarketDate above. When it HOLDs, the OM is still real
+  // provenance we just can't date → keep it as `date_uncertain` (off the time
+  // axis), never an upload/clock date. Forward-safe half of the surge fix.
   if (!om.on_market_date) {
-    om = omReceiptDateFromArtifactPath(artifact?.storage_path) || om;
+    om = { on_market_date: null, source: 'date_uncertain', confidence: 'none' };
   }
 
   // Round 76ej.f (2026-05-04): capture the source listing URL on the
@@ -275,7 +277,7 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
 // properties). We populate the fields the dia schema has and skip the rest.
 // Cap rate stored as decimal (0.0918) per chk_*_cap_rate_range check
 // constraints (valid range 0.005–0.30).
-function buildDiaListingRow(intakeId, snapshot, match, artifact) {
+function buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate) {
   // Extractor emits decimal (0.055) OR percent (7.75); detect, don't assume.
   const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
   // If a cap rate was present but normalized to null (implausible either way),
@@ -296,11 +298,11 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
   // T4c (2026-06-24): on_market_date provenance (see buildGovListingRow).
   let om = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
     ? { on_market_date: omEst.om_created_estimate, source: 'om_lease_inference', confidence: 'medium' }
-    : deriveOnMarketDate(snapshot);
-  // T9d (2026-06-27): recover from the artifact storage-path receipt date when
-  // HELD (see buildGovListingRow). The real OM-receipt date, never the clock.
+    : deriveOnMarketDate({ ...snapshot, source_email_date: snapshot.source_email_date ?? sourceEmailDate });
+  // T9d FIX (2026-06-27): HOLD as `date_uncertain` when no genuine signal exists
+  // (see buildGovListingRow) — never the artifact upload-path / capture clock.
   if (!om.on_market_date) {
-    om = omReceiptDateFromArtifactPath(artifact?.storage_path) || om;
+    om = { on_market_date: null, source: 'date_uncertain', confidence: 'none' };
   }
 
   // Bug G fix (2026-04-25): denormalize price_per_sf onto the listing row
@@ -382,9 +384,25 @@ async function promoteListing(domain, intakeId, snapshot, match) {
     }
   } catch { /* artifact link is nice-to-have, not critical */ }
 
+  // T9d FIX (2026-06-27): the real OM email Date is the on-market signal for the
+  // email channel — read staged_intake_items.source_email_date (captured at ingest
+  // for the new flow) and thread it to the builder's deriveOnMarketDate ladder.
+  // The artifact UPLOAD-path date is the IMPORT date, NOT a market date, and is
+  // never used. Empty source_email_date (historical batch) ⇒ the listing HOLDs as
+  // `date_uncertain` rather than re-creating the surge.
+  let sourceEmailDate = null;
+  try {
+    const itemLookup = await opsQuery('GET',
+      `staged_intake_items?intake_id=eq.${pgFilterVal(intakeId)}&select=source_email_date&limit=1`
+    );
+    if (itemLookup.ok && Array.isArray(itemLookup.data) && itemLookup.data.length) {
+      sourceEmailDate = itemLookup.data[0].source_email_date || null;
+    }
+  } catch { /* source_email_date is best-effort; HELD ⇒ date_uncertain */ }
+
   const row = isGov
-    ? buildGovListingRow(intakeId, snapshot, match, artifact)
-    : buildDiaListingRow(intakeId, snapshot, match, artifact);
+    ? buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate)
+    : buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate);
 
   if (isGov) {
     // Property-first dedup (Round 76 listing-lifecycle). The OLD logic
