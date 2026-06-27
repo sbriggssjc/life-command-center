@@ -338,8 +338,21 @@ document (intake artifact received/email date, earliest evidence) to replace the
 de-surges constructively, count stays honest; (3) kill the `inferred_active` phantom `last_verified_at`;
 (4) honest exit/age-out as a GENEROUS backstop only (lost-track deals), never pruning evidenced inventory.
 Count does NOT collapse to ~73 (that ignored OM/email evidence). Accept it's a best-effort count (commercial
-has no MLS). **A new prompt will be written along these lines after Scott confirms the counting philosophy +
-the earliest-evidence date rule.**
+has no MLS). **UPDATE 2026-06-26 — the exclusion version WAS run (do-not-relay marker insufficient) and is being
+REVERTED.** CC shipped the rejected exclusion approach: excluded 135 OM/flyer/email-evidenced listings,
+CLEARED on_market_date on 43 evidenced deals, collapsed active 121→75 / 272→30 (verified live). **Gate FAIL.**
+Two prompts now drive the fix (Scott approved the order):
+1. **`CLAUDE_CODE_PROMPT_T9d_REVERT.md`** (urgent) — restore the 110 cleared on_market_dates from
+   `cm_dia_t9d_on_market_sweep_backup` (prior_on_market_date/source/conf), restore the pre-T9d view bodies
+   from git, KEEP the `inferred_active` phantom-`last_verified_at` fix (good), HOLD PR #1354 footnote, keep
+   the backup table. Back to ~122.
+2. **`CLAUDE_CODE_PROMPT_T9d2_provenance_first_currency.md`** (the real fix) — provenance-first: recover the
+   true on-market date from each listing's intake artifact (OM/email/flyer receipt date behind
+   `intake_artifact_path`, earliest evidence) — T4c analog; KEEP every evidenced deal; currency = entry +
+   exit + GENEROUS age-out backstop (window each deal honestly, accurate now AND over time); **fix the INGEST
+   path** (`buildDiaListingRow`) to stamp on_market_date from the source-doc date not `capture_date_fallback`
+   (stays accurate going forward); fold in the `fn_listing_close_if_sold` landmine (NULL-on_market sale-match
+   collapse + orphan `sales_transaction_id=5701`). No fabrication, no URL requirement, ≤12 api/*.js, dia.
 **The root behind T9b/T9c.** The dia available/active count rests on an unreliable currency proxy
 (`COALESCE(last_seen,url_last_checked,last_verified_at,listing_date)>=period-120`) — every term compromised:
 **0 of 323 active listings EVER had a real URL check** (no live re-verification exists), `last_verified_at`
