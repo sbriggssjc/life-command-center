@@ -118,17 +118,13 @@ async function handleEmailRelationship(req, res, user, workspaceId) {
   if (!em) return res.status(200).json({ email: null, summary: null, recent: [] });
 
   const relRes = await opsQuery('POST', 'rpc/lcc_email_relationship', { p_email: em });
-  const summary = Array.isArray(relRes.data) ? relRes.data[0] : (relRes.data || null);
+  const summary = Array.isArray(relRes.data) ? (relRes.data[0] || null) : null;
 
-  const ev = encodeURIComponent(em);
-  const recRes = await opsQuery('GET',
-    `email_bodies?or=(from_email.eq.${ev},to_emails.cs.{${ev}})` +
-    `&select=subject,from_email,from_name,received_at,body_preview&order=received_at.desc&limit=12`);
-  const recent = (recRes.data || []).map(m => ({
+  const recRes = await opsQuery('POST', 'rpc/lcc_email_recent', { p_email: em, p_limit: 12 });
+  const recent = Array.isArray(recRes.data) ? recRes.data.map(m => ({
     subject: m.subject, from_name: m.from_name, received_at: m.received_at,
-    preview: m.body_preview,
-    dir: (String(m.from_email || '').toLowerCase() === em) ? 'in' : 'out'
-  }));
+    preview: m.preview, dir: m.dir
+  })) : [];
 
   return res.status(200).json({ email: em, summary, recent });
 }

@@ -805,7 +805,7 @@ async function cuiPullHistory(email) {
     const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
     if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) opts.headers['x-lcc-workspace'] = LCC_USER.workspace_id;
     opts.body = JSON.stringify({ email });
-    const res = await fetch('/api/email-relationship', opts);
+    const res = await fetch('/api/email-relationship?email=' + encodeURIComponent(email), opts);
     const d = await res.json().catch(() => ({}));
     if (btn) btn.textContent = d.queued ? '✓ Queued — pulls on next sync' : (d.error || 'Unable to queue');
   } catch (e) { if (btn) { btn.textContent = 'Error — try again'; btn.disabled = false; } }
