@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { deriveListingDate } from '../api/_handlers/sidebar-pipeline.js';
-import { deriveOnMarketDate } from '../api/_shared/listing-date.js';
+import { deriveOnMarketDate, omReceiptDateFromArtifactPath } from '../api/_shared/listing-date.js';
 
 // Fixed capture instant so assertions are deterministic: 2026-06-02T00:00:00Z
 const NOW = Date.parse('2026-06-02T00:00:00.000Z');
@@ -115,5 +115,33 @@ describe('deriveOnMarketDate — market-entry evidence, HOLD on none', () => {
     const r = deriveOnMarketDate({ days_on_market: 5000 }, { nowMs: NOW });
     assert.equal(r.on_market_date, null);
     assert.equal(r.source, 'unestablished');
+  });
+});
+
+// T9d: recover the OM-receipt date from the artifact storage path.
+describe('omReceiptDateFromArtifactPath — artifact storage-path receipt date', () => {
+  it('parses the lcc-om-uploads/<date>/ segment → om_receipt / medium', () => {
+    const r = omReceiptDateFromArtifactPath('lcc-om-uploads/2026-04-26/uuid-DaVita-OM.pdf', NOW);
+    assert.equal(r.on_market_date, '2026-04-26');
+    assert.equal(r.source, 'om_receipt');
+    assert.equal(r.confidence, 'medium');
+  });
+
+  it('returns null for a path with no date segment', () => {
+    assert.equal(omReceiptDateFromArtifactPath('lcc-om-uploads/document.pdf', NOW), null);
+  });
+
+  it('returns null for null / empty / non-string input', () => {
+    assert.equal(omReceiptDateFromArtifactPath(null, NOW), null);
+    assert.equal(omReceiptDateFromArtifactPath('', NOW), null);
+    assert.equal(omReceiptDateFromArtifactPath(undefined, NOW), null);
+  });
+
+  it('rejects a future receipt date (not evidence) → null', () => {
+    assert.equal(omReceiptDateFromArtifactPath('lcc-om-uploads/2026-12-31/uuid-OM.pdf', NOW), null);
+  });
+
+  it('rejects a structurally-invalid date segment (e.g. month 13) → null', () => {
+    assert.equal(omReceiptDateFromArtifactPath('lcc-om-uploads/2026-13-01/uuid-OM.pdf', NOW), null);
   });
 });
