@@ -10,6 +10,7 @@ import {
   granteePassesOwnerGuards,
   latestDeedGranteeFromMetadata,
   propagateDeedGranteeToOwner,
+  writeOwnerMailingAddress,
 } from '../api/_handlers/sidebar-pipeline.js';
 
 // ── A fake domain DB keyed by a tiny in-memory store ──
@@ -123,6 +124,81 @@ describe('propagateDeedGranteeToOwner', () => {
       { domain: 'government', propertyId: 5, granteeName: 'Acme Holdings LLC' }, deps);
     assert.equal(out.applied, false);
     assert.equal(out.skipped, 'already_current');
+    assert.equal(calls.patches.length, 0);
+  });
+});
+
+// ── ORE Phase 1 Unit C — owner mailing-address fill-blanks ──
+function makeOwnerDeps(curRow) {
+  const calls = { patches: [], gates: [] };
+  const deps = {
+    async domainQuery(domain, method, path) {
+      if (method === 'GET' && path.startsWith('recorded_owners?recorded_owner_id=eq.')) {
+        return { ok: true, data: curRow ? [curRow] : [] };
+      }
+      return { ok: true, data: [] };
+    },
+    async domainPatch(domain, path, data, label) { calls.patches.push({ path, data, label }); return { ok: true }; },
+    async shouldWriteField(args) { calls.gates.push(args); return { write: true, decision: 'write' }; },
+  };
+  return { deps, calls };
+}
+
+describe('writeOwnerMailingAddress (ORE Unit C)', () => {
+  it('gov: fills the blank mailing_address + records recorded_deed provenance on gov.recorded_owners', async () => {
+    const { deps, calls } = makeOwnerDeps({ mailing_address: null });
+    const out = await writeOwnerMailingAddress({
+      domain: 'government', ownerId: 'ro-1',
+      address: '17 Copperbeech Lane, Lawrence, NY 11559',
+      parsed: { state: 'NY', city: 'Lawrence', street: '17 Copperbeech Lane' },
+    }, deps);
+    assert.equal(out.applied, true);
+    assert.deepEqual(out.fields_filled, ['mailing_address']);
+    assert.equal(calls.patches[0].data.mailing_address, '17 Copperbeech Lane, Lawrence, NY 11559');
+    assert.equal(calls.gates[0].targetTable, 'gov.recorded_owners');
+    assert.equal(calls.gates[0].fieldName, 'mailing_address');
+    assert.equal(calls.gates[0].source, 'recorded_deed');
+  });
+
+  it('gov: a non-blank mailing_address is never clobbered (already_present)', async () => {
+    const { deps, calls } = makeOwnerDeps({ mailing_address: 'Existing curated addr' });
+    const out = await writeOwnerMailingAddress({ domain: 'government', ownerId: 'ro-1', address: '17 Copperbeech Lane, NY 11559' }, deps);
+    assert.equal(out.applied, false);
+    assert.equal(out.skipped, 'already_present');
+    assert.equal(calls.patches.length, 0);
+  });
+
+  it('dia: fills address/city/state from the parsed parts (fill-blanks each)', async () => {
+    const { deps, calls } = makeOwnerDeps({ address: null, city: null, state: null });
+    const out = await writeOwnerMailingAddress({
+      domain: 'dialysis', ownerId: 'ro-1',
+      address: '3662 Avalon Park East Blvd, Orlando, FL 32828',
+      parsed: { street: '3662 Avalon Park East Blvd', city: 'Orlando', state: 'FL' },
+    }, deps);
+    assert.equal(out.applied, true);
+    assert.equal(calls.patches[0].data.address, '3662 Avalon Park East Blvd');
+    assert.equal(calls.patches[0].data.city, 'Orlando');
+    assert.equal(calls.patches[0].data.state, 'FL');
+    assert.deepEqual(new Set(out.fields_filled), new Set(['address', 'city', 'state']));
+    assert.equal(calls.gates[0].targetTable, 'dia.recorded_owners');
+  });
+
+  it('dia: only blank columns are filled — an existing address is kept', async () => {
+    const { deps, calls } = makeOwnerDeps({ address: '99 Old St', city: null, state: null });
+    const out = await writeOwnerMailingAddress({
+      domain: 'dialysis', ownerId: 'ro-1', address: '3662 Ave, Orlando, FL 32828',
+      parsed: { street: '3662 Ave', city: 'Orlando', state: 'FL' },
+    }, deps);
+    assert.equal(out.applied, true);
+    assert.equal('address' in calls.patches[0].data, false, 'existing address not clobbered');
+    assert.equal(calls.patches[0].data.city, 'Orlando');
+    assert.equal(calls.patches[0].data.state, 'FL');
+  });
+
+  it('missing / too-short address → skipped, no write', async () => {
+    const { deps, calls } = makeOwnerDeps({ mailing_address: null });
+    assert.equal((await writeOwnerMailingAddress({ domain: 'government', ownerId: 'ro-1', address: '' }, deps)).skipped, 'missing_input');
+    assert.equal((await writeOwnerMailingAddress({ domain: 'government', ownerId: 'ro-1', address: 'abc' }, deps)).skipped, 'address_too_short');
     assert.equal(calls.patches.length, 0);
   });
 });

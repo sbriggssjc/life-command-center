@@ -8447,6 +8447,7 @@ function ownerNameNorm(s) {
 
 const R51_PROP_TARGET_DB    = (domain) => (domain === 'government' ? 'gov_db' : 'dia_db');
 const R51_PROP_TARGET_TABLE = (domain) => (domain === 'government' ? 'gov.properties' : 'dia.properties');
+const R51_OWNER_TARGET_TABLE = (domain) => (domain === 'government' ? 'gov.recorded_owners' : 'dia.recorded_owners');
 
 function buildDeedPropagationDeps() {
   return { domainQuery, domainPatch, shouldWriteField };
@@ -8563,6 +8564,65 @@ export async function propagateDeedGranteeToOwner(args, deps) {
     out.skipped = 'error'; out.error = err?.message || String(err);
     return out;
   }
+}
+
+// ORE Phase 1 Unit C — write the recorded deed's GRANTEE mailing address onto the
+// resolved recorded_owner (fill-blanks only, provenance source='recorded_deed').
+// The deed grantee IS the new owner; its notice / return-to address is the owner
+// mailing address Scott's ownership cross-match (Phase 2) keys on.
+//   gov: a single `mailing_address` text column (gov.recorded_owners has no
+//        address/city — a dedicated queryable column beats burying in contact_info).
+//   dia: the EXISTING `address`/`city`/`state` columns (the owner mailing address;
+//        already laddered in field_source_priority), filled from the parsed parts.
+// Never clobbers a non-blank value; records LCC field provenance per filled field
+// (best-effort, record_only). Reversible (revert by clearing the column / the
+// recorded_deed provenance row). Returns { applied, fields_filled, skipped }.
+export async function writeOwnerMailingAddress(args, deps) {
+  deps = deps || buildDeedPropagationDeps();
+  const { domain, ownerId, address, parsed = null, source = 'recorded_deed',
+          sourceRunId = null, confidence = 0.9 } = args || {};
+  const out = { domain, owner_id: ownerId, applied: false, fields_filled: [], skipped: null };
+  try {
+    if (!domain || !ownerId || !address) { out.skipped = 'missing_input'; return out; }
+    const clean = String(address).replace(/\s+/g, ' ').trim();
+    if (clean.length < 6) { out.skipped = 'address_too_short'; return out; }
+
+    const isGov = domain === 'government';
+    const selCols = isGov ? 'mailing_address' : 'address,city,state';
+    const cur = await deps.domainQuery(domain, 'GET',
+      `recorded_owners?recorded_owner_id=eq.${encodeURIComponent(ownerId)}&select=${selCols}&limit=1`);
+    if (!cur.ok || !cur.data?.length) { out.skipped = 'owner_not_found'; return out; }
+    const row = cur.data[0];
+
+    // Fill-blanks per column (never clobber a curated value).
+    const patch = {};
+    if (isGov) {
+      if (!row.mailing_address) patch.mailing_address = clean;
+    } else {
+      const street = (parsed && parsed.street) || clean;
+      if (!row.address && street) patch.address = street;
+      if (!row.city && parsed && parsed.city) patch.city = parsed.city;
+      if (!row.state && parsed && parsed.state) patch.state = parsed.state;
+    }
+    if (!Object.keys(patch).length) { out.skipped = 'already_present'; return out; }
+
+    const pr = await deps.domainPatch(domain,
+      `recorded_owners?recorded_owner_id=eq.${encodeURIComponent(ownerId)}`, patch, 'writeOwnerMailingAddress');
+    if (pr && pr.ok === false) { out.skipped = 'patch_failed'; return out; }
+
+    // Record provenance per filled field (best-effort; record_only ⇒ never blocks).
+    for (const f of Object.keys(patch)) {
+      out.fields_filled.push(f);
+      try {
+        await deps.shouldWriteField({
+          targetDb: R51_PROP_TARGET_DB(domain), targetTable: R51_OWNER_TARGET_TABLE(domain),
+          recordPk: ownerId, fieldName: f, value: patch[f], source, sourceRunId, confidence,
+        });
+      } catch (_e) { /* best-effort */ }
+    }
+    out.applied = true;
+    return out;
+  } catch (err) { out.skipped = 'error'; out.error = err?.message || String(err); return out; }
 }
 
 // Pick the latest deed grantee from captured sales/deeds (non-mortgage, newest

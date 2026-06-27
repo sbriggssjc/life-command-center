@@ -154,6 +154,21 @@ export function parseDeedText(text, opts = {}) {
               || extractFromToParty(text, 'Grantor')
               || cleanAndValidateParty(firstPatternMatch(text, legacyGrantorPatterns));
 
+  // ── Grantor / Grantee mailing addresses (ORE Phase 1 Unit C) ─────────────
+  // Deeds reliably carry the parties' notice addresses ("whose address is …")
+  // and the grantee "after recording return to / mail tax statements to" block —
+  // the OWNER MAILING ADDRESS Scott's ownership cross-match keys on. The
+  // name-extraction paths above STRIP these (leadingEntityName cuts the span at
+  // the "whose address" marker); we capture them HERE, in parallel, so the
+  // cleaned NAME is unchanged AND the address is retained. Conservative +
+  // party-paired: the reliable narrative "whose address is" per party, plus a
+  // heavily-guarded grantee return-to fallback (the new owner). A parse into
+  // {street, city, state, zip} is best-effort; the full string is always kept.
+  data.grantee_address = extractPartyAddress(text, 'Grantee') || extractReturnToAddress(text);
+  data.grantor_address = extractPartyAddress(text, 'Grantor');
+  if (data.grantee_address) data.grantee_address_parsed = parseAddressParts(data.grantee_address);
+  if (data.grantor_address) data.grantor_address_parsed = parseAddressParts(data.grantor_address);
+
   // ── APN / Parcel ID ──────────────────────────────────────────────────
   const apnPatterns = [
     /APN\s*[\/:]?\s*(?:Parcel\s+ID\s*\(s?\)\s*[:\s]*)?(\d[\d\-]+\d)/i,
@@ -465,6 +480,7 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
     granteeEntityId: null,
     ownsEdgeCreated: false,
     traceGranteeTaskSurfaced: false,
+    granteeAddressFilled: false,   // ORE Unit C
   };
 
   // Step 1: Parse
@@ -580,6 +596,11 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
       deedRow.consideration = dto.consideration;
       deedRow.county = dto.county;
       deedRow[stateCol] = deedState || null;
+      // ORE Phase 1 Unit C — keep the parsed party mailing addresses (full
+      // strings) on the deed record for audit; the structured {street,city,
+      // state,zip} breakdown rides extracted_data.deed_extraction (Step 2).
+      deedRow.grantee_address = parsed.grantee_address || null;
+      deedRow.grantor_address = parsed.grantor_address || null;
       deedRow.data_hash = dataHash;
       deedRow.raw_payload = dto.raw_payload;
 
@@ -681,7 +702,7 @@ export async function propagateStoredDeedExtraction({ domain, propertyId, docume
     crossRef: null,
     saleBuyerFilled: false, saleSellerFilled: false, ownershipEventAppended: false,
     suspectedSaleSurfaced: false, granteeEntityId: null, ownsEdgeCreated: false,
-    traceGranteeTaskSurfaced: false,
+    traceGranteeTaskSurfaced: false, granteeAddressFilled: false,
   };
   if (!parsed || propertyId == null || !parsed.grantee) return result;
   result.crossRef = await crossReferenceDeed(domain, propertyId, parsed, deps);
@@ -721,6 +742,7 @@ function stripNullsLocal(obj) {
  * Optional deps:
  *   granteePassesOwnerGuards(name)            — R51 owner guard (broker/federal/junk)
  *   resolveRecordedOwner(domain, name)        — resolve/create recorded_owner → id
+ *   writeOwnerMailingAddress(args)            — ORE Unit C: fill-blanks owner mailing addr
  *   ensureEntityLink(args)                    — mint/resolve an LCC entity (guards)
  *   insertEntityRelationship(row)             — entity_relationships POST (owns edge)
  *   opsQuery(method, path, body)              — LCC Opps query (edge dupe-guard)
@@ -768,40 +790,57 @@ async function propagateDeedToBd({ domain, propertyId, documentId, parsed, cross
     }
   }
 
-  // ── Unit 1(b): append the ownership_history event (recorded deed = transfer) ──
+  // Resolve the grantee's recorded_owner once (independent of recDate) — shared by
+  // the Unit 1(b) ownership_history append AND the Unit C mailing-address
+  // propagation. A broker/federal/junk grantee fails the guard ⇒ stays null.
   let granteeOwnerId = null;
-  if (grantee && passes && passes(grantee) && deps.resolveRecordedOwner && recDate) {
+  if (grantee && passes && passes(grantee) && deps.resolveRecordedOwner) {
     granteeOwnerId = await deps.resolveRecordedOwner(domain, grantee).catch(() => null);
-    if (granteeOwnerId) {
-      const dateCol = domain === 'government' ? 'transfer_date' : 'ownership_start';
-      const pkCol = domain === 'government' ? 'ownership_id' : 'id';
-      const dq = await q(domain, 'GET',
-        `ownership_history?property_id=eq.${propertyId}&recorded_owner_id=eq.${encodeURIComponent(granteeOwnerId)}` +
-        `&${dateCol}=eq.${recDate}&select=${pkCol}&limit=1`).catch(() => ({ ok: false }));
-      const exists = dq && dq.ok && Array.isArray(dq.data) && dq.data.length > 0;
-      if (!exists) {
-        // sale_id is uuid on gov / int on dia — only link when the matched sale's
-        // PK fits the domain's column type (never coerce a mismatched type).
-        const saleIdGov = confidentSale && UUID_RE.test(String(confidentSale.sale_id)) ? confidentSale.sale_id : null;
-        const saleIdDia = confidentSale && /^\d+$/.test(String(confidentSale.sale_id)) ? Number(confidentSale.sale_id) : null;
-        const row = domain === 'government'
-          ? stripNullsLocal({
-              property_id: propertyId, recorded_owner_id: granteeOwnerId,
-              recorded_owner_name: grantee, new_owner: grantee, prior_owner: grantor,
-              transfer_date: recDate, transfer_price: price, sale_price: price,
-              sale_id: saleIdGov, matched_sale_id: saleIdGov,
-              change_type: 'deed', data_source: 'deed_extraction', ownership_state: 'active',
-            })
-          : stripNullsLocal({
-              property_id: propertyId, recorded_owner_id: granteeOwnerId,
-              ownership_start: recDate, sold_price: price, sale_id: saleIdDia,
-              acquisition_method: 'deed', ownership_source: 'deed_extraction',
-              ownership_state: 'active', notes: `Recorded deed grantee (doc ${documentId})`,
-            });
-        const ins = await q(domain, 'POST', 'ownership_history', row, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
-        if (ins && ins.ok) result.ownershipEventAppended = true;
-      }
+  }
+
+  // ── Unit 1(b): append the ownership_history event (recorded deed = transfer) ──
+  if (granteeOwnerId && recDate) {
+    const dateCol = domain === 'government' ? 'transfer_date' : 'ownership_start';
+    const pkCol = domain === 'government' ? 'ownership_id' : 'id';
+    const dq = await q(domain, 'GET',
+      `ownership_history?property_id=eq.${propertyId}&recorded_owner_id=eq.${encodeURIComponent(granteeOwnerId)}` +
+      `&${dateCol}=eq.${recDate}&select=${pkCol}&limit=1`).catch(() => ({ ok: false }));
+    const exists = dq && dq.ok && Array.isArray(dq.data) && dq.data.length > 0;
+    if (!exists) {
+      // sale_id is uuid on gov / int on dia — only link when the matched sale's
+      // PK fits the domain's column type (never coerce a mismatched type).
+      const saleIdGov = confidentSale && UUID_RE.test(String(confidentSale.sale_id)) ? confidentSale.sale_id : null;
+      const saleIdDia = confidentSale && /^\d+$/.test(String(confidentSale.sale_id)) ? Number(confidentSale.sale_id) : null;
+      const row = domain === 'government'
+        ? stripNullsLocal({
+            property_id: propertyId, recorded_owner_id: granteeOwnerId,
+            recorded_owner_name: grantee, new_owner: grantee, prior_owner: grantor,
+            transfer_date: recDate, transfer_price: price, sale_price: price,
+            sale_id: saleIdGov, matched_sale_id: saleIdGov,
+            change_type: 'deed', data_source: 'deed_extraction', ownership_state: 'active',
+          })
+        : stripNullsLocal({
+            property_id: propertyId, recorded_owner_id: granteeOwnerId,
+            ownership_start: recDate, sold_price: price, sale_id: saleIdDia,
+            acquisition_method: 'deed', ownership_source: 'deed_extraction',
+            ownership_state: 'active', notes: `Recorded deed grantee (doc ${documentId})`,
+          });
+      const ins = await q(domain, 'POST', 'ownership_history', row, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+      if (ins && ins.ok) result.ownershipEventAppended = true;
     }
+  }
+
+  // ── ORE Phase 1 Unit C: propagate the grantee mailing address → recorded_owners
+  // (fill-blanks, provenance source='recorded_deed'). The deed grantee IS the new
+  // owner; its notice / return-to address is the owner mailing address Scott's
+  // ownership cross-match (Phase 2) keys on. Gated on the dep being present (absent
+  // ⇒ no-op, byte-identical to pre-Unit-C), and on a guard-passed grantee owner.
+  if (granteeOwnerId && parsed.grantee_address && deps.writeOwnerMailingAddress) {
+    const w = await deps.writeOwnerMailingAddress({
+      domain, ownerId: granteeOwnerId, address: parsed.grantee_address,
+      parsed: parsed.grantee_address_parsed || null, documentId,
+    }).catch(() => null);
+    if (w && w.applied) result.granteeAddressFilled = true;
   }
 
   // ── Unit 2: a transfer with consideration but NO matching sale → research task.
@@ -1034,10 +1073,29 @@ function extractLabeledParty(text, which) {
  * fallback; an implausible cleaned name falls through (no bad party emitted).
  */
 function extractNarrativeParty(text, which) {
-  if (!text) return null;
+  // 1-2. Locate the defined-term marker + the connective-anchored span that
+  //      introduces this party (shared with the address extractor below).
+  const span = partySpanBeforeMarker(text, which);
+  if (span == null) return null;
 
-  // 1. Locate the defined-term marker — parenthesized `(the "Grantor")` or the
-  //    bare quoted form `the "Grantor"` (quotes required when no parens).
+  // 3. Leading entity name = everything before the first qualifier delimiter,
+  //    then validate via the shared R59b clean+validate gate (qualifier strip +
+  //    OCR-tail trim + the plausibility / form-label / legal-desc guard).
+  return cleanAndValidateParty(span);
+}
+
+/**
+ * The connective-anchored span that introduces `which` party in the narrative
+ * recital, i.e. everything from the introducing connective up to (but not
+ * including) the `(the "Grantor")` defined-term marker. Returns null when there
+ * is no marker (e.g. a deed of trust / cover-page-only deed). Shared by the name
+ * extractor (`extractNarrativeParty` → leading entity name) AND the address
+ * extractor (`extractPartyAddress` → the "whose address is …" tail), so the two
+ * can never disagree about where a party's span is.
+ */
+function partySpanBeforeMarker(text, which) {
+  if (!text) return null;
+  // Parenthesized `(the "Grantor")` or the bare quoted form `the "Grantor"`.
   const Qc = '["\\u201C\\u201D\\u2018\\u2019\']';
   const markerRe = new RegExp(
     '\\(\\s*[Tt]he\\s+' + Q + which + Q + '\\s*\\)' +
@@ -1047,20 +1105,151 @@ function extractNarrativeParty(text, which) {
   const marker = text.match(markerRe);
   if (!marker) return null;
   const before = text.slice(0, marker.index);
-
-  // 2. The connective that introduces this party. Use the LAST one before the
-  //    marker so the recital's "by and between" is skipped. Grantor → "between".
-  //    Grantee → ", and" (the join between the two parties), falling back to a
-  //    bare " and " for the comma-less "(the "Grantor") and X (the "Grantee")".
-  const span = which === 'Grantee'
+  // The connective that introduces this party — LAST one before the marker so
+  // the recital's "by and between" is skipped. Grantor → "between"; Grantee →
+  // ", and" (the join between the two parties), falling back to a bare " and ".
+  return which === 'Grantee'
     ? (sliceAfterLast(before, /,\s*and\s+/gi) ?? sliceAfterLast(before, /\band\s+/gi))
     : sliceAfterLast(before, /\bbetween\s+/gi);
-  if (span == null) return null;
+}
 
-  // 3. Leading entity name = everything before the first qualifier delimiter,
-  //    then validate via the shared R59b clean+validate gate (qualifier strip +
-  //    OCR-tail trim + the plausibility / form-label / legal-desc guard).
-  return cleanAndValidateParty(span);
+/**
+ * ORE Phase 1 Unit C — the party's mailing/notice address from the narrative
+ * span (the tail `leadingEntityName` strips). Anchored on the same marker/span
+ * the name extractor uses, then captures everything after a "whose address is" /
+ * "having an address" marker up to the end of the span (which terminates right
+ * before the `(the "Grantor")` marker). Returns a cleaned full-string address or
+ * null. Conservative: requires the address-introducing marker — a cover-page or
+ * a deed-of-trust (no marker) yields null.
+ */
+function extractPartyAddress(text, which) {
+  const span = partySpanBeforeMarker(text, which);
+  if (span == null) return null;
+  return addressFromSpan(span);
+}
+
+/** Pull the "whose address is <ADDR>" / "having an address <ADDR>" tail. */
+function addressFromSpan(span) {
+  if (!span) return null;
+  const m = span.match(
+    /(?:whose\s+(?:(?:mailing|notice|principal)\s+)?address\s+(?:is|was|:)|having\s+an?\s+(?:(?:mailing|notice|principal)\s+)?address\s+(?:of\s+|at\s+)?)\s*:?\s*(.+)$/is
+  );
+  if (!m) return null;
+  return cleanAddress(m[1]);
+}
+
+/**
+ * ORE Phase 1 Unit C — the grantee "after recording return to" / "mail tax
+ * statements to" block (the new owner's mailing address). A GUARDED fallback for
+ * deeds without a narrative "whose address is": the block is sometimes the title/
+ * escrow company, so reject those and require the residue to look like a real
+ * mailing address. Grantee-only (return-to = the new owner).
+ */
+function extractReturnToAddress(text) {
+  if (!text) return null;
+  const m = text.match(
+    /(?:after\s+recording[\s,]+return\s+to|when\s+recorded[\s,]+(?:mail|return)\s+to|mail\s+tax\s+statements?\s+to|return\s+address|return\s+to)\s*:?\s*\n?([\s\S]{0,240}?)(?:\n\s*\n|\bAPN\b|\bGRANT\s+DEED\b|\bWARRANTY\s+DEED\b|send\s+tax|tax\s+(?:bill|statement)|prepared\s+by|\bgrantee\b|\bgrantor\b|\bparcel\b|property\s+address|$)/i
+  );
+  if (!m) return null;
+  const lines = m[1].replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  // Title/escrow contamination guard — the mail-to block is the new owner's
+  // address, but on many deeds it is the title company. Reject those.
+  const blockLc = lines.join(' ').toLowerCase();
+  if (/\b(title|escrow|recording\s+requested|national|fidelity|stewart|chicago\s+title|first\s+american|attorney|law\s+(?:office|firm)|trustee\b)/.test(blockLc)) return null;
+  // Drop a leading NAME line (no digit) — keep from the first line with a number.
+  const start = lines.findIndex((l) => /\d/.test(l));
+  if (start < 0) return null;
+  const addr = cleanAddress(lines.slice(start).join(', '));
+  if (!addr || !looksLikeMailingAddress(addr)) return null;
+  return addr;
+}
+
+/** A mailing address carries a street number AND (a state OR a ZIP), or a ZIP. */
+function looksLikeMailingAddress(s) {
+  if (!s) return false;
+  const hasZip = /\b\d{5}(?:-\d{4})?\b/.test(s);
+  const hasState = /(?:^|[,\s])([A-Z]{2})(?:[,\s.]|$)/.test(s);
+  const hasStreetNum = /\b\d{1,6}\s+[A-Za-z]/.test(s);
+  return (hasStreetNum && (hasZip || hasState)) || hasZip;
+}
+
+/**
+ * Clean a captured address string: collapse whitespace/newlines, drop a trailing
+ * defined-term marker the span may have included, require a digit (a real mailing
+ * address has a street number / ZIP), cap length. Returns null when it doesn't
+ * look like an address.
+ */
+function cleanAddress(raw) {
+  if (!raw) return null;
+  let s = String(raw).replace(/\r?\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  // Drop a trailing "(the "Grantor")" / "the "Grantee"" the span may include.
+  s = s.replace(/\s*\(?\s*the\s+["“”‘’']?\s*grant(?:or|ee).*$/i, '');
+  // Cut at a secondary directive header that bled into the capture (e.g. an OCR
+  // "… 37203 Send Tax Bills to: PennOne Financial, LLC 1374 …" run-on).
+  s = s.replace(/\s+(?:send\s+tax|tax\s+(?:bill|statement)|prepared\s+by|grantee\b|grantor\b|property\s+address|parcel\b).*$/i, '');
+  // Strip a trailing lone page-number / short-number artifact ("…19454, 2").
+  s = s.replace(/,\s*\d{1,3}\s*$/, '');
+  s = s.replace(/[,;\s]+$/, '').trim();
+  if (s.length < 6) return null;       // too short to be a mailing address
+  if (!/\d/.test(s)) return null;      // must carry a street number / ZIP
+  if (s.length > 160) s = s.slice(0, 160).replace(/[,;\s]+$/, '').trim();
+  return s || null;
+}
+
+const US_STATE_ABBR = new Set([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS',
+  'KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY',
+  'NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV',
+  'WI','WY','DC',
+]);
+const US_STATE_NAME = {
+  alabama:'AL', alaska:'AK', arizona:'AZ', arkansas:'AR', california:'CA',
+  colorado:'CO', connecticut:'CT', delaware:'DE', florida:'FL', georgia:'GA',
+  hawaii:'HI', idaho:'ID', illinois:'IL', indiana:'IN', iowa:'IA', kansas:'KS',
+  kentucky:'KY', louisiana:'LA', maine:'ME', maryland:'MD', massachusetts:'MA',
+  michigan:'MI', minnesota:'MN', mississippi:'MS', missouri:'MO', montana:'MT',
+  nebraska:'NE', nevada:'NV', 'new hampshire':'NH', 'new jersey':'NJ',
+  'new mexico':'NM', 'new york':'NY', 'north carolina':'NC', 'north dakota':'ND',
+  ohio:'OH', oklahoma:'OK', oregon:'OR', pennsylvania:'PA', 'rhode island':'RI',
+  'south carolina':'SC', 'south dakota':'SD', tennessee:'TN', texas:'TX',
+  utah:'UT', vermont:'VT', virginia:'VA', washington:'WA', 'west virginia':'WV',
+  wisconsin:'WI', wyoming:'WY', 'district of columbia':'DC',
+};
+
+/**
+ * Best-effort parse of a US mailing address into {street, city, state, zip}.
+ * Trailing ZIP, then a trailing state (full name → 2-letter), then the last
+ * comma-delimited token is the city, the rest the street. The FULL string is
+ * always stored on deed_records regardless — this is only the structured
+ * breakdown that rides extracted_data + the dia owner address/city/state fields.
+ */
+function parseAddressParts(addr) {
+  if (!addr) return null;
+  const out = {};
+  let s = String(addr).replace(/\s+/g, ' ').trim();
+  const zipM = s.match(/\b(\d{5})(?:-\d{4})?\s*$/);
+  if (zipM) { out.zip = zipM[1]; s = s.slice(0, zipM.index).replace(/[,\s]+$/, '').trim(); }
+  // State: full name first (covers "New York"), then 2-letter.
+  const fullM = s.match(/,?\s*([A-Za-z][A-Za-z ]+?)\s*$/);
+  if (fullM && US_STATE_NAME[fullM[1].trim().toLowerCase()]) {
+    out.state = US_STATE_NAME[fullM[1].trim().toLowerCase()];
+    s = s.slice(0, fullM.index).replace(/[,\s]+$/, '').trim();
+  } else {
+    const abM = s.match(/,?\s*([A-Za-z]{2})\s*$/);
+    if (abM && US_STATE_ABBR.has(abM[1].toUpperCase())) {
+      out.state = abM[1].toUpperCase();
+      s = s.slice(0, abM.index).replace(/[,\s]+$/, '').trim();
+    }
+  }
+  const parts = s.split(',').map((x) => x.trim()).filter(Boolean);
+  if (out.state && parts.length >= 2) {
+    out.city = parts[parts.length - 1];
+    out.street = parts.slice(0, -1).join(', ');
+  } else {
+    out.street = parts.join(', ');
+  }
+  return out;
 }
 
 /** Text after the LAST match of a global `re` in `s`, or null when none match. */
