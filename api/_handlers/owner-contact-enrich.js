@@ -355,8 +355,14 @@ function buildManualResearchDeps() {
 }
 
 export async function handleOwnerContactEnrichTick(req, res) {
-  const auth = await authenticate(req);
-  if (!auth.ok) return res.status(auth.status || 401).json({ error: auth.error || 'unauthorized' });
+  // Same auth contract as the sibling worker sub-routes (document-text-tick,
+  // lease-backfill, contact-acquisition, developer-chain-resolve, …):
+  // authenticate(req, res) returns the user object or null AFTER sending its own
+  // 401. It does NOT return an {ok,status} shape — the prior `auth.ok` check read
+  // a property the user object never carries, so a valid X-LCC-Key (the daily
+  // cron AND the Phase 5b "Run lookup" CTA) still 401'd, so this worker never ran.
+  const user = await authenticate(req, res);
+  if (!user) return; // authenticate already sent the 401
 
   // ---- Phase 5b: single-owner one-click run (the worklist "Run lookup" CTA) ----
   // POST &entity_id=<uuid> → ensure the owner's pivot (seed from
