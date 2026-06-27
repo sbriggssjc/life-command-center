@@ -188,6 +188,7 @@ app.all('/api/data-query', (req, res) => { req.query._route = 'edge-data'; admin
 
 // actions rewrites
 app.all('/api/activities', (req, res) => { req.query._route = 'activities'; actionsHandler(req, res); });
+app.all('/api/email-relationship', (req, res) => { req.query._route = 'email-relationship'; actionsHandler(req, res); });
 
 // admin sub-route rewrites
 app.all('/api/workspaces', (req, res) => { req.query._route = 'workspaces'; adminHandler(req, res); });

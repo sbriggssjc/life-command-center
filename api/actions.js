@@ -87,6 +87,50 @@ async function handleActivities(req, res, user, workspaceId) {
   return res.status(405).json({ error: `Method ${req.method} not allowed. Activities are append-only.` });
 }
 
+// ── Cortex W3 — resolve an entity's email (entity first, fall back to its linked contact) ──
+async function resolveEntityEmail(entityId) {
+  const e = await opsQuery('GET', `entities?id=eq.${pgFilterVal(entityId)}&select=email&limit=1`);
+  let em = e.data?.[0]?.email;
+  if (!em) {
+    const u = await opsQuery('GET', `unified_contacts?entity_id=eq.${pgFilterVal(entityId)}&select=email&limit=1`);
+    em = u.data?.[0]?.email;
+  }
+  return em ? String(em).trim().toLowerCase() : null;
+}
+
+// ── Cortex W3 — email relationship: corrected summary (direction via owner identities)
+//    + recent thread (preview-only). POST enqueues a deeper targeted Outlook pull. ──
+async function handleEmailRelationship(req, res, user, workspaceId) {
+  const { entity_id } = req.query;
+  if (!entity_id) return res.status(400).json({ error: 'entity_id required' });
+
+  const em = await resolveEntityEmail(entity_id);
+
+  if (req.method === 'POST') {
+    if (!em) return res.status(404).json({ error: 'No email on file for this entity' });
+    await opsQuery('POST', 'cortex_discovery_requests',
+      { addr: em, entity_id, requested_by: user.email || user.id, status: 'pending' });
+    return res.status(202).json({ queued: true, email: em });
+  }
+
+  if (!em) return res.status(200).json({ email: null, summary: null, recent: [] });
+
+  const relRes = await opsQuery('POST', 'rpc/lcc_email_relationship', { p_email: em });
+  const summary = Array.isArray(relRes.data) ? relRes.data[0] : (relRes.data || null);
+
+  const ev = encodeURIComponent(em);
+  const recRes = await opsQuery('GET',
+    `email_bodies?or=(from_email.eq.${ev},to_emails.cs.{${ev}})` +
+    `&select=subject,from_email,from_name,received_at,body_preview&order=received_at.desc&limit=12`);
+  const recent = (recRes.data || []).map(m => ({
+    subject: m.subject, from_name: m.from_name, received_at: m.received_at,
+    preview: m.body_preview,
+    dir: (String(m.from_email || '').toLowerCase() === em) ? 'in' : 'out'
+  }));
+
+  return res.status(200).json({ email: em, summary, recent });
+}
+
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
@@ -103,6 +147,11 @@ export default withErrorHandler(async function handler(req, res) {
   // Route to activities sub-handler if requested
   if (req.query._route === 'activities') {
     return handleActivities(req, res, user, workspaceId);
+  }
+
+  // Cortex W3 — unified email relationship (summary + recent thread; POST enqueues a deeper Outlook pull)
+  if (req.query._route === 'email-relationship') {
+    return handleEmailRelationship(req, res, user, workspaceId);
   }
 
   // GET

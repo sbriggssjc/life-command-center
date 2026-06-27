@@ -12380,17 +12380,18 @@ async function openEntityDetail(entityId, initialTab) {
 
     // UI Phase 4B — authoritative portfolio (BD spine), activities, and the
     // entity-level priority band (the Next-Step truth). All best-effort.
-    const [portfolioData, activities, band] = await Promise.all([
+    const [portfolioData, activities, band, emailRel] = await Promise.all([
       _entityApiFetch('/api/entities?action=portfolio&id=' + encodeURIComponent(entityId)).catch(() => null),
       _entityApiFetch('/api/activities?entity_id=' + encodeURIComponent(entityId) + '&order=occurred_at.desc&limit=20')
         .then(d => d?.activities || []).catch(() => []),
-      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null)
+      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null),
+      _entityApiFetch('/api/email-relationship?entity_id=' + encodeURIComponent(entityId)).catch(() => null)
     ]);
 
     const portfolio = (portfolioData && Array.isArray(portfolioData.properties)) ? portfolioData.properties : [];
     const rollup = (portfolioData && portfolioData.rollup) || null;
 
-    _entityDetailCache = { entity, entityId, contacts, portfolio, rollup, activities, band, type: 'entity' };
+    _entityDetailCache = { entity, entityId, contacts, portfolio, rollup, activities, band, emailRel, type: 'entity' };
 
     // Render header
     const typeBadge = (entity.entity_type || 'org').toUpperCase();
@@ -12704,12 +12705,22 @@ function _entityFmtMoney(n) {
 
 // ── Entity Activity Tab ──
 function _entityTabActivity() {
-  const activities = _entityDetailCache?.activities || [];
-  if (!activities.length) return '<div class="detail-empty">No activity history for this entity.</div>';
+  const cache = _entityDetailCache || {};
+  const activities = cache.activities || [];
+  const entityId = cache.entityId || (cache.entity && cache.entity.id) || '';
+
+  // Cortex W3 \u2014 unified relationship: email summary + recent thread sits ABOVE the
+  // structured activity_events timeline (which carries calls/SF/meetings/etc.).
+  let html = _renderEmailRelationshipCard(cache.emailRel, entityId);
+
+  if (!activities.length) {
+    html += '<div class="detail-empty">No structured activity events yet.</div>';
+    return html;
+  }
 
   const catIcon = { call: '\u{1F4DE}', email: '\u{1F4E7}', meeting: '\u{1F4C5}', note: '\u{1F4DD}', status_change: '\u{1F504}', assignment: '\u{1F464}', sync: '\u{1F500}', research: '\u{1F50D}', system: '\u{2699}\uFE0F' };
 
-  let html = '<div class="detail-section"><div class="detail-section-title">Activity Timeline (' + activities.length + ')</div>';
+  html += '<div class="detail-section"><div class="detail-section-title">Activity Timeline (' + activities.length + ')</div>';
   html += '<div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">';
 
   for (const a of activities) {
@@ -12736,6 +12747,64 @@ function _entityTabActivity() {
   html += '</div></div>';
   return html;
 }
+
+// ── Cortex W3 — Email Relationship card (corrected direction + recent thread) ──
+function _renderEmailRelationshipCard(rel, entityId) {
+  if (!rel || !rel.email) return '';  // no email on file → nothing to show
+  const s = rel.summary || {};
+  const total = Number(s.total || 0);
+  const sent = Number(s.sent || 0);
+  const received = Number(s.received || 0);
+  const span = (s.first_at && s.last_at)
+    ? _fmtDate(s.first_at) + ' → ' + _fmtDate(s.last_at) : '';
+
+  let html = '<div class="detail-section"><div class="detail-section-title">\u{1F4E7} Email Relationship</div>';
+
+  if (total > 0) {
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:8px 0">';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--accent)">' + total + '</div><div class="t-meta3">Total</div></div>';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--green)">' + sent + '</div><div class="t-meta3">You sent</div></div>';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--purple)">' + received + '</div><div class="t-meta3">Received</div></div>';
+    html += '</div>';
+    if (span) html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">' + esc(rel.email) + ' · ' + esc(span) + '</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--text2);margin:6px 0">No email history pulled yet for ' + esc(rel.email) + '.</div>';
+  }
+
+  html += '<button id="cortexPullBtn" onclick="_cortexPullHistory(\'' + esc(entityId) + '\')" style="font-size:11px;padding:6px 12px;border-radius:8px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;font-weight:600">\u{1F50D} Pull more from Outlook</button>';
+
+  const recent = rel.recent || [];
+  if (recent.length) {
+    html += '<div style="display:flex;flex-direction:column;gap:1px;margin-top:10px">';
+    for (const m of recent) {
+      const out = m.dir === 'out';
+      const arrow = out ? '<span style="color:var(--green)">↗ sent</span>' : '<span style="color:var(--purple)">↙ recv</span>';
+      html += '<div style="padding:8px 10px;border-left:3px solid ' + (out ? 'var(--green)' : 'var(--purple)') + ';margin-left:6px">';
+      html += '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-weight:600;font-size:12px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(m.subject || '(no subject)') + '</div><div style="font-size:10px;color:var(--text3);white-space:nowrap">' + esc(_fmtDate(m.received_at)) + '</div></div>';
+      html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + arrow + (m.from_name ? ' · ' + esc(m.from_name) : '') + '</div>';
+      if (m.preview) html += '<div style="font-size:11px;color:var(--text2);margin-top:3px;max-height:34px;overflow:hidden">' + esc(m.preview) + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+async function _cortexPullHistory(entityId) {
+  const btn = document.getElementById('cortexPullBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
+  try {
+    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+    const res = await fetchFn('/api/email-relationship?entity_id=' + encodeURIComponent(entityId), { method: 'POST', headers: _entityApiHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (btn) btn.textContent = d.queued ? '✓ Queued — pulls on next sync' : (d.error || 'Unable to queue');
+  } catch (e) {
+    if (btn) { btn.textContent = 'Error — try again'; btn.disabled = false; }
+  }
+}
+window._cortexPullHistory = _cortexPullHistory;
 
 // ── Entity Portfolio Tab (UI Phase 4B — authoritative BD-spine portfolio) ──
 // Sourced from lcc_entity_portfolio_facts ⋈ lcc_property_attributes (via
