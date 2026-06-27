@@ -226,6 +226,78 @@ describe('parseDeedText R59b — clean party extraction from OCR\'d scanned deed
   });
 });
 
+describe('parseDeedText — ORE Unit C: capture deed mailing addresses (keep, don\'t strip)', () => {
+  const REAL = [
+    'Prepared by First American Title. Transfer Amt $13,333,400.00  Doc Stamps $93,333.80',
+    'SPECIAL WARRANTY DEED',
+    'THIS SPECIAL WARRANTY DEED is made this day by and between Oldsmar Retail Development LLC,',
+    'a Florida limited liability company, a/k/a Oldsmar Retail Development, LLC, whose address is',
+    '3662 Avalon Park East Boulevard, Suite 201, Orlando, Florida 32828 (the "Grantor"), and',
+    'Deltona Wellness, LP, a Florida limited partnership, whose address is 17 Copperbeech Lane,',
+    'Lawrence, New York 11559 (the "Grantee"), the following described property in Pinellas County.',
+  ].join('\n');
+
+  it('captures grantor + grantee "whose address is" addresses; the NAME is still clean', () => {
+    const p = parseDeedText(REAL, { state: 'FL' });
+    // NAME unchanged (the address is captured in parallel, not at the name's expense).
+    assert.equal(p.grantor, 'Oldsmar Retail Development LLC');
+    assert.equal(p.grantee, 'Deltona Wellness, LP');
+    // Full-string addresses retained.
+    assert.equal(p.grantor_address, '3662 Avalon Park East Boulevard, Suite 201, Orlando, Florida 32828');
+    assert.equal(p.grantee_address, '17 Copperbeech Lane, Lawrence, New York 11559');
+  });
+
+  it('parses the address into {street, city, state, zip} (best-effort)', () => {
+    const p = parseDeedText(REAL, { state: 'FL' });
+    assert.deepEqual(p.grantor_address_parsed, { zip: '32828', state: 'FL', city: 'Orlando', street: '3662 Avalon Park East Boulevard, Suite 201' });
+    assert.deepEqual(p.grantee_address_parsed, { zip: '11559', state: 'NY', city: 'Lawrence', street: '17 Copperbeech Lane' });
+  });
+
+  it('grantee "after recording return to" block is a guarded fallback when no narrative address', () => {
+    const t = [
+      'GRANT DEED', 'County of Orange', 'DOC # 2024-9 recorded on 06/01/2024',
+      'AFTER RECORDING RETURN TO:', 'BUYER HOLDINGS LLC',
+      '500 Newport Center Dr, Suite 800, Newport Beach, CA 92660', '',
+      'acknowledged, SELLER TRUST hereby GRANTS to BUYER HOLDINGS LLC, the following described property:',
+    ].join('\n');
+    const p = parseDeedText(t, { state: 'CA' });
+    assert.equal(p.grantee_address, '500 Newport Center Dr, Suite 800, Newport Beach, CA 92660');
+    assert.equal(p.grantee_address_parsed.state, 'CA');
+    assert.equal(p.grantee_address_parsed.city, 'Newport Beach');
+  });
+
+  it('a TITLE-COMPANY return-to block is NOT taken as the owner address', () => {
+    const t = [
+      'GRANT DEED', 'WHEN RECORDED MAIL TO:', 'First American Title Company',
+      '1 First American Way, Santa Ana, CA 92707', '',
+      'acknowledged, SELLER TRUST hereby GRANTS to BUYER LLC, the property:',
+    ].join('\n');
+    assert.equal(parseDeedText(t, { state: 'CA' }).grantee_address || null, null);
+  });
+
+  it('no address markers (legacy GRANTS-to / cover-page) → no address, no false capture', () => {
+    const p = parseDeedText(DEED_TEXT, { state: 'CA' });          // legacy GRANTS-to form
+    assert.equal(p.grantee_address || null, null);
+    assert.equal(p.grantor_address || null, null);
+    const COVER = 'Recording Cover Page\nFirst Grantor: TRIVIUM GROVE CITY LLC First Grantee: CHF II GROVE CITY MOB LLC\nFees: $18.50';
+    const pc = parseDeedText(COVER, { state: 'OH' });
+    assert.equal(pc.grantee_address || null, null);
+    assert.equal(pc.grantor_address || null, null);
+  });
+
+  it('NO regression: name extraction unchanged when an address is present (OCR-junk trim + deed-of-trust null)', () => {
+    // doc-1948 OCR junk still trims to the clean name.
+    const junk = ['GRANT DEED', 'County of Los Angeles', 'DOC # 2021-1 recorded on 05/10/2021',
+      'acknowledged, SUNSET PLAZA HOLDINGS LLC hereby GRANTS to LA MIRADA INVESTMENT LLC, A CALIFORNIA LIMITED LIABILITY COMPANY Area, the following described property:'].join('\n');
+    assert.equal(parseDeedText(junk, { state: 'CA' }).grantee, 'LA MIRADA INVESTMENT LLC');
+    // deed of trust still yields NULL parties (and so NULL addresses).
+    const dot = 'DEED OF TRUST\nThis Deed of Trust is made among the Trustor JOHN SMITH, the Trustee FIRST AMERICAN TITLE, and the Beneficiary BIG BANK NA.';
+    const pd = parseDeedText(dot, { state: 'CA' });
+    assert.equal(pd.grantor || null, null);
+    assert.equal(pd.grantee_address || null, null);
+  });
+});
+
 describe('processDeedDocument — schema-correct DB integration', () => {
   it('writes property_documents.extracted_data (NOT metadata) keyed by document_id', async () => {
     const { q, calls } = makeFakeQ({
@@ -487,6 +559,74 @@ describe('processDeedDocument — R59 BD-spine propagation', () => {
     assert.equal(r.ownershipEventAppended, false);
     assert.equal(r.granteeEntityId, null);
     assert.equal(events.entities.length, 0);
+  });
+
+  // ── ORE Unit C — propagate the grantee mailing address → recorded_owners ──
+  const DEED_ADDR = [
+    'SPECIAL WARRANTY DEED', 'County of Pinellas', 'DOC # 2020-0012345 recorded on 01/21/2020',
+    'THIS SPECIAL WARRANTY DEED is made by and between Oldsmar Retail Development LLC, ' +
+      'a Florida limited liability company, whose address is 3662 Avalon Park East Boulevard, ' +
+      'Suite 201, Orlando, Florida 32828 (the "Grantor"), and Deltona Wellness, LP, a Florida ' +
+      'limited partnership, whose address is 17 Copperbeech Lane, Lawrence, New York 11559 ' +
+      '(the "Grantee"), the following described property.',
+  ].join('\n');
+
+  it('Unit C: propagates the grantee mailing address to the resolved recorded_owner', async () => {
+    const writes = [];
+    const { deps } = bdDeps({ writeOwnerMailingAddress: async (a) => { writes.push(a); return { ok: true, applied: true, fields_filled: ['mailing_address'] }; } });
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } },
+    });
+    const r = await processDeedDocument('government', 55, 900, DEED_ADDR, { state: 'FL' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.granteeAddressFilled, true);
+    assert.equal(writes.length, 1, 'writeOwnerMailingAddress called once for the grantee owner');
+    assert.equal(writes[0].ownerId, 'ro-1', 'on the resolved grantee recorded_owner');
+    assert.equal(writes[0].address, '17 Copperbeech Lane, Lawrence, New York 11559');
+    assert.equal(writes[0].parsed.state, 'NY');
+    assert.equal(writes[0].parsed.city, 'Lawrence');
+  });
+
+  it('Unit C: no grantee address in the deed → no owner-address write', async () => {
+    const writes = [];
+    const { deps } = bdDeps({ writeOwnerMailingAddress: async (a) => { writes.push(a); return { ok: true, applied: true }; } });
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } },
+    });
+    const r = await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.granteeAddressFilled, false);
+    assert.equal(writes.length, 0);
+  });
+
+  it('Unit C: a broker grantee (fails the owner guard) → no owner-address write even with an address', async () => {
+    const writes = [];
+    const { deps } = bdDeps({ writeOwnerMailingAddress: async (a) => { writes.push(a); return { ok: true, applied: true }; } });
+    const BROKER_ADDR = [
+      'GRANT DEED', 'County of Orange', 'DOC # 2024-2 recorded on 06/01/2024',
+      'made by and between SELLER TRUST (the "Grantor"), and CBRE Group broker, whose address is ' +
+        '100 Main St, Irvine, CA 92618 (the "Grantee").',
+    ].join('\n');
+    // The address still parses (audit), but the broker grantee fails the guard.
+    assert.equal(parseDeedText(BROKER_ADDR, { state: 'CA' }).grantee_address, '100 Main St, Irvine, CA 92618');
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } },
+    });
+    const r = await processDeedDocument('dialysis', 55, 900, BROKER_ADDR, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.granteeAddressFilled, false);
+    assert.equal(writes.length, 0, 'broker never gets an owner-address write');
+  });
+
+  it('Unit C: writeOwnerMailingAddress dep absent → no-op (byte-identical to pre-Unit-C)', async () => {
+    const { deps } = bdDeps();   // no writeOwnerMailingAddress injected
+    delete deps.writeOwnerMailingAddress;
+    const f = makeFakeQ({
+      'deed_records?data_hash': { value: { ok: true, data: [] } },
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [] } },
+    });
+    const r = await processDeedDocument('government', 55, 900, DEED_ADDR, { state: 'FL' }, { domainQuery: f.q, ...deps });
+    assert.equal(r.granteeAddressFilled, false);
   });
 });
 

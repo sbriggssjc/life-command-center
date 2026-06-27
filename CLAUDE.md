@@ -5822,3 +5822,115 @@ Reverse rows from `t9d_listing_omd_backup`; restore the prior view bodies (Round
 the prior `fn_listing_close_if_sold` + re-set pse 5701. No domain deletions; gov pipelines +
 gov CM views untouched; auth schema untouched. The 270 `date_uncertain` + the 414 remaining
 orphan pse danglers are SURFACED for follow-up, not silently dropped.
+
+## ORE Phase 1 Unit C — capture deed grantee/grantor mailing addresses (2026-06-27)
+
+Owner mailing/notice addresses — the signal Scott's ownership cross-match keys on — existed for
+<1% of owners even though we parse deeds constantly: `parseDeedText` (`api/_handlers/deed-parser.js`)
+FOUND the "whose address is" / "after recording return to" addresses, then `leadingEntityName()`
+**stripped** them during party-name extraction, and `deed_records` had no address column — so
+~100% of deed-borne owner addresses were discarded. This is the address dimension that made the
+CONTACT-SELECTION cross-reference resolver's `same_address` strategy return 0.
+
+### Keep, don't strip (parser)
+A new shared `partySpanBeforeMarker()` feeds BOTH the name extractor (`leadingEntityName` →
+cleaned NAME, **byte-identical** — the R59b OCR-trim + deed-of-trust-null tests still pass) AND a
+new `extractPartyAddress()` (the "whose address is …" tail). `extractReturnToAddress()` is a
+GUARDED grantee fallback for the "after recording return to / mail tax statements to" block
+(rejects title/escrow-company blocks; stops at a secondary directive header like "Send Tax Bills
+to"). `parseAddressParts()` best-effort-splits {street,city,state,zip}; the full string is always
+kept. `parseDeedText` now sets `grantee_address`/`grantor_address` (+ `_parsed`).
+
+### Store (audit) + propagate (actionable)
+- `processDeedDocument` Step 3 writes the full strings to `deed_records.grantee_address`/
+  `.grantor_address`; the structured parts already ride `extracted_data.deed_extraction`.
+- `propagateDeedToBd` Unit C: the grantee owner is resolved once (shared with the Unit-1b
+  ownership_history append), then `writeOwnerMailingAddress` (`sidebar-pipeline.js`, wired into the
+  `document-text.js` PROD_DEPS) fills the owner mailing address **fill-blanks** + provenance
+  `source='recorded_deed'` via `shouldWriteField`: **gov** → new `recorded_owners.mailing_address`;
+  **dia** → the existing `recorded_owners.address`/`city`/`state`. Gated on the dep (absent ⇒
+  no-op, byte-identical to pre-Unit-C) AND a guard-passed grantee (`granteePassesOwnerGuards` — a
+  brokerage/federal/junk grantee never gets an owner write). Reversible; idempotent.
+
+### Migrations (additive, applied live)
+gov `government-lease/sql/20260627_gov_ore_phase1c_deed_party_addresses.sql` (deed_records
+addr cols + recorded_owners.mailing_address), dia
+`Dialysis/supabase/migrations/20260627_dia_ore_phase1c_deed_party_addresses.sql` (deed_records
+addr cols), LCC `supabase/migrations/20260627120000_lcc_ore_phase1c_deed_address_priority.sql`
+(`recorded_deed`=3 field_source_priority on gov.recorded_owners.mailing_address +
+dia.recorded_owners.address/city/state). DB-first (apply before the Railway redeploy of the
+parser); `v_field_provenance_unranked` unchanged.
+
+### Re-parse rides the deed OCR backfill
+Forward deeds capture addresses automatically. The existing corpus needs the R58
+`document-text-tick` deed drain (OCR scanned deeds → re-run the now-address-capturing parser);
+gated on `OPENAI_API_KEY`/Document AI + CoStar-CDN reach (operational, handed to Scott) — Unit C
+does NOT duplicate it.
+
+### Verified (2026-06-27)
+Dry-run (read-only) re-parsed the 11 dia deeds carrying an address marker → 5/11 grantee + 1/11
+grantor addresses, all clean + correctly parsed; caught + fixed a return-to over-capture (deed
+1797). `test/deed-parser.test.mjs` (+address capture, name-no-regression, Unit C propagation) +
+`test/owner-deed-propagation.test.mjs` (+`writeOwnerMailingAddress`). `node --check` clean; `ls
+api/*.js | wc -l`=12; full suite **1607 pass / 0 fail / 6 skipped**. JS ships on the Railway
+redeploy. Full design: `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md` (Phase 1 Unit C).
+## T9d FIX — om_receipt was the IMPORT date, not the market-entry date (2026-06-27)
+
+The first T9d round (above) recovered `on_market_date` for 242 held dia listings
+from the artifact storage path `lcc-om-uploads/YYYY-MM-DD/…`. **That path date is
+the IMPORT date, not the OM's true email date** — for the mass-forwarded historical
+batch all 242 landed 2026-04-25 → 2026-06-23, **re-creating the very surge T9d set
+out to remove** (92 inflated the impending 2026-06-30 count). The true original
+email date is NOT recoverable: `staged_intake_items.source_email_date` is empty for
+the historical batch (populated only for the 8 new-flow items). dia
+`zqzrriwuavgrquhisnoa`. Reversible, no fabricated dates, dia only, ≤12 api/*.js.
+**Kept T9d2 Unit 2 (entry/exit/cap model) + Unit 4 (close-on-sale + pse 5701) as-is.**
+
+### Unit 1 FIX — reclassify the 242 `om_receipt` rows → `date_uncertain`
+Migration `supabase/migrations/dialysis/20260627_dia_t9d_fix_om_receipt_date_uncertain.sql`
+(applied live): NULL `on_market_date`, set `on_market_date_source='date_uncertain'`
+(confidence `none`) — KEPT as evidenced inventory (we hold the OM) but OFF the time
+axis. **Never use the upload/path/`capture_date_fallback` date as a market-entry
+date.** Reversible from `t9d_listing_omd_backup` (NEW `batch_tag='t9d_fix'`,
+change_kind `fix_om_receipt_to_date_uncertain`, 242 rows). Idempotent (a re-run
+reclassifies 0 / inserts 0).
+
+### Unit 2b — surface the cap inference (confirmed vs assumed_active)
+`cm_dialysis_active_listings_m`/`_q` gain an APPENDED `currency_basis` column (the
+entry/exit/cap membership model is UNCHANGED; only the inner CTE now carries
+`off_market_date`/`sold_date` to compute it):
+- **`confirmed`** = a recorded exit AFTER period_end (`off_market_date`/`sold_date`
+  > period_end) → positively observed on-market at period_end (entered ≤ pe, left
+  > pe). The cap is irrelevant to these.
+- **`assumed_active`** = no recorded exit → membership rests on "we never saw it
+  leave," bounded solely by the 1356d age-out cap. These are the cap-dependent
+  rows the report now makes visible.
+New summary view **`cm_dialysis_currency_basis_m`** (period_end → confirmed /
+assumed_active counts, both listing- and distinct-property-grained) so the
+cap-dependent set is a first-class, visible number, not hidden.
+
+### Unit 3 FIX — ingest is forward-safe (never the upload path / clock)
+`api/_shared/listing-date.js`: **`omReceiptDateFromArtifactPath` REMOVED** (the
+rejected path-date helper). `api/_handlers/intake-promoter.js`: `promoteListing`
+fetches `staged_intake_items.source_email_date` and threads it to
+`buildDia/GovListingRow`; the builders derive `on_market_date` from a GENUINE
+signal only — explicit on-market date / DOM / `source_email_date` (all via
+`deriveOnMarketDate`) — and HOLD as `date_uncertain` otherwise. **Never the upload
+path / `capture_date_fallback` / today**, so the surge cannot re-form.
+
+### Verified live (2026-06-27)
+`om_receipt` 242 → **0** (0 dated 2026); `date_uncertain` 270 → **512** (+242);
+total listings **5080 → 5080 (0 evidenced deals dropped)**; backup `t9d_fix` = 242
+(reversible); idempotent re-run = 0/0. **2026-03-31** (published quarter):
+**195 distinct properties** (canonical Round-74 count intact) — **61 confirmed /
+134 assumed_active** (the auditor's "~87 cap-dependent" was an estimate; the actual
+no-recorded-exit count is 134, reported honestly). **2026-06-30** (impending): the
+fake surge **230 → 138** properties — gone. `node --check` clean (intake-promoter,
+listing-date); listing tests green; full suite **1589 pass / 0 fail / 6 skipped**;
+`ls api/*.js | wc -l`=12. DB applied live + committed; JS ships on the Railway
+redeploy.
+
+### Reversibility / boundaries
+Reverse via `t9d_listing_omd_backup` (`batch_tag='t9d_fix'`) + `DROP VIEW
+cm_dialysis_currency_basis_m` + re-create the two membership views from the prior
+T9d migration. No domain deletions; gov untouched; auth schema untouched.
