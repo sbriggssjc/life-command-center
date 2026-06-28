@@ -149,6 +149,25 @@ async function handleDiscoveryQueue(req, res, user, workspaceId) {
   return res.status(200).json({ requests: r.data || [] });
 }
 
+// ── Cortex Lifecycle — Inbox Janitor: serve active cleanup rules with ready-to-use AQS queries ──
+async function handleJanitorRules(req, res, user, workspaceId) {
+  const r = await opsQuery('GET',
+    'cortex_janitor_rules?active=eq.true&select=action,from_term,folder,older_than_days,note&order=action');
+  const pad = (n) => String(n).padStart(2, '0');
+  const rules = (r.data || []).map(rule => {
+    const cutoff = new Date(Date.now() - (rule.older_than_days || 30) * 86400000);
+    const mdy = `${pad(cutoff.getMonth() + 1)}/${pad(cutoff.getDate())}/${cutoff.getFullYear()}`;
+    return {
+      action: rule.action,
+      from_term: rule.from_term,
+      folder: rule.folder || 'Archive',
+      note: rule.note || null,
+      search_query: `from:${rule.from_term} received:01/01/1900..${mdy}`
+    };
+  });
+  return res.status(200).json({ rules });
+}
+
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
@@ -175,6 +194,11 @@ export default withErrorHandler(async function handler(req, res) {
   // Cortex W3 — discovery queue drain (Power Automate: GET claims a batch, POST marks one done)
   if (req.query._route === 'discovery-queue') {
     return handleDiscoveryQueue(req, res, user, workspaceId);
+  }
+
+  // Cortex Lifecycle — Inbox Janitor rules (Power Automate reads active rules + ready AQS queries)
+  if (req.query._route === 'janitor-rules') {
+    return handleJanitorRules(req, res, user, workspaceId);
   }
 
   // GET
