@@ -196,7 +196,13 @@ Henry Ford, …) — never assigned an operator (hard guard verified, 0 leaks); 
   on the post-merge export); (b) regenerate the PA flow SAS key (leaked `sig`) + refresh
   `SF_RECORD_LOOKUP_URL`.
 
-**Working order (sequential, Scott): ✅ T4 / T4b / T4c (DONE) → ▶ T2 (active) → T7 → T8 → T10.**
+**STATUS (2026-06-27): ✅ T1·T2·T3·T3b·T4·T4b·T4c·T7-U1·T8·T9·T9b·T9c·T9d·T9e all GATED PASS.**
+**FINAL CLOSEOUT (remaining items, one prompt `CLAUDE_CODE_PROMPT_CM_FINAL_CLOSEOUT.md`):** T5 (dia
+price-change now fully covered — confirm render; gov add-or-scope), T6 (gov State/Muni cap — gap-aware render +
+muni-stop root cause), T7-U2 (extend gov returns to ~1997 — shared-mat, audit consumers), T8-U3 (termination
+numerator → snapshot departures, re-fit axis), T9-legend ([5,6)yr → relabel `<5`→`<6`), T10 (drop dia
+Undisclosed bar + gov combo colors + average→dot), T11 (gov NM line render from 2014 + reconcile market basis)
+→ then RE-EXPORT both for visual confirm.
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking
@@ -343,7 +349,14 @@ only if Comp__c has a sold/off-market field), ~9 have a URL (bot-blocked), 108 u
 no channel. So a full exit-harvest reaches ~25/134 — not worth it; going-forward close-on-sale (T9d4 hardened)
 shrinks it automatically. Scott chose the bounded pointer cleanup instead.
 
-### T9e — repair 413 dangling property_sale_events→sales_transactions pointers + prevent recurrence  ·  P2  ·  ▶ PROMPT WRITTEN (2026-06-27)
+### T9e — repair 413 dangling property_sale_events→sales_transactions pointers + prevent recurrence  ·  P2  ·  ✅ GATED PASS (PR #1360, 2026-06-27)
+**VERIFIED LIVE:** dangling 413→0; all 413 resolved (172 re-linked / 241 nulled+flagged); **0 re-links to the
+wrong property** (corroboration-aware guard sound); all 2,734 events retained; FK `ON DELETE SET NULL`
+(`confdeltype='n'`) added = forward guard so future sale deletes can't re-orphan; reversible
+(`t9e_pse_pointer_backup` 413). CC grounding correction (kept): a literal ±2% price guard would have dumped
+~49 correct exact-date re-links (event price is independently sourced) → used price-OR-exact-date/buyer guard;
+fn_listing_close_if_sold already tolerated null pointers (verified, 0 residue). Closes the close-on-sale
+landmine cousin. — 
 **Surfaced in T9d (CC fixed 1, `5701`).** `property_sale_events.sales_transaction_id` has **413** pointers to
 deleted `sales_transactions` rows (orphaned by the prior ~350-row sale cleanup that didn't null referencers) —
 the `fn_listing_close_if_sold` landmine's cousin. All carry own price (events have independent data; only the
