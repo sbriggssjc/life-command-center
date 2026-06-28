@@ -248,6 +248,11 @@ const SYNTHETIC_COMPOSERS = {
     const latest = termRows
       .filter(r => r.period_end === latestPeriod)
       .sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99));
+    // T10 — keep ALL buckets (incl. "Undisclosed Term") in the row stream so the
+    // data tab + caption still carry its count for reconciliation; the chart
+    // BUILDERS drop only the Undisclosed BAR (renderer filters, injector trims the
+    // trailing Undisclosed row from the plotted cell range). sort_order keeps
+    // Undisclosed last, so the injector's dataEnd-1 trim is exact.
     return latest.map(r => ({
       term_bucket: r.term_bucket,
       n_listings: Number(r.n_listings) || 0,

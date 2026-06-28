@@ -541,7 +541,9 @@ function buildChartConfig(chart, brand) {
       // data" + "remove the n=2 from the labels". Cap dispersion is
       // back on the same chart; the price-bar label now shows only
       // the price (no `(n=N)` count).
-      const termRows = chart.rows || [];
+      // T10 — drop the "Undisclosed Term" bar (not a real term cohort). The count
+      // stays in the data tab + caption for reconciliation; only the bar is removed.
+      const termRows = (chart.rows || []).filter(r => !/undisclosed/i.test(String(r.term_bucket || '')));
       const termLabels = termRows.map(r => r.term_bucket || '?');
       const dotPointRadius = 6;
       const dotPointStyle = 'rectRot';
@@ -878,7 +880,7 @@ function buildChartConfig(chart, brand) {
         { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
           borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
-        { label: '< 5 Year',       data: rows.map(r => r.cap_less5),
+        { label: '< 6 Year',       data: rows.map(r => r.cap_less5),    // T9 — bucket boundary 5->6 (contiguous 10+/6-10/<6)
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
         { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
@@ -2684,7 +2686,7 @@ function buildChartConfig(chart, brand) {
         { label: '6-10 Year',    data: rows.map(r => r.cap_5to10),
           borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
-        { label: '< 5 Year',     data: rows.map(r => r.cap_less5),
+        { label: '< 6 Year',     data: rows.map(r => r.cap_less5),    // T9 — bucket boundary 5->6 (contiguous 10+/6-10/<6)
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
         { label: 'Outside Firm', data: rows.map(r => r.cap_outside_firm),

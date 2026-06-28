@@ -2545,7 +2545,22 @@ const MIN_YEAR_BY_TEMPLATE = {
   // transaction_count_ttm column, so the old density check ALWAYS fell back to
   // a flat 2009, clipping ~8yr of real data (gov cap_ttm is 12/12 from 2001;
   // dia is sparse 2001 + NULL 2002-2004 → the line gaps there honestly).
-  cap_rate_ttm_by_quarter:      (rows) => firstNonNullYear(rows, ['ttm_weighted_cap_rate']),
+  // T7-U2 (CM final closeout, 2026-06-28) — the shared gov master mat was widened
+  // 2001->1997. 1997-2000 gov sales are DENSE (n=27-48/TTM, cap 12/12 non-null), so
+  // the data is honest — but the RETURNS INDEX is the only chart Scott asked to
+  // extend. To avoid scope-creep on the other established gov charts, clamp the
+  // previously-2001-anchored consumers back to 2001 (a no-op for dia/natl, whose
+  // first row is already >= 2001, and for gov restores the pre-widen start).
+  // cap_rate_ttm_by_quarter: clamp >= 2001 — for gov firstNonNull is now 1997
+  // (clamped to 2001); for dia firstNonNull is ~2009 (already > 2001, unchanged).
+  cap_rate_ttm_by_quarter:      (rows) => Math.max(firstNonNullYear(rows, ['ttm_weighted_cap_rate']) ?? 2001, 2001),
+  volume_ttm_by_quarter:        2001,   // T7-U2 — gov master widened; keep prior 2001 start
+  transaction_count_ttm:        2001,   // T7-U2 — "
+  avg_deal_size:                2001,   // T7-U2 — "
+  // cash_leveraged_returns (the gov RETURNS INDEX) is the intended T7-U2 extension —
+  // firstNonNull(cash_return) is now 1997 (dense, n>=4 gate clean), so it extends
+  // back to 1997 as Scott asked. The leveraged leg starts 2002 (loan-constant data)
+  // and simply gaps before then (gap-honest).
   cash_leveraged_returns:       (rows) => firstNonNullYear(rows, ['cash_return', 'leveraged_return_mid']),
   // cost_of_capital is a treasury-vs-cap macro chart (not in the T1 cap/returns/
   // term sales-history scope); its treasury leg has its own start, so it keeps
@@ -2592,7 +2607,11 @@ const MIN_YEAR_BY_TEMPLATE = {
   // the chart shows long-run market context with the NM overlay where it exists,
   // rather than clipping the whole chart to the NM line's late start. Superseded
   // the R66o static 2020 "Value Proposition window" floor.
-  nm_vs_market_cap:             (rows) => firstNonNullYear(rows, ['nm_cap_rate', 'market_cap_rate']),
+  // T7-U2 clamp >= 2001 — the master widen made market_cap_rate non-null back to
+  // 1997; the NM-vs-market chart keeps its established 2001 market-context start
+  // (Scott "take it back further than 2020" — 2001 satisfies that), with the NM
+  // overlay gapping until it begins (~2014, T11). dia/natl already start >= 2001.
+  nm_vs_market_cap:             (rows) => Math.max(firstNonNullYear(rows, ['nm_cap_rate', 'market_cap_rate']) ?? 2014, 2001),
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
   // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).
@@ -3426,17 +3445,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       if (!periodCol || !nmCol || !marketCol) return null;
       // R66o — deck labels both lines (peak / trough / most-recent per our
       // convention) so the current NM-vs-market gap is callout-legible.
-      // R66bb — compute the peak/trough/last over the DISPLAYED window only
-      // (>= MIN_YEAR 2020). The chart trims to 2020+, but buildAnnotationsForSpec
-      // ran over the full 2001+ rows, so the data-label INDICES referenced points
-      // outside the plotted range — e.g. a 4.73% trough from ~2004 got stamped
-      // onto a 2024 point. Filtering to the window aligns idx with the plotted
-      // series so labels land on the right points.
-      const nmWindowRows = Array.isArray(rows)
-        ? rows.filter(r => r && r.period_end && new Date(r.period_end).getFullYear() >= 2020)
-        : [];
-      const nmLabels  = buildAnnotationsForSpec(nmWindowRows, r => r.nm_cap_rate, fmtPct2Native);
-      const mktLabels = buildAnnotationsForSpec(nmWindowRows, r => r.market_cap_rate, fmtPct2Native);
+      // R66bb / T11 — the data labels must index the SAME rows the chart plots so
+      // peak/trough/most-recent callouts land on the right points. `plottedRows` is
+      // the effectiveStart-trimmed window (= the [dataStart..dataEnd] the series
+      // reference). The old hardcoded `>= 2020` filter became misaligned once the
+      // T11 floor clamp lowered the start to 2001 (market context) — it would stamp
+      // a label index from the 2020+ subset onto the 2001-based plotted series.
+      const nmLabelRows = plottedRows;
+      const nmLabels  = buildAnnotationsForSpec(nmLabelRows, r => r.nm_cap_rate, fmtPct2Native);
+      const mktLabels = buildAnnotationsForSpec(nmLabelRows, r => r.market_cap_rate, fmtPct2Native);
       return {
         tabName,
         spec: {
@@ -4069,13 +4086,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // muni only — but that makes them read as a different SERIES TYPE than
       // federal's clean line (Scott R76 E2: "line type different for municipal
       // and state — fix … same line style as federal, not a different one").
-      // Excel native charts can't do the PNG's per-point conditional markers
-      // (Chart.js scriptable pointRadius), so here all three render in ONE
-      // uniform plain-line style (no per-series markers) — literally the same
-      // line style as federal. Isolated single points are surfaced in the PNG
-      // image (cm-chart-image-renderer.js isoPointRadius); the editable Excel
-      // chart prioritizes a clean, consistent trend. NO spanGaps (Excel breaks
-      // real gaps by default -> honest, never connects across a multi-year hole).
+      // T6 (CM final closeout, 2026-06-28) — E2 removed ALL native markers,
+      // which made the sparse State/Municipal points INVISIBLE in the editable
+      // Excel chart (a markerless line cannot draw an isolated point between
+      // null gaps). Restore visibility WITHOUT re-introducing the
+      // inconsistency E2 flagged: put a small UNIFORM circle marker on ALL
+      // THREE series (cap_by_credit is QUARTERLY, ~100 pts, so markers stay
+      // legible) — same line style across federal/state/municipal, just now
+      // marker-bearing so every present point renders. dispBlanksAs='gap' +
+      // NO spanGaps keeps real holes honest (never connects across a gap).
+      // The sparse State/Municipal series stay visible instead of missing.
       const periodCol = findCol('period_end');
       const fedCol    = findCol('federal_cap');
       const stateCol  = findCol('state_cap');
@@ -4091,9 +4111,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: [
-            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy     },
-            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky      },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582' },  // sage
+            // T6 — uniform circle marker (size 4) on all three so sparse
+            // State/Municipal points are visible (gap-aware), federal unchanged
+            // in style. Municipal: no comp CLUSTER since early 2023 (only
+            // isolated single sales 2024-2025; the n>=2 TTM gate can't be met) —
+            // a genuine market gap, not a tagging miss; the line ends honestly.
+            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy,     showMarker: true, markerSize: 4 },
+            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582', showMarker: true, markerSize: 4 },  // sage
           ],
           anchor: standardAnchor,
         },
@@ -4961,6 +4986,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       if (!termCol || !priceCol || !avgCapCol || !upperQCol || !lowerQCol || !medianCol) {
         return null;
       }
+      // T10 (CM final closeout) — drop the trailing "Undisclosed Term" bucket from
+      // the PLOTTED cell range (dia term chart). The data tab keeps every bucket
+      // (incl. the undisclosed count) for reconciliation; only the bar is trimmed.
+      // sort_order keeps Undisclosed last, so dropping the final row is exact.
+      // Data-driven: trims ONLY when the last row really is undisclosed (a no-op
+      // for gov's firm-term summary if it has no such bucket).
+      let bucketDataEnd = dataEnd;
+      if (Array.isArray(rows) && rows.length
+          && /undisclosed/i.test(String(rows[rows.length - 1].term_bucket || ''))) {
+        bucketDataEnd = dataEnd - 1;
+      }
       // R50 — colors realigned to master Market Size tab chart26
       // (user feedback 2026-05-22: "Adjust dot colors to match master,
       // Pin right-axis range (cap %), Diamond markers instead of circles").
@@ -4997,7 +5033,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           type: 'combo',
           tabName,
           catCol: termCol,
-          dataStart, dataEnd,
+          dataStart, dataEnd: bucketDataEnd,   // T10 — Undisclosed bar trimmed
           // R64 — left axis "$X.XM" per user batch 5: "lets adjust the
           // number formatting of the x-axis to show $x.xM". Avg Price
           // for dia chair sale typically $1.5M-$5M; gov bldg $3M-$30M;
