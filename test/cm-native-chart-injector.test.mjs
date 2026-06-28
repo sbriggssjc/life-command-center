@@ -1243,7 +1243,7 @@ test('R73 C4: volume_cap cap (right) axis lowered per vertical to lift the band 
     'dia cap axis 3.0-9.0% (band 5.70-7.70% lifts to the upper frame)');
 });
 
-test('R76 E2: cap_rate_by_credit renders all three cohorts in one uniform plain-line style (no per-series markers)', () => {
+test('T6: cap_rate_by_credit renders all three cohorts in one uniform line+marker style (sparse state/muni points visible)', () => {
   const cols = [
     { key: 'period_end',   col: 'A' },
     { key: 'federal_cap',  col: 'B' },
@@ -1257,17 +1257,21 @@ test('R76 E2: cap_rate_by_credit renders all three cohorts in one uniform plain-
   });
   assert.equal(out.spec.type, 'multi-line');
   const [fed, state, muni] = out.spec.series;
-  // R76 E2 — state/muni no longer carry per-series markers; all three match
-  // federal's plain-line style so none reads as a different series type.
-  // (Isolated single points are surfaced in the PNG image via the scriptable
-  // pointRadius in cm-chart-image-renderer.js, not the editable Excel chart.)
-  assert.ok(!fed.showMarker, 'federal is a plain line');
-  assert.ok(!state.showMarker, 'state matches federal (no markers)');
-  assert.ok(!muni.showMarker, 'municipal matches federal (no markers)');
-  // Every series is markerless in the emitted XML (uniform style).
+  // T6 (CM final closeout) — R76 E2 stripped ALL native markers, which made the
+  // sparse State/Municipal points invisible in the editable Excel chart. T6
+  // restores a small UNIFORM circle marker on all three cohorts (same style as
+  // federal — none reads as a different series type) so isolated sparse points
+  // are visible; dispBlanksAs='gap' keeps real holes honest.
+  assert.ok(fed.showMarker, 'federal carries a uniform marker');
+  assert.ok(state.showMarker, 'state carries the SAME uniform marker as federal');
+  assert.ok(muni.showMarker, 'municipal carries the SAME uniform marker as federal');
+  // Uniform style: all three share the same marker size (no series stands out).
+  assert.equal(state.markerSize, fed.markerSize, 'state marker size matches federal');
+  assert.equal(muni.markerSize, fed.markerSize, 'municipal marker size matches federal');
+  // Markers emitted as circles in the XML for every cohort.
   const xml = buildMultiLineChartXml(out.spec);
-  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'markerless symbol emitted');
-  assert.ok(!/<c:marker><c:symbol val="circle"\/>/.test(xml), 'no circle markers on any cohort');
+  assert.match(xml, /<c:marker><c:symbol val="circle"\/>/, 'circle markers emitted');
+  assert.ok(!/<c:marker><c:symbol val="none"\/>/.test(xml), 'no markerless cohort (all uniform)');
 });
 
 test('R73 B1: bid_ask combo suppresses the invisible noFill base bar from the legend (no duplicate Last-Ask entry)', () => {

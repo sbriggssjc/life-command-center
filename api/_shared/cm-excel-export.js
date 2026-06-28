@@ -65,11 +65,12 @@ function getInlineSummaryMetrics(chartId, vertical) {
         { label: '≤5 Year Cap',   format: 'percent_basis_points', fieldKeys: ['cap_5orless'] },
       ];
     }
-    // gov + national_st use the legacy 10+/6-10/<5/outside cohorts
+    // gov + national_st use the 10+/6-10/<6/outside cohorts (T9 — boundary 5->6
+    // so the buckets are contiguous and [5,6)yr sales land in the <6 bucket).
     return [
       { label: '10+ Year Cap',     format: 'percent_basis_points', fieldKeys: ['cap_10plus'] },
       { label: '6-10 Year Cap',    format: 'percent_basis_points', fieldKeys: ['cap_6to10', 'cap_5to10'] },
-      { label: '< 5 Year Cap',     format: 'percent_basis_points', fieldKeys: ['cap_less5'] },
+      { label: '< 6 Year Cap',     format: 'percent_basis_points', fieldKeys: ['cap_less5'] },
       { label: 'Outside Firm Cap', format: 'percent_basis_points', fieldKeys: ['cap_outside_firm'] },
     ];
   }
@@ -162,7 +163,7 @@ const CHART_FOOTER_CAPTIONS = {
   available_by_tenant_volume_donut:
     'Active-listing volume share by tenant (DaVita / FMC / US Renal / Other). Donut at the latest reported quarter; segments sum to total available dollar volume.',
   available_by_term_summary:
-    'Active listings by lease-term cohort (Sub 5 / 5-8 / 8-12 / 12+). Sky bars: avg asking price (left axis). Diamond dots: avg cap (navy), upper quartile (purple), median (sage), lower quartile (gray) on the right axis.',
+    'Active listings by lease-term cohort (Sub 5 / 5-8 / 8-12 / 12+). Sky bars: avg asking price (left axis). Diamond dots: avg cap (navy), upper quartile (purple), median (sage), lower quartile (gray) on the right axis. Listings with an undisclosed lease term are excluded from the bars; their count is listed on the data tab.',
   top_buyers_table:
     'Top 25 buyers all-time, ranked by transaction count. Use to spot active capital deploying into the sector + concentration risk.',
   top_sellers_table:
@@ -478,7 +479,7 @@ const CHART_COLUMNS = {
     // Gov cohorts
     { key: 'cap_10plus',       header: '10+ Year Cap',      format: 'percent_basis_points', width: 14 },
     { key: 'cap_5to10',        header: '6-10 Year Cap',     format: 'percent_basis_points', width: 15 },
-    { key: 'cap_less5',        header: '< 5 Year Cap',      format: 'percent_basis_points', width: 14 },
+    { key: 'cap_less5',        header: '< 6 Year Cap',      format: 'percent_basis_points', width: 14 },
     { key: 'cap_outside_firm', header: 'Outside Firm Cap',  format: 'percent_basis_points', width: 17 },
   ],
   available_by_firm_term_summary: [
@@ -566,11 +567,11 @@ const CHART_COLUMNS = {
   cap_rate_by_lease_term: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    // Legacy gov-style cohorts (10+/6-10/<5/outside) — used by gov vertical
-    // and kept on dialysis for backward compatibility.
+    // Legacy gov-style cohorts (10+/6-10/<6/outside) — used by gov vertical
+    // and kept on dialysis for backward compatibility. T9 — <5 boundary -> <6.
     { key: 'cap_10plus',       header: '10+ Year Cap',        format: 'percent_basis_points', width: 14 },
     { key: 'cap_6to10',        header: '6–10 Year Cap',       format: 'percent_basis_points', width: 16 },
-    { key: 'cap_less5',        header: '< 5 Year Cap',        format: 'percent_basis_points', width: 14 },
+    { key: 'cap_less5',        header: '< 6 Year Cap',        format: 'percent_basis_points', width: 14 },
     { key: 'cap_outside_firm', header: 'Outside Firm Cap',    format: 'percent_basis_points', width: 18 },
     // Round 3 PDF-aligned dialysis cohorts (12+/8-12/6-8/≤5). NULL on gov
     // because gov master_m never carried these fields.
