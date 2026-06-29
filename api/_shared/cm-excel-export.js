@@ -226,7 +226,7 @@ const CHART_FOOTER_CAPTIONS = {
   ppsf_box_quarterly:
     'Quarterly price / SF distribution: IQR (bars), median (line), min/max (whiskers).',
   cap_rate_by_credit:
-    'Federal vs. State vs. Municipal TTM average cap rates. Federal carries credit and tenant-stability premiums; state and municipal tend to trade wider. State and municipal are genuinely sparse (303 / 81 eligible sales vs. 3,414 federal), so those lines populate fewer quarters (state ~76, municipal ~29 of 101) and may show isolated points in thin early years — that is real data scarcity, not a defect; all three render in the same line style.',
+    'Federal vs. State vs. Municipal TTM average cap rates. Federal carries credit and tenant-stability premiums; state and municipal tend to trade wider. State and municipal comps are genuinely sparse (303 / 81 eligible sales vs. 3,414 federal), so those lines populate fewer quarters (state ~76, municipal ~29 of 101) and trail off in recent quarters (state through ~late 2025; municipal to isolated single sales after early 2023, where the ≥2-sale quarterly gate can no longer be met). Federal renders as a clean line; State and Municipal carry a marker on each available quarter so every present reading is visible across the gaps — those gaps are real data scarcity, not a defect, and no points are fabricated.',
   cpi_vs_renewal_cagr:
     'CPI YoY change vs. GSA renewal CAGR. Persistent gaps highlight whether GSA renewals are tracking inflation.',
   fed_funds_vs_treasury:
@@ -242,7 +242,7 @@ const CHART_FOOTER_CAPTIONS = {
   net_lease_spread:
     'Cap-rate spread over the 10-Year Treasury for Market / NM / Non-NM cohorts.',
   renewal_rent_growth:
-    'TTM average GSA renewal rent / SF with quartile band.',
+    'GSA renewal economics over time: the average renewal rent / SF (dot) sits inside a lower→upper quartile band (the lighter up-down bar), with the per-lease renewal CAGR as the line on the right axis.',
   rent_by_year_built:
     'Median rent / SF by build-year decade with quartile whiskers. Newer build years command rent premiums driven by interior fit-out costs and current code requirements.',
   rent_heat_map:

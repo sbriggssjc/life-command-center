@@ -1849,54 +1849,60 @@ ${markerSer(spec.rightCol, (spec.rightColor || '003DA5').replace('#',''), 1, 1, 
 }
 
 /**
- * R66m — Renewal Rent Growth combo (gov, deck p.32 "Renewal Rent and its
- * Growth Rate Over Time"). Three groups sharing one category axis:
- *   1. barChart  (left $ axis):  TTM avg renewal rent/SF — pale-blue bars
- *   2. lineChart (left $ axis):  upper + lower quartile as marker-only series
- *      joined by <c:hiLowLines> → the deck's dark-blue vertical quartile bars
- *      with markers at top (upper Q) and bottom (lower Q)
+ * R66m → R2-B Unit 4 (2026-06-29) — Renewal Rent Growth combo (gov, deck p.32
+ * "Renewal Rent and its Growth Rate Over Time"). Scott's redesign: the CAGR
+ * stays a LINE, the AVG renewal rent becomes a DOT sitting in the middle of a
+ * LOWER→UPPER quartile up-down bar, and the quartile band is rendered in a
+ * LIGHTER color than the line and the dot. Three line groups, one category axis:
+ *   1. lineChart (left $ axis):  upper + lower quartile as marker-less series
+ *      joined by <c:hiLowLines> + <c:upDownBars> → a LIGHT vertical quartile band
+ *   2. lineChart (left $ axis):  Avg renewal rent/SF — navy circle DOT, no line,
+ *      sits in the middle of the band
  *   3. lineChart (right % axis): Avg Renewal Rent CAGR — sky line
+ * The pale TTM-rent BAR of the prior build is dropped (the avg dot replaces it).
  *
  * spec: { tabName, title, catCol, dataStart, dataEnd, headerRow,
- *         rentCol, upperCol, lowerCol, cagrCol,
+ *         rentCol (avg dot value), upperCol, lowerCol, cagrCol,
  *         leftRange, leftNumFmt, rightRange, rightNumFmt,
- *         rentColor, quartileColor, cagrColor }
+ *         quartileColor (LIGHT band), avgColor (dot), cagrColor (line) }
  */
 function buildRenewalRentGrowthXml(spec) {
   const sheet = escapeXml(spec.tabName);
   const hdr = spec.headerRow || 4;
-  const rentColor     = (spec.rentColor     || 'BBDDF2').replace('#', '');
-  const quartileColor = (spec.quartileColor || '003DA5').replace('#', '');
-  const cagrColor     = (spec.cagrColor     || '62B5E5').replace('#', '');
+  const quartileColor = (spec.quartileColor || 'BBDDF2').replace('#', '');  // LIGHT band
+  const avgColor      = (spec.avgColor      || '003DA5').replace('#', '');  // navy dot
+  const cagrColor     = (spec.cagrColor     || '62B5E5').replace('#', '');  // sky line
   const catRef = `'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}`;
   const valRef = (col) => `'${sheet}'!$${col}$${spec.dataStart}:$${col}$${spec.dataEnd}`;
   const txRef  = (col) => `'${sheet}'!$${col}$${hdr}`;
 
-  // Bar series — TTM renewal rent/SF (pale blue), left axis (2)
-  const rentBar = `        <c:ser>
-          <c:idx val="0"/>
-          <c:order val="0"/>
-          <c:tx><c:strRef><c:f>${txRef(spec.rentCol)}</c:f></c:strRef></c:tx>
-          <c:spPr><a:solidFill><a:srgbClr val="${rentColor}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr>
-          <c:invertIfNegative val="0"/>
-          <c:cat><c:numRef><c:f>${catRef}</c:f></c:numRef></c:cat>
-          <c:val><c:numRef><c:f>${valRef(spec.rentCol)}</c:f></c:numRef></c:val>
-        </c:ser>`;
-
-  // Quartile marker-only series (idx 1 = upper, idx 2 = lower), joined by
-  // hiLowLines into a vertical quartile bar.
+  // Quartile marker-less series (idx 0 = upper, idx 1 = lower), joined by
+  // hiLowLines + upDownBars into a LIGHT vertical quartile band. Markerless so
+  // the band reads as a clean bar (the avg dot is the only marker on the axis).
   const quartileSer = (col, idx) => `        <c:ser>
           <c:idx val="${idx}"/>
           <c:order val="${idx}"/>
           <c:tx><c:strRef><c:f>${txRef(col)}</c:f></c:strRef></c:tx>
           <c:spPr><a:ln><a:noFill/></a:ln></c:spPr>
-          <c:marker>
-            <c:symbol val="dash"/>
-            <c:size val="7"/>
-            <c:spPr><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill></a:ln></c:spPr>
-          </c:marker>
+          <c:marker><c:symbol val="none"/></c:marker>
           <c:cat><c:numRef><c:f>${catRef}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>${valRef(col)}</c:f></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>`;
+
+  // Avg renewal rent DOT (idx 2) — navy circle, NO connecting line, left axis (2)
+  const avgDot = `        <c:ser>
+          <c:idx val="2"/>
+          <c:order val="2"/>
+          <c:tx><c:strRef><c:f>${txRef(spec.rentCol)}</c:f></c:strRef></c:tx>
+          <c:spPr><a:ln><a:noFill/></a:ln></c:spPr>
+          <c:marker>
+            <c:symbol val="circle"/>
+            <c:size val="6"/>
+            <c:spPr><a:solidFill><a:srgbClr val="${avgColor}"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="${avgColor}"/></a:solidFill></a:ln></c:spPr>
+          </c:marker>
+          <c:cat><c:numRef><c:f>${catRef}</c:f></c:numRef></c:cat>
+          <c:val><c:numRef><c:f>${valRef(spec.rentCol)}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
         </c:ser>`;
 
@@ -1919,27 +1925,25 @@ function buildRenewalRentGrowthXml(spec) {
     ${chartTitleXml(spec.title)}
     <c:plotArea>
       <c:layout/>
-      <c:barChart>
-        <c:barDir val="col"/>
-        <c:grouping val="clustered"/>
-        <c:varyColors val="0"/>
-${rentBar}
-        <c:gapWidth val="40"/>
-        <c:overlap val="-20"/>
-        <c:axId val="1"/>
-        <c:axId val="2"/>
-      </c:barChart>
       <c:lineChart>
         <c:grouping val="standard"/>
         <c:varyColors val="0"/>
-${quartileSer(spec.upperCol, 1)}
-${quartileSer(spec.lowerCol, 2)}
+${quartileSer(spec.upperCol, 0)}
+${quartileSer(spec.lowerCol, 1)}
         <c:hiLowLines><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:round/></a:ln></c:spPr></c:hiLowLines>
         <c:upDownBars>
           <c:gapWidth val="150"/>
           <c:upBars><c:spPr><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill></a:ln></c:spPr></c:upBars>
           <c:downBars><c:spPr><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="${quartileColor}"/></a:solidFill></a:ln></c:spPr></c:downBars>
         </c:upDownBars>
+        <c:marker val="0"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:lineChart>
+      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${avgDot}
         <c:marker val="1"/>
         <c:axId val="1"/>
         <c:axId val="2"/>
@@ -2256,6 +2260,7 @@ export {
   buildStackedBarChartXml,
   buildMultiLineChartXml,
   buildComboChartXml,
+  buildRenewalRentGrowthXml,
   buildAreaComboChartXml,
   buildScatterChartXml,
   buildDoughnutChartXml,
@@ -2557,17 +2562,28 @@ const MIN_YEAR_BY_TEMPLATE = {
   // extend. To avoid scope-creep on the other established gov charts, clamp the
   // previously-2001-anchored consumers back to 2001 (a no-op for dia/natl, whose
   // first row is already >= 2001, and for gov restores the pre-widen start).
-  // cap_rate_ttm_by_quarter: clamp >= 2001 — for gov firstNonNull is now 1997
-  // (clamped to 2001); for dia firstNonNull is ~2009 (already > 2001, unchanged).
+  // cap_rate_ttm_by_quarter: clamp >= 2001. R2-B Unit 1 (2026-06-29) — VERIFIED
+  // live this already starts at first-real-data and needs NO change: dia
+  // firstNonNull(ttm_weighted_cap_rate)=2005, gov=2002 (cm_dialysis/gov_cap_ttm_q,
+  // 2026-06-29). Scott's "Cap_Avg pre-2005" flag is already satisfied (dia opens
+  // at 2005). Deliberately KEPT firstNonNull — switching to a dense (4-consecutive)
+  // gate would over-crop dia's real-but-sparse 2005-2008 data (n=1/3/3/4, 2009
+  // NULL) to 2011, which Scott's rule forbids ("real thin collection... gap
+  // honestly", don't crop). So the early line gaps honestly where data is thin.
   cap_rate_ttm_by_quarter:      (rows) => Math.max(firstNonNullYear(rows, ['ttm_weighted_cap_rate']) ?? 2001, 2001),
   volume_ttm_by_quarter:        2001,   // T7-U2 — gov master widened; keep prior 2001 start
   transaction_count_ttm:        2001,   // T7-U2 — "
   avg_deal_size:                2001,   // T7-U2 — "
-  // cash_leveraged_returns (the gov RETURNS INDEX) is the intended T7-U2 extension —
-  // firstNonNull(cash_return) is now 1997 (dense, n>=4 gate clean), so it extends
-  // back to 1997 as Scott asked. The leveraged leg starts 2002 (loan-constant data)
-  // and simply gaps before then (gap-honest).
-  cash_leveraged_returns:       (rows) => firstNonNullYear(rows, ['cash_return', 'leveraged_return_mid']),
+  // cash_leveraged_returns (the gov RETURNS INDEX).
+  // R2-B Unit 2 (2026-06-29) — start where BOTH lines exist. The T7-U2 widen to
+  // 1997 left 1997-2001 carrying cash_return but NO loan-constant data
+  // (leveraged_return_mid NULL) → a blank leveraged leg AND broken cat-axis date
+  // labels (Scott). Anchor the start at the first leveraged_return_mid non-null
+  // (~2001-2002) so both lines plot from the same period and the x-axis labels
+  // render across the full plotted span. cash_return simply isn't shown before
+  // then (it has no leveraged companion to compare against). Superseded the
+  // earlier scan-both-series start (which floored at cash_return's 1997).
+  cash_leveraged_returns:       (rows) => firstNonNullYear(rows, ['leveraged_return_mid']) ?? firstNonNullYear(rows, ['cash_return']),
   // cost_of_capital is a treasury-vs-cap macro chart (not in the T1 cap/returns/
   // term sales-history scope); its treasury leg has its own start, so it keeps
   // the prior density/2009 fallback. Revisit separately if needed.
@@ -2613,11 +2629,13 @@ const MIN_YEAR_BY_TEMPLATE = {
   // the chart shows long-run market context with the NM overlay where it exists,
   // rather than clipping the whole chart to the NM line's late start. Superseded
   // the R66o static 2020 "Value Proposition window" floor.
-  // T7-U2 clamp >= 2001 — the master widen made market_cap_rate non-null back to
-  // 1997; the NM-vs-market chart keeps its established 2001 market-context start
-  // (Scott "take it back further than 2020" — 2001 satisfies that), with the NM
-  // overlay gapping until it begins (~2014, T11). dia/natl already start >= 2001.
-  nm_vs_market_cap:             (rows) => Math.max(firstNonNullYear(rows, ['nm_cap_rate', 'market_cap_rate']) ?? 2014, 2001),
+  // R2-B Unit 1 (2026-06-29) — start where the NM line begins (~gov 2014, dia
+  // ~2012), NOT where the long-history market line begins (2001/1997). Scott:
+  // "data starts ~2014 — start the chart there, not 2001/1997." The NM overlay
+  // is the chart's subject, so scan nm_cap_rate ONLY; the market line is cropped
+  // to the same window. Superseded the T1/T7-U2 "market full-range + NM overlay
+  // gaps" start (which opened the chart on ~13yr of NM-less market history).
+  nm_vs_market_cap:             (rows) => firstNonNullYear(rows, ['nm_cap_rate']) ?? 2014,
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
   // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).
@@ -2706,6 +2724,14 @@ const MIN_YEAR_BY_TEMPLATE = {
   dom_price_change_active:      2018,  // R66b: pre-2018 had <12 active listings/mo,
                                        // so the DOM average stair-stepped on 2-5 listings.
                                        // View now gates n>=8 + 3-mo smooths; trim display to 2018.
+  // R2-B Unit 1 (2026-06-29) — Market_Turnover: deliberately NO entry. VERIFIED
+  // live the source views already begin at first-real-data: cm_gov_market_turnover_m
+  // earliest row is 2005-01 with active_count present every month (0 rows / 0
+  // NULL-active rows before 2005), and cm_dialysis_market_turnover_m active_count
+  // begins 2014. Scott's "gov active-listing counts missing pre-2012" premise did
+  // NOT hold — the data IS present from 2005 (8-12/yr), so the chart already opens
+  // at first-real-data with no blank early space; a trim entry would be a no-op
+  // for gov and risk cropping dia's other series.
 };
 
 export function buildInjectionSpec(args) {
@@ -3052,33 +3078,18 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       return singleSeries('bar', ['ttm_count', 'count'], navy, {
         valAxNumFmt: VAL_FMT_INTEGER,
       });
-    case 'avg_deal_size': {
-      // T10c (2026-06-29) — render Average Deal Size as DOTS, not bars (Scott,
-      // gov 25: "the average should be a dot, not a bar"). A single marker-only
-      // line series (no connecting line) keeps the quarter category axis, the
-      // $X.XM y-axis format, and the peak/trough/last labels. Mirrors the
-      // renderer's avg_deal_size dot conversion. (Was a navy bar via singleSeries.)
-      const periodCol = findCol('period_end');
-      const valCol    = findCol('avg_deal_size');
-      if (!periodCol || !valCol) return null;
-      const fmt = ANNOTATION_FORMATTERS['currency_m'];
-      const dataLabels = (fmt && Array.isArray(rows))
-        ? buildAnnotationsForSpec(rows, r => r.avg_deal_size, fmt)
-        : undefined;
-      return {
-        tabName,
-        spec: {
-          type: 'multi-line', tabName, catCol: periodCol, dataStart, dataEnd,
-          valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
-          series: [
-            { titleCol: valCol, titleRow: headerRow, valCol,
-              color: navy, showMarker: true, markerOnly: true,
-              markerShape: 'circle', markerSize: 6, dataLabels },
-          ],
-          anchor: standardAnchor,
-        },
-      };
-    }
+    case 'avg_deal_size':
+      // R2-B Unit 3 (2026-06-29) — REVERT the T10c average→dot change for THIS
+      // template only (Scott): Average Deal Size is a $ MAGNITUDE, so a BAR is
+      // correct; the T10c "average → dot" treatment mis-landed here and belongs
+      // to Renewal_Growth (Unit 4) instead. Keeps the quarter axis, $X.XM
+      // y-format, and the peak/trough/last labels. Mirrors the renderer's
+      // avg_deal_size bar revert.
+      return singleSeries('bar', 'avg_deal_size', navy, {
+        valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
+        annotateKey: 'avg_deal_size',
+        annotateFmt: 'currency_m',
+      });
     case 'yoy_volume_change':
       // Renderer uses signed colors (navy positive, lighter negative).
       // Native chart XML doesn't easily express per-point conditional
@@ -4113,13 +4124,18 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // T6 (CM final closeout, 2026-06-28) — E2 removed ALL native markers,
       // which made the sparse State/Municipal points INVISIBLE in the editable
       // Excel chart (a markerless line cannot draw an isolated point between
-      // null gaps). Restore visibility WITHOUT re-introducing the
-      // inconsistency E2 flagged: put a small UNIFORM circle marker on ALL
-      // THREE series (cap_by_credit is QUARTERLY, ~100 pts, so markers stay
-      // legible) — same line style across federal/state/municipal, just now
-      // marker-bearing so every present point renders. dispBlanksAs='gap' +
-      // NO spanGaps keeps real holes honest (never connects across a gap).
-      // The sparse State/Municipal series stay visible instead of missing.
+      // null gaps). T6 then put a uniform circle marker on ALL THREE series.
+      // R2-B Unit 5 (2026-06-29, Scott) — markers on the DENSE Federal line read
+      // as clutter ("now has dots in the lines"); markers belong only where they
+      // ADD value — the SPARSE State + Municipal series, whose isolated points a
+      // markerless line cannot draw across the surrounding null gaps. So Federal
+      // renders as a CLEAN line (no per-point dots) while State + Municipal carry
+      // a circle marker on every present quarter, so each available reading shows.
+      // dispBlanksAs='gap' + NO spanGaps keeps real holes honest. The genuine
+      // State/Municipal scarcity (state → ~2025-11, municipal → isolated single
+      // sales after ~2023-03, n>=2 TTM gate unmet) is annotated in the worksheet
+      // caption (CHART_CAPTIONS.cap_rate_by_credit) — gaps read as real scarcity,
+      // not a broken pull; no points are fabricated.
       const periodCol = findCol('period_end');
       const fedCol    = findCol('federal_cap');
       const stateCol  = findCol('state_cap');
@@ -4135,12 +4151,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: [
-            // T6 — uniform circle marker (size 4) on all three so sparse
-            // State/Municipal points are visible (gap-aware), federal unchanged
-            // in style. Municipal: no comp CLUSTER since early 2023 (only
-            // isolated single sales 2024-2025; the n>=2 TTM gate can't be met) —
-            // a genuine market gap, not a tagging miss; the line ends honestly.
-            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy,     showMarker: true, markerSize: 4 },
+            // Federal = clean line (dense, ~100 quarters → no markers).
+            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy },
+            // State + Municipal = marker per present quarter (sparse → each
+            // available reading visible across the null gaps).
             { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
             { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582', showMarker: true, markerSize: 4 },  // sage
           ],
@@ -4674,14 +4688,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'renewal_rent_growth': {
-      // R66m — rebuilt to the deck p.32 combo ("Renewal Rent and its Growth
-      // Rate Over Time"): pale-blue TTM rent/SF bars + dark-blue quartile
-      // hi-low verticals (upper/lower Q markers) on the left $ axis, and the
-      // Avg Renewal Rent CAGR as a sky line on the right % axis. Underlying
-      // view (cm_gov_renewal_rent_growth_m) now outlier-trims rent_psf to
-      // [$5,$100] so the TTM rent sits at a deck-consistent ~$30 (was inflating
-      // to $54+) and cagr_5yr reads ~1-3% (was 10.6%). Prior build was a single
-      // noisy quarterly-rent bar (spiked to $60).
+      // R66m → R2-B Unit 4 (2026-06-29) — deck p.32 combo ("Renewal Rent and its
+      // Growth Rate Over Time"), redesigned per Scott for readability: a LIGHT
+      // lower→upper quartile up-down band, the AVG renewal rent/SF as a navy DOT
+      // in the middle of the band, and the Avg Renewal Rent CAGR as a sky LINE on
+      // the right % axis (the band is lighter than both the line and the dot).
+      // The prior pale TTM-rent BAR is dropped — `rentCol` now feeds the avg dot.
+      // Underlying view (cm_gov_renewal_rent_growth_m) outlier-trims rent_psf to
+      // [$5,$100] so the avg sits at a deck-consistent ~$30 and the per-lease
+      // CAGR reads ~0.1-1.5%.
       const periodCol = findCol('period_end');
       const rentCol   = findCol('ttm_avg_renewal_rent_psf');
       const upperCol  = findCol('upper_quartile_rpsf');
@@ -4715,9 +4730,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // line looked flat. Pin 0-2% (200bps) so the movement is visible.
           rightRange:  { min: 0, max: 0.02 },
           rightNumFmt: VAL_FMT_PERCENT_1DP,
-          rentColor:     'BBDDF2',
-          quartileColor: '003DA5',
-          cagrColor:     '62B5E5',
+          // R2-B Unit 4 — quartile band LIGHTER than the line + dot: pale-blue
+          // band, navy avg dot, sky CAGR line. rentCol now feeds the avg DOT.
+          quartileColor: 'BBDDF2',   // light band
+          avgColor:      '003DA5',   // navy dot
+          cagrColor:     '62B5E5',   // sky line
           anchor: standardAnchor,
         },
       };
