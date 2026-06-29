@@ -203,6 +203,14 @@ muni-stop root cause), T7-U2 (extend gov returns to ~1997 — shared-mat, audit 
 numerator → snapshot departures, re-fit axis), T9-legend ([5,6)yr → relabel `<5`→`<6`), T10 (drop dia
 Undisclosed bar + gov combo colors + average→dot), T11 (gov NM line render from 2014 + reconcile market basis)
 → then RE-EXPORT both for visual confirm.
+**JUNE-29 RE-EXPORT GATE: PASS** (2026-06-29) — verified in the exports: T5 (dia full span; gov scoped out),
+T6 (credit-tier circle markers on all 3 tiers), T7-U2 (gov returns 1997-01→2026-03), T9 (legend "< 6 Year
+Cap"), T10a (dia term chart reads 4 buckets, Undisclosed dropped, count kept in data tab), T11 (NM/market to
+2014+, market_cap_rate==headline 0-diff). **FINAL TWO (prompt `CLAUDE_CODE_PROMPT_T8U3_T10bc_final.md`):**
+T8-U3 — Scott chose ACCURACY (2026-06-29): flip the gov termination numerator to hardened snapshot-departures
+(exclude the 2026-03/06 restatement snapshots that crater the tail to ~1%) → true ~12-18% rate, re-fit axis,
+footnote; T10b — gov "Volume + Cap Rate + Quartile Band" 3-type combo z-order/colors (pinned); T10c — gov
+"Average Deal Size — TTM" bar→dot (pinned, confirm vs deck pg 25) → re-export.
 
 ### T5 — Core price-change % coverage  ·  P2
 **Notes:** dia 5, 9 · gov 27. "Core price adjustment data missing 2025+" / "core price change % lacking
