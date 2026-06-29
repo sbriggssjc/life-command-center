@@ -785,22 +785,20 @@ function buildChartConfig(chart, brand) {
       if (Object.keys(annotations).length) {
         opts.plugins.annotation = { annotations };
       }
-      // T10c (2026-06-29) — render as DOTS, not bars (Scott, gov 25: "the
-      // average should be a dot, not a bar"). A marker-only line (showLine
-      // false) keeps the quarter axis, the $X.XM y-axis, and the peak/trough/
-      // last labels. Mirrors the native injector's avg_deal_size dot series.
+      // R2-B Unit 3 (2026-06-29) — REVERT the T10c average→dot change for THIS
+      // template (Scott): Average Deal Size is a $ MAGNITUDE → a BAR is correct
+      // (the dot treatment moved to Renewal_Growth, Unit 4). Keeps the quarter
+      // axis, the $X.XM y-axis, and the peak/trough/last labels. Mirrors the
+      // native injector's avg_deal_size bar revert.
       return {
-        type: 'line',
+        type: 'bar',
         data: {
           labels,
           datasets: [{
             label: 'Avg Deal Size',
             data: rows.map(r => r.avg_deal_size),
-            borderColor: 'transparent',
-            backgroundColor: palette[0],   // NM navy dots
-            pointRadius: 4,
-            pointStyle: 'circle',
-            showLine: false,
+            backgroundColor: palette[0],   // NM navy bars
+            borderRadius: 2,
           }],
         },
         options: opts,
@@ -1592,20 +1590,17 @@ function buildChartConfig(chart, brand) {
       // outliers dominate the visual.
       // R76 E2 (2026-06-10) — state + municipal ARE present now (303 / 81
       // eligible sales → 76 / 29 charted quarters); the stale "0 state" note
-      // is retired. They are just SPARSE (muni ~<1 sale/quarter), so the
-      // R73 markers-on-every-point treatment made them read as a different
-      // SERIES TYPE than federal's clean line (Scott E2: "line type different
-      // for municipal and state — fix"). All three now share ONE line style
-      // (solid, borderWidth 2.5, tension 0.3); a scriptable pointRadius shows
-      // a marker ONLY at a genuinely isolated point (value present, both
-      // neighbors null) so a lone reading still appears — but contiguous runs
-      // render identically to federal. spanGaps:false keeps real gaps broken
-      // (never fabricate a connection across a multi-year hole).
-      const isoPointRadius = function (ctx) {
-        var d = ctx.dataset.data, i = ctx.dataIndex;
-        var cur = d[i], prev = i > 0 ? d[i - 1] : null, next = i < d.length - 1 ? d[i + 1] : null;
-        return (cur != null && prev == null && next == null) ? 3.5 : 0;
-      };
+      // is retired. They are just SPARSE (muni ~<1 sale/quarter).
+      // R2-B Unit 5 (2026-06-29, Scott) — markers on the DENSE Federal line read
+      // as clutter ("now has dots in the lines"); markers belong only where they
+      // ADD value — the SPARSE State + Municipal series, whose isolated points a
+      // markerless line cannot draw across the surrounding null gaps. Federal is
+      // a CLEAN line (pointRadius 0); State + Municipal carry a circle marker on
+      // every present quarter so each available reading shows. spanGaps:false
+      // keeps real gaps broken (never fabricate a connection across a hole). The
+      // genuine State/Municipal scarcity is annotated honestly in the worksheet
+      // caption (CHART_CAPTIONS.cap_rate_by_credit) — gaps read as real scarcity,
+      // not a broken pull; no points are fabricated.
       return {
         type: 'line',
         data: {
@@ -1613,13 +1608,13 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { label: 'Federal',   data: rows.map(r => r.federal_cap),
               borderColor: PDF_COLORS.cap_short,    backgroundColor: PDF_COLORS.cap_short,
-              tension: 0.3, borderWidth: 2.5, pointRadius: isoPointRadius, spanGaps: false },
+              tension: 0.3, borderWidth: 2.5, pointRadius: 0, spanGaps: false },
             { label: 'State',     data: rows.map(r => r.state_cap),
               borderColor: PDF_COLORS.cap_mid,      backgroundColor: PDF_COLORS.cap_mid,
-              tension: 0.3, borderWidth: 2.5, pointRadius: isoPointRadius, spanGaps: false },
+              tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
             { label: 'Municipal', data: rows.map(r => r.municipal_cap),
               borderColor: PDF_COLORS.cap_mid_long, backgroundColor: PDF_COLORS.cap_mid_long,
-              tension: 0.3, borderWidth: 2.5, pointRadius: isoPointRadius, spanGaps: false },
+              tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE, yAxisTitle: 'Cap rate' }),   // R76 E4
@@ -1883,38 +1878,38 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'renewal_rent_growth': {
-      // R66m — rebuilt to the deck p.32 combo ("Renewal Rent and its Growth
-      // Rate Over Time"), mirroring the native injector's renewal-combo:
-      //   • pale-blue TTM renewal rent/SF bars (left $ axis)
-      //   • dark-blue upper/lower-quartile floating bar (left $ axis) — reads
-      //     as the deck's vertical quartile marker
+      // R66m → R2-B Unit 4 (2026-06-29) — deck p.32 combo, redesigned per Scott
+      // for readability (mirrors the native injector's renewal-combo redesign):
+      //   • LIGHT lower→upper quartile up-down band (left $ axis) — lighter than
+      //     the line + dot
+      //   • navy Avg Renewal Rent / SF DOT in the middle of the band (left $ axis)
       //   • sky Avg Renewal Rent CAGR line (right % axis)
-      // Underlying view now outlier-trims rent_psf to [$5,$100] so rent sits
-      // at ~$30 (was inflating to $54+) and CAGR reads ~1-3% (was 10.6%).
+      // The prior pale TTM-rent BAR is dropped — the avg dot replaces it.
       return {
         type: 'bar',
         data: {
           labels,
           datasets: [
-            { type: 'bar', label: 'Renewal Rent / SF (TTM)',
-              data: rows.map(r => r.ttm_avg_renewal_rent_psf),
-              backgroundColor: '#BBDDF2', borderColor: '#BBDDF2',
-              borderRadius: 1, barPercentage: 0.85, categoryPercentage: 0.9,
-              yAxisID: 'y', order: 3 },
-            { type: 'bar', label: 'Upper–Lower Quartile',
+            { type: 'bar', label: 'Lower–Upper Quartile',
               data: rows.map(r => {
                 const lo = r.lower_quartile_rpsf, hi = r.upper_quartile_rpsf;
                 return (lo != null && hi != null) ? [Number(lo), Number(hi)] : null;
               }),
-              backgroundColor: PDF_COLORS.cap_short, // navy #003DA5
-              borderColor: PDF_COLORS.cap_short, borderSkipped: false,
+              backgroundColor: '#BBDDF2',   // LIGHT band (lighter than line + dot)
+              borderColor: '#BBDDF2', borderSkipped: false,
               barPercentage: 0.22, categoryPercentage: 0.9,
+              yAxisID: 'y', order: 3 },
+            { type: 'line', label: 'Avg Renewal Rent / SF',
+              // Avg renewal rent dot sitting in the middle of the quartile band.
+              data: rows.map(r => r.ttm_avg_renewal_rent_psf),
+              borderColor: 'transparent',
+              backgroundColor: PDF_COLORS.cap_short,   // navy #003DA5
+              pointRadius: 4, pointStyle: 'circle', showLine: false,
               yAxisID: 'y', order: 2 },
             { type: 'line', label: 'Avg Renewal Rent CAGR',
               // Per-lease renewal CAGR (deck p.32): new renewal rate vs the
               // building's earliest-observed rate, annualized over elapsed
-              // years, TTM-averaged. Flat ~1% from 2014 (cagr_5yr was a
-              // market-average that couldn't start before 2018).
+              // years, TTM-averaged (~0.1-1.5%).
               data: rows.map(r => r.cagr_per_lease),
               borderColor: PDF_COLORS.cap_mid, // sky #62B5E5
               backgroundColor: 'transparent', tension: 0.3,
@@ -1926,7 +1921,7 @@ function buildChartConfig(chart, brand) {
           yLeftFormat:  AXIS_FORMAT_CURRENCY,
           yRightFormat: AXIS_FORMAT_PERCENT_1DP,
           yLeftRange:   { min: 0, max: 45 },
-          yRightRange:  { min: -0.04, max: 0.08 },
+          yRightRange:  { min: 0, max: 0.02 },   // match native rightRange (Unit 4)
         }),
       };
     }

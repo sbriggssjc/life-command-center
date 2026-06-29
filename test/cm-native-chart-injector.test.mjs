@@ -23,6 +23,7 @@ import {
   buildInjectionSpec,
   buildMultiLineChartXml,
   buildComboChartXml,
+  buildRenewalRentGrowthXml,
   buildSingleBarChartXml,
   buildDoughnutChartXml,
   fitDataAxisRange,
@@ -1243,7 +1244,7 @@ test('R73 C4: volume_cap cap (right) axis lowered per vertical to lift the band 
     'dia cap axis 3.0-9.0% (band 5.70-7.70% lifts to the upper frame)');
 });
 
-test('T6: cap_rate_by_credit renders all three cohorts in one uniform line+marker style (sparse state/muni points visible)', () => {
+test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sparse State/Municipal', () => {
   const cols = [
     { key: 'period_end',   col: 'A' },
     { key: 'federal_cap',  col: 'B' },
@@ -1257,21 +1258,16 @@ test('T6: cap_rate_by_credit renders all three cohorts in one uniform line+marke
   });
   assert.equal(out.spec.type, 'multi-line');
   const [fed, state, muni] = out.spec.series;
-  // T6 (CM final closeout) — R76 E2 stripped ALL native markers, which made the
-  // sparse State/Municipal points invisible in the editable Excel chart. T6
-  // restores a small UNIFORM circle marker on all three cohorts (same style as
-  // federal — none reads as a different series type) so isolated sparse points
-  // are visible; dispBlanksAs='gap' keeps real holes honest.
-  assert.ok(fed.showMarker, 'federal carries a uniform marker');
-  assert.ok(state.showMarker, 'state carries the SAME uniform marker as federal');
-  assert.ok(muni.showMarker, 'municipal carries the SAME uniform marker as federal');
-  // Uniform style: all three share the same marker size (no series stands out).
-  assert.equal(state.markerSize, fed.markerSize, 'state marker size matches federal');
-  assert.equal(muni.markerSize, fed.markerSize, 'municipal marker size matches federal');
-  // Markers emitted as circles in the XML for every cohort.
+  // R2-B Unit 5 (Scott) — markers belong only where they ADD value: the SPARSE
+  // State + Municipal series (isolated points a markerless line cannot draw
+  // across the gaps). Federal is dense → a CLEAN line with NO per-point markers.
+  assert.ok(!fed.showMarker, 'federal is a clean line (no markers)');
+  assert.ok(state.showMarker, 'state carries a marker per present quarter');
+  assert.ok(muni.showMarker, 'municipal carries a marker per present quarter');
+  // XML: federal renders markerless; state/muni render circle markers.
   const xml = buildMultiLineChartXml(out.spec);
-  assert.match(xml, /<c:marker><c:symbol val="circle"\/>/, 'circle markers emitted');
-  assert.ok(!/<c:marker><c:symbol val="none"\/>/.test(xml), 'no markerless cohort (all uniform)');
+  assert.match(xml, /<c:marker><c:symbol val="circle"\/>/, 'circle markers emitted for the sparse cohorts');
+  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal renders as a markerless clean line');
 });
 
 test('R73 B1: bid_ask combo suppresses the invisible noFill base bar from the legend (no duplicate Last-Ask entry)', () => {
@@ -1462,11 +1458,11 @@ test('buildInjectionSpec: buyer_class_pct_by_year builds 4-series annual stacked
     'navy / mid-blue / sky / pale');
 });
 
-test('buildInjectionSpec: renewal_rent_growth is the R66m rent+quartile+CAGR combo', () => {
-  // R66m — rebuilt from the R33 single-bar to the deck p.32 combo: pale-blue
-  // TTM rent/SF bars + dark-blue quartile hi-lows on the $ axis, sky CAGR line
-  // on the % axis. The legacy single-bar shape only survives as a fallback when
-  // the quartile/CAGR columns are absent (see the next test).
+test('buildInjectionSpec: renewal_rent_growth is the Unit-4 band+avg-dot+CAGR combo', () => {
+  // R2-B Unit 4 — deck p.32 combo redesigned: a LIGHT lower→upper quartile band,
+  // the avg renewal rent/SF as a navy DOT in the middle of the band (rentCol),
+  // and the per-lease CAGR as a sky line on the % axis. The legacy single-bar
+  // shape only survives as a fallback when the quartile/CAGR cols are absent.
   const out = buildInjectionSpec({
     chart_template_id: 'renewal_rent_growth',
     tabName: 'Data_Renewal_Rent_Growth',
@@ -1483,12 +1479,18 @@ test('buildInjectionSpec: renewal_rent_growth is the R66m rent+quartile+CAGR com
     brand: { palette: { nm_sky: '#62B5E5' } },
   });
   assert.equal(out.spec.type, 'renewal-combo');
-  assert.equal(out.spec.rentCol, 'C', 'rent bars = ttm_avg_renewal_rent_psf');
+  assert.equal(out.spec.rentCol, 'C', 'avg dot = ttm_avg_renewal_rent_psf');
   assert.equal(out.spec.upperCol, 'D');
   assert.equal(out.spec.lowerCol, 'E');
   assert.equal(out.spec.cagrCol, 'F', 'CAGR line = cagr_5yr (cagr_per_lease absent)');
-  assert.equal(out.spec.rentColor, 'BBDDF2');
-  assert.equal(out.spec.cagrColor, '62B5E5');
+  // Unit 4 colors: light band lighter than the line + dot.
+  assert.equal(out.spec.quartileColor, 'BBDDF2', 'light quartile band');
+  assert.equal(out.spec.avgColor, '003DA5', 'navy avg dot');
+  assert.equal(out.spec.cagrColor, '62B5E5', 'sky CAGR line');
+  // The redesigned XML drops the bar chart and renders the avg as a circle dot.
+  const xml = buildRenewalRentGrowthXml(out.spec);
+  assert.ok(!/<c:barChart>/.test(xml), 'no bar chart (avg is now a dot)');
+  assert.match(xml, /<c:symbol val="circle"\/>/, 'avg renders as a circle dot');
 });
 
 test('buildInjectionSpec: renewal_rent_growth falls back to single bar when quartile/CAGR cols missing', () => {
@@ -1989,14 +1991,12 @@ test('buildInjectionSpec: dispatches bar vs line correctly', () => {
   assert.equal(bar.spec.catCol, 'A');
   assert.equal(bar.spec.valCol, 'C');
 
-  // T10c — avg_deal_size is now a marker-only (dot) multi-line series, not a bar
-  const dots = buildInjectionSpec(args('avg_deal_size', baseCols));
-  assert.equal(dots.spec.type, 'multi-line');
-  assert.equal(dots.spec.catCol, 'A');
-  assert.equal(dots.spec.series.length, 1);
-  assert.equal(dots.spec.series[0].valCol, 'C');
-  assert.equal(dots.spec.series[0].markerOnly, true);
-  assert.equal(dots.spec.series[0].showMarker, true);
+  // R2-B Unit 3 — avg_deal_size REVERTED to a bar (a $ magnitude); the T10c dot
+  // treatment moved to Renewal_Growth.
+  const avgDeal = buildInjectionSpec(args('avg_deal_size', baseCols));
+  assert.equal(avgDeal.spec.type, 'bar');
+  assert.equal(avgDeal.spec.catCol, 'A');
+  assert.equal(avgDeal.spec.valCol, 'C');
 
   // line — cap_rate_ttm_by_quarter expects ttm_weighted_cap_rate column
   const lineCols = [
@@ -3125,12 +3125,12 @@ test('R73 D-#19: net_lease_spread floors at 2002 (earliest consistent treasury)'
   assert.equal(spec.spec.dataStart, 5 + 12, 'net-lease-spread floors at first 2002 row');
 });
 
-test('T1: nm_vs_market_cap extends to 2001 (market line full-range; NM overlay gaps until it begins)', () => {
+test('R2-B Unit 1: nm_vs_market_cap starts where the NM line begins (~2014), not the market line (2001)', () => {
   // market_cap_rate runs 12/12 from 2001; nm_cap_rate is sparse, NULL until 2014.
-  // The range starts at the earliest non-null across BOTH series = 2001 (market),
-  // so the market line plots full-range while the NM line simply gaps until 2014
-  // (via dispBlanksAs='gap'). Superseded the R66o static-2020 clip that hid all
-  // pre-2020 market context.
+  // Scott (Unit 1): "data starts ~2014 — start the chart there, not 2001/1997."
+  // The NM overlay is the chart's subject, so the start is the first nm_cap_rate
+  // non-null (2014); the long-history market line is cropped to the same window.
+  // Superseded the T1 "market full-range + NM overlay gaps" start.
   const rows = [];
   for (let y = 2001; y <= 2024; y++) {
     for (let m = 1; m <= 12; m++) {
@@ -3154,8 +3154,10 @@ test('T1: nm_vs_market_cap extends to 2001 (market line full-range; NM overlay g
     brand: { palette: {} },
     rows,
   });
-  assert.equal(spec.spec.dataStart, 5,
-    'T1: range starts at 2001 (market present); not clipped to the NM line start');
+  // 2001-01 .. 2013-12 = 13 years × 12 = 156 rows trimmed off; the first 2014-01
+  // row is at index 156 → effectiveStart = 5 + 156 = 161.
+  assert.equal(spec.spec.dataStart, 161,
+    'Unit 1: range starts at the NM line start (2014), market cropped to match');
 });
 
 test('R47: template not in MIN_YEAR_BY_TEMPLATE keeps original dataStart', () => {
@@ -4374,9 +4376,10 @@ test('R37 P3: buildInjectionSpec wires data labels from rows (avg_deal_size)', (
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
     rows,
   });
-  // T10c — avg_deal_size is now a marker-only multi-line series; the data
-  // labels ride on series[0] (was top-level spec.dataLabels on the bar spec).
-  const dataLabels = spec.spec.series[0].dataLabels;
+  // R2-B Unit 3 — avg_deal_size reverted to a single bar (singleSeries), so the
+  // data labels ride top-level on the spec again (was series[0] under T10c).
+  const dataLabels = spec.spec.dataLabels;
+  assert.equal(spec.spec.type, 'bar', 'avg_deal_size is a bar');
   assert.ok(dataLabels, 'avg_deal_size attaches dataLabels');
   assert.ok(dataLabels.length >= 1, 'has at least last-point label');
   // last is row index 11 (12th row) with value 5.0M + 11*0.25M = 7.75M
@@ -4494,8 +4497,8 @@ test('R37 P3: buildAnnotations returns fewer than 3 entries when peaks coincide'
     rows,
   });
   // last (idx 7, val 8M) — equals max, so only 2 distinct: last + min
-  // T10c — labels now ride on series[0] (marker-only multi-line, was bar spec).
-  const dataLabels = spec.spec.series[0].dataLabels;
+  // R2-B Unit 3 — avg_deal_size reverted to a bar; labels ride top-level again.
+  const dataLabels = spec.spec.dataLabels;
   assert.equal(dataLabels.length, 2,
     'monotonic data → max==last → 2 labels (last + min)');
   const idxs = dataLabels.map(l => l.idx).sort((a, b) => a - b);
