@@ -3243,11 +3243,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // line. The negSeries machinery below (negated helper cols + below-zero
       // stacking) reactivates automatically off the sign map. Mirrors the
       // renderer (cm-chart-image-renderer.js lease_renewal_rate). pdf_reconcile.
+      // R2-C Unit 4 — the below-zero EXIT side is now TRUE departures
+      // (non_renewed_expirations + terminated = net_departures_ttm), not the
+      // double-counted/event-corrupted expired + terminated (~1,425 -> ~595).
+      // expired_leases stays a data-tab audit column, off the bars.
       const RENEWAL_SERIES = [
         { key: 'first_generation_commencements', color: 'E0E8F4', sign: +1 },  // pale
         { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
         { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
-        { key: 'expired_leases',                 color: '62B5E5', sign: -1 },  // sky
+        { key: 'non_renewed_expirations',        color: '62B5E5', sign: -1 },  // sky — expired & not renewed
         { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
       ];
       const resolved = RENEWAL_SERIES
