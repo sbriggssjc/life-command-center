@@ -426,14 +426,27 @@ export async function handleOwnerContactEnrichTick(req, res) {
 
   // Candidates: pivot rows not yet linked (named → attach/drill-through) +
   // contactless rows carrying an enrichment_action. status locked/superseded are
-  // engaged/retired — skip. Ordered by least-recently-updated for fair drain.
-  const sel = 'owner_contact_pivot?select=entity_id,owner_name,workspace_id,'
-    + 'active_contact_name,active_contact_entity_id,active_authority_level,active_contact_role,enrichment_action,status'
-    + '&active_contact_entity_id=is.null'
+  // engaged/retired — skip.
+  const COLS = 'entity_id,owner_name,workspace_id,active_contact_name,'
+    + 'active_contact_entity_id,active_authority_level,active_contact_role,enrichment_action,status';
+  const FILTERS = '&active_contact_entity_id=is.null'
     + '&status=in.(active,exhausted)'
-    + '&or=(active_contact_name.not.is.null,enrichment_action.not.is.null)'
-    + '&order=updated_at.asc&limit=' + limit;
-  const r = await opsQuery('GET', sel);
+    + '&or=(active_contact_name.not.is.null,enrichment_action.not.is.null)';
+  // VALUE-RANKED (rank_value DESC) so the worker spends its budget-limited attach
+  // effort on the highest-value owners FIRST instead of FIFO — and the value-gated
+  // cadence-seed fires on the owners that matter. rank_value comes from the EXISTING
+  // R34 value sources (portfolio rollup → R17 connected-property value) via
+  // v_owner_contact_enrich_queue; updated_at ASC is the tiebreak that keeps the
+  // silent-churn guard progressing among equal-value rows.
+  const valueSel = 'v_owner_contact_enrich_queue?select=' + COLS + ',rank_value'
+    + FILTERS + '&order=rank_value.desc.nullslast,updated_at.asc&limit=' + limit;
+  // Deploy-order-safe fallback: if the value-rank view isn't present yet, drain the
+  // table FIFO (the prior behavior) rather than erroring. Reversible — drop the
+  // view → the worker silently reverts to least-recently-updated ordering.
+  const tableSel = 'owner_contact_pivot?select=' + COLS
+    + FILTERS + '&order=updated_at.asc&limit=' + limit;
+  let r = await opsQuery('GET', valueSel);
+  if (!r.ok) r = await opsQuery('GET', tableSel);
   if (!r.ok) return res.status(r.status || 500).json({ error: 'load_failed', detail: r.data });
   const rows = Array.isArray(r.data) ? r.data : [];
 
