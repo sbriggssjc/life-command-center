@@ -257,9 +257,19 @@ export function buildLeaseExtractionPrompt() {
     '  "ti_schedule": [ { "schedule_year": int|null, "period_start": "YYYY-MM-DD"|null,',
     '    "period_end": "YYYY-MM-DD"|null, "ti_excess_amount": number|null,',
     '    "cumulative_ti": number|null, "burn_off_date": "YYYY-MM-DD"|null } ],',
-    '  "expense_schedule": [ { "year": int|null, "category": str|null, "amount": number|null } ]',
+    '  "expense_schedule": [ { "year": int|null, "category": str|null, "amount": number|null } ],',
+    '  "notices": {',
+    '    "guarantor_address": str|null, "guarantor_phone": str|null, "guarantor_email": str|null,',
+    '    "tenant_address": str|null, "tenant_phone": str|null, "tenant_email": str|null',
+    '  }',
     '}',
     'The "guarantor" is the credit parent (e.g. "Total Renal Care, Inc." guarantees a DaVita lease).',
+    'The "notices" block is the lease\'s NOTICE / boilerplate contact info ("Notices to <party> ' +
+      'shall be sent to … at <address>", or a signature/contact block): the GUARANTOR\'s and the ' +
+      'TENANT\'s own mailing/notice address + phone + email. The notice address is the PARTY\'s ' +
+      'contact address — NOT the leased-premises / subject-property address. Extract ONLY what the ' +
+      'lease literally states; leave each field null when absent. Never infer or fabricate a phone, ' +
+      'email, or address.',
     'Use null for anything not stated. Do NOT invent a sale price or cap rate.',
   ].join('\n');
 }
@@ -320,7 +330,22 @@ export function normalizeLeaseExtraction(raw) {
     amount: num(row?.amount),
   })).filter(row => row.amount !== null);
 
-  return { property_identity, factual, ti_schedule, expense_schedule, rent_reconcile_flag: rec.flag };
+  // ORE Phase 1 Unit E — guarantor/tenant NOTICE contact block (the lease's
+  // boilerplate "notices to … at …" address + phone + email). Coerced to clean
+  // strings; absent fields stay null (no fabrication). The guarantor notice
+  // contact is written onto the guarantor entity (fill-blanks) in
+  // applyLeaseEnrichment; the tenant notice fields are surfaced for completeness.
+  const n = r.notices || {};
+  const notices = {
+    guarantor_address: str(n.guarantor_address),
+    guarantor_phone:   str(n.guarantor_phone),
+    guarantor_email:   str(n.guarantor_email),
+    tenant_address:    str(n.tenant_address),
+    tenant_phone:      str(n.tenant_phone),
+    tenant_email:      str(n.tenant_email),
+  };
+
+  return { property_identity, factual, ti_schedule, expense_schedule, notices, rent_reconcile_flag: rec.flag };
 }
 
 /**
@@ -629,6 +654,7 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
   const plan = planLeaseWrites(domain, normalized);
   const out = {
     ok: true, fields_filled: 0, conflicts: 0, ti_rows: 0, financial_rows: 0, guarantor_entity_id: null, guaranteed_by_edge: null,
+    guarantor_contact_filled: 0,
     document_id: null, lease_id: leaseId, lease_created: false, guarantor_withheld: false, warnings: plan.warnings,
   };
 
@@ -763,6 +789,27 @@ export async function applyLeaseEnrichment({ domain, propertyId, leaseId = null,
     // bare guarantor entity — surface its outcome instead of silently dropping it.
     out.guaranteed_by_edge = g?.edge_ok ?? null;
     if (g?.warning) out.warnings = [...out.warnings, g.warning];
+
+    // 4b) ORE Phase 1 Unit E — land the guarantor's NOTICE contact (address /
+    //     phone / email from the lease boilerplate) onto the guarantor ENTITY,
+    //     FILL-BLANKS. This is a BD-graph enrichment (entities is the LCC graph,
+    //     not a curated dia/gov domain table governed by field_source_priority),
+    //     so it does not route through the provenance ledger; the lease FACTUAL
+    //     fields keep their folder_feed_lease provenance above. Gated on the
+    //     optional writeEntityContact dep so legacy callers / tests are
+    //     byte-identical. Never fabricates — only writes what the lease stated.
+    const ntc = normalized.notices || {};
+    const guarContact = {
+      address: ntc.guarantor_address || null,
+      phone:   ntc.guarantor_phone || null,
+      email:   ntc.guarantor_email || null,
+    };
+    if (out.guarantor_entity_id && deps.writeEntityContact &&
+        (guarContact.address || guarContact.phone || guarContact.email)) {
+      const wc = await deps.writeEntityContact({ entityId: out.guarantor_entity_id, fields: guarContact })
+        .catch(() => ({ ok: false }));
+      out.guarantor_contact_filled = wc?.filled || 0;
+    }
   }
 
   // 5) Attach the lease doc to the property.
@@ -1294,6 +1341,31 @@ export function buildRealLeaseDeps({ workspaceId, actorId }) {
     attachDoc: async ({ domain, propertyId, fileName, sourceUrl }) => {
       const r = await attachEnrichDocument(domain, propertyId, { fileName, docType: 'lease', sourceUrl }).catch(() => null);
       return { document_id: r?.document_id || null };
+    },
+    // ORE Phase 1 Unit E — FILL-BLANKS the guarantor entity's contact columns
+    // (address / phone / email) on the LCC `entities` row. Reads the row first and
+    // writes ONLY columns that are currently blank — a curated value is never
+    // clobbered. entities is the LCC BD graph (not a curated domain table), so this
+    // is a graph enrichment, not a provenance-ledger write. Idempotent (a re-tick
+    // finds the columns filled → no-op). Returns {ok, filled}.
+    writeEntityContact: async ({ entityId, fields }) => {
+      if (!entityId || !fields) return { ok: false, filled: 0 };
+      const wanted = ['address', 'phone', 'email'].filter(k => {
+        const v = fields[k];
+        return v != null && String(v).trim() !== '';
+      });
+      if (!wanted.length) return { ok: true, filled: 0 };
+      const cur = await opsQuery('GET',
+        `entities?id=eq.${pgFilterVal(entityId)}&select=${wanted.join(',')}&limit=1`).catch(() => ({ ok: false }));
+      const row0 = (cur.ok && Array.isArray(cur.data) && cur.data[0]) || {};
+      const patch = {};
+      for (const k of wanted) {
+        const existing = row0[k];
+        if (existing == null || String(existing).trim() === '') patch[k] = String(fields[k]).trim();
+      }
+      if (!Object.keys(patch).length) return { ok: true, filled: 0 };
+      const r = await opsQuery('PATCH', `entities?id=eq.${pgFilterVal(entityId)}`, patch).catch(() => ({ ok: false }));
+      return { ok: !!r.ok, filled: r.ok ? Object.keys(patch).length : 0 };
     },
   };
 }

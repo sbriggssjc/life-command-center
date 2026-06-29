@@ -1143,3 +1143,78 @@ describe('lease extractor — R59 Unit 4 research producers', () => {
     assert.equal(out.guarantor_research_task, undefined);
   });
 });
+
+// ── ORE Phase 1 Unit E — guarantor/tenant notice contact ──────────────────
+describe('lease notices block + guarantor entity contact (ORE Phase 1 Unit E)', () => {
+  const RAW_NOTICE = {
+    ...RAW,
+    notices: {
+      guarantor_address: '2000 16th St, Denver, CO 80202',
+      guarantor_phone: '303-555-0100',
+      guarantor_email: 'legal@davita.com',
+      tenant_address: '4601 Madison Ave Ste 200, Kansas City, MO 64112',
+      tenant_phone: null,
+      tenant_email: '  ',
+    },
+  };
+
+  it('normalizeLeaseExtraction surfaces the notices block (present → string, absent → null)', () => {
+    const n = normalizeLeaseExtraction(RAW_NOTICE);
+    assert.equal(n.notices.guarantor_address, '2000 16th St, Denver, CO 80202');
+    assert.equal(n.notices.guarantor_phone, '303-555-0100');
+    assert.equal(n.notices.guarantor_email, 'legal@davita.com');
+    assert.equal(n.notices.tenant_address, '4601 Madison Ave Ste 200, Kansas City, MO 64112');
+    assert.equal(n.notices.tenant_phone, null);   // absent
+    assert.equal(n.notices.tenant_email, null);   // whitespace → null (no fabrication)
+  });
+
+  it('normalizeLeaseExtraction emits an all-null notices block when none stated', () => {
+    const n = normalizeLeaseExtraction(RAW); // RAW carries no notices
+    assert.ok(n.notices, 'notices object always present');
+    assert.equal(n.notices.guarantor_address, null);
+    assert.equal(n.notices.guarantor_email, null);
+    assert.equal(n.notices.tenant_address, null);
+  });
+
+  it('applyLeaseEnrichment writes the guarantor notice contact onto the guarantor entity (fill-blanks)', async () => {
+    let wcCall = null;
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }), patchLease: async () => ({ ok: true }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'ent-guar-1', edge_ok: true }),
+      writeEntityContact: async (a) => { wcCall = a; return { ok: true, filled: 3 }; },
+    };
+    const out = await applyLeaseEnrichment(
+      { domain: 'government', propertyId: 555, leaseId: 1, normalized: normalizeLeaseExtraction(RAW_NOTICE) }, deps);
+    assert.equal(out.guarantor_entity_id, 'ent-guar-1');
+    assert.ok(wcCall, 'writeEntityContact called');
+    assert.equal(wcCall.entityId, 'ent-guar-1');
+    assert.equal(wcCall.fields.address, '2000 16th St, Denver, CO 80202');
+    assert.equal(wcCall.fields.phone, '303-555-0100');
+    assert.equal(wcCall.fields.email, 'legal@davita.com');
+    assert.equal(out.guarantor_contact_filled, 3);
+  });
+
+  it('does NOT call writeEntityContact when the lease states no guarantor notice contact', async () => {
+    let called = false;
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }), patchLease: async () => ({ ok: true }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'ent-guar-1', edge_ok: true }),
+      writeEntityContact: async () => { called = true; return { ok: true, filled: 0 }; },
+    };
+    const out = await applyLeaseEnrichment(
+      { domain: 'government', propertyId: 555, leaseId: 1, normalized: normalizeLeaseExtraction(RAW) }, deps);
+    assert.equal(called, false, 'no notice contact → never called (no fabrication)');
+    assert.equal(out.guarantor_contact_filled, 0);
+  });
+
+  it('byte-identical when writeEntityContact is NOT injected (legacy callers / tests)', async () => {
+    const deps = {
+      mergeField: async () => ({ decision: 'write' }), patchLease: async () => ({ ok: true }),
+      ensureGuarantorEntity: async () => ({ entity_id: 'ent-guar-1', edge_ok: true }),
+    };
+    const out = await applyLeaseEnrichment(
+      { domain: 'government', propertyId: 555, leaseId: 1, normalized: normalizeLeaseExtraction(RAW_NOTICE) }, deps);
+    assert.equal(out.guarantor_entity_id, 'ent-guar-1');
+    assert.equal(out.guarantor_contact_filled, 0); // no dep → no write, no throw
+  });
+});
