@@ -956,12 +956,18 @@ function buildMultiLineChartXml(spec) {
     const markerFrag = s.showMarker
       ? `<c:marker><c:symbol val="${s.markerShape || 'circle'}"/><c:size val="${s.markerSize || 5}"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln></c:spPr></c:marker>`
       : `<c:marker><c:symbol val="none"/></c:marker>`;
+    // T10c — `markerOnly` suppresses the connecting line (no-fill stroke) so the
+    // series renders as DOTS only (Avg Deal Size: "the average should be a dot,
+    // not a bar"). The category axis + markers are kept; only the line is hidden.
+    const lineSpFrag = s.markerOnly
+      ? `<a:ln><a:noFill/></a:ln>`
+      : `<a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>`;
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
           <c:spPr>
-            <a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>
+            ${lineSpFrag}
           </c:spPr>
           ${markerFrag}
 ${dLblsFrag}
@@ -3046,16 +3052,33 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       return singleSeries('bar', ['ttm_count', 'count'], navy, {
         valAxNumFmt: VAL_FMT_INTEGER,
       });
-    case 'avg_deal_size':
-      // R37 P3 + R64 — y-axis labels use "$X.XM" format per user batch 5
-      // ("formatted in the same $7.0M style"). The R37 P3 peak/trough/last
-      // annotation already used currency_m formatter; only the y-axis
-      // numFmt changes to match.
-      return singleSeries('bar', 'avg_deal_size', navy, {
-        valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
-        annotateKey: 'avg_deal_size',
-        annotateFmt: 'currency_m',
-      });
+    case 'avg_deal_size': {
+      // T10c (2026-06-29) — render Average Deal Size as DOTS, not bars (Scott,
+      // gov 25: "the average should be a dot, not a bar"). A single marker-only
+      // line series (no connecting line) keeps the quarter category axis, the
+      // $X.XM y-axis format, and the peak/trough/last labels. Mirrors the
+      // renderer's avg_deal_size dot conversion. (Was a navy bar via singleSeries.)
+      const periodCol = findCol('period_end');
+      const valCol    = findCol('avg_deal_size');
+      if (!periodCol || !valCol) return null;
+      const fmt = ANNOTATION_FORMATTERS['currency_m'];
+      const dataLabels = (fmt && Array.isArray(rows))
+        ? buildAnnotationsForSpec(rows, r => r.avg_deal_size, fmt)
+        : undefined;
+      return {
+        tabName,
+        spec: {
+          type: 'multi-line', tabName, catCol: periodCol, dataStart, dataEnd,
+          valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
+          series: [
+            { titleCol: valCol, titleRow: headerRow, valCol,
+              color: navy, showMarker: true, markerOnly: true,
+              markerShape: 'circle', markerSize: 6, dataLabels },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
     case 'yoy_volume_change':
       // Renderer uses signed colors (navy positive, lighter negative).
       // Native chart XML doesn't easily express per-point conditional
@@ -4783,12 +4806,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //   2. PALE SKY FLOATING BARS (middle, right axis %) — Q1-Q3 cap range
       //   3. NAVY DOTS (front, right axis %) — TTM avg cap rate
       //
-      // Native decomposition uses the new 'area-combo' dispatch:
-      //   areaSeries: volume_dollars (col C) — pale fill, navy border, LEFT
+      // Native decomposition uses the new 'area-combo' dispatch (T10b colors —
+      // three distinct brand hues, see the consts below):
+      //   areaSeries: volume_dollars (col C) — pale fill, SKY border, LEFT
       //   barSeries[0] noFill=true:  lower_quartile (col F)
-      //   barSeries[1] pale sky 25% alpha w/ sky border:
+      //   barSeries[1] AMETHYST 30% alpha w/ amethyst border:
       //                              iqr_width helper (col G) = upper - lower
-      //   lineSeries[0] navy circle markers (no line):
+      //   lineSeries[0] NAVY circle markers (no line):
       //                              cap_rate (col D), shows on top
       const periodCol  = findCol('period_end');
       const volCol     = findCol('volume_dollars');
@@ -4799,6 +4823,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
       const iqrCol = String.fromCharCode(65 + cols.length);  // helper col letter
       const pale = (palette.nm_pale || '#E0E8F4').replace('#', '');
+      // T10b — three DISTINCT brand hues so the layers stop "blocking each
+      // other": volume area = pale fill + SKY edge (recedes, was navy), cap
+      // quartile band = AMETHYST low-opacity (was sky — blended with the area),
+      // avg-cap dots = NM navy (the lone navy element, the headline metric).
+      const amethyst = '7E6BAD';
 
       // R37 P3 — peak/trough/most-recent labels on the navy cap-rate dots
       // (renderer line 1489: buildAnnotations(rows, r => r.cap_rate, fmtPct2))
@@ -4825,17 +4854,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           areaSeries: {
             titleCol: volCol, titleRow: headerRow, valCol: volCol,
-            fillColor: pale,     // pale blue fill
-            borderColor: navy,   // navy border on the area edge
+            fillColor: pale,     // pale blue fill (quiet background area)
+            borderColor: sky,    // T10b — sky edge (was navy; frees navy for the dots)
           },
           barSeries: [
             // Invisible base — lifts the IQR bar off 0 up to lower_quartile
             { titleCol: lowerCol, titleRow: headerRow, valCol: lowerCol,
-              color: sky, noFill: true },
-            // Visible IQR band — pale sky 25% alpha w/ solid sky border
-            // (matches renderer's rgba(98,181,229,0.25) fill + sky border)
+              color: amethyst, noFill: true },
+            // Visible IQR band — T10b: amethyst 30% alpha w/ solid amethyst
+            // border (distinct from the sky volume area + the navy dots).
             { titleCol: iqrCol, titleRow: headerRow, valCol: iqrCol,
-              color: sky, alpha: '25000', borderColor: sky },
+              color: amethyst, alpha: '30000', borderColor: amethyst },
           ],
           lineSeries: [
             // Avg cap rate dots — navy circle markers, no connecting line

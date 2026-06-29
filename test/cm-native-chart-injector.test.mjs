@@ -1189,21 +1189,21 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.equal(out.spec.type, 'area-combo');
   assert.equal(out.spec.catCol, 'A');
 
-  // Area series: volume_dollars, pale fill, navy border, LEFT axis
+  // Area series: volume_dollars, pale fill, SKY border (T10b — distinct hues), LEFT axis
   assert.ok(out.spec.areaSeries, 'has areaSeries');
   assert.equal(out.spec.areaSeries.valCol, 'C', 'area = volume_dollars');
   assert.equal(out.spec.areaSeries.fillColor, 'E0E8F4');
-  assert.equal(out.spec.areaSeries.borderColor, '003DA5');
+  assert.equal(out.spec.areaSeries.borderColor, '62B5E5', 'T10b — sky edge (was navy)');
 
-  // Bar series: invisible base (lower_q) + visible pale sky band (iqr helper, col G)
+  // Bar series: invisible base (lower_q) + visible AMETHYST band (iqr helper, col G)
   assert.equal(out.spec.barSeries.length, 2);
   assert.equal(out.spec.barSeries[0].valCol, 'F', 'base = lower_quartile');
   assert.equal(out.spec.barSeries[0].noFill, true);
   assert.equal(out.spec.barSeries[1].valCol, 'G', 'band = iqr_width helper');
-  assert.equal(out.spec.barSeries[1].alpha, '25000', '25% alpha (renderer rgba(...,0.25))');
-  assert.equal(out.spec.barSeries[1].borderColor, '62B5E5', 'sky border');
+  assert.equal(out.spec.barSeries[1].alpha, '30000', 'T10b — amethyst 30% alpha');
+  assert.equal(out.spec.barSeries[1].borderColor, '7E6BAD', 'T10b — amethyst border (was sky)');
 
-  // Line series: cap_rate dots (navy circles)
+  // Line series: cap_rate dots (navy circles — the lone navy element)
   assert.equal(out.spec.lineSeries.length, 1);
   assert.equal(out.spec.lineSeries[0].valCol, 'D', 'line = cap_rate');
   assert.equal(out.spec.lineSeries[0].color, '003DA5');
@@ -1978,11 +1978,25 @@ test('buildInjectionSpec: dispatches bar vs line correctly', () => {
     cols, dataStart: 5, dataEnd: 100, brand,
   });
 
-  // bar
-  const bar = buildInjectionSpec(args('avg_deal_size', baseCols));
+  // bar — transaction_count_ttm is a single-bar template
+  const barCols = [
+    { key: 'period_end',   col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'ttm_count',    col: 'C' },
+  ];
+  const bar = buildInjectionSpec(args('transaction_count_ttm', barCols));
   assert.equal(bar.spec.type, 'bar');
   assert.equal(bar.spec.catCol, 'A');
   assert.equal(bar.spec.valCol, 'C');
+
+  // T10c — avg_deal_size is now a marker-only (dot) multi-line series, not a bar
+  const dots = buildInjectionSpec(args('avg_deal_size', baseCols));
+  assert.equal(dots.spec.type, 'multi-line');
+  assert.equal(dots.spec.catCol, 'A');
+  assert.equal(dots.spec.series.length, 1);
+  assert.equal(dots.spec.series[0].valCol, 'C');
+  assert.equal(dots.spec.series[0].markerOnly, true);
+  assert.equal(dots.spec.series[0].showMarker, true);
 
   // line — cap_rate_ttm_by_quarter expects ttm_weighted_cap_rate column
   const lineCols = [
@@ -4360,10 +4374,13 @@ test('R37 P3: buildInjectionSpec wires data labels from rows (avg_deal_size)', (
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
     rows,
   });
-  assert.ok(spec.spec.dataLabels, 'avg_deal_size attaches dataLabels');
-  assert.ok(spec.spec.dataLabels.length >= 1, 'has at least last-point label');
+  // T10c — avg_deal_size is now a marker-only multi-line series; the data
+  // labels ride on series[0] (was top-level spec.dataLabels on the bar spec).
+  const dataLabels = spec.spec.series[0].dataLabels;
+  assert.ok(dataLabels, 'avg_deal_size attaches dataLabels');
+  assert.ok(dataLabels.length >= 1, 'has at least last-point label');
   // last is row index 11 (12th row) with value 5.0M + 11*0.25M = 7.75M
-  const last = spec.spec.dataLabels.find(l => l.idx === 11);
+  const last = dataLabels.find(l => l.idx === 11);
   assert.ok(last, 'last-point label present at idx 11');
   assert.match(last.text, /^\$/, 'currency format');
   assert.match(last.text, /M$/, 'compact M suffix');
@@ -4477,9 +4494,11 @@ test('R37 P3: buildAnnotations returns fewer than 3 entries when peaks coincide'
     rows,
   });
   // last (idx 7, val 8M) — equals max, so only 2 distinct: last + min
-  assert.equal(spec.spec.dataLabels.length, 2,
+  // T10c — labels now ride on series[0] (marker-only multi-line, was bar spec).
+  const dataLabels = spec.spec.series[0].dataLabels;
+  assert.equal(dataLabels.length, 2,
     'monotonic data → max==last → 2 labels (last + min)');
-  const idxs = spec.spec.dataLabels.map(l => l.idx).sort((a, b) => a - b);
+  const idxs = dataLabels.map(l => l.idx).sort((a, b) => a - b);
   assert.deepEqual(idxs, [0, 7], 'min at idx 0, last at idx 7');
 });
 
