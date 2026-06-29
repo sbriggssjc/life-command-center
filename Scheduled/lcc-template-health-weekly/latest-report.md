@@ -1,77 +1,69 @@
-# LCC Template Health Report
+# LCC Template Health — Weekly Pulse
 
-**Week of:** June 22, 2026
+**Run:** Monday, June 29, 2026 · 8:00 AM CT
 **Lookback window:** 120 days
-**Run mode:** Live API call against `https://tranquil-delight-production-633f.up.railway.app/api/operations?_route=draft&action=health` with `X-LCC-Key`.
-**Status:** ✅ Completed — HTTP 200.
+**Endpoint:** `POST /api/operations?_route=draft&action=health` (Railway, live, `X-LCC-Key`)
 
-> Destination note: the task asks for this report at
-> `C:\Users\scott\OneDrive\Documents\Claude\Scheduled\lcc-template-health-weekly\latest-report.md`,
-> but that OneDrive folder isn't in the session's connected mounts (same as every prior week).
-> Written to the LCC workspace path instead.
+## At a glance
 
----
+| Metric | Count |
+|---|---|
+| Templates evaluated | 14 |
+| **Need revision** (edit rate > 40%) | **0** |
+| Underperforming vs targets | 1 |
+| Stale (no sends in 120 days) | 13 |
+| Healthy | 0 |
 
-## Executive Summary
+**Bottom line:** No templates need a revision this week — broker edit rates are
+acceptable across the board (and no template has enough edit samples to flag).
+One template is underperforming on open/reply, and nearly the whole library is
+unused. The real signal here is **adoption, not copy quality**.
 
-Health endpoint returned a clean 200. **No templates need revision and none are underperforming.** All 14 active templates are flagged `stale` for the same standing reason as every prior week: no broker sends have been recorded in the lookback window, so there is no edit-distance or performance data to score.
+## Needs revision (high edit rates)
 
-| Metric | This week (Jun 22) | Last week (Jun 15) |
-|---|---|---|
-| Endpoint response | **HTTP 200** | HTTP 200 |
-| Total templates evaluated | **14** | 14 |
-| Need revision (edit rate >40%) | **0** | 0 |
-| Underperforming vs targets | **0** | 0 |
-| Stale (no sends in window) | **14** | 14 |
-| Healthy | **0** | 0 |
+None. `revisions_flagged: 0` — no template is being heavily rewritten by hand,
+and none has a large enough edit sample to evaluate edit distance yet.
 
-`revisions_flagged: 0` — the revision-suggestion path produced nothing.
+## Underperforming vs targets — 1
 
----
+**T-001 · First Touch** (seller_bd, v3)
 
-## Templates Needing Revision
+- Sends (120d): 5 — all on 2026-06-26
+- Open rate: 0% vs 35% target
+- Reply rate: 0% vs 5% target
+- Edit distance: no samples
+- Engine revision suggestion: none flagged
 
-**None.** Flagging requires send history carrying edit-distance data; no template has any, so nothing is actionable from a copy-quality standpoint.
+Caveat worth keeping in mind: the mailto/copy send path carries **no open- or
+reply-tracking signal**, so a 0% open/reply on 5 same-day sends is most likely a
+*measurement gap*, not proof the copy is failing. Treat this as "watch as volume
+builds," not "rewrite now." It becomes a real quality signal once tracked sends
+(or logged replies) accumulate.
 
----
+## Stale — 13 (no sends in 120 days)
 
-## All active templates (all currently `stale`, 0 sends in 120d)
+T-002 Cadence Follow-Up · T-003 Capital Markets Update · T-004 Listing
+Announcement · T-005 Early Look Preview · T-006 OM Download Follow-Up ·
+T-007 Seller Weekly Activity Report · T-008 BOV Delivery Cover · T-009 Closing
+Announcement · T-010 Cold Ownership Inquiry · T-011 Listing BD — Same Asset
+Type/Same State · T-012 Listing BD — Owner Located Near Listing · T-013 GSA
+Lease Award Congratulations · T-014 Report Request Fulfillment
 
-| ID | Name | Category | Domain | Ver |
-|---|---|---|---|---|
-| T-001 | First Touch | seller_bd | — | 3 |
-| T-002 | Cadence Follow-Up | seller_bd | — | 3 |
-| T-003 | Capital Markets Update | mass_marketing | — | 4 |
-| T-004 | Listing Announcement | buyer_bd | — | 1 |
-| T-005 | Early Look Preview | buyer_bd | — | 1 |
-| T-006 | OM Download Follow-Up | buyer_bd | — | 1 |
-| T-007 | Seller Weekly Activity Report | seller_communication | — | 1 |
-| T-008 | BOV Delivery Cover | seller_bd | — | 2 |
-| T-009 | Closing Announcement | listing_marketing | — | 1 |
-| T-010 | Cold Ownership Inquiry | research_outreach | — | 1 |
-| T-011 | Listing BD — Same Asset Type / Same State | buyer_bd | — | 1 |
-| T-012 | Listing BD — Owner Located Near Listing | buyer_bd | — | 1 |
-| T-013 | GSA Lease Award Congratulations | seller_bd | government | 2 |
-| T-014 | Report Request Fulfillment | seller_bd | — | 1 |
+## What to do this week
 
----
-
-## What needs attention this week
-
-1. **Standing item (8 weeks running):** the refinement loop has nothing to score because no sends are recorded in the window. The R10 work (2026-06-07) closed the cadence → outreach loop (draft → mark sent → `record_send` → cadence advances); R16/R20 (2026-06-13/15) made cadences outreach-ready (SF contact auto-acquisition + "a person is their own contact"); and R24 (2026-06-16) fixed `recordTemplateSend` so a "Mark sent" finally writes a `template_sends` row. **The remaining blocker is operational, not technical:** templates only start producing edit/performance data once sends actually flow through the in-app draft/record path (or SF-logged sends mapped to a template). The action is to work the cadence dashboard so templates go out. Until `record_send` accumulates volume, this report stays empty — consider dialing the task to monthly.
-2. **Fix the scheduled-task spec (carried over, still unfixed).** The SKILL.md points at the wrong host and auth scheme; every run has to rediscover this:
-   - Host → live API is on **Railway** (`tranquil-delight-production-633f.up.railway.app`), not `life-command-center.vercel.app` (which returns the frontend 404 for all `/api/*`).
-   - Auth → `X-LCC-Key: <LCC_API_KEY>` header. The spec's `Authorization: Bearer` is treated as a JWT and 401s.
-   - The key in `.env.local` (`2e046e98…`) works as `X-LCC-Key`; `LCC_API_KEY` is not present in the sandbox env.
+1. **Adoption is the lever, not copy.** 13 of 14 templates have zero sends and
+   the one active template only fired 5 times (one day). Nothing to rewrite —
+   the work is getting outreach flowing through the draft → mark-sent loop.
+2. **T-001 First Touch** is the only template producing data. Keep using it and
+   let the numbers build before judging the copy; the 0% open/reply is almost
+   certainly the open-tracking gap, not the message.
+3. **Re-check next Monday.** Once a few templates clear the edit-sample floor,
+   the engine will start surfacing real revision suggestions
+   (`high_performing_templates` populates after ≥3 sends per template).
 
 ---
-
-## Run Notes
-
-- Endpoint: `POST /api/operations?_route=draft&action=health` on the Railway host.
-- Auth: `X-LCC-Key` header (key sourced from `.env.local`; `LCC_API_KEY` not present in the sandbox env).
-- Body: `{"lookback_days": 120}`
-- Response: HTTP 200 — `{"ok":true,"total_templates":14,"summary":{"needs_revision":0,"underperforming":0,"stale":14,"healthy":0},"revisions_flagged":0}`
-
----
-*Generated automatically by the `lcc-template-health-weekly` scheduled task. Next run: Monday 8:00 AM CT.*
+*Output-path note: the task's configured destination
+(`C:\Users\scott\OneDrive\Documents\Claude\Scheduled\lcc-template-health-weekly\latest-report.md`)
+was not reachable from this session's connected folders, so the report was
+written under the connected `life-command-center` workspace instead. Same as
+last week's run.*
