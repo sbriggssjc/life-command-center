@@ -196,6 +196,27 @@ Henry Ford, …) — never assigned an operator (hard guard verified, 0 leaks); 
   on the post-merge export); (b) regenerate the PA flow SAS key (leaked `sig`) + refresh
   `SF_RECORD_LOOKUP_URL`.
 
+## ROUND 2 — June-29 notes (26 items, grounded 2026-06-29; 4 prompts written)
+Root-cause headline: most recurring "still flat/too smooth" complaints = **residual smoothing windows** the
+T3/T3b passes missed (dia quartiles, gov cap-by-term [±3mo MA], gov sold-cap-by-term still windowed); the
+"flat" charts' data DOES move (86-173 distinct) — leftover smoothers + over-wide axes hide it.
+**Decisions (Scott 2026-06-29):** (1) revert Avg_Deal to a bar both decks (T10c mis-pinned; dots → Renewal_Growth);
+(2) gov Returns start ~2001 where both lines complete + fix x-axis labels (scopes back the T7-U2 1997 visual);
+(3) prioritize the OM date-recovery project now (recent inventory sparse = T9d date_uncertain off-axis).
+**4 prompts:**
+- **R2-A** (`CLAUDE_CODE_PROMPT_R2A_desmooth_axis_round2.md`): de-smooth dia quartiles + gov cap-by-term + gov
+  sold-cap-by-term (mirror T3/T3b), axis-fit the wide cap charts, dia/gov sold-cap <5yr lease-term filter.
+- **R2-B** (`CLAUDE_CODE_PROMPT_R2B_datastart_redesign.md`): dataStart "start where data is" (dia Bid_Ask/Cap_Avg/
+  NM, gov Bid_Ask/NM/Market_Turnover), gov Returns ~2001+labels, Avg_Deal→bar, gov Renewal_Growth redesign
+  (CAGR line + avg dot + light quartile high-low bar), T6 Cap_by_Credit markers on State/Muni only.
+- **R2-C** (`CLAUDE_CODE_PROMPT_R2C_data_integrity.md`): 10+/core price-change gaps (0→NULL below density floor;
+  dia=0.0000 2025-12→2026-03 grounded), dia Rent_PSF 2023 outlier (uq $68 on n=11), gov rent-by-year-built thin
+  years, gov Term_Rate 2013 flat-0→NULL (no prior snapshot), gov Renewal_Rate magnitude (927 expired = option-
+  date overcounting, re-base to true exits).
+- **R2-D** (`CLAUDE_CODE_PROMPT_R2D_om_date_recovery.md`): the date-recovery project — recover real on-market
+  dates for ~512 date_uncertain OMs (forwarded-email Date header / OM-PDF date / SF), investigation-first,
+  refills recent inventory + cohorts; forward-safe ingest. Largest item.
+
 **STATUS (2026-06-27): ✅ T1·T2·T3·T3b·T4·T4b·T4c·T7-U1·T8·T9·T9b·T9c·T9d·T9e all GATED PASS.**
 **FINAL CLOSEOUT (remaining items, one prompt `CLAUDE_CODE_PROMPT_CM_FINAL_CLOSEOUT.md`):** T5 (dia
 price-change now fully covered — confirm render; gov add-or-scope), T6 (gov State/Muni cap — gap-aware render +
