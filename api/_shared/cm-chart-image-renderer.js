@@ -785,15 +785,22 @@ function buildChartConfig(chart, brand) {
       if (Object.keys(annotations).length) {
         opts.plugins.annotation = { annotations };
       }
+      // T10c (2026-06-29) — render as DOTS, not bars (Scott, gov 25: "the
+      // average should be a dot, not a bar"). A marker-only line (showLine
+      // false) keeps the quarter axis, the $X.XM y-axis, and the peak/trough/
+      // last labels. Mirrors the native injector's avg_deal_size dot series.
       return {
-        type: 'bar',
+        type: 'line',
         data: {
           labels,
           datasets: [{
             label: 'Avg Deal Size',
             data: rows.map(r => r.avg_deal_size),
-            backgroundColor: palette[0],
-            borderRadius: 2,
+            borderColor: 'transparent',
+            backgroundColor: palette[0],   // NM navy dots
+            pointRadius: 4,
+            pointStyle: 'circle',
+            showLine: false,
           }],
         },
         options: opts,
@@ -1491,20 +1498,23 @@ function buildChartConfig(chart, brand) {
         data: {
           labels,
           datasets: [
-            // Volume area (background, lowest z-order)
+            // Volume area (background, lowest z-order). T10b — SKY edge (was
+            // navy); frees navy for the avg-cap dots so the layers read distinct.
             { type: 'line', label: 'TTM Volume',
               data: rows.map(r => r.volume_dollars),
-              borderColor: palette[0], backgroundColor: palette[3],
+              borderColor: palette[1], backgroundColor: palette[3],
               fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y', order: 3 },
-            // Cap-rate range bars (upper-to-lower quartile per period)
+            // Cap-rate range bars (upper-to-lower quartile per period). T10b —
+            // AMETHYST 30% fill + amethyst border (was sky — blended with the
+            // volume area); a distinct brand hue for the cap-range band.
             { type: 'bar', label: 'Cap Rate Range (Q1–Q3)',
               data: rows.map(r => {
                 const lo = r.lower_quartile, hi = r.upper_quartile;
                 return (lo != null && hi != null) ? [lo, hi] : null;
               }),
-              backgroundColor: 'rgba(98,181,229,0.25)',  // pale sky fill
-              borderColor: palette[1],                    // sky border
+              backgroundColor: 'rgba(126,107,173,0.30)',  // amethyst #7E6BAD @30%
+              borderColor: PDF_COLORS.cap_long_term,       // amethyst border
               borderWidth: 1,
               borderSkipped: false,
               barPercentage: 0.6,
