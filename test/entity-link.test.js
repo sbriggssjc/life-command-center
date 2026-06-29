@@ -4,7 +4,8 @@ import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListin
   isStreetFragmentName, isJunkEntityName, splitCompositeOwnerName,
   isFieldLabelName, isImplausibleOwnerName, isJunkProspectName,
   isPlaceholderOwnerName,
-  normalizeEmail, isGenericInboxEmail } from '../api/_shared/entity-link.js';
+  normalizeEmail, isGenericInboxEmail,
+  pickSeedFields, looksLikeContactPhone } from '../api/_shared/entity-link.js';
 
 const originalFetch = global.fetch;
 
@@ -504,5 +505,76 @@ describe('isImplausibleOwnerName', () => {
   });
   it('does not false-reject when tenant shares a single common token', () => {
     assert.equal(isImplausibleOwnerName('First National Bank Trust', { tenantBrand: 'Bank' }), false);
+  });
+});
+
+// ── ORE Phase 1 Unit B — org entities carry phone/email/address ──────────────
+describe('ORE Phase 1 Unit B — pickSeedFields contact-on-org', () => {
+  const FULL = {
+    name: 'Acme Holdings LLC',
+    phone: '(415) 555-0142',
+    email: 'owner@acmeholdings.com',
+    address: '100 Market St',
+    city: 'San Francisco',
+    state: 'CA',
+    zip: '94103',
+    title: 'Manager',
+    first_name: 'Jane',
+    last_name: 'Doe',
+    asset_type: 'office',
+    latitude: 37.7,
+    longitude: -122.4,
+  };
+
+  it('looksLikeContactPhone: real numbers pass, junk/label strings fail', () => {
+    assert.equal(looksLikeContactPhone('(415) 555-0142'), true);
+    assert.equal(looksLikeContactPhone('+1 312-768-5544'), true);
+    assert.equal(looksLikeContactPhone('(p)'), false);
+    assert.equal(looksLikeContactPhone('see notes'), false);
+    assert.equal(looksLikeContactPhone('123'), false);
+    assert.equal(looksLikeContactPhone(''), false);
+    assert.equal(looksLikeContactPhone(null), false);
+  });
+
+  it('an organization owner RETAINS phone/email/(mailing) address (the Unit B fix)', () => {
+    const picked = pickSeedFields('organization', FULL);
+    assert.equal(picked.phone, '(415) 555-0142');
+    assert.equal(picked.email, 'owner@acmeholdings.com');
+    assert.equal(picked.address, '100 Market St');
+    assert.equal(picked.city, 'San Francisco');
+    assert.equal(picked.state, 'CA');
+    assert.equal(picked.zip, '94103');
+    // org never carries person-name or asset-geo fields
+    assert.equal(picked.first_name, undefined);
+    assert.equal(picked.last_name, undefined);
+    assert.equal(picked.title, undefined);
+    assert.equal(picked.latitude, undefined);
+    assert.equal(picked.asset_type, undefined);
+  });
+
+  it('an organization drops a MALFORMED phone / email (guarded, never junk)', () => {
+    const picked = pickSeedFields('organization', {
+      name: 'Bad Data LLC', phone: '(p)', email: 'not-an-email',
+    });
+    assert.equal(picked.phone, undefined);
+    assert.equal(picked.email, undefined);
+  });
+
+  it('a person still keeps phone/email/title (unchanged)', () => {
+    const picked = pickSeedFields('person', FULL);
+    assert.equal(picked.phone, '(415) 555-0142');
+    assert.equal(picked.email, 'owner@acmeholdings.com');
+    assert.equal(picked.title, 'Manager');
+    assert.equal(picked.first_name, 'Jane');
+    assert.equal(picked.address, '100 Market St');
+  });
+
+  it('an asset still DROPS phone/email but keeps address + geo (unchanged)', () => {
+    const picked = pickSeedFields('asset', FULL);
+    assert.equal(picked.phone, undefined);
+    assert.equal(picked.email, undefined);
+    assert.equal(picked.address, '100 Market St');
+    assert.equal(picked.latitude, 37.7);
+    assert.equal(picked.asset_type, 'office');
   });
 });

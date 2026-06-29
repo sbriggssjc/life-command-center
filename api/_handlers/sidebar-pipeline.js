@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
@@ -1192,7 +1192,7 @@ function contactEntityType(contact) {
 /**
  * Build seed fields for ensureEntityLink based on contact data.
  */
-function contactSeedFields(contact, entityType) {
+export function contactSeedFields(contact, entityType) {
   const seed = { name: contact.name };
 
   if (entityType === 'person') {
@@ -1208,6 +1208,13 @@ function contactSeedFields(contact, entityType) {
 
   if (entityType === 'organization') {
     if (contact.ownership_type) seed.org_type = 'owner';
+    // ORE Phase 1 Unit B: carry the org's phone/email so an owner ORGANIZATION
+    // entity is reachable (the entity layer now retains them — see
+    // pickSeedFields). The entity layer validates the value shape; here we only
+    // forward what CoStar captured. Previously dropped (person-only), so owner
+    // org contact details we already had never landed.
+    if (contact.email) seed.email = contact.email;
+    if (contact.phones?.length) seed.phone = contact.phones[0];
   }
 
   if (contact.address) {
@@ -7287,13 +7294,39 @@ export function isFederalOwnerAntiPattern(name) {
  *   3. The first owner-role contact (even if federal anti-pattern) — used
  *      only when no private alternative exists (e.g. genuinely USPS-owned).
  */
-function selectAuthoritativeOwner(metadata) {
+// ORE Phase 1 Unit D: lift the owner contact's reachable details (phone / email
+// / mailing address) off the captured contact object so the owner write path
+// can persist them — previously selectAuthoritativeOwner's callers only read
+// `.name`/`.address` and the phone/email we already had was dropped. Guards:
+// a malformed phone (no real digits) and a generic/role inbox (info@/sales@ — a
+// firm mailbox, not the owner decision-maker) are NOT carried. The owner NAME is
+// already federal/junk-guarded upstream.
+function ownerReachableDetails(contact) {
+  if (!contact || typeof contact !== 'object') return { phone: null, email: null, address: null };
+  const phones = Array.isArray(contact.phones) ? contact.phones : (contact.phone ? [contact.phone] : []);
+  const phone = phones.map(p => (typeof p === 'string' ? p.trim() : '')).find(p => looksLikeContactPhone(p)) || null;
+  const normEmail = normalizeEmail(contact.email);
+  const email = (normEmail && !isGenericInboxEmail(normEmail)) ? normEmail : null;
+  const address = (typeof contact.address === 'string' && contact.address.trim()) ? contact.address.trim() : null;
+  return { phone, email, address };
+}
+
+// Decorate the chosen owner contact with normalized reachable details so every
+// downstream consumer (recorded_owners write, owner-entity link) gets a uniform
+// `{ phone, email, address }` regardless of the raw capture shape.
+function withOwnerDetails(contact) {
+  if (!contact) return contact;
+  return { ...contact, ...ownerReachableDetails(contact) };
+}
+
+export function selectAuthoritativeOwner(metadata) {
   const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
   const owners = contacts.filter(c => c && c.role === 'owner' && c.name);
   const privateOwner = owners.find(c => !isFederalOwnerAntiPattern(c.name));
-  if (privateOwner) return privateOwner;
+  if (privateOwner) return withOwnerDetails(privateOwner);
 
-  // No private owner contact — try sales_history buyers (most recent first)
+  // No private owner contact — try sales_history buyers (most recent first).
+  // A sale buyer carries no reachable contact details (name only).
   const sales = Array.isArray(metadata?.sales_history) ? metadata.sales_history : [];
   const sortedSales = sales
     .filter(s => s && s.buyer && !isFederalOwnerAntiPattern(s.buyer))
@@ -7303,7 +7336,8 @@ function selectAuthoritativeOwner(metadata) {
       return bd - ad;
     });
   if (sortedSales[0]) {
-    return { role: 'owner', name: sortedSales[0].buyer, type: 'entity', _from_sales_history: true };
+    return { role: 'owner', name: sortedSales[0].buyer, type: 'entity', _from_sales_history: true,
+      phone: null, email: null, address: sortedSales[0].buyer_address || null };
   }
 
   // Fall through to the federal candidate only if it's all we have.
@@ -7315,7 +7349,7 @@ function selectAuthoritativeOwner(metadata) {
         `Verify this property is actually federally-owned (USPS / GSA-titled).`
       );
     }
-    return owners[0];
+    return withOwnerDetails(owners[0]);
   }
   return null;
 }
@@ -7845,8 +7879,13 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
     }
   }
 
-  // Helper to find-or-create a recorded owner by name
-  async function ensureRecordedOwner(name, address) {
+  // Helper to find-or-create a recorded owner by name.
+  // ORE Phase 1 Unit D: `contact` (optional `{ phone, email }`) carries the
+  // owner's reachable details. On gov they land in the `contact_info` jsonb
+  // (dia has no phone/email column — those owners are reachable via the LCC
+  // entity, which Unit B now lets carry phone/email; a dia recorded_owners
+  // phone/email migration is a documented follow-up).
+  async function ensureRecordedOwner(name, address, contact = null) {
     // R5-DQ-2 (2026-05-20): strip " by <Brokerage>" suffix BEFORE the
     // existing normalizer so the same entity captured by two different
     // brokers (or the same broker with/without the suffix) resolves to
@@ -7905,24 +7944,35 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
 
     // Parse address if provided — domain-aware storage
     // Dialysis: flat address/city/state columns
-    // Gov: contact_info JSONB with { address, city, state }
-    const addrFields = {};
+    // Gov: contact_info JSONB with { address, city, state, phone, email }
+    let addrLine = null, cityVal = null, stateVal = null;
     if (address) {
       const parts = address.split(',').map(s => s.trim());
-      const addrLine = parts[0] || null;
-      const cityVal = parts.length >= 2 ? (parts[1] || null) : null;
-      let stateVal = null;
+      addrLine = parts[0] || null;
+      cityVal = parts.length >= 2 ? (parts[1] || null) : null;
       if (parts.length >= 3) {
         const stateZip = parts[2].split(/\s+/);
         if (stateZip[0]) stateVal = stateZip[0];
       }
-      if (domain === 'government') {
-        addrFields.contact_info = stripNulls({ address: addrLine, city: cityVal, state: stateVal });
-      } else {
-        addrFields.address = addrLine;
-        if (cityVal) addrFields.city = cityVal;
-        if (stateVal) addrFields.state = stateVal;
-      }
+    }
+    // ORE Phase 1 Unit D: guard the reachable details (drop a malformed phone /
+    // a generic-role inbox) before they reach the owner record.
+    const ownerPhone = (contact && looksLikeContactPhone(contact.phone)) ? contact.phone.trim() : null;
+    const normOwnerEmail = contact ? normalizeEmail(contact.email) : '';
+    const ownerEmail = (normOwnerEmail && !isGenericInboxEmail(normOwnerEmail)) ? normOwnerEmail : null;
+
+    const addrFields = {};
+    if (domain === 'government') {
+      // contact_info is jsonb — build it whenever ANY reachable detail exists,
+      // even with no address (a phone-only owner still gets contact_info).
+      const ci = stripNulls({ address: addrLine, city: cityVal, state: stateVal,
+        phone: ownerPhone, email: ownerEmail });
+      if (Object.keys(ci).length) addrFields.contact_info = ci;
+    } else {
+      // dia: flat address/city/state (no phone/email column — see Unit D note).
+      if (addrLine) addrFields.address = addrLine;
+      if (cityVal) addrFields.city = cityVal;
+      if (stateVal) addrFields.state = stateVal;
     }
 
     const ownerData = stripNulls({
@@ -7994,7 +8044,9 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
     console.warn(`[upsertDomainOwners] property=${propertyId} dropped federal anti-pattern owners (private alternative present): ${dropped.join(', ')}`);
   }
   for (const contact of ownerContacts) {
-    await ensureRecordedOwner(contact.name, contact.address);
+    // ORE Phase 1 Unit D: carry the owner's reachable phone/email onto the
+    // recorded_owner (gov contact_info) — fill-blanks, guarded inside the helper.
+    await ensureRecordedOwner(contact.name, contact.address, ownerReachableDetails(contact));
   }
 
   // Process buyers and sellers from sales history to build ownership chain
@@ -8259,7 +8311,8 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
     if (ownerContact?.name) {
       const ownerId = await ensureRecordedOwner(
         ownerContact.name,
-        ownerContact.address || null
+        ownerContact.address || null,
+        { phone: ownerContact.phone || null, email: ownerContact.email || null }
       );
       if (ownerId) {
         // Find the most recent sale date as the transfer date
