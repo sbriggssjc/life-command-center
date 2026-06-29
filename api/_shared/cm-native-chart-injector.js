@@ -3427,11 +3427,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // over ALL rows (dia all-years cohorts span 5.0–9.8%) → a 5–10% axis even
       // though the displayed 2019+ window only runs ~5.5–7.5%. Fit the cohort
       // lines over the PLOTTED window instead so the axis hugs the shown data.
-      // Scoped to sold_cap only — cap_rate_by_lease_term + the asking variant
-      // (both out of scope for this round) keep the shared capFit||cohortRange.
-      const soldCapFit = (chart_template_id === 'sold_cap_by_term_dot_plot')
-        ? fitDataAxisRange(plottedRows.flatMap((r) => series.map((s) => r[s.key])), 'cap')
-        : null;
+      // R2-A (2026-06-29) — generalized from sold-only to ALL three cohort
+      // cap-by-term charts (cap_rate_by_lease_term gov + asking_cap_by_term dia
+      // were still on the over-wide full-window capFit → e.g. dia asking 0.055-
+      // 0.115). The plotted-window fit hugs the displayed cohort lines; the
+      // de-smoothed views feed it choppier-but-honest data.
+      const cohortCapFit = fitDataAxisRange(plottedRows.flatMap((r) => series.map((s) => r[s.key])), 'cap');
       return {
         tabName,
         spec: {
@@ -3441,7 +3442,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           dataStart, dataEnd,
           // R37 P2 — 4-line cohort caps: 4-11% pin (renderer line ~874)
           // CM audit Task 5 — data-fit overrides the hand-tuned cohortRange.
-          yAxisRange: soldCapFit || capFit || cohortRange,
+          yAxisRange: cohortCapFit || capFit || cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: series.map(s => ({
@@ -4251,11 +4252,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'multi-line',
           tabName, catCol: periodCol, dataStart, dataEnd,
-          // R66s — the core-10+ quartile spikes (to 8.86% on 1-2 listings) are now
-          // gated out at the view (n_core>=5) and all four series are smoothed, so
-          // the data sits in the deck's tight 4.94-7.3% band. Tighten the axis to
-          // the deck's 4.5-7.75% (was 4.75-9.0% to accommodate the now-removed spikes).
-          yAxisRange: capFit || { min: 0.045, max: 0.0775 },
+          // R66s — the core-10+ quartile spikes (to 8.86% on 1-2 listings) are
+          // gated out at the view (n_core>=5). R2-A (2026-06-29) — view de-smoothed
+          // (the ±2 MA dropped); fit the axis to the PLOTTED quartile lines (was the
+          // full-window capFit / a hand-tuned 0.045-0.0775 literal) so the now-movier
+          // band hugs its data instead of sitting in whitespace.
+          yAxisRange: fitDataAxisRange(
+            plottedRows.flatMap((r) => [r.upper_q_total, r.lower_q_total, r.upper_q_core, r.lower_q_core]),
+            'cap',
+          ) || capFit || { min: 0.045, max: 0.0775 },
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: upTotCol, titleRow: headerRow, valCol: upTotCol, color: C_MAUVE }, // total upper

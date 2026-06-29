@@ -905,7 +905,10 @@ function buildChartConfig(chart, brand) {
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
           yAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
-          yAxisRange:  { min: 0.055, max: 0.0775 },
+          // R2-A (2026-06-29) — fit the cap axis to the PLOTTED cohort lines (was a
+          // hand-tuned 0.055-0.0775 literal) so the de-smoothed gov cap-by-term band
+          // hugs its data. Mirrors the native injector's plotted-window fit.
+          yAxisRange:  fitDataAxisRange(datasets.flatMap(d => d.data), 'cap') || { min: 0.055, max: 0.0775 },
         }),
       };
     }
@@ -1437,9 +1440,13 @@ function buildChartConfig(chart, brand) {
               tension: 0.3, pointRadius: 0, borderWidth: 2.5 },
           ],
         },
-        // R66s — core spikes gated out at the view (n_core>=5) + all 4 smoothed,
-        // so the band is the deck's tight 4.94-7.3%. Axis 4.5-7.75% (was 4.75-9.0%).
-        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: { min: 0.045, max: 0.0775 } }),
+        // R66s — core spikes gated out at the view (n_core>=5). R2-A (2026-06-29):
+        // view de-smoothed (±2 MA dropped); fit the axis to the PLOTTED quartile
+        // lines (was a hand-tuned 0.045-0.0775 literal). Mirrors the injector.
+        options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
+          yAxisRange: fitDataAxisRange(
+            rows.flatMap(r => [r.upper_q_total, r.lower_q_total, r.upper_q_core, r.lower_q_core]), 'cap',
+          ) || { min: 0.045, max: 0.0775 } }),
       };
     }
 
@@ -2718,7 +2725,11 @@ function buildChartConfig(chart, brand) {
         data: { labels, datasets },
         options: commonOpts({
           yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-          yAxisRange:  dotRange,
+          // R2-A (2026-06-29) — fit the cap axis to the PLOTTED cohort lines (was the
+          // hand-tuned dotRange literal) so the displayed band hugs its data — dia
+          // asking-by-term was 0.0475-0.085, often wider than the shown lines.
+          // Mirrors the native injector's plotted-window fit.
+          yAxisRange:  fitDataAxisRange(datasets.flatMap(d => d.data), 'cap') || dotRange,
         }),
       };
     }
