@@ -262,6 +262,8 @@ export async function searchHandler(req, res) {
   // Fourth federated source. Returned as type=document. Included unless the
   // caller restricts to a non-document type.
   const includeDocs = (!type || type === 'all' || type === 'document');
+  // B2: email corpus (email_bodies, preview-only). Returned as type=email.
+  const includeEmail = (!type || type === 'all' || type === 'email');
 
   // ── Build PostgREST path for entities (ops DB) ──────────────────────────
   // Expanded from the original name/canonical_name-only filter to also
@@ -310,7 +312,14 @@ export async function searchHandler(req, res) {
         `&order=last_seen_at.desc&limit=${limit}`
       : null;
 
-    const [entitiesResult, govQueryResult, diaQueryResult, docsResult] = await Promise.all([
+    // B2: email corpus — match subject/sender/preview, newest first.
+    const emailPath = includeEmail
+      ? `email_bodies?or=(subject.ilike.*${encTerm}*,from_name.ilike.*${encTerm}*,from_email.ilike.*${encTerm}*,body_preview.ilike.*${encTerm}*)` +
+        `&select=internet_message_id,subject,from_email,from_name,received_at,body_preview` +
+        `&order=received_at.desc&limit=${limit}`
+      : null;
+
+    const [entitiesResult, govQueryResult, diaQueryResult, docsResult, emailResult] = await Promise.all([
       opsQuery('GET', path),
       govPath
         ? domainQuery('government', 'GET', govPath).catch((err) => {
@@ -327,6 +336,12 @@ export async function searchHandler(req, res) {
       docsPath
         ? opsQuery('GET', docsPath).catch((err) => {
             console.error(`[search] docs query threw for q="${term}":`, err?.message || err);
+            return null;
+          })
+        : Promise.resolve(null),
+      emailPath
+        ? opsQuery('GET', emailPath).catch((err) => {
+            console.error(`[search] email query threw for q="${term}":`, err?.message || err);
             return null;
           })
         : Promise.resolve(null),
@@ -362,25 +377,27 @@ export async function searchHandler(req, res) {
       govRows: Array.isArray(govQueryResult?.data) ? govQueryResult.data : [],
       diaRows: Array.isArray(diaQueryResult?.data) ? diaQueryResult.data : [],
       docRows: Array.isArray(docsResult?.data) ? docsResult.data : [],
+      emailRows: Array.isArray(emailResult?.data) ? emailResult.data : [],
     };
   }
 
   // Try the cleaned term first (e.g. "Tulsa"), fall back to the raw term
   // (e.g. "Tulsa OK") if the cleaned variant returns nothing.
   let searchTerm = hasCleanVariant ? cleanTerm : rawSearchTerm;
-  let { rows, govRows, diaRows, docRows } = await runSearch(searchTerm);
+  let { rows, govRows, diaRows, docRows, emailRows } = await runSearch(searchTerm);
   if (
     rows.length === 0 &&
     govRows.length === 0 &&
     diaRows.length === 0 &&
     docRows.length === 0 &&
+    emailRows.length === 0 &&
     hasCleanVariant
   ) {
     console.log(
       `[search] clean term "${cleanTerm}" returned 0; falling back to raw q="${rawSearchTerm}"`
     );
     searchTerm = rawSearchTerm;
-    ({ rows, govRows, diaRows, docRows } = await runSearch(searchTerm));
+    ({ rows, govRows, diaRows, docRows, emailRows } = await runSearch(searchTerm));
   }
 
   // ── Reshape into unified UI search results ────────────────────────────────
@@ -456,6 +473,21 @@ export async function searchHandler(req, res) {
   // B1: append deal-document results (type=document).
   for (const d of docRows) {
     items.push(buildDocItem(d, searchTerm));
+  }
+
+  // B2: append email results (type=email, preview-only). Capped below entity/doc matches.
+  for (const m of emailRows) {
+    const who = m.from_name || m.from_email || '';
+    const d = m.received_at ? String(m.received_at).slice(0, 10) : '';
+    items.push({
+      id: `email:${m.internet_message_id}`,
+      type: 'email',
+      title: m.subject || '(no subject)',
+      subtitle: [who, d].filter(Boolean).join(' · ') || null,
+      domain: 'business',
+      url: null,
+      score: Math.min(computeScore(searchTerm, { name: m.subject || '', canonical_name: (m.from_name || '') }), 65),
+    });
   }
 
   // Sort by score descending, stable on title ascending
