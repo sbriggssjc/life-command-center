@@ -42,7 +42,7 @@ import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIden
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
-import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
+import { deriveListingDate, deriveOnMarketDate, toDatePart } from '../_shared/listing-date.js';
 import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 import { deriveOperatorFromTenant } from '../_shared/operator-normalize.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
@@ -171,7 +171,28 @@ async function recordOmFieldsProvenance(ctx, fieldValues, perFieldConfidence = {
 // 1. AVAILABLE_LISTINGS MAPPERS (per domain)
 // ============================================================================
 
-function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate) {
+// R2-D (2026-06-29): the Salesforce `Comp__c.On_Market_Date__c` is the real
+// market-entry signal for the SF-comp ingest channel. The bulk of dia/gov OM
+// intakes are Salesforce Comp__c records synced through the "email" channel —
+// NOT forwarded emails — so there is no email `Date:` header to read; the comp's
+// OWN on-market date is the authority. When the OM/lease/email ladder HOLDs, fall
+// back to the comp OMD (looked up from `lcc_sf_comp_on_market` in promoteListing)
+// before holding as `date_uncertain` — so a NEW SF-comp ingest dates itself
+// instead of relying on the post-hoc recovery backfill. Conservative: only fills
+// the HOLD gap (never overrides a lease-inference / DOM / email date), never a
+// future date. Tagged `sf_on_market_date` (high) — the SAME real-evidence source
+// the recovery backfill uses, so the T9d currency model treats it identically.
+function preferSfCompOnMarketDate(om, sfCompOnMarketDate) {
+  if (om.on_market_date || !sfCompOnMarketDate) return om;
+  const compPart = toDatePart(sfCompOnMarketDate);
+  const capturePart = new Date().toISOString().split('T')[0];
+  if (compPart && compPart <= capturePart) {
+    return { on_market_date: compPart, source: 'sf_on_market_date', confidence: 'high' };
+  }
+  return om;
+}
+
+function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate, sfCompOnMarketDate) {
   const state = normalizeState(snapshot.state);
   // Multi-broker OMs make these ARRAY-valued — coerce to a human-joined string
   // before any scalar string op or text-column write (Round 77f).
@@ -220,6 +241,7 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
   // handled by deriveOnMarketDate above. When it HOLDs, the OM is still real
   // provenance we just can't date → keep it as `date_uncertain` (off the time
   // axis), never an upload/clock date. Forward-safe half of the surge fix.
+  om = preferSfCompOnMarketDate(om, sfCompOnMarketDate);
   if (!om.on_market_date) {
     om = { on_market_date: null, source: 'date_uncertain', confidence: 'none' };
   }
@@ -277,7 +299,7 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
 // properties). We populate the fields the dia schema has and skip the rest.
 // Cap rate stored as decimal (0.0918) per chk_*_cap_rate_range check
 // constraints (valid range 0.005–0.30).
-function buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate) {
+function buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate, sfCompOnMarketDate) {
   // Extractor emits decimal (0.055) OR percent (7.75); detect, don't assume.
   const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
   // If a cap rate was present but normalized to null (implausible either way),
@@ -301,6 +323,7 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
     : deriveOnMarketDate({ ...snapshot, source_email_date: snapshot.source_email_date ?? sourceEmailDate });
   // T9d FIX (2026-06-27): HOLD as `date_uncertain` when no genuine signal exists
   // (see buildGovListingRow) — never the artifact upload-path / capture clock.
+  om = preferSfCompOnMarketDate(om, sfCompOnMarketDate);
   if (!om.on_market_date) {
     om = { on_market_date: null, source: 'date_uncertain', confidence: 'none' };
   }
@@ -391,18 +414,33 @@ async function promoteListing(domain, intakeId, snapshot, match) {
   // never used. Empty source_email_date (historical batch) ⇒ the listing HOLDs as
   // `date_uncertain` rather than re-creating the surge.
   let sourceEmailDate = null;
+  let sfCompOnMarketDate = null;
   try {
     const itemLookup = await opsQuery('GET',
-      `staged_intake_items?intake_id=eq.${pgFilterVal(intakeId)}&select=source_email_date&limit=1`
+      `staged_intake_items?intake_id=eq.${pgFilterVal(intakeId)}` +
+      `&select=source_email_date,sf_comp_id:raw_payload->seed_data->>sf_entity_id&limit=1`
     );
     if (itemLookup.ok && Array.isArray(itemLookup.data) && itemLookup.data.length) {
       sourceEmailDate = itemLookup.data[0].source_email_date || null;
+      // R2-D (2026-06-29): SF-comp channel — the authoritative on-market date is
+      // the Comp__c.On_Market_Date__c, harvested into lcc_sf_comp_on_market (T4c).
+      // Look it up so a NEW SF-comp ingest dates itself instead of HOLDing as
+      // date_uncertain (this channel is SF Comp__c, not a forwarded email).
+      const sfCompId = itemLookup.data[0].sf_comp_id || null;
+      if (sfCompId) {
+        const compLookup = await opsQuery('GET',
+          `lcc_sf_comp_on_market?sf_comp_id=eq.${pgFilterVal(sfCompId)}&select=on_market_date&limit=1`
+        );
+        if (compLookup.ok && Array.isArray(compLookup.data) && compLookup.data.length) {
+          sfCompOnMarketDate = compLookup.data[0].on_market_date || null;
+        }
+      }
     }
-  } catch { /* source_email_date is best-effort; HELD ⇒ date_uncertain */ }
+  } catch { /* both best-effort; HELD ⇒ date_uncertain */ }
 
   const row = isGov
-    ? buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate)
-    : buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate);
+    ? buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate, sfCompOnMarketDate)
+    : buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate, sfCompOnMarketDate);
 
   if (isGov) {
     // Property-first dedup (Round 76 listing-lifecycle). The OLD logic
