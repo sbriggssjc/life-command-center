@@ -405,6 +405,15 @@ ${documentBody}
   "listing_broker_email": null,
   "listing_firm": null,
   "seller_name": null,
+  "seller_email": null,
+  "seller_phone": null,
+  "seller_address": null,
+  "buyer_name": null,
+  "buyer_email": null,
+  "buyer_phone": null,
+  "owner_contact_name": null,
+  "owner_contact_email": null,
+  "owner_contact_phone": null,
   "parcel_number": null,
   "confidence_notes": null
 }
@@ -412,7 +421,13 @@ ${documentBody}
 Responsibility fields: for roof, hvac, structure, parking — return "tenant", "landlord", or "shared" based on lease language.
 Look for keywords like "repair", "replace", "maintain", "responsible" near "roof", "HVAC"/"heating"/"cooling", "structural"/"foundation"/"walls", "parking"/"lot"/"striping".
 If the document is an OM, these may appear in the lease abstract section.
-If not determinable, use null.`;
+If not determinable, use null.
+
+Party contacts (ORE Phase 1 Unit E): when the document explicitly states them, extract the deal PARTIES and their contact details:
+- "seller_name"/"seller_email"/"seller_phone"/"seller_address": the property seller / current owner of record (the entity disposing of the asset). "seller_address" is the SELLER's own mailing / notice / contact address — NOT the subject property's address.
+- "buyer_name"/"buyer_email"/"buyer_phone": the buyer / acquirer, when a sale doc names one.
+- "owner_contact_name"/"owner_contact_email"/"owner_contact_phone": a named owner/principal contact when it is DISTINCT from the listing broker and the seller (e.g. an asset-manager or principal contact block).
+Extract ONLY what the document literally states — never infer, guess, or fabricate a phone/email/address. Leave any field null when it is not present. Do NOT copy the listing broker's contact details into the seller/buyer/owner fields (the broker has its own fields above).`;
 
   // F8 (2026-06-04): zero-text PDF → vision/OCR fallback. pdf-parse returns 0
   // chars on scanned/image-based PDFs (no pdf_parse_error), so the text-in-

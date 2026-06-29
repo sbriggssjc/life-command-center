@@ -5934,3 +5934,85 @@ redeploy.
 Reverse via `t9d_listing_omd_backup` (`batch_tag='t9d_fix'`) + `DROP VIEW
 cm_dialysis_currency_basis_m` + re-create the two membership views from the prior
 T9d migration. No domain deletions; gov untouched; auth schema untouched.
+
+## ORE Phase 1 Unit E — capture party contacts from OMs + leases (2026-06-29)
+
+Our document extractors captured party NAMES but never their contact details,
+even when the document carried them. Unit E asks the extractor for the missing
+details and lands them on the contact/graph surfaces — fill-blanks, guarded,
+no fabrication. Companion to Unit C (deed mailing addresses). JS ships on the
+Railway redeploy; the registry migration is applied live to LCC Opps.
+
+### E1 — OM extraction requests + writes seller/buyer/owner contacts
+- **Extractor schema** (`intake-extractor.js`): the OM AI prompt now requests
+  `seller_email`/`seller_phone`/`seller_address`, `buyer_name`/`buyer_email`/
+  `buyer_phone`, and a distinct `owner_contact_name`/`_email`/`_phone` block —
+  with explicit guidance that `seller_address` is the SELLER's mailing/notice
+  address (NOT the subject property), to extract ONLY what the doc literally
+  states (null when absent), and to never copy the broker's details into the
+  party fields. The OCR-vision path reuses the same `prompt`, so it inherits the
+  fields. `mergeExtractions` keeps all keys (no whitelist) → the snapshot carries
+  them through to the promoter.
+- **Promoter** (`intake-promoter.js`): `collectOmPartyContacts(snapshot)` (pure,
+  exported) is the **VALUE GATE** — a party is promoted only when it has a NAME
+  **and** ≥1 contact DETAIL (email/phone/address); a bare seller_name already
+  flows to ownership resolution + the listing, so a name with no detail is
+  skipped (no noise, no fabrication). `promoteOmPartyContacts(domain, snapshot,
+  match)` writes each party to `<domain>.contacts` (the SAME table + per-domain
+  column shape as the broker writer — gov `name/email/phone/address/contact_type`;
+  dia `contact_name/contact_email/contact_phone/address/role`): junk-guarded via
+  `validateContactIngest` (a junk/federal NAME is nulled, kept only with a usable
+  email), deduped by email (an existing contact only has its **blank** phone/
+  address/property_id filled — curated values never clobbered), else inserted.
+  Wired into the existing `Promise.all` promote fan-out (best-effort, never
+  blocks). Provenance `source='om_extraction'` recorded per written field via the
+  existing `recordOmFieldsProvenance` path.
+- **Registry** (migration `20260629120000_lcc_ore_phase1e_party_contact_address_priority.sql`,
+  applied live): `gov.contacts.{address,city,state}` `om_extraction`@45 — dia
+  already had these (auto-seeded Round 76an); gov did not. Without them the gov
+  party-address provenance write would surface in `v_field_provenance_unranked`.
+  Idempotent; additive; reversible (DELETE the 3 rows).
+
+### E2 — lease extraction requests guarantor/tenant notice address+contact
+- **Prompt + normalize** (`lease-extractor.js`): the lease prompt now requests a
+  `notices` block — the lease boilerplate "Notices to <party> at <address>" /
+  signature-block `guarantor_address`/`_phone`/`_email` + `tenant_address`/
+  `_phone`/`_email` (the PARTY's contact address, NOT the leased premises; only
+  if stated, never fabricated). `normalizeLeaseExtraction` surfaces a coerced
+  `notices` object (absent fields → null).
+- **Write** (`applyLeaseEnrichment` step 4b): the guarantor's notice contact
+  (address/phone/email) lands on the **guarantor ENTITY** fill-blanks, via a new
+  deps-gated `writeEntityContact({entityId, fields})` (in `buildRealLeaseDeps`)
+  that reads the LCC `entities` row and PATCHes only blank `address`/`phone`/
+  `email` columns. This is a **BD-graph enrichment** — `entities` is the LCC graph,
+  NOT a curated dia/gov domain table governed by `field_source_priority`, so it
+  does not route through the provenance ledger (the lease FACTUAL fields keep
+  their `folder_feed_lease` provenance). Gated on the optional dep so legacy
+  callers/tests are byte-identical; idempotent (a re-tick finds the columns
+  filled → no-op); never fabricates. The four lease guards + location-agreement
+  guard (in `attachLeaseDoc`, which runs before enrichment) are unchanged. The
+  tenant notice fields are surfaced on the normalized output for completeness
+  (no tenant entity is minted in this flow, so they are captured, not written).
+
+### E3 — fix gov `ownership_history.address` = city bug
+`government-lease/src/ingest_ownership.py` (~line 239) set
+`ownership_history.address` from `acq.get("city")` — `detect_ownership_changes`
+loads only `gsa_lease_events.city/state` (the acq dict carries NO street
+address). Fix: the address is now filled from the **matched property's** street
+address (`prop["address"]`, loaded in `build_indexes`) when a property matches;
+an unmatched event leaves address absent (the clean-nulls filter drops it) —
+never the city. Small correctness fix; existing already-wrong rows are NOT
+backfilled here (a separate one-shot if wanted: `UPDATE ownership_history SET
+address=NULL WHERE address=city`).
+
+### Boundaries / verified (headless 2026-06-29)
+Fill-blanks; value-gated; junk-guarded; no fabrication (a field the doc doesn't
+state stays null); reversible; ≤12 api/*.js (no new api/*.js — promoter +
+lease-extractor are existing handlers). `test/om-party-contacts.test.mjs` (9:
+value gate, no-fabrication, array-unwrap, phone/address-only qualify) +
+`test/lease-extractor.test.mjs` 80→86 (notices surfacing present/absent;
+writeEntityContact called on a notice contact, never called without one, byte-
+identical when the dep is absent). `node --check` clean (intake-extractor,
+intake-promoter, lease-extractor); `python3 -m py_compile` clean
+(ingest_ownership.py). dia/gov OM/lease pipelines otherwise untouched; auth
+schema untouched.

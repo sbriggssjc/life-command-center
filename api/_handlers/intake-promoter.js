@@ -722,6 +722,145 @@ async function promoteBrokerContact(domain, snapshot, match) {
 }
 
 // ============================================================================
+// 2b. OM PARTY CONTACTS — seller / buyer / owner (ORE Phase 1 Unit E)
+// ============================================================================
+//
+// OMs and sale docs name the deal PARTIES (seller / current owner, buyer,
+// owner/principal contact) and frequently carry their phone / email / mailing
+// address in a contact block — data we never asked the extractor for. The
+// extractor schema now requests it (intake-extractor.js); this writer lands it
+// on <domain>.contacts (which already has email/phone/address columns), the
+// SAME table the broker contact uses. Discipline:
+//   - VALUE-GATED: a party is promoted only when it has a NAME and at least one
+//     contact DETAIL (email / phone / address). A bare seller_name already flows
+//     to ownership resolution + the listing; the win here is the contact detail,
+//     so a name with no detail is skipped (no noise, no fabrication).
+//   - fill-blanks: an existing contact (matched by email) only has its blank
+//     phone / address / property_id filled — curated name/email never clobbered.
+//   - junk-guarded: the name runs through validateContactIngest (same as broker);
+//     a junk/federal name is nulled (kept only if there's still a usable email).
+//   - NO fabrication: the AI returns null when a field is absent; we never invent.
+
+/**
+ * Collect the deal parties carrying a usable name + ≥1 contact detail from an
+ * OM snapshot. Pure + exported for unit testing. Never fabricates — a field the
+ * doc didn't state is null in the snapshot and excluded here.
+ *
+ * @returns {Array<{role,contact_type,title,name,email,phone,address}>}
+ */
+export function collectOmPartyContacts(snapshot) {
+  if (!snapshot) return [];
+  const s = (v) => { const x = firstOf(v); const t = x == null ? '' : String(x).trim(); return t || null; };
+  const specs = [
+    { role: 'seller', contact_type: 'seller', title: 'Seller',
+      name: s(snapshot.seller_name), email: s(snapshot.seller_email),
+      phone: s(snapshot.seller_phone), address: s(snapshot.seller_address) },
+    { role: 'buyer', contact_type: 'buyer', title: 'Buyer',
+      name: s(snapshot.buyer_name), email: s(snapshot.buyer_email),
+      phone: s(snapshot.buyer_phone), address: null },
+    { role: 'owner', contact_type: 'owner', title: 'Owner Contact',
+      name: s(snapshot.owner_contact_name), email: s(snapshot.owner_contact_email),
+      phone: s(snapshot.owner_contact_phone), address: null },
+  ];
+  // VALUE GATE — name AND at least one contact detail.
+  return specs.filter(p => p.name && (p.email || p.phone || p.address));
+}
+
+async function promoteOmPartyContacts(domain, snapshot, match) {
+  const parties = collectOmPartyContacts(snapshot);
+  if (!parties.length) return { ok: true, skipped: 'no_party_contacts', written: [] };
+
+  const isGov = domain === 'government';
+  const emailCol = isGov ? 'email' : 'contact_email';
+  const phoneCol = isGov ? 'phone' : 'contact_phone';
+  const nameCol  = isGov ? 'name'  : 'contact_name';
+  const propertyId = match?.property_id || null;
+  const written = [];
+
+  for (const p of parties) {
+    // Name guard — same ingest contract as the broker path. A junk/federal NAME
+    // is nulled; the row survives only if it still has a usable email.
+    let name = p.name;
+    const { errors } = validateContactIngest({
+      domain, name: p.name || null, email: p.email || null,
+      company: null, role: p.role, data_source: 'lcc_intake_om',
+    });
+    if (errors.filter(e => e.startsWith('name ')).length) name = null;
+    if (!name && !p.email) continue;
+
+    // Dedupe by email — fill blanks on an existing contact, else insert.
+    let contactId = null;
+    let fieldsWritten = null;
+    if (p.email) {
+      // eslint-disable-next-line no-await-in-loop
+      const existing = await domainQuery(
+        domain, 'GET',
+        `contacts?${emailCol}=ilike.${encodeURIComponent(p.email)}` +
+        `&select=contact_id,${phoneCol},address,property_id&limit=1`
+      ).catch(() => ({ ok: false }));
+      if (existing.ok && Array.isArray(existing.data) && existing.data.length) {
+        const row0 = existing.data[0];
+        contactId = row0.contact_id;
+        // Fill ONLY blanks — never clobber curated values.
+        const patch = {};
+        if (p.phone && !row0[phoneCol]) patch[phoneCol] = p.phone;
+        if (p.address && !row0.address) patch.address = p.address;
+        if (propertyId && !row0.property_id) patch.property_id = propertyId;
+        if (Object.keys(patch).length) {
+          // eslint-disable-next-line no-await-in-loop
+          await domainQuery(domain, 'PATCH',
+            `contacts?contact_id=eq.${encodeURIComponent(contactId)}`, patch).catch(() => {});
+          // Provenance fields = the contact-DETAIL columns written (phone/address).
+          // EXCLUDE property_id: it is not a contact detail and has no
+          // om_extraction field_source_priority row (only aggregator sources) —
+          // recording it would surface in v_field_provenance_unranked.
+          fieldsWritten = {};
+          if (patch[phoneCol] != null) fieldsWritten[phoneCol] = patch[phoneCol];
+          if (patch.address != null) fieldsWritten.address = patch.address;
+        }
+        written.push({ role: p.role, contact_id: contactId, inserted: false, fields: fieldsWritten || {} });
+        continue;
+      }
+    }
+
+    // No existing match → insert a fresh party contact.
+    const row = isGov
+      ? {
+          name:         name || p.email,
+          email:        p.email || null,
+          phone:        p.phone || null,
+          address:      p.address || null,
+          title:        p.title,
+          contact_type: p.contact_type,
+          data_source:  'lcc_intake_om',
+          property_id:  propertyId,
+        }
+      : {
+          contact_name:  name || p.email,
+          contact_email: p.email || null,
+          contact_phone: p.phone || null,
+          address:       p.address || null,
+          title:         p.title,
+          role:          p.role,
+          data_source:   'lcc_intake_om',
+          property_id:   propertyId,
+        };
+    // eslint-disable-next-line no-await-in-loop
+    const ins = await domainQuery(domain, 'POST', 'contacts', row, { Prefer: 'return=representation' })
+      .catch(() => ({ ok: false }));
+    if (!ins.ok) continue;
+    const insertedRow = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+    contactId = insertedRow?.contact_id || null;
+    written.push({
+      role: p.role, contact_id: contactId, inserted: true,
+      fields: { [nameCol]: name || null, [emailCol]: p.email || null, [phoneCol]: p.phone || null, address: p.address || null },
+    });
+  }
+
+  return { ok: true, written };
+}
+
+// ============================================================================
 // 3. PROPERTY FINANCIALS UPDATE (fill-in-blanks only)
 // ============================================================================
 //
@@ -2750,7 +2889,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   // after. promoteDiaLeaseFromOm only fires when domain is 'dialysis' (gov
   // has its own dedicated leases table managed elsewhere); when not
   // applicable it returns {ok:true, skipped:...} and is a no-op.
-  const [listingResult, contactResult, financialsResult, leaseExpensesResult, diaLeaseResult] = await Promise.all([
+  const [listingResult, contactResult, financialsResult, leaseExpensesResult, diaLeaseResult, partyContactsResult] = await Promise.all([
     promoteListing(match.domain, intakeId, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promoteBrokerContact(match.domain, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
@@ -2758,6 +2897,9 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     match.domain === 'dialysis'
       ? promoteDiaLeaseFromOm(match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message }))
       : Promise.resolve({ ok: true, skipped: `dia_lease_only_for_dialysis` }),
+    // ORE Phase 1 Unit E — seller / buyer / owner party contacts (the broker
+    // contact above handles only the listing broker). Best-effort; never blocks.
+    promoteOmPartyContacts(match.domain, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
   ]);
 
   // Bug J fix (2026-04-25): wire the freshly-created broker contact back
@@ -2926,6 +3068,21 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
         { ...provCtx, targetTable: `${tablePrefix}.contacts`, recordPk: contactResult.contact_id },
         contactValues
       );
+    }
+
+    // 2b. Party contact fields (seller / buyer / owner — ORE Phase 1 Unit E).
+    //     Each written party's actual columns (per-domain) are recorded against
+    //     <domain>.contacts so field_provenance audits them like the broker. The
+    //     gov.contacts.address om_extraction priority row is added in the
+    //     companion migration so v_field_provenance_unranked stays at 0.
+    if (partyContactsResult?.ok && Array.isArray(partyContactsResult.written)) {
+      for (const w of partyContactsResult.written) {
+        if (!w?.contact_id || !w.fields) continue;
+        await recordOmFieldsProvenance(
+          { ...provCtx, targetTable: `${tablePrefix}.contacts`, recordPk: w.contact_id },
+          w.fields
+        );
+      }
     }
 
     // 3. Property fields backfilled from the OM (only when promoter actually patched them)
