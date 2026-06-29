@@ -5934,3 +5934,83 @@ redeploy.
 Reverse via `t9d_listing_omd_backup` (`batch_tag='t9d_fix'`) + `DROP VIEW
 cm_dialysis_currency_basis_m` + re-create the two membership views from the prior
 T9d migration. No domain deletions; gov untouched; auth schema untouched.
+
+## ORE Phase 1 Units B+D — capture owner phone/email (stop dropping it) (2026-06-28)
+
+We already RECEIVE owner phone/email/(mailing) address in CoStar captures but
+dropped them TWICE — once at the sidebar (owner write was name+address only) and
+once at the entity layer (the field whitelist deleted phone/email for every
+non-person entity). Owners are `organization` entities, so a captured owner
+decision-maker's contact details never landed. These two units lift both drops so
+the owners we capture are REACHABLE (feeds CONTACT-SELECTION, the outreach-draft
+recipient resolution, and the cross-reference resolver). Free, guarded,
+fill-blanks, reversible. LCC + gov writes only; no new api/*.js (≤12); no
+migration (every column already exists — see below).
+
+### Unit B — owner ORGANIZATION entities carry phone/email/(mailing) address
+`api/_shared/entity-link.js`:
+- **`pickSeedFields` (the choke point)** — the `if (entityType !== 'person')
+  { delete phone/email }` + address-person/asset-only gates are lifted for
+  **`organization`**: an org now RETAINS `phone`/`email`/`address`/`city`/`state`/
+  `zip`/`county`. Persons unchanged; **assets still drop phone/email** (an asset
+  is not a contact). Org contact VALUES are guarded — a malformed email
+  (`normalizeEmail` fails) or a no-/few-digit phone (`looksLikeContactPhone`,
+  7–15 digits) is dropped, never stored as junk. The LCC `entities` table already
+  has `phone`/`email`/`address`/`city`/`state`/`zip`/`county` (verified live) — so
+  **no migration**, just the type-gate lift.
+- **`inferEntityType`** — an EXPLICIT `company`/`organization`/`org` sourceType now
+  maps to `organization` BEFORE the `email||phone||first||last → person` heuristic,
+  so a captured owner org carrying phone/email (now seeded — Unit D) is not
+  mis-inferred as a person. The firm-suffix person→org retype in `ensureEntityLink`
+  is unchanged (still catches firm-suffixed person mistypes). New exported helper
+  `looksLikeContactPhone`; `pickSeedFields` exported for unit testing.
+
+### Unit D — carry CoStar owner phone/email through to the owner write
+`api/_handlers/sidebar-pipeline.js`:
+- **`contactSeedFields`** — emits `email`/`phone` for **organization** contacts
+  (was person-only), so `unpackContacts` → `ensureEntityLink` carries an owner
+  org's phone/email onto the org ENTITY (Unit B retains it). This is the BD-graph
+  leverage point — the entity is what the outreach draft / cross-ref read.
+- **`selectAuthoritativeOwner`** (exported) — now decorates the chosen owner with
+  a uniform normalized `{ phone, email, address }` (`ownerReachableDetails`):
+  first VALID phone from `phones[]`/`phone`, `normalizeEmail`'d email **dropping a
+  generic/role inbox** (`isGenericInboxEmail` — info@/sales@ is a firm mailbox,
+  not the owner decision-maker), and the trimmed address. A sales-history buyer
+  fallback carries name+address only (no contact details). The owner NAME stays
+  federal/junk-guarded upstream.
+- **`ensureRecordedOwner(name, address, contact)`** — the optional `contact`
+  (`{phone,email}`, guarded again inside) is persisted on the owner record:
+  **gov** → the existing `contact_info` jsonb (now `{address,city,state,phone,
+  email}`; built whenever ANY reachable detail exists, even with no address — a
+  phone-only owner still gets `contact_info`). Threaded from both real call sites
+  (the role=owner contacts loop via `ownerReachableDetails`, and the
+  authoritative-owner history block). Sale buyer/seller calls pass no contact
+  (name only). `contactSeedFields` exported for unit testing.
+
+### dia recorded_owners — phone/email land on the ENTITY, not the domain row
+`dia.recorded_owners` has `address`/`city`/`state` but **no phone/email column**
+(gov has the `contact_info` jsonb). Per the task's "phone/email columns if
+present" clause, dia owners' phone/email are captured on the LCC **entity** (Unit
+B, both domains uniformly — that is the surface outreach/cross-ref consume), and
+the dia row gets address only (unchanged). **Follow-up (NOT in this round):** an
+additive `dia.recorded_owners.phone`/`email` migration + `field_source_priority`
+rows (+ provenance wiring) would make the dia domain row symmetric with gov — a
+separate blessed change (touches the provenance registry / drift detector).
+
+### Boundaries / verified (headless 2026-06-28)
+Fill-blanks, guarded (junk/broker/federal name guards unchanged; generic-inbox +
+malformed-value guards added for phone/email), reversible (entity rows; gov
+contact_info). No new api/*.js (`ls api/*.js | wc -l`=12); no migration (all
+columns pre-exist). `test/entity-link.test.js` (+Unit B: org retains phone/email/
+address, drops malformed values; person/asset unchanged; `looksLikeContactPhone`)
++ new `test/owner-contact-capture.test.mjs` (Unit D: `selectAuthoritativeOwner`
+carries phone/email/address, drops generic-inbox + malformed phone, picks first
+valid phone, federal-fallback, sales-history name-only; `contactSeedFields` emits
+org phone/email). `node --check` clean (entity-link, sidebar-pipeline); full suite
+green. JS ships on the Railway redeploy; dia/gov pipelines otherwise untouched;
+auth schema untouched.
+
+### Live proof (Cowork, after deploy)
+A new CoStar owner capture with a phone/email lands on the owner ENTITY (both
+domains) + the gov `recorded_owners.contact_info`; a spot-check owner that was
+name-only before now shows a reachable phone/email.

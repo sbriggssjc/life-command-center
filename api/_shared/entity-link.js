@@ -690,15 +690,31 @@ export function isGenericInboxEmail(email) {
   return GENERIC_INBOX_LOCALPARTS.has(local);
 }
 
+// ORE Phase 1 Unit B: a phone value is worth storing only when it carries enough
+// digits to be a real number. Guards against junk ("(p)", "see notes", "—", a
+// bare extension) landing in entities.phone. Conservative: 7-15 digits passes
+// (US local minimum through E.164 max); no-/few-digit label strings are dropped.
+export function looksLikeContactPhone(phone) {
+  if (typeof phone !== 'string') return false;
+  const digits = phone.replace(/\D/g, '');
+  return digits.length >= 7 && digits.length <= 15;
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
   if (['property', 'asset', 'clinic', 'facility'].includes(type)) return 'asset';
+  // ORE Phase 1 Unit B: an EXPLICIT company/org sourceType is an organization
+  // regardless of contact fields — so a captured owner ORG carrying phone/email
+  // (now seeded — see contactSeedFields) is not mis-inferred as a person by the
+  // email/phone heuristic below. (Firm-suffixed person mistypes are still caught
+  // by the retype in ensureEntityLink; this only fixes the explicit-org path.)
+  if (['company', 'organization', 'org'].includes(type)) return 'organization';
   if (seedFields.email || seedFields.phone || seedFields.first_name || seedFields.last_name) return 'person';
   return 'organization';
 }
 
-function pickSeedFields(entityType, seedFields = {}) {
+export function pickSeedFields(entityType, seedFields = {}) {
   const allowed = ['description', 'first_name', 'last_name', 'title', 'phone', 'email',
     'org_type', 'address', 'city', 'state', 'zip', 'county', 'latitude', 'longitude', 'asset_type',
     'domain', 'metadata'];
@@ -707,22 +723,39 @@ function pickSeedFields(entityType, seedFields = {}) {
     if (seedFields[key] !== undefined) picked[key] = seedFields[key];
   }
 
+  // Person-only name/title fields.
   if (entityType !== 'person') {
     delete picked.first_name;
     delete picked.last_name;
     delete picked.title;
+  }
+
+  // ORE Phase 1 Unit B (2026-06-28): organization OWNER entities now carry
+  // phone/email/(mailing) address so a captured owner decision-maker is
+  // REACHABLE on the BD graph (feeds CONTACT-SELECTION, outreach-draft recipient
+  // resolution, and the cross-reference resolver). Previously phone/email were
+  // deleted for every non-person entity, silently dropping owner contact details
+  // we already receive from CoStar. Persons keep them as before; assets never do
+  // (an asset is not a contact). Org contact VALUES are guarded — a malformed
+  // email / no-digit phone is dropped rather than stored as junk.
+  if (entityType !== 'person' && entityType !== 'organization') {
     delete picked.phone;
     delete picked.email;
+  } else if (entityType === 'organization') {
+    if (picked.email !== undefined && !normalizeEmail(picked.email)) delete picked.email;
+    if (picked.phone !== undefined && !looksLikeContactPhone(picked.phone)) delete picked.phone;
   }
+
   if (entityType !== 'organization') {
     delete picked.org_type;
   }
   if (entityType !== 'asset') {
     // R52 Unit 1: a PERSON keeps its mailing address (address/city/state/zip/
     // county) so an SF-contact pull / county-record lookup can land it
-    // first-class (the address dimension — 0% today). lat/lng/asset_type stay
-    // asset-only. An organization keeps none of these here (unchanged).
-    if (entityType !== 'person') {
+    // first-class (the address dimension). ORE Phase 1 Unit B extends the SAME
+    // to ORGANIZATION owners (notice/mailing address). lat/lng/asset_type stay
+    // asset-only.
+    if (entityType !== 'person' && entityType !== 'organization') {
       delete picked.address;
       delete picked.city;
       delete picked.state;
