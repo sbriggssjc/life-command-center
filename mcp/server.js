@@ -399,11 +399,70 @@ const TOOL_DEFINITIONS = {
       properties: {}
     }
   },
+  recall_memory: {
+    name: 'recall_memory',
+    description: 'Recall shared Cortex memory — the decisions, facts, outcomes, and preferences logged across past work sessions (any account/agent). Call this at the start of a task to load relevant prior context so output stays consistent with how things were done before. Filter by query/domain/kind.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keyword to match within the memory summary (optional)' },
+        domain: { type: 'string', enum: ['work', 'personal', 'global'], description: 'Optional domain filter' },
+        kind: { type: 'string', enum: ['decision', 'fact', 'outcome', 'preference', 'note'], description: 'Optional kind filter' },
+        limit: { type: 'number', description: 'Max entries (default 20, max 50)' }
+      }
+    }
+  },
+  log_memory: {
+    name: 'log_memory',
+    description: 'Log a new entry to shared Cortex memory so future sessions (any account/agent) remember it. Use for durable decisions, facts learned, outcomes, or stated preferences — not transient chatter.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'One-line summary of the decision/fact/outcome (required)' },
+        domain: { type: 'string', enum: ['work', 'personal', 'global'], description: 'Domain (default global)' },
+        kind: { type: 'string', enum: ['decision', 'fact', 'outcome', 'preference', 'note'], description: 'Entry kind (default note)' },
+        detail: { type: 'string', description: 'Optional supporting detail' }
+      },
+      required: ['summary']
+    }
+  },
 };
 
 // ── Tool handlers ─────────────────────────────────────────────────────────
 // These are the exact same async functions from the former s.tool() calls.
 const TOOL_HANDLERS = {
+  recall_memory: async ({ query, domain, kind, limit }) => {
+    return withTiming("recall_memory", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
+        return textResult({ error: "OPS database not configured" });
+      }
+      const lim = Math.min(parseInt(limit, 10) || 20, 50);
+      let path = `cortex_memory?active=eq.true&select=created_at,domain,kind,summary,source&order=created_at.desc&limit=${lim}`;
+      if (domain) path += `&domain=eq.${enc(domain)}`;
+      if (kind) path += `&kind=eq.${enc(kind)}`;
+      if (query) path += `&summary=ilike.*${enc(query)}*`;
+      const r = await opsQuery("GET", path);
+      return textResult({ count: r.data?.length || 0, memory: r.data || [] });
+    });
+  },
+  log_memory: async ({ summary, domain, kind, detail }) => {
+    return withTiming("log_memory", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
+        return textResult({ error: "OPS database not configured" });
+      }
+      if (!summary) return textResult({ error: "summary is required" });
+      const validKind = ['decision', 'fact', 'outcome', 'preference', 'note'].includes(kind) ? kind : 'note';
+      const row = {
+        domain: domain || 'global',
+        kind: validKind,
+        summary,
+        detail: detail ? { text: String(detail) } : {},
+        source: 'mcp:log_memory'
+      };
+      const r = await opsQuery("POST", "cortex_memory", row);
+      return textResult({ ok: r.ok !== false, logged: summary });
+    });
+  },
   get_daily_briefing: async ({ workspace_id }) => {
     return withTiming("get_daily_briefing", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
