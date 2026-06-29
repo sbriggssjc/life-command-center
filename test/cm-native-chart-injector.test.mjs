@@ -2019,7 +2019,9 @@ test('R68-E G5: lease_renewal_rate builds diverging stacked combo + net line', (
     { key: 'first_generation_commencements',   col: 'B' },
     { key: 'renewed_leases',                   col: 'C' },
     { key: 'succeeding_superseding_leases',    col: 'D' },
-    { key: 'expired_leases',                   col: 'E' },
+    // R2-C Unit 4: charted "out" side is non_renewed_expirations (the share of
+    // option-date expirations that actually left), not raw expired_leases.
+    { key: 'non_renewed_expirations',          col: 'E' },
     { key: 'terminated_leases',                col: 'F' },
   ];
   const brand = { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } };
@@ -2041,8 +2043,8 @@ test('R68-E G5: lease_renewal_rate builds diverging stacked combo + net line', (
     ['E0E8F4', '003DA5', '265AB2', '62B5E5', 'D97706'],
   );
   // Additive series (first 3) chart their own positive cols B/C/D.
-  // Subtractive series (expired/terminated) chart NEGATED helper cols
-  // (G/H = past the 6 regular cols A-F), but their TITLE still points at
+  // Subtractive series (non_renewed_expirations/terminated) chart NEGATED helper
+  // cols (G/H = past the 6 regular cols A-F), but their TITLE still points at
   // the original positive header (E/F) so the legend reads plain names.
   assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['B', 'C', 'D', 'G', 'H']);
   assert.deepEqual(out.spec.barSeries.map(s => s.titleCol), ['B', 'C', 'D', 'E', 'F']);
@@ -2050,16 +2052,16 @@ test('R68-E G5: lease_renewal_rate builds diverging stacked combo + net line', (
   assert.equal(out.spec.lineSeries.length, 1, 'one net-movement line');
   assert.equal(out.spec.lineSeries[0].valCol, 'I');
   assert.equal(out.spec.lineSeries[0].color, '191919', 'net line = rich black');
-  // Helper cols: expired_neg (G), terminated_neg (H), net_movement (I).
+  // Helper cols: non_renewed_expirations_neg (G), terminated_neg (H), net (I).
   assert.deepEqual(out.helperCols.map(h => h.key),
-    ['expired_leases_neg', 'terminated_leases_neg', 'net_movement']);
-  // Negation: expired 40 -> -40
-  assert.equal(out.helperCols[0].getValue({ expired_leases: 40 }), -40);
-  // Net = +firstgen +renewed +succ -expired -terminated
+    ['non_renewed_expirations_neg', 'terminated_leases_neg', 'net_movement']);
+  // Negation: 40 -> -40
+  assert.equal(out.helperCols[0].getValue({ non_renewed_expirations: 40 }), -40);
+  // Net = +firstgen +renewed +succ -non_renewed_expirations -terminated
   assert.equal(
     out.helperCols[2].getValue({
       first_generation_commencements: 10, renewed_leases: 50,
-      succeeding_superseding_leases: 20, expired_leases: 40, terminated_leases: 15,
+      succeeding_superseding_leases: 20, non_renewed_expirations: 40, terminated_leases: 15,
     }),
     10 + 50 + 20 - 40 - 15, // = 25
     'net movement = signed sum of all outcomes',
@@ -5770,7 +5772,8 @@ test('R68-E G5: renewal_rate XML — stacked diverging bars, zero-crossing singl
     { key: 'first_generation_commencements',   col: 'B' },
     { key: 'renewed_leases',                   col: 'C' },
     { key: 'succeeding_superseding_leases',    col: 'D' },
-    { key: 'expired_leases',                   col: 'E' },
+    // R2-C Unit 4: charted "out" side is non_renewed_expirations, not expired_leases.
+    { key: 'non_renewed_expirations',          col: 'E' },
     { key: 'terminated_leases',                col: 'F' },
   ];
   const out = buildInjectionSpec({
@@ -5793,7 +5796,7 @@ test('R68-E G5: renewal_rate XML — stacked diverging bars, zero-crossing singl
   const idxs = Array.from(xml.matchAll(/<c:idx val="(\d+)"\/>/g)).map(m => Number(m[1]));
   assert.deepEqual(idxs, [0, 1, 2, 3, 4, 5]);
   // The two subtractive bars chart the negated helper cols (G, H).
-  assert.match(xml, /\$G\$5:\$G\$100/, 'expired plots from negated helper col G');
+  assert.match(xml, /\$G\$5:\$G\$100/, 'non_renewed_expirations plots from negated helper col G');
   assert.match(xml, /\$H\$5:\$H\$100/, 'terminated plots from negated helper col H');
   // Net line plots from the net helper col (I).
   assert.match(xml, /\$I\$5:\$I\$100/, 'net line plots from net helper col I');

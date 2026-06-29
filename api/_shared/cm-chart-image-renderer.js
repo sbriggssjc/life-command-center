@@ -1691,11 +1691,16 @@ function buildChartConfig(chart, brand) {
       // crossing axis automatically. The series→sign map is CONFIG so a future
       // PDF-reconciliation flip is one line. Mirrored in
       // cm-native-chart-injector.js (keep the two in sync). pdf_reconcile.
+      // R2-C Unit 4 — below-zero EXIT side is TRUE departures
+      // (non_renewed_expirations + terminated = net_departures_ttm), not the
+      // double-counted/event-corrupted expired + terminated. So the net-change
+      // line reads real turnover (~hundreds, not -1,096). "Expired" (option-date,
+      // mostly renew/holdover) stays a data-tab audit column, off the bars.
       const LEASE_RENEWAL_SERIES = [
         { key: 'first_generation_commencements', label: 'First Generation Commencements', color: palette[3],           sign: +1 },
         { key: 'renewed_leases',                 label: 'Renewed',                        color: PDF_COLORS.cap_short, sign: +1 },
         { key: 'succeeding_superseding_leases',  label: 'Succeeding/Superseding',         color: palette[2],           sign: +1 },
-        { key: 'expired_leases',                 label: 'Expired',                        color: PDF_COLORS.cap_mid,   sign: -1 },
+        { key: 'non_renewed_expirations',        label: 'Expired (Not Renewed)',          color: PDF_COLORS.cap_mid,   sign: -1 },
         { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: -1 },
       ];
       const netData = rows.map(r => {

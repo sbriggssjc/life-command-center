@@ -725,8 +725,16 @@ const CHART_COLUMNS = {
     { key: 'first_generation_commencements', header: 'First Gen Commencements', format: 'integer_count', width: 24 },
     { key: 'renewed_leases', header: 'Renewed', format: 'integer_count', width: 12 },
     { key: 'succeeding_superseding_leases', header: 'Succeeding/Superseding', format: 'integer_count', width: 24 },
-    { key: 'expired_leases', header: 'Expired', format: 'integer_count', width: 12 },
+    // R2-C Unit 4: the charted "out" side is now TRUE departures, decomposed.
+    // non_renewed_expirations + terminated = net_departures_ttm (snapshot truth),
+    // so the diverging bars no longer double-count expired + terminated.
+    { key: 'non_renewed_expirations', header: 'Expired (Not Renewed)', format: 'integer_count', width: 22 },
     { key: 'terminated_leases', header: 'Terminated', format: 'integer_count', width: 14 },
+    // Audit-only columns (NOT charted): option-date expirations (mostly renew /
+    // hold over), the snapshot true-departure total, and the holdover share.
+    { key: 'expired_leases', header: 'Option-Date Expirations', format: 'integer_count', width: 22 },
+    { key: 'net_departures_ttm', header: 'True Departures (TTM)', format: 'integer_count', width: 20 },
+    { key: 'expirations_renewed_or_held', header: 'Expirations Renewed/Held', format: 'integer_count', width: 24 },
   ],
   lease_termination_rate: [
     { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
