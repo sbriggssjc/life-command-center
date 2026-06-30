@@ -6095,3 +6095,69 @@ auth schema untouched.
 A new CoStar owner capture with a phone/email lands on the owner ENTITY (both
 domains) + the gov `recorded_owners.contact_info`; a spot-check owner that was
 name-only before now shows a reachable phone/email.
+
+## Merge lane — widen safe auto-merge to SF-corroborated pinned dupes + survivor pick (2026-06-30)
+
+CONNECTIVITY #1b pinned every same-`norm_name` org group containing a freshly-
+bridged owner (`owner_role='unknown'`, `metadata.bridge_source='connectivity_inuse_owner'`)
+OUT of auto-merge — deliberate, and RETAINED — but it over-held a large class of
+GENUINE duplicates (Boyer / DRA Advisors / Granger / Huntington National Bank /
+Healthcare Realty Trust / Hutton Company …). Grounded live: of 1,904
+`bridged_unknown_pinned` groups, **469** are `raw_name_compatible AND
+distinct_sf_accounts=1` (same-name variants anchored by exactly ONE real SF
+account); the rest stay held (14 multi-SF, 1,382 zero-SF, 39 name-incompatible —
+the Excelsior Capital / The Excelsior Group / Excelsior Partners distinct-firm
+class).
+
+### Unit 1 — widen `auto_mergeable` (migration `20260630120000`, applied live)
+`CREATE OR REPLACE v_lcc_merge_candidates` adds a pinned tier to `auto_mergeable`:
+`raw_name_compatible AND ((NOT pinned AND <existing role/SF tiers>) OR (pinned AND
+distinct_sf_accounts=1))`. `raw_name_compatible` is REQUIRED in every tier, so a
+distinct-firm name-incompatible group can NEVER qualify. `review_reason` first arm
+mirrors the new gate. Column list/order/type unchanged (append-only rule). No JS
+change for the DDL.
+- **Bridge-safety (why co-bridging multiple true_owners onto the survivor is OK,
+  verified live):** `lcc_merge_entity` moves every member's `external_identities`
+  (incl. the several `(dia|gov, true_owner)` bridges) onto the survivor. A survivor
+  carrying MULTIPLE true_owner identities is ALREADY the normal tolerated steady
+  state — **43** LCC org entities carry ≥2 true_owner ids today. **0** true_owner
+  ids point at >1 entity (clean 1:1 from the true_owner side) → no identity
+  collisions inside the 469 set, and the R6/owner-facts resolver reads FROM a
+  domain property → its true_owner → (1:1) the LCC entity, so one-entity→many-
+  true_owner is correct, not corruption. `raw_name_compatible` (a bridged member's
+  entity name IS its domain true_owner name) already enforces "the group's domain
+  true_owners are dup-compatible" — no extra guard needed.
+
+### Unit 1b — drained the 469 live (reversible)
+`lcc_apply_fuzzy_merges(false, …)` in bounded batches: **471 groups / 544 losers**
+merged (469 newly-qualifying pinned + 2 pre-existing non-pinned auto). Snapshotted
+the full set to `merge_sf_pinned_widen_backup (batch_tag='20260630_sf_pinned_widen')`
+BEFORE the drain (reversal anchor). After: `auto_mergeable`=0, lane 2,212→1,741
+groups, held sets intact (1,435 pinned-held + 9 non-pinned name-incompat + 4
+multi-SF + 293 no-signal). Load-bearing caches rebuilt clean (`lcc_refresh_buyer_spe_resolved`
+740, `_entity_connected_value` 3,015, `_priority_queue_resolved` 1,112). Spot-check:
+"The Boyer Company" survivor inherited the SF account + consolidated the gov
+true_owner bridge; the 3 variants tombstoned. Excelsior/Nephron correctly NOT in
+the apply set. Reverse via the `merged_into_entity_id` tombstones + the backup table.
+
+### Unit 2 — surface + override the survivor on the merge card (JS, Railway redeploy)
+`admin.js`: the three merge sub-view pulls (`v_lcc_merge_candidates` /
+`v_lcc_person_email_merge_candidates` / `v_lcc_canonical_twin_candidates`) now
+SELECT `loser_names` into context. The `merge` verdict accepts an optional
+`payload.winner_id` OVERRIDE — validated to be an ACTUAL member of the group
+(re-fetched fresh by the stable view-winner key; `winner_id_not_in_group` 400
+otherwise) — and collapses everyone except the chosen survivor into it. The org
+re-fetch dropped the `auto_mergeable=eq.true` filter (winner_id-keyed only, like
+the person/canonical views) so the human verdict is authoritative (the lane shows
+`sf_inheritance` groups for merge). `ops.js`: the card now SHOWS "Merge into:
+<survivor>" with an override `<select>` of all members (default = the view winner)
++ a "Collapses: …" list; `dcMergeGroup(i)` reads the dropdown and only sends
+`winner_id` on a real override. `subjectRef` stays keyed on the view winner (one
+decision per group, idempotent). Genuinely-ambiguous groups (Excelsior, Nephron)
+stay HUMAN — now with the survivor visible + choosable.
+
+### Verified (2026-06-30)
+DB applied live + migration committed; JS ships on the Railway redeploy. `node
+--check` clean (admin.js, ops.js); `ls api/*.js | wc -l`=12; full suite **1628
+pass / 0 fail / 6 skipped** (`decision-center-partition` green). LCC-Opps only; no
+dia/gov writes; auth schema untouched.

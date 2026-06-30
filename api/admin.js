@@ -1115,20 +1115,20 @@ async function fetchFederatedSource(type, cap) {
     // One row per surviving (winner) entity; merging collapses the loser_ids in.
     const mergeFilter = 'or=(auto_mergeable.eq.true,sf_inheritance.eq.true)';
     const [r, pr, cr] = await Promise.all([
-      opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count,sf_inheritance,sf_linked_member_count'
+      opsQuery('GET', 'v_lcc_merge_candidates?select=norm_name,winner_name,winner_id,loser_ids,loser_names,member_count,sf_inheritance,sf_linked_member_count'
         + '&' + mergeFilter + '&order=sf_inheritance.desc,member_count.desc&limit=' + cap),
       // R39: ambiguous person email-share groups (same email, name-INcompatible)
       // need human judgment — a shared firm/assistant inbox vs the same person.
       // The name-compatible slice is auto-worked by lcc_apply_person_email_merges,
       // so it never reaches this lane.
-      opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,winner_name,winner_id,loser_ids,member_count,sf_linked_member_count'
+      opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,winner_name,winner_id,loser_ids,loser_names,member_count,sf_linked_member_count'
         + '&name_compatible=eq.false&order=member_count.desc&limit=' + cap),
       // CONNECTIVITY #1b: ALL same-canonical org twin groups (canonical_name
       // grouping catches the freshly-bridged-owner twins that the narrower
       // lcc_normalize_entity_name grouping in v_lcc_merge_candidates missed).
       // Surface-only view → never auto-merged; the merge is the human verdict.
       // Floated bridged twins first so the #1b set is worked.
-      opsQuery('GET', 'v_lcc_canonical_twin_candidates?select=norm_name,winner_name,winner_id,loser_ids,member_count,domains,has_bridged_owner'
+      opsQuery('GET', 'v_lcc_canonical_twin_candidates?select=norm_name,winner_name,winner_id,loser_ids,loser_names,member_count,domains,has_bridged_owner'
         + '&order=has_bridged_owner.desc,member_count.desc&limit=' + cap),
     ]);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
@@ -1140,7 +1140,7 @@ async function fetchFederatedSource(type, cap) {
       // SF-inheritance merges sort first (the bonus dedup+inherit-link win), then by size.
       rank_value: (row.sf_inheritance === true ? 1000000 : 0) + (Number(row.member_count) || 0),
       context: { winner_id: row.winner_id, winner_name: row.winner_name, norm_name: row.norm_name,
-        loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
+        loser_ids: row.loser_ids || [], loser_names: row.loser_names || [], member_count: Number(row.member_count) || 0,
         sf_inheritance: row.sf_inheritance === true, sf_linked_member_count: Number(row.sf_linked_member_count) || 0 },
     }));
     const personItems = prows.map((row) => ({
@@ -1148,7 +1148,7 @@ async function fetchFederatedSource(type, cap) {
       subject_domain: null, subject_property_id: null, subject_entity_id: row.winner_id,
       rank_value: (Number(row.member_count) || 0),
       context: { kind: 'person_email', winner_id: row.winner_id, winner_name: row.winner_name,
-        email: row.email, loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
+        email: row.email, loser_ids: row.loser_ids || [], loser_names: row.loser_names || [], member_count: Number(row.member_count) || 0,
         sf_linked_member_count: Number(row.sf_linked_member_count) || 0 },
     }));
     const canonicalItems = crows.map((row) => ({
@@ -1157,7 +1157,7 @@ async function fetchFederatedSource(type, cap) {
       // Bridged-owner twins float above non-bridged; then by group size.
       rank_value: (row.has_bridged_owner === true ? 100000 : 0) + (Number(row.member_count) || 0),
       context: { kind: 'canonical_twin', winner_id: row.winner_id, winner_name: row.winner_name,
-        norm_name: row.norm_name, loser_ids: row.loser_ids || [], member_count: Number(row.member_count) || 0,
+        norm_name: row.norm_name, loser_ids: row.loser_ids || [], loser_names: row.loser_names || [], member_count: Number(row.member_count) || 0,
         domains: row.domains || [], has_bridged_owner: row.has_bridged_owner === true },
     }));
     // Dedupe by subject_ref (winner_id) — a group already surfaced via
@@ -2505,43 +2505,58 @@ async function handleDecisionVerdict(req, res) {
     // 'keep_separate' is record-only; 'research' queues a task. Effect-first:
     // a failed merge keeps the decision open + records merge:false.
     if (decision.decision_type === 'merge_duplicate_entities') {
-      const winnerId = c.winner_id || decision.subject_entity_id;
+      // The view's winner is the stable GROUP KEY for the fresh re-fetch. The
+      // operator may OVERRIDE which member survives via payload.winner_id (Unit 2):
+      // the chosen survivor is validated to be an actual member of the group below.
+      const groupKey = c.winner_id || decision.subject_entity_id;
+      const override = (payload && payload.winner_id) ? String(payload.winner_id) : null;
+      const chosenWinner = override || groupKey;
       if (verdict === 'keep_separate') {
         await record('keep_separate', 'decided', null, { merge: 'suppressed_group' });
         return res.status(200).json({ ok: true, verdict: 'keep_separate' });
       }
       if (verdict === 'merge') {
-        if (!winnerId) return res.status(400).json({ error: 'merge requires a winner entity' });
-        // Re-fetch the CURRENT group (fresh loser set; no-op if already drained).
-        // R39: a person email-share group resolves from the person view; org
-        // duplicate groups from v_lcc_merge_candidates. Both expose winner_id +
-        // loser_ids, and the now-person-complete lcc_merge_entity collapses either.
+        if (!groupKey) return res.status(400).json({ error: 'merge requires a winner entity' });
+        // Re-fetch the CURRENT group (fresh loser set; no-op if already drained),
+        // keyed on the stable view winner. R39: a person email-share group resolves
+        // from the person view; CONNECTIVITY #1b twins from the canonical-twin view;
+        // org duplicate groups from v_lcc_merge_candidates. The human verdict is
+        // authoritative, so the org pull is winner_id-keyed only (matches the
+        // person/canonical-twin views — no auto_mergeable filter), so a survivor
+        // override or an sf_inheritance-only group still collapses on demand.
         const groupView = (c.kind === 'person_email')
-          ? 'v_lcc_person_email_merge_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1'
-          // CONNECTIVITY #1b: same-canonical twin groups (incl. freshly-bridged
-          // owners) resolve from the surface-only canonical-twin view. No
-          // auto_mergeable filter there — the merge is the human verdict.
+          ? 'v_lcc_person_email_merge_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(groupKey) + '&limit=1'
           : (c.kind === 'canonical_twin')
-          ? 'v_lcc_canonical_twin_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1'
-          : 'v_lcc_merge_candidates?select=loser_ids&auto_mergeable=eq.true&winner_id=eq.' + pgFilterVal(winnerId) + '&limit=1';
+          ? 'v_lcc_canonical_twin_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(groupKey) + '&limit=1'
+          : 'v_lcc_merge_candidates?select=loser_ids&winner_id=eq.' + pgFilterVal(groupKey) + '&limit=1';
         const gr = await opsQuery('GET', groupView);
-        const losers = (gr.ok && Array.isArray(gr.data) && gr.data[0] && Array.isArray(gr.data[0].loser_ids))
+        const freshLosers = (gr.ok && Array.isArray(gr.data) && gr.data[0] && Array.isArray(gr.data[0].loser_ids))
           ? gr.data[0].loser_ids : [];
+        // Full member set as the view knows it = the view winner + its current losers.
+        const memberSet = [groupKey].concat(freshLosers);
+        // The survivor override must be an ACTUAL member of this group — never merge
+        // an arbitrary entity the caller named.
+        if (override && memberSet.indexOf(override) === -1) {
+          return res.status(400).json({ error: 'winner_id_not_in_group' });
+        }
+        // Everyone except the chosen survivor collapses into it (works whether the
+        // survivor is the view winner OR an operator-overridden member).
+        const losers = memberSet.filter((id) => id && id !== chosenWinner);
         let merged = 0;
         for (const loser of losers) {
-          const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: loser, p_winner: winnerId });
+          const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: loser, p_winner: chosenWinner });
           if (!mr.ok) { await recordEffectFailure({ merge: false, merged, error: mr.data }); return res.status(502).json({ error: 'merge_failed', detail: mr.data }); }
           merged += 1;
         }
         // Merges change entity membership (SPE/parent + queue) — refresh caches.
         try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
         try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
-        await record('merge', 'decided', { winner_id: winnerId, merged }, { merge: 'collapsed', merged });
-        return res.status(200).json({ ok: true, verdict: 'merge', merged });
+        await record('merge', 'decided', { winner_id: chosenWinner, override: override ? true : false, merged }, { merge: 'collapsed', merged });
+        return res.status(200).json({ ok: true, verdict: 'merge', merged, winner_id: chosenWinner });
       }
       if (verdict === 'research') {
         const rt = await createResearchTask({ research_type: 'merge_duplicate_entities',
-          title: 'Review duplicate entity group: ' + (c.winner_name || c.norm_name || winnerId || ''),
+          title: 'Review duplicate entity group: ' + (c.winner_name || c.norm_name || groupKey || ''),
           instructions: 'Decision Center: confirm whether the ' + (c.member_count || '?') + '-member group around "'
             + (c.winner_name || c.norm_name || '') + '" is the same entity (merge) or distinct entities (keep separate).' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
