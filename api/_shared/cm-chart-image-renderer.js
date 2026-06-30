@@ -18,7 +18,18 @@
 // Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
-import { heatRampColors, fitDataAxisRange } from './cm-native-chart-injector.js';
+import { heatRampColors, fitDataAxisRange, minYearForTemplate } from './cm-native-chart-injector.js';
+
+// R2-A2 (2026-06-30) — templates whose PNG window must mirror the native
+// injector's MIN_YEAR_BY_TEMPLATE floor so both surfaces plot the identical
+// displayed window and their data-fit cap axes match. Scoped to the asking-cap
+// charts (the injector floors them at 2015 to exclude the sparse/plateau early
+// years; without this the PNG's recent-N-month window plots ~2006+ and its fit
+// diverges — chart #2 even shows the 2011-2013 6-8yr broker-theater plateau).
+const SYNC_INJECTOR_MIN_YEAR = new Set([
+  'asking_cap_quartiles_active',
+  'asking_cap_by_term_dot_plot',
+]);
 
 const QUICKCHART_URL =
   process.env.CM_QUICKCHART_URL || 'https://quickchart.io/chart';
@@ -417,7 +428,20 @@ function buildChartConfig(chart, brand) {
   // recentRows = clip to recent window; cropForRender = downsample if
   // we still exceed QuickChart's 250-point hard limit. Belt + suspenders.
   // Per-sale scatters bypass recentRows so the full time range is preserved.
-  const rows = cropForRender(isPerSale ? (chart.rows || []) : recentRows(chart.rows, windowSize));
+  let rows = cropForRender(isPerSale ? (chart.rows || []) : recentRows(chart.rows, windowSize));
+  // R2-A2 — for the asking-cap charts, additionally crop to the native
+  // injector's per-template dataStart floor (computed over the FULL row set, as
+  // the injector does) so this PNG surface plots the same window and its
+  // fitDataAxisRange('cap') lands on the same axis as the native chart.
+  if (SYNC_INJECTOR_MIN_YEAR.has(chart.chart_template_id)) {
+    const minYear = minYearForTemplate(chart.chart_template_id, chart.rows);
+    if (minYear) {
+      rows = rows.filter(r => {
+        const pe = r.period_end ? new Date(r.period_end) : null;
+        return pe && Number.isFinite(pe.getTime()) && pe.getUTCFullYear() >= minYear;
+      });
+    }
+  }
   const labels = rows.map(r => periodEndLabel(r.period_end || r.year));
 
   switch (chart.chart_template_id) {
