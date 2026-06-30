@@ -6161,3 +6161,84 @@ DB applied live + migration committed; JS ships on the Railway redeploy. `node
 --check` clean (admin.js, ops.js); `ls api/*.js | wc -l`=12; full suite **1628
 pass / 0 fail / 6 skipped** (`decision-center-partition` green). LCC-Opps only; no
 dia/gov writes; auth schema untouched.
+
+## Decision Center — intake_disposition: render content, gate the producer, honest count (2026-06-30)
+
+The "Staged intake — needs review" lane showed ~888 `staged_intake_items`
+(status `review_required`/`failed`) as identical "unknown doctype · source email"
+cards with the same four buttons — unworkable. Root cause: `_intakeSnap` read
+`extraction_result.snapshot`, but the live extractor writes the fields at the TOP
+level of `extraction_result` (verified: `has_snapshot=false` on 100% of rows), so
+the card projected nothing and "Create property" was offered on matched / noise /
+empty rows alike. Consumption-Layer fix (render the data we already extracted,
+value-gate the producer, honest count). LCC-Opps staging only; no dia/gov writes;
+no new api/*.js (≤12); no migration.
+
+### The one classifier (single source of truth)
+`classifyStagedIntake(fields)` (`api/_shared/intake-classify.js`, pure, exported)
+sorts each row into exactly one `klass` from the extraction_result fields
+(works on the nested object OR a flat PostgREST projection that aliases the
+`->>` paths to the same names):
+- **`matched`** — `match_status='matched'` (already tied to a property; promotion
+  didn't finish). Open / promote, NEVER create. Matched wins over doctype.
+- **`no_data`** — no address AND no tenant AND no asking price. Auto-retire.
+- **`noise`** — a non-listing doctype (`INTAKE_NOISE_DOCTYPES` = email_update /
+  broker_email / market_update / email / comp). Market intel, not a property.
+- **`create_candidate`** — an unmatched listing doc (`normalizeDocType` →
+  om/flyer/marketing_brochure) carrying content. The genuine create set.
+- **`other`** — unmatched, has content, doctype unknown/null. Workable but lower
+  confidence; shown only in "show all", not the default create lane.
+Grounded live 2026-06-30 over 888 review rows: matched 332 · no_data 164 ·
+noise 154 · other 141 · **create_candidate 103** (the honest create badge, was 888).
+
+### Unit 1 — render the extracted content (the headline)
+`api/admin.js` `fetchFederatedSource('intake_disposition')` now fetches a
+lightweight flat projection (`INTAKE_LANE_SELECT`, ≈1 KB/row, top-level
+`extraction_result` fields), classifies in JS (the alias normalization can't be a
+clean server-side count filter), and projects address/city/state/tenant/
+asking_price/cap_rate/doctype(normalized)/match_status/match_domain/
+match_property_id + `klass` into each card's context. `ops.js` `_fedCardHTML`
+renders the title from the address (or tenant) — never the intake id — with the
+deal facts + doctype + match_status badges.
+
+### Unit 2 — gate the producer / default actionable
+- **Default = create-candidates** (value-ranked by asking price desc, then
+  has-content), and `out.total` = the create-candidate universe (the badge drops
+  888 → ~103). A **"Show all (matched · noise)"** toggle (`?intake_view=all`)
+  surfaces every workable klass; `no_data` is excluded from both views (it's
+  retired, nothing to show). `out.complete` lets `listFederatedLane` derive an
+  EXACT count from items minus decided (a decided noise/matched row can't deflate
+  the create count). `intake_disposition` dropped from `_DC_BULK_SAFE` — a
+  "dismiss all" on a create lane is a footgun.
+- **Auto-retire `no_data`** — a bounded reversible sweep folded into the existing
+  `handleIntakePromoteDrain` (which already has the `lcc-intake-promote-drain`
+  cron + GET dry-run): a `review_required` row classified `no_data` is flipped to
+  `status='discarded'` with `raw_payload.disposition='auto_no_extractable_data'`
+  (+ `retired_at`), preserving the original `extraction_result` (REVERSIBLE — never
+  a hard delete; reverse on the disposition tag). GET = `no_data_eligible` count
+  only; POST drains up to `limit` (65 eligible live). Status-guarded PATCH so a
+  concurrent change is a no-op.
+
+### Unit 3 — value-rank + per-class actions + open_property verdict
+- **Per-row actions by klass** (`ops.js`): `create_candidate`/`other` →
+  **Create property** (primary) · Re-extract · Dismiss · Research;
+  `matched` → **Open property →** (`open_property` verdict, only when the row
+  matched a dia/gov property with a numeric id — `lcc`/UUID matches record + drop,
+  not openable) · Dismiss · Research, **never Create**; `noise` → Dismiss
+  (primary) · Research.
+- **`open_property` verdict** (`api/admin.js`): records the decision + hands the
+  matched dia/gov property to the UI (`next.action='intake_open_property'`,
+  domain normalized to dia/gov, numeric pid); `dcFed` opens it via
+  `openUnifiedDetail`. Effect-first / outcome-truthful preserved on all verdicts.
+
+### Verified (2026-06-30)
+`test/intake-disposition.test.mjs` +9 (classifyStagedIntake: create_candidate
+[+ field projection + string-price coercion], long-form-doctype normalize,
+matched-wins-over-doctype [incl. matched broker_email], noise [email_update /
+comp], no_data [empty / null / zero-price], other [unknown-doctype-with-content],
+and the create set EXCLUDES matched/noise/no_data). `node --check` clean
+(admin.js, ops.js, intake-classify.js); `ls api/*.js | wc -l`=12; full suite
+**1637 pass / 0 fail / 6 skipped** (`decision-center-partition` green). Live
+read-only grounding: create-candidate 103, no_data retire-eligible 65, 0 prior
+decided intake decisions. JS ships on the Railway redeploy; the no_data retire
+rides the existing promote-drain cron (no new cron / migration).

@@ -2044,7 +2044,7 @@ let _dcFedArr = [];
 let _dcFedType = null;
 const _DC_FED_META = {
   intake_disposition: { title: 'Staged intake — needs review',
-    intro: 'Staged-intake items awaiting review, top by extracted asking price. Create the property, re-extract (OCR), dismiss, or send to research.' },
+    intro: 'Genuine new-listing candidates (unmatched OM / flyer / brochure with extracted data), value-ranked by asking price. Create the property, re-extract (OCR), dismiss, or research. Use “Show all” to also see already-matched rows (open / promote) and market-blast noise; empty extractions are auto-retired.' },
   property_merge: { title: 'Property merges & duplicates',
     intro: 'Properties sharing a normalized address. Are they the same property? Compare & merge via the consolidate flow, mark “Not a duplicate”, or send to research.' },
   provenance_conflict: { title: 'Data conflicts & provenance',
@@ -2080,15 +2080,44 @@ function _fedCardHTML(it, i, isNext) {
   let body = '', actions = '';
   if (_dcFedType === 'intake_disposition') {
     const ask = _fedMoney(c.asking_price);
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.tenant || c.address || ('Intake ' + (c.intake_id || '').slice(0, 8))) + '</span>'
-      + '<div class="q-item-badges">' + (ask ? '<span class="q-badge">' + ask + '</span>' : '')
-      + '<span class="q-badge">' + esc(c.status || '') + '</span></div></div>'
-      + '<div class="q-item-meta">' + esc(c.doctype || 'unknown doctype') + (c.address ? ' · ' + esc(c.address) : '')
-      + ' · source ' + esc(c.source_type || '') + '</div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'create_property\')">Create property →</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'reextract\')">Re-extract (OCR)</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+    const klass = c.klass || 'other';
+    const loc = [c.city, c.state].filter(Boolean).join(', ');
+    // openable iff the row matched a dia/gov property with a numeric id.
+    const odom = (c.match_domain === 'dia' || c.match_domain === 'dialysis') ? 'dia'
+      : (c.match_domain === 'gov' || c.match_domain === 'government') ? 'gov' : null;
+    const opid = (c.match_property_id != null && /^\d+$/.test(String(c.match_property_id)))
+      ? String(c.match_property_id) : null;
+    const matchTxt = (klass === 'matched')
+      ? ('matched' + (c.match_domain ? ' · ' + c.match_domain : '') + (c.match_property_id ? ' #' + esc(String(c.match_property_id)) : ''))
+      : (c.match_status || 'unmatched');
+    const title = c.address || c.tenant || ('Intake ' + String(c.intake_id || '').slice(0, 8));
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
+      + '<div class="q-item-badges">'
+      + (ask ? '<span class="q-badge">' + ask + '</span>' : '')
+      + '<span class="q-badge">' + esc(c.doctype || 'unknown doctype') + '</span>'
+      + '<span class="q-badge' + (klass === 'matched' ? ' type' : '') + '">' + esc(matchTxt) + '</span>'
+      + '</div></div>'
+      + ((c.tenant && c.tenant !== title) ? '<div class="q-item-meta">Tenant: <b>' + esc(c.tenant) + '</b></div>' : '')
+      + '<div class="q-item-meta">' + (loc ? esc(loc) + ' · ' : '')
+      + (c.cap_rate ? 'cap ' + esc(String(c.cap_rate)) + ' · ' : '')
+      + 'source ' + esc(c.source_type || '') + '</div>';
+    if (klass === 'matched') {
+      // Already tied to a property — open / promote, NEVER create.
+      const openBtn = (odom && opid)
+        ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'open_property\')">Open property →</button>' : '';
+      actions = openBtn
+        + '<button class="q-action' + (openBtn ? '' : ' primary') + '" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+    } else if (klass === 'noise') {
+      // Broker blast / comp — market intel, not a property to create.
+      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+    } else {  // create_candidate / other
+      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'create_property\')">Create property →</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'reextract\')">Re-extract (OCR)</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+    }
   } else if (_dcFedType === 'property_merge') {
     const dom = c.domain, pid = c.property_id;
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + pid)) + '</span>'
@@ -2311,19 +2340,29 @@ function _fedCardHTML(it, i, isNext) {
     + '<div class="q-actions">' + actions + '</div></div>';
 }
 
-async function renderFederatedLane(type) {
+async function renderFederatedLane(type, view) {
   const el = document.getElementById('reviewConsoleContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const meta = _DC_FED_META[type] || { title: type, intro: '' };
-  const res = await opsApi('/api/decisions?type=' + encodeURIComponent(type) + '&limit=50');
+  // intake_disposition: 'create' (default, the workable candidates) ↔ 'all'.
+  const intakeView = (type === 'intake_disposition' && view === 'all') ? 'all' : null;
+  const res = await opsApi('/api/decisions?type=' + encodeURIComponent(type) + '&limit=50'
+    + (intakeView ? '&intake_view=all' : ''));
   if (!res.ok) { el.innerHTML = opsErrorState(res, "renderFederatedLane('" + type + "')", 'Could not load this lane'); return; }
   const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
   const total = res.data ? res.data.total : null;
+  _dcCurrentOpenExpr = "renderFederatedLane('" + type + "'" + (intakeView ? ", 'all'" : "") + ")";
   let html = '<div class="ops-header"><h2>' + esc(meta.title) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
   html += '<div class="rc-intro">' + esc(meta.intro) + '</div>';
-  _dcCurrentOpenExpr = "renderFederatedLane('" + type + "')";
+  if (type === 'intake_disposition') {
+    html += '<div class="triage-bar" style="margin:6px 0"><div class="triage-actions">'
+      + (intakeView
+          ? '<button class="q-action" onclick="renderFederatedLane(\'intake_disposition\')">← Create-candidates only</button>'
+          : '<button class="q-action" onclick="renderFederatedLane(\'intake_disposition\', \'all\')">Show all (matched · noise) →</button>')
+      + '</div></div>';
+  }
   if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' workable in this lane' : '') + '</div>';
@@ -2345,7 +2384,8 @@ window.renderFederatedLane = renderFederatedLane;
 
 // R59 Unit 3 — per-lane SAFE bulk verdict (record-only / non-destructive only).
 var _DC_BULK_SAFE = {
-  intake_disposition: { verdict: 'dismiss', label: 'Dismiss all shown' },
+  // intake_disposition intentionally omitted — the default lane is create-
+  // candidates (real listings), so a "dismiss all" bulk would be a footgun.
   property_merge: { verdict: 'not_duplicate', label: 'Mark all "not a duplicate"' },
   owner_source_conflict: { verdict: 'keep_current', label: 'Keep current owner on all' },
   provenance_conflict: { verdict: 'keep_current', label: 'Keep current on all' },
@@ -2458,6 +2498,8 @@ async function dcFed(i, verdict, payload) {
       fwd = ' <button class="q-action primary" onclick="dcCmsUnlink(' + esc(String(nx.property_id)) + ')">Break link in cms-match →</button>';
     } else if (nx && (nx.action === 'intake_create_property' || nx.action === 'intake_reextract')) {
       fwd = ' <button class="q-action primary" onclick="navTo(\'pageInbox\')">Finish in Inbox →</button>';
+    } else if (nx && nx.action === 'intake_open_property' && nx.domain && nx.property_id != null && typeof openUnifiedDetail === 'function') {
+      fwd = ' <button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(nx.domain) + '\', {property_id: ' + esc(String(nx.property_id)) + '}, {}, \'Overview\')">Open property →</button>';
     } else if (nx && nx.action === 'bad_rent_lane') {
       fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'bad_rent_lease\')">Open bad-rent lane →</button>';
     }

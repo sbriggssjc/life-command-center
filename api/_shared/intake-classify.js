@@ -138,6 +138,86 @@ export function isNonDealSnapshot(snapshot) {
   return true;
 }
 
+// ── Decision Center: staged-intake lane classification (2026-06-30) ──────
+// The `intake_disposition` Decision-Center lane mixed four fundamentally
+// different things under one "Create property" button: genuine unmatched
+// listing docs, already-matched rows (promotion just didn't finish), broker
+// market-blast / comp doctypes (never a property), and rows the extractor got
+// nothing usable from. classifyStagedIntake sorts each staged-intake row into
+// exactly one `klass` so the lane can default to the create-candidate set,
+// route the rest correctly, and report an HONEST count.
+//
+// Input is the extraction_result fields (works on the nested object OR a flat
+// PostgREST projection that aliases the `->>` paths to the same names):
+//   document_type, address, city, state, tenant_name, asking_price, cap_rate,
+//   match_status, match_domain, match_property_id
+//
+// Doctypes that are market intel / comps, NOT a listing to create a property
+// from. A matched row of any doctype is still `matched` (matched wins).
+export const INTAKE_NOISE_DOCTYPES = new Set([
+  'email_update', 'broker_email', 'market_update', 'email', 'comp',
+]);
+
+function _intakeText(v) {
+  const s = (v == null ? '' : String(v)).trim();
+  return s || null;
+}
+function _intakeMoney(v) {
+  const n = Number(String(v == null ? '' : v).replace(/[^0-9.]/g, ''));
+  return (Number.isFinite(n) && n > 0) ? n : null;
+}
+
+/**
+ * Classify ONE staged-intake row for the Decision-Center create lane.
+ *
+ * klass:
+ *   - 'matched'          : match_status='matched' — already tied to a property
+ *                          (promotion didn't finish). Open / promote, NOT create.
+ *   - 'no_data'          : no address AND no tenant AND no asking price — the
+ *                          extractor got nothing usable. Auto-retire.
+ *   - 'noise'            : a non-listing doctype (email_update/broker_email/
+ *                          comp/market_update/email) — market intel, not a
+ *                          listing. Excluded from the create lane.
+ *   - 'create_candidate' : an unmatched listing doc (om/flyer/marketing_brochure,
+ *                          aliases normalized) carrying content. The genuine
+ *                          "create the property" set.
+ *   - 'other'            : unmatched, has content, but doctype is unknown/null —
+ *                          workable but lower-confidence; shown only in "all".
+ */
+export function classifyStagedIntake(fields) {
+  const f = fields || {};
+  const address = _intakeText(f.address);
+  const city = _intakeText(f.city);
+  const state = _intakeText(f.state);
+  const tenant = _intakeText(f.tenant_name);
+  const asking = _intakeMoney(f.asking_price);
+  const capRate = _intakeText(f.cap_rate);
+  const matchStatus = _intakeText(f.match_status);
+  const matchDomain = _intakeText(f.match_domain);
+  const matchPropertyId = _intakeText(f.match_property_id);
+  const doctype = f.document_type ? normalizeDocType(f.document_type) : null;
+  const hasContent = !!(address || tenant || asking != null);
+
+  let klass;
+  if (matchStatus === 'matched') klass = 'matched';
+  else if (!hasContent) klass = 'no_data';
+  else if (doctype && INTAKE_NOISE_DOCTYPES.has(doctype)) klass = 'noise';
+  else if (doctype && LISTING_DOCUMENT_TYPES.has(doctype)) klass = 'create_candidate';
+  else klass = 'other';
+
+  return {
+    klass,
+    doctype,
+    address, city, state, tenant,
+    asking_price: asking,
+    cap_rate: capRate,
+    match_status: matchStatus,
+    match_domain: matchDomain,
+    match_property_id: matchPropertyId,
+    has_content: hasContent,
+  };
+}
+
 // ── Cap-rate normalization (Round 77f, 2026-06-04) ───────────────────────
 // The extractor emits cap rates in BOTH forms depending on the AI/prompt:
 //   - decimal fraction  : 0.055  (5.5%)        — already DB-ready
