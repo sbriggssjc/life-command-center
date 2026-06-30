@@ -36,7 +36,7 @@ import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
-  snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES,
+  snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES, classifyStagedIntake,
 } from './_shared/intake-classify.js';
 import { normalizeState, parseContactFromJunk } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
@@ -889,19 +889,48 @@ function federatedSubjectRef(type, s) {
   return null;
 }
 
-// Pull the small snapshot facts off a staged-intake raw_payload for the card.
-function _intakeSnap(rp) {
-  const ex = (rp && rp.extraction_result) || {};
-  const snap = ex.snapshot || ex.deal || {};
-  const askingRaw = snap.asking_price ?? snap.price ?? snap.list_price;
-  const asking = Number(String(askingRaw == null ? '' : askingRaw).replace(/[^0-9.]/g, ''));
+// Project + classify ONE staged-intake row for the create lane. `row` is the
+// lightweight PostgREST projection whose aliases mirror the extraction_result
+// field names (document_type/address/.../match_status). Reads the fields
+// DIRECTLY off extraction_result — the live extractor writes them at the top
+// level, NOT under a `snapshot` key (which is why the old card showed
+// "unknown doctype"). classifyStagedIntake sorts the row into one klass.
+function _intakeRowClass(row) {
+  return classifyStagedIntake(row || {});
+}
+
+// Build the create-lane card context from a classified row.
+function _intakeContext(row, cls) {
   return {
-    asking: Number.isFinite(asking) && asking > 0 ? asking : null,
-    tenant: snap.tenant_name || snap.tenant || null,
-    address: snap.address || snap.property_address || null,
-    doctype: ex.doc_type || snap.doc_type || null,
+    intake_id: row.intake_id,
+    source_type: row.source_type,
+    status: row.status,
+    klass: cls.klass,
+    doctype: cls.doctype,
+    address: cls.address,
+    city: cls.city,
+    state: cls.state,
+    tenant: cls.tenant,
+    asking_price: cls.asking_price,
+    cap_rate: cls.cap_rate,
+    match_status: cls.match_status,
+    match_domain: cls.match_domain,
+    match_property_id: cls.match_property_id,
   };
 }
+
+// PostgREST select that flattens the extraction_result fields the lane reads.
+const INTAKE_LANE_SELECT = 'intake_id,source_type,status,created_at,'
+  + 'document_type:raw_payload->extraction_result->>document_type,'
+  + 'address:raw_payload->extraction_result->>address,'
+  + 'city:raw_payload->extraction_result->>city,'
+  + 'state:raw_payload->extraction_result->>state,'
+  + 'tenant_name:raw_payload->extraction_result->>tenant_name,'
+  + 'asking_price:raw_payload->extraction_result->>asking_price,'
+  + 'cap_rate:raw_payload->extraction_result->>cap_rate,'
+  + 'match_status:raw_payload->extraction_result->>match_status,'
+  + 'match_domain:raw_payload->extraction_result->>match_domain,'
+  + 'match_property_id:raw_payload->extraction_result->>match_property_id';
 const _provImportance = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(String(f || '')) ? 1000
   : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? 300 : 50;
 
@@ -919,7 +948,8 @@ async function fetchExcludedRefs(type) {
 // Per-lane source fetch. Returns { items, total } where each item carries the
 // subject_ref + display context + rank_value. `cap` bounds the source pull
 // (top-of-funnel; exclusion + paging happen in JS).
-async function fetchFederatedSource(type, cap) {
+async function fetchFederatedSource(type, cap, opts) {
+  opts = opts || {};
   const out = { items: [], total: null };
   const domCnt = async (dom, path) => {
     const r = await domainQuery(dom, 'GET',
@@ -963,20 +993,46 @@ async function fetchFederatedSource(type, cap) {
   }
 
   if (type === 'intake_disposition') {
-    const r = await opsQuery('GET', 'staged_intake_items?select=intake_id,source_type,status,created_at,raw_payload'
-      + '&status=in.(review_required,failed)&order=created_at.desc&limit=' + cap);
+    // Two views, one lane (Consumption-Layer: default to the workable set, honest
+    // count, "show all" toggle):
+    //   'create' (default) — only the genuine "create the property" set
+    //                        (unmatched listing docs w/ content). Drives the badge.
+    //   'all'              — every review row, klass-tagged, for the toggle.
+    // The classification needs the extraction_result fields, so fetch a
+    // lightweight flat projection (≈1 KB/row) up to the PostgREST page cap and
+    // classify in JS — the alias normalization (offering_memorandum→om) can't be
+    // a clean server-side count filter. `cap` only bounds the items RETURNED.
+    const view = opts.intakeView === 'all' ? 'all' : 'create';
+    const r = await opsQuery('GET', 'staged_intake_items?select=' + INTAKE_LANE_SELECT
+      + '&status=in.(review_required,failed)&order=created_at.desc&limit=1000');
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
-    out.items = rows.map((row) => {
-      const snap = _intakeSnap(row.raw_payload);
+    const wanted = (view === 'all')
+      ? (k) => k !== 'no_data'   // show-all surfaces every workable klass; the
+                                 // no-data empties are auto-retired, not shown
+      : (k) => k === 'create_candidate';
+    const classified = rows.map((row) => {
+      const cls = _intakeRowClass(row);
       return {
         subject_ref: 'intake:' + row.intake_id,
         subject_domain: null, subject_property_id: null, subject_entity_id: null,
-        rank_value: snap.asking || 0,
-        context: { intake_id: row.intake_id, source_type: row.source_type, status: row.status,
-          asking_price: snap.asking, tenant: snap.tenant, address: snap.address, doctype: snap.doctype },
+        rank_value: cls.asking_price || 0,
+        _klass: cls.klass,
+        _hasContent: cls.has_content,
+        context: _intakeContext(row, cls),
       };
-    }).sort((a, b) => (b.rank_value - a.rank_value));
-    out.total = await opsCnt('staged_intake_items?status=in.(review_required,failed)');
+    });
+    const filtered = classified.filter((it) => wanted(it._klass));
+    // Value-rank: asking price desc, then has-content first, then recency
+    // (the projection arrives created_at.desc, so a stable sort preserves it).
+    filtered.sort((a, b) => (b.rank_value - a.rank_value)
+      || (Number(b._hasContent) - Number(a._hasContent)));
+    out.total = filtered.length;
+    out.items = filtered.slice(0, cap);
+    // When the returned items ARE the full classified set (not cap-truncated),
+    // listFederatedLane can derive an EXACT count by excluding decided subjects
+    // from the items — so a decided NOISE/matched row can't wrongly shrink the
+    // create-candidate count (decided subjects span all klasses).
+    out.complete = out.items.length === filtered.length;
     return out;
   }
 
@@ -1368,11 +1424,14 @@ async function fetchFederatedSource(type, cap) {
 }
 
 // List a federated lane: source top-N minus already-decided subjects.
-async function listFederatedLane(type, limit, offset) {
+async function listFederatedLane(type, limit, offset, opts) {
   const cap = Math.min(400, (limit + offset) * 3 + 60);
-  const [src, excluded] = await Promise.all([fetchFederatedSource(type, cap), fetchExcludedRefs(type)]);
+  const [src, excluded] = await Promise.all([fetchFederatedSource(type, cap, opts), fetchExcludedRefs(type)]);
   const workable = src.items.filter((it) => it.subject_ref && !excluded.has(it.subject_ref));
-  const total = (typeof src.total === 'number') ? Math.max(0, src.total - excluded.size) : workable.length;
+  // `complete` sources carry the full universe in items, so workable.length is
+  // the exact count (excluded subjects of OTHER views can't deflate it).
+  const total = src.complete ? workable.length
+    : (typeof src.total === 'number') ? Math.max(0, src.total - excluded.size) : workable.length;
   const items = workable.slice(offset, offset + limit).map((it) => ({
     id: null, decision_type: type, status: 'open', mode: 'federated',
     subject_entity_id: it.subject_entity_id, subject_domain: it.subject_domain,
@@ -1437,7 +1496,11 @@ async function handleDecisionsList(req, res) {
   // Federated lane: list from the source view, excluding decided subjects.
   if (FEDERATED_DECISION_TYPES.has(type)) {
     try {
-      const out = await listFederatedLane(type, limit, offset);
+      const laneOpts = (type === 'intake_disposition')
+        ? { intakeView: req.query.intake_view === 'all' ? 'all' : 'create' }
+        : undefined;
+      const out = await listFederatedLane(type, limit, offset, laneOpts);
+      if (laneOpts) out.intake_view = laneOpts.intakeView;
       return res.status(200).json(out);
     } catch (e) {
       console.error('[decisions:federated]', type, e?.message || e);
@@ -2297,10 +2360,24 @@ async function handleDecisionVerdict(req, res) {
     // ---- intake_disposition (federated) ------------------------------------
     // Staged-intake review. The heavy actions (create property / re-extract)
     // ride the existing intake routes via a hand-off; dismiss/research are safe.
+    // A MATCHED row already resolved to a property — its action is open/promote
+    // (the promote-drain cron re-runs the promotion), NEVER create.
     if (decision.decision_type === 'intake_disposition') {
       if (verdict === 'dismiss') {
         await record('dismiss', 'decided', null, { intake: 'dismissed_from_lane' });
         return res.status(200).json({ ok: true, verdict: 'dismiss' });
+      }
+      if (verdict === 'open_property') {
+        // Matched row: record the decision + hand the matched dia/gov property to
+        // the UI to open. (lcc/UUID matches aren't openable as a domain property;
+        // they record + drop out.) The promote-drain cron finishes promotion.
+        const dom = (c.match_domain === 'dia' || c.match_domain === 'dialysis') ? 'dia'
+          : (c.match_domain === 'gov' || c.match_domain === 'government') ? 'gov' : null;
+        const pid = (c.match_property_id != null && /^\d+$/.test(String(c.match_property_id)))
+          ? String(c.match_property_id) : null;
+        await record('open_property', 'decided', payload, { handoff: 'intake_open_property' });
+        return res.status(200).json({ ok: true, verdict: 'open_property',
+          next: (dom && pid) ? { action: 'intake_open_property', domain: dom, property_id: pid } : null });
       }
       if (verdict === 'create_property') {
         await record('create_property', 'decided', payload, { handoff: 'intake_create_property' });
@@ -6871,8 +6948,41 @@ async function handleIntakePromoteDrain(req, res) {
     still_matched: 0,     // left matched, stamped for retry
     skipped_cooldown: 0,
     errored: 0,
+    no_data_eligible: 0,  // review rows with no extractable data (auto-retire)
+    no_data_retired: 0,   // flipped to status='discarded' this tick (reversible)
     items: [],
   };
+
+  // ── Auto-retire the no-extractable-data review rows (Consumption-Layer) ──
+  // A review_required row whose extraction got NO address/tenant/price is not a
+  // decision — it is unworkable noise inflating the intake_disposition lane.
+  // Sweep it to status='discarded' and stamp a reason in raw_payload, preserving
+  // the original extraction_result (REVERSIBLE — never a hard delete). GET =
+  // count only; bounded by `limit`. Reverse with:
+  //   UPDATE staged_intake_items SET status='review_required'
+  //   WHERE raw_payload->>'disposition'='auto_no_extractable_data';
+  try {
+    const ndRes = await opsQuery('GET', 'staged_intake_items'
+      + '?select=intake_id,raw_payload&status=eq.review_required&order=created_at.asc&limit=1000');
+    const ndRows = (ndRes.ok && Array.isArray(ndRes.data)) ? ndRes.data : [];
+    const empties = ndRows.filter((row) =>
+      classifyStagedIntake((row.raw_payload && row.raw_payload.extraction_result) || {}).klass === 'no_data');
+    result.no_data_eligible = empties.length;
+    if (!dryRun) {
+      const nowIso = new Date().toISOString();
+      for (const row of empties) {
+        if (result.no_data_retired >= limit) break;
+        // Preserve raw_payload; add the reversible disposition tag. Guard on the
+        // current status so a concurrent change is a no-op, not a clobber.
+        const merged = { ...(row.raw_payload || {}),
+          disposition: 'auto_no_extractable_data', retired_at: nowIso };
+        const patch = await opsQuery('PATCH',
+          `staged_intake_items?intake_id=eq.${encodeURIComponent(row.intake_id)}&status=eq.review_required`,
+          { status: 'discarded', raw_payload: merged, updated_at: nowIso });
+        if (patch.ok) result.no_data_retired += 1;
+      }
+    }
+  } catch (_e) { /* retire is best-effort; never blocks the promote drain */ }
 
   // Pull a generous candidate window; cooldown'd rows are filtered in JS.
   const fetchLimit = Math.min(1000, limit * 4);
