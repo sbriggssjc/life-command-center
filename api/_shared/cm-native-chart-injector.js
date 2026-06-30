@@ -2519,21 +2519,28 @@ function capByTermFloor(rows) {
   return isDia ? 2019 : 2015;
 }
 
-// R76 A3 (2026-06-10) — dia ASKING cap-by-term floors at 2017, NOT 2019. Unlike
-// closed sales (which form a real term-premium ladder that settles ~2019),
-// asking caps are broker theater and cross in nearly every year regardless of n
-// (2016-2022 mostly CROSS even at high cohort counts), so there is no "ordering
-// settles" year to floor on. The honest floor is COMPLETENESS — all 4 dia
-// cohorts render continuously from 2017 (the ≤5 / 6-8 cohorts don't exist
-// before then). 2019 would over-crop two complete, decently-dense years.
+// R76 A3 (2026-06-10) — dia ASKING cap-by-term: asking caps are broker theater
+// and cross in nearly every year regardless of n, so there is no "ordering
+// settles" year to floor on; the honest floor is COMPLETENESS (all four cohorts
+// present) AND excluding the early-2010s broker-theater plateau.
+// R2-A2 (2026-06-30) — lowered dia 2017 → 2015. Grounded live on
+// cm_dialysis_asking_cap_by_term_m: the 6-8yr cohort sits on a flat 0.1105
+// "plateau" through 2011-2013 (broker theater on n=5-9) that would force the
+// axis ceiling wide (~0.115) and clip on any tight pin. All four dia cohorts
+// are present from 2015 (≤5 first appears 2015 n=11, full 2016; 12+/8-12/6-8
+// full from 2014), so 2015 is the first all-cohort year AFTER the plateau.
+// 2017 over-cropped two complete, decently-dense years (2015-2016 carry real
+// cohort movement — 2015 ≤5 peaks ~9.5%). Flooring at 2015 drops only the
+// incomplete/plateau pre-2015 tail; the plotted-window data-fit then lands the
+// axis at ~0.055-0.095 (covers the 2015 peak without clipping). gov unchanged.
 // Separately, ~33% of cap-eligible dia listings carry a NULL listing_date and
 // are dropped from EVERY active-window anchor (cm_dialysis_active_listings_m
 // requires listing_date IS NOT NULL) — that's an on-market data-quality gap
 // (Layer C), not a cohort floor; flooring can't recover those rows.
-function askByTermFloor(rows) {
-  const isDia = Array.isArray(rows) && rows.some(r => r &&
-    (r.cap_8to12 != null || r.cap_5orless != null));
-  return isDia ? 2017 : 2015;
+function askByTermFloor(_rows) {
+  // dia-only chart (gov asking-by-term deferred — no historical active-listing
+  // data); 2015 is the first all-cohort year after the 2011-2013 plateau.
+  return 2015;
 }
 
 const MIN_YEAR_BY_TEMPLATE = {
@@ -2733,6 +2740,18 @@ const MIN_YEAR_BY_TEMPLATE = {
   // at first-real-data with no blank early space; a trim entry would be a no-op
   // for gov and risk cropping dia's other series.
 };
+
+// R2-A2 (2026-06-30) — single source of truth for a template's displayed
+// dataStart year, so the PNG renderer (cm-chart-image-renderer.js) can crop to
+// the IDENTICAL window the native injector plots and the two surfaces' data-fit
+// axes stay in step. Resolves the MIN_YEAR_BY_TEMPLATE entry (a static year or a
+// rows→year function) and returns a finite year or null (no floor). Pass the
+// FULL row set (the function-floors scan it for first-dense / first-non-null).
+export function minYearForTemplate(templateId, rows) {
+  const entry = MIN_YEAR_BY_TEMPLATE[templateId];
+  const year = typeof entry === 'function' ? entry(rows) : entry;
+  return Number.isFinite(year) ? year : null;
+}
 
 export function buildInjectionSpec(args) {
   // R38 — thin wrapper that lets `args.title` flow into the returned
