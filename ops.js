@@ -2172,7 +2172,10 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcFed(' + i + ',\'void\')">Void</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'merge_duplicate_entities') {
-    const n = c.member_count || ((c.loser_ids || []).length + 1);
+    const loserIds = c.loser_ids || [];
+    const loserNames = c.loser_names || [];
+    const n = c.member_count || (loserIds.length + 1);
+    const winLabel = c.winner_name || c.norm_name || 'Duplicate group';
     // Tier-4 Unit 3: flag the SF-link-inheritance bonus so the operator can
     // prioritize duplicates of an already-SF-linked entity (merge dedups AND
     // inherits the Salesforce account onto the survivor).
@@ -2182,10 +2185,23 @@ function _fedCardHTML(it, i, isNext) {
     const sfMeta = c.sf_inheritance
       ? ' One of these is already linked to a Salesforce account, so the merge also inherits that SF link.'
       : '';
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.winner_name || c.norm_name || 'Duplicate group') + '</span>'
+    // Unit 2 — surface AND let the operator choose which member survives. The
+    // view's winner is the default; any member can be picked before merging.
+    let survOpts = '<option value="' + esc(String(c.winner_id || '')) + '" selected>' + esc(winLabel) + ' (default survivor)</option>';
+    for (let k = 0; k < loserIds.length; k++) {
+      survOpts += '<option value="' + esc(String(loserIds[k])) + '">' + esc(loserNames[k] || ('member ' + (k + 2))) + '</option>';
+    }
+    const survivorPick = loserIds.length
+      ? '<div class="q-item-meta">Merge into: <select id="dc-mw-' + i + '" class="dc-merge-winner">' + survOpts + '</select></div>'
+      : '';
+    const losersList = loserNames.length
+      ? '<div class="q-item-meta">Collapses: ' + loserNames.map(function (nm) { return esc(nm || '—'); }).join(', ') + '</div>'
+      : '';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(winLabel) + '</span>'
       + '<div class="q-item-badges">' + sfBadge + '<span class="q-badge">' + n + ' duplicates</span></div></div>'
-      + '<div class="q-item-meta">' + ((c.loser_ids || []).length) + ' duplicate(s) collapse into this survivor (portfolio + identities + relationships carry over).' + sfMeta + '</div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'merge\')">Merge duplicates →</button>'
+      + survivorPick + losersList
+      + '<div class="q-item-meta">' + loserIds.length + ' duplicate(s) collapse into the survivor (portfolio + identities + relationships carry over).' + sfMeta + '</div>';
+    actions = '<button class="q-action primary" onclick="dcMergeGroup(' + i + ')">Merge duplicates →</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_separate\')">Keep separate</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'caprate_review') {
@@ -2465,6 +2481,19 @@ async function dcFed(i, verdict, payload) {
   }
 }
 window.dcFed = dcFed;
+
+// Unit 2 — merge with an operator-chosen survivor. Reads the survivor dropdown
+// (default = the view winner) and only sends winner_id on a real override, so
+// admin.js's override flag + the chosen survivor are accurate.
+function dcMergeGroup(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const sel = document.getElementById('dc-mw-' + i);
+  const def = String(c.winner_id || '');
+  const w = sel ? String(sel.value || '') : def;
+  dcFed(i, 'merge', (w && w !== def) ? { winner_id: w } : {});
+}
+window.dcMergeGroup = dcMergeGroup;
 
 // cms break-link hands off to the existing cms-match DELETE route (Scott's call).
 async function dcCmsUnlink(propertyId) {
