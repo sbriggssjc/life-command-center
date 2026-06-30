@@ -34,21 +34,30 @@ source comps.
    listings are `date_uncertain`, so even the ~71 dia comps that ARE visible to the view
    are classified `missing_comps_not_held` and never fetched.
 
-### To make the worker drain the 375 (the required changes — Railway redeploy)
+### The two worker changes — LANDED on this branch (2026-06-30)
 
-Both are needed together; either alone is insufficient:
+Both were needed together (either alone is insufficient); both are now applied:
 
-- **DB (live-applyable, reversible):** broaden `public.v_lcc_missing_comp_ids` to resolve
-  `match_domain` from `seed_data.source_vertical` when `extraction_result.match_domain`
-  is `'lcc'`/absent (mirror `v_lcc_date_uncertain_recovery_map`'s CASE) so all 375 are
-  enumerated.
-- **Worker JS (`api/_handlers/sf-record-lookup.js`):** widen `loadHeldListingIds` to
-  `on_market_date_source IN ('unestablished','date_uncertain')` so the recovered set is
-  treated as "held" and fetched.
+- **DB (applied live to LCC Opps + committed):** migration
+  `20260630120000_lcc_missing_comp_ids_resolve_source_vertical.sql` broadens
+  `public.v_lcc_missing_comp_ids` to resolve `match_domain` from `seed_data.source_vertical`
+  when `extraction_result.match_domain` is `'lcc'`/absent (mirrors
+  `v_lcc_date_uncertain_recovery_map`'s CASE). The worker's source view now enumerates the
+  full pending set — **401 dia + 108 gov** distinct not-in-map comps (was 103 total).
+- **Worker JS (`api/_handlers/sf-record-lookup.js`, ships on the Railway redeploy):**
+  `loadHeldListingIds` widened to `on_market_date_source IN ('unestablished','date_uncertain')`
+  so the recovered set is treated as "held" and fetched. `node --check` clean; 12 api files;
+  `test/sf-record-lookup.test.mjs` 13/13 pass.
 
-Not applied this session: the SF fetch can't be exercised end-to-end from the sandbox, so
-a speculative deployed-behavior change to the T4c worker isn't verifiable here. Apply the
-two changes, deploy, then run the drain below.
+The SF fetch itself still can't be exercised from the sandbox (needs the live Railway
+worker + `SF_RECORD_LOOKUP_URL`). Once the JS deploys, run the drain below — the worker now
+both **sources** and **fetches** the 375 date_uncertain source comps.
+
+NOTE: comps already in `lcc_sf_comp_on_market` with a NULL OMD (SF returned no
+On_Market_Date__c) are intentionally still excluded from `v_lcc_missing_comp_ids`
+(`c.sf_comp_id IS NULL` filter) — re-fetching them won't recover a date SF doesn't have.
+They surface as the worker's `residual.no_omd_in_sf`. The not-in-map bulk of the 375 is now
+sourceable.
 
 ### Runbook (once `SF_RECORD_LOOKUP_URL` is live + the two changes ship)
 

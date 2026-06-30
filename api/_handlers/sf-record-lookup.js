@@ -87,12 +87,16 @@ export function planMissingCompFetch({ viewRows, heldByDomain, domains }) {
 }
 
 // Page through a domain's still-held listing ids (PostgREST caps at 1000/resp).
+// "Held" = a listing whose on_market_date is still unrecovered: the original T4c
+// `unestablished` set PLUS the R2-D `date_uncertain` set (T9d FIX moved the SF-comp
+// listings there). Both are fill-only-when-blank targets for a recovered OMD, so
+// fetching their comps' OMDs is never wasted SF cost.
 async function loadHeldListingIds(domain) {
   const ids = new Set();
   let offset = 0;
   for (let page = 0; page < 50; page++) {   // 50k cap — far above any held set
     const r = await domainQuery(domain, 'GET',
-      `available_listings?on_market_date_source=eq.unestablished&select=listing_id&limit=1000&offset=${offset}`);
+      `available_listings?on_market_date_source=in.(unestablished,date_uncertain)&select=listing_id&limit=1000&offset=${offset}`);
     if (!r.ok || !Array.isArray(r.data)) return { ok: false, status: r.status, detail: r.data };
     for (const row of r.data) if (row && row.listing_id != null) ids.add(String(row.listing_id));
     if (r.data.length < 1000) break;
