@@ -158,6 +158,19 @@ export const INTAKE_NOISE_DOCTYPES = new Set([
   'email_update', 'broker_email', 'market_update', 'email', 'comp',
 ]);
 
+// Asking-price sanity ceiling (2026-07). The extractor occasionally mashes a
+// multi-property OM into one row and concatenates the prices into an absurd
+// number (e.g. $750,200,011,294,000). A single-asset net-lease deal never
+// approaches $1B, so a parsed asking price ABOVE this ceiling is SUSPECT — it is
+// treated as absent for value-ranking (sorts last, never #1) AND flagged on the
+// card for re-extraction. Display + ranking only; the raw extraction (raw_payload)
+// is never mutated — the real fix for a suspect row is re-extraction.
+export const INTAKE_ASKING_PRICE_MAX = 1_000_000_000;
+
+// Cap-rate DISPLAY band (percent). A real CRE cap rate is well under 25%; a value
+// that normalizes above this is a mis-parse and is omitted rather than shown.
+const CAP_RATE_DISPLAY_MAX = 25;
+
 function _intakeText(v) {
   const s = (v == null ? '' : String(v)).trim();
   return s || null;
@@ -165,6 +178,31 @@ function _intakeText(v) {
 function _intakeMoney(v) {
   const n = Number(String(v == null ? '' : v).replace(/[^0-9.]/g, ''));
   return (Number.isFinite(n) && n > 0) ? n : null;
+}
+// A field carrying a pipe-joined string ("A|B") or a ≥2-element array is a
+// multi-property OM the extractor merged into one row — the root cause of the
+// concatenated garbage price. Soft flag (needs split / re-extract), never a hard
+// exclusion.
+function _intakeLooksMulti(v) {
+  if (Array.isArray(v)) return v.filter((x) => x != null && String(x).trim() !== '').length >= 2;
+  return typeof v === 'string' && v.includes('|');
+}
+
+/**
+ * Normalize a cap-rate value to ONE displayed format ("5.55%"), regardless of
+ * whether the source stored it as a decimal fraction (0.0555) or a whole percent
+ * (5.24) — the extractor emits both. Standard heuristic: v<1 is a decimal (×100);
+ * 1 ≤ v ≤ CAP_RATE_DISPLAY_MAX is already a percent; v normalizing above the band
+ * is a mis-parse → null (omit / suspect). Pure + display-only; never mutates the
+ * source. Returns the formatted string or null.
+ */
+export function formatCapRateDisplay(v) {
+  if (v == null) return null;
+  const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const pct = n < 1 ? n * 100 : n;
+  if (pct > CAP_RATE_DISPLAY_MAX) return null;   // out of band → suspect, omit
+  return pct.toFixed(2) + '%';
 }
 
 /**
@@ -191,6 +229,10 @@ export function classifyStagedIntake(fields) {
   const state = _intakeText(f.state);
   const tenant = _intakeText(f.tenant_name);
   const asking = _intakeMoney(f.asking_price);
+  // An implausible parsed price (multi-property mash-up) is kept for DISPLAY but
+  // flagged suspect so ranking treats it as absent — never sorts it to the top.
+  const askingSuspect = asking != null && asking > INTAKE_ASKING_PRICE_MAX;
+  const multiProperty = _intakeLooksMulti(f.address) || _intakeLooksMulti(f.tenant_name);
   const capRate = _intakeText(f.cap_rate);
   const matchStatus = _intakeText(f.match_status);
   const matchDomain = _intakeText(f.match_domain);
@@ -210,7 +252,10 @@ export function classifyStagedIntake(fields) {
     doctype,
     address, city, state, tenant,
     asking_price: asking,
+    asking_price_suspect: askingSuspect,
+    multi_property: multiProperty,
     cap_rate: capRate,
+    cap_rate_display: formatCapRateDisplay(f.cap_rate),
     match_status: matchStatus,
     match_domain: matchDomain,
     match_property_id: matchPropertyId,

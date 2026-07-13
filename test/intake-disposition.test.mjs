@@ -8,6 +8,8 @@ import {
   LISTING_DOCUMENT_TYPES,
   classifyStagedIntake,
   INTAKE_NOISE_DOCTYPES,
+  INTAKE_ASKING_PRICE_MAX,
+  formatCapRateDisplay,
 } from '../api/_shared/intake-classify.js';
 import { DIALYSIS_KEYWORDS } from '../api/_handlers/intake-matcher.js';
 
@@ -217,5 +219,63 @@ describe('classifyStagedIntake — Decision-Center create-lane klass', () => {
     ];
     const created = rows.map((r) => classifyStagedIntake(r).klass).filter((k) => k === 'create_candidate');
     assert.equal(created.length, 1);
+  });
+});
+
+describe('asking-price sanity gate (suspect / not a top-sort rank)', () => {
+  it('flags an above-ceiling price suspect but KEEPS the raw value for display', () => {
+    // The $750T multi-property mash-up.
+    const r = classifyStagedIntake({
+      document_type: 'om', match_status: 'unmatched',
+      address: '1208 Scottsville Road|350 Preakness Avenue',
+      tenant_name: 'Fresenius Medical Care Holdings, Inc.|Walgreen Eastern Co., Inc.',
+      asking_price: '750200011294000',
+    });
+    assert.equal(r.asking_price_suspect, true);
+    assert.equal(r.asking_price, 750200011294000);   // raw value preserved for the card
+    assert.equal(r.klass, 'create_candidate');        // still a real OM, not dropped
+  });
+  it('a plausible price (< ceiling) is NOT suspect', () => {
+    const r = classifyStagedIntake({
+      document_type: 'om', match_status: 'unmatched',
+      address: '100 Main St', asking_price: '4390000',
+    });
+    assert.equal(r.asking_price_suspect, false);
+    assert.equal(r.asking_price, 4390000);
+  });
+  it('the ceiling is $1B (a single-asset deal never approaches it)', () => {
+    assert.equal(INTAKE_ASKING_PRICE_MAX, 1_000_000_000);
+    // exactly at the ceiling is fine; just above is suspect
+    assert.equal(classifyStagedIntake({ asking_price: 1_000_000_000, address: 'A' }).asking_price_suspect, false);
+    assert.equal(classifyStagedIntake({ asking_price: 1_000_000_001, address: 'A' }).asking_price_suspect, true);
+  });
+  it('flags the pipe / array multi-property shape (soft, not an exclusion)', () => {
+    assert.equal(classifyStagedIntake({ address: 'A St|B St', tenant_name: 'X' }).multi_property, true);
+    assert.equal(classifyStagedIntake({ address: 'A St', tenant_name: 'X|Y' }).multi_property, true);
+    assert.equal(classifyStagedIntake({ addresses: ['1 A St', '2 B St'], tenant_name: 'DaVita' }).multi_property, false); // addresses[] is not the field checked
+    assert.equal(classifyStagedIntake({ address: '100 Main St', tenant_name: 'USPS' }).multi_property, false);
+  });
+});
+
+describe('formatCapRateDisplay — one displayed format regardless of stored form', () => {
+  it('a decimal fraction and a whole percent normalize to the SAME string', () => {
+    assert.equal(formatCapRateDisplay(0.0555), '5.55%');   // decimal
+    assert.equal(formatCapRateDisplay(5.55), '5.55%');     // percent
+    assert.equal(formatCapRateDisplay(0.0555), formatCapRateDisplay(5.55));
+  });
+  it('handles string inputs with symbols', () => {
+    assert.equal(formatCapRateDisplay('5.24%'), '5.24%');
+    assert.equal(formatCapRateDisplay('0.0524'), '5.24%');
+  });
+  it('omits (null) out-of-band / mis-parsed values', () => {
+    assert.equal(formatCapRateDisplay(55), null);   // > 25% → suspect
+    assert.equal(formatCapRateDisplay(0), null);
+    assert.equal(formatCapRateDisplay(null), null);
+    assert.equal(formatCapRateDisplay(''), null);
+  });
+  it('classifyStagedIntake surfaces the normalized display string', () => {
+    assert.equal(classifyStagedIntake({ address: 'A', cap_rate: '0.0555' }).cap_rate_display, '5.55%');
+    assert.equal(classifyStagedIntake({ address: 'A', cap_rate: '5.24' }).cap_rate_display, '5.24%');
+    assert.equal(classifyStagedIntake({ address: 'A', cap_rate: null }).cap_rate_display, null);
   });
 });

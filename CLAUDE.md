@@ -6242,3 +6242,36 @@ and the create set EXCLUDES matched/noise/no_data). `node --check` clean
 read-only grounding: create-candidate 103, no_data retire-eligible 65, 0 prior
 decided intake decisions. JS ships on the Railway redeploy; the no_data retire
 rides the existing promote-drain cron (no new cron / migration).
+
+### Follow-up — asking-price sanity gate + cap-rate display normalization (2026-07)
+
+Verifying the now-workable lane live surfaced two data-quality issues the fix made
+VISIBLE (it didn't create them — they were always in the extractions): a handful of
+garbage asking prices (a multi-property OM mashed into one row → the prices
+concatenated into `$750,200,011,294,000`), which — because the lane sorts by price —
+sat at #1 above the real deals; and cap-rate rendered inconsistently (some cards
+`0.0555` decimal, others `5.24` percent) because the source stores both forms.
+Display + ranking only (`intake-classify.js` + `admin.js` projection/rank + `ops.js`
+card) — no new api/*.js (≤12), no migration, no dia/gov write, **raw_payload never
+mutated** (the real fix for a suspect row is re-extraction).
+
+- **Asking-price sanity gate:** `classifyStagedIntake` flags a parsed asking price
+  above **`INTAKE_ASKING_PRICE_MAX`** ($1B — a single-asset net-lease deal never
+  approaches it) as `asking_price_suspect`, keeping the raw value for DISPLAY. The
+  card renders a **`⚠ price looks wrong ($750,200,011,294,000)`** badge instead of a
+  clean price; `admin.js` sets `rank_value = suspect ? 0 : asking_price`, so the
+  garbage row sorts LAST, not #1. The **Re-extract (OCR)** action is the natural
+  next step (the underlying OM needs re-parsing / splitting). Soft: the row is still
+  a `create_candidate`, not excluded.
+- **Multi-property soft flag:** `multi_property` (address or tenant_name containing
+  `|`, or a ≥2-element array) surfaces a **`multi-property OM — needs split`** badge —
+  the root cause of the concatenated price. Soft flag, not a hard exclusion.
+- **Cap-rate display:** `formatCapRateDisplay(v)` normalizes to ONE format (percent,
+  `5.55%`) — the standard heuristic (`v<1` = decimal ×100; `1 ≤ v ≤ 25` already
+  percent; `>25` = mis-parse → omitted). `classifyStagedIntake` emits `cap_rate_display`;
+  the card renders it (raw `cap_rate` still passes through for reference).
+- Verified: `test/intake-disposition.test.mjs` +6 (above-ceiling price → suspect,
+  raw value preserved, not a top rank; plausible price not suspect; ceiling is $1B;
+  pipe/array multi-property flag; decimal + percent cap normalize to the SAME string;
+  out-of-band cap omitted). `node --check` clean; ≤12 api/*.js; the 7 unrelated
+  pre-existing failures (CM chart / CRE owner / rca-parser) are untouched.
