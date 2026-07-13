@@ -319,6 +319,32 @@ export function classifyEnrichRow(row, looksPersonImpl) {
   return row.enrichment_action || 'manual_research';
 }
 
+// Resolve classes that need NO external egress (a guard-passed named person /
+// a manager drill-through) vs those that need a configured adapter webhook
+// (SOS / address / deed / web / public-IR) vs manual research. Cross-reference
+// (free sibling reuse) runs inside the external chain, so it isn't a class here.
+const FREE_RESOLVE_CLASSES = new Set(['attach_person', 'manager_drillthrough']);
+const ADAPTER_RESOLVE_CLASSES = new Set([
+  'sos_manager_lookup', 'address_reverse_lookup', 'parse_deed_signatory',
+  'find_person_at_manager', 'public_company_ir',
+]);
+
+/**
+ * Roll a by_action tally (classifyEnrichRow keys) into the acquisition-cost
+ * breakdown: how many resolve for FREE, need a configured adapter, or fall to
+ * manual research. Pure. `already_linked` is reported separately (nothing to do).
+ */
+export function summarizeResolution(byAction = {}) {
+  const out = { free_resolvable: 0, needs_adapter: 0, manual_research: 0, already_linked: 0 };
+  for (const [k, n] of Object.entries(byAction)) {
+    if (k === 'already_linked') out.already_linked += n;
+    else if (FREE_RESOLVE_CLASSES.has(k)) out.free_resolvable += n;
+    else if (ADAPTER_RESOLVE_CLASSES.has(k)) out.needs_adapter += n;
+    else out.manual_research += n;   // 'manual_research' + any unknown action
+  }
+  return out;
+}
+
 function buildDeps() {
   // Real Slice-4 adapters; each no-ops `unconfigured` without its webhook (and,
   // for SOS, an enabled per-state parser), so unconfigured behavior is identical
@@ -457,6 +483,12 @@ export async function handleOwnerContactEnrichTick(req, res) {
       byAction[k] = (byAction[k] || 0) + 1;
     }
     return res.status(200).json({ ok: true, dry_run: true, candidates: rows.length, by_action: byAction,
+      // Phase 2 — quantify the acquisition-cost picture so Scott can make the
+      // paid-web-search / walled-SOS call with real numbers: how many resolve
+      // for FREE now (attach a named person / drill through a manager — no
+      // external egress) vs need a configured adapter (SOS/address/deed/web) vs
+      // fall to manual research.
+      resolution_breakdown: summarizeResolution(byAction),
       adapters: { sos: isConfiguredSos(), address: isConfiguredAddress(), deed: isConfiguredDeed() } });
   }
 

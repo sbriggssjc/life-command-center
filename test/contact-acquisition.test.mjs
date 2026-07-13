@@ -90,6 +90,53 @@ describe('acquireForEntity (R16 Unit 1)', () => {
   });
 });
 
+// Phase 2 (2026-07-13) — the worklist SF cheap-win reuses acquireForEntity with
+// a stampCadence that routes through stampContactOnActiveCadence(seedIfValuable),
+// so a high-value worklist owner with NO cadence gains a contact AND a seeded
+// cadence (the maybeSeedValuableCadence wire) → it becomes workable outreach.
+describe('worklist SF path — acquire attaches a contact + seeds a cadence (Phase 2)', () => {
+  const owner = { cadence_id: null, entity_id: 'owner-9', sf_account_id: '001WWW', attempts: 0 };
+
+  it('SF contacts pulled → persons linked, primary stamps a NEWLY-SEEDED cadence', async () => {
+    const seeds = [];
+    // The worklist stamp: contact-carrying calls seed a value-gated cadence;
+    // no-contact (failure metadata) calls are a no-op (no cadence yet).
+    const worklistStamp = async (cadenceId, args) => {
+      if (!args || (!args.contactEntityId && !args.sfContactId)) return { ok: true };
+      seeds.push(args);
+      return { ok: true, seeded: true, cadenceId: 'seeded-cad-1' };
+    };
+    const { deps, calls } = recordingDeps({
+      getSfContacts: async () => ({ ok: true, contacts: [
+        { Id: '003AAA', Name: 'Adam Kamlet', Title: 'Managing Director', Email: 'adam@x.com' },
+      ] }),
+      stampCadence: worklistStamp,
+    });
+    const out = await acquireForEntity(owner, deps);
+    assert.equal(out.outcome, 'acquired');
+    assert.equal(out.contacts_created, 1);
+    assert.equal(calls.linkPerson.length, 1, 'person linked to the owner');
+    assert.equal(seeds.length, 1, 'the primary contact stamped/seeded a cadence');
+    assert.equal(seeds[0].contactEntityId, 'person-003AAA');
+    assert.equal(seeds[0].sfContactId, '003AAA');
+  });
+
+  it('empty SF account → no_contacts (no cadence seeded, falls to manual acquisition)', async () => {
+    const seeds = [];
+    const worklistStamp = async (_cid, args) => {
+      if (!args || (!args.contactEntityId && !args.sfContactId)) return { ok: true };
+      seeds.push(args); return { ok: true, seeded: true };
+    };
+    const { deps } = recordingDeps({
+      getSfContacts: async () => ({ ok: true, contacts: [] }),
+      stampCadence: worklistStamp,
+    });
+    const out = await acquireForEntity(owner, deps);
+    assert.equal(out.outcome, 'no_contacts');
+    assert.equal(seeds.length, 0, 'no cadence seeded when there is no contact');
+  });
+});
+
 describe('isAcqExhausted — don\'t re-hammer (R16 Unit 1)', () => {
   it('treats definitive empty + acquired + capped-unavailable as exhausted; transient/unset as retryable', () => {
     assert.equal(isAcqExhausted(null), false);

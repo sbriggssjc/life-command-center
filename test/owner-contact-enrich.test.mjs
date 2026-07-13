@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { processOwnerEnrichmentRow, classifyEnrichRow, normalizePersonName } from '../api/_handlers/owner-contact-enrich.js';
+import { processOwnerEnrichmentRow, classifyEnrichRow, normalizePersonName, summarizeResolution } from '../api/_handlers/owner-contact-enrich.js';
 
 function recordingDeps(overrides = {}) {
   const calls = { ensure: [], link: [], stamp: [], patch: [] };
@@ -238,5 +238,30 @@ describe('classifyEnrichRow', () => {
   });
   it('contactless with no signals → manual_research', () => {
     assert.equal(classifyEnrichRow({}), 'manual_research');
+  });
+});
+
+// Phase 2 (2026-07-13) — the acquisition-cost breakdown so Scott can make the
+// paid-adapter call with real numbers.
+describe('summarizeResolution (Phase 2 acquisition-cost breakdown)', () => {
+  it('splits a by_action tally into free / needs-adapter / manual / already-linked', () => {
+    const out = summarizeResolution({
+      attach_person: 60, manager_drillthrough: 15,           // free (no egress)
+      sos_manager_lookup: 20, address_reverse_lookup: 16,    // need an adapter
+      find_person_at_manager: 3, public_company_ir: 1,       // need an adapter
+      manual_research: 4,                                    // manual
+      already_linked: 2,                                     // done
+    });
+    assert.equal(out.free_resolvable, 75);
+    assert.equal(out.needs_adapter, 40);
+    assert.equal(out.manual_research, 4);
+    assert.equal(out.already_linked, 2);
+  });
+
+  it('an unknown action falls into manual_research', () => {
+    const out = summarizeResolution({ some_new_action: 3 });
+    assert.equal(out.manual_research, 3);
+    assert.equal(out.free_resolvable, 0);
+    assert.equal(out.needs_adapter, 0);
   });
 });

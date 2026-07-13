@@ -43,7 +43,7 @@ import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
 import { getSalesforceContactsByAccount, isSalesforceConfigured } from '../_shared/salesforce.js';
-import { linkPersonToEntity, stampCadenceContactById, ACTIVE_CADENCE_PHASES } from '../_shared/contact-attach.js';
+import { linkPersonToEntity, stampCadenceContactById, stampContactOnActiveCadence, ACTIVE_CADENCE_PHASES } from '../_shared/contact-attach.js';
 
 // Transient SF outages (unavailable) get a few retries; a definitive empty
 // account (no_contacts / no_usable_contacts) is terminal — never re-hammered.
@@ -170,6 +170,14 @@ export async function handleContactAcquisitionTick(req, res) {
     contacts_created: 0,
     no_contacts: 0,
     unavailable: 0,
+    // Phase 2 (2026-07-13) — the worklist SF cheap-win pass (owners with an SF
+    // Account identity but no cadence at all; not covered by the contactless-
+    // cadence passes above).
+    worklist_sf_mapped: 0,
+    worklist_acquired: 0,
+    worklist_contacts_created: 0,
+    worklist_cadences_seeded: 0,
+    worklist_no_contacts: 0,
     items: [],
   };
 
@@ -268,6 +276,7 @@ export async function handleContactAcquisitionTick(req, res) {
   }
 
   // ── Pass 2: SF contact acquisition (only when SF is configured). ──────────
+  let anyAcquired = false;
   if (!configured) {
     result.note = result.self_stamp_eligible
       ? 'salesforce_not_configured — SF acquisition inert; self-contact pass ran'
@@ -303,40 +312,52 @@ export async function handleContactAcquisitionTick(req, res) {
     for (const c of work) {
       result.items.push({ pass: 'sf_acquire', entity_id: c.entity_id, entity_name: c.entity_name, sf_account_id: c.sf_account_id, cadence_id: c.cadence_id });
     }
-    return res.status(200).json(result);
+  } else {
+    // Drain, bounded by the same wall-clock budget (SF flow calls are serial HTTP).
+    for (const c of work) {
+      if (Date.now() > deadline) { result.budget_stopped = true; break; }
+      const ws = c.workspace_id;
+      const deps = {
+        getSfContacts: (accountId) => getSalesforceContactsByAccount(accountId),
+        ensurePerson: (contact) => ensureEntityLink({
+          workspaceId: ws, userId: user.id,
+          sourceSystem: 'salesforce', sourceType: 'Contact', externalId: contact.Id,
+          domain: 'lcc',
+          seedFields: { name: contact.Name, email: contact.Email || undefined, title: contact.Title || undefined },
+          metadata: { via: 'contact_acquisition', sf_account_id: c.sf_account_id },
+        }),
+        linkPerson: (entityId, personId) => linkPersonToEntity({
+          workspaceId: ws, entityId, contactEntityId: personId,
+          role: 'prospecting_contact', via: 'contact_acquisition',
+        }),
+        stampCadence: (cadenceId, args) => stampCadenceContactById(cadenceId, Object.assign({ existingMetadata: c.existing_metadata }, args)),
+      };
+      let out;
+      try {
+        out = await acquireForEntity(c, deps);
+      } catch (e) {
+        out = { outcome: 'unavailable', contacts_created: 0, error: String(e && e.message || e) };
+      }
+      if (out.outcome === 'acquired') { result.acquired++; result.contacts_created += out.contacts_created; anyAcquired = true; }
+      else if (out.outcome === 'no_contacts') result.no_contacts++;
+      else result.unavailable++;
+      result.items.push({ pass: 'sf_acquire', entity_id: c.entity_id, entity_name: c.entity_name, sf_account_id: c.sf_account_id, outcome: out.outcome, contacts_created: out.contacts_created || 0 });
+    }
   }
 
-  // Drain, bounded by the same wall-clock budget (SF flow calls are serial HTTP).
-  let anyAcquired = false;
-  for (const c of work) {
-    if (Date.now() > deadline) { result.budget_stopped = true; break; }
-    const ws = c.workspace_id;
-    const deps = {
-      getSfContacts: (accountId) => getSalesforceContactsByAccount(accountId),
-      ensurePerson: (contact) => ensureEntityLink({
-        workspaceId: ws, userId: user.id,
-        sourceSystem: 'salesforce', sourceType: 'Contact', externalId: contact.Id,
-        domain: 'lcc',
-        seedFields: { name: contact.Name, email: contact.Email || undefined, title: contact.Title || undefined },
-        metadata: { via: 'contact_acquisition', sf_account_id: c.sf_account_id },
-      }),
-      linkPerson: (entityId, personId) => linkPersonToEntity({
-        workspaceId: ws, entityId, contactEntityId: personId,
-        role: 'prospecting_contact', via: 'contact_acquisition',
-      }),
-      stampCadence: (cadenceId, args) => stampCadenceContactById(cadenceId, Object.assign({ existingMetadata: c.existing_metadata }, args)),
-    };
-    let out;
-    try {
-      out = await acquireForEntity(c, deps);
-    } catch (e) {
-      out = { outcome: 'unavailable', contacts_created: 0, error: String(e && e.message || e) };
-    }
-    if (out.outcome === 'acquired') { result.acquired++; result.contacts_created += out.contacts_created; anyAcquired = true; }
-    else if (out.outcome === 'no_contacts') result.no_contacts++;
-    else result.unavailable++;
-    result.items.push({ pass: 'sf_acquire', entity_id: c.entity_id, entity_name: c.entity_name, sf_account_id: c.sf_account_id, outcome: out.outcome, contacts_created: out.contacts_created || 0 });
-  }
+  // ── Pass 3 (Phase 2): the worklist SF cheap-win. ──────────────────────────
+  // The highest-value BD targets (the "Owners Missing a Contact" worklist) can't
+  // enter the pipeline via Passes 1/2 because they carry NO cadence — Pass 2
+  // only walks contactless CADENCES. Grounded live 2026-07-13: 269 worklist
+  // owners carry an SF Account identity (38 of them ≥ $1M) — a cheap contact
+  // path (getSalesforceContactsByAccount) that was going unused. Pull their SF
+  // contacts + attach via the shared contact-attach helper, seeding a
+  // value-gated cadence (the maybeSeedValuableCadence wire) so the freshly-
+  // contacted owner surfaces at the TOP of the value-ranked focus session.
+  const processedEntities = new Set(selfStamped);
+  for (const c of work) processedEntities.add(c.entity_id);
+  await runWorklistSfPass({ result, dryRun, limit, deadline, user, processedEntities,
+    setAcquired: () => { anyAcquired = true; } });
 
   // Staleness hook: self-stamped + acquired entities just became reachable —
   // refresh the queue cache so they leave P-CONTACT within the request instead
@@ -346,4 +367,110 @@ export async function handleContactAcquisitionTick(req, res) {
   }
 
   return res.status(200).json(result);
+}
+
+/**
+ * Pass 3 — acquire SF contacts for high-value worklist owners that carry an SF
+ * Account identity but no cadence at all. Reuses acquireForEntity (the R16
+ * core) with the shared stampContactOnActiveCadence stamp, which seeds a
+ * value-gated cadence when the owner has none (the Phase-1 wire). A
+ * successfully-acquired owner drops out of the (auto-retiring) worklist view, so
+ * it is never re-processed; a genuinely-empty SF account falls to the enrichment
+ * adapters / manual pick (its pivot now exists from the Phase-2 sweep).
+ */
+async function runWorklistSfPass({ result, dryRun, limit, deadline, user, processedEntities, setAcquired }) {
+  // Value-ranked worklist owners (over-fetch so the already-processed + no-SF
+  // ones can be filtered in JS and we still fill the per-tick budget).
+  const overFetch = Math.min(600, limit * 6);
+  const wRes = await opsQuery('GET',
+    'v_owner_contact_worklist?select=entity_id,owner_name,workspace_id,rank_value'
+    + '&order=rank_value.desc.nullslast&limit=' + overFetch);
+  if (!wRes.ok || !Array.isArray(wRes.data) || wRes.data.length === 0) return;
+
+  const byId = new Map();
+  for (const w of wRes.data) {
+    if (!w.entity_id || processedEntities.has(w.entity_id) || byId.has(w.entity_id)) continue;
+    byId.set(w.entity_id, w);
+  }
+  const ids = Array.from(byId.keys());
+  if (ids.length === 0) return;
+
+  // SF Account identity map for the worklist owners.
+  const sfByEntity = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const inList = ids.slice(i, i + 100).map(pgFilterVal).join(',');
+    const eiRes = await opsQuery('GET', 'external_identities?source_system=eq.salesforce&source_type=eq.Account'
+      + '&entity_id=in.(' + inList + ')&select=entity_id,external_id');
+    if (eiRes.ok && Array.isArray(eiRes.data)) {
+      for (const row of eiRes.data) {
+        if (row.entity_id && row.external_id && !sfByEntity.has(row.entity_id)) sfByEntity.set(row.entity_id, row.external_id);
+      }
+    }
+  }
+
+  const owners = [];
+  for (const id of ids) {
+    const acct = sfByEntity.get(id);
+    if (!acct) continue;
+    const w = byId.get(id);
+    owners.push({ entity_id: id, entity_name: w.owner_name || null, workspace_id: w.workspace_id || null, sf_account_id: acct, rank_value: w.rank_value });
+  }
+  result.worklist_sf_mapped = owners.length;
+
+  const work = owners.slice(0, limit);
+  if (dryRun) {
+    for (const o of work) {
+      result.items.push({ pass: 'worklist_sf', entity_id: o.entity_id, entity_name: o.entity_name, sf_account_id: o.sf_account_id, rank_value: o.rank_value });
+    }
+    return;
+  }
+
+  for (const o of work) {
+    if (Date.now() > deadline) { result.budget_stopped = true; break; }
+    const ws = o.workspace_id;
+    let seedInfo = null;
+    const deps = {
+      getSfContacts: (accountId) => getSalesforceContactsByAccount(accountId),
+      ensurePerson: (contact) => ensureEntityLink({
+        workspaceId: ws, userId: user.id,
+        sourceSystem: 'salesforce', sourceType: 'Contact', externalId: contact.Id,
+        domain: 'lcc',
+        seedFields: { name: contact.Name, email: contact.Email || undefined, title: contact.Title || undefined },
+        metadata: { via: 'contact_acquisition_worklist', sf_account_id: o.sf_account_id },
+      }),
+      linkPerson: (entityId, personId) => linkPersonToEntity({
+        workspaceId: ws, entityId, contactEntityId: personId,
+        role: 'prospecting_contact', via: 'contact_acquisition_worklist',
+      }),
+      // The owner has no cadence — stampContactOnActiveCadence seeds a
+      // value-gated one (maybeSeedValuableCadence) when a contact is stamped.
+      // Failure/no-op metadata calls (no contact) are a no-op (no cadence yet).
+      stampCadence: async (_cadenceId, args) => {
+        if (!args || (!args.contactEntityId && !args.sfContactId)) return { ok: true };
+        const s = await stampContactOnActiveCadence({
+          entityId: o.entity_id, contactEntityId: args.contactEntityId, sfContactId: args.sfContactId,
+          onlyContactless: true, seedIfValuable: true,
+        });
+        seedInfo = s;
+        return { ok: !!s.ok };
+      },
+    };
+    let out;
+    try {
+      out = await acquireForEntity({ cadence_id: null, entity_id: o.entity_id, sf_account_id: o.sf_account_id, attempts: 0 }, deps);
+    } catch (e) {
+      out = { outcome: 'unavailable', contacts_created: 0, error: String(e && e.message || e) };
+    }
+    if (out.outcome === 'acquired') {
+      result.worklist_acquired++;
+      result.worklist_contacts_created += out.contacts_created;
+      if (seedInfo && seedInfo.seeded) result.worklist_cadences_seeded++;
+      setAcquired();
+    } else if (out.outcome === 'no_contacts') {
+      result.worklist_no_contacts++;
+    }
+    result.items.push({ pass: 'worklist_sf', entity_id: o.entity_id, entity_name: o.entity_name,
+      sf_account_id: o.sf_account_id, outcome: out.outcome, contacts_created: out.contacts_created || 0,
+      cadence_seeded: !!(seedInfo && seedInfo.seeded) });
+  }
 }

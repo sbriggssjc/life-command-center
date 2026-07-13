@@ -67,8 +67,7 @@ import { opsQuery } from '../_shared/ops-db.js';
 import {
   advanceCadence as defaultAdvanceCadence,
   resolveCadenceForEntity as defaultResolveCadenceForEntity,
-  getCadenceState as defaultGetCadenceState,
-  entityHasBdSignal as defaultEntityHasBdSignal,
+  growCadenceFromOutreach as defaultGrowCadenceFromOutreach,
 } from '../_shared/cadence-engine.js';
 
 // CONTACT-SELECTION Slice 2 — an inbound reply is a two-way (engaged) signal:
@@ -305,8 +304,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
   const append         = deps.appendActivityEvent || defaultAppendActivityEvent;
   const advance        = deps.advanceCadence || defaultAdvanceCadence;
   const resolveCadence = deps.resolveCadenceForEntity || defaultResolveCadenceForEntity;
-  const seedCadence    = deps.getCadenceState || defaultGetCadenceState;
-  const hasSignal      = deps.entityHasBdSignal || defaultEntityHasBdSignal;
+  const growCadence    = deps.growCadenceFromOutreach || defaultGrowCadenceFromOutreach;
   const { workspaceId, actorId } = ctx || {};
 
   const summary = {
@@ -451,25 +449,20 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
           replyAdvanced = false;
         }
       }
-      // R63 Unit 3 — GROW the cadence from real outreach (the inversion). When
-      // Scott logs SF/Outlook outreach on a real BD target that has NO active
-      // cadence, seed one and advance it (the single advance owner) so the
-      // cadence table grows from the people he actually contacts, not from
-      // capture noise. Gated: outreach categories only, a freshly-inserted
-      // non-reply event, no cadence already resolves (the SQL trigger already
-      // advanced any existing one on insert — never double-advance), and the
-      // entity carries a real BD signal. Best-effort — never fails the mirror.
+      // Phase 1 (2026-07-13) — GROW the cadence from real outreach (the
+      // inversion, extended). When Scott logs SF/Outlook outreach on a real BD
+      // target that has NO active cadence, seed one and advance it (the single
+      // advance owner) so the cadence table grows from the people he actually
+      // contacts. The grow gate is the LOOSER Phase-1 gate (SF identity OR >= 2
+      // real outreach events, not the R63 value floor — repeated human outreach
+      // IS the signal), it hops an asset touch to the OWNER, and it stamps the
+      // person Scott emailed as the contact. All of that lives in the shared
+      // growCadenceFromOutreach helper (reused by the Outlook + email_intake
+      // writers too). Best-effort — never fails the mirror.
       else if (entityId && (category === 'email' || category === 'call' || category === 'meeting')) {
         try {
-          const existing = await resolveCadence(entityId);
-          if (!existing?.id && await hasSignal(entityId)) {
-            const seed = await seedCadence({ entity_id: entityId }, { domain: it.domain || null });
-            if (seed?.ok && seed.cadence?.id) {
-              const advType = category === 'call' ? 'phone' : category;
-              const adv = await advance(seed.cadence.id, { type: advType, direction: 'outbound', outcome: 'logged_from_sf' });
-              if (adv?.ok) summary.cadences_grown += 1;
-            }
-          }
+          const g = await growCadence({ entityId, category, domain: it.domain || null });
+          if (g?.grown) summary.cadences_grown += 1;
         } catch (_e) { /* best-effort — the activity is recorded regardless */ }
       }
       summary.results.push({ sf_id: sfId, entity_id: entityId, outcome: 'inserted', reply_captured: replyAdvanced });
