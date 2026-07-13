@@ -912,7 +912,10 @@ function _intakeContext(row, cls) {
     state: cls.state,
     tenant: cls.tenant,
     asking_price: cls.asking_price,
+    asking_price_suspect: cls.asking_price_suspect,
+    multi_property: cls.multi_property,
     cap_rate: cls.cap_rate,
+    cap_rate_display: cls.cap_rate_display,
     match_status: cls.match_status,
     match_domain: cls.match_domain,
     match_property_id: cls.match_property_id,
@@ -1015,7 +1018,9 @@ async function fetchFederatedSource(type, cap, opts) {
       return {
         subject_ref: 'intake:' + row.intake_id,
         subject_domain: null, subject_property_id: null, subject_entity_id: null,
-        rank_value: cls.asking_price || 0,
+        // A suspect price (above the sanity ceiling) is NOT a usable rank value —
+        // rank it 0 so the garbage $750T mash-up sorts last, not #1.
+        rank_value: (cls.asking_price_suspect ? 0 : (cls.asking_price || 0)),
         _klass: cls.klass,
         _hasContent: cls.has_content,
         context: _intakeContext(row, cls),

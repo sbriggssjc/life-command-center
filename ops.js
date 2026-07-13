@@ -2080,6 +2080,7 @@ function _fedCardHTML(it, i, isNext) {
   let body = '', actions = '';
   if (_dcFedType === 'intake_disposition') {
     const ask = _fedMoney(c.asking_price);
+    const suspect = !!c.asking_price_suspect;   // implausible price (multi-property mash-up)
     const klass = c.klass || 'other';
     const loc = [c.city, c.state].filter(Boolean).join(', ');
     // openable iff the row matched a dia/gov property with a numeric id.
@@ -2091,15 +2092,20 @@ function _fedCardHTML(it, i, isNext) {
       ? ('matched' + (c.match_domain ? ' · ' + c.match_domain : '') + (c.match_property_id ? ' #' + esc(String(c.match_property_id)) : ''))
       : (c.match_status || 'unmatched');
     const title = c.address || c.tenant || ('Intake ' + String(c.intake_id || '').slice(0, 8));
+    // Suspect price → a warning badge (needs re-extract), not a clean $750T deal.
+    const priceBadge = suspect
+      ? '<span class="q-badge pri-high">⚠ price looks wrong' + (ask ? ' (' + ask + ')' : '') + '</span>'
+      : (ask ? '<span class="q-badge">' + ask + '</span>' : '');
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
       + '<div class="q-item-badges">'
-      + (ask ? '<span class="q-badge">' + ask + '</span>' : '')
+      + priceBadge
       + '<span class="q-badge">' + esc(c.doctype || 'unknown doctype') + '</span>'
+      + (c.multi_property ? '<span class="q-badge pri-high">multi-property OM — needs split</span>' : '')
       + '<span class="q-badge' + (klass === 'matched' ? ' type' : '') + '">' + esc(matchTxt) + '</span>'
       + '</div></div>'
       + ((c.tenant && c.tenant !== title) ? '<div class="q-item-meta">Tenant: <b>' + esc(c.tenant) + '</b></div>' : '')
       + '<div class="q-item-meta">' + (loc ? esc(loc) + ' · ' : '')
-      + (c.cap_rate ? 'cap ' + esc(String(c.cap_rate)) + ' · ' : '')
+      + (c.cap_rate_display ? 'cap ' + esc(c.cap_rate_display) + ' · ' : '')
       + 'source ' + esc(c.source_type || '') + '</div>';
     if (klass === 'matched') {
       // Already tied to a property — open / promote, NEVER create.
