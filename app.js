@@ -4756,6 +4756,13 @@ function renderDomainProspects(domain, containerId) {
 const PIPELINE_DOMAINS = ['government', 'dialysis', 'all_other'];
 var pipelineProspectsPage = 0, pipelineDealsPage = 0;
 var pipelineProspectsDomain = 'all', pipelineDealsDomain = 'all';
+// Prospects is the ACTIVELY-PURSUED subset (not the whole contact table). On this
+// SF-sourced surface the engagement signal is recent activity (last_activity_date
+// → `due_date`); the LCC cadence table isn't part of this client dataset, so
+// recent SF outreach is the available proxy. "Show all" reveals the full pursued
+// set (Consumption-Layer: default workable, escape hatch preserved).
+const PROSPECT_ENGAGEMENT_DAYS = 90;
+var pipelineProspectsEngaged = true;
 
 function _pipelineDomainLabel(d) {
   return d === 'government' ? 'Government' : d === 'dialysis' ? 'Dialysis' : d === 'all_other' ? 'All Other' : 'All';
@@ -4771,6 +4778,24 @@ function _pipelineCollect(store, domainFilter) {
   return out;
 }
 
+// sf_contact_ids that have an opportunity (a Deal) — those contacts belong in the
+// Deals sub-view, not Prospects (mutually exclusive; opening an opp moves a row
+// Prospects→Deals). Mirrors renderDomainProspects's own opp/contact dedup.
+function _pipelineOppContactIds() {
+  const ids = new Set();
+  const src = window._mktOpportunities || {};
+  PIPELINE_DOMAINS.forEach(dom => (src[dom] || []).forEach(o => { if (o.sf_contact_id) ids.add(o.sf_contact_id); }));
+  return ids;
+}
+
+function _prospectRecentlyActive(item, days) {
+  const d = item.due_date || item.last_activity_date;
+  if (!d) return false;
+  const t = Date.parse(d);
+  if (isNaN(t)) return false;
+  return (Date.now() - t) <= days * 86400000;
+}
+
 function _pipelineFilterPills(activeDomain, domainVar, pageVar, renderFn) {
   const pill = (val, label) => `<span class="pill ${activeDomain === val ? 'active' : ''}" onclick="${domainVar}='${val}';${pageVar}=0;${renderFn}()">${label}</span>`;
   return '<div class="pills" style="margin-bottom:10px">' +
@@ -4779,12 +4804,13 @@ function _pipelineFilterPills(activeDomain, domainVar, pageVar, renderFn) {
 }
 
 function _pipelineSubviewHTML(title, subtitle, items, opts) {
-  const { domain, domainVar, pageVar, renderFn } = opts;
+  const { domain, domainVar, pageVar, renderFn, extraControls } = opts;
   const dealCount = new Set(items.map(d => d.deal_name || d.item_id)).size;
   let html = '';
   html += `<div style="margin-bottom:10px"><h3 style="margin:0;color:var(--text)">${esc(title)}</h3>` +
     `<div style="font-size:12px;color:var(--text3)">${esc(subtitle)} · ${dealCount} deals · ${items.length} records</div></div>`;
   html += _pipelineFilterPills(domain, domainVar, pageVar, renderFn);
+  if (extraControls) html += extraControls;
   html += renderProspectCardsHTML(items, {
     showDomainDropdown: true,
     showReassign: true,
@@ -4808,10 +4834,24 @@ function renderPipelineProspects() {
     }
     return '';
   }
-  const items = _pipelineCollect('_mktProspectContacts', pipelineProspectsDomain);
-  const html = _pipelineSubviewHTML('Prospects', "People you're actively pursuing", items, {
+  const all = _pipelineCollect('_mktProspectContacts', pipelineProspectsDomain);
+  // Structural gate: a contact with an opportunity is a Deal, not a Prospect.
+  const oppIds = _pipelineOppContactIds();
+  const pursued = all.filter(x => !(x.sf_contact_id && oppIds.has(x.sf_contact_id)));
+  // Engagement gate (default): recently-active only.
+  const items = pipelineProspectsEngaged
+    ? pursued.filter(x => _prospectRecentlyActive(x, PROSPECT_ENGAGEMENT_DAYS))
+    : pursued;
+  const subtitle = pipelineProspectsEngaged
+    ? `${items.length} actively pursued (active in last ${PROSPECT_ENGAGEMENT_DAYS}d) · ${pursued.length} pursued total`
+    : `${pursued.length} pursued (all — no open opportunity)`;
+  const toggle = '<div class="pills" style="margin-bottom:10px">' +
+    `<span class="pill ${pipelineProspectsEngaged ? 'active' : ''}" onclick="pipelineProspectsEngaged=true;pipelineProspectsPage=0;renderPipelineProspects()">Engaged (${PROSPECT_ENGAGEMENT_DAYS}d)</span>` +
+    `<span class="pill ${!pipelineProspectsEngaged ? 'active' : ''}" onclick="pipelineProspectsEngaged=false;pipelineProspectsPage=0;renderPipelineProspects()">Show all</span>` +
+    '</div>';
+  const html = _pipelineSubviewHTML('Prospects', subtitle, items, {
     domain: pipelineProspectsDomain, domainVar: 'pipelineProspectsDomain',
-    pageVar: 'pipelineProspectsPage', renderFn: 'renderPipelineProspects'
+    pageVar: 'pipelineProspectsPage', renderFn: 'renderPipelineProspects', extraControls: toggle
   });
   el.innerHTML = html;
   return html;

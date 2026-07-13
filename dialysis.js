@@ -917,20 +917,23 @@ async function loadDiaData() {
       reconciliation: {}
     };
     
-    // ── ALL QUERIES: Run everything in parallel (all independent) ──────────
-    // Previously split into sequential Batch 1 → movers enrichment → Batch 2
-    // Now merged into single Promise.all — cuts load time roughly in half
-    var [freshness, invSummary, invChanges, moversUpRaw, moversDownRaw,
-         npiSignalSummary, npiSignals, propQueue, leaseQueue, leaseCountRes, outcomes, recon,
+    // ── FAST QUERIES: paint the Overview off the MV + summary views ────────
+    // Unit 3 (2026-07-13): the two heavy DETAIL-array pulls
+    // (v_clinic_inventory_latest_diff — full ~7.5k-row multi-page pull — and
+    // v_npi_inventory_signals limit 5000) were the ~9.7s block. The Overview
+    // reads mv_dia_overview_stats + the SUMMARY views (v_clinic_inventory_diff_
+    // summary / v_npi_inventory_signal_summary), NOT the detail arrays, so those
+    // two are DEFERRED to a background load (_loadDiaHeavyDetail) that re-renders
+    // the current tab when it lands. Everything below is the fast set.
+    var [freshness, invSummary, moversUpRaw, moversDownRaw,
+         npiSignalSummary, propQueue, leaseQueue, leaseCountRes, outcomes, recon,
          sfActivities, patientAsOfRows
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
       diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
-      diaQueryAll('v_clinic_inventory_latest_diff', '*').catch(function(e) { console.warn('Inv changes timeout', e); return []; }),
       diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=gt.0', order: 'delta_patients.desc', limit: 10 }).catch(function() { return []; }),
       diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=lt.0', order: 'delta_patients.asc', limit: 10 }).catch(function() { return []; }),
       diaQuery('v_npi_inventory_signal_summary', '*').catch(function() { return []; }),
-      diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(function() { return []; }),
       diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(function() { return []; }),
       diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 1000 }).catch(function() { return []; }),
       // Exact (un-capped) candidate count for the honest Lease Coverage sub —
@@ -956,25 +959,16 @@ async function loadDiaData() {
     if (invSummary && invSummary.length > 0) {
       invSummary.forEach(function(row) { diaData.inventorySummary[row.change_type] = row; });
     }
-    diaData.inventoryChanges = invChanges || [];
+    // inventoryChanges (the heavy detail array) is loaded in the background
+    // (_loadDiaHeavyDetail); leave it [] for the fast paint. The freshness
+    // fallback below is gated on it being loaded, so it re-runs in the bg.
 
-    // Fallback: if v_counts_freshness returned empty, estimate from loaded data
-    if (!diaData.freshness || !diaData.freshness.total_clinics) {
-      const ic = diaData.inventoryChanges;
-      const withCounts = ic.filter(function(c) { return c.latest_total_patients > 0; });
-      diaData.freshness = {
-        total_clinics: ic.length,
-        clinics_with_counts: withCounts.length,
-        coverage_pct: ic.length > 0 ? Math.round(withCounts.length / ic.length * 1000) / 10 : 0,
-        _fallback: true
-      };
-    }
+    _diaApplyFreshnessFallback();
 
-    // Assign NPI + research data
+    // Assign NPI + research data (npiSignals — the heavy array — loads in bg)
     if (npiSignalSummary && npiSignalSummary.length > 0) {
       npiSignalSummary.forEach(function(row) { diaData.npiSummary[row.signal_type] = row; });
     }
-    diaData.npiSignals = npiSignals || [];
     diaData.propertyReviewQueue = propQueue || [];
     diaData.leaseBackfillRows = leaseQueue || [];
     // Honest backlog size from the count=exact probe (null when it failed —
@@ -1042,12 +1036,10 @@ async function loadDiaData() {
     
     diaDataLoaded = true;
     _diaDataLoading = false;
-    console.debug('DIA DATA LOADED:', {
+    console.debug('DIA DATA LOADED (fast):', {
       freshness: diaData.freshness,
       invSummaryKeys: Object.keys(diaData.inventorySummary),
-      inventoryChanges: diaData.inventoryChanges.length,
       npiSummaryKeys: Object.keys(diaData.npiSummary),
-      npiSignals: diaData.npiSignals.length,
       propertyQueue: diaData.propertyReviewQueue.length,
       leaseBackfill: diaData.leaseBackfillRows.length,
       outcomes: diaData.researchOutcomes.length,
@@ -1055,9 +1047,13 @@ async function loadDiaData() {
       recon: diaData.reconciliation
     });
     var _diaLoadSec = ((Date.now() - _diaLoadStart) / 1000).toFixed(1);
-    showToast(`Dialysis: ${(diaData.freshness || {}).total_clinics || 0} clinics, ${diaData.inventoryChanges.length} changes, ${diaData.npiSignals.length} signals (${_diaLoadSec}s)`, 'success');
+    // The Overview paints off the MV + summary views; the detail arrays
+    // (inventoryChanges / npiSignals) load in the background — reported honestly.
+    showToast(`Dialysis: ${(diaData.freshness || {}).total_clinics || 0} clinics (${_diaLoadSec}s) · detail loading…`, 'success');
     // Only render if user is still viewing the dialysis tab
     if (typeof currentBizTab !== 'undefined' && currentBizTab === 'dialysis') renderDiaTab();
+    // Unit 3: fetch the heavy detail arrays in the background, then re-render.
+    _loadDiaHeavyDetail();
   } catch (err) {
     console.error('loadDiaData error:', err);
     _diaDataLoading = false;
@@ -1066,6 +1062,87 @@ async function loadDiaData() {
     if (inner) {
       inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load dialysis data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="this.disabled=true;this.textContent=\'Loading\u2026\';loadDiaData()" style="margin-top:12px">Retry</button></div>';
     }
+  }
+}
+
+/**
+ * Freshness fallback \u2014 estimate clinic coverage from the inventoryChanges detail
+ * array when v_counts_freshness returns empty. Gated on inventoryChanges being
+ * LOADED (Unit 3: it loads in the background), so a no-op during the fast paint
+ * and re-runs once _loadDiaHeavyDetail lands the array. Never clobbers a real
+ * freshness row (only fills when total_clinics is missing).
+ */
+function _diaApplyFreshnessFallback() {
+  if (!diaData) return;
+  if (diaData.freshness && diaData.freshness.total_clinics) return; // real row present
+  var ic = diaData.inventoryChanges || [];
+  if (ic.length === 0) return; // detail array not loaded yet \u2014 defer to bg
+  var withCounts = ic.filter(function(c) { return c.latest_total_patients > 0; });
+  diaData.freshness = {
+    total_clinics: ic.length,
+    clinics_with_counts: withCounts.length,
+    coverage_pct: ic.length > 0 ? Math.round(withCounts.length / ic.length * 1000) / 10 : 0,
+    _fallback: true
+  };
+}
+
+/**
+ * Unit 3 (2026-07-13) \u2014 background load of the two heavy DETAIL arrays that used
+ * to block the whole dia Overview (~9.7s): the full v_clinic_inventory_latest_diff
+ * multi-page pull and v_npi_inventory_signals (limit 5000). The Overview does NOT
+ * read these (it uses mv_dia_overview_stats + the summary views), so they load
+ * AFTER the fast paint. When they land we re-run the freshness fallback + the
+ * movers name pre-seed (belt-and-suspenders) and re-render the current tab so the
+ * Inventory Changes / NPI Intel tabs and any name gaps fill in without a spinner.
+ */
+var _diaHeavyDetailLoading = false;
+async function _loadDiaHeavyDetail() {
+  if (_diaHeavyDetailLoading) return;
+  _diaHeavyDetailLoading = true;
+  try {
+    var [invChanges, npiSignals] = await Promise.all([
+      diaQueryAll('v_clinic_inventory_latest_diff', '*').catch(function(e) { console.warn('Inv changes timeout', e); return []; }),
+      diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(function() { return []; })
+    ]);
+    diaData.inventoryChanges = invChanges || [];
+    diaData.npiSignals = npiSignals || [];
+
+    // Re-run the freshness fallback now that the detail array is available.
+    _diaApplyFreshnessFallback();
+
+    // Belt-and-suspenders: harvest facility names from inventoryChanges for any
+    // mover still showing "Clinic <id>" (the fast-path enrichment ran with an
+    // empty array). No extra round trip \u2014 pure in-memory patch.
+    try {
+      var nameMap = {};
+      diaData.inventoryChanges.forEach(function(r) {
+        if (r && r.clinic_id && r.facility_name) nameMap[r.clinic_id] = r.facility_name;
+      });
+      var patch = function(arr) {
+        return (arr || []).map(function(r) {
+          if (r && r.clinic_id && /^Clinic\s/.test(String(r.facility_name || '')) && nameMap[r.clinic_id]) {
+            return Object.assign({}, r, { facility_name: nameMap[r.clinic_id] });
+          }
+          return r;
+        });
+      };
+      if (Array.isArray(diaData.moversUp)) diaData.moversUp = patch(diaData.moversUp);
+      if (Array.isArray(diaData.moversDown)) diaData.moversDown = patch(diaData.moversDown);
+    } catch (e) { console.warn('mover name backfill failed', e); }
+
+    console.debug('DIA DETAIL LOADED (bg):', {
+      inventoryChanges: diaData.inventoryChanges.length,
+      npiSignals: diaData.npiSignals.length
+    });
+    // Re-render the current dia tab so the detail-backed sections fill in.
+    if (typeof currentBizTab !== 'undefined' && currentBizTab === 'dialysis' &&
+        typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
+      renderDiaTab();
+    }
+  } catch (e) {
+    console.warn('_loadDiaHeavyDetail error', e);
+  } finally {
+    _diaHeavyDetailLoading = false;
   }
 }
 
@@ -1260,8 +1337,12 @@ function renderDiaPortfolioGlanceInner() {
   h += infoCard({ title: 'Avg Rent / SF', value: mv.avg_rent_psf ? '$' + Number(mv.avg_rent_psf).toFixed(2) : '—', sub: fmtN(n(mv.properties_with_rent)) + ' properties', color: 'purple', tab: 'sales' });
   h += infoCard({ title: 'Operators Tracked', value: fmtN(n(mv.operators_tracked)), sub: 'distinct operators', color: 'yellow', tab: 'search' });
   h += '</div>';
-  h += '<div class="dia-grid dia-grid-3" style="margin-top:10px">';
+  // Second row mirrors gov's NOI row (Total NOI · Avg NOI/Property · Contacts).
+  // dia is NNN so net rent ≈ NOI; the Avg tile is total net rent / active property.
+  const avgNoi = n(mv.total_properties) > 0 ? n(mv.total_noi) / n(mv.total_properties) : 0;
+  h += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
   h += infoCard({ title: 'Net Rent ≈ NOI', value: '$' + fmtN(Math.round(n(mv.total_noi) / 1e6)) + 'M', sub: 'NNN net lease — rent ≈ NOI', color: 'green', tab: 'sales' });
+  h += infoCard({ title: 'Avg Net Rent / Property', value: avgNoi > 0 ? '$' + fmtN(Math.round(avgNoi / 1000)) + 'K' : '—', sub: 'across active portfolio (≈ NOI)', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'CMS Clinics', value: fmtN(n(mv.cms_clinics)), sub: 'Medicare-certified facilities', color: 'blue', tab: 'search' });
   h += infoCard({ title: 'Contacts', value: fmtN(n(mv.total_contacts)), sub: 'owners & principals', color: 'purple', tab: 'research' });
   h += '</div>';
@@ -1371,6 +1452,93 @@ function _diaLeaseCoverage() {
   return { pct, sub };
 }
 
+// UI Phase 2/3 — Action Items with ONE shared taxonomy across dia ↔ gov:
+// BD signals FIRST (leases expiring < 6mo, active on-market listings), THEN
+// data-quality (property review, lease backfill, inventory changes / NPI). Only
+// categories that have counts render. BD counts come from async sources
+// (mv_dia_overview_stats, diaAvailListings) so this is rendered into the
+// #diaActionItems placeholder and refreshed when those loads land.
+function renderDiaActionItemsInner() {
+  const n = v => Number(v) || 0;
+  const mv = (typeof diaOverviewStats !== 'undefined') ? diaOverviewStats : null;
+  const mvOk = mv && !mv._error && !mv._empty;
+  const bd = [], dq = [];
+
+  // ── BD signals ──────────────────────────────────────────────
+  const expLt6 = mvOk ? n(mv.exp_lease_lt_6mo) : 0;
+  if (expLt6 > 0) {
+    bd.push({ icon: '⏳', color: '#f87171', urgency: 'warning',
+      title: fmtN(expLt6) + ' lease' + (expLt6 > 1 ? 's' : '') + ' expiring within 6 months',
+      detail: 'Renewal / sale-leaseback windows opening — prioritize outreach on these owners',
+      action: 'Review leases', tab: 'leases' });
+  }
+  const onMarket = (typeof diaAvailListings !== 'undefined' && Array.isArray(diaAvailListings)) ? diaAvailListings.length : 0;
+  if (onMarket > 0) {
+    bd.push({ icon: '🏷️', color: '#34d399', urgency: 'info',
+      title: fmtN(onMarket) + ' dialysis propert' + (onMarket > 1 ? 'ies' : 'y') + ' on market',
+      detail: 'Active listings — acquisition targets / competitive positioning for your pipeline',
+      action: 'View listings', tab: 'sales' });
+  }
+
+  // ── Data-quality ────────────────────────────────────────────
+  const removedCount = (typeof diaData !== 'undefined' && diaData.inventorySummary) ? (diaData.inventorySummary.removed?.clinic_count || 0) : 0;
+  if (removedCount > 0) {
+    dq.push({ icon: '🚨', color: '#f87171', urgency: 'urgent',
+      title: removedCount + ' clinic' + (removedCount > 1 ? 's' : '') + ' removed from CMS inventory',
+      detail: 'Potential closures — check for acquisition or disposition opportunities',
+      action: 'Review closures', tab: 'inventory', preFilter: 'removed' });
+  }
+  const npiSignalCount = (typeof diaData !== 'undefined' && diaData.npiSummary) ? Object.values(diaData.npiSummary).reduce((s, r) => s + (r.signal_count || 0), 0) : 0;
+  const npiAutoResolvable = (typeof diaData !== 'undefined' && diaData.npiSummary) ? Object.values(diaData.npiSummary).reduce((s, r) => s + (r.auto_resolvable_count || 0), 0) : 0;
+  const npiActionableCount = Math.max(0, npiSignalCount - npiAutoResolvable);
+  if (npiActionableCount > 0) {
+    dq.push({ icon: '📡', color: '#fb923c', urgency: 'warning',
+      title: npiActionableCount + ' NPI signal' + (npiActionableCount > 1 ? 's' : '') + ' need review',
+      detail: 'Clinics with missing or duplicate NPIs — fix data quality issues that block ownership matching',
+      action: 'Review Signals', tab: 'npi' });
+  }
+  const propQueueLen = (typeof diaData !== 'undefined' && diaData.propertyReviewQueue) ? diaData.propertyReviewQueue.length : 0;
+  if (propQueueLen > 10) {
+    dq.push({ icon: '🔗', color: '#a78bfa', urgency: 'info',
+      title: propQueueLen + ' clinic' + (propQueueLen > 1 ? 's' : '') + ' in property review queue',
+      detail: 'Unlinked clinics need property matching for lease + ownership data',
+      action: 'Start Review', tab: 'research' });
+  }
+  const leaseBackfillLen = (typeof diaData !== 'undefined' && diaData.leaseBackfillRows) ? diaData.leaseBackfillRows.length : 0;
+  const leaseBackfillExact = (typeof diaData !== 'undefined' && diaData.leaseBackfillCount != null && diaData.leaseBackfillCount > 0)
+    ? diaData.leaseBackfillCount : leaseBackfillLen;
+  if (leaseBackfillExact > 20) {
+    dq.push({ icon: '📋', color: '#22d3ee', urgency: 'info',
+      title: fmtN(leaseBackfillExact) + ' clinic' + (leaseBackfillExact > 1 ? 's' : '') + ' need lease backfill',
+      detail: 'Missing lease data — prioritize high-value clinics',
+      action: 'Backfill Leases', tab: 'research' });
+  }
+  const addedCount = (typeof diaData !== 'undefined' && diaData.inventorySummary) ? (diaData.inventorySummary.added?.clinic_count || 0) : 0;
+  if (addedCount > 0) {
+    dq.push({ icon: '🆕', color: '#34d399', urgency: 'info',
+      title: addedCount + ' new clinic' + (addedCount > 1 ? 's' : '') + ' added to CMS inventory',
+      detail: 'New facilities — may need property linking and operator research',
+      action: 'Review new clinics', tab: 'inventory', preFilter: 'added' });
+  }
+
+  const items = bd.concat(dq);
+  if (!items.length) return '';
+  let html = '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px;padding-left:2px">Action Items</div>';
+  for (const h of items.slice(0, 6)) {
+    const borderColor = h.urgency === 'urgent' ? h.color : h.urgency === 'warning' ? h.color : 'var(--border)';
+    const _pf = h.preFilter ? ",'" + h.preFilter + "'" : '';
+    html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;background:var(--s2);border-radius:10px;border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="goToDiaTab(\'' + h.tab + '\'' + _pf + ')">';
+    html += '<span style="font-size:20px;flex-shrink:0">' + h.icon + '</span>';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(h.title) + '</div>';
+    html += '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(h.detail) + '</div>';
+    html += '</div>';
+    html += '<button class="gov-row-action accent" onclick="event.stopPropagation();goToDiaTab(\'' + h.tab + '\'' + _pf + ')" style="flex-shrink:0">' + esc(h.action) + '</button>';
+    html += '</div>';
+  }
+  return html;
+}
+
 /**
  * Render overview — infographic-style command center homepage
  */
@@ -1394,6 +1562,9 @@ function renderDiaOverview() {
       const g = document.getElementById('diaPortfolioGlance'); if (g) g.innerHTML = renderDiaPortfolioGlanceInner();
       const r = document.getElementById('diaLeaseExpRisk'); if (r) r.innerHTML = renderDiaLeaseExpRiskInner();
       const b = document.getElementById('diaBreakdown'); if (b) b.innerHTML = renderDiaBreakdownInner();
+      // BD-signal Action Items (leases expiring < 6mo) key on the MV — refresh
+      // the placeholder so they surface once the MV lands (BD-first taxonomy).
+      const ai = document.getElementById('diaActionItems'); if (ai) ai.innerHTML = renderDiaActionItemsInner();
       // Lease Coverage (Data Health) keys on the same MV — refresh it once the
       // MV lands so it isn't stuck on the '—' first-paint placeholder (Unit 3).
       const lc = _diaLeaseCoverage();
@@ -1894,75 +2065,10 @@ function renderDiaOverview() {
   // SECTION 0: ACTIONABLE HIGHLIGHTS (Round 54)
   // Auto-populated from live data — what needs your attention right now
   // ═══════════════════════════════════════════════
-  const diaHighlights = [];
-
-  // Highlight 1: NPI signals need review (only counts actionable, not auto-resolved)
-  if (npiActionableCount > 0) {
-    diaHighlights.push({
-      icon: '📡', color: '#fb923c', urgency: 'warning',
-      title: npiActionableCount + ' NPI signal' + (npiActionableCount > 1 ? 's' : '') + ' need review',
-      detail: 'Clinics with missing or duplicate NPIs — fix data quality issues that block ownership matching',
-      action: 'Review Signals', tab: 'npi'
-    });
-  }
-
-  // Highlight 2: Property review queue backlog
-  if (propQueueLen > 10) {
-    diaHighlights.push({
-      icon: '🔗', color: '#a78bfa', urgency: 'info',
-      title: propQueueLen + ' clinic' + (propQueueLen > 1 ? 's' : '') + ' in property review queue',
-      detail: 'Unlinked clinics need property matching for lease + ownership data',
-      action: 'Start Review', tab: 'research'
-    });
-  }
-
-  // Highlight 3: Lease backfill needed
-  if (leaseBackfillExact > 20) {
-    diaHighlights.push({
-      icon: '📋', color: '#22d3ee', urgency: 'info',
-      title: fmtN(leaseBackfillExact) + ' clinic' + (leaseBackfillExact > 1 ? 's' : '') + ' need lease backfill',
-      detail: 'Missing lease data — prioritize high-value clinics',
-      action: 'Backfill Leases', tab: 'research'
-    });
-  }
-
-  // Highlight 4: Clinics removed from CMS (closures)
-  if (removedCount > 0) {
-    diaHighlights.push({
-      icon: '🚨', color: '#f87171', urgency: 'urgent',
-      title: removedCount + ' clinic' + (removedCount > 1 ? 's' : '') + ' removed from CMS inventory',
-      detail: 'Potential closures — check for acquisition or disposition opportunities',
-      action: 'Review closures', tab: 'inventory', preFilter: 'removed'
-    });
-  }
-
-  // Highlight 5: New clinics added
-  if (addedCount > 0) {
-    diaHighlights.push({
-      icon: '🆕', color: '#34d399', urgency: 'info',
-      title: addedCount + ' new clinic' + (addedCount > 1 ? 's' : '') + ' added to CMS inventory',
-      detail: 'New facilities — may need property linking and operator research',
-      action: 'Review new clinics', tab: 'inventory', preFilter: 'added'
-    });
-  }
-
-  if (diaHighlights.length > 0) {
-    html += '<div style="margin-bottom:20px">';
-    html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px;padding-left:2px">Action Items</div>';
-    for (const h of diaHighlights.slice(0, 5)) {
-      const borderColor = h.urgency === 'urgent' ? h.color : h.urgency === 'warning' ? h.color : 'var(--border)';
-      const _pf = h.preFilter ? ",'" + h.preFilter + "'" : '';
-      html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;background:var(--s2);border-radius:10px;border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="goToDiaTab(\'' + h.tab + '\'' + _pf + ')">';
-      html += '<span style="font-size:20px;flex-shrink:0">' + h.icon + '</span>';
-      html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(h.title) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(h.detail) + '</div>';
-      html += '</div>';
-      html += '<button class="gov-row-action accent" onclick="event.stopPropagation();goToDiaTab(\'' + h.tab + '\'' + _pf + ')" style="flex-shrink:0">' + esc(h.action) + '</button>';
-      html += '</div>';
-    }
-    html += '</div>';
-  }
+  // SECTION 0: ACTION ITEMS — BD-first-then-DQ taxonomy shared with gov,
+  // rendered into a refreshable placeholder (BD counts load async — see the
+  // mv/listings callbacks below).
+  html += '<div id="diaActionItems" style="margin-bottom:20px">' + renderDiaActionItemsInner() + '</div>';
 
   // ═══════════════════════════════════════════════
   // UI Phase 2 — unified value-first Overview order (mirrors gov.js):
