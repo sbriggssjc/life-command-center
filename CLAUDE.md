@@ -6622,3 +6622,55 @@ suite **1676 pass / 0 fail / 6 skipped**. `dia-grid-4` CSS class exists
 verification (Prospects engaged-vs-all, the Avg NOI tile, the shared Action-Items
 order on both domains, and the dia Overview fast paint with detail filling in) is
 on the deployed app after redeploy.
+
+## Pipeline home: source Prospects from real pursued data + gate Deals to active (2026-07-13)
+
+Live verification of PR #1380/#1381 found the Pipeline home's STRUCTURE right
+(My Work · Prospects · Deals toggle, hero off My Work, Today→Pipeline dedupe) but
+two data-sourcing defects on the sub-views. Client-only fix (`app.js`); no new
+api/*.js (≤12); no migration; no dia/gov writes; reuses the existing
+`cadence_dashboard` endpoint + the SF-opps dataset.
+
+### Unit 1 — Prospects reads the LCC cadence layer, not SF marketing contacts
+`renderPipelineProspects` was sourced from `_mktProspectContacts` (the SF
+marketing contact table, which is opportunity-heavy), so the mutual-exclusion
+split (open-opp → Deals) routed essentially everything to Deals and left
+**Prospects at 0 records** even ungated. The real "who I'm actively pursuing"
+population lives in the LCC cadence layer (`v_bd_cadence_dashboard`) — the SAME
+set the outreach focus session works. Prospects now loads from the
+`?action=cadence_dashboard` endpoint (cached per toggle in `_pipelineCadenceCache`;
+tab-entry clears the cache in `_pipelineShowSubview`; domain-filter + pagination
+reuse it). It renders cadence-shaped cards (`_pipelineCadenceCardsHTML` — entity
+name + `rank_value` + phase/overdue + Draft email / Log touch via the existing
+`cadDraft`/`cadLogTouch`, plus Open → the 4B entity detail), value-ranked by
+`rank_value` (the endpoint already orders it). **Mutual exclusion with Deals:** a
+cadence in a deal phase (`buy_side`/`converted` — an entity already carrying an
+opportunity / engaged conversation, `_cadenceIsProspect`) is excluded and belongs
+under Deals. Toggle: default = the actionable pursued set (non-paused,
+has-contact — the endpoint default); **Show all** = `include_all=1` (paused /
+no-signal / contactless). The old SF-sourced 90-day engagement proxy
+(`pipelineProspectsEngaged`/`_prospectRecentlyActive`/`_pipelineOppContactIds`)
+was removed — the cadence itself IS the pursued signal, so the honest cadence-
+native actionable/all toggle replaces the recent-SF-activity proxy. The
+All/Government/Dialysis/All Other domain filter is preserved (cadence `domain`
+dia/gov → bucket via `_pipelineDomainOfCadence`).
+
+### Unit 2 — Deals defaults to ACTIVE opportunities (honest count)
+`renderPipelineDeals` listed all ~9,247 SF opportunities incl. 4-year-stale 2021
+rows. Now `_dealIsActive` gates to the not-stale set — `getDaysOverdue(due_date) <=
+DEAL_STALE_DAYS` (180, tunable; matches the card's own `isStale` threshold);
+missing/future/unparseable dates are kept (never over-hide a real in-flight deal).
+Default shows active, recency-ranked (fewest days overdue → future/recent first),
+with an honest subtitle ("Active opportunities · N total in pipeline"); **Show all**
+reveals the full/stale tail behind an honest count. Rich card (contact/email/phone/
+WebEx/Log) + domain filter unchanged.
+
+### Doctrine / boundaries
+The two sub-views draw from DIFFERENT datasets now (Prospects = LCC cadences;
+Deals = SF `_mktOpportunities`), so they cannot double-show a row; the
+mutual-exclusion is enforced on the cadence side by dropping deal-phase cadences.
+`node --check` clean (app.js); `ls api/*.js | wc -l`=12; full suite **1676 pass /
+0 fail / 6 skipped**. Client-only; reversible; JS ships on the Railway redeploy.
+Live verification (Prospects shows the real engaged set, an open-opp entity is not
+in Prospects, Deals defaults to the active subset with Show-all) is on the deployed
+app after redeploy.

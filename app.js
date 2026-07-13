@@ -1035,6 +1035,9 @@ function _pipelineShowSubview(tab) {
   _setDisplay('pipelineMyWork', tab === 'mywork' ? '' : 'none');
   _setDisplay('pipelineProspects', tab === 'prospects' ? '' : 'none');
   _setDisplay('pipelineDeals', tab === 'deals' ? '' : 'none');
+  // Prospects reads the live cadence layer — clear the cache on tab entry so a
+  // freshly-worked cadence isn't shown stale (in-tab pagination/filter reuse it).
+  if (tab === 'prospects') _pipelineCadenceCache = { actionable: null, all: null };
   _renderPipelineSubview(tab);
 }
 
@@ -4756,13 +4759,24 @@ function renderDomainProspects(domain, containerId) {
 const PIPELINE_DOMAINS = ['government', 'dialysis', 'all_other'];
 var pipelineProspectsPage = 0, pipelineDealsPage = 0;
 var pipelineProspectsDomain = 'all', pipelineDealsDomain = 'all';
-// Prospects is the ACTIVELY-PURSUED subset (not the whole contact table). On this
-// SF-sourced surface the engagement signal is recent activity (last_activity_date
-// → `due_date`); the LCC cadence table isn't part of this client dataset, so
-// recent SF outreach is the available proxy. "Show all" reveals the full pursued
-// set (Consumption-Layer: default workable, escape hatch preserved).
-const PROSPECT_ENGAGEMENT_DAYS = 90;
-var pipelineProspectsEngaged = true;
+// Prospects is sourced from the LCC cadence layer (the `cadence_dashboard` action
+// / v_bd_cadence_dashboard) — the ACTUALLY-PURSUED population (the same set the
+// outreach focus session works), NOT the SF marketing contact table (which is
+// opportunity-heavy, so the old mutual-exclusion split routed everything to Deals
+// and left Prospects empty). Mutually exclusive with Deals: a cadence in a deal
+// phase (buy_side / converted — an entity that already carries an opportunity /
+// engaged conversation) is excluded and belongs under Deals. Toggle: default =
+// the actionable pursued set (non-paused, has-contact); "Show all" reveals paused
+// / no-signal / contactless cadences.
+var pipelineProspectsActionable = true;
+// Deals defaults to ACTIVE opportunities (Consumption-Layer honest count) — a
+// 4-year-overdue 2021 opportunity is not an active deal. DEAL_STALE_DAYS is the
+// tunable cutoff (matches the card's own isStale threshold). "Show all" reveals
+// the stale tail behind an honest count.
+var pipelineDealsActive = true;
+const DEAL_STALE_DAYS = 180;
+let _pipelineCadenceCache = { actionable: null, all: null };
+function _pipeMoney(x) { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
 
 function _pipelineDomainLabel(d) {
   return d === 'government' ? 'Government' : d === 'dialysis' ? 'Dialysis' : d === 'all_other' ? 'All Other' : 'All';
@@ -4778,22 +4792,27 @@ function _pipelineCollect(store, domainFilter) {
   return out;
 }
 
-// sf_contact_ids that have an opportunity (a Deal) — those contacts belong in the
-// Deals sub-view, not Prospects (mutually exclusive; opening an opp moves a row
-// Prospects→Deals). Mirrors renderDomainProspects's own opp/contact dedup.
-function _pipelineOppContactIds() {
-  const ids = new Set();
-  const src = window._mktOpportunities || {};
-  PIPELINE_DOMAINS.forEach(dom => (src[dom] || []).forEach(o => { if (o.sf_contact_id) ids.add(o.sf_contact_id); }));
-  return ids;
+// A cadence row's canonical domain (dia/gov) → the pipeline domain bucket.
+function _pipelineDomainOfCadence(it) {
+  const d = String(it && it.domain || '').toLowerCase();
+  if (d === 'gov' || d === 'government') return 'government';
+  if (d === 'dia' || d === 'dialysis') return 'dialysis';
+  return 'all_other';
 }
 
-function _prospectRecentlyActive(item, days) {
-  const d = item.due_date || item.last_activity_date;
-  if (!d) return false;
-  const t = Date.parse(d);
-  if (isNaN(t)) return false;
-  return (Date.now() - t) <= days * 86400000;
+// Deal-phase cadences (an entity already carrying an opportunity / engaged
+// conversation) belong under Deals, not Prospects — the mutual-exclusion rule.
+const PIPELINE_DEAL_PHASES = ['buy_side', 'converted'];
+function _cadenceIsProspect(it) {
+  return PIPELINE_DEAL_PHASES.indexOf(String(it && it.phase || '').toLowerCase()) === -1;
+}
+
+// A deal (SF opportunity) is ACTIVE unless it is clearly stale — a finite
+// days-overdue beyond DEAL_STALE_DAYS. Missing / future / unparseable dates are
+// kept (never over-hide a real in-flight deal).
+function _dealIsActive(it) {
+  const od = getDaysOverdue(it && it.due_date);
+  return !isFinite(od) || od <= DEAL_STALE_DAYS;
 }
 
 function _pipelineFilterPills(activeDomain, domainVar, pageVar, renderFn) {
@@ -4824,35 +4843,102 @@ function _pipelineSubviewHTML(title, subtitle, items, opts) {
   return html;
 }
 
-function renderPipelineProspects() {
+// Render cadence rows (v_bd_cadence_dashboard shape) as pursued-prospect cards:
+// entity name + relationship value + phase/overdue + the next action. Reuses the
+// cadence work path (cadDraft / cadLogTouch — the same as the cadence dashboard /
+// focus session) plus an "Open →" into the 4B entity detail. No SF-contact shape.
+function _pipelineCadenceCardsHTML(items, page, pageSize, pageVar, renderFn) {
+  if (!items.length) {
+    return '<div style="text-align:center;padding:32px;color:var(--text2)">No prospects in this view. ✓</div>';
+  }
+  const start = page * pageSize;
+  const pageItems = items.slice(start, start + pageSize);
+  const totalPages = Math.ceil(items.length / pageSize);
+  const canCad = (typeof jsStringArg === 'function');
+  let html = '';
+  pageItems.forEach(it => {
+    const cid = it.cadence_id == null ? '' : String(it.cadence_id);
+    const eid = it.entity_id == null ? '' : String(it.entity_id);
+    const overdue = Number(it.days_overdue);
+    const dueLbl = it.next_touch_due
+      ? (isFinite(overdue) && overdue > 0 ? overdue + 'd overdue' : 'due ' + new Date(it.next_touch_due).toLocaleDateString())
+      : 'no next touch';
+    const nt = String(it.next_touch_type || '').toLowerCase();
+    const isEmail = (nt === 'email' || nt === '');
+    const valStr = _pipeMoney(it.rank_value);
+    const pc = Number(it.rank_property_count);
+    const meta = [];
+    if (valStr) meta.push(valStr + (isFinite(pc) && pc > 0 ? ' (' + pc + ' propert' + (pc === 1 ? 'y' : 'ies') + ')' : ''));
+    meta.push(it.phase || '—');
+    meta.push('touch ' + String(it.current_touch != null ? it.current_touch : 0));
+    meta.push(dueLbl);
+    if (it.last_touch_type) meta.push('last: ' + String(it.last_touch_type));
+    const dom = _pipelineDomainOfCadence(it);
+    const domBadge = `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--card);border:1px solid var(--border);color:var(--text3);margin-left:6px">${esc(_pipelineDomainLabel(dom))}</span>`;
+    const reviewBadge = (isFinite(overdue) && overdue > 90)
+      ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--orange);color:#fff;margin-left:6px" title="Active cadence > 90 days overdue — review, re-pace, or pause">&#9888; review</span>'
+      : '';
+    const tmpl = it.next_touch_template ? String(it.next_touch_template) : '';
+    let action = '';
+    if (canCad && isEmail && cid && eid && tmpl && typeof cadDraft === 'function') {
+      action = '<button class="q-action primary" onclick="cadDraft(' + jsStringArg(cid) + ',' + jsStringArg(eid)
+        + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
+        + ',' + jsStringArg(it.contact_email || '') + ',' + jsStringArg(it.contact_id || '') + ', this)">Draft email →</button>';
+    } else if (canCad && cid && eid && typeof cadLogTouch === 'function') {
+      action = '<button class="q-action primary" onclick="cadLogTouch(' + jsStringArg(cid) + ',' + jsStringArg(eid)
+        + ',' + jsStringArg(nt || 'call') + ', this)">Log touch →</button>';
+    }
+    const openBtn = eid ? `<button class="q-action" onclick="openEntityDetail('${esc(eid)}')">Open →</button>` : '';
+    html += `<div class="widget" style="padding:14px;margin-bottom:8px">`
+      + `<div style="font-size:15px;font-weight:600;display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin-bottom:6px">${esc(it.entity_name || 'Prospect')}${domBadge}${reviewBadge}</div>`
+      + `<div style="font-size:12px;color:var(--text3);margin-bottom:8px">${esc(meta.join(' · '))}</div>`
+      + `<div style="display:flex;gap:6px;flex-wrap:wrap">${action}${openBtn}</div>`
+      + `</div>`;
+  });
+  if (totalPages > 1 && pageVar && renderFn) {
+    html += `<div class="pager"><button onclick="${pageVar}--;${renderFn}()" ${page===0?'disabled':''}>&#x2190; Prev</button><span>Page ${page+1} of ${totalPages} · ${items.length} results</span><button onclick="${pageVar}++;${renderFn}()" ${page>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
+  }
+  return html;
+}
+
+// Prospects — the live "who I'm actively pursuing" list, sourced from the LCC
+// cadence layer (not SF marketing contacts). Value-ranked, deal-phase excluded.
+async function renderPipelineProspects() {
   const el = document.getElementById('pipelineProspectsContent');
   if (!el) return '';
-  if (!_mktOpportunitiesLoaded) {
+  if (typeof opsApi !== 'function') { el.innerHTML = '<div class="loading"><span class="spinner"></span></div>'; setTimeout(renderPipelineProspects, 300); return ''; }
+  const wantAll = !pipelineProspectsActionable;
+  const cacheKey = wantAll ? 'all' : 'actionable';
+  if (!_pipelineCadenceCache[cacheKey]) {
     el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-    if (typeof loadMarketing === 'function') {
-      loadMarketing().then(() => { if (currentPipelineTab === 'prospects') renderPipelineProspects(); });
+    let res;
+    try {
+      res = await opsApi('/api/operations?action=cadence_dashboard&limit=300' + (wantAll ? '&include_all=1' : ''));
+    } catch (e) { res = { ok: false }; }
+    if (!res || !res.ok || !res.data || !res.data.ok) {
+      el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text2)">Could not load your pursued list. '
+        + '<button class="retry-btn" onclick="_pipelineCadenceCache={actionable:null,all:null};renderPipelineProspects()">Retry</button></div>';
+      return '';
     }
-    return '';
+    _pipelineCadenceCache[cacheKey] = Array.isArray(res.data.items) ? res.data.items : [];
   }
-  const all = _pipelineCollect('_mktProspectContacts', pipelineProspectsDomain);
-  // Structural gate: a contact with an opportunity is a Deal, not a Prospect.
-  const oppIds = _pipelineOppContactIds();
-  const pursued = all.filter(x => !(x.sf_contact_id && oppIds.has(x.sf_contact_id)));
-  // Engagement gate (default): recently-active only.
-  const items = pipelineProspectsEngaged
-    ? pursued.filter(x => _prospectRecentlyActive(x, PROSPECT_ENGAGEMENT_DAYS))
-    : pursued;
-  const subtitle = pipelineProspectsEngaged
-    ? `${items.length} actively pursued (active in last ${PROSPECT_ENGAGEMENT_DAYS}d) · ${pursued.length} pursued total`
-    : `${pursued.length} pursued (all — no open opportunity)`;
+  // Prospects = pursued cadences that are NOT in a deal phase (buy_side/converted).
+  const pursued = (_pipelineCadenceCache[cacheKey] || []).filter(_cadenceIsProspect);
+  const items = pipelineProspectsDomain === 'all'
+    ? pursued
+    : pursued.filter(it => _pipelineDomainOfCadence(it) === pipelineProspectsDomain);
+  const subtitle = pipelineProspectsActionable
+    ? `${items.length} actively pursued (in an active cadence, contactable)`
+    : `${items.length} pursued (all cadences — incl. paused / contactless)`;
   const toggle = '<div class="pills" style="margin-bottom:10px">' +
-    `<span class="pill ${pipelineProspectsEngaged ? 'active' : ''}" onclick="pipelineProspectsEngaged=true;pipelineProspectsPage=0;renderPipelineProspects()">Engaged (${PROSPECT_ENGAGEMENT_DAYS}d)</span>` +
-    `<span class="pill ${!pipelineProspectsEngaged ? 'active' : ''}" onclick="pipelineProspectsEngaged=false;pipelineProspectsPage=0;renderPipelineProspects()">Show all</span>` +
+    `<span class="pill ${pipelineProspectsActionable ? 'active' : ''}" onclick="pipelineProspectsActionable=true;pipelineProspectsPage=0;renderPipelineProspects()">Actively pursued</span>` +
+    `<span class="pill ${!pipelineProspectsActionable ? 'active' : ''}" onclick="pipelineProspectsActionable=false;pipelineProspectsPage=0;renderPipelineProspects()">Show all</span>` +
     '</div>';
-  const html = _pipelineSubviewHTML('Prospects', subtitle, items, {
-    domain: pipelineProspectsDomain, domainVar: 'pipelineProspectsDomain',
-    pageVar: 'pipelineProspectsPage', renderFn: 'renderPipelineProspects', extraControls: toggle
-  });
+  let html = `<div style="margin-bottom:10px"><h3 style="margin:0;color:var(--text)">Prospects</h3>`
+    + `<div style="font-size:12px;color:var(--text3)">${esc(subtitle)}</div></div>`;
+  html += _pipelineFilterPills(pipelineProspectsDomain, 'pipelineProspectsDomain', 'pipelineProspectsPage', 'renderPipelineProspects');
+  html += toggle;
+  html += _pipelineCadenceCardsHTML(items, window.pipelineProspectsPage || 0, PROSPECT_PAGE, 'pipelineProspectsPage', 'renderPipelineProspects');
   el.innerHTML = html;
   return html;
 }
@@ -4867,10 +4953,24 @@ function renderPipelineDeals() {
     }
     return '';
   }
-  const items = _pipelineCollect('_mktOpportunities', pipelineDealsDomain);
-  const html = _pipelineSubviewHTML('Deals', 'Opportunities in flight', items, {
+  const all = _pipelineCollect('_mktOpportunities', pipelineDealsDomain);
+  const active = all.filter(_dealIsActive);
+  const items = (pipelineDealsActive ? active : all).slice();
+  // Recency-rank so current deals lead — fewest days overdue (future/recent) first.
+  items.sort((a, b) => {
+    const oa = getDaysOverdue(a.due_date), ob = getDaysOverdue(b.due_date);
+    return (isFinite(oa) ? oa : 1e9) - (isFinite(ob) ? ob : 1e9);
+  });
+  const subtitle = pipelineDealsActive
+    ? `Active opportunities · ${all.length.toLocaleString()} total in pipeline`
+    : `All opportunities (incl. stale) · ${active.length.toLocaleString()} active`;
+  const toggle = '<div class="pills" style="margin-bottom:10px">' +
+    `<span class="pill ${pipelineDealsActive ? 'active' : ''}" onclick="pipelineDealsActive=true;pipelineDealsPage=0;renderPipelineDeals()">Active</span>` +
+    `<span class="pill ${!pipelineDealsActive ? 'active' : ''}" onclick="pipelineDealsActive=false;pipelineDealsPage=0;renderPipelineDeals()">Show all</span>` +
+    '</div>';
+  const html = _pipelineSubviewHTML('Deals', subtitle, items, {
     domain: pipelineDealsDomain, domainVar: 'pipelineDealsDomain',
-    pageVar: 'pipelineDealsPage', renderFn: 'renderPipelineDeals'
+    pageVar: 'pipelineDealsPage', renderFn: 'renderPipelineDeals', extraControls: toggle
   });
   el.innerHTML = html;
   return html;
