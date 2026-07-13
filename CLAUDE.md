@@ -6468,3 +6468,84 @@ Phase 2: with `SF_LOOKUP_WEBHOOK_URL` set, `POST /api/contact-acquisition-tick`
 drains the 269 SF-account worklist owners (contacts attached + cadences seeded →
 they enter the focus session); `GET /api/owner-contact-enrich-tick` reports the
 free-resolvable vs needs-adapter split for the rest.
+
+## Pipeline home consolidation — one home, three sub-views (2026-07-13)
+
+The "who am I pursuing / what's my work" concept was fragmented across ~7 surfaces
+with 6 labels (bottom-nav "Pipeline" that was actually a task list; top-segment
+"Prospects"; domain "Deals"/"Leads" tabs; Today "My Work"; the Priority Queue).
+This round is **presentation-layer coherence, no data changes** — client-only
+(`index.html`, `styles.css`, `app.js`, `ops.js`); no api/*.js (≤12); no migration;
+hash routing + the 4A/4B zoom model preserved (no new pages/slugs — the sub-views
+live under the existing `pagePipeline` / `#/pipeline`).
+
+### The two-cockpit doctrine (kept distinct — do NOT converge)
+- **Priority** (bottom nav) — UNCHANGED. The system-ranked BD target list
+  (`v_priority_queue`): "who to pursue, highest-value first." **Owns the
+  "▶ Do this first" hero** — reserved for the Priority Queue only.
+- **Pipeline** (bottom nav) — the operator's active pipeline, restructured from a
+  My-Work-only view into ONE home with a segmented sub-view toggle:
+  - **My Work** — tasks assigned to the operator (`renderMyWork`/`renderTeamQueue`,
+    `/api/queue?view=my_work`). Keeps its OWN inner **My Work / Team Queue**
+    pill toggle (the old outer tabs, now nested). No "Do this first" hero here —
+    urgency order + a plain header.
+  - **Prospects** — entities being actively pursued, cross-domain. Reuses the
+    Salesforce prospect data + the ONE shared card renderer
+    (`renderProspectCardsHTML`); source = `_mktProspectContacts` (people).
+  - **Deals** — opportunities in flight, cross-domain. Same shared card renderer;
+    source = `_mktOpportunities` (deals). Split by SOURCE so no row shows twice.
+
+### Client wiring (app.js)
+- `currentPipelineTab` (`mywork|prospects|deals`) + `currentMyWorkTab`
+  (`mine|team`). The `#pipelineTabs` click handler (`_pipelineShowSubview`) and
+  the `#myWorkSubtabs` inner-toggle handler drive the display + call
+  `_renderPipelineSubview(tab)` — the single render dispatcher shared by the tab
+  click, `handlePageLoad('pagePipeline')`, and the Today "My Work" on-ramp.
+- **Prospects/Deals sub-views** (`renderPipelineProspects`/`renderPipelineDeals`)
+  are cross-domain lenses on the SAME data the domain "Pipeline" tab renders
+  (`renderDomainProspects` — already the shared cross-domain impl). `_pipelineCollect`
+  combines the three domain arrays; a domain-filter pill row (All / Government /
+  Dialysis / All Other) + pagination reuse `renderProspectCardsHTML`. First render
+  awaits `loadMarketing()`; the domain "Pipeline"/"Leads" tabs are left untouched
+  (they already use the shared renderers), so there is one implementation per concept.
+- **Legacy aliases** (`pageMyWork`/`pageTeamQueue`, incl. the Today "My Work" card
+  + PWA shortcuts) now set the sub-view state (`currentPipelineTab='mywork'`,
+  `currentMyWorkTab='mine'`/`'team'`) before delegating to `navTo('pagePipeline')`
+  — so the Today My Work card lands ON Pipeline › My Work (same source, no
+  duplicate render).
+
+### Phase 3 fixes (ops.js)
+- **Dead owner link fixed** — `queueItemHTML`'s owner/entity name rendered
+  `viewEntity(item.entity_id)` even when `entity_id` was absent (CRM-fallback
+  items like "Symmetry Property Dev" carry `company_name` but no id → a styled
+  link that errored on click). Now: clickable → `openEntityDetail(entity_id)` (the
+  4B entity detail, the same target Priority/DC use) ONLY when a real id exists;
+  otherwise plain non-clickable text.
+- **Hero reserved for Priority** — My Work's top-item `{hero:true}` elevation was
+  removed (it's a Pipeline sub-view now). The Priority Queue band render keeps its
+  hero; DC lanes were already plain.
+
+### Vocabulary
+One home to work your pipeline (My Work · Prospects · Deals) + one cockpit to see
+highest-value (Priority). Retire "Leads" as a separate concept where possible;
+gov's scored-leads "Leads" tab remains an honest gov-only specialization
+(`renderGovPipeline`, gov `prospect_leads`), distinct from the SF-opportunity
+"Deals" sub-view (different data source, no overlap).
+
+### Mapping decision (documented — the Prospects/Deals split)
+`renderDomainProspects` merges SF opportunities + prospect contacts into one list,
+so a naive "Deals = opportunities" sub-view alongside "Prospects" would double-show
+rows. Chosen split (lowest-risk, honors the task's IA, no overlap): **Prospects =
+prospect CONTACTS** (`_mktProspectContacts`), **Deals = OPPORTUNITIES**
+(`_mktOpportunities`) — each row appears once. The domain "Pipeline" tab keeps
+showing the merged `renderDomainProspects` (unchanged); Phase-2 "repoint the domain
+tabs to filtered Deals lenses" was NOT done because the domain "Deals" is a tab
+GROUP (not a single view) and no cross-domain `bd_opportunities` UI surface exists
+yet — deferred, surfaced not buried.
+
+### Verified (headless 2026-07-13)
+`node --check` clean (app.js, ops.js, gov.js, dialysis.js); `ls api/*.js | wc -l`=12;
+full suite **1676 pass / 0 fail / 6 skipped** (client-only change — no test regressions).
+Live verification (the sub-view toggle, cross-domain Prospects/Deals lists, the Today
+My Work → Pipeline landing, the fixed owner link, hero-only-on-Priority) is on the
+deployed app after the Railway redeploy.

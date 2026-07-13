@@ -553,8 +553,11 @@ function renderMyWorkList(el, connectors) {
     // Self-propelling contract: surface the most urgent item first and
     // elevate it as 'do this first'. Completing it re-renders and re-elevates
     // the next-most-urgent automatically (quickTransition reloads the page).
+    // Most-urgent first, but NO "▶ Do this first" hero — that flag is reserved
+    // for the Priority Queue cockpit. My Work is a Pipeline sub-view: it lists
+    // tasks in urgency order with a plain header.
     const _mwSorted = items.slice().sort(_myWorkUrgencyCmp);
-    _mwSorted.forEach(function (item, _ix) { html += queueItemHTML(item, 'my_work', { hero: _ix === 0 }); });
+    _mwSorted.forEach(function (item) { html += queueItemHTML(item, 'my_work', {}); });
   }
 
   // Pagination controls (if using v2).
@@ -6081,7 +6084,17 @@ function queueItemHTML(item, context, opts = {}) {
   html += '</div></div>';
 
   html += '<div class="q-item-meta">';
-  if (item.entity_name) html += `<span class="q-entity" onclick="viewEntity(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">${esc(item.entity_name)}</span>`;
+  // Owner/entity link — route to the 4B entity detail (openEntityDetail), the
+  // same target Priority Queue / Decision Center use. Only make it clickable
+  // when a real entity id is present; CRM-fallback items (company_name, no
+  // entity_id) render as plain text instead of a dead link.
+  if (item.entity_name) {
+    if (item.entity_id) {
+      html += `<span class="q-entity" tabindex="0" onclick="openEntityDetail(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">${esc(item.entity_name)}</span>`;
+    } else {
+      html += `<span class="q-entity-plain" style="color:var(--text2)">${esc(item.entity_name)}</span>`;
+    }
+  }
   if (item.assignee_name || item.owner_name) {
     const name = item.assignee_name || item.owner_name;
     html += `<span class="q-assignee">${esc(name)}</span>`;
