@@ -48,6 +48,7 @@ let diaOverviewStats = null;   // lazy-loaded single-row mv_dia_overview_stats (
 let _diaOverviewStatsLoading = false;
 let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties + leases
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
+let diaOnMarketIds = null; // Set of listing_id from v_dia_on_market (T9d canonical CURRENT on-market set; ~184). null = not loaded.
 let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
 let diaPatientCounts = null; // lazy-loaded from v_facility_patient_counts_latest
 // Round 76eh (2026-04-29): in-flight sentinels prevent duplicate concurrent
@@ -926,8 +927,8 @@ async function loadDiaData() {
     // two are DEFERRED to a background load (_loadDiaHeavyDetail) that re-renders
     // the current tab when it lands. Everything below is the fast set.
     var [freshness, invSummary, moversUpRaw, moversDownRaw,
-         npiSignalSummary, propQueue, leaseQueue, leaseCountRes, outcomes, recon,
-         sfActivities, patientAsOfRows
+         npiSignalSummary, propQueue, leaseQueue, leaseSummaryRows, outcomes, recon,
+         sfActivities, patientAsOfRows, outcomesCountRes
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
       diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
@@ -936,9 +937,12 @@ async function loadDiaData() {
       diaQuery('v_npi_inventory_signal_summary', '*').catch(function() { return []; }),
       diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(function() { return []; }),
       diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 1000 }).catch(function() { return []; }),
-      // Exact (un-capped) candidate count for the honest Lease Coverage sub —
-      // the 1000-row page above can't report the true backlog (Unit 3).
-      diaQuery('v_clinic_lease_backfill_candidates', 'ccn', { limit: 1, includeCount: true }).catch(function() { return { data: [], count: null }; }),
+      // Honest backlog size from the ONE canonical summary view (3 rows:
+      // high/moderate/low → clinic_count). Cap-proof — the 1000-row candidate
+      // page above can't report the true backlog (~3,039). Reads the summary,
+      // not a capped page (the count=exact probe was returning null on the live
+      // proxy → the tile fell back to 1,000).
+      diaQuery('v_clinic_lease_backfill_summary', '*').catch(function() { return []; }),
       diaQuery('research_queue_outcomes', 'outcome_id,clinic_id,queue_type,status,assigned_to,assigned_at,created_at,source_name,selected_property_id,notes', { limit: 2000 }).catch(function() { return []; }),
       diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(function() { return []; }),
       // Team touchpoints — query DIA Supabase directly so all team members are included
@@ -951,7 +955,11 @@ async function loadDiaData() {
       // (12-31 re-stamps excluded) — i.e. the honest "as of" date for the patient
       // tiles. Read it directly (the delta-filtered movers queries above return
       // nothing when there is no new period, so they can't carry the date).
-      diaQuery('v_facility_patient_counts_mom', 'snapshot_date', { limit: 1 }).catch(function() { return []; })
+      diaQuery('v_facility_patient_counts_mom', 'snapshot_date', { limit: 1 }).catch(function() { return []; }),
+      // Completed Reviews — the TRUE count of research-queue outcomes (all rows
+      // are terminal outcomes = completed reviews; ~1,166), via count=exact.
+      // The `outcomes` page above is capped at 1,000, so its .length undercounts.
+      diaQuery('research_queue_outcomes', 'outcome_id', { limit: 1, includeCount: true }).catch(function() { return { data: [], count: null }; })
     ]);
 
     // Assign core data
@@ -971,11 +979,17 @@ async function loadDiaData() {
     }
     diaData.propertyReviewQueue = propQueue || [];
     diaData.leaseBackfillRows = leaseQueue || [];
-    // Honest backlog size from the count=exact probe (null when it failed —
-    // never silently 0). Falls back to the capped page length only as a floor.
-    diaData.leaseBackfillCount = (leaseCountRes && typeof leaseCountRes.count === 'number')
-      ? leaseCountRes.count : null;
+    // Honest backlog size = SUM of clinic_count across the summary view's
+    // priority rows (high/moderate/low → ~3,039). Cap-proof. null when the
+    // summary failed to load — never silently 0.
+    diaData.leaseBackfillCount = (Array.isArray(leaseSummaryRows) && leaseSummaryRows.length)
+      ? leaseSummaryRows.reduce(function(s, r) { return s + (Number(r.clinic_count) || 0); }, 0)
+      : null;
     diaData.researchOutcomes = outcomes || [];
+    // True completed-reviews count (count=exact; the outcomes page is capped at
+    // 1,000). null when the probe failed → the tile falls back to page length.
+    diaData.researchOutcomesCount = (outcomesCountRes && typeof outcomesCountRes.count === 'number')
+      ? outcomesCountRes.count : null;
     diaData.sfActivities = sfActivities || [];
     // Honest "as of" period for the CMS patient-count tiles (the newest GENUINE
     // reporting period, not a year-end re-stamp). null when unavailable.
@@ -1614,6 +1628,15 @@ function renderDiaOverview() {
         );
         console.debug('Available listings loaded:', diaAvailListings.length, 'of', all.length, 'raw');
       } catch(e) { console.warn('Available listings load failed:', e.message); diaAvailListings = []; }
+      // Canonical CURRENT on-market membership (v_dia_on_market = T9d set, ~184).
+      // Both the Overview On-Market tile and the Listings tab filter
+      // diaAvailListings by this listing_id set, so the count reconciles with
+      // the CM available number instead of the raw v_available_listings length.
+      try {
+        const om = await diaQuery('v_dia_on_market', 'listing_id', { limit: 1000 });
+        const omRows = Array.isArray(om) ? om : (om && om.data) || [];
+        diaOnMarketIds = new Set(omRows.map(r => r.listing_id));
+      } catch (e) { console.warn('v_dia_on_market load failed:', e.message); diaOnMarketIds = null; }
       _diaAvailListingsLoading = false;
       const mktEl = document.getElementById('diaOverviewMarket');
       if (mktEl) mktEl.innerHTML = renderOnMarketInner();
@@ -1690,124 +1713,67 @@ function renderDiaOverview() {
     _diaOwnershipCoverageLoading = true;
   (async () => {
     try {
-      // QA-27 (2026-05-18): parallelize the two big full-table reads
-      // (ownership_history + true_owners). Previously awaited serially.
-      // Round 76ei (2026-04-29): the filter2 value used to be 'or=(...)' which failed
-      // the Edge function's compound parser (`startsWith("or(")` — no `=`). That made
-      // every ownership-coverage query 400-error and the dashboard show "0 of 0".
-      // Fixed by dropping the spurious `=` so it routes through the compound branch.
-      const [ownHistory, owners] = await Promise.all([
-        diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null', filter2: 'or(notes.not.like.CMS*,notes.is.null)' }),
-        diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id')
-      ]);
-      // 1. Ownership depth: properties with 3+ ownership records = deep chain (likely traced to developer)
-      //    Exclude CMS operator rows (notes LIKE 'CMS%') — tenant/operator data, not property ownership.
-      const ownRows = Array.isArray(ownHistory) ? ownHistory : (ownHistory.data || []);
-      const depthByProp = {};
-      ownRows.forEach(o => {
-        if (!o.property_id) return;
-        depthByProp[o.property_id] = (depthByProp[o.property_id] || 0) + 1;
-      });
-      const propsWithOwnership = Object.keys(depthByProp).length;
-      const deepChains = Object.values(depthByProp).filter(d => d >= 3).length;
+      // Reads the ONE canonical summary view v_ownership_coverage (a single
+      // pre-aggregated row) instead of the old sequential full-table pulls
+      // (ownership_history + true_owners + salesforce_activities) that routinely
+      // hung the three tiles on "...". The Unprospected tile keeps its
+      // v_prospect_targets read (one bounded query) for the BD-targets modal.
+      const covRes = await diaQuery('v_ownership_coverage', '*', { limit: 1 });
+      const cov = (Array.isArray(covRes) ? covRes : (covRes && covRes.data) || [])[0] || null;
 
-      // 2. Prospecting: true_owners with SF activity in last 180 days via ID join
-      //    true_owners.salesforce_id is mostly Contact IDs (003*) with some Account IDs (001*)
-      //    Join to salesforce_activities via sf_contact_id, sf_company_id, OR true_owner_id
-      const ownerRows = Array.isArray(owners) ? owners : (owners.data || []);
-      const ownersWithSF = ownerRows.filter(o => o.salesforce_id);
-      const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
-      const cutoffStr = cutoff180.toISOString().substring(0, 10);
-      let recentActivityOwners = 0;
-      if (ownersWithSF.length > 0) {
-        // Pull recent activities with all linkable ID fields
-        const recentActs = await diaQueryAll('salesforce_activities', 'sf_contact_id,sf_company_id,true_owner_id,activity_date', { filter: 'activity_date=gte.' + cutoffStr });
-        const actRows = Array.isArray(recentActs) ? recentActs : (recentActs.data || []);
-        // Build sets of active IDs from all three link columns
-        const activeSfIds = new Set();
-        const activeTrueOwnerIds = new Set();
-        actRows.forEach(a => {
-          if (a.sf_contact_id) activeSfIds.add(a.sf_contact_id);
-          if (a.sf_company_id) activeSfIds.add(a.sf_company_id);
-          if (a.true_owner_id) activeTrueOwnerIds.add(a.true_owner_id);
-        });
-        recentActivityOwners = ownersWithSF.filter(o =>
-          activeSfIds.has(o.salesforce_id) || activeTrueOwnerIds.has(o.true_owner_id)
-        ).length;
-      }
-
-      // 3. Unprospected Owners (QA-25 2026-05-18): only count owners that
-      //    actually own >= 1 property. Previously this widget counted ALL
-      //    true_owners — including 2,190 zero-prop stubs — which inflated
-      //    "Missing SF Link" to a misleading 79%. Filtering to real owners
-      //    drops the denominator from 3,422 to ~842 and gives an honest
-      //    "owners we haven't entered into SF yet" number. Powered by
-      //    v_prospect_targets view (excludes is_operator_not_owner rows).
-      let totalOwnersWithProps = 0;
-      let unprospectedOwners = 0;
+      // Unprospected Owners — owners with >=1 property but no SF link (the
+      // actionable BD-target count + the modal list). One bounded query.
+      let unprospectedOwners = null;
       let topUnprospected = [];
       try {
-        // QA-27 (2026-05-18): use includeCount so unprospectedOwners reflects
-        // the TRUE total (not capped at the query limit). On dia
-        // v_prospect_targets returns ~532 rows; before QA-27 the count fell
-        // back to ptRows.length which was 250 even when the real count was
-        // higher.
-        // QA-29 (2026-05-18): bumped the row limit from 250 -> 1000 so the
-        // modal table contains the full set instead of just the top 250.
-        // The modal's "Showing top 100 of N" footer was misleading
-        // ("100 of 250" while the headline showed 532). With limit=1000
-        // the rows array IS the full set, so the footer is accurate.
         const ptRes = await diaQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,last_contact_date,prospecting_status', { order: 'prop_count.desc.nullslast', limit: 1000, includeCount: true });
         const ptRows = ptRes.data || [];
         unprospectedOwners = (typeof ptRes.count === 'number' && ptRes.count > 0) ? ptRes.count : ptRows.length;
         topUnprospected = ptRows;
-        // Owners with props = unprospected + SF-linked-with-props. Use SF-linked
-        // owner count derived from ownerRows (already filters salesforce_id).
-        // Approx denominator: ownersWithSF + unprospected. Stub owners (no props)
-        // are correctly excluded from BOTH numerator and denominator.
-        totalOwnersWithProps = unprospectedOwners + ownersWithSF.length;
       } catch (err) {
-        console.warn('Prospect targets load failed, falling back to legacy metric:', err.message);
-        unprospectedOwners = ownerRows.filter(o => !o.salesforce_id).length;
-        totalOwnersWithProps = ownerRows.length;
+        console.warn('Prospect targets load failed:', err.message);
       }
-      // Stash for the modal (opened on card click)
-      // QA-29 (2026-05-18): stash the TRUE count alongside the row array so
-      // the modal footer can read it (was showing "top 100 of 250" instead
-      // of "top 100 of 532"). The modal's _diaShowProspectTargets reads
-      // window._diaTopUnprospected - keeping it array-shaped for backward
-      // compatibility but stashing the count on a sibling global.
       window._diaTopUnprospected = topUnprospected;
       window._diaUnprospectedTotal = unprospectedOwners;
 
+      if (!cov) {
+        const wrap = document.getElementById('diaOwnershipCoverage');
+        if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Ownership coverage unavailable</div>';
+        _diaOwnershipCoverageLoading = false;
+        window._diaOwnershipCoverageRendered = true;
+        return;
+      }
+      const pct = (v) => (v == null ? '—' : Math.round(Number(v)) + '%');
+
       // ── Update DOM ──
-      const _fmtPct = (n, d) => d > 0 ? Math.round(n / d * 100) + '%' : '—';
+      // Ownership Depth = % of properties resolved to a true owner (canonical).
       const devEl = document.getElementById('diaOwnDevVal');
       const devSub = document.getElementById('diaOwnDevSub');
-      if (devEl) devEl.textContent = _fmtPct(deepChains, propsWithOwnership);
-      if (devSub) devSub.textContent = deepChains + ' of ' + propsWithOwnership + ' properties with 3+ ownership records';
+      if (devEl) devEl.textContent = pct(cov.pct_property_has_true_owner);
+      if (devSub) devSub.textContent = 'of ' + fmtN(cov.properties) + ' properties resolved to a true owner · ' + pct(cov.pct_property_has_recorded_owner) + ' recorded · ' + pct(cov.pct_property_has_county_deed) + ' county deed';
 
+      // SF Prospecting = % of true owners linked to Salesforce.
       const prospEl = document.getElementById('diaOwnProspVal');
       const prospSub = document.getElementById('diaOwnProspSub');
-      if (prospEl) prospEl.textContent = _fmtPct(recentActivityOwners, ownersWithSF.length);
-      if (prospSub) prospSub.textContent = recentActivityOwners + ' active in 180d of ' + ownersWithSF.length + ' SF-linked groups';
+      if (prospEl) prospEl.textContent = pct(cov.pct_true_owner_has_salesforce);
+      if (prospSub) prospSub.textContent = 'of owners linked to Salesforce';
 
       const missEl = document.getElementById('diaOwnMissVal');
       const missSub = document.getElementById('diaOwnMissSub');
-      // QA-25: relabel "Missing SF Link" → "Unprospected Owners" + make clickable
+      // Relabel "Missing SF Link" → "Unprospected Owners" + make clickable.
       const missTitleEl = missEl ? missEl.closest('.dia-info-card')?.querySelector('div:first-child') : null;
       if (missTitleEl) missTitleEl.textContent = 'Unprospected Owners';
       const missCard = missEl ? missEl.closest('.dia-info-card') : null;
-      if (missCard) {
+      if (missCard && unprospectedOwners != null) {
         missCard.style.cursor = 'pointer';
         missCard.setAttribute('onclick', '_diaShowProspectTargets()');
         missCard.setAttribute('title', 'Click to see top unprospected owners by property count');
       }
       if (missEl) {
-        missEl.textContent = _fmtPct(unprospectedOwners, totalOwnersWithProps);
-        missEl.style.color = unprospectedOwners > totalOwnersWithProps * 0.5 ? '#f87171' : unprospectedOwners > totalOwnersWithProps * 0.25 ? '#fbbf24' : '#34d399';
+        missEl.textContent = (unprospectedOwners != null) ? fmtN(unprospectedOwners) : '—';
+        missEl.style.color = '#f87171';
       }
-      if (missSub) missSub.textContent = unprospectedOwners + ' of ' + totalOwnersWithProps + ' active owners — click to view BD targets';
+      if (missSub) missSub.textContent = (unprospectedOwners != null) ? 'owners with property, no SF link — click to view BD targets' : 'unavailable';
     } catch (err) {
       console.warn('Ownership coverage load failed:', err.message);
       const wrap = document.getElementById('diaOwnershipCoverage');
@@ -1971,9 +1937,20 @@ function renderDiaOverview() {
   if (!_diaLlcQueueLoading && !window._diaLlcQueueRendered) {
     _diaLlcQueueLoading = true;
     (async () => {
+      // (1) canonical counts from the ONE summary view v_llc_research_queue_health
+      // (status → row_count). Never hangs; drives the tile numbers.
       try {
-        // R4-B: bare fetch had no timeout — a hanging endpoint spun the widget
-        // forever. Abort after 20s so it fails visibly instead.
+        const hRes = await diaQuery('v_llc_research_queue_health', '*', { limit: 50 });
+        const hRows = Array.isArray(hRes) ? hRes : (hRes && hRes.data) || [];
+        const byStatus = {}; let total = 0;
+        hRows.forEach(r => { byStatus[r.status] = Number(r.row_count) || 0; total += Number(r.row_count) || 0; });
+        window._diaLlcPending = byStatus.deferred || 0;   // awaiting research (parked)
+        window._diaLlcDone = byStatus.done || 0;
+        window._diaLlcTotalRows = total;
+        window._diaLlcHealthLoaded = true;
+      } catch (e) { console.warn('dia llc health load failed:', e.message); }
+      // (2) per-owner list — best-effort, 20s abort (never hangs the tile).
+      try {
         const _ctrl = new AbortController();
         const _to = setTimeout(() => _ctrl.abort(), 20000);
         let resp;
@@ -1983,14 +1960,12 @@ function renderDiaOverview() {
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const j = await resp.json();
         window._llcQueueItems = (j && j.items) || [];
-        window._llcQueueTotal = (j && (j.total != null ? j.total : (j.items ? j.items.length : 0))) || 0;
-        renderDiaLlcQueue();
       } catch (err) {
         const msg = err.name === 'AbortError' ? 'request timed out' : (err.message || 'load failed');
-        console.warn('llc queue load failed:', msg);
-        const wrap = document.getElementById('diaLlcQueue');
-        if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">LLC research queue unavailable — ' + esc(msg) + '</div>';
+        console.warn('llc queue list load failed:', msg);
+        window._llcQueueItems = window._llcQueueItems || [];
       }
+      renderDiaLlcQueue();
       _diaLlcQueueLoading = false;
       window._diaLlcQueueRendered = true;
     })();
@@ -2034,7 +2009,11 @@ function renderDiaOverview() {
   // page. Falls back to the capped length only when the probe didn't load.
   const leaseBackfillExact = (diaData.leaseBackfillCount != null && diaData.leaseBackfillCount > 0)
     ? diaData.leaseBackfillCount : leaseBackfillLen;
-  const researchDone = diaData.researchOutcomes?.length || 0;
+  // True count from count=exact (research_queue_outcomes ~1,166); falls back to
+  // the capped page length only if the probe failed. Never the 1,000 cap.
+  const researchDone = (diaData.researchOutcomesCount != null && diaData.researchOutcomesCount > 0)
+    ? diaData.researchOutcomesCount
+    : (diaData.researchOutcomes?.length || 0);
 
   // Compute patient stats from v_facility_patient_counts_latest (loaded async) or inventory diff as fallback
   const ptSrc = diaPatientCounts && diaPatientCounts.length > 0 ? diaPatientCounts : diaData.inventoryChanges.filter(c => c.latest_total_patients > 0);
@@ -2255,8 +2234,8 @@ function renderDiaOverview() {
   // ═══════════════════════════════════════════════
   html += sectionHeader('LLC Research Queue', '🏛️', 'research');
   html += '<div id="diaLlcQueue"><div class="dia-grid dia-grid-3">';
-  html += infoCard({ title: 'Queued Owners', value: '...', sub: 'pending enrichment', color: 'purple', id: 'llcTotalVal', subId: 'llcTotalSub' });
-  html += infoCard({ title: 'Shown', value: '...', sub: 'top by value', color: 'blue', id: 'llcShownVal', subId: 'llcShownSub' });
+  html += infoCard({ title: 'Queued Owners', value: '—', sub: 'awaiting research', color: 'purple', id: 'llcTotalVal', subId: 'llcTotalSub' });
+  html += infoCard({ title: 'Resolved', value: '—', sub: 'to date', color: 'blue', id: 'llcShownVal', subId: 'llcShownSub' });
   html += infoCard({ title: 'Resolve', value: 'manual', sub: 'SOS lookup + mark done', color: 'cyan', tab: 'research' });
   html += '</div><div id="llcQueueList" style="margin-top:10px"></div></div>';
 
@@ -2460,11 +2439,14 @@ async function diaResolveListing(listingId, action, saleId, saleDate) {
 function renderDiaLlcQueue() {
   const items = window._llcQueueItems || [];
   const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  setTxt('llcTotalVal', fmtN(window._llcQueueTotal || items.length)); setTxt('llcTotalSub', 'status=queued');
-  setTxt('llcShownVal', fmtN(items.length)); setTxt('llcShownSub', 'highest value first');
+  // Canonical counts from v_llc_research_queue_health; '—' until it loads.
+  const pending = window._diaLlcHealthLoaded ? window._diaLlcPending : null;
+  const done = window._diaLlcHealthLoaded ? window._diaLlcDone : null;
+  setTxt('llcTotalVal', pending == null ? '—' : fmtN(pending)); setTxt('llcTotalSub', 'awaiting research');
+  setTxt('llcShownVal', done == null ? '—' : fmtN(done)); setTxt('llcShownSub', 'resolved to date');
   const wrap = document.getElementById('llcQueueList');
   if (!wrap) return;
-  if (!items.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px">No owners queued for research 🎉</div>'; return; }
+  if (!items.length) { wrap.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px">' + (window._diaLlcHealthLoaded && !pending ? 'No owners awaiting research 🎉' : 'No owner list to show') + '</div>'; return; }
   let t = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:var(--text3)">'
     + '<th style="padding:4px 8px">Owner</th><th style="padding:4px 8px">Property</th>'
     + '<th style="padding:4px 8px">State</th><th style="padding:4px 8px">Actions</th></tr></thead><tbody>';
@@ -2533,13 +2515,22 @@ function renderOnMarketInner() {
   }
   const listings = diaAvailListings;
 
-  // Filter stale listings — anything listed before 2023 is almost certainly no longer on market
-  const cutoff = new Date('2023-01-01');
-  const recentListings = listings.filter(r => {
-    if (!r.listing_date) return true; // keep listings without a date (benefit of the doubt)
-    return new Date(r.listing_date) >= cutoff;
-  });
-  const staleCount = listings.length - recentListings.length;
+  // Canonical CURRENT on-market set — v_dia_on_market membership (the T9d
+  // entry/exit/cap model; reconciles with the CM available count ~184). This is
+  // the ONE definition; the Listings tab reads the same set. Falls back to the
+  // legacy "listed since 2023" heuristic only if the view load failed.
+  let recentListings, staleCount;
+  if (diaOnMarketIds) {
+    recentListings = listings.filter(r => diaOnMarketIds.has(r.listing_id));
+    staleCount = listings.length - recentListings.length;
+  } else {
+    const cutoff = new Date('2023-01-01');
+    recentListings = listings.filter(r => {
+      if (!r.listing_date) return true; // keep listings without a date (benefit of the doubt)
+      return new Date(r.listing_date) >= cutoff;
+    });
+    staleCount = listings.length - recentListings.length;
+  }
 
   // Check multiple possible field names for price, cap rate, and days on market
   const getPrice = r => parseFloat(r.ask_price || r.asking_price || r.listing_price || r.price || 0);
@@ -2569,7 +2560,9 @@ function renderOnMarketInner() {
   const nmListings = recentListings.filter(isNMListing);
 
   let h = '<div class="dia-grid dia-grid-5">';
-  const staleSub = staleCount > 0 ? recentListings.length + ' recent · ' + staleCount + ' stale excluded' : 'clinics on market';
+  const staleSub = diaOnMarketIds
+    ? 'currently on market'
+    : (staleCount > 0 ? recentListings.length + ' recent · ' + staleCount + ' stale excluded' : 'clinics on market');
   h += infoCard({ title: 'Active Listings', value: fmtN(recentListings.length), sub: staleSub, color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'Avg Ask Cap', value: avgAskCap, sub: fmtN(validCaps.length) + ' with cap data', color: 'cyan', tab: 'sales' });
   h += infoCard({ title: 'Lower Quartile', value: lowerQ, sub: '25th pctl ask cap', color: 'purple', tab: 'sales' });
@@ -9817,6 +9810,14 @@ async function renderDiaSales() {
   const isComps = diaSalesView === 'comps';
   let data = isComps ? (diaSalesComps || []) : (diaAvailListings || []);
 
+  // Available view: restrict to the canonical CURRENT on-market set
+  // (v_dia_on_market membership ~184) so the tab count matches the Overview
+  // tile + the CM available number. Falls back to the full loaded set only if
+  // the membership view hasn't loaded.
+  if (!isComps && diaOnMarketIds) {
+    data = data.filter(r => diaOnMarketIds.has(r.listing_id));
+  }
+
   // Filter out blank/empty records — require at least an address or operator name
   data = data.filter(r => (r.address && r.address.trim()) || (r.tenant_operator && r.tenant_operator.trim()) || (r.facility_name && r.facility_name.trim()));
 
@@ -9899,7 +9900,8 @@ async function renderDiaSales() {
   // Sub-tab toggle: Sales Comps | Available
   html += '<div class="pills" style="margin-bottom: 16px;">';
   html += '<button class="pill' + (isComps ? ' active' : '') + '" data-sales-view="comps">Sales Comps (' + (diaSalesComps ? fmtN(diaSalesComps.length) : '…') + ')</button>';
-  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-sales-view="available">Available (' + (diaAvailListings ? fmtN(diaAvailListings.length) : '…') + ')</button>';
+  const _availPillCount = diaAvailListings ? (diaOnMarketIds ? diaAvailListings.filter(r => diaOnMarketIds.has(r.listing_id)).length : diaAvailListings.length) : null;
+  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-sales-view="available">Available (' + (_availPillCount == null ? '…' : fmtN(_availPillCount)) + ')</button>';
   html += '</div>';
 
   // Metrics
