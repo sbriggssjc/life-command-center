@@ -4784,10 +4784,25 @@ function renderGovOverview() {
     });
   }
 
+  // ── Data-quality (shared taxonomy: BD signals above, DQ here — mirrors dia) ──
+  // Owner-research backlog: ownership changes still pending investigation.
+  // Surfaces once govData.ownership has loaded (same async posture as dia's BD
+  // signals); shows only when there's a count.
+  const govNeedsResearch = (govData && Array.isArray(govData.ownership))
+    ? govData.ownership.filter(o => !o.research_status || o.research_status === 'pending').length : 0;
+  if (govNeedsResearch > 10) {
+    highlights.push({
+      icon: '🔎', color: '#a78bfa', urgency: 'info',
+      title: fmtN(govNeedsResearch) + ' ownership change' + (govNeedsResearch > 1 ? 's' : '') + ' need research',
+      detail: 'Pending owner investigation — resolve to connect the ownership + BD data',
+      action: 'Research owners', tab: 'research'
+    });
+  }
+
   if (highlights.length > 0) {
     html += '<div style="margin-bottom:20px">';
     html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px;padding-left:2px">Action Items</div>';
-    for (const h of highlights.slice(0, 5)) {
+    for (const h of highlights.slice(0, 6)) {
       const borderColor = h.urgency === 'urgent' ? h.color : h.urgency === 'warning' ? h.color : 'var(--border)';
       html += `<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;background:var(--s2);border-radius:10px;border-left:3px solid ${borderColor};cursor:pointer" onclick="goToGovTab('${h.tab}')">`;
       html += `<span style="font-size:20px;flex-shrink:0">${h.icon}</span>`;

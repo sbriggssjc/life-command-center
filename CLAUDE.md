@@ -6549,3 +6549,76 @@ full suite **1676 pass / 0 fail / 6 skipped** (client-only change — no test re
 Live verification (the sub-view toggle, cross-domain Prospects/Deals lists, the Today
 My Work → Pipeline landing, the fixed owner link, hero-only-on-Priority) is on the
 deployed app after the Railway redeploy.
+
+## Pipeline-home follow-ups — Prospects engagement-gate + dia Overview parity/perf (2026-07-13)
+
+Three client-only follow-ups to the Pipeline-home consolidation (PR #1380).
+No api/*.js (≤12); no migration; no dia/gov writes.
+
+### Unit 1 — Pipeline › Prospects gated to the ACTIVELY-PURSUED subset
+`app.js renderPipelineProspects` no longer lists the whole `_mktProspectContacts`
+contact table. Two gates, in order:
+- **Structural (mutually exclusive with Deals):** `_pipelineOppContactIds()`
+  builds the Set of `sf_contact_id`s that carry an OPEN opportunity (from
+  `_mktOpportunities`); those contacts are a **Deal**, not a Prospect, and are
+  excluded (opening an opp moves a row Prospects→Deals). Mirrors
+  `renderDomainProspects`'s own opp/contact dedup.
+- **Engagement (default):** `_prospectRecentlyActive(item, 90)` keeps only rows
+  active in the last `PROSPECT_ENGAGEMENT_DAYS` (90) by `due_date` ‖
+  `last_activity_date`. **Grounding note:** the LCC cadence table is NOT part of
+  this SF-sourced client dataset, so recent SF outreach is the available "actively
+  pursued" proxy (documented honestly, not a fabricated cadence read). A
+  **"Show all"** pill (`pipelineProspectsEngaged=false`) reveals the full pursued
+  set (no-open-opp) — Consumption-Layer: default workable, escape hatch preserved.
+  The subtitle reports both counts ("N actively pursued (active in last 90d) · M
+  pursued total"). Filter pills + pagination unchanged; reuses
+  `renderProspectCardsHTML`. `_pipelineSubviewHTML` gained an `opts.extraControls`
+  slot for the toggle. Deals is unchanged (opportunities are pursued by definition).
+
+### Unit 2 — dia Overview content parity with gov
+- **2.1 Portfolio tile (`renderDiaPortfolioGlanceInner`):** the second tile row is
+  now `dia-grid-4` and adds **"Avg Net Rent / Property"** (= `total_noi /
+  total_properties` from `mv_dia_overview_stats`, dia NNN so ≈ NOI/property),
+  mirroring gov's NOI row. Grounding refuted the audit premise that dia lacked
+  NOI/Contacts — it already had "Net Rent ≈ NOI" + "Contacts"; only the Avg tile
+  was genuinely missing, so ONLY it was added.
+- **2.2 ONE shared Action-Items taxonomy (dia + gov):** BD signals FIRST
+  (leases expiring <6mo from the MV `exp_lease_lt_6mo`; active on-market listings),
+  THEN data-quality (CMS removals, NPI actionable, property-review queue, lease
+  backfill, CMS additions). dia's old inline `diaHighlights` block was extracted
+  into `renderDiaActionItemsInner()` (BD-then-DQ, only categories with counts
+  render, capped at 6) rendered into a `#diaActionItems` placeholder refreshed by
+  the MV callback (the BD leases-<6mo count keys on the async MV). gov's
+  `renderGovOverview` gained the matching DQ item **"N ownership changes need
+  research"** (using the SAME `govData.ownership` pending-research computation the
+  Ownership Research panel already uses at gov.js:4962/5253 — honest, not a
+  count-everything false positive); its Action-Items slice bumped 5→6. Both pages
+  now read BD-first-then-DQ against one taxonomy.
+
+### Unit 3 — dia Overview loads fast (the ~9.7s block removed)
+Root cause: `loadDiaData`'s blocking `Promise.all` included the two heavy DETAIL
+arrays — `diaQueryAll('v_clinic_inventory_latest_diff', '*')` (full ~7.5k-row
+multi-page pull) + `diaQuery('v_npi_inventory_signals', {limit:5000})` — that the
+Overview does NOT read (it uses `mv_dia_overview_stats` + the SUMMARY views
+`v_clinic_inventory_diff_summary` / `v_npi_inventory_signal_summary`). Both moved
+OUT of the blocking set into **`_loadDiaHeavyDetail()`**, a background load fired
+AFTER the fast paint that assigns `diaData.inventoryChanges` / `.npiSignals`, then
+re-runs the freshness fallback + a movers name-backfill and re-renders the current
+dia tab so the Inventory Changes / NPI Intel tabs fill in without a spinner.
+- **`_diaApplyFreshnessFallback()`** — the `v_counts_freshness`-empty estimate now
+  gates on `inventoryChanges` being loaded (no-op during the fast paint, re-runs
+  in the background) and never clobbers a real freshness row. In the common case
+  `v_counts_freshness` returns data, so the fallback is an untaken edge path.
+- The movers fast-path enrichment already works with an empty `inventoryChanges`
+  (row `facility_name` from the mom-view INNER JOIN + the medicare_clinics
+  fallback lookup); the background load only patches any residual "Clinic <id>"
+  labels from the now-loaded array. Honest toast ("N clinics (Xs) · detail
+  loading…"); the Overview paints off the MV/summary set immediately.
+
+### Verified (headless 2026-07-13)
+`node --check` clean (app.js, dialysis.js, gov.js); `ls api/*.js | wc -l`=12; full
+suite **1676 pass / 0 fail / 6 skipped**. `dia-grid-4` CSS class exists
+(styles.css:765). Client-only; reversible; JS ships on the Railway redeploy. Live
+verification (Prospects engaged-vs-all, the Avg NOI tile, the shared Action-Items
+order on both domains, and the dia Overview fast paint with detail filling in) is
+on the deployed app after redeploy.
