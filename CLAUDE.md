@@ -6674,3 +6674,94 @@ mutual-exclusion is enforced on the cadence side by dropping deal-phase cadences
 Live verification (Prospects shows the real engaged set, an open-opp entity is not
 in Prospects, Deals defaults to the active subset with Show-all) is on the deployed
 app after redeploy.
+
+## dia/gov Overview — every snapshot tile reads ONE canonical source (2026-07-13)
+
+Scott's goal: one correct number per metric, everywhere. The dia + gov Overview
+snapshot/data-health tiles violated it — they re-derived from raw or capped detail
+queries, or fired heavy async loads that never resolved ("loading…" forever).
+Fixed so each tile reads the SINGLE canonical summary/CM source. Client-only
+(`dialysis.js`, `gov.js`) + two additive on-market views; **no new api/*.js
+(≤12)**; reversible.
+
+### The doctrine (apply to any new Overview tile)
+- **A snapshot COUNT never equals a query's LIMIT.** If a tile can show a round
+  ceiling (1,000 / 500), it is reading a paged detail query, not a count — read
+  the `_summary`/count view or `includeCount` (count=exact) instead.
+- **Stuck-loading tiles are a CONNECTION bug, not missing data** — read the
+  pre-aggregated summary view (one row), never sequential full-table pulls; every
+  async tile has a real empty/error state ("unavailable" / "—"), never a
+  perpetual spinner. Guard the filler so it fires once (the gov ownership-coverage
+  IIFE was UNGUARDED — re-ran every render).
+- **ONE canonical "On Market" definition per domain**, read by every surface
+  (Overview tile + Listings tab + CM). No surface computes its own on-market
+  filter.
+
+### On Market — one view per domain (Unit 3)
+- **gov `v_gov_on_market`** (migration `government-lease/sql/20260713_gov_v_on_market.sql`,
+  applied live) — the DECIDED rule (Scott 2026-07-13): **active + no exit
+  (`off_market_date`/`sale_transaction_id` NULL) + not excluded + recent
+  (`COALESCE(on_market_date,listing_date)` within **24 months** — the ONE tunable
+  knob)**. Live **278** (was 519 = `lccIsListingActive` with no recency gate; the
+  CM cap-dot 44 is a NARROWER metric — see below). Retired the status-string
+  filter.
+- **dia `v_dia_on_market`** (migration `Dialysis/supabase/migrations/20260713_dia_v_on_market.sql`,
+  applied live) — the **T9d entry/exit/cap model at its latest period** (=
+  `cm_dialysis_active_listings_q` latest `period_end`), reconciling with
+  `cm_dialysis_available_market_size_q.count_total` = **184** (the CM number). dia
+  deliberately keeps T9d (its published currency model) rather than the gov
+  active+recent rule — so dia Overview == dia CM. **The two domains are NOT
+  defined identically, by design** (documented in the view COMMENTs).
+- **Both surfaces read the view's `listing_id` MEMBERSHIP** (one Set), then filter
+  their already-loaded rows by it — so the table's property-embed is untouched and
+  neither surface re-implements the filter. gov loads `govData.onMarketIds`
+  (Phase-1); dia loads `diaOnMarketIds` (avail-listings filler). The Overview
+  On-Market tile AND the Listings tab (`renderGovListings` / `renderDiaSales`
+  "Available") filter by membership → both = 278 / 184. Fallback to the legacy
+  predicate only if the view load fails (never blanks).
+- **⚠️ 44 (gov CM cap-dot / by-term) is NOT the on-market count** — those CM views
+  add `cap_rate 0.04–0.12 AND firm_term present` on top of `off_market_date NULL`,
+  so 44 = the cap-rate-PLOTTABLE subset (a listing with no cap rate can't be a
+  cap-rate dot). It is a legitimately different, narrower metric. **Do NOT rebase
+  the CM cap-rate/by-term charts onto 278** — that would plot 234 caps-less
+  listings and corrupt the charts. The on-market COUNT (278) is the Overview +
+  Listings-tab number; the cap-distribution charts stay the plottable subset.
+  (Follow-up if wanted: align the cap-chart BASE membership to `v_gov_on_market`
+  so the plottable set is a strict subset of the canonical on-market universe.)
+
+### Count tiles → canonical summary (Unit 1, dia)
+- **Lease Backfill** → `v_clinic_lease_backfill_summary` (3 rows → SUM
+  `clinic_count` = **3,039**), not the count=exact probe (which returned null on
+  the live proxy → the tile fell back to the 1,000-row page). Cap-proof.
+- **Completed Reviews** → `research_queue_outcomes` count=exact (**~1,166** — all
+  rows are terminal review outcomes: approved_link 1,134 + verified_lease 26 +
+  completed 6), not the 1,000-capped page `.length`. (The audit's "research_tasks
+  = 10" premise was a misdiagnosis — `research_tasks` is a different 10-row table;
+  the outcomes log IS the completed-reviews count.)
+- **Property Queue** (89, `v_clinic_property_link_review_queue`) was already
+  correct — the reference pattern.
+
+### Stuck-loading tiles → summary views (Unit 2, both domains)
+- **Ownership Coverage** (3 sub-tiles) → the single-row **`v_ownership_coverage`**
+  (Ownership Depth = `pct_property_has_true_owner`; SF Prospecting = dia
+  `pct_true_owner_has_salesforce` / gov `pct_unified_owner_has_salesforce`;
+  Unprospected Owners = the `v_prospect_targets` count + the existing BD-targets
+  modal). Replaced the old sequential `diaQueryAll`/`govQueryAll` full-table pulls
+  (ownership_history + true_owners + sf_activities) that hung the tiles. gov filler
+  now guarded (was unguarded).
+- **LLC Research Queue** → **`v_llc_research_queue_health`** (status → row_count):
+  "Queued Owners" = `deferred` (awaiting research), "Resolved" = `done`. The
+  per-owner list still comes from `/api/llc-research-queue` but with a hard
+  AbortController timeout so it can never hang the tile.
+- **Listings Needing Confirmation** — `v_listings_needing_manual_confirmation`
+  (dia genuinely 500, gov 67 — real counts, not caps); loads fast, empty state
+  intact.
+
+### Verified live (read-only) 2026-07-13
+Each tile == its canonical SQL: gov On Market **278** (`v_gov_on_market`), dia On
+Market **184** (`v_dia_on_market` / cm), dia Lease Backfill **3,039**, dia
+Completed Reviews **1,166**, `v_ownership_coverage` renders real % (dia 83.8%
+depth / 11.1% SF; gov 48.3% / 6.7%), gov LLC deferred **887**, listings-confirm
+dia 500 / gov 67. `node --check` clean (dialysis.js, gov.js); the two views are
+additive + reversible (DROP VIEW → zero trace). JS ships on the Railway redeploy;
+the views are live.
