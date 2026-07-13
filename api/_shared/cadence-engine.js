@@ -15,6 +15,7 @@
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { recordTemplateSend } from './templates.js';
+import { isJunkEntityName, isImplausiblePersonName } from './entity-link.js';
 
 // ============================================================================
 // OPEN-TRACKING FLAG (R24 Unit 3)
@@ -109,6 +110,187 @@ export async function entityHasBdSignal(entityId, opts = {}) {
     return false; // fail closed — do not seed on a signal-check error
   }
   return bdSignalFromFacts(facts);
+}
+
+// ============================================================================
+// GROW GATE — capture Scott's REAL pipeline (2026-07-13)
+// ============================================================================
+//
+// R63 gated the PRODUCER (no auto-seed on a bare CoStar capture) and grew a
+// cadence from real SF outreach behind `entityHasBdSignal` (the value floor).
+// But Scott's real pipeline is mostly Outlook + property-page (email_intake)
+// outreach, and a person he emails/calls REPEATEDLY is a real relationship
+// regardless of portfolio value. Doctrine: repeated human outreach IS the BD
+// signal — the app should track it (reminder / next-touch / measurement), not
+// ignore it for failing a portfolio-value gate.
+//
+// So the GROW gate is deliberately LOOSER than the R63 producer gate. It
+// qualifies to grow a cadence when ANY of:
+//   - a full R63 BD signal (SF identity / open opp / SF activity / value ≥ floor)
+//   - a Salesforce CRM identity (a real, CRM-tracked contact)
+//   - >= 2 real outreach events (a genuinely-worked relationship)
+// It NEVER grows on a junk / implausible-name entity (garbage is not a
+// relationship). The pure classifier is shared with the async gatherer so the
+// decision is unit-testable without the DB.
+
+export const CADENCE_GROW_MIN_OUTREACH_EVENTS = 2;
+
+/**
+ * Pure grow-gate classifier. `facts` mirrors bdSignalFromFacts plus
+ * `outreachEventCount` (real email/call/meeting events on the worked entity)
+ * and `nameIsJunk` (structural garbage / implausible person name).
+ * @returns {boolean}
+ */
+export function growGateFromFacts(facts = {}) {
+  if (facts.nameIsJunk) return false;                     // never grow on garbage
+  if (bdSignalFromFacts(facts)) return true;              // SF id / opp / activity / value
+  const min = Number.isFinite(facts.growMinEvents) ? facts.growMinEvents : CADENCE_GROW_MIN_OUTREACH_EVENTS;
+  if (Number(facts.outreachEventCount) >= min) return true; // a genuinely-worked relationship
+  return false;
+}
+
+/**
+ * Gather the grow-gate facts for a target entity and classify. The value /
+ * identity / opp signals are read on `entityId` (the grow target — the owner
+ * for an asset), while the outreach-event count is read on
+ * `opts.outreachEntityId` (the entity Scott actually worked — the asset for a
+ * property-page touch) so repeated work on a property counts toward growing its
+ * OWNER's cadence. deps.query injectable for tests. Fails CLOSED on a gather
+ * error (never grow on a hiccup).
+ *
+ * @param {string} entityId  — the grow TARGET
+ * @param {object} [opts] - { query, floor, outreachEntityId }
+ * @returns {Promise<boolean>}
+ */
+export async function entityQualifiesForCadenceGrowth(entityId, opts = {}) {
+  if (!entityId) return false;
+  const query = opts.query || opsQuery;
+  const floor = Number.isFinite(opts.floor) ? opts.floor : cadenceSignalFloor();
+  const v = pgFilterVal(entityId);
+  const workedV = pgFilterVal(opts.outreachEntityId || entityId);
+  const facts = { floor };
+  try {
+    const [sf, opp, act, cv, pf, evc, ent] = await Promise.all([
+      query('GET', `external_identities?entity_id=eq.${v}&source_system=eq.salesforce&select=entity_id&limit=1`),
+      query('GET', `bd_opportunities?entity_id=eq.${v}&is_open=is.true&select=id&limit=1`),
+      query('GET', `activity_events?entity_id=eq.${v}&source_type=eq.salesforce&select=id&limit=1`),
+      query('GET', `lcc_entity_connected_value?entity_id=eq.${v}&select=connected_property_value&limit=1`),
+      query('GET', `v_entity_portfolio_all?entity_id=eq.${v}&select=current_annual_rent_total&limit=1`),
+      // Real outreach events on the WORKED entity — repeated human outreach.
+      // limit=CADENCE_GROW_MIN_OUTREACH_EVENTS: we only need to know if >= min.
+      query('GET', `activity_events?entity_id=eq.${workedV}&category=in.(email,call,meeting)&select=id&limit=${CADENCE_GROW_MIN_OUTREACH_EVENTS}`),
+      query('GET', `entities?id=eq.${v}&select=name,entity_type&limit=1`),
+    ]);
+    facts.hasSalesforceIdentity = !!(sf.ok && Array.isArray(sf.data) && sf.data.length);
+    facts.hasOpenOpportunity    = !!(opp.ok && Array.isArray(opp.data) && opp.data.length);
+    facts.hasSalesforceActivity = !!(act.ok && Array.isArray(act.data) && act.data.length);
+    facts.connectedValue = (cv.ok && cv.data?.[0]) ? (Number(cv.data[0].connected_property_value) || 0) : 0;
+    facts.portfolioValue = (pf.ok && pf.data?.[0]) ? (Number(pf.data[0].current_annual_rent_total) || 0) : 0;
+    facts.outreachEventCount = (evc.ok && Array.isArray(evc.data)) ? evc.data.length : 0;
+    const e = (ent.ok && ent.data?.[0]) || null;
+    const nm = e?.name || '';
+    facts.nameIsJunk = isJunkEntityName(nm) || (e?.entity_type === 'person' && isImplausiblePersonName(nm));
+  } catch (_e) {
+    return false; // fail closed — do not grow on a gather error
+  }
+  return growGateFromFacts(facts);
+}
+
+/**
+ * Resolve the entity a cadence should be GROWN on, from the entity Scott
+ * actually worked. A PROPERTY-page (asset) touch grows the OWNER's cadence (the
+ * R10 owns-hop) — property activity becomes owner cadence tracking. A PERSON
+ * Scott emailed IS the contact — grow on them and stamp themselves as the
+ * contact so the cadence is immediately outreach-ready (no re-acquisition). An
+ * organization owner grows on itself (a contact is acquired later).
+ *
+ * @returns {Promise<{growEntityId:string, contactEntityId:string|null, kind:string}|null>}
+ */
+export async function resolveCadenceGrowTarget(entityId, opts = {}) {
+  if (!entityId) return null;
+  const query = opts.query || opsQuery;
+  const v = pgFilterVal(entityId);
+  const ent = await query('GET', `entities?id=eq.${v}&select=id,entity_type&limit=1`);
+  const type = (ent.ok && ent.data?.[0]?.entity_type) || null;
+  if (type === 'asset') {
+    const owner = await query('GET',
+      `entity_relationships?to_entity_id=eq.${v}&relationship_type=eq.owns&select=from_entity_id&limit=1`);
+    const ownerId = owner.ok && owner.data?.[0]?.from_entity_id;
+    if (ownerId) return { growEntityId: ownerId, contactEntityId: null, kind: 'asset_owner' };
+    return null; // asset with no owner — nothing meaningful to grow
+  }
+  if (type === 'person') {
+    // The person IS the contact — self-stamp so the grown cadence is reachable.
+    return { growEntityId: entityId, contactEntityId: entityId, kind: 'person_self' };
+  }
+  return { growEntityId: entityId, contactEntityId: null, kind: 'owner' };
+}
+
+/**
+ * GROW a cadence from a real outreach event (the Phase-1 inversion — capture
+ * Scott's real pipeline). Called best-effort by every real-outreach writer (SF
+ * ingest, Outlook message link, email_intake correspondence) after a fresh
+ * insert. Grows ONLY when NO cadence resolves anywhere in the chain — the SQL
+ * advance trigger owns the advance of an EXISTING cadence, so this never
+ * double-advances. Reuses the single advance owner (advanceCadence) + the
+ * seed helper (getCadenceState). deps injectable for tests.
+ *
+ * @param {object} args - { entityId, category, domain, floor }
+ * @returns {Promise<{grown:boolean, reason?:string, cadence_id?:string, ...}>}
+ */
+export async function growCadenceFromOutreach(args = {}, deps = {}) {
+  const { entityId, category, domain } = args;
+  if (!entityId) return { grown: false, reason: 'no_entity' };
+  if (category !== 'email' && category !== 'call' && category !== 'meeting') {
+    return { grown: false, reason: 'not_outreach' };
+  }
+  const query        = deps.query || opsQuery;
+  const resolveCad   = deps.resolveCadenceForEntity || resolveCadenceForEntity;
+  const resolveTgt   = deps.resolveCadenceGrowTarget || resolveCadenceGrowTarget;
+  const qualifies    = deps.qualifies || entityQualifiesForCadenceGrowth;
+  const seed         = deps.getCadenceState || getCadenceState;
+  const advance      = deps.advanceCadence || advanceCadence;
+
+  // The trigger already advanced any EXISTING cadence on the insert (direct /
+  // owns-hop / contact-hop). Grow only when none resolves anywhere.
+  let existing = null;
+  try { existing = await resolveCad(entityId); } catch (_e) { existing = null; }
+  if (existing && existing.id) return { grown: false, reason: 'cadence_exists', cadence_id: existing.id };
+
+  const target = await resolveTgt(entityId, { query });
+  if (!target || !target.growEntityId) return { grown: false, reason: 'no_grow_target' };
+
+  // Defense against a race / a target reached by a different edge than the
+  // original resolution: never grow a duplicate onto a target that already has
+  // one. (For a person-self target this repeats the first check cheaply.)
+  if (target.growEntityId !== entityId) {
+    let tgtExisting = null;
+    try { tgtExisting = await resolveCad(target.growEntityId); } catch (_e) { tgtExisting = null; }
+    if (tgtExisting && tgtExisting.id) return { grown: false, reason: 'cadence_exists', cadence_id: tgtExisting.id };
+  }
+
+  const ok = await qualifies(target.growEntityId, { outreachEntityId: entityId, floor: args.floor });
+  if (!ok) return { grown: false, reason: 'not_qualified', target: target.kind };
+
+  const seedRes = await seed(
+    { entity_id: target.growEntityId, contact_id: target.contactEntityId || null },
+    { domain: domain || null }
+  );
+  if (!seedRes || !seedRes.ok || !seedRes.cadence || !seedRes.cadence.id) {
+    return { grown: false, reason: 'seed_failed' };
+  }
+  // An existing (e.g. paused) cadence was FOUND, not created — leave it as-is.
+  if (!seedRes.is_new) return { grown: false, reason: 'cadence_exists', cadence_id: seedRes.cadence.id };
+
+  const advType = category === 'call' ? 'phone' : category;
+  const adv = await advance(seedRes.cadence.id, { type: advType, direction: 'outbound', outcome: 'logged_from_outreach' });
+  return {
+    grown: !!(adv && adv.ok),
+    cadence_id: seedRes.cadence.id,
+    grow_entity_id: target.growEntityId,
+    contact_entity_id: target.contactEntityId || null,
+    target: target.kind,
+  };
 }
 
 // ============================================================================

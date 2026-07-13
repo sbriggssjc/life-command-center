@@ -23,6 +23,7 @@
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { appendActivityEvent } from './activity-events.js';
+import { growCadenceFromOutreach } from './cadence-engine.js';
 
 // ---- shared helpers --------------------------------------------------------
 
@@ -153,7 +154,7 @@ export async function handleOutlookMessageExtract(job) {
   // surface a "+N other recipients" affordance.
   const primaryEntityId = primaryContact?.entity_id || null;
   if (primaryEntityId) {
-    await appendActivityEvent({
+    const appended = await appendActivityEvent({
       workspaceId,
       actorId:    sourceUserId,
       category:   'email',
@@ -175,6 +176,15 @@ export async function handleOutlookMessageExtract(job) {
         linked_entity_ids:   tracked.map(c => c.entity_id).filter(Boolean)
       }
     });
+    // Phase 1 (2026-07-13) — capture Scott's REAL pipeline: Outlook email is his
+    // dominant outreach channel, so a real email to a tracked contact with no
+    // cadence GROWS one (the person is the contact → self-stamped, immediately
+    // outreach-ready). Best-effort, fresh-insert only (never on a dedup replay);
+    // no-ops when a cadence already resolves (the trigger owns that advance).
+    if (appended?.inserted) {
+      try { await growCadenceFromOutreach({ entityId: primaryEntityId, category: 'email' }); }
+      catch (_e) { /* best-effort — the timeline row is written regardless */ }
+    }
   }
 
   return {
@@ -274,7 +284,7 @@ export async function handleCalendarEventLink(job) {
   const primaryAttendee = tracked.find(c => c.entity_id) || tracked[0];
   const primaryEntityId = primaryAttendee?.entity_id || null;
   if (primaryEntityId) {
-    await appendActivityEvent({
+    const appended = await appendActivityEvent({
       workspaceId,
       actorId:    sourceUserId,
       category:   'meeting',
@@ -296,6 +306,11 @@ export async function handleCalendarEventLink(job) {
         attendee_count:     attendees.length
       }
     });
+    // Phase 1 — a real meeting with a tracked contact grows the cadence too.
+    if (appended?.inserted) {
+      try { await growCadenceFromOutreach({ entityId: primaryEntityId, category: 'meeting' }); }
+      catch (_e) { /* best-effort */ }
+    }
   }
 
   return {
