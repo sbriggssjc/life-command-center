@@ -842,20 +842,21 @@ const FEDERATED_DECISION_TYPES = new Set([
   // relationship / pursue the cohort fan-out / flag a sale-leaseback / dismiss).
   // The verdict marks the event processed so the queue drains. Never auto-blast.
   'listing_event_action',
-  // R51: the recorded deed grantee (legal title) disagrees with recorded_owner.
-  // Lists v_owner_source_conflict (gov+dia, value-ranked by rent), classified by
-  // conflict_kind. accept_deed / broker_not_owner ride the Unit-2 propagation
-  // (deed wins through the priority gate + R47 re-resolve); keep_current confirms
-  // a legit spe_vs_parent; research spawns a task. spe_vs_parent is excluded from
-  // the lane (default keep).
-  'owner_source_conflict',
-  // R53: an ownership CHANGE (GSA lessor change with no recorded sale, or a R51
-  // deed_newer_stale conflict with no recorded sale) is a SUSPECTED unrecorded
-  // sale. Lists gov v_suspected_sale (value-ranked by rent). confirm_sale writes
-  // a real sales row via gov_confirm_suspected_sale (operator price required —
-  // never fabricated); not_a_sale records + stops asking; research queues a
-  // trace_unrecorded_sale task. A suspected sale is a LEAD, never auto-recorded.
-  'suspected_sale',
+  // Ownership-resolution consolidation (2026-06-30): ONE property-keyed lane.
+  // gov v_ownership_resolution reconciles the deed-grantee / GSA-lessor /
+  // pending-discrepancy signals into a single decidable "Resolve ownership" card
+  // (spe_vs_parent excluded, value-ranked by rent, recency-aware, ONE row per
+  // property). This RETIRES the three overlapping lanes that triple-counted
+  // ~800 properties across 2,924 rows for only ~2,015 distinct properties:
+  //   • owner_source_conflict (recorded owner vs deed grantee)
+  //   • suspected_sale (GSA/state lessor change → unrecorded sale)
+  //   • the pending_update ownership-discrepancy slice (field recorded_owner_id)
+  // Verdicts reuse the EXISTING gov write-backs (propagateDeedGranteeToOwner for
+  // a guard-passing deed grantee, gov_apply_manual_true_owner [gated] for a
+  // lessor/discrepancy proposal, gov_confirm_suspected_sale for a confirmed sale)
+  // — no new write path. subject_ref is keyed on property_id, so a property with
+  // ≥2 signals collapses to one card / one decision.
+  'resolve_ownership',
   // R54: a loan maturing within 24mo (or already matured) is the classic CRE BD
   // trigger — the owner must refinance or sell. Lists gov+dia
   // v_loan_maturity_watch (value-ranked by rent; distressed loans rank first).
@@ -885,6 +886,9 @@ function federatedSubjectRef(type, s) {
     case 'suspected_sale': return (s.domain && s.property_id != null && s.signal_source)
                                   ? 'susp:' + s.domain + ':' + s.property_id + ':' + s.signal_source : null;
     case 'loan_maturity': return (s.domain && s.property_id != null) ? 'loanmat:' + s.domain + ':' + s.property_id : null;
+    // Ownership consolidation: keyed on property only — a property with a deed +
+    // lessor + discrepancy signal collapses to ONE subject_ref (one card / decision).
+    case 'resolve_ownership': return (s.property_id != null) ? 'resolveown:gov:' + s.property_id : null;
   }
   return null;
 }
@@ -1065,62 +1069,45 @@ async function fetchFederatedSource(type, cap, opts) {
     return out;
   }
 
-  if (type === 'owner_source_conflict') {
-    // R51: recorded_owner vs the authoritative latest_deed_grantee. spe_vs_parent
-    // is excluded (legit parent-vs-SPE — default keep); the lane is the
-    // deed-wins / broker-as-owner / stale-seller backlog, value-ranked by rent.
-    const sel = 'property_id,recorded_owner_id,recorded_owner_name,latest_deed_grantee,'
-      + 'latest_deed_date,true_owner_name,annual_rent,address,city,state,conflict_kind,'
-      + 'is_broker_owner,grantee_passes_guards,auto_fixable';
-    const fetchDom = async (dom) => {
-      const r = await domainQuery(dom, 'GET', 'v_owner_source_conflict?select=' + sel
-        + '&conflict_kind=neq.spe_vs_parent&order=annual_rent.desc.nullslast,property_id&limit=' + cap);
-      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
-      return rows.map((row) => ({
-        subject_ref: 'osrc:' + dom + ':' + row.property_id,
-        subject_domain: dom, subject_property_id: String(row.property_id), subject_entity_id: null,
-        rank_value: Number(row.annual_rent) || 0,
-        context: {
-          domain: dom, property_id: row.property_id,
-          recorded_owner_id: row.recorded_owner_id, recorded_owner_name: row.recorded_owner_name,
-          latest_deed_grantee: row.latest_deed_grantee, latest_deed_date: row.latest_deed_date,
-          true_owner_name: row.true_owner_name, annual_rent: row.annual_rent,
-          address: row.address, city: row.city, state: row.state,
-          conflict_kind: row.conflict_kind, is_broker_owner: row.is_broker_owner,
-          grantee_passes_guards: row.grantee_passes_guards, auto_fixable: row.auto_fixable,
-        },
-      }));
-    };
-    const [g, d, gc, dc] = await Promise.all([
-      fetchDom('gov'), fetchDom('dia'),
-      domCnt('gov', 'v_owner_source_conflict?conflict_kind=neq.spe_vs_parent'),
-      domCnt('dia', 'v_owner_source_conflict?conflict_kind=neq.spe_vs_parent'),
-    ]);
-    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
-    out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
-    return out;
-  }
-
-  if (type === 'suspected_sale') {
-    // R53: gov v_suspected_sale — an ownership change (GSA lessor / deed) with
-    // NO recorded sale → a suspected unrecorded sale, value-ranked by rent.
-    const sel = 'domain,property_id,signal_source,suspected_grantor,suspected_grantee,'
-      + 'suspected_sale_date,annual_rent,address,city,state,agency';
-    const r = await domainQuery('gov', 'GET', 'v_suspected_sale?select=' + sel
-      + '&order=annual_rent.desc.nullslast,property_id&limit=' + cap);
+  if (type === 'resolve_ownership') {
+    // Ownership consolidation: gov v_ownership_resolution reconciles the deed /
+    // GSA-lessor / pending-discrepancy signals into ONE row per property
+    // (spe_vs_parent excluded). Ordered fresh-before-stale (recency_rank) then by
+    // rent — the server already provides the order, so DON'T re-sort in JS.
+    const sel = 'property_id,address,city,state,agency,annual_rent,current_recorded_owner_name,'
+      + 'proposed_owner_name,true_owner_name,primary_signal,evidence,most_recent_signal_date,'
+      + 'recency_band,recency_rank,recommended_action,owner_guards_pass,is_newer_than_recorded,'
+      + 'latest_deed_grantee,latest_deed_date,deed_conflict_kind,deed_auto_fixable,'
+      + 'suspected_grantor,suspected_grantee,suspected_sale_date,lessor_signal_source,'
+      + 'discrepancy_source,discrepancy_proposed,has_deed_signal,has_lessor_signal,has_discrepancy_signal';
+    const r = await domainQuery('gov', 'GET', 'v_ownership_resolution?select=' + sel
+      + '&order=recency_rank.asc,annual_rent.desc.nullslast,property_id&limit=' + cap);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     out.items = rows.map((row) => ({
-      subject_ref: 'susp:gov:' + row.property_id + ':' + row.signal_source,
+      subject_ref: 'resolveown:gov:' + row.property_id,
       subject_domain: 'gov', subject_property_id: String(row.property_id), subject_entity_id: null,
       rank_value: Number(row.annual_rent) || 0,
       context: {
-        domain: 'gov', property_id: row.property_id, signal_source: row.signal_source,
-        suspected_grantor: row.suspected_grantor, suspected_grantee: row.suspected_grantee,
-        suspected_sale_date: row.suspected_sale_date, annual_rent: row.annual_rent,
+        domain: 'gov', property_id: row.property_id,
         address: row.address, city: row.city, state: row.state, agency: row.agency,
+        annual_rent: row.annual_rent,
+        recorded_owner_name: row.current_recorded_owner_name, proposed_owner_name: row.proposed_owner_name,
+        true_owner_name: row.true_owner_name, primary_signal: row.primary_signal, evidence: row.evidence,
+        most_recent_signal_date: row.most_recent_signal_date, recency_band: row.recency_band,
+        recommended_action: row.recommended_action, owner_guards_pass: row.owner_guards_pass,
+        is_newer_than_recorded: row.is_newer_than_recorded,
+        latest_deed_grantee: row.latest_deed_grantee, latest_deed_date: row.latest_deed_date,
+        deed_conflict_kind: row.deed_conflict_kind, deed_auto_fixable: row.deed_auto_fixable,
+        // dcConfirmSuspectedSale reads these — fall back to the reconciled owner names.
+        suspected_grantor: row.suspected_grantor || row.current_recorded_owner_name,
+        suspected_grantee: row.suspected_grantee || row.proposed_owner_name,
+        suspected_sale_date: row.suspected_sale_date || row.latest_deed_date || row.most_recent_signal_date,
+        discrepancy_source: row.discrepancy_source, discrepancy_proposed: row.discrepancy_proposed,
+        has_deed_signal: row.has_deed_signal, has_lessor_signal: row.has_lessor_signal,
+        has_discrepancy_signal: row.has_discrepancy_signal,
       },
     }));
-    out.total = await domCnt('gov', 'v_suspected_sale');
+    out.total = await domCnt('gov', 'v_ownership_resolution');
     return out;
   }
 
@@ -1284,9 +1271,14 @@ async function fetchFederatedSource(type, cap, opts) {
   }
 
   if (type === 'pending_update') {
+    // The ownership-discrepancy slice (field recorded_owner_id) moved to the
+    // resolve_ownership lane — EXCLUDE it here so it isn't double-surfaced. What
+    // remains is the SF-auto-created-property verify + the property-link matching
+    // reasons (a distinct data-hygiene concern).
+    const notOwnership = '&field_name=neq.recorded_owner_id';
     const r = await domainQuery('gov', 'GET', 'pending_updates?select=id,table_name,property_id,record_id,'
       + 'field_name,old_value,new_value,reason,confidence,priority_score,created_at'
-      + '&status=eq.pending&order=priority_score.desc.nullslast,created_at.desc&limit=' + cap);
+      + '&status=eq.pending' + notOwnership + '&order=priority_score.desc.nullslast,created_at.desc&limit=' + cap);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     out.items = rows.map((row) => ({
       subject_ref: 'pending:gov:' + row.id,
@@ -1296,7 +1288,7 @@ async function fetchFederatedSource(type, cap, opts) {
         record_id: row.record_id, field_name: row.field_name, old_value: row.old_value,
         new_value: row.new_value, reason: row.reason, confidence: row.confidence },
     }));
-    out.total = await domCnt('gov', 'pending_updates?status=eq.pending');
+    out.total = await domCnt('gov', 'pending_updates?status=eq.pending' + notOwnership);
     return out;
   }
 
@@ -2434,6 +2426,115 @@ async function handleDecisionVerdict(req, res) {
           title: 'Confirm property merge: ' + (c.address || c.property_id || ''),
           instructions: 'Decision Center: confirm whether ' + (c.domain || '') + ' property ' + (c.property_id || '')
             + ' (' + (c.address || '') + ') is a duplicate to be merged, or a distinct property.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- resolve_ownership (consolidated, federated) -----------------------
+    // ONE property-keyed lane reconciling the deed / GSA-lessor / pending-
+    // discrepancy signals (gov v_ownership_resolution). One property = one
+    // verdict. Every effect reuses an EXISTING gov write-back — no new path.
+    //   update_owner  — apply the proposed owner: a guard-passing DEED grantee
+    //                   rides propagateDeedGranteeToOwner (the R51 recorded-owner
+    //                   correction — works per-row, no env gate); a lessor/
+    //                   discrepancy proposal rides gov_apply_manual_true_owner
+    //                   (GATED on DECISION_GOV_WRITEBACK — record-only until set,
+    //                   the confirm_true_owner "stale" posture).
+    //   confirm_sale  — the change was an unrecorded SALE: gov_confirm_suspected_sale
+    //                   with an operator-supplied price (never fabricated).
+    //   keep          — recorded owner is right (record-only → stops asking).
+    //   research      — a resolve_ownership research task.
+    if (decision.decision_type === 'resolve_ownership') {
+      if (verdict === 'keep') {
+        await record('keep', 'decided', null,
+          { ownership: 'kept_current', primary_signal: c.primary_signal || null });
+        return res.status(200).json({ ok: true, verdict: 'keep' });
+      }
+      if (verdict === 'update_owner') {
+        if (c.property_id == null) return res.status(400).json({ error: 'update_owner requires a property subject' });
+        // Deed-primary + guard-passing grantee → the R51 recorded-owner correction.
+        if (c.has_deed_signal && c.latest_deed_grantee && c.owner_guards_pass) {
+          const prop = await propagateDeedGranteeToOwner({
+            domain: 'government', propertyId: c.property_id, granteeName: c.latest_deed_grantee,
+            entity: { state: c.state || null },
+          });
+          if (!prop.applied) {
+            await recordEffectFailure({ ownership: false, propagation: prop });
+            return res.status(502).json({ error: 'deed_propagation_not_applied', detail: prop });
+          }
+          await record('update_owner', 'decided',
+            { recorded_owner_id: prop.recorded_owner_id, owner: c.latest_deed_grantee, via: 'deed_grantee' },
+            { ownership: 'applied', via: 'deed_grantee', recorded_owner_id: prop.recorded_owner_id, decision: prop.decision });
+          await refreshQueueAfterDecision();
+          return res.status(200).json({ ok: true, verdict: 'update_owner', via: 'deed_grantee', recorded_owner_id: prop.recorded_owner_id });
+        }
+        // Lessor / discrepancy proposal (no deed grantee) → the gated true-owner
+        // write-back. Record-only until DECISION_GOV_WRITEBACK=on (never fabricate).
+        const newOwner = String(c.proposed_owner_name || '').trim();
+        if (!newOwner) return res.status(400).json({ error: 'update_owner has no proposed owner name' });
+        const writebackOn = /^(on|1|true|yes|enabled)$/i.test(String(process.env.DECISION_GOV_WRITEBACK || ''));
+        if (!writebackOn) {
+          await record('update_owner_pending_writeback', 'decided', { proposed_owner_name: newOwner },
+            { ownership: 'deferred_pending_blessing', writeback: false, primary_signal: c.primary_signal || null });
+          return res.status(200).json({ ok: true, verdict: 'update_owner_pending_writeback',
+            note: 'Recorded. The gov true-owner write-back is OFF (set DECISION_GOV_WRITEBACK=on to apply a lessor/discrepancy owner); a deed-grantee proposal applies without it.' });
+        }
+        const actor = (user && (user.email || user.id)) || 'decision_center';
+        const wr = await domainQuery('government', 'POST', 'rpc/gov_apply_manual_true_owner', {
+          p_property_id: c.property_id, p_new_owner_name: newOwner, p_actor: actor,
+          p_idempotency_key: 'resolveown:' + decisionId, p_dry_run: false });
+        const row = (wr.ok && Array.isArray(wr.data)) ? wr.data[0] : null;
+        if (!wr.ok || !row || (!row.wrote && row.note !== 'already_applied')) {
+          await recordEffectFailure({ ownership: false, writeback: false, error: (row && row.note) || wr.data || wr.status });
+          return res.status(502).json({ error: 'true_owner_writeback_not_applied', detail: row || wr.data });
+        }
+        try {
+          await opsQuery('PATCH', 'lcc_property_owner_facts?source_domain=eq.gov&source_property_id=eq.'
+            + pgFilterVal(String(c.property_id)),
+            { true_owner_name: newOwner, updated_at: new Date().toISOString() });
+        } catch (e) { console.warn('[decision-verdict] owner-facts mirror patch skipped:', e?.message || e); }
+        await record('update_owner', 'decided', { owner: newOwner, via: 'manual_true_owner' },
+          { ownership: 'applied', via: 'manual_true_owner', writeback: 'applied', gov_note: row.note });
+        await refreshQueueAfterDecision();
+        return res.status(200).json({ ok: true, verdict: 'update_owner', via: 'manual_true_owner', gov: row });
+      }
+      if (verdict === 'confirm_sale') {
+        if (c.property_id == null) return res.status(400).json({ error: 'confirm_sale requires a property subject' });
+        const price = Number(payload.sold_price);
+        const saleDate = payload.sale_date || c.suspected_sale_date || c.most_recent_signal_date || null;
+        if (!Number.isFinite(price) || price < 50000) {
+          return res.status(400).json({ error: 'confirm_sale requires a sold_price (>= $50k); we never fabricate a price' });
+        }
+        if (!saleDate) return res.status(400).json({ error: 'confirm_sale requires a sale_date' });
+        const rpc = await domainQuery('government', 'POST', 'rpc/gov_confirm_suspected_sale', {
+          p_property_id: c.property_id, p_sale_date: saleDate, p_sold_price: price,
+          p_buyer: payload.buyer || c.proposed_owner_name || c.suspected_grantee || null,
+          p_seller: payload.seller || c.recorded_owner_name || c.suspected_grantor || null,
+          p_actor: (user && user.email) || 'decision_center', p_dry_run: false,
+        });
+        const body0 = (rpc.ok && Array.isArray(rpc.data)) ? rpc.data[0] : rpc.data;
+        const result = (body0 && typeof body0 === 'object' && 'gov_confirm_suspected_sale' in body0)
+          ? body0.gov_confirm_suspected_sale : body0;
+        if (!rpc.ok || !result || result.ok !== true) {
+          await recordEffectFailure({ sale_recorded: false, rpc: result || rpc.data });
+          return res.status(502).json({ error: 'confirm_sale_not_applied', detail: result || rpc.data });
+        }
+        await record('confirm_sale', 'decided',
+          { sale_id: result.sale_id || null, sold_price: price, sale_date: saleDate },
+          { sale_recorded: true, sale_id: result.sale_id || null, already_exists: result.already_exists || false });
+        return res.status(200).json({ ok: true, verdict: 'confirm_sale', sale_id: result.sale_id || null,
+          already_exists: result.already_exists || false });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'resolve_ownership',
+          title: 'Resolve ownership: ' + (c.address || c.property_id || ''),
+          instructions: 'Decision Center: gov property ' + (c.property_id || '') + ' — recorded owner "'
+            + (c.recorded_owner_name || '?') + '" vs proposed "' + (c.proposed_owner_name || '?') + '" ('
+            + (c.primary_signal || '') + '). Reconcile the ownership chain / find the sale (deed, RCA, broker).' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });

@@ -6275,3 +6275,92 @@ mutated** (the real fix for a suspect row is re-extraction).
   pipe/array multi-property flag; decimal + percent cap normalize to the SAME string;
   out-of-band cap omitted). `node --check` clean; ≤12 api/*.js; the 7 unrelated
   pre-existing failures (CM chart / CRE owner / rca-parser) are untouched.
+
+## Decision Center — consolidate the ownership lanes into ONE property-keyed surface (2026-06-30)
+
+The Decision Center asked "who really owns this property?" in five+ overlapping
+lanes (`owner_source_conflict` recorded-vs-deed, `suspected_sale` GSA/state lessor
+change, the `pending_update` ownership-discrepancy slice, plus research tasks). An
+operator worked the SAME property's ownership question in up to three places with
+three verdicts. Grounded live (gov `scknotsqkcheojiaewwh` + LCC `xengecqvemvfknjvbvrq`,
+2026-06-30): the three conflict lanes covered only **2,015 distinct gov properties**
+but surfaced as **2,924 lane rows** — ~800 properties in both pending-discrepancy AND
+owner-vs-deed, plus spe_vs_parent keep-noise (325) and a stale tail. Consumption-Layer
+consolidation: one property = one ownership card = one verdict, value-ranked, deduped,
+honest count.
+
+### Phase 0 — the gov reconciling view (additive, applied live)
+`gov.v_ownership_resolution` (migration `sql/20260630_gov_ownership_resolution.sql`,
+postgres-owned + anon/authenticated/service_role granted, names-only PII posture like
+the sibling `v_*` views): ONE row per gov property with an open ownership question,
+UNION-reconciling the three signal sources and deduping by `property_id`.
+- **Precedence:** a recorded **deed** grantee (`v_owner_source_conflict`, spe excluded
+  at the source) > a GSA/state **lessor** change (`v_suspected_sale`) > a bare
+  **discrepancy** (`pending_updates` field `recorded_owner_id`). `proposed_owner_name`
+  coalesces in that order; `evidence` jsonb lists every firing signal.
+- **spe_vs_parent EXCLUDED** — the deed dimension drops `conflict_kind='spe_vs_parent'`
+  at the source, so a spe-only property never enters the candidate set (the general
+  "recorded==true_owner" flag was too aggressive — 993 vs the real 325 — because a
+  lessor/discrepancy owner change on a resolved property is a genuine signal, not spe).
+- **`recommended_action` ladder:** `auto_update` (deed grantee passes guards + recent +
+  dated = `v_owner_source_conflict.auto_fixable`; the R51 autofix subset) · `confirm`
+  (lessor/assessed/non-auto deed — human judgment) · `enrich` (recorded owner missing).
+  keep (spe) is excluded, not a row.
+- **Rank/recency:** every row carries `annual_rent` (= `properties.gross_rent`, so the
+  value is consistent) + `recency_rank` (0 fresh ≤3y / 1 undated / 2 stale) so the lane
+  orders fresh-before-stale then by rent. `v_ownership_resolution_counts` gives the
+  honest distinct-property count per action + band.
+- **Verified live:** rows = distinct_props = counts_total = **2,015** (was 2,924 lane
+  rows); property **7486** (in both deed + pending-discrepancy) → **ONE card**,
+  `n_signals=2`, deed wins primary; **0 spe leak**; top-of-lane = LCOR Alexandria $62M
+  (fresh, rent-desc). Action split: auto_update **1** (SNF LLC → Albuquerque SNF, LLC,
+  deed 2026-05-28), confirm 2,008 (1,527 fresh / 450 stale / 31 undated), enrich 6.
+
+### Phase 1 — LCC Decision Center: ONE `resolve_ownership` lane
+- **admin.js:** `resolve_ownership` added to `FEDERATED_DECISION_TYPES` +
+  `federatedSubjectRef` (**`resolveown:gov:<property_id>`** — keyed on property ONLY,
+  so a property with ≥2 signals collapses to one card/decision, unlike the retired
+  `suspected_sale` key that carried `+ signal_source`) + `fetchFederatedSource` (reads
+  `v_ownership_resolution`, `order=recency_rank.asc,annual_rent.desc.nullslast`) +
+  verdict dispatch. **`owner_source_conflict` + `suspected_sale` removed** from the
+  federated set (retired from the surface + the badge; their fetch/verdict branches are
+  left dormant for reversibility). The **`pending_update`** fetch now excludes the
+  ownership-discrepancy slice (`field_name=neq.recorded_owner_id`) so it isn't
+  double-surfaced — the SF-auto-created-property verify (597) + property-link (~250)
+  reasons stay in that hygiene lane.
+- **Verdicts (reuse the EXISTING gov write-backs — no new path):**
+  `update_owner` → a guard-passing DEED grantee rides `propagateDeedGranteeToOwner`
+  (the R51 recorded-owner correction, per-row, no env gate); a lessor/discrepancy
+  proposal rides `gov_apply_manual_true_owner` **gated on `DECISION_GOV_WRITEBACK`**
+  (record-only `update_owner_pending_writeback` until set — the confirm_true_owner
+  "stale" posture, never fabricated). `confirm_sale` → `gov_confirm_suspected_sale`
+  with an operator-supplied price (≥$50k, never fabricated). `keep` → record-only
+  (stops asking). `research` → a `resolve_ownership` research task. Effect-first /
+  outcome-truthful (a non-applied write 502s + keeps the decision open).
+- **ops.js:** `_DC_FEDERATED` + the SUBLANES ("Resolve ownership & control") +
+  `_DC_FED_META` + a `resolve_ownership` `_fedCardHTML` branch (current → proposed
+  owner, evidence chips, rent, recency; verdicts Update owner / Confirm sale / Keep /
+  Research) + `dcResolveConfirmSale` (the R53 price/date prompt) + `_DC_BULK_SAFE`
+  (keep). `review-shared.js` maps `resolve_ownership` → the **ownership** lane
+  (ownership-first).
+
+### Phase 2 — the high-confidence deed autofix (gated, Scott's switch)
+The R51 `?_route=owner-deed-autofix` (GET dry-run / POST apply gated on
+`DECISION_OWNER_DEED_WINS`) already drains the `auto_update` subset. Live it is **1
+property** today (property 32152), so the bulk apply is negligible — the per-row
+`update_owner` verdict on a deed-primary card applies it without the env flag. The env
+stays Scott's operational switch; run a GET dry-run first (this round surfaces the
+subset, does NOT flip the flag).
+
+### Boundaries / verified
+gov = ONE additive reconciling view (+ counts) applied live, no domain-row writes; LCC
+= admin.js + ops.js + review-shared.js, **no new api/*.js** (`ls api/*.js | wc -l`=12).
+`test/decision-center-partition.test.mjs` (the two federated sets stay identical) +
+`test/ownership-resolution-consolidation.test.mjs` (resolve_ownership federated both
+sides / retired lanes gone / property-keyed subject_ref dedup / spe-excluding view /
+rent-rank / pending-update excludes the discrepancy slice / card + confirm-sale helper).
+`node --check` clean (admin.js, ops.js, review-shared.js). LCC verdicts are LCC-Opps +
+the existing gated gov write-backs; auth schema untouched. Reversible (DROP the two gov
+views → zero trace; the retired lane code is dormant, not deleted). Phase 3 (fold the
+`property_missing_recorded_owner` / `true_owner_needs_salesforce` research-task steps in
+as the "enrich" tail) deferred — already value-gated by R60.

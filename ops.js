@@ -1422,7 +1422,10 @@ var _DC_FEDERATED = new Set([
   'intake_disposition', 'property_merge', 'provenance_conflict', 'pending_update',
   'cms_link_suspect', 'implausible_value', 'merge_duplicate_entities',
   'caprate_review', 'bad_rent_lease', 'resolve_owner_parent',
-  'listing_event_action', 'owner_source_conflict', 'suspected_sale', 'loan_maturity',
+  // Ownership-resolution consolidation (2026-06-30): ONE property-keyed lane
+  // replaces owner_source_conflict + suspected_sale (both retired). Keep in sync
+  // with admin.js FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'listing_event_action', 'resolve_ownership', 'loan_maturity',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1478,8 +1481,7 @@ async function renderReviewConsolePage() {
     { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
     { dt: 'resolve_owner_parent', label: 'Owner → ultimate parent', open: "renderFederatedLane('resolve_owner_parent')" },
-    { dt: 'owner_source_conflict', label: 'Owner vs deed — who took title', open: "renderFederatedLane('owner_source_conflict')" },
-    { dt: 'suspected_sale', label: 'Suspected unrecorded sales', open: "renderFederatedLane('suspected_sale')" },
+    { dt: 'resolve_ownership', label: 'Resolve ownership & control', open: "renderFederatedLane('resolve_ownership')" },
     { dt: 'loan_maturity', label: 'Loan maturities → refi or sell', open: "renderFederatedLane('loan_maturity')" },
     { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
@@ -2065,6 +2067,8 @@ const _DC_FED_META = {
     intro: 'Sponsor clusters mined from UNRESOLVED current-owner LLC/LP shells (gov + dia), ranked by $ rent. “high” = a fund numeral varies across the shells (SPUS6/7/8…). Confirm the controlling parent (registers it + rolls the shells up to it), name the parent yourself, or mark the owner a genuine independent. Never auto-merged — you confirm.' },
   listing_event_action: { title: 'New sales → act',
     intro: 'A closed sale is the next BD action, value-ranked by sale price. Nurture the seller (past/known owner — seed a relationship cadence, never auto-send), open the new-owner relationship (the buyer is a future seller; if a registered buyer parent, use the P-BUYER path), pursue the cohort fan-out (same-owner / recent-buyer / geographic neighbors), flag a sale-leaseback advisory angle, or dismiss. Each verdict marks the event processed.' },
+  resolve_ownership: { title: 'Resolve ownership & control',
+    intro: 'One card per gov property, reconciling every ownership signal we hold — the recorded deed grantee, a GSA/state lessor-name change, and pending owner discrepancies — into a single decision, value-ranked by rent (fresh signals first). Each card shows the current recorded owner → the best proposed owner + the evidence that fired. Update the owner (a guard-passing deed grantee applies through the priority gate; a lessor/discrepancy proposal writes the true owner when the gov write-back is enabled), confirm a sale (you supply the price — writes a real sales row), keep the current owner (stops asking), or research. spe_vs_parent is excluded (recorded owner already equals the parent). This ONE lane replaces the old owner-vs-deed / suspected-sale / pending-ownership-discrepancy lanes.' },
   owner_source_conflict: { title: 'Owner vs deed — who took title',
     intro: 'The recorded deed grantee (legal title) disagrees with the recorded owner (gov + dia), value-ranked by rent. Accept the deed (it wins through the priority gate; true owner re-resolves), clear a broker-as-owner, keep the current owner (a legit parent-vs-SPE), or research. spe_vs_parent is excluded (default keep).' },
   suspected_sale: { title: 'Suspected unrecorded sales',
@@ -2137,6 +2141,37 @@ function _fedCardHTML(it, i, isNext) {
       ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(pid)) + '}, {}, \'Overview\')">Compare &amp; merge →</button>' : '';
     actions = openDetail
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_duplicate\')">Not a duplicate</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'resolve_ownership') {
+    const pid = c.property_id;
+    const rent = _fedMoney(c.annual_rent);
+    const rec = c.recommended_action || 'confirm';
+    // Human-readable signal chips from the evidence array.
+    const ev = Array.isArray(c.evidence) ? c.evidence : [];
+    const sigLabel = { deed_grantee: 'Deed grantee', gsa_lessor_change: 'GSA lessor changed',
+      state_lessor_change: 'State lessor changed', discrepancy: 'Owner discrepancy' };
+    const chips = ev.map(function (e) {
+      var s = (e && e.signal) || '';
+      return '<span class="q-badge">' + esc(sigLabel[s] || s) + '</span>';
+    }).join('');
+    const recBadge = rec === 'auto_update' ? '<span class="q-badge type">high-confidence deed</span>'
+      : rec === 'enrich' ? '<span class="q-badge pri-high">no recorded owner</span>' : '';
+    const recency = (c.recency_band && c.recency_band !== 'fresh')
+      ? '<span class="q-badge">' + esc(c.recency_band) + '</span>' : '';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + pid)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">gov</span>' + chips + recBadge + recency
+      + (rent ? '<span class="q-badge">' + rent + '</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : ''))
+        + (c.agency ? ' · ' + esc(c.agency) : '') + ' · property ' + esc(String(pid)) + '</div>'
+      + '<div class="q-item-meta">Recorded owner: <b>' + esc(c.recorded_owner_name || '?') + '</b>'
+        + ' &rarr; proposed: <b>' + esc(c.proposed_owner_name || '?') + '</b></div>'
+      + (c.true_owner_name ? '<div class="q-item-meta">True owner: ' + esc(c.true_owner_name) + '</div>' : '')
+      + (c.most_recent_signal_date ? '<div class="q-item-meta">Latest signal: ' + esc(String(c.most_recent_signal_date)) + '</div>' : '');
+    // Update owner is the primary action; a sale-shaped change also offers "confirm sale".
+    const canSale = !!(c.has_lessor_signal || c.has_deed_signal);
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'update_owner\')">Update owner &rarr;</button>'
+      + (canSale ? '<button class="q-action" onclick="dcResolveConfirmSale(' + i + ')">Confirm sale (enter price) →</button>' : '')
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep\')">Keep current</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'owner_source_conflict') {
     const dom = c.domain, pid = c.property_id;
@@ -2393,6 +2428,7 @@ var _DC_BULK_SAFE = {
   // intake_disposition intentionally omitted — the default lane is create-
   // candidates (real listings), so a "dismiss all" bulk would be a footgun.
   property_merge: { verdict: 'not_duplicate', label: 'Mark all "not a duplicate"' },
+  resolve_ownership: { verdict: 'keep', label: 'Keep current owner on all' },
   owner_source_conflict: { verdict: 'keep_current', label: 'Keep current owner on all' },
   provenance_conflict: { verdict: 'keep_current', label: 'Keep current on all' },
   cms_link_suspect: { verdict: 'link_correct', label: 'Confirm all links correct' },
@@ -2490,6 +2526,36 @@ async function dcConfirmSuspectedSale(i) {
   });
 }
 window.dcConfirmSuspectedSale = dcConfirmSuspectedSale;
+
+// Ownership consolidation: confirm a resolve_ownership card AS a sale (the change
+// was an unrecorded transfer). Reuses the R53 price/date prompt; the operator MUST
+// supply a price (never fabricated). Dispatches the resolve_ownership confirm_sale
+// verdict (dcFed posts _dcFedType, which is resolve_ownership on this lane).
+async function dcResolveConfirmSale(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
+    + '"' + (c.recorded_owner_name || '?') + '" → "' + (c.proposed_owner_name || '?') + '"';
+  const pv = typeof lccPrompt === 'function'
+    ? await lccPrompt('Confirm this ownership change as a SALE.\n\n' + ctx + '\n\nEnter the SALE PRICE (numbers only — we never guess):', '')
+    : (typeof prompt === 'function' ? prompt('Sale price (number):') : '');
+  if (pv == null) return;
+  const price = Number(String(pv).replace(/[^0-9.]/g, ''));
+  if (!isFinite(price) || price < 50000) { if (typeof showToast === 'function') showToast('Enter a real price (≥ $50k)', 'error'); return; }
+  const defDate = (c.suspected_sale_date || c.latest_deed_date || c.most_recent_signal_date)
+    ? String(c.suspected_sale_date || c.latest_deed_date || c.most_recent_signal_date).slice(0, 10) : '';
+  const dv = typeof lccPrompt === 'function'
+    ? await lccPrompt('Sale date (YYYY-MM-DD):', defDate)
+    : (typeof prompt === 'function' ? prompt('Sale date (YYYY-MM-DD):', defDate) : defDate);
+  if (dv == null) return;
+  const saleDate = String(dv).trim() || defDate;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) { if (typeof showToast === 'function') showToast('Enter a valid date (YYYY-MM-DD)', 'error'); return; }
+  dcFed(i, 'confirm_sale', {
+    sold_price: price, sale_date: saleDate,
+    buyer: c.proposed_owner_name || null, seller: c.recorded_owner_name || null,
+  });
+}
+window.dcResolveConfirmSale = dcResolveConfirmSale;
 
 async function dcFed(i, verdict, payload) {
   const it = _dcFedArr[i]; if (!it) return;
