@@ -21,6 +21,7 @@
 // ============================================================================
 
 import { appendActivityEvent as defaultAppendActivityEvent } from './activity-events.js';
+import { growCadenceFromOutreach as defaultGrowCadenceFromOutreach } from './cadence-engine.js';
 
 // activity_events.domain carries the canonical short form 'dia' | 'gov'.
 // The matcher hands us 'dialysis' | 'government' (or null for an lcc-direct
@@ -61,6 +62,7 @@ export async function logEmailIntakeCorrespondence({
   intakeId = null,
 }, deps = {}) {
   const append = deps.appendActivityEvent || defaultAppendActivityEvent;
+  const grow   = deps.growCadenceFromOutreach || defaultGrowCadenceFromOutreach;
 
   // Guard 1: only the email channel carries email correspondence.
   if (channel !== 'email') return { ok: false, skipped: 'not_email_channel' };
@@ -74,7 +76,7 @@ export async function logEmailIntakeCorrespondence({
   const externalId = ctx.internet_message_id || ctx.message_id || null;
   if (!externalId) return { ok: false, skipped: 'no_message_id' };
 
-  return append({
+  const res = await append({
     workspaceId,
     actorId,
     category:    'email',
@@ -92,4 +94,16 @@ export async function logEmailIntakeCorrespondence({
       to:        ctx.to  || null,
     },
   });
+
+  // Phase 1 (2026-07-13) — capture Scott's REAL pipeline. Email-OM
+  // correspondence matches to a PROPERTY (asset), so growing hops to the OWNER
+  // (the R10 owns-hop, inside growCadenceFromOutreach): property-page email
+  // becomes owner cadence tracking. Best-effort, fresh-insert only.
+  if (res?.inserted) {
+    try {
+      await grow({ entityId: matchedEntityId, category: 'email',
+        domain: normalizeActivityDomain(matchedDomain) });
+    } catch (_e) { /* best-effort — the timeline row is written regardless */ }
+  }
+  return res;
 }

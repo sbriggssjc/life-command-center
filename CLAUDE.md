@@ -6364,3 +6364,107 @@ the existing gated gov write-backs; auth schema untouched. Reversible (DROP the 
 views → zero trace; the retired lane code is dormant, not deleted). Phase 3 (fold the
 `property_missing_recorded_owner` / `true_owner_needs_salesforce` research-task steps in
 as the "enrich" tail) deferred — already value-gated by R60.
+
+## Track Scott's REAL pipeline + wire the high-value worklist to the acquisition workers (2026-07-13)
+
+The outreach MACHINERY is healthy (reachability solved; the SF-activity→cadence
+advance bridge works; template_sends records) but the system tracked a different
+POPULATION than Scott actually works, and the highest-value targets couldn't
+enter the pipeline at all. Two phases, sequenced (Scott's call): Phase 1 captures
+his real outreach as tracked cadences; Phase 2 wires the high-value worklist to
+the acquisition workers (which then feed Phase 1's cadence seed). LCC-Opps only;
+no dia/gov writes; reuse the single advance owner (`advanceCadence`) + the shared
+attach/seed helpers; no new api/*.js (12); additive migration; reversible.
+
+### Grounding refined the premises (live LCC Opps `xengecqvemvfknjvbvrq` 2026-07-13)
+- **Untracked worked entities = 41**, but mostly NOT through the SF handler:
+  **14 outlook persons** (330 events, `source_type='outlook'`, `bridge-handlers-outlook`)
+  + **3 SF persons** (`sf-activity-ingest`) + **24 email_intake assets** (property-page
+  correspondence, `intake-correspondence`). The R63 grow path lived ONLY in
+  `sf-activity-ingest` → it could reach just 3/41. So the grow had to extend to
+  the Outlook + email_intake writers (the channels where Scott actually works) —
+  the literal "sf-activity-ingest only" boundary would have captured almost
+  nothing. Documented scope extension, driven by the data.
+- **Worklist = 3,503** (≥$1M **353**); **3,408 had no pivot**; **269 carry an SF
+  Account identity** (all cadence-less) — a cheap contact path, ~7× the audit's
+  "37" (the 37 was the ≥$1M subset, live 38).
+
+### Phase 1 — grow the cadence from real outreach (loosened gate + all channels)
+`api/_shared/cadence-engine.js` — the GROW gate is deliberately LOOSER than the
+R63 producer gate (repeated human outreach IS the BD signal; a person Scott
+works is a real relationship regardless of portfolio value):
+- **`growGateFromFacts(facts)`** (pure) — qualifies on ANY of: a full R63 BD
+  signal (SF identity / open opp / SF activity / value ≥ floor), a Salesforce
+  identity, or **`outreachEventCount >= CADENCE_GROW_MIN_OUTREACH_EVENTS (2)`**.
+  NEVER grows on `nameIsJunk` (junk / implausible person name).
+- **`entityQualifiesForCadenceGrowth(entityId, {query, outreachEntityId})`** —
+  gatherer; reads identity/value/opp on the grow TARGET, counts real outreach
+  events on the WORKED entity (`outreachEntityId` — so repeated work on a
+  property counts toward growing its OWNER's cadence), applies the junk guard
+  (`isJunkEntityName` + person-`isImplausiblePersonName`). Fails CLOSED.
+- **`resolveCadenceGrowTarget(entityId)`** — an ASSET touch hops to its `owns`
+  owner (contact null → property-page activity becomes owner cadence tracking); a
+  PERSON grows on themselves and is their OWN contact (self-stamped → immediately
+  outreach-ready, no re-acquisition); an org grows on itself.
+- **`growCadenceFromOutreach(args, deps)`** — the orchestrator: grows ONLY when
+  NO cadence resolves anywhere (direct/owns/contact — the SQL advance trigger
+  owns the advance of an EXISTING cadence, so never double-advances), reuses the
+  single advance owner (`advanceCadence`) + `getCadenceState`. deps-injectable.
+- **Wired into all three real-outreach writers** (best-effort, fresh-insert only,
+  no-op when a cadence exists): `sf-activity-ingest.js` (SF),
+  `bridge-handlers-outlook.js` `handleOutlookMessageLink` + `handleCalendarEventLink`
+  (Outlook email + meeting — the dominant channel), `intake-correspondence.js`
+  (email_intake asset → owner-hop). The R63 `entityHasBdSignal`-gated SF grow is
+  replaced by the shared helper.
+
+### Phase 2 — wire the worklist to the acquisition workers
+- **Proactive pivot-ensure sweep** (migration
+  `20260713120000_lcc_ensure_worklist_owner_pivots.sql`, applied live):
+  `lcc_ensure_worklist_owner_pivots(limit)` set-based-ensures a fallback pivot
+  (`active_source='worklist_sweep'`, `enrichment_action='manual_research'` or the
+  worklist hint) for every worklist owner lacking one, folded into the EXISTING
+  `lcc-owner-contact-pivot-refresh` cron. **Ran live: 3,408 pivots seeded → 0
+  worklist owners without a pivot.** Now `owner-contact-enrich` can reach every
+  high-value owner. Reversible (`DELETE WHERE active_source='worklist_sweep'`).
+- **The R16 SF cheap-win on worklist owners** (`contact-acquisition.js` **Pass
+  3**): the highest-value BD targets carry NO cadence, so Passes 1/2 (which walk
+  contactless CADENCES) never reached them. Pass 3 pulls the SF contacts of
+  worklist owners that carry an SF Account identity (269, value-ranked) via the
+  existing `getSalesforceContactsByAccount`, attaches via the shared
+  contact-attach helper, and stamps through `stampContactOnActiveCadence(
+  seedIfValuable)` — which SEEDS a value-gated cadence (the existing
+  `maybeSeedValuableCadence` wire, which passes on an SF-account owner by
+  construction). So the freshly-contacted owner surfaces at the TOP of the
+  value-ranked focus session — Phase 2 feeds Phase 1. A successfully-acquired
+  owner drops out of the auto-retiring worklist (never re-processed); an
+  empty-SF-account owner falls to the enrichment adapters / manual pick (its
+  pivot now exists). Result counters: `worklist_sf_mapped` / `_acquired` /
+  `_contacts_created` / `_cadences_seeded` / `_no_contacts`.
+- **Acquisition-cost breakdown** (`owner-contact-enrich.js`
+  `summarizeResolution`): the dry-run report now splits by_action into
+  `free_resolvable` (attach-named-person / manager-drill — no external egress) vs
+  `needs_adapter` (sos/address/deed/web/public-IR — feature-flagged, currently
+  unconfigured: `OWNER_ENRICH_WEBSEARCH_URL` / `_SOS_URL` / `_ADDRESS_URL`) vs
+  `manual_research`, so the paid-adapter cost call can be made with real numbers.
+  Item 4 (cadence seed on attach) is already wired (`maybeSeedValuableCadence`).
+
+### Boundaries / verified (2026-07-13)
+`node --check` clean (cadence-engine, sf-activity-ingest, bridge-handlers-outlook,
+intake-correspondence, contact-acquisition, owner-contact-enrich); `ls api/*.js |
+wc -l`=12; no circular import (cadence-engine → entity-link, one direction).
+`test/cadence-grow-gate.test.mjs` (new — pure gate / gatherer / target-resolver /
+orchestrator: grows on SF-linked or ≥2-event, NOT on junk / a single stranger;
+asset→owner hop; person self-contact; no-double-advance), `test/contact-acquisition.test.mjs`
+(+worklist SF path — acquire attaches a contact + seeds a cadence),
+`test/owner-contact-enrich.test.mjs` (+`summarizeResolution`),
+`test/sf-activity-ingest.test.mjs` (grow branch delegates to the helper). Migration
+additive + reversible; JS ships on the Railway redeploy.
+
+### After deploy (verify live)
+Phase 1: a fresh Outlook email / SF touch / email_intake correspondence on an
+untracked SF-linked person or a twice-worked entity grows a tracked cadence with
+the contact stamped (distinct-entities-with-cadence climbs from ~24 toward ~65).
+Phase 2: with `SF_LOOKUP_WEBHOOK_URL` set, `POST /api/contact-acquisition-tick`
+drains the 269 SF-account worklist owners (contacts attached + cadences seeded →
+they enter the focus session); `GET /api/owner-contact-enrich-tick` reports the
+free-resolvable vs needs-adapter split for the rest.

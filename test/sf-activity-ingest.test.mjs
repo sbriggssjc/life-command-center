@@ -334,63 +334,49 @@ describe('processSfActivityBatch reply capture (R24 Unit 2)', () => {
 // SF/Outlook outreach on a real target with NO cadence → seed one + advance it.
 // ===========================================================================
 
-describe('processSfActivityBatch grows a cadence from real outreach (R63 Unit 3)', () => {
+describe('processSfActivityBatch grows a cadence from real outreach (Phase 1)', () => {
   const ctx = { workspaceId: 'ws-1', actorId: 'user-1' };
 
-  it('seeds + advances a cadence for a real target (signal) with no existing cadence', async () => {
+  it('grows a cadence for a real target with no existing cadence', async () => {
     const { fn } = captureAppend();
-    const seedCalls = [], advanceCalls = [];
-    const fakeSeed = async (ids) => { seedCalls.push(ids); return { ok: true, is_new: true, cadence: { id: `cad-${ids.entity_id}` } }; };
-    const fakeAdvance = async (id, td) => { advanceCalls.push({ id, td }); return { ok: true }; };
+    const growCalls = [];
+    const fakeGrow = async (args) => { growCalls.push(args); return { grown: true, cadence_id: 'c1' }; };
 
     const out = await processSfActivityBatch([
       { sf_id: 'g1', type: 'Call', subject: 'Spoke with owner', who_id: '003aaa' },
     ], ctx, {
       findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
-      resolveCadenceForEntity: async () => null,         // no existing cadence
-      entityHasBdSignal: async () => true,               // real BD target
-      getCadenceState: fakeSeed, advanceCadence: fakeAdvance,
+      growCadenceFromOutreach: fakeGrow,
     });
 
     assert.equal(out.cadences_grown, 1, 'a cadence was grown from the outreach');
-    assert.equal(seedCalls.length, 1);
-    assert.equal(advanceCalls.length, 1);
-    assert.equal(advanceCalls[0].td.type, 'phone', 'a call maps to a phone touch');
-    assert.equal(advanceCalls[0].td.direction, 'outbound');
+    assert.equal(growCalls.length, 1);
+    assert.equal(growCalls[0].category, 'call', 'the real category is passed to the grow helper');
+    assert.equal(growCalls[0].entityId, 'ent-contact-1');
   });
 
-  it('does NOT grow a cadence for a bare captured contact (no signal)', async () => {
+  it('does NOT count a grown cadence when the grow gate declines (no signal)', async () => {
     const { fn } = captureAppend();
-    const seedCalls = [];
     const out = await processSfActivityBatch([
       { sf_id: 'g2', type: 'Email', subject: 'Sent the OM', who_id: '003aaa' },
     ], ctx, {
       findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
-      resolveCadenceForEntity: async () => null,
-      entityHasBdSignal: async () => false,              // no signal → no seed
-      getCadenceState: async (ids) => { seedCalls.push(ids); return { ok: true, cadence: { id: 'x' } }; },
-      advanceCadence: async () => ({ ok: true }),
+      growCadenceFromOutreach: async () => ({ grown: false, reason: 'not_qualified' }),
     });
 
     assert.equal(out.cadences_grown, 0, 'no cadence grown for capture noise');
-    assert.equal(seedCalls.length, 0, 'getCadenceState never called');
   });
 
-  it('does NOT seed when a cadence already exists (the trigger already advanced it)', async () => {
+  it('does NOT grow when a cadence already exists (the trigger already advanced it)', async () => {
     const { fn } = captureAppend();
-    const seedCalls = [];
     const out = await processSfActivityBatch([
       { sf_id: 'g3', type: 'Meeting', subject: 'Toured the asset', who_id: '003aaa' },
     ], ctx, {
       findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
-      resolveCadenceForEntity: async (e) => ({ id: `existing-${e}`, entity_id: e }),
-      entityHasBdSignal: async () => true,
-      getCadenceState: async (ids) => { seedCalls.push(ids); return { ok: true, cadence: { id: 'x' } }; },
-      advanceCadence: async () => ({ ok: true }),
+      growCadenceFromOutreach: async () => ({ grown: false, reason: 'cadence_exists' }),
     });
 
     assert.equal(out.cadences_grown, 0, 'existing cadence → no second owner');
-    assert.equal(seedCalls.length, 0);
   });
 });
 
