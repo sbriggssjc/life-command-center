@@ -256,15 +256,27 @@
       </div>
     </div>
 
-    <!-- PIPELINE — unified view: My Work + Team Queue tabs -->
+    <!-- PIPELINE HOME — one home, three sub-views: My Work · Prospects · Deals -->
     <div class="page" id="pagePipeline">
       <div class="page-inner">
         <div class="pipeline-tabs" id="pipelineTabs">
           <button class="pipeline-tab active" data-pipeline-tab="mywork">My Work</button>
-          <button class="pipeline-tab" data-pipeline-tab="team">Team Queue</button>
+          <button class="pipeline-tab" data-pipeline-tab="prospects">Prospects</button>
+          <button class="pipeline-tab" data-pipeline-tab="deals">Deals</button>
         </div>
-        <div id="pipelineMyWork"><div id="myWorkContent"><div class="loading"><span class="spinner"></span></div></div></div>
-        <div id="pipelineTeam" style="display:none"><div id="teamQueueContent"><div class="loading"><span class="spinner"></span></div></div></div>
+        <!-- MY WORK — tasks assigned to me (keeps its My Work / Team Queue toggle) -->
+        <div id="pipelineMyWork">
+          <div class="pipeline-subtabs" id="myWorkSubtabs">
+            <button class="pipeline-subtab active" data-mywork-tab="mine">My Work</button>
+            <button class="pipeline-subtab" data-mywork-tab="team">Team Queue</button>
+          </div>
+          <div id="pipelineMyWorkMine"><div id="myWorkContent"><div class="loading"><span class="spinner"></span></div></div></div>
+          <div id="pipelineTeam" style="display:none"><div id="teamQueueContent"><div class="loading"><span class="spinner"></span></div></div></div>
+        </div>
+        <!-- PROSPECTS — entities being actively pursued (cross-domain) -->
+        <div id="pipelineProspects" style="display:none"><div id="pipelineProspectsContent"><div class="loading"><span class="spinner"></span></div></div></div>
+        <!-- DEALS — opportunities in flight (cross-domain) -->
+        <div id="pipelineDeals" style="display:none"><div id="pipelineDealsContent"><div class="loading"><span class="spinner"></span></div></div></div>
       </div>
     </div>
 

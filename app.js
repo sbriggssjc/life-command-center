@@ -1021,25 +1021,58 @@ function toggleMoreDrawer() {
   document.getElementById('moreDrawer')?.classList.toggle('open');
 }
 
-// Pipeline tab switching
+// Pipeline home — one home, three sub-views: My Work · Prospects · Deals.
+// `currentPipelineTab` is the outer sub-view; `currentMyWorkTab` is My Work's
+// own inner My Work / Team Queue toggle (preserved from the old outer tabs).
 var currentPipelineTab = 'mywork';
-document.getElementById('pipelineTabs')?.addEventListener('click', (e) => {
-  const tab = e.target.closest('.pipeline-tab');
-  if (!tab) return;
-  currentPipelineTab = tab.dataset.pipelineTab;
-  document.querySelectorAll('.pipeline-tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
-  document.getElementById('pipelineMyWork').style.display = currentPipelineTab === 'mywork' ? '' : 'none';
-  document.getElementById('pipelineTeam').style.display = currentPipelineTab === 'team' ? '' : 'none';
-  if (currentPipelineTab === 'mywork' && typeof renderMyWork === 'function') renderMyWork();
-  if (currentPipelineTab === 'team' && typeof renderTeamQueue === 'function') {
+var currentMyWorkTab = 'mine';
+
+function _pipelineShowSubview(tab) {
+  currentPipelineTab = tab;
+  document.querySelectorAll('#pipelineTabs .pipeline-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.pipelineTab === tab);
+  });
+  _setDisplay('pipelineMyWork', tab === 'mywork' ? '' : 'none');
+  _setDisplay('pipelineProspects', tab === 'prospects' ? '' : 'none');
+  _setDisplay('pipelineDeals', tab === 'deals' ? '' : 'none');
+  _renderPipelineSubview(tab);
+}
+
+// Render whichever Pipeline sub-view is active (shared by the tab click +
+// handlePageLoad + the Today "My Work" on-ramp).
+function _renderPipelineSubview(tab) {
+  if (tab === 'prospects') { if (typeof renderPipelineProspects === 'function') renderPipelineProspects(); return; }
+  if (tab === 'deals') { if (typeof renderPipelineDeals === 'function') renderPipelineDeals(); return; }
+  // My Work sub-view — render its active inner tab (mine / team)
+  if (currentMyWorkTab === 'team') {
     if (!checkFlag('team_queue_enabled')) {
       const el = document.getElementById('teamQueueContent');
       if (el) el.innerHTML = _teamQueueDisabledHTML();
-    } else {
+    } else if (typeof renderTeamQueue === 'function') {
       renderTeamQueue();
     }
+  } else if (typeof renderMyWork === 'function') {
+    renderMyWork();
   }
+}
+
+document.getElementById('pipelineTabs')?.addEventListener('click', (e) => {
+  const tab = e.target.closest('.pipeline-tab');
+  if (!tab) return;
+  _pipelineShowSubview(tab.dataset.pipelineTab);
+});
+
+// My Work inner toggle — My Work / Team Queue (the old outer tabs, now nested)
+document.getElementById('myWorkSubtabs')?.addEventListener('click', (e) => {
+  const tab = e.target.closest('.pipeline-subtab');
+  if (!tab) return;
+  currentMyWorkTab = tab.dataset.myworkTab;
+  document.querySelectorAll('#myWorkSubtabs .pipeline-subtab').forEach(t => {
+    t.classList.toggle('active', t.dataset.myworkTab === currentMyWorkTab);
+  });
+  _setDisplay('pipelineMyWorkMine', currentMyWorkTab === 'mine' ? '' : 'none');
+  _setDisplay('pipelineTeam', currentMyWorkTab === 'team' ? '' : 'none');
+  _renderPipelineSubview('mywork');
 });
 
 // Centralized page load handler — fires ops.js renderers for canonical model pages
@@ -1054,20 +1087,19 @@ function handlePageLoad(pageId) {
       if (typeof renderTodayBdActions === 'function') renderTodayBdActions();
       break;
     case 'pagePipeline':
-      if (currentPipelineTab === 'mywork') {
-        if (typeof renderMyWork === 'function') renderMyWork();
-      } else {
-        if (!checkFlag('team_queue_enabled')) {
-          const el = document.getElementById('teamQueueContent');
-          if (el) el.innerHTML = _teamQueueDisabledHTML();
-        } else if (typeof renderTeamQueue === 'function') {
-          renderTeamQueue();
-        }
-      }
+      // Reflect the active sub-view's display state, then render it.
+      _setDisplay('pipelineMyWork', currentPipelineTab === 'mywork' ? '' : 'none');
+      _setDisplay('pipelineProspects', currentPipelineTab === 'prospects' ? '' : 'none');
+      _setDisplay('pipelineDeals', currentPipelineTab === 'deals' ? '' : 'none');
+      document.querySelectorAll('#pipelineTabs .pipeline-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.pipelineTab === currentPipelineTab);
+      });
+      _renderPipelineSubview(currentPipelineTab);
       break;
-    // Legacy aliases — redirect to Pipeline
-    case 'pageMyWork': navTo('pagePipeline'); return;
-    case 'pageTeamQueue': navTo('pagePipeline'); return;
+    // Legacy aliases — land on Pipeline › My Work (the Today "My Work" card,
+    // manifest PWA shortcuts). Team Queue alias lands on My Work › Team Queue.
+    case 'pageMyWork': currentPipelineTab = 'mywork'; currentMyWorkTab = 'mine'; navTo('pagePipeline'); return;
+    case 'pageTeamQueue': currentPipelineTab = 'mywork'; currentMyWorkTab = 'team'; navTo('pagePipeline'); return;
     case 'pageInbox': if (typeof renderInboxTriage === 'function') renderInboxTriage(); break;
     case 'pageEntities': if (typeof renderEntitiesPage === 'function') renderEntitiesPage(); break;
     case 'pageReviewConsole': if (typeof renderReviewConsolePage === 'function') renderReviewConsolePage(); break;
@@ -4707,6 +4739,100 @@ function renderDomainProspects(domain, containerId) {
   } else {
     el.innerHTML = html;
   }
+  return html;
+}
+
+// ============================================================
+// PIPELINE HOME sub-views — Prospects (contacts) + Deals (opportunities)
+// ------------------------------------------------------------
+// Cross-domain lenses on the SAME Salesforce prospect data that drives the
+// domain "Pipeline" tab (`renderDomainProspects`), reusing the ONE shared card
+// renderer (`renderProspectCardsHTML`). The domain tabs render this data
+// filtered by domain; the Pipeline home renders it unfiltered (all domains).
+// The split is by SOURCE so no row shows twice:
+//   Prospects = _mktProspectContacts (people being actively pursued)
+//   Deals     = _mktOpportunities   (opportunities in flight)
+// ============================================================
+const PIPELINE_DOMAINS = ['government', 'dialysis', 'all_other'];
+var pipelineProspectsPage = 0, pipelineDealsPage = 0;
+var pipelineProspectsDomain = 'all', pipelineDealsDomain = 'all';
+
+function _pipelineDomainLabel(d) {
+  return d === 'government' ? 'Government' : d === 'dialysis' ? 'Dialysis' : d === 'all_other' ? 'All Other' : 'All';
+}
+
+function _pipelineCollect(store, domainFilter) {
+  const src = window[store] || {};
+  const out = [];
+  PIPELINE_DOMAINS.forEach(dom => {
+    if (domainFilter !== 'all' && domainFilter !== dom) return;
+    (src[dom] || []).forEach(x => out.push(Object.assign({ _pipeline_domain: dom }, x)));
+  });
+  return out;
+}
+
+function _pipelineFilterPills(activeDomain, domainVar, pageVar, renderFn) {
+  const pill = (val, label) => `<span class="pill ${activeDomain === val ? 'active' : ''}" onclick="${domainVar}='${val}';${pageVar}=0;${renderFn}()">${label}</span>`;
+  return '<div class="pills" style="margin-bottom:10px">' +
+    pill('all', 'All') + pill('government', 'Government') + pill('dialysis', 'Dialysis') + pill('all_other', 'All Other') +
+    '</div>';
+}
+
+function _pipelineSubviewHTML(title, subtitle, items, opts) {
+  const { domain, domainVar, pageVar, renderFn } = opts;
+  const dealCount = new Set(items.map(d => d.deal_name || d.item_id)).size;
+  let html = '';
+  html += `<div style="margin-bottom:10px"><h3 style="margin:0;color:var(--text)">${esc(title)}</h3>` +
+    `<div style="font-size:12px;color:var(--text3)">${esc(subtitle)} · ${dealCount} deals · ${items.length} records</div></div>`;
+  html += _pipelineFilterPills(domain, domainVar, pageVar, renderFn);
+  html += renderProspectCardsHTML(items, {
+    showDomainDropdown: true,
+    showReassign: true,
+    showEmailTemplates: true,
+    showCallHistory: true,
+    page: window[pageVar] || 0,
+    pageSize: PROSPECT_PAGE,
+    pagerFn: pageVar,
+    renderFn: renderFn
+  });
+  return html;
+}
+
+function renderPipelineProspects() {
+  const el = document.getElementById('pipelineProspectsContent');
+  if (!el) return '';
+  if (!_mktOpportunitiesLoaded) {
+    el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+    if (typeof loadMarketing === 'function') {
+      loadMarketing().then(() => { if (currentPipelineTab === 'prospects') renderPipelineProspects(); });
+    }
+    return '';
+  }
+  const items = _pipelineCollect('_mktProspectContacts', pipelineProspectsDomain);
+  const html = _pipelineSubviewHTML('Prospects', "People you're actively pursuing", items, {
+    domain: pipelineProspectsDomain, domainVar: 'pipelineProspectsDomain',
+    pageVar: 'pipelineProspectsPage', renderFn: 'renderPipelineProspects'
+  });
+  el.innerHTML = html;
+  return html;
+}
+
+function renderPipelineDeals() {
+  const el = document.getElementById('pipelineDealsContent');
+  if (!el) return '';
+  if (!_mktOpportunitiesLoaded) {
+    el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+    if (typeof loadMarketing === 'function') {
+      loadMarketing().then(() => { if (currentPipelineTab === 'deals') renderPipelineDeals(); });
+    }
+    return '';
+  }
+  const items = _pipelineCollect('_mktOpportunities', pipelineDealsDomain);
+  const html = _pipelineSubviewHTML('Deals', 'Opportunities in flight', items, {
+    domain: pipelineDealsDomain, domainVar: 'pipelineDealsDomain',
+    pageVar: 'pipelineDealsPage', renderFn: 'renderPipelineDeals'
+  });
+  el.innerHTML = html;
   return html;
 }
 
