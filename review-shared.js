@@ -47,6 +47,7 @@ var LCC_REVIEW_LANES = [
 // 'linkage' under the synthetic key 'sos_owner_links'.
 var LCC_DECISION_LANE_MAP = {
   confirm_true_owner:            { lane: 'ownership',     merges: false },
+  resolve_ownership:             { lane: 'ownership',     merges: false },
   confirm_buyer_parent:          { lane: 'buyer_mapping', merges: false },
   map_sf_parent_account:         { lane: 'buyer_mapping', merges: false },
   merge_duplicate_entities:      { lane: 'entity_merge',  merges: 'entity' },
