@@ -88,6 +88,14 @@ export const GOV_READ_TABLES = new Set([
   'gsa_lease_timeline',
   'opm_agency_location_rollups',
   'v_listing_verification_summary',
+  // 2026-07-14 sweep: gov verification history drill-down (gov.js
+  // loadRecentGovVerifications) — allowlisted for dia but not gov, so it 403'd.
+  'listing_verification_history',
+  // Overview canonical-tile fix (2026-07-14): mirror of the data-query Edge
+  // Function GOV_READ_TABLES. New "one canonical source per tile" views the
+  // gov Overview reads through the proxy — 403'd until allowlisted.
+  'v_gov_on_market',
+  'v_llc_research_queue_health',
 ]);
 
 // Government Supabase — allowed tables for write (POST/PATCH)
@@ -234,6 +242,12 @@ export const DIA_READ_TABLES = new Set([
   // mv_gov_overview_stats. Without it the Portfolio-at-a-Glance / Lease
   // Expiration Risk / Operator Breakdown blocks render the empty skeleton.
   'mv_dia_overview_stats',
+  // Overview canonical-tile fix (2026-07-14): mirror of the data-query Edge
+  // Function DIA_READ_TABLES. New "one canonical source per tile" views the
+  // dia Overview reads through the proxy — 403'd until allowlisted.
+  'v_dia_on_market',
+  'v_clinic_lease_backfill_summary',
+  'v_llc_research_queue_health',
 ]);
 
 // Dialysis Supabase — allowed tables for write (POST/PATCH)
