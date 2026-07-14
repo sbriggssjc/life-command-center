@@ -6726,8 +6726,12 @@ Fixed so each tile reads the SINGLE canonical summary/CM source. Client-only
   the CM cap-rate/by-term charts onto 278** — that would plot 234 caps-less
   listings and corrupt the charts. The on-market COUNT (278) is the Overview +
   Listings-tab number; the cap-distribution charts stay the plottable subset.
-  (Follow-up if wanted: align the cap-chart BASE membership to `v_gov_on_market`
-  so the plottable set is a strict subset of the canonical on-market universe.)
+  **DONE (2026-07-13):** `cm_gov_available_cap_dot` +
+  `cm_gov_available_by_term_summary` now base their membership on
+  `v_gov_on_market` (by `listing_id`) THEN apply the plottable filters, so every
+  plotted dot is a strict subset of the on-market 278 (count unchanged at 44 —
+  they were already all on-market; the guarantee is now structural). Migration
+  `government-lease/sql/20260713_gov_cap_charts_base_on_market.sql`.
 
 ### Count tiles → canonical summary (Unit 1, dia)
 - **Lease Backfill** → `v_clinic_lease_backfill_summary` (3 rows → SUM
