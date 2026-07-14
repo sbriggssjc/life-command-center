@@ -3700,6 +3700,11 @@ async function handleAvailabilityPromotionSweep(req, res) {
     return res.status(400).json({ error: 'domain must be dia, gov, or both' });
   }
   const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)));
+  // max_age_days is retained for cron/URL compatibility, but a CONFIRMED
+  // same-property sale match promotes REGARDLESS of off_market_date age — a deed
+  // match is a sale at any age. The cap governs only the (currently no-op)
+  // non-matched aging path, so it is surfaced in the response for observability
+  // and no longer gates the sale-match promotion.
   const maxAgeDays = Math.min(180, Math.max(7, parseInt(req.query.max_age_days || '90', 10)));
   const dryRun = req.method === 'GET';
 
@@ -3709,11 +3714,9 @@ async function handleAvailabilityPromotionSweep(req, res) {
     scanned: 0,
     promoted_to_sold: 0,
     no_sale_evidence: 0,
+    max_age_days: maxAgeDays,
     by_domain: {},
   };
-
-  const offMarketCutoff = new Date(Date.now() - maxAgeDays * 86400000)
-    .toISOString().slice(0, 10);
 
   for (const target of targets) {
     const dom = target === 'dia' ? 'dialysis' : 'government';
@@ -3724,23 +3727,21 @@ async function handleAvailabilityPromotionSweep(req, res) {
       errors: [],
     };
 
-    // gov has the exclude_from_listing_metrics flag for soft-deleted /
-    // test rows; mirror handleAutoScrapeListings' filter.
-    const excludeFilter = dom === 'government'
-      ? `&exclude_from_listing_metrics=not.is.true`
-      : '';
-
-    // Pull off-market listings the scraper stamped as unverified.
-    // We don't filter on is_active/listing_status — the off_market_reason
-    // filter implicitly captures rows that aren't active anymore.
-    const select = 'listing_id,property_id,listing_date,off_market_date,off_market_reason';
+    // Drive off the view's classification rather than re-deriving a
+    // recency-gated candidate set: v_listings_needing_manual_confirmation
+    // already encodes the "confirmed sale, promote" doctrine —
+    // confirmation_state='sale_match_promote' == the listing has a 1:1
+    // same-property candidate sale in the property's window. NO age gate here.
+    // exclude_from_listing_metrics=not.is.true keeps test / soft-deleted rows
+    // out (both domains), replacing the old gov-only exclude filter.
+    const select =
+      'listing_id,property_id,candidate_sale_id,candidate_sale_date,candidate_sold_price';
     const path =
-      `available_listings?off_market_reason=eq.unverified_assumed_off` +
-      `&listing_date=not.is.null` +
-      `&off_market_date=gte.${encodeURIComponent(offMarketCutoff)}` +
-      excludeFilter +
+      `v_listings_needing_manual_confirmation` +
+      `?confirmation_state=eq.sale_match_promote` +
+      `&exclude_from_listing_metrics=not.is.true` +
       `&select=${select}` +
-      `&order=off_market_date.desc,listing_id.asc&limit=${limit}`;
+      `&order=off_market_date.asc,listing_id.asc&limit=${limit}`;
 
     const listingsRes = await domainQuery(dom, 'GET', path);
     if (!listingsRes.ok) {
@@ -3759,58 +3760,8 @@ async function handleAvailabilityPromotionSweep(req, res) {
 
     for (const l of listings) {
       try {
-        if (!l.property_id || !l.listing_date) {
-          summary.no_evidence += 1;
-          result.no_sale_evidence += 1;
-          continue;
-        }
-        const listingMs = Date.parse(l.listing_date);
-        if (!Number.isFinite(listingMs)) {
-          summary.no_evidence += 1;
-          result.no_sale_evidence += 1;
-          continue;
-        }
-
-        // Same ±3-year window + closest-sale picker as handleAutoScrapeListings.
-        const windowDays = 3 * 365 + 1;
-        const lower = new Date(listingMs - windowDays * 86400000).toISOString().slice(0, 10);
-        const upper = new Date(listingMs + windowDays * 86400000).toISOString().slice(0, 10);
-        const salePath =
-          `sales_transactions?property_id=eq.${Number(l.property_id)}` +
-          `&sale_date=gte.${encodeURIComponent(lower)}` +
-          `&sale_date=lte.${encodeURIComponent(upper)}` +
-          `&select=sale_id,sale_date,sold_price&order=sale_date.asc&limit=10`;
-        const saleRes = await domainQuery(dom, 'GET', salePath);
-        if (!saleRes.ok) {
-          summary.errors.push({
-            stage: 'sale_lookup', listing_id: l.listing_id,
-            status: saleRes.status, detail: saleRes.data,
-          });
-          continue;
-        }
-        const sales = Array.isArray(saleRes.data) ? saleRes.data : [];
-        if (sales.length === 0) {
-          summary.no_evidence += 1;
-          result.no_sale_evidence += 1;
-          continue;
-        }
-
-        // Pick closest by date, tiebreak prefer sale on-or-after listing_date.
-        let best = null;
-        let bestDist = Infinity;
-        let bestSign = 1;
-        for (const sale of sales) {
-          const saleMs = Date.parse(sale.sale_date);
-          if (!Number.isFinite(saleMs)) continue;
-          const dist = Math.abs(saleMs - listingMs);
-          const sign = saleMs >= listingMs ? -1 : 1;
-          if (dist < bestDist || (dist === bestDist && sign < bestSign)) {
-            best = sale;
-            bestDist = dist;
-            bestSign = sign;
-          }
-        }
-        if (!best) {
+        // sale_match_promote implies a candidate — defensive guard only.
+        if (!l.candidate_sale_id) {
           summary.no_evidence += 1;
           result.no_sale_evidence += 1;
           continue;
@@ -3822,15 +3773,21 @@ async function handleAvailabilityPromotionSweep(req, res) {
           continue;
         }
 
+        // 'sale_imported' is valid for BOTH lvh_method_check and
+        // lsh_source_check (reconciled 2026-07-14) — an honest label for a
+        // deed/sale-matched promotion, not a generic auto_scrape. The RPC
+        // preserves the existing off_market_date and sets status=Sold /
+        // is_active=false / off_market_reason=sold, and writes the auditable
+        // verification + status-history rows.
         const rpcRes = await domainQuery(dom, 'POST', 'rpc/lcc_record_listing_check', {
           p_listing_id: l.listing_id,
-          p_method: 'auto_scrape',
+          p_method: 'sale_imported',
           p_check_result: 'sold',
           p_off_market_reason: 'sold',
-          p_effective_at: best.sale_date,
-          p_notes: `availability-promotion-sweep: matched sales_transactions sale_id=${best.sale_id} on ${best.sale_date} (was unverified_assumed_off)`,
+          p_effective_at: l.candidate_sale_date,
+          p_notes: `availability-promotion-sweep: confirmed sale match candidate_sale_id=${l.candidate_sale_id} on ${l.candidate_sale_date} (was unverified_assumed_off)`,
           p_verified_by: user.id || null,
-        }, { label: 'availabilityPromotionSweep:recordCheck' });
+        }, {}, { label: 'availabilityPromotionSweep:recordCheck' });
         if (!rpcRes.ok) {
           summary.errors.push({
             stage: 'rpc', listing_id: l.listing_id,
