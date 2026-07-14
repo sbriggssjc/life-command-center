@@ -6806,3 +6806,41 @@ depth / 11.1% SF; gov 48.3% / 6.7%), gov LLC deferred **887**, listings-confirm
 dia 500 / gov 67. `node --check` clean (dialysis.js, gov.js); the two views are
 additive + reversible (DROP VIEW → zero trace). JS ships on the Railway redeploy;
 the views are live.
+
+## `/api/dia-query` + `/api/gov-query` enforce a table/view ALLOWLIST — new tiles must be added or they 403 (2026-07-14)
+
+**The runtime read gate for `/api/dia-query` and `/api/gov-query` is the
+`data-query` EDGE FUNCTION**, not `api/_shared/allowlist.js`. The route flows
+`/api/dia-query` → `/api/admin?_route=edge-data&_source=dia` → `handleEdgeDataProxy`
+(`api/admin.js`, `DATA_QUERY_EDGE_URL` hard-codes the **Dialysis_DB** project
+`zqzrriwuavgrquhisnoa`) → the `data-query` edge function's `GOV_READ_TABLES` /
+`DIA_READ_TABLES` `Set`s (`supabase/functions/data-query/index.ts`). A view NOT in
+that set → **HTTP 403 for the browser**, and the client tile silently shows
+`[]`/0/stuck-loading — **even though the DB-level SELECT grants to
+anon/authenticated are fine** (the allowlist is a separate, earlier gate at the
+proxy). This is a SECURITY control (only approved tables/views proxy through).
+
+**⚠️ Whenever a client tile reads a NEW view through `diaQuery`/`govQuery`, add it
+to the edge function allowlist AND redeploy `data-query` to `zqzrriwuavgrquhisnoa`**
+(NOT LCC Opps — the wrong project silently no-ops against production; QA-02 note).
+Also mirror the entry into `api/_shared/allowlist.js` (a documented mirror; its
+READ sets are otherwise dead — only its WRITE sets are on a live path via
+`apply-change.js`). A missed allowlist entry is the real root cause behind the
+"On Market shows 0 / Lease Backfill 1,000 / tile stuck on loading…" class of bugs
+— the client + views + grants can all be correct and the proxy still 403s.
+
+This round added the five canonical-tile views the 2026-07-13/14 Overview rounds
+created but never allowlisted (all verified to exist in their DBs; grants present):
+- **gov** (`GOV_READ_TABLES`): `v_gov_on_market` (On Market ≈278),
+  `v_llc_research_queue_health` (LLC queue counts).
+- **dia** (`DIA_READ_TABLES`): `v_dia_on_market` (On Market ≈184),
+  `v_clinic_lease_backfill_summary` (Lease Backfill ≈3,039),
+  `v_llc_research_queue_health` (LLC queue counts).
+
+`v_ownership_coverage`, `v_listings_needing_manual_confirmation`,
+`v_prospect_targets`, `mv_dia_overview_stats`, `mv_gov_overview_stats` were
+ALREADY allowlisted (their tiles worked); the five above were the silent 403s.
+Verify post-deploy in the browser: `GET /api/dia-query?table=v_dia_on_market`
+returns 200 with rows (not 403), and the dia Overview shows On Market 184 / Lease
+Backfill 3,039, gov Overview On Market 278. The edge redeploy is the activation;
+`allowlist.js` ships on the Railway redeploy.

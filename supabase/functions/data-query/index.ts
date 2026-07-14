@@ -82,6 +82,14 @@ const GOV_READ_TABLES = new Set([
   "gsa_lease_timeline",
   "opm_agency_location_rollups",
   "v_listing_verification_summary",
+  // Overview canonical-tile fix (2026-07-14): these views were created by the
+  // 2026-07-13 "one canonical source per tile" round but never allowlisted, so
+  // every browser read 403'd and the tiles silently showed 0 / stuck-loading:
+  //   v_gov_on_market            — gov.js:398 (On Market count = ~278)
+  //   v_llc_research_queue_health— gov.js:404 (LLC Research Queue counts)
+  // DB grants to anon/authenticated exist; the proxy allowlist was the gate.
+  "v_gov_on_market",
+  "v_llc_research_queue_health",
 ]);
 
 const GOV_WRITE_TABLES = new Set([
@@ -203,6 +211,16 @@ const DIA_READ_TABLES = new Set([
   // mv_gov_overview_stats. Without it the Portfolio-at-a-Glance / Lease
   // Expiration Risk / Operator Breakdown blocks render the empty skeleton.
   "mv_dia_overview_stats",
+  // Overview canonical-tile fix (2026-07-14): these views were created by the
+  // 2026-07-13 "one canonical source per tile" round but never allowlisted, so
+  // every browser read 403'd and the tiles silently showed 0 / stuck-loading:
+  //   v_dia_on_market                — dialysis.js:969/1680 (On Market = ~184)
+  //   v_clinic_lease_backfill_summary— dialysis.js:946 (Lease Backfill = ~3,039)
+  //   v_llc_research_queue_health    — dialysis.js:971 (LLC Research Queue counts)
+  // DB grants to anon/authenticated exist; the proxy allowlist was the gate.
+  "v_dia_on_market",
+  "v_clinic_lease_backfill_summary",
+  "v_llc_research_queue_health",
 ]);
 
 const DIA_WRITE_TABLES = new Set([
