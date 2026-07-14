@@ -350,10 +350,38 @@ tick:
 :45  lcc-availability-promotion-sweep (re-checks unverified set → 'sold' on deed match)
 ```
 
-The sweep only looks at listings whose `off_market_date` is within the
-last 90 days (`max_age_days` query param, capped at 180). Older listings
-fall back to manual research — at that point the absence of a deed match
-is a real-world signal, not a sweep oversight.
+**Age-decoupling (2026-07-14): a confirmed same-property sale match is
+promoted to Sold regardless of `off_market_date` age.** The sweep drives
+straight off `v_listings_needing_manual_confirmation` where
+`confirmation_state='sale_match_promote'` (the listing has a 1:1
+same-property candidate sale in the property's window — the view already
+encodes the "confirmed sale, promote" doctrine) filtered
+`exclude_from_listing_metrics=not.is.true` (test/soft-deleted guard, both
+domains). One doctrine: a deed match is a sale at any age. **`max_age_days`
+(default 90, capped 180) no longer gates the sale-match promotion** — it is
+retained for cron/URL compatibility and governs only the (currently no-op)
+non-matched aging path. Before the fix, ~9-year-old but exactly-matched
+listings sat stranded in the confirmation queue forever (dia 124 + gov 9,
+all 1:1 property-matched to a recorded sale); the queue holds only
+`aged_needs_research` (off-market >90d, no sale match) + transient
+`awaiting_sweep`.
+
+**Method label — the two-CHECK intersection (reconciled 2026-07-14).**
+`lcc_record_listing_check` passes its single `p_method` into BOTH
+`listing_verification_history.method` (`lvh_method_check`) AND
+`listing_status_history.source` (`lsh_source_check`). The two CHECKs
+disagreed on the "imported from a sale" label — lvh had `sold_imported`,
+lsh had `sale_imported` — so before the reconcile the only values valid for
+both were `auto_scrape`/`manual_user`/`sidebar_capture`. Migrations
+`{dia,gov} 20260714_..._listing_check_reconcile_and_promote_col.sql` widen
+both CHECKs (each accepts the other's label) and append
+`exclude_from_listing_metrics` to the view; the sweep now labels
+sale-from-match promotions honestly as **`sale_imported`** (valid for both)
+instead of a generic `auto_scrape`. Widening is additive/deploy-safe (apply
+DB first; JS ships on the Railway redeploy). Older listings with NO deed
+match still fall back to manual research — absence of a match is a
+real-world signal, not a sweep oversight. Reversible: a promoted listing
+carries its `sale_imported`-tagged verification + status-history rows.
 
 Acceptance script (live, no DB writes — uses the debug endpoint):
 ```bash

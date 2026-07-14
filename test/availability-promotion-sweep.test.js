@@ -1,9 +1,11 @@
-// Tests for the availability-promotion-sweep route in api/admin.js
-// (Round 76ej.h). The sweep finds listings the availability-checker
-// stamped 'unverified_assumed_off' and re-checks them against
-// sales_transactions; on a match it calls lcc_record_listing_check with
-// check_result='sold' to upgrade the off_market_reason from
-// 'unverified_assumed_off' to 'sold'.
+// Tests for the availability-promotion-sweep route in api/admin.js.
+// Age-decoupling (2026-07-14): the sweep drives straight off
+// v_listings_needing_manual_confirmation where
+// confirmation_state='sale_match_promote' (a confirmed 1:1 same-property sale
+// match) and promotes to Sold REGARDLESS of off_market_date age — a deed match
+// is a sale at any age. It records the promotion with method='sale_imported'
+// (valid for both lvh_method_check + lsh_source_check after the 2026-07-14
+// reconcile) and preserves the existing off_market_date via the RPC.
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,6 +51,11 @@ async function loadHandler() {
   return (await import(`../api/admin.js?test=${Date.now()}-${Math.random()}`)).default;
 }
 
+const USER_ROW = [{
+  id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
+  workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }],
+}];
+
 describe('admin /_route=availability-promotion-sweep', () => {
   beforeEach(() => {
     process.env.OPS_SUPABASE_URL = 'https://ops.example.com';
@@ -68,38 +75,27 @@ describe('admin /_route=availability-promotion-sweep', () => {
     }
   });
 
-  it('promotes a listing to sold when sales_transactions has a match in the ±3y window', async () => {
+  it('promotes a sale_match_promote row to sold — regardless of age — via sale_imported', async () => {
     const calls = [];
+    let viewUrl = null;
     global.fetch = async (url, opts = {}) => {
       const target = String(url);
       const method = opts.method || 'GET';
       calls.push({ url: target, method, body: opts.body });
 
-      if (target.includes('/rest/v1/users?')) {
-        return jsonResponse([{
-          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
-          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }],
-        }]);
-      }
+      if (target.includes('/rest/v1/users?')) return jsonResponse(USER_ROW);
 
-      // Promotion sweep query: filter on off_market_reason=eq.unverified_assumed_off.
-      if (target.startsWith('https://gov.example.com/rest/v1/available_listings?off_market_reason=eq.unverified_assumed_off')) {
+      // The sweep now drives off the view's classification.
+      if (target.startsWith('https://gov.example.com/rest/v1/v_listings_needing_manual_confirmation')) {
+        viewUrl = target;
         return jsonResponse([{
           listing_id: 'listing-uuid-1',
           property_id: 555,
-          listing_date: '2026-01-15',
-          off_market_date: '2026-04-10',
-          off_market_reason: 'unverified_assumed_off',
+          candidate_sale_id: 's-match',
+          candidate_sale_date: '2017-02-01',   // ~9 years old — must still promote
+          candidate_sold_price: 4200000,
         }]);
       }
-
-      if (target.startsWith('https://gov.example.com/rest/v1/sales_transactions')) {
-        return jsonResponse([
-          { sale_id: 's-old', sale_date: '2024-12-01' },     // 45d before listing
-          { sale_id: 's-match', sale_date: '2026-02-01' },   // 17d after listing — closest
-        ]);
-      }
-
       if (target.endsWith('/rest/v1/rpc/lcc_record_listing_check') && method === 'POST') {
         return jsonResponse({ ok: true });
       }
@@ -122,43 +118,37 @@ describe('admin /_route=availability-promotion-sweep', () => {
     assert.equal(res._json.promoted_to_sold, 1);
     assert.equal(res._json.no_sale_evidence, 0);
 
+    // Drives off the view, filters test rows, and applies NO age gate.
+    assert.ok(viewUrl, 'expected the view query to fire');
+    assert.match(viewUrl, /confirmation_state=eq\.sale_match_promote/);
+    assert.match(viewUrl, /exclude_from_listing_metrics=not\.is\.true/);
+    assert.ok(!/off_market_date=gte/.test(viewUrl), `no age gate expected in URL: ${viewUrl}`);
+    // Never queries sales_transactions itself — the view already resolved the match.
+    assert.ok(!calls.some((c) => c.url.includes('/rest/v1/sales_transactions')),
+      'must not re-derive the sale from sales_transactions');
+
     const rpc = calls.find((c) => c.url.endsWith('/rest/v1/rpc/lcc_record_listing_check'));
     assert.ok(rpc, 'expected lcc_record_listing_check call');
     const body = JSON.parse(rpc.body);
+    assert.equal(body.p_method, 'sale_imported');
     assert.equal(body.p_check_result, 'sold');
-    // off_market_reason must be 'sold' so the helper upgrades the listing
-    // away from the scraper's 'unverified_assumed_off' stamp.
     assert.equal(body.p_off_market_reason, 'sold');
+    assert.equal(body.p_effective_at, '2017-02-01');
     assert.match(body.p_notes, /availability-promotion-sweep/);
-    assert.match(body.p_notes, /sale_id=s-match/);
-    assert.equal(body.p_effective_at, '2026-02-01');
+    assert.match(body.p_notes, /candidate_sale_id=s-match/);
   });
 
-  it('records no_sale_evidence when nothing matches the window', async () => {
+  it('promotes nothing when the view has no sale_match_promote rows', async () => {
     global.fetch = async (url, opts = {}) => {
       const target = String(url);
       const method = opts.method || 'GET';
 
-      if (target.includes('/rest/v1/users?')) {
-        return jsonResponse([{
-          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
-          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }],
-        }]);
-      }
-      if (target.startsWith('https://dia.example.com/rest/v1/available_listings?off_market_reason=eq.unverified_assumed_off')) {
-        return jsonResponse([{
-          listing_id: 7,
-          property_id: 1,
-          listing_date: '2026-04-01',
-          off_market_date: '2026-04-20',
-          off_market_reason: 'unverified_assumed_off',
-        }]);
-      }
-      if (target.startsWith('https://dia.example.com/rest/v1/sales_transactions')) {
-        return jsonResponse([]); // no sales
+      if (target.includes('/rest/v1/users?')) return jsonResponse(USER_ROW);
+      if (target.startsWith('https://dia.example.com/rest/v1/v_listings_needing_manual_confirmation')) {
+        return jsonResponse([]); // aged_needs_research / awaiting_sweep only
       }
       if (target.endsWith('/rest/v1/rpc/lcc_record_listing_check') && method === 'POST') {
-        throw new Error('RPC must not be called when there is no sale evidence');
+        throw new Error('RPC must not be called when there is nothing to promote');
       }
       throw new Error(`Unexpected fetch: ${method} ${target}`);
     };
@@ -175,9 +165,8 @@ describe('admin /_route=availability-promotion-sweep', () => {
     );
 
     assert.equal(res._status, 200, JSON.stringify(res._json));
-    assert.equal(res._json.scanned, 1);
+    assert.equal(res._json.scanned, 0);
     assert.equal(res._json.promoted_to_sold, 0);
-    assert.equal(res._json.no_sale_evidence, 1);
   });
 
   it('GET returns dry-run counts without calling the RPC', async () => {
@@ -189,23 +178,15 @@ describe('admin /_route=availability-promotion-sweep', () => {
         rpcCalls.push({ method, body: opts.body });
       }
 
-      if (target.includes('/rest/v1/users?')) {
-        return jsonResponse([{
-          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
-          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }],
-        }]);
-      }
-      if (target.startsWith('https://gov.example.com/rest/v1/available_listings?off_market_reason=eq.unverified_assumed_off')) {
+      if (target.includes('/rest/v1/users?')) return jsonResponse(USER_ROW);
+      if (target.startsWith('https://gov.example.com/rest/v1/v_listings_needing_manual_confirmation')) {
         return jsonResponse([{
           listing_id: 'listing-uuid-1',
           property_id: 555,
-          listing_date: '2026-01-15',
-          off_market_date: '2026-04-10',
-          off_market_reason: 'unverified_assumed_off',
+          candidate_sale_id: 's-match',
+          candidate_sale_date: '2026-02-01',
+          candidate_sold_price: 4200000,
         }]);
-      }
-      if (target.startsWith('https://gov.example.com/rest/v1/sales_transactions')) {
-        return jsonResponse([{ sale_id: 's-match', sale_date: '2026-02-01' }]);
       }
       throw new Error(`Unexpected fetch: ${method} ${target}`);
     };
@@ -227,26 +208,22 @@ describe('admin /_route=availability-promotion-sweep', () => {
     assert.equal(rpcCalls.length, 0, 'dry-run must not call lcc_record_listing_check');
   });
 
-  it('applies the max_age_days cutoff to off_market_date', async () => {
-    let listingsUrl = null;
+  it('max_age_days does not gate the sale-match query (retained for cron compat)', async () => {
+    let viewUrl = null;
     global.fetch = async (url, opts = {}) => {
       const target = String(url);
       const method = opts.method || 'GET';
 
-      if (target.includes('/rest/v1/users?')) {
-        return jsonResponse([{
-          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
-          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }],
-        }]);
-      }
-      if (target.includes('/rest/v1/available_listings?off_market_reason=eq.unverified_assumed_off')) {
-        listingsUrl = target;
+      if (target.includes('/rest/v1/users?')) return jsonResponse(USER_ROW);
+      if (target.includes('/rest/v1/v_listings_needing_manual_confirmation')) {
+        viewUrl = target;
         return jsonResponse([]);
       }
       throw new Error(`Unexpected fetch: ${method} ${target}`);
     };
 
     const handler = await loadHandler();
+    const res = mockRes();
     await handler(
       {
         method: 'POST',
@@ -257,16 +234,13 @@ describe('admin /_route=availability-promotion-sweep', () => {
         },
         headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' },
       },
-      mockRes(),
+      res,
     );
 
-    // 30 days ago, ISO-prefix yyyy-mm-dd. Recompute the same way the
-    // handler does so the assertion is timezone-stable.
-    const expected = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    assert.ok(listingsUrl, 'expected listings query to fire');
-    assert.ok(
-      listingsUrl.includes(`off_market_date=gte.${encodeURIComponent(expected)}`),
-      `expected off_market_date=gte.${expected} in URL: ${listingsUrl}`,
-    );
+    assert.ok(viewUrl, 'expected the view query to fire');
+    // The sale-match promotion is age-independent — no off_market_date cutoff.
+    assert.ok(!/off_market_date=gte/.test(viewUrl), `no age gate expected in URL: ${viewUrl}`);
+    // max_age_days is surfaced in the response for observability only.
+    assert.equal(res._json.max_age_days, 30);
   });
 });
