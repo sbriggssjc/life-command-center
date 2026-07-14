@@ -6910,3 +6910,87 @@ Market ACTIVE LISTINGS shows 278 (not 0), including on a cold start where a
 transient 503 hits one detail query (the banner clears, the other tiles fill from
 the queries that succeeded, the headline still shows `onMarketIds.size`). `node
 --check gov.js` clean; suite 1676 pass / 0 fail / 6 skipped.
+
+## SJC Deal Book — DEAL-object-primary + self-maintaining (2026-07-14)
+
+The dia SJC Deal Book (`public.v_sjc_deal_book` on dia `zqzrriwuavgrquhisnoa`,
+rendered by `dialysis.js`) was fed **entirely from the Salesforce *Listing*
+object** (`sf_listing_staging`), so a closed deal only appeared if it carried a
+marketing Listing record — off-market / buy-side / co-broke / referral / older
+deals were invisible (82 closed shown vs Scott's ~251-deal ground truth, ~70%
+undercount). The book is now **DEAL-object-primary**: the Salesforce *Deal*
+(Opportunity) object is the primary source, the Listing object is supplemental,
+and a bootstrap/manual channel fills the historical gap. Migration
+`supabase/migrations/dialysis/20260714_dia_sjc_deal_book_deal_primary.sql`
+(applied live). Additive + reversible; output columns kept stable so
+`_summary` / `_by_year` are unaffected.
+
+### Three sources, one consolidated truth (superseded by dedup_key)
+- **`sf_deal_staging`** — the live SF Deal-object crawl (`deal_source='sf_crawl'`),
+  staged by the EXISTING `intake-salesforce` edge function (PA-driven; the SOQL
+  scope lives in the PA flow, watermark = `sf_sync_log` sync_type='crawl_run').
+  Full history 2006–2027. **We did NOT build a new crawl — we repointed the book
+  at the Deal object.**
+- **`public.sjc_deal_ingest`** (NEW table) — the one-time historical **bootstrap**
+  (`deal_source='manual_export'`) + any future manual entry. Drop the table →
+  gone. A BEFORE-INSERT/UPDATE trigger (`sjc_deal_ingest_fill_key`) fills
+  `dedup_key` from the shared key fn when a writer/seed leaves it null.
+- **`sf_listing_staging`** — SUPPLEMENTAL: active-marketing status + any closed
+  listing not yet covered by a Deal row (so there is **no regression** while the
+  crawl catches up).
+
+### The dedup key (single source of truth for cross-source supersession)
+`sjc_deal_dedup_key(name, close_date, price)` =
+`normalized(deal_name) | close_date(YYYY-MM-DD) | round(price/1000)*1000`
+(`sjc_norm_deal_name` lowercases + collapses non-alnum). `v_sjc_deal_ingest_current`
+UNIONs the crawl arm (from `sf_deal_staging`) + the bootstrap arm (from
+`sjc_deal_ingest`) and `DISTINCT ON (dedup_key)` keeps **`sf_crawl` over
+`manual_export`**, then most-recently-modified. The book's deal arm reads this
+(deal_side `<> 'other'`); the listing arm is appended ONLY where no deal row
+covers it (`NOT EXISTS` by `sf_deal_id` OR `dedup_key`).
+
+### deal_side mapping (crawl arm)
+`Category_sjc__c='Acquisition'` → `IS - Co-Broke Buyer` (if `Direct_Co_Broke_sjc__c`
+ILIKE `%co-broke%`) else `IS - Buy Side (CM)`; `deal_type='IS CM'` OR
+`Business_Line__c` ILIKE `Investment Sales%` → `Sale Deal - Commercial`; else
+`other` (excluded from the book). Team from `SJC_Broker_Team_Name_sjc__c`
+(fallback `_lcc_deal_team`); broker from `Broker_Name__c` (an HTML anchor → tags
+stripped) resolved through `salesforce_contacts` via `Producer__c`.
+
+### Verified live 2026-07-14 (seed NOT yet loaded — gain is from the crawl alone)
+Production flip held: **closed 82 → 129** (Sale-Commercial 62 → 107),
+total_rows 246, active_pipeline 18, **distinct_sf_deal_ids = rows_with_sf_deal_id
+= 246** (no duplicate sf_deal_ids), 90 with a resolved `broker_name`.
+`v_sjc_deal_book_by_year` now spans **2012–2026** (deep history the listing-only
+view never had — it had inflated recent years via per-listing snapshot fanout).
+`v_sjc_deal_book_summary` reconciles by team (Team Briggs 72 closed
+Sale-Commercial / $337M). Crawl-supersedes-seed round-trip (0 residue): a
+`manual_export` seed row surfaced as `manual_export` (book 246→247); a `sf_crawl`
+row with the SAME dedup_key kept the count steady (247) and **flipped the source
+to `sf_crawl`**; both test rows deleted (book back to 246 / closed 129).
+`node --check dialysis.js` clean; no client change needed (the render selects the
+same columns from `v_sjc_deal_book`).
+
+### Operational follow-ups (Scott's — NOT in this change; the two real levers)
+The 129 closed is up from 82 but still short of the ~251 ground truth, because
+the two durability levers are Scott's to pull:
+1. **Load the bootstrap seed.** Design intended a committed self-contained SQL
+   seed `audit/data-flow-2026-05-30/data/sjc_deal_bootstrap_seed.sql` (290 rows,
+   `deal_source='manual_export'`, `import_batch='manual_export_2026-07-14'`,
+   dedup_key precomputed) INSERTed into `public.sjc_deal_ingest`. **That seed file
+   is absent from the repo AND git history** (as is the source `.xlsx`), so it
+   could NOT be fabricated. When Scott commits the seed (or provides the export),
+   loading it into `sjc_deal_ingest` lifts closed toward ~251 immediately;
+   crawl-caught rows then supersede the seed twins automatically by dedup_key.
+2. **Widen the `intake-salesforce` crawl's Deal SOQL/report scope** — the durable
+   completeness fix that removes future manual exports. The crawl currently
+   reaches ~149 deals; the goal is ~272. The SOQL lives in the Power Automate
+   flow (the edge function is a passive stager), so this is a PA-flow edit, not a
+   code change here.
+3. **Run deal→property/sale propagation** — the ~122 unprocessed `sf_deal_staging`
+   rows via the existing `sf-promotion-worker` (deal → property/sale linking),
+   which populates `linked_property_id` / `matched_sale_id` on more book rows.
+
+### Reversibility
+Drop `sjc_deal_ingest` (+ its trigger/fns) and re-create the prior listing-only
+`v_sjc_deal_book` body from `20260604140000_dia_sjc_deal_book_dedupe.sql`.
