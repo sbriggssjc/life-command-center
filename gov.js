@@ -342,7 +342,8 @@ async function loadGovData() {
     // ── PHASE 1: Critical data for overview + research ────────────────
     // Loads leads, portfolio properties, property count, listings first
     // so the dashboard renders quickly (~3-5s) before heavier tables arrive
-    var [leadsRes, portfolioPropsRes, propsCountRes, listingsRes, onMarketRes] = await Promise.all([
+    var [leadsRes, portfolioPropsRes, propsCountRes, listingsRes, onMarketRes,
+         govOwnershipCovRes, govLlcHealthRes, govListingConfirmRes, govProspectRes] = await Promise.all([
       // PERF (2026-05-31): was govQueryAll (unbounded serial pagination of all
       // ~11.5k leads -> the 14.6s Gov-tab freeze). The leads array is a
       // prioritized WORKING SET (pipeline already caps at 1,000 via atCap), not
@@ -394,7 +395,15 @@ async function loadGovData() {
       // On-Market tile and the Listings tab filter govData.listings by this
       // listing_id membership, so neither computes its own filter and both
       // reconcile with the CM available count. Light (~278 rows).
-      govQuery('v_gov_on_market', 'listing_id', { limit: 1000 })
+      govQuery('v_gov_on_market', 'listing_id', { limit: 1000 }),
+      // ── Data-Health tiles: read the ONE canonical view per metric on the
+      // Overview load (mirrors dia), so they render SYNCHRONOUSLY and the
+      // re-render can't strand them on "loading…". All small (aggregated / a
+      // bounded page — gov listings-confirm ~67, prospect top-250).
+      govQuery('v_ownership_coverage', '*', { limit: 1 }),
+      govQuery('v_llc_research_queue_health', '*', { limit: 50 }),
+      govQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000 }),
+      govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
     ]);
 
     govData.leads = leadsRes.data || [];
@@ -411,6 +420,32 @@ async function loadGovData() {
     govData.onMarketIds = (onMarketRes && Array.isArray(onMarketRes.data))
       ? new Set(onMarketRes.data.map(r => r.listing_id))
       : null;
+
+    // ── Canonical Data-Health tile sources (rendered synchronously) ──
+    // Ownership Coverage — the ONE single-row summary view.
+    window._govOwnershipCoverage = (govOwnershipCovRes && govOwnershipCovRes.data && govOwnershipCovRes.data[0]) || null;
+    window._govOwnershipCoverageLoadedFlag = true;
+    // LLC Research Queue counts — status → row_count from the ONE health view.
+    (function() {
+      var byStatus = {}, total = 0;
+      ((govLlcHealthRes && govLlcHealthRes.data) || []).forEach(function(r) {
+        byStatus[r.status] = Number(r.row_count) || 0; total += Number(r.row_count) || 0;
+      });
+      window._govLlcPending = byStatus.deferred || 0;
+      window._govLlcDone = byStatus.done || 0;
+      window._govLlcTotalRows = total;
+      window._govLlcHealthLoaded = true;
+    })();
+    // Listings Needing Confirmation — the bounded row set (drives counts + list).
+    window._govLcConfirmRows = (govListingConfirmRes && govListingConfirmRes.data) || [];
+    window._govListingConfirmDataLoaded = true;
+    // Unprospected Owners — count + the modal top-list.
+    (function() {
+      var pt = (govProspectRes && govProspectRes.data) || [];
+      window._govTopUnprospected = pt;
+      window._govUnprospectedTotal = (govProspectRes && typeof govProspectRes.count === 'number' && govProspectRes.count > 0)
+        ? govProspectRes.count : pt.length;
+    })();
 
     // Mark connected so dashboard renders immediately with Phase 1 data
     govConnected = true;
@@ -4379,145 +4414,35 @@ function renderGovOverview() {
     })();
   }
 
-  // ── Async-load Listings Needing Confirmation (mirrors dia) ──
-  if (!window.__govListingConfirmLoading && !window._govListingConfirmLoaded) {
-    window.__govListingConfirmLoading = true;
-    (async () => {
-      try {
-        let all = [], offset = 0;
-        while (true) {
-          const res = await govQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000, offset });
-          const rows = res.data || [];
-          all = all.concat(rows);
-          if (rows.length < 1000) break;
-          offset += 1000;
-        }
-        window._govLcConfirmRows = all;
-        renderGovListingConfirm();
-      } catch (e) {
-        console.warn('gov listing confirmation load failed', e);
-        const wrap = document.getElementById('govListingConfirm');
-        if (wrap) wrap.innerHTML = '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">Confirmation queue unavailable</div>';
-      }
-      window._govListingConfirmLoaded = true;
-      window.__govListingConfirmLoading = false;
-    })();
-  }
+  // Listings-confirm / LLC / Ownership Coverage count tiles now render
+  // SYNCHRONOUSLY from the caches loaded in the main Promise.all (mirrors dia),
+  // so the re-render can't strand them on "loading…". Fill the resolve LISTS
+  // once the Overview HTML is in the DOM — re-render safe (getElementById
+  // no-ops if the Overview isn't mounted).
+  setTimeout(function() { try { renderGovListingConfirm(); } catch (e) {} }, 0);
 
-  // ── Async-load LLC Research Queue (mirrors dia) ──
-  // Counts come from the ONE canonical summary view v_llc_research_queue_health
-  // (status → row_count); the per-owner LIST is a best-effort endpoint read with
-  // a hard timeout so it can never hang the tile on "…".
-  if (!window.__govLlcQueueLoading && !window._govLlcQueueLoaded) {
+  // LLC per-owner resolve list — a separate endpoint; lazy, gated on cache-null
+  // (not a once-flag). The count tiles do NOT depend on it.
+  if (window._govLlcQueueItems == null && !window.__govLlcQueueLoading) {
     window.__govLlcQueueLoading = true;
     (async () => {
-      // (1) canonical counts — never hangs (single view row-group)
-      try {
-        const hRes = await govQuery('v_llc_research_queue_health', '*', { limit: 50 });
-        const hRows = (hRes && hRes.data) || [];
-        const byStatus = {}; let total = 0;
-        hRows.forEach(r => { byStatus[r.status] = Number(r.row_count) || 0; total += Number(r.row_count) || 0; });
-        window._govLlcPending = byStatus.deferred || 0;   // awaiting research (parked)
-        window._govLlcDone = byStatus.done || 0;
-        window._govLlcTotalRows = total;
-        window._govLlcHealthLoaded = true;
-      } catch (e) {
-        console.warn('gov llc health load failed', e);
-      }
-      // (2) per-owner list — best-effort, hard 12s timeout (never hangs the tile)
       try {
         const ctl = new AbortController();
         const to = setTimeout(() => ctl.abort(), 12000);
-        const resp = await fetch('/api/llc-research-queue?domain=government&limit=25', { signal: ctl.signal });
-        clearTimeout(to);
-        const j = resp.ok ? await resp.json() : {};
+        let resp;
+        try { resp = await fetch('/api/llc-research-queue?domain=government&limit=25', { signal: ctl.signal }); }
+        finally { clearTimeout(to); }
+        const j = resp && resp.ok ? await resp.json() : {};
         window._govLlcQueueItems = (j && j.items) || [];
       } catch (e) {
         console.warn('gov llc list load failed', e && e.message);
         window._govLlcQueueItems = window._govLlcQueueItems || [];
       }
-      renderGovLlcQueue();
-      window._govLlcQueueLoaded = true;
       window.__govLlcQueueLoading = false;
+      try { renderGovLlcQueue(); } catch (e) {}
     })();
   }
-
-  // Ownership Coverage (Section 12) — reads the ONE canonical summary view
-  // v_ownership_coverage (a single pre-aggregated row) instead of the old
-  // sequential full-table pulls (ownership_history + true_owners + sf_activities)
-  // that routinely hung the three tiles on "loading…". Guarded so it fires once
-  // per session (the old IIFE was UNGUARDED — it re-ran every render). The
-  // Unprospected tile keeps its v_prospect_targets read (one bounded query) for
-  // the click-through BD-targets modal.
-  if (!window.__govOwnershipCoverageLoading && !window._govOwnershipCoverageLoaded) {
-    window.__govOwnershipCoverageLoading = true;
-    (async () => {
-      try {
-        const covRes = await govQuery('v_ownership_coverage', '*', { limit: 1 });
-        const cov = (covRes && covRes.data && covRes.data[0]) || null;
-
-        // Unprospected owners (owners with >=1 property but no SF link) — the
-        // actionable BD-target count + the modal list. One bounded query.
-        const ptResSettled = await govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
-            .then(r => ({ ok: true, value: r }))
-            .catch(err => ({ ok: false, err }));
-        let missingSF = null, topUnprospected = [];
-        if (ptResSettled.ok) {
-          const ptRes = ptResSettled.value;
-          const ptRows = Array.isArray(ptRes.data) ? ptRes.data : (Array.isArray(ptRes) ? ptRes : []);
-          missingSF = (typeof ptRes.count === 'number' && ptRes.count > 0) ? ptRes.count : ptRows.length;
-          topUnprospected = ptRows;
-        }
-        window._govTopUnprospected = topUnprospected;
-        window._govUnprospectedTotal = missingSF;
-
-        const wrap = document.getElementById('govOwnershipCoverage');
-        if (!wrap) return;
-        if (!cov) {
-          wrap.innerHTML = '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">Ownership coverage unavailable</div>';
-          return;
-        }
-        const _c = { blue:'#6c8cff', green:'#34d399', red:'#f87171' };
-        const pct = (v) => (v == null ? '—' : Math.round(Number(v)) + '%');
-        // Ownership Depth = % of properties resolved to a true owner (the
-        // canonical depth metric). SF Prospecting = % of owners linked to
-        // Salesforce (gov uses pct_unified_owner_has_salesforce).
-        const depthPct = cov.pct_property_has_true_owner;
-        const sfPct = (cov.pct_unified_owner_has_salesforce != null ? cov.pct_unified_owner_has_salesforce : cov.pct_true_owner_has_salesforce);
-        const unpTile = (missingSF != null)
-          ? `<div class="gov-info-card" onclick="_govShowProspectTargets()" style="cursor:pointer" title="Click to see top unprospected owners by property count">
-               <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Unprospected Owners</div>
-               <div style="font-size:24px;font-weight:800;color:${_c.red};margin-bottom:4px">${fmtN(missingSF)}</div>
-               <div style="font-size:11px;color:var(--text2)">owners with property, no SF link — click to view BD targets</div>
-             </div>`
-          : `<div class="gov-info-card">
-               <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Unprospected Owners</div>
-               <div style="font-size:24px;font-weight:800;color:var(--text3);margin-bottom:4px">—</div>
-               <div style="font-size:11px;color:var(--text2)">unavailable</div>
-             </div>`;
-        wrap.innerHTML = `<div class="gov-grid gov-grid-3">
-          <div class="gov-info-card">
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Ownership Depth</div>
-            <div style="font-size:24px;font-weight:800;color:${_c.blue};margin-bottom:4px">${pct(depthPct)}</div>
-            <div style="font-size:11px;color:var(--text2)">of ${fmtN(cov.properties)} properties resolved to a true owner · ${pct(cov.pct_property_has_recorded_owner)} recorded · ${pct(cov.pct_property_has_county_deed)} county deed</div>
-          </div>
-          <div class="gov-info-card">
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">SF Prospecting</div>
-            <div style="font-size:24px;font-weight:800;color:${_c.green};margin-bottom:4px">${pct(sfPct)}</div>
-            <div style="font-size:11px;color:var(--text2)">of owners linked to Salesforce</div>
-          </div>
-          ${unpTile}
-        </div>`;
-        window._govOwnershipCoverageLoaded = true;
-      } catch (err) {
-        console.warn('Gov ownership coverage load failed:', err.message);
-        const wrap = document.getElementById('govOwnershipCoverage');
-        if (wrap) wrap.innerHTML = '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">Ownership coverage data unavailable</div>';
-      } finally {
-        window.__govOwnershipCoverageLoading = false;
-      }
-    })();
-  }
+  setTimeout(function() { try { renderGovLlcQueue(); } catch (e) {} }, 0);
 
   let html = '<div style="padding:4px 0">';
 
@@ -5137,30 +5062,21 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   html += '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);margin:30px 0 0;padding:0 2px 6px;border-bottom:2px solid var(--border)">Data Health &amp; Coverage</div>';
 
-  // ── Listings Needing Confirmation (manual follow-up) ──
+  // ── Listings Needing Confirmation (manual follow-up) — counts render
+  // SYNCHRONOUSLY from window._govLcConfirmRows (main-loaded); list fills via the
+  // scheduled renderGovListingConfirm() above. ──
   html += govSectionHeader('Listings Needing Confirmation', '🔎', 'listings');
-  html += '<div id="govListingConfirm"><div class="gov-grid gov-grid-3">';
-  html += govCard({ title: 'Need Confirmation', value: '...', sub: 'loading', color: 'orange', id: 'govLcNeed', subId: 'govLcNeedSub' });
-  html += govCard({ title: 'Sale Match Ready', value: '...', sub: 'one-click confirm sold', color: 'green', id: 'govLcMatch', subId: 'govLcMatchSub' });
-  html += govCard({ title: 'Aged > 90d', value: '...', sub: 'needs research', color: 'red', id: 'govLcAged', subId: 'govLcAgedSub' });
-  html += '</div><div id="govLcConfirmList" style="margin-top:10px"></div></div>';
+  html += '<div id="govListingConfirm">' + _govListingConfirmTiles() + '<div id="govLcConfirmList" style="margin-top:10px"></div></div>';
 
-  // ── LLC Research Queue (owner enrichment, manual resolve) ──
+  // ── LLC Research Queue — counts render SYNCHRONOUSLY from the main-loaded
+  // health globals; list fills via the scheduled renderGovLlcQueue() above. ──
   html += govSectionHeader('LLC Research Queue', '🏛️', 'research');
-  html += '<div id="govLlcQueue"><div class="gov-grid gov-grid-3">';
-  html += govCard({ title: 'Queued Owners', value: '—', sub: 'awaiting research', color: 'purple', id: 'govLlcTotal', subId: 'govLlcTotalSub' });
-  html += govCard({ title: 'Resolved', value: '—', sub: 'to date', color: 'blue', id: 'govLlcShown', subId: 'govLlcShownSub' });
-  html += govCard({ title: 'Resolve', value: 'manual', sub: 'SOS lookup + mark done', color: 'cyan', tab: 'research' });
-  html += '</div><div id="govLlcQueueList" style="margin-top:10px"></div></div>';
+  html += '<div id="govLlcQueue">' + _govLlcTiles() + '<div id="govLlcQueueList" style="margin-top:10px"></div></div>';
 
-  // ── Ownership Coverage ──
+  // ── Ownership Coverage — rendered SYNCHRONOUSLY from window._govOwnershipCoverage
+  // + window._govUnprospectedTotal (main-loaded). No hanging async / once-flag. ──
   html += govSectionHeader('Ownership Coverage', '🏛️', 'ownership');
-  html += '<div id="govOwnershipCoverage">';
-  html += '<div class="gov-grid gov-grid-3">';
-  html += govCard({ title: 'Ownership Depth', value: '...', sub: 'loading ownership data', color: 'blue' });
-  html += govCard({ title: 'SF Prospecting', value: '...', sub: 'loading activity data', color: 'green' });
-  html += govCard({ title: 'Missing SF Link', value: '...', sub: 'loading salesforce data', color: 'red' });
-  html += '</div></div>';
+  html += '<div id="govOwnershipCoverage">' + _govOwnershipCoverageCards() + '</div>';
 
   html += '</div>'; // end wrapper
   return html;
@@ -5617,6 +5533,68 @@ window.setGovListingOwnership = function(view) {
   govListingOwnership = view;
   renderGovTab();
 };
+
+// ── Gov Data-Health tile inner-renderers (synchronous, cache-fed) ────────────
+// Each reads a value loaded once in the main gov Promise.all so a re-render
+// always paints the real number instead of stranding the tile on "loading…".
+
+function _govOwnershipCoverageCards() {
+  const cov = window._govOwnershipCoverage;
+  const unpros = window._govUnprospectedTotal;
+  const loaded = window._govOwnershipCoverageLoadedFlag === true;
+  const _c = { blue: '#6c8cff', green: '#34d399', red: '#f87171' };
+  const pct = (v) => (v == null ? '—' : Math.round(Number(v)) + '%');
+  const cardHTML = (title, val, sub, color, onclick, cursor) =>
+    `<div class="gov-info-card"${onclick ? ' onclick="' + onclick + '" style="cursor:pointer" title="Click to see top unprospected owners by property count"' : ''}>
+       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${title}</div>
+       <div style="font-size:24px;font-weight:800;color:${color};margin-bottom:4px">${val}</div>
+       <div style="font-size:11px;color:var(--text2)">${sub}</div>
+     </div>`;
+  if (!loaded) {
+    return '<div class="gov-grid gov-grid-3">'
+      + cardHTML('Ownership Depth', '…', 'loading', _c.blue)
+      + cardHTML('SF Prospecting', '…', 'loading', _c.green)
+      + cardHTML('Unprospected Owners', '…', 'loading', _c.red)
+      + '</div>';
+  }
+  if (!cov) {
+    return '<div class="gov-info-card" style="padding:16px;color:var(--text3);font-size:12px">Ownership coverage unavailable</div>';
+  }
+  const sfPct = (cov.pct_unified_owner_has_salesforce != null ? cov.pct_unified_owner_has_salesforce : cov.pct_true_owner_has_salesforce);
+  const unpTile = (unpros != null)
+    ? cardHTML('Unprospected Owners', fmtN(unpros), 'owners with property, no SF link — click to view BD targets', _c.red, '_govShowProspectTargets()')
+    : cardHTML('Unprospected Owners', '—', 'unavailable', 'var(--text3)');
+  return '<div class="gov-grid gov-grid-3">'
+    + cardHTML('Ownership Depth', pct(cov.pct_property_has_true_owner),
+        'of ' + fmtN(cov.properties) + ' properties resolved to a true owner · ' + pct(cov.pct_property_has_recorded_owner) + ' recorded', _c.blue)
+    + cardHTML('SF Prospecting', pct(sfPct), 'of owners linked to Salesforce', _c.green)
+    + unpTile
+    + '</div>';
+}
+
+function _govListingConfirmTiles() {
+  const rows = window._govLcConfirmRows;
+  const loaded = Array.isArray(rows);
+  const matchReady = loaded ? rows.filter(r => r.confirmation_state === 'sale_match_promote') : [];
+  const aged = loaded ? rows.filter(r => r.confirmation_state === 'aged_needs_research') : [];
+  const v = (n) => loaded ? fmtN(n) : '…';
+  let h = '<div class="gov-grid gov-grid-3">';
+  h += govCard({ title: 'Need Confirmation', value: v(loaded ? rows.length : 0), sub: 'unverified_assumed_off', color: 'orange', id: 'govLcNeed', subId: 'govLcNeedSub' });
+  h += govCard({ title: 'Sale Match Ready', value: v(matchReady.length), sub: 'deed match — confirm sold', color: 'green', id: 'govLcMatch', subId: 'govLcMatchSub' });
+  h += govCard({ title: 'Aged > 90d', value: v(aged.length), sub: 'no deed match, aged', color: 'red', id: 'govLcAged', subId: 'govLcAgedSub' });
+  return h + '</div>';
+}
+
+function _govLlcTiles() {
+  const loaded = window._govLlcHealthLoaded;
+  const pending = loaded ? window._govLlcPending : null;
+  const done = loaded ? window._govLlcDone : null;
+  let h = '<div class="gov-grid gov-grid-3">';
+  h += govCard({ title: 'Queued Owners', value: (pending == null ? '…' : fmtN(pending)), sub: 'awaiting research', color: 'purple', id: 'govLlcTotal', subId: 'govLlcTotalSub' });
+  h += govCard({ title: 'Resolved', value: (done == null ? '…' : fmtN(done)), sub: 'resolved to date', color: 'blue', id: 'govLlcShown', subId: 'govLlcShownSub' });
+  h += govCard({ title: 'Resolve', value: 'manual', sub: 'SOS lookup + mark done', color: 'cyan', tab: 'research' });
+  return h + '</div>';
+}
 
 // ── Gov: Listings Needing Confirmation panel (mirror of dia) ──
 function renderGovListingConfirm() {

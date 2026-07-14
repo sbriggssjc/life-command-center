@@ -6675,6 +6675,43 @@ Live verification (Prospects shows the real engaged set, an open-opp entity is n
 in Prospects, Deals defaults to the active subset with Show-all) is on the deployed
 app after redeploy.
 
+## dia/gov Overview tiles — render SYNCHRONOUSLY from the main data load (2026-07-14)
+
+Follow-up: the 2026-07-13 canonical-source round pointed the tiles at the right
+views but LEFT the still-broken ones on the fragile **lazy-async-filler + once-flag**
+pattern — and the 2026-07-13 perf round's `_loadDiaHeavyDetail()` **re-renders the
+whole Overview** (`inner.innerHTML = renderDiaOverview()`), replacing the filled
+tiles with fresh "loading…" placeholders that the `window._diaXxxRendered` once-flag
+then REFUSED to refill. So live: **On Market showed 0** (renderOnMarketInner filtered
+`diaAvailListings` — which fails/empties client-side while v_dia_on_market succeeds →
+empty intersection); **Ownership Coverage / Listings-confirm / LLC queue stuck on
+"loading…"** (once-flag blocked refill after the re-render); **Lease Backfill 1,000**
+(the Research-TAB step badge `lbCount` still read the capped `leaseBackfillRows.length`
+page). The tiles that WORKED (Completed Reviews, Property Queue) render synchronously
+from `diaData` loaded in the main Promise.all — that IS the fix.
+
+**The rule (apply to any Overview tile):** load its ONE canonical source in the
+main `loadDiaData` / gov Promise.all (small: a `_summary`/1-row view, a bounded
+page, or `includeCount`), store it on `diaData`/`govData`/`window._*`, and render
+the tile VALUE **synchronously in the HTML string** via an inner-render helper that
+reads the cache. **Never** compute a count by filtering a client-loaded array (it
+can be empty on the Overview) and **never** gate a tile's value behind a
+lazy-async-filler with a `_rendered` once-flag (a re-render strands it). LIST panels
+(resolve queues) may still fill via a scheduled `setTimeout(0)` call that reads the
+same cache; the COUNT tiles never wait on them.
+
+Landed (`dialysis.js` + `gov.js`, client-only, no migration, no new api/*.js): On
+Market now reads `v_dia_on_market` ROWS directly (diaData.onMarketRows → 184; gov
+keeps its listings∩onMarketIds = 278, both main-loaded); `v_ownership_coverage`,
+`v_llc_research_queue_health`, `v_listings_needing_manual_confirmation`,
+`v_prospect_targets` (count) all fetched in the main Promise.all and rendered by
+`_dia*/_gov*` inner-render helpers; `lbCount` reads `diaData.leaseBackfillCount`
+(~3,039). The once-flag async fillers are deleted; only the LLC per-owner list stays
+lazy (cache-null gated, never blocks the count). Verified live (read-only): dia On
+Market 184 / Lease Backfill 3,039 / ownership 83.8% depth · 11.1% SF / LLC deferred
+1,155 · done 31 / listings-confirm 500; gov On Market 278 / listings-confirm 67 /
+unprospected 6,673. Full suite 1,676 pass / 0 fail.
+
 ## dia/gov Overview — every snapshot tile reads ONE canonical source (2026-07-13)
 
 Scott's goal: one correct number per metric, everywhere. The dia + gov Overview
