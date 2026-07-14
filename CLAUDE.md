@@ -6844,3 +6844,41 @@ Verify post-deploy in the browser: `GET /api/dia-query?table=v_dia_on_market`
 returns 200 with rows (not 403), and the dia Overview shows On Market 184 / Lease
 Backfill 3,039, gov Overview On Market 278. The edge redeploy is the activation;
 `allowlist.js` ships on the Railway redeploy.
+
+## gov Overview — On-Market count reads the canonical view directly + resilient detail load (2026-07-14)
+
+Two gov-only defects (dia was already correct — do NOT touch it). Client-only
+(`gov.js` `loadGovData` + the SECTION-10 On-Market render); no api/*.js (≤12); no
+migration; no DB change.
+
+- **The gov On-Market HEADLINE count reads `govData.onMarketIds.size`** (the
+  canonical `v_gov_on_market` membership, ~278) — decoupled from the heavy
+  `available_listings` pull. It was `listings.filter(l => onMarketIds.has(...)).length`,
+  which showed **0** whenever the `listings` array hadn't populated even though the
+  membership Set had loaded. Only when the view load itself failed (`onMarketIds`
+  null) does it fall back to the legacy `lccIsListingActive` filter over the client
+  rows. The detail SUB-tiles (Total Asking / Under Contract / Avg Cap / Avg DOM)
+  genuinely need row fields, so they still derive from the intersected rows and
+  honestly show `—` ("detail loading") when `listings` isn't loaded — decoupled
+  from the headline so a slow/failed listings pull can't zero the count. Mirrors
+  the dia `v_dia_on_market` doctrine: **read the count directly from the canonical
+  view, don't intersect a client array.**
+
+- **The gov Overview detail load (`loadGovData` Phase-1 batch) uses
+  `Promise.allSettled`, not `Promise.all`.** With `Promise.all`, ANY single
+  rejection (a Railway cold-start 503, or a canonical view still 403'd behind the
+  edge-allowlist redeploy) rejected the whole batch → none of the assignments ran
+  (`listings`/`onMarketIds`/ownership-coverage/LLC/listings-confirm all stayed
+  unset), `govDataLoaded` never flipped, the "Loading detailed data in
+  background…" banner never cleared, and every tile in the batch blanked together.
+  Now each result is extracted defensively (a rejected query → null); every
+  downstream tile already has a null/empty fallback, so the queries that succeed
+  land, `govDataLoaded=true` still fires, `renderGovTab()` re-renders and clears
+  the banner, and a failed sub-query shows only that tile's own empty/"unavailable"
+  state — never a page-wide strand.
+
+**Acceptance is the LIVE BROWSER, not the suite:** load the gov Overview → On
+Market ACTIVE LISTINGS shows 278 (not 0), including on a cold start where a
+transient 503 hits one detail query (the banner clears, the other tiles fill from
+the queries that succeeded, the headline still shows `onMarketIds.size`). `node
+--check gov.js` clean; suite 1676 pass / 0 fail / 6 skipped.
