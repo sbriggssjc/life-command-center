@@ -342,8 +342,13 @@ async function loadGovData() {
     // ── PHASE 1: Critical data for overview + research ────────────────
     // Loads leads, portfolio properties, property count, listings first
     // so the dashboard renders quickly (~3-5s) before heavier tables arrive
-    var [leadsRes, portfolioPropsRes, propsCountRes, listingsRes, onMarketRes,
-         govOwnershipCovRes, govLlcHealthRes, govListingConfirmRes, govProspectRes] = await Promise.all([
+    // Resilient load (2026-07-14): Promise.allSettled so ONE transient failure
+    // (a cold-start 503, or a canonical view still 403'd behind the edge-
+    // allowlist redeploy) can't reject the whole batch and strand every tile +
+    // leave the "Loading detailed data…" banner spinning forever. Each result
+    // is extracted defensively; every downstream tile already has a null/empty
+    // fallback, so the queries that succeed still land.
+    var _govSettled = await Promise.allSettled([
       // PERF (2026-05-31): was govQueryAll (unbounded serial pagination of all
       // ~11.5k leads -> the 14.6s Gov-tab freeze). The leads array is a
       // prioritized WORKING SET (pipeline already caps at 1,000 via atCap), not
@@ -405,14 +410,26 @@ async function loadGovData() {
       govQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000 }),
       govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
     ]);
+    // Extract each result defensively — a rejected query becomes null and the
+    // tile it feeds falls back to its own empty/error state (never a page-wide
+    // strand). NOTE: portfolioPropsRes comes from _loadPaginatedQuery (returns
+    // an array, not a {data} envelope), so it's null-on-failure directly.
+    var _gv = function (i) { return _govSettled[i].status === 'fulfilled' ? _govSettled[i].value : null; };
+    var leadsRes = _gv(0), portfolioPropsRes = _gv(1), propsCountRes = _gv(2),
+        listingsRes = _gv(3), onMarketRes = _gv(4), govOwnershipCovRes = _gv(5),
+        govLlcHealthRes = _gv(6), govListingConfirmRes = _gv(7), govProspectRes = _gv(8);
+    var _govFailedCount = _govSettled.filter(function (r) { return r.status === 'rejected'; }).length;
+    if (_govFailedCount > 0) {
+      console.warn('[gov] ' + _govFailedCount + ' of ' + _govSettled.length + ' overview queries failed (transient); rendering with the ones that succeeded');
+    }
 
-    govData.leads = leadsRes.data || [];
+    govData.leads = (leadsRes && leadsRes.data) || [];
     // True DB total (exact count from the bounded query above) — distinct from
     // the loaded working-set length. Used where the real total must be shown.
-    govData.leadsTotal = (typeof leadsRes.count === 'number' && leadsRes.count > 0) ? leadsRes.count : govData.leads.length;
+    govData.leadsTotal = (leadsRes && typeof leadsRes.count === 'number' && leadsRes.count > 0) ? leadsRes.count : govData.leads.length;
     govData.portfolioProperties = portfolioPropsRes || [];
-    govData.properties = [{ count: propsCountRes.count || 0 }];
-    govData.listings = listingsRes.data || [];
+    govData.properties = [{ count: (propsCountRes && propsCountRes.count) || 0 }];
+    govData.listings = (listingsRes && listingsRes.data) || [];
     // Set of listing_ids that are CURRENTLY on market per the canonical view.
     // null (query failed) → surfaces fall back to lccIsListingActive so the
     // tile never blanks. Empty Set is a legit "0 on market" (honest), distinct
@@ -4989,23 +5006,40 @@ function renderGovOverview() {
   // SECTION 10: ON MARKET
   // ═══════════════════════════════════════════════
   // Canonical CURRENT on-market set (v_gov_on_market membership) — the ONE
-  // definition, shared with the Listings tab + the CM available count. Falls
-  // back to the legacy status filter only if the view load failed (null).
-  const activeListings = govData.onMarketIds
+  // definition, shared with the Listings tab + the CM available count.
+  //
+  // HEADLINE COUNT reads the canonical view membership DIRECTLY
+  // (govData.onMarketIds.size) — it does NOT need the heavy `listings` array,
+  // so it never blanks to 0 while that pull is empty/slow. Only when the view
+  // load itself failed (null) do we fall back to the legacy status filter over
+  // the client rows. The detail SUB-tiles (Total Asking / Avg Cap / Avg DOM /
+  // Under Contract) genuinely need row fields, so they derive from the
+  // intersected rows when `listings` is loaded and honestly show '—' when it
+  // isn't — decoupled from the headline so a slow/failed listings pull can't
+  // zero the count. Mirrors the dia v_dia_on_market pattern.
+  const activeListingRows = govData.onMarketIds
     ? listings.filter(l => govData.onMarketIds.has(l.listing_id))
     : listings.filter(l => lccIsListingActive(l));
+  const onMarketCount = govData.onMarketIds
+    ? govData.onMarketIds.size
+    : activeListingRows.length;
+  const listingsLoaded = listings.length > 0;
   const underContract = listings.filter(l => (l.listing_status || '').toLowerCase() === 'under_contract');
-  const totalAsking = activeListings.reduce((s, l) => s + (l.asking_price || 0), 0);
-  const listingCaps = activeListings.filter(l => l.asking_cap_rate > 0.01 && l.asking_cap_rate < 0.25).map(l => parseFloat(l.asking_cap_rate)).sort((a,b) => a-b);
+  const totalAsking = activeListingRows.reduce((s, l) => s + (l.asking_price || 0), 0);
+  const listingCaps = activeListingRows.filter(l => l.asking_cap_rate > 0.01 && l.asking_cap_rate < 0.25).map(l => parseFloat(l.asking_cap_rate)).sort((a,b) => a-b);
   const avgAskingCap = listingCaps.length > 0 ? (listingCaps.reduce((s,v)=>s+v,0)/listingCaps.length*100).toFixed(2)+'%' : '—';
-  const avgDom = activeListings.filter(l => l.days_on_market > 0);
+  const avgDom = activeListingRows.filter(l => l.days_on_market > 0);
   const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,l) => s + l.days_on_market, 0) / avgDom.length) : '—';
+  // Sub-tile values fall back to '—' ("detail loading") when the row detail
+  // isn't available yet, so they never mislead — but the headline count stands.
+  const totalAskingVal = !listingsLoaded ? '—' : (totalAsking > 0 ? '$' + fmtN(Math.round(totalAsking / 1e6)) + 'M' : '—');
+  const underContractVal = listingsLoaded ? fmtN(underContract.length) : '—';
 
   html += govSectionHeader('On Market', '🏢', 'listings');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Active Listings', value: fmtN(activeListings.length), sub: 'currently on market', color: 'blue', tab: 'listings' });
-  html += govCard({ title: 'Under Contract', value: fmtN(underContract.length), sub: 'pending close', color: 'green', tab: 'listings' });
-  html += govCard({ title: 'Total Asking', value: totalAsking > 0 ? '$' + fmtN(Math.round(totalAsking / 1e6)) + 'M' : '—', sub: 'active asking value', color: 'cyan', tab: 'listings' });
+  html += govCard({ title: 'Active Listings', value: fmtN(onMarketCount), sub: 'currently on market', color: 'blue', tab: 'listings' });
+  html += govCard({ title: 'Under Contract', value: underContractVal, sub: 'pending close', color: 'green', tab: 'listings' });
+  html += govCard({ title: 'Total Asking', value: totalAskingVal, sub: 'active asking value', color: 'cyan', tab: 'listings' });
   html += govCard({ title: 'Avg Ask Cap', value: avgAskingCap, sub: fmtN(listingCaps.length) + ' with cap data', color: 'purple', tab: 'listings' });
   html += govCard({ title: 'Avg DOM', value: avgDomVal, sub: 'days on market', color: 'yellow', tab: 'listings' });
   html += '</div>';
