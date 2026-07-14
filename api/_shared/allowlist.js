@@ -88,6 +88,9 @@ export const GOV_READ_TABLES = new Set([
   'gsa_lease_timeline',
   'opm_agency_location_rollups',
   'v_listing_verification_summary',
+  // 2026-07-14 sweep: gov verification history drill-down (gov.js
+  // loadRecentGovVerifications) — allowlisted for dia but not gov, so it 403'd.
+  'listing_verification_history',
   // Overview canonical-tile fix (2026-07-14): mirror of the data-query Edge
   // Function GOV_READ_TABLES. New "one canonical source per tile" views the
   // gov Overview reads through the proxy — 403'd until allowlisted.

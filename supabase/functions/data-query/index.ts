@@ -82,6 +82,12 @@ const GOV_READ_TABLES = new Set([
   "gsa_lease_timeline",
   "opm_agency_location_rollups",
   "v_listing_verification_summary",
+  // 2026-07-14 sweep: listing_verification_history exists on gov + is read by
+  // gov.js:8953 (loadRecentGovVerifications — the URL-probe history drill-down
+  // under the verification summary card). Its summary view was allowlisted in
+  // R4-D but the history table was only added to DIA — so the gov drill-down
+  // 403'd. Already allowlisted for dia; same non-PII operational class.
+  "listing_verification_history",
   // Overview canonical-tile fix (2026-07-14): these views were created by the
   // 2026-07-13 "one canonical source per tile" round but never allowlisted, so
   // every browser read 403'd and the tiles silently showed 0 / stuck-loading:
