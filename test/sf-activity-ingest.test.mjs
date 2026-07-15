@@ -221,6 +221,42 @@ describe('processSfActivityBatch (Unit 2)', () => {
     assert.equal(calls[0].metadata.owner_name, null);
   });
 
+  it('queues an unresolved WhoId for the by-id resolver (SF-CONTACT-RECONCILE Unit 1)', async () => {
+    const { fn } = captureAppend();
+    const queued = [];
+    const out = await processSfActivityBatch([
+      // WhoId present but not an entity, and no name/email to mint from → enqueue.
+      { sf_id: 'q1', type: 'Call', who_id: '003zzz' },
+      // Same WhoId again in the batch → deduped in the collect set.
+      { sf_id: 'q2', type: 'Email', who_id: '003zzz' },
+      // A resolvable WhoId is NOT queued.
+      { sf_id: 'q3', type: 'Call', who_id: '003aaa' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      enqueueSfContactResolve: async (whoIds, ws) => { queued.push({ whoIds, ws }); return { ok: true, queued: whoIds.length }; },
+    });
+    assert.equal(out.skipped_no_entity, 2);         // q1 + q2
+    assert.equal(out.matched, 1);                    // q3
+    assert.equal(queued.length, 1, 'one bulk flush');
+    assert.deepEqual(queued[0].whoIds, ['003zzz'], 'deduped, only the unresolved WhoId');
+    assert.equal(queued[0].ws, 'ws-1');
+    assert.equal(out.contacts_queued, 1);
+  });
+
+  it('does not flush the resolve queue when every WhoId resolves', async () => {
+    const { fn } = captureAppend();
+    let called = false;
+    const out = await processSfActivityBatch([
+      { sf_id: 'r1', type: 'Call', who_id: '003aaa' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      enqueueSfContactResolve: async () => { called = true; return { ok: true, queued: 0 }; },
+    });
+    assert.equal(out.matched, 1);
+    assert.equal(called, false, 'no unresolved WhoIds → no flush');
+    assert.equal(out.contacts_queued, 0);
+  });
+
   it('handles a mixed batch of canonical + raw SF records', async () => {
     const { fn, calls } = captureAppend();
     const out = await processSfActivityBatch([

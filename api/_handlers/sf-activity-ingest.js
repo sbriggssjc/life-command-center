@@ -117,7 +117,7 @@ async function defaultApplyOwnerContactFeedback(ownerEntityId, kind) {
  *    contact from a bad name).
  * Returns { entityId, createdEntity, resolvedByEmail } or null (guard-rejected).
  */
-async function defaultResolveOrCreateSfContact({ workspaceId, userId, whoId, accountId, name, email, first, last, phone, title }) {
+export async function defaultResolveOrCreateSfContact({ workspaceId, userId, whoId, accountId, name, email, first, last, phone, title }) {
   const seedFields = {};
   if (name)  seedFields.name = name;
   if (first) seedFields.first_name = first;
@@ -185,7 +185,7 @@ export function sfContactAccountMismatch({ email, accountName } = {}) {
  * an operator to resolve. Idempotent on subject_ref (lcc_open_decision dedupes),
  * best-effort (never blocks the mirror). Record-only verdicts — no SF write.
  */
-async function defaultOpenSfMismatchDecision({ workspaceId, entityId, detail }) {
+export async function defaultOpenSfMismatchDecision({ workspaceId, entityId, detail }) {
   if (!entityId) return false;
   try {
     const r = await opsQuery('POST', 'rpc/lcc_open_decision', {
@@ -201,6 +201,29 @@ async function defaultOpenSfMismatchDecision({ workspaceId, entityId, detail }) 
     });
     return !!(r && r.ok);
   } catch (_e) { return false; }
+}
+
+/**
+ * SF-CONTACT-RECONCILE Unit 1 — enqueue unresolved WhoIds for the by-id resolver.
+ * When an activity carries a WhoId (Contact) that the ingest could NOT resolve to
+ * an LCC entity (and which isn't already an entity — that's exactly the state at
+ * the skipped_no_entity point), record it in sf_contact_resolve_queue so the
+ * resolver worker (api/_handlers/sf-contact-resolve.js) can fetch it by id, mint
+ * (or attach-by-email) the contact, and run the mismatch detector.
+ *
+ * Idempotent on who_id (PK): ignore-duplicates so a re-POST of the same Task never
+ * resets an existing row's attempts/status (a resolved/dead/no_data row stays put).
+ * Best-effort — never blocks the mirror; an absent table is a soft no-op.
+ */
+async function defaultEnqueueSfContactResolve(whoIds, workspaceId) {
+  const ids = Array.from(new Set((whoIds || []).map((w) => String(w || '').trim()).filter(Boolean)));
+  if (ids.length === 0) return { ok: true, queued: 0 };
+  const rows = ids.map((who_id) => ({ who_id, workspace_id: workspaceId || null }));
+  try {
+    const r = await opsQuery('POST', 'sf_contact_resolve_queue?on_conflict=who_id', rows,
+      { headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' } });
+    return { ok: !!r.ok, queued: r.ok ? ids.length : 0 };
+  } catch (_e) { return { ok: false, queued: 0 }; }
 }
 
 const MAX_BATCH = 500;
@@ -443,6 +466,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
   const growCadence    = deps.growCadenceFromOutreach || defaultGrowCadenceFromOutreach;
   const resolveOrCreateSfContact = deps.resolveOrCreateSfContact || defaultResolveOrCreateSfContact;
   const openMismatch   = deps.openSfMismatchDecision || defaultOpenSfMismatchDecision;
+  const enqueueResolve = deps.enqueueSfContactResolve || defaultEnqueueSfContactResolve;
   const { workspaceId, actorId } = ctx || {};
 
   const summary = {
@@ -458,11 +482,15 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     contacts_minted: 0,       // Unit 1 — WhoId contacts newly created as entities
     contacts_reconciled: 0,   // Unit 2 — WhoId contacts attached to an existing person by email
     mismatches_flagged: 0,    // Unit 3 — sf_contact_account_mismatch decisions opened
+    contacts_queued: 0,       // SF-CONTACT-RECONCILE — unresolved WhoIds queued for the by-id resolver
     results: [],
   };
   // Unit 3 — emit at most one mismatch decision per entity per tick (the RPC is
   // idempotent on subject_ref regardless).
   const mismatchEmitted = new Set();
+  // SF-CONTACT-RECONCILE Unit 1 — collect WhoIds the ingest could not resolve to
+  // an LCC entity; flushed to sf_contact_resolve_queue after the loop.
+  const toResolveWhoIds = new Set();
 
   if (!Array.isArray(records) || records.length === 0) return summary;
 
@@ -527,9 +555,12 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     const entityId = entity?.entityId || null;
     if (!entityId) {
       // Never guess — record the skip so the feed is observable, but don't
-      // manufacture an entity.
+      // manufacture an entity. SF-CONTACT-RECONCILE Unit 1: a WhoId we couldn't
+      // resolve here (and isn't already an entity) goes to the by-id resolve
+      // queue so the dedicated get-by-id worker can mint it later.
+      if (whoId) toResolveWhoIds.add(whoId);
       summary.skipped_no_entity += 1;
-      summary.results.push({ sf_id: sfId, outcome: 'skipped_no_entity' });
+      summary.results.push({ sf_id: sfId, outcome: 'skipped_no_entity', queued_who_id: !!whoId });
       continue;
     }
 
@@ -658,6 +689,15 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
       summary.errors += 1;
       summary.results.push({ sf_id: sfId, entity_id: entityId, outcome: 'error', reason: appendRes?.reason || 'append_failed' });
     }
+  }
+
+  // SF-CONTACT-RECONCILE Unit 1 — flush the unresolved WhoIds to the resolve
+  // queue in one bulk upsert (best-effort; never fails the mirror).
+  if (toResolveWhoIds.size > 0) {
+    try {
+      const q = await enqueueResolve(Array.from(toResolveWhoIds), workspaceId);
+      summary.contacts_queued = (q && q.queued) || 0;
+    } catch (_e) { /* non-blocking */ }
   }
 
   return summary;

@@ -190,6 +190,16 @@ export default withErrorHandler(async function handler(req, res) {
     return handleContactAcquisitionTick(req, res);
   }
 
+  // SF-CONTACT-RECONCILE Unit 2 — WhoId resolve worker (via vercel.json
+  // _route=sf-contact-resolve-tick). GET=dry-run (queue depth + sample) /
+  // POST=drain. Drains sf_contact_resolve_queue via the get-by-id flow, mints
+  // (or attaches-by-email) the contact, runs the mismatch detector. No-ops when
+  // SF_CONTACT_BYID_URL is unset. Authenticates internally.
+  if (req.query._route === 'sf-contact-resolve-tick') {
+    const { handleSfContactResolveTick } = await import('./_handlers/sf-contact-resolve.js');
+    return handleSfContactResolveTick(req, res);
+  }
+
   // CONNECTIVITY #3 — Salesforce link-store reconcile (via vercel.json
   // _route=sf-link-reconcile-tick). GET=dry-run / POST=drain. Mirrors domain
   // owner SF Account links onto the bridged entity; surfaces conflicts/
