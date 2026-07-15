@@ -7729,3 +7729,107 @@ explicitly (merging already inherits it via backref move) · widening the
 same-party auto-merge to a shared-address/phone class once the address dimension
 densifies (Phase A/B) · the sponsor-inversion flag (recorded=firm ↔ true_owner=SPE)
 as a distinct review reason.
+
+## ORE follow-up — text-lender CLEANER + `lenders` backfill foundation (2026-07-16)
+
+The highest-value item from the deed instrument-routing follow-ups: normalize the
+~1,755 MESSY existing text-lenders on `loans` (dia `lender_name` / gov
+`originator`) into the `lenders` entity table so lenders dedup ACROSS loans like
+`recorded_owners`, then stamp `loans.lender_id`. The `lenders` table was dormant;
+a blind backfill would mint duplicate/garbage rows because the text is
+broker-mashed / allocation-noted / suffix-variant. This round builds the CLEANER
++ the capped backfill; the **broad apply is Scott-gated** (dry-run below).
+Grounded live first (name-shapes, counts, existing `lenders`) — do not trust the
+examples as the full set. LCC + gated dia/gov writes; ≤12 api/*.js; reversible.
+
+### Unit 1 — the shared cleaner (`api/_shared/lender-name.js`)
+`cleanLenderName(name) → {clean, skip, reason}` (pure, idempotent, never throws)
+sits IN FRONT of the existing `resolveOrCreateLender` — the SINGLE choke point
+BOTH the forward deed-path lender AND the backfill inherit (don't fork). It
+produces a clean DISPLAY name or a SKIP verdict; the dedup itself
+(`normalized_name` / `lower(name)` GET-then-insert) still lives in
+`resolveOrCreateLender`, so the cleaner's quality IS the dedup quality. Doctrine:
+**surface ambiguity, never guess.** Transforms: strip a LEADING broker/
+intermediary prefix chain (looped, so co-brokers + `|` reduce — "CBRE | Colliers
+ServisFirst Bank" → "ServisFirst Bank"; ~50 curated CRE brokerage/debt-broker
+firms — the sf-nm-classifier superset + Eastdil/HFF/Cassidy Turley/Transwestern/
+Trammell Crow/Voit/…), drop allocation-note parentheticals ("JLL CIT Group
+($1.5m alloc'd)" → "CIT Group"; NOT state qualifiers like "(AR)"/"(MN)"), strip
+`™®℠`. SKIP (leave the row text-only, never minted): multi-lender `;`, **CMBS/CDO
+securitization trust codes** (a `YYYY-<letter>` series or shelf-acronym+year —
+the dominant gov junk: "CBRE Wachovia 2005-C20" ×14, "JPMCC 2007-LDP11", …; a
+debt VEHICLE, not a callable/BD-trackable lender), placeholder/generic
+(`Private/Other` [gov ×42], `Government Agency`, `Insurance`, bare `Bank`/`Trust`/
+`One`), too-short, broker-only. A real lending ARM that starts with a broker
+("Marcus & Millichap Capital Corporation") is kept whole via `LENDER_ARM_ALLOW`.
+- **Wiring:** `resolveOrCreateLender` (exported) now calls `cleanLenderName`
+  before its `lenderNamePasses` guard, so the forward deed instrument-routing
+  path (`writeLoanFromDeed`) self-corrects a broker-mashed capture too. `node
+  --check` clean; `test/lender-name.test.mjs` (40 cases) + the deed-path tests
+  (`owner-deed-propagation`/`deed-parser`, 131 total) green.
+
+### Unit 2 — the backfill (`scripts/lender-backfill.mjs`, workstation, NOT api/*.js)
+Reuses the shared cleaner + `resolveOrCreateLender` (imported from
+sidebar-pipeline.js) + a direct-PostgREST `domainQuery` adapter (service key).
+Fill-blanks ONLY — selects `loans WHERE lender_id IS NULL AND <text> IS NOT NULL`,
+resolves each through the choke point, PATCHes `loans.lender_id` guarded on
+`lender_id IS NULL` (a concurrent write is a no-op). `--domain=dia|gov|both`,
+`--dry-run` (default; reports the verdict distribution + would-create count + spot
+transforms, NO writes), `--apply --limit=N` (capped). Env: `DIA_/GOV_SUPABASE_URL`
++ `_SERVICE_KEY`. **Reverse a run by clearing the lender_id it set** (the created
+`lenders` rows are additive/harmless). The sandbox has no domain keys, so the
+broad apply is a Scott/Cowork operational step (like the deed OCR drain).
+
+### Dry-run distribution (grounded live 2026-07-16 via the REAL cleaner)
+Full universe = **1,755 text-only rows** (dia 403 / gov 1,352).
+- **dia:** 370/403 STAMPABLE (92%) → ~263 distinct cleaned lenders; 33 SKIP
+  (multi-lender 9, cmbs 11, placeholder 11, broker-only 2). Existing `lenders`=9.
+- **gov:** 1,043/1,352 STAMPABLE (77%) → ~473 distinct cleaned lenders; 309 SKIP
+  (cmbs 148, multi-lender 77, placeholder 57, broker-only 16, too-short 11).
+- **Total: ~1,413 rows stamp → ~736 distinct lenders; 342 left text-only.**
+Spot-checks all correct: "Eastdil Secured Centennial Bank (AR) ($1.2m alloc'd)" →
+"Centennial Bank (AR)"; "The Boulder Group Wintrust Financial" → "Wintrust
+Financial"; "CBRE Wachovia 2005-C20" → skip cmbs. **Known residual (conservative,
+by design, surfaced not fixed):** a leading OWNER-fragment word that is ALSO a
+real bank-name word ("Group Goldman Sachs", "Co Wells Fargo", "Investors EECU",
+"Trust Comerica Bank") is NOT stripped — stripping it would be a guess ("Capital
+One"/"Investors Bank"/"First Bank" all begin with such words). Those resolve to a
+slightly-imperfect lender (fill-blanks, reversible); a cross-reference-against-
+known-lenders pass could rescue them in a later round.
+
+### ALSO COVER (verified live 2026-07-16, not blocking)
+- **Deed instrument-routing is DEPLOYED but DORMANT.** 0 `data_source=
+  'deed_extraction'` loans exist on either domain — the routing/lender/borrower
+  writes only fire when a mortgage/DoT deed is actually processed, and the deed
+  corpus is read by the R58 `document-text-tick` deed drain (gated on OpenAI/
+  Document AI + CoStar-CDN reach), which hasn't run a mortgage yet. The routing
+  is code-verified (33 owner-deed-propagation tests) but has no live rows to
+  confirm against. So the "double-write" risk (deed-parser mortgage route vs the
+  forward CoStar `MORTGAGE_DEED_TYPES`/`upsertDomainLoans` path) is **currently
+  moot** (0 deed_extraction loans) and low-risk when it activates: the two paths
+  read different sources and dedup on different predicates. A belt-and-suspenders
+  cross-source dedup is a documented follow-up, not a blocker.
+- **`lcc-owner-deed-autofix` sweep** (`DECISION_OWNER_DEED_WINS` ON): the 2
+  mortgage/bank-parent grantees (dia 28051 SG Mortgage Finance, 26823 Sumitomo
+  Banking Corp) are correctly HELD (`auto_fixable=false` via the Topic-1 view
+  lender-guard) — they will NOT be repointed as owners. The other 4 dia
+  auto_fixable (27006/27042/29087/37690) apply cleanly. No wrong-property
+  repoints observed.
+- **R54 loan-maturity-watch as a richer debt-side trigger** (explore-only): worth
+  revisiting once the debt graph fills (this backfill + the deed drain populate
+  `lenders`/`lender_id`/borrower) — an owner→loan hop with lender concentration
+  + maturity into the priority queue. Not built.
+
+### Activation runbook (Scott/Cowork — the broad apply is gated)
+1. `node scripts/lender-backfill.mjs --domain=both --dry-run` — confirm the
+   distribution above against live keys (or read this section, already grounded).
+2. `node scripts/lender-backfill.mjs --domain=dia --apply --limit=50` — capped
+   real stamp; spot-check ~5 stamped loans' `lender_id` → `lenders` name vs the
+   original text; confirm no dup lenders, no skip-class stamped.
+3. Broaden: `--domain=both --apply` (no limit) once the capped batch checks out.
+Reverse: `UPDATE loans SET lender_id=NULL WHERE lender_id IN (<the run's ids>)`.
+
+### Follow-ups (NOT in this round)
+Owner-fragment-prefix rescue (cross-reference the stripped remainder against known
+lenders); signatory → person-entity linkage; `loan_type` mapping; the deed-drain
+activation that lights up the forward routing.
