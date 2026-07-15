@@ -406,13 +406,74 @@ that exist on the synced Boyd account and reconciling them. The two in question 
 as Contacts on the synced Boyd account** (possibly known only from conversation, or on a
 *fund* sub-account not mapped to the Boyd parent), or (b) added to SF without an
 activity/account link the sync reaches. **Verify in Salesforce before creating them** —
-that's the "don't needlessly create duplicates" check. The reconciliation safety net: LCC
+that's the "don't needlessly create duplicates" check.
+
+**VERIFIED live in Salesforce (2026-07-15, northmarqcapital org) — both exist; DO NOT
+create them:**
+- **Joseph Capra** — SF Contact on account **"Boyd Watterson Asset Management LLC"**,
+  `jcapra@boydwatterson.com`, recent activity 7/14/2026. Correct company. **Absent from
+  LCC.**
+- **Eric Dowling** — SF Contact, `edowling@boydwatterson.com`, (312) 777-3704, activity
+  7/14/2026 — **but mis-filed under the account "Arbor Realty Trust"** (title "Analyst").
+  His email domain contradicts the account → a **Salesforce-side data-quality error**.
+  LCC has him only from CoStar/RCA.
+
+**Root cause of the disconnect = SF→LCC contact-sync SCOPE, not a dup bug.** The 9 Boyd
+contacts that synced sit on the *mapped* Boyd accounts (Boyd Watterson / Boyd Watterson
+Global); Capra sits on a THIRD, **unmapped** account ("Boyd Watterson Asset Management
+LLC") and Dowling on a **misfiled** account ("Arbor Realty Trust"). The sync pulls
+contacts on LCC-mapped accounts only, so a decision-maker on an unmapped/misfiled account
+never flows — even with recent activity. **Fix = broaden the SF contact-sync scope** (pull
+by owner/company reconciliation or email-domain, not just exact account-mapping) + let LCC
+reconcile Dowling by email (the CoStar `edowling@…` and the SF Dowling are one person).
+**Bonus (the doctrine's payoff): LCC-as-reconciliation-layer would SURFACE the
+Dowling-on-Arbor SF error** — an @boydwatterson.com email on an "Arbor Realty Trust"
+account is a signal-disagreement the engine flags. Neither contact should be created in
+SF (they exist); the work is on the LCC sync + reconciliation side. The reconciliation safety net: LCC
 already holds Eric Dowling with his email, so if/when an SF Dowling appears, the engine
 should merge them **by email** (weight 55) into one — *provided the SF sync brings the
 Contact in*. The gap this exposes, and what §10 fixes: **a contact known from
 conversation/email/notes (like Capra) should be captured + reconciled even without a formal
 SF activity** — email/notes/Copilot as first-class contact sources, keyed on email/name so
 they never fork from the CoStar/SF record.
+
+### 10b. Salesforce posture + Outlook as a reconciliation source + duplicate handling (Scott, 2026-07-15)
+- **LCC is the source of truth; Salesforce is minimal-necessary.** Do NOT try to fully
+  reconcile/clean Salesforce (many users, shared org) — LCC complies with the *minimum
+  necessary/required by the organization* for SF, and keeps **most data + intelligence in
+  the LCC databases / contacts / entity graph.** SF is one authoritative source (high
+  weight for identity) + a compliance surface, not the master.
+- **Outlook (+ other LCC contacts) as a first-class, bidirectional reconciliation layer.**
+  We have extensive email + call history with contacts (e.g., Capra + Dowling) — LCC should
+  **sync with Outlook contacts and reconcile them as the source of truth**, and use that
+  layer to **search + enrich to/from** (email/phone/name → identity; email traffic → who to
+  call + direction + ownership facts). A contact known from email/calls must be captured +
+  reconciled by email/name even if it never became a formal SF Contact (the Capra/Dowling
+  gap) — closing §10's "learn from every source" loop on the contact side.
+- **Duplicate accounts/contacts are a permanent reality → LCC must absorb them, not
+  require SF to be clean.** Duplicate SF Accounts (the 3 Boyd accounts) + duplicate SF
+  Contacts will always exist. LCC's reconciliation engine (§7) already holds
+  conflicting-SF-account entities `distinct` (safe) — the scope-out: **LCC consolidates the
+  duplicates on ITS side** (merge the LCC entities that map to multiple SF accounts/contacts
+  of the same party, keyed on the weighted-signal agreement), presenting one canonical
+  party internally while tolerating the SF-side duplication. LCC never depends on SF being
+  deduped; it reconciles around it. (Scope note: a same-party cluster carrying two different
+  SF account ids is a `review`/merge candidate on the LCC side, not a blocker — extend the
+  engine to *merge the LCC entities* even across an SF-account conflict when the other
+  signals strongly agree AND the two SF accounts are themselves same-party, recording both
+  SF ids on the survivor.)
+
+### 10c. Next build — SF contact-scope + email reconcile + Outlook (prompt written 2026-07-15)
+`CLAUDECODE_PROMPT_ORE_sf_contact_scope_email_reconcile.md`: (1) widen SF contact ingest
+beyond exact account-mapping (activity-WhoId minting + email-domain/owner-company scope) so
+Capra (unmapped account) + Dowling (misfiled account) flow in; (2) reconcile every ingested
+SF contact by EMAIL so the SF Dowling merges into the existing CoStar/RCA Dowling — one
+entity, never a dup; (3) surface SF account/email disagreements (Dowling-on-Arbor) as a
+`sf_contact_account_mismatch` Decision-Center signal (LCC detects SF errors, doesn't inherit
+them); (4) Outlook as a first-class contact/enrichment source (email/call history →
+identity + real-activity signal). LCC = source of truth; SF/Outlook read-only,
+minimum-necessary; no fabrication; ≤12 api/*.js. Contact-authority-hierarchy round (PR
+#1402) merged + redeployed live.
 
 ## 8. Progress log (living — update as we work this topic)
 
