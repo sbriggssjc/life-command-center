@@ -3578,6 +3578,13 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     assessed_value: parseCurrency(metadata.assessed_value),
     is_single_tenant: metadata.tenancy_type === 'Single' ? true : metadata.tenancy_type === 'Multi' ? false : null,
     property_ownership_type: metadata.ownership_type || null,
+    // NOTE (dia denorm-drift, 2026-07-15): this writes the CoStar owner-panel name
+    // independently of the FK recorded_owner_id (resolved later from the ownership
+    // chain), which historically DRIFTED the two. The dia DB trigger
+    // trg_dia_sync_recorded_owner_name now forces recorded_owner_name to mirror the
+    // FK owner whenever the FK is set, so this write only "sticks" as a fallback
+    // when the FK is still null (a not-yet-resolved owner). recorded_owner_id (FK)
+    // is the single source of truth; do NOT rely on this column being independent.
     recorded_owner_name: ownerContact?.name || null,
     land_area: metadata.lot_size && /AC/i.test(metadata.lot_size) ? parseAcres(metadata.lot_size) : null,
     // Coordinates from CoStar Public Record tab (shared across both domains)
