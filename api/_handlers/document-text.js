@@ -57,16 +57,34 @@ function buildStorageGet(domain, bucket) {
 
 const DOMAINS = { dia: 'dialysis', dialysis: 'dialysis', gov: 'government', government: 'government' };
 
-/** Eligible queue: property_documents with a source and NO raw_text yet. */
+/**
+ * Eligible queue: property_documents that are NOT yet text-extracted AND whose
+ * bytes are already sitting in the domain Storage bucket (`storage_path`).
+ *
+ * STORAGE-ONLY is the fix for the "spinning on the wrong 7" stall: the byte
+ * source MUST be the durable Storage object, NOT a `source_url`. The deed
+ * `source_url`s are CoStar-CDN downloads (`ahprd1cdn.csgpimgs.com`) whose links
+ * EXPIRE, so a URL-only doc errors on fetch — and because those URL-only docs
+ * sort to the TOP by `document_id` (they arrived latest), the old
+ * `or=(storage_path,source_url)` claim let them re-clog the `document_id.desc`
+ * window every tick and starve the storage-ready backlog (which then never
+ * OCR'd). URL-only docs (no storage_path) are deliberately left for a future
+ * CDN-refetch step — a doc with neither raw_text nor storage_path must not be
+ * claimed by this OCR path (it would just error).
+ *
+ * Terminal deed states (`deed_parsed` / `DEED_NO_PARTIES_TERMINAL`) are excluded
+ * so a parsed / no-parties doc is never re-hammered; NULL / url_captured /
+ * bytes_captured status is included (re-attempt once bytes are ready). Ordered
+ * newest-first; the cap + repeat-tick model drains the whole storage-ready set.
+ */
 export async function fetchEligibleDocs(domain, { limit, doctype }, deps = {}) {
   const q = deps.domainQuery || domainQuery;
-  // Eligible = no text yet AND a byte source exists — either the durable
-  // storage_path (UW#6-REV, the win) OR a (possibly-stale-token) source_url.
   let path =
-    'property_documents?raw_text=is.null&or=(storage_path.not.is.null,source_url.not.is.null)' +
+    'property_documents?raw_text=is.null&storage_path=not.is.null' +
+    `&or=(ingestion_status.is.null,ingestion_status.not.in.(deed_parsed,${DEED_NO_PARTIES_TERMINAL}))` +
     '&select=document_id,property_id,source_url,storage_path,storage_bucket,document_type,file_name,ingestion_status' +
     `&order=document_id.desc&limit=${limit}`;
-  if (doctype && doctype !== 'all') path += `&document_type=eq.${encodeURIComponent(doctype)}`;
+  if (doctype && doctype !== 'all') path += `&document_type=ilike.*${encodeURIComponent(doctype)}*`;
   const r = await q(domain, 'GET', path);
   if (!r.ok) return { ok: false, status: r.status, detail: r.data };
   return { ok: true, rows: Array.isArray(r.data) ? r.data : [] };
