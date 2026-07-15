@@ -218,38 +218,6 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerContactEnrichTick(req, res);
   }
 
-  // ORE Phase B B1 — owner-reconcile worker (via vercel.json
-  // _route=owner-reconcile-tick). GET=dry-run (assemble + classify the
-  // reconcile-state distribution, no writes) / POST=drain (record the traceable
-  // per-owner reconcile output). Compares SF presence vs a resolved control
-  // contact and routes each owner to the existing engine. Authenticates internally.
-  if (req.query._route === 'owner-reconcile-tick') {
-    const { handleOwnerReconcileTick } = await import('./_handlers/owner-reconcile.js');
-    return handleOwnerReconcileTick(req, res);
-  }
-
-  // ORE — multi-signal, authority-weighted owner reconciliation ENGINE worker
-  // (via vercel.json _route=owner-reconcile-engine-tick). GET=dry-run (run the
-  // weighted resolver over the value-ranked owner universe / the queue, tally
-  // verdicts, sample the mergeable + review sets, surface true_owner noise; no
-  // writes) / POST=drain (consolidate the confident same-party merges, record the
-  // evidence trace). Authenticates internally.
-  if (req.query._route === 'owner-reconcile-engine-tick') {
-    const { handleOwnerReconcileEngineTick } = await import('./_handlers/owner-reconcile-engine.js');
-    return handleOwnerReconcileEngineTick(req, res);
-  }
-
-  // ORE Tier A — institution-contact attach + fan-out worker (via vercel.json
-  // _route=institution-contact-tick). GET=dry-run (the registry GAPS: which
-  // sponsor to fill first + how many owners would attach now) / POST=drain
-  // (attach the curated sponsor contact across the sponsor's whole contactless
-  // SPE portfolio). Curated-registry-only — never fabricates. Authenticates
-  // internally.
-  if (req.query._route === 'institution-contact-tick') {
-    const { handleInstitutionContactTick } = await import('./_handlers/institution-contact.js');
-    return handleInstitutionContactTick(req, res);
-  }
-
   // UW#7 — developer resolution from the ownership chain (via vercel.json
   // _route=developer-chain-resolve-tick). GET=dry-run (honest per-bucket sizing) /
   // POST=drain. Resolves the original developer for queued
@@ -2598,6 +2566,8 @@ const ACTION_REGISTRY = {
   list_dialysis_review_queue:  { method: 'GET', path: 'dia-query?table=v_clinic_property_link_review_queue&select=*', tier: 0, alias: 'data-proxy?_source=dia&table=v_clinic_property_link_review_queue&select=*' },
   get_work_counts:             { method: 'GET', path: 'queue-v2?view=work_counts', tier: 0, alias: 'queue?_version=v2&view=work_counts' },
   search_deals:                { tier: 0, handler: 'search_deals' },
+  search_properties:           { tier: 0, handler: 'search_properties' },
+  match_property_to_inbox_item: { tier: 0, handler: 'match_property' },
 
   // Tier 0-1: AI-powered actions (fetch context + generate content)
   generate_prospecting_brief:  { tier: 0, handler: 'prospecting_brief' },
@@ -2633,8 +2603,7 @@ const ACTION_REGISTRY = {
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
   ingest_pdf_document:         { tier: 1, handler: 'ingest_pdf', confirm: 'lightweight' },
-  triage_inbox_item:           { tier: 2, handler: 'inbox_triage', confirm: 'lightweight' },
-  dismiss_inbox_item:          { tier: 2, handler: 'inbox_dismiss', confirm: 'lightweight' },
+  triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
   promote_intake_to_action:    { method: 'POST', path: 'workflows?action=promote_to_shared', tier: 2, confirm: 'explicit', alias: 'operations?action=promote_to_shared' },
   create_listing_pursuit_followup_task: { method: 'POST', path: 'actions', tier: 2, confirm: 'explicit' },
   update_execution_task_status: { method: 'PATCH', path: 'actions', tier: 2, confirm: 'explicit' },
@@ -2668,8 +2637,6 @@ function deriveActionSummary(actionName, params, result) {
       return `Ingested PDF: ${safeParams.file_name || 'unnamed'}`;
     case 'triage_inbox_item':
       return `Triaged inbox item → ${safeParams.status || 'updated'}`;
-    case 'dismiss_inbox_item':
-      return `Dismissed inbox item ${safeParams.id ? safeParams.id.slice(0, 8) : ''}`;
     case 'promote_intake_to_action':
       return `Promoted inbox item to shared action`;
     case 'update_execution_task_status':
@@ -2736,6 +2703,8 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
     switch (spec.handler) {
       case 'daily_briefing':          result = await handleDailyBriefing(params, user, workspaceId, req); break;
       case 'search_deals':            result = await handleSearchDeals(params); break;
+      case 'search_properties':       result = await handleSearchProperties(params); break;
+      case 'match_property':          result = await handleMatchPropertyToInboxItem(params, workspaceId); break;
       case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
       case 'draft_outreach':          result = await handleDraftOutreachEmail(params, user, workspaceId); break;
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
@@ -2748,8 +2717,6 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'guided_entity_merge':     result = await handleGuidedEntityMerge(params, user, workspaceId); break;
       case 'document_assembly':       result = await handleDocumentAssembly(params, user, workspaceId); break;
       case 'ingest_pdf':              result = await ingestPdfWorker(params, user, workspaceId); break;
-      case 'inbox_triage':            result = await handleTriageInboxItem(params, user, workspaceId); break;
-      case 'inbox_dismiss':           result = await handleDismissInboxItem(params, user, workspaceId); break;
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
 
@@ -3033,47 +3000,412 @@ function normalizeState(input) {
 // in the live gov DB instead of static knowledge files.
 async function handleSearchDeals(params) {
   const p = params || {};
-  const state = normalizeState(p.state);
-  if (!state) return { ok: false, error: 'state is required (e.g. "TX" or "Texas").' };
+  const q = p.q ? String(p.q).trim() : null;
+  const statusFilter = p.status ? String(p.status).toLowerCase() : null;
+  const entityId = p.entity_id || null;
+  const limit = (Number.isFinite(+p.limit) && +p.limit > 0) ? Math.min(+p.limit, 50) : 20;
 
-  const status = String(p.status || 'both').toLowerCase();          // available | sold | both
-  const months = (Number.isFinite(+p.months) && +p.months > 0) ? Math.min(+p.months, 120) : 12;
-  const agency = p.agency ? String(p.agency).trim() : '';
-  const sampleLimit = (Number.isFinite(+p.limit) && +p.limit > 0) ? Math.min(+p.limit, 25) : 10;
+  // --- Build entity search path ---
+  let entityPath =
+    `entities?select=id,name,entity_type,asset_type,domain,city,state,zip,address` +
+    `&limit=${limit}&order=name.asc`;
 
-  const out = { ok: true, action: 'search_deals', state, source: 'live gov database (v_available_listings + sales_transactions)' };
-
-  if (status === 'available' || status === 'both') {
-    // Default select (all columns) — avoids PostgREST 400s from view-specific
-    // column naming on v_available_listings (an explicit select with a column
-    // the view doesn't expose breaks the whole request, incl. the count).
-    // Agency filter is applied only when the column is known to exist.
-    let path = `v_available_listings?state=eq.${encodeURIComponent(state)}`;
-    if (agency) path += `&or=(tenant_agency.ilike.*${encodeURIComponent(agency)}*,agency.ilike.*${encodeURIComponent(agency)}*)`;
-    const r = await govCountQuery(path);
-    out.available_count = r.ok ? r.count : null;
-    out.available_sample = (r.data || []).slice(0, sampleLimit);
-    if (!r.ok) out.available_note = `Available-listings query failed (status ${r.status}); count unavailable. Verify v_available_listings columns.`;
+  if (entityId) {
+    // Direct entity lookup — return any type
+    entityPath += `&id=eq.${encodeURIComponent(entityId)}`;
+  } else {
+    // Keyword search across name, city, state, address
+    if (q) {
+      const safe = encodeURIComponent(q.replace(/[*()]/g, ''));
+      entityPath +=
+        `&or=(name.ilike.*${safe}*,city.ilike.*${safe}*,state.ilike.*${safe}*,address.ilike.*${safe}*)`;
+    }
   }
 
-  if (status === 'sold' || status === 'both') {
-    const cutoff = new Date();
-    cutoff.setMonth(cutoff.getMonth() - months);
-    const cutoffIso = cutoff.toISOString().slice(0, 10);
-    let path = `sales_transactions?state=eq.${encodeURIComponent(state)}` +
-      `&sale_date=gte.${cutoffIso}` +
-      `&select=address,city,state,agency,sold_price,sold_cap_rate,sale_date` +
-      `&order=sale_date.desc`;
-    if (agency) path += `&agency=ilike.*${encodeURIComponent(agency)}*`;
-    const r = await govCountQuery(path);
-    out.sold_window_months = months;
-    out.sold_since = cutoffIso;
-    out.sold_count = r.ok ? r.count : null;
-    out.sold_sample = (r.data || []).slice(0, sampleLimit);
-    if (!r.ok) out.sold_note = `Sales query failed (status ${r.status}); count unavailable.`;
+  const entityResult = await opsQuery('GET', entityPath);
+
+  if (!entityResult.ok || !(entityResult.data || []).length) {
+    return {
+      ok: true,
+      action: 'search_deals',
+      count: 0,
+      results: [],
+      query: { q, status: statusFilter, entity_id: entityId },
+      note: q ? `No entities found matching "${q}"` : 'No entities found'
+    };
   }
 
-  return out;
+  const entities = entityResult.data || [];
+  const entityIds = entities.map(e => e.id);
+  const idsParam = entityIds.join(',');
+
+  // --- Parallel: BD opportunities + Salesforce external IDs ---
+  const [oppsResult, eiResult] = await Promise.all([
+    opsQuery('GET',
+      `bd_opportunities?entity_id=in.(${idsParam})` +
+      `&select=entity_id,type,stage,is_open,closed_won,vertical,amount,expected_close_date,sf_opp_id`
+    ),
+    opsQuery('GET',
+      `external_identities?entity_id=in.(${idsParam})&source_system=eq.salesforce` +
+      `&source_type=eq.Account&select=entity_id,external_id`
+    )
+  ]);
+
+  // Build lookup maps
+  const oppsMap = {};
+  (oppsResult.data || []).forEach(o => { oppsMap[o.entity_id] = o; });
+
+  // Fetch SF comp on-market status for any matched SF entity IDs
+  const sfIds = (eiResult.data || []).map(ei => ei.external_id);
+  let compMap = {};
+  if (sfIds.length) {
+    const compResult = await opsQuery('GET',
+      `lcc_sf_comp_on_market?sf_comp_id=in.(${sfIds.slice(0, 100).join(',')})` +
+      `&select=sf_comp_id,on_market_date,has_omd`
+    );
+    // Map back from sf_comp_id → entity_id via eiResult
+    const sfToEntity = {};
+    (eiResult.data || []).forEach(ei => { sfToEntity[ei.external_id] = ei.entity_id; });
+    (compResult.data || []).forEach(c => {
+      const eid = sfToEntity[c.sf_comp_id];
+      if (eid) compMap[eid] = c;
+    });
+  }
+
+  // --- Build and optionally filter results ---
+  let results = entities.map(e => {
+    const opp = oppsMap[e.id] || null;
+    const comp = compMap[e.id] || null;
+
+    // Derive deal_status for easy filtering / display
+    let deal_status = 'no_deal';
+    if (opp) {
+      if (opp.is_open)       deal_status = 'active';
+      else if (opp.closed_won) deal_status = 'closed';
+      else                     deal_status = 'dead';
+    } else if (comp?.on_market_date) {
+      deal_status = 'active'; // on-market listing counts as active
+    }
+
+    return {
+      entity_id: e.id,
+      name:       e.name,
+      entity_type: e.entity_type,
+      asset_type:  e.asset_type,
+      city:        e.city,
+      state:       e.state,
+      address:     e.address,
+      deal_status,
+      deal: opp ? {
+        stage:                opp.stage,
+        is_open:              opp.is_open,
+        closed_won:           opp.closed_won,
+        vertical:             opp.vertical,
+        amount:               opp.amount,
+        expected_close_date:  opp.expected_close_date,
+        sf_opp_id:            opp.sf_opp_id
+      } : null,
+      sf_comp: comp ? {
+        sf_comp_id:    comp.sf_comp_id,
+        on_market_date: comp.on_market_date,
+        has_omd:        comp.has_omd
+      } : null
+    };
+  });
+
+  // Apply status filter on derived deal_status
+  if (statusFilter) {
+    results = results.filter(r => {
+      if (statusFilter === 'active')  return r.deal_status === 'active';
+      if (statusFilter === 'closed')  return r.deal_status === 'closed';
+      if (statusFilter === 'dead')    return r.deal_status === 'dead';
+      if (statusFilter === 'pending') return r.deal?.stage?.toLowerCase().includes('pending');
+      return true;
+    });
+  }
+
+  return {
+    ok: true,
+    action: 'search_deals',
+    count: results.length,
+    results,
+    query: { q, status: statusFilter, entity_id: entityId }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SEARCH PROPERTIES — Tool 32 (Copilot intelligence category)
+// GET /api/copilot/intelligence/search-properties
+// ---------------------------------------------------------------------------
+async function handleSearchProperties(params) {
+  const p = params || {};
+  const q = p.q ? String(p.q).trim() : null;
+  const city = p.city ? String(p.city).trim() : null;
+  const state = p.state ? String(p.state).trim() : null;
+  const assetType = p.asset_type ? String(p.asset_type).trim() : null;
+  const domain = p.domain ? String(p.domain).toLowerCase().trim() : null;
+  const ownerEntityId = p.owner_entity_id || null;
+  const limit = (Number.isFinite(+p.limit) && +p.limit > 0) ? Math.min(+p.limit, 50) : 20;
+
+  // Must have at least one search filter
+  if (!q && !city && !state && !assetType && !domain && !ownerEntityId) {
+    return { ok: false, error: 'Provide at least one search filter: q, city, state, asset_type, domain, or owner_entity_id.' };
+  }
+
+  // Build PostgREST path — target asset-type entities
+  let path =
+    `entities?entity_type=eq.asset` +
+    `&select=id,name,entity_type,asset_type,domain,city,state,zip,address,metadata` +
+    `&limit=${limit}&order=name.asc`;
+
+  if (ownerEntityId) {
+    // Direct owner lookup via entity_relationships
+    const relPath = `entity_relationships?to_entity_id=eq.${encodeURIComponent(ownerEntityId)}&relationship_type=eq.owns&select=from_entity_id&limit=${limit}`;
+    const relResult = await opsQuery('GET', relPath);
+    const ownedIds = (relResult.data || []).map(r => r.from_entity_id);
+    if (!ownedIds.length) {
+      return {
+        ok: true, action: 'search_properties', count: 0, results: [],
+        query: p, note: 'No properties found for this owner entity.'
+      };
+    }
+    path += `&id=in.(${ownedIds.join(',')})`;
+  } else {
+    // Keyword filter
+    if (q) {
+      const safe = encodeURIComponent(q.replace(/[*()]/g, ''));
+      path += `&or=(name.ilike.*${safe}*,address.ilike.*${safe}*,city.ilike.*${safe}*)`;
+    }
+    // Exact-ish field filters
+    if (city)      path += `&city.ilike=*${encodeURIComponent(city.replace(/[*()]/g, ''))}*`;
+    if (state)     path += `&state.ilike=*${encodeURIComponent(state.replace(/[*()]/g, ''))}*`;
+    if (assetType) path += `&asset_type.ilike=*${encodeURIComponent(assetType.replace(/[*()]/g, ''))}*`;
+    if (domain)    path += `&domain=eq.${encodeURIComponent(domain)}`;
+  }
+
+  const entityResult = await opsQuery('GET', path);
+  if (!entityResult.ok || !(entityResult.data || []).length) {
+    return {
+      ok: true, action: 'search_properties', count: 0, results: [],
+      query: p, note: 'No properties found matching the provided filters.'
+    };
+  }
+
+  const entities = entityResult.data || [];
+  const entityIds = entities.map(e => e.id);
+
+  // Pull owner relationships for matched properties
+  const ownerRelResult = await opsQuery('GET',
+    `entity_relationships?from_entity_id=in.(${entityIds.join(',')})&relationship_type=eq.owns` +
+    `&select=from_entity_id,to_entity_id&limit=${entityIds.length * 3}`
+  );
+  const ownerMap = {};
+  (ownerRelResult.data || []).forEach(r => {
+    if (!ownerMap[r.from_entity_id]) ownerMap[r.from_entity_id] = [];
+    ownerMap[r.from_entity_id].push(r.to_entity_id);
+  });
+
+  // Fetch owner entity names
+  const allOwnerIds = [...new Set(Object.values(ownerMap).flat())];
+  let ownerNameMap = {};
+  if (allOwnerIds.length) {
+    const ownerResult = await opsQuery('GET',
+      `entities?id=in.(${allOwnerIds.slice(0, 50).join(',')})&select=id,name,entity_type`
+    );
+    (ownerResult.data || []).forEach(o => { ownerNameMap[o.id] = { name: o.name, entity_type: o.entity_type }; });
+  }
+
+  // Pull SF comp listing status for matched entities
+  const eiResult = await opsQuery('GET',
+    `external_identities?entity_id=in.(${entityIds.join(',')})&source_system=eq.salesforce&select=entity_id,external_id`
+  );
+  const sfIds = (eiResult.data || []).map(ei => ei.external_id);
+  let compMap = {};
+  if (sfIds.length) {
+    const compResult = await opsQuery('GET',
+      `lcc_sf_comp_on_market?sf_comp_id=in.(${sfIds.slice(0, 100).join(',')})&select=sf_comp_id,on_market_date,has_omd`
+    );
+    const sfToEntity = {};
+    (eiResult.data || []).forEach(ei => { sfToEntity[ei.external_id] = ei.entity_id; });
+    (compResult.data || []).forEach(c => {
+      const eid = sfToEntity[c.sf_comp_id];
+      if (eid) compMap[eid] = c;
+    });
+  }
+
+  const results = entities.map(e => {
+    const ownerIds = ownerMap[e.id] || [];
+    const owners = ownerIds.map(oid => ownerNameMap[oid]).filter(Boolean);
+    const comp = compMap[e.id] || null;
+    return {
+      entity_id:   e.id,
+      name:        e.name,
+      asset_type:  e.asset_type,
+      domain:      e.domain,
+      address:     e.address,
+      city:        e.city,
+      state:       e.state,
+      zip:         e.zip,
+      owners:      owners.length ? owners : null,
+      on_market:   comp ? { date: comp.on_market_date, has_omd: comp.has_omd } : null
+    };
+  });
+
+  return {
+    ok: true,
+    action: 'search_properties',
+    count: results.length,
+    results,
+    query: p
+  };
+}
+
+// ---------------------------------------------------------------------------
+// MATCH PROPERTY TO INBOX ITEM — Tool 33 (Copilot intelligence category)
+// POST /api/copilot/intelligence/match-property
+// ---------------------------------------------------------------------------
+async function handleMatchPropertyToInboxItem(params, workspaceId) {
+  const p = params || {};
+  const inboxItemId = p.inbox_item_id || null;
+  if (!inboxItemId) return { ok: false, error: 'inbox_item_id is required.' };
+
+  // 1. Fetch the inbox item
+  let wsFilter = workspaceId ? `&workspace_id=eq.${encodeURIComponent(workspaceId)}` : '';
+  const itemResult = await opsQuery('GET',
+    `inbox_items?id=eq.${encodeURIComponent(inboxItemId)}${wsFilter}&select=id,title,body,domain,entity_id,tags,metadata&limit=1`
+  );
+  const item = (itemResult.data || [])[0];
+  if (!item) {
+    return { ok: false, error: `Inbox item ${inboxItemId} not found.` };
+  }
+
+  // 2. If already linked, return early with the linked entity context
+  if (item.entity_id) {
+    const linkedResult = await opsQuery('GET',
+      `entities?id=eq.${encodeURIComponent(item.entity_id)}&select=id,name,entity_type,asset_type,domain,city,state,address&limit=1`
+    );
+    const linked = (linkedResult.data || [])[0];
+    return {
+      ok: true,
+      action: 'match_property_to_inbox_item',
+      already_linked: true,
+      inbox_item_id: inboxItemId,
+      entity_id: item.entity_id,
+      entity: linked || null,
+      candidates: [],
+      note: 'This inbox item already has a linked entity.'
+    };
+  }
+
+  // 3. Extract location/tenant signals from title + body
+  const text = [item.title, item.body].filter(Boolean).join(' ');
+
+  // Street address pattern: "1234 Main St" / "Ste 100" stripped
+  const addrMatch = text.match(/\b(\d{2,6}\s+[A-Z][a-z]+(?:\s+[A-Za-z]+){0,3}(?:\s+(?:St|Ave|Blvd|Dr|Rd|Ln|Way|Pl|Ct|Pkwy|Hwy|Freeway|Cir|Loop|Trail|Trl|Pike|Way)))\b/);
+  const streetHint = addrMatch ? addrMatch[1].trim() : null;
+
+  // City/State: "Dallas, TX" or "Houston Texas"
+  const stateAbbrs = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
+  const cityStateMatch = text.match(/([A-Z][a-zA-Z\s]{1,20}),?\s+([A-Z]{2})\b/);
+  const cityHint  = cityStateMatch ? cityStateMatch[1].trim() : null;
+  const stateHint = (cityStateMatch && stateAbbrs.includes(cityStateMatch[2])) ? cityStateMatch[2] : null;
+
+  // Tenant/operator keywords — build a single search hint
+  const TENANT_PATTERNS = [
+    { re: /davita/i, hint: 'DaVita' },
+    { re: /fresenius|bio[\s-]?medical/i, hint: 'Fresenius' },
+    { re: /\bdci\b|dialysis\s+clinic/i, hint: 'DCI' },
+    { re: /\bgsa\b|general\s+services\s+admin/i, hint: 'GSA' },
+    { re: /dollar\s+general/i, hint: 'Dollar General' },
+    { re: /walgreens/i, hint: 'Walgreens' },
+    { re: /cvs/i, hint: 'CVS' },
+    { re: /advance\s+auto/i, hint: 'Advance Auto' },
+    { re: /o'reilly|oreilly/i, hint: "O'Reilly" },
+    { re: /autozone/i, hint: 'AutoZone' },
+  ];
+  let tenantHint = null;
+  for (const { re, hint } of TENANT_PATTERNS) {
+    if (re.test(text)) { tenantHint = hint; break; }
+  }
+
+  // 4. Build parallel entity search queries from available signals
+  const searches = [];
+
+  if (streetHint) {
+    searches.push(opsQuery('GET',
+      `entities?entity_type=eq.asset&address.ilike=*${encodeURIComponent(streetHint.replace(/[*()]/g, ''))}*` +
+      `&select=id,name,entity_type,asset_type,domain,city,state,address&limit=10`
+    ).then(r => (r.data || []).map(e => ({ ...e, _signal: 'address', _score: 0.95 }))));
+  }
+
+  if (tenantHint && (cityHint || stateHint)) {
+    const safeTenant = encodeURIComponent(tenantHint.replace(/[*()]/g, ''));
+    let tp = `entities?entity_type=eq.asset&name.ilike=*${safeTenant}*&select=id,name,entity_type,asset_type,domain,city,state,address&limit=15`;
+    if (stateHint) tp += `&state.ilike=*${encodeURIComponent(stateHint)}*`;
+    if (cityHint)  tp += `&city.ilike=*${encodeURIComponent(cityHint.replace(/[*()]/g, ''))}*`;
+    searches.push(opsQuery('GET', tp)
+      .then(r => (r.data || []).map(e => ({ ...e, _signal: 'tenant+location', _score: 0.80 }))));
+  } else if (tenantHint) {
+    const safeTenant = encodeURIComponent(tenantHint.replace(/[*()]/g, ''));
+    searches.push(opsQuery('GET',
+      `entities?entity_type=eq.asset&name.ilike=*${safeTenant}*&select=id,name,entity_type,asset_type,domain,city,state,address&limit=10`
+    ).then(r => (r.data || []).map(e => ({ ...e, _signal: 'tenant', _score: 0.65 }))));
+  }
+
+  if (cityHint && stateHint) {
+    const safeCity  = encodeURIComponent(cityHint.replace(/[*()]/g, ''));
+    const safeState = encodeURIComponent(stateHint);
+    searches.push(opsQuery('GET',
+      `entities?entity_type=eq.asset&city.ilike=*${safeCity}*&state.ilike=*${safeState}*` +
+      `&select=id,name,entity_type,asset_type,domain,city,state,address&limit=15`
+    ).then(r => (r.data || []).map(e => ({ ...e, _signal: 'city+state', _score: 0.60 }))));
+  }
+
+  if (!searches.length) {
+    return {
+      ok: true,
+      action: 'match_property_to_inbox_item',
+      inbox_item_id: inboxItemId,
+      candidates: [],
+      signals_extracted: { street: null, city: null, state: null, tenant: null },
+      note: 'Could not extract usable location or tenant signals from this inbox item. Try searching manually with search_properties.'
+    };
+  }
+
+  // 5. Merge results, deduplicate by entity_id, keep highest-score match per entity
+  const allResults = (await Promise.all(searches)).flat();
+  const deduped = {};
+  for (const e of allResults) {
+    const prev = deduped[e.id];
+    if (!prev || e._score > prev._score) deduped[e.id] = e;
+  }
+
+  const candidates = Object.values(deduped)
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 10)
+    .map(e => ({
+      entity_id:   e.id,
+      name:        e.name,
+      asset_type:  e.asset_type,
+      domain:      e.domain,
+      address:     e.address,
+      city:        e.city,
+      state:       e.state,
+      match_signal: e._signal,
+      confidence:   e._score
+    }));
+
+  return {
+    ok: true,
+    action: 'match_property_to_inbox_item',
+    inbox_item_id: inboxItemId,
+    inbox_title: item.title,
+    signals_extracted: { street: streetHint, city: cityHint, state: stateHint, tenant: tenantHint },
+    candidates,
+    note: candidates.length
+      ? `Found ${candidates.length} candidate propert${candidates.length === 1 ? 'y' : 'ies'}. Review and confirm the correct match.`
+      : 'No property matches found. You may need to create a new property record or search manually.'
+  };
 }
 
 async function handleDailyBriefing(params, user, workspaceId, req) {
@@ -5362,14 +5694,20 @@ async function handleChatRoute(req, res) {
   // When Copilot calls /api/copilot/portfolio/get-daily-briefing-snapshot,
   // vercel.json rewrites it to ?_route=chat&_copilot_path=get-daily-briefing-snapshot.
   // Inject the action into the body so the dispatch logic picks it up.
+  // For GET requests (intelligence/* actions), query params carry the action inputs;
+  // merge them into params so the dispatcher receives them correctly.
   if (req.query._copilot_path && !req.body?.copilot_action) {
     const actionId = req.query._copilot_path.replace(/-/g, '_');
-    const originalParams = { ...(req.body || {}) }; // shallow copy BEFORE mutation
-    req.body = {
-      copilot_action: actionId,
-      params: originalParams,
-      surface: 'copilot_plugin',
-    };
+    req.body = req.body || {};
+    req.body.copilot_action = actionId;
+    // Merge GET query params (excluding routing internals) into params
+    const queryParams = {};
+    for (const [k, v] of Object.entries(req.query)) {
+      if (k === '_route' || k === '_copilot_path') continue;
+      queryParams[k] = v;
+    }
+    req.body.params = Object.assign({}, queryParams, req.body.params || {});
+    req.body.surface = req.body.surface || 'copilot_plugin';
   }
 
   // --- Structured action dispatch ---
@@ -5851,48 +6189,6 @@ async function bulkAssign(req, res, user, workspaceId) {
 // ============================================================================
 // WORKFLOW: BULK TRIAGE
 // ============================================================================
-
-// ============================================================================
-// COPILOT HANDLER: triage_inbox_item — writes status/priority/assigned_to to DB
-// ============================================================================
-async function handleTriageInboxItem(params, user, workspaceId) {
-  const { id, status, priority, assigned_to } = params || {};
-  if (!id) return { ok: false, error: 'id (inbox item UUID) is required' };
-
-  const VALID_STATUSES = ['triaged', 'dismissed', 'snoozed', 'promoted', 'archived', 'new'];
-  if (status && !VALID_STATUSES.includes(status)) {
-    return { ok: false, error: `Invalid status "${status}". Must be one of: ${VALID_STATUSES.join(', ')}` };
-  }
-
-  const updates = { updated_at: new Date().toISOString() };
-  if (status) updates.status = status;
-  if (status === 'triaged') updates.triaged_at = new Date().toISOString();
-  if (priority) updates.priority = priority;
-  if (assigned_to) updates.assigned_to = assigned_to;
-
-  const r = await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}`, updates);
-  if (!r.ok) return { ok: false, error: r.error || 'DB write failed', id };
-
-  return { ok: true, id, status: status || 'updated', updated: true };
-}
-
-// ============================================================================
-// COPILOT HANDLER: dismiss_inbox_item — hard-sets status = 'dismissed'
-// ============================================================================
-async function handleDismissInboxItem(params, user, workspaceId) {
-  const { id } = params || {};
-  if (!id) return { ok: false, error: 'id (inbox item UUID) is required' };
-
-  const updates = {
-    status: 'dismissed',
-    updated_at: new Date().toISOString()
-  };
-
-  const r = await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}`, updates);
-  if (!r.ok) return { ok: false, error: r.error || 'DB write failed', id };
-
-  return { ok: true, id, status: 'dismissed', updated: true };
-}
 
 async function bulkTriage(req, res, user, workspaceId) {
   const { item_ids, status, priority, assigned_to } = req.body || {};
