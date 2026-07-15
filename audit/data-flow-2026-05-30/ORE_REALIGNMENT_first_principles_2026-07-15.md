@@ -241,6 +241,93 @@ resolved without any new fetch.
 
 ---
 
+## 9. Contact selection & prospecting doctrine (Scott, 2026-07-15)
+
+Contact **discovery, selection, and prioritization** must be authoritative-weighted and
+org-structure-aware — the same discipline as ownership reconciliation (§7) — with a
+parallel experience/direction lane, and it must never stall. The objective is always:
+**reach the individual with control to bind, or direct action on behalf of, the
+organization.** Who that is depends on the org's size and structure, so the *contact*
+resolution must match the *owner* resolution.
+
+### 9a. Two lanes, one objective (start authoritative, never stall)
+- **Lane 1 — Authoritative (runs continuously, no waiting).** Resolve the control
+  contact from authoritative sources by weighted authority, exactly like ownership. This
+  lane **never pauses for a manual "who to call" decision** — it always produces a
+  best-authoritative target and keeps working until we learn more. Manual feedback is
+  required only when genuinely stuck; the process must not stall on an arbitrary pick.
+- **Lane 2 — Experience / direction (additive, adjusts strategy — not control).** Personal
+  experience + what groups tell us during prospecting ("call our wealth manager / our
+  accountant / talk to Jane in acquisitions") **directs future action but does NOT change
+  who holds control.** A handoff is not binary: keep prospecting the decision-maker, just
+  **lighter** after the handoff, and focus effort on the directed person. Both lanes work
+  to the same outcome; direction re-weights intensity, it doesn't overwrite the control
+  contact.
+
+### 9b. Authority hierarchy for CONTROL (who can bind)
+Rank contact sources by authority, mirroring the ownership ledger — **the person who
+signed is better evidence of control than an aggregator listing:**
+- **Highest:** deed **signatory** + loan-document **executor** (they signed = they bind);
+  LLC **managing member** (SOS); **notice address** individual (county/SOS — for a small
+  LLC this is often a primary residence = the individual).
+- **Lower:** CoStar "ownership contact" — good, but **not always perfect / not proof of
+  control**.
+- Direction from the org (Lane 2) is a *strategy* signal, ranked separately — it elevates
+  the directed contact's *priority* without claiming control authority.
+
+### 9c. Org-archetype-aware role model (the target matches the structure)
+The right contact — and how many — depends on the organization:
+- **Small LLC (one / a few individuals):** the managing member(s) / deed signer / notice
+  individual **are** the target(s). Prospect those individuals directly (they're usually
+  the same person across SOS + deed + notice address).
+- **Large REIT / institution (functionally separated roles):** roles split by function.
+  **Acquisition** (analysts → associates → directors) report to an **investment
+  committee** and drive buy/offer decisions. **Disposition** decisions + **broker
+  selection** are made by different people (asset management / capital markets) who rely
+  on the acquisition team's feedback. Prospect the **disposition/broker-selection** path
+  for seller work, informed by the acquisition relationship.
+- **Not one, not all.** Do NOT arbitrarily pick a single contact per company, and don't
+  blast everyone — resolve a considered **set** (the bench), sized + role-typed to the
+  org's structure. Businesses and true owners are dynamic.
+- **Partnership dynamics ≠ ownership percentage** — control doesn't always follow the
+  equity split; weight the signer/managing-member/decision-maker, not the cap table.
+
+### 9d. Buyer vs Seller prospecting mode (drives the whole motion + the touch content)
+Classify each true company by behavior and prospect accordingly:
+- **Programmatic Buyer (REIT / repeat acquirer — R5 buyer-parents already identify these):**
+  prospect as a **Buyer** — this happens **naturally via ongoing marketing of our
+  listings** (buy-side). Give them access to product *before* the market.
+- **Everyone else → prospect as a Seller.** Seller touches maximize name-recognition with
+  what resonates: **"you own this, I sell this"** — location-based or "blue-suit" style
+  (*you own a DaVita-leased building in Tulsa; I sell DaVita-leased buildings nationwide —
+  here's a comparable I just closed/listed*).
+- **Always lead with value / non-public information** that shows subspecialty expertise:
+  - Buyers → early access to this product type before it's for sale.
+  - Sellers → information that could move the owner's value / decision / timeline /
+    financing / valuation, or tenant trends (renewals, expansions, business shifts and
+    their real-estate impact).
+
+### 9e. Dynamic response (the app directs the effort, and learns)
+As we learn contact info + who to call, the app **responds dynamically**: the
+authoritative control contact stays resolved (Lane 1), the directed contact is added +
+prioritized (Lane 2), the touch mode (buyer/seller) + content (location/blue-suit +
+value offer) is selected per company, and every prospecting outcome (referral, handoff,
+no-response, bounce, two-way) re-weights the bench — continuously, without stalling.
+
+### 9f. Mapping to the code (where it lands)
+`owner_contact_pivot` already carries the bench (`bench`/`consumed`/`demoted`), authority
+(`active_authority_level`/`active_contact_role`/`active_source`), feedback
+(`pivot_history`/`recurrence_locked`), and the CONTACT-SELECTION ladder
+(signatory→controlling→economic→agent) exists — so the doctrine largely *extends* built
+structure. The gaps to close: (1) org-archetype-aware role prioritization (small-LLC
+individual vs REIT role-separated); (2) a **control-contact vs directed-contact**
+distinction so Lane-2 direction adjusts intensity without overwriting control; (3)
+**buyer/seller prospecting mode** on the company driving cadence type + touch content;
+(4) rank deed-signer / loan-executor / SOS-managing-member **above** CoStar in the contact
+authority weights (reuse `lcc_signal_authority`); (5) guarantee the authoritative lane
+never stalls waiting on a manual pick. Prompt:
+`CLAUDECODE_PROMPT_ORE_contact_selection_doctrine.md`.
+
 ## 8. Progress log (living — update as we work this topic)
 
 - **2026-07-15** — Deed OCR worker fix shipped + verified (158→154 storage-ready
