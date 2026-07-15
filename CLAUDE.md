@@ -7188,3 +7188,112 @@ ups (NOT built): a Decision-Center lane to add/confirm registry contacts inline;
 cron on the attach worker (schedule after the first gated drain, artifact-offload
 lesson); wiring the SOS/deed/address adapters for the `local` (fetch_public_records)
 tail.
+## Ownership reconcile arc — deed-wins auto-fix + dia recorded_owner_name drift (2026-07-15)
+
+The "why is this still a manual banner when we already have the sale?" thread
+(traced from gov property 16500, VA · Rockford IL). Three shipped fixes + one
+debugged-and-resolved data-integrity root cause. **All LCC-Opps + gated gov/dia
+writes; auth schema untouched.**
+
+### 1 — the broken detail-page verdict (regression, fixed)
+The 2026-06-30 ownership-lane consolidation removed `owner_source_conflict` +
+`suspected_sale` from `FEDERATED_DECISION_TYPES` (retiring them as **Decision
+Center lanes**), but the **property-detail** signal banner
+(`operations.js getPropertySignals` → `detail.js _udReconcileOwner` /
+`_udConfirmSuspectedSale` / `_udNotASale`) still emits and POSTs those types.
+The verdict entry-gate (`admin.js`) rejected any non-federated type → the
+"Accept deed owner" / "Confirm sale" buttons 400'd (`decision_id, or (federated
+type + subject), required`). Fix: a **separate `DETAIL_SURFACE_DECISION_TYPES`
+allowlist** (`owner_source_conflict`, `suspected_sale`) that clears the
+(type+subject) gate WITHOUT re-entering `FEDERATED_DECISION_TYPES` (retired lanes
+stay retired; the DC partition test stays green — guarded by a new static test in
+`decision-center-partition.test.mjs`). Their verdict-dispatch branches were
+already wired.
+
+### 2 — one click closes the whole loop (B1) + automatic sweep (B2)
+`reconcileSaleAndOwnershipForNewOwner(args, deps)` (`sidebar-pipeline.js`): after
+a deed grantee becomes `recorded_owner` (R51 `propagateDeedGranteeToOwner`),
+attribute the sale **whose buyer IS this owner** (correct — vs the legacy
+orphan-sale backlink that used the stale *current* owner) + append the
+`ownership_history` transfer. Per-domain, dedup (**dia keys on the
+`ownership_history_sale_id_unique` constraint**; gov on
+property+owner+transfer_date), append-only / fill-blanks, reversible
+(`data_source`/`ownership_source='owner_deed_reconcile'`). Wired into: the
+`owner_source_conflict` accept_deed verdict, the consolidated `resolve_ownership`
+update_owner verdict, the sidebar **capture path Step 5b4** (new captures
+self-heal), and `handleOwnerDeedAutofix` (the sweep). New cron
+**`lcc-owner-deed-autofix`** (daily 06:50) — **gated on env
+`DECISION_OWNER_DEED_WINS` (now ON)**; the endpoint 403s when off.
+Live 2026-07-15: fired the sweep → 11 gov+dia owners corrected, 16500 fully
+reconciled (recorded_owner → TNRE 13 LLC, sale attributed, OH transfer appended).
+
+### 3 — orphan-sale next-action: only a LIVE sale is a genuine orphan
+`v_gap_orphan_sale_owner` (gov + dia) filtered only on `recorded_owner_id IS
+NULL`, so every `transaction_state<>'live'` (duplicate_superseded, already deduped
+by R37) sale generated a phantom "Back-link sale" action — 16500 alone showed 5
+identical banners from its 5 superseded 2022 dups. Fix: `AND s.transaction_state
+= 'live'`. Applied live: **gov 2,359 → 274** orphan actions (2,085 phantoms
+removed, 88% noise), **dia 454 → 370**. Migrations
+`{government,dialysis}/20260716_*_orphan_sale_owner_live_only.sql`.
+
+### 4 — dia `properties.recorded_owner_name` denorm drift (ROOT-CAUSED + RESOLVED)
+**The debugged data-integrity root cause.** `recorded_owner_name` is a
+DENORMALIZED copy of the owning `recorded_owners.name` (via FK
+`recorded_owner_id`), but two writers set the two columns from DIFFERENT "current
+owner" sources → drift:
+- the CoStar sidebar property upsert writes `recorded_owner_name` from the
+  capture's **owner panel** (`sidebar-pipeline.js` ~L3581,
+  `recorded_owner_name: ownerContact?.name`) WITHOUT touching the FK;
+- `recorded_owner_id` (the FK — the join key the WHOLE system uses:
+  `ownership_history`, `external_identities` bridge, `v_owner_source_conflict`,
+  the BD spine / priority queue) is resolved separately from the ownership chain
+  (`reconcilePropertyOwnership`) / the deed grantee (R51).
+
+Grounded live (dia `zqzrriwuavgrquhisnoa`, 2026-07-15): **1,233 FK-set rows
+drifted** — 299 punctuation-only (same owner), 47 FK-is-current-denorm-stale,
+**290 denorm-is-current / FK-STALE** (deed grantee == denorm, FK lagged), 31
+neither, 261 no-deed. Because dia's `v_owner_source_conflict` compares the
+**denorm** (stale) name: the 47 FK-current rows FALSELY surfaced as conflicts
+(the deed sweep no-op'd them `already_current`), while the 290 genuinely-stale
+FKs were **MASKED** (the denorm showed the newer owner). gov `properties` has NO
+`recorded_owner_name` column (it reads the FK-joined name) → **gov is immune;
+dia-only bug.**
+
+**DOCTRINE:** `recorded_owner_id` (FK) is the single source of truth;
+`recorded_owner_name` is a pure cache that must ALWAYS equal `recorded_owners.name`
+via the FK. "Which owner is correct" (FK staleness) is a SEPARATE concern owned
+by R51 / the deed-autofix sweep.
+
+**FIX** (migration `dialysis/20260716_dia_recorded_owner_name_mirror_invariant.sql`,
+applied live):
+1. Reversible backup `dia_recorded_owner_name_drift_backup` (1,233 rows).
+2. **Trigger `trg_dia_sync_recorded_owner_name`** (`BEFORE INSERT OR UPDATE OF
+   recorded_owner_id, recorded_owner_name`) forces `recorded_owner_name` to mirror
+   the FK owner's name whenever the FK is set (left as-is when FK is null — a
+   capture-time fallback). Fires on **either** column, so it neutralises the L3581
+   name-only write AND any FK change, across **all** writers — the single airtight
+   enforcement point. Verified live (synthetic, rolled back): a garbage
+   name-write is overridden to the FK name; an FK repoint re-syncs the name.
+3. One-time backfill → **drift 0**.
+
+**Consequence (intended, self-healing):** denorm == FK everywhere ⇒
+`v_owner_source_conflict` now behaves as if reading the FK → the 47 false
+conflicts CLEARED and the ~290 masked stale FKs UNMASKED as real conflicts. The
+deed-autofix sweep then reconciled the auto_fixable subset (live: **35 dia owners
+repointed** to their deed grantee → the trigger synced the names); dia
+`auto_fixable` 15→41→**6** residual, `v_owner_source_conflict` total **370**
+(honest — genuine FK-vs-deed conflicts, mostly non-auto-fixable old deeds /
+guard-failures, for manual/future resolution).
+
+**Reversible:** `DROP TRIGGER trg_dia_sync_recorded_owner_name`; restore names
+from `dia_recorded_owner_name_drift_backup`. The L3581 write is now harmless
+(overridden by the trigger; a code comment there points to this).
+
+**Residual / follow-ups (surfaced, not chased):** (a) ~6 dia rows the sweep skips
+`already_current` — the view's owner↔grantee normalization is slightly looser
+than the JS `ownerNameNorm` (`dia_owner_share_significant_token`), so it
+over-flags a handful whose FK already equals the grantee; benign (no wrong write),
+worth a later view-normalization tightening. (b) The deeper design question —
+should the CoStar owner **panel drive the FK** (not just the name)? — is a
+separate owner-resolution change (Concern 2), NOT done here; the chain/deed
+resolvers remain the FK owners and the sweep reconciles staleness.
