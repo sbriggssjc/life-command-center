@@ -7390,3 +7390,46 @@ correct owner-currency mechanism is the deed-autofix sweep (evidence-backed,
 gated, reversible), which now resolves cleanly (Fix B) and is honestly counted
 (Fix A). Revisit only if a grounded audit shows the panel carrying owner truth the
 deed/chain paths miss.
+
+### Cause 3 (post-Fix-B safety) — a mortgage/DoT grantee must not become the owner
+**DOCTRINE (Scott, 2026-07-15):** *"If it's a grantee in a mortgage or deed of
+trust, route to the LENDER side. If it's a deed, the grantee is the BUYER → owner
+side. Grantors (both cases) enrich ownership history / contacts / signatories."*
+With Fix B deployed, the daily `lcc-owner-deed-autofix` sweep would have repointed
+the 6 remaining dia auto_fixable rows — but 2 of them are mortgage/lender parties
+(**28051 "SG Mortgage Finance Corp"** = the current owner Societe Generale's own
+finance arm; **26823 "Sumitomo Mitsui Banking Corporation"**, a bank parent with
+no sale backing). Grounded live: the 6 legacy `latest_deed_grantee` values carry
+**NO `deed_records` and NO metadata** (0 rows), so there is no stored instrument
+type to route on. The forward capture path is already safe
+(`latestDeedGranteeFromMetadata` filters `MORTGAGE_DEED_TYPES`); these are legacy
+contamination.
+- **Fix (pure-DB, migrations `dialysis/20260716_dia_owner_conflict_hold_lender_grantee.sql`
+  + `government-lease/sql/20260716_gov_..._hold_lender_grantee.sql`, applied live):**
+  exclude a lender/mortgage-instrument-NAMED grantee from the view's `auto_fixable`
+  (regex `mortgage | deed of trust | mortgage finance | home loan | savings bank |
+  banking corp(oration) | bancorp | financial corp | fsb`, inline in the boolean —
+  no output-column change). A name-anchored fallback **only where the sweep lacks
+  instrument provenance**. The row **STAYS a conflict** — a human can still confirm
+  it via the Decision Center `update_owner` verdict (which bypasses `auto_fixable`)
+  — so it's a HOLD-for-confirm, not a drop. **Safe direction:** a false-positive
+  just means "human confirms" (a fee owner is never named "…Mortgage Finance" /
+  "…Banking Corporation").
+- **The shared JS `granteePassesOwnerGuards` is NOT touched** — the R59 deed path
+  has the real `deed_type` and already filters mortgages; only the sweep (bare
+  `latest_deed_grantee`, no instrument) needs the name fallback.
+- Verified live: dia auto_fixable **6 → 4** — HELD (confirm) = 28051 + 26823 (the
+  mortgage/bank-parent grantees); AUTO-APPLY = 27006 (K&T Ranch), 27042 + 29087
+  (Sumitomo **Leasing** — `stale_seller`, sale-backed = buyer-side per doctrine),
+  37690 (Realty Income Properties 17 LLC, legit REIT SPE). gov unchanged (0
+  auto_fixable, 890 conflicts). Reversible (re-create the broker-parity body).
+
+### FOLLOW-UP — full instrument-type routing + grantor enrichment (ORE, NOT built)
+Scott's doctrine implies a larger ORE round, surfaced not built: (1) route a
+**mortgage/DoT grantee to the LENDER side** (`loans`/`lenders`), not just hold it
+off the owner side — needs the instrument type threaded from the deed parser /
+capture into a debt-side write; (2) use **grantors** (both deed and mortgage) to
+enrich `ownership_history`, `contacts`, and the **signatory** on the document.
+This touches the R58 deed parser, the CoStar capture path, and the debt/contact
+tables. The immediate view-hold above is the safety floor; the routing is the
+next round.
