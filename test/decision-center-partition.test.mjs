@@ -36,4 +36,20 @@ describe('R64 Decision Center federated-lane partition', () => {
       assert.ok(!client.has(dt), `${dt} must be an actionable verdict lane, not federated`);
     }
   });
+
+  // The 2026-06-30 ownership consolidation retired owner_source_conflict +
+  // suspected_sale as Decision-Center LANES but the PROPERTY-DETAIL signal banner
+  // (getPropertySignals → _udReconcileOwner / _udConfirmSuspectedSale) still posts
+  // them to /api/decision-verdict as (type + subject). They must stay OFF the
+  // federated set (so they don't re-surface as lanes / inflate the badge) but ON
+  // the detail-surface allowlist (so the entry gate doesn't 400 the verdict — the
+  // "Accept deed owner" / "Confirm sale" regression on the detail page).
+  it('detail-surface signal types are gate-allowed but NOT federated lanes', () => {
+    const federated = extractSet('api/admin.js', /FEDERATED_DECISION_TYPES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+    const detail = extractSet('api/admin.js', /DETAIL_SURFACE_DECISION_TYPES\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+    for (const dt of ['owner_source_conflict', 'suspected_sale']) {
+      assert.ok(detail.has(dt), `${dt} must be in DETAIL_SURFACE_DECISION_TYPES so the detail-page verdict clears the gate`);
+      assert.ok(!federated.has(dt), `${dt} must NOT be in FEDERATED_DECISION_TYPES (retired lane; would re-surface + break the partition)`);
+    }
+  });
 });
