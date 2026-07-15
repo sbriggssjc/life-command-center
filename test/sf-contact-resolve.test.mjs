@@ -9,6 +9,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveWhoId } from '../api/_handlers/sf-contact-resolve.js';
 import { getSalesforceContactById, isSfContactByIdConfigured } from '../api/_shared/salesforce.js';
+import { defaultResolveOrCreateSfContact } from '../api/_handlers/sf-activity-ingest.js';
 
 // ── resolveWhoId (deps-injected core) ────────────────────────────────────────
 function recordingDeps(overrides = {}) {
@@ -91,6 +92,76 @@ describe('resolveWhoId (SF-CONTACT-RECONCILE Unit 2)', () => {
     assert.equal(out.outcome, 'guard_rejected');
     assert.equal(calls.markRow.at(-1)[1].status, 'no_data');
     assert.equal(calls.openMismatch.length, 0);
+  });
+
+  // 2026-07-15 field-map fix: an empty NAME (adapter/field-map miss) is honestly
+  // 'no_name', NOT a guard rejection — the mislabel that hid the by-id field bug.
+  it('empty name (field-map miss) → no_name, NOT guard_rejected', async () => {
+    const { deps, calls } = recordingDeps({ mintContact: async () => ({ ok: false, reason: 'no_name' }) });
+    const out = await resolveWhoId(row, deps);
+    assert.equal(out.outcome, 'no_name');
+    const patch = calls.markRow.at(-1)[1];
+    assert.equal(patch.status, 'no_data');
+    assert.equal(patch.detail, 'no_name');
+    assert.equal(calls.openMismatch.length, 0);
+  });
+
+  // A GENUINE name-guard rejection still surfaces as guard_rejected (with the
+  // real skip reason in detail), distinct from a null name.
+  it('a real name-guard skip → guard_rejected with the true reason in detail', async () => {
+    const { deps, calls } = recordingDeps({ mintContact: async () => ({ ok: false, reason: 'implausible_person_name' }) });
+    const out = await resolveWhoId(row, deps);
+    assert.equal(out.outcome, 'guard_rejected');
+    assert.equal(calls.markRow.at(-1)[1].detail, 'implausible_person_name');
+  });
+
+  // A create/link failure (DB/RLS/transient) is retried, not terminally stranded.
+  it('create_failed (DB/link error) is transient → retry (keeps status seen)', async () => {
+    const { deps, calls } = recordingDeps({ mintContact: async () => ({ ok: false, reason: 'create_failed', detail: 'RLS denied' }) });
+    const out = await resolveWhoId({ who_id: '003zzz', workspace_id: 'ws-1', attempts: 0 }, deps);
+    assert.equal(out.outcome, 'retry');
+    const patch = calls.markRow.at(-1)[1];
+    assert.equal(patch.status, 'seen');
+    assert.match(patch.detail, /create_failed/);
+    assert.match(patch.detail, /RLS denied/);
+  });
+
+  it('create_failed dead-letters at the attempts cap', async () => {
+    const { deps, calls } = recordingDeps({ mintContact: async () => ({ ok: false, reason: 'create_failed' }) });
+    const out = await resolveWhoId({ who_id: '003zzz', workspace_id: 'ws-1', attempts: 2 }, deps);
+    assert.equal(out.outcome, 'dead');
+    assert.equal(calls.markRow.at(-1)[1].status, 'dead');
+  });
+
+  // The EXACT lowercase by-id payload (Eric Dowling) flows end-to-end to a
+  // resolved entity — no guard_rejected — once the adapter maps the name.
+  it('resolves the exact lowercase by-id payload (Eric Dowling) end-to-end', async () => {
+    let mintArg = null;
+    const { deps } = recordingDeps({
+      getContactById: async (whoId) => getSalesforceContactById(whoId),
+      mintContact: async (a) => { mintArg = a; return a.contact.name ? { ok: true, entityId: 'ent-' + a.whoId, createdEntity: true } : { ok: false, reason: 'no_name' }; },
+    });
+    const savedUrl = process.env.SF_CONTACT_BYID_URL;
+    const savedFetch = global.fetch;
+    process.env.SF_CONTACT_BYID_URL = 'https://pa.example/byid?sig=x';
+    global.fetch = async () => ({ ok: true, status: 200, async text() {
+      return JSON.stringify({
+        id: '0038W00002PRqkNQAT', name: 'Eric Dowling', email: 'edowling@boydwatterson.com',
+        first_name: 'Eric', last_name: 'Dowling', phone: '3127773704', title: 'Analyst',
+        account_id: '0018W00001dRmM1QAK', account_name: 'Arbor Realty Trust',
+      });
+    } });
+    try {
+      const out = await resolveWhoId({ who_id: '0038W00002PRqkNQAT', workspace_id: 'ws-1', attempts: 0 }, deps);
+      assert.equal(out.outcome, 'resolved');
+      assert.equal(out.entity_id, 'ent-0038W00002PRqkNQAT');
+      // The mint received a fully-mapped contact (name reached the resolver).
+      assert.equal(mintArg.contact.name, 'Eric Dowling');
+      assert.equal(mintArg.contact.email, 'edowling@boydwatterson.com');
+    } finally {
+      global.fetch = savedFetch;
+      if (savedUrl === undefined) delete process.env.SF_CONTACT_BYID_URL; else process.env.SF_CONTACT_BYID_URL = savedUrl;
+    }
   });
 
   it('flags the SF account/email mismatch (Dowling on Arbor) via the Decision-Center producer', async () => {
@@ -184,6 +255,51 @@ describe('getSalesforceContactById', () => {
     assert.equal(r.contact.account_name, 'Arbor Realty Trust');
   });
 
+  // The EXACT lowercase Response body the PA flow returns (2026-07-15 receipts).
+  // Every field must map — the miss that mislabeled every contact guard_rejected.
+  it('maps the EXACT lowercase by-id payload (Eric Dowling) — all fields', async () => {
+    global.fetch = async () => jsonResponse({
+      id: '0038W00002PRqkNQAT', name: 'Eric Dowling', email: 'edowling@boydwatterson.com',
+      first_name: 'Eric', last_name: 'Dowling', phone: '3127773704', title: 'Analyst',
+      account_id: '0018W00001dRmM1QAK', account_name: 'Arbor Realty Trust',
+    });
+    const r = await getSalesforceContactById('0038W00002PRqkNQAT');
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.contact, {
+      id: '0038W00002PRqkNQAT', name: 'Eric Dowling', email: 'edowling@boydwatterson.com',
+      first: 'Eric', last: 'Dowling', phone: '3127773704', title: 'Analyst',
+      account_id: '0018W00001dRmM1QAK', account_name: 'Arbor Realty Trust',
+    });
+  });
+
+  // A raw Salesforce record (PascalCase API names + nested Account.Name).
+  it('maps a raw SF record (PascalCase + nested Account.Name)', async () => {
+    global.fetch = async () => jsonResponse({
+      attributes: { type: 'Contact' },
+      Id: '0038W00002PRo0iQAD', Name: 'Joseph Capra', Email: 'jcapra@boydwatterson.com',
+      FirstName: 'Joseph', LastName: 'Capra', AccountId: '0018W00001aaa',
+      Account: { Name: 'Boyd Watterson Asset Management LLC' },
+    });
+    const r = await getSalesforceContactById('0038W00002PRo0iQAD');
+    assert.equal(r.ok, true);
+    assert.equal(r.contact.name, 'Joseph Capra');
+    assert.equal(r.contact.first, 'Joseph');
+    assert.equal(r.contact.account_id, '0018W00001aaa');
+    assert.equal(r.contact.account_name, 'Boyd Watterson Asset Management LLC');
+  });
+
+  it('unwraps a { body:{…} } / { value:[…] } envelope', async () => {
+    global.fetch = async () => jsonResponse({ body: { id: '003aaa000000009', name: 'Wrapped Person' } });
+    const rb = await getSalesforceContactById('003aaa000000009');
+    assert.equal(rb.ok, true);
+    assert.equal(rb.contact.name, 'Wrapped Person');
+
+    global.fetch = async () => jsonResponse({ value: [{ id: '003aaa000000010', name: 'List Person' }] });
+    const rv = await getSalesforceContactById('003aaa000000010');
+    assert.equal(rv.ok, true);
+    assert.equal(rv.contact.name, 'List Person');
+  });
+
   it('returns no_data on a 200 with no contact id (Lead / blank)', async () => {
     global.fetch = async () => jsonResponse({});
     const r = await getSalesforceContactById('00Qaaa000000001');
@@ -204,5 +320,23 @@ describe('getSalesforceContactById', () => {
     const r = await getSalesforceContactById('003aaa000000004');
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'unavailable');
+  });
+});
+
+// ── defaultResolveOrCreateSfContact (the mint contract) ──────────────────────
+describe('defaultResolveOrCreateSfContact', () => {
+  // The empty-name early return is pure (no DB / no ensureEntityLink call): a
+  // by-id result with no usable name/email is honestly 'no_name', NOT a guard
+  // rejection — the mislabel the 2026-07-15 field-map fix un-conflates.
+  it('empty name/email → { ok:false, reason:"no_name" } (no guard reject)', async () => {
+    const r = await defaultResolveOrCreateSfContact({ workspaceId: 'ws-1', whoId: '003zzz', name: null, email: null, first: null, last: null });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'no_name');
+  });
+
+  it('whitespace-only name/email still → no_name', async () => {
+    const r = await defaultResolveOrCreateSfContact({ workspaceId: 'ws-1', whoId: '003zzz', name: '   ', email: '  ', first: '', last: '' });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'no_name');
   });
 });

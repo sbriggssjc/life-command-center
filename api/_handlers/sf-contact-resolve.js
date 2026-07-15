@@ -89,12 +89,38 @@ export async function resolveWhoId(row, deps) {
   }
 
   const c = fetched.contact || {};
-  // Mint (or attach-by-email) via ensureEntityLink. Guards reject garbage → a
-  // null/!ok result means there's no usable identity to resolve.
+  // Mint (or attach-by-email) via ensureEntityLink. A non-entityId result carries
+  // an HONEST reason (no longer a blanket 'guard_rejected'):
+  //   - 'no_name'      — the by-id flow returned an id but no usable name/email
+  //                      (an adapter/field-map miss). Terminal but honestly
+  //                      labeled — NOT a guard rejection.
+  //   - a name-guard   — junk_entity_name / implausible_person_name /
+  //                      street_fragment_name (a genuine rejection). Terminal.
+  //   - 'create_failed'— the entities POST / link failed (a DB/RLS/transient
+  //                      error). RETRYABLE — don't terminally strand the row.
   const minted = await deps.mintContact({ whoId: row.who_id, workspaceId: row.workspace_id, contact: c });
   if (!minted || !minted.ok || !minted.entityId) {
-    await deps.markRow(row.who_id, { status: 'no_data', attempts, last_attempt_at: nowIso, detail: (minted && minted.reason) || 'guard_rejected' });
-    return { outcome: 'guard_rejected' };
+    const reason = (minted && minted.reason) || 'no_name';
+    const detail = (minted && minted.detail)
+      ? String(reason + ': ' + minted.detail).slice(0, 300)
+      : reason;
+
+    // A create/link failure is transient — retry, dead-letter at the cap.
+    if (reason === 'create_failed' || reason === 'link_failed') {
+      if (attempts >= maxAttempts) {
+        await deps.markRow(row.who_id, { status: 'dead', attempts, last_attempt_at: nowIso, detail });
+        return { outcome: 'dead' };
+      }
+      await deps.markRow(row.who_id, { status: 'seen', attempts, last_attempt_at: nowIso, detail });
+      return { outcome: 'retry' };
+    }
+
+    // 'no_name' (empty/absent name) is honestly its own outcome — never mislabel
+    // it as a guard rejection. A real name-guard skip stays 'guard_rejected'.
+    // The queue status stays 'no_data' (the allowed terminal value); the reason
+    // rides `detail` so the true cause is observable on the next drain.
+    await deps.markRow(row.who_id, { status: 'no_data', attempts, last_attempt_at: nowIso, detail: reason });
+    return { outcome: reason === 'no_name' ? 'no_name' : 'guard_rejected' };
   }
 
   // Unit-3 mismatch detector — an email-domain firm that contradicts the SF
@@ -163,6 +189,7 @@ export async function handleSfContactResolveTick(req, res) {
     minted: 0,
     reconciled: 0,
     no_data: 0,
+    no_name: 0,
     retried: 0,
     dead: 0,
     mismatches_flagged: 0,
@@ -210,7 +237,9 @@ export async function handleSfContactResolveTick(req, res) {
         workspaceId, userId: user.id, whoId, accountId: contact.account_id,
         name: contact.name, email: contact.email, first: contact.first,
         last: contact.last, phone: contact.phone, title: contact.title,
-      }).then((m) => (m && m.entityId ? { ok: true, ...m } : { ok: false, reason: 'guard_rejected' })),
+      }).then((m) => (m && m.entityId
+        ? { ok: true, ...m }
+        : { ok: false, reason: (m && m.reason) || 'no_name', detail: (m && m.detail) || null })),
       detectMismatch: (args) => sfContactAccountMismatch(args),
       openMismatch: (args) => defaultOpenSfMismatchDecision(args),
       markRow: defaultMarkRow,
@@ -239,6 +268,8 @@ export async function handleSfContactResolveTick(req, res) {
       if (out.created) result.minted++;
       if (out.reconciled) result.reconciled++;
       if (out.mismatch_flagged) result.mismatches_flagged++;
+    } else if (out.outcome === 'no_name') {
+      result.no_name++;
     } else if (out.outcome === 'no_data' || out.outcome === 'guard_rejected') {
       result.no_data++;
     } else if (out.outcome === 'dead') {

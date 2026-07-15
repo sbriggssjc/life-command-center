@@ -115,26 +115,52 @@ async function defaultApplyOwnerContactFeedback(ownerEntityId, kind) {
  *    (one entity, multiple source identities) instead of minting a duplicate;
  *  - the junk / implausible-person guards reject garbage (never invents a
  *    contact from a bad name).
- * Returns { entityId, createdEntity, resolvedByEmail } or null (guard-rejected).
+ * Returns:
+ *   { ok:true, entityId, createdEntity, resolvedByEmail }        — minted/attached
+ *   { ok:false, reason:'no_name' }                               — the by-id flow
+ *     yielded an id but NO usable name/email (an adapter/field-map miss or a
+ *     nameless record) — NOT a guard rejection.
+ *   { ok:false, reason:<junk_entity_name|implausible_person_name|
+ *     street_fragment_name> }                                    — a genuine
+ *     name-guard rejection (ensureEntityLink `skipped`), terminal.
+ *   { ok:false, reason:'create_failed', detail }                 — the entities
+ *     POST / link failed (a DB/RLS/transient error), NOT a guard rejection —
+ *     the caller may retry.
+ * The ingest caller only reads `.entityId`, so returning a `{ok:false,…}` object
+ * instead of the old bare `null` is backward-compatible.
  */
 export async function defaultResolveOrCreateSfContact({ workspaceId, userId, whoId, accountId, name, email, first, last, phone, title }) {
   const seedFields = {};
-  if (name)  seedFields.name = name;
-  if (first) seedFields.first_name = first;
-  if (last)  seedFields.last_name = last;
-  if (title) seedFields.title = title;
+  // Trim so a whitespace-only name (a padded field-map value) is treated as
+  // empty, not minted as a blank entity.
+  const trim = (v) => (typeof v === 'string' ? v.trim() : v);
+  const tName = trim(name), tFirst = trim(first), tLast = trim(last), tTitle = trim(title), tPhone = trim(phone);
+  if (tName)  seedFields.name = tName;
+  if (tFirst) seedFields.first_name = tFirst;
+  if (tLast)  seedFields.last_name = tLast;
+  if (tTitle) seedFields.title = tTitle;
   const ne = normalizeEmail(email);
-  if (ne)    seedFields.email = ne;
-  if (phone) seedFields.phone = phone;
-  if (!seedFields.name && !seedFields.first_name && !seedFields.last_name && !seedFields.email) return null;
+  if (ne)     seedFields.email = ne;
+  if (tPhone) seedFields.phone = tPhone;
+  if (!seedFields.name && !seedFields.first_name && !seedFields.last_name && !seedFields.email) {
+    return { ok: false, reason: 'no_name' };
+  }
   const link = await ensureEntityLink({
     workspaceId, userId,
     sourceSystem: 'salesforce', sourceType: 'Contact', externalId: whoId,
     seedFields,
     metadata: { via: 'sf_activity_ingest', sf_account: accountId || null },
   });
-  if (!link || !link.ok || !link.entityId) return null;
-  return { entityId: link.entityId, createdEntity: !!link.createdEntity, resolvedByEmail: !!link.resolvedByEmail };
+  if (link && link.ok && link.entityId) {
+    return { ok: true, entityId: link.entityId, createdEntity: !!link.createdEntity, resolvedByEmail: !!link.resolvedByEmail };
+  }
+  // Un-conflate: a name-guard rejection (ensureEntityLink `skipped`) is terminal;
+  // a create/link failure is a transient DB error the caller can retry.
+  if (link && link.skipped) return { ok: false, reason: link.skipped };
+  const rawDetail = link && link.detail
+    ? (typeof link.detail === 'string' ? link.detail : JSON.stringify(link.detail))
+    : null;
+  return { ok: false, reason: 'create_failed', detail: rawDetail ? rawDetail.slice(0, 200) : null };
 }
 
 // Free personal-mail domains carry NO firm signal, so a mismatch can't be judged

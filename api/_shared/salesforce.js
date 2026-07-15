@@ -545,6 +545,28 @@ export function isSfContactByIdConfigured() {
 }
 
 /**
+ * Unwrap the contact object from whatever envelope the "SF Get Contact By Id"
+ * Power Automate flow returns. The flow's documented shape is a BARE lowercase
+ * object ({ id, name, email, first_name, … }), but PA/Salesforce steps can wrap
+ * it ({ contact:{…} } / { record:{…} } / { body:{…} } / { result:{…} }) or hand
+ * back a list shape ({ value:[…] } / { records:[…] } / { d:{ records:[…] } }).
+ * Returns the inner object with an id, or null.
+ */
+function unwrapSfContact(json) {
+  if (!json || typeof json !== 'object') return null;
+  let c = json.contact || json.record || json.body || json.result || json;
+  // A list-records envelope carries the row(s) under value/records; take the 1st.
+  if (c && typeof c === 'object' && (c.id ?? c.Id) == null) {
+    const arr = (Array.isArray(c.value) && c.value)
+      || (Array.isArray(c.records) && c.records)
+      || (c.d && Array.isArray(c.d.records) && c.d.records)
+      || null;
+    if (arr && arr.length) c = arr[0];
+  }
+  return c && typeof c === 'object' ? c : null;
+}
+
+/**
  * Resolve a single Salesforce Contact by its 18/15-char Id via the dedicated
  * "SF Get Contact By Id" Power Automate flow (SF_CONTACT_BYID_URL).
  *
@@ -596,22 +618,35 @@ export async function getSalesforceContactById(whoId) {
     return { ok: false, reason: json.reason || 'flow_reported_failure', detail: pickFlowMessage(json.detail) || null };
   }
 
-  const c = (json && (json.contact || json.record)) || json || null;
-  const cid = c && (c.id || c.Id);
+  const c = unwrapSfContact(json);
+  const cid = c && (c.id ?? c.Id ?? c.contactId ?? c.ContactId);
   if (!c || !cid) return { ok: false, reason: 'no_data' };
 
+  // Read the flow's lowercase keys (the documented contract) AND capitalized /
+  // Salesforce-API spellings, so a future flow tweak (or a raw SF record) can't
+  // silently drop the name/email — the field-map miss that mislabeled every
+  // contact as guard_rejected (2026-07-15).
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = c[k];
+      if (v != null && String(v).trim() !== '') return v;
+    }
+    return null;
+  };
+  const acctNested = c.Account || c.account || null;
   return {
     ok: true,
     contact: {
       id: cid,
-      name:  c.name ?? c.Name ?? null,
-      email: c.email ?? c.Email ?? null,
-      first: c.first_name ?? c.FirstName ?? null,
-      last:  c.last_name ?? c.LastName ?? null,
-      phone: c.phone ?? c.Phone ?? null,
-      title: c.title ?? c.Title ?? null,
-      account_id:   c.account_id ?? c.AccountId ?? null,
-      account_name: c.account_name ?? c.AccountName ?? null,
+      name:  pick('name', 'Name', 'full_name', 'FullName'),
+      email: pick('email', 'Email'),
+      first: pick('first_name', 'FirstName', 'first', 'First'),
+      last:  pick('last_name', 'LastName', 'last', 'Last'),
+      phone: pick('phone', 'Phone', 'mobile_phone', 'MobilePhone'),
+      title: pick('title', 'Title'),
+      account_id:   pick('account_id', 'AccountId', 'accountId'),
+      account_name: pick('account_name', 'AccountName', 'accountName')
+        || (acctNested && (acctNested.Name ?? acctNested.name)) || null,
     },
   };
 }
