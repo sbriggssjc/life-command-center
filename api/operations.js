@@ -5350,10 +5350,12 @@ async function handleChatRoute(req, res) {
   // Inject the action into the body so the dispatch logic picks it up.
   if (req.query._copilot_path && !req.body?.copilot_action) {
     const actionId = req.query._copilot_path.replace(/-/g, '_');
-    req.body = req.body || {};
-    req.body.copilot_action = actionId;
-    req.body.params = req.body.params || req.body || {};
-    req.body.surface = 'copilot_plugin';
+    const originalParams = { ...(req.body || {}) }; // shallow copy BEFORE mutation
+    req.body = {
+      copilot_action: actionId,
+      params: originalParams,
+      surface: 'copilot_plugin',
+    };
   }
 
   // --- Structured action dispatch ---
