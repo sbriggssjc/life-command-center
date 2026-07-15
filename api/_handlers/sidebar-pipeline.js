@@ -8607,6 +8607,52 @@ function lenderNamePasses(name) {
   return clean;
 }
 
+// ── ORE follow-up (2026-07-15): normalize the CLEAN deed-path lender into the
+// `lenders` entity table so lenders dedup ACROSS loans (like recorded_owners),
+// then stamp `loans.lender_id`. Dedup key: dia `normalized_name` / gov `lower(name)`
+// — NEITHER `lenders` table carries a UNIQUE on the name, so this is a
+// GET-then-insert (a POST never 409s). Guarded via `lenderNamePasses` (banks /
+// finance / federal ARE legit lenders — no federal reject). `lender_type` is left
+// UNSET (a per-domain CHECK vocabulary with no value we can infer from a deed).
+// Returns lender_id (uuid) or null (best-effort; never throws). Only the clean
+// deed-path lender flows here — the messy CoStar text-lender backfill (broker-
+// mashed / allocation-note names) is a separate follow-up (needs a name-cleaner).
+async function resolveOrCreateLender(domain, name, deps) {
+  try {
+    const q = (deps || buildDeedPropagationDeps()).domainQuery;
+    const clean = lenderNamePasses(name);
+    if (!clean) return null;
+    const isGov = domain === 'government';
+    // Case-insensitive exact match; escape LIKE wildcards so a `%`/`_` in a name
+    // can't broaden the dedup (lender names essentially never carry them).
+    const likeVal = clean.replace(/([%_\\])/g, '\\$1');
+    const norm = clean.trim().toLowerCase()
+      .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp|na|n a)\b\.?/gi, '')
+      .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (isGov) {
+      const g = await q(domain, 'GET',
+        `lenders?name=ilike.${encodeURIComponent(likeVal)}&select=lender_id&limit=1`).catch(() => ({ ok: false }));
+      if (g.ok && Array.isArray(g.data) && g.data.length) return g.data[0].lender_id;
+    } else {
+      const g = await q(domain, 'GET',
+        `lenders?normalized_name=eq.${encodeURIComponent(norm)}&select=lender_id&limit=1`).catch(() => ({ ok: false }));
+      if (g.ok && Array.isArray(g.data) && g.data.length) return g.data[0].lender_id;
+      // Exact-name fallback: a pre-existing dia lender whose normalized_name was
+      // computed by an older/absent norm (mirrors the recorded_owner resolver).
+      const g2 = await q(domain, 'GET',
+        `lenders?lender_name=ilike.${encodeURIComponent(likeVal)}&select=lender_id&limit=1`).catch(() => ({ ok: false }));
+      if (g2.ok && Array.isArray(g2.data) && g2.data.length) return g2.data[0].lender_id;
+    }
+    const row = isGov ? { name: clean } : { lender_name: clean, normalized_name: norm };
+    const ins = await q(domain, 'POST', 'lenders', row).catch(() => ({ ok: false }));
+    if (ins.ok && ins.data) {
+      const created = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+      if (created && created.lender_id) return created.lender_id;
+    }
+    return null;
+  } catch (_e) { return null; }
+}
+
 // ── ORE: route a SECURITY-INSTRUMENT (mortgage / deed of trust) party set to the
 // LENDER side of the DB (Scott's doctrine, 2026-07-15). The grantee is the LENDER
 // (mortgagee) → the loan's text lender column (dia `lender_name` / gov `originator`
@@ -8618,7 +8664,7 @@ function lenderNamePasses(name) {
 export async function writeLoanFromDeed(args, deps) {
   const d = deps || buildDeedPropagationDeps();
   const q = d.domainQuery;
-  const out = { ok: false, lender_routed: null, loan_written: false, borrower_owner_id: null, skipped: null };
+  const out = { ok: false, lender_routed: null, lender_id: null, loan_written: false, borrower_owner_id: null, skipped: null };
   try {
     const { domain, propertyId, lenderName, borrowerName = null,
             loanAmount = null, originationDate = null, documentId = null, sourceUrl = null } = args || {};
@@ -8626,11 +8672,17 @@ export async function writeLoanFromDeed(args, deps) {
     const lender = lenderNamePasses(lenderName);
     if (!lender) { out.skipped = 'lender_failed_guards'; return out; }
 
-    // Borrower (mortgagor) = the property owner who took the loan. Only dia `loans`
-    // has a `recorded_owner_id` column to link it, so resolve/create the borrower
-    // owner there; on gov (no such column) the borrower name rides the notes.
+    // Normalize the lender into the `lenders` entity table (dedup across loans) and
+    // stamp loans.lender_id. Best-effort — a null lender_id still writes the loan
+    // with the text lender (originator / lender_name), so the loan is never lost.
+    const lenderId = await resolveOrCreateLender(domain, lender, d).catch(() => null);
+    out.lender_id = lenderId;
+
+    // Borrower (mortgagor) = the property owner who took the loan. BOTH domains now
+    // carry a `loans.recorded_owner_id` column, so resolve/create the borrower owner
+    // and link it structurally on both (gov column added 2026-07-15).
     let borrowerOwnerId = null;
-    if (borrowerName && domain === 'dialysis') {
+    if (borrowerName) {
       borrowerOwnerId = await resolveDeedRecordedOwner(domain, borrowerName, d).catch(() => null);
     }
     out.borrower_owner_id = borrowerOwnerId;
@@ -8651,11 +8703,11 @@ export async function writeLoanFromDeed(args, deps) {
     // is the semantic fit but dia lacks it, so leave loan_type unset on both).
     const borrowerNote = borrowerName ? ` Borrower (mortgagor) = ${borrowerName}.` : '';
     const row = stripNulls(domain === 'government'
-      ? { property_id: propertyId, originator: lender,
+      ? { property_id: propertyId, originator: lender, lender_id: lenderId, recorded_owner_id: borrowerOwnerId,
           loan_amount: loanAmount || null, origination_date: originationDate || null,
           status: 'active', source_url: sourceUrl || null, data_source: 'deed_extraction',
           notes: `Deed-extracted security instrument (doc ${documentId}); grantee=lender, grantor=borrower.${borrowerNote}` }
-      : { property_id: propertyId, lender_name: lender, recorded_owner_id: borrowerOwnerId,
+      : { property_id: propertyId, lender_name: lender, lender_id: lenderId, recorded_owner_id: borrowerOwnerId,
           loan_amount: loanAmount || null, origination_date: originationDate || null,
           is_active: true, source_url: sourceUrl || null, data_source: 'deed_extraction',
           notes: `Deed-extracted security instrument (doc ${documentId}); grantee=lender, grantor=borrower.${borrowerNote}` });
