@@ -8596,6 +8596,109 @@ export async function resolveDeedRecordedOwner(domain, name, deps) {
   } catch (_e) { return null; }
 }
 
+// A lender name must be substantive and not a brokerage/junk — but a bank / finance
+// / federal entity IS a legitimate lender, so (unlike granteePassesOwnerGuards) do
+// NOT apply the federal anti-pattern reject here.
+function lenderNamePasses(name) {
+  const clean = sanitizeOwnerName(name);
+  if (!clean || clean.replace(/[^a-z0-9]/gi, '').length < 4) return null;
+  if (isCompetitorBroker(clean)) return null;   // a broker is not a lender
+  if (isJunkEntityName(clean)) return null;      // structural garbage
+  return clean;
+}
+
+// ── ORE: route a SECURITY-INSTRUMENT (mortgage / deed of trust) party set to the
+// LENDER side of the DB (Scott's doctrine, 2026-07-15). The grantee is the LENDER
+// (mortgagee) → the loan's text lender column (dia `lender_name` / gov `originator`
+// — the codebase stores lenders as text on `loans`, the `lenders` table is dormant);
+// the grantor is the BORROWER (mortgagor = owner) → `loans.recorded_owner_id`
+// (resolve/create, since the mortgagor genuinely IS a property owner). NEVER writes
+// the mortgagee to any owner-side field. Fill-blanks-ish: dedups on
+// (property_id, lender, origination_date). Best-effort; never throws.
+export async function writeLoanFromDeed(args, deps) {
+  const d = deps || buildDeedPropagationDeps();
+  const q = d.domainQuery;
+  const out = { ok: false, lender_routed: null, loan_written: false, borrower_owner_id: null, skipped: null };
+  try {
+    const { domain, propertyId, lenderName, borrowerName = null,
+            loanAmount = null, originationDate = null, documentId = null, sourceUrl = null } = args || {};
+    if (!domain || propertyId == null || !lenderName) { out.skipped = 'missing_input'; return out; }
+    const lender = lenderNamePasses(lenderName);
+    if (!lender) { out.skipped = 'lender_failed_guards'; return out; }
+
+    // Borrower (mortgagor) = the property owner who took the loan. Only dia `loans`
+    // has a `recorded_owner_id` column to link it, so resolve/create the borrower
+    // owner there; on gov (no such column) the borrower name rides the notes.
+    let borrowerOwnerId = null;
+    if (borrowerName && domain === 'dialysis') {
+      borrowerOwnerId = await resolveDeedRecordedOwner(domain, borrowerName, d).catch(() => null);
+    }
+    out.borrower_owner_id = borrowerOwnerId;
+
+    // Dedup: an existing loan for this property + lender near the same origination.
+    const lenderCol = domain === 'government' ? 'originator' : 'lender_name';
+    const dedupParts = [`property_id=eq.${encodeURIComponent(String(propertyId))}`,
+                        `${lenderCol}=ilike.${encodeURIComponent(lender)}`];
+    if (originationDate) dedupParts.push(`origination_date=eq.${originationDate}`);
+    const look = await q(domain, 'GET', `loans?${dedupParts.join('&')}&select=loan_id&limit=1`).catch(() => ({ ok: false }));
+    if (look.ok && Array.isArray(look.data) && look.data.length) {
+      out.ok = true; out.lender_routed = lender; out.skipped = 'already_recorded'; return out;
+    }
+
+    // loan_type is a CHECK-constrained vocabulary that differs by domain and has no
+    // generic "mortgage" value — the security-instrument nature is carried by
+    // data_source='deed_extraction' + the notes instead (gov's 'County_Recorded'
+    // is the semantic fit but dia lacks it, so leave loan_type unset on both).
+    const borrowerNote = borrowerName ? ` Borrower (mortgagor) = ${borrowerName}.` : '';
+    const row = stripNulls(domain === 'government'
+      ? { property_id: propertyId, originator: lender,
+          loan_amount: loanAmount || null, origination_date: originationDate || null,
+          status: 'active', source_url: sourceUrl || null, data_source: 'deed_extraction',
+          notes: `Deed-extracted security instrument (doc ${documentId}); grantee=lender, grantor=borrower.${borrowerNote}` }
+      : { property_id: propertyId, lender_name: lender, recorded_owner_id: borrowerOwnerId,
+          loan_amount: loanAmount || null, origination_date: originationDate || null,
+          is_active: true, source_url: sourceUrl || null, data_source: 'deed_extraction',
+          notes: `Deed-extracted security instrument (doc ${documentId}); grantee=lender, grantor=borrower.${borrowerNote}` });
+    const ins = await q(domain, 'POST', 'loans', row, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+    if (ins && ins.ok) { out.ok = true; out.loan_written = true; out.lender_routed = lender; }
+    else { out.skipped = 'loan_insert_failed'; }
+    return out;
+  } catch (_e) { out.skipped = 'exception'; return out; }
+}
+
+// ── ORE: write the SIGNATORY (the person signing the document) as a contact linked
+// to the property (Scott: "the contact signing the documents"). Enrichment only —
+// junk-guarded, deduped on (property_id, name, role='signatory'), best-effort.
+export async function writeDeedPartyContact(args, deps) {
+  const d = deps || buildDeedPropagationDeps();
+  const q = d.domainQuery;
+  const out = { ok: false, written: false, skipped: null };
+  try {
+    const { domain, propertyId, name, title = null, role = 'signatory',
+            onBehalfOf = null, documentId = null } = args || {};
+    if (!domain || propertyId == null || !name) { out.skipped = 'missing_input'; return out; }
+    const clean = String(name).trim();
+    if (clean.replace(/[^a-z0-9]/gi, '').length < 4 || isJunkEntityName(clean)) { out.skipped = 'name_failed_guards'; return out; }
+    const isGov = domain === 'government';
+    const nameCol = isGov ? 'name' : 'contact_name';
+    const roleCol = isGov ? 'contact_type' : 'role';
+    const look = await q(domain, 'GET',
+      `contacts?property_id=eq.${encodeURIComponent(String(propertyId))}` +
+      `&${nameCol}=ilike.${encodeURIComponent(clean)}&${roleCol}=eq.${encodeURIComponent(role)}&select=contact_id&limit=1`
+    ).catch(() => ({ ok: false }));
+    if (look.ok && Array.isArray(look.data) && look.data.length) { out.ok = true; out.skipped = 'already_recorded'; return out; }
+    const row = stripNulls({
+      [nameCol]: clean, [roleCol]: role, title: title || null,
+      property_id: propertyId, company: onBehalfOf || null, data_source: 'deed_extraction',
+      notes: `Document signatory (doc ${documentId})${onBehalfOf ? `, on behalf of ${onBehalfOf}` : ''}.`,
+    });
+    const ins = await q(domain, 'POST', 'contacts', row, { Prefer: 'return=minimal' }).catch(() => ({ ok: false }));
+    if (ins && ins.ok) { out.ok = true; out.written = true; }
+    else { out.skipped = 'contact_insert_failed'; }
+    return out;
+  } catch (_e) { out.skipped = 'exception'; return out; }
+}
+
 export async function propagateDeedGranteeToOwner(args, deps) {
   deps = deps || buildDeedPropagationDeps();
   const { domain, propertyId, granteeName, entity = {},
