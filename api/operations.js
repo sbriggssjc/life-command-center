@@ -208,6 +208,16 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerContactEnrichTick(req, res);
   }
 
+  // ORE Phase B B1 — owner-reconcile worker (via vercel.json
+  // _route=owner-reconcile-tick). GET=dry-run (assemble + classify the
+  // reconcile-state distribution, no writes) / POST=drain (record the traceable
+  // per-owner reconcile output). Compares SF presence vs a resolved control
+  // contact and routes each owner to the existing engine. Authenticates internally.
+  if (req.query._route === 'owner-reconcile-tick') {
+    const { handleOwnerReconcileTick } = await import('./_handlers/owner-reconcile.js');
+    return handleOwnerReconcileTick(req, res);
+  }
+
   // UW#7 — developer resolution from the ownership chain (via vercel.json
   // _route=developer-chain-resolve-tick). GET=dry-run (honest per-bucket sizing) /
   // POST=drain. Resolves the original developer for queued
