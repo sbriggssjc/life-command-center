@@ -2045,10 +2045,18 @@
             "schema": {
               "type": "object",
               "properties": {
-                "item": {
-                  "type": "object"
-                },
                 "ok": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "string",
+                  "description": "UUID of the triaged inbox item"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "Status the item was set to"
+                },
+                "updated": {
                   "type": "boolean"
                 }
               }
@@ -2066,8 +2074,7 @@
               "properties": {
                 "id": {
                   "type": "string",
-                  "format": "uuid",
-                  "description": "Inbox item ID"
+                  "description": "Inbox item ID (UUID)"
                 },
                 "status": {
                   "type": "string",
@@ -2088,7 +2095,7 @@
                 },
                 "assigned_to": {
                   "type": "string",
-                  "format": "uuid"
+                  "description": "Assignee UUID"
                 }
               },
               "required": [
@@ -3969,10 +3976,18 @@
     "triage_inbox_item_output": {
       "type": "object",
       "properties": {
-        "item": {
-          "type": "object"
-        },
         "ok": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string",
+          "description": "UUID of the triaged inbox item"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status the item was set to"
+        },
+        "updated": {
           "type": "boolean"
         }
       }
