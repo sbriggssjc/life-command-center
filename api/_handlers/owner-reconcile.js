@@ -31,11 +31,19 @@
 
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
+import { routeFromArchetype } from '../_shared/institution-registry.js';
 
 const WALL_CLOCK_MS = 20000;
 
 // Which existing engine consumes each reconcile state (for the record + the
 // operator surface). A state with no downstream engine is a terminal record.
+// ORE Tier A (Unit 4): the enrichment tail (needs_enrichment / unresolvable) is
+// no longer a null/generic residual — it is routed by OWNER ARCHETYPE:
+//   institutional + registry contact → institution_registry (attach the sponsor
+//                                       contact; fans out — the highest lever)
+//   institutional + no contact        → resolve_parent_then_registry (add ONE
+//                                       contact for the sponsor → resolves many)
+//   local (terminal owner)            → fetch_public_records (SOS/deed/address)
 export const RECONCILE_ROUTES = {
   confirmed_connected: null,
   resolvable_contact: 'owner_contact_enrich',
@@ -44,6 +52,9 @@ export const RECONCILE_ROUTES = {
   needs_enrichment: 'owner_contact_enrich',
   unresolvable: null,
 };
+
+// The enrichment-tail states whose route is decided by owner archetype (Unit 4).
+const ARCHETYPE_ROUTED_STATES = new Set(['needs_enrichment', 'unresolvable']);
 
 /**
  * Classify ONE owner's reconcile state from the assembled compare-signals, and
@@ -95,6 +106,18 @@ export function reconcileOwnerRow(row) {
   const control_contact_source = control_contact_entity_id ? 'pivot'
     : (pivotResolvedName ? 'pivot_unattached' : null);
 
+  // ORE Tier A (Unit 4) — archetype-aware routing of the enrichment tail.
+  // owner_archetype ('institutional' | 'local') + has_institution_contact are
+  // overlaid onto the row by the worker (from v_owner_archetype). When present
+  // and the state is an enrichment-tail state, the route is the directed
+  // archetype route (institution_registry / resolve_parent_then_registry /
+  // fetch_public_records) instead of the generic owner_contact_enrich / null.
+  const archetype = (typeof row.owner_archetype === 'string') ? row.owner_archetype : null;
+  let routed_to = RECONCILE_ROUTES[state] || null;
+  if (archetype && ARCHETYPE_ROUTED_STATES.has(state)) {
+    routed_to = routeFromArchetype(archetype, !!row.has_institution_contact);
+  }
+
   const sources = {
     sf_account: hasSf ? { id: row.sf_account_id, n_accounts: row.n_sf_accounts || 1 } : null,
     person_contact: hasContact,
@@ -108,6 +131,9 @@ export function reconcileOwnerRow(row) {
     },
     has_reg_address: !!row.has_reg_address,
     enrichment_action: enrich || null,
+    owner_archetype: archetype,
+    sponsor_institution: row.sponsor_institution || null,
+    has_institution_contact: archetype ? !!row.has_institution_contact : null,
   };
 
   return {
@@ -121,7 +147,7 @@ export function reconcileOwnerRow(row) {
     has_person_contact: hasContact,
     rank_value: row.rank_value != null ? Number(row.rank_value) : null,
     workspace_id: row.workspace_id || null,
-    routed_to: RECONCILE_ROUTES[state] || null,
+    routed_to,
     sources,
   };
 }
@@ -132,6 +158,34 @@ const CANDIDATE_COLS = 'entity_id,owner_name,workspace_id,rank_value,property_co
   + 'active_contact_entity_id,active_contact_name,active_contact_role,active_authority_level,'
   + 'pivot_source,pivot_confidence,enrichment_action,entity_has_email,entity_has_phone,'
   + 'entity_has_address,has_reg_address';
+
+/**
+ * Overlay `owner_archetype` / `sponsor_institution` / `has_institution_contact`
+ * onto the loaded candidate rows (from v_owner_archetype, keyed by entity_id) so
+ * reconcileOwnerRow can route the enrichment tail by archetype (Unit 4).
+ * Best-effort + in-place — a failed fetch leaves the rows unchanged (pre-Tier-A
+ * generic routing). Batched by entity_id to keep it one query per tick.
+ */
+async function overlayArchetype(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  const ids = rows.map((x) => x.entity_id).filter(Boolean);
+  if (!ids.length) return;
+  const inList = ids.map((id) => pgFilterVal(id)).join(',');
+  const q = 'v_owner_archetype?select=entity_id,owner_archetype,sponsor_institution,has_registry_contact'
+    + '&entity_id=in.(' + inList + ')';
+  let ar;
+  try { ar = await opsQuery('GET', q); } catch (_e) { return; }
+  if (!ar || !ar.ok || !Array.isArray(ar.data)) return;
+  const byId = new Map();
+  for (const a of ar.data) byId.set(a.entity_id, a);
+  for (const row of rows) {
+    const a = byId.get(row.entity_id);
+    if (!a) continue;
+    row.owner_archetype = a.owner_archetype || null;
+    row.sponsor_institution = a.sponsor_institution || null;
+    row.has_institution_contact = !!a.has_registry_contact;
+  }
+}
 
 /**
  * Upsert one reconcile record. Effect-first / outcome-truthful — a failed write
@@ -176,6 +230,12 @@ export async function handleOwnerReconcileTick(req, res) {
   const r = await opsQuery('GET', sel);
   if (!r.ok) return res.status(r.status || 500).json({ error: 'load_failed', detail: r.data });
   const rows = Array.isArray(r.data) ? r.data : [];
+
+  // ORE Tier A (Unit 4) — overlay owner archetype so the enrichment tail routes
+  // by institutional-vs-local (v_owner_archetype, keyed by entity_id). Best-effort
+  // overlay (the enrich worker's pivot-overlay pattern); a failed/absent overlay
+  // leaves the pre-Tier-A generic routing (deploy-order-safe, no cycle).
+  await overlayArchetype(rows);
 
   const byState = {};
   const routed = {};

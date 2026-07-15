@@ -7094,3 +7094,97 @@ owners to Salesforce toward ~100%. **B3** = a bad-contact/bounceback handler
 mechanism already built, `two_way` wired). Schedule the reconcile cron only after
 the first gated drain. As Phase A accumulates, `unresolvable` shrinks and the
 routable head grows — B1 gets better daily with no code change.
+
+## ORE Tier A — institution-contacts registry + owner→sponsor resolve + fan-out (2026-07-15)
+
+The highest-leverage, most-accurate contact-acquisition lever for the value.
+Grounded live 2026-07-15: the high-value contactless owner ENTITY is an
+asset-named SPE shell (Cira Square Master Tenant LLC, LCPC Pentagon Property LLC,
+Two Independence Hana OW LLC, ARLINGTON VA I FGF LLC), but the property's
+`lcc_property_owner_facts.true_owner_name` ALREADY carries the real SPONSOR
+institution — Cira Square → **Brandywine Realty Trust**, LCPC Pentagon → **Korea
+Investment**, Two Independence Hana → **Hana Asset Management**, Reston VA II FGF →
+**Hyundai Securities**, ARLINGTON VA I FGF → **The Shooshan Company**. So the
+sponsor is in the data; the missing piece was a CONTACT for the institution. One
+curated contact resolves EVERY one of that sponsor's contactless SPEs
+(fan-out: **105 institutions with ≥2-SPE fan-out cover ~$330M** rolled-up rent —
+Gardner Tannenbaum 30 SPEs, Blackstone 8, Global Net Lease 8, C-III 5, Lincoln 4).
+
+### Grounding refuted / refined the task premises
+- **R47 already built the SPE→parent machinery** (`lcc_resolve_owner_parent`,
+  `owner_parent` relationship, `v_lcc_owner_parent_candidates`, `lcc_register_owner_parent`)
+  — but its owner_parent registry is EMPTY (0 patterns) and its naming-shape
+  clustering is NOISY for gov (asset-named SPEs → coincidental "pershing"/"airport"
+  clusters). So Tier A does NOT lean on cluster-mining for the primary path.
+- **The reliable gov signal is the in-data `true_owner` sponsor** (Unit 0's
+  "reconciliation-first"). Tier A keys the registry on the `true_owner_name` sponsor
+  DIRECTLY (tier-0 `domain_true_owner`), tier-1 the entity's own name. No naming
+  guess needed — the sponsor is a captured field.
+- **Operators-as-true_owner are EXCLUDED** (DaVita 211 / Fresenius 120 / U.S. Renal
+  15 SPEs — the R8 dia artifact); an operator is not an owner decision-maker.
+
+### What shipped (LCC Opps, migration `20260716130000`, applied live)
+- **`lcc_institution_contacts`** — the curated sponsor→decision-maker registry
+  (`institution_norm` = `lcc_institution_norm(name)` match key; contact_name/title/
+  email/phone; `source`/`source_url`/`note`/`confidence`; unique on `(institution_norm,
+  lower(contact_name))`). Source-tagged, traceable; **NEVER fabricated** — an absent
+  institution stays a directed research task. Drop the table → zero trace.
+- **`lcc_resolve_institution_contact(entity_id)`** — owner SPE → sponsor
+  (tier-0 property `true_owner_name` excluding operators; tier-1 entity own name)
+  → primary registry contact. Empty registry ⇒ no row (safe).
+- **`v_institution_registry_gaps`** — which sponsor to fill FIRST: contactless
+  valued owners grouped by `true_owner` sponsor (operators excluded), SPE count +
+  rolled-up rent + `has_registry_contact`, value-ranked. The highest-value manual
+  action surface (add ONE contact → resolve many).
+- **`v_institution_contact_attachable`** — the fan-out driver: one row per
+  contactless valued owner SPE whose sponsor HAS a registry contact, carrying the
+  resolved contact inline (worker attaches with no per-row RPC). Empty registry ⇒
+  0 rows.
+- **`v_owner_archetype`** — per contactless valued owner: `institutional` (distinct
+  non-operator sponsor → SPE→parent hop) vs `local` (terminal owner). Drives Unit-4.
+
+### Unit 3 — attach + fan-out worker (JS, Railway redeploy)
+`api/_shared/institution-registry.js` (`normalizeInstitution`, `routeFromArchetype`,
+`attachInstitutionContactToOwner` — mint the curated contact via `ensureEntityLink`
+[guards, deduped by canonical_name → SAME contact fans across sibling SPEs],
+`linkPersonToEntity` [`associated_with`, `via='institution_registry:<sponsor_norm>'`],
+`stampContactOnActiveCadence` [contactless-only + `seedIfValuable` → value-gated
+prospecting cadence], point the pivot). Worker `api/_handlers/institution-contact.js`
+→ **`?_route=institution-contact-tick`** (sub-route of operations.js; server.js +
+vercel.json wired — still 12 api/*.js). GET=dry-run (the registry gaps + attachable
+count) / POST=drain (fan the curated contact across every attachable SPE, value-
+ranked, bounded). `POST &entity_id=` = single-owner (worklist "Run lookup" reuse).
+Curated-registry-only — never fabricates; reversible (person entity + relationship
++ pivot pointer).
+
+### Unit 4 — archetype router into B1 reconcile
+`owner-reconcile.js` overlays `v_owner_archetype` onto candidate rows (best-effort,
+one query/tick — no circular view dependency) and `reconcileOwnerRow` routes the
+enrichment tail (`needs_enrichment`/`unresolvable`) by archetype via `routeFromArchetype`:
+institutional+contact → **`institution_registry`**; institutional+no-contact →
+**`resolve_parent_then_registry`** (add ONE contact); local → **`fetch_public_records`**
+(SOS/deed/address). Absent overlay ⇒ pre-Tier-A generic routing (deploy-order safe).
+
+### Verified (2026-07-15)
+Migration DDL validated in a rolled-back tx, then applied live. **Synthetic fan-out
+gate (0 residue):** a throwaway contact for "Global Net Lease" made all **8** of its
+contactless SPEs attachable carrying the SAME contact (`distinct_contacts=1`), the
+resolver resolved it via **tier-0 domain_true_owner**, `v_institution_registry_gaps`
+flipped `has_registry_contact=true`; deleting the row returned registry + attachable
+to 0. `test/institution-registry.test.mjs` (12: normalize/route helpers; attach mints
+w/ title+email+phone + links + stamps + pivots; fan-out dedup; guard-rejects a firm
+name/blank; link_failed surfaces WHY) + `test/owner-reconcile.test.mjs` +5 (Unit-4
+archetype routing; no-overlay generic preserved). `node --check` clean; `ls api/*.js
+| wc -l`=12; full suite **1713 pass / 0 fail / 6 skipped**. LCC-Opps only; no dia/gov
+writes; auth schema untouched.
+
+### Seeding is the operator's next step (NEVER fabricated here)
+The registry ships EMPTY. `v_institution_registry_gaps` surfaces the top sponsors to
+fill (Gardner Tannenbaum 30 SPEs, Blackstone 8, Global Net Lease 8, C-III 5, Lincoln
+4 …) — Scott adds a real, public/known contact for each via `lcc_institution_contacts`
+(or a future Decision-Center lane); then `POST /api/institution-contact-tick` fans it
+across the sponsor's whole contactless SPE portfolio and seeds their cadences. Follow-
+ups (NOT built): a Decision-Center lane to add/confirm registry contacts inline; a
+cron on the attach worker (schedule after the first gated drain, artifact-offload
+lesson); wiring the SOS/deed/address adapters for the `local` (fetch_public_records)
+tail.

@@ -102,3 +102,44 @@ describe('reconcileOwnerRow — the SF-vs-contact reconcile comparison', () => {
     for (const s of states) assert.ok(Object.prototype.hasOwnProperty.call(RECONCILE_ROUTES, s), s);
   });
 });
+
+describe('ORE Tier A (Unit 4) — archetype-aware routing of the enrichment tail', () => {
+  it('institutional + registry contact → institution_registry (fan-out attach)', () => {
+    const r = reconcileOwnerRow({ ...base, enrichment_action: 'manual_research',
+      owner_archetype: 'institutional', sponsor_institution: 'Blackstone', has_institution_contact: true });
+    assert.equal(r.reconcile_state, 'unresolvable');   // no LCC signals → tail state
+    assert.equal(r.routed_to, 'institution_registry');
+    assert.equal(r.sources.owner_archetype, 'institutional');
+    assert.equal(r.sources.sponsor_institution, 'Blackstone');
+    assert.equal(r.sources.has_institution_contact, true);
+  });
+
+  it('institutional + NO registry contact → resolve_parent_then_registry (add ONE contact)', () => {
+    const r = reconcileOwnerRow({ ...base, enrichment_action: 'sos_manager_lookup',
+      owner_archetype: 'institutional', sponsor_institution: 'Gardner Tannenbaum', has_institution_contact: false });
+    assert.equal(r.reconcile_state, 'needs_enrichment');
+    assert.equal(r.routed_to, 'resolve_parent_then_registry');
+    assert.equal(r.sources.has_institution_contact, false);
+  });
+
+  it('local (terminal owner) → fetch_public_records (SOS/deed/address)', () => {
+    const r = reconcileOwnerRow({ ...base, enrichment_action: 'address_reverse_lookup',
+      owner_archetype: 'local', has_institution_contact: false });
+    assert.equal(r.reconcile_state, 'needs_enrichment');
+    assert.equal(r.routed_to, 'fetch_public_records');
+  });
+
+  it('archetype only reroutes the enrichment tail — a connected owner is unaffected', () => {
+    const r = reconcileOwnerRow({ ...base, sf_account_id: '0011I00000AbcDeQAY',
+      has_person_contact: true, active_contact_entity_id: 'p-1', active_contact_name: 'Jane Roe',
+      owner_archetype: 'institutional', has_institution_contact: true });
+    assert.equal(r.reconcile_state, 'confirmed_connected');
+    assert.equal(r.routed_to, null);   // NOT rerouted — it is already connected
+  });
+
+  it('NO archetype overlay → generic routing preserved (deploy-order safe)', () => {
+    const r = reconcileOwnerRow({ ...base, enrichment_action: 'sos_manager_lookup' });
+    assert.equal(r.routed_to, 'owner_contact_enrich');   // pre-Tier-A behavior
+    assert.equal(r.sources.owner_archetype, null);
+  });
+});

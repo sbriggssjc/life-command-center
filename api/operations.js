@@ -218,6 +218,17 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerReconcileTick(req, res);
   }
 
+  // ORE Tier A — institution-contact attach + fan-out worker (via vercel.json
+  // _route=institution-contact-tick). GET=dry-run (the registry GAPS: which
+  // sponsor to fill first + how many owners would attach now) / POST=drain
+  // (attach the curated sponsor contact across the sponsor's whole contactless
+  // SPE portfolio). Curated-registry-only — never fabricates. Authenticates
+  // internally.
+  if (req.query._route === 'institution-contact-tick') {
+    const { handleInstitutionContactTick } = await import('./_handlers/institution-contact.js');
+    return handleInstitutionContactTick(req, res);
+  }
+
   // UW#7 — developer resolution from the ownership chain (via vercel.json
   // _route=developer-chain-resolve-tick). GET=dry-run (honest per-bucket sizing) /
   // POST=drain. Resolves the original developer for queued

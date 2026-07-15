@@ -76,6 +76,7 @@
     { "source": "/api/sf-link-reconcile-tick", "destination": "/api/operations?_route=sf-link-reconcile-tick" },
     { "source": "/api/owner-contact-enrich-tick", "destination": "/api/operations?_route=owner-contact-enrich-tick" },
     { "source": "/api/owner-reconcile-tick", "destination": "/api/operations?_route=owner-reconcile-tick" },
+    { "source": "/api/institution-contact-tick", "destination": "/api/operations?_route=institution-contact-tick" },
     { "source": "/api/developer-chain-resolve-tick", "destination": "/api/operations?_route=developer-chain-resolve-tick" },
     { "source": "/api/contact-writeback-tick", "destination": "/api/operations?_route=contact-writeback-tick" },
     { "source": "/api/sf-record-lookup-tick", "destination": "/api/operations?_route=sf-record-lookup-tick" },
