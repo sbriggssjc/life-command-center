@@ -508,6 +508,18 @@ the PR-#1404 mismatch detector (Dowling-on-Arbor flags). Feature-flagged on
 `SF_CONTACT_BYID_URL`; reliable get-by-id primitive; ≤12 api/*.js. Completes PR #1404 (Units
 1-3 were inert because the reverted flow carries no `Who.Name`).
 
+### 10f. SF WhoId-resolver BUILT (PR #1406, 2026-07-15) — flow + env live, awaiting merge
+Scott built the one-action **"SF Get Contact By Id"** PA flow (Contact + Company[=Account]
+get-by-id, verified our org relabels Account→Company but `Contact.AccountId` stands) and set
+`SF_CONTACT_BYID_URL`. Claude Code shipped the LCC resolver: `sf_contact_resolve_queue`
+(migration `20260731120000`) enqueues unresolved WhoIds at ingest; worker
+`?_route=sf-contact-resolve-tick` (GET dry-run / POST drain 25) → `getSalesforceContactById`
+→ mint via ensureEntityLink R39 email tier (Dowling merges into CoStar/RCA Dowling, no dup) →
+`sfContactAccountMismatch` (Dowling-on-Arbor flags); gentle cron `lcc-sf-contact-resolve`
+(`*/30`, `20260731120500`). Feature-flagged; ≤12 api/*.js; 1835 tests pass. **Awaiting Scott
+merge PR #1406 + redeploy** (endpoint 404s until operations.js ships). Verify: GET dry-run →
+capped POST drain → Capra mints onto Boyd, SF Dowling merges by email, mismatch lane surfaces.
+
 ## 8. Progress log (living — update as we work this topic)
 
 - **2026-07-15** — Deed OCR worker fix shipped + verified (158→154 storage-ready
