@@ -12,6 +12,7 @@ import {
   propagateDeedGranteeToOwner,
   writeOwnerMailingAddress,
   reconcileSaleAndOwnershipForNewOwner,
+  resolveDeedRecordedOwner,
 } from '../api/_handlers/sidebar-pipeline.js';
 
 // ── A fake domain DB keyed by a tiny in-memory store ──
@@ -126,6 +127,84 @@ describe('propagateDeedGranteeToOwner', () => {
     assert.equal(out.applied, false);
     assert.equal(out.skipped, 'already_current');
     assert.equal(calls.patches.length, 0);
+  });
+});
+
+// ── resolveOrCreateRecordedOwnerForDeed via resolveDeedRecordedOwner ──
+// The owner_resolve_failed fix (2026-07-15): a stale stored normalized_name
+// makes the normalized dedup GET miss AND the POST 409 on UNIQUE(name); the
+// exact-name tier must find the existing owner (following a merge tombstone)
+// instead of returning null.
+function makeResolveDeps({ normHit = null, nameRow = null, postStatus = 201 } = {}) {
+  const calls = { gets: [], posts: 0 };
+  const deps = {
+    async domainQuery(domain, method, path) {
+      if (method === 'GET') {
+        calls.gets.push(path);
+        if (path.includes('canonical_name=eq.') || path.includes('normalized_name=eq.')) {
+          return { ok: true, data: normHit ? [{ recorded_owner_id: normHit }] : [] };
+        }
+        if (path.includes('name=eq.')) {
+          return { ok: true, data: nameRow ? [nameRow] : [] };
+        }
+      }
+      if (method === 'POST' && path === 'recorded_owners') {
+        calls.posts += 1;
+        if (postStatus === 409) return { ok: false, status: 409, data: null };
+        return { ok: true, status: 201, data: [{ recorded_owner_id: 'own-CREATED' }] };
+      }
+      return { ok: true, data: [] };
+    },
+  };
+  return { deps, calls };
+}
+
+describe('resolveOrCreateRecordedOwnerForDeed (exact-name dedup + tombstone)', () => {
+  it('normalized GET miss but exact-name hit → returns the existing owner, no POST', async () => {
+    const { deps, calls } = makeResolveDeps({
+      nameRow: { recorded_owner_id: 'own-EXISTING', merged_into_recorded_owner_id: null } });
+    const id = await resolveDeedRecordedOwner('dialysis', 'Sumitomo Bank Leasing And Finance Inc', deps);
+    assert.equal(id, 'own-EXISTING');
+    assert.equal(calls.posts, 0);            // never re-created — the UNIQUE(name) row was found
+  });
+
+  it('follows a merge tombstone to the surviving owner', async () => {
+    const { deps } = makeResolveDeps({
+      nameRow: { recorded_owner_id: 'own-TOMB', merged_into_recorded_owner_id: 'own-SURVIVOR' } });
+    const id = await resolveDeedRecordedOwner('dialysis', 'Sumitomo Mitsui Banking Corporation', deps);
+    assert.equal(id, 'own-SURVIVOR');        // never point a property at a tombstone
+  });
+
+  it('POST 409 (stale norm hid the row) recovers by exact name, not null', async () => {
+    const { deps, calls } = makeResolveDeps({
+      nameRow: null, postStatus: 409 });
+    // First exact-name GET returns null (nameRow=null) so it POSTs → 409; then the
+    // 409-recovery exact-name GET must find it. Simulate the row appearing only on recovery:
+    let getN = 0;
+    deps.domainQuery = async (domain, method, path) => {
+      if (method === 'GET') {
+        calls.gets.push(path);
+        if (path.includes('normalized_name=eq.')) return { ok: true, data: [] };
+        if (path.includes('name=eq.')) {
+          getN += 1;
+          return getN === 1
+            ? { ok: true, data: [] }                                       // pre-POST miss
+            : { ok: true, data: [{ recorded_owner_id: 'own-RACE', merged_into_recorded_owner_id: null }] };
+        }
+      }
+      if (method === 'POST') { calls.posts += 1; return { ok: false, status: 409, data: null }; }
+      return { ok: true, data: [] };
+    };
+    const id = await resolveDeedRecordedOwner('dialysis', 'K&T Ranch', deps);
+    assert.equal(id, 'own-RACE');
+    assert.equal(calls.posts, 1);
+  });
+
+  it('genuinely new owner still creates one', async () => {
+    const { deps, calls } = makeResolveDeps({ nameRow: null, postStatus: 201 });
+    const id = await resolveDeedRecordedOwner('dialysis', 'Brand New Clinic Holdings LLC', deps);
+    assert.equal(id, 'own-CREATED');
+    assert.equal(calls.posts, 1);
   });
 });
 
