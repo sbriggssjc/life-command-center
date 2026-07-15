@@ -13,6 +13,8 @@ import {
   writeOwnerMailingAddress,
   reconcileSaleAndOwnershipForNewOwner,
   resolveDeedRecordedOwner,
+  writeLoanFromDeed,
+  writeDeedPartyContact,
 } from '../api/_handlers/sidebar-pipeline.js';
 
 // ── A fake domain DB keyed by a tiny in-memory store ──
@@ -368,5 +370,107 @@ describe('reconcileSaleAndOwnershipForNewOwner (B1/B2 close-the-loop)', () => {
     assert.equal((await reconcileSaleAndOwnershipForNewOwner({ domain: 'government', propertyId: 1, ownerName: 'X' }, deps)).skipped, 'missing_input');
     assert.equal((await reconcileSaleAndOwnershipForNewOwner({ domain: 'government', propertyId: 1, recordedOwnerId: 'o', ownerName: 'X' }, deps)).skipped, 'no_sales');
     assert.equal(calls.patches.length, 0);
+  });
+});
+
+// ── ORE — route a security instrument's grantee to the LENDER side ──────────────
+function makeLoanDeps({ existingLoan = false, borrowerId = 'ro-borrow' } = {}) {
+  const calls = { gets: [], posts: [] };
+  const deps = {
+    async domainQuery(domain, method, path, body) {
+      if (method === 'GET' && path.startsWith('loans?')) {
+        calls.gets.push(path);
+        return { ok: true, data: existingLoan ? [{ loan_id: 'L-1' }] : [] };
+      }
+      // resolveDeedRecordedOwner path: normalized/name lookups return nothing then create
+      if (method === 'GET' && path.startsWith('recorded_owners?')) return { ok: true, data: [] };
+      if (method === 'POST' && path === 'recorded_owners') return { ok: true, data: [{ recorded_owner_id: borrowerId }] };
+      if (method === 'POST' && path === 'loans') { calls.posts.push({ path, body }); return { ok: true, data: [] }; }
+      if (method === 'POST' && path === 'contacts') { calls.posts.push({ path, body }); return { ok: true, data: [] }; }
+      if (method === 'GET' && path.startsWith('contacts?')) { calls.gets.push(path); return { ok: true, data: [] }; }
+      return { ok: true, data: [] };
+    },
+  };
+  return { deps, calls };
+}
+
+describe('writeLoanFromDeed (mortgage/DoT grantee → lender side)', () => {
+  it('dia: writes a loan with lender_name=grantee + borrower recorded_owner_id', async () => {
+    const { deps, calls } = makeLoanDeps();
+    const out = await writeLoanFromDeed({ domain: 'dialysis', propertyId: 55,
+      lenderName: 'Sumitomo Bank Leasing And Finance Inc', borrowerName: 'Borrower Owner LLC',
+      loanAmount: 5000000, originationDate: '2024-06-01', documentId: 900 }, deps);
+    assert.equal(out.ok, true);
+    assert.equal(out.loan_written, true);
+    const loan = calls.posts.find(p => p.path === 'loans');
+    assert.ok(loan, 'a loans row was inserted');
+    assert.equal(loan.body.lender_name, 'Sumitomo Bank Leasing And Finance Inc');
+    assert.equal(loan.body.recorded_owner_id, 'ro-borrow');   // grantor = borrower
+    assert.equal(loan.body.data_source, 'deed_extraction');
+    assert.equal(loan.body.loan_amount, 5000000);
+  });
+
+  it('gov: the lender lands in `originator` (no lender_name column)', async () => {
+    const { deps, calls } = makeLoanDeps();
+    await writeLoanFromDeed({ domain: 'government', propertyId: 7, lenderName: 'Big Bank NA',
+      borrowerName: 'Owner LP', loanAmount: 1000000, originationDate: '2024-01-01', documentId: 1 }, deps);
+    const loan = calls.posts.find(p => p.path === 'loans');
+    assert.equal(loan.body.originator, 'Big Bank NA');
+    assert.equal(loan.body.lender_name, undefined);
+  });
+
+  it('a brokerage lender is rejected — never writes a loan', async () => {
+    const { deps, calls } = makeLoanDeps();
+    const out = await writeLoanFromDeed({ domain: 'dialysis', propertyId: 55,
+      lenderName: 'Marcus & Millichap', borrowerName: 'X LLC', documentId: 1 }, deps);
+    assert.equal(out.ok, false);
+    assert.equal(out.skipped, 'lender_failed_guards');
+    assert.equal(calls.posts.length, 0);
+  });
+
+  it('a bank name PASSES (banks are legitimate lenders)', async () => {
+    const { deps } = makeLoanDeps();
+    const out = await writeLoanFromDeed({ domain: 'dialysis', propertyId: 55,
+      lenderName: 'Sumitomo Mitsui Banking Corporation', borrowerName: 'X LLC', documentId: 1 }, deps);
+    assert.equal(out.ok, true);
+  });
+
+  it('dedup: an existing loan for property+lender+date → no duplicate insert', async () => {
+    const { deps, calls } = makeLoanDeps({ existingLoan: true });
+    const out = await writeLoanFromDeed({ domain: 'dialysis', propertyId: 55,
+      lenderName: 'Big Bank NA', borrowerName: 'X LLC', originationDate: '2024-01-01', documentId: 1 }, deps);
+    assert.equal(out.ok, true);
+    assert.equal(out.skipped, 'already_recorded');
+    assert.equal(calls.posts.filter(p => p.path === 'loans').length, 0);
+  });
+});
+
+describe('writeDeedPartyContact (signatory → contact)', () => {
+  it('dia: writes a signatory contact (contact_name/role) linked to the property', async () => {
+    const { deps, calls } = makeLoanDeps();
+    const out = await writeDeedPartyContact({ domain: 'dialysis', propertyId: 55,
+      name: 'John Q. Smith', title: 'Authorized Signatory', onBehalfOf: 'Borrower Owner LLC', documentId: 900 }, deps);
+    assert.equal(out.ok, true);
+    const c = calls.posts.find(p => p.path === 'contacts');
+    assert.equal(c.body.contact_name, 'John Q. Smith');
+    assert.equal(c.body.role, 'signatory');
+    assert.equal(c.body.property_id, 55);
+    assert.equal(c.body.company, 'Borrower Owner LLC');
+  });
+
+  it('gov: uses name/contact_type columns', async () => {
+    const { deps, calls } = makeLoanDeps();
+    await writeDeedPartyContact({ domain: 'government', propertyId: 7, name: 'Jane Doe', role: 'signatory', documentId: 1 }, deps);
+    const c = calls.posts.find(p => p.path === 'contacts');
+    assert.equal(c.body.name, 'Jane Doe');
+    assert.equal(c.body.contact_type, 'signatory');
+    assert.equal(c.body.contact_name, undefined);
+  });
+
+  it('a junk signatory name is rejected — no write', async () => {
+    const { deps, calls } = makeLoanDeps();
+    const out = await writeDeedPartyContact({ domain: 'dialysis', propertyId: 55, name: '(p) 555', documentId: 1 }, deps);
+    assert.equal(out.ok, false);
+    assert.equal(calls.posts.length, 0);
   });
 });
