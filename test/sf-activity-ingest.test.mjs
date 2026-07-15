@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mapSfTypeToCategory, deriveSfCategory, processSfActivityBatch } from '../api/_handlers/sf-activity-ingest.js';
+import { mapSfTypeToCategory, deriveSfCategory, processSfActivityBatch, sfContactAccountMismatch } from '../api/_handlers/sf-activity-ingest.js';
 
 // Fake external_identities (salesforce) → entity map.
 const SF_TO_ENTITY = {
@@ -511,5 +511,131 @@ describe('processSfActivityBatch — Events (Unit 2)', () => {
     assert.equal(calls[0].occurredAt, '2026-06-11', 'StartDateTime absent → ActivityDate');
     assert.equal(calls[0].entityId, 'ent-account-1');
     assert.equal(calls[0].metadata.resolved_via, 'account');
+  });
+});
+
+// ===========================================================================
+// SF-CONTACT-RECONCILE — mint WhoId contacts (Unit 1), reconcile by email
+// (Unit 2), flag SF account/email disagreements (Unit 3)
+// ===========================================================================
+
+describe('sfContactAccountMismatch (SF-CONTACT-RECONCILE Unit 3 detector)', () => {
+  it('flags an @firm.com contact filed under a different SF account (Dowling → Arbor)', () => {
+    const mm = sfContactAccountMismatch({ email: 'edowling@boydwatterson.com', accountName: 'Arbor Realty Trust' });
+    assert.equal(mm.mismatch, true);
+    assert.equal(mm.email_domain, 'boydwatterson.com');
+    assert.equal(mm.account_name, 'Arbor Realty Trust');
+  });
+  it('does NOT flag when the email domain agrees with the account (Capra → Boyd)', () => {
+    assert.equal(sfContactAccountMismatch({ email: 'jcapra@boydwatterson.com', accountName: 'Boyd Watterson Asset Management LLC' }).mismatch, false);
+  });
+  it('does NOT flag a generic/role inbox or a personal-mail domain (no firm signal)', () => {
+    assert.equal(sfContactAccountMismatch({ email: 'info@boydwatterson.com', accountName: 'Arbor Realty Trust' }).mismatch, false);
+    assert.equal(sfContactAccountMismatch({ email: 'ericdowling@gmail.com', accountName: 'Arbor Realty Trust' }).mismatch, false);
+  });
+  it('does NOT flag when a signal is missing/too short', () => {
+    assert.equal(sfContactAccountMismatch({ email: '', accountName: 'Arbor Realty Trust' }).mismatch, false);
+    assert.equal(sfContactAccountMismatch({ email: 'a@x.co', accountName: 'Arbor Realty Trust' }).mismatch, false);
+    assert.equal(sfContactAccountMismatch({ email: 'edowling@boydwatterson.com', accountName: '' }).mismatch, false);
+  });
+});
+
+describe('processSfActivityBatch — mint + reconcile the WhoId contact (Unit 1/2)', () => {
+  const ctx = { workspaceId: 'ws-1', actorId: 'user-1' };
+  // No existing SF entity for this WhoId, so the mint path is exercised.
+  const noEntity = async () => null;
+
+  it('mints a new contact entity when the feed carries the WhoId name/email (Capra)', async () => {
+    const { fn, calls } = captureAppend();
+    const mintCalls = [];
+    const fakeMint = async (args) => {
+      mintCalls.push(args);
+      return { entityId: 'ent-capra', createdEntity: true, resolvedByEmail: false };
+    };
+    const out = await processSfActivityBatch([
+      { sf_id: 't-capra', type: 'Task', subject: 'Sent RE: Boyd deal',
+        who_id: '003capra', who_name: 'Joseph Capra', who_email: 'jcapra@boydwatterson.com', what_id: '001boyd' },
+    ], ctx, {
+      findEntityBySfId: noEntity, appendActivityEvent: fn,
+      resolveOrCreateSfContact: fakeMint,
+      growCadenceFromOutreach: async () => ({ grown: false }),
+    });
+    assert.equal(out.contacts_minted, 1, 'the WhoId contact was minted');
+    assert.equal(out.contacts_reconciled, 0);
+    assert.equal(out.matched, 1, 'the activity now resolves to the minted entity');
+    assert.equal(out.skipped_no_entity, 0);
+    assert.equal(calls[0].entityId, 'ent-capra');
+    assert.equal(calls[0].metadata.resolved_via, 'contact_minted');
+    assert.equal(mintCalls[0].email, 'jcapra@boydwatterson.com');
+  });
+
+  it('reconciles by email — attaches the SF contact to an existing CoStar/RCA person (Dowling), no duplicate', async () => {
+    const { fn, calls } = captureAppend();
+    const fakeMint = async () => ({ entityId: 'ent-dowling-costar', createdEntity: false, resolvedByEmail: true });
+    const out = await processSfActivityBatch([
+      { sf_id: 't-dowling', type: 'Task', subject: 'Call',
+        who_id: '003dowling', who_name: 'Eric Dowling', who_email: 'edowling@boydwatterson.com', what_id: '001arbor' },
+    ], ctx, {
+      findEntityBySfId: noEntity, appendActivityEvent: fn,
+      resolveOrCreateSfContact: fakeMint,
+      growCadenceFromOutreach: async () => ({ grown: false }),
+    });
+    assert.equal(out.contacts_reconciled, 1, 'attached to the existing person by email');
+    assert.equal(out.contacts_minted, 0, 'no new entity — no duplicate');
+    assert.equal(out.matched, 1);
+    assert.equal(calls[0].entityId, 'ent-dowling-costar');
+    assert.equal(calls[0].metadata.resolved_via, 'contact_reconciled_email');
+  });
+
+  it('is byte-identical (no mint) when the feed omits the contact name/email', async () => {
+    const { fn } = captureAppend();
+    let minted = false;
+    const out = await processSfActivityBatch([
+      { sf_id: 't-bare', type: 'Task', subject: 'Sent RE: x', who_id: '003bare' },
+    ], ctx, {
+      findEntityBySfId: noEntity, appendActivityEvent: fn,
+      resolveOrCreateSfContact: async () => { minted = true; return null; },
+    });
+    assert.equal(minted, false, 'the mint dep is never called without contact identity fields');
+    assert.equal(out.contacts_minted, 0);
+    assert.equal(out.skipped_no_entity, 1, 'unchanged: no entity → skip, never fabricated');
+  });
+
+  it('flags the SF account/email disagreement (Dowling on Arbor) via a mismatch decision', async () => {
+    const { fn } = captureAppend();
+    const fakeMint = async () => ({ entityId: 'ent-dowling-costar', createdEntity: false, resolvedByEmail: true });
+    const mismatchCalls = [];
+    const out = await processSfActivityBatch([
+      { sf_id: 't-dowling2', type: 'Task', subject: 'Call',
+        who_id: '003dowling', who_name: 'Eric Dowling', who_email: 'edowling@boydwatterson.com',
+        what_id: '001arbor', what_name: 'Arbor Realty Trust' },
+    ], ctx, {
+      findEntityBySfId: noEntity, appendActivityEvent: fn,
+      resolveOrCreateSfContact: fakeMint,
+      openSfMismatchDecision: async (args) => { mismatchCalls.push(args); return true; },
+      growCadenceFromOutreach: async () => ({ grown: false }),
+    });
+    assert.equal(out.mismatches_flagged, 1);
+    assert.equal(mismatchCalls.length, 1);
+    assert.equal(mismatchCalls[0].entityId, 'ent-dowling-costar');
+    assert.equal(mismatchCalls[0].detail.email_domain, 'boydwatterson.com');
+    assert.equal(mismatchCalls[0].detail.account_name, 'Arbor Realty Trust');
+  });
+
+  it('does NOT flag when the SF account agrees with the email domain (Capra on Boyd)', async () => {
+    const { fn } = captureAppend();
+    const mismatchCalls = [];
+    const out = await processSfActivityBatch([
+      { sf_id: 't-capra2', type: 'Task', subject: 'Sent the memo',
+        who_id: '003capra', who_name: 'Joseph Capra', who_email: 'jcapra@boydwatterson.com',
+        what_id: '001boyd', what_name: 'Boyd Watterson Asset Management LLC' },
+    ], ctx, {
+      findEntityBySfId: noEntity, appendActivityEvent: fn,
+      resolveOrCreateSfContact: async () => ({ entityId: 'ent-capra', createdEntity: true, resolvedByEmail: false }),
+      openSfMismatchDecision: async (args) => { mismatchCalls.push(args); return true; },
+      growCadenceFromOutreach: async () => ({ grown: false }),
+    });
+    assert.equal(out.mismatches_flagged, 0);
+    assert.equal(mismatchCalls.length, 0);
   });
 });

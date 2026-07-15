@@ -2369,6 +2369,38 @@ async function handleDecisionVerdict(req, res) {
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
     }
 
+    // ---- sf_contact_account_mismatch (seeded, SF-CONTACT-RECONCILE Unit 3) --
+    // An SF contact whose email-domain firm contradicts its SF account (a
+    // Salesforce data-quality error). LCC records the truth internally; SF
+    // cleanup (if any) is the operator's separate manual step — NO SF write.
+    if (decision.decision_type === 'sf_contact_account_mismatch') {
+      const ctx = decision.context || {};
+      const label = ctx.contact_name || ctx.email_domain || decision.subject_entity_id;
+      if (verdict === 'confirm_lcc_company') {
+        // Trust the email-domain company in LCC; leave the SF account as-is.
+        await record('confirm_lcc_company', 'decided', payload,
+          { sf_mismatch: 'confirmed_lcc_company', email_domain: ctx.email_domain || null, sf_account_name: ctx.account_name || null });
+        return res.status(200).json({ ok: true, verdict: 'confirm_lcc_company' });
+      }
+      if (verdict === 'dismiss') {
+        await record('dismiss', 'decided', null, { sf_mismatch: 'dismissed' });
+        return res.status(200).json({ ok: true, verdict: 'dismiss' });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'sf_contact_account_mismatch',
+          title: 'Reconcile Salesforce contact/account mismatch for ' + label,
+          instructions: 'Decision Center: SF contact ' + (ctx.sf_contact_id || '?') + ' uses email domain @'
+            + (ctx.email_domain || '?') + ' but is filed under SF account "' + (ctx.account_name || '?')
+            + '" (SF account ' + (ctx.sf_account_id || '?') + '). Confirm the correct company/account.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      if (verdict === 'skip') { await record('skip', 'skipped', null, null); return res.status(200).json({ ok: true, verdict: 'skip' }); }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
     const c = decision.context || {};
 
     // ---- intake_disposition (federated) ------------------------------------
