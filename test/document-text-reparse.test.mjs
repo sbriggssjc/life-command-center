@@ -11,7 +11,7 @@ process.env.DIA_SUPABASE_KEY = 'k';
 process.env.GOV_SUPABASE_URL = 'https://gov.test.local';
 process.env.GOV_SUPABASE_KEY = 'k';
 
-const { fetchReparseDocs, processOneReparse, fetchPropagateBackfillDocs, processOnePropagateBackfill, R59_BACKFILL_MARKER } = await import('../api/_handlers/document-text.js');
+const { fetchEligibleDocs, fetchReparseDocs, processOneReparse, fetchPropagateBackfillDocs, processOnePropagateBackfill, R59_BACKFILL_MARKER, DEED_NO_PARTIES_TERMINAL } = await import('../api/_handlers/document-text.js');
 
 function makeFakeQ(canned = {}) {
   const calls = [];
@@ -128,5 +128,40 @@ describe('processOnePropagateBackfill (R59b Unit 2)', () => {
     assert.equal(r.outcome, 'skipped');
     assert.equal(events.length, 0);
     assert.equal(calls.length, 0);
+  });
+});
+
+// Deed OCR drain eligibility — claim STORAGE-READY docs, not expired-CDN URLs.
+// Root cause of the "spinning on the wrong 7" stall: the old claim allowed
+// source_url-only docs (expired CoStar-CDN links, highest document_id) to clog
+// the newest-first window every tick. Now the claim requires storage_path.
+describe('fetchEligibleDocs (deed OCR drain — storage-ready claim)', () => {
+  it('requires storage_path + NULL raw_text, excludes terminal states, ILIKE deed, newest-first', async () => {
+    const { q, calls } = makeFakeQ({ 'property_documents?raw_text=is.null': { value: { ok: true, data: [{ document_id: 6738, storage_path: 'gov/deed/1/x.pdf' }] } } });
+    const r = await fetchEligibleDocs('government', { limit: 15, doctype: 'deed' }, { domainQuery: q });
+    assert.equal(r.ok, true);
+    const path = calls[0].path;
+    assert.ok(path.includes('raw_text=is.null'), 'not yet text-extracted');
+    assert.ok(path.includes('storage_path=not.is.null'), 'bytes must be in Storage (no CDN fetch)');
+    assert.ok(!path.includes('source_url.not.is.null'), 'no longer claims URL-only (expired-CDN) docs');
+    assert.ok(path.includes(`ingestion_status.not.in.(deed_parsed,${DEED_NO_PARTIES_TERMINAL})`), 'terminal states excluded');
+    assert.ok(path.includes('ingestion_status.is.null'), 'NULL / url_captured / bytes_captured status included');
+    assert.ok(path.includes('document_type=ilike.*deed*'), 'deed doctype via ILIKE (robust to variants)');
+    assert.ok(path.includes('order=document_id.desc'), 'newest-first');
+    assert.ok(path.includes('limit=15'));
+  });
+
+  it('doctype=all drops the document_type filter entirely', async () => {
+    const { q, calls } = makeFakeQ();
+    await fetchEligibleDocs('dialysis', { limit: 10, doctype: 'all' }, { domainQuery: q });
+    assert.ok(!calls[0].path.includes('document_type='), 'no doctype filter when all');
+    assert.ok(calls[0].path.includes('storage_path=not.is.null'), 'still storage-ready only');
+  });
+
+  it('propagates a list failure', async () => {
+    const q = async () => ({ ok: false, status: 500, data: 'boom' });
+    const r = await fetchEligibleDocs('government', { limit: 15, doctype: 'deed' }, { domainQuery: q });
+    assert.equal(r.ok, false);
+    assert.equal(r.status, 500);
   });
 });
