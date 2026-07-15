@@ -366,6 +366,54 @@ Contact identity (weight 80) — the highest-authority link — directing consol
 cannot write to Salesforce; this is Scott's / a gated-worker step. Details captured here so
 they are not lost.)
 
+## 10. LCC as the universal reconciliation layer (Scott, 2026-07-15)
+
+The capstone doctrine. **LCC is the reconciliation engine that drives every source to the
+single most accurate truth — everywhere, all at once — and keeps learning as we grow.**
+Ownership, contact identity/selection/direction, contact info (email/phone) enrichment,
+the ownership chain back to the developer — all are resolved from the *agreement* of ALL
+available sources, weighted by authority (§7/§9), not from any one system. Sources include:
+- **Email (Microsoft/Outlook)** — call notes + email traffic reveal who to call, contact
+  info, handoffs/direction, and ownership facts.
+- **Salesforce activity + contacts** — the CRM record + logged tasks/events/notes.
+- **Copilot chats** — captured conversation intelligence.
+- **Web search** (public-records path; the paid search proxy stays paused).
+- **Property-folder correspondence + title commitments + lease documents** — which
+  establish the ownership chain back to the developer, guarantor, signatory.
+- **County/SOS/assessor/deed + CoStar/RCA + OM/flyer intake** (already wired).
+
+Every one of these is *evidence*. LCC ingests them, extracts the entities/contacts/facts,
+and feeds them into the weighted reconciliation engine (§7) + the contact-selection engine
+(§9) so that: a call note that says "we now deal with Jane in acquisitions" updates the
+directed contact; an email signature enriches a phone/email; a title commitment extends
+the ownership chain; a Salesforce contact anchors identity at the highest authority. The
+system **resolves continuously and re-triangulates as new evidence lands** — the truth
+converges over time instead of going stale, and no single source is trusted blindly.
+
+### 10a. Triage — the Salesforce contact-sync disconnect (Boyd, 2026-07-15)
+Grounded live: the SF→LCC contact sync **works** — **9 of the 10** Boyd-linked contacts
+carry a `salesforce/Contact` identity (Perrault, Moulder, Pfohl, Felfeli, McGrade, Penrod,
+Owens, Butler, Peters) and most reconciled with their CoStar captures. The **two
+exceptions are exactly the two Scott named:**
+- **Joe Capra** — **absent from LCC entirely** (no entity).
+- **Eric Dowling** — present in LCC but **only from CoStar + RCA** (`costar/contact`,
+  `rca/contact`), with a real email/phone (`edowling@boydwatterson.com` / (312) 777-3704)
+  — **no `salesforce/Contact` identity.**
+
+So this is **not a sync flaw creating duplicates** — the sync is pulling the SF contacts
+that exist on the synced Boyd account and reconciling them. The two in question simply
+**haven't come through Salesforce**, which means one of: (a) they are **not actually in SF
+as Contacts on the synced Boyd account** (possibly known only from conversation, or on a
+*fund* sub-account not mapped to the Boyd parent), or (b) added to SF without an
+activity/account link the sync reaches. **Verify in Salesforce before creating them** —
+that's the "don't needlessly create duplicates" check. The reconciliation safety net: LCC
+already holds Eric Dowling with his email, so if/when an SF Dowling appears, the engine
+should merge them **by email** (weight 55) into one — *provided the SF sync brings the
+Contact in*. The gap this exposes, and what §10 fixes: **a contact known from
+conversation/email/notes (like Capra) should be captured + reconciled even without a formal
+SF activity** — email/notes/Copilot as first-class contact sources, keyed on email/name so
+they never fork from the CoStar/SF record.
+
 ## 8. Progress log (living — update as we work this topic)
 
 - **2026-07-15** — Deed OCR worker fix shipped + verified (158→154 storage-ready
