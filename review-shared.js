@@ -60,6 +60,7 @@ var LCC_DECISION_LANE_MAP = {
   intake_disposition:            { lane: 'intake',        merges: false },
   match_disambiguation:          { lane: 'intake',        merges: false },
   cms_link_suspect:              { lane: 'linkage',       merges: false },
+  sf_contact_account_mismatch:   { lane: 'linkage',       merges: false },
   sos_owner_links:               { lane: 'linkage',       merges: false },
   implausible_value:             { lane: 'automation',    merges: false },
   llc_research_dead:             { lane: 'automation',    merges: false },

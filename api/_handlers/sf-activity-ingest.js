@@ -64,11 +64,18 @@ import { authenticate, requireRole } from '../_shared/auth.js';
 import { appendActivityEvent as defaultAppendActivityEvent } from '../_shared/activity-events.js';
 import { findEntityBySfId as defaultFindEntityBySfId } from '../_shared/bridge-handlers-salesforce.js';
 import { opsQuery } from '../_shared/ops-db.js';
+import { ensureEntityLink, normalizeEmail, isGenericInboxEmail } from '../_shared/entity-link.js';
 import {
   advanceCadence as defaultAdvanceCadence,
   resolveCadenceForEntity as defaultResolveCadenceForEntity,
   growCadenceFromOutreach as defaultGrowCadenceFromOutreach,
 } from '../_shared/cadence-engine.js';
+
+// SF-CONTACT-RECONCILE Unit 1 — kill-switch for the WhoId contact mint (default
+// ON). Even ON, minting is a natural no-op until the PA "Activity Sync" flow
+// includes the WhoId's Name/Email, so existing feeds are byte-identical: no
+// name/email ⇒ no mint (never fabricated).
+const MINT_SF_CONTACTS = process.env.SF_INGEST_MINT_CONTACTS !== 'false';
 
 // CONTACT-SELECTION Slice 2 — an inbound reply is a two-way (engaged) signal:
 // lock the owner's active contact pick (the human took over). Best-effort,
@@ -79,6 +86,121 @@ async function defaultApplyOwnerContactFeedback(ownerEntityId, kind) {
     await opsQuery('POST', 'rpc/lcc_apply_contact_feedback',
       { p_entity_id: ownerEntityId, p_kind: kind, p_detail: {}, p_source: 'sf_ingest' });
   } catch (_e) { /* non-blocking */ }
+}
+
+// ============================================================================
+// SF-CONTACT-RECONCILE (2026-07-15)
+// ----------------------------------------------------------------------------
+// Two Boyd Watterson decision-makers we email/call are in Salesforce but never
+// reached LCC — a contact-sync SCOPE gap: the sync only pulled contacts on
+// LCC-mapped accounts, so a decision-maker on an unmapped / misfiled account
+// (Joseph Capra; Eric Dowling filed under "Arbor Realty Trust") never flowed.
+//   Unit 1 — MINT the WhoId contact entity + salesforce/Contact identity on every
+//            synced activity (the activity itself is the "already prospected"
+//            signal; the contact becomes a first-class linked entity).
+//   Unit 2 — RECONCILE by email: minting routes through ensureEntityLink's R39
+//            email tier, so the SF Dowling ATTACHES to the existing CoStar/RCA
+//            Dowling (one entity, salesforce+costar+rca identities) — never a
+//            duplicate. The junk/implausible-person guards reject garbage.
+//   Unit 3 — SURFACE the SF data-quality error: an @<firm> email on a different
+//            SF account is a disagreement LCC FLAGS (never inherits) via a
+//            Decision-Center `sf_contact_account_mismatch` lane.
+// LCC is the source of truth; Salesforce is minimum-necessary. No SF writes.
+// ============================================================================
+
+/**
+ * Mint (or attach-by-email) the WhoId SF Contact as a person entity + a
+ * salesforce/Contact external identity. Routes through ensureEntityLink so:
+ *  - the R39 email tier ATTACHES to an existing CoStar/RCA person by email
+ *    (one entity, multiple source identities) instead of minting a duplicate;
+ *  - the junk / implausible-person guards reject garbage (never invents a
+ *    contact from a bad name).
+ * Returns { entityId, createdEntity, resolvedByEmail } or null (guard-rejected).
+ */
+async function defaultResolveOrCreateSfContact({ workspaceId, userId, whoId, accountId, name, email, first, last, phone, title }) {
+  const seedFields = {};
+  if (name)  seedFields.name = name;
+  if (first) seedFields.first_name = first;
+  if (last)  seedFields.last_name = last;
+  if (title) seedFields.title = title;
+  const ne = normalizeEmail(email);
+  if (ne)    seedFields.email = ne;
+  if (phone) seedFields.phone = phone;
+  if (!seedFields.name && !seedFields.first_name && !seedFields.last_name && !seedFields.email) return null;
+  const link = await ensureEntityLink({
+    workspaceId, userId,
+    sourceSystem: 'salesforce', sourceType: 'Contact', externalId: whoId,
+    seedFields,
+    metadata: { via: 'sf_activity_ingest', sf_account: accountId || null },
+  });
+  if (!link || !link.ok || !link.entityId) return null;
+  return { entityId: link.entityId, createdEntity: !!link.createdEntity, resolvedByEmail: !!link.resolvedByEmail };
+}
+
+// Free personal-mail domains carry NO firm signal, so a mismatch can't be judged
+// against them (a broker with a gmail address is not "wrong account").
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'yahoo.com', 'ymail.com', 'hotmail.com', 'outlook.com', 'live.com',
+  'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com', 'comcast.net',
+  'protonmail.com', 'proton.me', 'gmx.com', 'att.net', 'sbcglobal.net', 'verizon.net',
+]);
+
+function orgCore(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+
+/**
+ * Unit 3 detector (pure). An SF Contact whose EMAIL DOMAIN org-token contradicts
+ * its SF ACCOUNT name is a Salesforce-side data-quality error (e.g. Eric Dowling
+ * `edowling@boydwatterson.com` filed under account "Arbor Realty Trust"). LCC
+ * flags it — it does NOT inherit the wrong account.
+ *
+ * Conservative — returns `mismatch:true` ONLY when BOTH signals are strong:
+ *   - the email domain is a real firm domain (non-generic inbox, non-personal),
+ *     with a distinctive second-level label ≥ 4 chars (boydwatterson.com →
+ *     "boydwatterson");
+ *   - the account name collapses to ≥ 4 alnum chars;
+ *   - NEITHER core contains the other (no agreement).
+ * Any weak / agreeing / generic case ⇒ `mismatch:false`.
+ */
+export function sfContactAccountMismatch({ email, accountName } = {}) {
+  const e = normalizeEmail(email);
+  if (!e || isGenericInboxEmail(e)) return { mismatch: false };
+  const domain = (e.split('@')[1] || '').trim();
+  if (!domain || PERSONAL_EMAIL_DOMAINS.has(domain)) return { mismatch: false };
+  const acct = String(accountName || '').trim();
+  if (!acct) return { mismatch: false };
+  const labels = domain.split('.');
+  const domainLabel = labels.length >= 2 ? labels[labels.length - 2] : labels[0];
+  const domainCore = orgCore(domainLabel);
+  if (domainCore.length < 4) return { mismatch: false };
+  const acctCore = orgCore(acct);
+  if (acctCore.length < 4) return { mismatch: false };
+  if (acctCore.includes(domainCore) || domainCore.includes(acctCore)) {
+    return { mismatch: false, domain_label: domainLabel, account_name: acct };
+  }
+  return { mismatch: true, email_domain: domain, domain_label: domainLabel, account_name: acct };
+}
+
+/**
+ * Unit 3 producer — seed a `sf_contact_account_mismatch` Decision-Center row for
+ * an operator to resolve. Idempotent on subject_ref (lcc_open_decision dedupes),
+ * best-effort (never blocks the mirror). Record-only verdicts — no SF write.
+ */
+async function defaultOpenSfMismatchDecision({ workspaceId, entityId, detail }) {
+  if (!entityId) return false;
+  try {
+    const r = await opsQuery('POST', 'rpc/lcc_open_decision', {
+      p_decision_type: 'sf_contact_account_mismatch',
+      p_workspace_id: workspaceId || null,
+      p_question: null,
+      p_context: detail || {},
+      p_subject_entity_id: entityId,
+      p_subject_domain: null,
+      p_subject_property_id: null,
+      p_subject_ref: 'sfmismatch:' + entityId,
+      p_rank_value: null,
+    });
+    return !!(r && r.ok);
+  } catch (_e) { return false; }
 }
 
 const MAX_BATCH = 500;
@@ -241,6 +363,11 @@ export function normalizeSfRecord(rec) {
   const isClosed = isClosedRaw == null
     ? null
     : (isClosedRaw === true || String(isClosedRaw).toLowerCase() === 'true');
+  // SF-CONTACT-RECONCILE — the WhoId contact + WhatId account identity fields the
+  // PA flow may include (flattened `who_name`/`WhoName`, or nested `Who.Name`).
+  // Absent ⇒ the mint / mismatch detection are no-ops (never fabricated).
+  const who  = rec?.Who  || rec?.who  || null;
+  const what = rec?.What || rec?.what || rec?.Account || null;
   return {
     rec,
     kind,
@@ -251,6 +378,15 @@ export function normalizeSfRecord(rec) {
     actDate:  rec?.activity_date ?? rec?.ActivityDate ?? rec?.activityDate ?? null,
     whoId:    rec?.who_id ?? rec?.WhoId ?? null,    // Contact
     whatId:   rec?.what_id ?? rec?.WhatId ?? null,  // Account / other
+    // The WhoId Contact's identity (for the Unit-1 mint) + WhatId Account name
+    // (for the Unit-3 email-domain-vs-account mismatch detector).
+    whoName:  pickField(rec, 'who_name', 'WhoName', 'contact_name') ?? (who && (who.Name ?? who.name)) ?? null,
+    whoEmail: pickField(rec, 'who_email', 'WhoEmail', 'contact_email') ?? (who && (who.Email ?? who.email)) ?? null,
+    whoFirst: pickField(rec, 'who_first_name', 'WhoFirstName') ?? (who && (who.FirstName ?? who.firstName)) ?? null,
+    whoLast:  pickField(rec, 'who_last_name', 'WhoLastName') ?? (who && (who.LastName ?? who.lastName)) ?? null,
+    whoPhone: pickField(rec, 'who_phone', 'WhoPhone', 'contact_phone') ?? (who && (who.Phone ?? who.phone)) ?? null,
+    whoTitle: pickField(rec, 'who_title', 'WhoTitle') ?? (who && (who.Title ?? who.title)) ?? null,
+    whatName: pickField(rec, 'what_name', 'WhatName', 'account_name', 'AccountName') ?? (what && (what.Name ?? what.name)) ?? null,
     status:   rec?.status ?? rec?.Status ?? null,
     ownerId:   rec?.owner_id   ?? rec?.OwnerId ?? null,
     ownerName: rec?.owner_name ?? rec?.OwnerName ?? rec?.Owner?.Name ?? null,
@@ -305,6 +441,8 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
   const advance        = deps.advanceCadence || defaultAdvanceCadence;
   const resolveCadence = deps.resolveCadenceForEntity || defaultResolveCadenceForEntity;
   const growCadence    = deps.growCadenceFromOutreach || defaultGrowCadenceFromOutreach;
+  const resolveOrCreateSfContact = deps.resolveOrCreateSfContact || defaultResolveOrCreateSfContact;
+  const openMismatch   = deps.openSfMismatchDecision || defaultOpenSfMismatchDecision;
   const { workspaceId, actorId } = ctx || {};
 
   const summary = {
@@ -317,8 +455,14 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     errors: 0,
     replies_captured: 0,
     cadences_grown: 0,
+    contacts_minted: 0,       // Unit 1 — WhoId contacts newly created as entities
+    contacts_reconciled: 0,   // Unit 2 — WhoId contacts attached to an existing person by email
+    mismatches_flagged: 0,    // Unit 3 — sf_contact_account_mismatch decisions opened
     results: [],
   };
+  // Unit 3 — emit at most one mismatch decision per entity per tick (the RPC is
+  // idempotent on subject_ref regardless).
+  const mismatchEmitted = new Set();
 
   if (!Array.isArray(records) || records.length === 0) return summary;
 
@@ -357,6 +501,29 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
       continue;
     }
 
+    // SF-CONTACT-RECONCILE Unit 1/2 — the WhoId contact isn't yet an LCC entity,
+    // but the feed carries its identity: MINT it (or ATTACH-by-email if it
+    // already exists under CoStar/RCA — Unit 2). This is how a decision-maker on
+    // an unmapped / misfiled SF account (Joseph Capra; Eric Dowling on "Arbor
+    // Realty Trust") finally reaches LCC. Byte-identical no-op when the flow
+    // omits the contact name/email — nothing is fabricated.
+    if (!entity && whoId && MINT_SF_CONTACTS && (it.whoName || normalizeEmail(it.whoEmail))) {
+      try {
+        const minted = await resolveOrCreateSfContact({
+          workspaceId, userId: actorId, whoId, accountId: whatId,
+          name: it.whoName, email: it.whoEmail, first: it.whoFirst,
+          last: it.whoLast, phone: it.whoPhone, title: it.whoTitle,
+        });
+        if (minted && minted.entityId) {
+          entity = { entityId: minted.entityId };
+          resolvedVia = minted.resolvedByEmail ? 'contact_reconciled_email'
+            : (minted.createdEntity ? 'contact_minted' : 'contact');
+          if (minted.createdEntity)   summary.contacts_minted += 1;
+          if (minted.resolvedByEmail) summary.contacts_reconciled += 1;
+        }
+      } catch (_e) { /* best-effort — falls through to skipped_no_entity */ }
+    }
+
     const entityId = entity?.entityId || null;
     if (!entityId) {
       // Never guess — record the skip so the feed is observable, but don't
@@ -367,6 +534,24 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     }
 
     summary.matched += 1;
+    // SF-CONTACT-RECONCILE Unit 3 — an SF contact whose email-domain firm
+    // contradicts its SF account is a Salesforce data-quality error. LCC FLAGS
+    // it (a Decision-Center row) instead of inheriting the wrong account. Only
+    // when the feed carries both the contact email and the account name.
+    if (it.whatName && normalizeEmail(it.whoEmail) && !mismatchEmitted.has(entityId)) {
+      const mm = sfContactAccountMismatch({ email: it.whoEmail, accountName: it.whatName });
+      if (mm.mismatch) {
+        mismatchEmitted.add(entityId);
+        try {
+          const flagged = await openMismatch({ workspaceId, entityId, detail: {
+            contact_entity_id: entityId, sf_contact_id: whoId, sf_account_id: whatId,
+            email_domain: mm.email_domain, account_name: mm.account_name,
+            contact_name: it.whoName || null,
+          } });
+          if (flagged) summary.mismatches_flagged += 1;
+        } catch (_e) { /* non-blocking */ }
+      }
+    }
     // OUTREACH #1 (RC1) — subject-aware so a plain SF Task that is really an
     // email/call advances the cadence instead of being a dead 'note'. Events
     // (Unit 2) are categorized 'meeting' directly inside normalizeSfRecord.

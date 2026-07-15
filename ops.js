@@ -1499,6 +1499,7 @@ async function renderReviewConsolePage() {
     { dt: 'intake_disposition', label: 'Staged intake — needs review', open: "renderFederatedLane('intake_disposition')" },
     { dt: 'match_disambiguation', label: 'Intake match disambiguation', open: "renderDecisionLane('match_disambiguation')" },
     { dt: 'cms_link_suspect', label: 'CMS ↔ property link suspects', open: "renderFederatedLane('cms_link_suspect')" },
+    { dt: 'sf_contact_account_mismatch', label: 'Salesforce contact ↔ account mismatch', open: "renderDecisionLane('sf_contact_account_mismatch')" },
     { dt: 'sos_owner_links', label: 'Owner-contact links to confirm', open: 'renderSosLinkWorklist()' },
     { dt: 'implausible_value', label: 'Implausible values', open: "renderFederatedLane('implausible_value')" },
     { dt: 'llc_research_dead', label: 'LLC research dead-letters', open: "renderDecisionLane('llc_research_dead')" },
@@ -1809,6 +1810,15 @@ function _dcCardHTML(it, isNext) {
     });
     actions = '<button class="q-action" onclick="dcVerdict(' + id + ',\'keep_separate\')">Keep separate</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
+  } else if (it.decision_type === 'sf_contact_account_mismatch') {
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.contact_name || ('@' + (c.email_domain || 'contact'))) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">SF data-quality</span></div></div>'
+      + '<div class="q-item-meta">SF contact email <b>@' + esc(c.email_domain || '—') + '</b> is filed under SF account '
+      + '<b>' + esc(c.account_name || '—') + '</b> — the email domain and the account disagree. '
+      + 'Trust the email-domain company in LCC (leave SF as-is), research, or dismiss. LCC records the truth; no Salesforce write.</div>';
+    actions = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'confirm_lcc_company\')">Trust email-domain company</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>'
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'dismiss\')">Dismiss</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -1863,7 +1873,8 @@ async function renderDecisionLane(type) {
   const titles = { confirm_true_owner: 'Confirm the true owner', junk_entity_name: 'Junk entity names',
     match_disambiguation: 'Intake match disambiguation', llc_research_dead: 'LLC research dead-letters',
     availability_checker_botblock: 'Availability bot-blocks',
-    sf_link_conflict: 'Salesforce link conflicts', sf_link_collision: 'Salesforce link — same owner, two entities' };
+    sf_link_conflict: 'Salesforce link conflicts', sf_link_collision: 'Salesforce link — same owner, two entities',
+    sf_contact_account_mismatch: 'Salesforce contact ↔ account mismatch' };
   const intros = {
     confirm_true_owner: 'The domain true owner may be stale (pre-acquisition). Confirm it’s current and connect, mark it stale with the new owner (recorded now; write-back ships in Slice 3), or send to research.',
     junk_entity_name: 'Entities soft-flagged with structural-garbage names (phone/email/panel-header bleed-through). Rename to the real name, merge into the correct entity, or leave flagged.',
@@ -1872,6 +1883,7 @@ async function renderDecisionLane(type) {
     availability_checker_botblock: 'The availability-checker is being bot-blocked (high unreachable share). Verify the top listings by hand, or acknowledge the alert (resolves it).',
     sf_link_conflict: 'The bridged owner entity already has a Salesforce Account link that disagrees with the domain’s. Keep the current LCC link, accept the domain id, or research. Never auto-overwritten.',
     sf_link_collision: 'The same Salesforce Account resolves to two entities (a collision, or one SF id on multiple domain owners). Same owner, two entities — keep one and merge the rest in, or keep separate.',
+    sf_contact_account_mismatch: 'A Salesforce contact’s email-domain firm disagrees with its Salesforce account (e.g. an @firm.com contact filed under a different account). LCC flags the SF data-quality error instead of inheriting the wrong account — trust the email-domain company in LCC, research, or dismiss. No Salesforce write.',
   };
   let html = '<div class="ops-header"><h2>' + esc(titles[type] || type) + '</h2>'
     + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
