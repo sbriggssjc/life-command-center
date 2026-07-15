@@ -520,6 +520,17 @@ get-by-id, verified our org relabels Account→Company but `Contact.AccountId` s
 merge PR #1406 + redeploy** (endpoint 404s until operations.js ships). Verify: GET dry-run →
 capped POST drain → Capra mints onto Boyd, SF Dowling merges by email, mismatch lane surfaces.
 
+### 10g. WhoId-resolver live-tested — flow perfect, ONE adapter bug (2026-07-15)
+Migrations applied live to LCC Opps (queue + cron); route live (`byid_configured:true`).
+Seeded Capra (`0038W00002PRo0iQAD`) + Dowling (`0038W00002PRqkNQAT`) WhoIds + drained →
+both `guard_rejected`. **Root-caused via the PA run history: the flow is flawless** —
+returns `{name:"Eric Dowling", email:"edowling@boydwatterson.com", phone, title,
+account_id, account_name:"Arbor Realty Trust"}`, 200, lowercase-keyed. The bug is LCC-side:
+`getSalesforceContactById` isn't reading the flow's lowercase keys, so the name arrives
+null and the guard rejects it. Fix prompt: `CLAUDECODE_PROMPT_ORE_sf_byid_adapter_fieldmap_fix.md`
+(align the adapter field map + stop mislabeling a null name as `guard_rejected`). The two
+WhoIds sit in the queue (`no_data`) — Cowork resets to `seen` + re-drains after the fix.
+
 ## 8. Progress log (living — update as we work this topic)
 
 - **2026-07-15** — Deed OCR worker fix shipped + verified (158→154 storage-ready
