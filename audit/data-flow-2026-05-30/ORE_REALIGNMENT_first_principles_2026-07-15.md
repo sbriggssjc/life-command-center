@@ -260,7 +260,31 @@ resolved without any new fetch.
   asset-named (no sponsor signal in the name), BUT 57% of props already carry the
   sponsor in `true_owner`. Adopted the **multi-signal weighted reconciliation doctrine**
   (§7); Tier A build reframed to prefer the in-data sponsor first.
-- **Next:** Claude Code prompts — (a) Tier A: reconciliation-first (prefer true_owner
-  sponsor) + owner-parent resolver + institution registry + archetype router; (b) the
-  multi-signal weighted reconciler as the engine underneath. Verify recorded↔true
-  reconciliation (inversions/dups) as part of it.
+- **2026-07-15** — **ORE Tier A BUILT + pushed (PR #1397)**, LCC-Opps migration
+  `20260716130000` applied live. `lcc_institution_contacts` registry (ships empty —
+  never fabricated), `lcc_resolve_institution_contact` (tier-0 `true_owner` / tier-1
+  own-name, operators excluded), `v_institution_registry_gaps` (seed list, value-ranked),
+  `v_institution_contact_attachable` (fan-out driver), `v_owner_archetype`;
+  `institution-registry.js` + `?_route=institution-contact-tick` (attach + fan one
+  contact across the sponsor's whole SPE portfolio + seed cadence); B1 archetype router.
+  Reuses R47's `lcc_resolve_owner_parent`. Synthetic fan-out gate passed (one contact →
+  8 Global Net Lease SPEs via tier-0). 1713 tests pass. JS ships on Railway redeploy.
+- **2026-07-15 — live seed list (`v_institution_registry_gaps`, fan-out ≥3 SPEs):**
+  Gardner Tannenbaum 30/$12.2M · Penzance Management 3/**$48.1M** · Blackstone 8/$14.1M ·
+  Global Net Lease 8/$9.4M · GIP 6/$3.0M · C-III 5/$5.6M · Lincoln Property 4/$5.6M ·
+  Rainier 5 · Rooker 5 · TIAA 3. **Scott fills a real contact per sponsor → the worker
+  fans it out.**
+- **2026-07-15 — `true_owner` quality-noise finding (motivates the weighted reconciler):**
+  the sponsor-cluster ranking surfaced junk in the `true_owner` field feeding it —
+  placeholder values (`John Doe`, `Independent`), an OPERATOR mis-typed as a sponsor
+  (`U.S. Renal Care`, 15 dia SPEs — the R8 artifact; the operator-exclusion list needs
+  it), and AI-verbose strings (`TIAA (Teachers Insurance and Annuity Association…)`,
+  `… or related stakeholders`). These are precisely the cases the multi-signal weighted
+  reconciler (§7) resolves: junk/placeholder names filtered, operators excluded, verbose
+  strings canonicalized, identity confirmed by signal-agreement not a single noisy field.
+- **Next:** (a) Scott merges PR #1397 + redeploys; seeds the top sponsors above; run
+  `institution-contact-tick` to fan out. (b) Build the **multi-signal weighted
+  reconciliation engine** (prompt written 2026-07-15:
+  `CLAUDECODE_PROMPT_ORE_weighted_reconciliation_engine.md`) — the layer underneath that
+  runs across ALL owners, cleans the `true_owner` noise, and re-triangulates identity as
+  new clues arrive.
