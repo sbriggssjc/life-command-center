@@ -690,3 +690,115 @@ describe('propagateStoredDeedExtraction (R59b Unit 2)', () => {
     assert.equal(r.ownershipEventAppended, false);
   });
 });
+
+// ── ORE — instrument-type routing (mortgage/DoT → lender) + signatory ──────────
+describe('parseDeedText — ORE instrument classification + signatory', () => {
+  const MORTGAGE = [
+    'MORTGAGE',
+    'County of Cook',
+    'DOC # 2024-9001 recorded on 06/01/2024',
+    'For valuable consideration, sum of $5,000,000.',
+    'Grantor: BORROWER OWNER LLC',
+    'Grantee: SUMITOMO BANK LEASING AND FINANCE INC',
+    'By: John Q. Smith, Its Authorized Signatory',
+    'APN: 999-000-111',
+  ].join('\n');
+
+  it('a Mortgage → deed_type Mortgage + instrument_kind security_instrument', () => {
+    const p = parseDeedText(MORTGAGE, { state: 'IL' });
+    assert.equal(p.deed_type, 'Mortgage');
+    assert.equal(p.instrument_kind, 'security_instrument');
+  });
+
+  it('a Deed of Trust → security_instrument', () => {
+    const p = parseDeedText('DEED OF TRUST\nGrantor: X OWNER LLC\nGrantee: BIG BANK NA\nDOC # 1', {});
+    assert.equal(p.deed_type, 'Deed of Trust');
+    assert.equal(p.instrument_kind, 'security_instrument');
+  });
+
+  it('a Grant Deed → instrument_kind conveyance (default)', () => {
+    const p = parseDeedText(DEED_TEXT, { state: 'CA' });
+    assert.equal(p.instrument_kind, 'conveyance');
+    assert.equal(p.signatory_name, undefined);
+  });
+
+  it('captures the signatory (By: <name>, Its <title>)', () => {
+    const p = parseDeedText(MORTGAGE, { state: 'IL' });
+    assert.equal(p.signatory_name, 'John Q. Smith');
+    assert.equal(p.signatory_title, 'Authorized Signatory');
+  });
+
+  it('rejects a non-person signatory (entity token)', () => {
+    const p = parseDeedText('MORTGAGE\nGrantee: BANK NA\nBy: Wells Fargo Bank, Its Lender\nDOC # 1', {});
+    assert.equal(p.signatory_name, undefined);
+  });
+});
+
+describe('processDeedDocument — ORE instrument routing', () => {
+  const MORTGAGE = [
+    'MORTGAGE', 'County of Cook', 'DOC # 2024-9001 recorded on 06/01/2024',
+    'For valuable consideration, sum of $5,000,000.',
+    'Grantor: BORROWER OWNER LLC', 'Grantee: SUMITOMO BANK LEASING AND FINANCE INC',
+    'By: John Q. Smith, Its Authorized Signatory', 'APN: 999-000-111',
+  ].join('\n');
+
+  function routeDeps(over = {}) {
+    const ev = { loans: [], contacts: [], entities: [], owners: [] };
+    const deps = {
+      granteePassesOwnerGuards: (n) => !!n && n.replace(/[^a-z0-9]/gi, '').length >= 4,
+      resolveRecordedOwner: async (_d, name) => { ev.owners.push(name); return 'ro-1'; },
+      ensureEntityLink: async (a) => { ev.entities.push(a); return a.resolveOnly ? { ok: false } : { ok: true, entityId: 'e1' }; },
+      writeLoanFromDeed: async (a) => { ev.loans.push(a); return { ok: true, loan_written: true, lender_routed: a.lenderName, borrower_owner_id: 'ro-borrow' }; },
+      writeDeedPartyContact: async (a) => { ev.contacts.push(a); return { ok: true, written: true }; },
+      ...over,
+    };
+    return { deps, ev };
+  }
+
+  it('mortgage: grantee → LENDER side (writeLoanFromDeed) with grantor as borrower; NO owner-side writes', async () => {
+    const { deps, ev } = routeDeps();
+    const f = makeFakeQ({});
+    const r = await processDeedDocument('dialysis', 55, 900, MORTGAGE, { state: 'IL' }, { domainQuery: f.q, ...deps });
+    // routed to the lender side
+    assert.equal(ev.loans.length, 1);
+    assert.equal(ev.loans[0].lenderName, 'SUMITOMO BANK LEASING AND FINANCE INC');
+    assert.equal(ev.loans[0].borrowerName, 'BORROWER OWNER LLC');
+    assert.equal(r.lenderRouted, 'SUMITOMO BANK LEASING AND FINANCE INC');
+    assert.equal(r.loanWritten, true);
+    // NEVER writes latest_deed_grantee (Step 4 gate) and no ownership/entity units
+    assert.equal(f.calls.some(c => c.method === 'PATCH' && c.path.includes('latest_deed_grantee') === false && c.body && 'latest_deed_grantee' in (c.body || {})), false);
+    assert.equal(f.calls.some(c => c.body && c.body.latest_deed_grantee), false, 'no latest_deed_grantee write');
+    assert.equal(f.calls.some(c => c.method === 'POST' && c.path === 'ownership_history'), false, 'no ownership_history append');
+    assert.equal(ev.entities.some(e => e.sourceType === 'true_owner'), false, 'no true_owner entity minted');
+    assert.equal(r.r51Fed, false);
+  });
+
+  it('mortgage: signatory → writeDeedPartyContact on behalf of the grantor', async () => {
+    const { deps, ev } = routeDeps();
+    const f = makeFakeQ({});
+    const r = await processDeedDocument('dialysis', 55, 900, MORTGAGE, { state: 'IL' }, { domainQuery: f.q, ...deps });
+    assert.equal(ev.contacts.length, 1);
+    assert.equal(ev.contacts[0].name, 'John Q. Smith');
+    assert.equal(ev.contacts[0].role, 'signatory');
+    assert.equal(ev.contacts[0].onBehalfOf, 'BORROWER OWNER LLC');
+    assert.equal(r.signatoryContact, 'John Q. Smith');
+  });
+
+  it('conveyance (Grant Deed): NEVER routes to the lender side (byte-identical owner path)', async () => {
+    const { deps, ev } = routeDeps();
+    const f = makeFakeQ({
+      'sales_transactions?property_id=eq.55': { value: { ok: true, data: [{ sale_id: 7, sold_price: 1000000, sale_date: '2024-03-15' }] } },
+    });
+    await processDeedDocument('dialysis', 55, 900, DEED_TEXT, { state: 'CA' }, { domainQuery: f.q, ...deps });
+    assert.equal(ev.loans.length, 0, 'a conveyance never writes a loan');
+    // owner-side units still run (latest_deed_grantee fed)
+    assert.ok(f.calls.some(c => c.body && c.body.latest_deed_grantee === 'BUYER HOLDINGS LLC'), 'conveyance still feeds latest_deed_grantee');
+  });
+
+  it('mortgage with writeLoanFromDeed dep ABSENT → no loan, still no owner contamination', async () => {
+    const f = makeFakeQ({});
+    const r = await processDeedDocument('dialysis', 55, 900, MORTGAGE, { state: 'IL' }, { domainQuery: f.q });
+    assert.equal(r.loanWritten, false);
+    assert.equal(f.calls.some(c => c.body && c.body.latest_deed_grantee), false, 'still never writes latest_deed_grantee');
+  });
+});

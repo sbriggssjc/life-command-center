@@ -55,6 +55,42 @@ const NOMINAL_CONSIDERATION_FLOOR = 100; // excludes the "$10.00 and other valua
 // CORE PARSER
 // ============================================================================
 
+// A deed_type that is a SECURITY INSTRUMENT (mortgage / deed of trust / …), not a
+// title-transferring CONVEYANCE. Mirrors sidebar-pipeline.js MORTGAGE_DEED_TYPES.
+// On a security instrument the "grantee" is the LENDER (mortgagee/beneficiary) and
+// the "grantor" is the BORROWER (mortgagor) = the owner — the OPPOSITE roles from a
+// conveyance deed. So it must NEVER be routed to the owner side.
+const SECURITY_INSTRUMENT_TYPES = /^(mortgage|deed\s+of\s+trust|assignment|subordination|satisfaction|release|reconveyance|lien)/i;
+
+// Classify the parsed deed_type into 'security_instrument' vs 'conveyance'.
+// Unknown/undefined deed_type → 'conveyance' (preserve the pre-existing behavior;
+// the explicit mortgage/DoT classification + the downstream owner-conflict lender
+// guard are the backstops).
+function deedInstrumentKind(deedType) {
+  return deedType && SECURITY_INSTRUMENT_TYPES.test(deedType) ? 'security_instrument' : 'conveyance';
+}
+
+// Best-effort signature-block extraction: the person signing on a party's behalf
+// ("By: <name>, Its <title>" / "Name: <name> … Title: <title>"). Returns
+// { name, title } or null. Conservative — a 2-4 word Titlecase human name only,
+// never fabricated. (Scott's doctrine: grantors/signatories enrich contacts.)
+function extractSignatory(text) {
+  if (!text || typeof text !== 'string') return null;
+  const NAME = String.raw`([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})`;
+  const TITLE = String.raw`([A-Za-z][A-Za-z ,.&\/\-]{1,48}?)`;
+  // "By: [/s/] John Q. Smith, Its/Title/As Manager"
+  let m = text.match(new RegExp(String.raw`\bBy:?\s*(?:/s/\s*)?${NAME}\s*[,\n]\s*(?:Its|Title|As)[:\s]+${TITLE}(?:\n|$|\s{2,})`, 'i'));
+  // "Name: John Q. Smith … Title: Manager"
+  if (!m) m = text.match(new RegExp(String.raw`\bName:\s*${NAME}[\s\S]{0,60}?\bTitle:\s*${TITLE}(?:\n|$|\s{2,})`, 'i'));
+  if (!m) return null;
+  const name = m[1].replace(/\s{2,}/g, ' ').trim();
+  const title = (m[2] || '').replace(/\s{2,}/g, ' ').trim().replace(/[,.\s]+$/, '');
+  // Reject an obvious non-name (all-caps entity token, digits, too long).
+  if (/\d/.test(name) || name.length < 5 || name.length > 60) return null;
+  if (/\b(llc|inc|corp|company|trust|bank|association|n\.a\.|lp|llp)\b/i.test(name)) return null;
+  return { name, title: title || null };
+}
+
 /**
  * Extract structured data from raw deed text.
  * Handles standard California Grant Deed / Quitclaim Deed formats.
@@ -224,6 +260,18 @@ export function parseDeedText(text, opts = {}) {
   else if (text.match(/DEED\s+OF\s+TRUST/i)) data.deed_type = 'Deed of Trust';
   else if (text.match(/INTERSPOUSAL/i)) data.deed_type = 'Interspousal Transfer Deed';
   else if (text.match(/GIFT\s+DEED/i)) data.deed_type = 'Gift Deed';
+  else if (text.match(/\bMORTGAGE\b/i)) data.deed_type = 'Mortgage';
+  else if (text.match(/ASSIGNMENT\s+OF\s+(?:RENTS?|LEASES?|MORTGAGE|DEED)/i)) data.deed_type = 'Assignment';
+
+  // ── Instrument kind (Scott's doctrine, 2026-07-15) — a security instrument
+  //    (mortgage / deed of trust) has the grantee = LENDER and grantor = BORROWER
+  //    (owner); a conveyance has grantee = BUYER and grantor = SELLER. Routing
+  //    downstream keys on this, so a mortgagee never becomes the recorded owner.
+  data.instrument_kind = deedInstrumentKind(data.deed_type);
+
+  // ── Signatory (the person signing the document) — enrichment only ────
+  const sig = extractSignatory(text);
+  if (sig) { data.signatory_name = sig.name; if (sig.title) data.signatory_title = sig.title; }
 
   // ── Entity type classification ───────────────────────────────────────
   data.grantee_entity_type = classifyEntityType(data.grantee, text);
@@ -481,6 +529,12 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
     ownsEdgeCreated: false,
     traceGranteeTaskSurfaced: false,
     granteeAddressFilled: false,   // ORE Unit C
+    // ORE instrument routing — a security instrument (mortgage / deed of trust)
+    // routes the grantee to the lender side + the grantor to the borrower.
+    lenderRouted: null,
+    loanWritten: false,
+    borrowerOwnerId: null,
+    signatoryContact: null,
   };
 
   // Step 1: Parse
@@ -626,7 +680,13 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
   // basic guard (has a letter, length >= 4 after stripping) AND it is BLANK or
   // the parsed recording date is NEWER than the existing one — never clobber a
   // more-recent recorded grantee. Property key is property_id on both domains.
-  if (propertyId != null && parsed.grantee && granteeIsPlausible(parsed.grantee)) {
+  // INSTRUMENT GATE (Scott's doctrine, 2026-07-15): a SECURITY INSTRUMENT
+  // (mortgage / deed of trust) grantee is the LENDER, NOT the owner — it is
+  // routed to the lender side in propagateDeedToBd and must NEVER touch the
+  // owner-side latest_deed_grantee (the durable forward fix for the exact
+  // contamination that seeded the legacy owner-conflict rows).
+  if (propertyId != null && parsed.grantee && parsed.instrument_kind !== 'security_instrument'
+      && granteeIsPlausible(parsed.grantee)) {
     const recDate = parseRecordingDate(parsed.recording_date);
     const propRes = await q(domain, 'GET',
       `properties?property_id=eq.${propertyId}&select=latest_deed_grantee,latest_deed_date&limit=1`
@@ -770,6 +830,37 @@ async function propagateDeedToBd({ domain, propertyId, documentId, parsed, cross
       const days = Math.abs((new Date(recDate) - new Date(cand.sale_date)) / 86400000);
       if (Number.isFinite(days) && days <= DEED_SALE_PROXIMITY_DAYS) confidentSale = cand;
     }
+  }
+
+  // ── Signatory enrichment (BOTH instruments; Scott: "the contact signing the
+  // documents"). Best-effort; the party it signs for = grantor (the executing
+  // party) when present, else grantee. Gated on the dep (absent ⇒ byte-identical). ──
+  if (parsed.signatory_name && deps.writeDeedPartyContact) {
+    const sc = await deps.writeDeedPartyContact({
+      domain, propertyId, name: parsed.signatory_name, title: parsed.signatory_title || null,
+      role: 'signatory', onBehalfOf: grantor || grantee || null, documentId,
+    }).catch(() => null);
+    if (sc && sc.ok) result.signatoryContact = parsed.signatory_name;
+  }
+
+  // ── INSTRUMENT ROUTING (Scott's doctrine): a SECURITY INSTRUMENT (mortgage /
+  // deed of trust) grantee is the LENDER (mortgagee) and the grantor is the
+  // BORROWER (mortgagor = owner) — route to the LENDER side and NEVER to the
+  // owner/sale/entity units below. ──
+  if (parsed.instrument_kind === 'security_instrument') {
+    if (grantee && deps.writeLoanFromDeed) {
+      const loan = await deps.writeLoanFromDeed({
+        domain, propertyId, lenderName: grantee, borrowerName: grantor,
+        loanAmount: price, originationDate: recDate, documentId,
+        sourceUrl: parsed.source_url || null,
+      }).catch(() => null);
+      if (loan && loan.ok) {
+        result.lenderRouted = loan.lender_routed || grantee;
+        if (loan.loan_written) result.loanWritten = true;
+        if (loan.borrower_owner_id) result.borrowerOwnerId = loan.borrower_owner_id;
+      }
+    }
+    return; // security instruments never touch the owner/sale/entity units
   }
 
   // ── Unit 1(a): fill the confident sale's parties (fill-blanks, per-domain) ──

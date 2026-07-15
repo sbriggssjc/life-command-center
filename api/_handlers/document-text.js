@@ -39,7 +39,7 @@ import { processDeedDocument, propagateStoredDeedExtraction } from './deed-parse
 // testable; the worker injects the production wiring.
 import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
-import { granteePassesOwnerGuards, resolveDeedRecordedOwner, writeOwnerMailingAddress } from './sidebar-pipeline.js';
+import { granteePassesOwnerGuards, resolveDeedRecordedOwner, writeOwnerMailingAddress, writeLoanFromDeed, writeDeedPartyContact } from './sidebar-pipeline.js';
 import { openResearchTask } from '../_shared/research-task.js';
 
 /**
@@ -326,6 +326,11 @@ const PROD_DEPS = {
   opsQuery,
   openResearchTask,
   resolveBuyerParent: (entityId) => opsQuery('POST', 'rpc/lcc_resolve_buyer_parent', { p_entity_id: entityId }),
+  // ORE instrument routing — a security instrument (mortgage / deed of trust)
+  // grantee is the LENDER (→ loans, borrower = grantor) not the owner; the
+  // signatory → a contact. Absent ⇒ byte-identical to pre-ORE deed behavior.
+  writeLoanFromDeed: (a) => writeLoanFromDeed(a, { domainQuery }),
+  writeDeedPartyContact: (a) => writeDeedPartyContact(a, { domainQuery }),
 };
 
 export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {

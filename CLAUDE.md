@@ -7433,3 +7433,86 @@ enrich `ownership_history`, `contacts`, and the **signatory** on the document.
 This touches the R58 deed parser, the CoStar capture path, and the debt/contact
 tables. The immediate view-hold above is the safety floor; the routing is the
 next round.
+
+## ORE — deed instrument-type routing + grantor/signatory enrichment (2026-07-15)
+
+Builds the full doctrine flagged above (Scott, 2026-07-15): *a grantee on a
+mortgage / deed of trust is the LENDER → route to the lender side; a grantee on a
+deed is the BUYER → owner side; grantors + the signatory enrich history/contacts.*
+Grounding located the gap precisely: the **CoStar capture path already implements
+this** (`MORTGAGE_DEED_TYPES` drops mortgage rows from sales/owners/deed_records/
+grantee-propagation at 6 sites; a mortgage's lender→loan rides `upsertDomainLoans`).
+The **R58 deed-parser path did NOT** — it captured `deed_type` (incl. "Deed of
+Trust") but never routed on it, and Step 4 wrote `latest_deed_grantee` for ANY
+grantee, so a mortgage/DoT lender contaminated the owner field at the source (the
+durable origin of the very legacy rows the Topic-1 view-hold now catches). Also
+grounded: **there is NO `lenders`-entity usage anywhere** — every writer stores the
+lender as TEXT on `loans` (`lender_name` dia / `originator` gov); "the lender side"
+= a `loans` row, so this round mirrors that (the `lenders` table stays dormant).
+Deps-injected, reversible, ≤12 api/*.js, no migration. JS ships on the Railway
+redeploy; the live drain rides the existing `document-text-tick` deed worker.
+
+### Unit 1 — instrument classification + signatory (`deed-parser.js parseDeedText`)
+- Extends the `deed_type` chain with **Mortgage** + **Assignment**; adds
+  `data.instrument_kind` = `'security_instrument'` (mortgage / deed of trust /
+  assignment / subordination / satisfaction / release / reconveyance / lien —
+  `SECURITY_INSTRUMENT_TYPES`, mirrors `MORTGAGE_DEED_TYPES`) vs `'conveyance'`
+  (grant/quitclaim/warranty/special-warranty/trustee's/interspousal/gift, AND the
+  unknown/undefined default — preserves prior behavior; the Topic-1 view lender-
+  guard is the backstop for a misparsed mortgage).
+- New pure `extractSignatory(text)` — the person signing ("By: <name>, Its
+  <title>" / "Name: … Title: …"); conservative 2-4-word human-name guard, rejects
+  entity tokens. → `data.signatory_name`/`_title` (also persisted in
+  `property_documents.extracted_data.deed_extraction`).
+
+### Unit 2 — route by instrument (`deed-parser.js` + `sidebar-pipeline.js`)
+- **Step-4 gate (the durable forward fix):** `processDeedDocument` only writes
+  `properties.latest_deed_grantee` when `instrument_kind !== 'security_instrument'`
+  — a mortgagee (lender) can never again contaminate the owner field from the
+  deed-parser path.
+- **`propagateDeedToBd` routing:** on a security instrument it calls the new dep
+  `writeLoanFromDeed` and **returns before every owner/sale/entity unit** (no
+  latest_deed_grantee, no ownership_history, no true_owner entity/owns edge, no
+  suspected-sale/trace tasks). A conveyance keeps the exact R59 behavior
+  (byte-identical when the routing deps are absent).
+- **`writeLoanFromDeed(args, deps)`** (exported, `sidebar-pipeline.js`) — the
+  grantee (mortgagee) → the loan's text lender (`lender_name` dia / `originator`
+  gov); the grantor (mortgagor = owner) → the borrower: dia links
+  `loans.recorded_owner_id` (resolve/create via `resolveDeedRecordedOwner`; **gov
+  `loans` has NO `recorded_owner_id` column**, so the borrower name rides `notes`).
+  `data_source='deed_extraction'`, dedup on (property_id, lender, origination_date).
+  Lender guard = `lenderNamePasses` (junk + broker reject, but **banks/finance/
+  federal are legitimate lenders** — no federal reject, unlike the owner guard).
+  **`loan_type` is deliberately unset** — its CHECK vocabulary differs by domain and
+  has no generic "mortgage" value (dia: Refinance/Acquisition only; gov also has
+  `County_Recorded`); the instrument nature is in `data_source`+`notes`.
+
+### Unit 3 — grantor + signatory enrichment
+- **Signatory → contact** (both instruments): new `writeDeedPartyContact(args, deps)`
+  writes a `contacts` row (dia `contact_name`+`role`; gov `name`+`contact_type`;
+  both `role/contact_type='signatory'`, `property_id`, `company`=the party it signs
+  for, `data_source='deed_extraction'`), junk-guarded, deduped on (property_id,
+  name, role).
+- **Grantor:** conveyance grantor→seller + `prior_owner` (gov) is the existing R59
+  Unit 1a/1b; mortgage grantor→borrower is Unit 2's `loans.recorded_owner_id`
+  (dia). Both deps wired into `document-text.js` PROD_DEPS (absent ⇒ byte-identical).
+
+### Verified (2026-07-15)
+`test/deed-parser.test.mjs` +9 (Mortgage/DoT→security_instrument, Grant Deed→
+conveyance, signatory capture + entity-token reject; routing: mortgage→lender side
+with grantor as borrower, NO owner-side writes / no latest_deed_grantee, signatory
+contact, conveyance byte-identical, dep-absent no-op) + `test/owner-deed-propagation.test.mjs`
++13 (`writeLoanFromDeed` dia `lender_name`/gov `originator`/borrower/dedup/broker-
+reject/bank-passes; `writeDeedPartyContact` per-domain/junk-reject). **Live 0-residue
+schema gate (rolled back)** on dia + gov confirmed the `loans` + `contacts` write
+shapes — and CAUGHT the dia `loan_type` CHECK (Refinance/Acquisition only) + the
+gov `loans` missing-`recorded_owner_id` column, both fixed before commit. `node
+--check` clean (deed-parser, sidebar-pipeline, document-text); `ls api/*.js | wc
+-l`=12; full suite green.
+
+### Follow-ups (surfaced, NOT built)
+Normalizing the dormant `lenders` entity table (+ `loans.lender_id`) so lenders
+dedup across loans like recorded_owners do; a gov `loans.recorded_owner_id` (or a
+`borrowers` link) so the gov mortgagor is structured, not notes-only; and richer
+signatory→person-entity linkage. The current round is the doctrine's routing +
+enrichment on the established text-lender model.
