@@ -328,6 +328,44 @@ authority weights (reuse `lcc_signal_authority`); (5) guarantee the authoritativ
 never stalls waiting on a manual pick. Prompt:
 `CLAUDECODE_PROMPT_ORE_contact_selection_doctrine.md`.
 
+### 9g. Worked example / acceptance test — Boyd Watterson (Scott, 2026-07-15)
+
+The canonical case for the contact-selection build. **Boyd Watterson is a BUYER** (strong
+authoritative + personal-experience evidence) → prospect buy-side (via ongoing listing
+marketing), NOT a seller cadence. Two-fund structure reporting to one investment committee:
+- **GSA Fund** — head of acquisitions: **Eric Dowling**.
+- **State Fund** (government contractors + GSA deals < $10M purchase price) — head of
+  acquisitions: **Joe Capra**.
+- Each fund has acquisition team members (also prospect); **both funds report to the same
+  investment committee / higher-up decision-makers** that direct the funds.
+- Source: learned through conversation + direction by the Buyer (overt + subtextual /
+  deal-flow) — a Lane-2 (experience/direction) signal, now authoritative for Boyd.
+
+**Live-graph reality (why both engines matter):** Boyd is fragmented into ~26 LCC entities —
+real orgs (`Boyd Watterson` [SF 001Vs…PT1A6], `Boyd Watterson Global` [buyer-parent, SF
+0018W…X08rl], `Boyd Watterson Asset Management`, **`Boyd Watterson GSA Fund`** already
+exists, + `…SGF … c/o Boyd Watterson Asset Management` State-Fund SPEs) buried under junk
+person-rows (`Boyd Watterson by CBRE/Colliers/Newmark…`, CMBS codes, JVs) — across **three
+different Salesforce accounts**. The reconciliation engine correctly **held Boyd Watterson
+vs Boyd Watterson Global `distinct`** (score 70 but conflicting SF accounts = high-authority
+conflict → no auto-merge) and flagged `GSA Fund` as `review` (a child, not a dup). So:
+- **The two SF Boyd accounts are themselves a duplicate → reconcile in Salesforce first**;
+  that's the "contacts in SF help direct reconciliation across LCC/SF/Outlook" mechanism.
+- **The parent→fund→head-of-acq→team→shared-IC hierarchy is the NEW model** the
+  contact-selection build adds (funds are children, not merges). Boyd = the acceptance test:
+  the bench for a Boyd asset should carry Eric Dowling (GSA Fund acq) / Joe Capra (State
+  Fund acq) role-typed, buyer-mode, both under the parent + IC.
+- **The junk person-rows** (`Boyd Watterson by <broker>`) are reconciliation cleanup
+  (junk-name guards / merge).
+
+**Action for the two contacts:** add **Joe Capra** (State Fund) + **Eric Dowling** (GSA Fund),
+title *Head of Acquisitions*, as Salesforce **Contacts on the canonical Boyd account**
+(recommend the buyer-parent `Boyd Watterson Global` 0018W…X08rl; dedupe the 3 Boyd accounts).
+Once in SF, the SF sync pulls them into LCC and the reconciliation engine anchors on the SF
+Contact identity (weight 80) — the highest-authority link — directing consolidation. (Claude
+cannot write to Salesforce; this is Scott's / a gated-worker step. Details captured here so
+they are not lost.)
+
 ## 8. Progress log (living — update as we work this topic)
 
 - **2026-07-15** — Deed OCR worker fix shipped + verified (158→154 storage-ready
