@@ -7570,16 +7570,47 @@ dia + gov): the exact `lenders` + `loans` write shapes accepted on both DBs (dia
 lender_name/normalized_name; gov name; both loans with lender_id + recorded_owner_id),
 all rolled back — 0 residue confirmed. `node --check` clean; `ls api/*.js | wc -l`=12;
 full suite **1744 pass / 0 fail / 6 skipped**. gov migration applied live; JS ships
-on the Railway redeploy.
+on the Railway redeploy. **MERGED + redeploy live (2026-07-15)** — the writer path
+is active in production.
 
-### Follow-ups (surfaced, NOT built)
-The MESSY CoStar text-lender backfill (`loans.lender_name`/`originator` → the
-`lenders` table for the existing ~400 dia text-only rows) needs a name-cleaner:
-grounding found broker-mashed names ("Marcus & Millichap Capstar Bank"), allocation
-notes ("JLL CIT Group ($1.5m alloc'd)"), and suffix variants ("Wells Fargo" vs
-"Wells Fargo Bank Na") — a blind backfill would create duplicate/garbage lenders.
-Deferred as its own round. Also still deferred: richer signatory→person-entity
-linkage (the signatory lands as a `contacts` row, not a linked person entity).
+### After deploy (verify live — the deed OCR drain is the activation lever)
+The instrument-routing → lender/borrower writes only fire when a **security
+instrument (mortgage / deed of trust) deed is actually processed**, and the deed
+corpus is read by the R58 `document-text-tick` deed drain (`?domain=both&doctype=
+deed`), which is **gated on `OPENAI_API_KEY` / Document AI + CoStar-CDN reach** —
+i.e. nothing new lands until Scott runs (or crons) the deed drain. To confirm the
+routing live once a mortgage deed processes:
+```sql
+-- New deed-extracted loans carrying the normalized lender + structured borrower
+SELECT domain, count(*),
+       count(lender_id) FILTER (WHERE lender_id IS NOT NULL)          AS with_lender_id,
+       count(recorded_owner_id) FILTER (WHERE recorded_owner_id IS NOT NULL) AS with_borrower
+FROM   loans WHERE data_source='deed_extraction' GROUP BY domain;   -- run on dia + gov
+-- The lenders these minted (dedup working = one row per distinct lender)
+SELECT lender_name /*dia*/ , count(*) FROM lenders WHERE lender_name IS NOT NULL GROUP BY 1;
+```
+Spot-check that a mortgage/DoT grantee became a `lenders` row + `loans.lender_id`
+(never `properties.latest_deed_grantee`/recorded_owner), and the grantor is the
+loan's `recorded_owner_id` borrower.
+
+### Follow-ups — prioritized (surfaced, NOT built)
+1. **MESSY CoStar text-lender backfill (the highest-value next round).** ~400 dia
+   `loans.lender_name` (+ gov `originator`) text-only rows carry broker-mashed names
+   ("Marcus & Millichap Capstar Bank"), allocation notes ("JLL CIT Group ($1.5m
+   alloc'd)"), and suffix variants ("Wells Fargo" vs "Wells Fargo Bank Na"). A blind
+   backfill into `lenders` would create duplicate/garbage rows — it needs a
+   lender-name cleaner (strip a leading broker prefix, drop `($…alloc'd)`
+   parentheticals, normalize bank suffixes) BEFORE `resolveOrCreateLender`, then a
+   capped dry-run→apply pass. `resolveOrCreateLender` is the ready endpoint; the
+   cleaner is the missing piece.
+2. **Signatory → person-entity linkage.** The deed signatory currently lands as a
+   `contacts` row (`contact_type='signatory'`) on the domain DB, not a linked LCC
+   person entity in the BD graph — wiring `writeDeedPartyContact`'s signer through
+   `ensureEntityLink` + an edge to the owner would connect the signer to the spine.
+3. **`loan_type` mapping (minor).** Both deed-path loan writes leave `loan_type`
+   NULL (no generic "mortgage" in either domain's CHECK). A future map to the
+   closest value (gov `County_Recorded`) is cosmetic — the instrument nature is
+   already in `data_source='deed_extraction'` + notes.
 ## ORE — multi-signal, authority-weighted owner reconciliation engine (2026-07-16)
 
 The layer UNDERNEATH the Tier-A registry / Tier-B fetchers. Scott's core doctrine
