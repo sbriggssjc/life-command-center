@@ -26,7 +26,7 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout }
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
-import { reconcilePropertyOwnership, propagateDeedGranteeToOwner } from './_handlers/sidebar-pipeline.js';
+import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask } from './_shared/salesforce.js';
@@ -865,6 +865,20 @@ const FEDERATED_DECISION_TYPES = new Set([
   // domain write — this is a BD signal, never a fact.
   'loan_maturity',
 ]);
+
+// Decision types posted as (type + subject) from the PROPERTY-DETAIL signal
+// banner (operations.js getPropertySignals → detail.js _udReconcileOwner /
+// _udConfirmSuspectedSale / _udNotASale) that are NOT Decision-Center lanes.
+// The 2026-06-30 ownership-lane consolidation retired owner_source_conflict +
+// suspected_sale as DC LANES (folded into the gov-only resolve_ownership lane)
+// but the per-property detail surface — gov AND dia, a distinct surface — still
+// emits and verdicts them per-row (the intended human-in-the-loop reconcile).
+// Their verdict-dispatch branches below are intact; they just have to clear the
+// (type+subject) entry gate WITHOUT re-entering FEDERATED_DECISION_TYPES (which
+// would re-surface the retired lanes AND break the DC partition test). So they
+// live in their own allowlist. subject-key resolution (federatedSubjectRef) and
+// the dispatch branches already handle both types.
+const DETAIL_SURFACE_DECISION_TYPES = new Set(['owner_source_conflict', 'suspected_sale']);
 
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
 function federatedSubjectRef(type, s) {
@@ -1859,7 +1873,10 @@ async function handleDecisionVerdict(req, res) {
   } else {
     const dtype = String(body.type || body.decision_type || '').trim();
     const subject = (body.subject && typeof body.subject === 'object') ? body.subject : null;
-    if (!FEDERATED_DECISION_TYPES.has(dtype) || !subject) {
+    // A (type + subject) request is minted-at-verdict. It is allowed for a DC
+    // federated lane OR a detail-surface signal type (owner_source_conflict /
+    // suspected_sale — the per-property reconcile banner, gov+dia).
+    if ((!FEDERATED_DECISION_TYPES.has(dtype) && !DETAIL_SURFACE_DECISION_TYPES.has(dtype)) || !subject) {
       return res.status(400).json({ error: 'decision_id, or (federated type + subject), required' });
     }
     const subjectRef = federatedSubjectRef(dtype, Object.assign({}, subject, subject.context || {}));
@@ -2466,11 +2483,19 @@ async function handleDecisionVerdict(req, res) {
             await recordEffectFailure({ ownership: false, propagation: prop });
             return res.status(502).json({ error: 'deed_propagation_not_applied', detail: prop });
           }
+          // B1: close the transfer loop (attribute the matching sale + append the
+          // ownership_history row) in the same verdict. Best-effort.
+          const recon = await reconcileSaleAndOwnershipForNewOwner({
+            domain: 'government', propertyId: c.property_id, recordedOwnerId: prop.recorded_owner_id,
+            ownerName: c.latest_deed_grantee,
+          });
           await record('update_owner', 'decided',
             { recorded_owner_id: prop.recorded_owner_id, owner: c.latest_deed_grantee, via: 'deed_grantee' },
-            { ownership: 'applied', via: 'deed_grantee', recorded_owner_id: prop.recorded_owner_id, decision: prop.decision });
+            { ownership: 'applied', via: 'deed_grantee', recorded_owner_id: prop.recorded_owner_id,
+              decision: prop.decision, sale_reconcile: recon });
           await refreshQueueAfterDecision();
-          return res.status(200).json({ ok: true, verdict: 'update_owner', via: 'deed_grantee', recorded_owner_id: prop.recorded_owner_id });
+          return res.status(200).json({ ok: true, verdict: 'update_owner', via: 'deed_grantee',
+            recorded_owner_id: prop.recorded_owner_id, sale_reconcile: recon });
         }
         // Lessor / discrepancy proposal (no deed grantee) → the gated true-owner
         // write-back. Record-only until DECISION_GOV_WRITEBACK=on (never fabricate).
@@ -2567,10 +2592,19 @@ async function handleDecisionVerdict(req, res) {
           await recordEffectFailure({ owner_source: false, propagation: prop });
           return res.status(502).json({ error: 'deed_propagation_not_applied', detail: prop });
         }
+        // B1: one click closes the whole loop — attribute the matching sale to the
+        // new owner + append the ownership_history transfer, so the property doesn't
+        // leave the separate "Back-link sale" orphan banner behind. Best-effort.
+        const recon = await reconcileSaleAndOwnershipForNewOwner({
+          domain: dom, propertyId: c.property_id, recordedOwnerId: prop.recorded_owner_id,
+          ownerName: c.latest_deed_grantee,
+        });
         await record(verdict, 'decided',
           { recorded_owner_id: prop.recorded_owner_id, grantee: c.latest_deed_grantee },
-          { owner_source: 'applied', recorded_owner_id: prop.recorded_owner_id, decision: prop.decision });
-        return res.status(200).json({ ok: true, verdict, recorded_owner_id: prop.recorded_owner_id });
+          { owner_source: 'applied', recorded_owner_id: prop.recorded_owner_id, decision: prop.decision,
+            sale_reconcile: recon });
+        return res.status(200).json({ ok: true, verdict, recorded_owner_id: prop.recorded_owner_id,
+          sale_reconcile: recon });
       }
       if (verdict === 'research') {
         const rt = await createResearchTask({ research_type: 'owner_source_conflict',
@@ -4625,11 +4659,23 @@ async function handleOwnerDeedAutofix(req, res) {
         domain, propertyId: row.property_id, granteeName: row.latest_deed_grantee,
         entity: {},
       });
-      if (prop.applied) out.applied++;
+      let recon = null;
+      if (prop.applied) {
+        out.applied++;
+        // B2: a swept property is fully reconciled (owner + sale attribution +
+        // ownership_history), not just its recorded_owner. Best-effort.
+        recon = await reconcileSaleAndOwnershipForNewOwner({
+          domain, propertyId: row.property_id, recordedOwnerId: prop.recorded_owner_id,
+          ownerName: row.latest_deed_grantee,
+        });
+        if (recon.sale_attributed) out.sales_attributed = (out.sales_attributed || 0) + 1;
+        if (recon.ownership_history_appended) out.ownership_history_appended = (out.ownership_history_appended || 0) + 1;
+      }
       else if (prop.skipped === 'blocked_by_priority') out.blocked++;
       else out.skipped++;
       out.rows.push({ domain: row.domain, property_id: row.property_id,
-        applied: prop.applied, skipped: prop.skipped, decision: prop.decision });
+        applied: prop.applied, skipped: prop.skipped, decision: prop.decision,
+        sale_reconcile: recon });
     } catch (e) {
       out.errored++;
       out.rows.push({ domain: row.domain, property_id: row.property_id, error: e?.message || String(e) });

@@ -2864,10 +2864,20 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
     try {
       const latestDeed = latestDeedGranteeFromMetadata(metadata);
       if (latestDeed?.grantee) {
-        results.records.deed_owner_propagation = await propagateDeedGranteeToOwner({
+        const dop = await propagateDeedGranteeToOwner({
           domain, propertyId, granteeName: latestDeed.grantee,
           entity, workspaceId, sourceRunId: null, confidence: 0.9,
         });
+        results.records.deed_owner_propagation = dop;
+        // When the deed grantee actually became the recorded_owner, close the
+        // transfer loop in the same capture (attribute the matching sale + append
+        // the ownership_history row) so a fresh capture self-heals and never leaves
+        // the orphan-sale / owner-conflict banners for the operator. Best-effort.
+        if (dop && dop.applied && dop.recorded_owner_id) {
+          results.records.deed_owner_reconcile = await reconcileSaleAndOwnershipForNewOwner({
+            domain, propertyId, recordedOwnerId: dop.recorded_owner_id, ownerName: latestDeed.grantee,
+          });
+        }
       }
     } catch (err) {
       console.warn('[R51:propagateDeedGranteeToOwner] non-fatal:', err?.message || err);
@@ -8617,6 +8627,95 @@ export async function propagateDeedGranteeToOwner(args, deps) {
     out.skipped = 'error'; out.error = err?.message || String(err);
     return out;
   }
+}
+
+// After a deed grantee becomes the recorded_owner (R51 propagateDeedGranteeToOwner),
+// close the transfer loop on the DOMAIN side so the property doesn't leave the two
+// orphan banners behind ("Back-link sale" + "Reconcile owner"):
+//   (a) attribute the property's most-recent sale WHOSE BUYER IS this owner to the
+//       new recorded_owner_id. Keying on the sale's own buyer (== the grantee) is
+//       what makes this correct — the legacy orphan-sale backlink attributed the
+//       sale to whatever the *current* recorded_owner was, which mis-attributes a
+//       just-transferred property (e.g. the 2026 TNRE-13 sale → the stale Rainier
+//       owner). And
+//   (b) append the ownership_history transfer for that sale (dedup on
+//       property+owner+date; per-domain columns; mirrors upsertDomainOwners / R59).
+// Never fabricates a sale — only acts on a captured sale whose buyer normalizes to
+// the owner. Append-only / fill-blanks; best-effort, never throws. Reversible:
+// data_source='owner_deed_reconcile' (gov) / ownership_source='owner_deed_reconcile'
+// (dia) tag the OH row; the sale carries the recorded_owner_id it set. Returns
+// { sale_attributed, sale_id, ownership_history_appended, skipped }.
+export async function reconcileSaleAndOwnershipForNewOwner(args, deps) {
+  deps = deps || buildDeedPropagationDeps();
+  const { domain, propertyId, recordedOwnerId, ownerName } = args || {};
+  const out = { domain, property_id: propertyId, sale_attributed: false, sale_id: null,
+                ownership_history_appended: false, skipped: null };
+  try {
+    if (!domain || !propertyId || !recordedOwnerId || !ownerName) { out.skipped = 'missing_input'; return out; }
+    const wantNorm = ownerNameNorm(ownerName);
+    if (!wantNorm) { out.skipped = 'owner_name_empty'; return out; }
+
+    // Most-recent captured sales for the property (buyer/seller/price/attribution).
+    const salesRes = await deps.domainQuery(domain, 'GET',
+      `sales_transactions?property_id=eq.${propertyId}` +
+      `&order=sale_date.desc.nullslast,sale_id.desc` +
+      `&select=sale_id,sale_date,sold_price,buyer,seller,recorded_owner_id&limit=25`);
+    if (!salesRes.ok || !Array.isArray(salesRes.data) || !salesRes.data.length) {
+      out.skipped = 'no_sales'; return out;
+    }
+    // The acquisition sale = the most-recent sale whose BUYER is this owner.
+    const sale = salesRes.data.find((s) => s.buyer && ownerNameNorm(s.buyer) === wantNorm);
+    if (!sale) { out.skipped = 'no_matching_buyer_sale'; return out; }
+    out.sale_id = sale.sale_id;
+    const saleDateStr = sale.sale_date ? String(sale.sale_date).split('T')[0] : null;
+
+    // (a) Attribute the sale to the new owner (only when null or different).
+    if (String(sale.recorded_owner_id || '') !== String(recordedOwnerId)) {
+      const buyerPatch = { recorded_owner_id: recordedOwnerId, recorded_owner_name: ownerName };
+      const pr = await deps.domainPatch(domain,
+        `sales_transactions?sale_id=eq.${encodeURIComponent(sale.sale_id)}`,
+        buyerPatch, 'reconcileSaleAndOwnershipForNewOwner:attributeSale');
+      if (!(pr && pr.ok === false)) out.sale_attributed = true;
+    }
+
+    // (b) Append the ownership_history transfer. Dedup is per-domain: dia keys a
+    // transfer by sale_id (a UNIQUE constraint — ownership_history_sale_id_unique)
+    // so if the sale is already on an OH row the transfer is recorded and a second
+    // insert would 23505; gov's shape carries no sale_id, so it keys on
+    // (property, owner, transfer_date). The insert shape mirrors the proven
+    // upsertDomainOwners OH writer.
+    if (saleDateStr) {
+      if (domain === 'dialysis') {
+        const byId = await deps.domainQuery(domain, 'GET',
+          `ownership_history?sale_id=eq.${encodeURIComponent(sale.sale_id)}&select=ownership_id&limit=1`);
+        if (!(byId.ok && Array.isArray(byId.data) && byId.data.length)) {
+          const ohData = stripNulls({
+            property_id: propertyId, recorded_owner_id: recordedOwnerId,
+            ownership_start: saleDateStr, sold_price: parseCurrency(sale.sold_price),
+            sale_id: sale.sale_id, ownership_source: 'owner_deed_reconcile',
+          });
+          const ins = await deps.domainQuery(domain, 'POST', 'ownership_history', ohData);
+          if (ins.ok) out.ownership_history_appended = true;
+        }
+      } else {
+        const dedup = await deps.domainQuery(domain, 'GET',
+          `ownership_history?property_id=eq.${propertyId}` +
+          `&recorded_owner_id=eq.${encodeURIComponent(recordedOwnerId)}` +
+          `&transfer_date=eq.${saleDateStr}&select=ownership_id&limit=1`);
+        if (!(dedup.ok && Array.isArray(dedup.data) && dedup.data.length)) {
+          const ohData = stripNulls({
+            property_id: propertyId, recorded_owner_id: recordedOwnerId,
+            new_owner: ownerName, prior_owner: sale.seller || null,
+            transfer_date: saleDateStr, transfer_price: parseCurrency(sale.sold_price),
+            data_source: 'owner_deed_reconcile',
+          });
+          const ins = await deps.domainQuery(domain, 'POST', 'ownership_history', ohData);
+          if (ins.ok) out.ownership_history_appended = true;
+        }
+      }
+    }
+    return out;
+  } catch (err) { out.skipped = 'error'; out.error = err?.message || String(err); return out; }
 }
 
 // ORE Phase 1 Unit C — write the recorded deed's GRANTEE mailing address onto the

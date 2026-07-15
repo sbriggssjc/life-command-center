@@ -11,6 +11,7 @@ import {
   latestDeedGranteeFromMetadata,
   propagateDeedGranteeToOwner,
   writeOwnerMailingAddress,
+  reconcileSaleAndOwnershipForNewOwner,
 } from '../api/_handlers/sidebar-pipeline.js';
 
 // ── A fake domain DB keyed by a tiny in-memory store ──
@@ -199,6 +200,94 @@ describe('writeOwnerMailingAddress (ORE Unit C)', () => {
     const { deps, calls } = makeOwnerDeps({ mailing_address: null });
     assert.equal((await writeOwnerMailingAddress({ domain: 'government', ownerId: 'ro-1', address: '' }, deps)).skipped, 'missing_input');
     assert.equal((await writeOwnerMailingAddress({ domain: 'government', ownerId: 'ro-1', address: 'abc' }, deps)).skipped, 'address_too_short');
+    assert.equal(calls.patches.length, 0);
+  });
+});
+
+// B1/B2 — after the deed grantee becomes recorded_owner, close the transfer loop:
+// attribute the sale WHOSE BUYER IS this owner + append the ownership_history row.
+function makeReconcileDeps({ sales = [], existingOh = false } = {}) {
+  const calls = { patches: [], ohInserts: [] };
+  const deps = {
+    async domainQuery(domain, method, path) {
+      if (method === 'GET' && path.startsWith('sales_transactions?')) return { ok: true, data: sales };
+      if (method === 'GET' && path.startsWith('ownership_history?')) {
+        return { ok: true, data: existingOh ? [{ ownership_id: 'oh-EXIST' }] : [] };
+      }
+      if (method === 'POST' && path === 'ownership_history') {
+        calls.ohInserts.push(arguments[3]); return { ok: true, data: [{ ownership_id: 'oh-NEW' }] };
+      }
+      return { ok: true, data: [] };
+    },
+    async domainPatch(domain, path, data, label) { calls.patches.push({ path, data, label }); return { ok: true }; },
+  };
+  return { deps, calls };
+}
+
+describe('reconcileSaleAndOwnershipForNewOwner (B1/B2 close-the-loop)', () => {
+  it('gov: attributes the buyer-matched orphan sale + appends the OH transfer', async () => {
+    const { deps, calls } = makeReconcileDeps({ sales: [
+      { sale_id: 'S-2026', sale_date: '2026-06-30', sold_price: '7500000.00',
+        buyer: 'TNRE 13 LLC', seller: 'Rainier Rockford Llc', recorded_owner_id: null },
+      { sale_id: 'S-2015', sale_date: '2015-12-01', sold_price: '11032000.00',
+        buyer: 'Rainier Capital Management', seller: 'W.D. Schorsch LLC', recorded_owner_id: 'own-OLD' },
+    ] });
+    const out = await reconcileSaleAndOwnershipForNewOwner(
+      { domain: 'government', propertyId: 16500, recordedOwnerId: 'own-TNRE', ownerName: 'TNRE 13 LLC' }, deps);
+    assert.equal(out.sale_attributed, true);
+    assert.equal(out.sale_id, 'S-2026', 'picks the most-recent sale whose buyer IS the owner, not the 2015 one');
+    assert.equal(out.ownership_history_appended, true);
+    // The sale PATCH sets the NEW owner id.
+    const salePatch = calls.patches.find((p) => p.path.includes('sales_transactions'));
+    assert.equal(salePatch.data.recorded_owner_id, 'own-TNRE');
+    // The OH insert is a gov-shaped deed transfer, tagged for reversibility.
+    assert.equal(calls.ohInserts[0].transfer_date, '2026-06-30');
+    assert.equal(calls.ohInserts[0].new_owner, 'TNRE 13 LLC');
+    assert.equal(calls.ohInserts[0].data_source, 'owner_deed_reconcile');
+  });
+
+  it('never attributes a sale whose buyer is NOT this owner', async () => {
+    const { deps, calls } = makeReconcileDeps({ sales: [
+      { sale_id: 'S-1', sale_date: '2024-01-01', sold_price: '5000000', buyer: 'Someone Else LLC', recorded_owner_id: null },
+    ] });
+    const out = await reconcileSaleAndOwnershipForNewOwner(
+      { domain: 'government', propertyId: 1, recordedOwnerId: 'own-X', ownerName: 'TNRE 13 LLC' }, deps);
+    assert.equal(out.skipped, 'no_matching_buyer_sale');
+    assert.equal(out.sale_attributed, false);
+    assert.equal(calls.patches.length, 0);
+    assert.equal(calls.ohInserts.length, 0);
+  });
+
+  it('idempotent: already-attributed sale + existing OH → no writes', async () => {
+    const { deps, calls } = makeReconcileDeps({ existingOh: true, sales: [
+      { sale_id: 'S-2026', sale_date: '2026-06-30', sold_price: '7500000', buyer: 'TNRE 13 LLC', recorded_owner_id: 'own-TNRE' },
+    ] });
+    const out = await reconcileSaleAndOwnershipForNewOwner(
+      { domain: 'government', propertyId: 16500, recordedOwnerId: 'own-TNRE', ownerName: 'TNRE 13 LLC' }, deps);
+    assert.equal(out.sale_attributed, false, 'sale already carries the owner');
+    assert.equal(out.ownership_history_appended, false, 'OH transfer already exists');
+    assert.equal(calls.ohInserts.length, 0);
+  });
+
+  it('dia: OH insert uses ownership_start/sold_price/sale_id + attributes with name', async () => {
+    const { deps, calls } = makeReconcileDeps({ sales: [
+      { sale_id: 42, sale_date: '2025-03-10', sold_price: '2270000', buyer: 'AEI Capital Corp', recorded_owner_id: null },
+    ] });
+    const out = await reconcileSaleAndOwnershipForNewOwner(
+      { domain: 'dialysis', propertyId: 26955, recordedOwnerId: 'own-AEI', ownerName: 'AEI Capital Corp' }, deps);
+    assert.equal(out.sale_attributed, true);
+    assert.equal(out.ownership_history_appended, true);
+    assert.equal(calls.ohInserts[0].ownership_start, '2025-03-10');
+    assert.equal(calls.ohInserts[0].sale_id, 42);
+    assert.equal(calls.ohInserts[0].ownership_source, 'owner_deed_reconcile');
+    const salePatch = calls.patches.find((p) => p.path.includes('sales_transactions'));
+    assert.equal(salePatch.data.recorded_owner_name, 'AEI Capital Corp');
+  });
+
+  it('missing input / no sales → skipped, no writes', async () => {
+    const { deps, calls } = makeReconcileDeps({ sales: [] });
+    assert.equal((await reconcileSaleAndOwnershipForNewOwner({ domain: 'government', propertyId: 1, ownerName: 'X' }, deps)).skipped, 'missing_input');
+    assert.equal((await reconcileSaleAndOwnershipForNewOwner({ domain: 'government', propertyId: 1, recordedOwnerId: 'o', ownerName: 'X' }, deps)).skipped, 'no_sales');
     assert.equal(calls.patches.length, 0);
   });
 });
