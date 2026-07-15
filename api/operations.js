@@ -218,6 +218,17 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerReconcileTick(req, res);
   }
 
+  // ORE — multi-signal, authority-weighted owner reconciliation ENGINE worker
+  // (via vercel.json _route=owner-reconcile-engine-tick). GET=dry-run (run the
+  // weighted resolver over the value-ranked owner universe / the queue, tally
+  // verdicts, sample the mergeable + review sets, surface true_owner noise; no
+  // writes) / POST=drain (consolidate the confident same-party merges, record the
+  // evidence trace). Authenticates internally.
+  if (req.query._route === 'owner-reconcile-engine-tick') {
+    const { handleOwnerReconcileEngineTick } = await import('./_handlers/owner-reconcile-engine.js');
+    return handleOwnerReconcileEngineTick(req, res);
+  }
+
   // ORE Tier A — institution-contact attach + fan-out worker (via vercel.json
   // _route=institution-contact-tick). GET=dry-run (the registry GAPS: which
   // sponsor to fill first + how many owners would attach now) / POST=drain
