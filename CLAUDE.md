@@ -7510,12 +7510,76 @@ gov `loans` missing-`recorded_owner_id` column, both fixed before commit. `node
 --check` clean (deed-parser, sidebar-pipeline, document-text); `ls api/*.js | wc
 -l`=12; full suite green.
 
+### Follow-ups
+Lender normalization (+ `loans.lender_id`) and the structured gov borrower
+(`gov.loans.recorded_owner_id`) were the surfaced follow-ups — both BUILT next
+(see "ORE follow-up — lender normalization…" below). Still NOT built: richer
+signatory→person-entity linkage (the signatory currently lands as a `contacts`
+row, not a linked person entity); and a proper backfill of the messy CoStar
+text-lender column into the `lenders` table (needs a broker-prefix/allocation-note
+name-cleaner — see the follow-up section).
+
+## ORE follow-up — lender normalization + structured gov borrower (2026-07-15)
+
+Builds the two surfaced follow-ups from the deed instrument-type routing round:
+lenders now dedup ACROSS loans like recorded_owners, and the gov mortgagor is a
+real graph link, not notes-only. Deed-path only (the clean lender), reversible,
+≤12 api/*.js, one additive gov migration. JS ships on the Railway redeploy.
+
+### Grounding (live 2026-07-15) — the two `lenders` tables DIFFER
+Every writer stores the lender as TEXT on `loans` (`lender_name` dia / `originator`
+gov); the `lenders` entity table was dormant. Both `loans` already carry a
+`lender_id` uuid, so normalization = populate `lenders` + stamp `lender_id`.
+- **dia `lenders`:** name col `lender_name`, dedup key `normalized_name`;
+  `lender_type` CHECK (Bank/Credit Union/Life Insurance Company/Private Credit/
+  CMBS/Hard Money). `loans.recorded_owner_id` already present.
+- **gov `lenders`:** name col `name`, NO `normalized_name` → dedup `lower(name)`;
+  `lender_type` CHECK (Bank/CMBS/Life Company/…). `loans.recorded_owner_id` was
+  ABSENT → this round's migration adds it.
+- **NEITHER `lenders` table has a UNIQUE on the name** → dedup is a GET-then-insert
+  (a POST never 409s). `lender_type` is left UNSET (a per-domain CHECK vocabulary
+  with no value inferable from a deed).
+
+### Unit 1 — `resolveOrCreateLender(domain, name, deps)` (`sidebar-pipeline.js`)
+Normalizes the CLEAN deed-path lender into `lenders` and returns `lender_id` (uuid)
+or null. Dedup: dia by `normalized_name` (exact-name `lender_name` fallback for a
+row whose stored norm differs — mirrors the recorded_owner resolver), gov by
+case-insensitive `name` (LIKE wildcards escaped). Guarded via `lenderNamePasses`
+(banks/finance/federal ARE legit lenders — no federal reject). Wired into
+`writeLoanFromDeed`, which now stamps `loans.lender_id` on BOTH domains. Best-effort:
+a null `lender_id` still writes the loan with the text lender, so a loan is never
+lost. Idempotent (a second security-instrument capture reuses the existing lender).
+
+### Unit 2 — structured gov borrower (`gov.loans.recorded_owner_id`)
+Migration `government-lease/sql/20260716_gov_loans_recorded_owner_id.sql` (applied
+live): additive `gov.loans.recorded_owner_id` uuid FK → `recorded_owners`
+(`ON DELETE SET NULL`) + partial index, mirroring dia. `writeLoanFromDeed` now
+resolves/creates the grantor (mortgagor = borrower) via `resolveDeedRecordedOwner`
+on BOTH domains and links `recorded_owner_id` — the gov borrower was previously
+notes-only. Enables owner → loan / debt-side traversal (the same value the
+recorded_owner FK gives the ownership side). No backfill (forward deed-extraction
+populates it; existing rows stay NULL). Apply schema BEFORE the writer deploy
+(PostgREST 400s on an absent column) — standard deploy ordering.
+
+### Verified (2026-07-15)
+`test/owner-deed-propagation.test.mjs` 24 → 33 (dia loan: `lender_id` normalized +
+`lenders` row minted with normalized_name; gov loan: lender→`originator` + `lender_id`
++ borrower `recorded_owner_id` now linked; lender dedup: existing lender reused, no
+new `lenders` row). **Live 0-residue schema gate** (self-rolling-back DO blocks on
+dia + gov): the exact `lenders` + `loans` write shapes accepted on both DBs (dia
+lender_name/normalized_name; gov name; both loans with lender_id + recorded_owner_id),
+all rolled back — 0 residue confirmed. `node --check` clean; `ls api/*.js | wc -l`=12;
+full suite **1744 pass / 0 fail / 6 skipped**. gov migration applied live; JS ships
+on the Railway redeploy.
+
 ### Follow-ups (surfaced, NOT built)
-Normalizing the dormant `lenders` entity table (+ `loans.lender_id`) so lenders
-dedup across loans like recorded_owners do; a gov `loans.recorded_owner_id` (or a
-`borrowers` link) so the gov mortgagor is structured, not notes-only; and richer
-signatory→person-entity linkage. The current round is the doctrine's routing +
-enrichment on the established text-lender model.
+The MESSY CoStar text-lender backfill (`loans.lender_name`/`originator` → the
+`lenders` table for the existing ~400 dia text-only rows) needs a name-cleaner:
+grounding found broker-mashed names ("Marcus & Millichap Capstar Bank"), allocation
+notes ("JLL CIT Group ($1.5m alloc'd)"), and suffix variants ("Wells Fargo" vs
+"Wells Fargo Bank Na") — a blind backfill would create duplicate/garbage lenders.
+Deferred as its own round. Also still deferred: richer signatory→person-entity
+linkage (the signatory lands as a `contacts` row, not a linked person entity).
 ## ORE — multi-signal, authority-weighted owner reconciliation engine (2026-07-16)
 
 The layer UNDERNEATH the Tier-A registry / Tier-B fetchers. Scott's core doctrine
