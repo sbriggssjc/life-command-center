@@ -7017,3 +7017,80 @@ the two durability levers are Scott's to pull:
 ### Reversibility
 Drop `sjc_deal_ingest` (+ its trigger/fns) and re-create the prior listing-only
 `v_sjc_deal_book` body from `20260604140000_dia_sjc_deal_book_dedupe.sql`.
+
+## ORE Phase B B1 — assemble + reconcile the authoritative owner record (2026-07-15)
+
+Phase A lands the authoritative NAME + address layer (deeds → grantor/grantee +
+notice addresses; SOS-direct → managing member/agent + principal/mailing; GSA
+lessor; CoStar owner phone/email) into the domain DBs. Phase B is the RECONCILE
+step Scott does manually: for each owner, COMPARE the authoritative record
+against what the system already holds (Salesforce presence, a resolved control
+contact) and resolve each owner to ONE traceable source-of-truth state. B1 is the
+assembly + comparison; B2 (cross-match/consolidate + add non-SF owners) and B3
+(bad-contact feedback) follow. Reuse-not-rebuild: CONTACT-SELECTION pivot, the R6
+owner-facts / Slice-1 signals mirror, the Phase-5 worklist value-gate + guards,
+the SF-link bridge, and the existing acquisition workers. LCC-Opps only; no
+dia/gov writes; additive · reversible · ≤12 api/*.js (worker is a sub-route).
+
+### Grounding (live 2026-07-15) — B1 is "useful now, better daily"
+Authoritative-source coverage is still thin (gov recorded_owners: 1,423 manager /
+132 reg_agent / 5 mailing / 596 contact_info; dia: 526 addr / 31 manager) — the
+deed cron is draining and the SOS egress is pending, so the address dimension
+grows as the corpus accumulates. The reconcile universe is the **valued owner**
+set (rollup rent > 0, non-junk/operator/buyer): **3,521 owners**, 344 ≥$1M.
+Distribution over the SF-vs-contact comparison: **unresolvable 3,168** (the cold
+tail Phase A rescues over time) · **sf_no_contact 262** (SF Account, no human →
+contact-acquisition SF pull) · **resolvable_contact 40** (pivot resolved a name,
+not yet attached → owner-contact-enrich) · **contact_ready_no_sf 26** (we hold a
+contact, SF absent → the B2 net-new-to-SF push) · **needs_enrichment 23**
+(SOS/address/deed path) · **confirmed_connected 2**. This comparison
+(sf_no_contact vs contact_ready_no_sf) was surfaced NOWHERE before B1.
+
+### What shipped
+- **Migration `20260716120000_lcc_ore_phaseB_b1_owner_reconcile.sql`** (applied
+  live): `v_lcc_owner_reconcile_candidates` (SECURITY INVOKER — one row per valued
+  owner with the compare-signals: SF Account id/count, human-contact presence,
+  pivot control contact, entity CoStar contact fields, `has_reg_address` domain
+  hint; buyer SPE/parents excluded — P-BUYER is their surface) + `lcc_owner_reconcile`
+  (the traceable per-owner OUTPUT: `reconcile_state` + control contact + sf_account_id
+  + a `sources` ids-only jsonb trace + `routed_to`). Both reversible (DROP → zero
+  trace). No cron (the artifact-offload lesson — scheduled only after the first
+  gated drain).
+- **Worker `api/_handlers/owner-reconcile.js`** → `?_route=owner-reconcile-tick`
+  (sub-route of operations.js; vercel.json + server.js wired). GET=dry-run
+  (assemble + classify the distribution + a value-ranked sample, no writes) /
+  POST=drain (upsert the reconcile output, wall-clock-budgeted). Pure
+  `reconcileOwnerRow(row)` classifier (unit-tested) does the SF-presence-vs-contact
+  comparison + builds the `sources` trace; the worker is a **router + recorder**,
+  not a new pipeline — it ROUTES each owner to the EXISTING engine
+  (`RECONCILE_ROUTES`): confirmed_connected → none · resolvable_contact /
+  needs_enrichment → owner-contact-enrich · sf_no_contact → contact-acquisition ·
+  contact_ready_no_sf → the B2 SF push. Conflicts are NOT re-litigated (they ride
+  field_provenance + the DC resolve_ownership / owner_source_conflict lanes).
+- **SF-present outranks an unattached pivot name** (an owner with an SF Account is
+  an SF-pull case first — the Account is the authoritative contact home).
+
+### Verified (2026-07-15)
+`test/owner-reconcile.test.mjs` (11: every reconcile state + the routing map + the
+sources trace + the SF-outranks-pivot rule + whitespace-name guard). Full DDL
+validated live in a rolled-back tx (view 3,521 candidates, table + upsert +
+merge-duplicates, 0 residue), then applied live; the deployed view surfaces the
+real high-value reconcile targets (Blackstone/Durst/Urban Renaissance/Truist =
+contact-held-but-absent-from-SF; USPS/810 Seventh/Riverside = SF-but-no-human).
+`node --check` clean (owner-reconcile, operations, server); `ls api/*.js | wc -l`=12;
+vercel.json valid. JS ships on the Railway redeploy.
+
+### After deploy (verify live) + B2/B3 (next, gated)
+`GET /api/owner-reconcile-tick?min_value=1000000` sizes the ≥$1M distribution;
+`POST` records the reconcile output. Then the `routed_to` states feed the existing
+workers (owner-contact-enrich attaches the resolvable_contact set; contact-acquisition
+pulls the sf_no_contact SF contacts; the 26 contact_ready_no_sf owners queue for
+the **B2** SF push — reuse the R52 `contact-writeback-tick` pattern). **B2** =
+cross-match a party's other LLCs by naming-core + shared notice address (the
+cross-reference resolver's `same_address` strategy, starved until Phase A
+populates addresses), consolidate via `lcc_merge_entity`, and push the net-new
+owners to Salesforce toward ~100%. **B3** = a bad-contact/bounceback handler
+(SF-activity `bounce`/`bad` → demote + re-resolve via `lcc_apply_contact_feedback`,
+mechanism already built, `two_way` wired). Schedule the reconcile cron only after
+the first gated drain. As Phase A accumulates, `unresolvable` shrinks and the
+routable head grows — B1 gets better daily with no code change.
