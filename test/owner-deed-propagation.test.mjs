@@ -374,13 +374,22 @@ describe('reconcileSaleAndOwnershipForNewOwner (B1/B2 close-the-loop)', () => {
 });
 
 // ── ORE — route a security instrument's grantee to the LENDER side ──────────────
-function makeLoanDeps({ existingLoan = false, borrowerId = 'ro-borrow' } = {}) {
+function makeLoanDeps({ existingLoan = false, borrowerId = 'ro-borrow', existingLenderId = null } = {}) {
   const calls = { gets: [], posts: [] };
   const deps = {
     async domainQuery(domain, method, path, body) {
       if (method === 'GET' && path.startsWith('loans?')) {
         calls.gets.push(path);
         return { ok: true, data: existingLoan ? [{ loan_id: 'L-1' }] : [] };
+      }
+      // resolveOrCreateLender path: dedup GET on `lenders`, then a create POST.
+      if (method === 'GET' && path.startsWith('lenders?')) {
+        calls.gets.push(path);
+        return { ok: true, data: existingLenderId ? [{ lender_id: existingLenderId }] : [] };
+      }
+      if (method === 'POST' && path === 'lenders') {
+        calls.posts.push({ path, body });
+        return { ok: true, data: [{ lender_id: 'lender-NEW' }] };
       }
       // resolveDeedRecordedOwner path: normalized/name lookups return nothing then create
       if (method === 'GET' && path.startsWith('recorded_owners?')) return { ok: true, data: [] };
@@ -395,28 +404,51 @@ function makeLoanDeps({ existingLoan = false, borrowerId = 'ro-borrow' } = {}) {
 }
 
 describe('writeLoanFromDeed (mortgage/DoT grantee → lender side)', () => {
-  it('dia: writes a loan with lender_name=grantee + borrower recorded_owner_id', async () => {
+  it('dia: writes a loan with lender_name=grantee + normalized lender_id + borrower recorded_owner_id', async () => {
     const { deps, calls } = makeLoanDeps();
     const out = await writeLoanFromDeed({ domain: 'dialysis', propertyId: 55,
       lenderName: 'Sumitomo Bank Leasing And Finance Inc', borrowerName: 'Borrower Owner LLC',
       loanAmount: 5000000, originationDate: '2024-06-01', documentId: 900 }, deps);
     assert.equal(out.ok, true);
     assert.equal(out.loan_written, true);
+    assert.equal(out.lender_id, 'lender-NEW');                 // lender normalized into `lenders`
     const loan = calls.posts.find(p => p.path === 'loans');
     assert.ok(loan, 'a loans row was inserted');
     assert.equal(loan.body.lender_name, 'Sumitomo Bank Leasing And Finance Inc');
+    assert.equal(loan.body.lender_id, 'lender-NEW');           // stamped on the loan row
     assert.equal(loan.body.recorded_owner_id, 'ro-borrow');   // grantor = borrower
     assert.equal(loan.body.data_source, 'deed_extraction');
     assert.equal(loan.body.loan_amount, 5000000);
+    // A new lender was minted into the `lenders` entity table (name + normalized_name).
+    const lenderPost = calls.posts.find(p => p.path === 'lenders');
+    assert.ok(lenderPost, 'a lenders row was inserted');
+    assert.equal(lenderPost.body.lender_name, 'Sumitomo Bank Leasing And Finance Inc');
+    assert.ok(lenderPost.body.normalized_name, 'dia lenders carry a normalized_name');
   });
 
-  it('gov: the lender lands in `originator` (no lender_name column)', async () => {
+  it('gov: lender → `originator` + lender_id, and the borrower is now structured (recorded_owner_id)', async () => {
     const { deps, calls } = makeLoanDeps();
     await writeLoanFromDeed({ domain: 'government', propertyId: 7, lenderName: 'Big Bank NA',
       borrowerName: 'Owner LP', loanAmount: 1000000, originationDate: '2024-01-01', documentId: 1 }, deps);
     const loan = calls.posts.find(p => p.path === 'loans');
     assert.equal(loan.body.originator, 'Big Bank NA');
     assert.equal(loan.body.lender_name, undefined);
+    assert.equal(loan.body.lender_id, 'lender-NEW');          // lender normalized on gov too
+    assert.equal(loan.body.recorded_owner_id, 'ro-borrow');  // gov borrower now linked (col added 2026-07-15)
+    // gov lenders POST uses `name` (not lender_name / normalized_name)
+    const lenderPost = calls.posts.find(p => p.path === 'lenders');
+    assert.equal(lenderPost.body.name, 'Big Bank NA');
+    assert.equal(lenderPost.body.lender_name, undefined);
+  });
+
+  it('lender dedup: an existing lender is REUSED (no new lenders row)', async () => {
+    const { deps, calls } = makeLoanDeps({ existingLenderId: 'lender-EXIST' });
+    const out = await writeLoanFromDeed({ domain: 'dialysis', propertyId: 55,
+      lenderName: 'Big Bank NA', borrowerName: 'X LLC', originationDate: '2024-01-01', documentId: 1 }, deps);
+    assert.equal(out.lender_id, 'lender-EXIST');
+    assert.equal(calls.posts.filter(p => p.path === 'lenders').length, 0);   // reused, not re-created
+    const loan = calls.posts.find(p => p.path === 'loans');
+    assert.equal(loan.body.lender_id, 'lender-EXIST');
   });
 
   it('a brokerage lender is rejected — never writes a loan', async () => {
