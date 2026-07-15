@@ -494,6 +494,20 @@ contact, skipped when absent — never minted). Shipped LCC-side, no migration, 
   spec'd, symmetric fix, next round); Unit 1b (broadened SF contact-pull query scope — a PA
   flow edit).
 
+### 10e. SF WhoId-resolver pivot (2026-07-15) — the flow can't enrich, LCC resolves
+The PA Salesforce connector **cannot return relationship fields** (`Who.Name` rejected in
+`$select`), and **per-record lookups in the recurring flow are too slow** (a test ran hours
+over ~2,000 Tasks). So the SF Activity Sync flow was **reverted to its fast/simple working
+state** (WhoId/WhatId only), and enrichment moves to LCC: a tiny **"SF Get Contact By Id"**
+HTTP flow (one Get-record action + optional Account lookup) resolves only the **handful of
+WhoIds LCC wants to mint** (new contacts, not every Task). Prompt:
+`CLAUDECODE_PROMPT_ORE_sf_whoid_resolver.md` — (1) queue unresolved WhoIds at ingest
+(`sf_contact_resolve_queue`), (2) `?_route=sf-contact-resolve-tick` drains via the by-id flow
+→ mint through the R39 email tier (Dowling merges into the CoStar/RCA Dowling, no dup) → run
+the PR-#1404 mismatch detector (Dowling-on-Arbor flags). Feature-flagged on
+`SF_CONTACT_BYID_URL`; reliable get-by-id primitive; ≤12 api/*.js. Completes PR #1404 (Units
+1-3 were inert because the reverted flow carries no `Who.Name`).
+
 ## 8. Progress log (living — update as we work this topic)
 
 - **2026-07-15** — Deed OCR worker fix shipped + verified (158→154 storage-ready
