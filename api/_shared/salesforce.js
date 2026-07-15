@@ -528,3 +528,90 @@ export async function upsertSalesforceAccount(account) {
   if (!id) return { ok: false, reason: result.reason || 'no_account_returned' };
   return { ok: true, accountId: id, account: a, created: result.created === true };
 }
+
+// ============================================================================
+// SF-CONTACT-RECONCILE — get a single Contact by Id (SF_CONTACT_BYID_URL)
+// ----------------------------------------------------------------------------
+// A SEPARATE, reliable get-by-id primitive from the recurring SF Activity Sync
+// flow. The Salesforce connector cannot return relationship fields (Who.Name is
+// rejected) and per-record lookups inside the recurring flow are far too slow —
+// so the recurring flow stays simple (WhoId/WhatId only) and LCC resolves only
+// the handful of WhoIds it wants to mint via this dedicated one-action flow.
+// A get-by-id always works (no relationship $select needed).
+// ============================================================================
+
+export function isSfContactByIdConfigured() {
+  return !!process.env.SF_CONTACT_BYID_URL;
+}
+
+/**
+ * Resolve a single Salesforce Contact by its 18/15-char Id via the dedicated
+ * "SF Get Contact By Id" Power Automate flow (SF_CONTACT_BYID_URL).
+ *
+ * Flow contract:
+ *   POST <SF_CONTACT_BYID_URL>  { "contact_id": "003..." }
+ *   200  { id, name, email, first_name, last_name, phone, title,
+ *          account_id, account_name }   (account_* optional — a Contact with no
+ *                                         AccountId returns them absent)
+ *
+ * Tolerant of a bare contact object OR { ok:true, contact:{...} } / { record:{...} }
+ * and of PascalCase field names. Returns:
+ *   { ok:true, contact:{ id, name, email, first, last, phone, title,
+ *                        account_id, account_name } }   — a real contact
+ *   { ok:false, reason:'no_data' }                       — 200 but no id (Lead/blank/deleted)
+ *   { ok:false, reason:'not_configured' }                — env unset (worker no-ops)
+ *   { ok:false, reason:'bad_contact_id' }                — malformed WhoId
+ *   { ok:false, reason:'unavailable', status?, detail? } — transient / bad-key / non-2xx
+ *
+ * @param {string} whoId
+ */
+export async function getSalesforceContactById(whoId) {
+  const url = process.env.SF_CONTACT_BYID_URL;
+  if (!url) return { ok: false, reason: 'not_configured' };
+  const id = String(whoId || '').trim();
+  if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(id)) return { ok: false, reason: 'bad_contact_id' };
+
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contact_id: id }),
+    }, 15000);
+  } catch (e) {
+    return { ok: false, reason: 'unavailable', detail: String((e && e.message) || e).slice(0, 300) };
+  }
+
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
+
+  if (!res.ok) {
+    const detailRaw = pickFlowMessage(json?.error) || pickFlowMessage(json?.detail)
+      || (typeof text === 'string' ? text : '') || '';
+    return { ok: false, reason: 'unavailable', status: res.status, detail: String(detailRaw).slice(0, 300) };
+  }
+  // A flow that explicitly reports failure ({ ok:false, reason }).
+  if (json && json.ok === false) {
+    return { ok: false, reason: json.reason || 'flow_reported_failure', detail: pickFlowMessage(json.detail) || null };
+  }
+
+  const c = (json && (json.contact || json.record)) || json || null;
+  const cid = c && (c.id || c.Id);
+  if (!c || !cid) return { ok: false, reason: 'no_data' };
+
+  return {
+    ok: true,
+    contact: {
+      id: cid,
+      name:  c.name ?? c.Name ?? null,
+      email: c.email ?? c.Email ?? null,
+      first: c.first_name ?? c.FirstName ?? null,
+      last:  c.last_name ?? c.LastName ?? null,
+      phone: c.phone ?? c.Phone ?? null,
+      title: c.title ?? c.Title ?? null,
+      account_id:   c.account_id ?? c.AccountId ?? null,
+      account_name: c.account_name ?? c.AccountName ?? null,
+    },
+  };
+}

@@ -228,6 +228,7 @@ app.all('/api/preassemble', (req, res) => { req.query._route = 'context'; req.qu
 app.all('/api/context', (req, res) => { req.query._route = 'context'; operationsHandler(req, res); });
 app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.query.action = 'weekly-intelligence-report'; operationsHandler(req, res); });
 app.all('/api/contact-acquisition-tick', (req, res) => { req.query._route = 'contact-acquisition-tick'; operationsHandler(req, res); });
+app.all('/api/sf-contact-resolve-tick', (req, res) => { req.query._route = 'sf-contact-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/sf-link-reconcile-tick', (req, res) => { req.query._route = 'sf-link-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'owner-contact-enrich-tick'; operationsHandler(req, res); });
 app.all('/api/owner-reconcile-tick', (req, res) => { req.query._route = 'owner-reconcile-tick'; operationsHandler(req, res); });
