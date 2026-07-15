@@ -282,9 +282,39 @@ resolved without any new fetch.
   `… or related stakeholders`). These are precisely the cases the multi-signal weighted
   reconciler (§7) resolves: junk/placeholder names filtered, operators excluded, verbose
   strings canonicalized, identity confirmed by signal-agreement not a single noisy field.
-- **Next:** (a) Scott merges PR #1397 + redeploys; seeds the top sponsors above; run
-  `institution-contact-tick` to fan out. (b) Build the **multi-signal weighted
-  reconciliation engine** (prompt written 2026-07-15:
-  `CLAUDECODE_PROMPT_ORE_weighted_reconciliation_engine.md`) — the layer underneath that
-  runs across ALL owners, cleans the `true_owner` noise, and re-triangulates identity as
-  new clues arrive.
+- **2026-07-15 — multi-signal weighted reconciliation engine BUILT + pushed (PR #1399)**,
+  LCC-Opps migrations `20260716140000` (engine) + `20260716141000` (pure-DB crons) applied
+  live. `lcc_signal_authority` (8 weights: SF-account 80 → email 55 → address 50 → phone
+  45 → name-core 40 → sponsor 30 → name+city 25) + `match_threshold` 60 (the one knob);
+  `lcc_reconcile_owner(entity)` → `same_party`/`review`/`distinct` (a conflicting SF
+  account holds two shells apart, never merges); R7-style `lcc_owner_evidence_cache`
+  (**24,389 orgs**, live); append-only evidence trace; `v_lcc_true_owner_noise` (**8,418
+  rows** catalogued — the junk/operator/verbose cleanup surface); worker
+  `?_route=owner-reconcile-engine-tick` (GET dry-run / POST gated drain); cache-refresh +
+  queue-seed crons live. Verified live 0-residue: top-400 → 3 confident merges (City of
+  Phoenix / Penzance case-dups), 124 review pairs, 5 held distinct on SF-account conflict;
+  Blackstone name-only → review, never guessed. 1726 tests pass.
+  **Auto-merge drain cron is GATED off** (consequential — merges entities) pending Scott's
+  dry-run → capped-drain gate.
+- **STATE (2026-07-15): both engines built + live at the DB layer; movement now needs
+  Scott's gated activations:**
+  1. **Tier A** — merge PR #1397 + redeploy; seed top sponsors (Gardner Tannenbaum 30,
+     Penzance $48M, Blackstone 8, Global Net Lease 8, GIP 6, C-III 5, Lincoln 4) in
+     `lcc_institution_contacts` with real contacts; run `institution-contact-tick` to fan
+     out. → Claude verifies the fan-out live.
+  2. **Reconciliation engine** — merge PR #1399 + redeploy; `GET
+     owner-reconcile-engine-tick?min_value=1000000` (dry-run) → capped `POST …?limit=25` →
+     confirm case-dup merges correct → schedule `lcc-owner-reconcile-engine` (template in
+     migration `20260716141000`). → Claude runs/verifies the gated drain.
+  3. **Deed drain** — running gentle (Tier B local owners), compounding.
+  Both auto-merge/attach paths stay human-gated until the first drain is confirmed correct
+  (the owner-deed-autofix / UW#2 posture).
+- **2026-07-15 — both PRs merged + redeployed (live).** Reconciliation dry-run on the
+  top-60 ≥$1M owners: **2 confident `same_party` merges, 22 review, rest singletons** —
+  appropriately conservative. Example evidence trace (the doctrine working):
+  `"Penzance Management LLC" ↔ "Penzance"` → same_party, weighted score **70** (thr 60)
+  from shared_name_core(40) + shared_true_owner_sponsor(30), no high-authority conflict —
+  a real case-dup that also consolidates the $48M Penzance sponsor. Tier A registry still
+  **0 seeded** (awaiting Scott's real sponsor contacts — never fabricated). **Gated
+  activations pending: (1) seed a sponsor contact + run the fan-out; (2) bless the capped
+  reconciliation drain, then schedule its cron.**
