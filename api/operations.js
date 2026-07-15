@@ -2623,7 +2623,8 @@ const ACTION_REGISTRY = {
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
   ingest_pdf_document:         { tier: 1, handler: 'ingest_pdf', confirm: 'lightweight' },
-  triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
+  triage_inbox_item:           { tier: 2, handler: 'inbox_triage', confirm: 'lightweight' },
+  dismiss_inbox_item:          { tier: 2, handler: 'inbox_dismiss', confirm: 'lightweight' },
   promote_intake_to_action:    { method: 'POST', path: 'workflows?action=promote_to_shared', tier: 2, confirm: 'explicit', alias: 'operations?action=promote_to_shared' },
   create_listing_pursuit_followup_task: { method: 'POST', path: 'actions', tier: 2, confirm: 'explicit' },
   update_execution_task_status: { method: 'PATCH', path: 'actions', tier: 2, confirm: 'explicit' },
@@ -2657,6 +2658,8 @@ function deriveActionSummary(actionName, params, result) {
       return `Ingested PDF: ${safeParams.file_name || 'unnamed'}`;
     case 'triage_inbox_item':
       return `Triaged inbox item → ${safeParams.status || 'updated'}`;
+    case 'dismiss_inbox_item':
+      return `Dismissed inbox item ${safeParams.id ? safeParams.id.slice(0, 8) : ''}`;
     case 'promote_intake_to_action':
       return `Promoted inbox item to shared action`;
     case 'update_execution_task_status':
@@ -2735,6 +2738,8 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'guided_entity_merge':     result = await handleGuidedEntityMerge(params, user, workspaceId); break;
       case 'document_assembly':       result = await handleDocumentAssembly(params, user, workspaceId); break;
       case 'ingest_pdf':              result = await ingestPdfWorker(params, user, workspaceId); break;
+      case 'inbox_triage':            result = await handleTriageInboxItem(params, user, workspaceId); break;
+      case 'inbox_dismiss':           result = await handleDismissInboxItem(params, user, workspaceId); break;
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
 
@@ -5836,6 +5841,48 @@ async function bulkAssign(req, res, user, workspaceId) {
 // ============================================================================
 // WORKFLOW: BULK TRIAGE
 // ============================================================================
+
+// ============================================================================
+// COPILOT HANDLER: triage_inbox_item — writes status/priority/assigned_to to DB
+// ============================================================================
+async function handleTriageInboxItem(params, user, workspaceId) {
+  const { id, status, priority, assigned_to } = params || {};
+  if (!id) return { ok: false, error: 'id (inbox item UUID) is required' };
+
+  const VALID_STATUSES = ['triaged', 'dismissed', 'snoozed', 'promoted', 'archived', 'new'];
+  if (status && !VALID_STATUSES.includes(status)) {
+    return { ok: false, error: `Invalid status "${status}". Must be one of: ${VALID_STATUSES.join(', ')}` };
+  }
+
+  const updates = { updated_at: new Date().toISOString() };
+  if (status) updates.status = status;
+  if (status === 'triaged') updates.triaged_at = new Date().toISOString();
+  if (priority) updates.priority = priority;
+  if (assigned_to) updates.assigned_to = assigned_to;
+
+  const r = await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}`, updates);
+  if (!r.ok) return { ok: false, error: r.error || 'DB write failed', id };
+
+  return { ok: true, id, status: status || 'updated', updated: true };
+}
+
+// ============================================================================
+// COPILOT HANDLER: dismiss_inbox_item — hard-sets status = 'dismissed'
+// ============================================================================
+async function handleDismissInboxItem(params, user, workspaceId) {
+  const { id } = params || {};
+  if (!id) return { ok: false, error: 'id (inbox item UUID) is required' };
+
+  const updates = {
+    status: 'dismissed',
+    updated_at: new Date().toISOString()
+  };
+
+  const r = await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}`, updates);
+  if (!r.ok) return { ok: false, error: r.error || 'DB write failed', id };
+
+  return { ok: true, id, status: 'dismissed', updated: true };
+}
 
 async function bulkTriage(req, res, user, workspaceId) {
   const { item_ids, status, priority, assigned_to } = req.body || {};

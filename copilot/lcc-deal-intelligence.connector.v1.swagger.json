@@ -2658,6 +2658,192 @@
         ]
       }
     },
+    "/api/copilot/workflow/search-deals": {
+      "post": {
+        "operationId": "search_deals",
+        "summary": "Count and list LIVE government deals by state — available listings and recent sales.",
+        "description": "**Tier 0** (read-only). Use for quantitative or geographic deal questions: \"how many gov deals in Texas\", \"what sold in Florida in the last 12 months\". Returns exact live counts from the database.",
+        "tags": [
+          "portfolio"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "state": { "type": "string" },
+                "available_count": { "type": "integer" },
+                "available_sample": { "type": "array", "items": { "type": "object" } },
+                "sold_count": { "type": "integer" },
+                "sold_window_months": { "type": "integer" },
+                "sold_sample": { "type": "array", "items": { "type": "object" } },
+                "source": { "type": "string" }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "state": { "type": "string", "description": "US state, 2-letter code or full name (e.g. \"TX\" or \"Texas\")." },
+                "status": { "type": "string", "enum": ["available", "sold", "both"], "description": "Which deals to return (default: both)." },
+                "months": { "type": "integer", "description": "Look-back window in months for sold deals (default: 12)." },
+                "agency": { "type": "string", "description": "Optional tenant/agency filter (substring match), e.g. \"SSA\", \"VA\"." },
+                "limit": { "type": "integer", "description": "Max sample rows per category (default: 10, max: 25)." }
+              },
+              "required": ["state"]
+            }
+          }
+        ],
+        "consumes": ["application/json"],
+        "produces": ["application/json"]
+      }
+    },
+    "/api/copilot/outreach/draft-reply-from-inbox": {
+      "post": {
+        "operationId": "draft_reply_from_inbox",
+        "summary": "Draft a context-aware reply to a flagged email in the LCC inbox.",
+        "description": "**Tier 1** (explicit-confirm). Provide inbox_item_id (UUID from inbox_items). The recipient is derived automatically from the original sender. Set create_draft=true to create the reply as a real Outlook draft.",
+        "tags": [
+          "outreach"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "subject": { "type": "string" },
+                "body": { "type": "string" },
+                "original_sender": { "type": "string" },
+                "original_subject": { "type": "string" },
+                "provider": { "type": "string" },
+                "draft_created": { "type": "boolean" },
+                "draft_web_link": { "type": "string" }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "inbox_item_id": { "type": "string", "format": "uuid", "description": "UUID of the inbox_items row (the flagged email)." },
+                "intent": { "type": "string", "description": "Purpose of the reply (e.g., \"answer the question\", \"schedule a call\", \"request more info\")." },
+                "tone": { "type": "string", "description": "Desired tone (default: professional, warm, and responsive)." },
+                "guidance": { "type": "string", "description": "Optional freeform instructions — facts to include, points to address, things to avoid." },
+                "create_draft": { "type": "boolean", "description": "If true, create the reply as a real draft in Outlook." },
+                "cc": { "type": "string", "description": "Optional CC email address(es), semicolon-separated." }
+              },
+              "required": ["inbox_item_id"]
+            }
+          }
+        ],
+        "consumes": ["application/json"],
+        "produces": ["application/json"]
+      }
+    },
+    "/api/copilot/workflow/ingest-pdf-document": {
+      "post": {
+        "operationId": "ingest_pdf_document",
+        "summary": "Ingest an uploaded PDF into the LCC intake queue for triage.",
+        "description": "**Tier 1** (lightweight-confirm). Used when a user uploads a document (deed, OM, lease, brochure, financials, etc.) and wants it captured into LCC. Provide file_name plus either file_content_base64 or file_url.",
+        "tags": [
+          "workflow"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "inbox_item_id": { "type": "string", "format": "uuid" },
+                "file_name": { "type": "string" },
+                "page_count": { "type": "integer" },
+                "text_preview": { "type": "string" },
+                "extraction_ok": { "type": "boolean" },
+                "message": { "type": "string" }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "file_name": { "type": "string", "description": "Original filename including extension, e.g. \"deed.pdf\"" },
+                "file_content_base64": { "type": "string", "description": "Base64-encoded PDF content. Provide this OR file_url." },
+                "file_url": { "type": "string", "format": "uri", "description": "Publicly accessible HTTPS download URL. Provide this OR file_content_base64." },
+                "entity_id": { "type": "string", "format": "uuid", "description": "Optional UUID of a property or organization this document relates to." },
+                "note": { "type": "string", "description": "Optional one-line user description of what the document is." }
+              },
+              "required": ["file_name"]
+            }
+          }
+        ],
+        "consumes": ["application/json"],
+        "produces": ["application/json"]
+      }
+    },
+    "/api/copilot/workflow/dismiss-inbox-item": {
+      "post": {
+        "operationId": "dismiss_inbox_item",
+        "summary": "Dismiss an inbox item — sets status to dismissed in the database.",
+        "description": "**Tier 2** (lightweight-confirm). Hard-sets inbox item status to 'dismissed'. Use when an item needs no action. Requires only the item id.",
+        "tags": [
+          "workflow"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "id": { "type": "string", "format": "uuid" },
+                "status": { "type": "string" },
+                "updated": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "format": "uuid", "description": "UUID of the inbox item to dismiss." }
+              },
+              "required": ["id"]
+            }
+          }
+        ],
+        "consumes": ["application/json"],
+        "produces": ["application/json"]
+      }
+    },
     "/api/memory/log-turn": {
       "post": {
         "operationId": "memoryLogTurn",
