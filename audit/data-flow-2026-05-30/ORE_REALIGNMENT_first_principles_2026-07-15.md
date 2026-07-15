@@ -475,6 +475,25 @@ identity + real-activity signal). LCC = source of truth; SF/Outlook read-only,
 minimum-necessary; no fabrication; ≤12 api/*.js. Contact-authority-hierarchy round (PR
 #1402) merged + redeployed live.
 
+### 10d. SF contact-scope build shipped (PR #1404, 2026-07-15) — units 1-3
+Root cause confirmed: `sf-activity-ingest.js` was **resolve-only** (looked up the WhoId
+contact, skipped when absent — never minted). Shipped LCC-side, no migration, ≤12 api/*.js:
+- **Unit 1 — mint the WhoId contact** on every synced activity via
+  `ensureEntityLink(salesforce/Contact)` (kill-switch `SF_INGEST_MINT_CONTACTS`; byte-
+  identical no-op when the flow omits name/email; guards reject garbage). Capra becomes a
+  linked entity + `salesforce/Contact` identity.
+- **Unit 2 — reconcile by email** through the R39 email tier → the SF Dowling attaches to
+  the existing CoStar/RCA Dowling (one entity, three identities, no dup).
+- **Unit 3 — `sfContactAccountMismatch`** → seeds a `sf_contact_account_mismatch`
+  Decision-Center lane (Dowling-on-Arbor flags; Capra-on-Boyd agrees). Record-only, no SF
+  write. Live synthetic gate passed (0 residue).
+- **Scott's dependency (the mint is inert until done):** update the **SF Activity Sync PA
+  flow** to POST `Who.Name`/`Who.Email` (+ First/Last/Phone/Title) and `What.Name` (account)
+  on each Task/Event to `/api/sf-activity`. Then merge PR #1404 + redeploy.
+- **Deferred:** Unit 4 (Outlook — same resolve-only gap in `handleOutlookMessageExtract`,
+  spec'd, symmetric fix, next round); Unit 1b (broadened SF contact-pull query scope — a PA
+  flow edit).
+
 ## 8. Progress log (living — update as we work this topic)
 
 - **2026-07-15** — Deed OCR worker fix shipped + verified (158→154 storage-ready
