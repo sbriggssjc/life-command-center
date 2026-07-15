@@ -7729,3 +7729,123 @@ explicitly (merging already inherits it via backref move) · widening the
 same-party auto-merge to a shared-address/phone class once the address dimension
 densifies (Phase A/B) · the sponsor-inversion flag (recorded=firm ↔ true_owner=SPE)
 as a distinct review reason.
+
+## SF-CONTACT-RECONCILE — broaden SF contact ingest + email reconcile + flag SF account/email disagreements (2026-07-15)
+
+The two Boyd Watterson decision-makers Scott emails/calls (Joseph Capra on the
+unmapped account "Boyd Watterson Asset Management LLC"; Eric Dowling misfiled
+under "Arbor Realty Trust", `edowling@boydwatterson.com`) were in Salesforce all
+along but never reached LCC — a contact-sync SCOPE gap, not a dup bug: the SF
+sync only pulled contacts on LCC-MAPPED accounts, so a decision-maker on an
+unmapped / misfiled account never flowed. Grounded live: **`sf-activity-ingest.js`
+was resolve-only** — it looked the WhoId contact up via `findEntityBySfId` and
+SKIPPED (`skipped_no_entity`) when it didn't already exist; it never minted. The
+existing **Outlook** path (`bridge-handlers-outlook.js handleOutlookMessageExtract`)
+has the IDENTICAL gap — it DROPS a message when no party is a tracked contact
+(`no_tracked_party`). Doctrine (Scott): **LCC is the source of truth; Salesforce
+is minimum-necessary — do NOT clean/dedupe the shared SF org; LCC absorbs the SF
+dups/errors and reconciles around them. No outbound SF/Outlook contact writes.**
+Reuse the built machinery — `ensureEntityLink` (R39 email tier), `contact-attach`,
+the reconciliation engine. Additive · reversible · guarded · never fabricate ·
+≤12 api/*.js (no new api/*.js; no migration).
+
+### Unit 1 — MINT the WhoId SF contact (`sf-activity-ingest.js`)
+`processSfActivityBatch` now, when the WhoId contact isn't an LCC entity yet AND
+the feed carries its identity (name/email), MINTS it via the new
+`resolveOrCreateSfContact` dep → `ensureEntityLink(sourceSystem='salesforce',
+sourceType='Contact', externalId=whoId, seedFields={name,email,first,last,phone,
+title})`. The activity then resolves to the minted entity (`resolved_via:
+'contact_minted'`) instead of skipping — so Capra becomes a first-class linked
+entity carrying a `salesforce/Contact` identity, and the activity is its
+"already-prospected" signal. `normalizeSfRecord` reads the WhoId/WhatId identity
+fields (`who_name`/`WhoName`/`Who.Name`, `who_email`, `who_first/last/phone/
+title`, `what_name` = account name). **Byte-identical no-op** when the PA flow
+omits the contact name/email (nothing fabricated); the mint dep is never called.
+Kill-switch env **`SF_INGEST_MINT_CONTACTS`** (default ON). The junk /
+implausible-person guards in `ensureEntityLink` reject garbage — never invents a
+contact.
+
+### Unit 2 — RECONCILE by email (merge, never duplicate)
+Minting routes through `ensureEntityLink`'s **R39 email-resolution tier** (person
+only), so an SF contact carrying an email that already belongs to a CoStar/RCA
+person ATTACHES to that entity (picks up the `salesforce/Contact` identity)
+instead of minting a duplicate → the SF Eric Dowling
+(`edowling@boydwatterson.com`) becomes ONE entity carrying costar + rca +
+salesforce identities (`resolved_via: 'contact_reconciled_email'`,
+`contacts_reconciled++`). Generic/role inboxes + implausible names are excluded
+by the tier (never over-attach two distinct people). The SF-side dups are
+tolerated (doctrine); the LCC anti-dup guarantee is at the `ensureEntityLink`
+choke point.
+
+### Unit 3 — SURFACE the SF account/email disagreement (Decision Center lane)
+`sfContactAccountMismatch({email, accountName})` (pure, exported) flags an SF
+contact whose EMAIL-DOMAIN firm contradicts its SF ACCOUNT name — LCC detects
+SF's data-quality error instead of inheriting it. Conservative: fires only when
+the email domain is a real firm domain (non-generic inbox, non-personal, distinct
+2nd-level label ≥4 chars) AND the account name collapses to ≥4 alnum chars AND
+neither core contains the other (Dowling `boydwatterson.com` on "Arbor Realty
+Trust" → mismatch; Capra `boydwatterson.com` on "Boyd Watterson Asset Management
+LLC" → agreement, no flag; generic/personal-domain/short → no flag). The producer
+(`defaultOpenSfMismatchDecision`) seeds a **`sf_contact_account_mismatch`**
+Decision-Center row via `lcc_open_decision` (idempotent on `subject_ref
+'sfmismatch:<entity_id>'`, best-effort, one per entity per tick), fed at ingest
+when the feed carries both the contact email and the account name. Verdicts
+(`admin.js`, record-only — NO SF write): **`confirm_lcc_company`** (trust the
+email-domain company in LCC, leave SF as-is) / **`research`** (`createResearchTask`
+`sf_contact_account_mismatch`) / **`dismiss`**. Lane rendered in `ops.js`
+(`_dcCardHTML` + SUBLANES + title/intro) and mapped to the `linkage` lane in
+`review-shared.js`; `v_lcc_decision_open_counts` groups by decision_type so the
+chip appears automatically.
+
+### Verified (2026-07-15)
+`test/sf-activity-ingest.test.mjs` 46 (+11: `sfContactAccountMismatch` detector
+[Dowley→Arbor flag / Capra→Boyd agree / generic+personal / missing-signal]; mint
+[creates entity, `contacts_minted`], reconcile [attaches by email, no dup,
+`contacts_reconciled`], byte-identical no-op without contact fields, mismatch
+emit on Dowling-on-Arbor, no emit when account agrees). **Live synthetic gate
+(LCC Opps, self-rolling-back DO block, 0 residue):** `lcc_open_decision(
+'sf_contact_account_mismatch', …)` accepted the free-form type,
+`v_lcc_decision_open_counts` surfaced it (open_count=1),
+`lcc_record_decision_verdict('confirm_lcc_company','decided')` transitioned it,
+RAISE rolled back → 0 residue. `node --check` clean (sf-activity-ingest, admin,
+ops, review-shared); `ls api/*.js | wc -l`=12; `decision-center-partition` green
+(sf_contact_account_mismatch is a SEEDED type, NOT in FEDERATED_DECISION_TYPES).
+JS ships on the Railway redeploy.
+
+### Unit 4 (Outlook, first-class source) — SPEC'd, deferred (the same fix, a
+### distinct live path)
+The Outlook ingest (`bridge-handlers-outlook.js handleOutlookMessageExtract`) has
+the IDENTICAL resolve-only gap: it drops a message with `no_tracked_party` when
+no participant is an already-tracked contact, so an Outlook-only correspondent
+(someone Scott emails, absent from LCC) is never captured. The fix is symmetric
+and reuses the SAME machinery: when no tracked party, MINT the primary other-
+party (non-source-user) email via `ensureEntityLink(sourceSystem='outlook',
+sourceType='Contact')` — which reconciles by email (Unit 2) into any existing
+CoStar/RCA/SF person, junk-guarded — then attach the email + grow the cadence to
+it. New `external_identities` source `outlook`/`Contact` (reconcile, never
+duplicate). Read-only (no Outlook writes). Deferred from THIS round because it is
+a distinct live job path (its own tracked-contacts query + a Graph "list
+contacts"/message flow to trace) needing its own tests, and shipping an
+undertested change to it would be reckless — build it next as the symmetric
+Outlook unit.
+
+### PA-flow egress (Scott's side — the ingest's dependency; feature-flag-safe)
+- **SF Activity Sync flow (Unit 1/3):** include the WhoId's `Who.Name` /
+  `Who.Email` (and ideally `Who.FirstName`/`LastName`/`Phone`/`Title`) + the
+  WhatId's `What.Name` (account name) on each Task/Event it POSTs to
+  `/api/sf-activity`. Until it does, minting + mismatch detection are a byte-
+  identical no-op (the code is inert without the fields — the
+  find_contacts_by_account rollout pattern).
+- **SF broadened contact pull (Unit 1b, deferred):** widen the PA "find contacts"
+  query beyond exactly-account-mapped to an email-domain / owner-company scope so
+  a decision-maker on an unmapped account flows even without a logged activity.
+- **Outlook (Unit 4):** a Graph "list contacts" + message/calendar flow to
+  `/api/…` (the SHAREPOINT_FETCH_URL webhook pattern), feature-flagged, no-op
+  until wired.
+
+### After deploy (verify live)
+With the SF flow carrying `Who.Name`/`Who.Email`/`What.Name`: (a) Joseph Capra
+appears in LCC linked to Boyd with a `salesforce/Contact` identity; (b) the SF
+Eric Dowling merges by email into the existing CoStar/RCA Dowling (one entity,
+three source identities — no dup); (c) the `sf_contact_account_mismatch` lane
+surfaces the Dowling-on-Arbor disagreement. Spot-check Capra + Dowling end to end.
