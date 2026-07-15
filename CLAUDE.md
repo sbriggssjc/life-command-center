@@ -5351,12 +5351,16 @@ EXISTING owner-contact-enrich worker runs for that one owner.
   "Automated lookup not configured yet — queued for manual research"; public_ir →
   the manual IR path). Rows with no automated lookup keep the manual "Select
   contact →" pick (the Phase-5 flow).
-- **Activation:** the SOS / address / deed / web-search adapters stay
-  feature-flagged on `OWNER_ENRICH_SOS_URL` / `_ADDRESS_URL` / `_DEED_URL` /
-  `_WEBSEARCH_URL` (the find_contacts_by_account rollout pattern) — until those PA
-  webhooks land, a one-click run queues manual research (the loop is wired; the
-  external egress is the post-deploy piece). The attach-named-person /
-  manager-drill-through classes resolve today with no config.
+- **Activation:** the SOS / address / deed adapters stay feature-flagged on
+  `OWNER_ENRICH_SOS_URL` / `_ADDRESS_URL` / `_DEED_URL` (the
+  find_contacts_by_account rollout pattern) — until those PA webhooks land, a
+  one-click run queues manual research (the loop is wired; the external egress is
+  the post-deploy piece). The attach-named-person / manager-drill-through classes
+  resolve today with no config. **The `_WEBSEARCH_URL` (Brave/Serper) leg is
+  PAUSED — do not activate it** (decision 2026-07-14; see "Web-search enrichment
+  service … PAUSED"). Contact acquisition goes through the public-records path
+  (cross-reference resolver → SOS-direct → address reverse-lookup → deed), not a
+  search API.
 
 ### Verified (2026-06-24)
 Live read-only: all 37 runnable worklist rows resolve a pivot
@@ -5614,7 +5618,26 @@ the $1M+ owners. The acquire-contact worklist → workable-cadence focus chain i
 now whole: contactless $1M+ owner → acquire contact → seed cadence → value-ranked
 focus card → worked.
 
-## Web-search enrichment service — the search proxy that unlocks high-value contact acquisition (2026-06-27)
+## Web-search enrichment service — the search proxy (BUILT, **PAUSED — do not activate**, 2026-06-27; decision 2026-07-14)
+
+> **DECISION (Scott, 2026-07-14): the Brave/Serper web-search proxy is PAUSED and
+> is NOT the path forward. Do NOT provision a Brave/Serper key, deploy
+> `owner-contact-websearch`, or set `OWNER_ENRICH_WEBSEARCH_URL`.** Contact
+> acquisition for contactless owners goes through the **automated public-records
+> chain instead** — in priority order: (1) the **owner cross-reference resolver**
+> (reuse a contact from a related owner — same asset / same parent / distinctive
+> naming-core; free, on records we already hold — see the next section), (2) the
+> **per-state SOS-direct fetchers** (`sos_manager_lookup` / `find_person_at_manager`
+> via the free Secretary-of-State detail pages — `OWNER_ENRICH_SOS_URL`;
+> government-repo Phase-1 Unit F: FL Sunbiz + AZ eCorp PoC, more states to follow),
+> and (3) **address reverse-lookup** (`OWNER_ENRICH_ADDRESS_URL`) + **deed party
+> extraction** (`OWNER_ENRICH_DEED_URL`, ORE Phase-1 Unit C). Web/people-search is
+> only ever the LAST step (phone/email once identity is already known), and even
+> that is deferred — build it from the automated public-records path, not a paid/
+> rate-limited search API. The proxy code below stays in the repo as a dormant,
+> reversible reference ONLY; it is inert (`unconfigured`) and must remain so unless
+> Scott explicitly pivots. Do not re-raise "provision the search key" as a
+> follow-up.
 
 The owner-contact-enrich worker's web-search adapter
 (`api/_shared/web-search-enrich.js::buildWebSearchAdapter` /
@@ -5656,15 +5679,15 @@ only job is to run a web search and return `[{title,snippet,url}]`.
   transitional-open + warn (docai-ocr posture). A bad key → 401 (visible
   misconfig → adapter `search_error`).
 
-### Env / activation (post-merge, Scott + Cowork)
-Scott provisions a free **Brave Search API** key (`BRAVE_SEARCH_API_KEY`; ~2,000
-q/mo free — or Serper via `SERPER_API_KEY` + `WEBSEARCH_PROVIDER=serper`); Cowork
-deploys the edge fn (Supabase MCP, `--no-verify-jwt`) and Scott sets the function
-secret + `OWNER_ENRICH_WEBSEARCH_SECRET`, then on Railway sets
-`OWNER_ENRICH_WEBSEARCH_URL=https://<ops-ref>.supabase.co/functions/v1/owner-contact-websearch?key=<secret>`.
-Until then the adapter stays `unconfigured` (exact current behavior —
-deploy-order safe). Optional knobs: `WEBSEARCH_MAX_RESULTS` (10),
-`WEBSEARCH_TIMEOUT_MS` (8000), `WEBSEARCH_COUNTRY` (us).
+### Env / activation — **PAUSED, do not action** (decision 2026-07-14)
+This activation is **shelved** per the decision banner above. Do NOT provision a
+Brave/Serper key, deploy `owner-contact-websearch`, or set
+`OWNER_ENRICH_WEBSEARCH_URL` / `OWNER_ENRICH_WEBSEARCH_SECRET`. The adapter stays
+permanently `unconfigured` (inert, deploy-order safe) and the owner-contact-enrich
+worker relies on the public-records path (cross-reference resolver → SOS-direct →
+address reverse-lookup → deed extraction). The env knobs below
+(`WEBSEARCH_MAX_RESULTS`/`_TIMEOUT_MS`/`_COUNTRY`) are dormant. Kept for reference
+only in case Scott explicitly pivots back to a search provider.
 
 ### Verify live (Cowork, after activation)
 Fire `lcc_cron_post('/api/owner-contact-enrich-tick?limit=25', …)`: the web step
