@@ -7204,3 +7204,96 @@ worth a later view-normalization tightening. (b) The deeper design question —
 should the CoStar owner **panel drive the FK** (not just the name)? — is a
 separate owner-resolution change (Concern 2), NOT done here; the chain/deed
 resolvers remain the FK owners and the sweep reconciles staleness.
+
+## Ownership reconcile arc — Topic 1 residual-auto_fixable fixes (2026-07-15)
+
+Follow-up to the reconcile arc: the deed-autofix sweep dry-run perpetually
+reported **6 dia `auto_fixable` rows** that never applied. Grounded live (dia
+`zqzrriwuavgrquhisnoa`): two independent root causes, both genuine correctness
+bugs, both fixed. **These stop the false "auto_fixable but never applies" count
+AND fix a broad silent-drop in the shared recorded_owner resolver — not just the
+6 rows.** LCC + gated dia/gov writes; ≤12 api/*.js; reversible.
+
+### Cause 1 — the view's broker regex was NARROWER than the JS guard (1 row)
+`v_owner_source_conflict.auto_fixable` (dia + gov) drove the sweep, but the
+view's broker regex OMITTED `nai / srs / ipa / mmi / kw / ay / c&w / m&m` that
+the JS `COMPETITOR_BROKER_RE` (`api/_shared/sf-nm-classifier.js:411`) — which
+`granteePassesOwnerGuards` enforces at APPLY time — catches. So a broker deed
+grantee like **"Nai First Commercial Real Estate & Advisory Services"** (dia
+property 24325) passed the VIEW guard (`grantee_passes_guards=true`,
+`auto_fixable=true`) but the JS sweep REFUSED it (`grantee_failed_guards`) — a
+perpetual false auto_fixable. **Consumption-Layer "honest count": the view's
+auto_fixable must match what the sweep will accept.**
+- **Fix (migrations `dialysis/20260716_dia_owner_conflict_broker_regex_parity.sql`
+  + `government-lease/sql/20260716_gov_..._parity.sql`, applied live):** mirror the
+  JS `COMPETITOR_BROKER_RE` in BOTH regexes, ASYMMETRIC by risk direction —
+  - `grantee_passes_guards` (negation): FULL JS parity incl. the short
+    abbreviations (a false-reject just means "not auto-fixable → human confirms" =
+    SAFE direction);
+  - `is_broker_owner` (flags the CURRENT owner as a broker → the deed grantee wins
+    → auto-repoint AWAY): add only the DISTINCTIVE acronyms (nai/srs/ipa/mmi/c&w/
+    m&m); the bare 2-char `ay`/`kw` are OMITTED because a false-positive would
+    auto-repoint away from a legit owner = UNSAFE direction.
+  - `\mnai\M` etc. are whole-word (Postgres `\m`/`\M`), so "Mount **Sinai**" is
+    never caught. Column list/order/types unchanged (CREATE OR REPLACE append-safe);
+    reversible by re-creating the 2026-06-20 R51 body.
+- Verified live: 24325 → `grantee_passes_guards=false`, dropped from auto_fixable;
+  gov `broker_owner=0`, `auto_fixable=0`, 890 conflicts intact (no regression).
+
+### Cause 2 — the resolver dedups by a STALE normalized_name → owner_resolve_failed (5 rows)
+`resolveOrCreateRecordedOwnerForDeed` (`sidebar-pipeline.js`) dedups by
+`normalized_name` (dia) / `canonical_name` (gov) computed with the CURRENT norm
+regex, but `dia.recorded_owners` has a **UNIQUE(name)** constraint and many
+existing owners carry a `normalized_name` computed by an OLDER/different norm
+(grounded live: `"corporation"→"...oration"`, `"income"→"realtyome..."`, kept
+`&`/comma). So the normalized dedup GET MISSED → the POST hit UNIQUE(name) → 409
+→ the old 409-recovery **also** re-GET by `normalized_name` → missed again →
+returned `null` → the sweep recorded `owner_resolve_failed` and re-surfaced the
+row forever. **This silently drops ANY deed-grantee repoint whose existing owner
+carries a stale normalized_name — far broader than these 5** (affects R51 forward
+propagation, R59 ownership_history append, and the reconcile paths).
+- **Fix (`sidebar-pipeline.js`, JS-only, no migration):** new
+  `findRecordedOwnerByExactName(domain, cleanName, q)` — GET by EXACT `name`
+  (PostgREST-quoted so commas/`&`/spaces are safe), following a
+  `merged_into_recorded_owner_id` tombstone to the LIVE survivor (never point a
+  property at a tombstone). Wired as (a) an exact-name dedup tier BEFORE the POST
+  (pre-empts the failed POST) and (b) the 409 recovery. Strictly more correct:
+  never creates a duplicate, returns the exact-name match's id (or its
+  merge-survivor), else falls through to create. gov has NO unique-name constraint
+  (never 409s) → the exact-name tier is a safe no-op there.
+- Verified live (read-only): all 5 failing grantees resolve to a LIVE canonical
+  survivor — the two "Sumitomo … Leasing And Finance" variants + "Sumitomo Mitsui
+  Banking Corporation" all follow their merge tombstones to the ONE canonical
+  "Sumitomo Bank Leasing And Finance Inc" (respecting a prior merge decision);
+  "K&T Ranch" + "Realty Income Properties 17 LLC" → themselves. `node --check`
+  clean; `test/owner-deed-propagation.test.mjs` 20→24 (exact-name hit → no POST;
+  tombstone follow; 409-recovery-by-name; genuinely-new still creates).
+
+### After deploy — the 6 residual auto_fixable WILL apply (surfaced, intentional)
+With Fix A+B deployed, the next gated sweep (`lcc-owner-deed-autofix`, daily 06:50,
+`DECISION_OWNER_DEED_WINS` ON) resolves + repoints the 6 remaining dia
+auto_fixable: **26823, 27042, 29087 (Sumitomo finance), 28051 (SG Mortgage Finance
+Corp), 37690 (Realty Income Properties 17), 27006 (K&T Ranch)**. Note the
+**financing/lender-shaped grantees** (Sumitomo/SG Mortgage): these are a
+sale-leaseback / financing-party class — 3 are `stale_seller` (backed by an ACTUAL
+recorded sale where the grantee was the buyer — strong evidence) and the rest are
+`deed_newer_stale` (a dated deed within 2y). Under the R51 deed-wins doctrine they
+pass the guards; the repoint is **reversible** (`data_source='owner_deed_reconcile'`
+provenance-tagged) + **gated**. **No fragile financing-entity classifier was
+built** (it would false-exclude legit finance-arm net-lease lessors + real
+"…Bank" owners) — per doctrine, surface the class for Scott to eyeball on the
+first post-deploy sweep rather than guess. If any prove to be mis-captured
+mortgage grantees, revert the row + fix the capture (CoStar `latest_deed_grantee`
+mis-read), not the sweep.
+
+### Topic 2 — CoStar owner panel driving the FK: DEFERRED (documented decision)
+Should the CoStar "Recorded Owner" panel set `properties.recorded_owner_id` (the
+FK), not just the denorm `recorded_owner_name`? **Deliberately NOT done.** The FK
+is the R47/R51/chain-resolved source of truth; the panel is an aggregator signal
+that already lands on the denorm (now trigger-synced to the FK — see the reconcile
+arc §4). Letting the panel drive the FK would repoint on aggregator-quality data
+without the deed/chain evidence the resolvers require — the wrong direction. The
+correct owner-currency mechanism is the deed-autofix sweep (evidence-backed,
+gated, reversible), which now resolves cleanly (Fix B) and is honestly counted
+(Fix A). Revisit only if a grounded audit shows the panel carrying owner truth the
+deed/chain paths miss.

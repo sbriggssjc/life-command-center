@@ -8523,6 +8523,25 @@ function buildDeedPropagationDeps() {
   return { domainQuery, domainPatch, shouldWriteField };
 }
 
+// Resolve an existing recorded_owner by EXACT name — the real UNIQUE key on dia
+// recorded_owners.name — following a merge tombstone to the surviving owner so we
+// never point a property at a tombstoned owner. This is the fix for the
+// owner_resolve_failed class (2026-07-15): the stored normalized_name/canonical_name
+// on an existing owner can be computed by an OLDER norm than
+// resolveOrCreateRecordedOwnerForDeed uses (e.g. "corporation"→"...oration",
+// "income"→"...ome", kept `&`/comma), so the normalized dedup GET misses AND the
+// POST 409s on UNIQUE(name), and the old normalized 409-recovery missed too. The
+// exact-name value is PostgREST-quoted so commas/`&`/spaces in the name are safe.
+async function findRecordedOwnerByExactName(domain, cleanName, q) {
+  const quoted = '"' + String(cleanName).replace(/"/g, '\\"') + '"';
+  const r = await q(domain, 'GET',
+    `recorded_owners?name=eq.${encodeURIComponent(quoted)}` +
+    `&select=recorded_owner_id,merged_into_recorded_owner_id&limit=1`);
+  if (!r.ok || !Array.isArray(r.data) || !r.data.length) return null;
+  const row = r.data[0];
+  return row.merged_into_recorded_owner_id || row.recorded_owner_id || null;
+}
+
 // Resolve an existing recorded_owner by normalized name, or create a minimal
 // one. Mirrors upsertDomainOwners' ensureRecordedOwner dedup convention.
 async function resolveOrCreateRecordedOwnerForDeed(domain, cleanName, entity, deps) {
@@ -8539,6 +8558,12 @@ async function resolveOrCreateRecordedOwnerForDeed(domain, cleanName, entity, de
   if (look.ok && Array.isArray(look.data) && look.data.length) {
     return look.data[0].recorded_owner_id;
   }
+  // Exact-name dedup (the real UNIQUE key) BEFORE the POST — catches an existing
+  // owner whose stored normalized_name was computed by an older norm (which the
+  // normalized GET above misses and the POST below would 409 on), and follows a
+  // merge tombstone to the live survivor.
+  const byName = await findRecordedOwnerByExactName(domain, cleanName, q);
+  if (byName) return byName;
   const ownerData = stripNulls({ name: cleanName, [nameCol]: norm, state: entity?.state || null });
   const ins = await q(domain, 'POST', 'recorded_owners', ownerData);
   if (ins.ok && ins.data) {
@@ -8546,8 +8571,13 @@ async function resolveOrCreateRecordedOwnerForDeed(domain, cleanName, entity, de
     if (created?.recorded_owner_id) return created.recorded_owner_id;
   }
   if (ins.status === 409) {
+    // A UNIQUE(name) collision on a row the normalized GET couldn't see — recover
+    // by exact name (following the tombstone), then fall back to the normalized re-GET.
+    const survivor = await findRecordedOwnerByExactName(domain, cleanName, q);
+    if (survivor) return survivor;
     const r2 = await q(domain, 'GET',
-      `recorded_owners?${nameCol}=eq.${encodeURIComponent(norm)}&select=recorded_owner_id&limit=1`);
+      `recorded_owners?${nameCol}=eq.${encodeURIComponent(norm)}` +
+      `&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
     if (r2.ok && r2.data?.length) return r2.data[0].recorded_owner_id;
   }
   return null;
