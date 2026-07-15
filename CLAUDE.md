@@ -7516,3 +7516,121 @@ dedup across loans like recorded_owners do; a gov `loans.recorded_owner_id` (or 
 `borrowers` link) so the gov mortgagor is structured, not notes-only; and richer
 signatory→person-entity linkage. The current round is the doctrine's routing +
 enrichment on the established text-lender model.
+## ORE — multi-signal, authority-weighted owner reconciliation engine (2026-07-16)
+
+The layer UNDERNEATH the Tier-A registry / Tier-B fetchers. Scott's core doctrine
+(ORE_REALIGNMENT §7): manual reconciliation never trusts ONE source — it
+triangulates identity from EVERY clue, hierarchically weighting the more
+authoritative ones. Two owner records that share a phone, or a name-core +
+city/state, or a mailing address, are the SAME party even when no single field is
+authoritative. This engine runs across ALL owners, records the evidence trace,
+cleans the noisy `true_owner` field as it goes, and re-triangulates as new clues
+land. Composes the existing primitives (lcc_merge_entity, the cross-ref /
+institution resolvers, the entity-link guards, field_source_priority's scale) —
+does NOT rebuild them. Additive · reversible · guarded · surface-ambiguity-
+never-guess · ≤12 api/*.js. Migrations `20260716140000` + `20260716141000` (LCC
+Opps, applied live); JS ships on the Railway redeploy.
+
+### Unit 1 — the evidence model (signals + authority weights, single tunable knob)
+`lcc_signal_authority` (weight per signal, HIGHER = more authoritative — the
+INVERSE of field_source_priority's rank so weighted AGREEMENT sums intuitively):
+shared_salesforce_account 80 · shared_email 55 · shared_mailing_address 50 ·
+shared_phone 45 · shared_name_core 40 · shared_true_owner_sponsor 30 ·
+shared_name_city 25 · naming_inference 15. `lcc_reconcile_config.match_threshold`
+(default **60** — the ONE knob): a single high-authority signal clears it alone;
+several low-authority signals sum to clear it (the human move); a name-core (40)
+alone does NOT (needs corroboration). Normalizers: `lcc_normalize_phone`
+(last-10 NANP, drops repeated-digit junk), `lcc_reconcile_email_key` (drops
+generic/role inboxes — a shared info@ is a firm mailbox, not a party key),
+`lcc_normalize_address`, reuse `lcc_normalize_entity_name` for the name-core.
+
+### Unit 3 — clean the true_owner noise (the reconciler's first job, ADDITIVE guards)
+Composes OVER the widely-consumed `lcc_is_operator_owner_name` (NOT mutated):
+`lcc_is_placeholder_owner_name` (John Doe / Independent / numeric / N/A …),
+`lcc_is_extra_operator_name` (the period-broken "U.S. Renal Care" the shared
+regex misses — `\mus renal\M` fails on "u.s. renal"; + Renal Care Group / DCI /
+Physicians Dialysis / National Renal), `lcc_owner_name_usable` (the composite gate
+the resolver keys on), `lcc_canonicalize_owner_name` (strips a trailing (…)
+expansion / "or related stakeholders" / "et al" → TIAA(Teachers…) → "TIAA";
+"Blackstone … or related stakeholders" → "Blackstone Real Estate").
+`v_lcc_true_owner_noise` catalogues each distinct true_owner_name (placeholder /
+operator / verbose / clean) — surface, reversible. Verified live: U.S. Renal Care
+→ not usable; John Doe / Independent → rejected; TIAA / Blackstone verbose →
+canonicalized; Blackstone → usable.
+
+### Unit 2 — the resolver + evidence trace
+- **`lcc_reconcile_owner(entity)`** — gathers the owner's evidence (name-core,
+  phone/email/address keys, city/state, usable true_owner sponsor via the
+  portfolio mirror, SF account), clusters same-party candidate ORG entities by
+  ANY same-party key (shared phone/email/SF/address, or a DISTINCTIVE name-core
+  match), scores each by summed authority weights, and returns one row per
+  candidate with `verdict`: **same_party** (score ≥ threshold AND a name-core
+  variant — the "case-dups merge on name-core" rule) / **review** (strong
+  agreement below threshold, or a shared contact w/ a different name — human) /
+  **distinct** (a HIGH-AUTHORITY CONFLICT — both carry a KNOWN but DIFFERENT SF
+  Account → held apart, never merged). Never seeds a cluster from a
+  junk/operator/placeholder name (Unit-3 gate). SECURITY DEFINER; STABLE.
+- **`lcc_owner_evidence_cache`** (R7 pattern) — the candidate universe
+  materialized (~24k active-org owners), indexed on phone/email/addr/sf/token, so
+  discovery is an index lookup not a 24k-org recompute. `lcc_refresh_owner_evidence_cache()`
+  + hourly cron `lcc-owner-evidence-cache-refresh`. Empty cache ⇒ no candidates
+  (cache-or-live safe).
+- **`lcc_owner_reconcile_evidence`** — append-only trace: per (target, candidate)
+  the agreeing signals + weighted score + verdict + action. Grounded/traceable/
+  reversible.
+- **Worker** `?_route=owner-reconcile-engine-tick` (sub-route of operations.js;
+  handler `api/_handlers/owner-reconcile-engine.js`). GET=dry-run (resolver over
+  the value-ranked owner universe or the Unit-4 queue → verdict tally + mergeable/
+  review samples + true_owner-noise distribution; no writes) / POST=drain
+  (consolidate the confident same_party merges via `lcc_merge_entity` — reversible,
+  and merging fans one cluster contact across all members — then record the
+  evidence; bounded by limit + a ~20s wall-clock). Pure helpers
+  `classifyReconcilePair` (verdict→action; a high-authority conflict is NEVER a
+  merge) + `pickMergeWinner` (SF-linked wins, else the value-ranked target) are
+  unit-tested.
+
+### Unit 4 — continuous re-triangulation (queue + seed, NO hot-path trigger)
+`lcc_owner_reconcile_queue` + `lcc_enqueue_owner_reconcile` (idempotent) +
+`lcc_seed_owner_reconcile_queue(since, limit)` — enqueues owners whose evidence
+CHANGED recently (entity contact fields / owner-facts updated in the window),
+bounded + org-scoped + usable-name-gated. **Deliberate deviation:** NO AFTER-INSERT
+trigger on the hot `entity_relationships`/`external_identities` paths (CoStar
+bursts write tens of thousands of edges — the R7 connection-budget lesson);
+instead a gentle daily seed cron `lcc-owner-reconcile-seed` (06:20) + the worker
+drains it value-ranked. Same "re-triangulate on a new clue" effect, no hot-path
+risk.
+
+### Verified live (dry-run + synthetic gate, 0 residue) 2026-07-16
+- Resolver over the top-400 value-ranked owners: **3 same_party** (mergeable), 124
+  review pairs (67 owners), 5 held **distinct on SF-account conflict**. Spot-checks
+  to source: "City of Phoenix"↔"City Of Phoenix" and "Penzance"↔"Penzance
+  Management LLC" merge (name_core 40 + sponsor 30 = 70); Wells Fargo & Company vs
+  Wells Fargo Bank / Advisors held distinct (different SF accounts); Blackstone
+  Inc./EDENS + GBA/SSMC LP-variants → review (name-only, no corroboration — never
+  guessed).
+- Write-path gate (self-rolling-back DO block, 0 residue): two throwaway orgs with
+  a shared phone + name-core variant → resolver returned same_party (score 85),
+  `lcc_merge_entity` tombstoned the loser into the winner, an evidence row wrote;
+  full rollback → 0 synthetic entities / 0 evidence / 0 queue residue.
+- Unit-3 guards + Unit-4 seed (500 bounded) verified live. `node --check` clean;
+  `ls api/*.js | wc -l`=12; `test/owner-reconcile-engine.test.mjs` (9) green.
+
+### Activation (Scott's gate — the auto-merge DRAIN is NOT auto-scheduled)
+The pure-DB crons (cache refresh, queue seed) ship live. The DRAIN worker
+CONSOLIDATES entities, so per the owner-deed-autofix / UW#2 posture it is NOT
+scheduled: run `GET /api/owner-reconcile-engine-tick?min_value=1000000` (dry-run
+verdict distribution), then a capped `POST …?limit=25` gated drain, confirm the
+merges are correct case-dups (no wrong-family merge, conflicts held) — only THEN
+schedule `lcc-owner-reconcile-engine` (POST source=queue) per the commented
+template in migration `20260716141000`. Tune the threshold / weights in
+`lcc_reconcile_config` / `lcc_signal_authority`. Reverse a merge via the
+`merged_into_entity_id` tombstone; drop the evidence/queue/cache/config/authority
+tables + the functions → zero trace.
+
+### Follow-ups (NOT in this round)
+A Decision-Center lane rendering the `review` evidence (the mechanism records it;
+a lane surface is the operator-facing add) · attaching the best cluster contact
+explicitly (merging already inherits it via backref move) · widening the
+same-party auto-merge to a shared-address/phone class once the address dimension
+densifies (Phase A/B) · the sponsor-inversion flag (recorded=firm ↔ true_owner=SPE)
+as a distinct review reason.
