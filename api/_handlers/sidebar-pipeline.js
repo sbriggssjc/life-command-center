@@ -43,6 +43,7 @@ import { validateSaleIngest, validateContactIngest } from '../_shared/ingest-con
 // here for the existing test/derive-listing-date.test.js import path.
 import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 export { deriveListingDate };
+import { cleanLenderName } from '../_shared/lender-name.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -8607,20 +8608,27 @@ function lenderNamePasses(name) {
   return clean;
 }
 
-// ── ORE follow-up (2026-07-15): normalize the CLEAN deed-path lender into the
-// `lenders` entity table so lenders dedup ACROSS loans (like recorded_owners),
-// then stamp `loans.lender_id`. Dedup key: dia `normalized_name` / gov `lower(name)`
-// — NEITHER `lenders` table carries a UNIQUE on the name, so this is a
-// GET-then-insert (a POST never 409s). Guarded via `lenderNamePasses` (banks /
-// finance / federal ARE legit lenders — no federal reject). `lender_type` is left
-// UNSET (a per-domain CHECK vocabulary with no value we can infer from a deed).
-// Returns lender_id (uuid) or null (best-effort; never throws). Only the clean
-// deed-path lender flows here — the messy CoStar text-lender backfill (broker-
-// mashed / allocation-note names) is a separate follow-up (needs a name-cleaner).
-async function resolveOrCreateLender(domain, name, deps) {
+// ── ORE follow-up (2026-07-15/16): normalize a lender into the `lenders` entity
+// table so lenders dedup ACROSS loans (like recorded_owners), then stamp
+// `loans.lender_id`. Dedup key: dia `normalized_name` / gov `lower(name)` — NEITHER
+// `lenders` table carries a UNIQUE on the name, so this is a GET-then-insert (a POST
+// never 409s). `lender_type` is left UNSET (a per-domain CHECK vocabulary with no
+// value we can infer from a deed). Returns lender_id (uuid) or null (best-effort;
+// never throws).
+//   Cleaning pipeline (the SINGLE choke point both the deed path AND the messy
+//   CoStar text-lender backfill inherit): cleanLenderName() FIRST — strips a leading
+//   broker/intermediary prefix ("Marcus & Millichap Capstar Bank" → "Capstar Bank"),
+//   drops allocation-note parentheticals ("JLL CIT Group ($1.5m alloc'd)" → "CIT
+//   Group"), and SKIPS an ambiguous/garbage string (multi-lender `;`, placeholder
+//   Private/Other, bare fragment) so it is left text-only, never forced into
+//   `lenders`. Then lenderNamePasses() (banks / finance / federal ARE legit lenders
+//   — no federal reject). The cleaner's quality IS the dedup quality.
+export async function resolveOrCreateLender(domain, name, deps) {
   try {
     const q = (deps || buildDeedPropagationDeps()).domainQuery;
-    const clean = lenderNamePasses(name);
+    const cleaned = cleanLenderName(name);
+    if (cleaned.skip) return null;
+    const clean = lenderNamePasses(cleaned.clean);
     if (!clean) return null;
     const isGov = domain === 'government';
     // Case-insensitive exact match; escape LIKE wildcards so a `%`/`_` in a name
