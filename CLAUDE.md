@@ -7952,3 +7952,68 @@ appears in LCC linked to Boyd with a `salesforce/Contact` identity; (b) the SF
 Eric Dowling merges by email into the existing CoStar/RCA Dowling (one entity,
 three source identities — no dup); (c) the `sf_contact_account_mismatch` lane
 surfaces the Dowling-on-Arbor disagreement. Spot-check Capra + Dowling end to end.
+
+## SF-CONTACT-RECONCILE by-id resolver — un-conflate guard_rejected + harden field-map (2026-07-15)
+
+The WhoId by-id resolver (PR #1406) was deployed + running (`byid_configured:true`,
+the "SF Get Contact By Id" PA flow returns a clean lowercase payload), yet BOTH
+target decision-makers came back `guard_rejected` → `no_data`, minting nothing:
+Joseph Capra (`0038W00002PRo0iQAD`) + Eric Dowling (`0038W00002PRqkNQAT`,
+`edowling@boydwatterson.com`, misfiled under "Arbor Realty Trust"). Grounded live:
+`sf_contact_resolve_queue` held exactly those 2 rows, `status='no_data'`,
+`detail='guard_rejected'`. LCC-Opps + SF-read-only; no migration (the queue status
+CHECK `('seen','resolved','no_data','dead')` is unchanged — the honest reason rides
+`detail`); ≤12 api/*.js.
+
+### Root cause — `guard_rejected` was a blanket mislabel
+`resolveWhoId` (`sf-contact-resolve.js`) labeled EVERY non-entityId result from
+`defaultResolveOrCreateSfContact` (`sf-activity-ingest.js`) as `guard_rejected` —
+conflating (a) an EMPTY NAME (a by-id adapter/field-map miss → seedFields empty →
+the resolver's early `return null`), (b) a genuine name-guard skip (junk /
+implausible-person / street-fragment), AND (c) a failed `entities` POST (a DB/RLS
+error → `ensureEntityLink` returns `{ok:false,error}` → the resolver's `return
+null`). All three surfaced identically as `guard_rejected`, hiding the true cause.
+(The adapter `getSalesforceContactById` already read lowercase+PascalCase keys —
+the existing snake_case test passes — so the field-map was NOT the sole culprit;
+the mislabel is what masked whichever cause was really biting.)
+
+### The fix (JS-only, ships on the Railway redeploy)
+- **`defaultResolveOrCreateSfContact`** now returns a STRUCTURED result instead of
+  a bare `null`: `{ok:true, entityId, createdEntity, resolvedByEmail}` on success;
+  `{ok:false, reason:'no_name'}` when no usable name/email reached the resolver
+  (trim-aware, so a whitespace-only padded name is treated as empty, not minted
+  blank); `{ok:false, reason:<the ensureEntityLink `skipped`>}` for a genuine
+  name-guard; `{ok:false, reason:'create_failed', detail}` for a POST/link error.
+  Backward-compatible — the ingest caller (`sf-activity-ingest.js` L566) only reads
+  `.entityId`, so a `{ok:false,…}` object falls through to `skipped_no_entity`
+  exactly as the old `null` did.
+- **`resolveWhoId`** un-conflates: `no_name` → outcome `no_name` (status `no_data`,
+  `detail='no_name'` — honest, NOT guard_rejected); a real name-guard →
+  `guard_rejected` (with the true skip reason in `detail`); `create_failed` /
+  `link_failed` → **transient RETRY** (status `seen`, dead-letters at
+  `SF_RESOLVE_MAX_ATTEMPTS`) instead of terminally stranding a row on a DB hiccup.
+  The tick response gains a `no_name` counter.
+- **`getSalesforceContactById`** hardened defensively: `unwrapSfContact` peels
+  `{contact|record|body|result:{…}}` + list envelopes (`value[]`/`records[]`/
+  `d.records[]`); the field map reads lowercase + PascalCase + nested `Account.Name`
+  via a `pick(...spellings)` helper — so whatever shape the flow actually sends,
+  the name/email can't silently drop.
+
+### Verified (headless 2026-07-15)
+`test/sf-contact-resolve.test.mjs` 17 → 28 (the EXACT lowercase Dowling payload maps
+all fields + flows end-to-end to `resolved`; a raw SF record with nested
+`Account.Name` maps; `body`/`value[]` unwrap; `no_name` ≠ `guard_rejected`; a real
+guard skip stays `guard_rejected` with the true reason; `create_failed` retries then
+dead-letters; `defaultResolveOrCreateSfContact` empty/whitespace name → `no_name`).
+`node --check` clean (salesforce, sf-activity-ingest, sf-contact-resolve); `ls
+api/*.js | wc -l`=12; full suite 1845 pass / 0 fail / 6 skipped.
+
+### After deploy (Cowork verifies live)
+Reset the 2 queue rows to `status='seen'` and re-drain (`POST
+/api/sf-contact-resolve-tick`): expect Capra to MINT onto Boyd with a
+`salesforce/Contact` identity, the SF Dowling to MERGE by email into the existing
+CoStar/RCA Dowling (one entity, no dup), and the `sf_contact_account_mismatch` lane
+to surface Dowling-on-"Arbor Realty Trust". If a row now records `no_name` (the
+flow really returns no name) or `create_failed:<detail>` (a DB/RLS error), the
+honest label points straight at the real next fix instead of a blanket
+`guard_rejected`.
