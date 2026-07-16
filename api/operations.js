@@ -199,6 +199,17 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfLinkReconcileTick(req, res);
   }
 
+  // SF-CONTACT-RECONCILE — WhoId by-id contact resolver (via vercel.json /
+  // server.js _route=sf-contact-resolve-tick). GET=dry-run / POST=drain the
+  // sf_contact_resolve_queue → mint (or attach-by-email) the SF contact.
+  // Authenticates internally. NOTE: the by-id resolver depends on THIS dispatch
+  // — if it goes missing, every tick 400s at the bridge-action router below.
+  // (Restored 2026-07-16 after a stale-branch merge reverted the registration.)
+  if (req.query._route === 'sf-contact-resolve-tick') {
+    const { handleSfContactResolveTick } = await import('./_handlers/sf-contact-resolve.js');
+    return handleSfContactResolveTick(req, res);
+  }
+
   // CONTACT-SELECTION Slice 3 — owner-contact enrichment worker (via vercel.json
   // _route=owner-contact-enrich-tick). GET=dry-run / POST=drain. Attaches the
   // ranked decision-maker (or runs the enrichment action) so owners leave
