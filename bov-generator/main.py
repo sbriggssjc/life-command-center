@@ -3,26 +3,35 @@ main.py — BOV Generator API (FastAPI)
 
 POST /generate-bov
   Generates a BOV workbook, recalculates all formulas via LibreOffice, and
-  returns the completed file as a base64-encoded payload in JSON.  Claude
-  decodes the bytes and delivers the file directly to the user — no external
-  storage or Microsoft app registration required.
+  returns BOTH:
+    - a short-lived download_url (served by GET /download/{token}), suitable
+      for MCP/Claude Project delivery where a clickable link is needed; and
+    - file_base64 (backward compatible with the Cowork decode-and-deliver flow).
+
+GET /download/{token}
+  Serves a previously generated workbook by its unguessable token. No API key
+  required (so a browser click works), but tokens are high-entropy (uuid4) and
+  files expire after DOWNLOAD_TTL_SECONDS.
 
 GET /health
   Liveness check.
 
-Authentication: X-API-Key header must match the BOV_API_KEY env var.
+Authentication: X-API-Key header must match the BOV_API_KEY env var (generate only).
 """
 
 import base64
 import os
 import sys
+import time
+import uuid
+import shutil
 import tempfile
 import logging
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, Depends, Header
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 
 # ── Ensure local modules are importable ───────────────────────────────────────
@@ -42,11 +51,22 @@ log = logging.getLogger("bov-generator")
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="BOV Generator API",
-    description="Generates Briggs CRE BOV workbooks and returns the completed file as a base64-encoded payload.",
-    version="1.0.0",
+    description="Generates Briggs CRE BOV workbooks; returns a short-lived download link and a base64 payload.",
+    version="1.1.0",
 )
 
 BOV_API_KEY = os.environ.get("BOV_API_KEY", "")
+
+# Public base URL used to build absolute download links.  Set PUBLIC_BASE_URL in
+# Railway (e.g. https://pacific-love-production-f6b9.up.railway.app).  Falls back
+# to the incoming request's base URL if unset.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
+# Where generated workbooks are held for download.  On disk (not in-memory) so
+# it is shared across uvicorn workers within the same container.
+DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "bov_downloads"
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DOWNLOAD_TTL_SECONDS = int(os.environ.get("DOWNLOAD_TTL_SECONDS", "3600"))  # 60 min default
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -55,6 +75,39 @@ def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
         raise HTTPException(status_code=500, detail="BOV_API_KEY not configured on server")
     if x_api_key != BOV_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+# ── Download store helpers ────────────────────────────────────────────────────
+def _sweep_expired_downloads() -> None:
+    """Delete download folders older than the TTL.  Best-effort; never raises."""
+    now = time.time()
+    try:
+        for token_dir in DOWNLOAD_DIR.iterdir():
+            if not token_dir.is_dir():
+                continue
+            try:
+                age = now - token_dir.stat().st_mtime
+                if age > DOWNLOAD_TTL_SECONDS:
+                    shutil.rmtree(token_dir, ignore_errors=True)
+            except FileNotFoundError:
+                continue
+    except Exception:
+        log.warning("Download sweep skipped", exc_info=True)
+
+
+def _store_for_download(raw_bytes: bytes, filename: str) -> str:
+    """Persist the workbook under a fresh token and return the token."""
+    token = uuid.uuid4().hex
+    dest_dir = DOWNLOAD_DIR / token
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / filename).write_bytes(raw_bytes)
+    return token
+
+
+def _base_url(request: Request) -> str:
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+    return str(request.base_url).rstrip("/")
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -108,11 +161,13 @@ class BOVRequest(BaseModel):
 
 
 class BOVResponse(BaseModel):
-    status:        str
-    filename:      str
-    file_base64:   str  = Field(..., description="Base64-encoded .xlsx — decode and save as the filename above")
-    file_size_kb:  float
-    recalc_result: dict
+    status:             str
+    filename:           str
+    download_url:       str   = Field(..., description="Short-lived link to download the .xlsx — click to save")
+    expires_in_seconds: int   = Field(..., description="Seconds until the download link expires")
+    file_base64:        str   = Field(..., description="Base64-encoded .xlsx — decode and save as the filename above")
+    file_size_kb:       float
+    recalc_result:      dict
 
 
 # ── Filename helper ───────────────────────────────────────────────────────────
@@ -130,7 +185,7 @@ def _make_filename(req: BOVRequest) -> str:
 
 # ── Generate endpoint ─────────────────────────────────────────────────────────
 @app.post("/generate-bov", response_model=BOVResponse, dependencies=[Depends(verify_api_key)])
-async def generate_bov(req: BOVRequest):
+async def generate_bov(req: BOVRequest, request: Request):
     asset_type = req.asset_type.upper()
     if asset_type not in ("NNN", "MOB"):
         raise HTTPException(status_code=422, detail=f"asset_type must be NNN or MOB, got: {req.asset_type}")
@@ -172,32 +227,63 @@ async def generate_bov(req: BOVRequest):
             log.error("Recalc failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Recalc failed: {e}")
 
-        # 4 — Read file and base64-encode for return
+        # 4 — Read file, base64-encode, and stage for download
         try:
             raw_bytes = Path(output_path).read_bytes()
             file_b64  = base64.b64encode(raw_bytes).decode("ascii")
             size_kb   = round(len(raw_bytes) / 1024, 1)
-            log.info("Returning %s KB base64-encoded (%s)", size_kb, filename)
         except Exception as e:
             log.exception("File read failed")
             raise HTTPException(status_code=500, detail=f"File read failed: {e}")
 
+    # Stage the finished file for link-based download (outside the temp dir).
+    _sweep_expired_downloads()
+    token        = _store_for_download(raw_bytes, filename)
+    download_url = f"{_base_url(request)}/download/{token}"
+    log.info("Staged %s KB for download (%s) → token %s", size_kb, filename, token)
+
     return BOVResponse(
-        status        = "success",
-        filename      = filename,
-        file_base64   = file_b64,
-        file_size_kb  = size_kb,
-        recalc_result = recalc_result,
+        status             = "success",
+        filename           = filename,
+        download_url       = download_url,
+        expires_in_seconds = DOWNLOAD_TTL_SECONDS,
+        file_base64        = file_b64,
+        file_size_kb       = size_kb,
+        recalc_result      = recalc_result,
+    )
+
+
+# ── Download endpoint ─────────────────────────────────────────────────────────
+@app.get("/download/{token}")
+async def download_file(token: str):
+    # Guard against path traversal — tokens are always plain hex.
+    if not token.isalnum():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    _sweep_expired_downloads()
+    token_dir = DOWNLOAD_DIR / token
+    if not token_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Link expired or not found")
+
+    files = [p for p in token_dir.iterdir() if p.is_file()]
+    if not files:
+        raise HTTPException(status_code=404, detail="Link expired or not found")
+
+    target = files[0]
+    return FileResponse(
+        path       = str(target),
+        filename   = target.name,
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "bov-generator", "version": "1.0.0"}
+    return {"status": "ok", "service": "bov-generator", "version": "1.1.0"}
 
 
-# ── OpenAPI override (adds X-API-Key to schema for Claude Project registration) ──
+# ── OpenAPI override (adds X-API-Key to schema) ───────────────────────────────
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi():
     from fastapi.openapi.utils import get_openapi
