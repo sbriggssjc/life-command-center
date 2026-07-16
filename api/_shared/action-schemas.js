@@ -1141,6 +1141,12 @@ function sanitizeForSwagger2(node) {
     }
     delete node.nullable;
     delete node.examples;
+    // Swagger 2.0 requires 'items' on every array-type schema node.
+    // ACTION_SCHEMAS omit it for simplicity (opaque return arrays), so
+    // we inject a permissive stub here to satisfy the validator.
+    if (node.type === 'array' && !Object.prototype.hasOwnProperty.call(node, 'items')) {
+      node.items = {};
+    }
     for (const k of Object.keys(node)) sanitizeForSwagger2(node[k]);
   }
 }
