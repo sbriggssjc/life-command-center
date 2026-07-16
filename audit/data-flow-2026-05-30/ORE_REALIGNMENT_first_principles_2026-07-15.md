@@ -685,3 +685,42 @@ Account-type identity rather than a relationship edge to a Boyd org entity; Capr
 decide whether SF `AccountId` should be a person-identity or a `works_at` edge. This is the
 kind of conflation the reconciliation engine (§7) + the mismatch lane are meant to surface —
 now surfaced.
+
+## §10k — SF-as-source alignment: audit + plan execution (2026-07-16)
+
+Full audit: `ORE_SF_AS_SOURCE_AUDIT_2026-07-16.md`. Verdict: the doctrine is ~80% built —
+SF writes are already minimum-necessary + gated (call/activity logging, deal/BOV closing,
+gated-off contact-writeback; the `bridges.js salesforce.*.upsert` are INBOUND), and the R39
+email-tier reconcile already stops SF dups from becoming LCC dups. The gap is that the
+**autonomous consolidation/binding layer is gated off / never wired**, so SF conflation waits
+for a manual verdict. The Dowling "person named like a firm" conflation is nearly a one-off
+(1 of 559 account-carrying persons); the 559 pattern is a MODELING choice (SF AccountId stamped
+as an identity on the person rather than a person→org edge).
+
+**Move A (turn on the reconciliation engine) — dry-run DONE, route blocker found.**
+Refreshed the evidence cache (24,460 rows) and ran `lcc_reconcile_owner` over the top-400
+value owners: **4 `same_party` (all real case-dups: Penzance ↔ Penzance Management LLC; City
+Of Phoenix case-dup; Morgantown GSA ↔ Morgantown GSA USDA — two Boyd SPEs), 133 `review`
+(name-core only, < threshold 60), 10 `distinct` (ALL correctly held on a high-authority
+conflict — the "two different SF accounts → never merge" guard).** Engine verified safe +
+conservative. **But `/api/owner-reconcile-engine-tick` is NOT registered** — POST returns the
+bare bridge-router 400 (never a 200; same class as the sf-contact-resolve route revert). Its
+cron was left commented because the route was never wired. → prompt
+`CLAUDECODE_PROMPT_ORE_register_reconcile_engine_route_and_schedule.md` (register the route
+like PR #1408, keep the gated-drain posture; then Cowork runs the capped drain → schedules the
+cron).
+
+**Moves B + C (SF-conflation autonomy) → prompt `CLAUDECODE_PROMPT_ORE_sf_conflation_autonomy.md`:**
+- **C (modeling guards, do first):** never let an SF account NAME overwrite a person's name;
+  relate a contact to its SF Account as a person→org EDGE, not an `salesforce/Account`
+  identity-on-person; one-time reversible pass to convert the existing 559 identities→edges +
+  rename/relate the Dowling node.
+- **B (canonical-record binding):** extend the `sf-link-reconcile` owner→Account binding to
+  CONTACT identities — autonomously bind the most-accurate SF record (email-domain-authoritative:
+  Dowling → Boyd, Arbor demoted) and demote the rest, LCC-side only; genuine ties fall to the
+  `sf_contact_account_mismatch` lane as the true-ambiguity fallback.
+- SF writes UNCHANGED (minimum-necessary, gated; no SF merge/cleanup path — resolve in LCC).
+
+State: dry-run proves the engine; two prompts queued (route registration unblocks the
+autonomous cron; C+B make SF-conflation resolution autonomous). No merges hand-executed — they
+run through the worker's `pickMergeWinner` + snapshot + cache-refresh once the route is live.
