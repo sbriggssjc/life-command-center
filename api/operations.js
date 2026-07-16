@@ -241,6 +241,15 @@ export default withErrorHandler(async function handler(req, res) {
     return handleInstitutionContactTick(req, res);
   }
 
+  // Salesforce Lists (Campaigns/CampaignMembers) ingest (via vercel.json /
+  // server.js _route=sf-list-import). GET=dry-run (classify + normalize, no
+  // writes) / POST=ingest (reconcile-by-email → relate to company org → record
+  // membership → route buyers/sellers). Authenticates internally.
+  if (req.query._route === 'sf-list-import') {
+    const { handleSfListImport } = await import('./_handlers/sf-list-import.js');
+    return handleSfListImport(req, res);
+  }
+
   // UW#7 — developer resolution from the ownership chain (via vercel.json
   // _route=developer-chain-resolve-tick). GET=dry-run (honest per-bucket sizing) /
   // POST=drain. Resolves the original developer for queued
