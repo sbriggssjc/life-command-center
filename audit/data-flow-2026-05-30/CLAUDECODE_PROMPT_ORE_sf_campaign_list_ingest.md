@@ -76,3 +76,13 @@ broker). Build one LCC ingest route + a PA CampaignMember flow, reconcile by ema
 tag the segmentation, and route buyers → P-BUYER buy-side, sellers → owner-prospect + the
 institution registry. This turns Salesforce's own curated lists into the LCC's outreach engine —
 and finally seeds the institution registry with real, non-fabricated sponsor contacts.
+
+## ⚠️ PAGINATION IS MANDATORY (added 2026-07-16)
+Several lists exceed 100/500/2,000 members (the 100-cap I hit was only the Vision GM UI table;
+the API has no such cap). The PA "Get records" (Salesforce) step caps at **2,000 rows/call
+unless pagination is enabled** — turn ON the connector's Pagination setting (threshold ≥ the
+largest list) OR loop each campaign with a Do-Until on the CampaignMember count, so EVERY member
+of EVERY list is retrieved (never truncate at the first page). The `/api/sf-list-import` route
+must be **idempotent** (upsert by ContactId/email) so re-pulls and overlapping batches never
+duplicate. Verify by comparing the ingested member count for a large list against its Vision GM
+"Showing 1 to N of N entries" total.

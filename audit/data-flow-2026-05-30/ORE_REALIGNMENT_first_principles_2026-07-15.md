@@ -822,3 +822,27 @@ API.
 This turns Salesforce's own curated lists (the source for the quarterly CM sends + call lists)
 into the LCC's outreach/resolution engine, and finally supplies the institution registry with
 real sponsor contacts (the gate on Tier A / B1).
+
+## §10o — Seller-prospect lists extracted (broader net-lease seller bucket) + naming convention (2026-07-16)
+
+Extracted the seller-prospect side of the Vision GM lists → `NetLease_Seller_Prospects_bucket.csv`
+(**344 unique contacts**, deduped from 351 raw, list-membership tagged). By list: KDL Seller
+Prospects 100*, SAB Dialysis Prospects 100*, SAB Medical Developer 100*, NKB Prospects 20, SAB
+OFS Groups 14, SAB Seller Prospects 11, SAB GSA Prospects 3, SAB Net Lease 3 (*=100-row page cap,
+more on p2). JTS Seller Prospects + Kellys Prospects are PARENT folders (sub-lists, not expanded).
+
+**List naming convention (for the sf-list-import pipeline mapping):**
+- Broker prefix → owner: **SAB**=Scott Briggs, **KDL**=Kelly Largent, **NKB**=Nate Berwaldt,
+  **JTS**=Jake Schooley (old team), **DMR**=David Read (old team). "* Seller Prospects" /
+  "* Prospects" = the broker's owner-prospect lists.
+- Product type in the name: **Net Lease**, **GSA** (gov), **Dialysis**, **Medical Developer**,
+  **OFS** (office?), **Industrial**, **Drug Store**, plus owner lists (Office Principals, VCA
+  Animal Hospital Owners, Christian Brothers Owners, DMR Urgent Care Owners).
+- **Geographic lists** exist too (created for specific marketing tasks) — map to a geo tag.
+- "z_Old Team Members" / "z_Engage" / "New Name" / "delete" / "Redneck Industrial" = archive/junk
+  parents — the pipeline should skip `z_`-prefixed + obvious-junk campaigns.
+So the `sf-list-import` route parses `{broker_prefix, product_type|geo, side=buyer|seller}` from
+the campaign name + parent, reconciles each member by email, and routes buyers→P-BUYER /
+sellers→owner-prospect + institution registry. Two CSVs delivered to Scott today
+(GSA_Buyer_list_156, NetLease_Seller_Prospects_bucket 344); the pipeline makes it comprehensive +
+self-updating.
