@@ -18,8 +18,10 @@ bulk instead.
 ## STEP 2 — Get the campaigns (the list catalog)
 **Salesforce → Get records**
 - Object type: **Campaign**
-- Filter query: `IsActive = true` (optionally also exclude archives:
-  `AND (NOT Name LIKE 'z\_%') AND (NOT Name LIKE 'New Name%') AND (NOT Name LIKE 'delete%')`)
+- Filter query (⚠️ **OData syntax, not SOQL** — use `eq`, not `=`): **`IsActive eq true`**
+  (do NOT use SOQL `= true` or `LIKE` — the connector errors "Syntax error at position …".
+  To skip archives, filter them out with a Condition in the loop instead of here, or leave
+  them — the route classifies junk names to nothing.)
 - Select query (fields): `Id, Name, ParentId`
 - **Pagination: ON**, threshold 100000 (there aren't many campaigns, but leave it on).
 
