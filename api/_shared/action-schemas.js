@@ -1228,9 +1228,13 @@ export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_UR
     for (const { actionId, regEntry, schema } of actions) {
       const pathKey = `/api/copilot/${category}/${actionId.replace(/_/g, '-')}`;
       const tierLabel = regEntry.tier === 0 ? 'read-only' : regEntry.tier === 1 ? 'lightweight-confirm' : regEntry.tier === 2 ? 'explicit-confirm' : 'human-approval';
+      // Convert snake_case actionId → PascalCase operationId so the stored
+      // connector swagger matches what Copilot Studio bound when actions were
+      // first created (e.g. get_my_execution_queue → GetMyExecutionQueue).
+      const operationId = actionId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
       spec.paths[pathKey] = {
         post: {
-          operationId: actionId,
+          operationId,
           summary: (schema.description || actionId).slice(0, 80),
           description: `**Tier ${regEntry.tier}** (${tierLabel})${regEntry.confirm ? ` — requires ${regEntry.confirm} confirmation` : ''}. Category: ${category}. ${schema.description || ''}`,
           'x-ms-summary': actionId.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
