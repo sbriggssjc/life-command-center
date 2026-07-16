@@ -608,3 +608,34 @@ WhoIds sit in the queue (`no_data`) — Cowork resets to `seen` + re-drains afte
   **0 seeded** (awaiting Scott's real sponsor contacts — never fabricated). **Gated
   activations pending: (1) seed a sponsor contact + run the fan-out; (2) bless the capped
   reconciliation drain, then schedule its cron.**
+
+## §10h — SF WhoId resolver: by-id field-map fix WORKS, but the route regressed in the last redeploy (2026-07-16)
+
+- **The field-map fix (PR #1407) is proven correct in production.** Grounded live in
+  `net._http_response`: the `lcc-sf-contact-resolve` cron tick **id 98205 @ 2026-07-15
+  22:00:23 UTC** returned `{"mode":"apply","byid_configured":true,"queue_depth":3,
+  "scanned":3,"resolved":3,"minted":3,...}` — three WhoIds minted cleanly onto entities
+  (`sf_contact_resolve_queue` rows `003Vs00000bZj50IAC` / `0031I00000GxqICQAZ` /
+  `0031I00000GxqBBQAZ` → `status='resolved'`, `detail='minted'`). The by-id adapter now
+  reads the flow's lowercase keys and mints; the guard-rejected mislabel is gone. **The
+  resolver works.**
+- **A redeploy between 00:00 and 00:30 UTC (2026-07-16) DROPPED the
+  `/api/sf-contact-resolve-tick` route registration.** Last healthy worker 200 =
+  **00:00:02 UTC** (id 98441, `byid_configured:true`); first **HTTP 400 "Invalid POST
+  action"** = **00:30:10 UTC** (id 98547). Every tick since — cron and manual — 400s at
+  operations.js's bare **bridge-action router** (`log_activity, … / create_lead, …`),
+  meaning the POST reached operations.js but `sf-contact-resolve-tick` was no longer
+  recognized as a sub-route. Handler present, dispatch gone → the classic stale-branch
+  merge revert (PR #1407 likely branched pre-#1406 and reverted the operations.js /
+  server.js / vercel.json route wiring #1406 had added, while keeping the handler file).
+- **Impact:** Capra (`0038W00002PRo0iQAD`) + Dowling (`0038W00002PRqkNQAT`) are reset to
+  `status='seen'` in `sf_contact_resolve_queue` and CANNOT drain until the route is
+  restored — the by-id resolver is the only path (the reverted activity flow carries no
+  name, so ingest can't mint them). No data loss; the queue holds them.
+- **Fix = restore the sub-route registration, no handler change.** Written up:
+  `CLAUDECODE_PROMPT_ORE_restore_sf_contact_resolve_route.md` (restore operations.js
+  dispatch + server.js mount + vercel.json rewrite, mirroring the sibling resolver routes;
+  redeploy; then the queued Capra/Dowling drain and the Boyd loop closes — Capra mints onto
+  Boyd, SF Dowling merges by email into the CoStar/RCA Dowling, the
+  `sf_contact_account_mismatch` lane surfaces Dowling-on-Arbor). This is a route-dispatch
+  regression, not fixable via SQL.
