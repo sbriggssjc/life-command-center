@@ -82,3 +82,41 @@ each related to its company org; a large list's ingested count == its Vision GM 
 Skip the PA flow; I bulk-POST the already-scraped data (the 156 GSA buyers + the seller bucket)
 straight to `/api/sf-list-import` per campaign. Slower to maintain (manual re-scrape) but works
 today. The PA flow is the durable, self-updating path — prefer it.
+
+## ⚠️ SCOPE FIX — pull ONLY Team Briggs lists, not the whole org (added 2026-07-16)
+The first run used `IsActive eq true`, which pulled EVERY active campaign in the entire
+NorthMarq org (all offices — Dallas/Houston/SLC email blasts), 1h20m and still going, and
+hadn't even reached the Team Briggs lists. Scope the campaign fetch to the **Team Briggs
+subtree** (the "Team Briggs" root you see in the Vision GM tree + its children + grandchildren).
+No hardcoded IDs — find the root by name:
+
+Replace STEP 2 + STEP 3 with a 3-level walk:
+
+**2a. Get the Team Briggs root** — Salesforce Get records, Object **Campaign**,
+`$filter`: **`Name eq 'Team Briggs'`**, `$select`: `Id`.
+→ Compose **`teamBriggsId`** = `first(body('Get_Team_Briggs')?['value'])?['Id']`.
+
+**2b. Get its LEVEL-2 lists** — Get records, Campaign,
+`$filter`: **`ParentId eq '@{outputs('teamBriggsId')}'`**, `$select`: `Id, Name, ParentId`,
+**Pagination ON**. (These are the ~30 direct children: Buyer Lists, SAB/KDL/JTS/NKB Seller
+Prospects, Office Principals, VCA Animal Hospital Owners, etc.)
+
+**3. Apply to each LEVEL-2 campaign:**
+- **3a. POST its own members** — Get CampaignMember `CampaignId eq '@{items('L2')?['Id']}'`
+  (Pagination ON) → HTTP POST to the LCC route with `campaign_id`/`campaign_name`/`parent_id`
+  (parent_id = `@{outputs('teamBriggsId')}`) + `members`.
+- **3b. Get its LEVEL-3 sub-lists** — Get records, Campaign,
+  `$filter`: **`ParentId eq '@{items('L2')?['Id']}'`**, `$select`: `Id, Name`, Pagination ON.
+  (GSA Buyer sits here under "Buyer Lists"; the seller-prospect sublists sit under their
+  broker parent.)
+- **3c. Apply to each LEVEL-3 campaign:** Get its CampaignMembers (Pagination ON) → HTTP POST
+  (`parent_id` = the level-2 `items('L2')?['Id']`).
+
+That's the whole Team Briggs tree (it's ≤3 deep), nothing else. It'll finish in a couple of
+minutes instead of hours, and every list classifies correctly (the `parent_name`/name carries
+"Buyer Lists" / "Seller Prospects" so the route tags buyer vs seller). The member-pull + POST
+block is identical in 3a and 3c — copy it (or factor it into a child flow if you prefer).
+
+**Skip archives if you like:** the `z_Old Team Members`, `z_Engage`, `New Name`, `delete`
+lists are also under Team Briggs — add a Condition before the POST to skip a campaign whose
+Name starts with `z_` / equals `delete` / `New Name`. Optional; the route tags them harmless.
