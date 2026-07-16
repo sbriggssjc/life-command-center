@@ -128,3 +128,33 @@ describe('opsQuery countMode', () => {
     assert.equal(calledFetch, false);
   });
 });
+
+describe('resolvePrimaryWorkspaceId', () => {
+  async function loadFn() {
+    const mod = await import(`../api/_shared/ops-db.js?test=${Date.now()}-${Math.random()}`);
+    return mod.resolvePrimaryWorkspaceId;
+  }
+
+  it('resolves the account primary/oldest workspace id via injected opsQuery', async () => {
+    let path = null;
+    const opsQuery = async (_m, p) => { path = p; return { ok: true, data: [{ id: 'ws-primary' }] }; };
+    const resolvePrimaryWorkspaceId = await loadFn();
+    const ws = await resolvePrimaryWorkspaceId({ opsQuery });
+    assert.equal(ws, 'ws-primary');
+    assert.match(path, /workspaces/);
+    assert.match(path, /order=created_at\.asc/);
+    assert.match(path, /limit=1/);
+  });
+
+  it('returns null when no workspace exists', async () => {
+    const opsQuery = async () => ({ ok: true, data: [] });
+    const resolvePrimaryWorkspaceId = await loadFn();
+    assert.equal(await resolvePrimaryWorkspaceId({ opsQuery }), null);
+  });
+
+  it('returns null (soft) when the query fails or throws', async () => {
+    const resolvePrimaryWorkspaceId = await loadFn();
+    assert.equal(await resolvePrimaryWorkspaceId({ opsQuery: async () => ({ ok: false, status: 503, data: null }) }), null);
+    assert.equal(await resolvePrimaryWorkspaceId({ opsQuery: async () => { throw new Error('boom'); } }), null);
+  });
+});
