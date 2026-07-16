@@ -219,6 +219,28 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerContactEnrichTick(req, res);
   }
 
+  // ORE Phase B B1 / Tier A / reconcile-engine workers (via vercel.json /
+  // server.js). GET=dry-run / POST=drain, each authenticates internally + is
+  // bounded (limit + wall-clock); the reconcile-engine's auto-merge cron stays
+  // unscheduled so a drain only runs on a human-gated, capped call. NOTE: these
+  // three depend on THIS dispatch — server.js + vercel.json already route them
+  // here, so if a block goes missing every tick 400s at the bare-action router
+  // below. (Registered 2026-07-16 after a stale-branch merge left the server.js /
+  // vercel.json entries but dropped the operations.js dispatch — same class as
+  // the sf-contact-resolve-tick restore above; do NOT remove.)
+  if (req.query._route === 'owner-reconcile-tick') {
+    const { handleOwnerReconcileTick } = await import('./_handlers/owner-reconcile.js');
+    return handleOwnerReconcileTick(req, res);
+  }
+  if (req.query._route === 'owner-reconcile-engine-tick') {
+    const { handleOwnerReconcileEngineTick } = await import('./_handlers/owner-reconcile-engine.js');
+    return handleOwnerReconcileEngineTick(req, res);
+  }
+  if (req.query._route === 'institution-contact-tick') {
+    const { handleInstitutionContactTick } = await import('./_handlers/institution-contact.js');
+    return handleInstitutionContactTick(req, res);
+  }
+
   // UW#7 — developer resolution from the ownership chain (via vercel.json
   // _route=developer-chain-resolve-tick). GET=dry-run (honest per-bucket sizing) /
   // POST=drain. Resolves the original developer for queued
