@@ -1256,6 +1256,27 @@ export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_UR
           }
         }
       };
+      // Snake_case compat alias — action bindings created during the snake_case
+      // period reference the original actionId (e.g. get_hot_business_contacts).
+      // This secondary path resolves those without breaking the PascalCase bindings.
+      const compatPathKey = `/api/copilot/compat/${actionId.replace(/_/g, '-')}`;
+      spec.paths[compatPathKey] = {
+        post: {
+          operationId: actionId,
+          summary: (schema.description || actionId).slice(0, 80),
+          'x-ms-summary': actionId.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+          tags: [category],
+          parameters: [{
+            in: 'body',
+            name: 'body',
+            required: true,
+            schema: schema.inputs || { type: 'object' }
+          }],
+          responses: {
+            '200': { description: 'Success', schema: schema.outputs || { type: 'object' } }
+          }
+        }
+      };
     }
   }
 
