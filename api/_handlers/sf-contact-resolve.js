@@ -35,7 +35,7 @@
 // ============================================================================
 
 import { authenticate } from '../_shared/auth.js';
-import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
+import { opsQuery, pgFilterVal, resolvePrimaryWorkspaceId } from '../_shared/ops-db.js';
 import { getSalesforceContactById, isSfContactByIdConfigured } from '../_shared/salesforce.js';
 import {
   defaultResolveOrCreateSfContact,
@@ -60,11 +60,19 @@ const MAX_ATTEMPTS = parseInt(process.env.SF_RESOLVE_MAX_ATTEMPTS || '5', 10);
  *   openMismatch({workspaceId, entityId, detail}) -> boolean
  *   markRow(whoId, patch) -> Promise
  *   maxAttempts: number
+ *   fallbackWorkspaceId: string|null — the account primary/oldest workspace,
+ *     used when the queue row's workspace_id is null (the SF ingest can't always
+ *     resolve one at enqueue). entities.workspace_id is NOT NULL, so minting with
+ *     a null workspace 23502s — this fallback (the createResearchTask pattern) is
+ *     what keeps a workspace-null row from being stranded on the mint forever.
  */
 export async function resolveWhoId(row, deps) {
   const nowIso = new Date().toISOString();
   const attempts = Number(row.attempts || 0) + 1;
   const maxAttempts = deps.maxAttempts || MAX_ATTEMPTS;
+  // Row workspace when present, else the account fallback — never a null into the
+  // mint (which would 23502 on entities.workspace_id).
+  const workspaceId = row.workspace_id || deps.fallbackWorkspaceId || null;
 
   const fetched = await deps.getContactById(row.who_id);
 
@@ -98,7 +106,7 @@ export async function resolveWhoId(row, deps) {
   //                      street_fragment_name (a genuine rejection). Terminal.
   //   - 'create_failed'— the entities POST / link failed (a DB/RLS/transient
   //                      error). RETRYABLE — don't terminally strand the row.
-  const minted = await deps.mintContact({ whoId: row.who_id, workspaceId: row.workspace_id, contact: c });
+  const minted = await deps.mintContact({ whoId: row.who_id, workspaceId, contact: c });
   if (!minted || !minted.ok || !minted.entityId) {
     const reason = (minted && minted.reason) || 'no_name';
     const detail = (minted && minted.detail)
@@ -131,7 +139,7 @@ export async function resolveWhoId(row, deps) {
     if (mm && mm.mismatch) {
       try {
         mismatchFlagged = !!(await deps.openMismatch({
-          workspaceId: row.workspace_id, entityId: minted.entityId,
+          workspaceId, entityId: minted.entityId,
           detail: {
             contact_entity_id: minted.entityId, sf_contact_id: row.who_id,
             sf_account_id: c.account_id || null,
@@ -228,10 +236,17 @@ export async function handleSfContactResolveTick(req, res) {
 
   const deadline = Date.now() + parseInt(process.env.SF_RESOLVE_BUDGET_MS || '20000', 10);
 
+  // The account primary/oldest workspace — resolved ONCE per tick as the fallback
+  // for any queue row enqueued with a null workspace_id (the SF ingest can't
+  // always resolve one). Without this the mint 23502s on entities.workspace_id
+  // and the row retries forever. Same pattern as createResearchTask.
+  const fallbackWorkspaceId = await resolvePrimaryWorkspaceId({ opsQuery });
+
   for (const row of rows) {
     if (Date.now() > deadline) { result.budget_stopped = true; break; }
     const deps = {
       maxAttempts: MAX_ATTEMPTS,
+      fallbackWorkspaceId,
       getContactById: (whoId) => getSalesforceContactById(whoId),
       mintContact: ({ whoId, workspaceId, contact }) => defaultResolveOrCreateSfContact({
         workspaceId, userId: user.id, whoId, accountId: contact.account_id,

@@ -63,7 +63,7 @@
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { appendActivityEvent as defaultAppendActivityEvent } from '../_shared/activity-events.js';
 import { findEntityBySfId as defaultFindEntityBySfId } from '../_shared/bridge-handlers-salesforce.js';
-import { opsQuery } from '../_shared/ops-db.js';
+import { opsQuery, resolvePrimaryWorkspaceId } from '../_shared/ops-db.js';
 import { ensureEntityLink, normalizeEmail, isGenericInboxEmail } from '../_shared/entity-link.js';
 import {
   advanceCadence as defaultAdvanceCadence,
@@ -244,7 +244,13 @@ export async function defaultOpenSfMismatchDecision({ workspaceId, entityId, det
 async function defaultEnqueueSfContactResolve(whoIds, workspaceId) {
   const ids = Array.from(new Set((whoIds || []).map((w) => String(w || '').trim()).filter(Boolean)));
   if (ids.length === 0) return { ok: true, queued: 0 };
-  const rows = ids.map((who_id) => ({ who_id, workspace_id: workspaceId || null }));
+  // Belt-and-suspenders: never enqueue a null workspace_id. The by-id resolver
+  // has its own fallback, but stamping the workspace here means a row is never
+  // enqueued null in the first place. The account primary/oldest workspace is the
+  // fallback when the ingest had no context (createResearchTask pattern).
+  let ws = workspaceId || null;
+  if (!ws) ws = await resolvePrimaryWorkspaceId({ opsQuery });
+  const rows = ids.map((who_id) => ({ who_id, workspace_id: ws || null }));
   try {
     const r = await opsQuery('POST', 'sf_contact_resolve_queue?on_conflict=who_id', rows,
       { headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' } });

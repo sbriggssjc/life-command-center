@@ -44,6 +44,39 @@ describe('resolveWhoId (SF-CONTACT-RECONCILE Unit 2)', () => {
     assert.equal(patch.detail, 'minted');
   });
 
+  // Null-workspace fallback (2026-07-16): the SF ingest can enqueue a WhoId with a
+  // null workspace_id; entities.workspace_id is NOT NULL, so minting with a null
+  // workspace 23502s. The resolver supplies the account primary/oldest workspace
+  // (deps.fallbackWorkspaceId, the createResearchTask pattern) so the row isn't
+  // stranded on the mint forever.
+  it('uses the fallback workspace when the queue row workspace_id is null', async () => {
+    const { deps, calls } = recordingDeps({ fallbackWorkspaceId: 'ws-primary' });
+    const out = await resolveWhoId({ who_id: '003zzz', workspace_id: null, attempts: 0 }, deps);
+    assert.equal(out.outcome, 'resolved');
+    assert.equal(calls.mintContact.length, 1);
+    assert.equal(calls.mintContact[0].workspaceId, 'ws-primary', 'minted with the account fallback workspace');
+  });
+
+  it('prefers the row workspace over the fallback when present', async () => {
+    const { deps, calls } = recordingDeps({ fallbackWorkspaceId: 'ws-primary' });
+    const out = await resolveWhoId({ who_id: '003zzz', workspace_id: 'ws-1', attempts: 0 }, deps);
+    assert.equal(out.outcome, 'resolved');
+    assert.equal(calls.mintContact[0].workspaceId, 'ws-1', 'row workspace wins over the fallback');
+  });
+
+  // The mismatch producer also receives the resolved (non-null) workspace.
+  it('opens the mismatch decision with the fallback workspace (null row)', async () => {
+    const { deps, calls } = recordingDeps({
+      fallbackWorkspaceId: 'ws-primary',
+      getContactById: async () => ({ ok: true, contact: { id: '003ddd', name: 'Eric Dowling', email: 'edowling@boydwatterson.com', account_id: '001A', account_name: 'Arbor Realty Trust' } }),
+      detectMismatch: () => ({ mismatch: true, email_domain: 'boydwatterson.com', account_name: 'Arbor Realty Trust' }),
+    });
+    const out = await resolveWhoId({ who_id: '003ddd', workspace_id: null, attempts: 0 }, deps);
+    assert.equal(out.outcome, 'resolved');
+    assert.equal(calls.openMismatch.length, 1);
+    assert.equal(calls.openMismatch[0].workspaceId, 'ws-primary');
+  });
+
   it('records the reconcile-by-email path (attach to existing person, no dup)', async () => {
     const { deps, calls } = recordingDeps({
       mintContact: async (a) => ({ ok: true, entityId: 'ent-existing', createdEntity: false, resolvedByEmail: true }),
