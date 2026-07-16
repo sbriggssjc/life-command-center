@@ -39,6 +39,7 @@ import bridgesHandler from './api/bridges.js';
 // through to the SPA shell, so the Shortcut got HTML back. No vercel.json change
 // needed (no friendly alias — clients hit /api/intake-share directly).
 import intakeShareHandler from './api/intake-share.js';
+import bovHandler from './api/bov.js';
 
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -241,6 +242,9 @@ app.all('/api/sf-record-lookup-tick', (req, res) => { req.query._route = 'sf-rec
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 
+// BOV workbook generation (proxies the Railway BOV service; key stays server-side)
+app.all('/api/bov', bovHandler);
+
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
 app.all('/api/contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
@@ -379,6 +383,9 @@ app.all('/api/intake-share', intakeShareHandler);
 // ── Legal pages (required by Teams manifest) ──────────────────────────────
 // ── Health check — no auth, no DB, used by Railway deployment healthcheck ──
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.now() }));
+
+// BOV generator page (deep-link target: /bov?data=<base64 JSON>&k=<bridge token>)
+app.get('/bov', (req, res) => res.sendFile(join(__dirname, 'bov.html')));
 
 // R32 (2026-06-16): deploy-version diagnostics. Confirms which token the served
 // `?v=` cache-buster is stamped with and whether it's git-pinned. `no-store` so

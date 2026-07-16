@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>BOV Generator — Briggs CRE</title>
+<style>
+  :root {
+    --ink: #0f2233; --muted: #5b6b7a; --line: #e2e8f0; --bg: #f6f8fb;
+    --brand: #003DA5; --brand-2: #1F7A8C; --ok: #147d4a; --err: #b42318; --gold: #b7791f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; background: var(--brand); }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+  .sub { color: var(--muted); margin: 2px 0 24px; font-size: 13px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px; box-shadow: 0 1px 2px rgba(16,35,51,.04); }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 0 0 6px; }
+  textarea, input { width: 100%; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; font-size: 13px; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: var(--ink); background: #fff; }
+  textarea { min-height: 180px; resize: vertical; }
+  .row { margin-bottom: 16px; }
+  button { appearance: none; border: 0; border-radius: 8px; padding: 11px 18px;
+    font-size: 14px; font-weight: 600; cursor: pointer; background: var(--brand); color: #fff; }
+  button:disabled { opacity: .55; cursor: default; }
+  .btn-ghost { background: #eef2f7; color: var(--ink); }
+  .status { margin-top: 18px; padding: 14px 16px; border-radius: 10px; font-size: 14px; display: none; }
+  .status.show { display: block; }
+  .status.info { background: #eef4ff; color: #1e3a8a; }
+  .status.ok { background: #e7f6ee; color: var(--ok); }
+  .status.err { background: #fdeceb; color: var(--err); white-space: pre-wrap; }
+  .dl { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px;
+    text-decoration: none; background: var(--ok); color: #fff; padding: 12px 20px; border-radius: 8px; font-weight: 700; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .summary { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; }
+  .summary b { color: var(--brand-2); }
+  .hide { display: none; }
+  code { background: #f0f3f7; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><span class="dot"></span><h1>BOV Generator</h1></header>
+  <div class="sub">Briggs CRE — generates a 10-tab Broker Opinion of Value workbook. The link expires ~60 minutes after generation.</div>
+
+  <div class="card">
+    <div id="summary" class="summary hide"></div>
+
+    <div id="form">
+      <div class="row">
+        <label for="payload">Deal payload (JSON or the base64 string from Claude)</label>
+        <textarea id="payload" placeholder='{ "asset_type": "NNN", "property": { "address": "..." }, "tenants": [...], "underwriting": {...}, "client": { "last_name": "...", "file_month": "202607" } }'></textarea>
+      </div>
+      <div class="row" id="tokenRow">
+        <label for="token">Bridge token <span style="font-weight:400;color:var(--muted)">(only if your Copilot requires one)</span></label>
+        <input id="token" type="password" autocomplete="off" placeholder="leave blank if not configured">
+      </div>
+    </div>
+
+    <button id="go">Generate workbook</button>
+    <button id="reset" class="btn-ghost hide" style="margin-left:8px">Start over</button>
+
+    <div id="status" class="status"></div>
+  </div>
+
+  <div class="meta">The workbook is built by your BOV service; this page never sees the API key. Nothing is stored here.</div>
+</div>
+
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var $ = function (id) { return document.getElementById(id); };
+  var statusEl = $('status'), summaryEl = $('summary'), formEl = $('form');
+
+  function show(kind, html) {
+    statusEl.className = 'status show ' + kind;
+    statusEl.innerHTML = html;
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]; }); }
+
+  // Decode a base64 (URL-safe tolerant) string to UTF-8 text.
+  function b64decode(str) {
+    str = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (str.length % 4) str += '=';
+    var bin = atob(str);
+    try {
+      var bytes = Uint8Array.from(bin, function (c) { return c.charCodeAt(0); });
+      return new TextDecoder('utf-8').decode(bytes);
+    } catch (e) { return bin; }
+  }
+
+  // Accept either raw JSON or a base64-encoded JSON string.
+  function parsePayload(raw) {
+    raw = (raw || '').trim();
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (e) {}
+    try { return JSON.parse(b64decode(raw)); } catch (e) {}
+    return null;
+  }
+
+  function renderSummary(p) {
+    if (!p) { summaryEl.className = 'summary hide'; return; }
+    var addr = (p.property && p.property.address) || '(no address)';
+    var tenant = (p.tenants && p.tenants[0] && p.tenants[0].name) || '—';
+    var client = (p.client && p.client.last_name) || '—';
+    summaryEl.className = 'summary';
+    summaryEl.innerHTML = '<b>' + esc(p.asset_type || '?') + '</b> &nbsp;·&nbsp; ' + esc(addr) +
+      ' &nbsp;·&nbsp; tenant: ' + esc(tenant) + ' &nbsp;·&nbsp; client: ' + esc(client);
+  }
+
+  async function generate(payload, token) {
+    $('go').disabled = true;
+    show('info', 'Generating workbook — building 10 tabs and recalculating formulas. This can take up to a minute…');
+    var body = Object.assign({}, payload);
+    if (token) body._k = token;
+    try {
+      var r = await fetch('/api/bov', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok) {
+        show('err', 'Error ' + r.status + ': ' + (data.error || 'request failed') + (data.detail ? '\n\n' + data.detail : ''));
+        $('go').disabled = false;
+        return;
+      }
+      var mins = Math.round((data.expires_in_seconds || 3600) / 60);
+      var errs = (data.recalc_result && data.recalc_result.total_errors) || 0;
+      show('ok',
+        'Workbook ready: <b>' + esc(data.filename) + '</b>' +
+        '<div><a class="dl" href="' + esc(data.download_url) + '">⬇ Download .xlsx</a></div>' +
+        '<div class="meta">' + esc(String(data.file_size_kb || '?')) + ' KB · ' +
+        esc(String((data.recalc_result && data.recalc_result.total_formulas) || '?')) + ' formulas · ' +
+        errs + ' errors · link expires in ' + mins + ' min</div>');
+      $('reset').className = 'btn-ghost';
+      $('go').className = 'hide';
+      // Best-effort auto-open of the download.
+      try { window.location.assign(data.download_url); } catch (e) {}
+    } catch (e) {
+      show('err', 'Network error: ' + e.message);
+      $('go').disabled = false;
+    }
+  }
+
+  // Auto-run when a payload is passed in the URL (?data= and optional ?k=).
+  var urlData = q.get('data');
+  var urlToken = q.get('k') || '';
+  var preset = urlData ? parsePayload(urlData) : null;
+
+  if (preset) {
+    formEl.className = 'hide';
+    renderSummary(preset);
+    generate(preset, urlToken);
+  }
+
+  $('go').addEventListener('click', function () {
+    var p = parsePayload($('payload').value);
+    if (!p) { show('err', 'Could not read the payload. Paste valid JSON or the base64 string from Claude.'); return; }
+    renderSummary(p);
+    generate(p, $('token').value.trim());
+  });
+
+  $('reset').addEventListener('click', function () { location.href = location.pathname; });
+})();
+</script>
+</body>
+</html>
