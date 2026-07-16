@@ -190,16 +190,6 @@ export default withErrorHandler(async function handler(req, res) {
     return handleContactAcquisitionTick(req, res);
   }
 
-  // SF-CONTACT-RECONCILE Unit 2 — WhoId resolve worker (via vercel.json
-  // _route=sf-contact-resolve-tick). GET=dry-run (queue depth + sample) /
-  // POST=drain. Drains sf_contact_resolve_queue via the get-by-id flow, mints
-  // (or attaches-by-email) the contact, runs the mismatch detector. No-ops when
-  // SF_CONTACT_BYID_URL is unset. Authenticates internally.
-  if (req.query._route === 'sf-contact-resolve-tick') {
-    const { handleSfContactResolveTick } = await import('./_handlers/sf-contact-resolve.js');
-    return handleSfContactResolveTick(req, res);
-  }
-
   // CONNECTIVITY #3 — Salesforce link-store reconcile (via vercel.json
   // _route=sf-link-reconcile-tick). GET=dry-run / POST=drain. Mirrors domain
   // owner SF Account links onto the bridged entity; surfaces conflicts/
@@ -2568,6 +2558,9 @@ const ACTION_REGISTRY = {
   search_deals:                { tier: 0, handler: 'search_deals' },
   search_properties:           { tier: 0, handler: 'search_properties' },
   match_property_to_inbox_item: { tier: 0, handler: 'match_property' },
+  get_entity_context:           { tier: 0, handler: 'entity_context' },
+  link_contact_to_entity:       { tier: 1, handler: 'link_contact_to_entity', confirm: 'lightweight' },
+  merge_duplicate_entities:     { tier: 2, handler: 'merge_duplicate_entities', confirm: 'explicit' },
 
   // Tier 0-1: AI-powered actions (fetch context + generate content)
   generate_prospecting_brief:  { tier: 0, handler: 'prospecting_brief' },
@@ -2705,6 +2698,9 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'search_deals':            result = await handleSearchDeals(params); break;
       case 'search_properties':       result = await handleSearchProperties(params); break;
       case 'match_property':          result = await handleMatchPropertyToInboxItem(params, workspaceId); break;
+      case 'entity_context':          result = await handleGetEntityContext(params); break;
+      case 'link_contact_to_entity':  result = await handleLinkContactToEntity(params, user, workspaceId); break;
+      case 'merge_duplicate_entities': result = await handleMergeDuplicateEntities(params, user, workspaceId); break;
       case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
       case 'draft_outreach':          result = await handleDraftOutreachEmail(params, user, workspaceId); break;
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
@@ -3405,6 +3401,330 @@ async function handleMatchPropertyToInboxItem(params, workspaceId) {
     note: candidates.length
       ? `Found ${candidates.length} candidate propert${candidates.length === 1 ? 'y' : 'ies'}. Review and confirm the correct match.`
       : 'No property matches found. You may need to create a new property record or search manually.'
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET ENTITY CONTEXT — Tool 34 (Copilot intelligence category)
+// GET /api/copilot/intelligence/get-entity-context
+// Tier 0 — read-only, no confirmation required.
+// Returns full profile: entity record + relationships (both directions, with
+// resolved names) + latest touchpoint cadence + 5 most-recent activity events.
+// ---------------------------------------------------------------------------
+async function handleGetEntityContext(params) {
+  const p = params || {};
+  const entityId = p.entity_id || null;
+  const name = p.name ? String(p.name).trim() : null;
+
+  if (!entityId && !name) {
+    return { ok: false, error: 'Provide entity_id or name.' };
+  }
+
+  // 1. Resolve entity
+  let entity;
+  if (entityId) {
+    const er = await opsQuery('GET',
+      `entities?id=eq.${encodeURIComponent(entityId)}&select=id,name,canonical_name,entity_type,asset_type,domain,city,state,zip,address,phone,website,metadata,created_at,updated_at&limit=1`
+    );
+    entity = (er.data || [])[0];
+    if (!entity) return { ok: false, error: `Entity ${entityId} not found.` };
+  } else {
+    const er = await opsQuery('GET',
+      `entities?name.ilike=*${encodeURIComponent(name.replace(/[*()]/g, ''))}*&select=id,name,canonical_name,entity_type,asset_type,domain,city,state,zip,address,phone,website,metadata,created_at,updated_at&limit=5&order=name.asc`
+    );
+    if (!(er.data || []).length) {
+      return { ok: false, error: `No entity found matching name "${name}".` };
+    }
+    if (er.data.length > 1) {
+      return {
+        ok: true,
+        action: 'get_entity_context',
+        multiple_matches: true,
+        count: er.data.length,
+        candidates: er.data.map(e => ({ entity_id: e.id, name: e.name, entity_type: e.entity_type, domain: e.domain, city: e.city, state: e.state })),
+        note: `Multiple entities match "${name}". Provide entity_id for an exact lookup.`
+      };
+    }
+    entity = er.data[0];
+  }
+
+  const eid = entity.id;
+
+  // 2. Fetch relationships (both directions) + cadence + recent activity in parallel
+  const [outRels, inRels, cadence, recentActivity] = await Promise.all([
+    opsQuery('GET',
+      `entity_relationships?from_entity_id=eq.${encodeURIComponent(eid)}&select=id,relationship_type,to_entity_id,metadata&limit=20`
+    ),
+    opsQuery('GET',
+      `entity_relationships?to_entity_id=eq.${encodeURIComponent(eid)}&select=id,relationship_type,from_entity_id,metadata&limit=20`
+    ),
+    opsQuery('GET',
+      `touchpoint_cadence?entity_id=eq.${encodeURIComponent(eid)}&select=id,phase,priority_tier,last_touch_at,next_action_at,status,metadata&order=updated_at.desc&limit=1`
+    ),
+    opsQuery('GET',
+      `activity_events?entity_id=eq.${encodeURIComponent(eid)}&select=id,category,title,source_type,occurred_at,metadata&order=occurred_at.desc&limit=5`
+    )
+  ]);
+
+  // 3. Resolve related entity names in one round-trip
+  const relEntityIds = [
+    ...(outRels.data || []).map(r => r.to_entity_id),
+    ...(inRels.data || []).map(r => r.from_entity_id)
+  ].filter(Boolean);
+
+  let relNameMap = {};
+  if (relEntityIds.length) {
+    const unique = [...new Set(relEntityIds)].slice(0, 40);
+    const ne = await opsQuery('GET',
+      `entities?id=in.(${unique.join(',')})&select=id,name,entity_type,domain`
+    );
+    (ne.data || []).forEach(e => { relNameMap[e.id] = e; });
+  }
+
+  const relationships = {
+    outgoing: (outRels.data || []).map(r => ({
+      relationship:    r.relationship_type,
+      target_entity_id: r.to_entity_id,
+      target_name:     relNameMap[r.to_entity_id]?.name || null,
+      target_type:     relNameMap[r.to_entity_id]?.entity_type || null,
+      metadata:        r.metadata || null
+    })),
+    incoming: (inRels.data || []).map(r => ({
+      relationship:    r.relationship_type,
+      source_entity_id: r.from_entity_id,
+      source_name:     relNameMap[r.from_entity_id]?.name || null,
+      source_type:     relNameMap[r.from_entity_id]?.entity_type || null,
+      metadata:        r.metadata || null
+    }))
+  };
+
+  return {
+    ok: true,
+    action: 'get_entity_context',
+    entity: {
+      entity_id:   entity.id,
+      name:        entity.name,
+      entity_type: entity.entity_type,
+      asset_type:  entity.asset_type || null,
+      domain:      entity.domain,
+      address:     entity.address || null,
+      city:        entity.city || null,
+      state:       entity.state || null,
+      zip:         entity.zip || null,
+      phone:       entity.phone || null,
+      website:     entity.website || null,
+      created_at:  entity.created_at,
+      updated_at:  entity.updated_at
+    },
+    relationships,
+    cadence: (cadence.data || [])[0] || null,
+    recent_activity: (recentActivity.data || []).map(a => ({
+      category:    a.category,
+      title:       a.title,
+      source:      a.source_type,
+      occurred_at: a.occurred_at
+    }))
+  };
+}
+
+// ---------------------------------------------------------------------------
+// LINK CONTACT TO ENTITY — Tool 35 (Copilot intelligence category)
+// POST /api/copilot/intelligence/link-contact-to-entity
+// Tier 1 — lightweight confirm required.
+// Creates an entity_relationships row linking a person entity to an org/asset.
+// Idempotent: returns already_linked=true if the relationship already exists.
+// ---------------------------------------------------------------------------
+async function handleLinkContactToEntity(params, user, workspaceId) {
+  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
+  const p = params || {};
+
+  const entityId        = p.entity_id || null;
+  const contactEntityId = p.contact_entity_id || null;  // person entity id (direct)
+  const contactId       = p.contact_id || null;          // unified_contacts.id (lookup)
+  const relType         = p.relationship_type || 'associated_with';
+  const role            = p.role || 'contact';
+
+  if (!entityId)                        return { ok: false, error: 'entity_id is required.' };
+  if (!contactEntityId && !contactId)   return { ok: false, error: 'Provide contact_entity_id or contact_id.' };
+
+  // 1. Validate the target entity
+  const entityResult = await opsQuery('GET',
+    `entities?id=eq.${encodeURIComponent(entityId)}&select=id,name,entity_type&limit=1`
+  );
+  const targetEntity = (entityResult.data || [])[0];
+  if (!targetEntity) return { ok: false, error: `Entity ${entityId} not found.` };
+
+  // 2. Resolve contact entity id from unified_contacts if needed
+  let resolvedContactEntityId = contactEntityId;
+  let contactName = null;
+
+  if (!resolvedContactEntityId && contactId) {
+    const ucResult = await opsQuery('GET',
+      `unified_contacts?id=eq.${encodeURIComponent(contactId)}&select=id,entity_id,full_name&limit=1`
+    );
+    const uc = (ucResult.data || [])[0];
+    if (!uc) return { ok: false, error: `Contact ${contactId} not found.` };
+    if (!uc.entity_id) return { ok: false, error: `Contact ${contactId} has no linked entity record. Cannot create relationship.` };
+    resolvedContactEntityId = uc.entity_id;
+    contactName = uc.full_name;
+  }
+
+  // 3. Validate contact entity
+  const contactEntityResult = await opsQuery('GET',
+    `entities?id=eq.${encodeURIComponent(resolvedContactEntityId)}&select=id,name,entity_type&limit=1`
+  );
+  const contactEntity = (contactEntityResult.data || [])[0];
+  if (!contactEntity) return { ok: false, error: `Contact entity ${resolvedContactEntityId} not found.` };
+  if (!contactName) contactName = contactEntity.name;
+
+  // 4. Idempotency check — avoid duplicate relationships
+  const existsResult = await opsQuery('GET',
+    `entity_relationships?from_entity_id=eq.${encodeURIComponent(resolvedContactEntityId)}&to_entity_id=eq.${encodeURIComponent(entityId)}&relationship_type=eq.${encodeURIComponent(relType)}&limit=1`
+  );
+  if ((existsResult.data || []).length > 0) {
+    return {
+      ok: true,
+      action: 'link_contact_to_entity',
+      already_linked: true,
+      contact_entity_id: resolvedContactEntityId,
+      contact_name:      contactName,
+      entity_id:         entityId,
+      entity_name:       targetEntity.name,
+      relationship_type: relType,
+      note: 'Relationship already exists — no change made.'
+    };
+  }
+
+  // 5. Create the relationship
+  await insertEntityRelationship({
+    workspace_id:     workspaceId,
+    from_entity_id:   resolvedContactEntityId,
+    to_entity_id:     entityId,
+    relationship_type: relType,
+    metadata: { role, created_by: user?.id || null, via: 'copilot' }
+  });
+
+  return {
+    ok: true,
+    action:            'link_contact_to_entity',
+    contact_entity_id: resolvedContactEntityId,
+    contact_name:      contactName,
+    entity_id:         entityId,
+    entity_name:       targetEntity.name,
+    relationship_type: relType,
+    role,
+    message: `Linked "${contactName}" to "${targetEntity.name}" as ${relType} (role: ${role}).`
+  };
+}
+
+// ---------------------------------------------------------------------------
+// MERGE DUPLICATE ENTITIES — Tool 36 (Copilot intelligence category)
+// POST /api/copilot/intelligence/merge-duplicate-entities
+// Tier 2 — explicit confirm required. Irreversible canonical record mutation.
+//
+// Safety model:
+//   - Primary entity is kept as-is (winner).
+//   - Secondary entity is NOT deleted — its metadata is stamped with
+//     merged_into + merged_at for audit. Its canonical_name is prefixed [MERGED].
+//   - All entity_relationships (both directions) from secondary are moved to
+//     primary, skipping any that would create a duplicate.
+//   - All unified_contacts referencing secondary are re-parented to primary.
+// ---------------------------------------------------------------------------
+async function handleMergeDuplicateEntities(params, user, workspaceId) {
+  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
+  const p = params || {};
+
+  const primaryId   = p.primary_entity_id || null;
+  const secondaryId = p.secondary_entity_id || null;
+  const reason      = p.reason ? String(p.reason).trim() : null;
+
+  if (!primaryId)   return { ok: false, error: 'primary_entity_id is required.' };
+  if (!secondaryId) return { ok: false, error: 'secondary_entity_id is required.' };
+  if (primaryId === secondaryId) return { ok: false, error: 'primary_entity_id and secondary_entity_id must be different.' };
+
+  // 1. Validate both entities exist
+  const [primResult, secResult] = await Promise.all([
+    opsQuery('GET', `entities?id=eq.${encodeURIComponent(primaryId)}&select=id,name,canonical_name,entity_type,domain,metadata&limit=1`),
+    opsQuery('GET', `entities?id=eq.${encodeURIComponent(secondaryId)}&select=id,name,canonical_name,entity_type,domain,metadata&limit=1`)
+  ]);
+  const primary   = (primResult.data || [])[0];
+  const secondary = (secResult.data || [])[0];
+  if (!primary)   return { ok: false, error: `Primary entity ${primaryId} not found.` };
+  if (!secondary) return { ok: false, error: `Secondary entity ${secondaryId} not found.` };
+  if (secondary.metadata?.merged_into) {
+    return { ok: false, error: `Secondary entity "${secondary.name}" was already merged into ${secondary.metadata.merged_into}. Use that target as the primary instead.` };
+  }
+
+  const mergedAt = new Date().toISOString();
+  const steps = [];
+
+  // 2. Move outgoing relationships (secondary is the source)
+  const outRelsResult = await opsQuery('GET',
+    `entity_relationships?from_entity_id=eq.${encodeURIComponent(secondaryId)}&select=id,to_entity_id,relationship_type&limit=200`
+  );
+  const outRels = outRelsResult.data || [];
+  let movedOut = 0;
+  for (const rel of outRels) {
+    const dupe = await opsQuery('GET',
+      `entity_relationships?from_entity_id=eq.${encodeURIComponent(primaryId)}&to_entity_id=eq.${encodeURIComponent(rel.to_entity_id)}&relationship_type=eq.${encodeURIComponent(rel.relationship_type)}&limit=1`
+    );
+    if (!(dupe.data || []).length) {
+      await opsQuery('PATCH', `entity_relationships?id=eq.${encodeURIComponent(rel.id)}`, { from_entity_id: primaryId });
+      movedOut++;
+    }
+  }
+  steps.push({ step: 'outgoing_relationships', moved: movedOut, skipped_dupes: outRels.length - movedOut });
+
+  // 3. Move incoming relationships (secondary is the target)
+  const inRelsResult = await opsQuery('GET',
+    `entity_relationships?to_entity_id=eq.${encodeURIComponent(secondaryId)}&select=id,from_entity_id,relationship_type&limit=200`
+  );
+  const inRels = inRelsResult.data || [];
+  let movedIn = 0;
+  for (const rel of inRels) {
+    const dupe = await opsQuery('GET',
+      `entity_relationships?from_entity_id=eq.${encodeURIComponent(rel.from_entity_id)}&to_entity_id=eq.${encodeURIComponent(primaryId)}&relationship_type=eq.${encodeURIComponent(rel.relationship_type)}&limit=1`
+    );
+    if (!(dupe.data || []).length) {
+      await opsQuery('PATCH', `entity_relationships?id=eq.${encodeURIComponent(rel.id)}`, { to_entity_id: primaryId });
+      movedIn++;
+    }
+  }
+  steps.push({ step: 'incoming_relationships', moved: movedIn, skipped_dupes: inRels.length - movedIn });
+
+  // 4. Re-parent unified_contacts referencing the secondary entity
+  const ucResult = await opsQuery('GET',
+    `unified_contacts?entity_id=eq.${encodeURIComponent(secondaryId)}&select=id&limit=200`
+  );
+  const movedContacts = (ucResult.data || []).length;
+  if (movedContacts) {
+    await opsQuery('PATCH', `unified_contacts?entity_id=eq.${encodeURIComponent(secondaryId)}`, { entity_id: primaryId });
+  }
+  steps.push({ step: 'unified_contacts', moved: movedContacts });
+
+  // 5. Stamp secondary as merged (audit — row is preserved, not deleted)
+  const secMeta = {
+    ...(secondary.metadata || {}),
+    merged_into: primaryId,
+    merged_at:   mergedAt,
+    merged_by:   user?.id || null,
+    merge_reason: reason
+  };
+  await opsQuery('PATCH', `entities?id=eq.${encodeURIComponent(secondaryId)}`, {
+    metadata:       secMeta,
+    canonical_name: `[MERGED] ${secondary.canonical_name || secondary.name}`
+  });
+  steps.push({ step: 'mark_secondary_merged', secondary_id: secondaryId });
+
+  return {
+    ok: true,
+    action: 'merge_duplicate_entities',
+    primary:    { entity_id: primaryId,   name: primary.name },
+    secondary:  { entity_id: secondaryId, name: secondary.name, status: 'merged' },
+    steps,
+    merged_at: mergedAt,
+    reason:    reason || null,
+    message:   `Merged "${secondary.name}" into "${primary.name}". ${movedOut + movedIn} relationship(s) moved, ${movedContacts} contact(s) re-parented.`
   };
 }
 
