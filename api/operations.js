@@ -2561,6 +2561,9 @@ const ACTION_REGISTRY = {
   get_entity_context:           { tier: 0, handler: 'entity_context' },
   link_contact_to_entity:       { tier: 1, handler: 'link_contact_to_entity', confirm: 'lightweight' },
   merge_duplicate_entities:     { tier: 2, handler: 'merge_duplicate_entities', confirm: 'explicit' },
+  log_bd_touchpoint:            { tier: 1, handler: 'log_bd_touchpoint', confirm: 'lightweight' },
+  create_deal_from_inbox:       { tier: 2, handler: 'create_deal_from_inbox', confirm: 'explicit' },
+  resolve_entity_ownership:     { tier: 1, handler: 'resolve_entity_ownership', confirm: 'lightweight' },
 
   // Tier 0-1: AI-powered actions (fetch context + generate content)
   generate_prospecting_brief:  { tier: 0, handler: 'prospecting_brief' },
@@ -2701,6 +2704,9 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'entity_context':          result = await handleGetEntityContext(params); break;
       case 'link_contact_to_entity':  result = await handleLinkContactToEntity(params, user, workspaceId); break;
       case 'merge_duplicate_entities': result = await handleMergeDuplicateEntities(params, user, workspaceId); break;
+      case 'log_bd_touchpoint':        result = await handleLogBdTouchpoint(params, user, workspaceId); break;
+      case 'create_deal_from_inbox':   result = await handleCreateDealFromInbox(params, user, workspaceId); break;
+      case 'resolve_entity_ownership': result = await handleResolveEntityOwnership(params, user, workspaceId); break;
       case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
       case 'draft_outreach':          result = await handleDraftOutreachEmail(params, user, workspaceId); break;
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
@@ -3725,6 +3731,337 @@ async function handleMergeDuplicateEntities(params, user, workspaceId) {
     merged_at: mergedAt,
     reason:    reason || null,
     message:   `Merged "${secondary.name}" into "${primary.name}". ${movedOut + movedIn} relationship(s) moved, ${movedContacts} contact(s) re-parented.`
+  };
+}
+
+// ---------------------------------------------------------------------------
+// LOG BD TOUCHPOINT — Tool 37 (Copilot intelligence category)
+// POST /api/copilot/intelligence/log-bd-touchpoint
+// Tier 1 — lightweight confirm required.
+// Logs a BD touchpoint activity_events row against an entity and updates
+// touchpoint_cadence.last_touch_at. Idempotent-safe: always writes a new
+// activity row; cadence update is a PATCH so it converges on re-run.
+// ---------------------------------------------------------------------------
+async function handleLogBdTouchpoint(params, user, workspaceId) {
+  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
+  const p = params || {};
+
+  const entityId    = p.entity_id || null;
+  const touchType   = p.touch_type || 'call';          // call | email | meeting | note | linkedin
+  const notes       = p.notes || null;
+  const domain      = p.domain || null;
+  const outcome     = p.outcome || null;               // connected | left_vm | no_answer | replied | met | etc.
+  const occurredAt  = p.occurred_at || new Date().toISOString();
+
+  if (!entityId) return { ok: false, error: 'entity_id is required.' };
+
+  // 1. Validate entity exists
+  const entityRes = await opsQuery('GET',
+    `entities?id=eq.${pgFilterVal(entityId)}&select=id,name,domain&limit=1`
+  );
+  const entity = (entityRes.data || [])[0];
+  if (!entity) return { ok: false, error: `Entity not found: ${entityId}` };
+
+  const resolvedDomain = domain || entity.domain || null;
+
+  // 2. Determine activity category from touch type
+  const TOUCH_CATEGORY_MAP = {
+    call:     'call',
+    email:    'email',
+    meeting:  'meeting',
+    note:     'note',
+    linkedin: 'outreach',
+    text:     'outreach',
+    letter:   'outreach'
+  };
+  const category = TOUCH_CATEGORY_MAP[touchType] || 'outreach';
+
+  const titleParts = [`BD touch (${touchType}): ${entity.name}`];
+  if (outcome) titleParts.push(`— ${outcome}`);
+  const title = titleParts.join(' ');
+
+  const actMeta = {
+    bridge_source: 'log_bd_touchpoint',
+    touch_type:    touchType,
+    skip_cadence_advance: 'true'  // cadence advance is manual via existing bridge
+  };
+  if (outcome)  actMeta.outcome  = outcome;
+
+  // 3. Write activity_events row
+  const actResult = await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId,
+    actor_id:     user.id,
+    category,
+    title,
+    body:         notes || null,
+    entity_id:    entityId,
+    source_type:  'copilot',
+    domain:       resolvedDomain,
+    visibility:   'shared',
+    metadata:     actMeta,
+    occurred_at:  occurredAt
+  });
+
+  if (!actResult.ok) {
+    return { ok: false, error: 'Failed to write activity event.', detail: actResult.status };
+  }
+  const activity = Array.isArray(actResult.data) ? actResult.data[0] : actResult.data;
+
+  // 4. Bump touchpoint_cadence.last_touch_at (best-effort; cadence row may not exist)
+  let cadenceUpdated = false;
+  const cadRes = await opsQuery('GET',
+    `touchpoint_cadence?entity_id=eq.${pgFilterVal(entityId)}&workspace_id=eq.${pgFilterVal(workspaceId)}&order=updated_at.desc&limit=1`
+  );
+  const cadence = (cadRes.data || [])[0];
+  if (cadence) {
+    const patchRes = await opsQuery('PATCH',
+      `touchpoint_cadence?id=eq.${pgFilterVal(cadence.id)}`,
+      { last_touch_at: occurredAt, updated_at: new Date().toISOString() }
+    );
+    cadenceUpdated = !!patchRes.ok;
+  }
+
+  return {
+    ok:               true,
+    action:           'log_bd_touchpoint',
+    activity_id:      activity?.id || null,
+    entity_id:        entityId,
+    entity_name:      entity.name,
+    touch_type:       touchType,
+    outcome:          outcome || null,
+    cadence_updated:  cadenceUpdated,
+    message:          `Logged ${touchType} touchpoint for "${entity.name}"${outcome ? ` (${outcome})` : ''}.`
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CREATE DEAL FROM INBOX — Tool 38 (Copilot intelligence category)
+// POST /api/copilot/intelligence/create-deal-from-inbox
+// Tier 2 — explicit confirm required.
+// Promotes an inbox_items row to a pipeline deal in lcc_sf_comp_on_market
+// and marks the inbox item as 'promoted'. Writes an activity_events audit row.
+// ---------------------------------------------------------------------------
+async function handleCreateDealFromInbox(params, user, workspaceId) {
+  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
+  const p = params || {};
+
+  const inboxItemId     = p.inbox_item_id || null;
+  const dealName        = p.deal_name || null;              // override; falls back to inbox title
+  const domain          = p.domain || null;
+  const pipelineStage   = p.pipeline_stage || 'Prospect';   // Salesforce stage label
+  const entityId        = p.entity_id || null;              // seller/owner entity
+  const propertyAddress = p.property_address || null;
+  const notes           = p.notes || null;
+
+  if (!inboxItemId) return { ok: false, error: 'inbox_item_id is required.' };
+
+  // 1. Fetch the inbox item
+  const inboxRes = await opsQuery('GET',
+    `inbox_items?id=eq.${pgFilterVal(inboxItemId)}&select=id,title,body,domain,entity_id,status,source_type,metadata,received_at,workspace_id&limit=1`
+  );
+  const inbox = (inboxRes.data || [])[0];
+  if (!inbox) return { ok: false, error: `Inbox item not found: ${inboxItemId}` };
+  if (inbox.workspace_id && inbox.workspace_id !== workspaceId) {
+    return { ok: false, error: 'Inbox item belongs to a different workspace.' };
+  }
+  if (inbox.status === 'promoted') {
+    return { ok: false, error: 'Inbox item has already been promoted to a deal.', already_promoted: true };
+  }
+
+  const resolvedDomain  = domain || inbox.domain || 'government';
+  const resolvedName    = dealName || inbox.title || 'New Deal';
+  const resolvedEntity  = entityId || inbox.entity_id || null;
+
+  // 2. Create the deal record in lcc_sf_comp_on_market
+  //    Columns confirmed from existing queries in this file.
+  const dealPayload = {
+    workspace_id:    workspaceId,
+    deal_name:       resolvedName,
+    pipeline_stage:  pipelineStage,
+    domain:          resolvedDomain,
+    source_type:     'copilot_inbox_promotion',
+    inbox_item_id:   inboxItemId,
+    entity_id:       resolvedEntity || null,
+    property_address: propertyAddress || null,
+    notes:           notes || inbox.body || null,
+    created_by:      user.id,
+    created_at:      new Date().toISOString(),
+    updated_at:      new Date().toISOString(),
+    metadata: {
+      bridge_source:    'create_deal_from_inbox',
+      inbox_source_type: inbox.source_type || null,
+      inbox_received_at: inbox.received_at || null,
+      promoted_by:       user.id
+    }
+  };
+
+  const dealResult = await opsQuery('POST', 'lcc_sf_comp_on_market', dealPayload);
+  if (!dealResult.ok) {
+    return { ok: false, error: 'Failed to create deal record.', detail: dealResult.status };
+  }
+  const deal = Array.isArray(dealResult.data) ? dealResult.data[0] : dealResult.data;
+
+  // 3. Mark inbox item as promoted
+  await opsQuery('PATCH',
+    `inbox_items?id=eq.${pgFilterVal(inboxItemId)}`,
+    { status: 'promoted', updated_at: new Date().toISOString() }
+  );
+
+  // 4. Audit activity event
+  await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId,
+    actor_id:     user.id,
+    category:     'status_change',
+    title:        `Deal created from inbox: "${resolvedName}"`,
+    body:         notes || null,
+    entity_id:    resolvedEntity || null,
+    source_type:  'copilot',
+    domain:       resolvedDomain,
+    visibility:   'shared',
+    metadata: {
+      bridge_source: 'create_deal_from_inbox',
+      inbox_item_id: inboxItemId,
+      deal_id:       deal?.sf_comp_id || deal?.id || null,
+      pipeline_stage: pipelineStage
+    },
+    occurred_at: new Date().toISOString()
+  });
+
+  return {
+    ok:              true,
+    action:          'create_deal_from_inbox',
+    deal:            deal || null,
+    deal_id:         deal?.sf_comp_id || deal?.id || null,
+    deal_name:       resolvedName,
+    pipeline_stage:  pipelineStage,
+    inbox_item_id:   inboxItemId,
+    inbox_status:    'promoted',
+    entity_id:       resolvedEntity || null,
+    message:         `Created deal "${resolvedName}" in pipeline stage "${pipelineStage}" from inbox item.`
+  };
+}
+
+// ---------------------------------------------------------------------------
+// RESOLVE ENTITY OWNERSHIP — Tool 39 (Copilot intelligence category)
+// POST /api/copilot/intelligence/resolve-entity-ownership
+// Tier 1 — lightweight confirm required.
+// Updates an entity's ownership chain metadata and writes an audit activity.
+// Does NOT overwrite protected deal columns. Updates the entity metadata JSONB
+// with ownership resolution data plus logs a 'research' activity event.
+// ---------------------------------------------------------------------------
+async function handleResolveEntityOwnership(params, user, workspaceId) {
+  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
+  const p = params || {};
+
+  const entityId        = p.entity_id || null;
+  const trueOwnerName   = p.true_owner_name || null;   // resolved beneficial owner
+  const ownerEntityId   = p.owner_entity_id || null;   // entity id of the true owner if known
+  const ownerRole       = p.owner_role || 'owner';      // owner | lp | gp | trustee | etc.
+  const ownershipNotes  = p.ownership_notes || null;
+  const source          = p.source || null;             // deed | sec | state_corp | llc_lookup | etc.
+  const domain          = p.domain || null;
+
+  if (!entityId) return { ok: false, error: 'entity_id is required.' };
+  if (!trueOwnerName && !ownerEntityId) {
+    return { ok: false, error: 'Provide true_owner_name or owner_entity_id.' };
+  }
+
+  // 1. Fetch target entity
+  const entityRes = await opsQuery('GET',
+    `entities?id=eq.${pgFilterVal(entityId)}&select=id,name,entity_type,domain,metadata&limit=1`
+  );
+  const entity = (entityRes.data || [])[0];
+  if (!entity) return { ok: false, error: `Entity not found: ${entityId}` };
+
+  // 2. Optionally look up the owner entity name
+  let ownerEntityName = trueOwnerName;
+  if (ownerEntityId && !trueOwnerName) {
+    const ownerRes = await opsQuery('GET',
+      `entities?id=eq.${pgFilterVal(ownerEntityId)}&select=id,name&limit=1`
+    );
+    const ownerEntity = (ownerRes.data || [])[0];
+    if (!ownerEntity) return { ok: false, error: `Owner entity not found: ${ownerEntityId}` };
+    ownerEntityName = ownerEntity.name;
+  }
+
+  const resolvedDomain = domain || entity.domain || null;
+
+  // 3. Merge ownership resolution into entity metadata
+  const existingMeta = entity.metadata || {};
+  const updatedMeta  = {
+    ...existingMeta,
+    ownership_resolution: {
+      true_owner_name:  ownerEntityName || null,
+      owner_entity_id:  ownerEntityId   || null,
+      owner_role:       ownerRole,
+      source:           source           || null,
+      notes:            ownershipNotes   || null,
+      resolved_by:      user.id,
+      resolved_at:      new Date().toISOString()
+    }
+  };
+
+  const patchRes = await opsQuery('PATCH',
+    `entities?id=eq.${pgFilterVal(entityId)}`,
+    { metadata: updatedMeta, updated_at: new Date().toISOString() }
+  );
+  if (!patchRes.ok) {
+    return { ok: false, error: 'Failed to update entity metadata.', detail: patchRes.status };
+  }
+
+  // 4. If owner_entity_id supplied, create/confirm entity_relationships link
+  let relationshipCreated = false;
+  if (ownerEntityId) {
+    const relPayload = {
+      workspace_id:      workspaceId,
+      from_entity_id:    ownerEntityId,
+      to_entity_id:      entityId,
+      relationship_type: ownerRole === 'owner' ? 'owns' : 'related_to',
+      metadata: {
+        bridge_source: 'resolve_entity_ownership',
+        owner_role:    ownerRole,
+        source
+      }
+    };
+    const relRes = await opsQuery('POST', 'entity_relationships', relPayload,
+      { 'Prefer': 'return=representation,resolution=merge-duplicates' }
+    );
+    relationshipCreated = !!relRes.ok;
+  }
+
+  // 5. Write research activity event
+  const actTitle = `Ownership resolved: ${ownerEntityName}${source ? ` (source: ${source})` : ''}`;
+  await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId,
+    actor_id:     user.id,
+    category:     'research',
+    title:        actTitle,
+    body:         ownershipNotes || null,
+    entity_id:    entityId,
+    source_type:  'copilot',
+    domain:       resolvedDomain,
+    visibility:   'shared',
+    metadata: {
+      bridge_source:    'resolve_entity_ownership',
+      true_owner_name:  ownerEntityName || null,
+      owner_entity_id:  ownerEntityId   || null,
+      owner_role:       ownerRole,
+      source
+    },
+    occurred_at: new Date().toISOString()
+  });
+
+  return {
+    ok:                    true,
+    action:                'resolve_entity_ownership',
+    entity_id:             entityId,
+    entity_name:           entity.name,
+    true_owner_name:       ownerEntityName || null,
+    owner_entity_id:       ownerEntityId   || null,
+    owner_role:            ownerRole,
+    source:                source || null,
+    relationship_created:  relationshipCreated,
+    message:               `Ownership for "${entity.name}" resolved to "${ownerEntityName}"${ownershipNotes ? `. Notes: ${ownershipNotes}` : ''}.`
   };
 }
 
