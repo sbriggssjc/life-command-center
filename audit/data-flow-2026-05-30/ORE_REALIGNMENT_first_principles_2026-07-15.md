@@ -724,3 +724,101 @@ cron).
 State: dry-run proves the engine; two prompts queued (route registration unblocks the
 autonomous cron; C+B make SF-conflation resolution autonomous). No merges hand-executed — they
 run through the worker's `pickMergeWinner` + snapshot + cache-refresh once the route is live.
+
+## §10l — Move A LIVE + autonomous; SF-conflation guards deployed (2026-07-16)
+
+**PR #1410 (route registration) + #1411 (SF-conflation) merged + redeployed.** PR #1410 also
+revived two silently-400ing siblings — `owner-reconcile-tick` (B1 reconcile) and
+`institution-contact-tick` (Tier A fan-out) — now runnable.
+
+**Move A — reconciliation engine LIVE + scheduled autonomous.**
+- Route confirmed live (200, not 400). Capped drains executed correctly:
+  `limit=10` → merged 1 (Penzance ← Penzance), 3 review, 0 distinct, 0 failed;
+  `limit=100` → merged the 3rd Penzance variant into the survivor, 30 review, 0 distinct,
+  0 failed. The Penzance cluster is fully consolidated as a **reversible tombstone**
+  ("penzance management llc" survivor; the two "penzance" nodes → merged_into it). Evidence
+  recorded (31 rows); load-bearing caches healthy post-merge (priority_queue 1,119,
+  connected_value 3,049, buyer_spe 738). No wrong merges; every `distinct` conflict held.
+- **Cron scheduled + active:** `lcc-owner-reconcile-engine` `50 6 * * *`
+  (`?source=candidates&limit=100`) — a complete daily candidate sweep that self-converges as
+  dups tombstone. Supporting crons active: `lcc-owner-evidence-cache-refresh` (:34 hourly),
+  `lcc-owner-reconcile-seed` (06:20). The autonomous consolidation loop is closed.
+
+**Moves B + C (SF-conflation autonomy) — DEPLOYED.**
+- **C3 cleanup verified live:** persons carrying a `salesforce/Account` identity **559 → 0**
+  (all detached, reversible backup + provenance kept); all **1,485** `salesforce/Contact`
+  identities on persons preserved (they stay "connected"; priority queue unaffected). The
+  systemic "Account-tagged-on-person" pattern is eliminated.
+- **C1/C2 + B (JS, live):** new SF contact mints now name from the CONTACT (never the account),
+  relate the person to the SF Account as a person→org EDGE (not an identity-on-person), and
+  bind email-domain-authoritatively (agree → bind org [Capra→Boyd]; disagree → demote the
+  wrong account [Dowling@boydwatterson.com on "Arbor Realty Trust" → Arbor demoted], else the
+  `sf_contact_account_mismatch` lane as the true-ambiguity fallback). Forward behavior verifies
+  on the next SF activity sync (no queued WhoIds to mint right now). SF write paths unchanged —
+  minimum-necessary + gated; no SF cleanup/merge path.
+
+**Now available (PR #1410 side-effect), previously deferred:** the B1 reconcile
+(`owner-reconcile-tick`) and Tier A institution fan-out (`institution-contact-tick`) routes
+are live and runnable — candidates for the next activation, plus seeding
+`lcc_institution_contacts` with real sponsor contacts (Gardner Tannenbaum 30 SPEs, Blackstone,
+Global Net Lease…) to fan a contact across each sponsor's contactless SPE portfolio.
+
+## §10m — Tier A + B1 routes LIVE; both gate on seeding real sponsor contacts (2026-07-16)
+
+**All three PR#1410 routes verified live (200):** `owner-reconcile-engine-tick` (Move A, now
+cron'd), `institution-contact-tick` (Tier A fan-out), `owner-reconcile-tick` (B1 reconcile).
+- **Tier A** `institution-contact-tick?limit=5` → `processed:0, attached:0` — clean no-op
+  because `lcc_institution_contacts` is EMPTY (0 seeded). 2,682 sponsor gaps; 0 attachable.
+- **B1** `owner-reconcile-tick?limit=5` → `processed:5, recorded:5, failed:0`, all 5
+  `routed_to: resolve_parent_then_registry` — i.e. institutional owners waiting on the SAME
+  gate: a curated sponsor contact in the registry.
+
+**The gate is human input, not code.** The registry ships empty by design and contacts must be
+REAL (never fabricated). Value-ranked seeding worklist (top sponsors — one contact fans across
+all their contactless SPEs):
+- **Fan-out champions:** Gardner Tannenbaum (**30 SPEs**, $12.2M), Blackstone (**8 SPEs**,
+  $14.1M), Hana Asset Management (2 SPEs, $34.2M), Prologis (2).
+- **Top single-SPE value:** Brandywine Realty Trust ($34.4M), Korea Investment ($34.3M),
+  Hyundai Securities ($25.3M), Trammell Crow ($23.8M), World Bank ($23.4M), Foulger Pratt
+  ($16.5M), The Shooshan Company ($15.6M), Blake Real Estate ($14.2M), Easterly Government
+  Properties ($10.8M), STAG Industrial ($10.5M).
+Seed mechanism: `INSERT INTO lcc_institution_contacts (institution_norm, contact_name, title,
+email, phone, source, confidence)` (or a future Decision-Center lane). Once a sponsor has a
+contact, `institution-contact-tick` fans it across every contactless SPE + seeds their cadences
+automatically; B1's `resolve_parent_then_registry` owners resolve too. **Refinement noted:** a
+few gap rows are SPE-names-as-sponsor ("Crystal Gateway 3 Owner LLC", "MEPT/FCP Patriots Plaza
+LLC", "Sunflower Capital Partners or related individuals/entities") — the tier-0 resolver
+occasionally carries an SPE/verbose string as the sponsor; filter SPE-shaped `sponsor_norm` from
+the gaps as a cleanup (the top clean sponsors above are real).
+
+**SF-conflation verification:** guards deployed; **0 new persons minted with a salesforce/Account
+identity since deploy** (guard holding). Full behavioral proof (name-from-contact + person→org
+edge + email-domain binding) exercises on the next SF activity sync — no WhoIds queued to mint
+right now. The Boyd case already demonstrated the reconcile/no-dup + mismatch-lane behavior live.
+
+## §10n — Salesforce "Lists" cracked = Campaigns/CampaignMembers; GSA Buyer exported + durable pipeline designed (2026-07-16)
+
+Scott's SF prospecting/buyer/seller "Lists" (formerly "Groups", IS_Vision_GM app) are **standard
+Salesforce Campaigns** in a hierarchy (`Team Briggs → Buyer Lists → GSA Buyer`; seller lists per
+broker e.g. `JTS/KDL Seller Prospects`); members are **CampaignMembers** exposing First, Last,
+Company, Email, Phone, City, State, CM Relationship, Team, Org Type. He can't export from the UI,
+but the data is in the DOM (proven — a shadow-DOM scrape pulled all rows) AND the CampaignMember
+API.
+- **Immediate:** extracted **GSA Buyer = 156 members** via a shadow-DOM scrape (Lightning nests
+  the table in shadow roots — a recursive `walk(shadowRoot)` reaches it) and generated
+  `GSA_Buyer_list_156.csv` (downloaded to Scott's machine). Real repeat gov buyers (Nuveen, Ares,
+  FD Stonewater, Easterly/"Government Investment Partners", Nationwide Postal, Elmtree, Postal
+  Realty Trust, HC Government Realty Trust…) with emails + phones.
+- **Durable pipeline → prompt `CLAUDECODE_PROMPT_ORE_sf_campaign_list_ingest.md`:** a PA "Get
+  CampaignMembers" flow (direct fields — no relationship traversal needed) → new LCC route
+  `?_route=sf-list-import` that reconciles each person by email (R39 dedup, no duplicates), names
+  from the contact + relates to the company org (Unit-C guards), records list membership
+  (product_type + buyer/seller + broker + status), and routes: **buyer** members → the P-BUYER
+  buy-side contact pool; **seller** members → owner-prospect + (where the company is an
+  institution-gap sponsor) **seed `lcc_institution_contacts`** — the real, non-fabricated
+  registry seed the Tier A fan-out has been waiting for. Read-only, additive, reversible, ≤12
+  api/*.js.
+
+This turns Salesforce's own curated lists (the source for the quarterly CM sends + call lists)
+into the LCC's outreach/resolution engine, and finally supplies the institution registry with
+real sponsor contacts (the gate on Tier A / B1).
