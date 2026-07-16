@@ -1,0 +1,134 @@
+{
+  "name": "generate_bov_workbook",
+  "description": "Generate a Briggs CRE BOV Excel workbook from structured deal inputs. Builds the full 10-tab workbook (Cover, Executive Summary, Real Estate, Lease Abstract, Rent Schedule, Credit, Pro Forma, Assumptions & Flags, Sensitivity Analysis, Amortization), populates all input cells, recalculates all formulas via LibreOffice, and returns the completed file as a base64-encoded payload. Decode the file_base64 field and save as the filename field to deliver the workbook to the user.",
+  "type": "openapi",
+  "openapi": {
+    "info": {
+      "title": "BOV Generator API",
+      "version": "1.0.0"
+    },
+    "servers": [
+      {
+        "url": "https://bov-generator.up.railway.app"
+      }
+    ],
+    "paths": {
+      "/generate-bov": {
+        "post": {
+          "operationId": "generate_bov",
+          "summary": "Generate a BOV workbook and return it as base64",
+          "security": [{ "ApiKeyAuth": [] }],
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["asset_type", "property", "tenants", "underwriting", "client"],
+                  "properties": {
+                    "asset_type": {
+                      "type": "string",
+                      "enum": ["NNN", "MOB"],
+                      "description": "NNN = Single-Tenant Net Lease | MOB = Multi-Tenant Medical Office Building"
+                    },
+                    "property": {
+                      "type": "object",
+                      "required": ["address"],
+                      "properties": {
+                        "address":     { "type": "string", "description": "Street address" },
+                        "city_state":  { "type": "string", "description": "City, ST" },
+                        "building_sf": { "type": "number", "description": "Rentable SF" },
+                        "close_date":  { "type": "string", "description": "YYYY-MM-DD" }
+                      }
+                    },
+                    "tenants": {
+                      "type": "array",
+                      "description": "NNN: one tenant. MOB: up to 5 tenants.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name":           { "type": "string" },
+                          "guarantor":      { "type": "string" },
+                          "suite":          { "type": "string", "description": "MOB suite label" },
+                          "sf":             { "type": "number", "description": "Leased SF (MOB)" },
+                          "lease_type":     { "type": "string", "default": "NNN" },
+                          "year1_rent":     { "type": "number", "description": "Annual base rent Year 1 ($)" },
+                          "escalation_pct": { "type": "number", "description": "Annual escalation (0.02 = 2%)" },
+                          "reimbursements": { "type": "number", "default": 0 },
+                          "mgmt_fee_pct":   { "type": "number", "default": 0 }
+                        }
+                      }
+                    },
+                    "underwriting": {
+                      "type": "object",
+                      "properties": {
+                        "purchase_price":     { "type": "number" },
+                        "going_in_cap":       { "type": "number", "description": "0.065 = 6.5%" },
+                        "exit_cap":           { "type": "number" },
+                        "hold_years":         { "type": "integer", "default": 10 },
+                        "ltv":                { "type": "number", "default": 0.65 },
+                        "interest_rate":      { "type": "number", "default": 0.065 },
+                        "amortization_years": { "type": "integer", "default": 25 },
+                        "vacancy_pct":        { "type": "number", "default": 0.05, "description": "MOB vacancy/credit loss" },
+                        "capital_reserves":   { "type": "number", "default": 0 },
+                        "real_estate_taxes":  { "type": "number", "default": 0, "description": "MOB LL expense" },
+                        "insurance":          { "type": "number", "default": 0, "description": "MOB LL expense" },
+                        "cam":                { "type": "number", "default": 0, "description": "MOB LL expense" },
+                        "mgmt_fee_pct":       { "type": "number", "default": 0.04, "description": "MOB mgmt fee %" }
+                      }
+                    },
+                    "client": {
+                      "type": "object",
+                      "required": ["last_name", "file_month"],
+                      "properties": {
+                        "last_name":  { "type": "string", "description": "Client last name for filename" },
+                        "file_month": { "type": "string", "description": "YYYYMM e.g. 202607" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Workbook generated successfully",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "status":        { "type": "string" },
+                      "filename":      { "type": "string", "description": "Save-as filename for the workbook" },
+                      "file_base64":   { "type": "string", "description": "Base64-encoded .xlsx — decode and save as filename" },
+                      "file_size_kb":  { "type": "number", "description": "Uncompressed file size in KB" },
+                      "recalc_result": { "type": "object" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/health": {
+        "get": {
+          "operationId": "health_check",
+          "summary": "Service liveness check",
+          "responses": {
+            "200": { "description": "Service is healthy" }
+          }
+        }
+      }
+    },
+    "components": {
+      "securitySchemes": {
+        "ApiKeyAuth": {
+          "type": "apiKey",
+          "in": "header",
+          "name": "X-API-Key"
+        }
+      }
+    }
+  }
+}
