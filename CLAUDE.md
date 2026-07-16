@@ -8017,3 +8017,99 @@ to surface Dowling-on-"Arbor Realty Trust". If a row now records `no_name` (the
 flow really returns no name) or `create_failed:<detail>` (a DB/RLS error), the
 honest label points straight at the real next fix instead of a blanket
 `guard_rejected`.
+
+## SF-CONFLATION — bind the SF Account as an org edge, not an identity on the person (2026-07-16)
+
+Remediation of `audit/data-flow-2026-05-30/ORE_SF_AS_SOURCE_AUDIT_2026-07-16.md`.
+Doctrine (Scott): LCC is the source of truth; Salesforce is minimum-necessary and
+NOT cleaned. When SF gives us a conflated record for one party the LCC resolves it
+ON THE LCC SIDE — bind the most-accurate SF record, demote the rest — never
+touching SF. Additive · reversible · guarded · never fabricate · ≤12 api/*.js; no
+SF writes; no dia/gov writes; auth schema untouched.
+
+### Grounding (live LCC Opps `xengecqvemvfknjvbvrq`, 2026-07-16)
+- **559 person entities carried a `salesforce/Account` identity** (Capra's
+  `rel_count=0`). ALL 559 had **NO account NAME** available and **0** of the
+  account ids existed as an org entity — so the account could not be minted as a
+  well-named org for them; the correct cleanup is DETACH + provenance (below).
+- The name bleed (**Dowling `74e0b0a3` "Boyd Watterson Global"**, a person named
+  like a firm carrying Eric Dowling's `edowling@boydwatterson.com` + SF Account +
+  Contact) is a **dup-by-email of the real "Eric Dowling" `36fadad6`** — it rides
+  the existing person-email merge lane, not a name hack.
+- `connected_entities` (P0.4/P0.5 gate) counts ANY `salesforce` identity — every
+  one of the 559 keeps its `salesforce/Contact`, so the priority queue is
+  unaffected (verified: the 1 in-queue person, Paul Tsakiris, stays P0.5).
+
+### Unit C — the two modeling guards at the mint choke point
+New shared module **`api/_shared/sf-account-link.js`** (single source; the mismatch
+detector `sfContactAccountMismatch` moved here and is re-exported from
+`sf-activity-ingest.js` for existing importers):
+- **C1 `contactPersonName({name,first,last})`** — the PERSON name comes ONLY from
+  the CONTACT fields, preferring the structured `first last` over a free-text
+  `name` that could carry a firm/account string (the "Boyd Watterson Global on
+  Eric Dowling" bleed). `defaultResolveOrCreateSfContact` uses it; the SF-account
+  NAME is never even a name-position argument.
+- **C2 `relatePersonToSfAccount(...)`** — when an SF Contact carries an AccountId,
+  relate the person to their SF Account as an **ORG EDGE** (`associated_with`,
+  role `works_at`, via `sf_account_link`, reusing `linkPersonToEntity`), never a
+  `salesforce/Account` identity ON the person. The account identity lands on the
+  ORG entity (resolved/created via `ensureEntityLink(sourceType='Account')`); the
+  person keeps the account id in `metadata.sf_account` for provenance. **No
+  accountName ⇒ provenance only, no org, and crucially NO account-on-person.**
+- **Rewired the two mint paths + the writer that created the 559:**
+  `salesforce-sync.js::syncSalesforceForEntity` (person branch) REMOVED the
+  companion `salesforce/Account`-on-person write and now calls
+  `relatePersonToSfAccount` (lazy `import()` to break the entity-link ↔
+  salesforce-sync ↔ sf-account-link static cycle); `defaultResolveOrCreateSfContact`
+  threads `accountName` (from `sf-activity-ingest` `whatName` / `sf-contact-resolve`
+  `account_name`) and relates after a successful mint (best-effort, never fails
+  the mint).
+
+### Unit B — email-domain-authoritative binding (autonomous, lane fallback)
+`accountBindingDecision({email, accountName})` (pure, reuses the mismatch detector):
+- **agree / cannot-judge** (personal/generic/no-email) → bind the account ORG
+  (the Capra/Boyd case, autonomous).
+- **disagree** (Dowling `@boydwatterson.com` on "Arbor Realty Trust") → **never
+  bind the wrong account.** Record it as `metadata.sf_account.demoted`; bind a
+  **conservative unique email-domain org** if one exists (exact-core match, never
+  guesses on ambiguity), else return `needs_lane:true` → the existing
+  `sf_contact_account_mismatch` Decision-Center lane is the fallback for genuine
+  ambiguity. Genuine ties stay the exception, not the default.
+
+### Unit C3 — one-time reversible cleanup of the 559 (applied live)
+Migration `20260801120000_lcc_sf_conflation_cleanup_account_on_person.sql`:
+`lcc_cleanup_sf_account_on_person(dry_run default true, batch_tag)` DETACHES the
+`salesforce/Account` identity from every person, snapshots each to the reversible
+`sf_account_on_person_cleanup_backup`, writes `entities.metadata.sf_account`
+provenance, and soft-flags the firm-suffixed subset into the `junk_entity_name`
+lane. `lcc_restore_sf_account_on_person(batch_tag)` re-inserts them.
+**Applied live 2026-07-16:** dry-run 559 (2 firm-suffixed) → real apply **559
+detached / 559 provenance / 2 junk-flagged / 559 backed up**; idempotent re-run
+= 0; `account_on_org` (2,512) untouched; `lcc_refresh_priority_queue_resolved` +
+`_entity_connected_value` rebuild clean; Paul Tsakiris stays P0.5. Synthetic
+detach→restore round-trip verified (0 residue). Dowling's org-named dup is NOT
+auto-renamed (rides the person-email merge lane).
+
+### Verified (headless 2026-07-16)
+`test/sf-account-link.test.mjs` (17: contactPersonName C1; sfContactAccountMismatch
++ accountBindingDecision B; relatePersonToSfAccount agree→account-org / no-name→
+provenance-only-no-account-on-person / disagree→demote+email-domain-org or lane /
+missing-input / never-self-link) + `test/sf-activity-ingest.test.mjs` +2 (mint
+names from CONTACT fields never the account name, relates to the account org). `node
+--check` clean; `ls api/*.js | wc -l`=12; full suite **1870 pass / 0 fail / 6
+skipped**. JS ships on the Railway redeploy; the cleanup migration is applied live
++ committed. SF writes unchanged (no cleanup path); reverse the cleanup via
+`lcc_restore_sf_account_on_person` + the backup table.
+
+### After deploy (verify live)
+A fresh SF Contact mint creates a person named from the CONTACT (never the
+account), and — when an account name is present — an org entity carrying the
+`salesforce/Account` identity + a person→org edge (not an account-identity-on-
+person). Re-running the Boyd case, a Capra-style agreeing contact binds to the
+Boyd org autonomously; a Dowling-style disagreeing contact demotes the wrong
+account and (no confident Boyd org) surfaces the `sf_contact_account_mismatch`
+lane. dia/gov + SF write paths untouched.
+
+### Unit 4 (Outlook symmetric mint) — still DEFERRED (unchanged from prior round)
+The Outlook `handleOutlookMessageExtract` no-tracked-party mint is a distinct live
+path; the same org-edge modeling would apply there. Not built this round.
