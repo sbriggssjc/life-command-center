@@ -145,6 +145,29 @@ export async function insertEntityRelationship(row, opts) {
   return opsQuery('POST', 'entity_relationships', row, opts);
 }
 
+/**
+ * Resolve the primary/oldest workspace id — the account-wide fallback used when
+ * a producer/worker has NO explicit workspace context. Mirrors the inline
+ * `workspaces?select=id&order=created_at.asc&limit=1` pattern already repeated in
+ * research-task.js (createResearchTask), owner-contact-enrich.js and admin.js —
+ * made a single source of truth here so paths that mint an entity (which requires
+ * a NON-NULL entities.workspace_id) never 23502 on a null workspace.
+ *
+ * Returns null when no workspace exists or the query fails; the caller decides
+ * how to handle a null (an account always carries ≥1 workspace in practice).
+ *
+ * @param {object} [deps] - { opsQuery } injectable for tests
+ * @returns {Promise<string|null>}
+ */
+export async function resolvePrimaryWorkspaceId(deps = {}) {
+  const q = deps.opsQuery || opsQuery;
+  try {
+    const wr = await q('GET', 'workspaces?select=id&order=created_at.asc&limit=1');
+    if (wr && wr.ok && Array.isArray(wr.data) && wr.data[0]) return wr.data[0].id;
+  } catch (_e) { /* soft — caller handles null */ }
+  return null;
+}
+
 export async function logPerfMetric(workspaceId, userId, metricType, endpoint, durationMs, metadata) {
   if (!isOpsConfigured()) return { ok: false, status: 503, data: { error: 'Ops database not configured' } };
   try {
