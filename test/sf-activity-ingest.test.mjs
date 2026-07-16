@@ -675,3 +675,47 @@ describe('processSfActivityBatch — mint + reconcile the WhoId contact (Unit 1/
     assert.equal(mismatchCalls.length, 0);
   });
 });
+
+// ── SF-CONFLATION Unit C1/C2 — the mint relates person→org, never account-on-person
+import { defaultResolveOrCreateSfContact } from '../api/_handlers/sf-activity-ingest.js';
+
+describe('defaultResolveOrCreateSfContact — Unit C1/C2 wiring', () => {
+  it('names the person from CONTACT fields (never the account name) + relates to the account ORG', async () => {
+    const ensureCalls = [];
+    const relateCalls = [];
+    const r = await defaultResolveOrCreateSfContact({
+      workspaceId: 'ws-1', userId: 'u-1', whoId: '003X',
+      accountId: '001BOYD', accountName: 'Boyd Watterson Asset Management LLC',
+      name: 'Joseph Capra', email: 'jcapra@boydwatterson.com', first: 'Joseph', last: 'Capra',
+      deps: {
+        ensureEntityLink: async (a) => { ensureCalls.push(a); return { ok: true, entityId: 'per-capra', createdEntity: true }; },
+        relatePersonToSfAccount: async (a) => { relateCalls.push(a); return { ok: true, bound: 'account_org', orgEntityId: 'org-boyd' }; },
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.entityId, 'per-capra');
+    // C1: the entity name is the CONTACT name, never the account name
+    assert.equal(ensureCalls[0].sourceType, 'Contact');
+    assert.equal(ensureCalls[0].seedFields.name, 'Joseph Capra');
+    assert.notEqual(ensureCalls[0].seedFields.name, 'Boyd Watterson Asset Management LLC');
+    // C2: after minting, relate the person to the SF account (org edge)
+    assert.equal(relateCalls.length, 1);
+    assert.equal(relateCalls[0].personEntityId, 'per-capra');
+    assert.equal(relateCalls[0].accountId, '001BOYD');
+    assert.equal(relateCalls[0].accountName, 'Boyd Watterson Asset Management LLC');
+    assert.equal(r.accountBinding.bound, 'account_org');
+  });
+
+  it('does NOT relate when there is no accountId (no account to bind)', async () => {
+    let relateCalled = false;
+    const r = await defaultResolveOrCreateSfContact({
+      workspaceId: 'ws-1', whoId: '003Y', name: 'Solo Person', accountId: null,
+      deps: {
+        ensureEntityLink: async () => ({ ok: true, entityId: 'per-solo', createdEntity: true }),
+        relatePersonToSfAccount: async () => { relateCalled = true; return {}; },
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(relateCalled, false);
+  });
+});

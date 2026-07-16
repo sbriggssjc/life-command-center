@@ -156,14 +156,25 @@ export async function syncSalesforceForEntity({ workspaceId, entityId, entityTyp
           sfName: c.Name || null,
           accountId: c.AccountId || null,
         });
-        // Also record a companion Account link when the contact carries one.
+        // SF-CONFLATION Unit C2 — relate the person to their SF Account as an ORG
+        // EDGE, never a companion `salesforce/Account` identity ON the person
+        // (that companion write was the source of the 559 account-on-person rows;
+        // Capra's rel_count=0). The account identity lands on the ORG entity; the
+        // person gets a person→org `associated_with` edge + provenance metadata.
+        // Lazy import breaks the static cycle (entity-link → salesforce-sync →
+        // sf-account-link → entity-link). Best-effort — never fails the sync.
         if (c.AccountId) {
-          await writeEntitySalesforceLink({
-            workspaceId, entityId,
-            kind: 'Account',
-            sfId: c.AccountId,
-            sfName: c.Account?.Name || null,
-          });
+          try {
+            const { relatePersonToSfAccount } = await import('./sf-account-link.js');
+            await relatePersonToSfAccount({
+              workspaceId, userId: null, personEntityId: entityId,
+              personEmail: email || c.Email || null,
+              accountId: c.AccountId, accountName: c.Account?.Name || null,
+              via: 'salesforce_sync',
+            });
+          } catch (err) {
+            console.warn('[salesforce-sync] account org-relate failed (non-fatal):', err?.message || err);
+          }
         }
       }
       console.log(`[salesforce-sync] matched person via email (${reason || 'n/a'})`, {

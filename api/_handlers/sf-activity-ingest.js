@@ -64,12 +64,25 @@ import { authenticate, requireRole } from '../_shared/auth.js';
 import { appendActivityEvent as defaultAppendActivityEvent } from '../_shared/activity-events.js';
 import { findEntityBySfId as defaultFindEntityBySfId } from '../_shared/bridge-handlers-salesforce.js';
 import { opsQuery, resolvePrimaryWorkspaceId } from '../_shared/ops-db.js';
-import { ensureEntityLink, normalizeEmail, isGenericInboxEmail } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeEmail } from '../_shared/entity-link.js';
 import {
   advanceCadence as defaultAdvanceCadence,
   resolveCadenceForEntity as defaultResolveCadenceForEntity,
   growCadenceFromOutreach as defaultGrowCadenceFromOutreach,
 } from '../_shared/cadence-engine.js';
+// SF-CONFLATION Unit C/B — the SF-Account modeling choke point. The person name
+// comes from CONTACT fields (contactPersonName, C1); the SF Account relates to
+// the person as an ORG EDGE, never a `salesforce/Account` identity on the person
+// (relatePersonToSfAccount, C2/B). The mismatch detector lives there now (single
+// source) and is re-exported below so existing importers are unchanged.
+import {
+  sfContactAccountMismatch,
+  contactPersonName,
+  relatePersonToSfAccount,
+} from '../_shared/sf-account-link.js';
+
+// Re-export for the existing importers (sf-contact-resolve.js + tests).
+export { sfContactAccountMismatch };
 
 // SF-CONTACT-RECONCILE Unit 1 — kill-switch for the WhoId contact mint (default
 // ON). Even ON, minting is a natural no-op until the PA "Activity Sync" flow
@@ -129,13 +142,16 @@ async function defaultApplyOwnerContactFeedback(ownerEntityId, kind) {
  * The ingest caller only reads `.entityId`, so returning a `{ok:false,…}` object
  * instead of the old bare `null` is backward-compatible.
  */
-export async function defaultResolveOrCreateSfContact({ workspaceId, userId, whoId, accountId, name, email, first, last, phone, title }) {
+export async function defaultResolveOrCreateSfContact({ workspaceId, userId, whoId, accountId, accountName, name, email, first, last, phone, title, deps = {} }) {
   const seedFields = {};
   // Trim so a whitespace-only name (a padded field-map value) is treated as
   // empty, not minted as a blank entity.
   const trim = (v) => (typeof v === 'string' ? v.trim() : v);
-  const tName = trim(name), tFirst = trim(first), tLast = trim(last), tTitle = trim(title), tPhone = trim(phone);
-  if (tName)  seedFields.name = tName;
+  const tFirst = trim(first), tLast = trim(last), tTitle = trim(title), tPhone = trim(phone);
+  // Unit C1 — the PERSON name comes ONLY from the CONTACT fields (never the SF
+  // account name; this function is not even given a name-position account arg).
+  const personName = contactPersonName({ name, first: tFirst, last: tLast });
+  if (personName) seedFields.name = personName;
   if (tFirst) seedFields.first_name = tFirst;
   if (tLast)  seedFields.last_name = tLast;
   if (tTitle) seedFields.title = tTitle;
@@ -145,14 +161,33 @@ export async function defaultResolveOrCreateSfContact({ workspaceId, userId, who
   if (!seedFields.name && !seedFields.first_name && !seedFields.last_name && !seedFields.email) {
     return { ok: false, reason: 'no_name' };
   }
-  const link = await ensureEntityLink({
+  const ensureLink = deps.ensureEntityLink || ensureEntityLink;
+  const relateAcct = deps.relatePersonToSfAccount || relatePersonToSfAccount;
+  const link = await ensureLink({
     workspaceId, userId,
     sourceSystem: 'salesforce', sourceType: 'Contact', externalId: whoId,
     seedFields,
+    // Provenance only — the account id is NEVER written as a salesforce/Account
+    // identity on the person (Unit C2). It relates to the person as an ORG edge.
     metadata: { via: 'sf_activity_ingest', sf_account: accountId || null },
   });
   if (link && link.ok && link.entityId) {
-    return { ok: true, entityId: link.entityId, createdEntity: !!link.createdEntity, resolvedByEmail: !!link.resolvedByEmail };
+    // Unit C2/B — relate the person to their SF Account as an ORG edge (never an
+    // account identity on the person). Best-effort; never fails the mint.
+    let accountBinding = null;
+    if (accountId) {
+      try {
+        accountBinding = await relateAcct({
+          workspaceId, userId, personEntityId: link.entityId, personEmail: ne,
+          accountId, accountName, domain: null, via: 'sf_account_link',
+        });
+      } catch (_e) { /* best-effort */ }
+    }
+    return {
+      ok: true, entityId: link.entityId,
+      createdEntity: !!link.createdEntity, resolvedByEmail: !!link.resolvedByEmail,
+      accountBinding,
+    };
   }
   // Un-conflate: a name-guard rejection (ensureEntityLink `skipped`) is terminal;
   // a create/link failure is a transient DB error the caller can retry.
@@ -161,49 +196,6 @@ export async function defaultResolveOrCreateSfContact({ workspaceId, userId, who
     ? (typeof link.detail === 'string' ? link.detail : JSON.stringify(link.detail))
     : null;
   return { ok: false, reason: 'create_failed', detail: rawDetail ? rawDetail.slice(0, 200) : null };
-}
-
-// Free personal-mail domains carry NO firm signal, so a mismatch can't be judged
-// against them (a broker with a gmail address is not "wrong account").
-const PERSONAL_EMAIL_DOMAINS = new Set([
-  'gmail.com', 'yahoo.com', 'ymail.com', 'hotmail.com', 'outlook.com', 'live.com',
-  'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com', 'comcast.net',
-  'protonmail.com', 'proton.me', 'gmx.com', 'att.net', 'sbcglobal.net', 'verizon.net',
-]);
-
-function orgCore(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
-
-/**
- * Unit 3 detector (pure). An SF Contact whose EMAIL DOMAIN org-token contradicts
- * its SF ACCOUNT name is a Salesforce-side data-quality error (e.g. Eric Dowling
- * `edowling@boydwatterson.com` filed under account "Arbor Realty Trust"). LCC
- * flags it — it does NOT inherit the wrong account.
- *
- * Conservative — returns `mismatch:true` ONLY when BOTH signals are strong:
- *   - the email domain is a real firm domain (non-generic inbox, non-personal),
- *     with a distinctive second-level label ≥ 4 chars (boydwatterson.com →
- *     "boydwatterson");
- *   - the account name collapses to ≥ 4 alnum chars;
- *   - NEITHER core contains the other (no agreement).
- * Any weak / agreeing / generic case ⇒ `mismatch:false`.
- */
-export function sfContactAccountMismatch({ email, accountName } = {}) {
-  const e = normalizeEmail(email);
-  if (!e || isGenericInboxEmail(e)) return { mismatch: false };
-  const domain = (e.split('@')[1] || '').trim();
-  if (!domain || PERSONAL_EMAIL_DOMAINS.has(domain)) return { mismatch: false };
-  const acct = String(accountName || '').trim();
-  if (!acct) return { mismatch: false };
-  const labels = domain.split('.');
-  const domainLabel = labels.length >= 2 ? labels[labels.length - 2] : labels[0];
-  const domainCore = orgCore(domainLabel);
-  if (domainCore.length < 4) return { mismatch: false };
-  const acctCore = orgCore(acct);
-  if (acctCore.length < 4) return { mismatch: false };
-  if (acctCore.includes(domainCore) || domainCore.includes(acctCore)) {
-    return { mismatch: false, domain_label: domainLabel, account_name: acct };
-  }
-  return { mismatch: true, email_domain: domain, domain_label: domainLabel, account_name: acct };
 }
 
 /**
@@ -570,7 +562,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     if (!entity && whoId && MINT_SF_CONTACTS && (it.whoName || normalizeEmail(it.whoEmail))) {
       try {
         const minted = await resolveOrCreateSfContact({
-          workspaceId, userId: actorId, whoId, accountId: whatId,
+          workspaceId, userId: actorId, whoId, accountId: whatId, accountName: it.whatName,
           name: it.whoName, email: it.whoEmail, first: it.whoFirst,
           last: it.whoLast, phone: it.whoPhone, title: it.whoTitle,
         });

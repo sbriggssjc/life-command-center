@@ -250,6 +250,7 @@ export async function handleSfContactResolveTick(req, res) {
       getContactById: (whoId) => getSalesforceContactById(whoId),
       mintContact: ({ whoId, workspaceId, contact }) => defaultResolveOrCreateSfContact({
         workspaceId, userId: user.id, whoId, accountId: contact.account_id,
+        accountName: contact.account_name,
         name: contact.name, email: contact.email, first: contact.first,
         last: contact.last, phone: contact.phone, title: contact.title,
       }).then((m) => (m && m.entityId
