@@ -2590,7 +2590,7 @@ const ACTION_REGISTRY = {
   get_daily_briefing_snapshot: { tier: 0, handler: 'daily_briefing' },
   list_staged_intake_inbox:    { method: 'GET', path: 'inbox', tier: 0 },
   get_my_execution_queue:      { method: 'GET', path: 'queue-v2?view=my_work', tier: 0, alias: 'queue?_version=v2&view=my_work' },
-  get_sync_run_health:         { method: 'GET', path: 'sync?action=health', tier: 0 },
+  get_sync_run_health:         { tier: 0, handler: 'sync_health' },
   get_hot_business_contacts:   { method: 'GET', path: 'contacts?action=hot_leads', tier: 0, alias: 'entity-hub?_domain=contacts&action=hot_leads' },
   search_entity_targets:       { method: 'GET', path: 'entities?action=search', tier: 0, alias: 'entity-hub?_domain=entities&action=search' },
   fetch_listing_activity_context: { method: 'GET', path: 'queue-v2?view=entity_timeline', tier: 0, alias: 'queue?_version=v2&view=entity_timeline' },
@@ -2761,6 +2761,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'guided_entity_merge':     result = await handleGuidedEntityMerge(params, user, workspaceId); break;
       case 'document_assembly':       result = await handleDocumentAssembly(params, user, workspaceId); break;
       case 'ingest_pdf':              result = await ingestPdfWorker(params, user, workspaceId); break;
+      case 'sync_health':             result = await handleSyncHealthCopilot(params, user, workspaceId); break;
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
 
@@ -2813,6 +2814,57 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
     params_to_send: params || {},
     note: 'Execute this endpoint directly with your auth credentials to complete the action.'
   };
+}
+
+// ---------------------------------------------------------------------------
+// SYNC HEALTH — inline handler for get_sync_run_health Copilot action.
+// Replaces the internal HTTP self-call to /api/sync?action=health that was
+// returning 400. Directly queries the same tables as handleHealth in sync.js
+// but without the round-trip through the HTTP layer.
+// ---------------------------------------------------------------------------
+async function handleSyncHealthCopilot(params, user, workspaceId) {
+  try {
+    const cutoff = new Date(Date.now() - 86400000).toISOString();
+    const [connectors, recentJobs, unresolvedErrors] = await Promise.all([
+      opsQuery('GET',
+        `connector_accounts?workspace_id=eq.${workspaceId}&select=id,connector_type,display_name,status,last_sync_at,last_error&order=connector_type,display_name`,
+        undefined, { countMode: 'none' }
+      ),
+      opsQuery('GET',
+        `sync_jobs?workspace_id=eq.${workspaceId}&created_at=gte.${cutoff}&select=id,connector_account_id,status,direction,entity_type,records_processed,records_failed,started_at,completed_at&order=created_at.desc&limit=50`,
+        undefined, { countMode: 'none' }
+      ),
+      opsQuery('GET',
+        `sync_errors?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=id,connector_account_id,error_code,error_message,is_retryable,retry_count,created_at&order=created_at.desc&limit=25`,
+        undefined, { countMode: 'none' }
+      ),
+    ]);
+
+    const connectorList = connectors.data || [];
+    const recentJobList = recentJobs.data || [];
+    const errorList     = unresolvedErrors.data || [];
+
+    const summary = {
+      total_connectors:  connectorList.length,
+      healthy:           connectorList.filter(c => c.status === 'healthy').length,
+      degraded:          connectorList.filter(c => c.status === 'degraded').length,
+      error:             connectorList.filter(c => c.status === 'error').length,
+      disconnected:      connectorList.filter(c => c.status === 'disconnected').length,
+      unresolved_errors: errorList.length,
+    };
+
+    const overall_status =
+      connectorList.some(c => c.status === 'error') || errorList.length > 0 ? 'error' :
+      connectorList.some(c => c.status === 'degraded') ? 'degraded' : 'healthy';
+
+    return {
+      ok: true,
+      data: { summary, overall_status, connectors: connectorList, recent_jobs: recentJobList, unresolved_errors: errorList },
+    };
+  } catch (err) {
+    console.error('[handleSyncHealthCopilot] error:', err?.message || err);
+    return { ok: false, error: `Sync health check failed: ${err?.message || 'unknown error'}` };
+  }
 }
 
 async function executeReadAction(spec, params, user, workspaceId, req) {
