@@ -30,6 +30,12 @@ const GOV_SUPABASE_URL = process.env.GOV_SUPABASE_URL || "";
 // Prefer service_role over anon — see GitHub issue #720.
 const GOV_SUPABASE_KEY = process.env.GOV_SUPABASE_SERVICE_KEY || process.env.GOV_SUPABASE_KEY || "";
 
+// BOV Generator service (Railway FastAPI microservice). Thin proxy: the
+// generate_bov tool POSTs deal inputs to /generate-bov and returns a
+// short-lived download link. BOV_API_KEY must match the BOV Railway service.
+const BOV_SERVICE_URL = (process.env.BOV_SERVICE_URL || "https://pacific-love-production-f6b9.up.railway.app").replace(/\/+$/, "");
+const BOV_API_KEY = process.env.BOV_API_KEY || "";
+
 // ── Supabase fetch helper (mirrors api/_shared/ops-db.js pattern) ────────────
 
 async function supabaseQuery(baseUrl, apiKey, method, path, body) {
@@ -426,11 +432,116 @@ const TOOL_DEFINITIONS = {
       required: ['summary']
     }
   },
+  generate_bov: {
+    name: 'generate_bov',
+    description: "Generate a Briggs CRE BOV Excel workbook (10 tabs, all formulas recalculated) from structured deal inputs. Handles Single-Tenant Net Lease (NNN) and Multi-Tenant Medical Office (MOB) deals. Returns a short-lived download link to the finished .xlsx — share that link with the user to deliver the workbook.",
+    inputSchema: {
+      type: 'object',
+      required: ['asset_type', 'property', 'client'],
+      properties: {
+        asset_type: { type: 'string', enum: ['NNN', 'MOB'], description: 'NNN = Single-Tenant Net Lease | MOB = Multi-Tenant Medical Office Building' },
+        property: {
+          type: 'object',
+          required: ['address'],
+          properties: {
+            address: { type: 'string', description: 'Street address' },
+            city_state: { type: 'string', description: 'City, ST' },
+            building_sf: { type: 'number', description: 'Rentable SF' },
+            close_date: { type: 'string', description: 'YYYY-MM-DD estimated close date' }
+          }
+        },
+        tenants: {
+          type: 'array',
+          description: 'NNN: one tenant. MOB: up to 5 tenants.',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              guarantor: { type: 'string' },
+              suite: { type: 'string', description: 'MOB suite label' },
+              sf: { type: 'number', description: 'Leased SF (MOB)' },
+              lease_type: { type: 'string', description: 'NNN | NN | MG | Gross' },
+              year1_rent: { type: 'number', description: 'Annual base rent Year 1 ($)' },
+              escalation_pct: { type: 'number', description: 'Annual escalation (0.02 = 2%)' },
+              reimbursements: { type: 'number' },
+              mgmt_fee_pct: { type: 'number' }
+            }
+          }
+        },
+        underwriting: {
+          type: 'object',
+          properties: {
+            purchase_price: { type: 'number' },
+            going_in_cap: { type: 'number', description: '0.065 = 6.5%' },
+            exit_cap: { type: 'number' },
+            hold_years: { type: 'integer', description: 'default 10' },
+            ltv: { type: 'number', description: 'default 0.65' },
+            interest_rate: { type: 'number', description: 'default 0.065' },
+            amortization_years: { type: 'integer', description: 'default 25' },
+            vacancy_pct: { type: 'number', description: 'MOB vacancy/credit loss (default 0.05)' },
+            capital_reserves: { type: 'number' },
+            real_estate_taxes: { type: 'number', description: 'MOB LL-responsible expense' },
+            insurance: { type: 'number', description: 'MOB LL-responsible expense' },
+            cam: { type: 'number', description: 'MOB LL-responsible expense' },
+            mgmt_fee_pct: { type: 'number', description: 'MOB mgmt fee % (default 0.04)' }
+          }
+        },
+        client: {
+          type: 'object',
+          required: ['last_name', 'file_month'],
+          properties: {
+            last_name: { type: 'string', description: 'Client last name — used in filename' },
+            file_month: { type: 'string', description: 'YYYYMM e.g. 202607 — used in filename' }
+          }
+        }
+      }
+    }
+  },
 };
 
 // ── Tool handlers ─────────────────────────────────────────────────────────
 // These are the exact same async functions from the former s.tool() calls.
 const TOOL_HANDLERS = {
+  generate_bov: async (args) => {
+    return withTiming("generate_bov", async () => {
+      if (!BOV_SERVICE_URL || !BOV_API_KEY) {
+        return textResult({ error: "BOV service not configured — set BOV_SERVICE_URL and BOV_API_KEY env vars on the MCP service." });
+      }
+      if (!args || !args.asset_type || !args.property || !args.client) {
+        return textResult({ error: "generate_bov requires asset_type, property, and client (tenants + underwriting strongly recommended)." });
+      }
+      const url = BOV_SERVICE_URL + "/generate-bov";
+      let resp, text;
+      try {
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": BOV_API_KEY },
+          body: JSON.stringify(args),
+          signal: AbortSignal.timeout(180000),
+        });
+        text = await resp.text();
+      } catch (e) {
+        return textResult({ error: "Could not reach BOV service: " + e.message });
+      }
+      if (!resp.ok) {
+        return textResult({ error: "BOV service returned HTTP " + resp.status, detail: text.slice(0, 500) });
+      }
+      let data;
+      try { data = JSON.parse(text); } catch (e) { return textResult({ error: "BOV service returned non-JSON", raw: text.slice(0, 300) }); }
+      const recalc = data.recalc_result || {};
+      const mins = Math.round((data.expires_in_seconds || 3600) / 60);
+      return textResult({
+        status: data.status,
+        filename: data.filename,
+        download_url: data.download_url,
+        expires_in_seconds: data.expires_in_seconds,
+        file_size_kb: data.file_size_kb,
+        formulas_recalculated: recalc.total_formulas,
+        recalc_errors: recalc.total_errors || 0,
+        message: "BOV workbook generated: " + data.filename + ". Download it here (link expires in " + mins + " min): " + data.download_url,
+      });
+    });
+  },
   recall_memory: async ({ query, domain, kind, limit }) => {
     return withTiming("recall_memory", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
@@ -1520,6 +1631,7 @@ app.get("/health", (_req, res) => {
       "get_contact_context",
       "get_queue_summary",
       "get_pipeline_health",
+      "generate_bov",
     ],
     ops_configured: !!(OPS_SUPABASE_URL && OPS_SUPABASE_KEY),
     gov_configured: !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY),
