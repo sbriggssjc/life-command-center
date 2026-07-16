@@ -639,3 +639,49 @@ WhoIds sit in the queue (`no_data`) — Cowork resets to `seen` + re-drains afte
   Boyd, SF Dowling merges by email into the CoStar/RCA Dowling, the
   `sf_contact_account_mismatch` lane surfaces Dowling-on-Arbor). This is a route-dispatch
   regression, not fixable via SQL.
+
+## §10i — Boyd loop CLOSED live (2026-07-16) + two follow-ups surfaced
+
+**Route restored (PR #1408, merged + live) → the by-id resolver drained Capra + Dowling.**
+After restoring the operations.js dispatch, the first tick still `retry`'d both with
+`create_failed: 23502` — a **NOT NULL violation on `entities.workspace_id`**: the by-id
+field-map is perfect (both payloads complete — Joseph Capra / Acquisitions /
+jcapra@boydwatterson.com / 3127773707; Eric Dowling / Analyst / edowling@boydwatterson.com
+/ 3127773704), but `sf-activity-ingest` enqueued both WhoIds with a **null `workspace_id`**,
+which the resolver passed straight into the `entities` INSERT. Patched the two queue rows to
+the canonical workspace `a0000000-0000-0000-0000-000000000001` + re-drained →
+`scanned:2, resolved:2, minted:1, mismatches_flagged:1`. Queue now 5/5 resolved, 0
+null-workspace remaining.
+
+**Outcome (verified live):**
+- ✅ **Joseph Capra** minted fresh (entity `c15d1420…`, 2026-07-16, person) carrying
+  `salesforce/Contact` + `salesforce/Account`(Boyd) identities.
+- ✅ **Eric Dowling** reconciled by EMAIL — **NO duplicate created** (the R39 anti-dup
+  guarantee held); his `salesforce/Contact` identity attached to the pre-existing
+  `edowling@boydwatterson.com` record (entity `74e0b0a3…`).
+- ✅ **Mismatch lane fired** — `sf_contact_account_mismatch` open decision
+  `sfmismatch:74e0b0a3…`: email_domain `boydwatterson.com` on SF account **"Arbor Realty
+  Trust"**. LCC detected SF's misfile instead of inheriting it. Exactly the design.
+
+**Follow-up 1 (systemic, → Claude Code) — the workspace-null mint bug.** The resolver mint
+23502s whenever the queue row's `workspace_id` is null (which is how `sf-activity-ingest`
+enqueues them). Patched 2 rows by hand; the durable fix is a **fallback workspace** in the
+resolver (mirror `createResearchTask`'s "primary/oldest workspace" fallback) and/or set
+`workspace_id` at enqueue in `sf-activity-ingest`. Written up:
+`CLAUDECODE_PROMPT_ORE_sf_resolve_workspace_fallback.md`. Until it ships, any new WhoId with
+a null workspace 23502s → `retry` forever.
+
+**Follow-up 2 (data-quality, surface — do NOT silently mutate).** The pre-existing Dowling
+record `74e0b0a3` is **conflated**: `entity_type=person` but `canonical_name="boyd watterson
+global"` (a FIRM name), carrying `edowling@boydwatterson.com` + `rca/contact` +
+`salesforce/Account` + now `salesforce/Contact`. So Eric Dowling (person) and the Boyd
+Watterson firm/account are merged into one mislabeled node (an RCA capture put the firm name
++ a Boyd Account identity on a record keyed by Dowling's email). The email-reconcile
+correctly avoided a duplicate, but it attached to a bad target. Also both Capra + Dowling
+carry a `salesforce/Account` identity ON the person (the contact's AccountId recorded as an
+Account-type identity rather than a relationship edge to a Boyd org entity; Capra has
+`rel_count=0` — no graph edge to Boyd). Recommend (Scott's call, reversible): rename/split
+`74e0b0a3` to the person "Eric Dowling" and relate it to a distinct Boyd org entity, and
+decide whether SF `AccountId` should be a person-identity or a `works_at` edge. This is the
+kind of conflation the reconciliation engine (§7) + the mismatch lane are meant to surface —
+now surfaced.
