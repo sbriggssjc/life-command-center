@@ -149,6 +149,16 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleDocumentTextTick } = await import('./_handlers/document-text.js');
       return handleDocumentTextTick(req, res);
     }
+    case 'cre-doc-text-tick': {
+      // R58 Unit 4 (2A) — fill the CRE registry text sidecar (lease/dd/om).
+      const { handleCreDocTextTick } = await import('./_handlers/cre-doc-text.js');
+      return handleCreDocTextTick(req, res);
+    }
+    case 'bov-extract': {
+      // R58 Unit 4 (2B) — build the reviewable BOV record from text sidecars.
+      const { handleBovExtract } = await import('./_handlers/bov-extract.js');
+      return handleBovExtract(req, res);
+    }
     case 'document-notify': {
       const { handleDocumentNotify } = await import('./_handlers/intake-document-notify.js');
       return handleDocumentNotify(req, res);
@@ -167,7 +177,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, document-notify, sf-activity, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, feedback, accuracy'
       });
   }
 });

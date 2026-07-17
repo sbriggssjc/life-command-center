@@ -27,6 +27,8 @@
 // ============================================================================
 
 import { opsQuery } from './ops-db.js';
+import { enqueueEnrichmentJob } from './bridges.js';
+import { enqueueCreDocText } from './cre-property-doc-text.js';
 import {
   ensureEntityLink,
   normalizeCanonicalName,
@@ -221,6 +223,18 @@ export async function performCreRegister(args, deps) {
       docType: docType || 'document',
       sourceUrl: sourceUrl || null,
     }).catch((e) => ({ ok: false, error: e && e.message }));
+  }
+
+  // ---- Unit 4 Step 2A — enqueue text extraction for lease/dd/om -----------
+  // Extract-once at intake: a freshly-registered lease/DD/OM gets its raw_text
+  // sidecar filled by the `cre.doc.text` worker, so every access point reuses ONE
+  // extraction (this session's lesson) instead of re-OCRing at the access point.
+  // Guarded to the extractable types inside enqueueDocText; best-effort — a queue
+  // miss never blocks registration.
+  if (doc && doc.ok && doc.document_id && typeof deps.enqueueDocText === 'function') {
+    await deps.enqueueDocText({
+      documentId: doc.document_id, crePropertyId, documentType: docType, workspaceId,
+    }).catch(() => {});
   }
 
   // ---- Provenance (source='folder_feed_cre'; best-effort) -----------------
@@ -456,5 +470,7 @@ export async function registerCreProperty(args) {
     attachDoc:        attachCreDoc,
     ensureOwnerEntity: ensureCreOwnerEntity,
     recordProvenance: recordCreProvenance,
+    // Unit 4 Step 2A auto-enqueue (spec step 4): lease/dd/om → cre.doc.text job.
+    enqueueDocText:   (a) => enqueueCreDocText(a, { enqueueEnrichmentJob }),
   });
 }

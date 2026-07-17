@@ -1,7 +1,11 @@
 # SPEC — BOV / Lease Structured Extractor (R58 "Unit 4")
-**Status:** Draft for build · **Date:** July 2026
+**Status:** ✅ BUILT (2026-07-17) · migration applied to LCC Opps · code committed · unit-tested
 **Owner surface:** LCC Opps (`xengecqvemvfknjvbvrq`) · `api/_shared/`
 **Depends on:** `document-text.js` (Unit 1), `ai.js`, the folder-feed intake, the BOV generator schema
+
+> **Build notes:** see `SPEC_BOV_Lease_Extractor_Unit4_BUILD.md` for exactly what
+> shipped, the file map, how the real schema differed from the draft, and the two
+> remaining ops steps (schedule the drain tick · backfill the pilot deals).
 
 ---
 

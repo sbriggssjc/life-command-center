@@ -28,11 +28,11 @@ import shutil
 import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 # ── Ensure local modules are importable ───────────────────────────────────────
 _HERE = Path(__file__).parent
@@ -43,6 +43,18 @@ from build_bov_nnn import build_nnn
 from build_bov_mob import build_mob
 from populate      import fill_assumptions
 from recalc_runner import recalc_and_validate, RecalcError
+
+# R58 Unit 4 (2C) — optional {cre_property_id} input path. Loading the loader is
+# guarded so the generator still boots even if the module/env isn't present (the
+# hand-authored payload path is unaffected).
+try:
+    from bov_record_loader import load_bov_record, BovRecordError
+    _UNIT4_LOADER = True
+except Exception:  # noqa: BLE001
+    _UNIT4_LOADER = False
+    class BovRecordError(Exception):
+        def __init__(self, message: str, status: int = 502):
+            super().__init__(message); self.status = status
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -112,6 +124,9 @@ def _base_url(request: Request) -> str:
 
 # ── Request / Response models ─────────────────────────────────────────────────
 class PropertyInput(BaseModel):
+    # extra='allow' so rich intake fields ride through model_dump() into the
+    # dict fill_assumptions consumes (Unit-4 records carry more than the columns).
+    model_config = ConfigDict(extra="allow")
     address:     str            = Field(..., description="Street address — used on Cover tab")
     city_state:  str            = Field("",  description="City, ST — used in filename and Cover tab")
     building_sf: Optional[float]= Field(None, description="Rentable SF per lease or survey")
@@ -120,6 +135,7 @@ class PropertyInput(BaseModel):
 
 
 class RentPeriodInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     label:       str            = Field("",   description="Period label, e.g. 'Year 1', 'Option 1'")
     start_date:  str            = Field("",   description="YYYY-MM-DD period start")
     end_date:    str            = Field("",   description="YYYY-MM-DD period end")
@@ -127,135 +143,10 @@ class RentPeriodInput(BaseModel):
     status:      str            = Field("Contracted", description="Contracted | Option | Renewal | Projected")
 
 
-class LeaseAbstractInput(BaseModel):
-    """
-    Executed-lease provisions for the Lease Abstract tab (Leg 2). All optional —
-    identification and economics (tenant/guarantor, lease type, commencement,
-    expiration, Year-1 rent, escalations, remaining term, leased SF, rent/SF) are
-    auto-derived from the tenant's existing fields + `property`; the provisions
-    below fill the rest of the short-form summary and long-form article abstract.
-    """
-    # ── Identification ───────────────────────────────────────────────────────
-    tenant_of_record:   str = Field("", description="Legal tenant entity if different from the trade name")
-    landlord_of_record: str = Field("", description="Landlord / lessor of record")
-    execution_date:     str = Field("", description="Lease execution date (free text or YYYY-MM-DD)")
-    # ── Premises ─────────────────────────────────────────────────────────────
-    permitted_use:      str = Field("", description="Exclusive / permitted use")
-    prohibited_uses:    str = Field("", description="Prohibited uses")
-    leased_sf_per_survey: str = Field("", description="Leased SF per survey (if it differs from lease)")
-    # ── Rent ─────────────────────────────────────────────────────────────────
-    rent_commencement_date: str = Field("", description="Rent commencement date")
-    rent_abatement:     str = Field("", description="Rent abatement / free rent")
-    percentage_rent:    str = Field("", description="Percentage rent, if any")
-    # ── Expense structure ────────────────────────────────────────────────────
-    lease_structure:    str = Field("", description="NNN / NN / Gross / MG — defaults to the tenant's lease_type")
-    taxes_responsibility:    str = Field("", description="Real estate taxes — responsibility")
-    insurance_responsibility:str = Field("", description="Insurance — responsibility")
-    cam_responsibility:      str = Field("", description="CAM / maintenance — responsibility")
-    capital_responsibility:  str = Field("", description="Capital / roof / structure — responsibility")
-    expense_cap:        str = Field("", description="Expense cap, if any")
-    landlord_obligations: str = Field("", description="Landlord obligations / responsibilities")
-    # ── Options & renewals ───────────────────────────────────────────────────
-    num_renewal_options: str = Field("", description="Number of renewal options, e.g. '4'")
-    option_term_length:  str = Field("", description="Option term length, e.g. '5 years'")
-    renewal_rent_method: str = Field("", description="Renewal rent method, e.g. 'Fixed steps', 'FMV'")
-    renewal_notice:      str = Field("", description="Renewal notice requirement")
-    option_to_purchase:  str = Field("", description="Option to purchase")
-    rofr:               str = Field("", description="Right of first refusal")
-    rofo:               str = Field("", description="Right of first offer")
-    # ── Assignment & subletting ──────────────────────────────────────────────
-    assignment_rights:  str = Field("", description="Assignment rights")
-    subletting_rights:  str = Field("", description="Subletting rights")
-    change_of_control:  str = Field("", description="Change-of-control provisions")
-    guarantor_release:  str = Field("", description="Release of guarantor on assignment")
-    # ── Termination & default ────────────────────────────────────────────────
-    early_termination:  str = Field("", description="Early termination right")
-    termination_fee:    str = Field("", description="Termination fee / penalty")
-    default_cure:       str = Field("", description="Default / cure periods")
-    co_tenancy:         str = Field("", description="Co-tenancy provisions")
-    go_dark:            str = Field("", description="Go-dark provision")
-    # ── Other provisions ─────────────────────────────────────────────────────
-    ti_allowance:       str = Field("", description="TI allowance / landlord work")
-    signage_rights:     str = Field("", description="Signage rights")
-    parking_allocation: str = Field("", description="Parking allocation")
-    snda:               str = Field("", description="Subordination / SNDA / estoppel")
-    condemnation:       str = Field("", description="Condemnation provisions")
-    casualty:           str = Field("", description="Casualty / damage provisions")
-    holdover:           str = Field("", description="Holdover provisions")
-    notices:            str = Field("", description="Notices")
-    # ── Broker narrative (short-form) ────────────────────────────────────────
-    key_lease_strengths: str = Field("", description="Key lease strengths")
-    key_lease_risks:     str = Field("", description="Key lease risks")
-    broker_commentary:   str = Field("", description="Broker commentary")
-    # ── Sourcing ─────────────────────────────────────────────────────────────
-    default_source:     str = Field("", description="Label written to the DOCUMENT SOURCE column, e.g. 'Executed Lease', 'Amendment No. 1'")
-    # ── Long-form page / section references ──────────────────────────────────
-    clause_refs: Optional[Dict[str, Dict[str, str]]] = Field(
-        None, description="Per-clause lease references for the long-form PAGE / LEASE SECTION columns, "
-                          "keyed by the exact clause label, e.g. "
-                          "{'Base Rent — Year 1': {'page': '4', 'section': 'Art. 3.1'}}")
-
-
-class CreditInput(BaseModel):
-    """Tenant/guarantor credit for the Credit tab (Leg 3). All optional; supply what
-    reliable public sources support (SEC/10-K, S&P, Moody's, company filings)."""
-    # ── Corporate overview ───────────────────────────────────────────────────
-    tenant_operator:     str = Field("", description="Operating / trade name")
-    entity_lease:        str = Field("", description="Legal entity on the lease")
-    parent_company:      str = Field("", description="Parent company (ticker if public)")
-    ownership_structure: str = Field("", description="Public / private / PE-owned / franchise")
-    headquarters:        str = Field("", description="HQ city, state")
-    founded:             str = Field("", description="Year founded")
-    total_locations:     str = Field("", description="Total locations / units")
-    state_locations:     str = Field("", description="Locations in the subject state")
-    business_description: str = Field("", description="1–2 sentence business description")
-    years_operation:     str = Field("", description="Years in operation")
-    # ── Credit & ratings ─────────────────────────────────────────────────────
-    public_private:      str = Field("", description="Public / Private (+ ticker)")
-    credit_rating:       str = Field("", description="Combined rating, e.g. 'BBB (S&P) / Baa3 (Moody's)'")
-    sp_rating:           str = Field("", description="S&P rating + outlook")
-    moodys_rating:       str = Field("", description="Moody's rating + outlook")
-    investment_grade:    str = Field("", description="Yes / No")
-    ticker:              str = Field("", description="Stock ticker if public")
-    market_cap:          str = Field("", description="Market capitalization")
-    # ── Financial summary ────────────────────────────────────────────────────
-    annual_revenue:      str = Field("", description="Revenue, most recent FY (+ FY end)")
-    revenue_prior:       str = Field("", description="Revenue, prior FY")
-    revenue_growth:      str = Field("", description="Revenue growth YoY")
-    ebitda:              str = Field("", description="EBITDA, most recent FY")
-    ebitda_margin:       str = Field("", description="EBITDA margin")
-    net_income:          str = Field("", description="Net income, most recent FY")
-    total_debt:          str = Field("", description="Total debt")
-    total_assets:        str = Field("", description="Total assets")
-    net_worth:           str = Field("", description="Net worth / book value")
-    cash:                str = Field("", description="Cash & equivalents")
-    debt_ebitda:         str = Field("", description="Debt / EBITDA")
-    reporting_period:    str = Field("", description="Source / reporting period")
-    # ── Unit economics ───────────────────────────────────────────────────────
-    auv:                 str = Field("", description="Average unit volume")
-    avg_unit_sf:         str = Field("", description="Average unit SF")
-    rent_to_sales:       str = Field("", description="Rent-to-sales ratio (this location)")
-    occupancy_cost:      str = Field("", description="Typical store occupancy cost")
-    franchise_corporate: str = Field("", description="Franchise vs. corporate")
-    local_market:        str = Field("", description="Local market performance")
-    # ── Guaranty ─────────────────────────────────────────────────────────────
-    guarantor:           str = Field("", description="Guarantor name")
-    guarantor_type:      str = Field("", description="Corporate / Personal")
-    guaranty_type:       str = Field("", description="Full / Partial / Springing / Burn-off")
-    guaranty_strength:   str = Field("", description="Guaranty strength summary")
-    guaranty_cap:        str = Field("", description="Guaranty cap ($)")
-    guarantor_net_worth: str = Field("", description="Guarantor net worth")
-    # ── Qualitative ──────────────────────────────────────────────────────────
-    essential_recession: str = Field("", description="Essential / recession-resistant summary")
-    industry_trends:     str = Field("", description="Industry / sector trends")
-    online_exposure:     str = Field("", description="Online / omnichannel exposure")
-    key_strengths:       str = Field("", description="Key credit strengths")
-    key_risks:           str = Field("", description="Key credit risks")
-    broker_commentary:   str = Field("", description="Broker commentary")
-    default_source:      str = Field("", description="Default SOURCE label, e.g. 'S&P Global / FY2025 10-K'")
-
-
 class TenantInput(BaseModel):
+    # extra='allow' carries abstract / credit / clause_refs (Unit-4 lease record)
+    # through to the Lease Abstract + Credit tabs.
+    model_config = ConfigDict(extra="allow")
     name:           str            = Field("",    description="Tenant trade name")
     guarantor:      str            = Field("",    description="Corporate or personal guarantor")
     suite:          str            = Field("",    description="Suite number or description (MOB)")
@@ -267,16 +158,12 @@ class TenantInput(BaseModel):
     mgmt_fee_pct:   Optional[float]= Field(0.0,   description="Management fee % of EGR (NNN only)")
     lease_commencement: str        = Field("",    description="YYYY-MM-DD lease commencement (Rent Schedule)")
     lease_expiration:   str        = Field("",    description="YYYY-MM-DD lease expiration (Rent Schedule)")
-    credit_rating:      str        = Field("",    description="Tenant/guarantor credit rating, e.g. 'BBB (S&P) / Baa2 (Moody's)'")
     rent_schedule: Optional[List[RentPeriodInput]] = Field(
         None, description="Exact contracted rent by period; if omitted, computed from year1_rent x escalation")
-    abstract: Optional[LeaseAbstractInput] = Field(
-        None, description="Executed-lease provisions auto-filled into the Lease Abstract tab")
-    credit: Optional[CreditInput] = Field(
-        None, description="Tenant/guarantor credit auto-filled into the Credit tab")
 
 
 class UnderwritingInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     vacancy_pct:        Optional[float]= Field(0.05,  description="Vacancy/credit loss % (MOB)")
     capital_reserves:   Optional[float]= Field(0.0,   description="Annual capital reserves ($)")
     purchase_price:     Optional[float]= Field(None,  description="Purchase price ($)")
@@ -294,94 +181,28 @@ class UnderwritingInput(BaseModel):
 
 
 class ClientInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     last_name:  str = Field(..., description="Client last name — used in filename")
     file_month: str = Field(..., description="YYYYMM — used in filename (e.g. 202607)")
 
 
-class CompInput(BaseModel):
-    """A single comparable sale for the Real Estate tab's Market Comps block."""
-    summary:    str            = Field("",   description="One-line comp description; if omitted, composed from the fields below")
-    address:    str            = Field("",   description="Comp property address or name")
-    sale_price: Optional[float]= Field(None, description="Sale price ($)")
-    price_sf:   Optional[float]= Field(None, description="Price per SF ($)")
-    cap_rate:   Optional[float]= Field(None, description="Cap rate (0.0675 = 6.75%)")
-    sale_date:  str            = Field("",   description="Sale date (free text or YYYY-MM-DD)")
-    source:     str            = Field("",   description="Comp source, e.g. CoStar, public records")
-
-
-class RealEstateInput(BaseModel):
-    """
-    Physical / location / market diligence for the Real Estate tab (Leg 1).
-    Every field is optional — whatever is supplied is auto-filled into the
-    short-form summary and long-form diligence matrix; the rest stays a blank
-    broker-input cell. Address and building SF are pulled from `property`.
-    """
-    # ── Building & improvements ──────────────────────────────────────────────
-    year_built:            Optional[int]  = Field(None, description="Year the building was constructed")
-    year_renovated:        Optional[int]  = Field(None, description="Year of most recent major renovation")
-    construction_type:     str            = Field("",   description="e.g. Masonry / steel frame, wood frame")
-    roof:                  str            = Field("",   description="Roof type / age")
-    hvac:                  str            = Field("",   description="HVAC type / age")
-    condition:             str            = Field("",   description="Overall physical condition")
-    deferred_maintenance:  str            = Field("",   description="Known deferred maintenance")
-    ada_compliance:        str            = Field("",   description="ADA compliance status")
-    # ── Site characteristics ─────────────────────────────────────────────────
-    site_area_acres:       Optional[float]= Field(None, description="Site / land area in acres")
-    parcel_apn:            str            = Field("",   description="Parcel APN / Tax ID")
-    legal_description:     str            = Field("",   description="Legal description summary")
-    lot_configuration:     str            = Field("",   description="Lot configuration / shape")
-    frontage_lf:           Optional[float]= Field(None, description="Street frontage in linear feet")
-    topography:            str            = Field("",   description="Topography")
-    flood_zone:            str            = Field("",   description="FEMA flood zone designation, e.g. 'Zone X'")
-    utilities:             str            = Field("",   description="Utilities available")
-    # ── Zoning & land use ────────────────────────────────────────────────────
-    zoning:                str            = Field("",   description="Zoning classification code")
-    zoning_description:    str            = Field("",   description="Plain-language zoning / permitted use")
-    permitted_use_confirmation: str       = Field("",   description="Permitted use confirmation")
-    drive_through_permitted:    str       = Field("",   description="Drive-through permitted (Yes/No/N.A.)")
-    signage_rights:        str            = Field("",   description="Signage rights")
-    restrictive_covenants: str            = Field("",   description="Restrictive covenants / CC&Rs")
-    easements:             str            = Field("",   description="Recorded easements")
-    # ── Ingress / egress / parking ───────────────────────────────────────────
-    access_points:         str            = Field("",   description="Number / description of access points")
-    shared_access:         str            = Field("",   description="Shared / reciprocal access")
-    parking_spaces:        Optional[int]  = Field(None, description="Total parking spaces")
-    parking_ratio:         Optional[float]= Field(None, description="Parking ratio per 1,000 SF; auto-computed from spaces + building SF if omitted")
-    delivery_loading:      str            = Field("",   description="Delivery / loading access")
-    # ── Location & market ────────────────────────────────────────────────────
-    county:                str            = Field("",   description="County")
-    msa_submarket:         str            = Field("",   description="MSA / submarket")
-    population_1_3_5:      str            = Field("",   description="Population 1 / 3 / 5 mile rings")
-    median_hh_income:      str            = Field("",   description="Median household income")
-    traffic_counts:        str            = Field("",   description="Traffic counts (VPD)")
-    proximity_demand_generators: str      = Field("",   description="Proximity to demand generators")
-    market_rent_context:   str            = Field("",   description="Market rent context")
-    # ── Environmental ────────────────────────────────────────────────────────
-    environmental_status:  str            = Field("",   description="Short-form environmental status summary")
-    phase_i:               str            = Field("",   description="Phase I ESA status")
-    phase_ii:              str            = Field("",   description="Phase II ESA status")
-    known_recs:            str            = Field("",   description="Known recognized environmental conditions (RECs)")
-    underground_storage_tanks: str        = Field("",   description="Underground storage tanks")
-    # ── Market comps ─────────────────────────────────────────────────────────
-    comps:                 List[CompInput]= Field(default_factory=list, description="Up to 3 comparable sales")
-    implied_market_cap_rate: Optional[float]= Field(None, description="Implied market cap rate from comps (0.07 = 7%)")
-    implied_market_price_sf: Optional[float]= Field(None, description="Implied market price / SF from comps ($)")
-    # ── Broker narrative (short-form) ────────────────────────────────────────
-    notable_strengths:     str            = Field("",   description="Notable strengths")
-    notable_concerns:      str            = Field("",   description="Notable concerns")
-    broker_commentary:     str            = Field("",   description="Broker commentary")
-    # ── Sourcing ─────────────────────────────────────────────────────────────
-    default_source:        str            = Field("",   description="Default label written to the SOURCE column for auto-filled rows, e.g. 'Appraisal', 'CoStar', 'Public records'")
-
-
 class BOVRequest(BaseModel):
-    asset_type:   str               = Field(..., description="NNN | MOB")
-    property:     PropertyInput
-    tenants:      List[TenantInput] = Field(default_factory=list)
-    underwriting: UnderwritingInput
-    client:       ClientInput
-    real_estate:  Optional[RealEstateInput] = Field(
-        None, description="Optional physical / location / market diligence auto-filled into the Real Estate tab")
+    # extra='allow' so top-level intake keys (real_estate, credit, source hints)
+    # survive model_dump() into the fill_assumptions dict.
+    model_config = ConfigDict(extra="allow")
+    # asset_type / property / underwriting / client are OPTIONAL only so a
+    # {cre_property_id: N} body validates; they are REQUIRED-in-effect and checked
+    # after the Unit-4 record (if any) is merged in — a request missing them still
+    # 422s, just with a clearer message.
+    asset_type:   Optional[str]           = Field(None, description="NNN | MOB")
+    property:     Optional[PropertyInput] = None
+    tenants:      List[TenantInput]       = Field(default_factory=list)
+    underwriting: Optional[UnderwritingInput] = None
+    client:       Optional[ClientInput]   = None
+    # R58 Unit 4 (2C): load lease/dd/om data from the reviewed extraction record
+    # instead of hand-authoring the body. Mutually sufficient with a full payload;
+    # posted fields override the loaded record (e.g. a client/close_date override).
+    cre_property_id: Optional[int]        = Field(None, description="LCC Opps lcc_cre_properties.id — load the reviewed Unit-4 BOV record")
 
 
 class BOVResponse(BaseModel):
@@ -431,7 +252,35 @@ def _make_filename(req: BOVRequest) -> str:
 # ── Generate endpoint ─────────────────────────────────────────────────────────
 @app.post("/generate-bov", response_model=BOVResponse, dependencies=[Depends(verify_api_key)])
 async def generate_bov(req: BOVRequest, request: Request):
-    asset_type = req.asset_type.upper()
+    # R58 Unit 4 (2C) — {cre_property_id} input: load the reviewed extraction
+    # record and merge any explicitly-posted overrides on top. Hand-authored
+    # payloads (no cre_property_id) fall straight through unchanged.
+    if req.cre_property_id is not None:
+        if not _UNIT4_LOADER:
+            raise HTTPException(status_code=503, detail="cre_property_id input not available: bov_record_loader/env not configured")
+        try:
+            base = load_bov_record(req.cre_property_id)
+        except BovRecordError as e:
+            raise HTTPException(status_code=getattr(e, "status", 502), detail=str(e))
+        # exclude_unset → ONLY fields the caller explicitly posted override the
+        # loaded record (a non-None default like tenants=[] must NOT wipe the
+        # record's tenants).
+        overrides = req.model_dump(exclude_unset=True)
+        overrides.pop("cre_property_id", None)
+        merged = {**base, **overrides}
+        merged.pop("cre_property_id", None)
+        merged.pop("_source", None)
+        try:
+            req = BOVRequest(**merged)
+        except Exception as e:  # noqa: BLE001 — surface a clear 422 on a bad record shape
+            raise HTTPException(status_code=422, detail=f"Loaded Unit-4 record did not form a valid BOV request: {e}")
+
+    # Essentials must be present (whether hand-authored or loaded).
+    missing = [f for f in ("asset_type", "property", "underwriting", "client") if getattr(req, f, None) in (None, "")]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Missing required field(s): {', '.join(missing)} (supply them, or a cre_property_id whose reviewed record contains them)")
+
+    asset_type = (req.asset_type or "").upper()
     if asset_type not in ("NNN", "MOB"):
         raise HTTPException(status_code=422, detail=f"asset_type must be NNN or MOB, got: {req.asset_type}")
 
