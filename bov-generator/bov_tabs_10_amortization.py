@@ -47,44 +47,25 @@ def build_amortization_tab(wb):
     r = 5
     sec(ws, r, "LOAN SUMMARY", col_start=1, ncols=10)
 
-    loan_refs = [
-        (6,  "Loan Amount",         f'=IFERROR(\'{_AS}\'!$I$8,"")',   D0),
-        (6,  "Interest Rate",       f'=IFERROR(\'{_AS}\'!$I$10,"")',  P2),
-        (6,  "Amortization (yrs)",  f'=IFERROR(\'{_AS}\'!$I$11,"")',  N0),
-        (6,  "Hold Period (yrs)",   f'=IFERROR(\'{_AS}\'!$I$13,"")',  N0),
-        (6,  "Monthly Payment",     f'=IFERROR(\'{_AS}\'!$I$15,"")',  D0),
-        (6,  "Annual Debt Service", f'=IFERROR(\'{_AS}\'!$I$14,"")',  D0),
-    ]
+    # Loan summary as six self-contained merged cells (label+value concatenated),
+    # spread cleanly across the 10-column table so all six terms display in full.
     r = 6
     ws.row_dimensions[r].height = 18
-    labels   = ["Loan Amount",     "Interest Rate",    "Amortization (yrs)", "Hold Period (yrs)",  "Monthly Payment", "Annual Debt Service"]
-    formulas = [
-        f'=IFERROR(\'{_AS}\'!$I$8,"")',
-        f'=IFERROR(\'{_AS}\'!$I$10,"")',
-        f'=IFERROR(\'{_AS}\'!$I$11,"")',
-        f'=IFERROR(\'{_AS}\'!$I$13,"")',
-        f'=IFERROR(\'{_AS}\'!$I$15,"")',
-        f'=IFERROR(\'{_AS}\'!$I$14,"")',
+    for cc in range(1, 11):
+        ws.cell(row=r, column=cc).fill = F_PALE
+    summary_cells = [
+        (1,  2,  f'=IFERROR("Loan  "&TEXT(\'{_AS}\'!$I$8,"$#,##0"),"")'),
+        (3,  4,  f'=IFERROR("Rate  "&TEXT(\'{_AS}\'!$I$10,"0.00%"),"")'),
+        (5,  6,  f'=IFERROR("Amort  "&TEXT(\'{_AS}\'!$I$11,"0")&" yr","")'),
+        (7,  8,  f'=IFERROR("Hold  "&TEXT(\'{_AS}\'!$I$13,"0")&" yr","")'),
+        (9,  9,  f'=IFERROR("Mo Pmt  "&TEXT(\'{_AS}\'!$I$15,"$#,##0"),"")'),
+        (10, 10, f'=IFERROR("Ann DS  "&TEXT(\'{_AS}\'!$I$14,"$#,##0"),"")'),
     ]
-    fmts = [D0, P2, N0, N0, D0, D0]
-    # 3 items in first row, 3 in second label row
-    cols_a = [1, 3, 5, 7, 8, 9]  # label/value pairs stacked
-    for i, (label, formula, fmt) in enumerate(zip(labels, formulas, fmts)):
-        col_l = 1 + i * 1   # re-do: spread across row
-    # Simple 2-row layout: row 6 = labels, row 7 = values
-    for i, (label, formula, fmt) in enumerate(zip(labels, formulas, fmts)):
-        col = 1 + i
-        if col > 7: col = 1  # wrap — just skip for now
-        c = ws.cell(row=6, column=col + (i // 4) * 0, value=label)
-        c.font = FT_NOTE; c.alignment = AL_C; c.fill = F_PALE
-    # Actually let's do a clean single-row display
-    for i, (label, formula, fmt) in enumerate(zip(labels[:5], formulas[:5], fmts[:5])):
-        col = 1 + i * 2
-        if col > 10: break
-        c = ws.cell(row=6, column=col, value=label)
-        c.font = FT_NOTE; c.alignment = AL_C; c.fill = F_PALE
-        c2 = frm(ws, 6, col + 1, formula, fmt=fmt, align=AL_C)
-        c2.fill = F_PALE
+    for c1, c2, formula in summary_cells:
+        cell = ws.cell(row=r, column=c1, value=formula)
+        cell.font = FT_NOTE; cell.alignment = AL_C; cell.fill = F_PALE
+        if c2 > c1:
+            merge(ws, r, c1, r, c2)
 
     r = 7
     ws.row_dimensions[r].height = 8

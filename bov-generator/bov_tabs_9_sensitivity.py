@@ -76,10 +76,10 @@ def build_sensitivity_tab(wb):
     ws.sheet_view.showGridLines = False
 
     # ── Column widths ──────────────────────────────────────────────────────────
-    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["A"].width = 42   # fit longest metric labels on one line
     ws.column_dimensions["B"].width = 3
     for col in DATA_COLS:
-        ws.column_dimensions[get_column_letter(col)].width = 10
+        ws.column_dimensions[get_column_letter(col)].width = 11  # fit Y0 outflow ($-1,387,000)
 
     # ── Header ────────────────────────────────────────────────────────────────
     r = 1;  ws.row_dimensions[r].height = 6
@@ -98,22 +98,26 @@ def build_sensitivity_tab(wb):
 
     # ── Base case inputs strip ─────────────────────────────────────────────────
     r = 5;  ws.row_dimensions[r].height = 16
-    sec(ws, r, "BASE CASE INPUTS  —  From Assumptions & Flags", col_start=1, ncols=12)
+    sec(ws, r, "BASE CASE INPUTS  —  From Assumptions & Flags", col_start=1, ncols=13)
 
+    # Row 6: six inputs as self-contained merged cells (label+value concatenated),
+    # kept entirely within the 3–13 matrix so nothing overhangs the last column.
     r = 6;  ws.row_dimensions[r].height = 16
-    strip_items = [
-        ("Year 1 NOI",     f'=IFERROR({_NOI},"")',                     D0),
-        ("Purchase Price", f'=IFERROR(\'{_AS}\'!$C$36,"")',             D0),
-        ("Going-In Cap",   f'=IFERROR({_GCAP},"")',                    P2),
-        ("Escalation",     f'=IFERROR({_ESC},"")',                     P2),
-        ("Exit Cap",       f'=IFERROR({_XCAP},"")',                    P2),
-        ("Hold (Years)",   f'=IFERROR({_HOLD},"")',                    "0"),
+    for cc in DATA_COLS:
+        ws.cell(row=r, column=cc).fill = F_PALE
+    strip_cells = [
+        (3,  4,  f'=IFERROR("Yr-1 NOI  "&TEXT({_NOI},"$#,##0"),"")'),
+        (5,  6,  f'=IFERROR("Price  "&TEXT(\'{_AS}\'!$C$36,"$#,##0"),"")'),
+        (7,  8,  f'=IFERROR("Going-In  "&TEXT({_GCAP},"0.00%"),"")'),
+        (9,  10, f'=IFERROR("Escalation  "&TEXT({_ESC},"0.00%"),"")'),
+        (11, 12, f'=IFERROR("Exit Cap  "&TEXT({_XCAP},"0.00%"),"")'),
+        (13, 13, f'=IFERROR("Hold  "&TEXT({_HOLD},"0")&"y","")'),
     ]
-    for i, (label, formula, fmt) in enumerate(strip_items):
-        col = 3 + i * 2
-        c = ws.cell(row=r, column=col, value=label)
-        c.font = FT_NOTE; c.alignment = AL_C; c.fill = F_PALE
-        frm(ws, r, col + 1, formula, fmt=fmt, align=AL_C).fill = F_PALE
+    for c1, c2, formula in strip_cells:
+        cell = ws.cell(row=r, column=c1, value=formula)
+        cell.font = FT_NOTE; cell.alignment = AL_C; cell.fill = F_PALE
+        if c2 > c1:
+            merge(ws, r, c1, r, c2)
 
     # ══════════════════════════════════════════════════════════════════════════
     # CAP RATE HEADER ROW (row 7)
@@ -122,7 +126,8 @@ def build_sensitivity_tab(wb):
     ws.row_dimensions[r].height = 20
 
     c = ws.cell(row=r, column=1, value="METRIC  ↓  |  Going-In Cap Rate  →")
-    c.font = FT_LABEL; c.fill = F_NAVY; c.alignment = AL_L
+    c.font = FT_SHDR; c.fill = F_NAVY; c.alignment = AL_L   # white text — was unreadable dark-on-navy
+    ws.cell(row=r, column=2).fill = F_NAVY                  # carry navy across the margin col
 
     for idx, offset in enumerate(CAP_OFFSETS):
         col = 3 + idx
@@ -135,11 +140,11 @@ def build_sensitivity_tab(wb):
     # SECTION A: UNLEVERAGED RETURNS
     # ══════════════════════════════════════════════════════════════════════════
     r = 8;  ws.row_dimensions[r].height = 16
-    sec(ws, r, "UNLEVERAGED RETURNS", col_start=1, ncols=12)
+    sec(ws, r, "UNLEVERAGED RETURNS", col_start=1, ncols=13)
 
-    # M1: Avg Going-In Yield (cap rate growth-weighted over hold period)
+    # M1: Average Cash Cap Rate (NOI-over-price, growth-weighted across the hold)
     r = M1_ROW;  ws.row_dimensions[r].height = 18
-    c = ws.cell(row=r, column=1, value="Avg Going-In Yield (hold-weighted)")
+    c = ws.cell(row=r, column=1, value="Average Cash Cap Rate")
     c.font = FT_LABEL; c.alignment = AL_L
     for col in DATA_COLS:
         cl  = get_column_letter(col)
@@ -190,7 +195,7 @@ def build_sensitivity_tab(wb):
     # SECTION B: LEVERAGED RETURNS
     # ══════════════════════════════════════════════════════════════════════════
     r = 12;  ws.row_dimensions[r].height = 16
-    sec(ws, r, "LEVERAGED RETURNS  —  65% LTV  ·  Rate and Amortization from Assumptions", col_start=1, ncols=12)
+    sec(ws, r, "LEVERAGED RETURNS  —  65% LTV  ·  Rate and Amortization from Assumptions", col_start=1, ncols=13)
 
     # M4: Avg Cash-on-Cash Return (Leveraged)
     r = M4_ROW;  ws.row_dimensions[r].height = 18
