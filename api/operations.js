@@ -199,17 +199,6 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfLinkReconcileTick(req, res);
   }
 
-  // SF-CONTACT-RECONCILE — WhoId by-id contact resolver (via vercel.json /
-  // server.js _route=sf-contact-resolve-tick). GET=dry-run / POST=drain the
-  // sf_contact_resolve_queue → mint (or attach-by-email) the SF contact.
-  // Authenticates internally. NOTE: the by-id resolver depends on THIS dispatch
-  // — if it goes missing, every tick 400s at the bridge-action router below.
-  // (Restored 2026-07-16 after a stale-branch merge reverted the registration.)
-  if (req.query._route === 'sf-contact-resolve-tick') {
-    const { handleSfContactResolveTick } = await import('./_handlers/sf-contact-resolve.js');
-    return handleSfContactResolveTick(req, res);
-  }
-
   // CONTACT-SELECTION Slice 3 — owner-contact enrichment worker (via vercel.json
   // _route=owner-contact-enrich-tick). GET=dry-run / POST=drain. Attaches the
   // ranked decision-maker (or runs the enrichment action) so owners leave
@@ -217,37 +206,6 @@ export default withErrorHandler(async function handler(req, res) {
   if (req.query._route === 'owner-contact-enrich-tick') {
     const { handleOwnerContactEnrichTick } = await import('./_handlers/owner-contact-enrich.js');
     return handleOwnerContactEnrichTick(req, res);
-  }
-
-  // ORE Phase B B1 / Tier A / reconcile-engine workers (via vercel.json /
-  // server.js). GET=dry-run / POST=drain, each authenticates internally + is
-  // bounded (limit + wall-clock); the reconcile-engine's auto-merge cron stays
-  // unscheduled so a drain only runs on a human-gated, capped call. NOTE: these
-  // three depend on THIS dispatch — server.js + vercel.json already route them
-  // here, so if a block goes missing every tick 400s at the bare-action router
-  // below. (Registered 2026-07-16 after a stale-branch merge left the server.js /
-  // vercel.json entries but dropped the operations.js dispatch — same class as
-  // the sf-contact-resolve-tick restore above; do NOT remove.)
-  if (req.query._route === 'owner-reconcile-tick') {
-    const { handleOwnerReconcileTick } = await import('./_handlers/owner-reconcile.js');
-    return handleOwnerReconcileTick(req, res);
-  }
-  if (req.query._route === 'owner-reconcile-engine-tick') {
-    const { handleOwnerReconcileEngineTick } = await import('./_handlers/owner-reconcile-engine.js');
-    return handleOwnerReconcileEngineTick(req, res);
-  }
-  if (req.query._route === 'institution-contact-tick') {
-    const { handleInstitutionContactTick } = await import('./_handlers/institution-contact.js');
-    return handleInstitutionContactTick(req, res);
-  }
-
-  // Salesforce Lists (Campaigns/CampaignMembers) ingest (via vercel.json /
-  // server.js _route=sf-list-import). GET=dry-run (classify + normalize, no
-  // writes) / POST=ingest (reconcile-by-email → relate to company org → record
-  // membership → route buyers/sellers). Authenticates internally.
-  if (req.query._route === 'sf-list-import') {
-    const { handleSfListImport } = await import('./_handlers/sf-list-import.js');
-    return handleSfListImport(req, res);
   }
 
   // UW#7 — developer resolution from the ownership chain (via vercel.json
@@ -2590,7 +2548,7 @@ const ACTION_REGISTRY = {
   get_daily_briefing_snapshot: { tier: 0, handler: 'daily_briefing' },
   list_staged_intake_inbox:    { method: 'GET', path: 'inbox', tier: 0 },
   get_my_execution_queue:      { method: 'GET', path: 'queue-v2?view=my_work', tier: 0, alias: 'queue?_version=v2&view=my_work' },
-  get_sync_run_health:         { tier: 0, handler: 'sync_health' },
+  get_sync_run_health:         { method: 'GET', path: 'sync?action=health', tier: 0 },
   get_hot_business_contacts:   { method: 'GET', path: 'contacts?action=hot_leads', tier: 0, alias: 'entity-hub?_domain=contacts&action=hot_leads' },
   search_entity_targets:       { method: 'GET', path: 'entities?action=search', tier: 0, alias: 'entity-hub?_domain=entities&action=search' },
   fetch_listing_activity_context: { method: 'GET', path: 'queue-v2?view=entity_timeline', tier: 0, alias: 'queue?_version=v2&view=entity_timeline' },
@@ -2603,9 +2561,6 @@ const ACTION_REGISTRY = {
   get_entity_context:           { tier: 0, handler: 'entity_context' },
   link_contact_to_entity:       { tier: 1, handler: 'link_contact_to_entity', confirm: 'lightweight' },
   merge_duplicate_entities:     { tier: 2, handler: 'merge_duplicate_entities', confirm: 'explicit' },
-  log_bd_touchpoint:            { tier: 1, handler: 'log_bd_touchpoint', confirm: 'lightweight' },
-  create_deal_from_inbox:       { tier: 2, handler: 'create_deal_from_inbox', confirm: 'explicit' },
-  resolve_entity_ownership:     { tier: 1, handler: 'resolve_entity_ownership', confirm: 'lightweight' },
 
   // Tier 0-1: AI-powered actions (fetch context + generate content)
   generate_prospecting_brief:  { tier: 0, handler: 'prospecting_brief' },
@@ -2710,9 +2665,12 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   // Without this, the Tier-1 gate fires and handleDraftOutreachEmail never
   // runs — so _maybeCreateOutlookDraft never POSTs to PA_OUTLOOK_DRAFT_URL and
   // no real Outlook draft is created.
+  // Power Platform / Copilot Studio serializes boolean params as strings
+  // (e.g. create_draft: "true"), so accept both boolean true AND string "true".
+  const create_draft_truthy = params?.create_draft === true || params?.create_draft === 'true';
   const implicitlyConfirmed = (
     /^draft_/.test(actionName)
-    && params?.create_draft === true
+    && create_draft_truthy
     && (
       (typeof params?.to === 'string' && params.to.length > 0)
       || (actionName === 'draft_reply_from_inbox'
@@ -2746,9 +2704,6 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'entity_context':          result = await handleGetEntityContext(params); break;
       case 'link_contact_to_entity':  result = await handleLinkContactToEntity(params, user, workspaceId); break;
       case 'merge_duplicate_entities': result = await handleMergeDuplicateEntities(params, user, workspaceId); break;
-      case 'log_bd_touchpoint':        result = await handleLogBdTouchpoint(params, user, workspaceId); break;
-      case 'create_deal_from_inbox':   result = await handleCreateDealFromInbox(params, user, workspaceId); break;
-      case 'resolve_entity_ownership': result = await handleResolveEntityOwnership(params, user, workspaceId); break;
       case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
       case 'draft_outreach':          result = await handleDraftOutreachEmail(params, user, workspaceId); break;
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
@@ -2761,7 +2716,6 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'guided_entity_merge':     result = await handleGuidedEntityMerge(params, user, workspaceId); break;
       case 'document_assembly':       result = await handleDocumentAssembly(params, user, workspaceId); break;
       case 'ingest_pdf':              result = await ingestPdfWorker(params, user, workspaceId); break;
-      case 'sync_health':             result = await handleSyncHealthCopilot(params, user, workspaceId); break;
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
 
@@ -2814,57 +2768,6 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
     params_to_send: params || {},
     note: 'Execute this endpoint directly with your auth credentials to complete the action.'
   };
-}
-
-// ---------------------------------------------------------------------------
-// SYNC HEALTH — inline handler for get_sync_run_health Copilot action.
-// Replaces the internal HTTP self-call to /api/sync?action=health that was
-// returning 400. Directly queries the same tables as handleHealth in sync.js
-// but without the round-trip through the HTTP layer.
-// ---------------------------------------------------------------------------
-async function handleSyncHealthCopilot(params, user, workspaceId) {
-  try {
-    const cutoff = new Date(Date.now() - 86400000).toISOString();
-    const [connectors, recentJobs, unresolvedErrors] = await Promise.all([
-      opsQuery('GET',
-        `connector_accounts?workspace_id=eq.${workspaceId}&select=id,connector_type,display_name,status,last_sync_at,last_error&order=connector_type,display_name`,
-        undefined, { countMode: 'none' }
-      ),
-      opsQuery('GET',
-        `sync_jobs?workspace_id=eq.${workspaceId}&created_at=gte.${cutoff}&select=id,connector_account_id,status,direction,entity_type,records_processed,records_failed,started_at,completed_at&order=created_at.desc&limit=50`,
-        undefined, { countMode: 'none' }
-      ),
-      opsQuery('GET',
-        `sync_errors?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=id,connector_account_id,error_code,error_message,is_retryable,retry_count,created_at&order=created_at.desc&limit=25`,
-        undefined, { countMode: 'none' }
-      ),
-    ]);
-
-    const connectorList = connectors.data || [];
-    const recentJobList = recentJobs.data || [];
-    const errorList     = unresolvedErrors.data || [];
-
-    const summary = {
-      total_connectors:  connectorList.length,
-      healthy:           connectorList.filter(c => c.status === 'healthy').length,
-      degraded:          connectorList.filter(c => c.status === 'degraded').length,
-      error:             connectorList.filter(c => c.status === 'error').length,
-      disconnected:      connectorList.filter(c => c.status === 'disconnected').length,
-      unresolved_errors: errorList.length,
-    };
-
-    const overall_status =
-      connectorList.some(c => c.status === 'error') || errorList.length > 0 ? 'error' :
-      connectorList.some(c => c.status === 'degraded') ? 'degraded' : 'healthy';
-
-    return {
-      ok: true,
-      data: { summary, overall_status, connectors: connectorList, recent_jobs: recentJobList, unresolved_errors: errorList },
-    };
-  } catch (err) {
-    console.error('[handleSyncHealthCopilot] error:', err?.message || err);
-    return { ok: false, error: `Sync health check failed: ${err?.message || 'unknown error'}` };
-  }
 }
 
 async function executeReadAction(spec, params, user, workspaceId, req) {
@@ -3828,337 +3731,6 @@ async function handleMergeDuplicateEntities(params, user, workspaceId) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// LOG BD TOUCHPOINT — Tool 37 (Copilot intelligence category)
-// POST /api/copilot/intelligence/log-bd-touchpoint
-// Tier 1 — lightweight confirm required.
-// Logs a BD touchpoint activity_events row against an entity and updates
-// touchpoint_cadence.last_touch_at. Idempotent-safe: always writes a new
-// activity row; cadence update is a PATCH so it converges on re-run.
-// ---------------------------------------------------------------------------
-async function handleLogBdTouchpoint(params, user, workspaceId) {
-  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
-  const p = params || {};
-
-  const entityId    = p.entity_id || null;
-  const touchType   = p.touch_type || 'call';          // call | email | meeting | note | linkedin
-  const notes       = p.notes || null;
-  const domain      = p.domain || null;
-  const outcome     = p.outcome || null;               // connected | left_vm | no_answer | replied | met | etc.
-  const occurredAt  = p.occurred_at || new Date().toISOString();
-
-  if (!entityId) return { ok: false, error: 'entity_id is required.' };
-
-  // 1. Validate entity exists
-  const entityRes = await opsQuery('GET',
-    `entities?id=eq.${pgFilterVal(entityId)}&select=id,name,domain&limit=1`
-  );
-  const entity = (entityRes.data || [])[0];
-  if (!entity) return { ok: false, error: `Entity not found: ${entityId}` };
-
-  const resolvedDomain = domain || entity.domain || null;
-
-  // 2. Determine activity category from touch type
-  const TOUCH_CATEGORY_MAP = {
-    call:     'call',
-    email:    'email',
-    meeting:  'meeting',
-    note:     'note',
-    linkedin: 'outreach',
-    text:     'outreach',
-    letter:   'outreach'
-  };
-  const category = TOUCH_CATEGORY_MAP[touchType] || 'outreach';
-
-  const titleParts = [`BD touch (${touchType}): ${entity.name}`];
-  if (outcome) titleParts.push(`— ${outcome}`);
-  const title = titleParts.join(' ');
-
-  const actMeta = {
-    bridge_source: 'log_bd_touchpoint',
-    touch_type:    touchType,
-    skip_cadence_advance: 'true'  // cadence advance is manual via existing bridge
-  };
-  if (outcome)  actMeta.outcome  = outcome;
-
-  // 3. Write activity_events row
-  const actResult = await opsQuery('POST', 'activity_events', {
-    workspace_id: workspaceId,
-    actor_id:     user.id,
-    category,
-    title,
-    body:         notes || null,
-    entity_id:    entityId,
-    source_type:  'copilot',
-    domain:       resolvedDomain,
-    visibility:   'shared',
-    metadata:     actMeta,
-    occurred_at:  occurredAt
-  });
-
-  if (!actResult.ok) {
-    return { ok: false, error: 'Failed to write activity event.', detail: actResult.status };
-  }
-  const activity = Array.isArray(actResult.data) ? actResult.data[0] : actResult.data;
-
-  // 4. Bump touchpoint_cadence.last_touch_at (best-effort; cadence row may not exist)
-  let cadenceUpdated = false;
-  const cadRes = await opsQuery('GET',
-    `touchpoint_cadence?entity_id=eq.${pgFilterVal(entityId)}&workspace_id=eq.${pgFilterVal(workspaceId)}&order=updated_at.desc&limit=1`
-  );
-  const cadence = (cadRes.data || [])[0];
-  if (cadence) {
-    const patchRes = await opsQuery('PATCH',
-      `touchpoint_cadence?id=eq.${pgFilterVal(cadence.id)}`,
-      { last_touch_at: occurredAt, updated_at: new Date().toISOString() }
-    );
-    cadenceUpdated = !!patchRes.ok;
-  }
-
-  return {
-    ok:               true,
-    action:           'log_bd_touchpoint',
-    activity_id:      activity?.id || null,
-    entity_id:        entityId,
-    entity_name:      entity.name,
-    touch_type:       touchType,
-    outcome:          outcome || null,
-    cadence_updated:  cadenceUpdated,
-    message:          `Logged ${touchType} touchpoint for "${entity.name}"${outcome ? ` (${outcome})` : ''}.`
-  };
-}
-
-// ---------------------------------------------------------------------------
-// CREATE DEAL FROM INBOX — Tool 38 (Copilot intelligence category)
-// POST /api/copilot/intelligence/create-deal-from-inbox
-// Tier 2 — explicit confirm required.
-// Promotes an inbox_items row to a pipeline deal in lcc_sf_comp_on_market
-// and marks the inbox item as 'promoted'. Writes an activity_events audit row.
-// ---------------------------------------------------------------------------
-async function handleCreateDealFromInbox(params, user, workspaceId) {
-  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
-  const p = params || {};
-
-  const inboxItemId     = p.inbox_item_id || null;
-  const dealName        = p.deal_name || null;              // override; falls back to inbox title
-  const domain          = p.domain || null;
-  const pipelineStage   = p.pipeline_stage || 'Prospect';   // Salesforce stage label
-  const entityId        = p.entity_id || null;              // seller/owner entity
-  const propertyAddress = p.property_address || null;
-  const notes           = p.notes || null;
-
-  if (!inboxItemId) return { ok: false, error: 'inbox_item_id is required.' };
-
-  // 1. Fetch the inbox item
-  const inboxRes = await opsQuery('GET',
-    `inbox_items?id=eq.${pgFilterVal(inboxItemId)}&select=id,title,body,domain,entity_id,status,source_type,metadata,received_at,workspace_id&limit=1`
-  );
-  const inbox = (inboxRes.data || [])[0];
-  if (!inbox) return { ok: false, error: `Inbox item not found: ${inboxItemId}` };
-  if (inbox.workspace_id && inbox.workspace_id !== workspaceId) {
-    return { ok: false, error: 'Inbox item belongs to a different workspace.' };
-  }
-  if (inbox.status === 'promoted') {
-    return { ok: false, error: 'Inbox item has already been promoted to a deal.', already_promoted: true };
-  }
-
-  const resolvedDomain  = domain || inbox.domain || 'government';
-  const resolvedName    = dealName || inbox.title || 'New Deal';
-  const resolvedEntity  = entityId || inbox.entity_id || null;
-
-  // 2. Create the deal record in lcc_sf_comp_on_market
-  //    Columns confirmed from existing queries in this file.
-  const dealPayload = {
-    workspace_id:    workspaceId,
-    deal_name:       resolvedName,
-    pipeline_stage:  pipelineStage,
-    domain:          resolvedDomain,
-    source_type:     'copilot_inbox_promotion',
-    inbox_item_id:   inboxItemId,
-    entity_id:       resolvedEntity || null,
-    property_address: propertyAddress || null,
-    notes:           notes || inbox.body || null,
-    created_by:      user.id,
-    created_at:      new Date().toISOString(),
-    updated_at:      new Date().toISOString(),
-    metadata: {
-      bridge_source:    'create_deal_from_inbox',
-      inbox_source_type: inbox.source_type || null,
-      inbox_received_at: inbox.received_at || null,
-      promoted_by:       user.id
-    }
-  };
-
-  const dealResult = await opsQuery('POST', 'lcc_sf_comp_on_market', dealPayload);
-  if (!dealResult.ok) {
-    return { ok: false, error: 'Failed to create deal record.', detail: dealResult.status };
-  }
-  const deal = Array.isArray(dealResult.data) ? dealResult.data[0] : dealResult.data;
-
-  // 3. Mark inbox item as promoted
-  await opsQuery('PATCH',
-    `inbox_items?id=eq.${pgFilterVal(inboxItemId)}`,
-    { status: 'promoted', updated_at: new Date().toISOString() }
-  );
-
-  // 4. Audit activity event
-  await opsQuery('POST', 'activity_events', {
-    workspace_id: workspaceId,
-    actor_id:     user.id,
-    category:     'status_change',
-    title:        `Deal created from inbox: "${resolvedName}"`,
-    body:         notes || null,
-    entity_id:    resolvedEntity || null,
-    source_type:  'copilot',
-    domain:       resolvedDomain,
-    visibility:   'shared',
-    metadata: {
-      bridge_source: 'create_deal_from_inbox',
-      inbox_item_id: inboxItemId,
-      deal_id:       deal?.sf_comp_id || deal?.id || null,
-      pipeline_stage: pipelineStage
-    },
-    occurred_at: new Date().toISOString()
-  });
-
-  return {
-    ok:              true,
-    action:          'create_deal_from_inbox',
-    deal:            deal || null,
-    deal_id:         deal?.sf_comp_id || deal?.id || null,
-    deal_name:       resolvedName,
-    pipeline_stage:  pipelineStage,
-    inbox_item_id:   inboxItemId,
-    inbox_status:    'promoted',
-    entity_id:       resolvedEntity || null,
-    message:         `Created deal "${resolvedName}" in pipeline stage "${pipelineStage}" from inbox item.`
-  };
-}
-
-// ---------------------------------------------------------------------------
-// RESOLVE ENTITY OWNERSHIP — Tool 39 (Copilot intelligence category)
-// POST /api/copilot/intelligence/resolve-entity-ownership
-// Tier 1 — lightweight confirm required.
-// Updates an entity's ownership chain metadata and writes an audit activity.
-// Does NOT overwrite protected deal columns. Updates the entity metadata JSONB
-// with ownership resolution data plus logs a 'research' activity event.
-// ---------------------------------------------------------------------------
-async function handleResolveEntityOwnership(params, user, workspaceId) {
-  if (!workspaceId) return { ok: false, error: 'Workspace context required.' };
-  const p = params || {};
-
-  const entityId        = p.entity_id || null;
-  const trueOwnerName   = p.true_owner_name || null;   // resolved beneficial owner
-  const ownerEntityId   = p.owner_entity_id || null;   // entity id of the true owner if known
-  const ownerRole       = p.owner_role || 'owner';      // owner | lp | gp | trustee | etc.
-  const ownershipNotes  = p.ownership_notes || null;
-  const source          = p.source || null;             // deed | sec | state_corp | llc_lookup | etc.
-  const domain          = p.domain || null;
-
-  if (!entityId) return { ok: false, error: 'entity_id is required.' };
-  if (!trueOwnerName && !ownerEntityId) {
-    return { ok: false, error: 'Provide true_owner_name or owner_entity_id.' };
-  }
-
-  // 1. Fetch target entity
-  const entityRes = await opsQuery('GET',
-    `entities?id=eq.${pgFilterVal(entityId)}&select=id,name,entity_type,domain,metadata&limit=1`
-  );
-  const entity = (entityRes.data || [])[0];
-  if (!entity) return { ok: false, error: `Entity not found: ${entityId}` };
-
-  // 2. Optionally look up the owner entity name
-  let ownerEntityName = trueOwnerName;
-  if (ownerEntityId && !trueOwnerName) {
-    const ownerRes = await opsQuery('GET',
-      `entities?id=eq.${pgFilterVal(ownerEntityId)}&select=id,name&limit=1`
-    );
-    const ownerEntity = (ownerRes.data || [])[0];
-    if (!ownerEntity) return { ok: false, error: `Owner entity not found: ${ownerEntityId}` };
-    ownerEntityName = ownerEntity.name;
-  }
-
-  const resolvedDomain = domain || entity.domain || null;
-
-  // 3. Merge ownership resolution into entity metadata
-  const existingMeta = entity.metadata || {};
-  const updatedMeta  = {
-    ...existingMeta,
-    ownership_resolution: {
-      true_owner_name:  ownerEntityName || null,
-      owner_entity_id:  ownerEntityId   || null,
-      owner_role:       ownerRole,
-      source:           source           || null,
-      notes:            ownershipNotes   || null,
-      resolved_by:      user.id,
-      resolved_at:      new Date().toISOString()
-    }
-  };
-
-  const patchRes = await opsQuery('PATCH',
-    `entities?id=eq.${pgFilterVal(entityId)}`,
-    { metadata: updatedMeta, updated_at: new Date().toISOString() }
-  );
-  if (!patchRes.ok) {
-    return { ok: false, error: 'Failed to update entity metadata.', detail: patchRes.status };
-  }
-
-  // 4. If owner_entity_id supplied, create/confirm entity_relationships link
-  let relationshipCreated = false;
-  if (ownerEntityId) {
-    const relPayload = {
-      workspace_id:      workspaceId,
-      from_entity_id:    ownerEntityId,
-      to_entity_id:      entityId,
-      relationship_type: ownerRole === 'owner' ? 'owns' : 'related_to',
-      metadata: {
-        bridge_source: 'resolve_entity_ownership',
-        owner_role:    ownerRole,
-        source
-      }
-    };
-    const relRes = await opsQuery('POST', 'entity_relationships', relPayload,
-      { 'Prefer': 'return=representation,resolution=merge-duplicates' }
-    );
-    relationshipCreated = !!relRes.ok;
-  }
-
-  // 5. Write research activity event
-  const actTitle = `Ownership resolved: ${ownerEntityName}${source ? ` (source: ${source})` : ''}`;
-  await opsQuery('POST', 'activity_events', {
-    workspace_id: workspaceId,
-    actor_id:     user.id,
-    category:     'research',
-    title:        actTitle,
-    body:         ownershipNotes || null,
-    entity_id:    entityId,
-    source_type:  'copilot',
-    domain:       resolvedDomain,
-    visibility:   'shared',
-    metadata: {
-      bridge_source:    'resolve_entity_ownership',
-      true_owner_name:  ownerEntityName || null,
-      owner_entity_id:  ownerEntityId   || null,
-      owner_role:       ownerRole,
-      source
-    },
-    occurred_at: new Date().toISOString()
-  });
-
-  return {
-    ok:                    true,
-    action:                'resolve_entity_ownership',
-    entity_id:             entityId,
-    entity_name:           entity.name,
-    true_owner_name:       ownerEntityName || null,
-    owner_entity_id:       ownerEntityId   || null,
-    owner_role:            ownerRole,
-    source:                source || null,
-    relationship_created:  relationshipCreated,
-    message:               `Ownership for "${entity.name}" resolved to "${ownerEntityName}"${ownershipNotes ? `. Notes: ${ownershipNotes}` : ''}.`
-  };
-}
-
 async function handleDailyBriefing(params, user, workspaceId, req) {
   // Fetch the structured snapshot from the daily-briefing endpoint
   const proto = req?.headers?.['x-forwarded-proto'] || 'https';
@@ -4273,142 +3845,88 @@ async function handleDailyBriefing(params, user, workspaceId, req) {
 
 async function handleProspectingBrief(params, user, workspaceId) {
   const limit = Math.min(parseInt(params?.limit) || 10, 25);
-  const domainFilter = params?.domain ? String(params.domain).trim() : null;
+  const domainFilter = params?.domain || null;
 
-  // =========================================================================
-  // PRIMARY SOURCE: LCC BD queue (touchpoint_cadence via v_bd_cadence_dashboard)
-  // Ranked by: most overdue first (call urgency), then highest annual rent
-  // (commission potential). Contact-filter = outreach-ready (has a contact).
-  // =========================================================================
   // BD-target gate: require a classified owner_role for ALL contacts.
-  // The previous gate used domain as an OR path which let through unclassified
-  // broker contacts (e.g. Colliers) tagged as government/dialysis domain.
-  // Brokers and unclassified intermediaries have null/unknown owner_role and
-  // should not appear in the call sheet regardless of domain.
-  // Domain filter is still honored when the caller explicitly passes one.
+  // Brokers and unclassified intermediaries have owner_role='unknown' and
+  // must be excluded regardless of domain. The previous implementation queried
+  // unified_contacts (GOV Supabase) which has no owner_role classification —
+  // it returned brokers alongside property owners, polluting the call sheet.
+  // This version queries v_bd_cadence_dashboard (LCC production) which joins
+  // entities (owner_role, domain) with touchpoint_cadence (rank_value, days_overdue).
   const BD_OWNER_ROLES = 'developer,user_owner,buyer,seller_flipper,operator';
   const bdGate = domainFilter
-    ? `&domain=eq.${pgFilterVal(domainFilter)}&owner_role.in.(${BD_OWNER_ROLES})`
-    : `&owner_role.in.(${BD_OWNER_ROLES})`;
+    ? `&domain=eq.${pgFilterVal(domainFilter)}&owner_role=in.(${BD_OWNER_ROLES})`
+    : `&owner_role=in.(${BD_OWNER_ROLES})`;
 
-  let queuePath = `v_bd_cadence_dashboard?workspace_id=eq.${pgFilterVal(workspaceId)}`
-    + `&phase=not.in.(paused,unsubscribed)`
-    + `&contact_id=not.is.null`
-    + bdGate
-    + `&order=days_overdue.desc.nullslast,rank_value.desc.nullslast`
-    + `&limit=${limit}`
-    + `&select=cadence_id,entity_id,entity_name,domain,phase,priority_tier,`
-    + `next_touch_due,days_overdue,days_until_next,last_touch_at,last_touch_type,`
-    + `emails_sent,calls_made,calls_connected,rank_value,rank_property_count,`
-    + `contact_id,contact_email,review_flag,owner_role`;
+  // Primary: LCC queue ranked by portfolio value (rank_value) and urgency (days_overdue)
+  const queueResult = await opsQuery('GET',
+    `v_bd_cadence_dashboard?workspace_id=eq.${pgFilterVal(workspaceId)}${bdGate}&phase=not.in.(paused,unsubscribed)&contact_id=not.is.null&order=rank_value.desc.nullslast,days_overdue.desc.nullslast&limit=${limit}`
+  );
 
-  const queueResult = await opsQuery('GET', queuePath);
-  const queueItems = Array.isArray(queueResult.data) ? queueResult.data : [];
+  let contacts = [];
+  let source = 'lcc_queue';
 
-  // =========================================================================
-  // FALLBACK: Outlook engagement scores (used only when LCC queue is empty)
-  // =========================================================================
-  if (!queueItems.length) {
+  if (queueResult.ok && (queueResult.data || []).length > 0) {
+    contacts = queueResult.data.map(c => ({
+      contact_id:      c.contact_id || null,
+      name:            c.name || c.contact_name || 'Unknown',
+      company:         c.company_name || c.org_name || '',
+      email:           c.contact_email || c.email || '',
+      domain:          c.domain || '',
+      owner_role:      c.owner_role || '',
+      annual_rent:     c.annual_rent || null,
+      rank_value:      c.rank_value || null,
+      days_overdue:    c.days_overdue || 0,
+      priority_signal: c.priority_signal || '',
+      phase:           c.phase || ''
+    }));
+  } else {
+    // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty
+    source = 'outlook_engagement';
     const hotResult = await govContactQuery(
       `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`
     );
-    const outlookContacts = (hotResult.data || []).map(c => ({
-      name: c.full_name,
-      company: c.company_name || '',
-      title: c.title || '',
-      email: c.email || '',
-      phone: c.phone || '',
-      score: c.engagement_score,
-      heat: c.engagement_score >= 60 ? 'hot' : c.engagement_score >= 30 ? 'warm' : 'cool',
-      last_call: c.last_call_date || 'never',
-      last_email: c.last_email_date || 'never',
-      total_calls: c.total_calls || 0,
-      total_emails: c.total_emails_sent || 0,
-      source: 'outlook_engagement'
+    contacts = (hotResult.data || []).map(c => ({
+      name:         c.full_name,
+      company:      c.company_name || '',
+      title:        c.title || '',
+      email:        c.email || '',
+      phone:        c.phone || '',
+      score:        c.engagement_score,
+      heat:         c.engagement_score >= 60 ? 'hot' : c.engagement_score >= 30 ? 'warm' : 'cool',
+      last_call:    c.last_call_date || 'never',
+      last_email:   c.last_email_date || 'never',
+      last_meeting: c.last_meeting_date || 'never',
+      total_calls:  c.total_calls || 0,
+      total_emails: c.total_emails_sent || 0
     }));
 
-    if (!outlookContacts.length) {
+    if (!contacts.length) {
       return {
         ok: true,
         action: 'generate_prospecting_brief',
-        response: 'No actionable BD contacts found. The LCC queue has no outreach-ready cadences and Outlook engagement data is unavailable. Add contacts to the cadence system to activate call prioritization.',
+        response: 'No BD contacts found in the LCC queue or Outlook engagement data.',
         contacts: [],
         source: 'none'
       };
     }
-
-    const contactList = outlookContacts.map((c, i) =>
-      `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Email: ${c.email}`
-    ).join('\n\n');
-    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    const fallbackPrompt = `Generate a daily prospecting call sheet for ${today}.\n\nContacts ranked by Outlook engagement score (LCC queue data not yet available):\n\n${contactList}\n\nFor each contact: call prep note, talking point, and priority (call today / this week / nurture).`;
-    const fallbackResult = await invokeChatProvider({
-      message: fallbackPrompt,
-      context: { assistant_feature: 'global_copilot', action: 'generate_prospecting_brief' },
-      history: [], attachments: [], user, workspaceId
-    });
-    return { ok: true, action: 'generate_prospecting_brief', response: fallbackResult.data?.response || '', contacts: outlookContacts, source: 'outlook_engagement', provider: fallbackResult.provider };
   }
-
-  // =========================================================================
-  // Map LCC queue rows → contact records with call prioritization signals
-  // =========================================================================
-  const now = Date.now();
-  const contacts = queueItems.map(c => {
-    const lastTouch = c.last_touch_at ? new Date(c.last_touch_at) : null;
-    const daysSinceTouch = lastTouch ? Math.floor((now - lastTouch.getTime()) / 86400000) : null;
-    const annualRent = c.rank_value ? Number(c.rank_value) : null;
-    const daysOverdue = c.days_overdue || 0;
-    const prioritySignal = daysOverdue > 30 ? 'CRITICALLY_OVERDUE'
-      : daysOverdue > 7 ? 'OVERDUE'
-      : daysOverdue > 0 ? 'DUE'
-      : c.review_flag ? 'STALE_REVIEW'
-      : 'ON_SCHEDULE';
-    return {
-      name: c.entity_name || '(Unknown)',
-      domain: c.domain || 'general',
-      phase: c.phase || '',
-      priority_tier: c.priority_tier || '',
-      email: c.contact_email || '',
-      days_overdue: daysOverdue,
-      days_since_touch: daysSinceTouch,
-      last_touch_date: lastTouch ? lastTouch.toISOString().split('T')[0] : 'never',
-      last_touch_type: c.last_touch_type || 'none',
-      annual_rent: annualRent,
-      property_count: c.rank_property_count || 0,
-      calls_made: c.calls_made || 0,
-      emails_sent: c.emails_sent || 0,
-      priority_signal: prioritySignal,
-      cadence_id: c.cadence_id,
-      entity_id: c.entity_id,
-      source: 'lcc_queue'
-    };
-  });
-
-  // =========================================================================
-  // AI prompt — uses LCC queue signals, not Outlook engagement scores
-  // =========================================================================
-  const contactList = contacts.map((c, i) => {
-    const rentStr = c.annual_rent
-      ? `$${(c.annual_rent / 1e6).toFixed(1)}M annual rent (${c.property_count} prop${c.property_count !== 1 ? 's' : ''})`
-      : 'portfolio value TBD';
-    const overdueStr = c.days_overdue > 0 ? `${c.days_overdue}d overdue [${c.priority_signal}]` : 'on schedule';
-    const touchStr = c.last_touch_date === 'never'
-      ? 'never contacted'
-      : `last ${c.last_touch_type || 'touch'}: ${c.last_touch_date} (${c.days_since_touch ?? '?'}d ago)`;
-    return `${i + 1}. ${c.name} [${c.domain}]\n   Status: ${overdueStr} | Phase: ${c.phase}${c.priority_tier ? ' | Tier: ' + c.priority_tier : ''}\n   Portfolio: ${rentStr}\n   Touch history: ${touchStr} | ${c.calls_made} calls, ${c.emails_sent} emails sent\n   Email: ${c.email || '(no email on file)'}`;
-  }).join('\n\n');
 
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  const prompt = `Generate a daily BD prospecting call sheet for ${today}.\n\n`
-    + `These are your top LCC BD queue contacts, ranked by cadence urgency (most overdue) then portfolio value (annual rent from government and healthcare real estate).\n\n`
-    + contactList
-    + `\n\nFor each contact:\n`
-    + `1. Why to call TODAY — cite the specific urgency signal (e.g., "${contacts[0]?.days_overdue || 'X'}d overdue on cadence, $Xm portfolio") and the commission opportunity\n`
-    + `2. Suggested opener — one sentence tailored to their domain (government: reference the agency/lease context; dialysis: reference the operator chain/facility; other: relationship continuity)\n`
-    + `3. Priority: CALL TODAY (critically overdue or high value) / THIS WEEK (overdue) / NURTURE (on schedule)\n\n`
-    + `Flag any CRITICALLY_OVERDUE contacts prominently. Keep each contact entry to 3-4 lines max.`;
+  const contactList = source === 'lcc_queue'
+    ? contacts.map((c, i) => {
+        const rent = c.annual_rent ? `$${Math.round(c.annual_rent).toLocaleString()}/yr` : 'rent unknown';
+        return `${i + 1}. ${c.name}${c.company ? ` (${c.company})` : ''} — ${c.owner_role} [${c.domain || 'mixed'}]\n   Email: ${c.email || 'no email on file'}\n   Portfolio value: ${rent} | Days overdue: ${c.days_overdue}\n   Signal: ${c.priority_signal || 'none'} | Phase: ${c.phase}`;
+      }).join('\n\n')
+    : contacts.map((c, i) =>
+        `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Phone: ${c.phone} | Email: ${c.email}`
+      ).join('\n\n');
+
+  const prompt = source === 'lcc_queue'
+    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A domain-specific talking point (government net-lease, dialysis net-lease, etc.)\n3. Priority: call today / this week / nurture\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
+    : `Generate a concise daily prospecting call sheet for ${today}.\n\nHere are the top contacts ranked by engagement:\n\n${contactList}\n\nFor each contact, provide:\n1. A one-line call prep note (why to call based on engagement pattern)\n2. A suggested talking point or reason to reach out\n3. Priority level (call today / this week / nurture)\n\nFocus on contacts who haven't been called recently but have high engagement. Flag any that are overdue for a touchpoint.`;
 
   const result = await invokeChatProvider({
     message: prompt,
@@ -4424,7 +3942,7 @@ async function handleProspectingBrief(params, user, workspaceId) {
     action: 'generate_prospecting_brief',
     response: result.data?.response || '',
     contacts,
-    source: 'lcc_queue',
+    source,
     provider: result.provider
   };
 }
@@ -4511,7 +4029,7 @@ async function handleDraftOutreachEmail(params, user, workspaceId) {
   const toneGuide = tone || 'professional, warm, and concise';
   const intentGuide = intent || 'reconnect and explore potential listing opportunities';
 
-  const prompt = `Draft a personalized outreach email for a commercial real estate investment sales professional.\n${contactContext}\n\nIntent: ${intentGuide}\nTone: ${toneGuide}\n\nRequirements:\n- Subject line + email body\n- Reference any relevant engagement history to make it personal\n- Keep it under 150 words\n- Include a clear but soft call-to-action\n- Do NOT use generic filler — make it specific to the recipient\n- This is a DRAFT for the investment sales professional to review before sending`;
+  const prompt = `Draft a personalized outreach email for a commercial real estate broker.\n${contactContext}\n\nIntent: ${intentGuide}\nTone: ${toneGuide}\n\nRequirements:\n- Subject line + email body\n- Reference any relevant engagement history to make it personal\n- Keep it under 150 words\n- Include a clear but soft call-to-action\n- Do NOT use generic filler — make it specific to the recipient\n- This is a DRAFT for the broker to review before sending`;
 
   const result = await invokeChatProvider({
     message: prompt,
@@ -4647,7 +4165,7 @@ async function handleDraftReplyFromInbox(params, user, workspaceId) {
   const receivedBlock = receivedAt ? `\nReceived: ${receivedAt}` : '';
 
   const prompt = [
-    'Draft a personalized REPLY to a flagged business email for a commercial real estate investment sales professional (SVP, Investment Sales at Northmarq).',
+    'Draft a personalized REPLY to a flagged business email for a commercial real estate broker (SVP, Investment Sales at Northmarq).',
     '',
     'Original email context:',
     `- From: ${senderName} <${senderEmail}>${receivedBlock}`,
