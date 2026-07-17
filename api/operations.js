@@ -4280,16 +4280,27 @@ async function handleProspectingBrief(params, user, workspaceId) {
   // Ranked by: most overdue first (call urgency), then highest annual rent
   // (commission potential). Contact-filter = outreach-ready (has a contact).
   // =========================================================================
+  // BD-target gate: include only entities that are either in a recognized BD domain
+  // (government / dialysis) OR carry a classified ownership role. This prevents
+  // broker, intermediary, and unclassified contacts from appearing in the call
+  // sheet — brokers have no owner_role or owner_role='unknown' and domain outside
+  // the two BD verticals, so they fall out of the OR naturally.
+  const BD_OWNER_ROLES = 'developer,user_owner,buyer,seller_flipper,operator';
+  const BD_DOMAINS = 'government,dialysis';
+  const bdGate = domainFilter
+    ? `&domain=eq.${pgFilterVal(domainFilter)}`
+    : `&or=(domain.in.(${BD_DOMAINS}),owner_role.in.(${BD_OWNER_ROLES}))`;
+
   let queuePath = `v_bd_cadence_dashboard?workspace_id=eq.${pgFilterVal(workspaceId)}`
     + `&phase=not.in.(paused,unsubscribed)`
     + `&contact_id=not.is.null`
+    + bdGate
     + `&order=days_overdue.desc.nullslast,rank_value.desc.nullslast`
     + `&limit=${limit}`
     + `&select=cadence_id,entity_id,entity_name,domain,phase,priority_tier,`
     + `next_touch_due,days_overdue,days_until_next,last_touch_at,last_touch_type,`
     + `emails_sent,calls_made,calls_connected,rank_value,rank_property_count,`
-    + `contact_id,contact_email,review_flag`;
-  if (domainFilter) queuePath += `&domain=eq.${pgFilterVal(domainFilter)}`;
+    + `contact_id,contact_email,review_flag,owner_role`;
 
   const queueResult = await opsQuery('GET', queuePath);
   const queueItems = Array.isArray(queueResult.data) ? queueResult.data : [];
@@ -4500,7 +4511,7 @@ async function handleDraftOutreachEmail(params, user, workspaceId) {
   const toneGuide = tone || 'professional, warm, and concise';
   const intentGuide = intent || 'reconnect and explore potential listing opportunities';
 
-  const prompt = `Draft a personalized outreach email for a commercial real estate broker.\n${contactContext}\n\nIntent: ${intentGuide}\nTone: ${toneGuide}\n\nRequirements:\n- Subject line + email body\n- Reference any relevant engagement history to make it personal\n- Keep it under 150 words\n- Include a clear but soft call-to-action\n- Do NOT use generic filler — make it specific to the recipient\n- This is a DRAFT for the broker to review before sending`;
+  const prompt = `Draft a personalized outreach email for a commercial real estate investment sales professional.\n${contactContext}\n\nIntent: ${intentGuide}\nTone: ${toneGuide}\n\nRequirements:\n- Subject line + email body\n- Reference any relevant engagement history to make it personal\n- Keep it under 150 words\n- Include a clear but soft call-to-action\n- Do NOT use generic filler — make it specific to the recipient\n- This is a DRAFT for the investment sales professional to review before sending`;
 
   const result = await invokeChatProvider({
     message: prompt,
@@ -4636,7 +4647,7 @@ async function handleDraftReplyFromInbox(params, user, workspaceId) {
   const receivedBlock = receivedAt ? `\nReceived: ${receivedAt}` : '';
 
   const prompt = [
-    'Draft a personalized REPLY to a flagged business email for a commercial real estate broker (SVP, Investment Sales at Northmarq).',
+    'Draft a personalized REPLY to a flagged business email for a commercial real estate investment sales professional (SVP, Investment Sales at Northmarq).',
     '',
     'Original email context:',
     `- From: ${senderName} <${senderEmail}>${receivedBlock}`,
