@@ -305,13 +305,13 @@ export const ACTION_SCHEMAS = {
   },
 
   draft_outreach_email: {
-    description: 'Draft a personalized outreach email for a business development contact. Provide contact_id (unified_id from GOV contacts DB) or contact_name. Set create_draft=true to also create the email as a real draft in the user\'s Outlook (returns draft_web_link).',
+    description: 'Draft a personalized outreach email for a business development contact. ALWAYS pass contact_name when the person\'s name is known — it drives LCC relationship enrichment and email personalization. Set create_draft=true + to=[email] to also create a real Outlook draft (returns draft_web_link). You do NOT need contact_id if you have contact_name.',
     category: 'outreach',
     inputs: {
       type: 'object',
       properties: {
-        contact_id: { type: 'string', description: 'Contact unified_id from GOV contacts DB' },
-        contact_name: { type: 'string', description: 'Contact name (used if contact_id not available)' },
+        contact_id: { type: 'string', description: 'Contact unified_id from GOV contacts DB (optional — use if available from a prior search)' },
+        contact_name: { type: 'string', description: 'Contact full name — ALWAYS pass this when the person\'s name is known, even without a contact_id' },
         intent: { type: 'string', description: 'Purpose of the outreach (e.g., "reconnect", "listing pitch", "market update")' },
         tone: { type: 'string', description: 'Desired tone (default: professional, warm, and concise)' },
         create_draft: { type: 'boolean', description: 'If true, create the email as a real draft in Outlook (requires a recipient — uses the contact email or the "to" field).' },
@@ -616,20 +616,20 @@ export const ACTION_SCHEMAS = {
   },
 
   get_relationship_context: {
-    description: 'Get full relationship context for an entity — communication history, deal involvement, touchpoint cadence. Provide entity_id (UUID), contact_name, or contact_id — at least one is required.',
+    description: 'Get full relationship context and relationship health summary for a contact — communication history, engagement score, relationship health, and talking points. Use contact_name (fuzzy name lookup) or contact_id (exact match). Call this before drafting outreach to enrich with real history.',
     category: 'portfolio',
     inputs: {
       type: 'object',
       properties: {
-        entity_id: { type: 'string', format: 'uuid', description: 'Entity UUID — use when known from a prior search_entities call' },
-        contact_name: { type: 'string', description: 'Contact or company name (alternative to entity_id; resolved server-side)' },
-        contact_id: { type: 'string', description: 'Unified contact ID from GOV contacts DB (alternative to entity_id)' }
+        contact_id:   { type: 'string', description: 'Contact unified_id from GOV contacts DB (exact match, preferred)' },
+        contact_name: { type: 'string', description: 'Contact full name — used for fuzzy lookup when contact_id is not available' }
       }
     },
     outputs: {
       type: 'object',
       properties: {
-        context: { type: 'object', description: 'Relationship context with history and recommendations' }
+        contact:  { type: 'object', description: 'Contact profile with engagement metrics and relationship health' },
+        response: { type: 'string', description: 'AI-generated relationship briefing with talking points' }
       }
     }
   },
@@ -665,7 +665,7 @@ export const ACTION_SCHEMAS = {
         title: { type: 'string', description: 'Task title' },
         body: { type: 'string', description: 'Task notes/body' },
         due_date: { type: 'string', format: 'date', description: 'Due date (YYYY-MM-DD)' },
-        importance: { type: 'string', description: 'One of: low, normal, high' },
+        importance: { type: 'string', enum: ['low', 'normal', 'high'] },
         list_name: { type: 'string', description: 'To Do list name' },
         lcc_action_id: { type: 'string', format: 'uuid', description: 'Linked LCC action item ID' }
       },
@@ -732,10 +732,9 @@ export const ACTION_SCHEMAS = {
       type: 'object',
       properties: {
         id: { type: 'string', format: 'uuid', description: 'Inbox item ID' },
-        status: { type: 'string', description: 'One of: triaged, dismissed, snoozed' },
-        priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
-        assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
-
+        status: { type: 'string', enum: ['triaged', 'dismissed', 'snoozed'] },
+        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+        assigned_to: { type: 'string', format: 'uuid' }
       },
       required: ['id']
     },
@@ -756,12 +755,11 @@ export const ACTION_SCHEMAS = {
       properties: {
         inbox_item_id: { type: 'string', format: 'uuid' },
         title: { type: 'string' },
-        action_type: { type: 'string', description: 'One of: follow_up, research, review, outreach, meeting' },
-        priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
-        assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
+        action_type: { type: 'string', enum: ['follow_up', 'research', 'review', 'outreach', 'meeting'] },
+        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+        assigned_to: { type: 'string', format: 'uuid' },
         due_date: { type: 'string', format: 'date' },
-        entity_id: { type: 'string', format: 'uuid' },
-
+        entity_id: { type: 'string', format: 'uuid' }
       },
       required: ['inbox_item_id']
     },
@@ -783,10 +781,9 @@ export const ACTION_SCHEMAS = {
         title: { type: 'string' },
         entity_id: { type: 'string', format: 'uuid' },
         action_type: { type: 'string' },
-        priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
         due_date: { type: 'string', format: 'date' },
-        description: { type: 'string' },
-
+        description: { type: 'string' }
       },
       required: ['title', 'entity_id']
     },
@@ -806,8 +803,7 @@ export const ACTION_SCHEMAS = {
       type: 'object',
       properties: {
         id: { type: 'string', format: 'uuid', description: 'Action item ID' },
-        status: { type: 'string', description: 'One of: open, in_progress, blocked, completed, cancelled' },
-
+        status: { type: 'string', enum: ['open', 'in_progress', 'blocked', 'completed', 'cancelled'] }
       },
       required: ['id', 'status']
     },
@@ -870,11 +866,10 @@ export const ACTION_SCHEMAS = {
     inputs: {
       type: 'object',
       properties: {
-        item_type: { type: 'string', description: 'One of: action, inbox, research' },
+        item_type: { type: 'string', enum: ['action', 'inbox', 'research'] },
         item_id: { type: 'string', format: 'uuid' },
         assigned_to: { type: 'string', format: 'uuid', description: 'Target user ID' },
-        reason: { type: 'string', description: 'Reason for reassignment' },
-
+        reason: { type: 'string', description: 'Reason for reassignment' }
       },
       required: ['item_type', 'item_id', 'assigned_to']
     },
@@ -896,8 +891,7 @@ export const ACTION_SCHEMAS = {
       properties: {
         action_item_id: { type: 'string', format: 'uuid' },
         escalate_to: { type: 'string', format: 'uuid', description: 'Manager user ID' },
-        reason: { type: 'string', description: 'Escalation reason' },
-
+        reason: { type: 'string', description: 'Escalation reason' }
       },
       required: ['action_item_id', 'escalate_to', 'reason']
     },
