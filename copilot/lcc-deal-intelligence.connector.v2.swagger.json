@@ -1141,7 +1141,7 @@
               "properties": {
                 "contact_id": {
                   "type": "string",
-                  "description": "Contact unified_id from GOV contacts DB"
+                  "description": "Contact unified_id from GOV contacts DB (returned by search_entities)"
                 },
                 "contact_name": {
                   "type": "string",
@@ -1154,6 +1154,18 @@
                 "tone": {
                   "type": "string",
                   "description": "Desired tone (default: professional, warm, and concise)"
+                },
+                "create_draft": {
+                  "type": "boolean",
+                  "description": "If true, create the email as a real draft in the user's Outlook. Requires a recipient email — uses contact email on file or the 'to' field."
+                },
+                "to": {
+                  "type": "string",
+                  "description": "Recipient email address. Required when creating an Outlook draft and the contact has no email on file."
+                },
+                "cc": {
+                  "type": "string",
+                  "description": "Optional CC email address(es), semicolon-separated."
                 }
               }
             }
@@ -3904,7 +3916,7 @@
       "properties": {
         "contact_id": {
           "type": "string",
-          "description": "Contact unified_id from GOV contacts DB"
+          "description": "Contact unified_id from GOV contacts DB (returned by search_entities)"
         },
         "contact_name": {
           "type": "string",
@@ -3917,6 +3929,18 @@
         "tone": {
           "type": "string",
           "description": "Desired tone (default: professional, warm, and concise)"
+        },
+        "create_draft": {
+          "type": "boolean",
+          "description": "If true, create the email as a real draft in the user's Outlook. Requires a recipient email."
+        },
+        "to": {
+          "type": "string",
+          "description": "Recipient email address. Required when creating an Outlook draft."
+        },
+        "cc": {
+          "type": "string",
+          "description": "Optional CC email address(es), semicolon-separated."
         }
       }
     },
