@@ -4670,9 +4670,20 @@ ${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/g
 // ---------------------------------------------------------------------------
 
 async function handleRelationshipContext(params, user, workspaceId) {
-  const { contact_id, contact_name } = params || {};
+  let { contact_id, contact_name, entity_id } = params || {};
+
+  // entity_id is what Copilot passes (from the Swagger spec); resolve it to a name
+  if (entity_id && !contact_id && !contact_name) {
+    const entityRow = await opsQuery('GET',
+      `entities?entity_id=eq.${encodeURIComponent(entity_id)}&select=name&limit=1`
+    );
+    if (entityRow.data?.[0]?.name) {
+      contact_name = entityRow.data[0].name;
+    }
+  }
+
   if (!contact_id && !contact_name) {
-    return { ok: false, error: 'contact_id or contact_name is required' };
+    return { ok: false, error: 'contact_id, contact_name, or entity_id is required' };
   }
 
   // Fetch contact profile
