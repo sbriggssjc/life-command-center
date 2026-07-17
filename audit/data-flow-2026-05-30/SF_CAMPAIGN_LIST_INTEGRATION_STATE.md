@@ -197,3 +197,29 @@ working 2026-07-16 (627 rows ingested), so a redeploy since dropped it.
   branches once a full run verifies.
 - Then verify GSA Buyer = 156, seller lists match Vision GM totals, no dup persons; then
   flip `SF_LIST_SEED_INSTITUTION` for the Tier A fan-out.
+
+### Route restored (PR #1414) + verified live 2026-07-17
+The `sf-list-import` dispatch (plus 4 siblings — `sf-contact-resolve-tick`,
+`owner-reconcile-tick`, `owner-reconcile-engine-tick`, `institution-contact-tick`) was reverted
+by a stale-branch merge in `operations.js`; PR #1414 restored all five verbatim with `do NOT
+remove` guards, shipped on the Railway redeploy. Post-deploy run: **POSTs return 200 and 133
+real contacts across 22 lists ingested** into `lcc_sf_list_membership` — real names + emails +
+city/state + `sf_contact_id`, `entity_type='person'`, correctly classified by side/product/
+broker, no junk (the two-step resolve delivers exactly what CampaignMember couldn't). Email-tier
+reconcile holds (no dup persons).
+
+### CHUNKING is now the confirmed live blocker (not theoretical)
+Same run then FAILED inside **`For each L3`** on the first LARGE sub-list. Small lists (2–20)
+resolve fine; **GSA Buyer (156)** builds a ~4,400-char `Id eq…or…` filter that exceeds the
+connector's `$filter`/URL length limit → `Get Contacts L3` errors → loop fails. GSA Buyer is
+stuck at its old partial 15. **Fix = chunk the ID array into ~50-member batches in BOTH resolve
+branches** (`chunk(body('Select_ContactIds_Lx'), 50)` → Apply-to-each → per-chunk
+`join(item(), ' or ')` → Get Contacts → Select Members → POST; route is idempotent so multiple
+POSTs/campaign don't dup). Build guide: `PA_FLOW_add_chunking_to_resolve_branches.md`. This
+unblocks GSA Buyer's 156 AND the 4–5k-member lists.
+
+### Two small data-quality polish items (non-blocking, observed in the good rows)
+`member_type` lands NULL (route doesn't stamp Contact-vs-Lead; entity_type+sf_contact_id already
+identify). `company_name` lands NULL (the `Get Contacts` `$select` doesn't fetch `Account.Name`
+— connector can't traverse it; city/state DO come via Mailing fields). Both later, LCC-side or
+a separate Account resolve.
