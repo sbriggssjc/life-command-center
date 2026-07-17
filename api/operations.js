@@ -6186,8 +6186,6 @@ async function handleChatRoute(req, res) {
   // agents, Teams cards, and Power Automate flows.
   if (req.body?.copilot_action) {
     const { copilot_action, params, surface, session_id: copilotSessionId } = req.body;
-    // Temporary debug log — remove after Phase 1E validation complete
-    console.log('[copilot-dispatch]', JSON.stringify({ action: copilot_action, paramKeys: Object.keys(params || {}), hasCreateDraft: (params || {}).create_draft, hasTo: !!(params || {}).to, copilotPath: req.query._copilot_path }));
     const startMs = Date.now();
     const result = await dispatchAction(copilot_action, params || {}, user, workspaceId, req);
     const durationMs = Date.now() - startMs;
