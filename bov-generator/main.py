@@ -127,6 +127,70 @@ class RentPeriodInput(BaseModel):
     status:      str            = Field("Contracted", description="Contracted | Option | Renewal | Projected")
 
 
+class LeaseAbstractInput(BaseModel):
+    """
+    Executed-lease provisions for the Lease Abstract tab (Leg 2). All optional —
+    identification and economics (tenant/guarantor, lease type, commencement,
+    expiration, Year-1 rent, escalations, remaining term, leased SF, rent/SF) are
+    auto-derived from the tenant's existing fields + `property`; the provisions
+    below fill the rest of the short-form summary and long-form article abstract.
+    """
+    # ── Identification ───────────────────────────────────────────────────────
+    tenant_of_record:   str = Field("", description="Legal tenant entity if different from the trade name")
+    landlord_of_record: str = Field("", description="Landlord / lessor of record")
+    execution_date:     str = Field("", description="Lease execution date (free text or YYYY-MM-DD)")
+    # ── Premises ─────────────────────────────────────────────────────────────
+    permitted_use:      str = Field("", description="Exclusive / permitted use")
+    prohibited_uses:    str = Field("", description="Prohibited uses")
+    leased_sf_per_survey: str = Field("", description="Leased SF per survey (if it differs from lease)")
+    # ── Rent ─────────────────────────────────────────────────────────────────
+    rent_commencement_date: str = Field("", description="Rent commencement date")
+    rent_abatement:     str = Field("", description="Rent abatement / free rent")
+    percentage_rent:    str = Field("", description="Percentage rent, if any")
+    # ── Expense structure ────────────────────────────────────────────────────
+    lease_structure:    str = Field("", description="NNN / NN / Gross / MG — defaults to the tenant's lease_type")
+    taxes_responsibility:    str = Field("", description="Real estate taxes — responsibility")
+    insurance_responsibility:str = Field("", description="Insurance — responsibility")
+    cam_responsibility:      str = Field("", description="CAM / maintenance — responsibility")
+    capital_responsibility:  str = Field("", description="Capital / roof / structure — responsibility")
+    expense_cap:        str = Field("", description="Expense cap, if any")
+    landlord_obligations: str = Field("", description="Landlord obligations / responsibilities")
+    # ── Options & renewals ───────────────────────────────────────────────────
+    num_renewal_options: str = Field("", description="Number of renewal options, e.g. '4'")
+    option_term_length:  str = Field("", description="Option term length, e.g. '5 years'")
+    renewal_rent_method: str = Field("", description="Renewal rent method, e.g. 'Fixed steps', 'FMV'")
+    renewal_notice:      str = Field("", description="Renewal notice requirement")
+    option_to_purchase:  str = Field("", description="Option to purchase")
+    rofr:               str = Field("", description="Right of first refusal")
+    rofo:               str = Field("", description="Right of first offer")
+    # ── Assignment & subletting ──────────────────────────────────────────────
+    assignment_rights:  str = Field("", description="Assignment rights")
+    subletting_rights:  str = Field("", description="Subletting rights")
+    change_of_control:  str = Field("", description="Change-of-control provisions")
+    guarantor_release:  str = Field("", description="Release of guarantor on assignment")
+    # ── Termination & default ────────────────────────────────────────────────
+    early_termination:  str = Field("", description="Early termination right")
+    termination_fee:    str = Field("", description="Termination fee / penalty")
+    default_cure:       str = Field("", description="Default / cure periods")
+    co_tenancy:         str = Field("", description="Co-tenancy provisions")
+    go_dark:            str = Field("", description="Go-dark provision")
+    # ── Other provisions ─────────────────────────────────────────────────────
+    ti_allowance:       str = Field("", description="TI allowance / landlord work")
+    signage_rights:     str = Field("", description="Signage rights")
+    parking_allocation: str = Field("", description="Parking allocation")
+    snda:               str = Field("", description="Subordination / SNDA / estoppel")
+    condemnation:       str = Field("", description="Condemnation provisions")
+    casualty:           str = Field("", description="Casualty / damage provisions")
+    holdover:           str = Field("", description="Holdover provisions")
+    notices:            str = Field("", description="Notices")
+    # ── Broker narrative (short-form) ────────────────────────────────────────
+    key_lease_strengths: str = Field("", description="Key lease strengths")
+    key_lease_risks:     str = Field("", description="Key lease risks")
+    broker_commentary:   str = Field("", description="Broker commentary")
+    # ── Sourcing ─────────────────────────────────────────────────────────────
+    default_source:     str = Field("", description="Label written to the DOCUMENT SOURCE column, e.g. 'Executed Lease', 'Amendment No. 1'")
+
+
 class TenantInput(BaseModel):
     name:           str            = Field("",    description="Tenant trade name")
     guarantor:      str            = Field("",    description="Corporate or personal guarantor")
@@ -141,6 +205,8 @@ class TenantInput(BaseModel):
     lease_expiration:   str        = Field("",    description="YYYY-MM-DD lease expiration (Rent Schedule)")
     rent_schedule: Optional[List[RentPeriodInput]] = Field(
         None, description="Exact contracted rent by period; if omitted, computed from year1_rent x escalation")
+    abstract: Optional[LeaseAbstractInput] = Field(
+        None, description="Executed-lease provisions auto-filled into the Lease Abstract tab")
 
 
 class UnderwritingInput(BaseModel):
@@ -165,12 +231,90 @@ class ClientInput(BaseModel):
     file_month: str = Field(..., description="YYYYMM — used in filename (e.g. 202607)")
 
 
+class CompInput(BaseModel):
+    """A single comparable sale for the Real Estate tab's Market Comps block."""
+    summary:    str            = Field("",   description="One-line comp description; if omitted, composed from the fields below")
+    address:    str            = Field("",   description="Comp property address or name")
+    sale_price: Optional[float]= Field(None, description="Sale price ($)")
+    price_sf:   Optional[float]= Field(None, description="Price per SF ($)")
+    cap_rate:   Optional[float]= Field(None, description="Cap rate (0.0675 = 6.75%)")
+    sale_date:  str            = Field("",   description="Sale date (free text or YYYY-MM-DD)")
+    source:     str            = Field("",   description="Comp source, e.g. CoStar, public records")
+
+
+class RealEstateInput(BaseModel):
+    """
+    Physical / location / market diligence for the Real Estate tab (Leg 1).
+    Every field is optional — whatever is supplied is auto-filled into the
+    short-form summary and long-form diligence matrix; the rest stays a blank
+    broker-input cell. Address and building SF are pulled from `property`.
+    """
+    # ── Building & improvements ──────────────────────────────────────────────
+    year_built:            Optional[int]  = Field(None, description="Year the building was constructed")
+    year_renovated:        Optional[int]  = Field(None, description="Year of most recent major renovation")
+    construction_type:     str            = Field("",   description="e.g. Masonry / steel frame, wood frame")
+    roof:                  str            = Field("",   description="Roof type / age")
+    hvac:                  str            = Field("",   description="HVAC type / age")
+    condition:             str            = Field("",   description="Overall physical condition")
+    deferred_maintenance:  str            = Field("",   description="Known deferred maintenance")
+    ada_compliance:        str            = Field("",   description="ADA compliance status")
+    # ── Site characteristics ─────────────────────────────────────────────────
+    site_area_acres:       Optional[float]= Field(None, description="Site / land area in acres")
+    parcel_apn:            str            = Field("",   description="Parcel APN / Tax ID")
+    legal_description:     str            = Field("",   description="Legal description summary")
+    lot_configuration:     str            = Field("",   description="Lot configuration / shape")
+    frontage_lf:           Optional[float]= Field(None, description="Street frontage in linear feet")
+    topography:            str            = Field("",   description="Topography")
+    flood_zone:            str            = Field("",   description="FEMA flood zone designation, e.g. 'Zone X'")
+    utilities:             str            = Field("",   description="Utilities available")
+    # ── Zoning & land use ────────────────────────────────────────────────────
+    zoning:                str            = Field("",   description="Zoning classification code")
+    zoning_description:    str            = Field("",   description="Plain-language zoning / permitted use")
+    permitted_use_confirmation: str       = Field("",   description="Permitted use confirmation")
+    drive_through_permitted:    str       = Field("",   description="Drive-through permitted (Yes/No/N.A.)")
+    signage_rights:        str            = Field("",   description="Signage rights")
+    restrictive_covenants: str            = Field("",   description="Restrictive covenants / CC&Rs")
+    easements:             str            = Field("",   description="Recorded easements")
+    # ── Ingress / egress / parking ───────────────────────────────────────────
+    access_points:         str            = Field("",   description="Number / description of access points")
+    shared_access:         str            = Field("",   description="Shared / reciprocal access")
+    parking_spaces:        Optional[int]  = Field(None, description="Total parking spaces")
+    parking_ratio:         Optional[float]= Field(None, description="Parking ratio per 1,000 SF; auto-computed from spaces + building SF if omitted")
+    delivery_loading:      str            = Field("",   description="Delivery / loading access")
+    # ── Location & market ────────────────────────────────────────────────────
+    county:                str            = Field("",   description="County")
+    msa_submarket:         str            = Field("",   description="MSA / submarket")
+    population_1_3_5:      str            = Field("",   description="Population 1 / 3 / 5 mile rings")
+    median_hh_income:      str            = Field("",   description="Median household income")
+    traffic_counts:        str            = Field("",   description="Traffic counts (VPD)")
+    proximity_demand_generators: str      = Field("",   description="Proximity to demand generators")
+    market_rent_context:   str            = Field("",   description="Market rent context")
+    # ── Environmental ────────────────────────────────────────────────────────
+    environmental_status:  str            = Field("",   description="Short-form environmental status summary")
+    phase_i:               str            = Field("",   description="Phase I ESA status")
+    phase_ii:              str            = Field("",   description="Phase II ESA status")
+    known_recs:            str            = Field("",   description="Known recognized environmental conditions (RECs)")
+    underground_storage_tanks: str        = Field("",   description="Underground storage tanks")
+    # ── Market comps ─────────────────────────────────────────────────────────
+    comps:                 List[CompInput]= Field(default_factory=list, description="Up to 3 comparable sales")
+    implied_market_cap_rate: Optional[float]= Field(None, description="Implied market cap rate from comps (0.07 = 7%)")
+    implied_market_price_sf: Optional[float]= Field(None, description="Implied market price / SF from comps ($)")
+    # ── Broker narrative (short-form) ────────────────────────────────────────
+    notable_strengths:     str            = Field("",   description="Notable strengths")
+    notable_concerns:      str            = Field("",   description="Notable concerns")
+    broker_commentary:     str            = Field("",   description="Broker commentary")
+    # ── Sourcing ─────────────────────────────────────────────────────────────
+    default_source:        str            = Field("",   description="Default label written to the SOURCE column for auto-filled rows, e.g. 'Appraisal', 'CoStar', 'Public records'")
+
+
 class BOVRequest(BaseModel):
     asset_type:   str               = Field(..., description="NNN | MOB")
     property:     PropertyInput
     tenants:      List[TenantInput] = Field(default_factory=list)
     underwriting: UnderwritingInput
     client:       ClientInput
+    real_estate:  Optional[RealEstateInput] = Field(
+        None, description="Optional physical / location / market diligence auto-filled into the Real Estate tab")
 
 
 class BOVResponse(BaseModel):

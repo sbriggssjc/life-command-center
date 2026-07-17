@@ -347,15 +347,532 @@ def fill_exec_subtitle(wb, req: dict) -> None:
     ws["B2"] = f"{_property_display(req)}  ·  {kind}  ·  Investment Snapshot  ·  {_analysis_date()}"
 
 
+REAL_ESTATE_SHEET = "Real Estate"
+
+# ── Real Estate tab cell map ──────────────────────────────────────────────────
+# The NNN (bov_tabs_3_real_estate.py) and MOB (mob_tab_3_real_estate.py) Real
+# Estate tabs share an identical layout, so one map serves both.
+#
+# Short-form summary — attribute label in col C, wide finding merged into col D.
+_RE_SF = {                       # attribute        -> D-column row
+    "address":       7,          # Property Address (address + city/state)
+    "building_sf":   8,          # Building SF
+    "year":          9,          # Year Built / Renovated
+    "site_area":    10,          # Site Area (Acres)
+    "zoning":       11,          # Zoning
+    "flood_zone":   12,          # Flood Zone
+    "parking":      13,          # Parking
+    "condition":    14,          # Condition (Overall)
+    "environmental":15,          # Environmental Status
+    "proximity":    16,          # Proximity / Demand Generators
+    "market":       17,          # Market Context
+    "strengths":    18,          # Notable Strengths
+    "concerns":     19,          # Notable Concerns
+    "commentary":   20,          # Broker Commentary
+}
+# Long-form matrix — finding in col E (5), source in col F (6), notes in col G (7).
+_RE_LF = {                       # attribute                      -> E-column row
+    "address":       25,
+    "city_state":    26,
+    "county":        27,
+    "msa":           28,
+    "population":    29,
+    "median_income": 30,
+    "traffic":       31,
+    "proximity":     32,
+    "market_rent":   33,
+    "site_area":     35,
+    "parcel_apn":    36,
+    "legal":         37,
+    "lot_config":    38,
+    "frontage":      39,
+    "topography":    40,
+    "flood_zone":    41,
+    "utilities":     42,
+    "building_sf":   44,
+    "year_built":    45,
+    "year_renov":    46,
+    "construction":  47,
+    "roof":          48,
+    "hvac":          49,
+    "ada":           50,
+    "condition":     51,
+    "deferred_maint":52,
+    "zoning":        54,
+    "permitted_use": 55,
+    "drive_through": 56,
+    "signage":       57,
+    "covenants":     58,
+    "easements":     59,
+    "access_points": 61,
+    "shared_access": 62,
+    "parking_spaces":63,
+    "parking_ratio": 64,
+    "delivery":      65,
+    "phase_i":       67,
+    "phase_ii":      68,
+    "known_recs":    69,
+    "ust":           70,
+    "comp1":         72,
+    "comp2":         73,
+    "comp3":         74,
+    "implied_cap":   75,
+    "implied_psf":   76,
+}
+_RE_FINDING_COL = 5   # E
+_RE_SOURCE_COL  = 6   # F
+
+
+def _s(v) -> str:
+    """Trim to a clean string; empty for None/blank."""
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _fmt_int(v):
+    try:
+        return f"{int(round(float(v))):,}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_pct(v):
+    """Accept a fraction (0.0675) or a whole number (6.75) and render as a %."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return ""
+    if f > 1:            # already expressed as a percent
+        f /= 100.0
+    return f"{f:.2%}"
+
+
+def _year_summary(built, renov) -> str:
+    b, r = _s(built), _s(renov)
+    if b and r:
+        return f"{b}  /  renov. {r}"
+    if b:
+        return b
+    if r:
+        return f"Renovated {r}"
+    return ""
+
+
+def _comp_finding(comp: dict) -> str:
+    """Compose a one-line comp string from an explicit summary or its parts."""
+    if _s(comp.get("summary")):
+        return _s(comp["summary"])
+    bits = []
+    if _s(comp.get("address")):
+        bits.append(_s(comp["address"]))
+    tail = []
+    if comp.get("sale_price") is not None:
+        tail.append(f"${_fmt_int(comp['sale_price'])}")
+    if comp.get("price_sf") is not None:
+        tail.append(f"${_fmt_int(comp['price_sf'])}/SF")
+    if comp.get("cap_rate") is not None:
+        tail.append(f"{_fmt_pct(comp['cap_rate'])} cap")
+    if _s(comp.get("sale_date")):
+        tail.append(_s(comp["sale_date"]))
+    if tail:
+        bits.append(" · ".join(tail))
+    return " — ".join(bits)
+
+
+def fill_real_estate(wb, req: dict) -> None:
+    """
+    Auto-fill the Real Estate tab (shared NNN/MOB layout) from the optional
+    `real_estate` block plus address/building-SF already on `property`.
+    Only supplied values are written; everything else stays a broker-input cell.
+    The tab's conditional formatting turns each filled yellow cell white.
+    """
+    if REAL_ESTATE_SHEET not in wb.sheetnames:
+        return
+    ws = wb[REAL_ESTATE_SHEET]
+
+    # Fail-safe: the cell map is positional. If the tab layout has shifted,
+    # skip rather than risk writing findings into the wrong rows. Anchor on the
+    # short-form label (C7) and a long-form attribute (D36).
+    if (_s(ws.cell(row=7, column=3).value) != "Property Address"
+            or _s(ws.cell(row=36, column=4).value) != "Parcel APN / Tax ID"):
+        return
+
+    prop = req.get("property", {}) or {}
+    re_d = req.get("real_estate") or {}
+
+    address    = _s(prop.get("address"))
+    city_state = _s(prop.get("city_state"))
+    bsf        = prop.get("building_sf")
+    building_sf_str = f"{_fmt_int(bsf)} SF" if bsf is not None else ""
+    src        = _s(re_d.get("default_source"))
+
+    # ── Derived / formatted values ──────────────────────────────────────────
+    full_address = ", ".join(p for p in [address, city_state] if p)
+    year_sf   = _year_summary(re_d.get("year_built"), re_d.get("year_renovated"))
+    site_str  = (f"{re_d['site_area_acres']:g} acres"
+                 if re_d.get("site_area_acres") is not None else "")
+    frontage_str = (f"{_fmt_int(re_d['frontage_lf'])} LF"
+                    if re_d.get("frontage_lf") is not None else "")
+
+    zoning_sf = _s(re_d.get("zoning"))
+    if zoning_sf and _s(re_d.get("zoning_description")):
+        zoning_sf = f"{zoning_sf} — {_s(re_d['zoning_description'])}"
+    elif not zoning_sf:
+        zoning_sf = _s(re_d.get("zoning_description"))
+
+    # Parking ratio: use supplied, else compute from spaces + building SF.
+    spaces = re_d.get("parking_spaces")
+    ratio  = re_d.get("parking_ratio")
+    if ratio is None and spaces is not None and bsf:
+        try:
+            ratio = float(spaces) / (float(bsf) / 1000.0)
+        except (TypeError, ValueError, ZeroDivisionError):
+            ratio = None
+    ratio_str = f"{ratio:.2f} per 1,000 SF" if isinstance(ratio, (int, float)) else ""
+    if spaces is not None and ratio_str:
+        parking_sf = f"{_fmt_int(spaces)} spaces  ({ratio:.1f} / 1,000 SF)"
+    elif spaces is not None:
+        parking_sf = f"{_fmt_int(spaces)} spaces"
+    else:
+        parking_sf = ""
+
+    def _w(row: int, col: int, value: str) -> None:
+        """Write a finding, and stamp the source column when a value landed."""
+        value = _s(value)
+        if not value:
+            return
+        ws.cell(row=row, column=col).value = value
+        if col == _RE_FINDING_COL and src:
+            ws.cell(row=row, column=_RE_SOURCE_COL).value = src
+
+    # ── Short-form summary (col D) ──────────────────────────────────────────
+    sf = _RE_SF
+    _w(sf["address"],       4, full_address)
+    _w(sf["building_sf"],   4, building_sf_str)
+    _w(sf["year"],          4, year_sf)
+    _w(sf["site_area"],     4, site_str)
+    _w(sf["zoning"],        4, zoning_sf)
+    _w(sf["flood_zone"],    4, _s(re_d.get("flood_zone")))
+    _w(sf["parking"],       4, parking_sf)
+    _w(sf["condition"],     4, _s(re_d.get("condition")))
+    _w(sf["environmental"], 4, _s(re_d.get("environmental_status")) or _s(re_d.get("phase_i")))
+    _w(sf["proximity"],     4, _s(re_d.get("proximity_demand_generators")))
+    _w(sf["market"],        4, _s(re_d.get("market_rent_context")))
+    _w(sf["strengths"],     4, _s(re_d.get("notable_strengths")))
+    _w(sf["concerns"],      4, _s(re_d.get("notable_concerns")))
+    _w(sf["commentary"],    4, _s(re_d.get("broker_commentary")))
+
+    # ── Long-form diligence matrix (col E finding, col F source) ────────────
+    lf = _RE_LF
+    _w(lf["address"],       5, address)
+    _w(lf["city_state"],    5, city_state)
+    _w(lf["county"],        5, _s(re_d.get("county")))
+    _w(lf["msa"],           5, _s(re_d.get("msa_submarket")))
+    _w(lf["population"],    5, _s(re_d.get("population_1_3_5")))
+    _w(lf["median_income"], 5, _s(re_d.get("median_hh_income")))
+    _w(lf["traffic"],       5, _s(re_d.get("traffic_counts")))
+    _w(lf["proximity"],     5, _s(re_d.get("proximity_demand_generators")))
+    _w(lf["market_rent"],   5, _s(re_d.get("market_rent_context")))
+    _w(lf["site_area"],     5, site_str)
+    _w(lf["parcel_apn"],    5, _s(re_d.get("parcel_apn")))
+    _w(lf["legal"],         5, _s(re_d.get("legal_description")))
+    _w(lf["lot_config"],    5, _s(re_d.get("lot_configuration")))
+    _w(lf["frontage"],      5, frontage_str)
+    _w(lf["topography"],    5, _s(re_d.get("topography")))
+    _w(lf["flood_zone"],    5, _s(re_d.get("flood_zone")))
+    _w(lf["utilities"],     5, _s(re_d.get("utilities")))
+    _w(lf["building_sf"],   5, building_sf_str)
+    _w(lf["year_built"],    5, _s(re_d.get("year_built")))
+    _w(lf["year_renov"],    5, _s(re_d.get("year_renovated")))
+    _w(lf["construction"],  5, _s(re_d.get("construction_type")))
+    _w(lf["roof"],          5, _s(re_d.get("roof")))
+    _w(lf["hvac"],          5, _s(re_d.get("hvac")))
+    _w(lf["ada"],           5, _s(re_d.get("ada_compliance")))
+    _w(lf["condition"],     5, _s(re_d.get("condition")))
+    _w(lf["deferred_maint"],5, _s(re_d.get("deferred_maintenance")))
+    _w(lf["zoning"],        5, _s(re_d.get("zoning")))
+    _w(lf["permitted_use"], 5, _s(re_d.get("permitted_use_confirmation")))
+    _w(lf["drive_through"], 5, _s(re_d.get("drive_through_permitted")))
+    _w(lf["signage"],       5, _s(re_d.get("signage_rights")))
+    _w(lf["covenants"],     5, _s(re_d.get("restrictive_covenants")))
+    _w(lf["easements"],     5, _s(re_d.get("easements")))
+    _w(lf["access_points"], 5, _s(re_d.get("access_points")))
+    _w(lf["shared_access"], 5, _s(re_d.get("shared_access")))
+    _w(lf["parking_spaces"],5, _fmt_int(spaces) if spaces is not None else "")
+    _w(lf["parking_ratio"], 5, ratio_str)
+    _w(lf["delivery"],      5, _s(re_d.get("delivery_loading")))
+    _w(lf["phase_i"],       5, _s(re_d.get("phase_i")))
+    _w(lf["phase_ii"],      5, _s(re_d.get("phase_ii")))
+    _w(lf["known_recs"],    5, _s(re_d.get("known_recs")))
+    _w(lf["ust"],           5, _s(re_d.get("underground_storage_tanks")))
+
+    # Comps — write finding, and a per-comp source overriding the default.
+    comps = re_d.get("comps") or []
+    for i, key in enumerate(["comp1", "comp2", "comp3"]):
+        if i >= len(comps):
+            break
+        comp = comps[i] or {}
+        finding = _comp_finding(comp)
+        if finding:
+            ws.cell(row=lf[key], column=5).value = finding
+            comp_src = _s(comp.get("source")) or src
+            if comp_src:
+                ws.cell(row=lf[key], column=_RE_SOURCE_COL).value = comp_src
+
+    _w(lf["implied_cap"], 5, _fmt_pct(re_d.get("implied_market_cap_rate"))
+       if re_d.get("implied_market_cap_rate") is not None else "")
+    _w(lf["implied_psf"], 5, f"${_fmt_int(re_d['implied_market_price_sf'])} / SF"
+       if re_d.get("implied_market_price_sf") is not None else "")
+
+
+LEASE_ABSTRACT_SHEET = "Lease Abstract"
+
+
+def _fmt_date_str(v) -> str:
+    """YYYY-MM-DD -> MM/DD/YYYY; pass through anything else unchanged."""
+    d = _date(v) if v else None
+    return d.strftime("%m/%d/%Y") if d else _s(v)
+
+
+def _ref_date(prop: dict):
+    """Reference point for remaining-term math: close date if given, else today."""
+    return _date(prop.get("close_date", "")) or datetime.now().date()
+
+
+def _remaining_term(exp_v, ref_date) -> str:
+    d = _date(exp_v) if exp_v else None
+    if not d:
+        return ""
+    yrs = (d - ref_date).days / 365.25
+    return "Expired" if yrs < 0 else f"{yrs:.1f} years"
+
+
+def _esc_summary(t: dict) -> str:
+    rs = t.get("rent_schedule")
+    if rs and len(rs) > 1:
+        return "Stepped increases — see Rent Schedule"
+    esc = t.get("escalation_pct")
+    return f"{_fmt_pct(esc)} annually" if esc else ""
+
+
+def _rent_and_psf(t: dict, prop: dict):
+    y1 = t.get("year1_rent")
+    if y1 is None:
+        return "", ""
+    sf = t.get("sf") or prop.get("building_sf")
+    rent = f"${_fmt_int(y1)}"
+    psf = ""
+    try:
+        if sf:
+            psf = f"${float(y1) / float(sf):.2f}/SF"
+    except (TypeError, ValueError, ZeroDivisionError):
+        psf = ""
+    return rent, psf
+
+
+def _join(*parts) -> str:
+    return " / ".join(p for p in (_s(x) for x in parts) if p)
+
+
+def _lease_values(t: dict, prop: dict, ref_date):
+    """Build (short-form dict, long-form dict, source) for one tenant's lease."""
+    ab = t.get("abstract") or {}
+    name       = _s(ab.get("tenant_of_record")) or _s(t.get("name"))
+    lease_type = _s(t.get("lease_type")) or "NNN"
+    structure  = _s(ab.get("lease_structure")) or lease_type
+    comm       = _fmt_date_str(t.get("lease_commencement", ""))
+    exp        = _fmt_date_str(t.get("lease_expiration", ""))
+    remaining  = _remaining_term(t.get("lease_expiration", ""), ref_date)
+    rent, psf  = _rent_and_psf(t, prop)
+    rent_full  = f"{rent}  ({psf})" if rent and psf else rent
+    esc        = _esc_summary(t)
+    suite      = _s(t.get("suite"))
+    if t.get("sf") is not None:
+        leased_sf = f"{_fmt_int(t.get('sf'))} SF"
+    elif prop.get("building_sf") is not None:
+        leased_sf = f"{_fmt_int(prop.get('building_sf'))} SF"
+    else:
+        leased_sf = ""
+    renew = "  ×  ".join(x for x in [_s(ab.get("num_renewal_options")),
+                                     _s(ab.get("option_term_length"))] if x)
+
+    premises = _s(prop.get("address"))
+    if suite:
+        premises = f"{premises}, Suite {suite}".strip(", ")
+
+    sf_values = {
+        "Tenant (Lease)":          name,
+        "Guarantor":               _s(t.get("guarantor")),
+        "Lease Type":              lease_type,
+        "Lease Commencement":      comm,
+        "Lease Expiration":        exp,
+        "Remaining Lease Term":    remaining,
+        "Suite / Unit":            suite,
+        "Leased SF":               leased_sf,
+        "Year 1 Base Rent":        rent_full,
+        "Rent / SF":               psf,
+        "Rent Escalations":        esc,
+        "Renewal Options":         renew,
+        "Renewal Rent Method":     _s(ab.get("renewal_rent_method")),
+        "Expense Structure":       structure,
+        "LL Responsibilities":     _s(ab.get("landlord_obligations")),
+        "Early Termination":       _s(ab.get("early_termination")),
+        "Assignment / Subletting": _join(ab.get("assignment_rights"), ab.get("subletting_rights")),
+        "ROFR / ROFO":             _join(ab.get("rofr"), ab.get("rofo")),
+        "Option to Purchase":      _s(ab.get("option_to_purchase")),
+        "Key Lease Strengths":     _s(ab.get("key_lease_strengths")),
+        "Key Lease Risks":         _s(ab.get("key_lease_risks")),
+        "Broker Commentary":       _s(ab.get("broker_commentary")),
+    }
+
+    lf_values = {
+        "Lease Type / Form":                          lease_type,
+        "Execution Date":                             _fmt_date_str(ab.get("execution_date", "")),
+        "Effective / Commencement Date":              comm,
+        "Lease Expiration Date":                      exp,
+        "Landlord of Record":                         _s(ab.get("landlord_of_record")),
+        "Tenant of Record":                           name,
+        "Guarantor (if any)":                         _s(t.get("guarantor")),
+        "Demised Premises Address":                   premises,
+        "Demised Premises / Suite":                   premises,
+        "Leased SF (per lease)":                      leased_sf,
+        "Leased SF (per survey)":                     _s(ab.get("leased_sf_per_survey")),
+        "Exclusive Use / Permitted Use":              _s(ab.get("permitted_use")),
+        "Permitted Use":                              _s(ab.get("permitted_use")),
+        "Prohibited Uses":                            _s(ab.get("prohibited_uses")),
+        "Base Rent — Year 1":                         rent_full,
+        "Annual Rent Escalations":                    esc,
+        "Rent Commencement Date":                     _fmt_date_str(ab.get("rent_commencement_date", "")),
+        "Rent Abatement / Free Rent":                 _s(ab.get("rent_abatement")),
+        "Percentage Rent":                            _s(ab.get("percentage_rent")),
+        "Lease Structure (NNN / NN / Gross / MG)":    structure,
+        "Lease Structure (NNN / Gross / MG)":         structure,
+        "Real Estate Taxes — Responsibility":         _s(ab.get("taxes_responsibility")),
+        "Insurance — Responsibility":                 _s(ab.get("insurance_responsibility")),
+        "CAM / Maintenance — Responsibility":         _s(ab.get("cam_responsibility")),
+        "Capital / Roof / Structure — Responsibility":_s(ab.get("capital_responsibility")),
+        "Expense Cap (if any)":                       _s(ab.get("expense_cap")),
+        "Landlord Obligations":                       _s(ab.get("landlord_obligations")),
+        "Number of Renewal Options":                  _s(ab.get("num_renewal_options")),
+        "Option Term Length":                         _s(ab.get("option_term_length")),
+        "Renewal Rent — Method":                      _s(ab.get("renewal_rent_method")),
+        "Renewal Notice Requirement":                 _s(ab.get("renewal_notice")),
+        "Option to Purchase":                         _s(ab.get("option_to_purchase")),
+        "Right of First Refusal (ROFR)":              _s(ab.get("rofr")),
+        "Right of First Offer (ROFO)":                _s(ab.get("rofo")),
+        "Assignment Rights":                          _s(ab.get("assignment_rights")),
+        "Subletting Rights":                          _s(ab.get("subletting_rights")),
+        "Change of Control Provisions":               _s(ab.get("change_of_control")),
+        "Release of Guarantor on Assignment":         _s(ab.get("guarantor_release")),
+        "Early Termination Right":                    _s(ab.get("early_termination")),
+        "Termination Fee / Penalty":                  _s(ab.get("termination_fee")),
+        "Default / Cure Periods":                     _s(ab.get("default_cure")),
+        "Co-Tenancy Provisions":                      _s(ab.get("co_tenancy")),
+        "Go-Dark Provision":                          _s(ab.get("go_dark")),
+        "Co-Tenancy / Go-Dark Provision":             _join(ab.get("co_tenancy"), ab.get("go_dark")),
+        "TI Allowance / Landlord Work":               _s(ab.get("ti_allowance")),
+        "Signage Rights":                             _s(ab.get("signage_rights")),
+        "Parking Allocation":                         _s(ab.get("parking_allocation")),
+        "Subordination / SNDA / Estoppel":            _s(ab.get("snda")),
+        "Condemnation Provisions":                    _s(ab.get("condemnation")),
+        "Casualty / Damage Provisions":               _s(ab.get("casualty")),
+        "Holdover Provisions":                        _s(ab.get("holdover")),
+        "Notices":                                    _s(ab.get("notices")),
+    }
+    source = _s(ab.get("default_source")) or "Executed Lease"
+    return sf_values, lf_values, source
+
+
+def _lf_boundary(ws) -> int:
+    """Row where the long-form section begins (col B header starts 'LONG-FORM')."""
+    for row in range(1, ws.max_row + 1):
+        if _s(ws.cell(row=row, column=2).value).upper().startswith("LONG-FORM"):
+            return row
+    return ws.max_row + 1
+
+
+def fill_nnn_lease_abstract(wb, req: dict) -> None:
+    """Single-tenant Lease Abstract: short-form (C->D) + long-form (D->H, source G)."""
+    if LEASE_ABSTRACT_SHEET not in wb.sheetnames:
+        return
+    tenants = req.get("tenants") or []
+    if not tenants:
+        return
+    ws = wb[LEASE_ABSTRACT_SHEET]
+    sfv, lfv, source = _lease_values(tenants[0], req.get("property", {}) or {}, _ref_date(req.get("property", {}) or {}))
+    lf_start = _lf_boundary(ws)
+
+    # Short-form region: attribute label in col C (3), wide input in col D (4).
+    for row in range(1, lf_start):
+        label = _s(ws.cell(row=row, column=3).value)
+        if label in sfv and sfv[label]:
+            ws.cell(row=row, column=4).value = sfv[label]
+
+    # Long-form region: clause label in col D (4); operative -> H (8), source -> G (7).
+    for row in range(lf_start, ws.max_row + 1):
+        clause = _s(ws.cell(row=row, column=4).value)
+        if clause in lfv and lfv[clause]:
+            ws.cell(row=row, column=8).value = lfv[clause]
+            if source:
+                ws.cell(row=row, column=7).value = source
+
+
+def fill_mob_lease_abstract(wb, req: dict) -> None:
+    """
+    Multi-tenant Lease Abstract: a 5-column short-form summary table, then one
+    stacked long-form section per tenant (teal header rows delimit sections).
+    """
+    if LEASE_ABSTRACT_SHEET not in wb.sheetnames:
+        return
+    tenants = (req.get("tenants") or [])[:5]
+    if not tenants:
+        return
+    ws = wb[LEASE_ABSTRACT_SHEET]
+    prop = req.get("property", {}) or {}
+    ref = _ref_date(prop)
+    vals = [_lease_values(t, prop, ref) for t in tenants]  # list of (sfv, lfv, source)
+    lf_start = _lf_boundary(ws)
+
+    # Short-form: provision label in col B (2); tenant columns C..G (3..7).
+    for row in range(1, lf_start):
+        label = _s(ws.cell(row=row, column=2).value)
+        if not label:
+            continue
+        for i, (sfv, _lfv, _src) in enumerate(vals):
+            v = sfv.get(label)
+            if v:
+                ws.cell(row=row, column=3 + i).value = v
+
+    # Long-form: teal header rows carry a formula in col B and advance the tenant
+    # index; within a section, clause label in col C (3) -> operative G (7), source F (6).
+    sec_idx = -1
+    for row in range(lf_start, ws.max_row + 1):
+        b = ws.cell(row=row, column=2).value
+        if isinstance(b, str) and b.startswith("="):
+            sec_idx += 1
+            continue
+        if 0 <= sec_idx < len(vals):
+            _sfv, lfv, source = vals[sec_idx]
+            clause = _s(ws.cell(row=row, column=3).value)
+            if clause in lfv and lfv[clause]:
+                ws.cell(row=row, column=7).value = lfv[clause]
+                if source:
+                    ws.cell(row=row, column=6).value = source
+
+
 def fill_assumptions(wb, req: dict) -> None:
     """Dispatch to the correct fill functions based on asset_type."""
     asset_type = req.get("asset_type", "NNN").upper()
     if asset_type == "MOB":
         fill_mob_assumptions(wb, req)
         fill_mob_rent_schedule(wb, req)
+        fill_mob_lease_abstract(wb, req)
     else:
         fill_nnn_assumptions(wb, req)
         fill_nnn_rent_schedule(wb, req)
+        fill_nnn_lease_abstract(wb, req)
     fill_cover(wb, req)
     fill_exec_subtitle(wb, req)
+    fill_real_estate(wb, req)
 
