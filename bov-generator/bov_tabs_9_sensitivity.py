@@ -343,7 +343,7 @@ def build_sensitivity_tab(wb):
                 # Year 10: Y10 NOI - DS + net reversion after debt payoff
                 noi_10   = f'{_NOI}*(1+{_ESC})^9'
                 net_rev  = f'({noi_10}/{_XCAP})*0.94'
-                rem_loan = f'(-PV({_RATE}/12,({_AMORT}-{_HOLD})*12,PMT({_RATE}/12,{_AMORT}*12,{loan})))'
+                rem_loan = f'(PV({_RATE}/12,({_AMORT}-{_HOLD})*12,PMT({_RATE}/12,{_AMORT}*12,{loan})))'
                 formula  = (
                     f'=IFERROR(IF(${cl}${LEV_HELP_START}="","",'
                     f'{noi_10}-{ds_ann}+{net_rev}-{rem_loan}),"")'

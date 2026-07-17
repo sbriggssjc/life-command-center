@@ -260,7 +260,7 @@ def build_exec_summary(wb):
     h(ws, 24, 22)
     ws.cell(row=24, column=2, value="Asking Price").font = FT_LABEL
     ws.cell(row=24, column=2).fill = F_TOT; ws.cell(row=24, column=2).alignment = AL_L
-    inp(ws, 24, 3, fmt=P2).fill = F_TOT
+    frm(ws, 24, 3, f'=IFERROR(IF({_A}!$C$16="","",{_A}!$C$16),"")', fmt=P2).fill = F_TOT
     # NOI = Assumptions C33 (Estimated NOI Y1); Building SF = Assumptions C9
     frm(ws, 24, 4,
         f'=IFERROR(IF(OR({_A}!$C$33="",C24="",C24=0),"",{_A}!$C$33/C24),"")',

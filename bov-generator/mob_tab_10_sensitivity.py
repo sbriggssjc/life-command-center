@@ -234,7 +234,7 @@ def build_mob_sensitivity_tab(wb):
                 noi_10  = f"({_NOI}*(1+{_ESC})^9)"
                 net_rev = f"({noi_10}/{_XCAP}*0.94)"
                 # Remaining loan = PV of (amort−hold) remaining payments
-                rem_loan = (f"(-PV({_RATE}/12,({_AMORT}-{_HOLD})*12,"
+                rem_loan = (f"(PV({_RATE}/12,({_AMORT}-{_HOLD})*12,"
                             f"PMT({_RATE}/12,{_AMORT}*12,{loan_f})))")
                 net_rev_after = f"({net_rev}-{rem_loan})"
                 formula = (f'=IFERROR(IF(OR({_NOI}="",{cap_ref}=0),"",{noi_10}-{ds_f}+{net_rev_after}),"")')

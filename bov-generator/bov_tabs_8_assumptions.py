@@ -124,7 +124,7 @@ def build_assumptions_tab(wb):
     row_inp(ws, 16, "Recommended Asking Cap Rate",  fmt=P2,   note="Drives Recommended Asking Price on Exec Summary")
     row_inp(ws, 17, "Trade Range — Low Cap Rate",   fmt=P2,   note="Low = higher price")
     row_inp(ws, 18, "Trade Range — High Cap Rate",  fmt=P2,   note="High = lower price")
-    row_frm(ws, 19, "Implied Ask Price (NOI / Cap)", '=IFERROR(IF(OR(C9="",C16="",C16=0),"",C9/C16),"")',  fmt=D0, note="Updates Executive Summary")
+    row_frm(ws, 19, "Implied Ask Price (NOI / Cap)", '=IFERROR(IF(OR(C33="",C16="",C16=0),"",C33/C16),"")',  fmt=D0, note="Updates Executive Summary")
     row_inp(ws, 20, "Broker Price Opinion (BPO)",    fmt=D0,   note="Override if needed")
     row_inp(ws, 21, "Price Per SF",                 fmt=D2,   note="Manual entry or use Valuation Matrix")
 
@@ -255,7 +255,7 @@ def build_assumptions_tab(wb):
 
     row_inp_r(ws, 20, "Exit Cap Rate",               fmt=P2,  note="Applied to Year 10 NOI")
     row_frm_r(ws, 21, "Exit NOI (Year 10 Projected)",
-              '=IFERROR(IF(OR(C24="",C25=""),"",C24*(1+C25)^I13),"")', fmt=D0,
+              '=IFERROR(IF(OR(C24="",C25=""),"",C24*(1+C25)^(I13-1)),"")', fmt=D0,
               note="Y1 rent * (1+escalation)^hold period")
     row_frm_r(ws, 22, "GROSS SALE PROCEEDS",
               '=IFERROR(IF(OR(I21="",I20="",I20=0),"",I21/I20),"")', fmt=D0, bold=True)

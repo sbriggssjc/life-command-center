@@ -419,7 +419,7 @@ def build_mob_assumptions_tab(wb):
 
     row_inp_r(20, "Exit Cap Rate",           fmt=P2, note="Applied to projected Year-10 NOI")
     row_frm_r(21, "Exit NOI (Year 10 Projected)",
-              '=IFERROR(IF(OR(C85="",C64=""),"",C85*(1+C64)^I13),"")',
+              '=IFERROR(IF(OR(C85="",C64=""),"",C85*(1+C64)^(I13-1)),"")',
               fmt=D0, note="Y1 NOI × (1 + Portfolio Avg Esc)^Hold")
     row_frm_r(22, "GROSS SALE PROCEEDS",
               '=IFERROR(IF(OR(I21="",I20="",I20=0),"",I21/I20),"")',

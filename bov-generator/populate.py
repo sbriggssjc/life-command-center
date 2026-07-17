@@ -167,6 +167,7 @@ def fill_mob_assumptions(wb, req: dict) -> None:
 
     # Acquisition pricing
     ws["C94"] = _num(uw.get("purchase_price"))
+    ws["C88"] = _pct(uw.get("going_in_cap"))
 
     # Right side — debt / leverage (same as NNN)
     ws["I6"]  = _num(uw.get("purchase_price"))

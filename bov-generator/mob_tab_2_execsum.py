@@ -247,7 +247,7 @@ def build_mob_exec_summary(wb):
     ws.cell(row=PASK_ROW, column=2, value="Asking Price").font = FT_LABEL
     ws.cell(row=PASK_ROW, column=2).fill = F_TOT
     ws.cell(row=PASK_ROW, column=2).alignment = AL_L
-    inp(ws, PASK_ROW, 3, fmt=P2).fill = F_TOT
+    frm(ws, PASK_ROW, 3, f'=IFERROR(IF({_A}!$C$88="","",{_A}!$C$88),"")', fmt=P2).fill = F_TOT
     frm(ws, PASK_ROW, 4,
         f'=IFERROR(IF(OR({_NOI}="",C{PASK_ROW}="",C{PASK_ROW}=0),"",{_NOI}/C{PASK_ROW}),"")',
         fmt=D0).fill = F_TOT

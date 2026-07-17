@@ -147,7 +147,7 @@ def build_mob_pro_forma_tab(wb):
     for col in YR_COLS:
         cl = get_column_letter(col)
         c = frm(ws, r, col,
-                f'=IFERROR(IFERROR({cl}8,0)+IFERROR({cl}9,0)+IFERROR({cl}10,0)+IFERROR({cl}11,0)+IFERROR({cl}12,0),"")',
+                f'=IFERROR(N({cl}8)+N({cl}9)+N({cl}10)+N({cl}11)+N({cl}12),"")',
                 fmt=D0, align=AL_R)
         c.fill = F_PALE; c.font = FT_LABEL
     ws.cell(row=r, column=NCOLS).fill = F_PALE
@@ -172,7 +172,7 @@ def build_mob_pro_forma_tab(wb):
     for col in YR_COLS:
         cl = get_column_letter(col)
         c = frm(ws, r, col,
-                f'=IFERROR(IF({cl}{GPR_ROW}="","",{cl}{GPR_ROW}+IFERROR({cl}{VAC_ROW},0)),"")',
+                f'=IFERROR(IF({cl}{GPR_ROW}="","",{cl}{GPR_ROW}+N({cl}{VAC_ROW})),"")',
                 fmt=D0, align=AL_R)
         c.font = FT_LABEL
 
@@ -208,7 +208,7 @@ def build_mob_pro_forma_tab(wb):
     for col in YR_COLS:
         cl = get_column_letter(col)
         c = frm(ws, r, col,
-                f'=IFERROR(IFERROR({cl}{EBR_ROW},0)+IFERROR({cl}{REIMB_ROW},0)+IFERROR({cl}{OTHER_ROW},0),"")',
+                f'=IFERROR(N({cl}{EBR_ROW})+N({cl}{REIMB_ROW})+N({cl}{OTHER_ROW}),"")',
                 fmt=D0, align=AL_R)
         c.font = FT_TOTAL; c.fill = F_TOT
         c.border = Border(top=_GY_T, bottom=_NM_T)
