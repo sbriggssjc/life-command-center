@@ -43,7 +43,7 @@ export async function handleCreDocTextTick(req, res, deps = PROD_DEPS) {
   const result = {
     mode: mode + (dryRun ? '_dry_run' : ''),
     version, doctype: doctype || 'lease,dd,om', limit,
-    scanned: 0, text_extracted: 0, ocr: 0, needs_ocr: 0, fetch_failed: 0, persist_failed: 0, error: 0, not_found: 0,
+    scanned: 0, text_extracted: 0, ocr: 0, already_extracted: 0, needs_ocr: 0, fetch_failed: 0, persist_failed: 0, error: 0, not_found: 0,
     ocr_pages_total: 0, ocr_by_engine: {}, items: [],
   };
   const bump = (r) => {

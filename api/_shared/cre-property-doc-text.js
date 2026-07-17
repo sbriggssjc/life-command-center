@@ -147,6 +147,21 @@ async function fetchRegistryRow(documentId, deps = {}) {
 }
 
 /**
+ * Is there already a sidecar for this (document, version)? Returns 'done' when a
+ * non-needs_ocr sidecar exists (skip re-extract), 'needs_ocr' when one exists but
+ * is still awaiting OCR (re-attempt is allowed), or null when absent.
+ */
+async function sidecarStatus(documentId, version, deps = {}) {
+  const q = deps.opsQuery || opsQuery;
+  const r = await q('GET',
+    `lcc_cre_property_document_text?select=needs_ocr&document_id=eq.${encodeURIComponent(documentId)}` +
+    `&extractor_version=eq.${encodeURIComponent(version)}&limit=1`,
+    null, { countMode: 'none' });
+  if (!r.ok || !Array.isArray(r.data) || !r.data.length) return null;
+  return r.data[0].needs_ocr ? 'needs_ocr' : 'done';
+}
+
+/**
  * Upsert the sidecar row on (document_id, extractor_version). merge-duplicates so
  * a re-run overwrites the prior extraction for that version rather than erroring.
  */
@@ -171,6 +186,18 @@ async function upsertSidecar(row, deps = {}) {
  */
 export async function runPropertyDocText(documentId, deps = {}) {
   if (documentId == null) return { ok: false, outcome: 'no_document_id' };
+
+  // Idempotency guard: skip a doc that already has a fresh (non-needs_ocr) sidecar
+  // at this version — so the forward `jobs` lane and the backlog `eligible` sweep
+  // can run together without ever re-OCRing the same document (DocAI bills per
+  // page). `deps.force` re-extracts anyway (a re-OCR after a source replacement).
+  if (!deps.force && !deps.registryRow) {
+    const existing = await sidecarStatus(documentId, deps.version || CRE_DOC_TEXT_VERSION, deps);
+    if (existing === 'done') {
+      return { ok: true, outcome: 'already_extracted', document_id: documentId };
+    }
+  }
+
   const regRow = deps.registryRow || (await fetchRegistryRow(documentId, deps));
   if (!regRow) return { ok: false, outcome: 'not_found', document_id: documentId };
 
@@ -266,4 +293,4 @@ export async function enqueueCreDocText({ documentId, crePropertyId, documentTyp
   });
 }
 
-export const __private = { fetchRegistryRow, upsertSidecar };
+export const __private = { fetchRegistryRow, upsertSidecar, sidecarStatus };
