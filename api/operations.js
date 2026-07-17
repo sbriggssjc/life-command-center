@@ -4280,16 +4280,16 @@ async function handleProspectingBrief(params, user, workspaceId) {
   // Ranked by: most overdue first (call urgency), then highest annual rent
   // (commission potential). Contact-filter = outreach-ready (has a contact).
   // =========================================================================
-  // BD-target gate: include only entities that are either in a recognized BD domain
-  // (government / dialysis) OR carry a classified ownership role. This prevents
-  // broker, intermediary, and unclassified contacts from appearing in the call
-  // sheet — brokers have no owner_role or owner_role='unknown' and domain outside
-  // the two BD verticals, so they fall out of the OR naturally.
+  // BD-target gate: require a classified owner_role for ALL contacts.
+  // The previous gate used domain as an OR path which let through unclassified
+  // broker contacts (e.g. Colliers) tagged as government/dialysis domain.
+  // Brokers and unclassified intermediaries have null/unknown owner_role and
+  // should not appear in the call sheet regardless of domain.
+  // Domain filter is still honored when the caller explicitly passes one.
   const BD_OWNER_ROLES = 'developer,user_owner,buyer,seller_flipper,operator';
-  const BD_DOMAINS = 'government,dialysis';
   const bdGate = domainFilter
-    ? `&domain=eq.${pgFilterVal(domainFilter)}`
-    : `&or=(domain.in.(${BD_DOMAINS}),owner_role.in.(${BD_OWNER_ROLES}))`;
+    ? `&domain=eq.${pgFilterVal(domainFilter)}&owner_role.in.(${BD_OWNER_ROLES})`
+    : `&owner_role.in.(${BD_OWNER_ROLES})`;
 
   let queuePath = `v_bd_cadence_dashboard?workspace_id=eq.${pgFilterVal(workspaceId)}`
     + `&phase=not.in.(paused,unsubscribed)`

@@ -138,6 +138,22 @@ export function validateActionInput(actionId, params, schemas) {
   delete cleanParams._confirmed;
   delete cleanParams._surface;
 
+  // Coerce Power Platform string serializations before type validation.
+  // Copilot Studio / Power Automate connectors sometimes send boolean and
+  // integer values as strings (e.g. create_draft: "true", limit: "10").
+  // Coerce at the top-level properties level only — nested schemas are rare
+  // in our action inputs and can be added if needed.
+  const inputProperties = schema.inputs?.properties || {};
+  for (const [key, propSchema] of Object.entries(inputProperties)) {
+    if (cleanParams[key] === undefined || cleanParams[key] === null) continue;
+    if (propSchema.type === 'boolean' && typeof cleanParams[key] === 'string') {
+      cleanParams[key] = cleanParams[key].toLowerCase() === 'true';
+    } else if ((propSchema.type === 'integer' || propSchema.type === 'number') && typeof cleanParams[key] === 'string') {
+      const n = propSchema.type === 'integer' ? parseInt(cleanParams[key], 10) : parseFloat(cleanParams[key]);
+      if (!isNaN(n)) cleanParams[key] = n;
+    }
+  }
+
   const result = validateSchema(cleanParams, schema.inputs);
   return result;
 }
