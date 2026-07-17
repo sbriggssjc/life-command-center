@@ -616,14 +616,15 @@ export const ACTION_SCHEMAS = {
   },
 
   get_relationship_context: {
-    description: 'Get full relationship context for an entity — communication history, deal involvement, touchpoint cadence.',
+    description: 'Get full relationship context for an entity — communication history, deal involvement, touchpoint cadence. Provide entity_id (UUID), contact_name, or contact_id — at least one is required.',
     category: 'portfolio',
     inputs: {
       type: 'object',
       properties: {
-        entity_id: { type: 'string', format: 'uuid' }
-      },
-      required: ['entity_id']
+        entity_id: { type: 'string', format: 'uuid', description: 'Entity UUID — use when known from a prior search_entities call' },
+        contact_name: { type: 'string', description: 'Contact or company name (alternative to entity_id; resolved server-side)' },
+        contact_id: { type: 'string', description: 'Unified contact ID from GOV contacts DB (alternative to entity_id)' }
+      }
     },
     outputs: {
       type: 'object',
