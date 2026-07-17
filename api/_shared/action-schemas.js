@@ -733,7 +733,7 @@ export const ACTION_SCHEMAS = {
         id: { type: 'string', format: 'uuid', description: 'Inbox item ID' },
         status: { type: 'string', enum: ['triaged', 'dismissed', 'snoozed'] },
         priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
-        assigned_to: { type: 'string', format: 'uuid' }
+        assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' }
       },
       required: ['id']
     },
@@ -756,7 +756,7 @@ export const ACTION_SCHEMAS = {
         title: { type: 'string' },
         action_type: { type: 'string', enum: ['follow_up', 'research', 'review', 'outreach', 'meeting'] },
         priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
-        assigned_to: { type: 'string', format: 'uuid' },
+        assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
         due_date: { type: 'string', format: 'date' },
         entity_id: { type: 'string', format: 'uuid' }
       },

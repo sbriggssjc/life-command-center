@@ -2762,12 +2762,23 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   // Write actions return metadata about what to call — the frontend or
   // Copilot should invoke the real endpoint directly with proper auth.
   // This avoids double-proxying and keeps audit trails clean.
+  // Default assigned_to to the authenticated user so Copilot never needs
+  // to ask for a raw UUID — the schema description says "omit to assign to
+  // yourself" and this makes that promise true at the proxy layer.
+  const enrichedParams = { ...(params || {}) };
+  if (
+    !enrichedParams.assigned_to &&
+    user?.id &&
+    ACTION_SCHEMAS[actionName]?.inputs?.properties?.assigned_to
+  ) {
+    enrichedParams.assigned_to = user.id;
+  }
   return {
     ok: true,
     action: actionName,
     method: spec.method,
     endpoint: `/api/${spec.path}`,
-    params_to_send: params || {},
+    params_to_send: enrichedParams,
     note: 'Execute this endpoint directly with your auth credentials to complete the action.'
   };
 }
@@ -3953,7 +3964,7 @@ async function handleProspectingBrief(params, user, workspaceId) {
   if (queueResult.ok && (queueResult.data || []).length > 0) {
     contacts = queueResult.data.map(c => ({
       contact_id:      c.contact_id || null,
-      name:            c.name || c.contact_name || 'Unknown',
+      name:            c.entity_name || c.name || c.contact_name || 'Unknown',
       company:         c.company_name || c.org_name || '',
       email:           c.contact_email || c.email || '',
       domain:          c.domain || '',
@@ -3961,7 +3972,7 @@ async function handleProspectingBrief(params, user, workspaceId) {
       annual_rent:     c.annual_rent || null,
       rank_value:      c.rank_value || null,
       days_overdue:    c.days_overdue || 0,
-      priority_signal: c.priority_signal || '',
+      priority_signal: c.priority_signal || c.priority_tier || '',
       phase:           c.phase || ''
     }));
   } else {
