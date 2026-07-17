@@ -158,3 +158,42 @@ lists we opened; the durable flow covers all + the 4-5k lists.
   minimum-necessary, gated, per the SF-as-source doctrine; the marketing team relies on these
   lists, so writes must be deliberate + reversible). Design TBD — this doc is the prerequisite
   understanding.
+
+## 10. Session 2026-07-17 — the durable two-step resolve WORKS; now blocked on the LCC route
+
+### The connector does NOT support the OData `IN` operator (either case)
+The two-step Contact resolve failed at `Get Contacts` with `400 "Syntax error at position 5
+in 'Id IN (…)'"` — and lowercasing to `Id in (…)` failed IDENTICALLY. The Salesforce Power
+Automate connector's `$filter` parser accepts only `eq` / `and` / `or` (proven: `CampaignId
+eq …` / `ParentId eq …` work everywhere). **Do NOT use `in` — build an `eq…or` chain.**
+
+### Fix applied to the flow (both L2 and L3 resolve branches), via the browser designer:
+1. **`Select ContactIds L2/L3` Map** changed from the bare `ContactId` token to the expression
+   `concat('Id eq ''', item()?['ContactId'], '''')` → emits `["Id eq '0038…'", …]`.
+2. **`Compose ContactFilter L2/L3`** changed from `concat('Id in (''', join(…), ''')')` to
+   `join(body('Select_ContactIds_L2'), ' or ')` → `Id eq 'a' or Id eq 'b' or …`.
+   (`Get Contacts` `$filter` still points at `outputs('Compose_ContactFilter_Lx')`, unchanged.)
+Saved clean ("flow is ready to go"). **Verified live in a test run: `Get Contacts L2`
+returns 200** — the SF connector resolve is fixed end-to-end (`Get L2 members` → `Select`
+→ `Compose` → `Get Contacts` 200 → `Select Members` 200).
+
+### Remaining blocker — the LCC `/api/sf-list-import` route regressed (NOT a flow bug)
+The run now fails one step later at **`POST L2` → 400** from
+`https://tranquil-delight-production-633f.up.railway.app/api/sf-list-import`:
+`{"error":"Invalid POST action. Bridge: log_activity, complete_research, …"}`. That is the
+`operations.js` BRIDGE action-router — i.e. the POST reached operations.js but the
+`sf-list-import` sub-route dispatch **did not match** and fell through. Same class as PR
+#1408/#1410 (a stale-`main` Railway redeploy dropped the sub-route). Production is the
+**Railway Express `server.js`** (vercel.json rewrite is legacy/no-op), so the route must be
+mounted in server.js AND dispatched in operations.js before the bridge router. It WAS
+working 2026-07-16 (627 rows ingested), so a redeploy since dropped it.
+→ Fix prompt written: `CLAUDECODE_PROMPT_ORE_restore_sf_list_import_route.md`.
+
+### Still pending after the route is restored
+- **Chunking (mandatory for the 4-5k lists).** The `eq…or` filter has NO chunking yet; it
+  passed on small NKB Prospects but a 4-5k-member `Id eq…or…` filter will exceed the
+  connector URL/filter length. Add `chunk(body('Select_ContactIds_Lx'), 50)` + an inner
+  Apply-to-each (Compose join per chunk → Get Contacts → Select Members → POST) in BOTH
+  branches once a full run verifies.
+- Then verify GSA Buyer = 156, seller lists match Vision GM totals, no dup persons; then
+  flip `SF_LIST_SEED_INSTITUTION` for the Tier A fan-out.
