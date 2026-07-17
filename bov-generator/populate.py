@@ -819,7 +819,9 @@ def fill_nnn_lease_abstract(wb, req: dict) -> None:
     if not tenants:
         return
     ws = wb[LEASE_ABSTRACT_SHEET]
-    sfv, lfv, source = _lease_values(tenants[0], req.get("property", {}) or {}, _ref_date(req.get("property", {}) or {}))
+    tenant0 = tenants[0]
+    sfv, lfv, source = _lease_values(tenant0, req.get("property", {}) or {}, _ref_date(req.get("property", {}) or {}))
+    refs = ((tenant0.get("abstract") or {}).get("clause_refs")) or {}
     lf_start = _lf_boundary(ws)
 
     # Short-form region: attribute label in col C (3), wide input in col D (4).
@@ -828,13 +830,20 @@ def fill_nnn_lease_abstract(wb, req: dict) -> None:
         if label in sfv and sfv[label]:
             ws.cell(row=row, column=4).value = sfv[label]
 
-    # Long-form region: clause label in col D (4); operative -> H (8), source -> G (7).
+    # Long-form region: clause in col D (4); page -> E (5), section -> F (6),
+    # source -> G (7), operative -> H (8).
     for row in range(lf_start, ws.max_row + 1):
         clause = _s(ws.cell(row=row, column=4).value)
         if clause in lfv and lfv[clause]:
             ws.cell(row=row, column=8).value = lfv[clause]
             if source:
                 ws.cell(row=row, column=7).value = source
+        ref = refs.get(clause)
+        if ref:
+            if _s(ref.get("page")):
+                ws.cell(row=row, column=5).value = _s(ref["page"])
+            if _s(ref.get("section")):
+                ws.cell(row=row, column=6).value = _s(ref["section"])
 
 
 def fill_mob_lease_abstract(wb, req: dict) -> None:
@@ -851,6 +860,7 @@ def fill_mob_lease_abstract(wb, req: dict) -> None:
     prop = req.get("property", {}) or {}
     ref = _ref_date(prop)
     vals = [_lease_values(t, prop, ref) for t in tenants]  # list of (sfv, lfv, source)
+    refs = [((t.get("abstract") or {}).get("clause_refs")) or {} for t in tenants]
     lf_start = _lf_boundary(ws)
 
     # Short-form: provision label in col B (2); tenant columns C..G (3..7).
@@ -864,7 +874,8 @@ def fill_mob_lease_abstract(wb, req: dict) -> None:
                 ws.cell(row=row, column=3 + i).value = v
 
     # Long-form: teal header rows carry a formula in col B and advance the tenant
-    # index; within a section, clause label in col C (3) -> operative G (7), source F (6).
+    # index; within a section, clause in col C (3) -> page D(4), section E(5),
+    # source F(6), operative G(7).
     sec_idx = -1
     for row in range(lf_start, ws.max_row + 1):
         b = ws.cell(row=row, column=2).value
@@ -878,6 +889,12 @@ def fill_mob_lease_abstract(wb, req: dict) -> None:
                 ws.cell(row=row, column=7).value = lfv[clause]
                 if source:
                     ws.cell(row=row, column=6).value = source
+            ref = refs[sec_idx].get(clause)
+            if ref:
+                if _s(ref.get("page")):
+                    ws.cell(row=row, column=4).value = _s(ref["page"])
+                if _s(ref.get("section")):
+                    ws.cell(row=row, column=5).value = _s(ref["section"])
 
 
 RENT_ROLL_SHEET = "Rent Roll"
@@ -955,6 +972,26 @@ def _hide_unused_mob_tenants(wb, n_tenants: int) -> None:
             if 0 <= sec_idx and sec_idx >= n:
                 ws.row_dimensions[rr].hidden = True
 
+    # 4b) Credit — same shape as Lease Abstract (short-form tenant cols + long-form sections).
+    if CREDIT_SHEET in wb.sheetnames:
+        ws = wb[CREDIT_SHEET]
+        _blank_fill = PatternFill(fill_type=None)
+        _no_border = Border()
+        lf_start = _lf_boundary(ws)
+        for col in range(3 + n, 8):
+            for rr in range(6, lf_start):
+                cell = ws.cell(row=rr, column=col)
+                cell.value = None
+                cell.fill = _blank_fill
+                cell.border = _no_border
+        sec_idx = -1
+        for rr in range(lf_start, ws.max_row + 1):
+            b = ws.cell(row=rr, column=2).value
+            if isinstance(b, str) and b.startswith("="):
+                sec_idx += 1
+            if 0 <= sec_idx and sec_idx >= n:
+                ws.row_dimensions[rr].hidden = True
+
     # 5) Rent Schedule — hide the unused per-tenant sections (teal header = col B formula).
     if RENT_SCHEDULE_SHEET in wb.sheetnames:
         ws = wb[RENT_SCHEDULE_SHEET]
@@ -976,6 +1013,149 @@ def _trade_range(ws, gic, low_row, high_row, spread=0.0025):
     if isinstance(gic, (int, float)):
         ws.cell(row=low_row,  column=3).value = round(gic + spread, 4)   # low indication = higher cap
         ws.cell(row=high_row, column=3).value = round(gic - spread, 4)   # high indication = lower cap
+
+
+CREDIT_SHEET = "Credit"
+
+
+def _credit_values(cr: dict, t: dict):
+    """Build (short-form, long-form, source) label→value dicts for the Credit tab."""
+    g = lambda k: _s(cr.get(k))
+    name = g("tenant_operator") or _s(t.get("name"))
+    guarantor = g("guarantor") or _s(t.get("guarantor"))
+    sf = {
+        "Tenant / Operator": name,
+        "Parent Company": g("parent_company"),
+        "Public / Private": g("public_private"),
+        "Credit Rating": g("credit_rating"),
+        "Investment Grade": g("investment_grade"),
+        "Investment Grade (Y/N)": g("investment_grade"),   # MOB short-form label variant
+        "Total Locations": g("total_locations"),
+        "Annual Revenue": g("annual_revenue"),
+        "EBITDA / Margin": g("ebitda_margin"),
+        "Rent-to-Sales Ratio": g("rent_to_sales"),
+        "Guarantor": guarantor,
+        "Guaranty Type": g("guaranty_type"),
+        "Guaranty Strength": g("guaranty_strength"),
+        "Essential / Recession-Resistant": g("essential_recession"),
+        "Key Credit Strengths": g("key_strengths"),
+        "Key Credit Risks": g("key_risks"),
+        "Broker Commentary": g("broker_commentary"),
+    }
+    lf = {
+        "Entity Name (Lease)": g("entity_lease") or name,
+        "Entity Name (Operating / Trade)": name,
+        "Ownership Structure": g("ownership_structure"),
+        "Parent Company": g("parent_company"),
+        "Headquarters": g("headquarters"),
+        "Founded": g("founded"),
+        "Number of Locations (Total)": g("total_locations"),
+        "Number of Locations (State)": g("state_locations"),
+        "Business Description": g("business_description"),
+        "Years in Operation": g("years_operation"),
+        "S&P Credit Rating": g("sp_rating"),
+        "Moody's Credit Rating": g("moodys_rating"),
+        "Investment Grade (Y/N)": g("investment_grade"),
+        "Public / Private": g("public_private"),
+        "Stock Ticker (if public)": g("ticker"),
+        "Market Capitalization": g("market_cap"),
+        "Revenue — Most Recent FY": g("annual_revenue"),
+        "Revenue — Prior FY": g("revenue_prior"),
+        "Revenue Growth YoY": g("revenue_growth"),
+        "EBITDA — Most Recent FY": g("ebitda"),
+        "EBITDA Margin": g("ebitda_margin"),
+        "Net Income — Most Recent FY": g("net_income"),
+        "Total Debt": g("total_debt"),
+        "Total Assets": g("total_assets"),
+        "Net Worth / Book Value": g("net_worth"),
+        "Cash & Equivalents": g("cash"),
+        "Debt / EBITDA": g("debt_ebitda"),
+        "Source / Reporting Period": g("reporting_period"),
+        "Average Unit Volume (AUV)": g("auv"),
+        "Average Unit SF": g("avg_unit_sf"),
+        "Rent-to-Sales Ratio (this location)": g("rent_to_sales"),
+        "Typical Store Occupancy Cost": g("occupancy_cost"),
+        "Franchise vs. Corporate": g("franchise_corporate"),
+        "Local Market Performance": g("local_market"),
+        "Guarantor Name": guarantor,
+        "Guarantor Type (Corporate / Personal)": g("guarantor_type"),
+        "Guaranty Type (Full / Partial / Springing / Burn-off)": g("guaranty_type"),
+        "Guaranty Cap ($)": g("guaranty_cap"),
+        "Guarantor Net Worth": g("guarantor_net_worth"),
+        "Recession Resistance / Essential Services": g("essential_recession"),
+        "Industry / Sector Trends": g("industry_trends"),
+        "Key Risks to Tenancy": g("key_risks"),
+        "Key Credit Strengths": g("key_strengths"),
+        "Online / Omnichannel Exposure": g("online_exposure"),
+        "Broker Commentary": g("broker_commentary"),
+    }
+    source = g("default_source") or "Public filings / S&P / Moody's"
+    return sf, lf, source
+
+
+def _fill_credit_tab(ws, cr: dict, t: dict) -> None:
+    """Label-driven fill of the shared Credit layout (short-form C→D, long-form D→E/F)."""
+    sfv, lfv, source = _credit_values(cr, t)
+    for row in range(1, ws.max_row + 1):
+        cval = _s(ws.cell(row=row, column=3).value)
+        dval = _s(ws.cell(row=row, column=4).value)
+        if cval in sfv:
+            if sfv[cval]:
+                ws.cell(row=row, column=4).value = sfv[cval]
+        elif dval in lfv:
+            if lfv[dval]:
+                ws.cell(row=row, column=5).value = lfv[dval]
+                if source:
+                    ws.cell(row=row, column=6).value = source
+
+
+def fill_nnn_credit(wb, req: dict) -> None:
+    """Fill the single-tenant Credit tab from tenants[0].credit."""
+    if CREDIT_SHEET not in wb.sheetnames:
+        return
+    tenants = req.get("tenants") or []
+    cr = (tenants[0].get("credit") if tenants else None) or {}
+    if cr:
+        _fill_credit_tab(wb[CREDIT_SHEET], cr, tenants[0])
+
+
+def fill_mob_credit(wb, req: dict) -> None:
+    """
+    Multi-tenant Credit tab: 5-column short-form + stacked per-tenant long-form
+    sections. Short-form ITEM in col B, tenant columns C..G; long-form attribute
+    in col D -> finding E, source F (teal header rows delimit tenant sections).
+    """
+    if CREDIT_SHEET not in wb.sheetnames:
+        return
+    tenants = (req.get("tenants") or [])[:5]
+    vals = [_credit_values((t.get("credit") or {}), t) for t in tenants]
+    ws = wb[CREDIT_SHEET]
+    lf_start = _lf_boundary(ws)
+
+    # Short-form: ITEM label in col B; write each tenant's value into col 3+i.
+    for row in range(1, lf_start):
+        label = _s(ws.cell(row=row, column=2).value)
+        if not label:
+            continue
+        for i, (sfv, _lfv, _src) in enumerate(vals):
+            v = sfv.get(label)
+            if v:
+                ws.cell(row=row, column=3 + i).value = v
+
+    # Long-form: teal header (col B formula) advances the tenant index.
+    sec_idx = -1
+    for row in range(lf_start, ws.max_row + 1):
+        b = ws.cell(row=row, column=2).value
+        if isinstance(b, str) and b.startswith("="):
+            sec_idx += 1
+            continue
+        if 0 <= sec_idx < len(vals):
+            _sfv, lfv, source = vals[sec_idx]
+            attr = _s(ws.cell(row=row, column=4).value)
+            if attr in lfv and lfv[attr]:
+                ws.cell(row=row, column=5).value = lfv[attr]
+                if source:
+                    ws.cell(row=row, column=6).value = source
 
 
 def fill_nnn_exec_summary(wb, req: dict) -> None:
@@ -1063,12 +1243,14 @@ def fill_assumptions(wb, req: dict) -> None:
         fill_mob_lease_abstract(wb, req)
         fill_mob_rent_roll(wb, req)
         fill_mob_exec_summary(wb, req)
+        fill_mob_credit(wb, req)
         _hide_unused_mob_tenants(wb, len(req.get("tenants") or []))
     else:
         fill_nnn_assumptions(wb, req)
         fill_nnn_rent_schedule(wb, req)
         fill_nnn_lease_abstract(wb, req)
         fill_nnn_exec_summary(wb, req)
+        fill_nnn_credit(wb, req)
     fill_cover(wb, req)
     fill_exec_subtitle(wb, req)
     fill_real_estate(wb, req)

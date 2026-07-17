@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse, FileResponse
@@ -189,6 +189,70 @@ class LeaseAbstractInput(BaseModel):
     broker_commentary:   str = Field("", description="Broker commentary")
     # ── Sourcing ─────────────────────────────────────────────────────────────
     default_source:     str = Field("", description="Label written to the DOCUMENT SOURCE column, e.g. 'Executed Lease', 'Amendment No. 1'")
+    # ── Long-form page / section references ──────────────────────────────────
+    clause_refs: Optional[Dict[str, Dict[str, str]]] = Field(
+        None, description="Per-clause lease references for the long-form PAGE / LEASE SECTION columns, "
+                          "keyed by the exact clause label, e.g. "
+                          "{'Base Rent — Year 1': {'page': '4', 'section': 'Art. 3.1'}}")
+
+
+class CreditInput(BaseModel):
+    """Tenant/guarantor credit for the Credit tab (Leg 3). All optional; supply what
+    reliable public sources support (SEC/10-K, S&P, Moody's, company filings)."""
+    # ── Corporate overview ───────────────────────────────────────────────────
+    tenant_operator:     str = Field("", description="Operating / trade name")
+    entity_lease:        str = Field("", description="Legal entity on the lease")
+    parent_company:      str = Field("", description="Parent company (ticker if public)")
+    ownership_structure: str = Field("", description="Public / private / PE-owned / franchise")
+    headquarters:        str = Field("", description="HQ city, state")
+    founded:             str = Field("", description="Year founded")
+    total_locations:     str = Field("", description="Total locations / units")
+    state_locations:     str = Field("", description="Locations in the subject state")
+    business_description: str = Field("", description="1–2 sentence business description")
+    years_operation:     str = Field("", description="Years in operation")
+    # ── Credit & ratings ─────────────────────────────────────────────────────
+    public_private:      str = Field("", description="Public / Private (+ ticker)")
+    credit_rating:       str = Field("", description="Combined rating, e.g. 'BBB (S&P) / Baa3 (Moody's)'")
+    sp_rating:           str = Field("", description="S&P rating + outlook")
+    moodys_rating:       str = Field("", description="Moody's rating + outlook")
+    investment_grade:    str = Field("", description="Yes / No")
+    ticker:              str = Field("", description="Stock ticker if public")
+    market_cap:          str = Field("", description="Market capitalization")
+    # ── Financial summary ────────────────────────────────────────────────────
+    annual_revenue:      str = Field("", description="Revenue, most recent FY (+ FY end)")
+    revenue_prior:       str = Field("", description="Revenue, prior FY")
+    revenue_growth:      str = Field("", description="Revenue growth YoY")
+    ebitda:              str = Field("", description="EBITDA, most recent FY")
+    ebitda_margin:       str = Field("", description="EBITDA margin")
+    net_income:          str = Field("", description="Net income, most recent FY")
+    total_debt:          str = Field("", description="Total debt")
+    total_assets:        str = Field("", description="Total assets")
+    net_worth:           str = Field("", description="Net worth / book value")
+    cash:                str = Field("", description="Cash & equivalents")
+    debt_ebitda:         str = Field("", description="Debt / EBITDA")
+    reporting_period:    str = Field("", description="Source / reporting period")
+    # ── Unit economics ───────────────────────────────────────────────────────
+    auv:                 str = Field("", description="Average unit volume")
+    avg_unit_sf:         str = Field("", description="Average unit SF")
+    rent_to_sales:       str = Field("", description="Rent-to-sales ratio (this location)")
+    occupancy_cost:      str = Field("", description="Typical store occupancy cost")
+    franchise_corporate: str = Field("", description="Franchise vs. corporate")
+    local_market:        str = Field("", description="Local market performance")
+    # ── Guaranty ─────────────────────────────────────────────────────────────
+    guarantor:           str = Field("", description="Guarantor name")
+    guarantor_type:      str = Field("", description="Corporate / Personal")
+    guaranty_type:       str = Field("", description="Full / Partial / Springing / Burn-off")
+    guaranty_strength:   str = Field("", description="Guaranty strength summary")
+    guaranty_cap:        str = Field("", description="Guaranty cap ($)")
+    guarantor_net_worth: str = Field("", description="Guarantor net worth")
+    # ── Qualitative ──────────────────────────────────────────────────────────
+    essential_recession: str = Field("", description="Essential / recession-resistant summary")
+    industry_trends:     str = Field("", description="Industry / sector trends")
+    online_exposure:     str = Field("", description="Online / omnichannel exposure")
+    key_strengths:       str = Field("", description="Key credit strengths")
+    key_risks:           str = Field("", description="Key credit risks")
+    broker_commentary:   str = Field("", description="Broker commentary")
+    default_source:      str = Field("", description="Default SOURCE label, e.g. 'S&P Global / FY2025 10-K'")
 
 
 class TenantInput(BaseModel):
@@ -208,6 +272,8 @@ class TenantInput(BaseModel):
         None, description="Exact contracted rent by period; if omitted, computed from year1_rent x escalation")
     abstract: Optional[LeaseAbstractInput] = Field(
         None, description="Executed-lease provisions auto-filled into the Lease Abstract tab")
+    credit: Optional[CreditInput] = Field(
+        None, description="Tenant/guarantor credit auto-filled into the Credit tab")
 
 
 class UnderwritingInput(BaseModel):
