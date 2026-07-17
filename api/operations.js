@@ -199,17 +199,6 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfLinkReconcileTick(req, res);
   }
 
-  // SF-CONTACT-RECONCILE — WhoId by-id contact resolver (via vercel.json /
-  // server.js _route=sf-contact-resolve-tick). GET=dry-run / POST=drain the
-  // sf_contact_resolve_queue → mint (or attach-by-email) the SF contact.
-  // Authenticates internally. NOTE: the by-id resolver depends on THIS dispatch
-  // — if it goes missing, every tick 400s at the bridge-action router below.
-  // (Restored 2026-07-16 after a stale-branch merge reverted the registration.)
-  if (req.query._route === 'sf-contact-resolve-tick') {
-    const { handleSfContactResolveTick } = await import('./_handlers/sf-contact-resolve.js');
-    return handleSfContactResolveTick(req, res);
-  }
-
   // CONTACT-SELECTION Slice 3 — owner-contact enrichment worker (via vercel.json
   // _route=owner-contact-enrich-tick). GET=dry-run / POST=drain. Attaches the
   // ranked decision-maker (or runs the enrichment action) so owners leave
@@ -217,41 +206,6 @@ export default withErrorHandler(async function handler(req, res) {
   if (req.query._route === 'owner-contact-enrich-tick') {
     const { handleOwnerContactEnrichTick } = await import('./_handlers/owner-contact-enrich.js');
     return handleOwnerContactEnrichTick(req, res);
-  }
-
-  // ORE Phase B B1 / Tier A / reconcile-engine workers (via vercel.json /
-  // server.js). GET=dry-run / POST=drain, each authenticates internally + is
-  // bounded (limit + wall-clock); the reconcile-engine's auto-merge cron stays
-  // unscheduled so a drain only runs on a human-gated, capped call. NOTE: these
-  // three depend on THIS dispatch — server.js + vercel.json already route them
-  // here, so if a block goes missing every tick 400s at the bare-action router
-  // below. (Registered 2026-07-16 after a stale-branch merge left the server.js /
-  // vercel.json entries but dropped the operations.js dispatch — same class as
-  // the sf-contact-resolve-tick restore above; do NOT remove.)
-  if (req.query._route === 'owner-reconcile-tick') {
-    const { handleOwnerReconcileTick } = await import('./_handlers/owner-reconcile.js');
-    return handleOwnerReconcileTick(req, res);
-  }
-  if (req.query._route === 'owner-reconcile-engine-tick') {
-    const { handleOwnerReconcileEngineTick } = await import('./_handlers/owner-reconcile-engine.js');
-    return handleOwnerReconcileEngineTick(req, res);
-  }
-  if (req.query._route === 'institution-contact-tick') {
-    const { handleInstitutionContactTick } = await import('./_handlers/institution-contact.js');
-    return handleInstitutionContactTick(req, res);
-  }
-
-  // Salesforce Lists (Campaigns/CampaignMembers) ingest (via vercel.json /
-  // server.js _route=sf-list-import). GET=dry-run (classify + normalize, no
-  // writes) / POST=ingest (reconcile-by-email → relate to company org → record
-  // membership → route buyers/sellers). Authenticates internally.
-  // NOTE: server.js + vercel.json already route /api/sf-list-import here; if this
-  // block goes missing the POST 400s "Invalid POST action" at the bridge-action
-  // router below. (Restored after a stale-branch merge dropped the dispatch —
-  // same regression class as the tick routes above; do NOT remove.)
-  if (req.query._route === 'sf-list-import') {
-    const { handleSfListImport } = await import('./_handlers/sf-list-import.js');
-    return handleSfListImport(req, res);
   }
 
   // UW#7 — developer resolution from the ownership chain (via vercel.json
@@ -2687,10 +2641,10 @@ function deriveActionSummary(actionName, params, result) {
 }
 
 async function dispatchAction(actionName, params, user, workspaceId, req) {
-  // Copilot Studio cannot pass boolean params without triggering a Power Platform
-  // dialgId error at tool-add time, so user_confirmed is never transmitted by the
-  // agent. The agent's "Shall I proceed?" prompt is the confirmation gate for all
-  // Copilot calls — auto-confirm here so the tier gate doesn't block execution.
+  // Copilot Studio cannot pass boolean confirmation params without triggering a
+  // Power Platform dialgId error at tool-add time, so user_confirmed is never
+  // transmitted by the agent. The agent's "Shall I proceed?" prompt IS the
+  // confirmation gate — auto-confirm here so the tier gate doesn't block execution.
   params = { ...(params || {}), user_confirmed: true };
 
   const spec = ACTION_REGISTRY[actionName];
@@ -2714,7 +2668,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   // Implicit confirmation: when a draft_* action is invoked with
   // create_draft=true and a non-empty 'to' recipient, that IS the explicit
   // confirmation — the user (via the Copilot agent) has already said "create a
-  // draft in my Outlook," so we don't make them resend with user_confirmed:true.
+  // draft in my Outlook," so we don't make them resend with _confirmed:true.
   // Without this, the Tier-1 gate fires and handleDraftOutreachEmail never
   // runs — so _maybeCreateOutlookDraft never POSTs to PA_OUTLOOK_DRAFT_URL and
   // no real Outlook draft is created.
@@ -2814,23 +2768,12 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   // Write actions return metadata about what to call — the frontend or
   // Copilot should invoke the real endpoint directly with proper auth.
   // This avoids double-proxying and keeps audit trails clean.
-  // Default assigned_to to the authenticated user so Copilot never needs
-  // to ask for a raw UUID — the schema description says "omit to assign to
-  // yourself" and this makes that promise true at the proxy layer.
-  const enrichedParams = { ...(params || {}) };
-  if (
-    !enrichedParams.assigned_to &&
-    user?.id &&
-    ACTION_SCHEMAS[actionName]?.inputs?.properties?.assigned_to
-  ) {
-    enrichedParams.assigned_to = user.id;
-  }
   return {
     ok: true,
     action: actionName,
     method: spec.method,
     endpoint: `/api/${spec.path}`,
-    params_to_send: enrichedParams,
+    params_to_send: params || {},
     note: 'Execute this endpoint directly with your auth credentials to complete the action.'
   };
 }
@@ -4016,7 +3959,7 @@ async function handleProspectingBrief(params, user, workspaceId) {
   if (queueResult.ok && (queueResult.data || []).length > 0) {
     contacts = queueResult.data.map(c => ({
       contact_id:      c.contact_id || null,
-      name:            c.entity_name || c.name || c.contact_name || 'Unknown',
+      name:            c.name || c.contact_name || 'Unknown',
       company:         c.company_name || c.org_name || '',
       email:           c.contact_email || c.email || '',
       domain:          c.domain || '',
@@ -4024,7 +3967,7 @@ async function handleProspectingBrief(params, user, workspaceId) {
       annual_rent:     c.annual_rent || null,
       rank_value:      c.rank_value || null,
       days_overdue:    c.days_overdue || 0,
-      priority_signal: c.priority_signal || c.priority_tier || '',
+      priority_signal: c.priority_signal || '',
       phase:           c.phase || ''
     }));
   } else {
@@ -6249,6 +6192,8 @@ async function handleChatRoute(req, res) {
   // agents, Teams cards, and Power Automate flows.
   if (req.body?.copilot_action) {
     const { copilot_action, params, surface, session_id: copilotSessionId } = req.body;
+    // Temporary debug log — remove after Phase 1E validation complete
+    console.log('[copilot-dispatch]', JSON.stringify({ action: copilot_action, paramKeys: Object.keys(params || {}), hasCreateDraft: (params || {}).create_draft, hasTo: !!(params || {}).to, copilotPath: req.query._copilot_path }));
     const startMs = Date.now();
     const result = await dispatchAction(copilot_action, params || {}, user, workspaceId, req);
     const durationMs = Date.now() - startMs;
