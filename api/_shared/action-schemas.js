@@ -735,7 +735,7 @@ export const ACTION_SCHEMAS = {
         status: { type: 'string', description: 'One of: triaged, dismissed, snoozed' },
         priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
         assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
-        _confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the proposed triage to execute the write.' }
+        user_confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the proposed triage to execute the write.' }
       },
       required: ['id']
     },
@@ -761,7 +761,7 @@ export const ACTION_SCHEMAS = {
         assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
         due_date: { type: 'string', format: 'date' },
         entity_id: { type: 'string', format: 'uuid' },
-        _confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the promotion to execute the write.' }
+        user_confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the promotion to execute the write.' }
       },
       required: ['inbox_item_id']
     },
@@ -786,7 +786,7 @@ export const ACTION_SCHEMAS = {
         priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
         due_date: { type: 'string', format: 'date' },
         description: { type: 'string' },
-        _confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the task creation to execute the write.' }
+        user_confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the task creation to execute the write.' }
       },
       required: ['title', 'entity_id']
     },
@@ -807,7 +807,7 @@ export const ACTION_SCHEMAS = {
       properties: {
         id: { type: 'string', format: 'uuid', description: 'Action item ID' },
         status: { type: 'string', description: 'One of: open, in_progress, blocked, completed, cancelled' },
-        _confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the status change to execute the write.' }
+        user_confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the status change to execute the write.' }
       },
       required: ['id', 'status']
     },
@@ -874,7 +874,7 @@ export const ACTION_SCHEMAS = {
         item_id: { type: 'string', format: 'uuid' },
         assigned_to: { type: 'string', format: 'uuid', description: 'Target user ID' },
         reason: { type: 'string', description: 'Reason for reassignment' },
-        _confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the reassignment to execute the write.' }
+        user_confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the reassignment to execute the write.' }
       },
       required: ['item_type', 'item_id', 'assigned_to']
     },
@@ -897,7 +897,7 @@ export const ACTION_SCHEMAS = {
         action_item_id: { type: 'string', format: 'uuid' },
         escalate_to: { type: 'string', format: 'uuid', description: 'Manager user ID' },
         reason: { type: 'string', description: 'Escalation reason' },
-        _confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the escalation to execute the write.' }
+        user_confirmed: { type: 'boolean', description: 'Pass true after the user has explicitly confirmed the escalation to execute the write.' }
       },
       required: ['action_item_id', 'escalate_to', 'reason']
     },
