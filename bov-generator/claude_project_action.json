@@ -55,7 +55,10 @@
                           "year1_rent":     { "type": "number", "description": "Annual base rent Year 1 ($)" },
                           "escalation_pct": { "type": "number", "description": "Annual escalation (0.02 = 2%)" },
                           "reimbursements": { "type": "number", "default": 0 },
-                          "mgmt_fee_pct":   { "type": "number", "default": 0 }
+                          "mgmt_fee_pct":   { "type": "number", "default": 0 },
+                          "lease_commencement": { "type": "string", "description": "YYYY-MM-DD lease commencement (Rent Schedule)" },
+                          "lease_expiration":   { "type": "string", "description": "YYYY-MM-DD lease expiration (Rent Schedule)" },
+                          "rent_schedule": { "type": "array", "description": "Exact contracted rent by period; omit to compute from year1_rent x escalation", "items": { "type": "object", "properties": { "label": {"type":"string"}, "start_date": {"type":"string"}, "end_date": {"type":"string"}, "annual_rent": {"type":"number"}, "status": {"type":"string"} } } }
                         }
                       }
                     },

@@ -43,9 +43,13 @@ MOB cell map (Assumptions & Flags sheet):
     C94 = Purchase Price (left-side input)
   Right side (col I):
     I6=purchase_price, I7=LTV, I10=rate, I11=amort, I13=hold, I20=exit_cap
+
+Rent Schedule tab: identification block + per-lease-period grid.
+  NNN: ident E6-E12; grid rows 16-45 (C start, D end, E label, F annual, I esc, J status).
+  MOB: per-tenant grid begins at row 17 + t*26 (15 rows each).
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from openpyxl import load_workbook
 
 SHEET = "Assumptions & Flags"
@@ -178,10 +182,133 @@ def fill_mob_assumptions(wb, req: dict) -> None:
     ws["I20"] = _pct(uw.get("exit_cap"))
 
 
+RENT_SCHEDULE_SHEET = "Rent Schedule"
+
+
+def _add_years(d, n):
+    """Shift date d by n years, clamping Feb 29 to Feb 28."""
+    try:
+        return d.replace(year=d.year + n)
+    except ValueError:
+        return d.replace(year=d.year + n, day=28)
+
+
+def _rent_periods_from(tenant: dict):
+    """
+    Build the rent-schedule rows for one tenant.
+    Preferred: tenant['rent_schedule'] = [{label,start_date,end_date,annual_rent,status}, ...]
+      — the exact contracted schedule (handles stepped rents and option bumps).
+    Fallback: compute from year1_rent x (1+escalation)^(n-1) across the lease term.
+    Returns dicts: {label, start(date|None), end(date|None), annual, esc, status}.
+    """
+    rows = []
+    rs = tenant.get("rent_schedule")
+    if rs:
+        prev = None
+        for i, p in enumerate(rs):
+            annual = _num(p.get("annual_rent"))
+            esc = None
+            if i > 0 and isinstance(annual, (int, float)) and isinstance(prev, (int, float)) and prev:
+                esc = round(annual / prev - 1, 4)
+            rows.append({
+                "label":  p.get("label") or f"Year {i + 1}",
+                "start":  _date(p.get("start_date", "")),
+                "end":    _date(p.get("end_date", "")),
+                "annual": annual,
+                "esc":    esc,
+                "status": p.get("status") or "Contracted",
+            })
+            if isinstance(annual, (int, float)):
+                prev = annual
+        return rows
+
+    # Fallback — compute from Year-1 rent and a single escalation rate
+    y1 = tenant.get("year1_rent")
+    if y1 is None:
+        return rows
+    esc = tenant.get("escalation_pct") or 0.0
+    comm = _date(tenant.get("lease_commencement", ""))
+    exp = _date(tenant.get("lease_expiration", ""))
+    nyears = 10
+    if comm and exp:
+        nyears = max(1, round((exp - comm).days / 365.25))
+    for n in range(nyears):
+        start = _add_years(comm, n) if comm else None
+        end = (_add_years(comm, n + 1) - timedelta(days=1)) if comm else None
+        rows.append({
+            "label":  f"Year {n + 1}",
+            "start":  start,
+            "end":    end,
+            "annual": round(y1 * ((1 + esc) ** n)),
+            "esc":    (esc if n > 0 else None),
+            "status": "Contracted (computed)",
+        })
+    return rows
+
+
+def _write_rent_grid(ws, data_start: int, periods: list, max_rows: int) -> None:
+    """Write periods into grid rows: C=start D=end E=label F=annual I=esc J=status."""
+    for i, p in enumerate(periods[:max_rows]):
+        rr = data_start + i
+        if p.get("start") is not None:
+            ws.cell(row=rr, column=3).value = p["start"]
+        if p.get("end") is not None:
+            ws.cell(row=rr, column=4).value = p["end"]
+        if p.get("label"):
+            ws.cell(row=rr, column=5).value = p["label"]
+        if isinstance(p.get("annual"), (int, float)):
+            ws.cell(row=rr, column=6).value = p["annual"]
+        if isinstance(p.get("esc"), (int, float)):
+            ws.cell(row=rr, column=9).value = p["esc"]
+        if p.get("status"):
+            ws.cell(row=rr, column=10).value = p["status"]
+
+
+def fill_nnn_rent_schedule(wb, req: dict) -> None:
+    """Populate the single-tenant Rent Schedule tab (identification + grid)."""
+    if RENT_SCHEDULE_SHEET not in wb.sheetnames:
+        return
+    ws = wb[RENT_SCHEDULE_SHEET]
+    prop = req.get("property", {})
+    tenant = (req.get("tenants") or [{}])[0]
+
+    ws["E6"] = prop.get("address", "")
+    ws["E7"] = tenant.get("name", "")
+    ws["E8"] = tenant.get("guarantor", "")
+    comm = _date(tenant.get("lease_commencement", ""))
+    if comm:
+        ws["E9"] = comm
+    exp = _date(tenant.get("lease_expiration", ""))
+    if exp:
+        ws["E10"] = exp
+        ws["E11"] = '=IFERROR(ROUND((E10-TODAY())/365.25,1),"")'
+    ws["E12"] = _num(prop.get("building_sf"))
+
+    _write_rent_grid(ws, 16, _rent_periods_from(tenant), 30)
+
+
+# MOB rent-schedule grid: tenant t grid begins at row 17 + t*26 (15 rows each)
+_MOB_RS_GRID_START = 17
+_MOB_RS_STRIDE = 26
+_MOB_RS_MAX_ROWS = 15
+
+
+def fill_mob_rent_schedule(wb, req: dict) -> None:
+    """Populate each per-tenant grid on the multi-tenant Rent Schedule tab."""
+    if RENT_SCHEDULE_SHEET not in wb.sheetnames:
+        return
+    ws = wb[RENT_SCHEDULE_SHEET]
+    for t, tenant in enumerate((req.get("tenants") or [])[:5]):
+        data_start = _MOB_RS_GRID_START + t * _MOB_RS_STRIDE
+        _write_rent_grid(ws, data_start, _rent_periods_from(tenant), _MOB_RS_MAX_ROWS)
+
+
 def fill_assumptions(wb, req: dict) -> None:
-    """Dispatch to the correct fill function based on asset_type."""
+    """Dispatch to the correct fill functions based on asset_type."""
     asset_type = req.get("asset_type", "NNN").upper()
     if asset_type == "MOB":
         fill_mob_assumptions(wb, req)
+        fill_mob_rent_schedule(wb, req)
     else:
         fill_nnn_assumptions(wb, req)
+        fill_nnn_rent_schedule(wb, req)

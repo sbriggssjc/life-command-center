@@ -118,6 +118,14 @@ class PropertyInput(BaseModel):
     close_date:  str            = Field("",   description="YYYY-MM-DD — estimated close date")
 
 
+class RentPeriodInput(BaseModel):
+    label:       str            = Field("",   description="Period label, e.g. 'Year 1', 'Option 1'")
+    start_date:  str            = Field("",   description="YYYY-MM-DD period start")
+    end_date:    str            = Field("",   description="YYYY-MM-DD period end")
+    annual_rent: Optional[float]= Field(None, description="Annual rent for this period ($)")
+    status:      str            = Field("Contracted", description="Contracted | Option | Renewal | Projected")
+
+
 class TenantInput(BaseModel):
     name:           str            = Field("",    description="Tenant trade name")
     guarantor:      str            = Field("",    description="Corporate or personal guarantor")
@@ -128,6 +136,10 @@ class TenantInput(BaseModel):
     escalation_pct: Optional[float]= Field(None,  description="Annual rent escalation (0.02 = 2%)")
     reimbursements: Optional[float]= Field(0.0,   description="Annual tenant reimbursements (NNN = 0)")
     mgmt_fee_pct:   Optional[float]= Field(0.0,   description="Management fee % of EGR (NNN only)")
+    lease_commencement: str        = Field("",    description="YYYY-MM-DD lease commencement (Rent Schedule)")
+    lease_expiration:   str        = Field("",    description="YYYY-MM-DD lease expiration (Rent Schedule)")
+    rent_schedule: Optional[List[RentPeriodInput]] = Field(
+        None, description="Exact contracted rent by period; if omitted, computed from year1_rent x escalation")
 
 
 class UnderwritingInput(BaseModel):
