@@ -6153,6 +6153,8 @@ async function handleChatRoute(req, res) {
   // Inject the action into the body so the dispatch logic picks it up.
   // For GET requests (intelligence/* actions), query params carry the action inputs;
   // merge them into params so the dispatcher receives them correctly.
+  // For POST requests, the connector sends action inputs directly as top-level body
+  // fields (not nested under `params`). Extract them alongside any explicit params.
   if (req.query._copilot_path && !req.body?.copilot_action) {
     const actionId = req.query._copilot_path.replace(/-/g, '_');
     req.body = req.body || {};
@@ -6163,7 +6165,18 @@ async function handleChatRoute(req, res) {
       if (k === '_route' || k === '_copilot_path') continue;
       queryParams[k] = v;
     }
-    req.body.params = Object.assign({}, queryParams, req.body.params || {});
+    // For POST bodies, the Power Platform connector sends action inputs as top-level
+    // body fields (e.g. { contact_name: "...", create_draft: true, to: "..." }).
+    // Extract those into params so dispatchAction receives them — only skip internal
+    // routing/framing keys that aren't action inputs.
+    const INTERNAL_BODY_KEYS = new Set(['surface', 'session_id', 'history', 'context', 'attachments', 'params']);
+    const bodyInputs = {};
+    for (const [k, v] of Object.entries(req.body)) {
+      if (INTERNAL_BODY_KEYS.has(k)) continue;
+      bodyInputs[k] = v;
+    }
+    // Priority: explicit body.params > top-level body fields > query params
+    req.body.params = Object.assign({}, queryParams, bodyInputs, req.body.params || {});
     req.body.surface = req.body.surface || 'copilot_plugin';
   }
 
@@ -6173,6 +6186,8 @@ async function handleChatRoute(req, res) {
   // agents, Teams cards, and Power Automate flows.
   if (req.body?.copilot_action) {
     const { copilot_action, params, surface, session_id: copilotSessionId } = req.body;
+    // Temporary debug log — remove after Phase 1E validation complete
+    console.log('[copilot-dispatch]', JSON.stringify({ action: copilot_action, paramKeys: Object.keys(params || {}), hasCreateDraft: (params || {}).create_draft, hasTo: !!(params || {}).to, copilotPath: req.query._copilot_path }));
     const startMs = Date.now();
     const result = await dispatchAction(copilot_action, params || {}, user, workspaceId, req);
     const durationMs = Date.now() - startMs;
