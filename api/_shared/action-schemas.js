@@ -734,7 +734,8 @@ export const ACTION_SCHEMAS = {
         id: { type: 'string', format: 'uuid', description: 'Inbox item ID' },
         status: { type: 'string', description: 'One of: triaged, dismissed, snoozed' },
         priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
-        assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' }
+        assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
+
       },
       required: ['id']
     },
@@ -759,7 +760,8 @@ export const ACTION_SCHEMAS = {
         priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
         assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
         due_date: { type: 'string', format: 'date' },
-        entity_id: { type: 'string', format: 'uuid' }
+        entity_id: { type: 'string', format: 'uuid' },
+
       },
       required: ['inbox_item_id']
     },
@@ -783,7 +785,8 @@ export const ACTION_SCHEMAS = {
         action_type: { type: 'string' },
         priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
         due_date: { type: 'string', format: 'date' },
-        description: { type: 'string' }
+        description: { type: 'string' },
+
       },
       required: ['title', 'entity_id']
     },
@@ -803,7 +806,8 @@ export const ACTION_SCHEMAS = {
       type: 'object',
       properties: {
         id: { type: 'string', format: 'uuid', description: 'Action item ID' },
-        status: { type: 'string', description: 'One of: open, in_progress, blocked, completed, cancelled' }
+        status: { type: 'string', description: 'One of: open, in_progress, blocked, completed, cancelled' },
+
       },
       required: ['id', 'status']
     },
@@ -869,7 +873,8 @@ export const ACTION_SCHEMAS = {
         item_type: { type: 'string', description: 'One of: action, inbox, research' },
         item_id: { type: 'string', format: 'uuid' },
         assigned_to: { type: 'string', format: 'uuid', description: 'Target user ID' },
-        reason: { type: 'string', description: 'Reason for reassignment' }
+        reason: { type: 'string', description: 'Reason for reassignment' },
+
       },
       required: ['item_type', 'item_id', 'assigned_to']
     },
@@ -891,7 +896,8 @@ export const ACTION_SCHEMAS = {
       properties: {
         action_item_id: { type: 'string', format: 'uuid' },
         escalate_to: { type: 'string', format: 'uuid', description: 'Manager user ID' },
-        reason: { type: 'string', description: 'Escalation reason' }
+        reason: { type: 'string', description: 'Escalation reason' },
+
       },
       required: ['action_item_id', 'escalate_to', 'reason']
     },

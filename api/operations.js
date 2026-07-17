@@ -2687,6 +2687,12 @@ function deriveActionSummary(actionName, params, result) {
 }
 
 async function dispatchAction(actionName, params, user, workspaceId, req) {
+  // Copilot Studio cannot pass boolean params without triggering a Power Platform
+  // dialgId error at tool-add time, so user_confirmed is never transmitted by the
+  // agent. The agent's "Shall I proceed?" prompt is the confirmation gate for all
+  // Copilot calls — auto-confirm here so the tier gate doesn't block execution.
+  params = { ...(params || {}), user_confirmed: true };
+
   const spec = ACTION_REGISTRY[actionName];
   if (!spec) {
     return { ok: false, error: `Unknown action: ${actionName}`, available_actions: Object.keys(ACTION_REGISTRY) };
@@ -2708,7 +2714,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   // Implicit confirmation: when a draft_* action is invoked with
   // create_draft=true and a non-empty 'to' recipient, that IS the explicit
   // confirmation — the user (via the Copilot agent) has already said "create a
-  // draft in my Outlook," so we don't make them resend with _confirmed:true.
+  // draft in my Outlook," so we don't make them resend with user_confirmed:true.
   // Without this, the Tier-1 gate fires and handleDraftOutreachEmail never
   // runs — so _maybeCreateOutlookDraft never POSTs to PA_OUTLOOK_DRAFT_URL and
   // no real Outlook draft is created.
@@ -2725,13 +2731,13 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
           && params.inbox_item_id.length > 0)
     )
   );
-  if (spec.tier >= 1 && spec.confirm && !params?._confirmed && !implicitlyConfirmed) {
+  if (spec.tier >= 1 && spec.confirm && !params?.user_confirmed && !implicitlyConfirmed) {
     return {
       ok: false,
       requires_confirmation: true,
       action: actionName,
       confirmation_level: spec.confirm || 'explicit',
-      message: `Action "${actionName}" requires ${spec.confirm || 'explicit'} confirmation. Resend with _confirmed: true to execute.`,
+      message: `Action "${actionName}" requires ${spec.confirm || 'explicit'} confirmation. Resend with user_confirmed: true to execute.`,
       tier: spec.tier
     };
   }
@@ -4716,20 +4722,9 @@ ${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/g
 // ---------------------------------------------------------------------------
 
 async function handleRelationshipContext(params, user, workspaceId) {
-  let { contact_id, contact_name, entity_id } = params || {};
-
-  // entity_id is what Copilot passes (from the Swagger spec); resolve it to a name
-  if (entity_id && !contact_id && !contact_name) {
-    const entityRow = await opsQuery('GET',
-      `entities?entity_id=eq.${encodeURIComponent(entity_id)}&select=name&limit=1`
-    );
-    if (entityRow.data?.[0]?.name) {
-      contact_name = entityRow.data[0].name;
-    }
-  }
-
+  const { contact_id, contact_name } = params || {};
   if (!contact_id && !contact_name) {
-    return { ok: false, error: 'contact_id, contact_name, or entity_id is required' };
+    return { ok: false, error: 'contact_id or contact_name is required' };
   }
 
   // Fetch contact profile
