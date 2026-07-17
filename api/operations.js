@@ -2559,6 +2559,7 @@ const ACTION_REGISTRY = {
   search_properties:           { tier: 0, handler: 'search_properties' },
   match_property_to_inbox_item: { tier: 0, handler: 'match_property' },
   get_entity_context:           { tier: 0, handler: 'entity_context' },
+  search_entities:              { tier: 0, handler: 'search_entities' },
   link_contact_to_entity:       { tier: 1, handler: 'link_contact_to_entity', confirm: 'lightweight' },
   merge_duplicate_entities:     { tier: 2, handler: 'merge_duplicate_entities', confirm: 'explicit' },
 
@@ -2702,6 +2703,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'search_properties':       result = await handleSearchProperties(params); break;
       case 'match_property':          result = await handleMatchPropertyToInboxItem(params, workspaceId); break;
       case 'entity_context':          result = await handleGetEntityContext(params); break;
+      case 'search_entities':         result = await handleSearchEntities(params); break;
       case 'link_contact_to_entity':  result = await handleLinkContactToEntity(params, user, workspaceId); break;
       case 'merge_duplicate_entities': result = await handleMergeDuplicateEntities(params, user, workspaceId); break;
       case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
@@ -3527,6 +3529,87 @@ async function handleGetEntityContext(params) {
       source:      a.source_type,
       occurred_at: a.occurred_at
     }))
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SEARCH ENTITIES — Tool 35a (Copilot intelligence category)
+// GET /api/copilot/intelligence/search-entities
+// Tier 0 — read-only, no confirmation required.
+// Searches the LCC entity graph AND the GOV contacts DB by name/keyword.
+// Returns matching entities with IDs, emails, and contact details so Copilot
+// Studio can resolve a name before calling draft_outreach_email or
+// get_entity_context.
+// ---------------------------------------------------------------------------
+async function handleSearchEntities(params) {
+  const p = params || {};
+  const query = p.query ? String(p.query).trim() : (p.q ? String(p.q).trim() : null);
+  const entityType = p.entity_type || null;
+  const limit = Math.min(parseInt(p.limit) || 10, 20);
+
+  if (!query || query.length < 2) {
+    return { ok: false, error: 'Provide a search query (name, company, etc.) with at least 2 characters.' };
+  }
+
+  // Sanitize for PostgREST ilike — strip special chars that would break the pattern
+  const safeQ = query.replace(/[*()[\]%]/g, '').trim();
+  const encoded = encodeURIComponent(safeQ);
+
+  // Build entity filter
+  let entityFilter = `name=ilike.*${encoded}*`;
+  if (entityType) entityFilter += `&entity_type=eq.${encodeURIComponent(entityType)}`;
+
+  // Search LCC entity graph and GOV contacts DB in parallel
+  const [entitiesResult, contactsResult] = await Promise.all([
+    opsQuery('GET',
+      `entities?${entityFilter}&select=id,name,canonical_name,entity_type,domain,city,state&order=name.asc&limit=${limit}`
+    ),
+    govContactQuery(
+      `unified_contacts?full_name=ilike.*${encoded}*&select=unified_id,full_name,email,company_name,title,engagement_score&order=engagement_score.desc.nullslast&limit=${limit}`
+    )
+  ]);
+
+  // Map GOV contacts — contact_id = unified_id (used by draft_outreach_email)
+  const govContacts = (contactsResult.data || []).map(c => ({
+    entity_id:        null,
+    contact_id:       c.unified_id,
+    name:             c.full_name || 'Unknown',
+    entity_type:      'person',
+    company:          c.company_name || '',
+    title:            c.title || '',
+    email:            c.email || '',
+    engagement_score: c.engagement_score || 0,
+    source:           'gov_contacts'
+  }));
+
+  // Map LCC entities — skip any whose name is already covered by a GOV contact match
+  const govNames = new Set(govContacts.map(c => (c.name || '').toLowerCase()));
+  const lccEntities = (entitiesResult.data || [])
+    .filter(e => !govNames.has((e.name || '').toLowerCase()))
+    .map(e => ({
+      entity_id:    e.id,
+      contact_id:   null,
+      name:         e.name || e.canonical_name || 'Unknown',
+      entity_type:  e.entity_type || 'unknown',
+      domain:       e.domain || '',
+      city:         e.city || '',
+      state:        e.state || '',
+      email:        null,
+      source:       'lcc_entities'
+    }));
+
+  // GOV contacts first (they have email; more useful for outreach)
+  const combined = [...govContacts, ...lccEntities].slice(0, limit);
+
+  return {
+    ok: true,
+    action: 'search_entities',
+    query,
+    count: combined.length,
+    entities: combined,
+    note: combined.length === 0
+      ? `No entities found matching "${query}". Try a shorter name or check spelling.`
+      : `${combined.length} result(s) found. Use contact_id (if present) for draft_outreach_email, or entity_id for get_entity_context.`
   };
 }
 

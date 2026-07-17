@@ -2988,6 +2988,63 @@
         "consumes": ["application/json"]
       }
     },
+    "/api/copilot/intelligence/search-entities": {
+      "get": {
+        "operationId": "search_entities",
+        "summary": "Search the LCC entity graph and GOV contacts DB by name or keyword.",
+        "description": "**Tier 0** (read-only) — no confirmation required. Category: outreach. Searches both the LCC entity graph (26k+ orgs/persons/assets) and the GOV contacts database simultaneously. GOV-contact matches include email and a contact_id for use with draft_outreach_email. LCC-entity matches include an entity_id for use with get_entity_context. Use this to resolve a name before calling draft_outreach_email or get_entity_context.",
+        "tags": ["outreach"],
+        "parameters": [
+          {
+            "in": "query", "name": "query", "required": true, "type": "string",
+            "description": "Name, company, or keyword to search for (min 2 characters)"
+          },
+          {
+            "in": "query", "name": "entity_type", "required": false, "type": "string",
+            "enum": ["person", "org", "asset"],
+            "description": "Optional: filter LCC entity type"
+          },
+          {
+            "in": "query", "name": "limit", "required": false, "type": "integer",
+            "minimum": 1, "maximum": 20,
+            "description": "Max results to return (default 10)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "entities": {
+                  "type": "array",
+                  "description": "Matching entities/contacts — GOV contacts first (have email + contact_id), then LCC entities.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "entity_id":        { "type": "string", "description": "LCC entity UUID — use with get_entity_context" },
+                      "contact_id":       { "type": "string", "description": "GOV contacts unified_id — use with draft_outreach_email" },
+                      "name":             { "type": "string" },
+                      "entity_type":      { "type": "string" },
+                      "email":            { "type": "string" },
+                      "company":          { "type": "string" },
+                      "title":            { "type": "string" },
+                      "domain":           { "type": "string" },
+                      "engagement_score": { "type": "number" },
+                      "source":           { "type": "string", "enum": ["gov_contacts", "lcc_entities"] }
+                    }
+                  }
+                },
+                "count": { "type": "integer" },
+                "query": { "type": "string" },
+                "note":  { "type": "string" }
+              }
+            }
+          }
+        },
+        "produces": ["application/json"]
+      }
+    },
     "/api/copilot/intelligence/get-entity-context": {
       "get": {
         "operationId": "get_entity_context",

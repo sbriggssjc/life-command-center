@@ -244,6 +244,45 @@ export const ACTION_SCHEMAS = {
   // TIER 0-1 — AI-POWERED GENERATION
   // =========================================================================
 
+  search_entities: {
+    description: 'Search the LCC entity graph and GOV contacts database by name or keyword. Returns matching entities/contacts with IDs, emails, and details. Use this to resolve a person or company name before calling draft_outreach_email (use the returned contact_id) or get_entity_context (use the returned entity_id).',
+    category: 'outreach',
+    inputs: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query:       { type: 'string', minLength: 2, description: 'Name, company, or keyword to search for (min 2 characters)' },
+        entity_type: { type: 'string', enum: ['person', 'org', 'asset'], description: 'Optional: filter LCC entities by type' },
+        limit:       { type: 'integer', minimum: 1, maximum: 20, description: 'Max results to return (default 10)' }
+      }
+    },
+    outputs: {
+      type: 'object',
+      properties: {
+        entities: {
+          type: 'array',
+          description: 'Matching entities/contacts. Each item has: entity_id (for get_entity_context), contact_id (for draft_outreach_email), name, entity_type, email, company, domain, source.',
+          items: {
+            type: 'object',
+            properties: {
+              entity_id:   { type: 'string', description: 'LCC entity UUID — use with get_entity_context' },
+              contact_id:  { type: 'string', description: 'GOV contacts unified_id — use with draft_outreach_email' },
+              name:        { type: 'string' },
+              entity_type: { type: 'string' },
+              email:       { type: 'string' },
+              company:     { type: 'string' },
+              domain:      { type: 'string' },
+              source:      { type: 'string', enum: ['gov_contacts', 'lcc_entities'] }
+            }
+          }
+        },
+        count: { type: 'integer' },
+        query: { type: 'string' },
+        note:  { type: 'string' }
+      }
+    }
+  },
+
   generate_prospecting_brief: {
     description: 'Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from the LCC queue by cadence urgency (days overdue) and portfolio value (annual rent). Falls back to Outlook engagement scores if no LCC queue data exists.',
     category: 'outreach',
