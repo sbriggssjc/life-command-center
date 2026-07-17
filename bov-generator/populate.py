@@ -51,6 +51,7 @@ Rent Schedule tab: identification block + per-lease-period grid.
 
 from datetime import datetime, timedelta
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Border
 
 SHEET = "Assumptions & Flags"
 
@@ -879,6 +880,180 @@ def fill_mob_lease_abstract(wb, req: dict) -> None:
                     ws.cell(row=row, column=6).value = source
 
 
+RENT_ROLL_SHEET = "Rent Roll"
+# Assumptions tenant-block header rows (7 data rows each, spacer before each).
+_MOB_ASM_TENANT_STARTS = [17, 26, 35, 44, 53]
+# Rent Roll tenant rows and Exec Summary tenant-summary rows.
+_MOB_RR_DATA_START = 16
+_MOB_ES_TENANT_START = 19   # tenant summary (asking cap/price removed from snapshot → shifted up 2)
+
+
+def fill_mob_rent_roll(wb, req: dict) -> None:
+    """Fill the Rent Roll's per-tenant lease commencement (G) and expiration (H) dates."""
+    if RENT_ROLL_SHEET not in wb.sheetnames:
+        return
+    ws = wb[RENT_ROLL_SHEET]
+    for t, tenant in enumerate((req.get("tenants") or [])[:5]):
+        rr = _MOB_RR_DATA_START + t
+        comm = _date(tenant.get("lease_commencement", ""))
+        exp = _date(tenant.get("lease_expiration", ""))
+        if comm:
+            ws.cell(row=rr, column=7).value = comm
+        if exp:
+            ws.cell(row=rr, column=8).value = exp
+
+
+def _hide_unused_mob_tenants(wb, n_tenants: int) -> None:
+    """
+    MOB templates build a fixed 5 tenant slots. Hide the rows/columns for slots
+    beyond the actual tenant count so no phantom 'TENANT 5 / [Vacant]' shows.
+    Uses hide (not delete) so all downstream formulas and fixed layouts are intact.
+    """
+    n = max(0, min(5, n_tenants))
+    if n >= 5:
+        return
+
+    # 1) Assumptions & Flags — hide the spacer + 8-row block for each unused slot.
+    if SHEET in wb.sheetnames:
+        ws = wb[SHEET]
+        for t in range(n, 5):
+            s = _MOB_ASM_TENANT_STARTS[t]
+            for rr in range(s - 1, s + 8):
+                ws.row_dimensions[rr].hidden = True
+
+    # 2) Rent Roll — hide the unused tenant rows (drops the "[Vacant]" phantoms).
+    if RENT_ROLL_SHEET in wb.sheetnames:
+        ws = wb[RENT_ROLL_SHEET]
+        for t in range(n, 5):
+            ws.row_dimensions[_MOB_RR_DATA_START + t].hidden = True
+
+    # 3) Executive Summary tenant-summary — hide unused tenant rows.
+    if EXECSUM_SHEET in wb.sheetnames:
+        ws = wb[EXECSUM_SHEET]
+        for t in range(n, 5):
+            ws.row_dimensions[_MOB_ES_TENANT_START + t].hidden = True
+
+    # 4) Lease Abstract — short-form: blank the unused tenant COLUMNS within the
+    #    short-form band only (cols share the sheet with long-form, so we clear
+    #    rather than hide). Long-form: hide the unused per-tenant sections.
+    if LEASE_ABSTRACT_SHEET in wb.sheetnames:
+        ws = wb[LEASE_ABSTRACT_SHEET]
+        _blank_fill = PatternFill(fill_type=None)
+        _no_border = Border()
+        for col in range(3 + n, 8):            # unused tenant cols C..G
+            for rr in range(6, 26):            # short-form band (header + 19 provisions)
+                cell = ws.cell(row=rr, column=col)
+                cell.value = None
+                cell.fill = _blank_fill
+                cell.border = _no_border
+        lf_start = _lf_boundary(ws)
+        sec_idx = -1
+        for rr in range(lf_start, ws.max_row + 1):
+            b = ws.cell(row=rr, column=2).value
+            if isinstance(b, str) and b.startswith("="):
+                sec_idx += 1
+            if 0 <= sec_idx and sec_idx >= n:
+                ws.row_dimensions[rr].hidden = True
+
+    # 5) Rent Schedule — hide the unused per-tenant sections (teal header = col B formula).
+    if RENT_SCHEDULE_SHEET in wb.sheetnames:
+        ws = wb[RENT_SCHEDULE_SHEET]
+        headers = [rr for rr in range(1, ws.max_row + 1)
+                   if isinstance(ws.cell(row=rr, column=2).value, str)
+                   and ws.cell(row=rr, column=2).value.startswith("=")]
+        for t in range(n, len(headers)):
+            start = headers[t]
+            end = headers[t + 1] - 1 if t + 1 < len(headers) else start + _MOB_RS_STRIDE
+            for rr in range(start, end + 1):
+                ws.row_dimensions[rr].hidden = True
+
+
+_ASREF = f"'{SHEET}'"
+
+
+def _trade_range(ws, gic, low_row, high_row, spread=0.0025):
+    """Pre-populate a cap-rate trade range around the going-in cap (broker-adjustable)."""
+    if isinstance(gic, (int, float)):
+        ws.cell(row=low_row,  column=3).value = round(gic + spread, 4)   # low indication = higher cap
+        ws.cell(row=high_row, column=3).value = round(gic - spread, 4)   # high indication = lower cap
+
+
+def fill_nnn_exec_summary(wb, req: dict) -> None:
+    """Fill the NNN Executive Summary Investment Snapshot + trade-range caps."""
+    if EXECSUM_SHEET not in wb.sheetnames:
+        return
+    ws = wb[EXECSUM_SHEET]
+    prop = req.get("property", {}) or {}
+    re_d = req.get("real_estate") or {}
+    uw = req.get("underwriting") or {}
+    t = (req.get("tenants") or [{}])[0]
+    ref = _ref_date(prop)
+
+    def put(row, val):
+        if val not in (None, ""):
+            ws.cell(row=row, column=3).value = val
+
+    put(5, _s(prop.get("name")) or _s(t.get("name")))
+    put(6, _s(prop.get("address")))
+    put(7, _s(prop.get("city_state")))
+    put(9, re_d.get("year_built"))
+    put(10, prop.get("building_sf"))
+    put(11, re_d.get("site_area_acres"))
+    if _s(t.get("lease_type")):
+        put(12, _s(t.get("lease_type")))
+    comm = _date(t.get("lease_commencement", ""))
+    exp = _date(t.get("lease_expiration", ""))
+    if comm:
+        put(13, comm)
+    if exp:
+        put(14, exp)
+        put(15, round((exp - ref).days / 365.25, 1))
+    put(16, t.get("year1_rent"))
+    ws.cell(row=17, column=3).value = f'=IFERROR({_ASREF}!$C$33,"")'   # Y1 NOI (computed)
+    name, guar = _s(t.get("name")), _s(t.get("guarantor"))
+    put(18, f"{name}  /  {guar}" if guar else name)
+    put(19, _s(t.get("credit_rating")))
+
+    _trade_range(ws, uw.get("going_in_cap"), 28, 29)
+
+
+def fill_mob_exec_summary(wb, req: dict) -> None:
+    """Fill the MOB Executive Summary snapshot + trade-range caps (pricing section below)."""
+    if EXECSUM_SHEET not in wb.sheetnames:
+        return
+    ws = wb[EXECSUM_SHEET]
+    prop = req.get("property", {}) or {}
+    re_d = req.get("real_estate") or {}
+    uw = req.get("underwriting") or {}
+    tenants = (req.get("tenants") or [])[:5]
+    ref = _ref_date(prop)
+
+    def put(row, val):
+        if val not in (None, ""):
+            ws.cell(row=row, column=3).value = val
+
+    name = _s(prop.get("name"))
+    addr = _s(prop.get("address"))
+    put(5, "  —  ".join(x for x in [name, addr] if x) or addr)
+    put(6, _s(prop.get("city_state")))
+    put(8, re_d.get("year_built"))
+    put(9, prop.get("building_sf"))
+    put(10, re_d.get("site_area_acres"))
+    put(11, len(tenants))
+    # WALT — SF-weighted remaining lease term across tenants with an expiration.
+    num = den = 0.0
+    for t in tenants:
+        exp = _date(t.get("lease_expiration", ""))
+        sf = t.get("sf")
+        if exp and isinstance(sf, (int, float)):
+            num += float(sf) * max(0.0, (exp - ref).days / 365.25)
+            den += float(sf)
+    if den:
+        put(13, round(num / den, 1))
+
+    _trade_range(ws, uw.get("going_in_cap"), 33, 34)   # ETR Low / High after 2-row shift
+
+
 def fill_assumptions(wb, req: dict) -> None:
     """Dispatch to the correct fill functions based on asset_type."""
     asset_type = req.get("asset_type", "NNN").upper()
@@ -886,10 +1061,14 @@ def fill_assumptions(wb, req: dict) -> None:
         fill_mob_assumptions(wb, req)
         fill_mob_rent_schedule(wb, req)
         fill_mob_lease_abstract(wb, req)
+        fill_mob_rent_roll(wb, req)
+        fill_mob_exec_summary(wb, req)
+        _hide_unused_mob_tenants(wb, len(req.get("tenants") or []))
     else:
         fill_nnn_assumptions(wb, req)
         fill_nnn_rent_schedule(wb, req)
         fill_nnn_lease_abstract(wb, req)
+        fill_nnn_exec_summary(wb, req)
     fill_cover(wb, req)
     fill_exec_subtitle(wb, req)
     fill_real_estate(wb, req)

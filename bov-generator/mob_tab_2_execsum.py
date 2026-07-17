@@ -56,8 +56,8 @@ def build_mob_exec_summary(wb):
         ("WALT (Weighted Avg Lease Term)",   None,                            '0.0 "yrs"',       False),
         ("Year 1 Gross Potential Rent",      None,                            D0,                True),
         ("Year 1 NOI",                       None,                            D0,                True),
-        ("Asking Cap Rate",                  None,                            P2,                False),
-        ("Asking Price",                     None,                            D0,                True),
+        # Asking Cap Rate / Asking Price live in the PRICING STRATEGY section below,
+        # not the snapshot (removed here to avoid duplicating pricing at the top).
     ]
 
     # Row assignments: snapshot starts at row 5
@@ -112,8 +112,8 @@ def build_mob_exec_summary(wb):
     # Formula rows (i=7 Occupancy, i=9 GPR, i=10 NOI, i=12 Asking Price) and the
     # hard-coded default row (i=2 Asset Type) always have cell content, so ISBLANK()
     # is always False → the white-fill CF would fire constantly and wipe out alternating bands.
-    # Input row indices: 0,1,3,4,5,6,8,11  →  rows 5,6,8,9,10,11,13,16
-    for inp_i in [0, 1, 3, 4, 5, 6, 8, 11]:
+    # Input row indices: 0,1,3,4,5,6,8  →  rows 5,6,8,9,10,11,13
+    for inp_i in [0, 1, 3, 4, 5, 6, 8]:
         inp_r = SNAP_START + inp_i
         add_cf_clear(ws, f"C{inp_r}:C{inp_r}")
 

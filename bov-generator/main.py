@@ -203,6 +203,7 @@ class TenantInput(BaseModel):
     mgmt_fee_pct:   Optional[float]= Field(0.0,   description="Management fee % of EGR (NNN only)")
     lease_commencement: str        = Field("",    description="YYYY-MM-DD lease commencement (Rent Schedule)")
     lease_expiration:   str        = Field("",    description="YYYY-MM-DD lease expiration (Rent Schedule)")
+    credit_rating:      str        = Field("",    description="Tenant/guarantor credit rating, e.g. 'BBB (S&P) / Baa2 (Moody's)'")
     rent_schedule: Optional[List[RentPeriodInput]] = Field(
         None, description="Exact contracted rent by period; if omitted, computed from year1_rent x escalation")
     abstract: Optional[LeaseAbstractInput] = Field(
