@@ -46,6 +46,41 @@ describe('classifyList — side / product_type / broker', () => {
   });
 });
 
+describe('classifyList — broker-prefixed Prospects + Owners → seller (Unit 2)', () => {
+  it('broker-prefixed "* Prospects" is seller with the broker tag', () => {
+    const a = classifyList({ campaign_name: 'SAB GSA Prospects' });
+    assert.equal(a.side, 'seller');
+    assert.equal(a.broker, 'SAB');
+    assert.equal(a.product_type, 'GSA');
+    const b = classifyList({ campaign_name: 'SAB Dialysis Prospects' });
+    assert.equal(b.side, 'seller');
+    assert.equal(b.broker, 'SAB');
+    assert.equal(b.product_type, 'Dialysis');
+    assert.equal(classifyList({ campaign_name: 'NKB Prospects' }).side, 'seller');
+    assert.equal(classifyList({ campaign_name: 'NKB Prospects' }).broker, 'NKB');
+  });
+  it('an "* Owners" list is seller; the tenant name is NOT treated as a broker', () => {
+    const a = classifyList({ campaign_name: 'VCA Animal Hospital Owners' });
+    assert.equal(a.side, 'seller');
+    assert.equal(a.broker, null);
+    const b = classifyList({ campaign_name: 'Christian Brothers Owners' });
+    assert.equal(b.side, 'seller');
+    assert.equal(b.broker, null);
+    const c = classifyList({ campaign_name: 'DMR Urgent Care Owners' });
+    assert.equal(c.side, 'seller');
+    assert.equal(c.broker, 'DMR');           // broker prefix still recognised on an Owners list
+  });
+  it('buyer lists stay buyer even with a broker/Prospects shape absent', () => {
+    assert.equal(classifyList({ campaign_name: 'GSA Buyer' }).side, 'buyer');
+    assert.equal(classifyList({ campaign_name: 'Dialysis Buyers' }).side, 'buyer');
+    assert.equal(classifyList({ campaign_name: 'Medical Buyers' }).side, 'buyer');
+    assert.equal(classifyList({ campaign_name: 'AL Principals' }).side, 'buyer');
+  });
+  it('a bare broker-prefixed non-prospect/owner list stays unknown (no over-reach)', () => {
+    assert.equal(classifyList({ campaign_name: 'SAB Net Lease' }).side, 'unknown');
+  });
+});
+
 describe('deriveProductType / deriveBroker — pure edge cases', () => {
   it('product cues map', () => {
     assert.equal(deriveProductType('Federal / GSA book'), 'GSA');
@@ -97,6 +132,36 @@ describe('normalizeMember — tolerant field mapping', () => {
     assert.equal(personNameFromMember(normalizeMember({ First: 'Jane', Last: 'Doe', Company: 'Acme LLC' })), 'Jane Doe');
     assert.equal(personNameFromMember(normalizeMember({ Name: 'John Smith' })), 'John Smith');
     assert.equal(personNameFromMember(normalizeMember({ Company: 'Acme LLC' })), null);
+  });
+  it('a Lead-linked member (LeadId, no ContactId) is fully read (Unit 1)', () => {
+    const m = normalizeMember({
+      FirstName: 'Lee', LastName: 'Prospect', Email: 'LEE@owner.com',
+      CompanyOrAccount: 'Owner LLC', LeadId: '00Q8W00000ABCDeUAF',
+    });
+    assert.equal(m.first, 'Lee');
+    assert.equal(m.email, 'lee@owner.com');
+    assert.equal(m.company, 'Owner LLC');
+    assert.equal(m.sf_lead_id, '00Q8W00000ABCDeUAF');
+    assert.equal(m.sf_contact_id, null);
+    assert.equal(personNameFromMember(m), 'Lee Prospect');   // a member WITH data is never dropped
+  });
+  it('case-insensitive keys (lowercase connector shape) still read', () => {
+    const m = normalizeMember({ firstname: 'Lo', lastname: 'Case', email: 'lo@x.com', leadid: '00Qxxx', companyoraccount: 'Lo Co' });
+    assert.equal(m.first, 'Lo');
+    assert.equal(m.email, 'lo@x.com');
+    assert.equal(m.company, 'Lo Co');
+    assert.equal(m.sf_lead_id, '00Qxxx');
+  });
+  it('nested Lead/Contact relationship objects are read (with an Id fallback)', () => {
+    const lead = normalizeMember({ LeadId: '00Qzzz', Lead: { FirstName: 'Nest', LastName: 'Ed', Email: 'nest@x.com', Company: 'Nested LLC' } });
+    assert.equal(lead.first, 'Nest');
+    assert.equal(lead.email, 'nest@x.com');
+    assert.equal(lead.company, 'Nested LLC');
+    assert.equal(lead.sf_lead_id, '00Qzzz');
+    // Id resolved from the nested relationship when no top-level *Id scalar is present.
+    const contact = normalizeMember({ Contact: { Id: '003abc', FirstName: 'C', LastName: 'N', Email: 'c@x.com' } });
+    assert.equal(contact.sf_contact_id, '003abc');
+    assert.equal(contact.first, 'C');
   });
 });
 
@@ -220,5 +285,46 @@ describe('processMember — reconcile + guards', () => {
     assert.equal(out.org_entity_id, null);
     assert.equal(deps._calls.links.length, 0);
     assert.equal(deps._calls.membership.length, 1);
+  });
+});
+
+describe('processMember — Lead-linked members (Unit 1, the critical fix)', () => {
+  function captureDeps() {
+    const links = [];
+    const deps = mkDeps({
+      async ensureEntityLink(a) {
+        links.push(a);
+        if (a.sourceType === 'organization') return { ok: true, entityId: 'org-1', createdEntity: true };
+        return { ok: true, entityId: 'person-1', createdEntity: true };
+      },
+    });
+    deps._links = links;
+    return deps;
+  }
+
+  it('a Lead-only member keys the identity on the LeadId with source_type Lead', async () => {
+    const deps = captureDeps();
+    const out = await processMember(
+      { FirstName: 'Lee', LastName: 'Prospect', Email: 'lee@owner.com', CompanyOrAccount: 'Owner LLC', LeadId: '00Q8W00000ABCDeUAF' },
+      buyerCtx, deps);
+    assert.equal(out.outcome, 'processed');
+    const personLink = deps._links.find((l) => l.sourceType !== 'organization');
+    assert.equal(personLink.sourceSystem, 'salesforce');
+    assert.equal(personLink.sourceType, 'Lead');
+    assert.equal(personLink.externalId, '00Q8W00000ABCDeUAF');
+    assert.equal(personLink.seedFields.first_name, 'Lee');   // structured name → person infer
+    assert.equal(personLink.seedFields.last_name, 'Prospect');
+    // membership records the LeadId (and no ContactId) — visible in the DB row
+    assert.equal(deps._calls.membership[0].sf_lead_id, '00Q8W00000ABCDeUAF');
+    assert.equal(deps._calls.membership[0].sf_contact_id, null);
+  });
+
+  it('a name-only Lead (no email) is still processed, not dropped', async () => {
+    const deps = captureDeps();
+    const out = await processMember({ FirstName: 'Nora', LastName: 'Email-less', LeadId: '00Qnoemail' }, sellerCtx, deps);
+    assert.equal(out.outcome, 'processed');
+    const personLink = deps._links.find((l) => l.sourceType !== 'organization');
+    assert.equal(personLink.sourceType, 'Lead');
+    assert.equal(personLink.seedFields.first_name, 'Nora');
   });
 });
