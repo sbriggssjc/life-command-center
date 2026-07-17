@@ -144,9 +144,14 @@ def build_rent_schedule_tab(wb):
     _hl_font = Font(name="Calibri", size=10, bold=True, color=TEXT)
     for i in range(MAX_ROWS):
         rr = DATA_START + i
-        # Formula checks: C{rr} (start) <= TODAY() and D{rr} (end) >= TODAY()
-        # Anchored to C column (start date col)
-        formula = f'AND(NOT(ISBLANK($C{rr})),NOT(ISBLANK($D{rr})),$C{rr}<=TODAY(),$D{rr}>=TODAY())'
+        # Highlight the CURRENT / in-place period = the first period whose End Date
+        # has not yet passed. Works pre-close (when TODAY is before every Start Date),
+        # unlike a "Start<=TODAY<=End" test. COUNTIF over D16:D{rr} = 1 marks the first
+        # not-yet-ended row.
+        formula = (
+            f'AND(NOT(ISBLANK($D{rr})),$D{rr}>=TODAY(),'
+            f'COUNTIF($D${DATA_START}:$D{rr},">="&TODAY())=1)'
+        )
         row_range = f"B{rr}:J{rr}"
         ws.conditional_formatting.add(
             row_range,

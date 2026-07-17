@@ -194,7 +194,7 @@ def build_mob_pro_forma_tab(wb):
     lbl(ws, r, 1, "Other Income", bold=False)
     OTHER_ROW = r
     for col in YR_COLS:
-        inp(ws, r, col, fmt=D0)
+        inp(ws, r, col, val=0, fmt=D0)   # default 0 (goes white via CF) — enter a value only if reported
         ws.cell(row=r, column=col).alignment = AL_R
     add_cf_clear(ws, f"D{OTHER_ROW}:M{OTHER_ROW}")
 

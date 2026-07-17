@@ -130,7 +130,7 @@ def build_pro_forma_tab(wb):
     ws.row_dimensions[r].height = 18
     lbl(ws, r, 1, "Other Income", bold=False)
     for col in YR_COLS:
-        inp(ws, r, col, fmt=D0)
+        inp(ws, r, col, val=0, fmt=D0)   # default 0 (goes white via CF) — enter a value only if reported
         ws.cell(row=r, column=col).alignment = AL_R
     add_cf_clear(ws, f"D10:M10")
 

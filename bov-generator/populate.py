@@ -246,8 +246,15 @@ def _rent_periods_from(tenant: dict):
     return rows
 
 
-def _write_rent_grid(ws, data_start: int, periods: list, max_rows: int) -> None:
-    """Write periods into grid rows: C=start D=end E=label F=annual I=esc J=status."""
+def _write_rent_grid(ws, data_start: int, periods: list, max_rows: int,
+                     hide_unused: bool = True) -> int:
+    """
+    Write periods into grid rows: C=start D=end E=label F=annual I=esc J=status.
+    First period's escalation shows "-" (no prior period to step from).
+    Unused grid rows are hidden so the TOTALS bar sits directly under the last
+    contracted period. Returns the number of periods written.
+    """
+    n = 0
     for i, p in enumerate(periods[:max_rows]):
         rr = data_start + i
         if p.get("start") is not None:
@@ -260,8 +267,15 @@ def _write_rent_grid(ws, data_start: int, periods: list, max_rows: int) -> None:
             ws.cell(row=rr, column=6).value = p["annual"]
         if isinstance(p.get("esc"), (int, float)):
             ws.cell(row=rr, column=9).value = p["esc"]
+        elif i == 0:
+            ws.cell(row=rr, column=9).value = "-"   # first period: no escalation
         if p.get("status"):
             ws.cell(row=rr, column=10).value = p["status"]
+        n += 1
+    if hide_unused:
+        for rr in range(data_start + n, data_start + max_rows):
+            ws.row_dimensions[rr].hidden = True
+    return n
 
 
 def fill_nnn_rent_schedule(wb, req: dict) -> None:
@@ -281,7 +295,11 @@ def fill_nnn_rent_schedule(wb, req: dict) -> None:
     exp = _date(tenant.get("lease_expiration", ""))
     if exp:
         ws["E10"] = exp
-        ws["E11"] = '=IFERROR(ROUND((E10-TODAY())/365.25,1),"")'
+        # Static remaining term on the same basis as the Lease Abstract / Exec
+        # Summary (as of close date, not TODAY) so the number matches elsewhere.
+        ref = _ref_date(prop)
+        yrs = (exp - ref).days / 365.25
+        ws["E11"] = f"{yrs:.1f} yrs" if yrs >= 0 else "Expired"
     ws["E12"] = _num(prop.get("building_sf"))
 
     _write_rent_grid(ws, 16, _rent_periods_from(tenant), 30)
