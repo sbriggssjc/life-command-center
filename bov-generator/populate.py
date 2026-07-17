@@ -303,6 +303,50 @@ def fill_mob_rent_schedule(wb, req: dict) -> None:
         _write_rent_grid(ws, data_start, _rent_periods_from(tenant), _MOB_RS_MAX_ROWS)
 
 
+COVER_SHEET = "Cover"
+EXECSUM_SHEET = "Executive Summary"
+
+
+def _analysis_date() -> str:
+    return datetime.now().strftime("%B %d, %Y")
+
+
+def _property_display(req: dict) -> str:
+    """'{Property/Tenant Name}  —  {City, State}' for the Cover and Exec Summary subtitle."""
+    prop = req.get("property", {})
+    name = (prop.get("name") or "").strip()
+    if not name:
+        tenants = req.get("tenants") or []
+        if req.get("asset_type", "").upper() != "MOB" and tenants and tenants[0].get("name"):
+            name = tenants[0]["name"]
+        else:
+            name = prop.get("address", "")
+    cs = (prop.get("city_state") or "").strip()
+    return f"{name}  —  {cs}" if cs else name
+
+
+def fill_cover(wb, req: dict) -> None:
+    """Fill the Cover tab identity cells (B10=Property/Tenant, B12=Address, B14=Client, B18=Analysis Date)."""
+    if COVER_SHEET not in wb.sheetnames:
+        return
+    ws = wb[COVER_SHEET]
+    prop = req.get("property", {})
+    client = req.get("client", {})
+    ws["B10"] = _property_display(req)
+    ws["B12"] = prop.get("address", "")
+    ws["B14"] = client.get("last_name", "")
+    ws["B18"] = _analysis_date()
+
+
+def fill_exec_subtitle(wb, req: dict) -> None:
+    """Fill the Executive Summary subtitle (B2), replacing the placeholder."""
+    if EXECSUM_SHEET not in wb.sheetnames:
+        return
+    ws = wb[EXECSUM_SHEET]
+    kind = "Multi-Tenant MOB" if req.get("asset_type", "").upper() == "MOB" else "Single-Tenant NNN"
+    ws["B2"] = f"{_property_display(req)}  ·  {kind}  ·  Investment Snapshot  ·  {_analysis_date()}"
+
+
 def fill_assumptions(wb, req: dict) -> None:
     """Dispatch to the correct fill functions based on asset_type."""
     asset_type = req.get("asset_type", "NNN").upper()
@@ -312,3 +356,6 @@ def fill_assumptions(wb, req: dict) -> None:
     else:
         fill_nnn_assumptions(wb, req)
         fill_nnn_rent_schedule(wb, req)
+    fill_cover(wb, req)
+    fill_exec_subtitle(wb, req)
+

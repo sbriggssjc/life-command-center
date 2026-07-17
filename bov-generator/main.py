@@ -112,10 +112,11 @@ def _base_url(request: Request) -> str:
 
 # ── Request / Response models ─────────────────────────────────────────────────
 class PropertyInput(BaseModel):
-    address:     str            = Field(..., description="Street address — used in filename and Cover tab")
-    city_state:  str            = Field("",  description="City, ST — used on Cover tab")
+    address:     str            = Field(..., description="Street address — used on Cover tab")
+    city_state:  str            = Field("",  description="City, ST — used in filename and Cover tab")
     building_sf: Optional[float]= Field(None, description="Rentable SF per lease or survey")
     close_date:  str            = Field("",   description="YYYY-MM-DD — estimated close date")
+    name:        str            = Field("",   description="Property/deal name for filename & Cover (e.g. 'Valley MOB', 'Dollar General'); defaults to tenant name (NNN) or address (MOB)")
 
 
 class RentPeriodInput(BaseModel):
@@ -185,14 +186,35 @@ class BOVResponse(BaseModel):
 # ── Filename helper ───────────────────────────────────────────────────────────
 def _make_filename(req: BOVRequest) -> str:
     """
-    Produce: [Address]_BOV_[ClientLastName]_[YYYYMM].xlsx
-    Address: first part of the property address, spaces → underscores, non-alphanumeric stripped.
+    Produce: [Property/Tenant]_[City]_[State]_BOV_[ClientLastName]_[YYYYMM].xlsx
+      e.g. CompassusHospice_Roanoke_AL_BOV_Kitchens_202603.xlsx
+    Name = property.name, else tenant name (NNN), else first part of the address (MOB).
+    Each component has spaces removed and non-alphanumerics stripped.
     """
     import re
-    raw = req.property.address.split(",")[0].strip()
-    safe = re.sub(r"[^\w\s-]", "", raw).strip()
-    safe = re.sub(r"[\s-]+", "_", safe)
-    return f"{safe}_BOV_{req.client.last_name}_{req.client.file_month}.xlsx"
+
+    def _clean(s: str) -> str:
+        s = re.sub(r"[^\w\s-]", "", str(s or "")).strip()
+        return re.sub(r"\s+", "", s)  # remove internal spaces (CompassusHospice)
+
+    prop = req.property
+    name = (prop.name or "").strip()
+    if not name:
+        if req.asset_type.upper() != "MOB" and req.tenants and req.tenants[0].name:
+            name = req.tenants[0].name
+        else:
+            name = prop.address.split(",")[0]
+
+    parts = [_clean(name)]
+    cs = (prop.city_state or "").split(",")
+    if len(cs) >= 1 and cs[0].strip():
+        parts.append(_clean(cs[0]))
+    if len(cs) >= 2 and cs[1].strip():
+        parts.append(_clean(cs[1]))
+
+    prefix = "_".join(p for p in parts if p)
+    client_last = _clean(req.client.last_name)
+    return f"{prefix}_BOV_{client_last}_{req.client.file_month}.xlsx"
 
 
 # ── Generate endpoint ─────────────────────────────────────────────────────────

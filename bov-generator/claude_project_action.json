@@ -35,6 +35,7 @@
                       "type": "object",
                       "required": ["address"],
                       "properties": {
+                        "name":        { "type": "string", "description": "Property/deal name for filename (e.g. 'Valley MOB'); defaults to tenant name or address" },
                         "address":     { "type": "string", "description": "Street address" },
                         "city_state":  { "type": "string", "description": "City, ST" },
                         "building_sf": { "type": "number", "description": "Rentable SF" },
