@@ -4273,38 +4273,131 @@ async function handleDailyBriefing(params, user, workspaceId, req) {
 
 async function handleProspectingBrief(params, user, workspaceId) {
   const limit = Math.min(parseInt(params?.limit) || 10, 25);
+  const domainFilter = params?.domain ? String(params.domain).trim() : null;
 
-  // Fetch hot leads
-  const hotResult = await govContactQuery(
-    `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`
-  );
+  // =========================================================================
+  // PRIMARY SOURCE: LCC BD queue (touchpoint_cadence via v_bd_cadence_dashboard)
+  // Ranked by: most overdue first (call urgency), then highest annual rent
+  // (commission potential). Contact-filter = outreach-ready (has a contact).
+  // =========================================================================
+  let queuePath = `v_bd_cadence_dashboard?workspace_id=eq.${pgFilterVal(workspaceId)}`
+    + `&phase=not.in.(paused,unsubscribed)`
+    + `&contact_id=not.is.null`
+    + `&order=days_overdue.desc.nullslast,rank_value.desc.nullslast`
+    + `&limit=${limit}`
+    + `&select=cadence_id,entity_id,entity_name,domain,phase,priority_tier,`
+    + `next_touch_due,days_overdue,days_until_next,last_touch_at,last_touch_type,`
+    + `emails_sent,calls_made,calls_connected,rank_value,rank_property_count,`
+    + `contact_id,contact_email,review_flag`;
+  if (domainFilter) queuePath += `&domain=eq.${pgFilterVal(domainFilter)}`;
 
-  const contacts = (hotResult.data || []).map(c => ({
-    name: c.full_name,
-    company: c.company_name || '',
-    title: c.title || '',
-    email: c.email || '',
-    phone: c.phone || '',
-    score: c.engagement_score,
-    heat: c.engagement_score >= 60 ? 'hot' : c.engagement_score >= 30 ? 'warm' : 'cool',
-    last_call: c.last_call_date || 'never',
-    last_email: c.last_email_date || 'never',
-    last_meeting: c.last_meeting_date || 'never',
-    total_calls: c.total_calls || 0,
-    total_emails: c.total_emails_sent || 0
-  }));
+  const queueResult = await opsQuery('GET', queuePath);
+  const queueItems = Array.isArray(queueResult.data) ? queueResult.data : [];
 
-  if (!contacts.length) {
-    return { ok: true, action: 'generate_prospecting_brief', response: 'No business contacts with engagement scores found. Start by ingesting contacts from Outlook or Salesforce.', contacts: [] };
+  // =========================================================================
+  // FALLBACK: Outlook engagement scores (used only when LCC queue is empty)
+  // =========================================================================
+  if (!queueItems.length) {
+    const hotResult = await govContactQuery(
+      `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`
+    );
+    const outlookContacts = (hotResult.data || []).map(c => ({
+      name: c.full_name,
+      company: c.company_name || '',
+      title: c.title || '',
+      email: c.email || '',
+      phone: c.phone || '',
+      score: c.engagement_score,
+      heat: c.engagement_score >= 60 ? 'hot' : c.engagement_score >= 30 ? 'warm' : 'cool',
+      last_call: c.last_call_date || 'never',
+      last_email: c.last_email_date || 'never',
+      total_calls: c.total_calls || 0,
+      total_emails: c.total_emails_sent || 0,
+      source: 'outlook_engagement'
+    }));
+
+    if (!outlookContacts.length) {
+      return {
+        ok: true,
+        action: 'generate_prospecting_brief',
+        response: 'No actionable BD contacts found. The LCC queue has no outreach-ready cadences and Outlook engagement data is unavailable. Add contacts to the cadence system to activate call prioritization.',
+        contacts: [],
+        source: 'none'
+      };
+    }
+
+    const contactList = outlookContacts.map((c, i) =>
+      `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Email: ${c.email}`
+    ).join('\n\n');
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const fallbackPrompt = `Generate a daily prospecting call sheet for ${today}.\n\nContacts ranked by Outlook engagement score (LCC queue data not yet available):\n\n${contactList}\n\nFor each contact: call prep note, talking point, and priority (call today / this week / nurture).`;
+    const fallbackResult = await invokeChatProvider({
+      message: fallbackPrompt,
+      context: { assistant_feature: 'global_copilot', action: 'generate_prospecting_brief' },
+      history: [], attachments: [], user, workspaceId
+    });
+    return { ok: true, action: 'generate_prospecting_brief', response: fallbackResult.data?.response || '', contacts: outlookContacts, source: 'outlook_engagement', provider: fallbackResult.provider };
   }
 
-  const contactList = contacts.map((c, i) =>
-    `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Phone: ${c.phone} | Email: ${c.email}`
-  ).join('\n\n');
+  // =========================================================================
+  // Map LCC queue rows → contact records with call prioritization signals
+  // =========================================================================
+  const now = Date.now();
+  const contacts = queueItems.map(c => {
+    const lastTouch = c.last_touch_at ? new Date(c.last_touch_at) : null;
+    const daysSinceTouch = lastTouch ? Math.floor((now - lastTouch.getTime()) / 86400000) : null;
+    const annualRent = c.rank_value ? Number(c.rank_value) : null;
+    const daysOverdue = c.days_overdue || 0;
+    const prioritySignal = daysOverdue > 30 ? 'CRITICALLY_OVERDUE'
+      : daysOverdue > 7 ? 'OVERDUE'
+      : daysOverdue > 0 ? 'DUE'
+      : c.review_flag ? 'STALE_REVIEW'
+      : 'ON_SCHEDULE';
+    return {
+      name: c.entity_name || '(Unknown)',
+      domain: c.domain || 'general',
+      phase: c.phase || '',
+      priority_tier: c.priority_tier || '',
+      email: c.contact_email || '',
+      days_overdue: daysOverdue,
+      days_since_touch: daysSinceTouch,
+      last_touch_date: lastTouch ? lastTouch.toISOString().split('T')[0] : 'never',
+      last_touch_type: c.last_touch_type || 'none',
+      annual_rent: annualRent,
+      property_count: c.rank_property_count || 0,
+      calls_made: c.calls_made || 0,
+      emails_sent: c.emails_sent || 0,
+      priority_signal: prioritySignal,
+      cadence_id: c.cadence_id,
+      entity_id: c.entity_id,
+      source: 'lcc_queue'
+    };
+  });
+
+  // =========================================================================
+  // AI prompt — uses LCC queue signals, not Outlook engagement scores
+  // =========================================================================
+  const contactList = contacts.map((c, i) => {
+    const rentStr = c.annual_rent
+      ? `$${(c.annual_rent / 1e6).toFixed(1)}M annual rent (${c.property_count} prop${c.property_count !== 1 ? 's' : ''})`
+      : 'portfolio value TBD';
+    const overdueStr = c.days_overdue > 0 ? `${c.days_overdue}d overdue [${c.priority_signal}]` : 'on schedule';
+    const touchStr = c.last_touch_date === 'never'
+      ? 'never contacted'
+      : `last ${c.last_touch_type || 'touch'}: ${c.last_touch_date} (${c.days_since_touch ?? '?'}d ago)`;
+    return `${i + 1}. ${c.name} [${c.domain}]\n   Status: ${overdueStr} | Phase: ${c.phase}${c.priority_tier ? ' | Tier: ' + c.priority_tier : ''}\n   Portfolio: ${rentStr}\n   Touch history: ${touchStr} | ${c.calls_made} calls, ${c.emails_sent} emails sent\n   Email: ${c.email || '(no email on file)'}`;
+  }).join('\n\n');
 
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  const prompt = `Generate a concise daily prospecting call sheet for ${today}.\n\nHere are the top contacts ranked by engagement:\n\n${contactList}\n\nFor each contact, provide:\n1. A one-line call prep note (why to call based on engagement pattern)\n2. A suggested talking point or reason to reach out\n3. Priority level (call today / this week / nurture)\n\nFocus on contacts who haven't been called recently but have high engagement. Flag any that are overdue for a touchpoint.`;
+  const prompt = `Generate a daily BD prospecting call sheet for ${today}.\n\n`
+    + `These are your top LCC BD queue contacts, ranked by cadence urgency (most overdue) then portfolio value (annual rent from government and healthcare real estate).\n\n`
+    + contactList
+    + `\n\nFor each contact:\n`
+    + `1. Why to call TODAY — cite the specific urgency signal (e.g., "${contacts[0]?.days_overdue || 'X'}d overdue on cadence, $Xm portfolio") and the commission opportunity\n`
+    + `2. Suggested opener — one sentence tailored to their domain (government: reference the agency/lease context; dialysis: reference the operator chain/facility; other: relationship continuity)\n`
+    + `3. Priority: CALL TODAY (critically overdue or high value) / THIS WEEK (overdue) / NURTURE (on schedule)\n\n`
+    + `Flag any CRITICALLY_OVERDUE contacts prominently. Keep each contact entry to 3-4 lines max.`;
 
   const result = await invokeChatProvider({
     message: prompt,
@@ -4320,6 +4413,7 @@ async function handleProspectingBrief(params, user, workspaceId) {
     action: 'generate_prospecting_brief',
     response: result.data?.response || '',
     contacts,
+    source: 'lcc_queue',
     provider: result.provider
   };
 }

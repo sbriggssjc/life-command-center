@@ -245,19 +245,21 @@ export const ACTION_SCHEMAS = {
   // =========================================================================
 
   generate_prospecting_brief: {
-    description: 'Generate an AI-powered daily prospecting call sheet — ranks top contacts by engagement score with call prep notes and talking points.',
+    description: 'Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from the LCC queue by cadence urgency (days overdue) and portfolio value (annual rent). Falls back to Outlook engagement scores if no LCC queue data exists.',
     category: 'outreach',
     inputs: {
       type: 'object',
       properties: {
-        limit: { type: 'integer', minimum: 1, maximum: 25, description: 'Number of top contacts to include (default 10)' }
+        limit: { type: 'integer', minimum: 1, maximum: 25, description: 'Number of top contacts to include (default 10)' },
+        domain: { type: 'string', enum: ['government', 'dialysis'], description: 'Optional: filter by business domain' }
       }
     },
     outputs: {
       type: 'object',
       properties: {
-        response: { type: 'string', description: 'AI-generated call sheet with prep notes' },
-        contacts: { type: 'array', description: 'Ranked contacts with engagement data' },
+        response: { type: 'string', description: 'AI-generated call sheet with prep notes and domain-specific openers' },
+        contacts: { type: 'array', description: 'Ranked contacts with LCC queue signals (days_overdue, annual_rent, priority_signal, etc.)' },
+        source: { type: 'string', description: 'Data source: lcc_queue | outlook_engagement | none' },
         provider: { type: 'string' }
       }
     }
