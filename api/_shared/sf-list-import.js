@@ -35,46 +35,93 @@ import { normalizeInstitution } from './institution-registry.js';
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 
-/** Read the first non-empty value across a set of key spellings on an object. */
-function pick(obj, ...keys) {
-  if (!obj || typeof obj !== 'object') return undefined;
-  for (const k of keys) {
-    const v = obj[k];
-    if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+const s = (v) => (v === undefined || v === null ? '' : String(v).trim());
+
+/**
+ * Build a tolerant field getter for ONE CampaignMember row. Salesforce "Get
+ * records" carries the denormalized member fields (FirstName / LastName / Email /
+ * Phone / City / State / CompanyOrAccount) for BOTH Lead- and Contact-linked
+ * members, but the exact SHAPE varies by connector / flow: PascalCase top-level
+ * scalars, lowercase keys, or the values nested under a `Lead` / `Contact`
+ * relationship object. Read ALL of these so a Lead-linked member with real data
+ * is NEVER dropped at the no-identity guard just because its fields arrived under
+ * a different shape (the same defensive read as getSalesforceContactById). Pure.
+ * Top-level scalars win; the nested Lead/Contact objects are a fallback.
+ */
+function buildMemberGetter(raw) {
+  const flat = {};
+  const fold = (o) => {
+    if (!o || typeof o !== 'object') return;
+    for (const k of Object.keys(o)) {
+      const v = o[k];
+      if (v === null || v === undefined || typeof v === 'object') continue;
+      const lk = k.toLowerCase();
+      if (flat[lk] === undefined) flat[lk] = v;   // first writer wins → top-level precedence
+    }
+  };
+  fold(raw);
+  if (raw && typeof raw === 'object') {
+    for (const k of Object.keys(raw)) {
+      const lk = k.toLowerCase();
+      if ((lk === 'lead' || lk === 'contact') && raw[k] && typeof raw[k] === 'object') fold(raw[k]);
+    }
   }
-  return undefined;
+  return (...spellings) => {
+    for (const sp of spellings) {
+      const v = flat[String(sp).toLowerCase()];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+    }
+    return undefined;
+  };
 }
 
-const s = (v) => (v === undefined || v === null ? '' : String(v).trim());
+/** Read a nested Salesforce relationship id (Lead.Id / Contact.Id), case-insensitively. */
+function nestedRelId(raw, rel) {
+  if (!raw || typeof raw !== 'object') return null;
+  for (const k of Object.keys(raw)) {
+    if (k.toLowerCase() === rel && raw[k] && typeof raw[k] === 'object') {
+      for (const ik of Object.keys(raw[k])) {
+        if (ik.toLowerCase() === 'id') return s(raw[k][ik]) || null;
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * Normalize a CampaignMember (or a DOM-scraped member row) into a canonical
  * shape. Tolerant of BOTH the PA/SF connector field names (FirstName / LastName /
  * CompanyOrAccount / ContactId / LeadId / Type / Status) AND the shadow-DOM
  * scrape labels (First / Last / Company / CM Relationship / Team / Org Type /
- * Last Activity). Pure.
+ * Last Activity) — read case-insensitively and from nested Lead/Contact objects
+ * so a Lead-linked member is read regardless of shape. Pure.
  */
 export function normalizeMember(raw) {
-  const first = s(pick(raw, 'FirstName', 'First', 'first_name', 'first'));
-  const last = s(pick(raw, 'LastName', 'Last', 'last_name', 'last'));
-  const name = s(pick(raw, 'Name', 'FullName', 'name', 'full_name'));
+  const g = buildMemberGetter(raw);
+  const first = s(g('FirstName', 'First', 'first_name', 'first'));
+  const last = s(g('LastName', 'Last', 'last_name', 'last'));
+  const name = s(g('Name', 'FullName', 'name', 'full_name'));
   return {
     first,
     last,
     name,
-    email: s(pick(raw, 'Email', 'email', 'ContactEmail')).toLowerCase() || null,
-    phone: s(pick(raw, 'Phone', 'phone', 'MobilePhone')) || null,
-    city: s(pick(raw, 'City', 'city', 'MailingCity')) || null,
-    state: s(pick(raw, 'State', 'state', 'MailingState')) || null,
-    company: s(pick(raw, 'CompanyOrAccount', 'Company', 'company', 'AccountName', 'account')) || null,
-    sf_contact_id: s(pick(raw, 'ContactId', 'contact_id', 'contactId')) || null,
-    sf_lead_id: s(pick(raw, 'LeadId', 'lead_id', 'leadId')) || null,
+    email: s(g('Email', 'email', 'ContactEmail')).toLowerCase() || null,
+    phone: s(g('Phone', 'phone', 'MobilePhone')) || null,
+    city: s(g('City', 'city', 'MailingCity')) || null,
+    state: s(g('State', 'state', 'MailingState')) || null,
+    company: s(g('CompanyOrAccount', 'Company', 'company', 'AccountName', 'account')) || null,
+    // A CampaignMember links EITHER a Contact (ContactId) OR a Lead (LeadId),
+    // and prospect/buyer/seller lists are OVERWHELMINGLY Leads. Capture BOTH
+    // ids (top-level or nested) so processMember can key the SF identity on
+    // whichever exists — never favour ContactId and drop the Lead path.
+    sf_contact_id: s(g('ContactId', 'contact_id')) || nestedRelId(raw, 'contact'),
+    sf_lead_id: s(g('LeadId', 'lead_id')) || nestedRelId(raw, 'lead'),
     // CampaignMember.Type (Sent / Responded …) vs CM Relationship (Open / Assigned).
-    member_type: s(pick(raw, 'Type', 'member_type', 'MemberType')) || null,
-    status: s(pick(raw, 'Status', 'CMRelationship', 'CM Relationship', 'cm_relationship', 'status')) || null,
-    org_type: s(pick(raw, 'OrgType', 'Org Type', 'org_type')) || null,
-    team: s(pick(raw, 'Team', 'team')) || null,
-    last_activity: s(pick(raw, 'LastActivity', 'Last Activity', 'last_activity', 'LastActivityDate')) || null,
+    member_type: s(g('Type', 'member_type', 'MemberType')) || null,
+    status: s(g('Status', 'CMRelationship', 'CM Relationship', 'cm_relationship')) || null,
+    org_type: s(g('OrgType', 'Org Type', 'org_type')) || null,
+    team: s(g('Team', 'team')) || null,
+    last_activity: s(g('LastActivity', 'Last Activity', 'last_activity', 'LastActivityDate')) || null,
   };
 }
 
@@ -105,6 +152,13 @@ const PRODUCT_CUES = [
 const SELLER_RE = /seller\s*prospect|seller\s*list|\bsellers?\b|owner\s*prospect/i;
 const BUYER_RE = /\bbuyer\s*list|\bbuyers?\b|\bprincipals?\b|\bbuy[-\s]?side\b/i;
 
+// Broker prefixes that front Team-Briggs seller-side lists ("SAB Seller
+// Prospects", "SAB GSA Prospects", "KDL Seller Prospects/Industrial", …).
+const BROKER_PREFIX_RE = /^\s*(SAB|KDL|NKB|JTS|DMR)\b/i;
+// A name ending in "Owners" / "Owner" is a sell-side owner target list
+// ("VCA Animal Hospital Owners", "Christian Brothers Owners", "DMR Urgent Care Owners").
+const OWNERS_LIST_RE = /\bowners?\s*$/i;
+
 /** Derive the product type from a list's combined name. null when no cue. Pure. */
 export function deriveProductType(combined) {
   const t = s(combined);
@@ -122,6 +176,14 @@ export function deriveProductType(combined) {
 export function deriveBroker(campaignName) {
   const t = s(campaignName);
   if (!t) return null;
+  // An explicit broker prefix (SAB / KDL / NKB / JTS / DMR) wins — "SAB GSA
+  // Prospects" → "SAB", "KDL Seller Prospects/Industrial" → "KDL".
+  const pm = t.match(BROKER_PREFIX_RE);
+  if (pm) return pm[1].toUpperCase();
+  // Otherwise derive a broker tag by stripping the prospect words — but ONLY
+  // when a "seller"/"prospects" word is actually present, so a tenant/owner name
+  // ("Christian Brothers Owners") is never mistaken for a broker.
+  if (!/\b(seller|prospects?)\b/i.test(t)) return null;
   const remainder = t
     .replace(/\bseller\s*prospects?\b/ig, ' ')
     .replace(/\bseller\s*list\b/ig, ' ')
@@ -145,9 +207,16 @@ export function classifyList({ campaign_name, parent_name } = {}) {
   const parent = s(parent_name);
   const combined = `${parent} ${camp}`.trim();
 
+  // A broker-prefixed "* Prospects" list ("SAB GSA Prospects", "NKB Prospects")
+  // and any "* Owners" list are sell-side targets. Tested AFTER the explicit
+  // buyer cue so "GSA Buyer" / "* Buyers" / "Buyer Lists" stay buyer.
+  const brokerProspects = BROKER_PREFIX_RE.test(camp) && /\bprospects?\b/i.test(camp);
+  const ownersList = OWNERS_LIST_RE.test(camp);
+
   let side = 'unknown';
   if (SELLER_RE.test(camp)) side = 'seller';
   else if (BUYER_RE.test(camp)) side = 'buyer';
+  else if (brokerProspects || ownersList) side = 'seller';
   else if (SELLER_RE.test(parent)) side = 'seller';
   else if (BUYER_RE.test(parent)) side = 'buyer';
 
@@ -195,6 +264,10 @@ export async function processMember(rawMember, listCtx, deps) {
   const externalId = m.sf_contact_id || m.sf_lead_id || undefined;
   const idType = m.sf_contact_id ? 'Contact' : (m.sf_lead_id ? 'Lead' : 'person');
   const seedFields = { name: personName || undefined, entity_type: 'person', domain: 'lcc' };
+  // Pass the structured name so inferEntityType resolves a name-only Lead (no
+  // email/phone) to a PERSON, not the org default.
+  if (m.first) seedFields.first_name = m.first;
+  if (m.last) seedFields.last_name = m.last;
   if (m.email) seedFields.email = m.email;
   if (m.phone) seedFields.phone = m.phone;
 
