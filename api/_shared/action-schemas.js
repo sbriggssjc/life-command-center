@@ -664,7 +664,7 @@ export const ACTION_SCHEMAS = {
         title: { type: 'string', description: 'Task title' },
         body: { type: 'string', description: 'Task notes/body' },
         due_date: { type: 'string', format: 'date', description: 'Due date (YYYY-MM-DD)' },
-        importance: { type: 'string', enum: ['low', 'normal', 'high'] },
+        importance: { type: 'string', description: 'One of: low, normal, high' },
         list_name: { type: 'string', description: 'To Do list name' },
         lcc_action_id: { type: 'string', format: 'uuid', description: 'Linked LCC action item ID' }
       },
@@ -731,8 +731,8 @@ export const ACTION_SCHEMAS = {
       type: 'object',
       properties: {
         id: { type: 'string', format: 'uuid', description: 'Inbox item ID' },
-        status: { type: 'string', enum: ['triaged', 'dismissed', 'snoozed'] },
-        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+        status: { type: 'string', description: 'One of: triaged, dismissed, snoozed' },
+        priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
         assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' }
       },
       required: ['id']
@@ -754,8 +754,8 @@ export const ACTION_SCHEMAS = {
       properties: {
         inbox_item_id: { type: 'string', format: 'uuid' },
         title: { type: 'string' },
-        action_type: { type: 'string', enum: ['follow_up', 'research', 'review', 'outreach', 'meeting'] },
-        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+        action_type: { type: 'string', description: 'One of: follow_up, research, review, outreach, meeting' },
+        priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
         assigned_to: { type: 'string', format: 'uuid', description: 'User ID to assign to. Omit to assign to yourself (the authenticated user) — do NOT ask the user for this value.' },
         due_date: { type: 'string', format: 'date' },
         entity_id: { type: 'string', format: 'uuid' }
@@ -780,7 +780,7 @@ export const ACTION_SCHEMAS = {
         title: { type: 'string' },
         entity_id: { type: 'string', format: 'uuid' },
         action_type: { type: 'string' },
-        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+        priority: { type: 'string', description: 'One of: low, normal, high, urgent' },
         due_date: { type: 'string', format: 'date' },
         description: { type: 'string' }
       },
@@ -802,7 +802,7 @@ export const ACTION_SCHEMAS = {
       type: 'object',
       properties: {
         id: { type: 'string', format: 'uuid', description: 'Action item ID' },
-        status: { type: 'string', enum: ['open', 'in_progress', 'blocked', 'completed', 'cancelled'] }
+        status: { type: 'string', description: 'One of: open, in_progress, blocked, completed, cancelled' }
       },
       required: ['id', 'status']
     },
@@ -865,7 +865,7 @@ export const ACTION_SCHEMAS = {
     inputs: {
       type: 'object',
       properties: {
-        item_type: { type: 'string', enum: ['action', 'inbox', 'research'] },
+        item_type: { type: 'string', description: 'One of: action, inbox, research' },
         item_id: { type: 'string', format: 'uuid' },
         assigned_to: { type: 'string', format: 'uuid', description: 'Target user ID' },
         reason: { type: 'string', description: 'Reason for reassignment' }
