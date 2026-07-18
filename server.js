@@ -40,6 +40,7 @@ import bridgesHandler from './api/bridges.js';
 // needed (no friendly alias — clients hit /api/intake-share directly).
 import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
+import compsHandler from './api/comps.js';
 
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -247,6 +248,9 @@ app.all('/api/workflows', operationsHandler);
 // BOV workbook generation (proxies the Railway BOV service; key stays server-side)
 app.all('/api/bov', bovHandler);
 
+// Comps workbook generation (proxies the Railway BOV service's /generate-comps; key stays server-side)
+app.all('/api/comps', compsHandler);
+
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
 app.all('/api/contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
@@ -388,6 +392,9 @@ app.get('/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.n
 
 // BOV generator page (deep-link target: /bov?data=<base64 JSON>&k=<bridge token>)
 app.get('/bov', (req, res) => res.sendFile(join(__dirname, 'bov.html')));
+
+// Comps generator page (deep-link target: /comps?data=<base64 JSON>&k=<bridge token>)
+app.get('/comps', (req, res) => res.sendFile(join(__dirname, 'comps.html')));
 
 // R32 (2026-06-16): deploy-version diagnostics. Confirms which token the served
 // `?v=` cache-buster is stamped with and whether it's git-pinned. `no-store` so
