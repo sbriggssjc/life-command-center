@@ -498,11 +498,69 @@ const TOOL_DEFINITIONS = {
       }
     }
   },
+  generate_comps: {
+    name: 'generate_comps',
+    description: "Populate a Briggs CRE comps workbook (sales or lease) from structured comp rows and return a short-lived download link. You map the raw CoStar/Salesforce export → rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate — so the output is identical no matter which team member prepared the rows. Row keys are the Briggs column names lowercased with underscores (e.g. property_name, address, city, st, rba_sf, tenant, lease_type, lease_exp, annual_noi, init_price, cur_price, list_date, last_price, sale_price, sale_date, buyer, seller, financing, bumps, options, yr_built, submarket, notes; lease: property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated). Omit any field you don't have — never guess. Dates 'YYYY-MM-DD'; rents/NOI annual.",
+    inputSchema: {
+      type: 'object',
+      required: ['comp_type'],
+      properties: {
+        comp_type: { type: 'string', enum: ['sales', 'lease'], description: 'sales = On Market + Sold sheets | lease = Lease Comps sheet' },
+        on_market: { type: 'array', description: 'Sales: active listings (each an object keyed by Briggs column name).', items: { type: 'object', additionalProperties: true } },
+        sold: { type: 'array', description: 'Sales: closed comps (On Market fields + last_price, sale_price, sale_date, buyer, seller, financing).', items: { type: 'object', additionalProperties: true } },
+        comps: { type: 'array', description: 'Lease: lease comp rows (object per row).', items: { type: 'object', additionalProperties: true } },
+        name: { type: 'string', description: 'Label for the filename (property/market/tenant); defaults to client last name or "Briggs".' },
+        client: { type: 'object', properties: { last_name: { type: 'string' }, file_month: { type: 'string', description: 'YYYYMM' } } },
+      }
+    }
+  },
 };
 
 // ── Tool handlers ─────────────────────────────────────────────────────────
 // These are the exact same async functions from the former s.tool() calls.
 const TOOL_HANDLERS = {
+  generate_comps: async (args) => {
+    return withTiming("generate_comps", async () => {
+      if (!BOV_SERVICE_URL || !BOV_API_KEY) {
+        return textResult({ error: "Comps service not configured — set BOV_SERVICE_URL and BOV_API_KEY on the MCP service." });
+      }
+      const ct = args && String(args.comp_type || '').toLowerCase();
+      if (ct !== 'sales' && ct !== 'lease') {
+        return textResult({ error: "generate_comps requires comp_type 'sales' or 'lease', plus rows (sales: on_market/sold; lease: comps)." });
+      }
+      const url = BOV_SERVICE_URL + "/generate-comps";
+      let resp, text;
+      try {
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": BOV_API_KEY },
+          body: JSON.stringify(args),
+          signal: AbortSignal.timeout(180000),
+        });
+        text = await resp.text();
+      } catch (e) {
+        return textResult({ error: "Could not reach comps service: " + e.message });
+      }
+      if (!resp.ok) {
+        return textResult({ error: "Comps service returned HTTP " + resp.status, detail: text.slice(0, 500) });
+      }
+      let data;
+      try { data = JSON.parse(text); } catch (e) { return textResult({ error: "Comps service returned non-JSON", raw: text.slice(0, 300) }); }
+      const recalc = data.recalc_result || {};
+      const mins = Math.round((data.expires_in_seconds || 3600) / 60);
+      return textResult({
+        status: data.status,
+        filename: data.filename,
+        download_url: data.download_url,
+        comp_type: data.comp_type,
+        rows_by_sheet: data.rows_by_sheet,
+        skipped_formula_keys: data.skipped_formula_keys,
+        unknown_keys: data.unknown_keys,
+        recalc_errors: recalc.total_errors || 0,
+        message: "Comps workbook generated: " + data.filename + ". Download it here (link expires in " + mins + " min): " + data.download_url,
+      });
+    });
+  },
   generate_bov: async (args) => {
     return withTiming("generate_bov", async () => {
       if (!BOV_SERVICE_URL || !BOV_API_KEY) {
@@ -1638,6 +1696,7 @@ app.get("/health", (_req, res) => {
       "get_queue_summary",
       "get_pipeline_health",
       "generate_bov",
+      "generate_comps",
     ],
     ops_configured: !!(OPS_SUPABASE_URL && OPS_SUPABASE_KEY),
     gov_configured: !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY),

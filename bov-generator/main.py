@@ -56,6 +56,16 @@ except Exception:  # noqa: BLE001
         def __init__(self, message: str, status: int = 502):
             super().__init__(message); self.status = status
 
+# Comps population engine — the shared comps tool (mirrors the BOV generator).
+try:
+    from comps_generator import populate_comps, CompsError
+    _COMPS_ENGINE = True
+except Exception:  # noqa: BLE001
+    _COMPS_ENGINE = False
+    class CompsError(Exception):
+        def __init__(self, message, status=422):
+            super().__init__(message); self.status = status
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("bov-generator")
@@ -362,6 +372,71 @@ async def generate_bov(req: BOVRequest, request: Request):
         file_size_kb       = size_kb,
         recalc_result      = recalc_result,
     )
+
+
+# ── Comps endpoint ────────────────────────────────────────────────────────────
+# The shared comps engine: the LLM at any access point maps a raw CoStar/Salesforce
+# export → structured rows (per Comps_Column_Mapping.md), POSTs them here, and gets
+# back the identical populated Briggs comps template — formula columns preserved.
+@app.post("/generate-comps", dependencies=[Depends(verify_api_key)])
+async def generate_comps(payload: dict, request: Request):
+    if not _COMPS_ENGINE:
+        raise HTTPException(status_code=503, detail="comps engine not available (comps_generator/templates not deployed)")
+    comp_type = str(payload.get("comp_type", "")).lower()
+    if comp_type not in ("sales", "lease"):
+        raise HTTPException(status_code=422, detail="comp_type must be 'sales' or 'lease'")
+
+    # Filename: [label]_[Sales|Lease]Comps_[YYYYMM].xlsx. label from payload.name or client.
+    import re as _re
+    label = str(payload.get("name") or payload.get("label")
+                or (payload.get("client") or {}).get("last_name") or "Briggs").strip()
+    label = _re.sub(r"[^\w\s-]", "", label); label = _re.sub(r"\s+", "", label) or "Briggs"
+    month = str((payload.get("client") or {}).get("file_month") or datetime.now().strftime("%Y%m"))
+    kind = "SalesComps" if comp_type == "sales" else "LeaseComps"
+    filename = f"{label}_{kind}_{month}.xlsx"
+    log.info("Generating %s: %s", kind, filename)
+
+    with tempfile.TemporaryDirectory(prefix="comps-gen-") as tmp:
+        output_path = os.path.join(tmp, filename)
+        try:
+            summary = populate_comps(payload, output_path)
+        except CompsError as e:
+            raise HTTPException(status_code=getattr(e, "status", 422), detail=str(e))
+        except Exception as e:  # noqa: BLE001
+            log.exception("Comps populate failed")
+            raise HTTPException(status_code=500, detail=f"Comps populate failed: {e}")
+
+        try:
+            recalc_result = recalc_and_validate(output_path, timeout=120)
+        except RecalcError as e:
+            log.error("Comps recalc failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"Recalc failed: {e}")
+
+        try:
+            raw_bytes = Path(output_path).read_bytes()
+            file_b64 = base64.b64encode(raw_bytes).decode("ascii")
+            size_kb = round(len(raw_bytes) / 1024, 1)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"File read failed: {e}")
+
+    _sweep_expired_downloads()
+    token = _store_for_download(raw_bytes, filename)
+    download_url = f"{_base_url(request)}/download/{token}"
+    log.info("Staged comps %s KB (%s) → %s", size_kb, filename, token)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "download_url": download_url,
+        "expires_in_seconds": DOWNLOAD_TTL_SECONDS,
+        "file_base64": file_b64,
+        "file_size_kb": size_kb,
+        "comp_type": comp_type,
+        "rows_by_sheet": summary["sheets"],
+        "skipped_formula_keys": summary["skipped_formula_keys"],
+        "unknown_keys": summary["unknown_keys"],
+        "recalc_result": recalc_result,
+    }
 
 
 # ── Download endpoint ─────────────────────────────────────────────────────────
