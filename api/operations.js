@@ -4135,20 +4135,23 @@ async function _maybeCreateOutlookDraft({ params, responseText, fallbackTo }) {
   // Pass text_only=true to skip draft creation and return email text only.
   if (params?.text_only === true || params?.text_only === 'true') return null;
   const to = params.to || fallbackTo;
+  console.log('[outlook-draft] to:', to, '| params.to:', params?.to, '| fallbackTo:', fallbackTo);
   if (!to) {
     return { draft_created: false, draft_note: 'No recipient email available — returned text only. Pass "to" to create an Outlook draft.' };
   }
   const { subject, body } = _parseDraftSubjectBody(responseText);
+  console.log('[outlook-draft] calling PA | to:', to, '| subject:', subject);
   const res = await createOutlookDraftViaPA({
     to,
     cc: params.cc,
     subject: subject || (params.subject || 'Draft'),
     body_html: _draftBodyToHtml(body || responseText),
   });
+  console.log('[outlook-draft] PA result:', JSON.stringify(res));
   if (res.ok) {
     return { draft_created: true, draft_web_link: res.web_link || null, draft_id: res.draft_id || null, draft_recipient: to };
   }
-  return { draft_created: false, draft_note: `Outlook draft not created (${res.error || 'unknown'}); returned text only.` };
+  return { draft_created: false, outlook_draft_failed: true, draft_note: `OUTLOOK DRAFT NOT SAVED — Power Automate flow error: ${res.error || 'unknown'}. The email text is NOT in your Outlook Drafts folder.` };
 }
 
 async function handleDraftOutreachEmail(params, user, workspaceId) {
