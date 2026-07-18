@@ -88,7 +88,12 @@ export const ACTION_SCHEMAS = {
   get_sync_run_health: {
     description: 'Check health status of all sync connectors — Salesforce, Outlook, domain databases.',
     category: 'ops',
-    inputs: { type: 'object', properties: {} },
+    inputs: {
+      type: 'object',
+      properties: {
+        connector: { type: 'string', description: 'Optional: filter to a specific connector name (e.g., "salesforce", "outlook"). Omit for all connectors.' }
+      }
+    },
     outputs: {
       type: 'object',
       properties: {
@@ -394,7 +399,12 @@ export const ACTION_SCHEMAS = {
   list_email_templates: {
     description: 'List all active email templates available for draft generation.',
     category: 'outreach',
-    inputs: { type: 'object', properties: {} },
+    inputs: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: 'Optional: filter by template category (e.g., "outreach", "seller_update", "follow_up").' }
+      }
+    },
     outputs: {
       type: 'object',
       properties: {
@@ -682,9 +692,14 @@ export const ACTION_SCHEMAS = {
   },
 
   ingest_outlook_flagged_emails: {
-    description: 'Trigger ingestion of flagged Outlook emails into the inbox queue.',
+    description: 'Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all currently flagged emails from Outlook via Power Automate and creates LCC inbox items for each.',
     category: 'workflow',
-    inputs: { type: 'object', properties: {} },
+    inputs: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'Maximum number of flagged emails to ingest in this run (optional, default: 50).' }
+      }
+    },
     outputs: {
       type: 'object',
       properties: {
