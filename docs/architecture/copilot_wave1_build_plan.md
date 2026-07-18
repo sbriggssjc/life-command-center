@@ -13,6 +13,13 @@ Define the execution plan for Wave 1 Copilot capabilities with clear sequencing,
 
 ---
 
+> **Infrastructure Note (updated 2026-07-17):**
+> The live Railway production host is `tranquil-delight-production-633f.up.railway.app`.
+> `life-command-center-production.up.railway.app` returns 404 on all API routes — do not use it.
+> All PA flow configs, test commands, and env references must use the tranquil-delight hostname.
+
+---
+
 ## 1. Wave 1 Goals and Success Criteria
 
 ### Goals
@@ -110,7 +117,7 @@ Tasks:
 
 **Milestone:** Auth hardened, messaging routes wired, pre-commit guard active.
 
-### Phase 1B: Daily Briefing Snapshot (Days 3-7) — COMPLETE
+### Phase 1B: Daily Briefing Snapshot (Days 3-7) — CODE COMPLETE, PA FLOW ACTIVATION PENDING
 **Goal:** Build the single highest-leverage Wave 1 deliverable.
 
 Tasks:
@@ -120,16 +127,22 @@ Tasks:
   - Support `role_view` parameter (broker, analyst_ops, manager)
 - [x] Add role-specific section weighting per daily_briefing_integration_plan.md
 - [x] Validate response matches `daily_briefing_payload_contract.md` schema
-- [ ] Activate `flow-daily-briefing-to-teams.json` in production Power Automate
+- [ ] Build and activate `flow-daily-briefing-to-teams.json` in production Power Automate
+  - Blueprint at `flow-daily-briefing-to-teams.json` (design spec — must be built in PA UI)
+  - Config: LCC_HOST=https://tranquil-delight-production-633f.up.railway.app, WORKSPACE_ID=a0000000-0000-0000-0000-000000000001, ROLE_VIEW=broker
+  - Schedule: Weekdays 07:30 America/Chicago
 - [ ] Verify Teams adaptive card renders correctly from snapshot payload
 
 **Milestone:** Team receives daily briefing in Teams channel every weekday morning.
 
-### Phase 1C: Intake Pipeline Activation (Days 5-10)
+### Phase 1C: Intake Pipeline Activation (Days 5-10) — PA FLOW ACTIVATION PENDING
 **Goal:** Every flagged Outlook email becomes a tracked intake item with Teams visibility.
 
 Tasks:
-- [ ] Verify `flow-outlook-intake-to-teams-hardened.json` is imported in Power Automate
+- [ ] Build `flow-outlook-intake-to-teams-hardened.json` in Power Automate
+  - Blueprint at `flow-outlook-intake-to-teams-hardened.json` (design spec — must be built in PA UI)
+  - Trigger: When an email is flagged (V3) — Office 365 Outlook connector
+  - Config: LCC_HOST=https://tranquil-delight-production-633f.up.railway.app, WORKSPACE_ID=a0000000-0000-0000-0000-000000000001
 - [ ] Configure flow with production LCC_API_KEY, workspace ID, and Team/Channel IDs
 - [ ] Activate hardened flow (single-message deterministic path)
 - [ ] Test end-to-end: flag email in Outlook -> inbox item created -> Teams card posted
@@ -166,27 +179,31 @@ Tasks:
 - [x] Wire `draft_outreach_email` with contact/entity context from LCC
 - [x] Wire `draft_seller_update_email` with listing activity timeline context
 - [x] Add confirmation flow for email drafts (explicit confirmation before any send)
-- [ ] Test prospecting flow: hot contacts -> brief -> draft email -> user reviews in Outlook
+- [x] Fix entity_name field mapping in v_bd_cadence_dashboard (was returning 'Unknown')
+- [x] Fix priority_signal fallback to priority_tier column
+- [x] Eliminate assigned_to UUID prompt (schema description + proxy layer user.id injection)
+- [x] Outlook draft creation via Power Automate live (PA_OUTLOOK_DRAFT_URL set in Railway)
+- [ ] Full prospecting test in Copilot Studio: hot contacts → brief → draft email → user reviews in Outlook
 
-**Milestone:** 3 AI-powered handlers wired. Structured dispatch and confirmation enforcement working.
+**Milestone:** 3 AI-powered handlers wired. Structured dispatch and confirmation enforcement working. Live Outlook draft confirmed working end-to-end.
 
-### Phase 1F: Write Actions with Confirmation (Days 12-18) — CODE COMPLETE, TESTING PENDING
+### Phase 1F: Write Actions with Confirmation (Days 12-18) — API TESTING COMPLETE, COPILOT STUDIO TESTING PENDING
 **Goal:** All 8 mutation actions enforce confirmation policy and work correctly.
 
 Tasks:
-- [x] Verify confirmation enforcement for each write action:
-  - `ingest_outlook_flagged_emails` (lightweight)
-  - `triage_inbox_item` (lightweight)
-  - `promote_intake_to_action` (explicit)
-  - `create_listing_pursuit_followup_task` (explicit)
-  - `update_execution_task_status` (explicit)
-  - `retry_sync_error_record` (explicit)
-  - `draft_outreach_email` (explicit — draft only, no send)
-  - `draft_seller_update_email` (explicit — draft only, no send)
+- [x] Verify confirmation enforcement for each write action (all 8 confirmed at API level, 2026-07-17):
+  - [x] `ingest_outlook_flagged_emails` (lightweight) — gate fires + proxy execute confirmed
+  - [x] `triage_inbox_item` (lightweight) — gate fires + proxy execute confirmed
+  - [x] `promote_intake_to_action` (explicit) — gate fires + proxy execute confirmed
+  - [x] `create_listing_pursuit_followup_task` (explicit) — gate fires + proxy execute confirmed
+  - [x] `update_execution_task_status` (explicit) — gate fires + proxy execute confirmed
+  - [x] `retry_sync_error_record` (explicit) — gate fires + proxy execute confirmed
+  - [x] `draft_outreach_email` (implicit via create_draft+to) — live Outlook draft confirmed
+  - [x] `draft_seller_update_email` (implicit via create_draft+to) — gate + implicit confirm confirmed
 - [x] Add activity_event logging for all Copilot-initiated mutations
-- [ ] Test each action through Copilot Chat with confirmation flow
+- [ ] Test each action through Copilot Studio with live confirmation flow (end-to-end)
 
-**Milestone:** Confirmation enforcement built into dispatcher. Telemetry logging active. Live testing pending.
+**Milestone:** Confirmation enforcement built into dispatcher. Telemetry logging active. Live Copilot Studio testing pending.
 
 ---
 
@@ -223,7 +240,7 @@ Each action gets a manual validation script:
 ### Guardrails
 - All write actions require explicit confirmation — no autonomous mutations in Wave 1
 - Daily briefing is read-only aggregation — no state changes from briefing delivery
-- Email drafts are generated but never auto-sent — user must copy to Outlook manually
+- Email drafts are generated but never auto-sent — user must review in Outlook
 - Copilot Chat responses include source attribution (which endpoint provided data)
 - All Copilot-initiated actions log to `activity_events` with `source: 'copilot'`
 
@@ -283,10 +300,9 @@ Each action gets a manual validation script:
 
 ## 9. Immediate Next Actions
 
-1. Complete auth hardening (gate transitional fallback)
-2. Complete contacts messaging route fix
-3. Implement daily briefing snapshot aggregation
-4. Import and activate hardened Outlook intake flow in Power Automate
-5. Import and activate daily briefing Teams flow in Power Automate
-6. Validate all 10 read-only actions return expected data
-7. Begin prospecting flow wiring
+1. Build Phase 1B flow in Power Automate (daily briefing → Teams, scheduled weekdays 7:30 CT)
+2. Build Phase 1C flow in Power Automate (Outlook flag → LCC intake → Teams card)
+3. Live Copilot Studio end-to-end testing for all Wave 1 actions
+4. Production smoke test sweep (all 18 actions)
+5. Verify Teams cards render and action links work
+6. Verify daily briefing delivered for 3 consecutive weekdays
