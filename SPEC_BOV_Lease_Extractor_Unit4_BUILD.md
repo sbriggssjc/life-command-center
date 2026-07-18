@@ -115,6 +115,40 @@ the currently-running deploy): `api/_shared/document-text.js`,
 `api/_shared/bov-extract.js`. Plus `vercel.json` (named-path rewrites). After that
 redeploy, enable the forward `jobs`-lane cron (commented in the cron migration).
 
+## ⚠️ DocAI page-anchors BLOCKED by a processor-type misconfig (2026-07-17)
+
+The `page_texts` code change is deployed (docai-ocr **v16**, hardened) and committed —
+correct and proven innocent via A/B (the hardened build still 502→gpt-4o, so the
+failure is not ours). Root cause of the OCR failures, found via a throwaway
+`docai-diag` function that reproduced the exact call path:
+
+- Service account + OAuth token: **fine** (token mint returns 200).
+- Document AI returns **HTTP 400 INVALID_ARGUMENT**, fieldViolation:
+  `entity_types: "Must have at least one entity type."`
+- Meaning: the configured processor **`e1904ab5a10ddf4c`** (project
+  `modular-conduit-450617-h5`, SA `lcc-deed-ocr@…`) is a **Custom Extractor /
+  entity-extraction** processor, NOT a **Document OCR** processor. The wrapper
+  sends a doc for OCR; a Custom Extractor rejects it because it wants trained
+  entity types. So every scanned lease/deed 502s → falls back to gpt-4o (pricier,
+  no page anchors). (Note: a google_docai success appeared earlier the same day,
+  so the processor env was likely changed mid-day to this wrong processor.)
+
+**THE FIX (GCP / env — no code):**
+1. Google Cloud Console → Document AI → Processors. Create (or find) a
+   **"Document OCR"** processor (a.k.a. Enterprise Document OCR) in a `us`/`eu`
+   location. Custom Extractor ≠ Document OCR.
+2. Copy its Processor ID.
+3. Update the edge-function env `GOOGLE_DOCAI_PROCESSOR_ID` (or the full
+   `GOOGLE_DOCAI_PROCESSOR` resource name) to the OCR processor. No redeploy of
+   docai-ocr needed — it re-reads env per invocation.
+4. Verify: `GET .../functions/v1/docai-diag` was the probe (now disabled); instead
+   run a `cre-doc-text-tick` and confirm a sidecar with `ocr_engine='google_docai'`
+   now has `page_count>0` and a populated `pages` array. Then delete `docai-diag`
+   from the dashboard (no MCP delete tool; it's inert/410 in the meantime).
+
+Once the OCR processor is set, page anchors populate automatically AND scanned
+OCR stops burning gpt-4o. The rest of Unit 4 is unaffected and running.
+
 ## Coverage-gated auto-extraction (Step 2B, self-advancing)
 
 Built so records generate automatically as the backlog drains — safely:
