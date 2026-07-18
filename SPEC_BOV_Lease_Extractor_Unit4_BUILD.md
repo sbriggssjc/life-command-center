@@ -128,7 +128,18 @@ Built so records generate automatically as the backlog drains — safely:
 - **Cron** `lcc-cre-bov-extract-sweep` (migration written, NOT yet applied): every
   2h, 5 properties/tick. Gated by construction — only fully-covered properties.
 
-## ACTIVATION SEQUENCE — after the next redeploy
+## ✅ ACTIVATED (2026-07-17) — all three crons live, verified
+
+Redeploy confirmed live (sweep handler + idempotency guard responding). Activation
+run end-to-end:
+- `lcc-cre-doc-text-backfill` (*/30) · `lcc-cre-doc-text-jobs` (:15/:45) ·
+  `lcc-cre-bov-extract-sweep` (17 */2) — all active.
+- First auto-extracted record produced by the sweep (property 301, review-gated).
+- Records: 1 reviewed (pilot 16) + 1 extracted; readiness view: 3 properties.
+- Only remaining item is the EXTERNAL DocAI-wrapper per-page-text change (Step 6
+  below) for OCR-derived lease PAGE anchors; sections + everything else work.
+
+## ACTIVATION SEQUENCE — reference (already executed; re-run safe/idempotent)
 
 The redeploy carries: `document-text.js` (page passthrough), `cre-property-doc-text.js`
 (idempotency guard + thin-OCR flag), `bov-extract.js` + `bov-extract.js` handler

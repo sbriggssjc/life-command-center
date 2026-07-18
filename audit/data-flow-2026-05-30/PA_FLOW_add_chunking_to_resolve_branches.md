@@ -191,6 +191,22 @@ margin). More chunks per list (GSA Buyer = 8 instead of 4), handled fine by the 
 upsert. Everything else (the fx `join(items(...))` filter, retry policy, Select, POST) stays.
 This is the LAST constraint — after this the big lists complete.
 
+## FINAL reliability fix (2026-07-17, run #7) — Salesforce rate-limit → run For-each SEQUENTIALLY
+
+After chunk-size 20 (which fixed the OData node limit), the run failed at ~5-6 min with 0 writes.
+The failing actions were Salesforce calls (`Has L2 Members` chunk failing after **31s of retries**,
+and `Get L2 members` in another iteration) — i.e. **Salesforce rate-limiting (429)**, NOT the OData
+400 (a 400 fails in ~2s and isn't retried; 31s means the retry policy ran and SF stayed throttled).
+Shrinking chunks to 20 increased the SF call count, and `For each L2` runs ~20 lists in PARALLEL by
+default, each firing many Get-Contacts calls — flooding Salesforce.
+
+**THE FIX — process lists one at a time so SF isn't flooded:**
+- `For each L2` → **⋯ / Settings → Concurrency Control → ON → Degree of parallelism = 1** (sequential).
+
+Runtime ~20 min (the Jul-16 SUCCESSFUL runs took 19-22 min — that's normal), but it COMPLETES instead
+of aborting. Keep the Get-Contacts retry policies. Optionally add the same retry (Exponential/PT10S/
+count 4) to `Get L2 members`, `Get L3 lists`, `Get L3 members`. Concurrency=1 is the decisive lever.
+
 ## After chunking verifies end-to-end
 Flip **`SF_LIST_SEED_INSTITUTION`** on (after eyeballing the first full seller ingest) to kick the
 Tier A fan-out over the contactless sponsors.
