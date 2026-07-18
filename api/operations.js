@@ -4188,6 +4188,12 @@ async function handleDraftOutreachEmail(params, user, workspaceId) {
     }
   }
 
+  // Fallback: if orchestrator passed an email inside any param value (e.g. intent, contact_name),
+  // or if params.to is set but recipientEmail is still null, use params.to.
+  if (!recipientEmail && params?.to) {
+    recipientEmail = params.to;
+  }
+
   const toneGuide = tone || 'professional, warm, and concise';
   const intentGuide = intent || 'reconnect and explore potential listing opportunities';
 

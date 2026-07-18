@@ -1106,8 +1106,8 @@
     "/api/copilot/outreach/draft-outreach-email": {
       "post": {
         "operationId": "draft_outreach_email",
-        "summary": "Draft a personalized outreach email for a business development contact. Provide contact_id (unified_id from GOV contacts DB) or contact_name.",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach.",
+        "summary": "Draft a personalized outreach email and automatically save it to Outlook Drafts. Always include the recipient email in the \"to\" field.",
+        "description": "**Tier 1** (always-draft) \u2014 automatically saves to Outlook Drafts when \"to\" is provided. Category: outreach.",
         "tags": [
           "outreach"
         ],
@@ -1141,11 +1141,11 @@
               "properties": {
                 "contact_id": {
                   "type": "string",
-                  "description": "Contact unified_id from GOV contacts DB (returned by search_entities)"
+                  "description": "Contact unified_id from GOV contacts DB (returned by search_entities) \u2014 preferred; resolves recipient email automatically"
                 },
                 "contact_name": {
                   "type": "string",
-                  "description": "Contact name (used if contact_id not available)"
+                  "description": "Contact full name \u2014 used when contact_id is not available; email is looked up from contacts DB"
                 },
                 "intent": {
                   "type": "string",
@@ -1155,13 +1155,9 @@
                   "type": "string",
                   "description": "Desired tone (default: professional, warm, and concise)"
                 },
-                "create_draft": {
-                  "type": "boolean",
-                  "description": "If true, create the email as a real draft in the user's Outlook. Requires a recipient email — uses contact email on file or the 'to' field."
-                },
                 "to": {
                   "type": "string",
-                  "description": "Recipient email address. Required when creating an Outlook draft and the contact has no email on file."
+                  "description": "Recipient email address \u2014 ALWAYS include when the user provides an email or when one is known. The draft is automatically saved to Outlook Drafts when this field is provided. Do not omit this field if an email address is available."
                 },
                 "cc": {
                   "type": "string",
@@ -2094,7 +2090,7 @@
                 },
                 "_confirmed": {
                   "type": "boolean",
-                  "description": "Tier 2 confirmation gate — must be true to execute the write"
+                  "description": "Tier 2 confirmation gate \u2014 must be true to execute the write"
                 },
                 "status": {
                   "type": "string",
@@ -2728,7 +2724,7 @@
       "post": {
         "operationId": "dismiss_inbox_item",
         "summary": "Dismiss an inbox item permanently.",
-        "description": "**Tier 2** (explicit-confirm) — requires confirmation before dismissal. Category: workflow.",
+        "description": "**Tier 2** (explicit-confirm) \u2014 requires confirmation before dismissal. Category: workflow.",
         "tags": [
           "workflow"
         ],
@@ -2771,7 +2767,7 @@
                 },
                 "_confirmed": {
                   "type": "boolean",
-                  "description": "Tier 2 confirmation gate — must be true to execute the dismissal"
+                  "description": "Tier 2 confirmation gate \u2014 must be true to execute the dismissal"
                 },
                 "reason": {
                   "type": "string",
@@ -2796,7 +2792,7 @@
       "get": {
         "operationId": "search_deals",
         "summary": "Search active deals and pipeline by keyword, status, or entity.",
-        "description": "**Tier 1** (read-only) — no confirmation required. Category: intelligence.",
+        "description": "**Tier 1** (read-only) \u2014 no confirmation required. Category: intelligence.",
         "tags": [
           "intelligence"
         ],
@@ -2811,12 +2807,25 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "id": { "type": "string" },
-                      "name": { "type": "string" },
-                      "status": { "type": "string" },
-                      "entity_name": { "type": "string" },
-                      "stage": { "type": "string" },
-                      "updated_at": { "type": "string", "format": "date-time" }
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "entity_name": {
+                        "type": "string"
+                      },
+                      "stage": {
+                        "type": "string"
+                      },
+                      "updated_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
                     }
                   },
                   "description": "Matching deals"
@@ -2842,7 +2851,12 @@
             "name": "status",
             "required": false,
             "type": "string",
-            "enum": ["active", "closed", "dead", "pending"],
+            "enum": [
+              "active",
+              "closed",
+              "dead",
+              "pending"
+            ],
             "description": "Filter by deal status"
           },
           {
@@ -2871,36 +2885,65 @@
       "get": {
         "operationId": "search_properties",
         "summary": "Search CRE properties by location, asset type, or owner.",
-        "description": "**Tier 0** (read-only) — no confirmation required. Category: intelligence. Returns asset-type entities matching the provided filters. Use to find a property before researching its owner or checking its deal status.",
-        "tags": ["intelligence"],
+        "description": "**Tier 0** (read-only) \u2014 no confirmation required. Category: intelligence. Returns asset-type entities matching the provided filters. Use to find a property before researching its owner or checking its deal status.",
+        "tags": [
+          "intelligence"
+        ],
         "parameters": [
           {
-            "in": "query", "name": "q", "required": false, "type": "string",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "type": "string",
             "description": "Keyword search across property name, address, and city"
           },
           {
-            "in": "query", "name": "city", "required": false, "type": "string",
+            "in": "query",
+            "name": "city",
+            "required": false,
+            "type": "string",
             "description": "Filter by city name"
           },
           {
-            "in": "query", "name": "state", "required": false, "type": "string",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "type": "string",
             "description": "Filter by state abbreviation or full name (e.g. TX or Texas)"
           },
           {
-            "in": "query", "name": "asset_type", "required": false, "type": "string",
+            "in": "query",
+            "name": "asset_type",
+            "required": false,
+            "type": "string",
             "description": "Filter by asset type (e.g. nnn, mob, gov, dia)"
           },
           {
-            "in": "query", "name": "domain", "required": false, "type": "string",
-            "enum": ["gov", "dia", "lcc"],
+            "in": "query",
+            "name": "domain",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "gov",
+              "dia",
+              "lcc"
+            ],
             "description": "Filter by data domain: gov=government, dia=dialysis, lcc=general CRE"
           },
           {
-            "in": "query", "name": "owner_entity_id", "required": false, "type": "string", "format": "uuid",
+            "in": "query",
+            "name": "owner_entity_id",
+            "required": false,
+            "type": "string",
+            "format": "uuid",
             "description": "Return properties owned by this entity UUID"
           },
           {
-            "in": "query", "name": "limit", "required": false, "type": "integer", "default": 20,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "type": "integer",
+            "default": 20,
             "description": "Max results to return"
           }
         ],
@@ -2910,21 +2953,44 @@
             "schema": {
               "type": "object",
               "properties": {
-                "count": { "type": "integer" },
+                "count": {
+                  "type": "integer"
+                },
                 "results": {
                   "type": "array",
                   "items": {
                     "type": "object",
                     "properties": {
-                      "entity_id": { "type": "string" },
-                      "name":      { "type": "string" },
-                      "asset_type": { "type": "string" },
-                      "domain":    { "type": "string" },
-                      "address":   { "type": "string" },
-                      "city":      { "type": "string" },
-                      "state":     { "type": "string" },
-                      "owners":    { "type": "array", "items": { "type": "object" } },
-                      "on_market": { "type": "object" }
+                      "entity_id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "asset_type": {
+                        "type": "string"
+                      },
+                      "domain": {
+                        "type": "string"
+                      },
+                      "address": {
+                        "type": "string"
+                      },
+                      "city": {
+                        "type": "string"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "owners": {
+                        "type": "array",
+                        "items": {
+                          "type": "object"
+                        }
+                      },
+                      "on_market": {
+                        "type": "object"
+                      }
                     }
                   }
                 }
@@ -2932,15 +2998,19 @@
             }
           }
         },
-        "produces": ["application/json"]
+        "produces": [
+          "application/json"
+        ]
       }
     },
     "/api/copilot/intelligence/match-property": {
       "post": {
         "operationId": "match_property_to_inbox_item",
         "summary": "Match an inbox item to a known CRE property using extracted location and tenant signals.",
-        "description": "**Tier 0** (read-only) — no confirmation required. Category: intelligence. Reads the inbox item's title and body, extracts address/city/state/tenant signals, and returns ranked property candidates. Use before creating an action item to ensure the right property is linked.",
-        "tags": ["intelligence"],
+        "description": "**Tier 0** (read-only) \u2014 no confirmation required. Category: intelligence. Reads the inbox item's title and body, extracts address/city/state/tenant signals, and returns ranked property candidates. Use before creating an action item to ensure the right property is linked.",
+        "tags": [
+          "intelligence"
+        ],
         "parameters": [
           {
             "in": "body",
@@ -2948,10 +3018,13 @@
             "required": true,
             "schema": {
               "type": "object",
-              "required": ["inbox_item_id"],
+              "required": [
+                "inbox_item_id"
+              ],
               "properties": {
                 "inbox_item_id": {
-                  "type": "string", "format": "uuid",
+                  "type": "string",
+                  "format": "uuid",
                   "description": "UUID of the inbox item to match"
                 }
               }
@@ -2964,16 +3037,30 @@
             "schema": {
               "type": "object",
               "properties": {
-                "inbox_item_id": { "type": "string" },
-                "inbox_title":   { "type": "string" },
-                "already_linked": { "type": "boolean" },
+                "inbox_item_id": {
+                  "type": "string"
+                },
+                "inbox_title": {
+                  "type": "string"
+                },
+                "already_linked": {
+                  "type": "boolean"
+                },
                 "signals_extracted": {
                   "type": "object",
                   "properties": {
-                    "street": { "type": "string" },
-                    "city":   { "type": "string" },
-                    "state":  { "type": "string" },
-                    "tenant": { "type": "string" }
+                    "street": {
+                      "type": "string"
+                    },
+                    "city": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "tenant": {
+                      "type": "string"
+                    }
                   }
                 },
                 "candidates": {
@@ -2981,44 +3068,80 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "entity_id":     { "type": "string" },
-                      "name":          { "type": "string" },
-                      "address":       { "type": "string" },
-                      "city":          { "type": "string" },
-                      "state":         { "type": "string" },
-                      "match_signal":  { "type": "string" },
-                      "confidence":    { "type": "number" }
+                      "entity_id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "address": {
+                        "type": "string"
+                      },
+                      "city": {
+                        "type": "string"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "match_signal": {
+                        "type": "string"
+                      },
+                      "confidence": {
+                        "type": "number"
+                      }
                     }
                   }
                 },
-                "note": { "type": "string" }
+                "note": {
+                  "type": "string"
+                }
               }
             }
           }
         },
-        "produces": ["application/json"],
-        "consumes": ["application/json"]
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ]
       }
     },
     "/api/copilot/intelligence/search-entities": {
       "get": {
         "operationId": "search_entities",
         "summary": "Search the LCC entity graph and GOV contacts DB by name or keyword.",
-        "description": "**Tier 0** (read-only) — no confirmation required. Category: outreach. Searches both the LCC entity graph (26k+ orgs/persons/assets) and the GOV contacts database simultaneously. GOV-contact matches include email and a contact_id for use with draft_outreach_email. LCC-entity matches include an entity_id for use with get_entity_context. Use this to resolve a name before calling draft_outreach_email or get_entity_context.",
-        "tags": ["outreach"],
+        "description": "**Tier 0** (read-only) \u2014 no confirmation required. Category: outreach. Searches both the LCC entity graph (26k+ orgs/persons/assets) and the GOV contacts database simultaneously. GOV-contact matches include email and a contact_id for use with draft_outreach_email. LCC-entity matches include an entity_id for use with get_entity_context. Use this to resolve a name before calling draft_outreach_email or get_entity_context.",
+        "tags": [
+          "outreach"
+        ],
         "parameters": [
           {
-            "in": "query", "name": "query", "required": true, "type": "string",
+            "in": "query",
+            "name": "query",
+            "required": true,
+            "type": "string",
             "description": "Name, company, or keyword to search for (min 2 characters)"
           },
           {
-            "in": "query", "name": "entity_type", "required": false, "type": "string",
-            "enum": ["person", "org", "asset"],
+            "in": "query",
+            "name": "entity_type",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "person",
+              "org",
+              "asset"
+            ],
             "description": "Optional: filter LCC entity type"
           },
           {
-            "in": "query", "name": "limit", "required": false, "type": "integer",
-            "minimum": 1, "maximum": 20,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
             "description": "Max results to return (default 10)"
           }
         ],
@@ -3030,46 +3153,89 @@
               "properties": {
                 "entities": {
                   "type": "array",
-                  "description": "Matching entities/contacts — GOV contacts first (have email + contact_id), then LCC entities.",
+                  "description": "Matching entities/contacts \u2014 GOV contacts first (have email + contact_id), then LCC entities.",
                   "items": {
                     "type": "object",
                     "properties": {
-                      "entity_id":        { "type": "string", "description": "LCC entity UUID — use with get_entity_context" },
-                      "contact_id":       { "type": "string", "description": "GOV contacts unified_id — use with draft_outreach_email" },
-                      "name":             { "type": "string" },
-                      "entity_type":      { "type": "string" },
-                      "email":            { "type": "string" },
-                      "company":          { "type": "string" },
-                      "title":            { "type": "string" },
-                      "domain":           { "type": "string" },
-                      "engagement_score": { "type": "number" },
-                      "source":           { "type": "string", "enum": ["gov_contacts", "lcc_entities"] }
+                      "entity_id": {
+                        "type": "string",
+                        "description": "LCC entity UUID \u2014 use with get_entity_context"
+                      },
+                      "contact_id": {
+                        "type": "string",
+                        "description": "GOV contacts unified_id \u2014 use with draft_outreach_email"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "entity_type": {
+                        "type": "string"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "company": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "domain": {
+                        "type": "string"
+                      },
+                      "engagement_score": {
+                        "type": "number"
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "gov_contacts",
+                          "lcc_entities"
+                        ]
+                      }
                     }
                   }
                 },
-                "count": { "type": "integer" },
-                "query": { "type": "string" },
-                "note":  { "type": "string" }
+                "count": {
+                  "type": "integer"
+                },
+                "query": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
               }
             }
           }
         },
-        "produces": ["application/json"]
+        "produces": [
+          "application/json"
+        ]
       }
     },
     "/api/copilot/intelligence/get-entity-context": {
       "get": {
         "operationId": "get_entity_context",
         "summary": "Get full context for an entity by ID or name.",
-        "description": "**Tier 0** (read-only) — no confirmation required. Category: intelligence. Returns the entity record, all relationships (both directions with resolved names), latest touchpoint cadence, and 5 most-recent activity events. Use before any outreach, merge, or link action to confirm you have the right record.",
-        "tags": ["intelligence"],
+        "description": "**Tier 0** (read-only) \u2014 no confirmation required. Category: intelligence. Returns the entity record, all relationships (both directions with resolved names), latest touchpoint cadence, and 5 most-recent activity events. Use before any outreach, merge, or link action to confirm you have the right record.",
+        "tags": [
+          "intelligence"
+        ],
         "parameters": [
           {
-            "in": "query", "name": "entity_id", "required": false, "type": "string", "format": "uuid",
+            "in": "query",
+            "name": "entity_id",
+            "required": false,
+            "type": "string",
+            "format": "uuid",
             "description": "UUID of the entity to look up. Preferred over name when known."
           },
           {
-            "in": "query", "name": "name", "required": false, "type": "string",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "type": "string",
             "description": "Fuzzy name search fallback. Returns a candidate list if multiple entities match."
           }
         ],
@@ -3082,46 +3248,102 @@
                 "entity": {
                   "type": "object",
                   "properties": {
-                    "entity_id":   { "type": "string" },
-                    "name":        { "type": "string" },
-                    "entity_type": { "type": "string" },
-                    "asset_type":  { "type": "string" },
-                    "domain":      { "type": "string" },
-                    "address":     { "type": "string" },
-                    "city":        { "type": "string" },
-                    "state":       { "type": "string" },
-                    "zip":         { "type": "string" },
-                    "phone":       { "type": "string" },
-                    "website":     { "type": "string" },
-                    "created_at":  { "type": "string" },
-                    "updated_at":  { "type": "string" }
+                    "entity_id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "entity_type": {
+                      "type": "string"
+                    },
+                    "asset_type": {
+                      "type": "string"
+                    },
+                    "domain": {
+                      "type": "string"
+                    },
+                    "address": {
+                      "type": "string"
+                    },
+                    "city": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "zip": {
+                      "type": "string"
+                    },
+                    "phone": {
+                      "type": "string"
+                    },
+                    "website": {
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "type": "string"
+                    }
                   }
                 },
                 "relationships": {
                   "type": "object",
                   "properties": {
-                    "outgoing": { "type": "array", "items": { "type": "object" } },
-                    "incoming": { "type": "array", "items": { "type": "object" } }
+                    "outgoing": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "incoming": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
                   }
                 },
-                "cadence":         { "type": "object" },
-                "recent_activity": { "type": "array", "items": { "type": "object" } },
-                "multiple_matches": { "type": "boolean" },
-                "candidates":      { "type": "array", "items": { "type": "object" } },
-                "note":            { "type": "string" }
+                "cadence": {
+                  "type": "object"
+                },
+                "recent_activity": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "multiple_matches": {
+                  "type": "boolean"
+                },
+                "candidates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "note": {
+                  "type": "string"
+                }
               }
             }
           }
         },
-        "produces": ["application/json"]
+        "produces": [
+          "application/json"
+        ]
       }
     },
     "/api/copilot/intelligence/link-contact-to-entity": {
       "post": {
         "operationId": "link_contact_to_entity",
         "summary": "Link a contact (person entity) to an organization or property entity.",
-        "description": "**Tier 1** — lightweight confirmation required. Category: intelligence. Creates an entity_relationships row linking a person to an org or asset. Idempotent — returns already_linked:true if the relationship already exists. Provide either contact_entity_id (direct) or contact_id (unified_contacts UUID, auto-resolved to entity).",
-        "tags": ["intelligence"],
+        "description": "**Tier 1** \u2014 lightweight confirmation required. Category: intelligence. Creates an entity_relationships row linking a person to an org or asset. Idempotent \u2014 returns already_linked:true if the relationship already exists. Provide either contact_entity_id (direct) or contact_id (unified_contacts UUID, auto-resolved to entity).",
+        "tags": [
+          "intelligence"
+        ],
         "parameters": [
           {
             "in": "body",
@@ -3129,26 +3351,33 @@
             "required": true,
             "schema": {
               "type": "object",
-              "required": ["entity_id"],
+              "required": [
+                "entity_id"
+              ],
               "properties": {
                 "entity_id": {
-                  "type": "string", "format": "uuid",
+                  "type": "string",
+                  "format": "uuid",
                   "description": "UUID of the organization or asset to link the contact to"
                 },
                 "contact_entity_id": {
-                  "type": "string", "format": "uuid",
+                  "type": "string",
+                  "format": "uuid",
                   "description": "Entity UUID of the person (preferred when already known)"
                 },
                 "contact_id": {
-                  "type": "string", "format": "uuid",
-                  "description": "unified_contacts.id — resolved to entity_id automatically"
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "unified_contacts.id \u2014 resolved to entity_id automatically"
                 },
                 "relationship_type": {
-                  "type": "string", "default": "associated_with",
+                  "type": "string",
+                  "default": "associated_with",
                   "description": "Relationship type (e.g. associated_with, employed_by). Defaults to associated_with."
                 },
                 "role": {
-                  "type": "string", "default": "contact",
+                  "type": "string",
+                  "default": "contact",
                   "description": "Semantic role label stored in metadata (e.g. contact, decision_maker, owner)"
                 }
               }
@@ -3161,28 +3390,50 @@
             "schema": {
               "type": "object",
               "properties": {
-                "contact_entity_id": { "type": "string" },
-                "contact_name":      { "type": "string" },
-                "entity_id":         { "type": "string" },
-                "entity_name":       { "type": "string" },
-                "relationship_type": { "type": "string" },
-                "role":              { "type": "string" },
-                "already_linked":    { "type": "boolean" },
-                "message":           { "type": "string" }
+                "contact_entity_id": {
+                  "type": "string"
+                },
+                "contact_name": {
+                  "type": "string"
+                },
+                "entity_id": {
+                  "type": "string"
+                },
+                "entity_name": {
+                  "type": "string"
+                },
+                "relationship_type": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "already_linked": {
+                  "type": "boolean"
+                },
+                "message": {
+                  "type": "string"
+                }
               }
             }
           }
         },
-        "produces": ["application/json"],
-        "consumes": ["application/json"]
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ]
       }
     },
     "/api/copilot/intelligence/merge-duplicate-entities": {
       "post": {
         "operationId": "merge_duplicate_entities",
         "summary": "Merge a duplicate entity into a primary entity (irreversible).",
-        "description": "**Tier 2** — explicit confirmation required. Category: intelligence. Canonical record mutation: moves all entity_relationships (both directions) and re-parents all unified_contacts from the secondary entity to the primary. Secondary is NOT deleted — its metadata is stamped with merged_into + merged_at for audit. Run get_entity_context on both entities first to confirm you have the right pair.",
-        "tags": ["intelligence"],
+        "description": "**Tier 2** \u2014 explicit confirmation required. Category: intelligence. Canonical record mutation: moves all entity_relationships (both directions) and re-parents all unified_contacts from the secondary entity to the primary. Secondary is NOT deleted \u2014 its metadata is stamped with merged_into + merged_at for audit. Run get_entity_context on both entities first to confirm you have the right pair.",
+        "tags": [
+          "intelligence"
+        ],
         "parameters": [
           {
             "in": "body",
@@ -3190,14 +3441,19 @@
             "required": true,
             "schema": {
               "type": "object",
-              "required": ["primary_entity_id", "secondary_entity_id"],
+              "required": [
+                "primary_entity_id",
+                "secondary_entity_id"
+              ],
               "properties": {
                 "primary_entity_id": {
-                  "type": "string", "format": "uuid",
+                  "type": "string",
+                  "format": "uuid",
                   "description": "UUID of the entity to keep (winner)"
                 },
                 "secondary_entity_id": {
-                  "type": "string", "format": "uuid",
+                  "type": "string",
+                  "format": "uuid",
                   "description": "UUID of the duplicate entity to deprecate (all data moves to primary)"
                 },
                 "reason": {
@@ -3214,25 +3470,63 @@
             "schema": {
               "type": "object",
               "properties": {
-                "primary":   { "type": "object", "properties": { "entity_id": { "type": "string" }, "name": { "type": "string" } } },
-                "secondary": { "type": "object", "properties": { "entity_id": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string" } } },
-                "steps":     { "type": "array", "items": { "type": "object" } },
-                "merged_at": { "type": "string" },
-                "reason":    { "type": "string" },
-                "message":   { "type": "string" }
+                "primary": {
+                  "type": "object",
+                  "properties": {
+                    "entity_id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "secondary": {
+                  "type": "object",
+                  "properties": {
+                    "entity_id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "merged_at": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
               }
             }
           }
         },
-        "produces": ["application/json"],
-        "consumes": ["application/json"]
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ]
       }
     },
     "/api/copilot/workflow/draft-reply-from-inbox": {
       "post": {
         "operationId": "draft_reply_from_inbox",
         "summary": "Draft an email reply based on an inbox item context.",
-        "description": "**Tier 1** (read-only draft) — generates a draft, never sends. User must review and explicitly approve before sending. Category: workflow.",
+        "description": "**Tier 1** (read-only draft) \u2014 generates a draft, never sends. User must review and explicitly approve before sending. Category: workflow.",
         "tags": [
           "workflow"
         ],
@@ -3281,7 +3575,11 @@
                 },
                 "tone": {
                   "type": "string",
-                  "enum": ["professional", "brief", "detailed"],
+                  "enum": [
+                    "professional",
+                    "brief",
+                    "detailed"
+                  ],
                   "description": "Tone for the draft reply"
                 },
                 "additional_context": {
@@ -3307,7 +3605,7 @@
       "post": {
         "operationId": "ingest_pdf_document",
         "summary": "Ingest a PDF document (OM, BOV, rent roll) into the LCC knowledge base.",
-        "description": "**Tier 2** (explicit-confirm) — requires confirmation before ingesting. Category: intelligence.",
+        "description": "**Tier 2** (explicit-confirm) \u2014 requires confirmation before ingesting. Category: intelligence.",
         "tags": [
           "intelligence"
         ],
@@ -3327,7 +3625,9 @@
                 },
                 "entity_links": {
                   "type": "array",
-                  "items": { "type": "string" },
+                  "items": {
+                    "type": "string"
+                  },
                   "description": "Entity IDs linked to this document"
                 },
                 "ok": {
@@ -3352,7 +3652,13 @@
                 },
                 "document_type": {
                   "type": "string",
-                  "enum": ["om", "bov", "rent_roll", "lease", "other"],
+                  "enum": [
+                    "om",
+                    "bov",
+                    "rent_roll",
+                    "lease",
+                    "other"
+                  ],
                   "description": "Type of document being ingested"
                 },
                 "deal_id": {
@@ -3362,7 +3668,7 @@
                 },
                 "_confirmed": {
                   "type": "boolean",
-                  "description": "Tier 2 confirmation gate — must be true to execute the ingest"
+                  "description": "Tier 2 confirmation gate \u2014 must be true to execute the ingest"
                 }
               },
               "required": [

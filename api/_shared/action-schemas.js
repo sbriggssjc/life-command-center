@@ -314,7 +314,7 @@ export const ACTION_SCHEMAS = {
         contact_name: { type: 'string', description: 'Contact full name — used when contact_id is not available; email is looked up from the contacts DB' },
         intent: { type: 'string', description: 'Purpose of the outreach (e.g., "reconnect", "listing pitch", "market update")' },
         tone: { type: 'string', description: 'Desired tone (default: professional, warm, and concise)' },
-        to: { type: 'string', description: 'Explicit recipient email override — the person being emailed. If omitted, email is resolved from contact_id or contact_name lookup. NEVER use the authenticated user\'s own email.' },
+        to: { type: 'string', description: 'Recipient email address of the person being emailed. ALWAYS include this field when the user provides an email address. The draft is automatically saved to Outlook Drafts when this field is present. Do not omit if an email address is mentioned or known.' },
         cc: { type: 'string', description: 'Optional CC email address(es), semicolon-separated.' },
         text_only: { type: 'boolean', description: 'Set true ONLY when user explicitly asks to see the draft text without saving to Outlook. Default is false — draft is always saved to Outlook when a recipient email is available.' }
       }
