@@ -45,13 +45,33 @@ MCP tool — so the two highest-traffic doors are now equals.
 3. **Northmarq Project:** re-import / update the action from
    `claude_project_action.json` in the Project's action settings.
 
-## Remaining parity items (same one-line change, lower traffic)
-- **Copilot plugin** (`_AI-Context/Copilot-Context/ai-plugin.json`): add the same
-  `property_lookup` / `cre_property_id` inputs if it exposes generate_bov.
-- **Methodology note**: a line in `NORTHMARQ_PROJECT_PROMPT.md` and the
-  `bov-underwriting` skill — "when the property exists in LCC, BOV from the record
-  (property_lookup); only hand-author a brand-new property." (The tool/action
-  descriptions already say PREFERRED, so this is reinforcement.)
+## Methodology note — DONE
+`NORTHMARQ_PROJECT_PROMPT.md` bumped to **v1.6**: §3P now leads with the PREFERRED
+record path — hand off `{ property_lookup: "<address>", client }` (or cre_property_id)
+for any property already in LCC; full hand-authored payload reserved for NEW deals.
+Changelog row added.
+
+## Two doors that need a manual paste (not repo edits)
+
+**1. Copilot Studio agent** (`Team Briggs.../Copilot Studio Agents/LCC Deal Agent…​.agent`).
+It's a Power-Platform package (not a readable/committable JSON). IF the agent exposes a
+BOV-generation action pointing at `/generate-bov`, add these two inputs to that action's
+request schema in Copilot Studio (and mark the previously-required fields optional):
+```json
+"property_lookup": { "type": "string", "description": "Address (or numeric id) to resolve to the LCC property's reviewed BOV record — e.g. '207 Fob James Dr, Valley, AL'. No other fields needed; posted fields override the record." },
+"cre_property_id": { "type": "integer", "description": "LCC Opps lcc_cre_properties.id — load that property's reviewed BOV record directly." }
+```
+If the agent only surfaces deal context (get_property_context etc.) and doesn't generate
+BOVs, no change is needed — it already reads the same records.
+
+**2. `bov-underwriting` skill** (`~/.claude/skills/bov-underwriting/SKILL.md`, not
+bridged to this session). Add one line near the top of the workflow:
+> **Record-first:** If the property already exists in LCC, generate the BOV from its
+> reviewed record — call the generator (or `mcp__LCC__generate_bov`) with
+> `property_lookup: "<address>"` (or `cre_property_id`). This yields the identical
+> workbook every access point produces. Only hand-author the full payload for a
+> brand-new property not yet ingested into LCC.
 
 Net: personal Claude, the Northmarq team Project, and any direct caller now resolve
-"BOV 207 Fob James Dr" to the same reviewed record and produce the same deliverable.
+"BOV 207 Fob James Dr" to the same reviewed record and produce the same deliverable —
+with the two paste-ins above closing the Copilot + skill doors.
