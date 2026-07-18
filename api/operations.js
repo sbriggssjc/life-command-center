@@ -4127,7 +4127,13 @@ function _draftBodyToHtml(text) {
 // Best-effort: create a real Outlook draft from an AI draft response.
 // Returns a partial result object to merge into the action response, or null.
 async function _maybeCreateOutlookDraft({ params, responseText, fallbackTo }) {
-  if (!params?.create_draft) return null;
+  // Trigger when create_draft=true (boolean or string 'true') OR when an explicit
+  // 'to' recipient email is provided. Copilot Studio's orchestrator reliably extracts
+  // string values (email addresses) from natural language but frequently drops boolean
+  // flags. A 'to' address is the definitive signal the user wants an Outlook draft.
+  const wantsDraft = params?.create_draft === true || params?.create_draft === 'true'
+    || (typeof params?.to === 'string' && params.to.includes('@'));
+  if (!wantsDraft) return null;
   const to = params.to || fallbackTo;
   if (!to) {
     return { draft_created: false, draft_note: 'No recipient email available — returned text only. Pass "to" to create an Outlook draft.' };
