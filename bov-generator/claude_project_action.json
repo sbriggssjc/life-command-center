@@ -1,6 +1,6 @@
 {
   "name": "generate_bov_workbook",
-  "description": "Generate a Briggs CRE BOV Excel workbook from structured deal inputs. Builds the full 10-tab workbook (Cover, Executive Summary, Real Estate, Lease Abstract, Rent Schedule, Credit, Pro Forma, Assumptions & Flags, Sensitivity Analysis, Amortization), populates all input cells, recalculates all formulas via LibreOffice, and returns the completed file as a base64-encoded payload. Decode the file_base64 field and save as the filename field to deliver the workbook to the user.",
+  "description": "Generate a Briggs CRE BOV Excel workbook from structured deal inputs. Builds the full 10-tab workbook (Cover, Executive Summary, Real Estate, Lease Abstract, Rent Schedule, Credit, Pro Forma, Assumptions & Flags, Sensitivity Analysis, Amortization), populates all input cells, recalculates all formulas via LibreOffice, and returns the completed file as a base64-encoded payload. Decode the file_base64 field and save as the filename field to deliver the workbook to the user. Also generates Briggs comps workbooks (sales/lease) via /generate-comps.",
   "type": "openapi",
   "openapi": {
     "info": {
@@ -17,37 +17,61 @@
         "post": {
           "operationId": "generate_bov",
           "summary": "Generate a BOV workbook and return it as base64",
-          "security": [{ "ApiKeyAuth": [] }],
+          "security": [
+            {
+              "ApiKeyAuth": []
+            }
+          ],
           "requestBody": {
             "required": true,
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "description": "Two ways to call: (1) PREFERRED for a known LCC property — send ONLY property_lookup (or cre_property_id) and the server builds from that property's reviewed lease/financial record, identical to every other team member. (2) For a brand-new deal not yet in LCC — hand-author asset_type + property + tenants + underwriting + client.",
+                  "description": "Two ways to call: (1) PREFERRED for a known LCC property \u2014 send ONLY property_lookup (or cre_property_id) and the server builds from that property's reviewed lease/financial record, identical to every other team member. (2) For a brand-new deal not yet in LCC \u2014 hand-author asset_type + property + tenants + underwriting + client.",
                   "properties": {
                     "property_lookup": {
                       "type": "string",
-                      "description": "PREFERRED path: an address (or numeric id as a string) to resolve to the LCC property's reviewed BOV record — e.g. '207 Fob James Dr, Valley, AL'. No other fields needed; posted fields override the record. Ambiguous address → the service returns candidates to retry with cre_property_id."
+                      "description": "PREFERRED path: an address (or numeric id as a string) to resolve to the LCC property's reviewed BOV record \u2014 e.g. '207 Fob James Dr, Valley, AL'. No other fields needed; posted fields override the record. Ambiguous address \u2192 the service returns candidates to retry with cre_property_id."
                     },
                     "cre_property_id": {
                       "type": "integer",
-                      "description": "LCC Opps lcc_cre_properties.id — load that property's reviewed BOV record directly (alternative to property_lookup)."
+                      "description": "LCC Opps lcc_cre_properties.id \u2014 load that property's reviewed BOV record directly (alternative to property_lookup)."
                     },
                     "asset_type": {
                       "type": "string",
-                      "enum": ["NNN", "MOB"],
+                      "enum": [
+                        "NNN",
+                        "MOB"
+                      ],
                       "description": "NNN = Single-Tenant Net Lease | MOB = Multi-Tenant Medical Office Building (required only when hand-authoring a new deal)"
                     },
                     "property": {
                       "type": "object",
-                      "required": ["address"],
+                      "required": [
+                        "address"
+                      ],
                       "properties": {
-                        "name":        { "type": "string", "description": "Property/deal name for filename (e.g. 'Valley MOB'); defaults to tenant name or address" },
-                        "address":     { "type": "string", "description": "Street address" },
-                        "city_state":  { "type": "string", "description": "City, ST" },
-                        "building_sf": { "type": "number", "description": "Rentable SF" },
-                        "close_date":  { "type": "string", "description": "YYYY-MM-DD" }
+                        "name": {
+                          "type": "string",
+                          "description": "Property/deal name for filename (e.g. 'Valley MOB'); defaults to tenant name or address"
+                        },
+                        "address": {
+                          "type": "string",
+                          "description": "Street address"
+                        },
+                        "city_state": {
+                          "type": "string",
+                          "description": "City, ST"
+                        },
+                        "building_sf": {
+                          "type": "number",
+                          "description": "Rentable SF"
+                        },
+                        "close_date": {
+                          "type": "string",
+                          "description": "YYYY-MM-DD"
+                        }
                       }
                     },
                     "tenants": {
@@ -56,45 +80,150 @@
                       "items": {
                         "type": "object",
                         "properties": {
-                          "name":           { "type": "string" },
-                          "guarantor":      { "type": "string" },
-                          "suite":          { "type": "string", "description": "MOB suite label" },
-                          "sf":             { "type": "number", "description": "Leased SF (MOB)" },
-                          "lease_type":     { "type": "string", "default": "NNN" },
-                          "year1_rent":     { "type": "number", "description": "Annual base rent Year 1 ($)" },
-                          "escalation_pct": { "type": "number", "description": "Annual escalation (0.02 = 2%)" },
-                          "reimbursements": { "type": "number", "default": 0 },
-                          "mgmt_fee_pct":   { "type": "number", "default": 0 },
-                          "lease_commencement": { "type": "string", "description": "YYYY-MM-DD lease commencement (Rent Schedule)" },
-                          "lease_expiration":   { "type": "string", "description": "YYYY-MM-DD lease expiration (Rent Schedule)" },
-                          "rent_schedule": { "type": "array", "description": "Exact contracted rent by period; omit to compute from year1_rent x escalation", "items": { "type": "object", "properties": { "label": {"type":"string"}, "start_date": {"type":"string"}, "end_date": {"type":"string"}, "annual_rent": {"type":"number"}, "status": {"type":"string"} } } }
+                          "name": {
+                            "type": "string"
+                          },
+                          "guarantor": {
+                            "type": "string"
+                          },
+                          "suite": {
+                            "type": "string",
+                            "description": "MOB suite label"
+                          },
+                          "sf": {
+                            "type": "number",
+                            "description": "Leased SF (MOB)"
+                          },
+                          "lease_type": {
+                            "type": "string",
+                            "default": "NNN"
+                          },
+                          "year1_rent": {
+                            "type": "number",
+                            "description": "Annual base rent Year 1 ($)"
+                          },
+                          "escalation_pct": {
+                            "type": "number",
+                            "description": "Annual escalation (0.02 = 2%)"
+                          },
+                          "reimbursements": {
+                            "type": "number",
+                            "default": 0
+                          },
+                          "mgmt_fee_pct": {
+                            "type": "number",
+                            "default": 0
+                          },
+                          "lease_commencement": {
+                            "type": "string",
+                            "description": "YYYY-MM-DD lease commencement (Rent Schedule)"
+                          },
+                          "lease_expiration": {
+                            "type": "string",
+                            "description": "YYYY-MM-DD lease expiration (Rent Schedule)"
+                          },
+                          "rent_schedule": {
+                            "type": "array",
+                            "description": "Exact contracted rent by period; omit to compute from year1_rent x escalation",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "label": {
+                                  "type": "string"
+                                },
+                                "start_date": {
+                                  "type": "string"
+                                },
+                                "end_date": {
+                                  "type": "string"
+                                },
+                                "annual_rent": {
+                                  "type": "number"
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
                         }
                       }
                     },
                     "underwriting": {
                       "type": "object",
                       "properties": {
-                        "purchase_price":     { "type": "number" },
-                        "going_in_cap":       { "type": "number", "description": "0.065 = 6.5%" },
-                        "exit_cap":           { "type": "number" },
-                        "hold_years":         { "type": "integer", "default": 10 },
-                        "ltv":                { "type": "number", "default": 0.65 },
-                        "interest_rate":      { "type": "number", "default": 0.065 },
-                        "amortization_years": { "type": "integer", "default": 25 },
-                        "vacancy_pct":        { "type": "number", "default": 0.05, "description": "MOB vacancy/credit loss" },
-                        "capital_reserves":   { "type": "number", "default": 0 },
-                        "real_estate_taxes":  { "type": "number", "default": 0, "description": "MOB LL expense" },
-                        "insurance":          { "type": "number", "default": 0, "description": "MOB LL expense" },
-                        "cam":                { "type": "number", "default": 0, "description": "MOB LL expense" },
-                        "mgmt_fee_pct":       { "type": "number", "default": 0.04, "description": "MOB mgmt fee %" }
+                        "purchase_price": {
+                          "type": "number"
+                        },
+                        "going_in_cap": {
+                          "type": "number",
+                          "description": "0.065 = 6.5%"
+                        },
+                        "exit_cap": {
+                          "type": "number"
+                        },
+                        "hold_years": {
+                          "type": "integer",
+                          "default": 10
+                        },
+                        "ltv": {
+                          "type": "number",
+                          "default": 0.65
+                        },
+                        "interest_rate": {
+                          "type": "number",
+                          "default": 0.065
+                        },
+                        "amortization_years": {
+                          "type": "integer",
+                          "default": 25
+                        },
+                        "vacancy_pct": {
+                          "type": "number",
+                          "default": 0.05,
+                          "description": "MOB vacancy/credit loss"
+                        },
+                        "capital_reserves": {
+                          "type": "number",
+                          "default": 0
+                        },
+                        "real_estate_taxes": {
+                          "type": "number",
+                          "default": 0,
+                          "description": "MOB LL expense"
+                        },
+                        "insurance": {
+                          "type": "number",
+                          "default": 0,
+                          "description": "MOB LL expense"
+                        },
+                        "cam": {
+                          "type": "number",
+                          "default": 0,
+                          "description": "MOB LL expense"
+                        },
+                        "mgmt_fee_pct": {
+                          "type": "number",
+                          "default": 0.04,
+                          "description": "MOB mgmt fee %"
+                        }
                       }
                     },
                     "client": {
                       "type": "object",
-                      "required": ["last_name", "file_month"],
+                      "required": [
+                        "last_name",
+                        "file_month"
+                      ],
                       "properties": {
-                        "last_name":  { "type": "string", "description": "Client last name for filename" },
-                        "file_month": { "type": "string", "description": "YYYYMM e.g. 202607" }
+                        "last_name": {
+                          "type": "string",
+                          "description": "Client last name for filename"
+                        },
+                        "file_month": {
+                          "type": "string",
+                          "description": "YYYYMM e.g. 202607"
+                        }
                       }
                     }
                   }
@@ -110,11 +239,24 @@
                   "schema": {
                     "type": "object",
                     "properties": {
-                      "status":        { "type": "string" },
-                      "filename":      { "type": "string", "description": "Save-as filename for the workbook" },
-                      "file_base64":   { "type": "string", "description": "Base64-encoded .xlsx — decode and save as filename" },
-                      "file_size_kb":  { "type": "number", "description": "Uncompressed file size in KB" },
-                      "recalc_result": { "type": "object" }
+                      "status": {
+                        "type": "string"
+                      },
+                      "filename": {
+                        "type": "string",
+                        "description": "Save-as filename for the workbook"
+                      },
+                      "file_base64": {
+                        "type": "string",
+                        "description": "Base64-encoded .xlsx \u2014 decode and save as filename"
+                      },
+                      "file_size_kb": {
+                        "type": "number",
+                        "description": "Uncompressed file size in KB"
+                      },
+                      "recalc_result": {
+                        "type": "object"
+                      }
                     }
                   }
                 }
@@ -123,12 +265,135 @@
           }
         }
       },
+      "/generate-comps": {
+        "post": {
+          "operationId": "generate_comps",
+          "summary": "Generate a Briggs CRE comps workbook (sales or lease) from structured comp rows",
+          "description": "Populate the Briggs comps template from structured rows and return a download link + base64. You map the raw CoStar/Salesforce export -> rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate. Row keys are the Briggs column names lowercased with underscores (e.g. property_name, address, city, st, rba_sf, tenant, lease_type, lease_exp, annual_noi, init_price, cur_price, list_date, last_price, sale_price, sale_date, buyer, seller, financing, bumps, options, yr_built, submarket, notes; lease adds property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated). Omit any field you don't have; never guess. Dates YYYY-MM-DD; rents/NOI annual. Decode file_base64 and save as filename, or share download_url.",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "comp_type"
+                  ],
+                  "properties": {
+                    "comp_type": {
+                      "type": "string",
+                      "enum": [
+                        "sales",
+                        "lease"
+                      ],
+                      "description": "sales = On Market + Sold sheets | lease = Lease Comps sheet"
+                    },
+                    "on_market": {
+                      "type": "array",
+                      "description": "Sales: active listings, one object per row keyed by Briggs column name.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "sold": {
+                      "type": "array",
+                      "description": "Sales: closed comps (On Market fields + last_price, sale_price, sale_date, buyer, seller, financing).",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "comps": {
+                      "type": "array",
+                      "description": "Lease: lease comp rows (object per row).",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Label for the filename (property/market/tenant); defaults to client last name or Briggs."
+                    },
+                    "client": {
+                      "type": "object",
+                      "properties": {
+                        "last_name": {
+                          "type": "string"
+                        },
+                        "file_month": {
+                          "type": "string",
+                          "description": "YYYYMM"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Comps workbook generated",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "type": "string"
+                      },
+                      "filename": {
+                        "type": "string"
+                      },
+                      "download_url": {
+                        "type": "string",
+                        "description": "Short-lived link to the .xlsx"
+                      },
+                      "file_base64": {
+                        "type": "string",
+                        "description": "Base64 .xlsx \u2014 decode and save as filename"
+                      },
+                      "comp_type": {
+                        "type": "string"
+                      },
+                      "rows_by_sheet": {
+                        "type": "object"
+                      },
+                      "skipped_formula_keys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "unknown_keys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "security": [
+            {
+              "ApiKeyAuth": []
+            }
+          ]
+        }
+      },
       "/health": {
         "get": {
           "operationId": "health_check",
           "summary": "Service liveness check",
           "responses": {
-            "200": { "description": "Service is healthy" }
+            "200": {
+              "description": "Service is healthy"
+            }
           }
         }
       }
