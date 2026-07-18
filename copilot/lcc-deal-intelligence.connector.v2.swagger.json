@@ -2,8 +2,8 @@
   "swagger": "2.0",
   "info": {
     "title": "LCC Deal Intelligence",
-    "version": "2.0.0",
-    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. Auto-refreshed from live /api/copilot-spec-v2 endpoint. 87 operations covering all LCC Copilot actions (read, write, outreach, workflow, compat). Source of truth \u2014 do not maintain duplicates."
+    "version": "2.1.0",
+    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 87 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException."
   },
   "host": "tranquil-delight-production-633f.up.railway.app",
   "basePath": "/",
@@ -153,7 +153,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/get-daily-briefing-snapshot": {
@@ -212,7 +213,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-daily-briefing-snapshot": {
@@ -270,7 +272,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/list-staged-intake-inbox": {
@@ -345,7 +348,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/list-staged-intake-inbox": {
@@ -419,7 +423,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/get-my-execution-queue": {
@@ -483,7 +488,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-my-execution-queue": {
@@ -546,7 +552,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/get-hot-business-contacts": {
@@ -599,7 +606,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-hot-business-contacts": {
@@ -651,7 +659,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/search-entity-targets": {
@@ -715,7 +724,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/search-entity-targets": {
@@ -778,7 +788,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/fetch-listing-activity-context": {
@@ -832,7 +843,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/fetch-listing-activity-context": {
@@ -885,7 +897,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/search-deals": {
@@ -971,7 +984,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/search-deals": {
@@ -1056,7 +1070,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/generate-listing-pursuit-dossier": {
@@ -1109,7 +1124,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/generate-listing-pursuit-dossier": {
@@ -1161,7 +1177,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/get-relationship-context": {
@@ -1210,7 +1227,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-relationship-context": {
@@ -1258,7 +1276,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/portfolio/get-pipeline-intelligence": {
@@ -1312,7 +1331,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-pipeline-intelligence": {
@@ -1365,7 +1385,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/ops/get-sync-run-health": {
@@ -1384,7 +1405,12 @@
             "required": true,
             "schema": {
               "type": "object",
-              "properties": {}
+              "properties": {
+                "connector": {
+                  "type": "string",
+                  "description": "Optional: filter to a specific connector name (e.g., \"salesforce\", \"outlook\"). Omit for all connectors."
+                }
+              }
             }
           }
         ],
@@ -1410,7 +1436,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-sync-run-health": {
@@ -1428,7 +1455,12 @@
             "required": true,
             "schema": {
               "type": "object",
-              "properties": {}
+              "properties": {
+                "connector": {
+                  "type": "string",
+                  "description": "Optional: filter to a specific connector name (e.g., \"salesforce\", \"outlook\"). Omit for all connectors."
+                }
+              }
             }
           }
         ],
@@ -1454,7 +1486,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/ops/get-work-counts": {
@@ -1498,7 +1531,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-work-counts": {
@@ -1541,7 +1575,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/ops/generate-teams-card": {
@@ -1596,7 +1631,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/generate-teams-card": {
@@ -1650,7 +1686,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/ops/retry-sync-error-record": {
@@ -1697,7 +1734,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/retry-sync-error-record": {
@@ -1743,7 +1781,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/domain/list-government-review-observations": {
@@ -1792,7 +1831,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/list-government-review-observations": {
@@ -1840,7 +1880,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/domain/list-dialysis-review-queue": {
@@ -1885,7 +1926,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/list-dialysis-review-queue": {
@@ -1929,7 +1971,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/search-entities": {
@@ -2033,7 +2076,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/search-entities": {
@@ -2136,7 +2180,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/generate-prospecting-brief": {
@@ -2199,7 +2244,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/generate-prospecting-brief": {
@@ -2261,7 +2307,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/draft-outreach-email": {
@@ -2342,7 +2389,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/draft-outreach-email": {
@@ -2422,7 +2470,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/draft-seller-update-email": {
@@ -2496,7 +2545,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/draft-seller-update-email": {
@@ -2569,7 +2619,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/draft-reply-from-inbox": {
@@ -2655,7 +2706,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/draft-reply-from-inbox": {
@@ -2740,7 +2792,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/list-email-templates": {
@@ -2759,7 +2812,12 @@
             "required": true,
             "schema": {
               "type": "object",
-              "properties": {}
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "description": "Optional: filter by template category (e.g., \"outreach\", \"seller_update\", \"follow_up\")."
+                }
+              }
             }
           }
         ],
@@ -2780,7 +2838,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/list-email-templates": {
@@ -2798,7 +2857,12 @@
             "required": true,
             "schema": {
               "type": "object",
-              "properties": {}
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "description": "Optional: filter by template category (e.g., \"outreach\", \"seller_update\", \"follow_up\")."
+                }
+              }
             }
           }
         ],
@@ -2819,7 +2883,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/get-email-template": {
@@ -2863,7 +2928,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-email-template": {
@@ -2906,7 +2972,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/generate-template-draft": {
@@ -2962,7 +3029,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/generate-template-draft": {
@@ -3017,7 +3085,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/generate-batch-drafts": {
@@ -3082,7 +3151,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/generate-batch-drafts": {
@@ -3146,7 +3216,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/record-template-send": {
@@ -3216,7 +3287,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/record-template-send": {
@@ -3285,7 +3357,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/get-template-performance": {
@@ -3369,7 +3442,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/get-template-performance": {
@@ -3452,7 +3526,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/evaluate-template-health": {
@@ -3518,7 +3593,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/evaluate-template-health": {
@@ -3583,7 +3659,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/run-listing-bd-pipeline": {
@@ -3651,7 +3728,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/run-listing-bd-pipeline": {
@@ -3718,7 +3796,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/outreach/generate-document": {
@@ -3782,7 +3861,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/generate-document": {
@@ -3845,7 +3925,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/create-todo-task": {
@@ -3918,7 +3999,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/create-todo-task": {
@@ -3990,7 +4072,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/guided-entity-merge": {
@@ -4039,7 +4122,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/guided-entity-merge": {
@@ -4087,14 +4171,15 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/ingest-outlook-flagged-emails": {
       "post": {
         "operationId": "IngestOutlookFlaggedEmails",
-        "summary": "Trigger ingestion of flagged Outlook emails into the inbox queue.",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: workflow. Trigger ingestion of flagged Outlook emails into the inbox queue.",
+        "summary": "Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all curr",
+        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: workflow. Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all currently flagged emails from Outlook via Power Automate and creates LCC inbox items for each.",
         "x-ms-summary": "Ingest Outlook Flagged Emails",
         "tags": [
           "workflow"
@@ -4106,7 +4191,12 @@
             "required": true,
             "schema": {
               "type": "object",
-              "properties": {}
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "description": "Maximum number of flagged emails to ingest in this run (optional, default: 50)."
+                }
+              }
             }
           }
         ],
@@ -4125,13 +4215,14 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/ingest-outlook-flagged-emails": {
       "post": {
         "operationId": "ingest_outlook_flagged_emails",
-        "summary": "Trigger ingestion of flagged Outlook emails into the inbox queue.",
+        "summary": "Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all curr",
         "x-ms-summary": "Ingest Outlook Flagged Emails",
         "tags": [
           "workflow"
@@ -4143,7 +4234,12 @@
             "required": true,
             "schema": {
               "type": "object",
-              "properties": {}
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "description": "Maximum number of flagged emails to ingest in this run (optional, default: 50)."
+                }
+              }
             }
           }
         ],
@@ -4162,7 +4258,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/ingest-pdf-document": {
@@ -4251,7 +4348,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/ingest-pdf-document": {
@@ -4339,7 +4437,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/triage-inbox-item": {
@@ -4407,7 +4506,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/triage-inbox-item": {
@@ -4474,7 +4574,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/promote-intake-to-action": {
@@ -4555,7 +4656,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/promote-intake-to-action": {
@@ -4635,7 +4737,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/create-listing-pursuit-followup-task": {
@@ -4704,7 +4807,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/create-listing-pursuit-followup-task": {
@@ -4772,7 +4876,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/update-execution-task-status": {
@@ -4830,7 +4935,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/update-execution-task-status": {
@@ -4887,7 +4993,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/research-followup": {
@@ -4954,7 +5061,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/research-followup": {
@@ -5020,7 +5128,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/reassign-work-item": {
@@ -5088,7 +5197,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/reassign-work-item": {
@@ -5155,7 +5265,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/workflow/escalate-action": {
@@ -5215,7 +5326,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/copilot/compat/escalate-action": {
@@ -5274,7 +5386,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/intake/stage-om": {
@@ -5362,7 +5475,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/intake/finalize-om": {
@@ -5407,7 +5521,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/context/retrieve-entity": {
@@ -5474,7 +5589,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     },
     "/api/memory/log-turn": {
@@ -5528,7 +5644,8 @@
               }
             }
           }
-        }
+        },
+        "x-ms-requestBody-name": "body"
       }
     }
   },
