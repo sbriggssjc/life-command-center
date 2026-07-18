@@ -24,12 +24,20 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["asset_type", "property", "tenants", "underwriting", "client"],
+                  "description": "Two ways to call: (1) PREFERRED for a known LCC property — send ONLY property_lookup (or cre_property_id) and the server builds from that property's reviewed lease/financial record, identical to every other team member. (2) For a brand-new deal not yet in LCC — hand-author asset_type + property + tenants + underwriting + client.",
                   "properties": {
+                    "property_lookup": {
+                      "type": "string",
+                      "description": "PREFERRED path: an address (or numeric id as a string) to resolve to the LCC property's reviewed BOV record — e.g. '207 Fob James Dr, Valley, AL'. No other fields needed; posted fields override the record. Ambiguous address → the service returns candidates to retry with cre_property_id."
+                    },
+                    "cre_property_id": {
+                      "type": "integer",
+                      "description": "LCC Opps lcc_cre_properties.id — load that property's reviewed BOV record directly (alternative to property_lookup)."
+                    },
                     "asset_type": {
                       "type": "string",
                       "enum": ["NNN", "MOB"],
-                      "description": "NNN = Single-Tenant Net Lease | MOB = Multi-Tenant Medical Office Building"
+                      "description": "NNN = Single-Tenant Net Lease | MOB = Multi-Tenant Medical Office Building (required only when hand-authoring a new deal)"
                     },
                     "property": {
                       "type": "object",
@@ -40,74 +48,6 @@
                         "city_state":  { "type": "string", "description": "City, ST" },
                         "building_sf": { "type": "number", "description": "Rentable SF" },
                         "close_date":  { "type": "string", "description": "YYYY-MM-DD" }
-                      }
-                    },
-                    "real_estate": {
-                      "type": "object",
-                      "description": "Optional physical / location / market diligence auto-filled into the Real Estate tab. Address and building SF come from `property`; everything supplied here fills the short-form summary and long-form diligence matrix. Omit any field you don't have — it stays a blank broker-input cell.",
-                      "properties": {
-                        "year_built":            { "type": "integer", "description": "Year constructed" },
-                        "year_renovated":        { "type": "integer", "description": "Year of last major renovation" },
-                        "construction_type":     { "type": "string" },
-                        "roof":                  { "type": "string", "description": "Roof type / age" },
-                        "hvac":                  { "type": "string", "description": "HVAC type / age" },
-                        "condition":             { "type": "string", "description": "Overall physical condition" },
-                        "deferred_maintenance":  { "type": "string" },
-                        "ada_compliance":        { "type": "string" },
-                        "site_area_acres":       { "type": "number", "description": "Land / site area in acres" },
-                        "parcel_apn":            { "type": "string", "description": "Parcel APN / Tax ID" },
-                        "legal_description":     { "type": "string" },
-                        "lot_configuration":     { "type": "string" },
-                        "frontage_lf":           { "type": "number", "description": "Street frontage (linear feet)" },
-                        "topography":            { "type": "string" },
-                        "flood_zone":            { "type": "string", "description": "FEMA flood zone, e.g. 'Zone X'" },
-                        "utilities":             { "type": "string" },
-                        "zoning":                { "type": "string", "description": "Zoning classification code" },
-                        "zoning_description":    { "type": "string", "description": "Plain-language zoning / permitted use" },
-                        "permitted_use_confirmation": { "type": "string" },
-                        "drive_through_permitted":    { "type": "string" },
-                        "signage_rights":        { "type": "string" },
-                        "restrictive_covenants": { "type": "string" },
-                        "easements":             { "type": "string" },
-                        "access_points":         { "type": "string" },
-                        "shared_access":         { "type": "string" },
-                        "parking_spaces":        { "type": "integer" },
-                        "parking_ratio":         { "type": "number", "description": "Per 1,000 SF; auto-computed from spaces + building SF if omitted" },
-                        "delivery_loading":      { "type": "string" },
-                        "county":                { "type": "string" },
-                        "msa_submarket":         { "type": "string" },
-                        "population_1_3_5":      { "type": "string", "description": "Population 1 / 3 / 5 mile rings" },
-                        "median_hh_income":      { "type": "string" },
-                        "traffic_counts":        { "type": "string" },
-                        "proximity_demand_generators": { "type": "string" },
-                        "market_rent_context":   { "type": "string" },
-                        "environmental_status":  { "type": "string", "description": "Short-form environmental summary" },
-                        "phase_i":               { "type": "string" },
-                        "phase_ii":              { "type": "string" },
-                        "known_recs":            { "type": "string" },
-                        "underground_storage_tanks": { "type": "string" },
-                        "comps": {
-                          "type": "array",
-                          "description": "Up to 3 comparable sales",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "summary":    { "type": "string", "description": "One-line comp; if omitted, composed from the fields below" },
-                              "address":    { "type": "string" },
-                              "sale_price": { "type": "number" },
-                              "price_sf":   { "type": "number" },
-                              "cap_rate":   { "type": "number", "description": "0.0675 = 6.75%" },
-                              "sale_date":  { "type": "string" },
-                              "source":     { "type": "string" }
-                            }
-                          }
-                        },
-                        "implied_market_cap_rate": { "type": "number", "description": "0.07 = 7%" },
-                        "implied_market_price_sf": { "type": "number" },
-                        "notable_strengths":     { "type": "string" },
-                        "notable_concerns":      { "type": "string" },
-                        "broker_commentary":     { "type": "string" },
-                        "default_source":        { "type": "string", "description": "Label written to the SOURCE column for auto-filled rows, e.g. 'Appraisal', 'CoStar', 'Public records'" }
                       }
                     },
                     "tenants": {
@@ -127,57 +67,7 @@
                           "mgmt_fee_pct":   { "type": "number", "default": 0 },
                           "lease_commencement": { "type": "string", "description": "YYYY-MM-DD lease commencement (Rent Schedule)" },
                           "lease_expiration":   { "type": "string", "description": "YYYY-MM-DD lease expiration (Rent Schedule)" },
-                          "rent_schedule": { "type": "array", "description": "Exact contracted rent by period; omit to compute from year1_rent x escalation", "items": { "type": "object", "properties": { "label": {"type":"string"}, "start_date": {"type":"string"}, "end_date": {"type":"string"}, "annual_rent": {"type":"number"}, "status": {"type":"string"} } } },
-                          "abstract": {
-                            "type": "object",
-                            "description": "Executed-lease provisions auto-filled into the Lease Abstract tab. Identification and economics (tenant/guarantor, lease type, commencement, expiration, Year-1 rent, escalations, remaining term, leased SF, rent/SF) are derived automatically from the tenant fields above + property; supply the provisions below to fill the rest. Omit any you don't have.",
-                            "properties": {
-                              "tenant_of_record":    { "type": "string", "description": "Legal tenant entity if different from trade name" },
-                              "landlord_of_record":  { "type": "string" },
-                              "execution_date":      { "type": "string" },
-                              "permitted_use":       { "type": "string", "description": "Exclusive / permitted use" },
-                              "prohibited_uses":     { "type": "string" },
-                              "leased_sf_per_survey":{ "type": "string" },
-                              "rent_commencement_date": { "type": "string" },
-                              "rent_abatement":      { "type": "string" },
-                              "percentage_rent":     { "type": "string" },
-                              "lease_structure":     { "type": "string", "description": "NNN / NN / Gross / MG — defaults to lease_type" },
-                              "taxes_responsibility":    { "type": "string" },
-                              "insurance_responsibility":{ "type": "string" },
-                              "cam_responsibility":      { "type": "string" },
-                              "capital_responsibility":  { "type": "string", "description": "Capital / roof / structure responsibility" },
-                              "expense_cap":         { "type": "string" },
-                              "landlord_obligations":{ "type": "string" },
-                              "num_renewal_options": { "type": "string" },
-                              "option_term_length":  { "type": "string" },
-                              "renewal_rent_method": { "type": "string" },
-                              "renewal_notice":      { "type": "string" },
-                              "option_to_purchase":  { "type": "string" },
-                              "rofr":                { "type": "string", "description": "Right of first refusal" },
-                              "rofo":                { "type": "string", "description": "Right of first offer" },
-                              "assignment_rights":   { "type": "string" },
-                              "subletting_rights":   { "type": "string" },
-                              "change_of_control":   { "type": "string" },
-                              "guarantor_release":   { "type": "string", "description": "Release of guarantor on assignment" },
-                              "early_termination":   { "type": "string" },
-                              "termination_fee":     { "type": "string" },
-                              "default_cure":        { "type": "string", "description": "Default / cure periods" },
-                              "co_tenancy":          { "type": "string" },
-                              "go_dark":             { "type": "string" },
-                              "ti_allowance":        { "type": "string", "description": "TI allowance / landlord work" },
-                              "signage_rights":      { "type": "string" },
-                              "parking_allocation":  { "type": "string" },
-                              "snda":                { "type": "string", "description": "Subordination / SNDA / estoppel" },
-                              "condemnation":        { "type": "string" },
-                              "casualty":            { "type": "string", "description": "Casualty / damage provisions" },
-                              "holdover":            { "type": "string" },
-                              "notices":             { "type": "string" },
-                              "key_lease_strengths": { "type": "string" },
-                              "key_lease_risks":     { "type": "string" },
-                              "broker_commentary":   { "type": "string" },
-                              "default_source":      { "type": "string", "description": "Label for the DOCUMENT SOURCE column, e.g. 'Executed Lease'" }
-                            }
-                          }
+                          "rent_schedule": { "type": "array", "description": "Exact contracted rent by period; omit to compute from year1_rent x escalation", "items": { "type": "object", "properties": { "label": {"type":"string"}, "start_date": {"type":"string"}, "end_date": {"type":"string"}, "annual_rent": {"type":"number"}, "status": {"type":"string"} } } }
                         }
                       }
                     },

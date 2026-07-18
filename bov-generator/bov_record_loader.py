@@ -78,6 +78,52 @@ def _get(url: str, key: str, path: str) -> list:
     return data if isinstance(data, list) else []
 
 
+def resolve_property_id(lookup) -> int:
+    """
+    Resolve a `property_lookup` to a cre_property_id (lcc_cre_properties.id).
+
+    - A numeric value (int or all-digit string) is treated as the id directly.
+    - Otherwise it's an ADDRESS: match the street portion (before the first comma)
+      against lcc_cre_properties.address, optionally narrowed by a ", ST" state
+      suffix if present. Exactly one match → its id. Zero → 404. More than one →
+      409 with the candidate list, so the caller disambiguates (never guesses).
+
+    This lives in the generator so EVERY caller (MCP tool, Northmarq Project
+    OpenAPI action, Copilot plugin, curl) gets address-or-id resolution for free.
+    """
+    s = str(lookup or "").strip()
+    if not s:
+        raise BovRecordError("property_lookup is empty", status=422)
+    if s.isdigit():
+        return int(s)
+
+    url, key = _config()
+    # Split "207 Fob James Dr, Valley, AL" → street="207 Fob James Dr", state="AL".
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    street = parts[0] if parts else s
+    state = None
+    if len(parts) >= 2:
+        tail = parts[-1].upper()
+        if len(tail) == 2 and tail.isalpha():
+            state = tail
+    # ilike wildcards around the street token; PostgREST uses * as the wildcard.
+    q = f"lcc_cre_properties?select=id,address,city,state,tenant_brand&address=ilike.*{urllib.parse.quote(street)}*"
+    if state:
+        q += f"&state=eq.{urllib.parse.quote(state)}"
+    q += "&limit=25"
+    rows = _get(url, key, q)
+
+    if not rows:
+        raise BovRecordError(f"No LCC property matches address '{s}'. Check the address or pass cre_property_id.", status=404)
+    if len(rows) > 1:
+        cands = "; ".join(
+            f"id={r.get('id')}: {r.get('address') or r.get('tenant_brand') or '?'}, {r.get('city') or ''} {r.get('state') or ''}".strip()
+            for r in rows[:10]
+        )
+        raise BovRecordError(f"'{s}' matches {len(rows)} properties — pass cre_property_id to disambiguate. Candidates: {cands}", status=409)
+    return int(rows[0]["id"])
+
+
 def load_bov_record(cre_property_id: int, extractor_version: Optional[str] = None) -> dict:
     """
     Return the BOV request dict for a property, or raise BovRecordError.

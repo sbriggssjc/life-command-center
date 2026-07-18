@@ -48,7 +48,7 @@ from recalc_runner import recalc_and_validate, RecalcError
 # guarded so the generator still boots even if the module/env isn't present (the
 # hand-authored payload path is unaffected).
 try:
-    from bov_record_loader import load_bov_record, BovRecordError
+    from bov_record_loader import load_bov_record, resolve_property_id, BovRecordError
     _UNIT4_LOADER = True
 except Exception:  # noqa: BLE001
     _UNIT4_LOADER = False
@@ -203,6 +203,11 @@ class BOVRequest(BaseModel):
     # instead of hand-authoring the body. Mutually sufficient with a full payload;
     # posted fields override the loaded record (e.g. a client/close_date override).
     cre_property_id: Optional[int]        = Field(None, description="LCC Opps lcc_cre_properties.id — load the reviewed Unit-4 BOV record")
+    # Capability-parity: any entry point can pass a property_lookup (an address, or
+    # the numeric id as a string) and the server resolves it to cre_property_id →
+    # loads the reviewed record. So "BOV 207 Fob James Dr" produces the identical
+    # workbook from every surface with no client-side lookup.
+    property_lookup: Optional[str]        = Field(None, description="Address (or numeric id) to resolve to the LCC property record — e.g. '207 Fob James Dr, Valley, AL'")
 
 
 class BOVResponse(BaseModel):
@@ -252,6 +257,16 @@ def _make_filename(req: BOVRequest) -> str:
 # ── Generate endpoint ─────────────────────────────────────────────────────────
 @app.post("/generate-bov", response_model=BOVResponse, dependencies=[Depends(verify_api_key)])
 async def generate_bov(req: BOVRequest, request: Request):
+    # Capability-parity — resolve a property_lookup (address or numeric id) to a
+    # cre_property_id first, so "BOV 207 Fob James Dr" works from any entry point.
+    if req.cre_property_id is None and req.property_lookup:
+        if not _UNIT4_LOADER:
+            raise HTTPException(status_code=503, detail="property_lookup not available: bov_record_loader/env not configured")
+        try:
+            req.cre_property_id = resolve_property_id(req.property_lookup)
+        except BovRecordError as e:
+            raise HTTPException(status_code=getattr(e, "status", 502), detail=str(e))
+
     # R58 Unit 4 (2C) — {cre_property_id} input: load the reviewed extraction
     # record and merge any explicitly-posted overrides on top. Hand-authored
     # payloads (no cre_property_id) fall straight through unchanged.
@@ -267,8 +282,10 @@ async def generate_bov(req: BOVRequest, request: Request):
         # record's tenants).
         overrides = req.model_dump(exclude_unset=True)
         overrides.pop("cre_property_id", None)
+        overrides.pop("property_lookup", None)
         merged = {**base, **overrides}
         merged.pop("cre_property_id", None)
+        merged.pop("property_lookup", None)
         merged.pop("_source", None)
         try:
             req = BOVRequest(**merged)

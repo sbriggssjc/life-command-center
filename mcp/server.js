@@ -434,12 +434,13 @@ const TOOL_DEFINITIONS = {
   },
   generate_bov: {
     name: 'generate_bov',
-    description: "Generate a Briggs CRE BOV Excel workbook (10 tabs, all formulas recalculated) from structured deal inputs. Handles Single-Tenant Net Lease (NNN) and Multi-Tenant Medical Office (MOB) deals. Returns a short-lived download link to the finished .xlsx — share that link with the user to deliver the workbook.",
+    description: "Generate a Briggs CRE BOV Excel workbook (10 tabs, all formulas recalculated) and return a short-lived download link to the finished .xlsx. TWO ways to call: (1) PREFERRED for a known LCC property — pass ONLY `property_lookup` (an address like '207 Fob James Dr, Valley, AL') or `cre_property_id`; the server loads that property's reviewed lease/financial record and builds the identical workbook every team member would get. (2) For a brand-new deal not yet in LCC — hand-author asset_type + property + tenants + underwriting + client. You may also pass property_lookup/cre_property_id AND override specific fields (e.g. client) — posted fields win over the loaded record.",
     inputSchema: {
       type: 'object',
-      required: ['asset_type', 'property', 'client'],
       properties: {
-        asset_type: { type: 'string', enum: ['NNN', 'MOB'], description: 'NNN = Single-Tenant Net Lease | MOB = Multi-Tenant Medical Office Building' },
+        property_lookup: { type: 'string', description: "PREFERRED path: an address (or numeric id as a string) to resolve to the LCC property's reviewed BOV record — e.g. '207 Fob James Dr, Valley, AL'. No other fields needed. On an ambiguous address the service returns the candidate list so you can re-call with cre_property_id." },
+        cre_property_id: { type: 'integer', description: "LCC Opps lcc_cre_properties.id — load that property's reviewed BOV record directly (alternative to property_lookup)." },
+        asset_type: { type: 'string', enum: ['NNN', 'MOB'], description: 'NNN = Single-Tenant Net Lease | MOB = Multi-Tenant Medical Office Building (required only when hand-authoring a new deal)' },
         property: {
           type: 'object',
           required: ['address'],
@@ -507,8 +508,13 @@ const TOOL_HANDLERS = {
       if (!BOV_SERVICE_URL || !BOV_API_KEY) {
         return textResult({ error: "BOV service not configured — set BOV_SERVICE_URL and BOV_API_KEY env vars on the MCP service." });
       }
-      if (!args || !args.asset_type || !args.property || !args.client) {
-        return textResult({ error: "generate_bov requires asset_type, property, and client (tenants + underwriting strongly recommended)." });
+      // Two valid shapes: a record call (property_lookup OR cre_property_id) — the
+      // server loads the reviewed record — or a hand-authored call (asset_type +
+      // property + client). Only reject when NEITHER is satisfied.
+      const hasRecordRef = !!(args && (args.property_lookup || args.cre_property_id));
+      const hasHandAuthored = !!(args && args.asset_type && args.property && args.client);
+      if (!hasRecordRef && !hasHandAuthored) {
+        return textResult({ error: "generate_bov needs either property_lookup / cre_property_id (to build from the property's reviewed LCC record) OR asset_type + property + client (to hand-author a new deal)." });
       }
       const url = BOV_SERVICE_URL + "/generate-bov";
       let resp, text;
