@@ -113,6 +113,25 @@ def resolve_property_id(lookup) -> int:
     q += "&limit=25"
     rows = _get(url, key, q)
 
+    # Fallback: many CRE rows were registered by tenant+city with a NULL address,
+    # but the reviewed BOV record carries the real street address. Match on the
+    # record's `property.address` so lookup works even before the registry address
+    # is backfilled — and it only surfaces properties that HAVE a buildable record.
+    if not rows:
+        rq = (
+            "lcc_cre_bov_extraction?select=cre_property_id"
+            f"&record->property->>address=ilike.*{urllib.parse.quote(street)}*&limit=25"
+        )
+        rec_rows = _get(url, key, rq)
+        ids = sorted({r["cre_property_id"] for r in rec_rows if r.get("cre_property_id") is not None})
+        if len(ids) == 1:
+            return int(ids[0])
+        if len(ids) > 1:
+            raise BovRecordError(
+                f"'{s}' matches {len(ids)} property records — pass cre_property_id. Candidate ids: {ids[:10]}",
+                status=409,
+            )
+
     if not rows:
         raise BovRecordError(f"No LCC property matches address '{s}'. Check the address or pass cre_property_id.", status=404)
     if len(rows) > 1:
