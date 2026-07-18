@@ -4127,13 +4127,13 @@ function _draftBodyToHtml(text) {
 // Best-effort: create a real Outlook draft from an AI draft response.
 // Returns a partial result object to merge into the action response, or null.
 async function _maybeCreateOutlookDraft({ params, responseText, fallbackTo }) {
-  // Trigger when create_draft=true (boolean or string 'true') OR when an explicit
-  // 'to' recipient email is provided. Copilot Studio's orchestrator reliably extracts
-  // string values (email addresses) from natural language but frequently drops boolean
-  // flags. A 'to' address is the definitive signal the user wants an Outlook draft.
-  const wantsDraft = params?.create_draft === true || params?.create_draft === 'true'
-    || (typeof params?.to === 'string' && params.to.includes('@'));
-  if (!wantsDraft) return null;
+  // Default: always create an Outlook draft when a recipient is available.
+  // The orchestrator reliably drops boolean flags (create_draft) but we can't
+  // reliably get 'to' either. So we drive off recipient availability:
+  //   - params.to   (explicit override passed by orchestrator)
+  //   - fallbackTo  (email resolved from contact_id DB lookup in the caller)
+  // Pass text_only=true to skip draft creation and return email text only.
+  if (params?.text_only === true || params?.text_only === 'true') return null;
   const to = params.to || fallbackTo;
   if (!to) {
     return { draft_created: false, draft_note: 'No recipient email available — returned text only. Pass "to" to create an Outlook draft.' };
@@ -4167,7 +4167,22 @@ async function handleDraftOutreachEmail(params, user, workspaceId) {
       contactContext = `\nRecipient Profile:\n- Name: ${c.full_name}\n- Company: ${c.company_name || 'unknown'}\n- Title: ${c.title || 'unknown'}\n- Location: ${[c.city, c.state].filter(Boolean).join(', ') || 'unknown'}\n- Engagement: score ${c.engagement_score || 0}, ${c.total_calls || 0} calls, ${c.total_emails_sent || 0} emails sent\n- Last call: ${c.last_call_date || 'never'} | Last email: ${c.last_email_date || 'never'} | Last meeting: ${c.last_meeting_date || 'never'}`;
     }
   } else if (contact_name) {
-    contactContext = `\nRecipient: ${contact_name}`;
+    // Try to resolve the contact's email from the GOV contacts DB by name so
+    // _maybeCreateOutlookDraft has a fallbackTo even when no contact_id is given.
+    try {
+      const nameSearch = await govContactQuery(
+        `unified_contacts?full_name=ilike.*${encodeURIComponent(contact_name)}*&limit=1&select=full_name,email,company_name,title`
+      );
+      const c = nameSearch.data?.[0];
+      if (c) {
+        recipientEmail = c.email || null;
+        contactContext = `\nRecipient Profile:\n- Name: ${c.full_name}${c.company_name ? ` (${c.company_name})` : ''}${c.title ? `, ${c.title}` : ''}`;
+      } else {
+        contactContext = `\nRecipient: ${contact_name}`;
+      }
+    } catch (_) {
+      contactContext = `\nRecipient: ${contact_name}`;
+    }
   }
 
   const toneGuide = tone || 'professional, warm, and concise';

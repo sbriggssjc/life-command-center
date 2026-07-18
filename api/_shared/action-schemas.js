@@ -305,18 +305,18 @@ export const ACTION_SCHEMAS = {
   },
 
   draft_outreach_email: {
-    description: 'Draft a personalized outreach email for a business development contact. Provide contact_id (unified_id from GOV contacts DB) or contact_name. IMPORTANT: When the user says "save to Outlook", "create a draft", "draft it in Outlook", "save as draft", or similar, you MUST set create_draft=true AND set the "to" field to the recipient email address extracted from the user message. Do NOT skip create_draft or set it false when Outlook saving is requested.',
+    description: 'Draft a personalized outreach email and automatically save it to the Outlook Drafts folder via Power Automate. Always creates an Outlook draft when a recipient email is available — no flag needed. Provide contact_id (preferred, resolves email from DB) or contact_name. Optionally pass "to" to override the recipient email. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.',
     category: 'outreach',
     inputs: {
       type: 'object',
       properties: {
-        contact_id: { type: 'string', description: 'Contact unified_id from GOV contacts DB' },
-        contact_name: { type: 'string', description: 'Contact name (used if contact_id not available)' },
+        contact_id: { type: 'string', description: 'Contact unified_id from GOV contacts DB — preferred, resolves recipient email automatically' },
+        contact_name: { type: 'string', description: 'Contact full name — used when contact_id is not available; email is looked up from the contacts DB' },
         intent: { type: 'string', description: 'Purpose of the outreach (e.g., "reconnect", "listing pitch", "market update")' },
         tone: { type: 'string', description: 'Desired tone (default: professional, warm, and concise)' },
-        create_draft: { type: 'boolean', description: 'MUST be true when user says "save to Outlook", "create a draft", "draft it in Outlook", or similar. When true, creates a real draft in the user\'s Outlook Drafts folder via Power Automate. Requires "to" field.' },
-        to: { type: 'string', description: 'Recipient email address — the person being emailed (NEVER the user\'s own email). Required when create_draft=true. Extract from user message or look up via search_entities.' },
-        cc: { type: 'string', description: 'Optional CC email address(es), semicolon-separated.' }
+        to: { type: 'string', description: 'Explicit recipient email override — the person being emailed. If omitted, email is resolved from contact_id or contact_name lookup. NEVER use the authenticated user\'s own email.' },
+        cc: { type: 'string', description: 'Optional CC email address(es), semicolon-separated.' },
+        text_only: { type: 'boolean', description: 'Set true ONLY when user explicitly asks to see the draft text without saving to Outlook. Default is false — draft is always saved to Outlook when a recipient email is available.' }
       }
     },
     outputs: {
