@@ -199,6 +199,18 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfLinkReconcileTick(req, res);
   }
 
+  // SF-CONTACT-RECONCILE — WhoId by-id contact resolver (via vercel.json /
+  // server.js _route=sf-contact-resolve-tick). GET=dry-run / POST=drain the
+  // sf_contact_resolve_queue → mint (or attach-by-email) the SF contact.
+  // Authenticates internally. NOTE: the by-id resolver depends on THIS dispatch
+  // — if it goes missing, every tick 400s at the bridge-action router below.
+  // (Restored 2026-07-16 after a stale-branch merge reverted the registration.)
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'sf-contact-resolve-tick') {
+    const { handleSfContactResolveTick } = await import('./_handlers/sf-contact-resolve.js');
+    return handleSfContactResolveTick(req, res);
+  }
+
   // CONTACT-SELECTION Slice 3 — owner-contact enrichment worker (via vercel.json
   // _route=owner-contact-enrich-tick). GET=dry-run / POST=drain. Attaches the
   // ranked decision-maker (or runs the enrichment action) so owners leave
@@ -206,6 +218,43 @@ export default withErrorHandler(async function handler(req, res) {
   if (req.query._route === 'owner-contact-enrich-tick') {
     const { handleOwnerContactEnrichTick } = await import('./_handlers/owner-contact-enrich.js');
     return handleOwnerContactEnrichTick(req, res);
+  }
+
+  // ORE Phase B B1 / Tier A / reconcile-engine workers (via vercel.json /
+  // server.js). GET=dry-run / POST=drain, each authenticates internally + is
+  // bounded (limit + wall-clock); the reconcile-engine's auto-merge cron stays
+  // unscheduled so a drain only runs on a human-gated, capped call. NOTE: these
+  // three depend on THIS dispatch — server.js + vercel.json already route them
+  // here, so if a block goes missing every tick 400s at the bare-action router
+  // below. (Registered 2026-07-16 after a stale-branch merge left the server.js /
+  // vercel.json entries but dropped the operations.js dispatch — same class as
+  // the sf-contact-resolve-tick restore above; do NOT remove.)
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'owner-reconcile-tick') {
+    const { handleOwnerReconcileTick } = await import('./_handlers/owner-reconcile.js');
+    return handleOwnerReconcileTick(req, res);
+  }
+  if (req.query._route === 'owner-reconcile-engine-tick') {
+    const { handleOwnerReconcileEngineTick } = await import('./_handlers/owner-reconcile-engine.js');
+    return handleOwnerReconcileEngineTick(req, res);
+  }
+  if (req.query._route === 'institution-contact-tick') {
+    const { handleInstitutionContactTick } = await import('./_handlers/institution-contact.js');
+    return handleInstitutionContactTick(req, res);
+  }
+
+  // Salesforce Lists (Campaigns/CampaignMembers) ingest (via vercel.json /
+  // server.js _route=sf-list-import). GET=dry-run (classify + normalize, no
+  // writes) / POST=ingest (reconcile-by-email → relate to company org → record
+  // membership → route buyers/sellers). Authenticates internally.
+  // NOTE: server.js + vercel.json already route /api/sf-list-import here; if this
+  // block goes missing the POST 400s "Invalid POST action" at the bridge-action
+  // router below. (Restored after a stale-branch merge dropped the dispatch —
+  // same regression class as the tick routes above; do NOT remove.)
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'sf-list-import') {
+    const { handleSfListImport } = await import('./_handlers/sf-list-import.js');
+    return handleSfListImport(req, res);
   }
 
   // UW#7 — developer resolution from the ownership chain (via vercel.json
