@@ -13,7 +13,10 @@
 // ============================================================================
 
 import { authenticate } from '../_shared/auth.js';
-import { runBovExtract, extractBovRecord, gatherPropertyText } from '../_shared/bov-extract.js';
+import {
+  runBovExtract, extractBovRecord, gatherPropertyText,
+  fetchReadyProperties, runBovExtractSweep,
+} from '../_shared/bov-extract.js';
 
 export async function handleBovExtract(req, res, deps = {}) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -21,6 +24,22 @@ export async function handleBovExtract(req, res, deps = {}) {
   }
   const user = await authenticate(req, res);
   if (!user) return;
+
+  // Coverage-gated sweep: extract every fully-covered property not yet done.
+  //   GET  ?mode=sweep       — dry-run (list ready-and-pending properties)
+  //   POST ?mode=sweep&limit — extract up to `limit`, wall-clock budgeted
+  const mode = (req.query.mode || req.body?.mode || '').toLowerCase();
+  if (mode === 'sweep') {
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || req.body?.limit || '5', 10)));
+    const refresh = String(req.query.refresh || req.body?.refresh || '') === '1';
+    if (req.method === 'GET') {
+      const ready = await fetchReadyProperties({ limit, refresh }, deps);
+      return res.status(200).json({ mode: 'sweep_dry_run', limit, pending: ready.rows?.length || 0, rows: ready.rows || [], detail: ready.detail });
+    }
+    const budgetMs = Math.max(5000, parseInt(process.env.BOV_EXTRACT_TICK_BUDGET_MS || '25000', 10));
+    const out = await runBovExtractSweep({ limit, refresh }, { ...deps, deadlineMs: Date.now() + budgetMs });
+    return res.status(200).json({ mode: 'sweep', ...out });
+  }
 
   const crePropertyId = req.method === 'POST'
     ? (req.body?.cre_property_id ?? req.body?.crePropertyId)

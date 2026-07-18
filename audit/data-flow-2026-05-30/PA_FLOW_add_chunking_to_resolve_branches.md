@@ -170,6 +170,27 @@ fails, even after most succeeded.
      simultaneous SF calls = far less throttling on the big multi-chunk lists.
   Then one clean run finishes everything.
 
+## ⚠️⚠️⚠️ DEFINITIVE fix (2026-07-17, run #5/#6) — chunk size 50 exceeds SF's OData 100-NODE cap
+
+Runs with the retry policy STILL failed at ~18 min, always on a specific chunk. Read the failed
+`Get Contacts L2` OUTPUTS — Salesforce returned **400 BadRequest**:
+> "OData query syntax tree has exceeded nodes count limit of **'100'**."
+
+A 50-ID chunk builds `Id eq 'a' or Id eq 'b' or …` = 50 clauses ≈ **150–200 OData nodes**, over
+SF's hard **100-node** limit. So the CHUNK SIZE of 50 is too big — independent of URL length.
+This is why small lists (<25 members → <100 nodes) ingested fine but any list with a full 50-ID
+chunk (GSA Buyer, the big seller/buyer lists) 400'd. **Retries don't help — a 400 is a client
+error, not a transient (PA only retries 429/5xx).**
+
+**THE FIX — reduce the chunk size from 50 → 20** in BOTH Compose actions:
+- `Chunk L2`: `chunk(body('Select_ContactIds_L2'), 20)`
+- `Chunk L3`: `chunk(body('Select_ContactIds_L3'), 20)`
+
+20 IDs ≈ 4×20−1 = **79 nodes**, safely under 100 (24 would be the max at ~95 nodes; 20 leaves
+margin). More chunks per list (GSA Buyer = 8 instead of 4), handled fine by the idempotent
+upsert. Everything else (the fx `join(items(...))` filter, retry policy, Select, POST) stays.
+This is the LAST constraint — after this the big lists complete.
+
 ## After chunking verifies end-to-end
 Flip **`SF_LIST_SEED_INSTITUTION`** on (after eyeballing the first full seller ingest) to kick the
 Tier A fan-out over the contactless sponsors.

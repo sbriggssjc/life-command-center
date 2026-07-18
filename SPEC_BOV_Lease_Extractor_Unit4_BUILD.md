@@ -80,6 +80,70 @@ upsert, needs_ocr/transient handling) + enqueue-guard + the 2C model/merge suite
 
 ---
 
+## LIVE STATUS (2026-07-17, after scheduling)
+
+- **Drain cron is running in production.** `lcc-cre-doc-text-backfill` (pg_cron
+  jobid 167, `*/30 * * * *`) → `POST /api/intake?_route=cre-doc-text-tick&mode=eligible&limit=15`.
+  Smoke-tested live: HTTP 200, real docs processed, sidecars written. The digital
+  docs extract fast (≤50/tick); scanned leases OCR via **google_docai** at ~2/tick
+  (22s wall-clock budget), so the ~444-lease scanned backlog is a multi-day drain.
+- **Daily coverage report** scheduled: `trig_015cppx2Q66hNoznbBKWDm3T` (13:00 UTC,
+  push on). It reports coverage %, OCR-tier mix, and flags when lease coverage is
+  high enough to advance to Step 2B.
+- **Pilot record** live: `lcc_cre_bov_extraction` id 1 (property 16, reviewed) →
+  generator `{cre_property_id:16}` reproduces the master byte-for-byte (10,537/10,537).
+
+## Two production findings (fixed in code; one has an external dependency)
+
+1. **Per-page anchors from OCR.** DocAI returns a page COUNT but Unit 1 wasn't
+   capturing per-page TEXT, so lease `clause_refs` couldn't resolve real PAGE
+   numbers from OCR (sections always work). FIXED on the code side: Unit 1
+   (`document-text.js` `ocrCloudCheap`/tiered/`extractDocumentText`) now threads a
+   `pageTexts` array → the sidecar `pages` column → `clause_refs`. **External
+   dependency:** the DocAI wrapper behind `OCR_CLOUD_OCR_URL` must return per-page
+   text (`page_texts` / `pages_text` / a `pages` ARRAY). Until it does, OCR'd
+   leases get sections but no page numbers. Pilot/hand-authored records are
+   unaffected (their pages are set).
+2. **Thin OCR results.** A lease that fell through to gpt-4o returned 48 chars and
+   was marked "done." FIXED: a sub-floor OCR result is tagged `reason='thin_ocr_result'`
+   (and gpt-4o transcriptions `no_page_anchors_gpt4o`); Unit 4's gather treats both
+   as `citation_risk` so a human reviews rather than trusting junk text.
+
+**These three files are committed but PENDING the next redeploy** (they are not in
+the currently-running deploy): `api/_shared/document-text.js`,
+`api/_shared/cre-property-doc-text.js` (also carries the idempotency guard),
+`api/_shared/bov-extract.js`. Plus `vercel.json` (named-path rewrites). After that
+redeploy, enable the forward `jobs`-lane cron (commented in the cron migration).
+
+## Coverage-gated auto-extraction (Step 2B, self-advancing)
+
+Built so records generate automatically as the backlog drains — safely:
+- **`v_lcc_cre_bov_ready`** (view, APPLIED): properties whose lease/dd/om are FULLY
+  text-covered and have ≥1 lease. 3 properties already qualify.
+- **Sweep** (`api/_handlers/bov-extract.js` `mode=sweep`, `bov-extract.js`
+  `fetchReadyProperties`/`runBovExtractSweep`): extracts each ready-and-not-yet-done
+  property, bounded by limit + ~25s budget. Records land **status='extracted'
+  (review-gated)** — the generator prefers 'reviewed', so an auto-extracted record
+  never silently drives a client deliverable.
+- **Cron** `lcc-cre-bov-extract-sweep` (migration written, NOT yet applied): every
+  2h, 5 properties/tick. Gated by construction — only fully-covered properties.
+
+## ACTIVATION SEQUENCE — after the next redeploy
+
+The redeploy carries: `document-text.js` (page passthrough), `cre-property-doc-text.js`
+(idempotency guard + thin-OCR flag), `bov-extract.js` + `bov-extract.js` handler
+(sweep + citation flags), `vercel.json` (named-path rewrites). Then:
+
+1. Verify: `GET /api/cre-doc-text-tick` and `GET /api/bov-extract?mode=sweep` return 200.
+2. Apply migration `20260802150000_..._bov_extract_sweep_cron.sql` (schedules the sweep).
+3. Enable the forward doc-text `jobs`-lane cron (uncomment in `20260802130000_..._cre_doc_text_cron.sql`).
+4. Update the DocAI wrapper behind `OCR_CLOUD_OCR_URL` to return per-page text
+   (`page_texts` / `pages_text` / a `pages` array) → lease clause_ref PAGE numbers
+   populate automatically (code side already threads it).
+
+Until then: the doc-text backlog keeps draining on the live cron, the daily report
+tracks coverage, and the pilot `{cre_property_id:16}` path already works.
+
 ## Remaining OPS steps (not code — runtime)
 
 1. **Schedule the drain tick.** Point the existing tick scheduler at

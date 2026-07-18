@@ -28,9 +28,17 @@
 // ============================================================================
 
 import { opsQuery, isOpsConfigured } from './ops-db.js';
-import { extractDocumentText } from './document-text.js';
+import { extractDocumentText, meaningfulTextLen } from './document-text.js';
 
 export const CRE_DOC_TEXT_VERSION = process.env.CRE_DOC_TEXT_VERSION || 'unit1_v1';
+
+// A successful OCR whose MEANINGFUL text is below this floor is almost certainly a
+// blank/near-blank scan or a cover page (prod finding: a lease that fell through to
+// gpt-4o returned 48 chars and was marked "done"). We still persist it (re-OCR
+// wouldn't recover more), but tag reason='thin_ocr_result' so Unit 4 treats it as
+// citation-risk / review rather than trusting it. 0 disables. Digital text uses the
+// upstream DOC_TEXT_MIN_CHARS floor already; this covers the OCR path.
+const OCR_MIN_MEANINGFUL_CHARS = Number(process.env.CRE_OCR_MIN_CHARS || 120);
 
 // Doc types this worker extracts by default (the ones Unit 4 consumes). A comp
 // export or a finished master workbook doesn't need a text sidecar.
@@ -112,7 +120,17 @@ export async function buildDocTextRow(regRow, deps = {}) {
     };
   }
 
-  const pages = derivePages(ext.text, ext.pages);
+  // Per-page text for clause_refs page anchors. Unit 1 currently returns a page
+  // COUNT (ext.ocr_pages) from the DocAI layout tier but not the per-page array —
+  // so we accept any of the field names Unit 1 / the DocAI wrapper would carry it
+  // under when that passthrough lands, and fall back to form-feed splitting.
+  const providedPages = ext.pages || ext.ocr_page_texts || ext.page_texts || null;
+  const pages = derivePages(ext.text, providedPages);
+
+  // Thin-OCR guard: a near-empty OCR result is flagged (not silently trusted).
+  const meaningful = meaningfulTextLen(ext.text);
+  const thinOcr = ext.method === 'ocr' && OCR_MIN_MEANINGFUL_CHARS > 0 && meaningful < OCR_MIN_MEANINGFUL_CHARS;
+
   return {
     outcome: ext.method === 'ocr' ? 'ocr' : 'text_extracted',
     row: {
@@ -122,13 +140,15 @@ export async function buildDocTextRow(regRow, deps = {}) {
       ocr_tier: ext.ocr_tier || null,
       ocr_engine: ext.ocr_engine || null,
       ocr_confidence: typeof ext.ocr_confidence === 'number' ? ext.ocr_confidence : null,
-      ocr_pages: Number.isFinite(ext.ocr_pages) ? ext.ocr_pages : null,
+      ocr_pages: Number.isFinite(ext.ocr_pages) ? ext.ocr_pages : (pages.length || null),
       page_count: pages.length || null,
       pages: pages.length ? pages : null,
       thin_text_layer: !!ext.thin_text_layer,
       char_len: ext.text.length,
       needs_ocr: false,
-      reason: null,
+      // gpt-4o transcription (tier 'cloud') has no page anchors; a thin OCR result
+      // is low-confidence. Either way, tag it so Unit 4 flags citation risk.
+      reason: thinOcr ? 'thin_ocr_result' : (ext.ocr_tier === 'cloud' ? 'no_page_anchors_gpt4o' : null),
     },
   };
 }

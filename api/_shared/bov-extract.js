@@ -197,7 +197,7 @@ export async function gatherPropertyText(crePropertyId, deps = {}) {
     `lcc_cre_property_document_text?cre_property_id=eq.${encodeURIComponent(crePropertyId)}` +
     `&extractor_version=eq.${encodeURIComponent(sideVer)}` +
     '&needs_ocr=is.false&raw_text=not.is.null' +
-    '&select=document_id,document_type,raw_text,pages,ocr_confidence,ocr_tier,char_len' +
+    '&select=document_id,document_type,raw_text,pages,ocr_confidence,ocr_tier,char_len,reason' +
     '&order=document_id.desc',
     null, { countMode: 'none' });
   const rows = r.ok && Array.isArray(r.data) ? r.data : [];
@@ -211,8 +211,10 @@ export async function gatherPropertyText(crePropertyId, deps = {}) {
       minConfidence = minConfidence == null ? row.ocr_confidence : Math.min(minConfidence, row.ocr_confidence);
       if (row.ocr_confidence < 70) citationRisk = true;
     }
-    // A gpt-4o (tier 'cloud') transcription has no page anchors → citation risk on any lease.
+    // A gpt-4o (tier 'cloud') transcription has no page anchors, and a thin/low-
+    // confidence OCR result (Step 2A flags these in `reason`) → citation risk.
     if (row.ocr_tier === 'cloud') citationRisk = true;
+    if (row.reason === 'thin_ocr_result' || row.reason === 'no_page_anchors_gpt4o') citationRisk = true;
     const dt = String(row.document_type || '').toLowerCase();
     if (dt === 'lease') groups.leases.push(row);
     else if (dt === 'dd') groups.dd.push(row);
@@ -446,6 +448,64 @@ export async function runBovExtract(crePropertyId, deps = {}) {
   if (!ex.ok) return ex;
   const saved = await persistBovRecord(crePropertyId, ex.record, ex.meta, deps);
   return { ok: saved.ok, record_id: saved.id ?? null, meta: ex.meta, reason: saved.ok ? null : (saved.detail || 'persist_failed'), record: ex.record };
+}
+
+// ---------------------------------------------------------------------------
+// Coverage-gated sweep — only extract properties whose lease/dd/om are FULLY
+// text-covered (the v_lcc_cre_bov_ready view), so a half-OCR'd property never
+// yields a partial record. Records land status='extracted' (review-gated).
+// ---------------------------------------------------------------------------
+
+/**
+ * Ready properties not yet extracted at this version. Reads the readiness view,
+ * excludes any property that already has a record at BOV_EXTRACT_VERSION (unless
+ * deps.refresh), returns up to `limit` property ids. Two cheap reads diffed in JS
+ * (mirrors fetchEligibleCreDocs) — no cross-table filter dependency.
+ */
+export async function fetchReadyProperties({ limit = 5, refresh = false } = {}, deps = {}) {
+  const q = deps.opsQuery || opsQuery;
+  const ver = deps.version || BOV_EXTRACT_VERSION;
+  const cap = Math.min(50, Math.max(1, limit));
+
+  const ready = await q('GET',
+    `v_lcc_cre_bov_ready?select=cre_property_id,lease_docs,covered_docs&limit=${cap * 4}`,
+    null, { countMode: 'none' });
+  if (!ready.ok || !Array.isArray(ready.data)) return { ok: false, status: ready.status, detail: ready.data };
+  if (!ready.data.length) return { ok: true, rows: [] };
+
+  if (refresh) return { ok: true, rows: ready.data.slice(0, cap) };
+
+  const ids = ready.data.map((r) => r.cre_property_id);
+  const existing = await q('GET',
+    `lcc_cre_bov_extraction?select=cre_property_id&extractor_version=eq.${encodeURIComponent(ver)}` +
+    `&cre_property_id=in.(${ids.join(',')})`,
+    null, { countMode: 'none' });
+  const done = new Set(existing.ok && Array.isArray(existing.data) ? existing.data.map((r) => r.cre_property_id) : []);
+  const rows = ready.data.filter((r) => !done.has(r.cre_property_id)).slice(0, cap);
+  return { ok: true, rows };
+}
+
+/**
+ * Sweep: extract every ready-and-not-yet-done property, bounded by `limit` and an
+ * optional wall-clock budget (deps.deadlineMs). Each is review-gated (status=
+ * 'extracted'). Never throws; a per-property failure is captured, not fatal.
+ */
+export async function runBovExtractSweep({ limit = 5, refresh = false } = {}, deps = {}) {
+  const ready = await fetchReadyProperties({ limit, refresh }, deps);
+  if (!ready.ok) return { ok: false, reason: 'ready_query_failed', detail: ready.detail, results: [] };
+  const results = [];
+  for (const row of ready.rows) {
+    if (deps.deadlineMs && Date.now() > deps.deadlineMs) break;
+    const r = await runBovExtract(row.cre_property_id, deps).catch((e) => ({ ok: false, reason: e?.message || String(e) }));
+    results.push({
+      cre_property_id: row.cre_property_id,
+      ok: r.ok, record_id: r.record_id ?? null,
+      tenant_count: r.meta?.tenant_count ?? null,
+      citation_risk: r.meta?.citation_risk ?? null,
+      reason: r.ok ? null : r.reason,
+    });
+  }
+  return { ok: true, swept: results.length, extracted: results.filter((x) => x.ok).length, results };
 }
 
 export const __private = { fetchProperty, deriveAssetType, buildPropertyBlock, numOrNull, cleanRentPeriod };
