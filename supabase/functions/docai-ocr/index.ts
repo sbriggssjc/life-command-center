@@ -183,6 +183,35 @@ function meanConfidence(doc: Record<string, unknown>): number | null {
   return Math.round((sum / n) * 1000) / 10;   // 0-100, one decimal
 }
 
+// ── Per-page text (R58 Unit 4 — clause_ref PAGE anchors) ─────────────────────
+// Document AI returns document.text (one concatenated string) plus, per page, a
+// layout.textAnchor.textSegments[] of {startIndex,endIndex} offsets INTO that
+// string. Slice the full text by each page's segments to recover per-page text.
+// int64 fields arrive as STRINGS in the JSON, so coerce with Number() before
+// slicing. Returns [{page, text}]; empty array when the shape isn't present —
+// additive, so callers that ignore page_texts are unchanged.
+function pageTextsFromDoc(doc: Record<string, unknown>): Array<{ page: number; text: string }> {
+  const fullText = String(doc?.text || "");
+  const pages = (doc?.pages as Array<Record<string, unknown>>) || [];
+  const out: Array<{ page: number; text: string }> = [];
+  pages.forEach((p, i) => {
+    const pageNumber = Number((p?.pageNumber as number | string) ?? i + 1) || i + 1;
+    const layout = (p?.layout as Record<string, unknown>) || {};
+    const anchor = (layout?.textAnchor as Record<string, unknown>) || {};
+    const segments = (anchor?.textSegments as Array<Record<string, unknown>>) || [];
+    let text = "";
+    for (const seg of segments) {
+      const start = Number(seg?.startIndex ?? 0);   // int64 → string in JSON
+      const end = Number(seg?.endIndex ?? 0);
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+        text += fullText.slice(start, end);
+      }
+    }
+    out.push({ page: pageNumber, text: text.trim() });
+  });
+  return out;
+}
+
 // ── Auth on this endpoint (shared secret) ────────────────────────────────────
 function authorized(req: Request): boolean {
   if (!SHARED_SECRET) {
@@ -277,11 +306,18 @@ Deno.serve(async (req: Request) => {
   const pages = Array.isArray(doc?.pages) ? (doc.pages as unknown[]).length : 0;
   if (!text) return json({ ok: false, reason: "docai_empty", pages });
 
+  // R58 Unit 4 — per-page text for clause_ref PAGE anchors. Wrapped so a shape
+  // surprise can NEVER turn a good OCR into a 502; on any error the field is [].
+  let pageTexts: Array<{ page: number; text: string }> = [];
+  try { pageTexts = pageTextsFromDoc(doc); }
+  catch (err) { console.error("[docai-ocr] pageTextsFromDoc failed:", (err as Error)?.message); }
+
   return json({
     ok: true,
     engine: "google_docai",
     text,
     confidence: meanConfidence(doc),
     pages,
+    page_texts: pageTexts,
   });
 });
