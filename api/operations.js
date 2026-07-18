@@ -4667,7 +4667,9 @@ ${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/g
 async function handleRelationshipContext(params, user, workspaceId) {
   const { contact_id, contact_name } = params || {};
   if (!contact_id && !contact_name) {
-    return { ok: false, error: 'contact_id or contact_name is required' };
+    // Soft response — don't throw 400; let the agent recover and try again with a name
+    return { ok: true, action: 'get_relationship_context', contact: null,
+             response: 'No contact name or ID provided. Please specify a contact_name or contact_id to look up relationship context.' };
   }
 
   // Fetch contact profile
@@ -6250,7 +6252,10 @@ async function handleChatRoute(req, res) {
       response._digest = formatForOutlookDigest(copilot_action, result);
     }
 
-    return res.status(result.ok === false && result.requires_confirmation ? 200 : (result.ok ? 200 : 400)).json(response);
+    // Always return HTTP 200 for dispatched actions — Power Platform treats any
+    // non-200 as a hard ConnectorRequestFailure that blocks the conversation.
+    // Soft errors (ok:false) are communicated in the body so the agent can handle them.
+    return res.status(200).json(response);
   }
 
   if (!message) {
