@@ -309,14 +309,15 @@ export const ACTION_SCHEMAS = {
     category: 'outreach',
     inputs: {
       type: 'object',
+      required: ['contact_name', 'to'],
       properties: {
         contact_id: { type: 'string', description: 'Contact unified_id from GOV contacts DB — preferred, resolves recipient email automatically' },
-        contact_name: { type: 'string', description: 'Contact full name — used when contact_id is not available; email is looked up from the contacts DB' },
+        contact_name: { type: 'string', description: 'Full name of the person being emailed (required)' },
         intent: { type: 'string', description: 'Purpose of the outreach (e.g., "reconnect", "listing pitch", "market update")' },
         tone: { type: 'string', description: 'Desired tone (default: professional, warm, and concise)' },
-        to: { type: 'string', description: 'Recipient email address of the person being emailed. ALWAYS include this field when the user provides an email address. The draft is automatically saved to Outlook Drafts when this field is present. Do not omit if an email address is mentioned or known.' },
+        to: { type: 'string', description: 'Recipient email address (required). ALWAYS include when provided. Draft saves to Outlook Drafts automatically when this is present.' },
         cc: { type: 'string', description: 'Optional CC email address(es), semicolon-separated.' },
-        text_only: { type: 'boolean', description: 'Set true ONLY when user explicitly asks to see the draft text without saving to Outlook. Default is false — draft is always saved to Outlook when a recipient email is available.' }
+        text_only: { type: 'boolean', description: 'Set true ONLY when user explicitly asks to preview text without saving to Outlook.' }
       }
     },
     outputs: {
