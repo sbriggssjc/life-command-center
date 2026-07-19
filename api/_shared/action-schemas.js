@@ -747,10 +747,10 @@ export const ACTION_SCHEMAS = {
     inputs: {
       type: 'object',
       properties: {
-        id: { type: 'string', format: 'uuid', description: 'Inbox item ID' },
-        status: { type: 'string', enum: ['triaged', 'dismissed', 'snoozed'] },
-        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
-        assigned_to: { type: 'string', format: 'uuid' }
+        id: { type: 'string', format: 'uuid', description: 'UUID of the inbox_items row to triage (required).' },
+        status: { type: 'string', enum: ['triaged', 'dismissed', 'snoozed'], description: 'New status to set on the inbox item (triaged, dismissed, or snoozed).' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: 'Priority level to assign (low, normal, high, or urgent).' },
+        assigned_to: { type: 'string', format: 'uuid', description: 'UUID of the team member to assign this item to (optional).' }
       },
       required: ['id']
     },
@@ -764,18 +764,18 @@ export const ACTION_SCHEMAS = {
   },
 
   promote_intake_to_action: {
-    description: 'Promote an inbox item to a shared team action item.',
+    description: 'Promote an inbox item to a shared team action item in the execution queue.',
     category: 'workflow',
     inputs: {
       type: 'object',
       properties: {
-        inbox_item_id: { type: 'string', format: 'uuid' },
-        title: { type: 'string' },
-        action_type: { type: 'string', enum: ['follow_up', 'research', 'review', 'outreach', 'meeting'] },
-        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
-        assigned_to: { type: 'string', format: 'uuid' },
-        due_date: { type: 'string', format: 'date' },
-        entity_id: { type: 'string', format: 'uuid' }
+        inbox_item_id: { type: 'string', format: 'uuid', description: 'UUID of the inbox_items row to promote to an active action (required).' },
+        title: { type: 'string', description: 'Action item title — defaults to the intake item title if omitted.' },
+        action_type: { type: 'string', enum: ['follow_up', 'research', 'review', 'outreach', 'meeting'], description: 'Type of action to create: follow_up, research, review, outreach, or meeting (default: follow_up).' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: 'Task priority level: low, normal, high, or urgent (default: normal).' },
+        assigned_to: { type: 'string', format: 'uuid', description: 'UUID of the team member to assign the action to (optional — defaults to the current user).' },
+        due_date: { type: 'string', format: 'date', description: 'Target due date in YYYY-MM-DD format (optional).' },
+        entity_id: { type: 'string', format: 'uuid', description: 'Entity UUID to link this action to (optional — defaults to the intake item entity).' }
       },
       required: ['inbox_item_id']
     },
@@ -789,17 +789,17 @@ export const ACTION_SCHEMAS = {
   },
 
   create_listing_pursuit_followup_task: {
-    description: 'Create a follow-up action item for a listing pursuit.',
+    description: 'Create a follow-up action item linked to a listing or pursuit entity.',
     category: 'workflow',
     inputs: {
       type: 'object',
       properties: {
-        title: { type: 'string' },
-        entity_id: { type: 'string', format: 'uuid' },
-        action_type: { type: 'string' },
-        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
-        due_date: { type: 'string', format: 'date' },
-        description: { type: 'string' }
+        title: { type: 'string', description: 'Action item title describing what needs to be done (required).' },
+        entity_id: { type: 'string', format: 'uuid', description: 'UUID of the listing or pursuit entity this task is linked to (required).' },
+        action_type: { type: 'string', description: 'Type of follow-up: follow_up, call, email, research, meeting, or review (default: follow_up).' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: 'Task priority: low, normal, high, or urgent (default: normal).' },
+        due_date: { type: 'string', format: 'date', description: 'Target completion date in YYYY-MM-DD format (optional).' },
+        description: { type: 'string', description: 'Additional notes or context for the task (optional).' }
       },
       required: ['title', 'entity_id']
     },
@@ -818,8 +818,9 @@ export const ACTION_SCHEMAS = {
     inputs: {
       type: 'object',
       properties: {
-        id: { type: 'string', format: 'uuid', description: 'Action item ID' },
-        status: { type: 'string', enum: ['open', 'in_progress', 'blocked', 'completed', 'cancelled'] }
+        id: { type: 'string', format: 'uuid', description: 'UUID of the action_items row to update (required).' },
+        status: { type: 'string', enum: ['open', 'in_progress', 'blocked', 'completed', 'cancelled'], description: 'New status to set: open, in_progress, blocked, completed, or cancelled (required).' },
+        notes: { type: 'string', description: 'Optional notes to append to the task record explaining the status change.' }
       },
       required: ['id', 'status']
     },
@@ -833,12 +834,12 @@ export const ACTION_SCHEMAS = {
   },
 
   retry_sync_error_record: {
-    description: 'Retry a failed sync job.',
+    description: 'Retry a failed data sync job by job ID.',
     category: 'ops',
     inputs: {
       type: 'object',
       properties: {
-        job_id: { type: 'string', format: 'uuid', description: 'Sync job ID to retry' }
+        job_id: { type: 'string', format: 'uuid', description: 'UUID of the failed sync job to retry (required). Retrieve from get_sync_run_health when errors are present.' }
       },
       required: ['job_id']
     },
