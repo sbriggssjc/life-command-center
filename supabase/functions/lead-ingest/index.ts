@@ -13,10 +13,14 @@
 // ============================================================================
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
-import { rawQuery } from "../_shared/supabase-client.ts";
+import { rawQuery, opsClient } from "../_shared/supabase-client.ts";
 import { authenticateWebhook, authenticateUser } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
 import { validateContactIngest } from "../_shared/ingest-contract.ts";
+import {
+  parseGoogleAlert, scoreNewsAlert, routeNewsAlert, tenantDedupKey,
+  NEWS_ALERT_DEDUP_DAYS, DEFAULT_TRACKED_TENANTS,
+} from "./news-alert.js";
 
 // C9 Phase 2 (2026-05-27): sanitize a parsed lead's name through the ingest
 // contract before it's written to marketing_leads. A junk/section-label or
@@ -75,8 +79,8 @@ Deno.serve(async (req: Request) => {
     if (action === "health") return handleHealth(req);
     return jsonResponse(req, {
       service: "lead-ingest",
-      version: "1.0.0",
-      valid_actions: ["rcm", "loopnet", "health"],
+      version: "1.1.0",
+      valid_actions: ["rcm", "loopnet", "news_alert", "health"],
     });
   }
 
@@ -90,19 +94,139 @@ Deno.serve(async (req: Request) => {
     if (!user) return errorResponse(req, "Authentication failed", 401);
   }
 
+  const body = await parseBody(req);
+
+  // news_alert lands in LCC Opps (OPS), not DIA — gate DIA only for the
+  // RCM/LoopNet marketing-lead handlers.
+  if (action === "news_alert") return handleNewsAlertIngest(req, body);
+
   if (!diaConfig().configured) {
     return errorResponse(req, "DIA Supabase not configured", 500);
   }
-
-  const body = await parseBody(req);
 
   switch (action) {
     case "rcm":      return handleRcmIngest(req, body);
     case "loopnet":  return handleLoopNetIngest(req, body);
     default:
-      return errorResponse(req, "Invalid action. Use: rcm, loopnet, health", 400);
+      return errorResponse(req, "Invalid action. Use: rcm, loopnet, news_alert, health", 400);
   }
 });
+
+// ── News Alert Ingest Handler ───────────────────────────────────────────────
+// Cross-vertical (dialysis / government / netlease) Google Alert lead intake.
+// Classifies the tenant/domain, runs the confidence gate, dedups 90-day
+// reposts, and writes to the canonical LCC-Opps `news_alert_leads` table. The
+// response tells Power Automate whether to auto-archive the source email.
+
+function loadTrackedTenants(): Record<string, unknown> {
+  const raw = Deno.env.get("TRACKED_TENANTS_JSON");
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      console.warn("[lead-ingest] TRACKED_TENANTS_JSON invalid — using seed watchlist");
+    }
+  }
+  return DEFAULT_TRACKED_TENANTS as Record<string, unknown>;
+}
+
+async function handleNewsAlertIngest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  const { source_ref, subject, raw_body } = (body || {}) as Record<string, unknown>;
+  if (!raw_body) return errorResponse(req, "raw_body is required", 400);
+
+  let ops;
+  try {
+    ops = opsClient();
+  } catch {
+    return errorResponse(req, "OPS Supabase not configured", 500);
+  }
+
+  const watchlist = loadTrackedTenants();
+  const extracted = parseGoogleAlert(raw_body as string, (subject || null) as string | null, watchlist);
+  const tenantMatch = extracted.match;
+  const tenant = (tenantMatch && tenantMatch.tenant) || extracted.tenant_name || null;
+  const domain = (tenantMatch && tenantMatch.domain) || null;
+  const confidence = scoreNewsAlert(tenantMatch, extracted);
+  const route = routeNewsAlert(confidence);
+  const dedupKey = tenantDedupKey(tenant);
+
+  // Dedup: suppress a duplicate lead for the same tenant + city/state within the
+  // window (syndicated re-posts of one story). A high-confidence duplicate is
+  // still auto-archived (no new row); a low-confidence one is left for review.
+  if (dedupKey) {
+    const sinceIso = new Date(Date.now() - NEWS_ALERT_DEDUP_DAYS * 86400000).toISOString();
+    let dq = ops.from("news_alert_leads")
+      .select("news_lead_id")
+      .eq("dedup_key", dedupKey)
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (extracted.city) dq = dq.ilike("city", extracted.city as string);
+    if (extracted.state) dq = dq.ilike("state", extracted.state as string);
+    const { data: dup } = await dq;
+    if (Array.isArray(dup) && dup.length > 0) {
+      return jsonResponse(req, {
+        ok: true, duplicate: true, news_lead_id: dup[0].news_lead_id,
+        domain, tenant, confidence, route: route.route, archive: route.archive,
+        message: `Duplicate of ${dup[0].news_lead_id} (same tenant + city/state within ${NEWS_ALERT_DEDUP_DAYS}d)`,
+      });
+    }
+  }
+
+  const insertPayload = {
+    source: "google_alert",
+    domain,
+    tenant,
+    match_kind: (tenantMatch && tenantMatch.match_kind) || "none",
+    confidence,
+    city: extracted.city,
+    state: extracted.state,
+    article_url: extracted.article_url,
+    article_title: extracted.article_title,
+    summary: extracted.summary,
+    status: route.status,
+    dedup_key: dedupKey || null,
+    source_ref: (source_ref as string) || null,
+    raw_subject: (subject as string) || null,
+    metadata: { matched: tenantMatch?.matched || null },
+  } as Record<string, unknown>;
+
+  try {
+    const { data, error } = await ops.from("news_alert_leads")
+      .insert(insertPayload)
+      .select("news_lead_id")
+      .maybeSingle();
+
+    // A unique (source, source_ref) collision means Power Automate re-POSTed the
+    // same alert — treat as an idempotent duplicate, not an error.
+    if (error) {
+      if ((error as { code?: string }).code === "23505") {
+        return jsonResponse(req, {
+          ok: true, duplicate: true, domain, tenant, confidence,
+          route: route.route, archive: route.archive,
+          message: "Lead already exists (duplicate source_ref)",
+        });
+      }
+      return jsonResponse(req, { error: "Failed to insert news-alert lead", detail: error.message }, 500);
+    }
+
+    return jsonResponse(req, {
+      ok: true,
+      news_lead_id: data?.news_lead_id || null,
+      domain,
+      tenant,
+      match_kind: (tenantMatch && tenantMatch.match_kind) || "none",
+      confidence,
+      route: route.route,            // "auto" | "review"
+      status: route.status,          // "developer_unknown" | "needs_review"
+      archive: route.archive,        // Power Automate archives the source email iff true
+      article_url: extracted.article_url,
+    }, 201);
+  } catch (err) {
+    console.error("[lead-ingest] news_alert error:", (err as Error).message);
+    return errorResponse(req, "News-alert ingestion failed", 500);
+  }
+}
 
 // ── RCM Email Parser ───────────────────────────────────────────────────────
 
@@ -414,6 +538,7 @@ async function handleHealth(req: Request): Promise<Response> {
   const dia = diaConfig();
   const checks: Record<string, unknown> = {
     dia_configured: dia.configured,
+    ops_configured: !!(Deno.env.get("OPS_SUPABASE_URL") && Deno.env.get("OPS_SUPABASE_SERVICE_KEY")),
     webhook_secret_configured: !!Deno.env.get("PA_WEBHOOK_SECRET"),
     timestamp: isoNow()
   };
