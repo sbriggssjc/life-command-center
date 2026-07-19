@@ -207,6 +207,31 @@ Runtime ~20 min (the Jul-16 SUCCESSFUL runs took 19-22 min — that's normal), b
 of aborting. Keep the Get-Contacts retry policies. Optionally add the same retry (Exponential/PT10S/
 count 4) to `Get L2 members`, `Get L3 lists`, `Get L3 members`. Concurrency=1 is the decisive lever.
 
+## ✅✅ OUTCOME — SEED COMPLETE + CONVERGED (2026-07-18)
+
+**7,186 members across 57 lists.** Convergence proven by decelerating deltas across idempotent
+re-runs: 713 → 5,566 (+4,853) → 7,115 (+1,549) → **7,186 (+71)**. Per-list:
+SAB GSA Prospects **3,925** (asymptoted), KDL Seller Prospects **987** (stable = complete),
+z_Engage 440, DMR Urgent Care 256, VCA 209, SAB Medical Developer 197, Christian Brothers 150,
+DMR Medical 142. **GSA Buyer = 21 is FINAL and CORRECT** — that is its true Contact-linked count;
+the remaining ~135 members are **Leads** (LeadId, no ContactId) which the two-step Contact resolve
+skips by design. (Ingesting Lead members is an optional future additive branch — Leads already
+carry FirstName/LastName/Email directly on the CampaignMember, so they need no resolve.)
+
+### Known residual (cosmetic, NOT data loss)
+Runs still report **Failed**: SAB GSA Prospects (~4k members ≈ 200 chunks of 20) is a marathon, and
+in a PA For-each ONE failed action aborts the whole run — with ~200 chunks the odds of a single blip
+are high. **The idempotent upsert (by ContactId/email) is the safety net** — that's why totals
+CONVERGED instead of resetting. Data is complete; only the run status is red.
+- If this flow is ever made **scheduled/recurring**, add continue-on-error on the chunk `POST`
+  (or otherwise stop one chunk failing the parent) so monitoring isn't permanently red.
+- For the one-time seed, re-running was the intended (and sufficient) safety net.
+
+### Final tuning that worked
+chunk size **20** (SF 100-node OData cap) · filter as an **fx expression**
+`join(items('Apply_to_each_chunk_Lx'), ' or ')` · Get Contacts **retry** Exponential/PT10S/count 4 ·
+`For each L2` **concurrency 4** (1 = 2h35m too slow; 20 = SF 429 flood).
+
 ## After chunking verifies end-to-end
 Flip **`SF_LIST_SEED_INSTITUTION`** on (after eyeballing the first full seller ingest) to kick the
 Tier A fan-out over the contactless sponsors.
