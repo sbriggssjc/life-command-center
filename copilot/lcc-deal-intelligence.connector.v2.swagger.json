@@ -4597,10 +4597,12 @@
               "properties": {
                 "inbox_item_id": {
                   "type": "string",
-                  "format": "uuid"
+                  "format": "uuid",
+                  "description": "UUID of the inbox_items row to promote to an active action (required)."
                 },
                 "title": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Action item title \u2014 defaults to the intake item title if omitted."
                 },
                 "action_type": {
                   "type": "string",
@@ -4610,7 +4612,8 @@
                     "review",
                     "outreach",
                     "meeting"
-                  ]
+                  ],
+                  "description": "Type of action to create: follow_up, research, review, outreach, or meeting (default: follow_up)."
                 },
                 "priority": {
                   "type": "string",
@@ -4619,19 +4622,23 @@
                     "normal",
                     "high",
                     "urgent"
-                  ]
+                  ],
+                  "description": "Task priority level: low, normal, high, or urgent (default: normal)."
                 },
                 "assigned_to": {
                   "type": "string",
-                  "format": "uuid"
+                  "format": "uuid",
+                  "description": "UUID of the team member to assign the action to (optional \u2014 defaults to the current user)."
                 },
                 "due_date": {
                   "type": "string",
-                  "format": "date"
+                  "format": "date",
+                  "description": "Target due date in YYYY-MM-DD format (optional)."
                 },
                 "entity_id": {
                   "type": "string",
-                  "format": "uuid"
+                  "format": "uuid",
+                  "description": "Entity UUID to link this action to (optional \u2014 defaults to the intake item entity)."
                 }
               },
               "required": [
@@ -4759,14 +4766,17 @@
               "type": "object",
               "properties": {
                 "title": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Action item title describing what needs to be done (required)."
                 },
                 "entity_id": {
                   "type": "string",
-                  "format": "uuid"
+                  "format": "uuid",
+                  "description": "UUID of the listing or pursuit entity this task is linked to (required)."
                 },
                 "action_type": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Type of follow-up: follow_up, call, email, research, meeting, or review (default: follow_up)."
                 },
                 "priority": {
                   "type": "string",
@@ -4775,14 +4785,17 @@
                     "normal",
                     "high",
                     "urgent"
-                  ]
+                  ],
+                  "description": "Task priority: low, normal, high, or urgent (default: normal)."
                 },
                 "due_date": {
                   "type": "string",
-                  "format": "date"
+                  "format": "date",
+                  "description": "Target completion date in YYYY-MM-DD format (optional)."
                 },
                 "description": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Additional notes or context for the task (optional)."
                 }
               },
               "required": [
@@ -4900,7 +4913,7 @@
                 "id": {
                   "type": "string",
                   "format": "uuid",
-                  "description": "Action item ID"
+                  "description": "UUID of the action_items row to update (required)."
                 },
                 "status": {
                   "type": "string",
@@ -4910,7 +4923,12 @@
                     "blocked",
                     "completed",
                     "cancelled"
-                  ]
+                  ],
+                  "description": "New status to set: open, in_progress, blocked, completed, or cancelled (required)."
+                },
+                "notes": {
+                  "type": "string",
+                  "description": "Optional notes to append to the task record explaining the status change."
                 }
               },
               "required": [
