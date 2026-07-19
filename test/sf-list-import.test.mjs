@@ -11,8 +11,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyList, normalizeMember, personNameFromMember,
-  deriveProductType, deriveBroker, processMember,
+  deriveProductType, deriveBroker, processMember, buildAccountNameMap,
 } from '../api/_shared/sf-list-import.js';
+import { toSf18 } from '../api/_shared/sf-id.js';
 
 describe('classifyList — side / product_type / broker', () => {
   it('GSA Buyer under Buyer Lists → buyer / GSA', () => {
@@ -151,6 +152,12 @@ describe('normalizeMember — tolerant field mapping', () => {
     assert.equal(m.email, 'lo@x.com');
     assert.equal(m.company, 'Lo Co');
     assert.equal(m.sf_lead_id, '00Qxxx');
+  });
+  it('captures account_id (top-level, lowercase, nested) and null when absent', () => {
+    assert.equal(normalizeMember({ AccountId: '0018W00002abcDEFAB1' }).account_id, '0018W00002abcDEFAB1');
+    assert.equal(normalizeMember({ accountid: '0018W00002abcDEFAB1' }).account_id, '0018W00002abcDEFAB1');
+    assert.equal(normalizeMember({ Contact: { AccountId: '0018W00002abcDEFAB1' } }).account_id, '0018W00002abcDEFAB1');
+    assert.equal(normalizeMember({ FirstName: 'No', LastName: 'Acct' }).account_id, null);
   });
   it('nested Lead/Contact relationship objects are read (with an Id fallback)', () => {
     const lead = normalizeMember({ LeadId: '00Qzzz', Lead: { FirstName: 'Nest', LastName: 'Ed', Email: 'nest@x.com', Company: 'Nested LLC' } });
@@ -326,5 +333,136 @@ describe('processMember — Lead-linked members (Unit 1, the critical fix)', () 
     const personLink = deps._links.find((l) => l.sourceType !== 'organization');
     assert.equal(personLink.sourceType, 'Lead');
     assert.equal(personLink.seedFields.first_name, 'Nora');
+  });
+});
+
+describe('processMember — Unit 2 AccountId → company resolution', () => {
+  function acctDeps(overrides = {}) {
+    const links = [];
+    const gaps = [];
+    const deps = mkDeps({
+      async ensureEntityLink(a) {
+        links.push(a);
+        if (a.sourceType === 'organization') return { ok: true, entityId: 'org-1', createdEntity: true };
+        return { ok: true, entityId: 'person-1', createdEntity: true };
+      },
+      async matchRegistryGap(company) { gaps.push(company); return { match: false }; },
+      ...overrides,
+    });
+    deps._links = links;
+    deps._gaps = gaps;
+    return deps;
+  }
+
+  it('a real CompanyOrAccount WINS over the AccountId lookup (resolver never called)', async () => {
+    let resolverCalled = false;
+    const deps = acctDeps({ resolveAccountName: async () => { resolverCalled = true; return 'From Account'; } });
+    const out = await processMember(
+      { FirstName: 'Ann', LastName: 'Buyer', Email: 'ann@nuveen.com', CompanyOrAccount: 'Nuveen', AccountId: '0018W00002xxx', ContactId: 'c1' },
+      buyerCtx, deps);
+    assert.equal(out.outcome, 'processed');
+    assert.equal(out.company_source, 'member');
+    assert.equal(resolverCalled, false);
+    const orgLink = deps._links.find((l) => l.sourceType === 'organization');
+    assert.equal(orgLink.seedFields.name, 'Nuveen');
+    assert.equal(deps._calls.membership[0].company_name, 'Nuveen');
+  });
+
+  it('AccountId-only member resolves the name and uses it for BOTH org link and matchRegistryGap', async () => {
+    const deps = acctDeps({ resolveAccountName: async () => 'Boyd Watterson Asset Management LLC' });
+    const out = await processMember(
+      { FirstName: 'Sam', LastName: 'Seller', Email: 'sam@bw.com', AccountId: '0018W00002boyd', ContactId: 'c2' },
+      sellerCtx, deps);
+    assert.equal(out.outcome, 'processed');
+    assert.equal(out.company_source, 'account_lookup');
+    assert.equal(out.account_id_unresolved, null);
+    const orgLink = deps._links.find((l) => l.sourceType === 'organization');
+    assert.equal(orgLink.seedFields.name, 'Boyd Watterson Asset Management LLC');   // org link uses the resolved name
+    assert.deepEqual(deps._gaps, ['Boyd Watterson Asset Management LLC']);          // registry match uses the SAME name
+    assert.equal(deps._calls.membership[0].company_name, 'Boyd Watterson Asset Management LLC');
+  });
+
+  it('unresolved AccountId → company null, no org link, no registry match, member still recorded', async () => {
+    const deps = acctDeps({ resolveAccountName: async () => null });
+    const out = await processMember(
+      { FirstName: 'Un', LastName: 'Mapped', Email: 'un@x.com', AccountId: '0018W00002miss', ContactId: 'c3' },
+      sellerCtx, deps);
+    assert.equal(out.outcome, 'processed');
+    assert.equal(out.org_entity_id, null);
+    assert.equal(out.company_source, null);
+    assert.equal(out.account_id_unresolved, '0018W00002miss');
+    assert.equal(deps._links.filter((l) => l.sourceType === 'organization').length, 0);
+    assert.equal(deps._gaps.length, 0);                                            // never matched a registry gap
+    assert.equal(deps._calls.membership.length, 1);                                // still recorded
+    assert.equal(deps._calls.membership[0].company_name, null);
+    assert.equal(deps._calls.membership[0].raw.sf_account_id_unresolved, '0018W00002miss');
+  });
+
+  it('no AccountId + no resolver dep → byte-identical prior behaviour (member company)', async () => {
+    const deps = acctDeps();   // no resolveAccountName
+    const out = await processMember(
+      { FirstName: 'Reg', LastName: 'Ular', Email: 'r@x.com', CompanyOrAccount: 'Plain LLC', ContactId: 'c4' },
+      buyerCtx, deps);
+    assert.equal(out.company_source, 'member');
+    assert.equal(out.account_id_unresolved, null);
+    assert.equal(deps._calls.membership[0].company_name, 'Plain LLC');
+  });
+});
+
+describe('buildAccountNameMap — batched, no N+1, 15/18-safe', () => {
+  function mkQuery({ ei = [], ent = [] } = {}) {
+    const calls = [];
+    const query = async (method, path) => {
+      calls.push(path);
+      if (path.startsWith('external_identities')) return { ok: true, data: ei };
+      if (path.startsWith('entities?')) return { ok: true, data: ent };
+      return { ok: true, data: [] };
+    };
+    return { query, calls };
+  }
+
+  it('N members sharing one account → exactly ONE external_identities + ONE entities query', async () => {
+    const acct18 = '0018W00002abcDEFAB';   // 18 chars
+    const { query, calls } = mkQuery({
+      ei: [{ entity_id: 'org-9', external_id: acct18 }],
+      ent: [{ id: 'org-9', name: 'Shared Owner LLC' }],
+    });
+    const members = [
+      { AccountId: acct18, ContactId: 'c1' },
+      { AccountId: acct18, ContactId: 'c2' },
+      { AccountId: acct18, ContactId: 'c3' },
+    ];
+    const map = await buildAccountNameMap(members, { query });
+    assert.equal(map.get(acct18.slice(0, 15)), 'Shared Owner LLC');
+    const eiCalls = calls.filter((p) => p.startsWith('external_identities')).length;
+    const entCalls = calls.filter((p) => p.startsWith('entities?')).length;
+    assert.equal(eiCalls, 1);        // ONE lookup for the 3 members (no N+1)
+    assert.equal(entCalls, 1);
+  });
+
+  it('15/18-safe: a 15-char member id resolves against an 18-char stored identity', async () => {
+    const id15 = '0018W00002abcDE';                       // 15-char member value
+    const stored18 = toSf18(id15);                         // what LCC stores
+    assert.equal(stored18.length, 18);
+    const { query } = mkQuery({
+      ei: [{ entity_id: 'org-5', external_id: stored18 }],
+      ent: [{ id: 'org-5', name: 'Fifteen Char Owner' }],
+    });
+    const map = await buildAccountNameMap([{ AccountId: id15 }], { query });
+    assert.equal(map.get(id15), 'Fifteen Char Owner');     // keyed by sf15
+  });
+
+  it('no account ids → empty map, no queries', async () => {
+    const { query, calls } = mkQuery();
+    const map = await buildAccountNameMap([{ FirstName: 'No', LastName: 'Acct' }], { query });
+    assert.equal(map.size, 0);
+    assert.equal(calls.length, 0);
+  });
+
+  it('external_identities miss → empty map, entities never queried', async () => {
+    const { query, calls } = mkQuery({ ei: [] });
+    const map = await buildAccountNameMap([{ AccountId: '0018W00002zzzzzz' }], { query });
+    assert.equal(map.size, 0);
+    assert.equal(calls.filter((p) => p.startsWith('entities?')).length, 0);
   });
 });

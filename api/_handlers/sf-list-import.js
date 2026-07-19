@@ -25,8 +25,10 @@ import { opsQuery, pgFilterVal, resolvePrimaryWorkspaceId } from '../_shared/ops
 import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
 import { linkPersonToEntity, stampContactOnActiveCadence } from '../_shared/contact-attach.js';
 import { normalizeInstitution } from '../_shared/institution-registry.js';
+import { sf15 } from '../_shared/sf-id.js';
 import {
   classifyList, normalizeMember, personNameFromMember, processMember,
+  buildAccountNameMap,
 } from '../_shared/sf-list-import.js';
 
 const MEMBER_CAP = 500;        // hard cap per request (a list is ~150-500 members)
@@ -41,11 +43,20 @@ function readBody(req) {
 
 // ── Production deps (wired once per request) ────────────────────────────────
 
-function buildDeps({ workspaceId, userId, seedInstitution }) {
+function buildDeps({ workspaceId, userId, seedInstitution, accountNameMap }) {
   return {
     ensureEntityLink,
     linkPersonToEntity,
     stampContactOnActiveCadence,
+
+    // Unit 2 — resolve an SF AccountId to its LCC org name from the batch map
+    // (built once per request, no per-member query). 15/18-safe via sf15; returns
+    // null when the account isn't a known LCC Salesforce Account identity.
+    async resolveAccountName(accountId) {
+      const k = sf15(accountId);
+      if (!k || !accountNameMap) return null;
+      return accountNameMap.get(k) || null;
+    },
 
     // Upsert the membership row (one per campaign+entity; a re-ingest updates).
     async recordMembership(row) {
@@ -150,6 +161,9 @@ export async function handleSfListImport(req, res) {
     resolved_by_email: 0,
     created_persons: 0,
     orgs_linked: 0,
+    company_from_member: 0,
+    company_from_account_lookup: 0,
+    account_id_unresolved: 0,
     buyer_parent_matches: 0,
     cadences_seeded: 0,
     registry_gap_matches: 0,
@@ -181,15 +195,28 @@ export async function handleSfListImport(req, res) {
   const workspaceId = await resolvePrimaryWorkspaceId();
   if (!workspaceId) return res.status(500).json({ error: 'no_workspace' });
 
+  const cappedMembers = members.slice(0, MEMBER_CAP);
+
+  // Unit 2 — resolve the distinct SF AccountIds this batch carries to their LCC
+  // org names in a bounded number of queries (no N+1), then serve each member
+  // from the map. Best-effort: a failed lookup leaves the map empty and members
+  // fall back to their in-line company (or record the unresolved id).
+  let accountNameMap = new Map();
+  try {
+    accountNameMap = await buildAccountNameMap(cappedMembers, { query: opsQuery, pgEncode: pgFilterVal });
+  } catch (_e) { /* soft — leaves an empty map */ }
+  result.accounts_resolved = accountNameMap.size;
+
   const deps = buildDeps({
     workspaceId, userId: user.id,
     seedInstitution: !!process.env.SF_LIST_SEED_INSTITUTION,
+    accountNameMap,
   });
   const listCtx = { campaign_id, campaign_name, parent_name, workspaceId, userId: user.id, ...classification };
 
   const deadline = Date.now() + BUDGET_MS;
   let anyWrite = false;
-  for (const raw of members.slice(0, MEMBER_CAP)) {
+  for (const raw of cappedMembers) {
     if (Date.now() > deadline) { result.budget_stopped = true; break; }
     let out;
     try {
@@ -203,6 +230,9 @@ export async function handleSfListImport(req, res) {
       if (out.resolved_by_email) result.resolved_by_email++;
       if (out.created_entity) result.created_persons++;
       if (out.org_entity_id) result.orgs_linked++;
+      if (out.company_source === 'member') result.company_from_member++;
+      else if (out.company_source === 'account_lookup') result.company_from_account_lookup++;
+      if (out.account_id_unresolved) result.account_id_unresolved++;
       if (out.buyer_parent_match) result.buyer_parent_matches++;
       if (out.cadence_seeded) result.cadences_seeded++;
       if (out.registry_gap) result.registry_gap_matches++;
