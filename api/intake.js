@@ -34,7 +34,8 @@ import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
 import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
 import { stageOmIntake } from './_shared/intake-om-pipeline.js';
 import { domainQuery } from './_shared/domain-db.js';
-import { firstOf, joinedOf } from './_shared/intake-classify.js';
+import { firstOf, joinedOf, detectInfraAlert, buildInfraScoringItem, priorityTierFromScore } from './_shared/intake-classify.js';
+import { scoreItem } from './_shared/briefing-data.js';
 import { isClosingAnnouncement } from './_shared/sf-closing-email-parse.js';
 
 // ============================================================================
@@ -347,6 +348,23 @@ async function handleOutlookMessage(req, res) {
   const hasAttachments = Boolean(firstNonEmpty(payload.has_attachments, payload.hasAttachments, false));
   const attachmentCount = Array.isArray(payload.attachments) ? payload.attachments.length : null;
 
+  // ── Infra-alert classification (Vercel / GitHub CI-CD failure notifications)
+  // Detect right after sender/subject parse. A matched alert is tagged
+  // domain='infra', priority-scored against the open queue via the SAME
+  // scoreItem() engine the daily briefing uses, and surfaced with a scannable
+  // [HIGH]/[MED]/[LOW] tier — WITHOUT any new folder/flag/button. The only
+  // user action stays "flag the email". Patterns live in intake-classify.js.
+  // (Does not touch dia/gov/netlease classification — infra is a separate tag.)
+  const infra = detectInfraAlert({ senderEmail: sender?.email, subject });
+  let infraScore = null;
+  let infraTier = null;
+  if (infra.isInfra) {
+    const { score } = scoreItem(buildInfraScoringItem({ subject, senderEmail: sender?.email }), null);
+    infraScore = score;
+    infraTier = priorityTierFromScore(score);
+  }
+  const infraTodoTitle = infra.isInfra ? `[${infraTier}] ${subject}` : null;
+
   if (!messageId) {
     return res.status(400).json({ error: 'message_id (or id/internet_message_id) is required' });
   }
@@ -431,6 +449,28 @@ async function handleOutlookMessage(req, res) {
         inbox_item_id: existing.id,
         kind: 'deal_closing_announcement',
         deal_closing: closingResult || { ok: false, reason: 'handler_error' },
+      });
+    }
+
+    // ── Infra-alert on a replay / re-flag ────────────────────────────────────
+    // The row was already tagged domain='infra' + priority_score on the fresh
+    // pass. A Vercel/GitHub alert is NOT a listing OM, so it must NEVER fall
+    // through to the OM re-stage below. Return the recorded tier/score (fall
+    // back to the freshly-computed values if the first pass predates this).
+    if (infra.isInfra) {
+      const tier = existing.metadata?.priority_tier || infraTier;
+      return res.status(200).json({
+        ok: true,
+        deduplicated: true,
+        correlation_id: correlationId,
+        inbox_item_id: existing.id,
+        kind: 'infra_alert',
+        domain: 'infra',
+        source_system: existing.metadata?.source_system || infra.sourceSystem,
+        priority_tier: tier,
+        priority_score: existing.metadata?.priority_score ?? infraScore,
+        todo_title: `[${tier}] ${subject}`,
+        message: 'Already ingested',
       });
     }
 
@@ -626,7 +666,11 @@ async function handleOutlookMessage(req, res) {
     external_id: String(messageId),
     external_url: deepLink,
     status: 'new',
-    priority: 'normal',
+    // Infra alerts reflect their urgency in `priority` (a failure = urgent);
+    // everything else keeps the default. `priority_score` (numeric column) is
+    // the cross-domain ranking signal set only for infra here.
+    priority: infra.isInfra ? (infraTier === 'HIGH' ? 'urgent' : infraTier === 'MED' ? 'high' : 'low') : 'normal',
+    ...(infra.isInfra ? { domain: 'infra', priority_score: infraScore } : {}),
     visibility: 'private',
     metadata: {
       sender_name: sender.name,
@@ -637,7 +681,15 @@ async function handleOutlookMessage(req, res) {
       graph_rest_id: graphRestId || null,
       internet_message_id: internetMsgId || null,
       event_source: 'outlook_power_automate',
-      correlation_id: correlationId
+      correlation_id: correlationId,
+      ...(infra.isInfra ? {
+        kind: 'infra_alert',
+        domain: 'infra',
+        source_system: infra.sourceSystem,
+        infra_matched_by: infra.matchedBy,
+        priority_score: infraScore,
+        priority_tier: infraTier,
+      } : {})
     },
     received_at: receivedAtIso
   }, { Prefer: 'return=representation,resolution=merge-duplicates' });
@@ -701,6 +753,29 @@ async function handleOutlookMessage(req, res) {
       inbox_item_id: item?.id || null,
       kind: 'deal_closing_announcement',
       deal_closing: closingResult || { ok: false, reason: 'handler_error' },
+      external_id: String(messageId),
+      status: item?.status || 'new',
+    });
+  }
+
+  // ── Infra alert (Vercel / GitHub CI-CD failure) ──────────────────────────
+  // The inbox row was already tagged domain='infra' + priority_score at INSERT
+  // above. An infra alert is NOT a listing OM — SKIP the OM extractor and
+  // return the priority tier + a ready-to-use To Do title so the Flag → To Do
+  // Power Automate flow can prefix the task (e.g. "[HIGH] Vercel build failed
+  // — soccer-video"). No new folder/flag/button; the user only flags the email.
+  if (infra.isInfra) {
+    // Fire-and-forget entity extraction is skipped for infra (no deal parties).
+    return res.status(200).json({
+      ok: true,
+      correlation_id: correlationId,
+      inbox_item_id: item?.id || null,
+      kind: 'infra_alert',
+      domain: 'infra',
+      source_system: infra.sourceSystem,
+      priority_tier: infraTier,
+      priority_score: infraScore,
+      todo_title: infraTodoTitle,
       external_id: String(messageId),
       status: item?.status || 'new',
     });

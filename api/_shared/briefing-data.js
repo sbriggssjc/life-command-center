@@ -100,7 +100,10 @@ const REVENUE_KEYWORDS = /commission|fee|listing agreement|exclusive|signed|enga
 const PURSUIT_KEYWORDS = /bov|proposal|valuation|pitch|pursuit|prospect|owner|developer|seller/i;
 const RELATIONSHIP_KEYWORDS = /follow[- ]?up|check[- ]?in|touch base|reconnect|introduction|referral|thank you|congrat/i;
 
-function scoreItem(item, hotContactMap) {
+// Exported so the infra-alert intake path (api/intake.js) can priority-score a
+// flagged Vercel/GitHub alert against the same scale as the daily briefing —
+// reuse, not a duplicated scoring engine.
+export function scoreItem(item, hotContactMap) {
   let score = 0;
   let tier = 'urgent';
   const title = (item.title || '').toLowerCase();

@@ -362,3 +362,113 @@ export function hasFullDealSignature(snapshot) {
     && hasTenant
     && Number(snapshot.asking_price) > 0;
 }
+
+// ===========================================================================
+// Infra-alert classification (Vercel / GitHub CI-CD failure notifications)
+// ---------------------------------------------------------------------------
+// Scott flags Vercel/GitHub build & deploy failure emails in Outlook, same as
+// any deal email — no new folder, flag, or button. These helpers let the
+// outlook-message intake handler recognize such an email, tag it
+// domain='infra' + source_system, and priority-SCORE it against the rest of
+// the open queue so its To Do task carries a scannable [HIGH]/[MED]/[LOW]
+// tier.  THIS IS THE SINGLE SOURCE OF TRUTH FOR THE SENDER/SUBJECT PATTERNS —
+// edit them here.  See docs/INFRA_ALERT_CLASSIFICATION.md.
+//
+// NOTE: the score itself is produced by scoreItem() in briefing-data.js (the
+// same engine the daily briefing uses); these helpers only classify + shape
+// the pseudo-item + bucket the resulting score into a tier.
+// ===========================================================================
+
+// Sender domain → source_system. A domain matches when the sender's domain
+// part equals it OR is a subdomain (e.g. notifications.github.com → github).
+export const INFRA_SENDER_DOMAINS = {
+  vercel: ['vercel.com'],
+  github: ['github.com', 'githubapp.com'],
+};
+
+// Subject-line fallbacks (a forwarded / re-branded alert may not keep the
+// original sender). Anchored on failure/attention wording, not bare "build".
+export const INFRA_SUBJECT_PATTERNS = [
+  /\bbuild failed\b/i,
+  /\bbuild has failed\b/i,
+  /\bdeploy(?:ment)? failed\b/i,
+  /\bfailed to deploy\b/i,
+  /\bworkflow run failed\b/i,
+  /\b(?:ci|pipeline|check(?:s)?|job|run) failed\b/i,
+  /\baction required:/i,
+];
+
+/**
+ * Classify an inbound flagged email as a Vercel/GitHub infra alert.
+ * Sender-domain match wins (most authoritative → sets source_system);
+ * subject-pattern match is the fallback, inferring the system from wording.
+ * @returns {{ isInfra: boolean, sourceSystem: string|null, matchedBy: string|null }}
+ */
+export function detectInfraAlert({ senderEmail, subject } = {}) {
+  const email = String(senderEmail || '').toLowerCase().trim();
+  const domainPart = email.includes('@') ? email.split('@').pop() : email;
+  if (domainPart) {
+    for (const [system, suffixes] of Object.entries(INFRA_SENDER_DOMAINS)) {
+      if (suffixes.some((s) => domainPart === s || domainPart.endsWith('.' + s))) {
+        return { isInfra: true, sourceSystem: system, matchedBy: 'sender_domain' };
+      }
+    }
+  }
+  const subj = String(subject || '');
+  if (INFRA_SUBJECT_PATTERNS.some((re) => re.test(subj))) {
+    let system = 'unknown';
+    if (/\bvercel\b/i.test(subj)) system = 'vercel';
+    else if (/\b(?:github|workflow|gh action|action required)\b/i.test(subj)) system = 'github';
+    return { isInfra: true, sourceSystem: system, matchedBy: 'subject' };
+  }
+  return { isInfra: false, sourceSystem: null, matchedBy: null };
+}
+
+/**
+ * Urgency of an infra alert, derived from the subject.
+ *  - 'high'   — an actual failure (build/deploy/workflow failed, error)
+ *  - 'medium' — needs attention but not a hard failure ("action required")
+ *  - 'low'    — a softer infra notice that still matched a pattern
+ */
+export function infraUrgency(subject) {
+  const s = String(subject || '');
+  if (/\b(?:failed|failure|error|broke|broken|cannot deploy|could not)\b/i.test(s)) return 'high';
+  if (/\b(?:action required|required|approve|review|attention|warning)\b/i.test(s)) return 'medium';
+  return 'low';
+}
+
+/**
+ * Build the pseudo-item scoreItem() expects, encoding the infra scoring
+ * policy: the urgency (build failure = high) rides in `priority` so the shared
+ * engine adds its priority weight; there is NO due_date (infra has no
+ * client-facing deadline); source_type='flagged_email' gives it the small
+ * flagged-email weight — so it lands BELOW active deal-deadline emails (deal
+ * keywords add 70-100) but ABOVE a bare FYI/reference email. The `body` is
+ * deliberately omitted so a long alert body can't trip deal/pursuit keywords.
+ */
+export function buildInfraScoringItem({ subject, senderEmail } = {}) {
+  const urgency = infraUrgency(subject);
+  const priority = urgency === 'high' ? 'urgent' : urgency === 'medium' ? 'high' : 'low';
+  return {
+    title: String(subject || ''),
+    body: '',
+    metadata: { sender_email: senderEmail || null, has_attachments: false },
+    source_type: 'flagged_email',
+    priority,
+    // no due_date — infra alerts carry no client-facing deadline
+  };
+}
+
+/**
+ * Bucket a numeric priority score into the scannable To Do tier.
+ * Calibrated to the shared scoreItem() scale so an infra alert reads:
+ *   failure  (urgent + flagged_email = 40) → HIGH
+ *   attention(high   + flagged_email = 30) → MED
+ *   notice   (low    + flagged_email = 10) → LOW
+ */
+export function priorityTierFromScore(score) {
+  const n = Number(score) || 0;
+  if (n >= 40) return 'HIGH';
+  if (n >= 20) return 'MED';
+  return 'LOW';
+}
