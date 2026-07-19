@@ -25,6 +25,7 @@ import { opsQuery, pgFilterVal, resolvePrimaryWorkspaceId } from '../_shared/ops
 import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
 import { linkPersonToEntity, stampContactOnActiveCadence } from '../_shared/contact-attach.js';
 import { normalizeInstitution } from '../_shared/institution-registry.js';
+import { sf15, toSf18 } from '../_shared/sf-id.js';
 import {
   classifyList, normalizeMember, personNameFromMember, processMember,
 } from '../_shared/sf-list-import.js';
@@ -39,13 +40,82 @@ function readBody(req) {
   return b;
 }
 
+// ── AccountId → company NAME (batch, per-request; no N+1) ───────────────────
+//
+// The PA "Get Contacts Lx" $select now carries the SF AccountId but NOT the
+// account NAME (the connector can't traverse Account.Name in $select). LCC
+// already holds the SF Account identities from the SF-CONFLATION work
+// (external_identities where source_system='salesforce' AND source_type='Account',
+// all 18-char) pointing at the organization entity that carries the account NAME.
+// So the name is resolved LOCALLY, ONE query per request:
+//   1. collect the DISTINCT AccountIds in the batch,
+//   2. look them up in ONE external_identities?…&external_id=in.(…) query,
+//   3. follow the entity ids to entities.name,
+//   4. serve per-member from an in-request Map (keyed by the 15-char base so a
+//      15-char incoming id resolves against the stored 18-char identity).
+// Never fabricates: an id that isn't a known LCC Account identity resolves null.
+//
+// deps.query injectable for tests (defaults to opsQuery).
+export async function buildAccountNameMap(members, deps = {}) {
+  const query = deps.query || opsQuery;
+  const map = new Map();            // sf15(account_id) → company name
+  const wanted = new Map();         // sf15 → toSf18 (the value the store holds)
+  for (const raw of members) {
+    const m = normalizeMember(raw);
+    if (!m.account_id) continue;
+    const key = sf15(m.account_id);
+    if (!key || wanted.has(key)) continue;
+    const id18 = toSf18(m.account_id);
+    if (id18) wanted.set(key, id18);
+  }
+  if (!wanted.size) return map;
+
+  const inList = [...wanted.values()].map(pgFilterVal).join(',');
+  const eir = await query('GET',
+    'external_identities?source_system=eq.salesforce&source_type=eq.Account'
+    + '&external_id=in.(' + inList + ')&select=external_id,entity_id',
+    { countMode: 'none' });
+  if (!eir.ok || !Array.isArray(eir.data) || !eir.data.length) return map;
+
+  const entToKey = new Map();       // entity_id → sf15 (first writer wins)
+  const entIds = [];
+  for (const row of eir.data) {
+    const k = sf15(row.external_id);
+    if (!k || !row.entity_id || entToKey.has(row.entity_id)) continue;
+    entToKey.set(row.entity_id, k);
+    entIds.push(row.entity_id);
+  }
+  if (!entIds.length) return map;
+
+  const er = await query('GET',
+    'entities?id=in.(' + entIds.map(pgFilterVal).join(',') + ')&select=id,name',
+    { countMode: 'none' });
+  if (er.ok && Array.isArray(er.data)) {
+    for (const e of er.data) {
+      const k = entToKey.get(e.id);
+      const nm = (e.name || '').trim();
+      if (k && nm && !map.has(k)) map.set(k, nm);   // first non-empty name per id
+    }
+  }
+  return map;
+}
+
 // ── Production deps (wired once per request) ────────────────────────────────
 
-function buildDeps({ workspaceId, userId, seedInstitution }) {
+function buildDeps({ workspaceId, userId, seedInstitution, accountNameMap }) {
+  const acctMap = accountNameMap || new Map();
   return {
     ensureEntityLink,
     linkPersonToEntity,
     stampContactOnActiveCadence,
+
+    // AccountId → company NAME from the prebuilt per-request map (no query — a
+    // Map lookup keyed by the 15-char base, 15↔18 safe). Real CompanyOrAccount
+    // always wins in processMember; this is the fallback.
+    async resolveAccountName(accountId) {
+      const k = sf15(accountId);
+      return (k && acctMap.get(k)) || null;
+    },
 
     // Upsert the membership row (one per campaign+entity; a re-ingest updates).
     async recordMembership(row) {
@@ -150,6 +220,10 @@ export async function handleSfListImport(req, res) {
     resolved_by_email: 0,
     created_persons: 0,
     orgs_linked: 0,
+    // Company-name coverage (honest gap reporting — Unit 3).
+    company_from_member: 0,
+    company_from_account_lookup: 0,
+    account_id_unresolved: 0,
     buyer_parent_matches: 0,
     cadences_seeded: 0,
     registry_gap_matches: 0,
@@ -163,13 +237,32 @@ export async function handleSfListImport(req, res) {
     return res.status(400).json({ error: 'campaign_id required for ingest', classification });
   }
 
+  // Resolve AccountId → company NAME once per request (one query, shared by
+  // every member). Built in BOTH modes so the dry-run coverage is truthful.
+  const scoped = members.slice(0, MEMBER_CAP);
+  let accountNameMap = new Map();
+  try { accountNameMap = await buildAccountNameMap(scoped); } catch (_e) { /* soft — no name resolution */ }
+
   // Dry-run: classify + normalize each member, no writes.
   if (dryRun) {
-    for (const raw of members.slice(0, MEMBER_CAP)) {
+    for (const raw of scoped) {
       const m = normalizeMember(raw);
       const name = personNameFromMember(m);
+      let company = m.company;
+      let companySource = m.company ? 'member' : null;
+      let acctUnresolved = false;
+      if (!company && m.account_id) {
+        const k = sf15(m.account_id);
+        const resolved = (k && accountNameMap.get(k)) || null;
+        if (resolved) { company = resolved; companySource = 'account_lookup'; }
+        else acctUnresolved = true;
+      }
+      if (companySource === 'member') result.company_from_member++;
+      else if (companySource === 'account_lookup') result.company_from_account_lookup++;
+      if (acctUnresolved) result.account_id_unresolved++;
       result.items.push({
-        name, email: m.email, company: m.company, city: m.city, state: m.state,
+        name, email: m.email, company, company_source: companySource,
+        account_id_unresolved: acctUnresolved, city: m.city, state: m.state,
         side: classification.side, product_type: classification.product_type,
         has_identity: !!(name || m.email),
       });
@@ -184,12 +277,13 @@ export async function handleSfListImport(req, res) {
   const deps = buildDeps({
     workspaceId, userId: user.id,
     seedInstitution: !!process.env.SF_LIST_SEED_INSTITUTION,
+    accountNameMap,
   });
   const listCtx = { campaign_id, campaign_name, parent_name, workspaceId, userId: user.id, ...classification };
 
   const deadline = Date.now() + BUDGET_MS;
   let anyWrite = false;
-  for (const raw of members.slice(0, MEMBER_CAP)) {
+  for (const raw of scoped) {
     if (Date.now() > deadline) { result.budget_stopped = true; break; }
     let out;
     try {
@@ -203,6 +297,9 @@ export async function handleSfListImport(req, res) {
       if (out.resolved_by_email) result.resolved_by_email++;
       if (out.created_entity) result.created_persons++;
       if (out.org_entity_id) result.orgs_linked++;
+      if (out.company_source === 'member') result.company_from_member++;
+      else if (out.company_source === 'account_lookup') result.company_from_account_lookup++;
+      if (out.account_id_unresolved) result.account_id_unresolved++;
       if (out.buyer_parent_match) result.buyer_parent_matches++;
       if (out.cadence_seeded) result.cadences_seeded++;
       if (out.registry_gap) result.registry_gap_matches++;

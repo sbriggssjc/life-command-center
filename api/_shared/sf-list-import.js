@@ -116,6 +116,11 @@ export function normalizeMember(raw) {
     // whichever exists — never favour ContactId and drop the Lead path.
     sf_contact_id: s(g('ContactId', 'contact_id')) || nestedRelId(raw, 'contact'),
     sf_lead_id: s(g('LeadId', 'lead_id')) || nestedRelId(raw, 'lead'),
+    // The SF Account id the Contact/Lead belongs to (the PA "Get Contacts Lx"
+    // $select now carries AccountId). It has NO company NAME — the SF connector
+    // can't traverse Account.Name in $select — so the name is resolved LOCALLY
+    // from LCC's existing SF Account identities (processMember → resolveAccountName).
+    account_id: s(g('AccountId', 'accountId', 'account_id')) || null,
     // CampaignMember.Type (Sent / Responded …) vs CM Relationship (Open / Assigned).
     member_type: s(g('Type', 'member_type', 'MemberType')) || null,
     status: s(g('Status', 'CMRelationship', 'CM Relationship', 'cm_relationship')) || null,
@@ -244,6 +249,7 @@ export function classifyList({ campaign_name, parent_name } = {}) {
  *   matchBuyerParent(orgEntityId)      -> Promise<boolean>          (buyer side)
  *   matchRegistryGap(company)          -> Promise<{match,institution_norm,institution_name,has_contact}|null> (seller side)
  *   seedInstitutionContact(args)       -> Promise<{ok,seeded}>      (seller side; flag-gated in handler)
+ *   resolveAccountName(accountId)      -> Promise<string|null>      (AccountId → company NAME, from LCC's SF Account identities; reads a prebuilt per-request map — no N+1)
  *
  * @returns granular per-member outcome (never throws — a bad member is skipped).
  */
@@ -255,6 +261,19 @@ export async function processMember(rawMember, listCtx, deps) {
   // blank person.
   if (!personName && !m.email) {
     return { outcome: 'skipped', reason: 'no_identity', side: listCtx.side };
+  }
+
+  // Resolve the company NAME: a real CompanyOrAccount always WINS; only when the
+  // member carries an AccountId (no name — the SF connector can't $select
+  // Account.Name) do we look the name up LOCALLY from LCC's existing SF Account
+  // identities. Never fabricate — an unresolved AccountId leaves company null.
+  let company = m.company;
+  let companySource = m.company ? 'member' : null;
+  let accountUnresolved = false;
+  if (!company && m.account_id && deps.resolveAccountName) {
+    const resolved = await deps.resolveAccountName(m.account_id);
+    if (resolved) { company = resolved; companySource = 'account_lookup'; }
+    else accountUnresolved = true;
   }
 
   // 1. Reconcile the PERSON (R39 email tier: an existing CoStar/RCA/SF person
@@ -291,13 +310,13 @@ export async function processMember(rawMember, listCtx, deps) {
   //    person to it as an edge (person → org, works_at). Never an identity on
   //    the person (SF-CONFLATION doctrine).
   let orgEntityId = null;
-  if (m.company) {
+  if (company) {
     const org = await deps.ensureEntityLink({
       workspaceId: listCtx.workspaceId,
       userId: listCtx.userId,
       sourceType: 'organization',
       domain: 'lcc',
-      seedFields: { name: m.company, org_type: 'company' },
+      seedFields: { name: company, org_type: 'company' },
       metadata: { via: 'sf_list_import' },
     });
     if (org && org.ok && org.entityId && org.entityId !== personEntityId) orgEntityId = org.entityId;
@@ -323,12 +342,17 @@ export async function processMember(rawMember, listCtx, deps) {
     member_type: m.member_type,
     city: m.city,
     state: m.state,
-    company_name: m.company,
+    company_name: company,
     org_entity_id: orgEntityId,
     sf_contact_id: m.sf_contact_id,
     sf_lead_id: m.sf_lead_id,
     last_activity: m.last_activity,
-    raw: { first: m.first, last: m.last, org_type: m.org_type },
+    raw: {
+      first: m.first, last: m.last, org_type: m.org_type,
+      // Surface the unresolved AccountId so the coverage gap is measurable and a
+      // later backfill (e.g. an SF "Get Accounts" pull) can fill it.
+      ...(accountUnresolved ? { sf_account_id_unresolved: m.account_id } : {}),
+    },
   });
 
   const out = {
@@ -338,6 +362,8 @@ export async function processMember(rawMember, listCtx, deps) {
     org_entity_id: orgEntityId,
     resolved_by_email: !!person.resolvedByEmail,
     created_entity: !!person.createdEntity,
+    company_source: companySource,          // 'member' | 'account_lookup' | null
+    account_id_unresolved: accountUnresolved,
     buyer_parent_match: false,
     cadence_seeded: false,
     registry_seeded: false,
@@ -368,15 +394,15 @@ export async function processMember(rawMember, listCtx, deps) {
     // contactless valued SPEs and NO registry contact yet, this real curated
     // contact is exactly the one the Tier A fan-out needs. Flag-gated by the
     // handler (seedInstitutionContact absent ⇒ recorded as a candidate only).
-    if (m.company && deps.matchRegistryGap && personName) {
+    if (company && deps.matchRegistryGap && personName) {
       try {
-        const gap = await deps.matchRegistryGap(m.company);
+        const gap = await deps.matchRegistryGap(company);
         if (gap && gap.match && !gap.has_contact) {
-          out.registry_gap = gap.institution_name || m.company;
+          out.registry_gap = gap.institution_name || company;
           if (deps.seedInstitutionContact) {
             const seed = await deps.seedInstitutionContact({
-              institution_name: gap.institution_name || m.company,
-              institution_norm: gap.institution_norm || normalizeInstitution(m.company),
+              institution_name: gap.institution_name || company,
+              institution_norm: gap.institution_norm || normalizeInstitution(company),
               contact: { name: personName, email: m.email, phone: m.phone, title: null },
             });
             out.registry_seeded = !!(seed && seed.seeded);
