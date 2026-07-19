@@ -36,7 +36,22 @@ export async function handleSyncSFTasks(body: { tasks?: SFTask[] | { value?: SFT
 }
 
 export async function handleGetSFTasks(url: URL) {
-  const d = getDialysisClient(); const ownerId = url.searchParams.get('owner_id') || '0051I000001vHJbQAM'; const statusFilter = url.searchParams.get('status'); const mode = url.searchParams.get('mode') || 'display'; const clientLimit = parseInt(url.searchParams.get('limit') || '0'); const requestedLimit = mode === 'display' ? Math.max(clientLimit || 5000, 5000) : (clientLimit || 5000); const afterDate = url.searchParams.get('after') || (mode === 'display' ? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : null); const whoId = url.searchParams.get('who_id'); const whatId = url.searchParams.get('what_id');
+  const d = getDialysisClient();
+  // Per-user reads (Phase 3): resolve an additive `user_email` param -> lcc_users.salesforce_owner_id.
+  // Keep Scott's default ONLY when no identity param (owner_id / user_email) is passed. If user_email is
+  // passed but not found, filter to a non-matching value so we NEVER fall back to Scott's data.
+  let ownerId = url.searchParams.get('owner_id');
+  if (!ownerId) {
+    const userEmail = url.searchParams.get('user_email');
+    if (userEmail) {
+      let resolvedOwnerId: string | null = null;
+      try { const { data } = await d.from("lcc_users").select("email, salesforce_owner_id").ilike("email", userEmail).limit(5); const match = (data || []).find((u: Record<string, unknown>) => String(u.email || '').toLowerCase() === userEmail.toLowerCase()); resolvedOwnerId = (match?.salesforce_owner_id as string) || null; } catch (_) {}
+      ownerId = resolvedOwnerId || '__no_matching_user__';
+    } else {
+      ownerId = '0051I000001vHJbQAM';
+    }
+  }
+  const statusFilter = url.searchParams.get('status'); const mode = url.searchParams.get('mode') || 'display'; const clientLimit = parseInt(url.searchParams.get('limit') || '0'); const requestedLimit = mode === 'display' ? Math.max(clientLimit || 5000, 5000) : (clientLimit || 5000); const afterDate = url.searchParams.get('after') || (mode === 'display' ? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : null); const whoId = url.searchParams.get('who_id'); const whatId = url.searchParams.get('what_id');
   const PAGE_SIZE = 1000; const allTasks: unknown[] = []; let currentOffset = 0;
   while (allTasks.length < requestedLimit) { const batchSize = Math.min(PAGE_SIZE, requestedLimit - allTasks.length); let query = d.from("salesforce_tasks").select("id, subject, description, status, priority, activity_date, owner_id, who_id, who_name, what_id, what_name, what_type, task_type, created_date, last_modified_date").eq("owner_id", ownerId).order("activity_date", { ascending: false }).range(currentOffset, currentOffset + batchSize - 1); if (statusFilter) { const statuses = statusFilter.split(',').map(s => s.trim()); if (statuses.length === 1) { query = query.eq("status", statuses[0]); } else { query = query.in("status", statuses); } } if (afterDate) { query = query.gte("activity_date", afterDate); } if (whoId) query = query.eq("who_id", whoId); if (whatId) query = query.eq("what_id", whatId); const { data, error } = await query; if (error) return jsonResponse({ error: "Failed to fetch SF tasks", details: error.message }, 500); if (!data || data.length === 0) break; allTasks.push(...data); currentOffset += data.length; if (data.length < batchSize) break; }
   const { count: totalCount } = await d.from("salesforce_tasks").select("id", { count: "planned", head: true }).eq("owner_id", ownerId);
@@ -45,7 +60,22 @@ export async function handleGetSFTasks(url: URL) {
 }
 
 export async function handleGetSFActivities(url: URL) {
-  const d = getDialysisClient(); const assignedTo = url.searchParams.get('assigned_to') || 'Scott Briggs'; const statusFilter = url.searchParams.get('status') || 'Open'; const category = url.searchParams.get('category'); const search = url.searchParams.get('search'); const clientLimit = parseInt(url.searchParams.get('limit') || '2000'); const requestedLimit = Math.min(clientLimit, 2000); const offset = parseInt(url.searchParams.get('offset') || '0'); const afterDate = url.searchParams.get('after') || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; const sortBy = url.searchParams.get('sort') || 'activity_date'; const sortDir = url.searchParams.get('sort_dir') === 'asc' ? true : false;
+  const d = getDialysisClient();
+  // Per-user reads (Phase 3): resolve an additive `user_email` param -> lcc_users.display_name.
+  // Keep Scott's default ONLY when no identity param (assigned_to / user_email) is passed. If user_email is
+  // passed but not found, filter to a non-matching value so we NEVER fall back to Scott's data.
+  let assignedTo = url.searchParams.get('assigned_to');
+  if (!assignedTo) {
+    const userEmail = url.searchParams.get('user_email');
+    if (userEmail) {
+      let resolvedName: string | null = null;
+      try { const { data } = await d.from("lcc_users").select("email, display_name").ilike("email", userEmail).limit(5); const match = (data || []).find((u: Record<string, unknown>) => String(u.email || '').toLowerCase() === userEmail.toLowerCase()); resolvedName = (match?.display_name as string) || null; } catch (_) {}
+      assignedTo = resolvedName || '__no_matching_user__';
+    } else {
+      assignedTo = 'Scott Briggs';
+    }
+  }
+  const statusFilter = url.searchParams.get('status') || 'Open'; const category = url.searchParams.get('category'); const search = url.searchParams.get('search'); const clientLimit = parseInt(url.searchParams.get('limit') || '2000'); const requestedLimit = Math.min(clientLimit, 2000); const offset = parseInt(url.searchParams.get('offset') || '0'); const afterDate = url.searchParams.get('after') || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; const sortBy = url.searchParams.get('sort') || 'activity_date'; const sortDir = url.searchParams.get('sort_dir') === 'asc' ? true : false;
   const PAGE_SIZE = 1000; const allActivities: unknown[] = []; let currentOffset = offset;
   while (allActivities.length < requestedLimit) { const batchSize = Math.min(PAGE_SIZE, requestedLimit - allActivities.length); let query = d.from("salesforce_activities").select("sf_task_id, subject, first_name, last_name, sf_contact_id, company_name, sf_company_id, company_address, company_city_state, assigned_to, nm_type, activity_date, nm_notes, task_subtype, email, phone, status").order(sortBy === 'company_name' ? 'company_name' : sortBy === 'subject' ? 'subject' : 'activity_date', { ascending: sortDir }).range(currentOffset, currentOffset + batchSize - 1); if (assignedTo && assignedTo !== 'all') { query = query.eq("assigned_to", assignedTo); } if (statusFilter && statusFilter !== 'all') { const statuses = statusFilter.split(',').map(s => s.trim()); if (statuses.length === 1) { query = query.eq("status", statuses[0]); } else { query = query.in("status", statuses); } } if (afterDate) { query = query.gte("activity_date", afterDate); } if (search) { query = query.or(`subject.ilike.%${search}%,company_name.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%`); } const { data, error } = await query; if (error) return jsonResponse({ error: "Failed to fetch SF activities", details: error.message }, 500); if (!data || data.length === 0) break; allActivities.push(...data); currentOffset += data.length; if (data.length < batchSize) break; }
   // Deduplicate activities by composite key (subject + contact + company + date)
