@@ -2814,17 +2814,11 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
     return await executeReadAction(spec, params, user, workspaceId, req);
   }
 
-  // Write actions return metadata about what to call — the frontend or
-  // Copilot should invoke the real endpoint directly with proper auth.
-  // This avoids double-proxying and keeps audit trails clean.
-  return {
-    ok: true,
-    action: actionName,
-    method: spec.method,
-    endpoint: `/api/${spec.path}`,
-    params_to_send: params || {},
-    note: 'Execute this endpoint directly with your auth credentials to complete the action.'
-  };
+  // Execute write actions via a real internal HTTP call so the actual endpoint
+  // response shape is returned. Returning metadata here would put `action` as
+  // a string, but the swagger schema declares it as an object — Power Fx then
+  // throws "Expecting Record but received a String" (PowerFxJsonException).
+  return await executeWriteAction(actionName, spec, params, user, workspaceId, req);
 }
 
 async function executeReadAction(spec, params, user, workspaceId, req) {
@@ -2872,6 +2866,86 @@ async function executeReadAction(spec, params, user, workspaceId, req) {
     };
   } catch (e) {
     return { ok: false, action: spec.path.split('?')[0], error: `Internal API call failed: ${e.message}` };
+  }
+}
+
+/**
+ * Execute a write (POST/PATCH) action by making a real internal HTTP call to the
+ * correct LCC endpoint. This ensures Power Fx gets actual object shapes back
+ * (action, item, etc.) rather than metadata strings that cause type mismatches.
+ *
+ * Key routing rules:
+ *  - PATCH actions: extract `id` from params into the URL query string.
+ *    Both /api/actions PATCH and /api/inbox PATCH read id from req.query.
+ *  - POST actions: use alias path when available (e.g. promote_intake_to_action
+ *    uses alias 'operations?action=promote_to_shared' because the 'workflows'
+ *    path doesn't exist as a standalone Vercel function).
+ *  - All params sent in body except internal flags (_*, user_confirmed).
+ */
+async function executeWriteAction(actionName, spec, params, user, workspaceId, req) {
+  const proto = req?.headers?.['x-forwarded-proto'] || 'https';
+  const host = req?.headers?.host || 'localhost:3000';
+  const baseUrl = `${proto}://${host}`;
+
+  // Auth headers — identical pattern to executeReadAction
+  const headers = { 'Content-Type': 'application/json' };
+  if (user?._copilot_plugin && process.env.LCC_API_KEY) {
+    headers['x-lcc-key'] = process.env.LCC_API_KEY;
+  } else {
+    if (req?.headers?.['authorization']) headers['authorization'] = req.headers['authorization'];
+    if (req?.headers?.['x-lcc-key']) headers['x-lcc-key'] = req.headers['x-lcc-key'];
+  }
+  if (workspaceId) headers['x-lcc-workspace'] = workspaceId;
+
+  // Strip internal/meta params — don't forward to downstream endpoints
+  const cleanParams = {};
+  for (const [k, v] of Object.entries(params || {})) {
+    if (!k.startsWith('_') && k !== 'user_confirmed') cleanParams[k] = v;
+  }
+
+  let url;
+  let bodyObj;
+
+  if (spec.method === 'PATCH') {
+    // Both /api/actions PATCH and /api/inbox PATCH read `id` from req.query —
+    // extract it from params and inject into the URL so it isn't lost in body.
+    const { id, ...bodyParams } = cleanParams;
+    const idPart = id ? `?id=${encodeURIComponent(id)}` : '';
+    url = `${baseUrl}/api/${spec.path}${idPart}`;
+    bodyObj = bodyParams;
+  } else {
+    // POST — prefer alias path (e.g. promote_intake_to_action's alias routes
+    // through operations.js which is already loaded, avoiding a cold start on
+    // the non-existent 'workflows' serverless function).
+    const basePath = spec.alias || spec.path;
+    url = `${baseUrl}/api/${basePath}`;
+    bodyObj = cleanParams;
+  }
+
+  console.log(`[executeWriteAction] ${actionName} → ${spec.method} ${url}`);
+
+  try {
+    const fetchRes = await fetch(url, {
+      method: spec.method,
+      headers,
+      body: JSON.stringify(bodyObj)
+    });
+    const data = await fetchRes.json().catch(() => ({}));
+    if (!fetchRes.ok) {
+      console.error(`[executeWriteAction] ${actionName} failed: ${fetchRes.status}`, data);
+      return {
+        ok: false,
+        error: data?.error || `Action endpoint returned ${fetchRes.status}`,
+        status: fetchRes.status,
+        detail: data
+      };
+    }
+    // Return the actual endpoint response directly — preserves correct field
+    // types for Power Fx (action as Record, item as Record, etc.)
+    return { ok: true, ...data };
+  } catch (e) {
+    console.error(`[executeWriteAction] ${actionName} threw:`, e?.message);
+    return { ok: false, error: `Internal write call failed: ${e.message}` };
   }
 }
 
