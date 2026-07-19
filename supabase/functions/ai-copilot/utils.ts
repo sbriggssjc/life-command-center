@@ -27,7 +27,7 @@ export function normalizeSFArray<T>(input: T[] | { value?: T[] } | undefined | n
   return [];
 }
 
-export interface SFActivity { sf_task_id: string; subject?: string; first_name?: string; last_name?: string; sf_contact_id?: string; company_name?: string; sf_company_id?: string; company_address?: string; company_city_state?: string; assigned_to?: string; nm_type?: string; activity_date?: string; nm_notes?: string; task_subtype?: string; email?: string; phone?: string; status?: string; }
+export interface SFActivity { sf_task_id: string; subject?: string; first_name?: string; last_name?: string; sf_contact_id?: string; company_name?: string; sf_company_id?: string; company_address?: string; company_city_state?: string; assigned_to?: string; owner_id?: string; nm_type?: string; activity_date?: string; nm_notes?: string; task_subtype?: string; email?: string; phone?: string; status?: string; }
 export interface SFAccount { [key: string]: unknown; }
 export interface SFContact { [key: string]: unknown; }
 export interface SFTask { Id?: string; id?: string; Subject?: string; subject?: string; Description?: string; description?: string; Status?: string; status?: string; Priority?: string; priority?: string; ActivityDate?: string; activity_date?: string; OwnerId?: string; owner_id?: string; WhoId?: string; who_id?: string; WhoName?: string; who_name?: string; WhatId?: string; what_id?: string; WhatName?: string; what_name?: string; TaskType?: string; task_type?: string; Type?: string; CreatedDate?: string; created_date?: string; LastModifiedDate?: string; last_modified_date?: string; [key: string]: unknown; }
