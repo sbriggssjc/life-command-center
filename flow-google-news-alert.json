@@ -1,0 +1,123 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "When_a_new_Google_Alert_arrives": {
+        "type": "ApiConnectionNotification",
+        "description": "Fires on every new email from Google Alerts (sender-based, NOT subject). Google always sends from googlealerts-noreply@google.com.",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "fetch": {
+            "pathTemplate": { "template": "/v3/Mail/OnNewEmail" },
+            "method": "get",
+            "queries": {
+              "folderPath": "Inbox",
+              "from": "googlealerts-noreply@google.com",
+              "importance": "Any",
+              "fetchOnlyWithAttachment": false,
+              "includeAttachments": false,
+              "fetchOnlyUnread": false
+            }
+          },
+          "subscribe": {
+            "pathTemplate": { "template": "/GraphMailSubscriptionPoke/$subscriptions" },
+            "method": "post",
+            "queries": { "folderPath": "Inbox" },
+            "body": { "NotificationUrl": "@{listCallbackUrl()}" }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Html_to_text": {
+        "type": "ApiConnection",
+        "description": "Google Alerts are HTML — convert to plain text so raw_body is clean for the deterministic parser.",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['conversionservice']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/html2text",
+          "body": "@triggerOutputs()?['body/body']"
+        },
+        "runAfter": {}
+      },
+      "POST_to_news_alert_ingest": {
+        "type": "Http",
+        "description": "Cross-vertical Google Alert intake. The edge function classifies dialysis/government/netlease, runs the confidence gate, dedups 90-day reposts, and returns archive:true|false.",
+        "inputs": {
+          "method": "POST",
+          "uri": "REPLACE_WITH_LEAD_INGEST_BASE_URL/lead-ingest?action=news_alert",
+          "headers": {
+            "Content-Type": "application/json",
+            "X-PA-Webhook-Secret": "REPLACE_WITH_PA_WEBHOOK_SECRET"
+          },
+          "body": {
+            "source_ref": "@{triggerOutputs()?['body/id']}",
+            "subject": "@{triggerOutputs()?['body/subject']}",
+            "raw_body": "@{body('Html_to_text')?['text']}"
+          }
+        },
+        "runAfter": {
+          "Html_to_text": ["Succeeded"]
+        }
+      },
+      "Archive_if_high_confidence": {
+        "type": "If",
+        "description": "Only auto-archive when the edge function says archive:true (a high-confidence tracked-tenant hit). A low-confidence hit is left in the Inbox for Scott's review queue — never auto-deleted.",
+        "expression": {
+          "and": [
+            { "equals": ["@body('POST_to_news_alert_ingest')?['archive']", true] }
+          ]
+        },
+        "actions": {
+          "Move_email_to_Archive": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['office365']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/v2/Mail/Move/@{encodeURIComponent(triggerOutputs()?['body/id'])}",
+              "queries": { "folderPath": "Archive" }
+            },
+            "runAfter": {}
+          }
+        },
+        "else": { "actions": {} },
+        "runAfter": {
+          "POST_to_news_alert_ingest": ["Succeeded"]
+        }
+      }
+    }
+  },
+  "connectionReferences": {
+    "office365": {
+      "connectionName": "shared_office365",
+      "source": "Invoker",
+      "id": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "tier": "NotSpecified"
+    },
+    "conversionservice": {
+      "connectionName": "shared_conversionservice",
+      "source": "Invoker",
+      "id": "/providers/Microsoft.PowerApps/apis/shared_conversionservice",
+      "tier": "NotSpecified"
+    }
+  }
+}
