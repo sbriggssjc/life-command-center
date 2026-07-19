@@ -32,6 +32,7 @@
 
 import { contactPersonName } from './sf-account-link.js';
 import { normalizeInstitution } from './institution-registry.js';
+import { sf15, toSf18 } from './sf-id.js';
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 
@@ -110,6 +111,11 @@ export function normalizeMember(raw) {
     city: s(g('City', 'city', 'MailingCity')) || null,
     state: s(g('State', 'state', 'MailingState')) || null,
     company: s(g('CompanyOrAccount', 'Company', 'company', 'AccountName', 'account')) || null,
+    // The SF Account id the member's Contact/Lead is filed under (the PA "Get
+    // Contacts" $select now includes AccountId). It carries no NAME — the LCC
+    // side resolves the org name from an already-known Salesforce Account identity
+    // (Unit 2). Read tolerantly (top-level or nested, any case). Pure.
+    account_id: s(g('AccountId', 'accountId', 'account_id')) || null,
     // A CampaignMember links EITHER a Contact (ContactId) OR a Lead (LeadId),
     // and prospect/buyer/seller lists are OVERWHELMINGLY Leads. Capture BOTH
     // ids (top-level or nested) so processMember can key the SF identity on
@@ -241,6 +247,7 @@ export function classifyList({ campaign_name, parent_name } = {}) {
  *   linkPersonToEntity(args)           -> { ok }
  *   stampContactOnActiveCadence(args)  -> { ok, seeded? }
  *   recordMembership(row)              -> { ok }
+ *   resolveAccountName(accountId)      -> Promise<string|null>      (Unit 2; optional — org name from an SF AccountId, null when unknown / absent)
  *   matchBuyerParent(orgEntityId)      -> Promise<boolean>          (buyer side)
  *   matchRegistryGap(company)          -> Promise<{match,institution_norm,institution_name,has_contact}|null> (seller side)
  *   seedInstitutionContact(args)       -> Promise<{ok,seeded}>      (seller side; flag-gated in handler)
@@ -255,6 +262,23 @@ export async function processMember(rawMember, listCtx, deps) {
   // blank person.
   if (!personName && !m.email) {
     return { outcome: 'skipped', reason: 'no_identity', side: listCtx.side };
+  }
+
+  // Resolve the company NAME (used for the org edge, the membership row, and the
+  // seller institution match). A real CompanyOrAccount always WINS; the SF
+  // AccountId lookup (Unit 2) is a fallback that resolves the org name from an
+  // already-known LCC Salesforce Account identity — NEVER fabricated (null when
+  // the account isn't a known LCC identity). `companySource` records which; an
+  // AccountId the batch couldn't resolve is tracked so the coverage gap is
+  // measurable (Unit 3). Backward-compatible: with no `resolveAccountName` dep,
+  // this is exactly the prior `m.company`.
+  let company = m.company;
+  let companySource = m.company ? 'member' : null;
+  let accountUnresolved = false;
+  if (!company && m.account_id && deps.resolveAccountName) {
+    const resolved = await deps.resolveAccountName(m.account_id);
+    if (resolved) { company = resolved; companySource = 'account_lookup'; }
+    else { accountUnresolved = true; }
   }
 
   // 1. Reconcile the PERSON (R39 email tier: an existing CoStar/RCA/SF person
@@ -291,13 +315,13 @@ export async function processMember(rawMember, listCtx, deps) {
   //    person to it as an edge (person → org, works_at). Never an identity on
   //    the person (SF-CONFLATION doctrine).
   let orgEntityId = null;
-  if (m.company) {
+  if (company) {
     const org = await deps.ensureEntityLink({
       workspaceId: listCtx.workspaceId,
       userId: listCtx.userId,
       sourceType: 'organization',
       domain: 'lcc',
-      seedFields: { name: m.company, org_type: 'company' },
+      seedFields: { name: company, org_type: 'company' },
       metadata: { via: 'sf_list_import' },
     });
     if (org && org.ok && org.entityId && org.entityId !== personEntityId) orgEntityId = org.entityId;
@@ -323,12 +347,18 @@ export async function processMember(rawMember, listCtx, deps) {
     member_type: m.member_type,
     city: m.city,
     state: m.state,
-    company_name: m.company,
+    company_name: company,
     org_entity_id: orgEntityId,
     sf_contact_id: m.sf_contact_id,
     sf_lead_id: m.sf_lead_id,
     last_activity: m.last_activity,
-    raw: { first: m.first, last: m.last, org_type: m.org_type },
+    raw: {
+      first: m.first, last: m.last, org_type: m.org_type,
+      account_id: m.account_id || undefined,
+      // Track an AccountId the batch resolver couldn't map to a known LCC
+      // Salesforce Account identity — the measurable coverage gap (Unit 3).
+      sf_account_id_unresolved: accountUnresolved ? m.account_id : undefined,
+    },
   });
 
   const out = {
@@ -338,6 +368,8 @@ export async function processMember(rawMember, listCtx, deps) {
     org_entity_id: orgEntityId,
     resolved_by_email: !!person.resolvedByEmail,
     created_entity: !!person.createdEntity,
+    company_source: companySource,                       // 'member' | 'account_lookup' | null
+    account_id_unresolved: accountUnresolved ? m.account_id : null,
     buyer_parent_match: false,
     cadence_seeded: false,
     registry_seeded: false,
@@ -368,15 +400,15 @@ export async function processMember(rawMember, listCtx, deps) {
     // contactless valued SPEs and NO registry contact yet, this real curated
     // contact is exactly the one the Tier A fan-out needs. Flag-gated by the
     // handler (seedInstitutionContact absent ⇒ recorded as a candidate only).
-    if (m.company && deps.matchRegistryGap && personName) {
+    if (company && deps.matchRegistryGap && personName) {
       try {
-        const gap = await deps.matchRegistryGap(m.company);
+        const gap = await deps.matchRegistryGap(company);
         if (gap && gap.match && !gap.has_contact) {
-          out.registry_gap = gap.institution_name || m.company;
+          out.registry_gap = gap.institution_name || company;
           if (deps.seedInstitutionContact) {
             const seed = await deps.seedInstitutionContact({
-              institution_name: gap.institution_name || m.company,
-              institution_norm: gap.institution_norm || normalizeInstitution(m.company),
+              institution_name: gap.institution_name || company,
+              institution_norm: gap.institution_norm || normalizeInstitution(company),
               contact: { name: personName, email: m.email, phone: m.phone, title: null },
             });
             out.registry_seeded = !!(seed && seed.seeded);
@@ -387,4 +419,82 @@ export async function processMember(rawMember, listCtx, deps) {
   }
 
   return out;
+}
+
+// ── Unit 2: batch AccountId → org-name resolver (no N+1) ────────────────────
+
+/**
+ * Resolve the distinct SF AccountIds carried by a batch of members to their LCC
+ * org NAMES, in a BOUNDED number of queries (NOT one per member). LCC already
+ * holds the SF Account identities from the SF-CONFLATION work
+ * (`external_identities` source_system='salesforce', source_type='Account'), each
+ * pointing at an organization entity that carries the account name — so the name
+ * is followed FROM that identity, never fabricated. Returns a Map keyed by the
+ * 15-char case-sensitive natural key (`sf15`) → org name, so a 15-char member id
+ * and an 18-char stored id resolve to the same entry (15/18-safe).
+ *
+ * deps.query: async (method, path) => { ok, data }  (opsQuery-shaped; injectable
+ *             so the batcher is unit-testable without a live DB).
+ * deps.pgEncode: value → PostgREST-safe string (defaults to encodeURIComponent).
+ *
+ * Pure over its injected query — no direct DB import. Two queries total for a
+ * small batch (one external_identities `in.()` + one entities `in.()`), NOT one
+ * per member.
+ */
+export async function buildAccountNameMap(members, deps = {}) {
+  const query = deps.query;
+  const enc = deps.pgEncode || ((v) => encodeURIComponent(String(v)));
+  const byKey = new Map();                              // sf15 -> org name
+  if (typeof query !== 'function' || !Array.isArray(members)) return byKey;
+
+  // Distinct account-id keys (sf15) + the exact id-forms to probe. Query BOTH the
+  // canonical 18-char form and the 15-char base so a store holding either length
+  // resolves (LCC's Account store is 18-char, but this stays robust to a 15-char
+  // row).
+  const forms = new Set();
+  const keys = new Set();
+  for (const raw of members) {
+    const k = sf15(normalizeMember(raw).account_id);
+    if (!k || keys.has(k)) continue;
+    keys.add(k);
+    const s18 = toSf18(k);
+    if (s18) forms.add(s18);
+    forms.add(k);
+  }
+  if (!keys.size) return byKey;
+
+  // 1) external_identities Account rows for these ids → entity_id (chunked so a
+  //    huge batch still bounds the `in.()` list; one query for a normal batch).
+  const entByKey = new Map();                           // sf15 -> entity_id
+  const formList = Array.from(forms);
+  for (let i = 0; i < formList.length; i += 80) {
+    const inList = formList.slice(i, i + 80).map(enc).join(',');
+    if (!inList) continue;
+    const r = await query('GET', 'external_identities?source_system=eq.salesforce&source_type=eq.Account'
+      + '&external_id=in.(' + inList + ')&select=entity_id,external_id');
+    if (r && r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) {
+        const kk = sf15(row.external_id);
+        if (kk && row.entity_id && !entByKey.has(kk)) entByKey.set(kk, row.entity_id);
+      }
+    }
+  }
+  if (!entByKey.size) return byKey;
+
+  // 2) entities.name for the resolved entity ids.
+  const entityIds = Array.from(new Set([...entByKey.values()]));
+  const nameById = new Map();
+  for (let i = 0; i < entityIds.length; i += 100) {
+    const inList = entityIds.slice(i, i + 100).map(enc).join(',');
+    if (!inList) continue;
+    const r = await query('GET', 'entities?id=in.(' + inList + ')&select=id,name');
+    if (r && r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) if (row.id && row.name) nameById.set(row.id, row.name);
+    }
+  }
+  for (const [k, eid] of entByKey) {
+    const nm = nameById.get(eid);
+    if (nm) byKey.set(k, nm);
+  }
+  return byKey;
 }
