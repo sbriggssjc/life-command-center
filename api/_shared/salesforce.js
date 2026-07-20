@@ -378,6 +378,8 @@ export async function createSalesforceTask(task) {
   const whatId = task?.whatId ? String(task.whatId).trim() : '';
   if (whatId && /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(whatId)) body.what_id = whatId;
   if (task?.idempotencyKey) body.idempotency_key = String(task.idempotencyKey);
+  // Comments → the PA flow maps item/Description ← triggerBody()?['comments'].
+  if (task?.comments) body.comments = String(task.comments);
 
   const result = await callSfLookupFlow(body);
   if (!result || result.ok !== true) {
@@ -436,15 +438,21 @@ function cleanActivityLabel(label) {
   return t ? t.slice(0, 80) : 'Account';
 }
 
+/** Collapse whitespace + trim a comment to a concise one-liner length. */
+function cleanActivityComment(comment) {
+  return String(comment == null ? '' : comment).replace(/\s+/g, ' ').trim().slice(0, 255);
+}
+
 /**
  * Build the mode-aware create_opportunity payload for a COMPLETED touchpoint.
  * Pure (no I/O) so the subject/linking/privacy rules are unit-testable.
  *
  * @param {{mode?:'bd'|'marketing', whoId?:string, whatId?:string, label?:string,
- *          touchNumber?:number, activityDate?:string, idempotencyKey?:string}} args
+ *          touchNumber?:number, ref?:string, comments?:string, activityDate?:string,
+ *          idempotencyKey?:string}} args
  * @returns {{mode:'bd'|'marketing', task:{whoId?:string, subject:string,
- *          nmType:string, status:string, activityDate?:string, whatId?:string,
- *          idempotencyKey?:string}}}
+ *          nmType:string, status:string, comments:string, activityDate?:string,
+ *          whatId?:string, idempotencyKey?:string}}}
  */
 export function buildSalesforceActivityPayload(args = {}) {
   const mode = args.mode === 'marketing' ? 'marketing' : 'bd';
@@ -456,6 +464,17 @@ export function buildSalesforceActivityPayload(args = {}) {
     ? `LCC-Mktg · ${label} · Marketing${n ? ` ${n}` : ''}`
     : `LCC-BD · ${label} · Touchpoint${n ? ` ${n}` : ''}`;
 
+  // The Comments/Description field is VISIBLE to other Salesforce users. BD stays
+  // privacy-safe — a minimal LCC reference + touchpoint label + an opaque pointer
+  // (`ref`) back to the LCC record driving the touch, NEVER any strategy/intent.
+  // Marketing (= our own Deal) carries the same concise one-liner. An explicit
+  // `comments` overrides the default. `<N>` mirrors the subject's touch counter.
+  const ref = args.ref != null ? String(args.ref).replace(/\s+/g, ' ').trim() : '';
+  const commentDefault = mode === 'marketing'
+    ? `LCC-Mktg · Marketing Outreach${n ? ` ${n}` : ''}${ref ? ` · ${ref}` : ''}`
+    : `LCC-BD · Touchpoint${n ? ` ${n}` : ''}${ref ? ` · ${ref}` : ''}`;
+  const comments = (args.comments != null ? cleanActivityComment(args.comments) : '') || commentDefault;
+
   const task = {
     whoId: args.whoId ? String(args.whoId).trim() : undefined,
     subject,
@@ -463,6 +482,8 @@ export function buildSalesforceActivityPayload(args = {}) {
     nmType: '',
     // The SPEC's core ask — a COMPLETED activity, not an open task.
     status: 'Completed',
+    // Privacy-safe reference line → PA maps item/Description ← comments.
+    comments,
   };
   if (args.activityDate) task.activityDate = args.activityDate;
   if (args.idempotencyKey) task.idempotencyKey = String(args.idempotencyKey);
