@@ -795,13 +795,13 @@ export const ACTION_SCHEMAS = {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Action item title describing what needs to be done (required).' },
-        entity_id: { type: 'string', format: 'uuid', description: 'UUID of the listing or pursuit entity this task is linked to (optional — omit if not yet known).' },
+        entity_id: { type: 'string', format: 'uuid', description: 'UUID of the listing or pursuit entity this task is linked to (required).' },
         action_type: { type: 'string', description: 'Type of follow-up: follow_up, call, email, research, meeting, or review (default: follow_up).' },
         priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: 'Task priority: low, normal, high, or urgent (default: normal).' },
         due_date: { type: 'string', format: 'date', description: 'Target completion date in YYYY-MM-DD format (optional).' },
         description: { type: 'string', description: 'Additional notes or context for the task (optional).' }
       },
-      required: ['title']
+      required: ['title', 'entity_id']
     },
     outputs: {
       type: 'object',

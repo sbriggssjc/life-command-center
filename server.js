@@ -48,11 +48,6 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 
-// Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
-// The Dialysis_DB data-query edge function proxies to these paths when
-// GOV_API_URL=https://life-command-center-production.up.railway.app.
-import govEvidenceRouter from './api/gov-evidence.js';
-
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -195,9 +190,6 @@ app.all('/api/gov-buyer-sync',             (req, res) => { req.query._route = 'g
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
 app.all('/api/gov-write', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-write'; adminHandler(req, res); });
 app.all('/api/gov-evidence', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-evidence'; adminHandler(req, res); });
-// Wave 2 Task #110: backing routes that GOV_API_URL serves directly.
-// Mounted at /api so the router's /evidence-health → /api/evidence-health, etc.
-app.use('/api', govEvidenceRouter);
 app.all('/api/dia-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'dia'; adminHandler(req, res); });
 // R5-FE-2 (2026-05-20): mirror the vercel.json /api/data-query rewrite on Railway.
 // detail.js contact/ownership/Add-Contact lookups carry their own _source=gov|dia, so do NOT bake _source here.
