@@ -240,6 +240,7 @@ app.all('/api/owner-reconcile-tick', (req, res) => { req.query._route = 'owner-r
 app.all('/api/owner-reconcile-engine-tick', (req, res) => { req.query._route = 'owner-reconcile-engine-tick'; operationsHandler(req, res); });
 app.all('/api/institution-contact-tick', (req, res) => { req.query._route = 'institution-contact-tick'; operationsHandler(req, res); });
 app.all('/api/sf-list-import', (req, res) => { req.query._route = 'sf-list-import'; operationsHandler(req, res); });
+app.all('/api/sf-account-import', (req, res) => { req.query._route = 'sf-account-import'; operationsHandler(req, res); });
 app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 'developer-chain-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/contact-writeback-tick', (req, res) => { req.query._route = 'contact-writeback-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-lookup-tick', (req, res) => { req.query._route = 'sf-record-lookup-tick'; operationsHandler(req, res); });

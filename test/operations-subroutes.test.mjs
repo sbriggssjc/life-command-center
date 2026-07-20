@@ -25,6 +25,7 @@ const read = (f) => readFileSync(join(root, f), 'utf8');
 // dropping one from BOTH server.js and operations.js still fails (belt + suspenders).
 const CRITICAL_SUBROUTES = [
   'sf-list-import',
+  'sf-account-import',
   'sf-contact-resolve-tick',
   'owner-reconcile-tick',
   'owner-reconcile-engine-tick',
