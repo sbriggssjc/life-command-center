@@ -24,6 +24,26 @@
 // (the chunking saga was caused by `CampaignMember.Id eq …` filters; a flat Get on
 // Account has none of that).
 //
+// ── NEEDED-ONLY FILTER (default) ────────────────────────────────────────────
+// Scott's SF org is 100,000+ Accounts; minting an org entity for EACH would grow
+// `entities` ~45.8k → ~146k. On 2026-07-19 a +6,545-entity seed alone degraded
+// `v_priority_queue_live` >60s and saturated the LCC-Opps connection pool (auth
+// lives on this DB) — a 100k increment is ~15× that. And LCC needs exactly the
+// ~4,667 accounts referenced by contactless `lcc_sf_list_membership` rows; the
+// rest is pulled only to be discarded (Northmarq internal offices/program buckets,
+// individuals, …). So by DEFAULT we persist ONLY accounts LCC actually needs:
+//   * the account is in the "needed set" (a member's `raw.sf_account_id_unresolved`
+//     awaiting resolution), OR
+//   * the account is ALREADY known to LCC (an existing salesforce/Account
+//     identity — persisting refreshes the name and CANNOT grow the entity table).
+// Everything else is skipped (`accounts_skipped_not_needed`), never minted. The
+// needed set + the known set are each fetched ONCE per batch (bounded queries, no
+// N+1). `?all=1` restores the old persist-everything behavior for the rare case
+// Scott deliberately wants a full account mirror (adds ~100k entities — do not use
+// casually). The `backfill` pass is unchanged and, by construction, can never
+// strand a member: the needed set IS the members' unresolved ids, so every account
+// a member references is always persisted.
+//
 // Reuse (never fork): ensureEntityLink (org mint + guards + the salesforce/Account
 // identity write, deduped by external-identity then canonical_name → idempotent),
 // linkPersonToEntity (person→org works_at edge — the same relate processMember
@@ -142,6 +162,71 @@ export async function resolveAccountNamesByIds(ids, deps = {}) {
   return out;
 }
 
+// ── Needed / known account-key sets (built ONCE per batch — no N+1) ─────────
+
+/**
+ * The "needed set": the DISTINCT `raw.sf_account_id_unresolved` values on
+ * contactless `lcc_sf_list_membership` rows — the exact ~4,667 accounts a member
+ * is waiting on. Keyed by the 15-char natural key (sf15) so a 15-char member id
+ * and an 18-char posted id land in the same bucket. Paged 1000/row (PostgREST
+ * cap) selecting ONLY the id (a tiny jsonb projection — never the whole `raw`).
+ * deps.query: opsQuery-shaped (method, path) => { ok, data }  (injectable).
+ */
+export async function buildNeededAccountKeys(deps = {}) {
+  const query = deps.query || opsQuery;
+  const keys = new Set();                              // sf15 of every needed account
+  const PAGE = 1000;
+  for (let offset = 0; ; offset += PAGE) {
+    const r = await query('GET',
+      'lcc_sf_list_membership?company_name=is.null&raw->>sf_account_id_unresolved=not.is.null'
+      + '&select=acct:raw->>sf_account_id_unresolved&order=id.asc&limit=' + PAGE + '&offset=' + offset);
+    const data = (r && r.ok && Array.isArray(r.data)) ? r.data : [];
+    for (const row of data) {
+      const k = sf15(row && row.acct);
+      if (k) keys.add(k);
+    }
+    if (data.length < PAGE) break;                     // paged past the end
+  }
+  return keys;
+}
+
+/**
+ * The "known set": the sf15 of every posted account that ALREADY carries a
+ * salesforce/Account identity in LCC. Probed in bounded `in.()` chunks over the
+ * batch's ids (both 18-canonical + 15-base forms, so a stored 15 or 18 matches) —
+ * NOT one query per account. Used so an already-tracked account is still persisted
+ * (name refresh, zero entity growth) even when no member currently needs it.
+ * deps.query / deps.enc injectable.
+ */
+export async function fetchKnownAccountKeys(id18List, deps = {}) {
+  const query = deps.query || opsQuery;
+  const enc = deps.enc || pgFilterVal;
+  const known = new Set();                             // sf15 already in external_identities
+  if (!Array.isArray(id18List) || !id18List.length) return known;
+
+  const keys = new Set();
+  const forms = new Set();
+  for (const id of id18List) {
+    const k = sf15(id);
+    if (!k || keys.has(k)) continue;
+    keys.add(k);
+    const s18 = toSf18(k);
+    if (s18) forms.add(s18);
+    forms.add(k);
+  }
+  const formList = Array.from(forms);
+  for (let i = 0; i < formList.length; i += 80) {
+    const inList = formList.slice(i, i + 80).map(enc).join(',');
+    if (!inList) continue;
+    const r = await query('GET', 'external_identities?source_system=eq.salesforce&source_type=eq.Account'
+      + '&external_id=in.(' + inList + ')&select=external_id');
+    if (r && r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) { const kk = sf15(row && row.external_id); if (kk) known.add(kk); }
+    }
+  }
+  return known;
+}
+
 // ── Exact-count helper (Content-Range, no rows fetched) ─────────────────────
 // selectCol must be a column the target table actually has (external_identities
 // has no `id`, so callers pass a real column like `entity_id`).
@@ -153,13 +238,42 @@ async function countExact(path, selectCol = 'id') {
 
 // ── Account-import (POST) ───────────────────────────────────────────────────
 
-async function importAccounts(accounts, { workspaceId, userId, result, deadline }) {
-  for (const raw of accounts.slice(0, ACCOUNT_CAP)) {
+export async function importAccounts(accounts, ctx, deps = {}) {
+  const { workspaceId, userId, result, deadline, all } = ctx;
+  const ensureLink = deps.ensureLink || ensureEntityLink;
+
+  // Normalize the whole batch up-front so the filter sets are built over the
+  // valid ids (and so the needed/known lookups are one-per-batch, not per-account).
+  const rows = accounts.slice(0, ACCOUNT_CAP).map((raw) => normalizeAccountRow(raw));
+
+  // Default (filtered) mode: fetch the needed set + the already-known set ONCE.
+  let neededKeys = null, knownKeys = null;
+  if (!all) {
+    neededKeys = await buildNeededAccountKeys(deps);
+    result.needed_set_size = neededKeys.size;
+    // One log line per request so a run's receipts show what it filtered against.
+    console.log('[sf-account-import] needed-set size=' + neededKeys.size
+      + ' (distinct account ids awaited by contactless list members)');
+    const validIds = rows.filter((n) => n.id18).map((n) => n.id18);
+    knownKeys = await fetchKnownAccountKeys(validIds, deps);
+  }
+
+  for (const n of rows) {
     if (Date.now() > deadline) { result.budget_stopped = true; break; }
     result.accounts_received++;
-    const n = normalizeAccountRow(raw);
     if (n.skip === 'bad_id') { result.accounts_skipped_bad_id++; continue; }
     if (n.skip === 'no_name') { result.accounts_skipped_no_name++; continue; }
+
+    // Persist ONLY what LCC needs (a member awaits it) OR already tracks (name
+    // refresh, no growth). Everything else is a genuinely-unreferenced account we
+    // pulled only to discard — skip it, never mint (the entity-graph blast radius).
+    if (!all) {
+      const key = sf15(n.id18);
+      if (!neededKeys.has(key) && !knownKeys.has(key)) {
+        result.accounts_skipped_not_needed++;
+        continue;
+      }
+    }
 
     let link;
     try {
@@ -167,7 +281,7 @@ async function importAccounts(accounts, { workspaceId, userId, result, deadline 
       // dedups by external-identity then canonical_name (idempotent — a re-run of the
       // full flow reports ~0 created), applies the junk/structural guards, and NEVER
       // fabricates (a blank name is already screened above).
-      link = await ensureEntityLink({
+      link = await ensureLink({
         workspaceId, userId,
         sourceSystem: 'salesforce', sourceType: 'Account', externalId: n.id18,
         seedFields: { name: n.name, org_type: 'company' },
@@ -278,16 +392,22 @@ export async function handleSfAccountImport(req, res) {
   }
 
   // ── Account import (POST) ─────────────────────────────────────────────────
+  // Default: needed-only. `?all=1` opts into persist-everything (adds ~100k
+  // entities — do NOT use casually; see the header).
+  const all = String(req.query.all || '') === '1' || req.query.all === 'true';
   const accounts = Array.isArray(body.accounts) ? body.accounts : [];
   const result = {
     mode: 'apply',
+    filtered: !all,
+    needed_set_size: 0,
     accounts_received: 0,
     accounts_created: 0,
     accounts_matched_existing: 0,
+    accounts_skipped_not_needed: 0,
     accounts_skipped_guard: 0,
     accounts_skipped_no_name: 0,
     accounts_skipped_bad_id: 0,
   };
-  await importAccounts(accounts, { workspaceId, userId: user.id, result, deadline });
+  await importAccounts(accounts, { workspaceId, userId: user.id, result, deadline, all });
   return res.status(200).json(result);
 }
