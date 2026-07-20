@@ -212,6 +212,7 @@ app.all('/api/rcm-backfill', (req, res) => { req.query._route = 'rcm-backfill'; 
 app.all('/api/live-ingest', (req, res) => { req.query._route = 'live-ingest'; syncHandler(req, res); });
 app.all('/api/loopnet-ingest', (req, res) => { req.query._route = 'loopnet-ingest'; syncHandler(req, res); });
 app.all('/api/lead-health', (req, res) => { req.query._route = 'lead-health'; syncHandler(req, res); });
+app.all('/api/lead-ingest', (req, res) => { req.query._route = 'lead-ingest'; syncHandler(req, res); });
 app.all('/api/cross-domain-match', (req, res) => { req.query._route = 'cross-domain-match'; syncHandler(req, res); });
 app.all('/api/listing-webhook', (req, res) => { req.query._route = 'listing-webhook'; syncHandler(req, res); });
 
@@ -296,6 +297,10 @@ app.all('/api/intake/document-notify', (req, res) => { req.query._route = 'docum
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).
 app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });
+
+// Email auto-archive/cleanup webhook: Power Automate pulls the pending move
+// queue (GET) and reports move results (POST). intake.js decides; PA moves.
+app.all('/api/webhooks/processing-complete', (req, res) => { req.query._route = 'processing-complete'; intakeHandler(req, res); });
 
 // intake rewrites — slash-path Copilot action presets. These were present in
 // vercel.json's rewrites but missing from server.js, so PA Flow requests to
