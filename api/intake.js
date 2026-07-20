@@ -1505,7 +1505,15 @@ function mapItemForTeams(item, appBase) {
   const senderEmail = item.metadata?.sender_email || null;
   const subject = item.title || '(No subject)';
   const summary = truncate(item.body || item.metadata?.body_preview || '');
-  const inboxUrl = `${appBase}/?page=pageInbox&inbox_id=${encodeURIComponent(item.id)}`;
+  // Hash-route only: the SPA router reads location.hash, never location.search,
+  // so the old `?page=pageInbox` query never deep-linked. `#/inbox` maps to
+  // pageInbox via ROUTE_SLUG_TO_PAGE (app.js). No per-item detail token exists
+  // for inbox rows, so the link opens the Inbox page.
+  const inboxUrl = `${appBase}/#/inbox`;
+  // The Outlook deep link captured at intake (inbox_items.external_url), so the
+  // Teams card's "Open Email" action has a real URL to bind to. Null when the
+  // source didn't provide a web link.
+  const emailUrl = item.external_url || null;
   return {
     inbox_item_id: item.id,
     sender: senderName,
@@ -1517,6 +1525,7 @@ function mapItemForTeams(item, appBase) {
     priority: item.priority || 'normal',
     has_attachments: Boolean(item.metadata?.has_attachments),
     lcc_item_url: inboxUrl,
+    email_url: emailUrl,
     suggested_actions: ['triage', 'assign', 'promote']
   };
 }
@@ -1538,7 +1547,7 @@ async function handleIntakeSummary(req, res) {
   const correlationId = req.query.correlation_id ? String(req.query.correlation_id) : '';
   const appBase = buildAppBaseUrl(req);
 
-  let path = `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.flagged_email&select=id,title,body,status,priority,received_at,metadata&order=received_at.desc&limit=${limit * 6}`;
+  let path = `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.flagged_email&select=id,title,body,status,priority,received_at,external_url,metadata&order=received_at.desc&limit=${limit * 6}`;
   const floorIso = correlationToIsoFloor(correlationId);
   if (floorIso) path += `&received_at=gte.${encodeURIComponent(floorIso)}`;
 
