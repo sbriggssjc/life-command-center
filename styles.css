@@ -1226,6 +1226,14 @@ body.compact .greeting { font-size: 18px; }
 .q-item.high-pri { border-left: 3px solid var(--orange); }
 .q-item.urgent { border-left: 3px solid var(--red); animation: pulse-border 2s infinite; }
 @keyframes pulse-border { 0%,100% { border-left-color: var(--red); } 50% { border-left-color: transparent; } }
+/* Deep-link focus flash (#/inbox/<id> — Teams "View in LCC"): pulse the row so
+   the operator sees which item the card opened, then fade back to normal. */
+.q-item.inbox-focus { border-color: var(--accent); animation: inbox-focus-flash 2.6s ease-out 1; }
+@keyframes inbox-focus-flash {
+  0%   { box-shadow: 0 0 0 3px rgba(98,181,229,0.55); background: rgba(98,181,229,0.14); }
+  70%  { box-shadow: 0 0 0 3px rgba(98,181,229,0.20); background: rgba(98,181,229,0.06); }
+  100% { box-shadow: 0 0 0 0 rgba(98,181,229,0);      background: var(--s1); }
+}
 .q-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
 .q-item-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .q-item-badges { display: flex; gap: 4px; flex-shrink: 0; }

@@ -2257,14 +2257,14 @@ function _routeParseHash(rawHash) {
   try {
     let h = String(rawHash || '');
     if (h.startsWith('#')) h = h.slice(1);
-    if (!h) return { page: null, detail: null };
+    if (!h) return { page: null, detail: null, focus: null };
     // Legacy PWA shortcut: #page=pageMyWork
     if (h.startsWith('page=')) {
       const pid = h.slice(5);
       const canon = ROUTE_PAGE_ALIAS[pid] || pid;
-      return { page: (canon && document.getElementById(canon)) || ROUTE_PAGE_TO_SLUG[canon] ? canon : null, detail: null };
+      return { page: (canon && document.getElementById(canon)) || ROUTE_PAGE_TO_SLUG[canon] ? canon : null, detail: null, focus: null };
     }
-    if (!h.startsWith('/')) return { page: null, detail: null };
+    if (!h.startsWith('/')) return { page: null, detail: null, focus: null };
     h = h.slice(1);
     let slug = h;
     let detailToken = null;
@@ -2276,10 +2276,24 @@ function _routeParseHash(rawHash) {
         if (eq > 0 && pair.slice(0, eq) === 'd') detailToken = pair.slice(eq + 1);
       });
     }
-    slug = slug.replace(/\/+$/, '').toLowerCase();
-    return { page: ROUTE_SLUG_TO_PAGE[slug] || null, detail: _routeParseDetail(detailToken) };
+    // Split the base page-slug from an optional item-level sub-path. Today only
+    // `#/inbox/<id>` uses a sub-path (the Teams "View in LCC" card deep-links a
+    // specific captured row). Lowercase ONLY the page slug — the sub-path is an
+    // item id (UUID / internet_message_id) and is case-sensitive.
+    const trimmed = slug.replace(/^\/+|\/+$/g, '');
+    const firstSlash = trimmed.indexOf('/');
+    const baseSlug = (firstSlash >= 0 ? trimmed.slice(0, firstSlash) : trimmed).toLowerCase();
+    const subPath = firstSlash >= 0 ? trimmed.slice(firstSlash + 1) : '';
+    const page = ROUTE_SLUG_TO_PAGE[baseSlug] || null;
+    let focus = null;
+    if (page === 'pageInbox' && subPath) {
+      let itemId = subPath;
+      try { itemId = decodeURIComponent(subPath); } catch (_) {}
+      focus = { kind: 'inbox', id: itemId };
+    }
+    return { page, detail: _routeParseDetail(detailToken), focus };
   } catch (_) {
-    return { page: null, detail: null };
+    return { page: null, detail: null, focus: null };
   }
 }
 
@@ -2310,7 +2324,7 @@ function _routeSameDetail(a, b) {
 // Read the hash and drive the page + detail via the existing render paths.
 // Loop-guarded: _routerApplying suppresses the WRITE side while we apply.
 function applyRoute() {
-  const { page, detail } = _routeParseHash(location.hash);
+  const { page, detail, focus } = _routeParseHash(location.hash);
   _routerApplying = true;
   try {
     const targetPage = page || 'pageHome';
@@ -2352,6 +2366,13 @@ function applyRoute() {
     } else if (typeof _detailStackReset === 'function' && _detailStack.length) {
       // Bare page route with no open detail → drop any stale trail.
       _detailStackReset();
+    }
+    // Item-level inbox deep-link (`#/inbox/<id>`, Teams "View in LCC"). navTo
+    // above kicked renderInboxTriage(); focusInboxItem locates + highlights the
+    // row once the (async) list renders. Fire-and-forget so it runs AFTER the
+    // router releases (_routerApplying) — it never writes the hash, so no loop.
+    if (focus && focus.kind === 'inbox' && focus.id && typeof focusInboxItem === 'function') {
+      Promise.resolve().then(() => { try { focusInboxItem(focus.id); } catch (_) {} });
     }
   } finally {
     _routerApplying = false;

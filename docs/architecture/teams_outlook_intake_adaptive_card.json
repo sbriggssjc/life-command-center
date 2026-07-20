@@ -42,7 +42,12 @@
     },
     {
       "type": "Action.OpenUrl",
-      "title": "Open Email",
+      "title": "Open Email (Desktop)",
+      "url": "${email_url_desktop}"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "Open Email (Web)",
       "url": "${email_url}"
     }
   ]

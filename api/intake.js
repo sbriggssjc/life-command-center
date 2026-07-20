@@ -1500,20 +1500,49 @@ function correlationToIsoFloor(correlationId) {
   return new Date(Math.max(0, ts - 5 * 60 * 1000)).toISOString();
 }
 
-function mapItemForTeams(item, appBase) {
+// Desktop Outlook deep link (`ms-outlook://…`) for a captured inbox row.
+// Uses the `open?url=<owa-link>` verb — the form
+// ai-copilot/utils.ts::constructOutlookDesktopLink produces, and the one "New
+// Outlook for Windows" honors (it renders the wrapped OWA URL inside the client
+// instead of a browser tab). Deliberately NOT the `emails/open?messageId=` verb:
+// New Outlook errors on that with "This action isn't supported yet" — the reason
+// app.js's openOutlookEmail abandoned it. Prefers the web link already captured
+// at intake (external_url), else synthesizes an OWA read link from the Graph REST
+// id / internet_message_id. Returns null when there's no URL to wrap.
+// NOTE: `ms-outlook://` targets New Outlook for Windows + the mobile Outlook app.
+// CLASSIC desktop Outlook (Win32) does NOT register the scheme — there is no
+// supported URL that deep-links a specific message in classic Outlook.
+export function buildOutlookDesktopLink(item) {
+  const meta = (item && item.metadata) || {};
+  const inet = item?.internet_message_id || meta.internet_message_id || meta.message_id || '';
+  const rest = meta.graph_rest_id || item?.graph_rest_id || item?.external_id || '';
+  const web = item?.external_url
+    || (rest ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(rest)}` : '')
+    || (inet ? `https://outlook.office365.com/mail/inbox/id/${encodeURIComponent(String(inet).replace(/^<|>$/g, ''))}` : '');
+  if (!web) return null;
+  return `ms-outlook://open?url=${encodeURIComponent(web)}`;
+}
+
+export function mapItemForTeams(item, appBase) {
   const senderName = item.metadata?.sender_name || item.metadata?.sender_email || 'Unknown sender';
   const senderEmail = item.metadata?.sender_email || null;
   const subject = item.title || '(No subject)';
   const summary = truncate(item.body || item.metadata?.body_preview || '');
   // Hash-route only: the SPA router reads location.hash, never location.search,
-  // so the old `?page=pageInbox` query never deep-linked. `#/inbox` maps to
-  // pageInbox via ROUTE_SLUG_TO_PAGE (app.js). No per-item detail token exists
-  // for inbox rows, so the link opens the Inbox page.
-  const inboxUrl = `${appBase}/#/inbox`;
-  // The Outlook deep link captured at intake (inbox_items.external_url), so the
-  // Teams card's "Open Email" action has a real URL to bind to. Null when the
+  // so the old `?page=pageInbox` query never deep-linked. `#/inbox/<id>` maps to
+  // the Inbox page (ROUTE_SLUG_TO_PAGE) and focuses the specific captured row
+  // (app.js applyRoute → focusInboxItem). The id is `inbox_items.id` (a UUID —
+  // URL-safe, no PII). Falls back to the bare `#/inbox` list when no id.
+  const inboxUrl = item.id
+    ? `${appBase}/#/inbox/${encodeURIComponent(item.id)}`
+    : `${appBase}/#/inbox`;
+  // The Outlook WEB deep link captured at intake (inbox_items.external_url), so
+  // the Teams card's web "Open Email" action has a real URL. Null when the
   // source didn't provide a web link.
   const emailUrl = item.external_url || null;
+  // The DESKTOP-client deep link (ms-outlook://) for operators who work Outlook
+  // on the desktop instead of OWA — surfaced as a separate card action.
+  const emailUrlDesktop = buildOutlookDesktopLink(item);
   return {
     inbox_item_id: item.id,
     sender: senderName,
@@ -1526,6 +1555,7 @@ function mapItemForTeams(item, appBase) {
     has_attachments: Boolean(item.metadata?.has_attachments),
     lcc_item_url: inboxUrl,
     email_url: emailUrl,
+    email_url_desktop: emailUrlDesktop,
     suggested_actions: ['triage', 'assign', 'promote']
   };
 }
