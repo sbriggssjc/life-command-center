@@ -17,15 +17,36 @@
 //      JSON 404; an HTML body means either that fix isn't deployed or the SPA
 //      catch-all is still masking the route.
 //
+// CACHE DEFENSE (2026-07-20): a gate that exists to detect staleness must not
+// itself be fed a cached response. `/version` sets `Cache-Control: no-store`, yet
+// something between us and origin (client / proxy / CDN) served a byte-identical
+// copy — INCLUDING the `ts` — twice, nearly reporting a current deploy as stale.
+// So every request here appends a unique `?_cb=<ts>-<uuid>` cache-buster and
+// sends `Cache-Control: no-cache` + `Pragma: no-cache`; and `/version` is read
+// TWICE — identical `ts` across two distinct-URL reads proves a cache is in the
+// path, so we fail loudly ("cached /version") instead of trusting the SHA.
+//
 // Exit 0 = deploy matches the repo AND the anti-masking fix is live.
-// Exit non-zero = SHA mismatch or any critical route returned HTML.
+// Exit non-zero = SHA mismatch, a cached /version response, or any critical route
+//                 returned HTML.
 //
 // Usage:
 //   node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>]
 //   npm run verify:deploy
 
 import { execSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { CRITICAL_SUBROUTES } from '../test/critical-subroutes.mjs';
+
+// Append a unique cache-buster so no URL-keyed cache (client/proxy/CDN) can serve
+// a stale copy. Query param is what actually defeated the cache in the incident.
+function withCacheBust(url) {
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}_cb=${Date.now()}-${randomUUID()}`;
+}
+
+// Request headers: no-cache (belt to the query-param braces). Callers add accept.
+const NOCACHE_HEADERS = { 'cache-control': 'no-cache', pragma: 'no-cache' };
 
 const DEFAULT_URL = 'https://tranquil-delight-production-633f.up.railway.app';
 
@@ -78,21 +99,51 @@ async function main() {
   console.log(`▶ Verifying deploy at ${base}`);
 
   // 1) /version — deployed commit must match the repo/merge SHA.
-  let deployed = null;
-  try {
-    const res = await fetchWithTimeout(`${base}/version`, { headers: { accept: 'application/json' } }, args.timeout);
-    const text = await res.text();
-    if (!res.ok) {
-      failures.push(`GET /version returned HTTP ${res.status}`);
-    } else {
+  //    Read it TWICE with distinct cache-busters and assert freshness: identical
+  //    `ts` across two live reads is impossible (the endpoint stamps Date.now()
+  //    per request), so identical `ts` == a cached response we cannot trust.
+  async function readVersion() {
+    try {
+      const res = await fetchWithTimeout(
+        withCacheBust(`${base}/version`),
+        { headers: { accept: 'application/json', ...NOCACHE_HEADERS } },
+        args.timeout,
+      );
+      const text = await res.text();
+      if (!res.ok) return { error: `HTTP ${res.status}` };
       try {
-        deployed = JSON.parse(text);
+        return { json: JSON.parse(text) };
       } catch {
-        failures.push(`GET /version did not return JSON (got: ${text.slice(0, 120)})`);
+        return { error: `did not return JSON (got: ${text.slice(0, 120)})` };
       }
+    } catch (err) {
+      return { error: err.message };
     }
-  } catch (err) {
-    failures.push(`GET /version failed: ${err.message}`);
+  }
+
+  let deployed = null;
+  const readA = await readVersion();
+  if (readA.error) {
+    failures.push(`GET /version failed: ${readA.error}`);
+  } else {
+    deployed = readA.json;
+    // Freshness: a second read with a different cache-buster must return a
+    // different `ts`. Same `ts` ⇒ a cache served both ⇒ the whole comparison is
+    // suspect. Best-effort: if the second read can't be obtained we warn but
+    // still compare (the buster already defeated a URL-keyed cache for read A).
+    const readB = await readVersion();
+    if (readB.json) {
+      const tsA = readA.json.ts, tsB = readB.json.ts;
+      if (tsA != null && tsB != null && tsA === tsB) {
+        failures.push(
+          `got a cached /version response (identical ts=${tsA} across two distinct-URL reads) — cannot verify deploy`,
+        );
+      } else {
+        console.log('  ✓ /version is live (two reads returned distinct ts — not cached)');
+      }
+    } else {
+      console.log(`  ⚠ could not obtain a second /version read (${readB.error}) — freshness unconfirmed`);
+    }
   }
 
   if (deployed) {
@@ -111,10 +162,16 @@ async function main() {
 
   // 2) Critical routes must respond with JSON, not the SPA HTML (proves the
   //    API-scoped 404 fix is live and no route falls through to index.html).
+  //    Cache-busted + no-cache so a cached 200 can't mask a currently-missing
+  //    route (the same masking risk the /version freshness check covers).
   for (const route of CRITICAL_SUBROUTES) {
     const url = `${base}/api/${route}`;
     try {
-      const res = await fetchWithTimeout(url, { headers: { accept: 'application/json' } }, args.timeout);
+      const res = await fetchWithTimeout(
+        withCacheBust(url),
+        { headers: { accept: 'application/json', ...NOCACHE_HEADERS } },
+        args.timeout,
+      );
       const text = await res.text();
       if (bodyLooksLikeHtml(text, res.headers.get('content-type'))) {
         failures.push(`GET /api/${route} returned HTML (status ${res.status}) — SPA catch-all is masking the route / fix not deployed`);
