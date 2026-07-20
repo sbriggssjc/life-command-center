@@ -117,7 +117,7 @@ Tasks:
 
 **Milestone:** Auth hardened, messaging routes wired, pre-commit guard active.
 
-### Phase 1B: Daily Briefing Snapshot (Days 3-7) — FLOW BUILT, URL FIX REQUIRED
+### Phase 1B: Daily Briefing Snapshot (Days 3-7) — COMPLETE
 **Goal:** Build the single highest-leverage Wave 1 deliverable.
 
 Tasks:
@@ -131,15 +131,11 @@ Tasks:
   - Recurrence: Daily at 12:30 UTC (7:30 CDT), weekday guard in condition ✓
   - Teams adaptive card: production signals, domain highlights, degraded-state warning, action buttons ✓
   - Group ID `6fc86bbe-2f43-4a1d-b9b8-79885f794f0d`, Channel `19:1002e32b7379470ba8fbc30440d46035@thread.tacv2` ✓
-  - ⚠️ **URL fix required before flow will work:** HTTP action currently points to
-    `https://life-command-center-nine.vercel.app/api/daily-briefing?action=snapshot&role_view=broker`
-    Must be updated to:
-    `https://tranquil-delight-production-633f.up.railway.app/api/daily-briefing?action=snapshot&role_view=broker`
-    Fix in PA UI: open flow → HTTP_GetDailyBriefingSnapshot → URI field → save.
-- [ ] Apply URL fix in Power Automate UI and confirm flow runs successfully
-- [ ] Verify Teams adaptive card renders correctly from live snapshot payload
+  - URL corrected to `https://tranquil-delight-production-633f.up.railway.app/api/daily-briefing?action=snapshot&role_view=broker` ✓
+- [x] Apply URL fix in Power Automate UI and confirm flow runs successfully — manual test run succeeded 2026-07-20 ✓
+- [x] Verify Teams adaptive card renders correctly from live snapshot payload — confirmed 2026-07-20 ✓
 
-**Milestone:** Team receives daily briefing in Teams channel every weekday morning.
+**Milestone:** ✅ Team receives daily briefing in Teams channel every weekday morning. Manual test run confirmed 2026-07-20.
 
 ### Phase 1C: Intake Pipeline Activation (Days 5-10) — COMPLETE
 **Goal:** Every flagged Outlook email becomes a tracked intake item with Teams visibility.
@@ -155,11 +151,11 @@ Tasks:
 - [x] `HTTP_GetIntakeSummary` fetches enriched item via `correlation_id` from POST response ✓
 - [x] Microsoft To Do task created with dynamic due date (1 day if high-importance, 3 otherwise) ✓
 - [x] Teams adaptive card posts: From, Subject, Run ID, Received, body preview, "View in LCC" + "Open Email" buttons ✓
-- [ ] Verify end-to-end in production: flag email in Outlook → inbox item created → Teams card posted
-- [ ] Verify correlation_id tracking across the pipeline
+- [x] Verify end-to-end in production: flag email in Outlook → inbox item created → Teams card posted — confirmed 2026-07-20 ✓
+- [x] Verify correlation_id tracking across the pipeline — `outlook-msg-{hash}-{timestamp}` format confirmed, `bridged_to_intake_id` linked ✓
 - [ ] Keep batch flow (`flow-outlook-intake-to-teams.json`) as fallback
 
-**Milestone:** Flagged emails appear as LCC intake items with Teams notification in < 60s.
+**Milestone:** ✅ Flagged emails appear as LCC intake items with Teams notification in < 60s. Confirmed 2026-07-20 with 5 items created in seconds. Note: Janitor correctly auto-archives system noise (Vercel build alerts); CRE contact emails will stay as `new` in inbox.
 
 ### Phase 1D: Copilot Read Actions (Days 7-12) — COMPLETE
 **Goal:** All 10 read-only actions work through Copilot Chat.
@@ -324,12 +320,8 @@ Each action gets a manual validation script:
 
 ## 9. Immediate Next Actions
 
-*Updated 2026-07-20 — Phase 1C complete. Phase 1B flow built; one URL fix blocks activation.*
+*Updated 2026-07-20 — Phases 1B, 1C, 1D, 1E, 1F all complete. Remaining: smoke test sweep and live delivery verification.*
 
-1. **Phase 1B URL fix (blocking):** Open `LCC - Daily Briefing to Teams` in Power Automate → `HTTP_GetDailyBriefingSnapshot` action → update URI from
-   `https://life-command-center-nine.vercel.app/api/daily-briefing?action=snapshot&role_view=broker`
-   to `https://tranquil-delight-production-633f.up.railway.app/api/daily-briefing?action=snapshot&role_view=broker` → save → run manually to confirm Teams card renders.
-2. **Phase 1C end-to-end verification:** Flag a test email in Outlook → confirm inbox item created in LCC + Teams card posted + To Do task created.
-3. **Phase 1A remaining:** Full smoke test sweep across all 18 Wave 1 actions.
-4. **Verification:** Daily briefing delivered for 3 consecutive weekdays.
-5. **Wave 2 consideration:** Make `entity_id` optional in `create_listing_pursuit_followup_task` (allow unlinked tasks) or add agent-side entity lookup by name.
+1. **Phase 1A remaining:** Full smoke test sweep across all 18 Wave 1 actions.
+2. **Verification:** Daily briefing delivered for 3 consecutive weekdays (first live run on next weekday morning at 7:30 CDT).
+3. **Wave 2 consideration:** Make `entity_id` optional in `create_listing_pursuit_followup_task` (allow unlinked tasks) or add agent-side entity lookup by name.
