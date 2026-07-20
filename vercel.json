@@ -138,6 +138,7 @@
     { "source": "/api/bov-extract", "destination": "/api/intake?_route=bov-extract" },
     { "source": "/api/intake/document-notify", "destination": "/api/intake?_route=document-notify" },
     { "source": "/api/sf-activity", "destination": "/api/intake?_route=sf-activity" },
+    { "source": "/api/webhooks/processing-complete", "destination": "/api/intake?_route=processing-complete" },
     { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },
     { "source": "/api/intake/accuracy", "destination": "/api/intake?_route=accuracy" },
     { "source": "/api/inbox", "destination": "/api/queue?_route=inbox" },

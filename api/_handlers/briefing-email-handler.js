@@ -49,6 +49,7 @@ import {
   fetchHotContacts,
   fetchDiaPipeline,
   fetchNewIntakes,
+  fetchProcessingSummary,
   buildStrategicPriorities,
   deriveItemTitle,
   fetchIntelSnapshot,
@@ -1047,8 +1048,9 @@ function renderWeeklyChanges({ intelSnapshot }) {
 // 10. Ops & Queue + footer
 // ---------------------------------------------------------------------------
 
-function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes }) {
+function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, processingSummary }) {
   const s = syncHealth?.summary || {};
+  const ps = processingSummary || { filed: 0, needs_review: 0, duplicate: 0, pending_moves: 0 };
   const queueCells = [
     ['Open', workCounts.open || 0],
     ['Overdue', workCounts.overdue || 0],
@@ -1069,7 +1071,14 @@ function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes })
   // Plain '·' (not &middot;) — sectionHeader escapes its subtitle, so the
   // entity leaked literally into the rendered email (2026-06-05 audit).
   const health = `${s.healthy || 0} healthy · ${s.degraded || 0} degraded · ${s.error || 0} error`;
-  return sectionHeader('Ops & Queue', `Connectors: ${health}`) +
+  // Auto-archive one-liner: N emails auto-filed, M flagged for review (24h).
+  const autoBits = [];
+  if (ps.filed) autoBits.push(`${ps.filed} auto-filed`);
+  if (ps.needs_review) autoBits.push(`${ps.needs_review} flagged for review`);
+  if (ps.duplicate) autoBits.push(`${ps.duplicate} deduped`);
+  if (ps.pending_moves) autoBits.push(`${ps.pending_moves} move${ps.pending_moves === 1 ? '' : 's'} pending`);
+  const autoLine = autoBits.length ? ` · Email cleanup (24h): ${autoBits.join(', ')}` : '';
+  return sectionHeader('Ops & Queue', `Connectors: ${health}${autoLine}`) +
     bodyCell(
       `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
       `style="margin:14px 0;border:1px solid ${BRAND.bgAlt};background:#fafbfc;">` +
@@ -1372,7 +1381,7 @@ export async function briefingEmailHandler(req, res) {
     workCounts, myWork, inboxSummary, unassignedWork, syncHealth,
     sfActivity, hotContacts, diaPipeline, newIntakes,
     intelSnapshot, salesComps, expirations, newListings, pipelineRollup,
-    marketStats, researchProgress,
+    marketStats, researchProgress, processingSummary,
   ] = await Promise.all([
     safe(() => fetchWorkCounts(workspaceId, userId), defaultWorkCounts, 'fetchWorkCounts'),
     safe(() => fetchMyWork(workspaceId, userId, 15), [], 'fetchMyWork'),
@@ -1397,6 +1406,9 @@ export async function briefingEmailHandler(req, res) {
     safe(() => fetchResearchProgress(workspaceId, 7),
       { window_days: 7, workspace: null, dialysis: null, government: null },
       'fetchResearchProgress'),
+    safe(() => fetchProcessingSummary(workspaceId, 24),
+      { filed: 0, needs_review: 0, duplicate: 0, pending_moves: 0 },
+      'fetchProcessingSummary'),
   ]);
 
   let priorities;
@@ -1453,7 +1465,7 @@ export async function briefingEmailHandler(req, res) {
     personalContext, intelSnapshot: effectiveSnapshot,
     priorities, syncHealth, workCounts, inboxSummary, newIntakes,
     salesComps, expirations, newListings, pipelineRollup,
-    marketStats, researchProgress,
+    marketStats, researchProgress, processingSummary,
     weather: personalContext.weather,
   };
 
