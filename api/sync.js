@@ -181,6 +181,11 @@ export default withErrorHandler(async function handler(req, res) {
     return handleListingWebhook(req, res);
   }
 
+  // Dispatch to processing-complete webhook (LCC → PA "Move Message" relay)
+  if (req.query._route === 'processing-complete') {
+    return handleProcessingComplete(req, res);
+  }
+
   // Dispatch to cross-domain contact matcher (nightly batch job)
   if (req.query._route === 'cross-domain-match' || req.query.action === 'cross-domain-match') {
     return handleCrossDomainMatch(req, res);
@@ -2343,6 +2348,105 @@ async function handleLiveIngest(req, res) {
     ok: true,
     documents: normalized,
     count: normalized.length
+  });
+}
+
+// ============================================================================
+// PROCESSING-COMPLETE WEBHOOK — LCC → PA "Move Message" relay (Flow 1)
+// POST /api/webhooks/processing-complete → /api/sync?_route=processing-complete
+//
+// The LCC side of the "Closing the Loop" mailbox-mechanics layer. When an intake
+// completes (a processing_complete event), the caller POSTs a SINGLE move
+// instruction here and this endpoint relays it — immediately, one POST per
+// completed intake, NEVER batched/queued — to the "LCC Processing Complete →
+// Move Message" Power Automate flow, which finds the ONE Outlook message by
+// internet_message_id and moves it to its Processed/* destination.
+//
+// Delivery model (confirmed): single-event, synchronous. The PA HTTP trigger
+// resolves exactly one internet_message_id per invocation, so a batch payload
+// would break it — this is deliberately not a queue.
+//
+// Body: { internet_message_id, target_folder, outcome? }
+//   internet_message_id  Outlook message id (the move key)
+//   target_folder        destination, e.g. "Processed/News" / "Processed/Duplicates"
+//   outcome              disposition label (auto_filed / duplicate / flagged / …)
+//
+// Auth: PA webhook secret (X-PA-Webhook-Secret) OR an authenticated user, same as
+// the listing webhook. The PA trigger URL (with its live `sig` credential) is
+// read from the PA_MOVE_MESSAGE_WEBHOOK_URL env var — never hardcoded. Set it in
+// the RAILWAY env (production runs on the Railway Express server; Vercel is
+// legacy). Until it is set, the relay is a safe 503 no-op (the endpoint still
+// validates + responds honestly).
+//
+// Outcome-truthful: an HTTP 200 with the PA flow's ok:false, a 4xx, or a 5xx are
+// all reported as failures with the PA status/detail (never a false success).
+// ============================================================================
+
+async function handleProcessingComplete(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  // Auth: PA webhook secret OR an authenticated user (mirrors the listing webhook).
+  const isWebhook = authenticateWebhook(req);
+  if (!isWebhook) {
+    const user = await authenticate(req, res);
+    if (!user) return; // authenticate() already responded 401
+  }
+
+  const body = req.body || {};
+  const internetMessageId = body.internet_message_id;
+  const targetFolder = body.target_folder;
+  // `outcome` is the caller's word; `disposition` is the build-sheet word — accept either.
+  const outcome = body.outcome || body.disposition || null;
+
+  if (!internetMessageId || typeof internetMessageId !== 'string') {
+    return res.status(400).json({ ok: false, error: 'internet_message_id is required' });
+  }
+  if (!targetFolder || typeof targetFolder !== 'string') {
+    return res.status(400).json({ ok: false, error: 'target_folder is required' });
+  }
+
+  const { postMoveMessage } = await import('./_shared/pa-move-message.js');
+  const result = await postMoveMessage({
+    internetMessageId,
+    targetFolder,
+    outcome,
+    // Forward the fuller build-sheet fields when the caller supplies them, so the
+    // relay works whether the PA trigger schema is minimal or marks these required.
+    passthrough: {
+      correlation_id: body.correlation_id,
+      schema_version: body.schema_version,
+      subject: body.subject,
+    },
+    fetchImpl: fetchWithTimeout,
+  });
+
+  if (result.ok) {
+    return res.status(200).json({
+      ok: true,
+      moved: true,
+      internet_message_id: internetMessageId,
+      target_folder: targetFolder,
+      outcome,
+      pa_status: result.status,
+      attempts: result.attempts,
+    });
+  }
+
+  // The PA relay is unset (503), rejected the payload (4xx / logical ok:false),
+  // or failed after retries (5xx / network). Report it honestly — never a false
+  // "moved". A 503 means the flow isn't configured yet (safe no-op).
+  const status = result.status === 503 ? 503 : 502;
+  return res.status(status).json({
+    ok: false,
+    moved: false,
+    internet_message_id: internetMessageId,
+    target_folder: targetFolder,
+    outcome,
+    pa_status: result.status,
+    detail: result.detail,
+    attempts: result.attempts,
   });
 }
 
