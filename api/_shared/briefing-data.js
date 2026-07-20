@@ -278,6 +278,32 @@ export async function fetchInboxSummary(workspaceId, limit = 10) {
 }
 
 /**
+ * Auto-archive/cleanup activity in the last N hours.
+ *
+ * One row per email whose intake job finished is recorded in processing_log
+ * (filed / needs_review / duplicate). This rolls the recent window up so the
+ * briefing can report a one-liner: "14 emails auto-filed, 2 flagged for review".
+ * Best-effort: a missing table (migration not yet applied) returns zeros.
+ */
+export async function fetchProcessingSummary(workspaceId, hours = 24) {
+  const sinceIso = new Date(Date.now() - hours * 3600_000).toISOString();
+  const wsEnc = encodeURIComponent(workspaceId);
+  const base = `processing_log?workspace_id=eq.${wsEnc}&created_at=gte.${encodeURIComponent(sinceIso)}`;
+  const [filed, review, dup, pending] = await Promise.all([
+    opsQuery('GET', `${base}&outcome=eq.filed&select=id&limit=0`),
+    opsQuery('GET', `${base}&outcome=eq.needs_review&select=id&limit=0`),
+    opsQuery('GET', `${base}&outcome=eq.duplicate&select=id&limit=0`),
+    opsQuery('GET', `${base}&move_status=eq.pending&select=id&limit=0`),
+  ]);
+  return {
+    filed: filed.ok ? (filed.count || 0) : 0,
+    needs_review: review.ok ? (review.count || 0) : 0,
+    duplicate: dup.ok ? (dup.count || 0) : 0,
+    pending_moves: pending.ok ? (pending.count || 0) : 0,
+  };
+}
+
+/**
  * Newly promoted OM intakes within the last N hours.
  *
  * Surfaces OMs that made it through the full pipeline (extraction → match →
