@@ -27,6 +27,27 @@ const LCC_AUTH = (() => {
   let initialized = false;
   let authMode = 'unknown'; // 'jwt', 'dev-fallback', 'loading'
 
+  // Readiness signal — resolves once init() has settled (session restored, or a
+  // definitive dev-fallback / unauthenticated / error state reached). The global
+  // fetch interceptor awaits this before dispatching /api/ requests so an early
+  // hash-routed page (e.g. a deep-link to #/inbox) can't fire its authed API
+  // before the JWT/API-key is available. Bounded by a timeout at the call site.
+  let _ready = false;
+  let _readyResolve;
+  const _readyPromise = new Promise((resolve) => { _readyResolve = resolve; });
+  function _markReady() {
+    if (_ready) return;
+    _ready = true;
+    if (_readyResolve) { _readyResolve(); _readyResolve = null; }
+  }
+  function whenReady(timeoutMs) {
+    if (_ready) return Promise.resolve();
+    if (timeoutMs) {
+      return Promise.race([_readyPromise, new Promise((r) => setTimeout(r, timeoutMs))]);
+    }
+    return _readyPromise;
+  }
+
   // Config (loaded from server)
   let config = {
     supabaseUrl: null,
@@ -61,6 +82,7 @@ const LCC_AUTH = (() => {
       authMode = 'dev-fallback';
       initialized = true;
       renderAuthState();
+      _markReady();
       return;
     }
 
@@ -109,6 +131,7 @@ const LCC_AUTH = (() => {
 
     initialized = true;
     renderAuthState();
+    _markReady();
   }
 
   // ---- Resolve LCC user from the API using the JWT ----
@@ -363,6 +386,13 @@ const LCC_AUTH = (() => {
     hideLoginModal,
     _handleLoginSubmit,
 
+    // Readiness (used by the global fetch interceptor to avoid the deep-link
+    // auth race). whenReady() resolves once init() settles; _markReady() is a
+    // safety hook the boot chain calls in .finally() to cover an init throw.
+    whenReady,
+    _markReady,
+    get isReady() { return _ready; },
+
     // Getters
     get isAuthenticated() { return authMode === 'jwt' && !!session; },
     get isDevMode() { return authMode === 'dev-fallback'; },
@@ -424,12 +454,33 @@ const LCC_AUTH = (() => {
   // callers on page load share one network round-trip. Keyed by "METHOD url".
   const _inflightGets = new Map();
 
-  window.fetch = function(input, init) {
+  // Auth-bootstrap requests must NEVER wait on auth readiness — they are what
+  // MAKES auth ready (loading config + resolving the user), so gating them on
+  // readiness would deadlock init(). Match them by their _route so they always
+  // dispatch immediately.
+  const AUTH_READY_TIMEOUT_MS = 8000;
+  function _isAuthBootstrap(url) {
+    return url.includes('_route=auth-config') || url.includes('_route=me');
+  }
+
+  window.fetch = async function(input, init) {
     // Determine the URL string
     const url = (input instanceof Request) ? input.url : String(input);
+    const isApiUrl = url.startsWith('/api/') || url.startsWith(location.origin + '/api/');
+
+    // Deep-link race fix: if a page fires an /api/ call before LCC_AUTH.init()
+    // has restored the session (e.g. a hash-route to #/inbox), wait (bounded)
+    // for readiness so the JWT/API-key below is actually available. Without this
+    // the request goes out unauthenticated and the server returns 401 even though
+    // the user is signed in. Bootstrap requests are exempt (see above).
+    if (isApiUrl && !_isAuthBootstrap(url)
+        && typeof LCC_AUTH !== 'undefined' && typeof LCC_AUTH.whenReady === 'function'
+        && !LCC_AUTH.isReady) {
+      try { await LCC_AUTH.whenReady(AUTH_READY_TIMEOUT_MS); } catch (_) { /* proceed on timeout */ }
+    }
 
     // Only intercept /api/ calls (same-origin API requests)
-    if (url.startsWith('/api/') || url.startsWith(location.origin + '/api/')) {
+    if (isApiUrl) {
       if (typeof LCC_AUTH !== 'undefined') {
         init = init || {};
         init.headers = init.headers || {};
@@ -475,8 +526,7 @@ const LCC_AUTH = (() => {
     }
 
     const method = _resolveMethod(input, init);
-    const isApi = url.startsWith('/api/') || url.startsWith(location.origin + '/api/');
-    const isGetApi = isApi && method === 'GET';
+    const isGetApi = isApiUrl && method === 'GET';
 
     // Non-GET (or non-API) requests bypass coalescing entirely; GETs still
     // get the retry wrapper via _dispatchWithRetry.

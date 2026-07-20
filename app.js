@@ -9383,6 +9383,10 @@ function bootApp() {
   console.warn('[App] Auth init error:', e.message);
   // On auth init failure, still try to load (dev mode safety net)
   bootApp();
+}).finally(() => {
+  // Release any /api/ requests parked on auth readiness (deep-link race fix),
+  // even if init() threw before reaching its own _markReady().
+  if (typeof LCC_AUTH !== 'undefined' && LCC_AUTH._markReady) LCC_AUTH._markReady();
 });
 
 // ============================================================
