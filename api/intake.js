@@ -183,16 +183,9 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleMatcherAccuracy } = await import('./_handlers/intake-feedback.js');
       return handleMatcherAccuracy(req, res);
     }
-    case 'processing-complete': {
-      // Email auto-archive/cleanup webhook. Power Automate pulls the pending
-      // move queue (GET) and reports move results (POST). intake.js decides;
-      // PA performs the Graph mailbox move.
-      const { handleProcessingComplete } = await import('./_handlers/processing-complete.js');
-      return handleProcessingComplete(req, res);
-    }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy, processing-complete'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy'
       });
   }
 });
