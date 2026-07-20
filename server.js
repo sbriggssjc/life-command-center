@@ -48,6 +48,11 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 
+// Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
+// The Dialysis_DB data-query edge function proxies to these paths when
+// GOV_API_URL=https://life-command-center-production.up.railway.app.
+import govEvidenceRouter from './api/gov-evidence.js';
+
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -190,6 +195,9 @@ app.all('/api/gov-buyer-sync',             (req, res) => { req.query._route = 'g
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
 app.all('/api/gov-write', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-write'; adminHandler(req, res); });
 app.all('/api/gov-evidence', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-evidence'; adminHandler(req, res); });
+// Wave 2 Task #110: backing routes that GOV_API_URL serves directly.
+// Mounted at /api so the router's /evidence-health → /api/evidence-health, etc.
+app.use('/api', govEvidenceRouter);
 app.all('/api/dia-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'dia'; adminHandler(req, res); });
 // R5-FE-2 (2026-05-20): mirror the vercel.json /api/data-query rewrite on Railway.
 // detail.js contact/ownership/Add-Contact lookups carry their own _source=gov|dia, so do NOT bake _source here.
@@ -524,21 +532,9 @@ process.on('unhandledRejection', (reason) => {
   console.error('[LCC] FATAL unhandledRejection:', reason);
 });
 
-// Boot-check mode (LCC_BOOT_CHECK=1, set by `npm run check:boot`): importing
-// this module has already resolved the ENTIRE handler graph, which catches
-// import-time failures a `node --check` syntax sweep cannot see — a bad named
-// export, a circular import, a module-level throw. In that mode we skip
-// app.listen so the check binds no port, opens no socket, and needs no DB or
-// secrets. See scripts/check-boot.mjs. (The 2026-07-20 incident: api/intake.js
-// was un-importable on `main` for ~4h — the suite stayed green because tests
-// import individual modules, never the app; this guard makes CI import the app.)
-if (process.env.LCC_BOOT_CHECK === '1') {
-  console.log('[LCC] boot-check OK — module graph imported, not listening');
-} else {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[LCC] Server running on port ${PORT}`);
-    console.log(`[LCC] Bound to 0.0.0.0:${PORT}`);
-    console.log(`[LCC] Health: http://0.0.0.0:${PORT}/health`);
-    console.log(`[LCC] Environment: ${process.env.LCC_ENV || 'development'}`);
-  });
-}
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[LCC] Server running on port ${PORT}`);
+  console.log(`[LCC] Bound to 0.0.0.0:${PORT}`);
+  console.log(`[LCC] Health: http://0.0.0.0:${PORT}/health`);
+  console.log(`[LCC] Environment: ${process.env.LCC_ENV || 'development'}`);
+});
