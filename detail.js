@@ -15186,4 +15186,4 @@ async function _udBuildLeaseCompsWorkbook(ExcelJS, db, subject, comps) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-window._udExportLeaseComps = _udExportLeaseComps;indow._udExportLeaseComps = _udExportLeaseComps;ortLeaseComps;
+window._udExportLeaseComps = _udExportLeaseComps;
