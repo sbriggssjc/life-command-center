@@ -37,3 +37,14 @@ verify_jwt = false
 # (Pinned 2026-05-20 after a bare `functions deploy` re-enabled the CLI default and broke it.)
 [functions.intake-salesforce-files]
 verify_jwt = false
+
+# lead-ingest authenticates via X-PA-Webhook-Secret (authenticateWebhook) for the
+# RCM / LoopNet / news_alert Power Automate webhooks — the caller sends an opaque
+# PA secret, not a Supabase JWT. It MUST stay verify_jwt = false or the gateway
+# 401s every PA POST/GET with UNAUTHORIZED_NO_AUTH_HEADER (or, if the flow sends
+# the PA secret as `Authorization: Bearer`, UNAUTHORIZED_INVALID_JWT_FORMAT) before
+# the function's own auth runs. (Pinned 2026-07-20 after the function was found
+# deployed verify_jwt = true — the only fn in the project with it on — which broke
+# the new /api/lead-ingest?action=news_alert flow with a gateway 401.)
+[functions.lead-ingest]
+verify_jwt = false
