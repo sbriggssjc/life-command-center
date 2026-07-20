@@ -405,6 +405,106 @@ export async function createSalesforceOpportunity(task) {
   return createSalesforceTask(Object.assign({}, task, { nmType }));
 }
 
+// ============================================================================
+// Draft & Log Action Engine (Topic F) — mode-aware COMPLETED-activity logger
+//
+// The one-click "Draft & Log" records a COMPLETED touchpoint in Salesforce with
+// mode-specific linking + privacy (Scott's SPEC, 2026-07). It rides the EXISTING
+// createSalesforceTask path (SF_LOOKUP_WEBHOOK_URL, operation=create_opportunity)
+// — no new SF write path — so it is feature-flagged + no-ops (reason
+// `sf_not_configured`) until the SF flow is wired.
+//
+//   Mode A — BD prospecting (working an ownership/prospect account):
+//     minimal detail so other SF users can't read our BD intent. Subject
+//     `LCC-BD · <account> · Touchpoint <N>`, NO WhatId (pre-deal), nmType blank
+//     (a plain touchpoint, never an "Opportunity"). The create_opportunity
+//     contract carries no description/body field, so the "near-empty body" the
+//     SPEC asks for is INHERENT — a Task has only the subject.
+//
+//   Mode B — Marketing a listing (= a Deal):
+//     Subject `LCC-Mktg · <deal> · Marketing <N>`, WhatId = the listing's SF
+//     Deal id (resolved via v_sjc_deal_book), normal detail (our own deal).
+//
+// Both log a COMPLETED activity (status='Completed'). ⚠️ The PA `create_opportunity`
+// case must honor the `status` field (and, for marketing, `what_id`) — see the
+// Topic-F handoff doc; until it does, this is inert.
+// ============================================================================
+
+/** Collapse whitespace + trim a label to a safe SF-subject length. */
+function cleanActivityLabel(label) {
+  const t = String(label == null ? '' : label).replace(/\s+/g, ' ').trim();
+  return t ? t.slice(0, 80) : 'Account';
+}
+
+/**
+ * Build the mode-aware create_opportunity payload for a COMPLETED touchpoint.
+ * Pure (no I/O) so the subject/linking/privacy rules are unit-testable.
+ *
+ * @param {{mode?:'bd'|'marketing', whoId?:string, whatId?:string, label?:string,
+ *          touchNumber?:number, activityDate?:string, idempotencyKey?:string}} args
+ * @returns {{mode:'bd'|'marketing', task:{whoId?:string, subject:string,
+ *          nmType:string, status:string, activityDate?:string, whatId?:string,
+ *          idempotencyKey?:string}}}
+ */
+export function buildSalesforceActivityPayload(args = {}) {
+  const mode = args.mode === 'marketing' ? 'marketing' : 'bd';
+  const label = cleanActivityLabel(args.label);
+  const nRaw = Number(args.touchNumber);
+  const n = Number.isFinite(nRaw) && nRaw > 0 ? Math.floor(nRaw) : null;
+
+  const subject = mode === 'marketing'
+    ? `LCC-Mktg · ${label} · Marketing${n ? ` ${n}` : ''}`
+    : `LCC-BD · ${label} · Touchpoint${n ? ` ${n}` : ''}`;
+
+  const task = {
+    whoId: args.whoId ? String(args.whoId).trim() : undefined,
+    subject,
+    // Minimal detail: never flag a touchpoint as an "Opportunity" from here.
+    nmType: '',
+    // The SPEC's core ask — a COMPLETED activity, not an open task.
+    status: 'Completed',
+  };
+  if (args.activityDate) task.activityDate = args.activityDate;
+  if (args.idempotencyKey) task.idempotencyKey = String(args.idempotencyKey);
+  // WhatId is the listing's SF DEAL — MARKETING ONLY (BD stays pre-deal, no link).
+  if (mode === 'marketing' && args.whatId) task.whatId = String(args.whatId).trim();
+
+  return { mode, task };
+}
+
+/**
+ * Log a COMPLETED Salesforce activity for the Draft & Log engine. Wraps
+ * createSalesforceTask, so it inherits the flow-tolerant contract: returns
+ * `{ok:false, reason:'sf_not_configured'|'bad_who_id'|…}` when the SF flow is
+ * unwired or the WhoId is missing — the caller reports honestly + keeps going.
+ *
+ * @param {{mode?:'bd'|'marketing', whoId?:string, whatId?:string, label?:string,
+ *          touchNumber?:number, activityDate?:string, idempotencyKey?:string}} args
+ * @returns {Promise<{ok:boolean, task?:{Id}|null, reason?:string, mode:'bd'|'marketing'}>}
+ */
+export async function logSalesforceActivity(args = {}) {
+  const { mode, task } = buildSalesforceActivityPayload(args);
+  const result = await createSalesforceTask(task);
+  return { ...result, mode };
+}
+
+/**
+ * Infer the Draft & Log mode from the request. An explicit `mode` wins; else a
+ * Deal/listing signal (we're MARKETING a listing) → 'marketing', otherwise BD
+ * prospecting. Pure so the inference rule is unit-testable.
+ *
+ * @param {{mode?:string, sf_deal_id?:string, deal_id?:string, listing_id?:string,
+ *          sf_listing_id?:string, what_id?:string}} input
+ * @returns {'bd'|'marketing'}
+ */
+export function resolveDraftLogMode(input = {}) {
+  const explicit = String(input.mode || '').trim().toLowerCase();
+  if (explicit === 'marketing' || explicit === 'bd') return explicit;
+  const hasDealSignal = !!(input.sf_deal_id || input.deal_id || input.listing_id
+    || input.sf_listing_id || input.what_id);
+  return hasDealSignal ? 'marketing' : 'bd';
+}
+
 /**
  * Split a full name into {firstName, lastName} for Salesforce (Contact.LastName
  * is REQUIRED). Last token is LastName; everything before is FirstName. A
