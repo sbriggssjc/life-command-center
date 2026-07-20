@@ -308,10 +308,6 @@ app.all('/api/intake/document-notify', (req, res) => { req.query._route = 'docum
 // canonical activity_events timeline (linked via external_identities).
 app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });
 
-// Email auto-archive/cleanup webhook: Power Automate pulls the pending move
-// queue (GET) and reports move results (POST). intake.js decides; PA moves.
-app.all('/api/webhooks/processing-complete', (req, res) => { req.query._route = 'processing-complete'; intakeHandler(req, res); });
-
 // intake rewrites — slash-path Copilot action presets. These were present in
 // vercel.json's rewrites but missing from server.js, so PA Flow requests to
 // Railway hit Express's 404 handler. 2026-04-24 E2E test: PA Flow's
