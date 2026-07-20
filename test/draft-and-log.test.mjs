@@ -98,3 +98,54 @@ describe('buildSalesforceActivityPayload — label hygiene + passthrough', () =>
     assert.equal(task.idempotencyKey, 'dl:e1:2026-07-20:3');
   });
 });
+
+describe('buildSalesforceActivityPayload — comments (SF-visible Description)', () => {
+  it('BD: non-empty, privacy-safe reference line, no strategy/account detail, nm_type blank', () => {
+    const { task } = buildSalesforceActivityPayload({
+      mode: 'bd', whoId: '0038W00002PRo0iQAD', label: 'Boyd Watterson', touchNumber: 3, ref: 'ent-abc123'
+    });
+    assert.ok(task.comments && task.comments.length > 0);           // non-empty
+    assert.equal(task.comments, 'LCC-BD · Touchpoint 3 · ent-abc123');
+    // Privacy: the account NAME (a strategy/intent leak) never rides the comment.
+    assert.ok(!task.comments.includes('Boyd Watterson'));
+    // No strategy/intent verbs — only the opaque LCC pointer + touch label.
+    assert.equal(task.nmType, '');                                  // still blank
+  });
+  it('marketing: non-empty, LCC-Mktg reference to the LCC deal/listing record', () => {
+    const { task } = buildSalesforceActivityPayload({
+      mode: 'marketing', whoId: '003x', whatId: '006DEAL123',
+      label: 'DaVita Chilton', touchNumber: 2, ref: 'deal-xyz789'
+    });
+    assert.ok(task.comments && task.comments.length > 0);           // non-empty
+    assert.equal(task.comments, 'LCC-Mktg · Marketing Outreach 2 · deal-xyz789');
+    assert.equal(task.nmType, '');                                  // still blank
+  });
+  it('N mirrors the subject counter (omitted when absent); comment non-empty without a ref', () => {
+    const bd = buildSalesforceActivityPayload({ label: 'Acme' });   // no touch, no ref
+    assert.equal(bd.task.subject, 'LCC-BD · Acme · Touchpoint');
+    assert.equal(bd.task.comments, 'LCC-BD · Touchpoint');          // still non-empty
+    const mk = buildSalesforceActivityPayload({ mode: 'marketing', label: 'Deal' });
+    assert.equal(mk.task.comments, 'LCC-Mktg · Marketing Outreach');
+  });
+  it('an explicit comments string overrides the default (whitespace collapsed; blank falls back)', () => {
+    const over = buildSalesforceActivityPayload({ mode: 'bd', touchNumber: 1, comments: '  custom   note ' });
+    assert.equal(over.task.comments, 'custom note');
+    const blank = buildSalesforceActivityPayload({ mode: 'bd', touchNumber: 1, ref: 'e1', comments: '   ' });
+    assert.equal(blank.task.comments, 'LCC-BD · Touchpoint 1 · e1');  // blank override → default
+  });
+});
+
+describe('buildSalesforceActivityPayload — sample payloads (eyeball the comments)', () => {
+  it('prints a BD and a marketing payload', () => {
+    const bd = buildSalesforceActivityPayload({
+      mode: 'bd', whoId: '0038W00002PRo0iQAD', label: 'Boyd Watterson', touchNumber: 3, ref: 'ent-abc123'
+    });
+    const mk = buildSalesforceActivityPayload({
+      mode: 'marketing', whoId: '003x', whatId: '006DEAL123',
+      label: 'DaVita Chilton', touchNumber: 2, ref: 'deal-xyz789'
+    });
+    console.log('BD payload:', JSON.stringify(bd, null, 2));
+    console.log('Marketing payload:', JSON.stringify(mk, null, 2));
+    assert.ok(bd.task.comments && mk.task.comments);
+  });
+});

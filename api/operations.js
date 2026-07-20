@@ -861,10 +861,17 @@ async function bridgeDraftAndLog(req, res, user, workspaceId) {
   let sfOut = { logged: false, task_id: null, reason: 'no_sf_contact', mode };
   if (whoId) {
     try {
+      // Opaque LCC-record pointer for the (SF-visible) comment line — never a
+      // property/name. Marketing → the LCC listing/deal record; else the
+      // account/prospect entity, falling back to the cadence row id.
+      const logRef = (mode === 'marketing'
+        ? (String(b.sf_deal_id || b.what_id || b.listing_id || b.sf_listing_id || '').trim()
+            || resolvedEntityId || cadence?.id)
+        : (resolvedEntityId || cadence?.id)) || null;
       const sf = await logSalesforceActivity({
         mode, whoId,
         whatId: (mode === 'marketing') ? String(b.sf_deal_id || b.what_id || '').trim() : undefined,
-        label, touchNumber, idempotencyKey: idemKey
+        label, touchNumber, ref: logRef, idempotencyKey: idemKey
       });
       sfOut = { logged: !!sf.ok, task_id: sf.task?.Id || null, reason: sf.ok ? null : (sf.reason || 'sf_failed'), mode };
     } catch (err) {
