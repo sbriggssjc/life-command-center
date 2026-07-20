@@ -866,6 +866,63 @@ function opsInboxSetFilter() {
   renderInboxTriage();
 }
 
+// Item-level inbox deep-link target (`#/inbox/<id>` — the Teams "View in LCC"
+// card). Called by the router (app.js applyRoute) after it navigates to the
+// Inbox page. Locates the row by data-inbox-id, scrolls it into view and pulses
+// a highlight. Robust to the async render: it polls for the row, widens the
+// window when the item is loaded-but-below-the-fold, and switches to the "all"
+// filter once (a triaged/archived item is hidden under the default "new"
+// filter). Best-effort: an item older than the loaded page — or in another
+// workspace — degrades to a toast instead of failing silently.
+function _inboxRowEl(id) {
+  const sel = (window.CSS && CSS.escape) ? CSS.escape(String(id)) : String(id).replace(/["\\]/g, '\\$&');
+  return document.querySelector('[data-inbox-id="' + sel + '"]');
+}
+
+async function _inboxPollRow(id, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  id = String(id);
+  while (Date.now() < deadline) {
+    let el = _inboxRowEl(id);
+    if (el) return el;
+    // Loaded into opsInboxData but windowed off (below the fold)? Expand the
+    // window and re-render once, then re-check.
+    if (Array.isArray(opsInboxData) && opsInboxData.length
+        && opsInboxWindow < opsInboxData.length
+        && opsInboxData.some(i => String(i.id) === id)) {
+      opsInboxWindow = opsInboxData.length;
+      try { await renderInboxTriage(); } catch (_) {}
+      el = _inboxRowEl(id);
+      if (el) return el;
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return _inboxRowEl(id);
+}
+
+async function focusInboxItem(id) {
+  if (!id) return;
+  id = String(id);
+  // Wait for the row in the current list (renderInboxTriage from navTo is async).
+  let el = await _inboxPollRow(id, 4000);
+  // Not in the default "new" filter? A triaged/archived item lives under "all".
+  if (!el && typeof opsInboxFilter !== 'undefined' && opsInboxFilter !== 'all') {
+    opsInboxFilter = 'all';
+    opsInboxWindow = 50;
+    try { await renderInboxTriage(); } catch (_) {}
+    el = await _inboxPollRow(id, 3000);
+  }
+  if (!el) {
+    if (typeof showToast === 'function') {
+      showToast("That inbox item isn't in the current list — it may be older than the loaded page or already handled.", 'warn');
+    }
+    return;
+  }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('inbox-focus');
+  setTimeout(() => { try { el.classList.remove('inbox-focus'); } catch (_) {} }, 2800);
+}
+
 function _intakeDomShort(d) {
   d = String(d || '').toLowerCase();
   return d === 'government' ? 'gov' : d === 'dialysis' ? 'dia' : d;

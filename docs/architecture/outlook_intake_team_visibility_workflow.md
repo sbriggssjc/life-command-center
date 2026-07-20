@@ -81,9 +81,17 @@ Status:
 **Subject:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['subject'], triggerOutputs()?['body/subject'])}
 **Summary:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['summary'], triggerOutputs()?['body/bodyPreview'])}
 
-🔗 **LCC Item:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['lcc_item_url'], 'https://<LCC_HOST>/?page=pageInbox')}
+🔗 **LCC Item:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['lcc_item_url'], 'https://<LCC_HOST>/#/inbox')}
+📧 **Open Email (Desktop):** @{first(body('HTTP_GetIntakeSummary')?['items'])?['email_url_desktop']}
+🌐 **Open Email (Web):** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['email_url'], triggerOutputs()?['body/webLink'])}
 
 **Suggested actions:** Triage | Assign | Promote
+
+> `lcc_item_url` is item-level (`#/inbox/<inbox_item_id>`) — the SPA focuses that
+> specific captured row (app.js router → focusInboxItem). `email_url_desktop`
+> (`ms-outlook://…`) opens the message in the Outlook desktop / mobile / New
+> Outlook client; `email_url` is the OWA web fallback. Classic Win32 Outlook does
+> not register `ms-outlook://` — there is no supported deep link for it.
 ```
 
 ## Teams Notification — Adaptive Card (recommended)
