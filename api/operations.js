@@ -290,6 +290,15 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfRecordLookupTick(req, res);
   }
 
+  // Targeted SF record sync (via server.js _route=sf-record-sync-tick). GET=dry-run
+  // (compute the missing-id set + batch plan, no writes / no flow call) / POST=drain
+  // (fetch ONLY the records LCC is missing, by Id, spec-driven — `?object=account`).
+  // Replaces the wasteful bulk "SF Get Accounts" pull. Authenticates internally.
+  if (req.query._route === 'sf-record-sync-tick') {
+    const { handleSfRecordSyncTick } = await import('./_handlers/sf-record-sync.js');
+    return handleSfRecordSyncTick(req, res);
+  }
+
   // R52 — Salesforce contact writeback (via vercel.json
   // _route=contact-writeback-tick). GET=dry-run (?summary=1 for coverage) /
   // POST=drain (gated on SF_CONTACT_WRITEBACK). Pushes emailable LCC persons

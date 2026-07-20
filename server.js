@@ -253,6 +253,7 @@ app.all('/api/sf-account-import', (req, res) => { req.query._route = 'sf-account
 app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 'developer-chain-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/contact-writeback-tick', (req, res) => { req.query._route = 'contact-writeback-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-lookup-tick', (req, res) => { req.query._route = 'sf-record-lookup-tick'; operationsHandler(req, res); });
+app.all('/api/sf-record-sync-tick', (req, res) => { req.query._route = 'sf-record-sync-tick'; operationsHandler(req, res); });
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 
