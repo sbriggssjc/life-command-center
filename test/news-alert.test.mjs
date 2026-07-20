@@ -123,6 +123,66 @@ describe('parseGoogleAlert', () => {
     const p = parseGoogleAlert('https://policies.google.com/x\nhttps://news.example/real', 'Google Alert - x');
     assert.equal(p.article_url, 'https://news.example/real');
   });
+
+  it('associates the headline line before the redirect link', () => {
+    const subject = 'Google Alert - DaVita';
+    const body = [
+      'DaVita opens new dialysis center in Dallas, TX',
+      'https://www.google.com/url?rct=j&sa=t&url=https%3A%2F%2Fnews.example%2Fdavita-dallas&ct=ga',
+    ].join('\n');
+    const p = parseGoogleAlert(body, subject);
+    assert.equal(p.article_url, 'https://news.example/davita-dallas');
+    assert.equal(p.article_title, 'DaVita opens new dialysis center in Dallas, TX');
+  });
+
+  // Bug 2026-07-20: html2text renders the header logo <img> as a bracketed URL
+  // line; the parser grabbed it as article_url AND article_title/summary.
+  it('never captures the Google Alerts header logo (real html2text shape)', () => {
+    const subject = 'Google Alert - square foot clinic';
+    const body = [
+      '[https://www.google.com/intl/en_us/alerts/logo.png?cd=KhQxNzg2MjM3NTExNDMxODY5MTE3OA]',
+      '',
+      'square foot clinic',
+      '',
+      'Daily update ⋅ July 20, 2026',
+      'NEWS',
+      '',
+      'New 12,000 square foot clinic opens in Springfield',
+      '[https://www.google.com/url?rct=j&sa=t&url=https%3A%2F%2Fsjournal.example%2Fclinic&ct=ga&cd=YY&usg=ZZ]',
+      'Springfield Journal',
+      'The new dialysis facility will serve the east side of town.',
+      '',
+      'Flag as irrelevant',
+    ].join('\n');
+    const p = parseGoogleAlert(body, subject);
+    assert.equal(p.article_url, 'https://sjournal.example/clinic');
+    assert.equal(p.article_title, 'New 12,000 square foot clinic opens in Springfield');
+    for (const f of [p.article_url, p.article_title, p.summary]) {
+      assert.ok(!/logo\.png/i.test(String(f)), `logo url leaked into "${f}"`);
+    }
+  });
+
+  it('handles the [Headline](redirect) markdown link shape', () => {
+    const subject = 'Google Alert - Fresenius';
+    const body = [
+      '[https://www.google.com/intl/en_us/alerts/logo.png?cd=AAA]',
+      '',
+      '[Fresenius breaks ground on new clinic](https://www.google.com/url?url=https%3A%2F%2Fwire.example%2Ffmc&ct=ga)',
+    ].join('\n');
+    const p = parseGoogleAlert(body, subject);
+    assert.equal(p.article_url, 'https://wire.example/fmc');
+    assert.equal(p.article_title, 'Fresenius breaks ground on new clinic');
+    assert.ok(!/logo\.png/i.test(String(p.article_url)));
+    assert.ok(!/logo\.png/i.test(String(p.article_title)));
+  });
+
+  it('logo-only body yields no logo url and no logo title', () => {
+    const body = '[https://www.google.com/intl/en_us/alerts/logo.png?cd=BBB]\n\nfresenius\n';
+    const p = parseGoogleAlert(body, 'Google Alert - fresenius');
+    assert.equal(p.article_url, null);            // no real article link present
+    assert.ok(!/logo\.png/i.test(String(p.article_title)));
+    assert.ok(!/logo\.png/i.test(String(p.summary)));
+  });
 });
 
 describe('end-to-end classification', () => {
