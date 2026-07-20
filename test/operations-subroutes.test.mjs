@@ -1,36 +1,40 @@
-// SUBROUTE-DISPATCH GUARD — a recurring regression (PR #1408 sf-contact-resolve-tick,
-// PR #1410 three routes, PR #1414 sf-list-import, and again after) is that a
-// stale-branch merge reverts api/operations.js to a state predating one or more
-// `_route` sub-route dispatches, WHILE server.js + vercel.json still mount those
-// routes into operationsHandler with the `_route` query param. With the mount but
-// no matching dispatch, a POST falls through to the bridge POST-action `switch`
-// and 400s "Invalid POST action" — exactly the symptom the "SF Get Campaign
-// Members" PA flow hit on POST /api/sf-list-import.
+// SUBROUTE-DISPATCH GUARD — this test guards the REPO dispatch only. It does NOT
+// verify what is deployed; deploy verification is `scripts/verify-deploy.mjs`
+// (compares live /version to the merge SHA + probes that critical routes return
+// JSON, not the SPA HTML). The two are complementary: a stale deploy (the real
+// 2026-07-20 root cause — four unshipped merges misdiagnosed as dispatch
+// regressions) passes this test but fails verify-deploy.
+//
+// A recurring regression (PR #1408 sf-contact-resolve-tick, PR #1410 three routes,
+// PR #1414 sf-list-import, and again after) is that a stale-branch merge reverts
+// api/operations.js to a state predating one or more `_route` sub-route dispatches,
+// WHILE server.js still mounts those routes into operationsHandler with the `_route`
+// query param. With the mount but no matching dispatch, a POST falls through to the
+// bridge POST-action `switch` and 400s "Invalid POST action" — exactly the symptom
+// the "SF Get Campaign Members" PA flow hit on POST /api/sf-list-import.
 //
 // This test makes server.js the single source of truth: every `_route` value it
 // routes into operationsHandler MUST have a matching dispatch in operations.js,
 // positioned BEFORE the bridge action router. If a merge drops a dispatch (or adds
 // a mount without one), CI fails here instead of production 400ing silently.
+// (Vercel was retired 2026-07-20 — vercel.json is deleted; server.js is the sole
+// routing source of truth.)
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { CRITICAL_SUBROUTES } from './critical-subroutes.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => readFileSync(join(root, f), 'utf8');
 
-// The routes the task/regression class explicitly names — asserted by name too, so
-// dropping one from BOTH server.js and operations.js still fails (belt + suspenders).
-const CRITICAL_SUBROUTES = [
-  'sf-list-import',
-  'sf-account-import',
-  'sf-contact-resolve-tick',
-  'owner-reconcile-tick',
-  'owner-reconcile-engine-tick',
-  'institution-contact-tick',
-];
+// CRITICAL_SUBROUTES — the routes the task/regression class explicitly names,
+// asserted by name too so dropping one from BOTH server.js and operations.js still
+// fails (belt + suspenders). Lives in ./critical-subroutes.mjs so the deploy gate
+// (scripts/verify-deploy.mjs) can share the exact same list without importing this
+// test module (which would run the suite as a side effect).
 
 // Every `_route` value server.js routes into operationsHandler. Matched per-line:
 // each mount is a single-line `app.all(..., _route = '<x>'; ... operationsHandler)`.
@@ -107,15 +111,10 @@ describe('operations.js sub-route dispatch guard', () => {
     }
   });
 
-  it('server.js AND vercel.json both mount every critical sub-route (all three layers agree)', () => {
+  it('server.js mounts every critical sub-route (it is the sole routing source of truth)', () => {
     const server = read('server.js');
-    const vercel = read('vercel.json');
     for (const r of CRITICAL_SUBROUTES) {
       assert.ok(server.includes(`/api/${r}'`), `server.js does not mount /api/${r}`);
-      assert.ok(
-        vercel.includes(`"/api/${r}"`),
-        `vercel.json has no rewrite for /api/${r}`,
-      );
     }
   });
 });

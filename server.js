@@ -2,9 +2,15 @@
 // Express Server — Railway deployment entry point
 // Life Command Center
 //
-// Replaces Vercel serverless function routing with a single Express server.
-// All 12 API handlers are mounted with identical URL paths and rewrite aliases
-// from vercel.json. No handler code is modified — they remain (req, res) => {}.
+// THIS FILE is the single source of truth for /api/* routing. Every API handler
+// is mounted here with its URL path + sub-route aliases (`?_route=<name>` set on
+// req.query). Handlers are unmodified — they remain (req, res) => {}.
+//
+// Vercel was RETIRED 2026-07-20 (40+ consecutive failed deploys on the Hobby
+// 12-function cap; vercel.json is deleted). There is NO serverless-function cap
+// any more. To add a route, mount it HERE — do NOT re-create vercel.json.
+// Historical comments below still mention vercel.json for context; ignore them
+// as instructions.
 // ============================================================================
 
 import express from 'express';
@@ -123,9 +129,10 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// ── Rewrite aliases (vercel.json rewrites → Express routes) ─────────────────
-// Each rewrite sets the same query params that vercel.json would inject,
-// then delegates to the target handler.
+// ── Sub-route aliases (friendly /api/<name> → handler + `?_route=<name>`) ────
+// These ARE the routing table (vercel.json is retired). Each alias sets the
+// query params the handler dispatches on, then delegates to the target handler.
+// Add a new sub-route by adding a line here.
 
 // admin rewrites (formerly diagnostics + data-proxy + daily-briefing)
 app.all('/api/config', (req, res) => { req.query._route = 'config'; adminHandler(req, res); });
@@ -488,6 +495,21 @@ app.use(express.static(__dirname, {
   extensions: ['html'],
   cacheControl: false
 }));
+
+// Any /api/* path that reached here matched no route. Return an honest JSON 404 —
+// NEVER fall through to the SPA catch-all below, which would return 200 + index.html
+// and make a stale deploy or a dropped route look healthy (2026-07-20 incident: four
+// "the _route dispatch regressed" misdiagnoses were really four unshipped deploys —
+// a GET to an unmounted /api/* path returned the SPA HTML with a 200, so every
+// status-code check was lied to). This 404 also stamps the deploy version so the
+// response itself names which build answered.
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    error: 'Unknown API route',
+    path: req.path,
+    version: DEPLOY_VERSION
+  });
+});
 
 // SPA fallback — serve the version-stamped index.html for unmatched routes
 app.get('*', (req, res) => sendIndex(res));
