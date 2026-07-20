@@ -982,3 +982,32 @@ Round 3 audit finding **R3-M-3d**. The coverage sweep (R3-M-3c) confirmed the 20
 - Rollback per flow: delete the `PostDeadLetter` HTTP action + trailing `Terminate`, reset the terminal action's run-after to "is successful" only. No other action modified.
 - Standing P0 reminder: the anon key is now inline in 33 flows' PostDeadLetter headers. The DRY fix (single shared "dead-letter" child flow invoked via Run a Child Flow, centralizing the key) is captured as a future round.
 - Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-07-20 — "Closing the Loop" mailbox-mechanics build spec (5 flow sheets, documentation-only)
+- Flow name (planned, not yet built in PA):
+  - `Processing Complete → Move Message` (NEW, HTTP-triggered — load-bearing)
+  - `Vercel/GitHub Direct Alert Trigger` (NEW/confirm-scope, New-email V3 Inbox)
+  - `Google Alerts Sub-folder Watch` (reconcile with existing sender-triggered flow)
+  - `Weekly Retention Sweep` (NEW, Recurrence — the only flow that deletes)
+  - `LCC Daily Briefing` (MODIFY — add a one-line processing summary)
+- Flow version/export artifact: none — these are build specs authored in the repo, not PA exports. No flow was built/turned on in PA this change.
+- Risk tier: `P2` (documentation / build spec). No live flow behavior changed.
+- Change summary:
+  - Added the "Closing the Loop" overview (`closing-the-loop-overview.md`) + 5 per-flow build sheets under `docs/architecture/flows/`.
+  - This is prompt 3 of a three-prompt design (prompts 1–2 = classify/score/decide; prompt 3 = the mailbox mechanics that move/file/delete post-classification).
+- Exact steps changed (documentation):
+  - `closing-the-loop-overview.md`, `processing-complete-move-message.md`, `vercel-github-direct-alert.md`, `google-alerts-subfolder-watch.md`, `weekly-retention-sweep.md`, `daily-briefing-processing-summary.md`.
+- Affected endpoints/tables/connectors (as designed — most are prompt-2 prerequisites):
+  - `POST /api/webhooks/processing-complete` — **DOES NOT EXIST YET**; prompt 2 must ship it as a sub-route (12-function limit holds), returning `{ internet_message_id, target_folder, disposition }`.
+  - `processing_log` (LCC-Opps table/view) — **DOES NOT EXIST YET**; prompt 2 must ship it for the briefing summary line.
+  - Endpoint correction: the plan's `/api/intake?_route=news-alert` is wrong; the built news-alert channel is the `lead-ingest` edge fn `?action=news_alert` (existing sender-triggered flow — reconcile, don't duplicate).
+  - Connectors (planned): `shared_office365` (Move email V2 / New email V3 / Get emails V3 / Delete email V2), `shared_teams` (briefing + fault alerts).
+  - Folder taxonomy: `Processed/Duplicates` (30d delete), `Processed/*` (180d → `Archive/LCC-Processed`).
+- Security impact: none — documentation only. No credentials, tokens, or endpoints exposed. Every planned flow carries the 7 observability controls (correlation_id, schema_version+required, 4×PT10S retry, dead-letter/fault branch, 200-with-ok:false logical-failure detection, null-safe accessors, injection escaping).
+- Locked "do nots" (per plan, recorded on every relevant sheet):
+  - Only the Weekly Retention Sweep deletes, and only from `Processed/Duplicates` after 30 days — no flow permanently deletes on first pass.
+  - Do not duplicate the existing Flag → To Do flow (the single human-review mechanism) or the existing Google-Alerts sender flow.
+- Validation evidence: documentation-only; no runtime runs. Grounded against the repo: grep confirmed `processing-complete` + `processing_log` absent, and `/api/intake?_route=news-alert` absent (real channel = `lead-ingest?action=news_alert`). Per-flow "Verify after build" steps are the acceptance criteria once each flow is built in PA.
+- Rollback action: documentation-only — revert the 6 markdown files. No live flow to roll back (none built).
+- Build sequencing: Flow 1 (Processing Complete → Move Message) first; then Flows 2–3 (intake triggers); then Flows 4–5 (retention sweep + briefing line).
+- Owner: LCC architecture/audit track (Scott Briggs).

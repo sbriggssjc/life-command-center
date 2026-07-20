@@ -51,11 +51,40 @@ Import: `flow-google-news-alert.json` (repo root, mirrors `flow-loopnet-backfill
 - `duplicate: true` (also returned) — a syndicated repost of a story already captured
   within 90 days; no new lead. A high-confidence duplicate still returns `archive:true`.
 
+## Where to POST — two equivalent targets (either works)
+
+`action=news_alert` is reachable at **both**:
+
+1. **Railway app** (the same host RCM/LoopNet use):
+   `https://<railway-app>.up.railway.app/api/lead-ingest?action=news_alert`
+   `server.js` mounts `/api/lead-ingest` → `api/sync.js` (`?_route=lead-ingest`),
+   which **proxies to the edge function** below (mirroring the rcm/loopnet
+   `proxyToLeadIngest` pattern). This is the production path.
+2. **Edge function directly:**
+   `https://<ops-ref>.supabase.co/functions/v1/lead-ingest?action=news_alert`.
+
+Use the Railway URL if your PA flow already targets the Railway host — no
+repoint needed. A `GET .../api/lead-ingest?action=health` on either target
+returns `ops_configured: true` when the LCC-Opps env is set.
+
+## Two things to verify in your PA flow (common mistakes)
+
+- **`raw_body` must be the EMAIL BODY**, not `sensitivityLabelInfo`. Wire it to
+  `@{body('Html_to_text')?['text']}` (via the `Html to text` action on
+  `@triggerOutputs()?['body/body']`), or at minimum
+  `@{triggerOutputs()?['body/body']}`. If it points at `sensitivityLabelInfo`
+  the classifier receives garbage and every alert routes to `needs_review`.
+- **Link-wrapping caveat:** if the mailbox rewrites URLs through Mimecast /
+  Safe-Links, `article_url` will be the wrapper (e.g.
+  `https://url.us.m.mimecastprotect.com/s/...?domain=google.com`). That is
+  harmless for classification (confidence is driven by the tenant match, not the
+  URL) but the stored `article_url` will be the wrapper, not the original story.
+
 ## Placeholders to fill in (in `flow-google-news-alert.json`)
 
 | Placeholder | Value |
 |---|---|
-| `REPLACE_WITH_LEAD_INGEST_BASE_URL` | The deployed `lead-ingest` edge-function base, e.g. `https://<ops-ref>.supabase.co/functions/v1` (the same base RCM/LoopNet use). Full URI becomes `…/lead-ingest?action=news_alert`. |
+| `REPLACE_WITH_LEAD_INGEST_BASE_URL` | Either the Railway app base (`https://<railway-app>.up.railway.app/api` — full URI `…/api/lead-ingest?action=news_alert`) **or** the edge-function base (`https://<ops-ref>.supabase.co/functions/v1` — full URI `…/lead-ingest?action=news_alert`). Both reach the same handler. |
 | `REPLACE_WITH_PA_WEBHOOK_SECRET` | The `PA_WEBHOOK_SECRET` the edge function authenticates against (same secret as the RCM/LoopNet flows). |
 | `folderPath: "Archive"` (Move step) | Confirm/select the destination Archive folder in the designer if your mailbox uses a different one. |
 
