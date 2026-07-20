@@ -293,6 +293,17 @@ export async function fetchProcessingSummary(workspaceId, hours = 24) {
     opsQuery('GET', `${base}&outcome=eq.filed&select=id&limit=0`),
     opsQuery('GET', `${base}&outcome=eq.needs_review&select=id&limit=0`),
     opsQuery('GET', `${base}&outcome=eq.duplicate&select=id&limit=0`),
+    // KNOWN ISSUE (see docs/KNOWN_ISSUES.md): pending_moves counts rows still at
+    // move_status='pending', but NOTHING clears that column anymore — the queue-
+    // drain consumer (api/_handlers/processing-complete.js) was retired, and the
+    // live sync.js relay reconciles via todo_task_map + pa-move-message, never
+    // touching processing_log.move_status. So this count monotonically inflates
+    // (counts ~every move-eligible email in the window). The filed/needs_review/
+    // duplicate counts above are accurate (they key on `outcome`, still written by
+    // emitProcessingComplete). Preferred fix: DROP the pending_moves clause from
+    // the briefing line — do NOT wire a parallel PATCH-based move_status tracker
+    // (sync.js + todo_task_map already own real move-tracking; a second mechanism
+    // would recreate the two-systems duplication that PR #1435 removed).
     opsQuery('GET', `${base}&move_status=eq.pending&select=id&limit=0`),
   ]);
   return {
