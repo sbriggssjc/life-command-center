@@ -19,7 +19,9 @@
             }
           },
           "fetch": {
-            "pathTemplate": { "template": "/v3/Mail/OnNewEmail" },
+            "pathTemplate": {
+              "template": "/v3/Mail/OnNewEmail"
+            },
             "method": "get",
             "queries": {
               "folderPath": "Inbox",
@@ -31,10 +33,16 @@
             }
           },
           "subscribe": {
-            "pathTemplate": { "template": "/GraphMailSubscriptionPoke/$subscriptions" },
+            "pathTemplate": {
+              "template": "/GraphMailSubscriptionPoke/$subscriptions"
+            },
             "method": "post",
-            "queries": { "folderPath": "Inbox" },
-            "body": { "NotificationUrl": "@{listCallbackUrl()}" }
+            "queries": {
+              "folderPath": "Inbox"
+            },
+            "body": {
+              "NotificationUrl": "@{listCallbackUrl()}"
+            }
           }
         }
       }
@@ -42,7 +50,7 @@
     "actions": {
       "Html_to_text": {
         "type": "ApiConnection",
-        "description": "Google Alerts are HTML — convert to plain text so raw_body is clean for the deterministic parser.",
+        "description": "Google Alerts are HTML \u2014 convert to plain text so raw_body is clean for the deterministic parser.",
         "inputs": {
           "host": {
             "connection": {
@@ -68,40 +76,29 @@
           "body": {
             "source_ref": "@{triggerOutputs()?['body/id']}",
             "subject": "@{triggerOutputs()?['body/subject']}",
-            "raw_body": "@{body('Html_to_text')?['text']}"
+            "raw_body": "@{body('Html_to_text')?['text']}",
+            "internet_message_id": "@{triggerOutputs()?['body/internetMessageId']}"
           }
         },
         "runAfter": {
-          "Html_to_text": ["Succeeded"]
+          "Html_to_text": [
+            "Succeeded"
+          ]
         }
       },
-      "Archive_if_high_confidence": {
-        "type": "If",
-        "description": "Only auto-archive when the edge function says archive:true (a high-confidence tracked-tenant hit). A low-confidence hit is left in the Inbox for Scott's review queue — never auto-deleted.",
-        "expression": {
-          "and": [
-            { "equals": ["@body('POST_to_news_alert_ingest')?['archive']", true] }
-          ]
+      "Note_move_handled_by_pull_queue": {
+        "type": "Compose",
+        "description": "Auto-archive/cleanup: the lead-ingest edge function recorded a processing_complete decision in processing_log (a high-confidence tracked-tenant hit files the email to Processed/Leads; a low-confidence hit is left in the Inbox for review). The separate processing-complete webhook flow (GET /api/webhooks/processing-complete) performs the Outlook move by internetMessageId. This flow no longer moves the email inline.",
+        "inputs": {
+          "news_lead_id": "@{body('POST_to_news_alert_ingest')?['news_lead_id']}",
+          "outcome": "@{if(equals(body('POST_to_news_alert_ingest')?['route'],'auto'),'filed','needs_review')}",
+          "target_folder": "@{body('POST_to_news_alert_ingest')?['target_folder']}",
+          "confidence": "@{body('POST_to_news_alert_ingest')?['confidence']}"
         },
-        "actions": {
-          "Move_email_to_Archive": {
-            "type": "ApiConnection",
-            "inputs": {
-              "host": {
-                "connection": {
-                  "name": "@parameters('$connections')['office365']['connectionId']"
-                }
-              },
-              "method": "post",
-              "path": "/v2/Mail/Move/@{encodeURIComponent(triggerOutputs()?['body/id'])}",
-              "queries": { "folderPath": "Archive" }
-            },
-            "runAfter": {}
-          }
-        },
-        "else": { "actions": {} },
         "runAfter": {
-          "POST_to_news_alert_ingest": ["Succeeded"]
+          "POST_to_news_alert_ingest": [
+            "Succeeded"
+          ]
         }
       }
     }

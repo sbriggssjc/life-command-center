@@ -2,9 +2,15 @@
 // Express Server — Railway deployment entry point
 // Life Command Center
 //
-// Replaces Vercel serverless function routing with a single Express server.
-// All 12 API handlers are mounted with identical URL paths and rewrite aliases
-// from vercel.json. No handler code is modified — they remain (req, res) => {}.
+// THIS FILE is the single source of truth for /api/* routing. Every API handler
+// is mounted here with its URL path + sub-route aliases (`?_route=<name>` set on
+// req.query). Handlers are unmodified — they remain (req, res) => {}.
+//
+// Vercel was RETIRED 2026-07-20 (40+ consecutive failed deploys on the Hobby
+// 12-function cap; vercel.json is deleted). There is NO serverless-function cap
+// any more. To add a route, mount it HERE — do NOT re-create vercel.json.
+// Historical comments below still mention vercel.json for context; ignore them
+// as instructions.
 // ============================================================================
 
 import express from 'express';
@@ -123,9 +129,10 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// ── Rewrite aliases (vercel.json rewrites → Express routes) ─────────────────
-// Each rewrite sets the same query params that vercel.json would inject,
-// then delegates to the target handler.
+// ── Sub-route aliases (friendly /api/<name> → handler + `?_route=<name>`) ────
+// These ARE the routing table (vercel.json is retired). Each alias sets the
+// query params the handler dispatches on, then delegates to the target handler.
+// Add a new sub-route by adding a line here.
 
 // admin rewrites (formerly diagnostics + data-proxy + daily-briefing)
 app.all('/api/config', (req, res) => { req.query._route = 'config'; adminHandler(req, res); });
@@ -212,6 +219,7 @@ app.all('/api/rcm-backfill', (req, res) => { req.query._route = 'rcm-backfill'; 
 app.all('/api/live-ingest', (req, res) => { req.query._route = 'live-ingest'; syncHandler(req, res); });
 app.all('/api/loopnet-ingest', (req, res) => { req.query._route = 'loopnet-ingest'; syncHandler(req, res); });
 app.all('/api/lead-health', (req, res) => { req.query._route = 'lead-health'; syncHandler(req, res); });
+app.all('/api/lead-ingest', (req, res) => { req.query._route = 'lead-ingest'; syncHandler(req, res); });
 app.all('/api/cross-domain-match', (req, res) => { req.query._route = 'cross-domain-match'; syncHandler(req, res); });
 app.all('/api/listing-webhook', (req, res) => { req.query._route = 'listing-webhook'; syncHandler(req, res); });
 app.all('/api/webhooks/processing-complete', (req, res) => { req.query._route = 'processing-complete'; syncHandler(req, res); });
@@ -241,6 +249,7 @@ app.all('/api/owner-reconcile-tick', (req, res) => { req.query._route = 'owner-r
 app.all('/api/owner-reconcile-engine-tick', (req, res) => { req.query._route = 'owner-reconcile-engine-tick'; operationsHandler(req, res); });
 app.all('/api/institution-contact-tick', (req, res) => { req.query._route = 'institution-contact-tick'; operationsHandler(req, res); });
 app.all('/api/sf-list-import', (req, res) => { req.query._route = 'sf-list-import'; operationsHandler(req, res); });
+app.all('/api/sf-account-import', (req, res) => { req.query._route = 'sf-account-import'; operationsHandler(req, res); });
 app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 'developer-chain-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/contact-writeback-tick', (req, res) => { req.query._route = 'contact-writeback-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-lookup-tick', (req, res) => { req.query._route = 'sf-record-lookup-tick'; operationsHandler(req, res); });
@@ -298,6 +307,10 @@ app.all('/api/intake/document-notify', (req, res) => { req.query._route = 'docum
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).
 app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });
+
+// Email auto-archive/cleanup webhook: Power Automate pulls the pending move
+// queue (GET) and reports move results (POST). intake.js decides; PA moves.
+app.all('/api/webhooks/processing-complete', (req, res) => { req.query._route = 'processing-complete'; intakeHandler(req, res); });
 
 // intake rewrites — slash-path Copilot action presets. These were present in
 // vercel.json's rewrites but missing from server.js, so PA Flow requests to
@@ -483,6 +496,21 @@ app.use(express.static(__dirname, {
   extensions: ['html'],
   cacheControl: false
 }));
+
+// Any /api/* path that reached here matched no route. Return an honest JSON 404 —
+// NEVER fall through to the SPA catch-all below, which would return 200 + index.html
+// and make a stale deploy or a dropped route look healthy (2026-07-20 incident: four
+// "the _route dispatch regressed" misdiagnoses were really four unshipped deploys —
+// a GET to an unmounted /api/* path returned the SPA HTML with a 200, so every
+// status-code check was lied to). This 404 also stamps the deploy version so the
+// response itself names which build answered.
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    error: 'Unknown API route',
+    path: req.path,
+    version: DEPLOY_VERSION
+  });
+});
 
 // SPA fallback — serve the version-stamped index.html for unmatched routes
 app.get('*', (req, res) => sendIndex(res));

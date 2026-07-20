@@ -8,6 +8,7 @@
 // POST /api/intake?_route=copilot-action    — Copilot action gateway (dispatches by action_id)
 // POST /api/intake?_route=parse-om          — OM lease abstract parser + provenance push
 // POST /api/intake?_route=ingest_pdf        — PDF upload ingestion (Copilot chat / REST)
+// POST /api/intake?_route=mobile-share      — iPhone Share Sheet → cross-vertical lead/touch
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -37,6 +38,7 @@ import { domainQuery } from './_shared/domain-db.js';
 import { firstOf, joinedOf, detectInfraAlert, buildInfraScoringItem, priorityTierFromScore } from './_shared/intake-classify.js';
 import { scoreItem } from './_shared/briefing-data.js';
 import { isClosingAnnouncement } from './_shared/sf-closing-email-parse.js';
+import { emitProcessingComplete } from './_shared/processing-complete.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -168,6 +170,11 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleSfActivityIngest } = await import('./_handlers/sf-activity-ingest.js');
       return handleSfActivityIngest(req, res);
     }
+    case 'mobile-share': {
+      // iPhone Share Sheet ("Send to LCC") — LinkedIn / Safari / any app.
+      const { handleMobileShare } = await import('./_handlers/mobile-share.js');
+      return handleMobileShare(req, res);
+    }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
       return handleIntakeFeedback(req, res);
@@ -176,9 +183,16 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleMatcherAccuracy } = await import('./_handlers/intake-feedback.js');
       return handleMatcherAccuracy(req, res);
     }
+    case 'processing-complete': {
+      // Email auto-archive/cleanup webhook. Power Automate pulls the pending
+      // move queue (GET) and reports move results (POST). intake.js decides;
+      // PA performs the Graph mailbox move.
+      const { handleProcessingComplete } = await import('./_handlers/processing-complete.js');
+      return handleProcessingComplete(req, res);
+    }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy, processing-complete'
       });
   }
 });
@@ -371,6 +385,24 @@ async function handleOutlookMessage(req, res) {
 
   const correlationId = deterministicCorrelationId(workspaceId, String(messageId), receivedAtIso);
 
+  // Auto-archive/cleanup: record a processing_complete decision once this
+  // email's intake job is done, and return the event so Power Automate can move
+  // the message (Processed/{domain} for filed, Processed/Duplicates for a
+  // duplicate; needs_review is left in place). Best-effort — never blocks the
+  // intake response. First emit wins (idempotent per internet_message_id), so a
+  // PA replay of the same flag never enqueues a second move.
+  const emitPC = (outcome, opts = {}) => emitProcessingComplete({
+    workspaceId,
+    internetMessageId: internetMsgId,
+    graphRestId,
+    inboxItemId: opts.inboxItemId ?? null,
+    sourceType: 'flagged_email',
+    subject,
+    outcome,
+    channel: opts.channel ?? null,
+    domain: opts.domain ?? null,
+  }).catch(() => null);
+
   // Build deeplink: prefer Graph webLink (survives moves), fall back to REST id link
   const deepLink = webLink
     || (graphRestId ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(graphRestId)}` : null);
@@ -442,6 +474,9 @@ async function handleOutlookMessage(req, res) {
           },
         }).catch(err => console.error('[intake] deal-closing dedup inbox patch failed:', err?.message));
       }
+      const processing_complete = await emitPC('duplicate', {
+        channel: 'deal_closing', domain: closingResult?.domain || null, inboxItemId: existing.id,
+      });
       return res.status(200).json({
         ok: true,
         deduplicated: true,
@@ -449,6 +484,7 @@ async function handleOutlookMessage(req, res) {
         inbox_item_id: existing.id,
         kind: 'deal_closing_announcement',
         deal_closing: closingResult || { ok: false, reason: 'handler_error' },
+        processing_complete,
       });
     }
 
@@ -459,6 +495,11 @@ async function handleOutlookMessage(req, res) {
     // back to the freshly-computed values if the first pass predates this).
     if (infra.isInfra) {
       const tier = existing.metadata?.priority_tier || infraTier;
+      // Infra alerts stay in place (needs_review) until acknowledged — a re-flag
+      // must not move them. First emit wins, so this reaffirms that decision.
+      const processing_complete = await emitPC('needs_review', {
+        channel: 'infra', domain: 'infra', inboxItemId: existing.id,
+      });
       return res.status(200).json({
         ok: true,
         deduplicated: true,
@@ -471,6 +512,7 @@ async function handleOutlookMessage(req, res) {
         priority_score: existing.metadata?.priority_score ?? infraScore,
         todo_title: `[${tier}] ${subject}`,
         message: 'Already ingested',
+        processing_complete,
       });
     }
 
@@ -643,6 +685,12 @@ async function handleOutlookMessage(req, res) {
       }
     }
 
+    // Re-flag of an already-ingested email. First emit wins: if the fresh pass
+    // already filed it, this returns that decision; if none exists (a pre-feature
+    // email re-flagged), it records a duplicate → Processed/Duplicates.
+    const processing_complete = await emitPC('duplicate', {
+      channel: 'om', inboxItemId: existing.id,
+    });
     return res.status(200).json({
       ok: true,
       deduplicated: true,
@@ -652,6 +700,7 @@ async function handleOutlookMessage(req, res) {
       // we have one — regardless of whether we re-ran staging on this replay.
       staged_intake_id: bridgedIntakeId || null,
       message: 'Already ingested',
+      processing_complete,
     });
   }
 
@@ -747,6 +796,11 @@ async function handleOutlookMessage(req, res) {
         },
       }).catch(err => console.error('[intake] deal-closing inbox patch failed:', err?.message));
     }
+    // Filed when the closed comp was recorded; else leave in place for review.
+    const processing_complete = await emitPC(
+      closingResult?.ok ? 'filed' : 'needs_review',
+      { channel: 'deal_closing', domain: closingResult?.domain || null, inboxItemId: item?.id || null },
+    );
     return res.status(200).json({
       ok: true,
       correlation_id: correlationId,
@@ -755,6 +809,7 @@ async function handleOutlookMessage(req, res) {
       deal_closing: closingResult || { ok: false, reason: 'handler_error' },
       external_id: String(messageId),
       status: item?.status || 'new',
+      processing_complete,
     });
   }
 
@@ -766,6 +821,12 @@ async function handleOutlookMessage(req, res) {
   // — soccer-video"). No new folder/flag/button; the user only flags the email.
   if (infra.isInfra) {
     // Fire-and-forget entity extraction is skipped for infra (no deal parties).
+    // Infra alerts stay in place (needs_review) so they remain visible + flagged
+    // until acknowledged — the classification captured the priority signal, but
+    // the raw email is not auto-filed here.
+    const processing_complete = await emitPC('needs_review', {
+      channel: 'infra', domain: 'infra', inboxItemId: item?.id || null,
+    });
     return res.status(200).json({
       ok: true,
       correlation_id: correlationId,
@@ -778,6 +839,7 @@ async function handleOutlookMessage(req, res) {
       todo_title: infraTodoTitle,
       external_id: String(messageId),
       status: item?.status || 'new',
+      processing_complete,
     });
   }
 
@@ -925,13 +987,23 @@ async function handleOutlookMessage(req, res) {
   runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
     .catch(err => console.error('[Intake extraction error]', err.message || err));
 
+  // Auto-archive decision: an email that staged an OM/lease intake is done →
+  // filed (Processed/Deals). An email that produced no staging (signal-light,
+  // no OM/PDF/URL/body) still went through intake but captured nothing → leave
+  // it in place for review rather than silently filing it away.
+  const processing_complete = await emitPC(
+    stagedIntakeId ? 'filed' : 'needs_review',
+    { channel: 'om', inboxItemId: item?.id || null },
+  );
+
   return res.status(200).json({
     ok: true,
     correlation_id: correlationId,
     inbox_item_id: item?.id || null,
     staged_intake_id: stagedIntakeId,
     external_id: String(messageId),
-    status: item?.status || 'new'
+    status: item?.status || 'new',
+    processing_complete,
   });
 }
 

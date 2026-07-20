@@ -257,6 +257,21 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfListImport(req, res);
   }
 
+  // SF Get Accounts — bulk Account→org(Name) map ingest (via vercel.json /
+  // server.js _route=sf-account-import). GET=dry-run (counts only) / POST=ingest
+  // (mint/attach the org carrying the salesforce/Account identity) /
+  // POST&backfill=1 (retro-resolve list members that recorded an unresolved
+  // AccountId). Fills the AccountId→name map the sf-list-import member resolver
+  // reads. Authenticates internally.
+  // NOTE: server.js + vercel.json route /api/sf-account-import here; if this block
+  // goes missing the POST 400s "Invalid POST action" at the bridge-action router
+  // below (the recurring subroute-dispatch regression class — do NOT remove).
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'sf-account-import') {
+    const { handleSfAccountImport } = await import('./_handlers/sf-account-import.js');
+    return handleSfAccountImport(req, res);
+  }
+
   // UW#7 — developer resolution from the ownership chain (via vercel.json
   // _route=developer-chain-resolve-tick). GET=dry-run (honest per-bucket sizing) /
   // POST=drain. Resolves the original developer for queued

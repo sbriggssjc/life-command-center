@@ -166,6 +166,26 @@ export default withErrorHandler(async function handler(req, res) {
     return handleLoopNetIngest(req, res);
   }
 
+  // Dispatch to lead-ingest edge function (Google/News Alert intake + health).
+  // Mounted at Railway /api/lead-ingest so the Power Automate flow's
+  // `.../api/lead-ingest?action=news_alert` URL reaches the edge handler,
+  // mirroring the rcm/loopnet proxy pattern. PA-authenticated via the
+  // X-PA-Webhook-Secret header (the edge function re-checks it); no user session.
+  if (req.query._route === 'lead-ingest') {
+    const action = (req.query.action || 'health').toString();
+    const proxyResult = await proxyToLeadIngest(req, res, action);
+    if (proxyResult) return;
+    // Edge unreachable — for the health probe, report honestly; for news_alert
+    // there is no local fallback handler (the classifier lives in the edge fn),
+    // so surface a 503 rather than silently dropping the alert.
+    console.warn('[lead-ingest] Edge proxy failed for action=%s', action);
+    return res.status(503).json({
+      ok: false,
+      error: 'lead-ingest edge function unreachable',
+      action,
+    });
+  }
+
   // Dispatch to lead ingest test/health check
   if (req.query._route === 'lead-health') {
     return handleLeadHealth(req, res);
