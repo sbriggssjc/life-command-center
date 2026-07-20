@@ -42,7 +42,7 @@ export function targetFolderFor(outcome, { channel = null, domain = null } = {})
   // Infra alerts → Processed/Infra.
   if (key === 'infra') return 'Processed/Infra';
   // Lead / news-alert / marketplace channels → Processed/Leads.
-  if (['lead', 'leads', 'news_alert', 'news-alert', 'crexi', 'loopnet'].includes(key)) {
+  if (['lead', 'leads', 'news_alert', 'news-alert', 'crexi', 'rcm', 'loopnet'].includes(key)) {
     return 'Processed/Leads';
   }
   // Deal channels (OM/lease extraction, closing announcements) → Processed/Deals.
