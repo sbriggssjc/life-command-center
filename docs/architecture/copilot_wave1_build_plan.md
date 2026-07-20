@@ -113,17 +113,17 @@ Tasks:
 - [x] Wire `send_teams`, `send_webex`, `send_sms` into contacts POST switch in entity-hub.js
 - [x] Add `send_teams`, `send_webex`, `send_sms` to contactActions set in entity-hub.js
 - [x] Verify all 18 Wave 1 action endpoints return expected responses (smoke test 2026-07-20)
-  - 16/18 passing. Two flags: (1) `list_government_review_observations` [503] — `GOV_API_URL` env var not set in Railway; (2) `ingest_outlook_flagged_emails` pull path times out — Graph API blocked at Northmarq; PA push flow (Phase 1C) is the live path and works correctly. See Phase 1A note below.
+  - 16/18 passing. Two flags: (1) `list_government_review_observations` [503→404] — `GOV_API_URL` secret set in Supabase Dialysis_DB `data-query` edge function but pointing to wrong target (`https://scknotsqkcheojiaewwh.supabase.co`). It must point to the Government FastAPI evidence service (`/api/research-observations`). That FastAPI service does not yet exist — Wave 2 dependency. See Phase 1A note below. (2) `ingest_outlook_flagged_emails` pull path times out — Graph API blocked at Northmarq; PA push flow (Phase 1C) is the live path and works correctly.
   - Auth rejection: [401] “Invalid API key” on bad key ✓
   - Validation: [400] on missing required params for all write actions ✓
   - Lifecycle enforcement: archived→triaged blocked correctly ✓
 - [x] Add pre-commit hook or CI check: `ls api/*.js | wc -l` must be <= 12
 
 > **Phase 1A Smoke Test Gaps (2026-07-20):**
-> 1. `list_government_review_observations` — [503] `GOV_API_URL not configured`. Fix: add `GOV_API_URL` to Railway environment variables pointing to the government Supabase REST endpoint.
+> 1. `list_government_review_observations` — Was [503] `GOV_API_URL not configured`; now [404] `requested path is invalid` after Scott added secret to Supabase. Root cause: `GOV_API_URL` is used by the `data-query` edge function (Dialysis_DB project `zqzrriwuavgrquhisnoa`) to reach the **Government FastAPI evidence service** (e.g. `https://gov-api.example.com`). The edge function calls `${GOV_API_URL}/api/research-observations`. The current secret value points to the Government Supabase URL instead of a FastAPI service, which returns 404. This FastAPI service does not yet exist — it is a **Wave 2 dependency**. No Railway env var change needed; the secret location is correct (Supabase edge function secrets), but the value must be the FastAPI service URL once built.
 > 2. `ingest_outlook_flagged_emails` (pull path) — times out because the Graph API pull is blocked at Northmarq. The Power Automate push path (Phase 1C) is the production-grade replacement and is fully operational. No fix needed for Wave 1.
 
-**Milestone:** Auth hardened, messaging routes wired, pre-commit guard active. Smoke test 16/18 — one env var fix needed (`GOV_API_URL`), one action de facto replaced by PA flow.
+**Milestone:** Auth hardened, messaging routes wired, pre-commit guard active. Smoke test 16/18 — one Wave 2 dependency (`list_government_review_observations` requires Government FastAPI evidence service not yet built), one action de facto replaced by PA flow.
 
 ### Phase 1B: Daily Briefing Snapshot (Days 3-7) — COMPLETE
 **Goal:** Build the single highest-leverage Wave 1 deliverable.
@@ -328,8 +328,8 @@ Each action gets a manual validation script:
 
 ## 9. Immediate Next Actions
 
-*Updated 2026-07-20 — All phases complete. Smoke test done (16/18). One env fix + 3-day briefing verification remaining.*
+*Updated 2026-07-20 — All phases complete. Smoke test done (16/18). Two known gaps: (1) `list_government_review_observations` is a Wave 2 dependency (requires Government FastAPI evidence service, not yet built); (2) daily briefing 3-day consecutive verification still in progress.*
 
-1. **Fix `GOV_API_URL` env var in Railway:** Set `GOV_API_URL` to the government Supabase REST endpoint so `list_government_review_observations` returns data instead of [503].
+1. **`list_government_review_observations` [Wave 2]:** Returns [404] because the Government FastAPI evidence service (`/api/research-observations`) doesn't exist yet. The `GOV_API_URL` secret in Supabase Dialysis_DB `data-query` edge function is set but points to the Supabase project URL — correct the value to the FastAPI service URL once that service is built. No action needed for Wave 1.
 2. **Verification:** Daily briefing delivered for 3 consecutive weekdays (first live run on next weekday morning at 7:30 CDT).
 3. **Wave 2 consideration:** Make `entity_id` optional in `create_listing_pursuit_followup_task` (allow unlinked tasks) or add agent-side entity lookup by name.

@@ -36,6 +36,12 @@ const GOV_SUPABASE_KEY = process.env.GOV_SUPABASE_SERVICE_KEY || process.env.GOV
 const BOV_SERVICE_URL = (process.env.BOV_SERVICE_URL || "https://pacific-love-production-f6b9.up.railway.app").replace(/\/+$/, "");
 const BOV_API_KEY = process.env.BOV_API_KEY || "";
 
+// Primary workspace ID — used as the default when callers omit workspace_id.
+// Override via LCC_PRIMARY_WORKSPACE_ID env var if the deployment uses a
+// different workspace. The production LCC workspace is a0000000-...-0001.
+const PRIMARY_WORKSPACE_ID =
+  process.env.LCC_PRIMARY_WORKSPACE_ID || "a0000000-0000-0000-0000-000000000001";
+
 // ── Supabase fetch helper (mirrors api/_shared/ops-db.js pattern) ────────────
 
 async function supabaseQuery(baseUrl, apiKey, method, path, body) {
@@ -644,10 +650,15 @@ const TOOL_HANDLERS = {
         return textResult({ error: "OPS database not configured" });
       }
 
+      // Default to primary workspace when caller omits workspace_id.
+      // Without this guard, enc(undefined) produces the string "undefined",
+      // which causes a PostgreSQL 22P02 UUID parse error on action_items.
+      const wsId = workspace_id || PRIMARY_WORKSPACE_ID;
+
       // Try daily_briefing_snapshot first
       const snapshot = await opsQuery(
         "GET",
-        `daily_briefing_snapshot?workspace_id=eq.${enc(workspace_id)}&order=created_at.desc&limit=1`
+        `daily_briefing_snapshot?workspace_id=eq.${enc(wsId)}&order=created_at.desc&limit=1`
       );
 
       if (snapshot.ok && snapshot.data?.length) {
@@ -661,15 +672,15 @@ const TOOL_HANDLERS = {
       const [urgent, high, normal] = await Promise.all([
         opsQuery(
           "GET",
-          `action_items?workspace_id=eq.${enc(workspace_id)}&priority=eq.urgent&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
+          `action_items?workspace_id=eq.${enc(wsId)}&priority=eq.urgent&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
         ),
         opsQuery(
           "GET",
-          `action_items?workspace_id=eq.${enc(workspace_id)}&priority=eq.high&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
+          `action_items?workspace_id=eq.${enc(wsId)}&priority=eq.high&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
         ),
         opsQuery(
           "GET",
-          `action_items?workspace_id=eq.${enc(workspace_id)}&priority=eq.normal&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
+          `action_items?workspace_id=eq.${enc(wsId)}&priority=eq.normal&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
         ),
       ]);
 
