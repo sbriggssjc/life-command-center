@@ -8,6 +8,7 @@
 // POST /api/intake?_route=copilot-action    — Copilot action gateway (dispatches by action_id)
 // POST /api/intake?_route=parse-om          — OM lease abstract parser + provenance push
 // POST /api/intake?_route=ingest_pdf        — PDF upload ingestion (Copilot chat / REST)
+// POST /api/intake?_route=mobile-share      — iPhone Share Sheet → cross-vertical lead/touch
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -169,6 +170,11 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleSfActivityIngest } = await import('./_handlers/sf-activity-ingest.js');
       return handleSfActivityIngest(req, res);
     }
+    case 'mobile-share': {
+      // iPhone Share Sheet ("Send to LCC") — LinkedIn / Safari / any app.
+      const { handleMobileShare } = await import('./_handlers/mobile-share.js');
+      return handleMobileShare(req, res);
+    }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
       return handleIntakeFeedback(req, res);
@@ -187,6 +193,7 @@ export default withErrorHandler(async function handler(req, res) {
     default:
       return res.status(400).json({
         error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, feedback, accuracy, processing-complete'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy'
       });
   }
 });
