@@ -524,9 +524,21 @@ process.on('unhandledRejection', (reason) => {
   console.error('[LCC] FATAL unhandledRejection:', reason);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[LCC] Server running on port ${PORT}`);
-  console.log(`[LCC] Bound to 0.0.0.0:${PORT}`);
-  console.log(`[LCC] Health: http://0.0.0.0:${PORT}/health`);
-  console.log(`[LCC] Environment: ${process.env.LCC_ENV || 'development'}`);
-});
+// Boot-check mode (LCC_BOOT_CHECK=1, set by `npm run check:boot`): importing
+// this module has already resolved the ENTIRE handler graph, which catches
+// import-time failures a `node --check` syntax sweep cannot see — a bad named
+// export, a circular import, a module-level throw. In that mode we skip
+// app.listen so the check binds no port, opens no socket, and needs no DB or
+// secrets. See scripts/check-boot.mjs. (The 2026-07-20 incident: api/intake.js
+// was un-importable on `main` for ~4h — the suite stayed green because tests
+// import individual modules, never the app; this guard makes CI import the app.)
+if (process.env.LCC_BOOT_CHECK === '1') {
+  console.log('[LCC] boot-check OK — module graph imported, not listening');
+} else {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[LCC] Server running on port ${PORT}`);
+    console.log(`[LCC] Bound to 0.0.0.0:${PORT}`);
+    console.log(`[LCC] Health: http://0.0.0.0:${PORT}/health`);
+    console.log(`[LCC] Environment: ${process.env.LCC_ENV || 'development'}`);
+  });
+}

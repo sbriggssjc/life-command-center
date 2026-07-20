@@ -1,0 +1,41 @@
+name: Boot Check
+
+# CI must catch an app that can't boot. The 2026-07-20 incident: a bad merge
+# left api/intake.js with two `error:` keys and no comma between them, so
+# server.js (which imports it) crash-looped on every Railway build — production
+# froze on the last healthy container while four merges silently never shipped.
+# The 2,000-test suite stayed green the whole time because tests import
+# individual modules; nothing imports the app.
+#
+# This job closes that gap: `npm run check:boot` (scripts/check-boot.mjs) runs a
+# `node --check` syntax sweep over server.js + api/**/*.js AND imports
+# server.js with LCC_BOOT_CHECK=1 (skips app.listen) to catch import-time
+# failures a syntax check misses. It needs NO network, NO database, NO secrets,
+# so it runs on every PR without the Production environment. Make it a required
+# check in branch protection so a non-booting app can't merge.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: boot-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  boot-check:
+    name: App boots
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run check:boot
