@@ -1511,46 +1511,50 @@ function correlationToIsoFloor(correlationId) {
   return new Date(Math.max(0, ts - 5 * 60 * 1000)).toISOString();
 }
 
-// Desktop Outlook deep link (`ms-outlook://…`) for a captured inbox row.
-// Uses the `open?url=<owa-link>` verb — the form
-// ai-copilot/utils.ts::constructOutlookDesktopLink produces, and the one "New
-// Outlook for Windows" honors (it renders the wrapped OWA URL inside the client
-// instead of a browser tab). Deliberately NOT the `emails/open?messageId=` verb:
-// New Outlook errors on that with "This action isn't supported yet" — the reason
-// app.js's openOutlookEmail abandoned it. Prefers the web link already captured
-// at intake (external_url), else synthesizes an OWA read link from the Graph REST
-// id / internet_message_id. Returns null when there's no URL to wrap.
-// NOTE: `ms-outlook://` targets New Outlook for Windows + the mobile Outlook app.
-// CLASSIC desktop Outlook (Win32) does NOT register the scheme — there is no
-// supported URL that deep-links a specific message in classic Outlook.
+// "Find in Outlook" deep link for a captured inbox row — a documented OWA SEARCH
+// deep link (`…/mail/deeplink/search?query=<subject slice>`) that lands New Outlook
+// for Windows in a search-results view for the email. Named `buildOutlookDesktopLink`
+// + surfaced as `email_url_desktop` (field name kept so the PA card binding is
+// unchanged), but it is a FIND link, not a specific-message open — hence the card
+// should label it "Find in Outlook", not "Open".
+//
+// Why not the old `ms-outlook://open?url=<owa read-link>` wrapper: New Outlook for
+// Windows registers `ms-outlook:` only as an app ACTIVATOR — it discards the wrapped
+// message target and opens to the Inbox, so deep-linking a SPECIFIC message in the
+// desktop client is not achievable (confirmed live + against MS docs, 2026-07). The
+// exact-message path is the WEB link (`email_url` = the raw `…/deeplink/read/<id>`),
+// which opens the message reliably in OWA; this search link is the honest desktop-app
+// companion for "find it in Outlook".
+//
+// Uses a distinctive slice of the SUBJECT as a plain keyword query — NOT AQS field
+// operators (`from:`/`subject:`), which OWA runs via an AJAX POST and honors
+// inconsistently across tenants; a plain-text query is reliably dropped in the search
+// box. Returns null when the row has no usable subject.
 export function buildOutlookDesktopLink(item) {
-  const meta = (item && item.metadata) || {};
-  const inet = item?.internet_message_id || meta.internet_message_id || meta.message_id || '';
-  const rest = meta.graph_rest_id || item?.graph_rest_id || item?.external_id || '';
-  // Build the RAW (fully-decoded) OWA web link, then percent-encode it EXACTLY ONCE
-  // when wrapping it in `ms-outlook://open?url=`. The captured `external_url` is already
-  // a ready-to-open OWA deep link with its id segment single-encoded (…AAA%3D), so
-  // re-encoding it verbatim double-encodes (%3D → %253D) and New Outlook silently
-  // no-ops on the malformed url. Decoding to raw first (and NOT pre-encoding the
-  // synthesized branches' ids) makes the single `encodeURIComponent` below produce the
-  // same single-encoded form as `external_url` (…AAA%3D), never a doubly-encoded one.
-  const rawWeb = decodeUrlSafe(item?.external_url)
-    || (rest ? `https://outlook.office.com/mail/deeplink/read/${rest}` : '')
-    || (inet ? `https://outlook.office365.com/mail/inbox/id/${String(inet).replace(/^<|>$/g, '')}` : '');
-  if (!rawWeb) return null;
-  return `ms-outlook://open?url=${encodeURIComponent(rawWeb)}`;
+  const query = outlookSearchQueryFromSubject(item?.title);
+  if (!query) return null;
+  return `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent(query)}`;
 }
 
-// Decode a captured URL back to its raw form so buildOutlookDesktopLink can re-encode it
-// exactly once. Best-effort: external_url is external data, so a malformed %-escape falls
-// back to the original string rather than dropping the link entirely.
-function decodeUrlSafe(url) {
-  if (!url) return '';
-  try {
-    return decodeURIComponent(url);
-  } catch {
-    return url;
-  }
+// Distill a subject line into a distinctive search query: strip leading Re:/Fw:/Fwd:
+// reply-forward prefixes, collapse whitespace, and cap to a distinctive slice on a word
+// boundary (a very long subject over-constrains the search). Returns '' when nothing
+// usable remains (so buildOutlookDesktopLink yields null → the card omits the button).
+const OUTLOOK_SEARCH_MAX_LEN = 80;
+function outlookSearchQueryFromSubject(subject) {
+  let s = String(subject || '').replace(/\s+/g, ' ').trim();
+  // Strip any run of leading reply/forward markers (Re:, Fw:, Fwd:, AW:, WG:, …).
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/^(re|fw|fwd|aw|wg|tr|rv)\s*:\s*/i, '').trim();
+  } while (s !== prev);
+  if (!s) return '';
+  if (s.length <= OUTLOOK_SEARCH_MAX_LEN) return s;
+  // Cap on a word boundary so we never send a truncated mid-word token.
+  const slice = s.slice(0, OUTLOOK_SEARCH_MAX_LEN);
+  const lastSpace = slice.lastIndexOf(' ');
+  return (lastSpace > 40 ? slice.slice(0, lastSpace) : slice).trim();
 }
 
 export function mapItemForTeams(item, appBase) {
@@ -1570,8 +1574,10 @@ export function mapItemForTeams(item, appBase) {
   // the Teams card's web "Open Email" action has a real URL. Null when the
   // source didn't provide a web link.
   const emailUrl = item.external_url || null;
-  // The DESKTOP-client deep link (ms-outlook://) for operators who work Outlook
-  // on the desktop instead of OWA — surfaced as a separate card action.
+  // "Find in Outlook" SEARCH deep link (…/mail/deeplink/search) — lands New Outlook
+  // for Windows on a search-results view for this email. Field name kept
+  // (`email_url_desktop`) so the PA card binding is unchanged; label the card action
+  // "Find in Outlook" (it's a find, not an exact-message open — that's `email_url`).
   const emailUrlDesktop = buildOutlookDesktopLink(item);
   return {
     inbox_item_id: item.id,

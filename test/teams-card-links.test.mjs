@@ -7,46 +7,43 @@ import { mapItemForTeams, buildOutlookDesktopLink } from '../api/intake.js';
 // PA flow / adaptive card bind to.
 
 describe('buildOutlookDesktopLink', () => {
-  // Uses the `open?url=<owa-link>` verb New Outlook for Windows honors — NOT the
-  // `emails/open?messageId=` verb New Outlook errors on.
-  it('wraps the captured web link (external_url) in the open?url= verb', () => {
+  // "Find in Outlook" = the documented OWA SEARCH deep link, built from a distinctive
+  // slice of the SUBJECT. The old `ms-outlook://open?url=<owa read-link>` wrapper was
+  // dropped: New Outlook for Windows treats `ms-outlook:` as a bare app activator and
+  // ignores the wrapped message target (opens to Inbox). The exact-message path is now
+  // `email_url` (the raw web read-link); this link only helps FIND the message.
+  const SEARCH = 'https://outlook.office.com/mail/deeplink/search?query=';
+
+  it('builds a subject search deep link (reads item.title, not external_url)', () => {
     const link = buildOutlookDesktopLink({
+      title: 'Deltona Wellness OM — asking $13.3M',
       external_url: 'https://outlook.office.com/mail/deeplink/read/xyz',
       metadata: { internet_message_id: '<abc123@contoso.com>', graph_rest_id: 'AAMkAG...' },
     });
-    assert.equal(
-      link,
-      'ms-outlook://open?url=' + encodeURIComponent('https://outlook.office.com/mail/deeplink/read/xyz'),
-    );
+    assert.equal(link, SEARCH + encodeURIComponent('Deltona Wellness OM — asking $13.3M'));
   });
 
-  it('single-encodes an already-encoded external_url (…%3D → …%3D, never …%253D)', () => {
-    // Real OWA deep links end in a single-encoded id (…AAA%3D). The wrapper must decode
-    // to raw before re-encoding, so the id ends %3D — the double-encode bug produced %253D
-    // and New Outlook silently no-op'd on the malformed url.
-    const external = 'https://outlook.office.com/mail/deeplink/read/AAMkAGabc%3D';
-    const link = buildOutlookDesktopLink({ external_url: external });
-    // Same as encoding the fully-decoded link exactly once.
-    assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(decodeURIComponent(external)));
-    assert.ok(link.endsWith('%3D'), 'id is single-encoded');
-    assert.ok(!link.includes('%253D'), 'no double encoding');
+  it('strips leading Re:/Fw:/Fwd: reply-forward prefixes (incl. repeated runs)', () => {
+    const link = buildOutlookDesktopLink({ title: 'RE: FW:  Fwd: NNN dialysis comps' });
+    assert.equal(link, SEARCH + encodeURIComponent('NNN dialysis comps'));
   });
 
-  it('synthesizes an OWA read link from the Graph REST id when no external_url', () => {
-    // REST id ending in `=` must be single-encoded in the wrapper, not doubled.
-    const link = buildOutlookDesktopLink({ metadata: { graph_rest_id: 'AAMkAG_x/y=' } });
-    const owa = 'https://outlook.office.com/mail/deeplink/read/AAMkAG_x/y=';
-    assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(owa));
-    assert.ok(!link.includes('%253D'), 'no double encoding');
+  it('caps a long subject to a distinctive slice on a word boundary', () => {
+    const long =
+      'Offering Memorandum for a single-tenant net-leased dialysis facility located in the ' +
+      'greater metropolitan area with long remaining term';
+    const link = buildOutlookDesktopLink({ title: long });
+    const query = decodeURIComponent(link.slice(SEARCH.length));
+    assert.ok(query.length <= 80, 'query capped at 80 chars');
+    assert.ok(long.startsWith(query), 'query is a leading slice of the subject');
+    assert.ok(!/\s$/.test(query), 'trimmed');
+    assert.ok(!query.endsWith('me'), 'no truncated mid-word token');
   });
 
-  it('falls back to an inbox/id link from the internet_message_id (brackets stripped)', () => {
-    const link = buildOutlookDesktopLink({ metadata: { internet_message_id: '<m1@ex.com>' } });
-    const owa = 'https://outlook.office365.com/mail/inbox/id/m1@ex.com';
-    assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(owa));
-  });
-
-  it('returns null when there is no URL to wrap', () => {
+  it('returns null when the row has no usable subject', () => {
+    // No subject ⇒ nothing to search ⇒ the card omits the Find button (email_url still works).
+    assert.equal(buildOutlookDesktopLink({ title: '', external_url: 'https://outlook.office.com/x' }), null);
+    assert.equal(buildOutlookDesktopLink({ title: '   Re:  ' }), null);
     assert.equal(buildOutlookDesktopLink({ metadata: {} }), null);
     assert.equal(buildOutlookDesktopLink({}), null);
     assert.equal(buildOutlookDesktopLink(null), null);
@@ -70,26 +67,35 @@ describe('mapItemForTeams', () => {
     assert.equal(out.lcc_item_url, base + '/#/inbox');
   });
 
-  it('carries the web email URL and the desktop (open?url=) deep link (Task 1)', () => {
+  it('carries the exact-message web link (email_url) + a subject-search Find link (email_url_desktop)', () => {
     const out = mapItemForTeams(
       {
         id: 'row-1',
-        title: 'Flagged',
+        title: 'Flagged deal',
         external_url: 'https://outlook.office.com/mail/deeplink/read/xyz',
         metadata: { internet_message_id: '<m1@ex.com>', sender_email: 's@ex.com' },
       },
       base,
     );
+    // Exact-message path stays the raw web read-link (opens the message in OWA).
     assert.equal(out.email_url, 'https://outlook.office.com/mail/deeplink/read/xyz');
+    // Desktop field is now the "Find in Outlook" subject search (same field name for the PA binding).
     assert.equal(
       out.email_url_desktop,
-      'ms-outlook://open?url=' + encodeURIComponent('https://outlook.office.com/mail/deeplink/read/xyz'),
+      'https://outlook.office.com/mail/deeplink/search?query=' + encodeURIComponent('Flagged deal'),
     );
   });
 
-  it('desktop link is null only when the row has no URL to wrap at all', () => {
-    const out = mapItemForTeams({ id: 'row-2', title: 'X', metadata: {} }, base);
-    assert.equal(out.email_url_desktop, null);
-    assert.equal(out.email_url, null);
+  it('the Find link is null when the row has no subject (email_url still carried when present)', () => {
+    const noSubject = mapItemForTeams(
+      { id: 'row-2', title: '', external_url: 'https://outlook.office.com/mail/deeplink/read/z', metadata: {} },
+      base,
+    );
+    assert.equal(noSubject.email_url_desktop, null);
+    assert.equal(noSubject.email_url, 'https://outlook.office.com/mail/deeplink/read/z');
+
+    const empty = mapItemForTeams({ id: 'row-3', title: '', metadata: {} }, base);
+    assert.equal(empty.email_url_desktop, null);
+    assert.equal(empty.email_url, null);
   });
 });
