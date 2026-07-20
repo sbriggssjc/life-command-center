@@ -91,6 +91,7 @@
     { "source": "/api/cross-domain-match", "destination": "/api/sync?_route=cross-domain-match" },
     { "source": "/api/listing-webhook", "destination": "/api/sync?_route=listing-webhook" },
     { "source": "/api/webhooks/processing-complete", "destination": "/api/sync?_route=processing-complete" },
+    { "source": "/api/webhooks/todo-task-created", "destination": "/api/sync?_route=todo-task-created" },
     { "source": "/api/connectors", "destination": "/api/admin?_route=connectors" },
     { "source": "/api/enrichment-worker", "destination": "/api/bridges?_route=worker" },
     { "source": "/api/salesforce-changes", "destination": "/api/bridges?_route=ingest&_source=salesforce" },
