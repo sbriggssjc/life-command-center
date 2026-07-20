@@ -7,22 +7,32 @@ import { mapItemForTeams, buildOutlookDesktopLink } from '../api/intake.js';
 // PA flow / adaptive card bind to.
 
 describe('buildOutlookDesktopLink', () => {
-  it('prefers the stable internet_message_id and strips angle brackets', () => {
+  // Uses the `open?url=<owa-link>` verb New Outlook for Windows honors — NOT the
+  // `emails/open?messageId=` verb New Outlook errors on.
+  it('wraps the captured web link (external_url) in the open?url= verb', () => {
     const link = buildOutlookDesktopLink({
+      external_url: 'https://outlook.office.com/mail/deeplink/read/xyz',
       metadata: { internet_message_id: '<abc123@contoso.com>', graph_rest_id: 'AAMkAG...' },
     });
     assert.equal(
       link,
-      'ms-outlook://emails/open?messageId=' + encodeURIComponent('abc123@contoso.com'),
+      'ms-outlook://open?url=' + encodeURIComponent('https://outlook.office.com/mail/deeplink/read/xyz'),
     );
   });
 
-  it('falls back to the Graph REST id when no internet_message_id', () => {
+  it('synthesizes an OWA read link from the Graph REST id when no external_url', () => {
     const link = buildOutlookDesktopLink({ metadata: { graph_rest_id: 'AAMkAG_x/y' } });
-    assert.equal(link, 'ms-outlook://emails/open?id=' + encodeURIComponent('AAMkAG_x/y'));
+    const owa = 'https://outlook.office.com/mail/deeplink/read/' + encodeURIComponent('AAMkAG_x/y');
+    assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(owa));
   });
 
-  it('returns null when neither id is present', () => {
+  it('falls back to an inbox/id link from the internet_message_id (brackets stripped)', () => {
+    const link = buildOutlookDesktopLink({ metadata: { internet_message_id: '<m1@ex.com>' } });
+    const owa = 'https://outlook.office365.com/mail/inbox/id/' + encodeURIComponent('m1@ex.com');
+    assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(owa));
+  });
+
+  it('returns null when there is no URL to wrap', () => {
     assert.equal(buildOutlookDesktopLink({ metadata: {} }), null);
     assert.equal(buildOutlookDesktopLink({}), null);
     assert.equal(buildOutlookDesktopLink(null), null);
@@ -46,7 +56,7 @@ describe('mapItemForTeams', () => {
     assert.equal(out.lcc_item_url, base + '/#/inbox');
   });
 
-  it('carries the web email URL and the desktop deep link (Task 1)', () => {
+  it('carries the web email URL and the desktop (open?url=) deep link (Task 1)', () => {
     const out = mapItemForTeams(
       {
         id: 'row-1',
@@ -57,12 +67,15 @@ describe('mapItemForTeams', () => {
       base,
     );
     assert.equal(out.email_url, 'https://outlook.office.com/mail/deeplink/read/xyz');
-    assert.equal(out.email_url_desktop, 'ms-outlook://emails/open?messageId=' + encodeURIComponent('m1@ex.com'));
+    assert.equal(
+      out.email_url_desktop,
+      'ms-outlook://open?url=' + encodeURIComponent('https://outlook.office.com/mail/deeplink/read/xyz'),
+    );
   });
 
-  it('desktop link is null when the row carries no message id (web-only fallback)', () => {
-    const out = mapItemForTeams({ id: 'row-2', title: 'X', external_url: 'https://x', metadata: {} }, base);
+  it('desktop link is null only when the row has no URL to wrap at all', () => {
+    const out = mapItemForTeams({ id: 'row-2', title: 'X', metadata: {} }, base);
     assert.equal(out.email_url_desktop, null);
-    assert.equal(out.email_url, 'https://x');
+    assert.equal(out.email_url, null);
   });
 });

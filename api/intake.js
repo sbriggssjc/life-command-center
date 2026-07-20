@@ -1501,25 +1501,26 @@ function correlationToIsoFloor(correlationId) {
 }
 
 // Desktop Outlook deep link (`ms-outlook://…`) for a captured inbox row.
-// Mirrors app.js `outlookLinks().desktop`: prefer the STABLE internet_message_id
-// (survives folder moves) over the mutable Graph REST id. This is the
-// server-side twin of ai-copilot/utils.ts::constructOutlookDesktopLink — it just
-// uses the internet-message-id verb instead of wrapping the web URL, so the id
-// stays stable when the email is auto-filed. Returns null when neither id is
-// present. NOTE: the `ms-outlook://` scheme targets the mobile Outlook app and
-// "New Outlook for Windows"; CLASSIC desktop Outlook (Win32) does NOT register
-// it — there is no supported URL that deep-links a specific message in classic
-// Outlook (see the Teams card notes + the PR summary).
+// Uses the `open?url=<owa-link>` verb — the form
+// ai-copilot/utils.ts::constructOutlookDesktopLink produces, and the one "New
+// Outlook for Windows" honors (it renders the wrapped OWA URL inside the client
+// instead of a browser tab). Deliberately NOT the `emails/open?messageId=` verb:
+// New Outlook errors on that with "This action isn't supported yet" — the reason
+// app.js's openOutlookEmail abandoned it. Prefers the web link already captured
+// at intake (external_url), else synthesizes an OWA read link from the Graph REST
+// id / internet_message_id. Returns null when there's no URL to wrap.
+// NOTE: `ms-outlook://` targets New Outlook for Windows + the mobile Outlook app.
+// CLASSIC desktop Outlook (Win32) does NOT register the scheme — there is no
+// supported URL that deep-links a specific message in classic Outlook.
 export function buildOutlookDesktopLink(item) {
   const meta = (item && item.metadata) || {};
   const inet = item?.internet_message_id || meta.internet_message_id || meta.message_id || '';
-  if (inet) {
-    const clean = String(inet).replace(/^<|>$/g, '');
-    return `ms-outlook://emails/open?messageId=${encodeURIComponent(clean)}`;
-  }
   const rest = meta.graph_rest_id || item?.graph_rest_id || item?.external_id || '';
-  if (rest) return `ms-outlook://emails/open?id=${encodeURIComponent(rest)}`;
-  return null;
+  const web = item?.external_url
+    || (rest ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(rest)}` : '')
+    || (inet ? `https://outlook.office365.com/mail/inbox/id/${encodeURIComponent(String(inet).replace(/^<|>$/g, ''))}` : '');
+  if (!web) return null;
+  return `ms-outlook://open?url=${encodeURIComponent(web)}`;
 }
 
 export function mapItemForTeams(item, appBase) {
