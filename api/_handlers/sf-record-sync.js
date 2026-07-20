@@ -17,8 +17,16 @@
 //   ?_route=sf-record-sync-tick&object=<name>   (default `account`)
 //   GET  → dry-run: compute the missing-id set + batch plan, write NOTHING,
 //          call NO flow.
-//   POST → drain: fetch the missing records by Id (gated on SF_RECORD_LOOKUP_URL),
-//          persist via the object's `persist`, re-measure the missing set.
+//   POST → drain: INTERLEAVE fetch+persist per batch (gated on SF_RECORD_LOOKUP_URL),
+//          re-measure the missing set. Each batch is persisted before the next
+//          fetch starts, so the budget bounds how many batches run — never whether
+//          a fetched record is kept. `records_discarded` is 0 by construction; a
+//          non-zero value is a bug signal, not an accepted outcome. (The pre-fix
+//          two-phase shape — fetch-all then persist-all sharing one ~22s budget —
+//          let the fetch phase spend the whole budget and the persist phase return
+//          0, throwing away fetched records as a "successful" 200.) Throughput
+//          telemetry (ms_missing_set / ms_lookup / ms_persist / records_per_second)
+//          lets the cron `limit` be tuned on evidence.
 //
 // SPEC-DRIVEN: adding a future object (contact / opportunity / lead) is a spec in
 // SYNC_SPECS — a { objectType, fields, computeMissing, persist } — not a new
@@ -75,7 +83,11 @@ async function accountComputeMissing(deps = {}) {
  * (persistAccountRow — the identical mint sf-account-import uses). Every fetched
  * id is needed by construction; the `neededKeys` filter is kept as DEFENSE IN
  * DEPTH against a future accidental bulk POST (a record we did not ask for is
- * skipped, never minted). ctx.deadline bounds the loop.
+ * skipped, never minted). ctx.deadline bounds the loop — but the interleave loop
+ * in runSync passes deadline:0 so a batch just fetched is ALWAYS fully persisted
+ * (never abandoned mid-write). `records_seen` = the records this call actually
+ * processed (persisted OR skipped-for-a-reason); the caller uses it to prove no
+ * fetched record was silently discarded.
  * deps.ensureLink + deps.persistRow injectable.
  */
 async function accountPersist(records, neededKeys, ctx, deps = {}) {
@@ -84,10 +96,11 @@ async function accountPersist(records, neededKeys, ctx, deps = {}) {
   const out = {
     records_persisted: 0, entities_created: 0, entities_matched: 0,
     skipped_guard: 0, skipped_bad_id: 0, skipped_no_name: 0, skipped_not_needed: 0,
-    budget_stopped: false,
+    records_seen: 0, budget_stopped: false,
   };
   for (const raw of (Array.isArray(records) ? records : [])) {
     if (ctx && ctx.deadline && Date.now() > ctx.deadline) { out.budget_stopped = true; break; }
+    out.records_seen++;
     const n = normalizeAccountRow(raw);
     if (n.skip === 'bad_id') { out.skipped_bad_id++; continue; }
     if (n.skip === 'no_name') { out.skipped_no_name++; continue; }
@@ -134,10 +147,13 @@ export function resolveSyncSpec(name) {
  *   deps.query / deps.ensureLink / deps.persistRow / deps.fetchImpl injectable.
  */
 export async function runSync({ spec, dryRun, limit, batchSize, requestIdSeed, ctx, deps = {} }) {
+  const deadline = (ctx && ctx.deadline) || 0;
+  const tMissing = Date.now();
   const before = await spec.computeMissing(deps);
+  const msMissingSet = Date.now() - tMissing;
   const missingBefore = before.missing.length;
   const fetchIds = before.missing.slice(0, limit);
-  const batches = chunk(fetchIds, batchSize).length;
+  const idBatches = chunk(fetchIds, batchSize);
   const configured = isSfRecordLookupConfigured() || !!deps.fetchImpl;
 
   const result = {
@@ -148,10 +164,11 @@ export async function runSync({ spec, dryRun, limit, batchSize, requestIdSeed, c
     needed_total: before.neededCount ?? null,
     already_known: before.knownCount ?? null,
     ids_requested: fetchIds.length,
-    batches,
+    batches: idBatches.length,
     batch_size: batchSize,
     capped: fetchIds.length < missingBefore,
     unconfigured: !configured,
+    ms_missing_set: msMissingSet,
   };
 
   // Dry-run: plan only, no flow call, no writes.
@@ -159,6 +176,7 @@ export async function runSync({ spec, dryRun, limit, batchSize, requestIdSeed, c
     result.sample_ids = fetchIds.slice(0, 10);
     result.records_returned = 0;
     result.records_persisted = 0;
+    result.records_discarded = 0;
     result.entities_created = 0;
     result.missing_after = missingBefore;
     return result;
@@ -168,38 +186,121 @@ export async function runSync({ spec, dryRun, limit, batchSize, requestIdSeed, c
   if (!configured || !fetchIds.length) {
     result.records_returned = 0;
     result.records_persisted = 0;
+    result.records_discarded = 0;
     result.entities_created = 0;
     result.missing_after = missingBefore;
     return result;
   }
 
-  // Fetch the missing records by Id (OData `Id eq …` chain, <=batchSize/batch).
-  const lookup = await lookupSfRecordsByIds({
-    objectType: spec.objectType, fields: spec.fields, ids: fetchIds,
-    batchSize, requestIdSeed, fetchImpl: deps.fetchImpl, deadline: ctx && ctx.deadline,
-  });
-  result.records_returned = Array.isArray(lookup.records) ? lookup.records.length : 0;
-  result.lookup = {
-    ok: lookup.ok, batches_run: lookup.batches_run, batches_failed: lookup.batches_failed,
-    batches_total: lookup.batches_total, budget_stopped: !!lookup.budget_stopped,
+  // ── INTERLEAVE: fetch a batch, persist THAT batch, repeat ──────────────────
+  // The budget bounds how many BATCHES run, never whether a fetched record is
+  // kept. A batch just fetched from Salesforce (real API calls) is persisted
+  // before the next fetch starts, so `records_discarded` is 0 by construction.
+  // The old two-phase shape (fetch-all → persist-all sharing one budget) let the
+  // fetch phase spend the whole budget and the persist phase return 0 — 140
+  // fetched records thrown away, reported as a successful 200.
+  const persistAgg = {
+    records_persisted: 0, entities_created: 0, entities_matched: 0,
+    skipped_guard: 0, skipped_bad_id: 0, skipped_no_name: 0, skipped_not_needed: 0,
+    records_seen: 0,
   };
-  if (lookup.errors && lookup.errors.length) result.lookup.errors = lookup.errors.slice(0, 5);
+  const lookupErrors = [];
+  let recordsReturned = 0;
+  let lookupBatchesRun = 0, lookupBatchesFailed = 0, lookupOk = true;
+  let msLookup = 0, msPersist = 0;
+  let maxBatchMs = 0;
+  let budgetStopped = false;
 
-  const persisted = await spec.persist(lookup.records || [], before.neededKeys, ctx, deps);
-  result.records_persisted = persisted.records_persisted;
-  result.entities_created = persisted.entities_created;
-  result.persist = persisted;
+  for (let i = 0; i < idBatches.length; i++) {
+    // Reserve a persist tail: don't START a batch we likely can't fetch+persist
+    // within budget (after ≥1 batch, so we always make progress). Persist itself
+    // runs WITHOUT a deadline — a started batch is never abandoned mid-write.
+    if (i > 0 && deadline && Date.now() + maxBatchMs > deadline) { budgetStopped = true; break; }
+    const batchStart = Date.now();
+
+    const lookup = await lookupSfRecordsByIds({
+      objectType: spec.objectType, fields: spec.fields, ids: idBatches[i],
+      batchSize, requestIdSeed: `${requestIdSeed}-${i}`, fetchImpl: deps.fetchImpl, deadline: 0,
+    });
+    msLookup += Date.now() - batchStart;
+    lookupBatchesRun += lookup.batches_run || 0;
+    lookupBatchesFailed += lookup.batches_failed || 0;
+    if (!lookup.ok) lookupOk = false;
+    if (lookup.errors && lookup.errors.length) {
+      for (const e of lookup.errors) if (lookupErrors.length < 5) lookupErrors.push({ ...e, batch: i });
+    }
+    const recs = Array.isArray(lookup.records) ? lookup.records : [];
+    recordsReturned += recs.length;
+
+    // Persist THIS batch immediately (deadline:0 → never abandons a fetched batch).
+    const pStart = Date.now();
+    const persisted = await spec.persist(recs, before.neededKeys, { ...ctx, deadline: 0 }, deps);
+    msPersist += Date.now() - pStart;
+    persistAgg.records_persisted += persisted.records_persisted;
+    persistAgg.entities_created += persisted.entities_created;
+    persistAgg.entities_matched += persisted.entities_matched;
+    persistAgg.skipped_guard += persisted.skipped_guard;
+    persistAgg.skipped_bad_id += persisted.skipped_bad_id;
+    persistAgg.skipped_no_name += persisted.skipped_no_name;
+    persistAgg.skipped_not_needed += persisted.skipped_not_needed;
+    persistAgg.records_seen += persisted.records_seen;
+
+    const batchMs = Date.now() - batchStart;
+    if (batchMs > maxBatchMs) maxBatchMs = batchMs;
+  }
+
+  result.records_returned = recordsReturned;
+  result.records_persisted = persistAgg.records_persisted;
+  // Fetched but never handed to persist (should ALWAYS be 0 with interleave — a
+  // non-zero value is a bug signal, not an accepted outcome).
+  result.records_discarded = Math.max(0, recordsReturned - persistAgg.records_seen);
+  result.entities_created = persistAgg.entities_created;
+  // budget_stopped scoped honestly: "stopped STARTING new batches", never
+  // "abandoned fetched records".
+  result.budget_stopped = budgetStopped;
+  result.lookup = {
+    ok: lookupOk, batches_run: lookupBatchesRun, batches_failed: lookupBatchesFailed,
+    batches_total: idBatches.length, budget_stopped: budgetStopped,
+  };
+  if (lookupErrors.length) result.lookup.errors = lookupErrors;
+  result.persist = persistAgg;
+
+  // Throughput telemetry so the cron `limit` can be tuned on evidence.
+  result.ms_lookup = msLookup;
+  result.ms_persist = msPersist;
+  const workSecs = (msLookup + msPersist) / 1000;
+  result.records_per_second = workSecs > 0
+    ? Math.round((persistAgg.records_persisted / workSecs) * 10) / 10
+    : null;
 
   // Re-measure the missing set: persisting an id makes it a known identity, so it
   // drops out — missing_after < missing_before proves progress (honest, not derived).
   const after = await spec.computeMissing(deps);
   result.missing_after = after.missing.length;
 
-  // Given the incident history, entity growth per tick is logged in its own line.
+  // A tick that fetched records but persisted none is anomalous — the pre-fix bug
+  // looked exactly like this and passed as a 200. Log it loudly; never silent.
+  if (recordsReturned > 0 && persistAgg.records_persisted === 0) {
+    console.warn('[sf-record-sync] ANOMALY object=' + spec.name
+      + ' records_returned=' + recordsReturned + ' records_persisted=0'
+      + ' skipped{guard=' + persistAgg.skipped_guard + ',not_needed=' + persistAgg.skipped_not_needed
+      + ',bad_id=' + persistAgg.skipped_bad_id + ',no_name=' + persistAgg.skipped_no_name + '}');
+  }
+  if (result.records_discarded > 0) {
+    console.warn('[sf-record-sync] ANOMALY object=' + spec.name
+      + ' records_discarded=' + result.records_discarded
+      + ' (records_returned=' + recordsReturned + ' records_seen=' + persistAgg.records_seen + ')');
+  }
+
+  // Given the incident history, entity growth + throughput per tick are logged.
   console.log('[sf-record-sync] object=' + spec.name
-    + ' entities_created=' + persisted.entities_created
-    + ' records_persisted=' + persisted.records_persisted
-    + ' missing ' + missingBefore + '->' + result.missing_after);
+    + ' entities_created=' + persistAgg.entities_created
+    + ' records_persisted=' + persistAgg.records_persisted
+    + ' records_discarded=' + result.records_discarded
+    + ' missing ' + missingBefore + '->' + result.missing_after
+    + ' ms{missing=' + msMissingSet + ',lookup=' + msLookup + ',persist=' + msPersist + '}'
+    + ' rps=' + result.records_per_second
+    + (budgetStopped ? ' budget_stopped' : ''));
 
   return result;
 }

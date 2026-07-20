@@ -10,8 +10,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveSyncSpec, SYNC_SPECS, runSync } from '../api/_handlers/sf-record-sync.js';
-import { chunk, buildOdataIdFilter } from '../api/_shared/sf-record-lookup.js';
+import { chunk, buildOdataIdFilter, normalizeCompRecords } from '../api/_shared/sf-record-lookup.js';
 import { toSf18, sf15 } from '../api/_shared/sf-id.js';
+
+// Four more valid 15-char Account (001…) ids for the multi-batch interleave tests.
+const C15 = '0011I00000AAA01';
+const D15 = '0011I00000AAA02';
+const E15 = '0011I00000AAA03';
+const F15 = '0011I00000AAA04';
+const PAST = () => Date.now() - 1;   // a deadline already expired
 
 const ID15 = '0011I00000h7mHE';           // real live 15-char Account id
 const ID18 = '0011I00000h7mHEQAY';        // its canonical 18-char form
@@ -216,6 +223,7 @@ describe('runSync — dry-run + unconfigured', () => {
       assert.equal(out.missing_before, 2);
       assert.equal(out.records_returned, 0);
       assert.equal(out.records_persisted, 0);
+      assert.equal(out.records_discarded, 0);
       assert.equal(out.missing_after, out.missing_before);
       assert.equal(out.lookup, undefined);              // the flow never ran
       assert.equal(ensured, 0);                          // no writes
@@ -223,5 +231,69 @@ describe('runSync — dry-run + unconfigured', () => {
       if (saved === undefined) delete process.env.SF_RECORD_LOOKUP_URL;
       else process.env.SF_RECORD_LOOKUP_URL = saved;
     }
+  });
+});
+
+describe('runSync — interleave (fetch a batch, persist that batch, repeat)', () => {
+  it('a budget expiring mid-drain persists EVERY fetched record (records_discarded=0)', async () => {
+    // batchSize 1 → 4 single-id batches; the deadline is already past, so after the
+    // first batch fully completes (fetch+persist) the loop stops STARTING new ones.
+    // The old two-phase shape would have fetched several then persisted 0.
+    const { spec } = resolveSyncSpec('account');
+    const { deps } = statefulDeps([C15, D15, E15, F15]);
+    const out = await runSync({ spec, dryRun: false, limit: 1000, batchSize: 1, requestIdSeed: 't', ctx: { workspaceId: 'ws', userId: 'u', deadline: PAST() }, deps });
+    assert.equal(out.mode, 'apply');
+    assert.equal(out.missing_before, 4);
+    assert.ok(out.records_returned >= 1, 'at least one batch always runs');
+    assert.equal(out.records_discarded, 0, 'no fetched record is ever thrown away');
+    assert.equal(out.records_returned, out.records_persisted, 'everything fetched was persisted');
+    assert.ok(out.missing_after < out.missing_before, 'the progress proof');
+    assert.equal(out.budget_stopped, true, 'stopped STARTING new batches');
+  });
+
+  it('a budget that expires during fetch stops cleanly with no partial/unpersisted batch', async () => {
+    // Same shape: whatever was fetched is fully persisted; the deferred remainder
+    // stays missing for the next tick (resumable). records_discarded stays 0.
+    const { spec } = resolveSyncSpec('account');
+    const { deps } = statefulDeps([C15, D15, E15, F15]);
+    const out = await runSync({ spec, dryRun: false, limit: 1000, batchSize: 1, requestIdSeed: 't', ctx: { deadline: PAST() }, deps });
+    assert.equal(out.records_discarded, 0);
+    assert.equal(out.records_persisted, out.records_returned);
+    // Exactly the persisted ids left the missing set; the rest are deferred.
+    assert.equal(out.missing_after, out.missing_before - out.records_persisted);
+    assert.ok(out.entities_created >= 1);
+  });
+
+  it('records_returned > 0 && records_persisted === 0 is impossible under normal operation', async () => {
+    const { spec } = resolveSyncSpec('account');
+    const { deps } = statefulDeps([ID18, B18]);
+    const out = await runSync({ spec, dryRun: false, limit: 1000, batchSize: 20, requestIdSeed: 't', ctx: { deadline: FAR() }, deps });
+    assert.ok(out.records_returned > 0);
+    assert.ok(!(out.records_returned > 0 && out.records_persisted === 0),
+      'a fetched-but-persisted-nothing tick — the pre-fix bug — must never happen normally');
+    assert.equal(out.records_discarded, 0);
+  });
+
+  it('reports per-phase throughput telemetry so the cron limit can be tuned on evidence', async () => {
+    const { spec } = resolveSyncSpec('account');
+    const { deps } = statefulDeps([ID18, B18]);
+    const out = await runSync({ spec, dryRun: false, limit: 1000, batchSize: 20, requestIdSeed: 't', ctx: { deadline: FAR() }, deps });
+    assert.equal(typeof out.ms_missing_set, 'number');
+    assert.equal(typeof out.ms_lookup, 'number');
+    assert.equal(typeof out.ms_persist, 'number');
+    assert.ok(out.records_per_second === null || typeof out.records_per_second === 'number');
+  });
+});
+
+describe('T4c comp lookup path in sf-record-lookup.js is untouched', () => {
+  it('normalizeCompRecords still maps a comp record to the retained-map shape', () => {
+    const out = normalizeCompRecords([
+      { Id: 'a1Y000000000001', On_Market_Date__c: '2026-01-22T00:00:00Z', CreatedDate: '2025-12-01T00:00:00Z' },
+      { id: 'a1Y000000000002' },                        // lowercase id, null dates tolerated
+      { On_Market_Date__c: '2026-01-01' },              // no id → dropped
+    ]);
+    assert.equal(out.length, 2);
+    assert.deepEqual(out[0], { sf_comp_id: 'a1Y000000000001', on_market_date: '2026-01-22', created_date: '2025-12-01' });
+    assert.deepEqual(out[1], { sf_comp_id: 'a1Y000000000002', on_market_date: null, created_date: null });
   });
 });
