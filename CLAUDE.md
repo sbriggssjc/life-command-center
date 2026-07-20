@@ -8111,6 +8111,66 @@ lane. dia/gov + SF write paths untouched.
 The Outlook `handleOutlookMessageExtract` no-tracked-party mint is a distinct live
 path; the same org-edge modeling would apply there. Not built this round.
 
+## Topic F — One-Click "Draft & Log" Action Engine (2026-07-20)
+
+One button on a cadence/prospect card that in ONE call renders a template, drafts
+the email to **Outlook Drafts** (never auto-sent), logs a **COMPLETED Salesforce
+activity** (mode-aware), and advances the cadence. `POST
+/api/operations?action=draft_and_log` → `bridgeDraftAndLog` — a router+recorder
+composing EXISTING pieces (`generateDraft` · `createOutlookDraftViaPA` ·
+`logSalesforceActivity` · `recordTemplateSend` · `advanceCadence` [single advance
+owner] · `writeSignal`), never a new pipeline. No new api/*.js; no migration;
+LCC-Opps + flagged external PA/SF writes only. Full handoff:
+`docs/DRAFT_AND_LOG_ACTION_ENGINE.md`.
+
+- **Mode A (bd, default on cadence cards):** minimal completed Task —
+  `LCC-BD · <account> · Touchpoint <N>`, status `Completed`, **NO WhatId** (pre-deal),
+  `nmType` blank (never an Opportunity). The `create_opportunity` PA contract has no
+  body field, so "near-empty body" is inherent. Cadence advances.
+- **Mode B (marketing):** `LCC-Mktg · <deal> · Marketing <N>`, **WhatId = the SF
+  Deal** (`sf_deal_id`, resolved via dia `v_sjc_deal_book`), normal detail, **no BD
+  sequence advance**.
+
+**Reuses `createSalesforceTask`** (`SF_LOOKUP_WEBHOOK_URL`, `operation=create_opportunity`)
+as the completed-activity backend via the new pure `buildSalesforceActivityPayload`
++ `logSalesforceActivity` + `resolveDraftLogMode` in `api/_shared/salesforce.js`
+(mode inference + subject/linking/privacy rules, unit-tested). Every external step
+is **feature-flagged + outcome-truthful**: with PA/SF env unset the engine still
+renders the draft (copy/mailto) + records the template send + advances the cadence;
+only the Outlook + SF writes no-op honestly (`sf_not_configured` / draft
+`reason:'no_recipient'`). Frontend `cadDraftAndLog` (`ops.js`) renders the draft
+inline + an honest status line; added as the primary **"Draft & Log →"** button
+(with **"Draft only"** = the prior review-first flow) on the outreach focus session
+(`_focusRenderCard`) + Pipeline › Prospects cards (`_pipelineCadenceCardsHTML`,
+app.js). Existing Draft/Mark-sent/Log-touch flows untouched.
+
+### Grounding refuted the SPEC's premises (reconciled, do NOT re-chase)
+- **`template_definitions` is already the mature engine** (T-001…T-014); the SPEC's
+  4 named templates live in **`bd_email_templates` on the Dialysis_DB project** (a
+  flat table read by the `detail.js` CRM workbench + `ai-copilot`, a DIFFERENT
+  surface). The cadence flow already uses `template_definitions` (`next_touch_template`
+  = a `T-00x` id), so **the 4 are NOT migrated** — migrating them risks those
+  consumers and isn't needed. A future unify is a deliberate non-goal.
+- **`touchpoint_schedule` / `outbound_activities` do not exist** as the SPEC implies:
+  the cadence table is `touchpoint_cadence` (the 7-touch `PROSPECTING_SEQUENCE` +
+  tiering is already built); `outbound_activities` is a private dia audit table, and
+  the `sync_outbound_enabled` flag gates a heavier `log_to_sf` bus the engine
+  deliberately does NOT use (it uses the lighter flagged `SF_LOOKUP_WEBHOOK_URL`
+  path). No "dormant since March 2026" marker exists in the repo.
+
+### Activation (Scott's operational steps — inert until then)
+Set `PA_OUTLOOK_DRAFT_URL` (Outlook draft flow); make the PA `create_opportunity`
+Switch case honor `status` (Completed) + `what_id` (marketing WhatId). Until then
+the SF log no-ops honestly and the draft is copy/mailto. Verified headless:
+`test/draft-and-log.test.mjs` (12: mode inference + BD/marketing subject/status/WhatId
++ label hygiene). `node --check` clean; full suite 2031 pass / 0 fail / 6 skipped.
+JS ships on the Railway redeploy.
+
+### Follow-ups (surfaced, NOT built)
+Wire the button onto the Listing-Workspace / deal-book rows as `mode:'marketing'`
+(extend the `v_sjc_deal_book` select to carry `sf_listing_id`); set `template_sends.
+deal_advanced=true` on a marketing send; the Cortex `log_memory` one-liner (a
+`draft_and_log` signal is the durable record today).
 ## Targeted SF record sync — fetch ONLY the records LCC is missing (2026-07-20)
 
 The bulk **"SF Get Accounts"** pull is the wrong shape and the live numbers proved
