@@ -159,3 +159,30 @@ the SPEC's naming:
   three renderings" enhancement.
 - Fold the 4 `bd_email_templates` into `template_definitions` if/when the CRM
   workbench + copilot are unified onto the mature engine.
+
+---
+
+## ✅ GO-LIVE VERIFIED — 2026-07-20 (PA flow live-tested end to end)
+
+Both wirings are set and the `create_opportunity` PA case was live-fired with real
+payloads against a real SF Contact (Scott Briggs) + Deal. Final verified contract:
+
+**Flow:** `Http -> Switch...` (flow id `c3744e93-5e95-4b6f-a839-d4308389d21f`),
+`create_opportunity` case → `Create record` (SF Task, `PostItem_V2`). Field map:
+
+| Task field | Maps from | Notes |
+|---|---|---|
+| `item/WhoId` | `triggerBody()?['who_id']` | the contact |
+| `item/WhatId` | `triggerBody()?['what_id']` | **marketing only** → lands in **"Related To"** = the Deal (Opportunity). There is **no** custom "Related Deal" field on Task, so Related To IS the deal link. BD sends no `what_id` → stays blank. |
+| `item/Subject` | `triggerBody()?['subject']` | `LCC-BD · <acct> · Touchpoint N` / `LCC-Mktg · <deal> · Marketing Outreach N` |
+| `item/Status` | `if(empty(triggerBody()?['status']),'Completed',triggerBody()?['status'])` | was hardcoded `Open`; **fixed** → Completed (drops to Activity History) |
+| `item/Description` | `triggerBody()?['comments']` | Comments field. **Both modes** carry a light LCC reference + touchpoint label (e.g. `LCC-BD outreach · Touchpoint N · LCC record ref: <id>`). Doctrine updated: BD is no longer blank — it carries a minimal reference, no strategy. |
+| `item/SJC_Type_sjc__c` (NM Type) | `triggerBody()?['nm_type']` (direct; the old `NMT_Type` Compose was writing junk) | always sent blank → NM Type blank (never "Opportunity"-typed) |
+
+**Engine (`api/_shared/salesforce.js`) follow-up still to apply:** `buildSalesforceActivityPayload`
+now must send **`comments` in BOTH modes** (BD: `LCC-BD · Touchpoint N · <LCC ref>`;
+marketing: `LCC-Mktg · Marketing Outreach N · <LCC ref>`), keep `nm_type` blank, and
+send `what_id` only for marketing. (The flow already honors all of these.)
+
+Observation: SF also mirrors Comments into a custom **NM Notes** field automatically
+(Ascendix) — harmless, no mapping needed.
