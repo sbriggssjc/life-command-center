@@ -173,8 +173,20 @@ export async function resolveAccountNamesByIds(ids, deps = {}) {
  * deps.query: opsQuery-shaped (method, path) => { ok, data }  (injectable).
  */
 export async function buildNeededAccountKeys(deps = {}) {
+  return new Set((await buildNeededAccountIdMap(deps)).keys());
+}
+
+/**
+ * Same "needed set" as buildNeededAccountKeys, but keeps the ACTUAL id (canonical
+ * 18-char form) per key — the targeted SF-record-sync worker needs the ids to
+ * fetch them by Id, not just the sf15 keys. Returns Map<sf15, id18>, deduped by
+ * sf15 (a member id may appear 15 or 18-char across rows). Paged 1000/row
+ * (PostgREST cap) selecting ONLY the id (a tiny jsonb projection). deps.query
+ * injectable.
+ */
+export async function buildNeededAccountIdMap(deps = {}) {
   const query = deps.query || opsQuery;
-  const keys = new Set();                              // sf15 of every needed account
+  const map = new Map();                               // sf15 -> id18 (canonical)
   const PAGE = 1000;
   for (let offset = 0; ; offset += PAGE) {
     const r = await query('GET',
@@ -183,11 +195,12 @@ export async function buildNeededAccountKeys(deps = {}) {
     const data = (r && r.ok && Array.isArray(r.data)) ? r.data : [];
     for (const row of data) {
       const k = sf15(row && row.acct);
-      if (k) keys.add(k);
+      if (!k || map.has(k)) continue;
+      map.set(k, toSf18(k) || String(row.acct));       // canonical 18 (fallback: raw)
     }
     if (data.length < PAGE) break;                     // paged past the end
   }
-  return keys;
+  return map;
 }
 
 /**
@@ -238,6 +251,40 @@ async function countExact(path, selectCol = 'id') {
 
 // ── Account-import (POST) ───────────────────────────────────────────────────
 
+/**
+ * Persist ONE normalized account row (`{id18, name}`) → mint/attach the org
+ * carrying the salesforce/Account identity. The SINGLE upsert both the bulk
+ * import (importAccounts) AND the targeted SF-record-sync worker call, so the
+ * mint semantics can't drift. ensureEntityLink dedups by external-identity then
+ * canonical_name (idempotent — a re-run reports ~0 created), applies the junk/
+ * structural guards, and NEVER fabricates (a blank name is screened by
+ * normalizeAccountRow before this is reached). Reversible via
+ * metadata.via='sf_account_import'.
+ *   → { ok:true, created, matched, entityId }  on success
+ *   → { ok:false, skipped }                    when the guard/link refuses
+ * deps.ensureLink injectable (defaults to ensureEntityLink).
+ */
+export async function persistAccountRow(n, ctx, deps = {}) {
+  const ensureLink = deps.ensureLink || ensureEntityLink;
+  const { workspaceId, userId } = ctx || {};
+  let link;
+  try {
+    link = await ensureLink({
+      workspaceId, userId,
+      sourceSystem: 'salesforce', sourceType: 'Account', externalId: n.id18,
+      seedFields: { name: n.name, org_type: 'company' },
+      domain: 'lcc',
+      metadata: { via: 'sf_account_import' },
+    });
+  } catch (e) {
+    return { ok: false, skipped: String((e && e.message) || e) };
+  }
+  if (!link || !link.ok || !link.entityId) {
+    return { ok: false, skipped: (link && link.skipped) || 'guard' };
+  }
+  return { ok: true, created: !!link.createdEntity, matched: !link.createdEntity, entityId: link.entityId };
+}
+
 export async function importAccounts(accounts, ctx, deps = {}) {
   const { workspaceId, userId, result, deadline, all } = ctx;
   const ensureLink = deps.ensureLink || ensureEntityLink;
@@ -275,24 +322,11 @@ export async function importAccounts(accounts, ctx, deps = {}) {
       }
     }
 
-    let link;
-    try {
-      // Mint/attach the org carrying the salesforce/Account identity. ensureEntityLink
-      // dedups by external-identity then canonical_name (idempotent — a re-run of the
-      // full flow reports ~0 created), applies the junk/structural guards, and NEVER
-      // fabricates (a blank name is already screened above).
-      link = await ensureLink({
-        workspaceId, userId,
-        sourceSystem: 'salesforce', sourceType: 'Account', externalId: n.id18,
-        seedFields: { name: n.name, org_type: 'company' },
-        domain: 'lcc',
-        metadata: { via: 'sf_account_import' },
-      });
-    } catch (e) {
-      link = { ok: false, skipped: String(e && e.message || e) };
-    }
-    if (!link || !link.ok || !link.entityId) { result.accounts_skipped_guard++; continue; }
-    if (link.createdEntity) result.accounts_created++;
+    // Mint/attach the org via the shared per-account upsert (the SAME path the
+    // targeted SF-record-sync worker uses — one place, can't drift).
+    const p = await persistAccountRow(n, { workspaceId, userId }, { ensureLink });
+    if (!p.ok) { result.accounts_skipped_guard++; continue; }
+    if (p.created) result.accounts_created++;
     else result.accounts_matched_existing++;
   }
 }
