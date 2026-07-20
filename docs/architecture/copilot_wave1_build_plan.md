@@ -112,10 +112,18 @@ Tasks:
 - [x] Gate transitional auth fallback behind `LCC_ENV !== 'production'`
 - [x] Wire `send_teams`, `send_webex`, `send_sms` into contacts POST switch in entity-hub.js
 - [x] Add `send_teams`, `send_webex`, `send_sms` to contactActions set in entity-hub.js
-- [ ] Verify all 18 Wave 1 action endpoints return expected responses (manual smoke test)
+- [x] Verify all 18 Wave 1 action endpoints return expected responses (smoke test 2026-07-20)
+  - 16/18 passing. Two flags: (1) `list_government_review_observations` [503] — `GOV_API_URL` env var not set in Railway; (2) `ingest_outlook_flagged_emails` pull path times out — Graph API blocked at Northmarq; PA push flow (Phase 1C) is the live path and works correctly. See Phase 1A note below.
+  - Auth rejection: [401] “Invalid API key” on bad key ✓
+  - Validation: [400] on missing required params for all write actions ✓
+  - Lifecycle enforcement: archived→triaged blocked correctly ✓
 - [x] Add pre-commit hook or CI check: `ls api/*.js | wc -l` must be <= 12
 
-**Milestone:** Auth hardened, messaging routes wired, pre-commit guard active.
+> **Phase 1A Smoke Test Gaps (2026-07-20):**
+> 1. `list_government_review_observations` — [503] `GOV_API_URL not configured`. Fix: add `GOV_API_URL` to Railway environment variables pointing to the government Supabase REST endpoint.
+> 2. `ingest_outlook_flagged_emails` (pull path) — times out because the Graph API pull is blocked at Northmarq. The Power Automate push path (Phase 1C) is the production-grade replacement and is fully operational. No fix needed for Wave 1.
+
+**Milestone:** Auth hardened, messaging routes wired, pre-commit guard active. Smoke test 16/18 — one env var fix needed (`GOV_API_URL`), one action de facto replaced by PA flow.
 
 ### Phase 1B: Daily Briefing Snapshot (Days 3-7) — COMPLETE
 **Goal:** Build the single highest-leverage Wave 1 deliverable.
@@ -320,8 +328,8 @@ Each action gets a manual validation script:
 
 ## 9. Immediate Next Actions
 
-*Updated 2026-07-20 — Phases 1B, 1C, 1D, 1E, 1F all complete. Remaining: smoke test sweep and live delivery verification.*
+*Updated 2026-07-20 — All phases complete. Smoke test done (16/18). One env fix + 3-day briefing verification remaining.*
 
-1. **Phase 1A remaining:** Full smoke test sweep across all 18 Wave 1 actions.
+1. **Fix `GOV_API_URL` env var in Railway:** Set `GOV_API_URL` to the government Supabase REST endpoint so `list_government_review_observations` returns data instead of [503].
 2. **Verification:** Daily briefing delivered for 3 consecutive weekdays (first live run on next weekday morning at 7:30 CDT).
 3. **Wave 2 consideration:** Make `entity_id` optional in `create_listing_pursuit_followup_task` (allow unlinked tasks) or add agent-side entity lookup by name.
