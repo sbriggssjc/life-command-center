@@ -678,10 +678,14 @@ async function handleOutlookMessage(req, res) {
       }
     }
 
-    // Re-flag of an already-ingested email. First emit wins: if the fresh pass
-    // already filed it, this returns that decision; if none exists (a pre-feature
-    // email re-flagged), it records a duplicate → Processed/Duplicates.
-    const processing_complete = await emitPC('duplicate', {
+    // Re-flag of an already-ingested email. First emit wins, so this normally
+    // returns the fresh pass's decision (now needs_review — the general path
+    // does not auto-file, see below). Records needs_review for a pre-feature
+    // email that never went through the fresh path, so an unclassified re-flag
+    // also stays visible in the Inbox rather than being moved to
+    // Processed/Duplicates. (Classified flows — infra / deal-closing — set their
+    // own outcome on their own branches above.)
+    const processing_complete = await emitPC('needs_review', {
       channel: 'om', inboxItemId: existing.id,
     });
     return res.status(200).json({
@@ -980,14 +984,21 @@ async function handleOutlookMessage(req, res) {
   runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
     .catch(err => console.error('[Intake extraction error]', err.message || err));
 
-  // Auto-archive decision: an email that staged an OM/lease intake is done →
-  // filed (Processed/Deals). An email that produced no staging (signal-light,
-  // no OM/PDF/URL/body) still went through intake but captured nothing → leave
-  // it in place for review rather than silently filing it away.
-  const processing_complete = await emitPC(
-    stagedIntakeId ? 'filed' : 'needs_review',
-    { channel: 'om', inboxItemId: item?.id || null },
-  );
+  // Disposition: this general flagged-email path has NO domain/category
+  // classification, so it must NOT auto-file. Staging an OM intake is NOT a
+  // terminal action — a real deal email (survey/title question, OM to review,
+  // anything not yet acted on) would get moved out of the Inbox prematurely.
+  // So it always records `needs_review`: the email stays visible + flagged in
+  // the Inbox (the Teams card + To Do task the PA flow creates are the surface),
+  // and no Outlook move is enqueued (needs_review → target_folder null →
+  // move_status 'skipped'). `filed` is reserved for classified flows where
+  // filing genuinely IS the terminal action (infra alerts stay in place;
+  // deal-closing announcements file a recorded comp). Re-enable auto-file here
+  // only once this path classifies the domain/category and can pick the correct
+  // Processed/* destination.
+  const processing_complete = await emitPC('needs_review', {
+    channel: 'om', inboxItemId: item?.id || null,
+  });
 
   return res.status(200).json({
     ok: true,
