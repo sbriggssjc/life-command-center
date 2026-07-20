@@ -116,13 +116,46 @@ processing_log;`). Key columns: `internet_message_id` (stable move key),
 `v_processing_log_daily` view rolls outcomes up per workspace per day. The
 `created_at` index supports the future retention sweep of `Processed/Duplicates`.
 
-## 6. Scope / boundaries
+## 6. Lead channels (news_alert / CREXi / LoopNet) — the edge-function twin
 
-- Only fires on the `processing_complete` emit inside `handleOutlookMessage`, so
-  mail that never went through intake is untouched.
+The `news_alert` (Google Alerts), `rcm` (CREXi/RCM LightBox), and `loopnet`
+marketplace-inquiry channels don't run through `api/intake.js` — they land in
+the `lead-ingest` **Supabase edge function** (Deno), which can't import the Node
+`emitProcessingComplete`. So they emit through the pure ESM twin
+`supabase/functions/lead-ingest/processing-complete.js`
+(`targetFolderForLead` + `buildProcessingRow`) and a best-effort I/O wrapper
+`emitLeadProcessingComplete()` in `lead-ingest/index.ts` that writes the SAME
+`public.processing_log` row (LCC Opps):
+
+| lead outcome | when | `target_folder` | `move_status` |
+| --- | --- | --- | --- |
+| `filed` | a lead was created (news alert `route=auto`; a new CREXi/LoopNet lead) | `Processed/Leads` | `pending` |
+| `needs_review` | low-confidence news alert (`route=review`) | *(null — left in Inbox)* | `skipped` |
+| `duplicate` | dedup-window / `source_ref` collision | `Processed/Duplicates` | `pending` |
+
+Because these write `move_status='pending'`, the **same batch webhook pull-queue**
+(§3b) moves them — one unified mover for every channel. So the lead-ingest PA
+flows must **not** also move the email inline (`flow-google-news-alert.json` had
+its inline "Move to Archive" removed and now defers to the pull-queue). The
+flow must send the stable `internet_message_id`
+(`triggerOutputs()?['body/internetMessageId']`) in the POST body so the
+pull-queue can move by it; `source_ref` (the mutable Graph id) is kept as the
+fallback move key. The news vertical (dialysis/government/netlease) rides the
+`domain` column as metadata only — a lead always files to `Processed/Leads`,
+never `Processed/Deals`.
+
+**Env:** the edge function needs `LCC_DEFAULT_WORKSPACE_ID` (the workspace the
+daily briefing filters on) set in its Supabase secrets; without it the emit is a
+warned no-op (lead ingestion still succeeds) and the lead won't appear in the
+briefing count. Best-effort throughout — a missing table / DB hiccup never
+blocks or fails a lead ingest.
+
+## 7. Scope / boundaries
+
+- Fires only on a `processing_complete` emit — from `handleOutlookMessage`
+  (flagged email) or a `lead-ingest` handler (§6). Mail that never went through
+  intake is untouched.
 - Never deletes — moving to `Processed/*` only. Deletion = the separate
   30-day retention sweep on `Processed/Duplicates`.
-- The `news_alert` (Google Alerts) and CoStar/CREXi/LoopNet lead channels flow
-  through the `lead-ingest` edge function / `api/sync.js`, which already carry
-  their own `archive` contract; the `Processed/Leads` mapping here is ready if
-  those channels are later routed through `emitProcessingComplete` too.
+- Infra alerts stay `needs_review` (left visible in the Inbox), by design — not
+  auto-filed.
