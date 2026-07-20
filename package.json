@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "start:railway": "NODE_ENV=production node server.js",
-    "dev": "vercel dev",
+    "dev": "node server.js",
+    "verify:deploy": "node scripts/verify-deploy.mjs",
     "lint": "eslint api/ --ext .js",
     "ai:routing": "node scripts/print-ai-chat-routing.mjs",
     "ai:status": "node scripts/ai-rollout-status.mjs",
@@ -19,8 +20,7 @@
     "ai:apply-manual": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_MANUAL_EDGE_PRESET.env.example --target .env.local",
     "test": "node --test test/*.test.js test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.js test/*.test.mjs",
-    "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs",
-    "check:functions": "node -e \"const fs=require('fs'),path=require('path');function walk(d){let n=0;for(const f of fs.readdirSync(d)){if(f.startsWith('_'))continue;const p=path.join(d,f);const s=fs.statSync(p);if(s.isDirectory())n+=walk(p);else if(f.endsWith('.js')||f.endsWith('.ts'))n++;}return n;}const c=walk('api');console.log(c+'/12 serverless functions');if(c>12){console.error('ERROR: exceeds Vercel Hobby 12-function limit');process.exit(1)}else if(c===12){console.warn('WARN: at Vercel Hobby cap; next addition will fail to deploy');}\""
+    "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -33,7 +33,6 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "eslint": "^9.0.0",
-    "vercel": "^37.0.0"
+    "eslint": "^9.0.0"
   }
 }

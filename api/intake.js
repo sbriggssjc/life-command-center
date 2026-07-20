@@ -192,8 +192,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, feedback, accuracy, processing-complete'
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy, processing-complete'
       });
   }
 });

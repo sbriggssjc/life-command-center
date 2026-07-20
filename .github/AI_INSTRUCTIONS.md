@@ -7,55 +7,30 @@ This file provides critical constraints and architectural context for any AI ass
 
 ---
 
-## HARD CONSTRAINT: Vercel Hobby Plan — 12 Serverless Function Limit
+## ROUTING: server.js is the single source of truth (Vercel retired 2026-07-20)
 
-This project is deployed on Vercel's Hobby plan, which has a **maximum of 12 serverless
-functions per deployment**. Each `.js` file directly inside `/api/` counts as one function.
-Files in subdirectories starting with `_` (like `_shared/` and `_handlers/`) do NOT count.
-
-### Current Function Inventory (9 of 12 — 3 slots free)
-
-| # | File | Purpose |
-|---|------|---------|
-| 1 | actions.js | Action lifecycle + activity logging |
-| 2 | admin.js | Workspaces, members, flags, connectors, diagnostics, edge proxies (10+ sub-routes) |
-| 3 | apply-change.js | Audited mutation service |
-| 4 | domains.js | Domain CRUD + templates + validation |
-| 5 | entity-hub.js | Contacts + Entities router (delegates to _handlers/) |
-| 6 | intake.js | Outlook message intake + summary (2 sub-routes) |
-| 7 | operations.js | Bridge actions + Workflow engine + Chat (18+ sub-routes) |
-| 8 | queue.js | Queue (v1 & v2) + inbox CRUD |
-| 9 | sync.js | Sync orchestration + RCM/LoopNet ingest + webhooks (10+ sub-routes) |
-
-#### Deleted in Phase 4b (migrated to admin.js + Supabase Edge Functions):
-- ~~daily-briefing.js~~ → edge function `daily-briefing` on LCC Opps, proxied via admin.js `_route=edge-brief`
-- ~~data-proxy.js~~ → edge function `data-query` on LCC Opps, proxied via admin.js `_route=edge-data`
-- ~~diagnostics.js~~ → absorbed into admin.js routes: `_route=config`, `_route=diag`, `_route=treasury`
+Production is the **Railway Express server** (`server.js`). Vercel was retired
+2026-07-20 after 40+ consecutive failed deploys on the Hobby 12-function cap;
+`vercel.json` is **deleted**. **There is NO serverless-function cap any more.**
+`server.js` is the sole `/api/*` routing table — add a route by mounting it there.
 
 ### RULES — Read These Carefully
 
-1. **NEVER create a new .js file directly in /api/.** You will break the deployment.
-   If you need a new endpoint, add it as a sub-route to an existing function using
-   the `action` or `_route` query parameter pattern.
+1. **Add a new endpoint as a `?_route=` (or `?action=`) sub-route of an existing
+   handler**, not a brand-new top-level pipeline. This is good structure (one
+   handler owns a family of related routes), independent of any platform cap.
 
-2. **NEVER rename or split an existing /api/*.js file** without verifying the total
-   count stays at 12 or fewer.
+2. **Mount every new route in `server.js`** — add the `app.all('/api/<name>', …)`
+   alias that sets `req.query._route = '<name>'` and delegates to the handler. That
+   mount IS the route; there is no vercel.json to update. (`test/operations-subroutes.test.mjs`
+   guards that every server.js-mounted `_route` has a matching dispatch.)
 
-3. **New helper/utility code goes in /api/_shared/ or /api/_handlers/.** These
-   directories are ignored by Vercel's function counter.
+3. **New helper/utility code goes in /api/_shared/ or /api/_handlers/.**
 
-4. **If you must add a new logical endpoint**, follow this pattern:
-   - Add handler logic inside an existing file or in `_handlers/`
-   - Add a rewrite rule in `vercel.json` to route the new path
-   - Add a case to the relevant dispatcher's switch statement
-
-5. **After any changes to /api/**, verify the count:
-   ```bash
-   ls api/*.js | wc -l  # Must be <= 12
-   ```
-
-6. **The vercel.json rewrite order matters.** Specific routes must come before the
-   catch-all `"/api/(.*)"` rule at the bottom.
+4. **After a deploy, run the deploy gate:** `npm run verify:deploy` (compares live
+   `/version` to the merge SHA and probes that critical routes return JSON, not the
+   SPA HTML). A stale/unshipped deploy fails here — the real 2026-07-20 root cause
+   was four unshipped merges misdiagnosed as dispatch regressions.
 
 ---
 
@@ -78,9 +53,9 @@ Files in subdirectories starting with `_` (like `_shared/` and `_handlers/`) do 
 - **Tier 3 (Human-in-loop):** Explicit confirmation — canonical writes, evidence promotion, merges
 
 ### Consolidation Pattern
-When multiple logical endpoints share a single serverless function, they use:
+When multiple logical endpoints share a single handler, they use:
 - `?action=<name>` for action-based routing
-- `?_route=<name>` for vercel.json rewrite routing
+- `?_route=<name>` for server.js sub-route alias routing
 - `?_domain=<name>` for domain-based delegation (entity-hub pattern)
 - `?_source=<name>` for data source selection (edge-data proxy pattern)
 - `?_edgeRoute=<name>` for mapping to edge function _route params (admin.js edge proxy)
@@ -188,10 +163,10 @@ deployment failures because they bypass review of the function count constraint.
 
 | Path | Purpose |
 |------|---------|
-| `/api/*.js` | Serverless functions (MAX 12) |
+| `/api/*.js` | API handlers (no function cap — Vercel retired 2026-07-20) |
 | `/api/_shared/` | Shared modules (auth, db, lifecycle, ai) |
 | `/api/_handlers/` | Delegated handler modules (contacts, entities) |
-| `/vercel.json` | Rewrite rules, headers, build config |
+| `/server.js` | Railway Express entry — the `/api/*` routing table + headers |
 | `/.github/AI_INSTRUCTIONS.md` | This file — AI assistant guardrails |
 | `/LCC_ARCHITECTURE_STRATEGY.md` | Full architecture strategy (2026-04-03) |
 | `/copilot_authoritative_architecture_plan.md` | Copilot integration plan |
