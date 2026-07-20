@@ -20,15 +20,29 @@ describe('buildOutlookDesktopLink', () => {
     );
   });
 
+  it('single-encodes an already-encoded external_url (…%3D → …%3D, never …%253D)', () => {
+    // Real OWA deep links end in a single-encoded id (…AAA%3D). The wrapper must decode
+    // to raw before re-encoding, so the id ends %3D — the double-encode bug produced %253D
+    // and New Outlook silently no-op'd on the malformed url.
+    const external = 'https://outlook.office.com/mail/deeplink/read/AAMkAGabc%3D';
+    const link = buildOutlookDesktopLink({ external_url: external });
+    // Same as encoding the fully-decoded link exactly once.
+    assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(decodeURIComponent(external)));
+    assert.ok(link.endsWith('%3D'), 'id is single-encoded');
+    assert.ok(!link.includes('%253D'), 'no double encoding');
+  });
+
   it('synthesizes an OWA read link from the Graph REST id when no external_url', () => {
-    const link = buildOutlookDesktopLink({ metadata: { graph_rest_id: 'AAMkAG_x/y' } });
-    const owa = 'https://outlook.office.com/mail/deeplink/read/' + encodeURIComponent('AAMkAG_x/y');
+    // REST id ending in `=` must be single-encoded in the wrapper, not doubled.
+    const link = buildOutlookDesktopLink({ metadata: { graph_rest_id: 'AAMkAG_x/y=' } });
+    const owa = 'https://outlook.office.com/mail/deeplink/read/AAMkAG_x/y=';
     assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(owa));
+    assert.ok(!link.includes('%253D'), 'no double encoding');
   });
 
   it('falls back to an inbox/id link from the internet_message_id (brackets stripped)', () => {
     const link = buildOutlookDesktopLink({ metadata: { internet_message_id: '<m1@ex.com>' } });
-    const owa = 'https://outlook.office365.com/mail/inbox/id/' + encodeURIComponent('m1@ex.com');
+    const owa = 'https://outlook.office365.com/mail/inbox/id/m1@ex.com';
     assert.equal(link, 'ms-outlook://open?url=' + encodeURIComponent(owa));
   });
 
