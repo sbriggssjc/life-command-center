@@ -189,6 +189,19 @@ export function routeNewsAlert(confidence, threshold = NEWS_ALERT_AUTO_THRESHOLD
 }
 
 // ── Google Alert parsing (deterministic — the edge function has no AI) ────────
+//
+// Google Alerts are HTML; Power Automate runs them through html2text before we
+// see them, so `rawBody` is the plain-text rendering. The header logo <img> is
+// rendered as a bracketed URL line, e.g.
+//   [https://www.google.com/intl/en_us/alerts/logo.png?cd=...]
+// followed by the alert term, a "Daily update ⋅ <date>" line, section headers,
+// then the actual result items. Each result item's link is a
+//   https://www.google.com/url?...&url=<ENCODED-PUBLISHER-URL>...
+// redirect, and the headline is the anchor/text next to it. The parser must
+// target that article link + headline, NOT the header logo (Bug: 2026-07-20 —
+// article_url/title/summary were all capturing the logo image URL because the
+// first URL in the body is the logo and the "skip lines starting with http"
+// filter missed the bracket-wrapped logo line).
 function unwrapGoogleRedirect(url) {
   // Google Alert links wrap the destination in https://www.google.com/url?...&url=<ENCODED>
   const m = /[?&]url=([^&]+)/i.exec(url);
@@ -208,15 +221,93 @@ const URL_SKIP = [
   "unsubscribe", "feedback", "mailto:", "myaccount.google",
 ];
 
-function firstArticleUrl(rawBody) {
-  const urls = String(rawBody || "").match(/https?:\/\/[^\s"'<>)]+/gi) || [];
-  for (const raw of urls) {
-    const url = unwrapGoogleRedirect(raw.replace(/[.,)]+$/, ""));
-    const low = url.toLowerCase();
-    if (URL_SKIP.some((s) => low.includes(s))) continue;
-    return url;
+// A URL still on a Google-infrastructure host after redirect-unwrapping is
+// chrome (the header logo image, alert settings, RSS, tracking) — never the
+// article. A real article link is a google.com/url?...&url=<publisher> redirect,
+// which unwrapGoogleRedirect turns into the publisher's (non-Google) URL.
+function isGoogleInfraUrl(url) {
+  return /^https?:\/\/([a-z0-9-]+\.)*(google\.com|gstatic\.com|googleusercontent\.com|goo\.gl)(?:[/?]|$)/i
+    .test(url);
+}
+
+// URL match that stops at a closing bracket, so the html2text `[<url>]` wrapping
+// (the logo line) doesn't fold the trailing "]" into the match.
+const URL_RE = /https?:\/\/[^\s"'<>)\]]+/gi;
+
+// Resolve the first REAL article link in a plain-text Google Alert: the first
+// URL that, after unwrapping the Google redirect, is not Google chrome. Returns
+// { url, lineIdx } (lineIdx is the body line it was found on, for headline
+// association) or null.
+function findArticleUrl(lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const urls = lines[i].match(URL_RE) || [];
+    for (const raw of urls) {
+      const url = unwrapGoogleRedirect(raw.replace(/[\].,)]+$/, ""));
+      const low = url.toLowerCase();
+      if (URL_SKIP.some((s) => low.includes(s))) continue;
+      if (isGoogleInfraUrl(url)) continue;
+      return { url, lineIdx: i };
+    }
   }
   return null;
+}
+
+// Strip URLs + markdown/link scaffolding from a candidate headline line so we
+// keep the human-readable text: `[Title](url)` -> `Title`, `Title (url)` ->
+// `Title`, and a bare/bracketed URL -> "".
+function cleanTitleText(s) {
+  return String(s || "")
+    .replace(/\[([^\]]+)\]\(\s*https?:[^)]*\)/gi, "$1") // [Title](url) -> Title
+    .replace(/\(\s*https?:[^)]*\)/gi, " ")              // trailing (url)
+    .replace(URL_RE, " ")                               // any bare url
+    .replace(/[[\]]/g, " ")                             // stray brackets
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Is `line` Google-Alert chrome/boilerplate rather than an article headline?
+function isChromeLine(line, subjTerm) {
+  const s = String(line || "").trim();
+  if (!s) return true;
+  if (/^\[?\(?\s*https?:\/\//i.test(s)) return true;             // a (bracketed) URL line
+  if (/alerts\/logo\.png/i.test(s)) return true;                  // header logo
+  if (/^google\s+alerts?$/i.test(s)) return true;
+  if (/^(daily|weekly)\s+update\b/i.test(s)) return true;         // "Daily update ⋅ <date>"
+  if (/^(news|web|blogs?|videos?|books?|finance|scholar)\s*$/i.test(s)) return true; // section headers
+  if (/^(flag as irrelevant|see more results|edit (this )?alert|delete (this )?alert|unsubscribe|rss|view all|see all)/i.test(s)) return true;
+  if (subjTerm && s.toLowerCase() === subjTerm.trim().toLowerCase()) return true;   // the alert query heading
+  return false;
+}
+
+// Extract the article headline + link. Prefers the anchor text on the same line
+// as the article link, then the nearest preceding content line (the common
+// "headline line, then link line" html2text layout), then the first content
+// line anywhere, then the alert term as a last resort — but NEVER the logo/URL.
+function extractArticle(rawBody, subjTerm) {
+  const lines = String(rawBody || "").split(/\r?\n/).map((l) => l.trim());
+  const found = findArticleUrl(lines);
+  const article_url = found ? found.url : null;
+
+  const isContent = (line) =>
+    !isChromeLine(line, subjTerm) && /[A-Za-z]/.test(cleanTitleText(line));
+
+  let title = null;
+  if (found) {
+    const sameLine = cleanTitleText(lines[found.lineIdx]); // anchor text beside the link
+    if (sameLine.length > 3 && /[A-Za-z]/.test(sameLine)) title = sameLine;
+    if (!title) {
+      for (let i = found.lineIdx - 1; i >= 0; i--) {
+        if (isContent(lines[i])) { title = cleanTitleText(lines[i]); break; }
+      }
+    }
+  }
+  if (!title) {
+    const first = lines.find(isContent);
+    if (first) title = cleanTitleText(first);
+  }
+  if (!title && subjTerm) title = subjTerm.trim();
+
+  return { article_url, article_title: title || null, summary: title || null };
 }
 
 /**
@@ -242,19 +333,15 @@ export function parseGoogleAlert(rawBody, subject, watchlist) {
   const city = loc ? loc[1].trim() : null;
   const state = loc ? loc[2].trim() : null;
 
-  const article_url = firstArticleUrl(body);
-
-  // Title/summary: first substantial text line (best-effort).
-  const firstLine = body.split(/\r?\n/).map((l) => l.trim())
-    .find((l) => l.length > 12 && !/^https?:\/\//i.test(l)) || null;
+  const { article_url, article_title, summary } = extractArticle(body, subjTerm);
 
   return {
     tenant_name,
     city,
     state,
     article_url,
-    article_title: firstLine,
-    summary: firstLine,
+    article_title,
+    summary,
     match,
   };
 }

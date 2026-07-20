@@ -8171,3 +8171,89 @@ Wire the button onto the Listing-Workspace / deal-book rows as `mode:'marketing'
 (extend the `v_sjc_deal_book` select to carry `sf_listing_id`); set `template_sends.
 deal_advanced=true` on a marketing send; the Cortex `log_memory` one-liner (a
 `draft_and_log` signal is the durable record today).
+## Targeted SF record sync — fetch ONLY the records LCC is missing (2026-07-20)
+
+The bulk **"SF Get Accounts"** pull is the wrong shape and the live numbers proved
+it: a 7,335-account sweep (entities 45,797 → 53,079) covered **40 of the 4,627**
+accounts LCC actually needs (0.5%) because the connector returns accounts in Id
+order — so a sweep yields Northmarq's own office records + 2019 rows while the
+needed accounts sit scattered through a 100,000+ row table. And a full sweep
+re-adds ~100k entities — ~15× the +6,545 seed that degraded `v_priority_queue_live`
+>60s and saturated the LCC-Opps connection pool on 2026-07-19 (auth lives on this
+DB). Invert it: **ask Salesforce only for the records LCC knows it's missing, by
+Id.** LCC-Opps only; no SF writes; no dia/gov writes; no new api/*.js; no migration;
+reversible; idempotent.
+
+### The worker (spec-driven — extend the T4c transport, don't fork it)
+`?_route=sf-record-sync-tick&object=<name>` (sub-route of operations.js; handler
+`api/_handlers/sf-record-sync.js`; server.js mount + operations.js dispatch wired,
+guarded by `test/operations-subroutes.test.mjs`). **GET = dry-run** (compute the
+missing-id set + batch plan, write NOTHING, call NO flow) / **POST = drain**. Built
+around a **`SYNC_SPECS` registry** so a future object (contact / opportunity / lead)
+is a spec — `{ objectType, fields, computeMissing, persist }` — not a new worker.
+Unknown `object` → honest **400** listing the registered specs. Bounded: `?limit=`
+(default 1,000, cap 5,000) on ids + a ~22s wall-clock budget; **resumable** — a
+resolved id drops out of `computeMissing` on the next tick. **Feature-flagged on
+`SF_RECORD_LOOKUP_URL`** (the existing, already-parameterized "SF → LCC: Record
+Lookup by ID" PA flow — Account is just `object_type:"Account"`, `fields:"Id,Name"`;
+no new flow needed); unset ⇒ clean `unconfigured` no-op, no flow call, no writes.
+
+- **Transport reuse:** `lookupSfRecordsByIds` + `buildOdataIdFilter` + `chunk`
+  (`api/_shared/sf-record-lookup.js`) — already `batchSize<=20` for the SF OData
+  100-node ceiling (4,627 ids → 232 batches of ≤20). The bare-array `[{Id,Name}]`
+  flow response feeds the spec's `persist`.
+- **Account spec `computeMissing`:** DISTINCT `raw.sf_account_id_unresolved` on
+  contactless `lcc_sf_list_membership` rows (`company_name IS NULL`) MINUS ids
+  already held as a `salesforce/Account` external identity — keyed by `sf15`
+  (15↔18 safe). Reuses `buildNeededAccountIdMap` + `fetchKnownAccountKeys`
+  (`sf-account-import.js`). Live today: **4,627**.
+- **Account spec `persist`:** the SHARED **`persistAccountRow`** — the SAME
+  `ensureEntityLink(salesforce/Account, org_type:company, via:'sf_account_import')`
+  mint `sf-account-import.js` uses (extracted this round so the two can't drift;
+  guarded, idempotent, never fabricates a name). Every fetched id is needed by
+  construction, so the PR #1434 needed-only filter is redundant here but kept as
+  **defense in depth** against a future accidental bulk POST.
+- **Honest receipts:** `object`, `missing_before`, `ids_requested`, `batches`,
+  `records_returned`, `records_persisted`, `entities_created`, `missing_after`,
+  and `unconfigured` when flagged off. **`missing_after < missing_before` on a
+  successful drain is the progress proof** (persisting an id makes it a known
+  identity → it leaves the missing set on the re-measure). Entity growth is logged
+  per tick (`[sf-record-sync] object=account entities_created=N …`) given the
+  incident history.
+
+### Retire the bulk pull (Unit 4)
+The bulk **"SF Get Accounts"** flow is now obsolete AND actively risky (it's the
+path that adds ~100k entities). **Account backfill goes through
+`/api/sf-record-sync-tick?object=account`.** `POST /api/sf-account-import` (without
+`?all=1`) remains for direct `{accounts:[…]}` posts but is **not** the backfill
+mechanism; `?all=1` (persist-everything, ~100k entities) is not for casual use.
+Scott turns the bulk flow off on his side.
+
+### Schedulable — NOT scheduled (Unit 5, same gate discipline as owner-deed-autofix)
+Bounded + cheap, so it is cron-safe, but per the gate discipline (capped dry-run →
+capped real drain → Scott blesses → then schedule) it is **NOT** scheduled. When
+blessed, register on LCC Opps (no migration this round):
+```sql
+-- SELECT cron.schedule('lcc-sf-record-sync-account', '35 5 * * *',
+--   $$SELECT public.lcc_cron_post('/api/sf-record-sync-tick?object=account&limit=1000',
+--       '{}'::jsonb, 'vercel')$$);
+```
+
+### Verified (headless 2026-07-20)
+`test/sf-record-sync.test.mjs` (15: spec registry [account resolves / case-insensitive
+/ unknown→error listing specs]; `computeMissing` excludes known 15↔18 both directions /
+dedupes / empty; batching 4,627→232 of ≤20 under the node ceiling; drain persists +
+`missing_after < missing_before`; idempotent second drain creates ~0; `?limit` caps +
+defers; dry-run no flow/no writes; unconfigured clean no-op) + `test/sf-account-import.test.mjs`
+(unchanged — the extraction preserves `importAccounts` behavior). `node --check` clean
+(sf-record-sync, sf-account-import, operations, server); `ls api/*.js | wc -l`=14 (no new
+api/*.js — the handler is in `_handlers/`); full suite **2033 pass / 0 fail / 6 skipped**.
+JS ships on the Railway redeploy.
+
+### After deploy (Cowork verifies live)
+`npm run verify:deploy`; `GET /api/sf-record-sync-tick?object=account` → dry-run shows
+`missing_before ≈ 4,627` + a batch plan, writes nothing; capped real drain `POST
+…&object=account&limit=200` → coverage climbs, `entities` grows by ~ids-fetched (not tens
+of thousands), `lcc_refresh_log` queue-refresh stays low single-digit seconds; drain to
+completion, then `POST /api/sf-account-import?backfill=1&limit=500` until `members_resolved`
+= 0 (`has_company` climbs toward ~6,000); then `POST /api/operations?_route=institution-contact-tick`.
