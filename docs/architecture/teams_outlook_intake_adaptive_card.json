@@ -42,18 +42,8 @@
     },
     {
       "type": "Action.OpenUrl",
-      "title": "Triage",
-      "url": "${lcc_base_url}/?page=pageInbox&action=triage&inbox_id=${inbox_item_id}"
-    },
-    {
-      "type": "Action.OpenUrl",
-      "title": "Assign",
-      "url": "${lcc_base_url}/?page=pageInbox&action=assign&inbox_id=${inbox_item_id}"
-    },
-    {
-      "type": "Action.OpenUrl",
-      "title": "Promote",
-      "url": "${lcc_base_url}/?page=pageInbox&action=promote&inbox_id=${inbox_item_id}"
+      "title": "Open Email",
+      "url": "${email_url}"
     }
   ]
 }

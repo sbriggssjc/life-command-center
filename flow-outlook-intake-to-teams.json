@@ -9,7 +9,7 @@
       },
       "LCC_HOST": {
         "type": "String",
-        "defaultValue": "https://life-command-center-nine.vercel.app"
+        "defaultValue": "https://tranquil-delight-production-633f.up.railway.app"
       },
       "LCC_API_KEY": {
         "type": "String",
@@ -120,7 +120,33 @@
           "method": "post",
           "path": "/v3/conversations/@{encodeURIComponent(parameters('TEAMS_TEAM_ID'))}/channels/@{encodeURIComponent(parameters('TEAMS_CHANNEL_ID'))}/messages",
           "body": {
-            "content": "📥 **New Intake Item Captured**\n\n**Sender:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['sender'], triggerOutputs()?['body/from'])}\n**Subject:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['subject'], triggerOutputs()?['body/subject'])}\n**Summary:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['summary'], outputs('Compose_EmailSummary'))}\n\n🔗 **LCC Item:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['lcc_item_url'], concat(parameters('LCC_HOST'), '/?page=pageInbox'))}\n\n**Suggested actions:** Triage | Assign | Promote\n\n_Run:_ @{body('HTTP_IngestEmails')?['correlation_id']}\n_Processed:_ @{body('HTTP_IngestEmails')?['processed']}\n_Failed:_ @{body('HTTP_IngestEmails')?['failed']}"
+            "content": "📥 **New Intake Item Captured**\n\n**Sender:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['sender'], triggerOutputs()?['body/from'])}\n**Subject:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['subject'], triggerOutputs()?['body/subject'])}\n**Summary:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['summary'], outputs('Compose_EmailSummary'))}\n\n🔗 **LCC Item:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['lcc_item_url'], concat(parameters('LCC_HOST'), '/#/inbox'))}\n📧 **Open Email:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['email_url'], triggerOutputs()?['body/webLink'])}\n\n_Run:_ @{body('HTTP_IngestEmails')?['correlation_id']}\n_Processed:_ @{body('HTTP_IngestEmails')?['processed']}\n_Failed:_ @{body('HTTP_IngestEmails')?['failed']}"
+          }
+        }
+      },
+      "HTTP_ProcessingComplete": {
+        "type": "Http",
+        "description": "LCC relay (Option A caller): POST the single processing-complete event so LCC's /api/webhooks/processing-complete → pa-move-message.js fires the 'LCC Processing Complete → Move Message' flow. One POST per flagged email (single internet_message_id from the trigger — never batched). Runs after the Teams card so a move failure never blocks the notification, and surfaces honestly in this flow's run history (a 502/503 marks the run failed).",
+        "runAfter": {
+          "Post_message_in_a_chat_or_channel": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "method": "POST",
+          "uri": "@{concat(parameters('LCC_HOST'), '/api/webhooks/processing-complete')}",
+          "headers": {
+            "Content-Type": "application/json",
+            "x-lcc-key": "@{parameters('LCC_API_KEY')}",
+            "x-lcc-workspace": "@{parameters('LCC_WORKSPACE')}"
+          },
+          "body": {
+            "correlation_id": "@{body('HTTP_IngestEmails')?['correlation_id']}",
+            "schema_version": "1.0",
+            "internet_message_id": "@{triggerOutputs()?['body/internetMessageId']}",
+            "target_folder": "Processed/General",
+            "disposition": "auto_filed",
+            "subject": "@{triggerOutputs()?['body/subject']}"
           }
         }
       }
