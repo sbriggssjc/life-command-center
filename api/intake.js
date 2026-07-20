@@ -1516,11 +1516,30 @@ export function buildOutlookDesktopLink(item) {
   const meta = (item && item.metadata) || {};
   const inet = item?.internet_message_id || meta.internet_message_id || meta.message_id || '';
   const rest = meta.graph_rest_id || item?.graph_rest_id || item?.external_id || '';
-  const web = item?.external_url
-    || (rest ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(rest)}` : '')
-    || (inet ? `https://outlook.office365.com/mail/inbox/id/${encodeURIComponent(String(inet).replace(/^<|>$/g, ''))}` : '');
-  if (!web) return null;
-  return `ms-outlook://open?url=${encodeURIComponent(web)}`;
+  // Build the RAW (fully-decoded) OWA web link, then percent-encode it EXACTLY ONCE
+  // when wrapping it in `ms-outlook://open?url=`. The captured `external_url` is already
+  // a ready-to-open OWA deep link with its id segment single-encoded (…AAA%3D), so
+  // re-encoding it verbatim double-encodes (%3D → %253D) and New Outlook silently
+  // no-ops on the malformed url. Decoding to raw first (and NOT pre-encoding the
+  // synthesized branches' ids) makes the single `encodeURIComponent` below produce the
+  // same single-encoded form as `external_url` (…AAA%3D), never a doubly-encoded one.
+  const rawWeb = decodeUrlSafe(item?.external_url)
+    || (rest ? `https://outlook.office.com/mail/deeplink/read/${rest}` : '')
+    || (inet ? `https://outlook.office365.com/mail/inbox/id/${String(inet).replace(/^<|>$/g, '')}` : '');
+  if (!rawWeb) return null;
+  return `ms-outlook://open?url=${encodeURIComponent(rawWeb)}`;
+}
+
+// Decode a captured URL back to its raw form so buildOutlookDesktopLink can re-encode it
+// exactly once. Best-effort: external_url is external data, so a malformed %-escape falls
+// back to the original string rather than dropping the link entirely.
+function decodeUrlSafe(url) {
+  if (!url) return '';
+  try {
+    return decodeURIComponent(url);
+  } catch {
+    return url;
+  }
 }
 
 export function mapItemForTeams(item, appBase) {
