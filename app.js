@@ -4881,9 +4881,15 @@ function _pipelineCadenceCardsHTML(items, page, pageSize, pageVar, renderFn) {
     const tmpl = it.next_touch_template ? String(it.next_touch_template) : '';
     let action = '';
     if (canCad && isEmail && cid && eid && tmpl && typeof cadDraft === 'function') {
-      action = '<button class="q-action primary" onclick="cadDraft(' + jsStringArg(cid) + ',' + jsStringArg(eid)
-        + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
-        + ',' + jsStringArg(it.contact_email || '') + ',' + jsStringArg(it.contact_id || '') + ', this)">Draft email →</button>';
+      const cadArgs = jsStringArg(cid) + ',' + jsStringArg(eid) + ',' + jsStringArg(tmpl)
+        + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
+        + ',' + jsStringArg(it.contact_email || '') + ',' + jsStringArg(it.contact_id || '') + ', this';
+      // One-click Draft & Log (Topic F) primary; "Draft only" keeps review-first.
+      action = (typeof cadDraftAndLog === 'function'
+          ? '<button class="q-action primary" onclick="cadDraftAndLog(' + cadArgs + ')">Draft &amp; Log →</button>'
+          : '')
+        + '<button class="q-action" onclick="cadDraft(' + cadArgs + ')">'
+        + (typeof cadDraftAndLog === 'function' ? 'Draft only' : 'Draft email →') + '</button>';
     } else if (canCad && cid && eid && typeof cadLogTouch === 'function') {
       action = '<button class="q-action primary" onclick="cadLogTouch(' + jsStringArg(cid) + ',' + jsStringArg(eid)
         + ',' + jsStringArg(nt || 'call') + ', this)">Log touch →</button>';

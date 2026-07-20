@@ -70,6 +70,7 @@ import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSugges
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
+import { logSalesforceActivity, resolveDraftLogMode } from './_shared/salesforce.js';
 import { ACTION_SCHEMAS, generateOpenApiSpec, generateSwagger2Spec, generatePluginManifest } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
 import { ingestPdfWorker } from './intake.js';
@@ -382,6 +383,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
       case 'snooze_cadence':     return await bridgeSnoozeCadence(req, res, user, workspaceId);
       case 'set_contact_email':  return await bridgeSetContactEmail(req, res, user, workspaceId);
+      case 'draft_and_log':      return await bridgeDraftAndLog(req, res, user, workspaceId);
 
       // Workflow actions
       case 'promote_to_shared':  return await promoteToShared(req, res, user, workspaceId);
@@ -396,7 +398,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity, advance_cadence, snooze_cadence, set_contact_email. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity, open_government_buyer'
+          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity, advance_cadence, snooze_cadence, set_contact_email, draft_and_log. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage. Prospecting: create_lead, initiate_cadence, open_opportunity, open_government_buyer'
         });
     }
   }
@@ -749,6 +751,202 @@ async function bridgeSetContactEmail(req, res, user, workspaceId) {
     { email, updated_at: new Date().toISOString() });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to save email', detail: r.data });
   return res.status(200).json({ ok: true, entity_id: entityId, email });
+}
+
+// ============================================================================
+// BRIDGE: Draft & Log Action Engine (Topic F) — one call, one touchpoint
+//
+// The one-click "Draft & Log": render a template, draft the email to Outlook
+// Drafts (NEVER auto-sent), log a COMPLETED Salesforce activity, and advance the
+// cadence — mode-aware (BD prospecting vs marketing a Deal). Reached via
+// POST /api/operations?action=draft_and_log. This is a ROUTER + RECORDER that
+// composes the EXISTING pieces (generateDraft · createOutlookDraftViaPA ·
+// logSalesforceActivity · recordTemplateSend · advanceCadence — the single
+// advance owner), never a new pipeline. Every external step is best-effort +
+// outcome-truthful: the SF/Outlook writes are feature-flagged and no-op honestly
+// (`sf_not_configured` / draft `reason`) until Scott wires the PA/SF flows, so
+// the response always carries the rendered draft for copy/mailto fallback.
+//
+//   Mode A (bd):        completed Task, minimal subject, NO WhatId, cadence advances.
+//   Mode B (marketing): completed activity linked to the SF Deal (WhatId), no BD
+//                       sequence advance (marketing logs against the Deal).
+// ============================================================================
+async function bridgeDraftAndLog(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const templateId = String(b.template_id || '').trim();
+  if (!templateId) return res.status(400).json({ error: 'template_id is required' });
+
+  // 1. Resolve the cadence (drives the recipient / touch number / WhoId / advance).
+  //    Optional for marketing; required for a BD cadence advance. Fetch, never
+  //    create — same posture as advance_cadence.
+  let cadence = null;
+  const cadenceId = String(b.cadence_id || '').trim();
+  const entityId = String(b.entity_id || '').trim();
+  if (cadenceId) {
+    const r = await opsQuery('GET',
+      `touchpoint_cadence?id=eq.${pgFilterVal(cadenceId)}&workspace_id=eq.${pgFilterVal(workspaceId)}&limit=1`);
+    cadence = (r.ok && Array.isArray(r.data)) ? (r.data[0] || null) : null;
+  } else if (entityId || b.sf_contact_id || b.contact_id) {
+    const filters = [`workspace_id=eq.${pgFilterVal(workspaceId)}`];
+    if (entityId) filters.push(`entity_id=eq.${pgFilterVal(entityId)}`);
+    if (b.sf_contact_id) filters.push(`sf_contact_id=eq.${pgFilterVal(b.sf_contact_id)}`);
+    if (b.contact_id) filters.push(`contact_id=eq.${pgFilterVal(b.contact_id)}`);
+    const path = `touchpoint_cadence?${filters.join('&')}`
+      + `&phase=in.(prospecting,onboarding,steady_state,maintenance,buy_side)`
+      + `&order=next_touch_due.asc.nullslast&limit=1`;
+    const r = await opsQuery('GET', path);
+    cadence = (r.ok && Array.isArray(r.data)) ? (r.data[0] || null) : null;
+  }
+
+  if (!cadence && !entityId) {
+    return res.status(400).json({ error: 'provide a cadence_id or entity_id to draft & log against' });
+  }
+
+  const mode = resolveDraftLogMode(b);
+  const resolvedEntityId = cadence?.entity_id || entityId || null;
+  const domain = b.domain || cadence?.domain || b.context?.domain || null;
+  const touchNumber = Number.isFinite(+b.touch_number) ? +b.touch_number
+    : (Number.isFinite(+cadence?.current_touch) ? +cadence.current_touch + 1 : null);
+  const recipient = String(b.to || b.contact_email || '').trim();
+
+  // 2. Render the template (strict:false → always renders; the operator can edit
+  //    any unresolved placeholder before sending). Reuse the cadence context
+  //    flags so cadence-aware templates render.
+  const baseContext = (b.context && typeof b.context === 'object') ? b.context
+    : { contact: { full_name: b.name || null }, property: { domain }, domain };
+  let cadenceInfo = null;
+  if (cadence?.entity_id || cadence?.sf_contact_id || cadence?.contact_id) {
+    try {
+      cadenceInfo = await getCadenceForDraft(
+        { entity_id: cadence.entity_id, sf_contact_id: cadence.sf_contact_id, contact_id: cadence.contact_id },
+        { property_id: cadence.property_id, domain }
+      );
+      if (cadenceInfo?.ok && cadenceInfo.context_flags) Object.assign(baseContext, cadenceInfo.context_flags);
+    } catch (err) {
+      console.warn('[draft_and_log] cadence context lookup failed (non-blocking):', err.message);
+    }
+  }
+
+  const rendered = await generateDraft(templateId, baseContext, { strict: false });
+  if (!rendered.ok) {
+    // Only reachable if the template id is unknown/deprecated — an honest 422.
+    return res.status(422).json(rendered);
+  }
+  const subject = (b.final_subject != null ? String(b.final_subject) : rendered.subject) || '';
+  const body = (b.final_body != null ? String(b.final_body) : rendered.body) || '';
+
+  // 3. Draft to Outlook Drafts (best-effort, feature-flagged on PA_OUTLOOK_DRAFT_URL).
+  //    Needs a recipient; without one we still return subject/body for copy/mailto.
+  let draftOut = { created: false, web_link: null, reason: null };
+  if (b.create_draft === false) {
+    draftOut.reason = 'skipped';
+  } else if (!recipient) {
+    draftOut.reason = 'no_recipient';
+  } else {
+    try {
+      const d = await createOutlookDraftViaPA({ to: recipient, subject, body_html: textToHtml(body) });
+      draftOut = { created: !!d.ok, web_link: d.web_link || null, reason: d.ok ? null : (d.error || 'draft_failed') };
+    } catch (err) {
+      draftOut = { created: false, web_link: null, reason: 'draft_error: ' + (err.message || 'unknown') };
+    }
+  }
+
+  // 4. Log the COMPLETED Salesforce activity (mode-aware, best-effort, flagged on
+  //    SF_LOOKUP_WEBHOOK_URL). WhoId = the SF contact; a same-day double-click is
+  //    deduped by the idempotency key (the PA flow SHOULD upsert on it).
+  const whoId = String(b.sf_contact_id || cadence?.sf_contact_id || '').trim();
+  const label = b.deal_name || b.account_name || b.label || b.name
+    || cadence?.property_address || null;
+  const idemKey = `dl:${resolvedEntityId || cadence?.id || 'x'}:${todayYmd()}:${touchNumber || 0}`;
+  let sfOut = { logged: false, task_id: null, reason: 'no_sf_contact', mode };
+  if (whoId) {
+    try {
+      const sf = await logSalesforceActivity({
+        mode, whoId,
+        whatId: (mode === 'marketing') ? String(b.sf_deal_id || b.what_id || '').trim() : undefined,
+        label, touchNumber, idempotencyKey: idemKey
+      });
+      sfOut = { logged: !!sf.ok, task_id: sf.task?.Id || null, reason: sf.ok ? null : (sf.reason || 'sf_failed'), mode };
+    } catch (err) {
+      sfOut = { logged: false, task_id: null, reason: 'sf_error: ' + (err.message || 'unknown'), mode };
+    }
+  }
+
+  // 5. Record the send for the template learning loop (non-blocking).
+  let recorded = false;
+  try {
+    const rec = await recordTemplateSend({
+      template_id: templateId,
+      template_version: rendered.template_version || 1,
+      user_id: user.id,
+      entity_id: resolvedEntityId,
+      domain,
+      final_subject: subject,
+      final_body: body,
+      rendered_subject: rendered.subject,
+      rendered_body: rendered.body
+    });
+    recorded = !!rec?.ok;
+  } catch (err) {
+    console.warn('[draft_and_log] recordTemplateSend failed (non-blocking):', err.message);
+  }
+
+  // 6. Advance the cadence — BD only, via the SINGLE advance owner (record_send
+  //    already wrote the template_sends row → skip_template_send). Marketing logs
+  //    against the Deal (no BD-sequence advance) per the SPEC.
+  let cadenceOut = { advanced: false, id: cadence?.id || null, next_touch_due: cadence?.next_touch_due || null };
+  if (cadence && mode !== 'marketing') {
+    try {
+      const adv = await advanceCadence(cadence.id, {
+        type: 'email', template_id: templateId, outcome: 'sent', skip_template_send: true
+      });
+      if (adv?.ok) {
+        cadenceOut = { advanced: true, id: cadence.id, next_touch_due: adv.cadence?.next_touch_due || null };
+        // Slice-1 staleness contract — the card leaves its band immediately.
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+      }
+    } catch (err) {
+      console.warn('[draft_and_log] cadence advance failed (non-blocking):', err.message);
+    }
+  }
+
+  // 7. Update memory — a durable signal of the touch (the Cortex log_memory
+  //    one-liner is a follow-up; the signal is the built durable record today).
+  try {
+    writeSignal({
+      signal_type: 'draft_and_log', signal_category: 'communication',
+      entity_type: cadence?.contact_id ? 'contact' : 'entity',
+      entity_id: resolvedEntityId, domain, user_id: user.id,
+      payload: {
+        mode, template_id: templateId, touch_number: touchNumber,
+        sf_logged: sfOut.logged, draft_created: draftOut.created,
+        cadence_advanced: cadenceOut.advanced
+      }
+    });
+  } catch (_e) { /* non-blocking */ }
+
+  return res.status(200).json({
+    ok: true,
+    mode,
+    draft: { subject, body, created: draftOut.created, web_link: draftOut.web_link, reason: draftOut.reason,
+             unresolved_variables: rendered.unresolved_variables || [] },
+    sf: sfOut,
+    cadence: cadenceOut,
+    recorded
+  });
+}
+
+// Plain-text → minimal HTML for the Outlook draft body (escape + newline→<br>).
+function textToHtml(text) {
+  const esc = String(text == null ? '' : text)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc.replace(/\r\n|\r|\n/g, '<br>');
+}
+
+// UTC YYYY-MM-DD for the SF activity idempotency key (a same-day double-click
+// dedups on the PA upsert).
+function todayYmd() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // ============================================================================

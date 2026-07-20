@@ -3644,9 +3644,13 @@ function _focusRenderCard() {
   var tmpl = it.next_touch_template ? String(it.next_touch_template) : '';
   var primary;
   if (isEmail && tmpl) {
-    primary = '<button class="q-action primary" onclick="cadDraft(' + jsStringArg(cid) + ',' + jsStringArg(eid)
-      + ',' + jsStringArg(tmpl) + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
-      + ',' + jsStringArg(it.contact_email || '') + ',' + jsStringArg(it.contact_id || '') + ', this)">Draft email →</button>';
+    var cadArgs = jsStringArg(cid) + ',' + jsStringArg(eid) + ',' + jsStringArg(tmpl)
+      + ',' + jsStringArg(it.entity_name || '') + ',' + jsStringArg(it.domain || '')
+      + ',' + jsStringArg(it.contact_email || '') + ',' + jsStringArg(it.contact_id || '') + ', this';
+    // One-click Draft & Log (Topic F) is the primary; "Draft only" keeps the
+    // review-first flow (draft → edit → Mark sent) for operators who want it.
+    primary = '<button class="q-action primary" onclick="cadDraftAndLog(' + cadArgs + ')">Draft & Log →</button>'
+      + '<button class="q-action" onclick="cadDraft(' + cadArgs + ')">Draft only</button>';
   } else {
     primary = '<button class="q-action primary" onclick="cadLogTouch(' + jsStringArg(cid) + ',' + jsStringArg(eid)
       + ',' + jsStringArg(nt || 'call') + ', this)">Log ' + esc(nt || 'call') + ' →</button>';
@@ -4080,6 +4084,72 @@ async function cadLogTouch(cadenceId, entityId, touchType, btn) {
   }
 }
 window.cadLogTouch = cadLogTouch;
+
+// ── Draft & Log (Topic F) — ONE click: draft the email to Outlook Drafts +
+// log a COMPLETED Salesforce touchpoint + advance the cadence. The orchestrator
+// (?action=draft_and_log) does all of it; here we render the returned draft for
+// the operator to send from Outlook, and settle the card honestly (the SF/Outlook
+// writes are feature-flagged — the status line reports what actually happened).
+async function cadDraftAndLog(cadenceId, entityId, templateId, name, domain, contactEmail, contactId, btn) {
+  var card = (btn && btn.closest) ? btn.closest('.q-item, .widget') : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Drafting & logging…'; }
+  var to = (contactEmail || '').trim();
+  var res = await opsPost('/api/operations?action=draft_and_log', {
+    template_id: templateId,
+    cadence_id: cadenceId || null,
+    entity_id: entityId || null,
+    context: { contact: { name: name || '', full_name: name || '' }, property: { domain: domain || '' }, domain: domain || '' },
+    domain: domain || null,
+    name: name || null,
+    to: to || null,
+    mode: 'bd'   // cadence cards are BD prospecting; a marketing surface passes mode:'marketing' + sf_deal_id
+  });
+  if (!res.ok || !res.data || !res.data.ok) {
+    showToast('Draft & Log failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Draft & Log →'; }
+    return;
+  }
+  var d = res.data.draft || {};
+  var subject = d.subject || '';
+  var bodyText = d.body || '';
+  var sf = res.data.sf || {};
+  var advanced = res.data.cadence && res.data.cadence.advanced;
+
+  if (!card) { showToast('Draft & logged', 'success'); return; }
+  var host = card.querySelector('.cad-draft');
+  if (!host) { host = document.createElement('div'); host.className = 'cad-draft'; card.appendChild(host); }
+  var mailto = 'mailto:' + encodeURIComponent(to) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyText);
+  // Honest status line — the SF/Outlook writes no-op cleanly until Scott wires
+  // the PA flows, so say exactly what happened rather than imply a send.
+  var status = [];
+  if (d.created) status.push('✓ Draft in Outlook');
+  else if (d.reason === 'no_recipient') status.push('⚠ add a recipient to draft in Outlook');
+  else status.push('Draft ready — copy/paste below');
+  if (sf.logged) status.push('✓ logged to Salesforce');
+  else if (sf.reason === 'no_sf_contact') status.push('no SF contact — SF log skipped');
+  else if (sf.reason === 'sf_not_configured') status.push('SF logging not configured yet');
+  else status.push('SF log pending');
+  if (advanced) status.push('cadence advanced');
+
+  var openDraftBtn = d.web_link
+    ? '<a class="q-action primary" href="' + esc(d.web_link) + '" target="_blank" rel="noopener">Open Outlook draft</a>' : '';
+  host.innerHTML = (to ? '<div class="cad-draft-to"><b>To:</b> ' + esc(to) + '</div>' : '')
+    + '<div class="cad-draft-subj"><b>Subject:</b> ' + esc(subject) + '</div>'
+    + '<textarea class="cad-draft-body" rows="8" style="width:100%;margin:6px 0">' + esc(bodyText) + '</textarea>'
+    + '<div class="q-actions">'
+    + '<button class="q-action" onclick="cadCopyDraft(this)">Copy</button>'
+    + '<a class="q-action" href="' + esc(mailto) + '" target="_blank" rel="noopener">Open in mail</a>'
+    + openDraftBtn
+    + '</div>'
+    + '<div class="q-item-meta" style="margin-top:6px">' + esc(status.join(' · ')) + '</div>';
+  card._cadDraft = { subject: subject, body: bodyText };
+  // The touchpoint IS logged + the cadence advanced — settle the card and
+  // auto-advance the focus session (the draft above stays for the operator to send).
+  card.classList.add('resolved');
+  showToast(advanced ? 'Drafted & logged — cadence advanced' : 'Drafted & logged', 'success');
+  if (typeof _focusActionDone === 'function') _focusActionDone(card);
+}
+window.cadDraftAndLog = cadDraftAndLog;
 
 // Tier 3 Phase 2: deep-link from the read-only Data Quality dashboard into the
 // relevant Decision Center lane. Navigates to the Decision Center, then runs the
