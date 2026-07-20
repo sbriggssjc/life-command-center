@@ -45,6 +45,14 @@ HTTP-trigger URL; the PA flow does the actual Outlook find + move + flag-clear.
   caller supplies them**, so the relay satisfies BOTH this sheet's fuller
   `required` schema and a minimal 3-field flow — build the flow's trigger schema
   to whichever you prefer; the relay is compatible with both.
+- **To Do auto-completion fields (Option A, SHIPPED 2026-07-20):** the relay also
+  forwards `complete_todo` (boolean) and, ONLY when `complete_todo` is true,
+  `todo_task_id` + `todo_list_id`. The gate is category-driven (see "To Do task
+  completion" below): a **leave-open** category sends `complete_todo:false` and NO
+  task id, so the Move flow's conditional completion step never fires and the To
+  Do stays open. A message that was never flagged (no mapping) also gets
+  `complete_todo:false`. **The task-id lookup is best-effort — a DB miss/error
+  resolves to "leave open," never blocking the move.**
 - **Outcome-truthful:** the relay reports the PA flow's real status — an HTTP 200
   with the flow's `ok:false`, a 4xx, or a 5xx are all returned as failures
   (`moved:false`, `502`), never a false success. Transient 5xx / network errors
@@ -88,6 +96,7 @@ relay is never invoked and the HTTP trigger never fires.
 | `internet_message_id` | **The move key.** The RFC `Internet-Message-Id` header of the mail (stable, mailbox-independent). Move-by-this, not by the mutable Graph `id`. | `"<CAF…@mail.gmail.com>"` |
 | `target_folder` | Path under `Processed/` (see the taxonomy in the overview). The flow resolves/creates it. | `"Processed/OM"`, `"Processed/Duplicates"`, `"Processed/News"` |
 | `disposition` | One of `auto_filed` / `flagged` / `duplicate`. Written to `processing_log` (prompt 2) so the briefing line can count. Does NOT change the delete rule — a `duplicate` is *moved to* `Processed/Duplicates`, never deleted here. | `"auto_filed"` |
+| `category` | Optional (prompt 2's classification tag: `news` / `reference` / `fyi` / `deals` / `leads` / `general` / `infra` / `needs_review` / …). Drives the To Do auto-completion gate ONLY. Absent ⇒ the To Do is left open (allow-list default). | `"news"` |
 | `subject` | Optional, for the audit log only (never used as a match key). | `"OM — 123 Main St"` |
 
 ## Action topology
@@ -114,43 +123,80 @@ relay is never invoked and the HTTP trigger never fires.
    stable but the Flag connector keys on the item `Id`, which changed on the move).
    A Flag failure is non-fatal — the move already succeeded; log + continue (run
    after → is successful, so a flag-clear hiccup never fails the move).
-6. **Respond** — HTTP 200 `{ ok: true, correlation_id, moved: true,
+6. **Complete the linked To Do (V3) — on move success only (Option A).** Runs in
+   the SAME successful-move branch as the flag-clear (step 5), off the same
+   condition. Add a **Condition** `todo_task_id is not empty` (equivalently
+   `complete_todo is equal to true` — the relay only sends a task id when the gate
+   says complete), and in the True branch run **Update a to-do (V3)** with To-do
+   list Id `todo_list_id`, Task Id `todo_task_id`, **Status = `completed`**. When
+   the relay leaves those fields empty (a leave-open category, or an email that was
+   never flagged), the condition is false and the To Do is left OPEN — filing is
+   not always the whole job (see "To Do task completion" below). A To-do update
+   failure is non-fatal (log + continue), exactly like the flag-clear.
+7. **Respond** — HTTP 200 `{ ok: true, correlation_id, moved: true,
    internet_message_id, target_folder }`. On the no-message path respond
    `{ ok: true, moved: false, reason: "message_not_found" }` (a benign no-op —
    prompt 2 treats `moved:false` as already-handled, not an error).
-7. **Fault branch** — a `Move email` failure / timeout (Configure run after → has
+8. **Fault branch** — a `Move email` failure / timeout (Configure run after → has
    failed / has timed out) posts to the shared dead-letter (Teams alert) with the
    `correlation_id`, and responds HTTP 502 `{ ok: false, ... }` so prompt 2 can
    retry.
 
-## To Do task completion — DECISION PENDING (Scott, 2026-07-20)
+## To Do task completion — Option A, SHIPPED 2026-07-20 (Scott-confirmed)
 
-The Flag → To Do flow creates a Microsoft To Do task when Scott flags an email;
-this flow files that same email. Nothing links a specific To Do task to the email
-that spawned it, so a filed email leaves its To Do task open. Two options:
+Filing the email and completing the underlying To Do are **two different things**.
+Auto-complete the task ONLY where filing genuinely IS the whole job; leave it OPEN
+where intake is step one and a human deliverable follows (a BOV, a reply, a lead
+follow-up, anything routed to `needs_review`). Both the flag-clear (step 5) and
+the To Do completion (step 6) fire off the SAME successful-move condition.
 
-- **Option A — link + auto-complete.** Flag → To Do writes the created task's id
-  back so this flow can mark it complete on file. **Cleanest form is an LCC
-  mapping table, NOT an email custom property** (Outlook categories are visible /
-  noisy and the PA Outlook connector's extended-property support is weak). LCC is
-  already the correlation hub (this webhook round-trips every processed email
-  through LCC keyed on `internet_message_id`), so store `internet_message_id →
-  {todo_task_id, todo_list_id}` there. Requires: (1) a new step in Flag → To Do
-  POSTing the created task ids to a small LCC sub-route; (2) an LCC mapping store
-  + receiver (a sub-route, no new `api/*.js`); (3) LCC returns the task id in the
-  move-relay payload; (4) a conditional **Update a to-do (V3) → `completed`** step
-  here that fires only when a task id is present (non-flagged emails skip it).
-- **Option B — don't link; flag-clear is enough.** Treat "flag cleared + email
-  filed" (step 5) as the sufficient visible signal, and leave To Do completion a
-  MANUAL check-off (done when Scott has actually acted).
+### The link — an LCC mapping table (not an email custom property)
+Outlook categories are visible/noisy and the PA connector's extended-property
+support is weak; LCC already round-trips every processed email keyed on
+`internet_message_id`, so it is the correlation hub. The Flag → To Do flow POSTs
+the created task ids to LCC, which stores the mapping; the move-relay reads it.
 
-**The deciding question is what the To Do MEANS.** If the task is a "process this
-email" reminder that *filing* satisfies → A is honest. If it means "a human must
-personally act" → auto-completing on file asserts work that wasn't done (violates
-the honest-signals doctrine) → B. Recommendation: **ship step 5 (flag-clear) now
-regardless** (it's cheap, same-flow, unambiguously correct), and **default to B
-until Scott confirms the To Do semantics**; adopt A (mapping-table form) only if
-the To Do is really just a filing reminder. Do not build A speculatively.
+1. **Flag → To Do flow (the ONLY change to it):** after **Create a to-do (V3)**,
+   add one **HTTP** action POSTing to `/api/webhooks/todo-task-created`:
+   `{ "internet_message_id": <the flagged message's Internet-Message-Id>,
+   "todo_task_id": <Create-a-to-do output Id>, "todo_list_id": <the list Id> }`.
+   It still creates the task exactly as today; this only records which task
+   belongs to which email. (A flagged email can be BOTH moved by this flow AND
+   surfaced as a To Do by that one — orthogonal until this mapping links them.)
+2. **LCC mapping store + receiver (SHIPPED, no new `api/*.js`):**
+   `POST /api/webhooks/todo-task-created` → `api/sync.js` `?_route=todo-task-created`
+   (`handleTodoTaskCreated`) upserts `public.todo_task_map`
+   (`internet_message_id → {todo_task_id, todo_list_id}`, unique on
+   `internet_message_id` — a re-flag/re-POST relinks, never duplicates). Migration
+   `20260720120000_lcc_todo_task_map.sql` (LCC Opps, additive; drop the table →
+   zero trace). Auth mirrors the other webhooks (`X-PA-Webhook-Secret` OR an
+   authenticated user; transitional-open when the secret is unset).
+3. **The move-relay looks it up + gates it** (`handleProcessingComplete`,
+   `resolveTodoCompletion`): it computes `complete_todo` from the category gate,
+   and only when the gate says complete does it look up the task id and forward
+   `todo_task_id` + `todo_list_id` (+ `complete_todo:true`) to the Move flow.
+4. **The Move flow completes the task** — step 6 above (conditional on the task id
+   being present), in the same successful-move branch as the flag-clear.
+
+### The category gate (the tunable knob — `api/_shared/todo-complete-gate.js`)
+`shouldAutoCompleteTodo(outcome, category)`. `AUTO_COMPLETE_CATEGORIES` is the
+single confirmable constant:
+
+| Category | On a filed email | Why |
+|---|---|---|
+| `news` / `reference` / `fyi` | ✅ **auto-complete** | No human deliverable — filing closes it. |
+| `duplicate` (disposition) | ✅ **auto-complete** | A dedup has nothing to work (matched via the outcome, not a category). |
+| `deals` / `leads` | ❌ **leave open** | Intake is step one — a BOV / follow-up follows. |
+| `general` / `infra` | ❌ **leave open** | Catch-all + infra alerts stay open until each is trusted (flip in the constant when they move off `needs_review`). |
+| `needs_review` | ❌ **NEVER** (hard guard) | Explicitly still open. |
+| unknown / absent | ❌ **leave open** | Allow-list default — a new prompt-2 category never silently auto-completes. |
+
+Gate: auto-complete iff (a) a `duplicate` disposition, OR (b) `outcome ∈
+{filed, auto_filed}` AND `category ∈ AUTO_COMPLETE_CATEGORIES`; `needs_review`
+and a bare `flagged` disposition never complete. The category is prompt 2's
+conceptual set (not a live enum yet), so until prompt 2 sends `category` the gate
+returns false for every filed email ⇒ the To Do is left open (inert, safe). To
+change the policy, edit `AUTO_COMPLETE_CATEGORIES` — nothing else.
 
 ## Observability controls (all apply)
 
@@ -161,6 +207,7 @@ the To Do is really just a filing reminder. Do not build A speculatively.
 | Exponential 4×PT10S retry | On the `Move email (V2)` action. |
 | Dead-letter / fault branch | Step 7 (run-after has-failed/has-timed-out). |
 | Flag-clear on success only | Step 5 runs after Move succeeds (off the Move output `Id`); a flag-clear hiccup never fails the move. |
+| To Do completion on success + gate | Step 6 runs in the same successful-move branch, conditional on `todo_task_id` being present (the relay only sends it when the category gate says complete). A To-do-update hiccup never fails the move; a leave-open category / unmapped email leaves the To Do open. |
 | Logical-failure detection | The no-message path responds `moved:false`, and prompt 2 must treat a 200-with-`moved:false` as "not moved," not success — the same "200 ≠ ok" lesson that auto-disabled HTTP Init LLC for 14 days. |
 | Null-safe accessors | Step 2 checks the 0-results case before indexing `[0]`. |
 
@@ -175,16 +222,29 @@ the To Do is really just a filing reminder. Do not build A speculatively.
 3. POST with `target_folder:"Processed/Duplicates"` → mail moves there (it is
    **not** deleted — deletion is the Weekly Retention Sweep after 30 days).
 4. Confirm the flow's POST URL is handed to prompt 2 as the webhook target.
+5. **To Do completion (Option A):** flag a test mail, let the Flag → To Do flow
+   create a task and POST the ids to `/api/webhooks/todo-task-created`. Then hit
+   `/api/webhooks/processing-complete` for that message with a **terminal**
+   category (e.g. `category:"news"`, `outcome:"auto_filed"`): the LCC response
+   shows `complete_todo:true` + the `todo_task_id`, and the Move flow marks the To
+   Do **completed**. Repeat with a **leave-open** category (e.g. `deals`) or
+   `needs_review`: response `complete_todo:false`, no task id, the To Do stays
+   **open**. An unflagged message (no mapping) also returns `complete_todo:false`.
 
 ## Locked "do nots"
 
 - **Never delete here.** This flow only moves. `Processed/Duplicates` is a
   destination, not a deletion — the Weekly Retention Sweep is the only deleter,
   and only after 30 days.
-- **Do not touch the Flag → To Do flow** *unless* Scott picks Option A above — in
-  which case the ONLY change to it is a new step POSTing the created task's ids to
-  LCC (it still creates the task exactly as today). A flagged email can be both
-  moved by this flow AND surfaced as a To Do by that one; they are orthogonal
-  until (and unless) A links them.
+- **The ONLY change to the Flag → To Do flow is the new HTTP step** POSTing the
+  created task's ids to `/api/webhooks/todo-task-created` (it still creates the
+  task exactly as today). A flagged email can be both moved by this flow AND
+  surfaced as a To Do by that one; the mapping links them.
 - **Do not clear the flag before the move.** The flag-clear (step 5) runs only on
-  move success, off the Move action's output `Id` — never on a failed move.
+  move success, off the Move action's output `Id` — never on a failed move. The
+  To Do completion (step 6) rides the same successful-move branch.
+- **Do not blanket-complete every filed email's To Do.** Filing ≠ done. Only the
+  terminal categories auto-complete (`news`/`reference`/`fyi`/`duplicate`);
+  `needs_review` NEVER completes; unknown categories leave the To Do open. The
+  policy is one constant — `AUTO_COMPLETE_CATEGORIES` in
+  `api/_shared/todo-complete-gate.js`.

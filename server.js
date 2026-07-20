@@ -223,6 +223,7 @@ app.all('/api/lead-ingest', (req, res) => { req.query._route = 'lead-ingest'; sy
 app.all('/api/cross-domain-match', (req, res) => { req.query._route = 'cross-domain-match'; syncHandler(req, res); });
 app.all('/api/listing-webhook', (req, res) => { req.query._route = 'listing-webhook'; syncHandler(req, res); });
 app.all('/api/webhooks/processing-complete', (req, res) => { req.query._route = 'processing-complete'; syncHandler(req, res); });
+app.all('/api/webhooks/todo-task-created', (req, res) => { req.query._route = 'todo-task-created'; syncHandler(req, res); });
 
 // operations rewrites (copilot, chat, draft, bridge, workflows, context)
 app.all('/api/copilot/portfolio/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
