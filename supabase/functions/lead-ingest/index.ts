@@ -21,6 +21,78 @@ import {
   parseGoogleAlert, scoreNewsAlert, routeNewsAlert, tenantDedupKey,
   NEWS_ALERT_DEDUP_DAYS, DEFAULT_TRACKED_TENANTS,
 } from "./news-alert.js";
+import { buildProcessingRow } from "./processing-complete.js";
+
+// ── Auto-archive/cleanup: emit a processing_complete decision ────────────────
+// A lead channel (news_alert / rcm[CREXi] / loopnet) finishes an intake job and
+// records the decision in public.processing_log (LCC Opps) — the SAME table +
+// move-queue api/intake.js writes. Power Automate reads the pending rows via
+// GET /api/webhooks/processing-complete and moves the email (a filed lead →
+// Processed/Leads), and the daily briefing counts it. Best-effort: NEVER blocks
+// or fails lead ingestion (a missing workspace/table just logs a warning).
+// First emit wins (check-then-insert on (workspace_id, internet_message_id); the
+// DB unique index is the backstop against a Power-Automate replay double-insert).
+async function emitLeadProcessingComplete(
+  ops: ReturnType<typeof opsClient> | null,
+  args: {
+    internetMessageId?: string | null;
+    graphRestId?: string | null;
+    outcome: string;
+    channel?: string | null;
+    domain?: string | null;
+    sourceRef?: string | null;
+    subject?: string | null;
+  },
+): Promise<Record<string, unknown> | null> {
+  try {
+    const workspaceId = Deno.env.get("LCC_DEFAULT_WORKSPACE_ID") || null;
+    if (!workspaceId) {
+      console.warn("[lead-ingest] processing_complete skipped — LCC_DEFAULT_WORKSPACE_ID unset");
+      return null;
+    }
+    let client = ops;
+    if (!client) {
+      try { client = opsClient(); } catch { return null; }
+    }
+    if (!client) return null;
+    const built = buildProcessingRow({ workspaceId, ...args });
+    if (!built) return null;
+
+    // First emit wins: a prior row for this (workspace, message) is the
+    // authoritative decision; a Power-Automate replay must not enqueue a second
+    // move or downgrade filed→duplicate.
+    const { data: existing } = await client.from("processing_log")
+      .select("outcome,target_folder,move_status")
+      .eq("workspace_id", workspaceId)
+      .eq("internet_message_id", built.row.internet_message_id)
+      .limit(1)
+      .maybeSingle();
+    if (existing) {
+      return {
+        internet_message_id: built.row.internet_message_id,
+        outcome: existing.outcome,
+        target_folder: existing.target_folder,
+        move_status: existing.move_status,
+        deduplicated: true,
+      };
+    }
+
+    const { error } = await client.from("processing_log").insert(built.row);
+    if (error) {
+      // 23505 = a concurrent replay already inserted — treat as an idempotent
+      // no-op, not a failure. Anything else (e.g. table missing pre-migration)
+      // is non-fatal: lead ingestion already succeeded.
+      if ((error as { code?: string }).code !== "23505") {
+        console.warn("[lead-ingest] processing_complete insert failed (non-fatal):", error.message);
+      }
+      return built.event;
+    }
+    return built.event;
+  } catch (err) {
+    console.warn("[lead-ingest] processing_complete emit error (non-fatal):", (err as Error).message);
+    return null;
+  }
+}
 
 // C9 Phase 2 (2026-05-27): sanitize a parsed lead's name through the ingest
 // contract before it's written to marketing_leads. A junk/section-label or
@@ -132,7 +204,8 @@ function loadTrackedTenants(): Record<string, unknown> {
 }
 
 async function handleNewsAlertIngest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const { source_ref, subject, raw_body } = (body || {}) as Record<string, unknown>;
+  const { source_ref, subject, raw_body, internet_message_id } =
+    (body || {}) as Record<string, unknown>;
   if (!raw_body) return errorResponse(req, "raw_body is required", 400);
 
   let ops;
@@ -141,6 +214,21 @@ async function handleNewsAlertIngest(req: Request, body: Record<string, unknown>
   } catch {
     return errorResponse(req, "OPS Supabase not configured", 500);
   }
+
+  // Auto-archive/cleanup emitter, bound to this message's ids. news_alert leads
+  // and their processing_log rows both live in LCC Opps, so reuse the `ops`
+  // client. channel='news_alert' files a filed lead to Processed/Leads (the news
+  // vertical rides `domain` as metadata, never the folder).
+  const emitPC = (outcome: string, dom: string | null) =>
+    emitLeadProcessingComplete(ops, {
+      internetMessageId: (internet_message_id as string) || (source_ref as string) || null,
+      graphRestId: (source_ref as string) || null,
+      outcome,
+      channel: "news_alert",
+      domain: dom,
+      sourceRef: (source_ref as string) || null,
+      subject: (subject as string) || null,
+    });
 
   const watchlist = loadTrackedTenants();
   const extracted = parseGoogleAlert(raw_body as string, (subject || null) as string | null, watchlist);
@@ -165,9 +253,11 @@ async function handleNewsAlertIngest(req: Request, body: Record<string, unknown>
     if (extracted.state) dq = dq.ilike("state", extracted.state as string);
     const { data: dup } = await dq;
     if (Array.isArray(dup) && dup.length > 0) {
+      const pc = await emitPC("duplicate", domain);
       return jsonResponse(req, {
         ok: true, duplicate: true, news_lead_id: dup[0].news_lead_id,
         domain, tenant, confidence, route: route.route, archive: route.archive,
+        target_folder: pc?.target_folder ?? null, processing_complete: pc,
         message: `Duplicate of ${dup[0].news_lead_id} (same tenant + city/state within ${NEWS_ALERT_DEDUP_DAYS}d)`,
       });
     }
@@ -201,15 +291,21 @@ async function handleNewsAlertIngest(req: Request, body: Record<string, unknown>
     // same alert — treat as an idempotent duplicate, not an error.
     if (error) {
       if ((error as { code?: string }).code === "23505") {
+        const pc = await emitPC("duplicate", domain);
         return jsonResponse(req, {
           ok: true, duplicate: true, domain, tenant, confidence,
           route: route.route, archive: route.archive,
+          target_folder: pc?.target_folder ?? null, processing_complete: pc,
           message: "Lead already exists (duplicate source_ref)",
         });
       }
       return jsonResponse(req, { error: "Failed to insert news-alert lead", detail: error.message }, 500);
     }
 
+    // A high-confidence (route=auto) hit filed a lead → Processed/Leads. A
+    // low-confidence (route=review) hit is left in the inbox for the review
+    // queue (needs_review → no move).
+    const pc = await emitPC(route.route === "auto" ? "filed" : "needs_review", domain);
     return jsonResponse(req, {
       ok: true,
       news_lead_id: data?.news_lead_id || null,
@@ -220,6 +316,8 @@ async function handleNewsAlertIngest(req: Request, body: Record<string, unknown>
       route: route.route,            // "auto" | "review"
       status: route.status,          // "developer_unknown" | "needs_review"
       archive: route.archive,        // Power Automate archives the source email iff true
+      target_folder: pc?.target_folder ?? null,  // Processed/Leads (filed) | null (review)
+      processing_complete: pc,
       article_url: extracted.article_url,
     }, 201);
   } catch (err) {
@@ -436,10 +534,24 @@ async function matchAndCreateActivity(
 // ── RCM Ingest Handler ─────────────────────────────────────────────────────
 
 async function handleRcmIngest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const { source, source_ref, deal_name, subject, raw_body, status } = (body || {}) as Record<string, unknown>;
+  const { source, source_ref, deal_name, subject, raw_body, status, internet_message_id } =
+    (body || {}) as Record<string, unknown>;
 
   if (!raw_body) return errorResponse(req, "raw_body is required", 400);
   if (source !== "rcm") return errorResponse(req, 'source must be "rcm"', 400);
+
+  // Auto-archive/cleanup emitter (RCM/CREXi is the marketplace-inquiry channel).
+  // marketing_leads lives on DIA, but processing_log lives on LCC Opps, so pass
+  // ops=null and let the emitter lazily create the OPS client.
+  const emitPC = (outcome: string) =>
+    emitLeadProcessingComplete(null, {
+      internetMessageId: (internet_message_id as string) || (source_ref as string) || null,
+      graphRestId: (source_ref as string) || null,
+      outcome,
+      channel: "crexi",
+      sourceRef: (source_ref as string) || null,
+      subject: (deal_name || subject) as string || null,
+    });
 
   const parsed = sanitizeLeadName(parseRcmEmail(raw_body as string, (deal_name || subject || null) as string | null));
 
@@ -467,15 +579,18 @@ async function handleRcmIngest(req: Request, body: Record<string, unknown> | nul
     const lead = Array.isArray(inserted) ? inserted[0] : inserted;
 
     if (!lead || !lead.lead_id) {
-      return jsonResponse(req, { ok: true, duplicate: true, message: "Lead already exists (duplicate source_ref)", source_ref });
+      const pc = await emitPC("duplicate");
+      return jsonResponse(req, { ok: true, duplicate: true, message: "Lead already exists (duplicate source_ref)", source_ref, target_folder: pc?.target_folder ?? null, processing_complete: pc });
     }
 
     const { sfMatch, sfActivityId } = await matchAndCreateActivity(lead, parsed, "rcm", source_ref as string, raw_body as string);
 
+    const pc = await emitPC("filed");
     return jsonResponse(req, {
       ok: true, lead_id: lead.lead_id, sf_activity_id: sfActivityId,
       parsed: { lead_name: parsed.lead_name, lead_email: parsed.lead_email, lead_phone: parsed.lead_phone, lead_company: parsed.lead_company, deal_name: parsed.deal_name, activity_type: parsed.activity_type },
-      sf_match: sfMatch ? { sf_contact_id: sfMatch.sf_contact_id, name: `${sfMatch.first_name || ""} ${sfMatch.last_name || ""}`.trim() } : null
+      sf_match: sfMatch ? { sf_contact_id: sfMatch.sf_contact_id, name: `${sfMatch.first_name || ""} ${sfMatch.last_name || ""}`.trim() } : null,
+      target_folder: pc?.target_folder ?? null, processing_complete: pc
     }, 201);
   } catch (err) {
     console.error("[lead-ingest] RCM error:", (err as Error).message);
@@ -486,9 +601,21 @@ async function handleRcmIngest(req: Request, body: Record<string, unknown> | nul
 // ── LoopNet Ingest Handler ─────────────────────────────────────────────────
 
 async function handleLoopNetIngest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const { source_ref, deal_name, raw_body, status } = (body || {}) as Record<string, unknown>;
+  const { source_ref, deal_name, raw_body, status, internet_message_id } =
+    (body || {}) as Record<string, unknown>;
 
   if (!raw_body) return errorResponse(req, "raw_body is required", 400);
+
+  // Auto-archive/cleanup emitter (marketing_leads on DIA; processing_log on OPS).
+  const emitPC = (outcome: string) =>
+    emitLeadProcessingComplete(null, {
+      internetMessageId: (internet_message_id as string) || (source_ref as string) || null,
+      graphRestId: (source_ref as string) || null,
+      outcome,
+      channel: "loopnet",
+      sourceRef: (source_ref as string) || null,
+      subject: (deal_name as string) || null,
+    });
 
   const parsed = sanitizeLeadName(parseLoopNetEmail(raw_body as string, (deal_name || null) as string | null));
 
@@ -516,15 +643,18 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
     const lead = Array.isArray(inserted) ? inserted[0] : inserted;
 
     if (!lead || !lead.lead_id) {
-      return jsonResponse(req, { ok: true, duplicate: true, message: "Lead already exists (duplicate source_ref)", source_ref });
+      const pc = await emitPC("duplicate");
+      return jsonResponse(req, { ok: true, duplicate: true, message: "Lead already exists (duplicate source_ref)", source_ref, target_folder: pc?.target_folder ?? null, processing_complete: pc });
     }
 
     const { sfMatch, sfActivityId } = await matchAndCreateActivity(lead, parsed, "loopnet", source_ref as string, raw_body as string);
 
+    const pc = await emitPC("filed");
     return jsonResponse(req, {
       ok: true, lead_id: lead.lead_id, sf_activity_id: sfActivityId,
       parsed: { lead_name: parsed.lead_name, lead_email: parsed.lead_email, lead_phone: parsed.lead_phone, lead_company: parsed.lead_company, deal_name: parsed.deal_name, listing_id: parsed.listing_id, activity_type: parsed.activity_type },
-      sf_match: sfMatch ? { sf_contact_id: sfMatch.sf_contact_id, name: `${sfMatch.first_name || ""} ${sfMatch.last_name || ""}`.trim() } : null
+      sf_match: sfMatch ? { sf_contact_id: sfMatch.sf_contact_id, name: `${sfMatch.first_name || ""} ${sfMatch.last_name || ""}`.trim() } : null,
+      target_folder: pc?.target_folder ?? null, processing_complete: pc
     }, 201);
   } catch (err) {
     console.error("[lead-ingest] LoopNet error:", (err as Error).message);

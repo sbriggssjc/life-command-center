@@ -21,11 +21,20 @@ Import: `flow-google-news-alert.json` (repo root, mirrors `flow-loopnet-backfill
    Google always sends from that address, so no subject pattern is needed.
 2. **Html to text.** Google Alerts are HTML; converts the body to clean plain text.
 3. **POST** to `…/lead-ingest?action=news_alert` with
-   `{ source_ref, subject, raw_body }` and the `X-PA-Webhook-Secret` header.
-4. **Archive on `archive:true`.** The response says whether it was a high-confidence
-   tracked-tenant hit. Only then is the source email moved to **Archive** (no manual
-   step). A low-confidence hit is **left in the Inbox** for Scott's review queue —
-   it is never auto-deleted.
+   `{ source_ref, subject, raw_body, internet_message_id }` and the
+   `X-PA-Webhook-Secret` header. `source_ref` = the Outlook message `id` (mutable);
+   `internet_message_id` = `triggerOutputs()?['body/internetMessageId']` (the STABLE
+   id the auto-archive move queue uses).
+4. **The move is deferred to the auto-archive pull-queue — this flow no longer
+   moves the email inline.** The `news_alert` handler records a `processing_complete`
+   decision in `public.processing_log` (a high-confidence tracked-tenant hit →
+   `filed`/`Processed/Leads`; a low-confidence hit → `needs_review`, left in the
+   Inbox). The separate **processing-complete** Power Automate flow
+   (`GET /api/webhooks/processing-complete`) reads the pending decisions and performs
+   the Outlook move by `internetMessageId`, so a filed lead lands in
+   **Processed/Leads** and the daily briefing counts it. A low-confidence hit is
+   never moved or auto-deleted. (This unifies the move mechanism with the flagged-
+   email intake — see `docs/EMAIL_AUTO_ARCHIVE.md` §6.)
 
 ## Response contract (from the edge function)
 
@@ -40,16 +49,22 @@ Import: `flow-google-news-alert.json` (repo root, mirrors `flow-loopnet-backfill
   "route": "auto | review",
   "status": "developer_unknown | needs_review",
   "archive": true,
+  "target_folder": "Processed/Leads | Processed/Duplicates | null",
+  "processing_complete": { "internet_message_id": "…", "outcome": "filed | needs_review | duplicate", "target_folder": "…", "move_status": "pending | skipped" },
   "article_url": "https://…"
 }
 ```
 
-- `archive: true`  → `route:"auto"`, `status:"developer_unknown"` — lead auto-created,
-  the flow archives the email.
-- `archive: false` → `route:"review"`, `status:"needs_review"` — lead created flagged
-  for review; the flow leaves the email in the Inbox.
+- `route:"auto"`, `status:"developer_unknown"` → lead auto-created; the handler
+  recorded a `filed` processing_complete → `target_folder:"Processed/Leads"`,
+  `move_status:"pending"` (the pull-queue moves it).
+- `route:"review"`, `status:"needs_review"` → lead created flagged for review;
+  `needs_review` → `target_folder:null`, left in the Inbox.
 - `duplicate: true` (also returned) — a syndicated repost of a story already captured
-  within 90 days; no new lead. A high-confidence duplicate still returns `archive:true`.
+  within 90 days; no new lead → a `duplicate` processing_complete
+  (`target_folder:"Processed/Duplicates"`, `move_status:"pending"`).
+- `archive` is retained for backward compatibility; the flow no longer reads it (the
+  move is driven by `processing_complete` / the pull-queue). Prefer `target_folder`.
 
 ## Where to POST — two equivalent targets (either works)
 
@@ -86,13 +101,21 @@ returns `ops_configured: true` when the LCC-Opps env is set.
 |---|---|
 | `REPLACE_WITH_LEAD_INGEST_BASE_URL` | Either the Railway app base (`https://<railway-app>.up.railway.app/api` — full URI `…/api/lead-ingest?action=news_alert`) **or** the edge-function base (`https://<ops-ref>.supabase.co/functions/v1` — full URI `…/lead-ingest?action=news_alert`). Both reach the same handler. |
 | `REPLACE_WITH_PA_WEBHOOK_SECRET` | The `PA_WEBHOOK_SECRET` the edge function authenticates against (same secret as the RCM/LoopNet flows). |
-| `folderPath: "Archive"` (Move step) | Confirm/select the destination Archive folder in the designer if your mailbox uses a different one. |
+
+The inline "Move to Archive" step was removed (the move is now the auto-archive
+pull-queue's job — §6 of `docs/EMAIL_AUTO_ARCHIVE.md`). The `Processed/Leads` /
+`Processed/Duplicates` folders must exist in the mailbox (the processing-complete
+flow moves into them).
 
 ## Edge-function env (LCC Opps)
 
 - `OPS_SUPABASE_URL` / `OPS_SUPABASE_SERVICE_KEY` — already set (the `news_alert`
   handler writes here via `opsClient()`).
 - `PA_WEBHOOK_SECRET` — already set (shared with RCM/LoopNet).
+- `LCC_DEFAULT_WORKSPACE_ID` — the workspace the daily briefing filters on. **NEW /
+  required for the `processing_complete` emit** — the lead's `processing_log` row is
+  tagged with it so the briefing counts it. Absent ⇒ the emit is a warned no-op (lead
+  ingestion still succeeds; the lead just won't appear in the auto-filed count).
 - `TRACKED_TENANTS_JSON` *(optional)* — override the seed tenant watchlist without a
   code change. Same shape as `DEFAULT_TRACKED_TENANTS` in
   `supabase/functions/lead-ingest/news-alert.js`:
@@ -118,8 +141,11 @@ found (both capped by the ceiling).
 
 1. Send yourself a test Google Alert (or wait for one). The flow should fire.
 2. `GET …/lead-ingest?action=health` → `ops_configured: true`.
-3. A DaVita/SSA/Dollar General alert → `domain` set, `route:"auto"`, a new row in
-   `news_alert_leads` (status `developer_unknown`), and the email moved to Archive.
+3. A DaVita/SSA/Dollar General alert → `domain` set, `route:"auto"`,
+   `target_folder:"Processed/Leads"`, a new row in `news_alert_leads` (status
+   `developer_unknown`) + a `processing_log` row (`outcome:"filed"`,
+   `move_status:"pending"`). The processing-complete pull-queue then moves the email
+   to **Processed/Leads**, and the daily briefing counts it (`filed`).
 4. A vague "new dialysis center" alert (no tracked tenant named) → `route:"review"`,
-   status `needs_review`, email left in the Inbox, row visible in
+   status `needs_review`, `target_folder:null`, email left in the Inbox, row visible in
    `v_news_alert_review_queue`.
