@@ -451,10 +451,18 @@ export async function fetchRecentSfActivity(workspaceId, limit = 30) {
 }
 
 export async function fetchHotContacts(limit = 15) {
+  const path = `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`;
+  // A9b: the contacts hub follows CONTACTS_HUB. When 'ops', read the canonical
+  // LCC Opps hub (so this reader sees the reconciled/merged rows); else the
+  // legacy gov copy. Repoints together with the contacts-handler routing flip.
+  if ((process.env.CONTACTS_HUB || 'gov').toLowerCase() === 'ops') {
+    try { const r = await opsQuery('GET', path); return Array.isArray(r.data) ? r.data : []; }
+    catch { return []; }
+  }
   if (!GOV_URL || !GOV_KEY) return [];
   try {
     const res = await fetchWithTimeout(
-      `${GOV_URL}/rest/v1/unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`,
+      `${GOV_URL}/rest/v1/${path}`,
       { headers: { 'apikey': GOV_KEY, 'Authorization': `Bearer ${GOV_KEY}` } },
       5000
     );
