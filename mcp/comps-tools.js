@@ -97,6 +97,7 @@ function argsToParams(args) {
     p_include_sf: args.include_salesforce !== false,
     p_include_onmkt: !!args.include_on_market,
     p_limit: Math.min(args.limit || 200, 500),
+    p_tenant: args.tenant || null,
   };
 }
 
@@ -129,13 +130,23 @@ export function parseRequest(text) {
   if (pt.size) out.property_types = [...pt];
   if (/\bva\b|veterans|gsa|federal|government|\bgov\b|\bagency\b|\bssa\b|social security|municipal|\birs\b|\bfbi\b|\bdea\b|uscis|\bhhs\b|\bihs\b/.test(t)) out.government_only = true;
   if (/on.?market|active listing|\bavailable\b|for sale/.test(t)) out.include_on_market = true;
+  const WN = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11, twelve:12 };
+  const numOf = s => (/^\d+$/.test(s) ? parseInt(s, 10) : (WN[s] || null));
   let months = null, m;
-  if ((m = t.match(/(?:last|past|trailing)\s+(\d+)\s+month/))) months = parseInt(m[1], 10);
-  else if ((m = t.match(/(?:last|past|trailing)\s+(\d+)\s+year/))) months = parseInt(m[1], 10) * 12;
+  if ((m = t.match(/(?:last|past|trailing)\s+([a-z]+|\d+)\s+month/))) months = numOf(m[1]);
+  else if ((m = t.match(/(?:last|past|trailing)\s+([a-z]+|\d+)\s+year/))) { const n = numOf(m[1]); months = n ? n * 12 : null; }
   else if (/last\s+year|past\s+year|trailing\s+(?:12|twelve)|\bttm\b|last\s+12\s+months|\bt-?12\b/.test(t)) months = 12;
   else if (/last\s+quarter|past\s+quarter/.test(t)) months = 3;
   if (months) { const d = new Date(Date.now()); d.setMonth(d.getMonth() - months); out.date_from = d.toISOString().slice(0, 10); }
   if ((m = t.match(/since\s+(\d{4})/))) out.date_from = `${m[1]}-01-01`;
+  // Operator/tenant scoping — matched period-insensitively against tenant+operator in the RPC.
+  const OPS = [
+    [/\bu\.?\s*s\.?\s*renal\b|\busrc\b/, 'US Renal'], [/\bdavita\b/, 'DaVita'],
+    [/\bfresenius\b|\bfmc\b/, 'Fresenius'], [/\bamerican renal\b/, 'American Renal'],
+    [/\bsatellite (?:health|dialysis)\b/, 'Satellite'], [/\binnovative renal\b/, 'Innovative Renal'],
+    [/\bdialysis clinic\b|\bdci\b/, 'Dialysis Clinic'], [/\bdsi\b/, 'DSI Renal'],
+  ];
+  for (const [re, name] of OPS) if (re.test(t)) { out.tenant = name; break; }
   return out;
 }
 
@@ -175,6 +186,7 @@ export async function runSynthesize(args, deps) {
     government_only:   (args.government_only != null) ? args.government_only : p.government_only,
     date_from:         args.date_from || p.date_from,
     include_on_market: (args.include_on_market != null) ? args.include_on_market : p.include_on_market,
+    tenant:            args.tenant || p.tenant,
   };
   const route = routeIntent(eff);
   const { comps, meta } = await runComps({ ...eff, verticals: route.verticals,
@@ -183,7 +195,7 @@ export async function runSynthesize(args, deps) {
     .sort((x, y) => y._score - x._score).slice(0, Math.min(eff.limit || 100, 300));
   return { interpreted_query: {
       comp_type: eff.comp_type || 'sale', property_types: eff.property_types || null,
-      states: eff.states || null, date_from: eff.date_from || null,
+      states: eff.states || null, date_from: eff.date_from || null, tenant: eff.tenant || null,
       government_only: route.government_only, verticals: route.verticals },
     comps: scored,
     meta: { returned: scored.length,
