@@ -1,39 +1,95 @@
 // api/_shared/contacts-company-link.js
 // ============================================================================
-// Phase 1b — connect owners to people via company resolution.
+// Contact → company link (Phase 1b + the aggressive-normalizer widen).
 // ----------------------------------------------------------------------------
 // Phase 1a exact-key backfilled `unified_contacts.entity_id` (person entities,
 // all 1:1) but set NO edges. This module drains the resolved candidate surface
 // `v_lcc_contact_company_link_candidates`:
-//   * exact_unique   → auto-apply a person→owner-org edge (Unit 1). Reuses the
-//                      SAME `linkPersonToEntity` the contact picker / acquisition
-//                      worker use (dupe-guarded, `associated_with`, metadata.via
-//                      batch tag). Guarded: skip junk owner names / implausible
-//                      person names / tombstoned (the view already excludes
-//                      tombstoned + junk-flagged, this is defense-in-depth).
-//   * exact_ambiguous / fuzzy → surfaced to the Decision-Center
-//                      `contact_company_link` federated lane (Unit 2), never a
-//                      guess.
+//   * auto_appliable=true  → auto-apply a person→owner-org edge. Reuses the SAME
+//                      `linkPersonToEntity` the contact picker / acquisition
+//                      worker use (dupe-guarded, `associated_with`,
+//                      metadata.role='works_at', metadata.via batch tag). The
+//                      view flags a row auto_appliable when n_candidate_orgs=1
+//                      (the ambiguity gate) AND the AGGRESSIVE descriptor-core
+//                      of company_name == that of owner_org_name (len>=4) AND the
+//                      person guards pass. So "Blake Real Estate" ↔ "Blake Real
+//                      Estate Inc" now auto-links, not just dense-equal names.
+//   * everything else → surfaced to the Decision-Center `contact_company_link`
+//                      federated lane (never a guess).
 //
-// The matcher lives in SQL (the view, reusing lcc_normalize_entity_name); this
-// module does NOT fork a matcher. Reversible: every edge carries
-// metadata.via='contacts_phase1b:<batch_tag>'.
+// The name-core normalizer is defined ONCE — the SQL 2-arg
+// `lcc_normalize_entity_name(name, true)` (the view) and the JS
+// `aggressiveCompanyCore` (this module, the resolver's apply-time canary) are
+// kept in lockstep by test/contacts-company-link.test.mjs (SQL↔JS agreement on a
+// fixture list), so the two tiers can never drift. This module does NOT fork a
+// matcher — the match lives in the view; the JS mirror re-verifies the core at
+// apply time and is the drift canary.
+//
+// Reversible: every edge carries metadata.via='contact_company_link:<batch_tag>'.
 // ============================================================================
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { linkPersonToEntity } from './contact-attach.js';
 import { isJunkEntityName, isImplausiblePersonName, looksLikePersonName } from './entity-link.js';
 
-export const DEFAULT_BATCH_TAG = 'phase1b_20260721';
+export const DEFAULT_BATCH_TAG = 'company_link_widen_20260721';
+export const VIA_PREFIX = 'contact_company_link:';
 export const LINK_ROLE = 'works_at';
+
+// The AGGRESSIVE descriptor suffixes (trailing, iterative). Kept as an exported
+// constant so the JS mirror + the SQL function + the test all reference one list.
+// Mirrors the 2-arg lcc_normalize_entity_name(text, boolean) SQL body exactly.
+export const AGGRESSIVE_SUFFIXES = [
+  'inc', 'llc', 'lp', 'llp', 'ltd', 'corp', 'corporation', 'company', 'co', 'trust',
+  'group', 'holdings', 'partners', 'properties', 'props', 'realty', 'management',
+  'mgmt', 'associates', 'enterprises', 'capital', 'development', 'developers',
+];
+const AGGRESSIVE_SUFFIX_RE = new RegExp('\\s+(' + AGGRESSIVE_SUFFIXES.join('|') + ')$');
+
+/**
+ * Aggressive descriptor-core normalizer — the EXACT JS mirror of the SQL
+ * `lcc_normalize_entity_name(text, true)`. Order (mirrors the SQL):
+ *   lowercase → drop parentheticals → keep before the first `|` → separators to
+ *   single space → drop a leading "the" → ITERATIVELY strip a trailing descriptor
+ *   token (and the two-word "real estate") until stable → dense collapse.
+ * The loop is required: a single trailing-token pass stalls ("claremont group
+ * llc" → "claremont group") before reaching "claremont".
+ * Pure. Returns a dense lowercase string (possibly '' for all-descriptor input).
+ */
+export function aggressiveCompanyCore(name) {
+  if (name == null) return '';
+  let v = String(name).toLowerCase();
+  v = v.replace(/\([^)]*\)/g, ' ');       // drop parentheticals
+  v = v.split('|')[0];                     // keep before the first `|`
+  v = v.replace(/[^a-z0-9]+/g, ' ').trim();
+  v = v.replace(/^the\s+/, '');            // leading "the"
+  let prev;
+  do {
+    prev = v;
+    v = v.replace(/\s+real\s+estate$/, '');
+    v = v.replace(AGGRESSIVE_SUFFIX_RE, '');
+    v = v.trim();
+  } while (v !== prev);
+  return v.replace(/[^a-z0-9]+/g, '');     // dense core
+}
+
+/** The apply-time core gate: two names share an aggressive descriptor-core (>=4). */
+export function coreMatches(companyName, ownerName) {
+  const a = aggressiveCompanyCore(companyName);
+  return a.length >= 4 && a === aggressiveCompanyCore(ownerName);
+}
 
 // Columns the worker reads off the candidate view.
 export const CANDIDATE_COLS = 'unified_id,person_entity_id,person_name,company_name,'
-  + 'match_class,n_candidate_orgs,owner_org_id,owner_org_name,workspace_id,rank_value';
+  + 'match_class,n_candidate_orgs,owner_org_id,owner_org_name,workspace_id,rank_value,auto_appliable';
 
 /**
- * Pure per-row decision for an exact_unique candidate: apply a person→owner-org
+ * Pure per-row decision for an auto_appliable candidate: apply a person→owner-org
  * edge unless a guard rejects it. No I/O. deps injectable for tests.
+ *
+ * The SQL view already gated n_candidate_orgs=1 + aggressive-core equality; this
+ * planner re-applies the JS person/junk guards (the single source of the name
+ * guards) so the two tiers agree, and shapes the edge. Reversible via metadata.via.
  *
  * @returns {{action:'apply'|'skip', reason?:string, edge?:object}}
  */
@@ -60,30 +116,38 @@ export function planCompanyLink(row, opts = {}) {
       entityId: row.owner_org_id,          // the owner org "has" the contact
       contactEntityId: row.person_entity_id, // the person
       role: LINK_ROLE,
-      via: 'contacts_phase1b:' + batchTag,
+      via: VIA_PREFIX + batchTag,
     },
   };
 }
 
-/** Count exact_ambiguous + fuzzy rows (the Unit-2 review universe). */
-export async function countReviewLane(q = opsQuery) {
-  const one = async (cls) => {
-    const r = await q('GET', 'v_lcc_contact_company_link_candidates?select=unified_id'
-      + '&match_class=eq.' + cls + '&limit=1', undefined, { countMode: 'exact' });
+/**
+ * Lane counts: the auto-appliable set + the human-review remainder (single /
+ * multi candidate). PostgREST count=exact per bucket.
+ */
+export async function countLane(q = opsQuery) {
+  const one = async (filter) => {
+    const r = await q('GET', 'v_lcc_contact_company_link_candidates?select=unified_id&' + filter
+      + '&limit=1', undefined, { countMode: 'exact' });
     return (r.ok && typeof r.count === 'number') ? r.count : null;
   };
-  const [ambiguous, fuzzy] = await Promise.all([one('exact_ambiguous'), one('fuzzy')]);
-  return { ambiguous, fuzzy };
+  const [auto, reviewSingle, reviewMulti] = await Promise.all([
+    one('auto_appliable=eq.true'),
+    one('auto_appliable=eq.false&n_candidate_orgs=eq.1'),
+    one('auto_appliable=eq.false&n_candidate_orgs=gt.1'),
+  ]);
+  const review = (reviewSingle == null || reviewMulti == null) ? null : reviewSingle + reviewMulti;
+  return { auto, review, review_single: reviewSingle, review_multi: reviewMulti };
 }
 
 /**
- * Fetch a page of exact_unique candidates (value-ranked). PostgREST caps at
- * 1000/page, so callers page. `limit` bounds the total processed per invocation.
+ * Fetch a page of auto_appliable candidates (value-ranked). PostgREST caps at
+ * 1000/page; `limit` bounds the total processed per invocation.
  */
-export async function fetchExactUnique(limit, q = opsQuery) {
+export async function fetchAutoAppliable(limit, q = opsQuery) {
   const page = Math.min(1000, limit);
   const r = await q('GET', 'v_lcc_contact_company_link_candidates?select=' + CANDIDATE_COLS
-    + '&match_class=eq.exact_unique&order=rank_value.desc.nullslast,person_entity_id&limit=' + page);
+    + '&auto_appliable=eq.true&order=rank_value.desc.nullslast,person_entity_id&limit=' + page);
   if (!r.ok) return { ok: false, detail: r.data };
   return { ok: true, rows: Array.isArray(r.data) ? r.data : [] };
 }
@@ -100,7 +164,6 @@ export async function classifyOwnerState(ownerIds, q = opsQuery) {
   if (!ids.length) return out;
   const inList = ids.map((id) => pgFilterVal(id)).join(',');
   try {
-    // Owners already carrying a person edge (either direction).
     const rel = await q('GET', 'entity_relationships?select=from_entity_id,to_entity_id'
       + '&relationship_type=in.(associated_with,contact_at,works_at)'
       + '&or=(from_entity_id.in.(' + inList + '),to_entity_id.in.(' + inList + '))&limit=10000');
@@ -109,9 +172,6 @@ export async function classifyOwnerState(ownerIds, q = opsQuery) {
       for (const r of rel.data) {
         const owner = idset.has(r.from_entity_id) ? r.from_entity_id
           : (idset.has(r.to_entity_id) ? r.to_entity_id : null);
-        // We can only be sure the OWNER is here; the other end may or may not be a
-        // person. Treat any such edge as "has a related entity" — conservative for
-        // the first-contact count (may undercount first-contacts, never overcount).
         if (owner) out.hasPerson.add(owner);
       }
     }
