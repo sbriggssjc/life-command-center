@@ -344,6 +344,15 @@ async function handleOutlookMessage(req, res) {
     payload.body_html, payload.bodyHtml, payload.body_text, payload.bodyText,
     payload.body, bodyForUrlScan, bodyPreview, ''
   );
+  // FULL body persisted on the inbox row (metadata) so the in-app Inbox detail
+  // view can render the whole email — read/copy/reply without opening Outlook.
+  // The row's `body` column stays the ~255-char preview (list-light); the full
+  // HTML/text ride in metadata, size-capped (clampBody) so a large message can't
+  // bloat inbox_items on LCC Opps (auth lives there). Only present once the PA
+  // flow forwards body_html/body_text — inert until then (older rows show the
+  // preview + an "open in Outlook" note in the detail view).
+  const bodyHtmlFull = clampBody(firstNonEmpty(payload.body_html, payload.bodyHtml, ''), 200_000);
+  const bodyTextFull = clampBody(firstNonEmpty(payload.body_text, payload.bodyText, ''), 100_000);
   const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
   // RAW received date (null when the email genuinely carries none) — distinct
   // from the now()-coalesced `receivedAtIso`. T4c: only a REAL email Date may
@@ -728,6 +737,8 @@ async function handleOutlookMessage(req, res) {
       internet_message_id: internetMsgId || null,
       event_source: 'outlook_power_automate',
       correlation_id: correlationId,
+      ...(bodyHtmlFull ? { body_html: bodyHtmlFull } : {}),
+      ...(bodyTextFull ? { body_text: bodyTextFull } : {}),
       ...(infra.isInfra ? {
         kind: 'infra_alert',
         domain: 'infra',
@@ -1511,50 +1522,14 @@ function correlationToIsoFloor(correlationId) {
   return new Date(Math.max(0, ts - 5 * 60 * 1000)).toISOString();
 }
 
-// "Find in Outlook" deep link for a captured inbox row — a documented OWA SEARCH
-// deep link (`…/mail/deeplink/search?query=<subject slice>`) that lands New Outlook
-// for Windows in a search-results view for the email. Named `buildOutlookDesktopLink`
-// + surfaced as `email_url_desktop` (field name kept so the PA card binding is
-// unchanged), but it is a FIND link, not a specific-message open — hence the card
-// should label it "Find in Outlook", not "Open".
-//
-// Why not the old `ms-outlook://open?url=<owa read-link>` wrapper: New Outlook for
-// Windows registers `ms-outlook:` only as an app ACTIVATOR — it discards the wrapped
-// message target and opens to the Inbox, so deep-linking a SPECIFIC message in the
-// desktop client is not achievable (confirmed live + against MS docs, 2026-07). The
-// exact-message path is the WEB link (`email_url` = the raw `…/deeplink/read/<id>`),
-// which opens the message reliably in OWA; this search link is the honest desktop-app
-// companion for "find it in Outlook".
-//
-// Uses a distinctive slice of the SUBJECT as a plain keyword query — NOT AQS field
-// operators (`from:`/`subject:`), which OWA runs via an AJAX POST and honors
-// inconsistently across tenants; a plain-text query is reliably dropped in the search
-// box. Returns null when the row has no usable subject.
-export function buildOutlookDesktopLink(item) {
-  const query = outlookSearchQueryFromSubject(item?.title);
-  if (!query) return null;
-  return `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent(query)}`;
-}
-
-// Distill a subject line into a distinctive search query: strip leading Re:/Fw:/Fwd:
-// reply-forward prefixes, collapse whitespace, and cap to a distinctive slice on a word
-// boundary (a very long subject over-constrains the search). Returns '' when nothing
-// usable remains (so buildOutlookDesktopLink yields null → the card omits the button).
-const OUTLOOK_SEARCH_MAX_LEN = 80;
-function outlookSearchQueryFromSubject(subject) {
-  let s = String(subject || '').replace(/\s+/g, ' ').trim();
-  // Strip any run of leading reply/forward markers (Re:, Fw:, Fwd:, AW:, WG:, …).
-  let prev;
-  do {
-    prev = s;
-    s = s.replace(/^(re|fw|fwd|aw|wg|tr|rv)\s*:\s*/i, '').trim();
-  } while (s !== prev);
-  if (!s) return '';
-  if (s.length <= OUTLOOK_SEARCH_MAX_LEN) return s;
-  // Cap on a word boundary so we never send a truncated mid-word token.
-  const slice = s.slice(0, OUTLOOK_SEARCH_MAX_LEN);
-  const lastSpace = slice.lastIndexOf(' ');
-  return (lastSpace > 40 ? slice.slice(0, lastSpace) : slice).trim();
+// Cap a stored email body so a large HTML message can't bloat inbox_items on
+// LCC Opps (auth lives there — disk-full = total sign-in lockout). Returns null
+// for an empty/whitespace body so the metadata key is omitted rather than stored
+// as null. Pure + exported for unit testing.
+export function clampBody(str, max) {
+  const s = String(str == null ? '' : str);
+  if (!s.trim()) return null;
+  return s.length > max ? s.slice(0, max) : s;
 }
 
 export function mapItemForTeams(item, appBase) {
@@ -1565,20 +1540,19 @@ export function mapItemForTeams(item, appBase) {
   // Hash-route only: the SPA router reads location.hash, never location.search,
   // so the old `?page=pageInbox` query never deep-linked. `#/inbox/<id>` maps to
   // the Inbox page (ROUTE_SLUG_TO_PAGE) and focuses the specific captured row
-  // (app.js applyRoute → focusInboxItem). The id is `inbox_items.id` (a UUID —
-  // URL-safe, no PII). Falls back to the bare `#/inbox` list when no id.
+  // (app.js applyRoute → focusInboxItem, which auto-expands the full-body detail).
+  // The id is `inbox_items.id` (a UUID — URL-safe, no PII). Falls back to the
+  // bare `#/inbox` list when no id.
+  //
+  // SINGLE ACTION — "View in LCC". The Outlook web/desktop deep-link fields
+  // (email_url / email_url_desktop) were dropped: New Outlook's deep-link verbs
+  // are a broken Microsoft feature (the read-link → "message might have been
+  // moved or deleted"; the search-link hangs), and the full email body now lives
+  // in the LCC inbox detail view — so "View in LCC" is the one link that works
+  // and matches the real workflow (read/copy/reply in LCC, rarely open Outlook).
   const inboxUrl = item.id
     ? `${appBase}/#/inbox/${encodeURIComponent(item.id)}`
     : `${appBase}/#/inbox`;
-  // The Outlook WEB deep link captured at intake (inbox_items.external_url), so
-  // the Teams card's web "Open Email" action has a real URL. Null when the
-  // source didn't provide a web link.
-  const emailUrl = item.external_url || null;
-  // "Find in Outlook" SEARCH deep link (…/mail/deeplink/search) — lands New Outlook
-  // for Windows on a search-results view for this email. Field name kept
-  // (`email_url_desktop`) so the PA card binding is unchanged; label the card action
-  // "Find in Outlook" (it's a find, not an exact-message open — that's `email_url`).
-  const emailUrlDesktop = buildOutlookDesktopLink(item);
   return {
     inbox_item_id: item.id,
     sender: senderName,
@@ -1590,8 +1564,6 @@ export function mapItemForTeams(item, appBase) {
     priority: item.priority || 'normal',
     has_attachments: Boolean(item.metadata?.has_attachments),
     lcc_item_url: inboxUrl,
-    email_url: emailUrl,
-    email_url_desktop: emailUrlDesktop,
     suggested_actions: ['triage', 'assign', 'promote']
   };
 }
