@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { targetFolderFor } from '../api/_shared/processing-complete.js';
+import { targetFolderFor, STAGING_FOLDER } from '../api/_shared/processing-complete.js';
 
 describe('targetFolderFor — outcome → Outlook folder mapping', () => {
   it('needs_review leaves the email in place (null folder)', () => {
@@ -45,5 +45,13 @@ describe('targetFolderFor — outcome → Outlook folder mapping', () => {
 
   it('unknown outcome is treated as leave-in-place (null)', () => {
     assert.equal(targetFolderFor('whatever', { channel: 'om' }), null);
+  });
+
+  it('staged → the single "Intake Staged, Not Completed" folder regardless of domain', () => {
+    assert.equal(STAGING_FOLDER, 'Intake Staged, Not Completed');
+    assert.equal(targetFolderFor('staged', {}), STAGING_FOLDER);
+    assert.equal(targetFolderFor('staged', { channel: 'infra', domain: 'infra' }), STAGING_FOLDER);
+    assert.equal(targetFolderFor('staged', { channel: 'deal_closing', domain: 'gov' }), STAGING_FOLDER);
+    assert.equal(targetFolderFor('staged', { channel: 'om' }), STAGING_FOLDER);
   });
 });

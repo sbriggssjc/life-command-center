@@ -20,9 +20,21 @@
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
 
+// Single "everything outstanding" staging folder. A `staged` email — intake
+// finished for a non-terminal category — moves HERE and KEEPS its flag until
+// its Microsoft To Do task completes, then it reaches Processed/{category} (its
+// final_target_folder, resolved at staging time). This is a top-level sibling of
+// Processed/, deliberately OUTSIDE the retention sweep's Processed/* scope, so a
+// staged (outstanding) email is never archived/deleted regardless of age.
+export const STAGING_FOLDER = 'Intake Staged, Not Completed';
+
+// All valid emit outcomes.
+const VALID_OUTCOMES = new Set(['filed', 'needs_review', 'duplicate', 'staged']);
+
 // Outcomes that require Power Automate to move the message. needs_review is left
-// in place (no move), so it is recorded 'skipped' in the move queue.
-const MOVE_OUTCOMES = new Set(['filed', 'duplicate']);
+// in place (no move), so it is recorded 'skipped' in the move queue. `staged`
+// moves to the staging folder (but does NOT clear the flag — see clear_flag).
+const MOVE_OUTCOMES = new Set(['filed', 'duplicate', 'staged']);
 
 /**
  * Map an (outcome, channel/domain) to the Outlook target folder.
@@ -30,11 +42,14 @@ const MOVE_OUTCOMES = new Set(['filed', 'duplicate']);
  *
  *   filed        → Processed/{domain}  — Processed/Deals | Processed/Infra |
  *                  Processed/Leads | Processed/General
+ *   staged       → "Intake Staged, Not Completed" (single outstanding-work view;
+ *                  flag KEPT; final destination in final_target_folder)
  *   needs_review → null (leave in place; existing flag/inbox surfaces it)
  *   duplicate    → Processed/Duplicates (recoverable; swept by the retention job)
  */
 export function targetFolderFor(outcome, { channel = null, domain = null } = {}) {
   if (outcome === 'needs_review') return null;
+  if (outcome === 'staged') return STAGING_FOLDER;
   if (outcome === 'duplicate') return 'Processed/Duplicates';
   if (outcome !== 'filed') return null;
 
@@ -65,7 +80,7 @@ export function targetFolderFor(outcome, { channel = null, domain = null } = {})
  * @param {string} args.internetMessageId  Stable dedup/move key (falls back to
  *                                          graphRestId if the real one is absent).
  * @param {string} [args.graphRestId]
- * @param {string} args.outcome            'filed' | 'needs_review' | 'duplicate'
+ * @param {string} args.outcome            'filed' | 'needs_review' | 'duplicate' | 'staged'
  * @param {string} [args.channel]          'om' | 'deal_closing' | 'infra' | 'lead'
  * @param {string} [args.domain]           'infra' | 'dia' | 'gov' | 'leads' | null
  * @param {string} [args.inboxItemId]
@@ -85,7 +100,7 @@ export async function emitProcessingComplete(args = {}) {
     subject = null,
   } = args;
 
-  if (!outcome || !['filed', 'needs_review', 'duplicate'].includes(outcome)) {
+  if (!outcome || !VALID_OUTCOMES.has(outcome)) {
     console.warn('[processing-complete] skipped emit — invalid outcome:', outcome);
     return null;
   }
@@ -97,11 +112,26 @@ export async function emitProcessingComplete(args = {}) {
 
   const targetFolder = targetFolderFor(outcome, { channel, domain });
   const moveStatus = MOVE_OUTCOMES.has(outcome) && targetFolder ? 'pending' : 'skipped';
+  // For a `staged` email, resolve the eventual Processed/{category} destination
+  // NOW (at staging time) so it is never re-derived later — the todo-completion
+  // poll reads it to file the email once the task completes. Only staged carries
+  // one (filed already IS the final move; duplicate/needs_review have no deferred
+  // second move).
+  const finalTargetFolder = outcome === 'staged'
+    ? targetFolderFor('filed', { channel, domain })
+    : null;
+  // Whether Power Automate should CLEAR the flag after the move. A staged email
+  // moves to the staging folder but stays flagged (it is still outstanding work
+  // — the flag clears only when the To Do task completes and it files). filed +
+  // duplicate are terminal and clear the flag. needs_review does not move.
+  const clearFlag = outcome === 'filed' || outcome === 'duplicate';
   const event = {
     internet_message_id: messageKey,
     outcome,
     target_folder: targetFolder,
+    final_target_folder: finalTargetFolder,
     move_status: moveStatus,
+    clear_flag: clearFlag,
   };
 
   try {
@@ -112,7 +142,7 @@ export async function emitProcessingComplete(args = {}) {
       'GET',
       `processing_log?workspace_id=eq.${pgFilterVal(workspaceId)}` +
         `&internet_message_id=eq.${pgFilterVal(messageKey)}` +
-        `&select=id,outcome,target_folder,move_status&limit=1`,
+        `&select=id,outcome,target_folder,final_target_folder,move_status&limit=1`,
       null,
       { countMode: 'none' },
     );
@@ -122,7 +152,9 @@ export async function emitProcessingComplete(args = {}) {
         internet_message_id: messageKey,
         outcome: row.outcome,
         target_folder: row.target_folder,
+        final_target_folder: row.final_target_folder ?? null,
         move_status: row.move_status,
+        clear_flag: row.outcome === 'filed' || row.outcome === 'duplicate',
         deduplicated: true,
       };
     }
@@ -138,6 +170,7 @@ export async function emitProcessingComplete(args = {}) {
       subject: subject ? String(subject).slice(0, 500) : null,
       outcome,
       target_folder: targetFolder,
+      final_target_folder: finalTargetFolder,
       move_status: moveStatus,
     }, { Prefer: 'return=minimal,resolution=merge-duplicates' });
 

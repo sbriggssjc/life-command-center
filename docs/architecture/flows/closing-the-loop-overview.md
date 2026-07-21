@@ -41,15 +41,16 @@ where a contract is a prompt-2 prerequisite, the sheet marks it and the flow
 no-ops safely (Respond/Terminate) until prompt 2 lands — the same
 feature-flagged-rollout posture the rest of the portfolio uses.
 
-## The five flows (+ their per-flow sheets)
+## The flows (+ their per-flow sheets)
 
 | # | Flow | Sheet | Trigger | Load-bearing? |
 |---|---|---|---|---|
 | 1 | Processing Complete → Move Message | `processing-complete-move-message.md` | HTTP request (from prompt-2 webhook) | **Yes — build first.** Both hygiene flows and the briefing line depend on the move actually happening + being logged. |
 | 2 | Vercel/GitHub Direct Alert Trigger | `vercel-github-direct-alert.md` | New email (V3), Inbox-scoped | No — confirms trigger scope now that infra alerts land direct (Gmail hop removed). |
 | 3 | Google Alerts Sub-folder Watch | `google-alerts-subfolder-watch.md` | New email (V3), sub-folder-scoped | No — **reconcile with the existing sender-triggered flow; do not duplicate.** |
-| 4 | Weekly Retention Sweep | `weekly-retention-sweep.md` | Scheduled, weekly | No — hygiene; the only flow that ever **deletes** (and only from `Processed/Duplicates` after 30d). |
+| 4 | Weekly Retention Sweep | `weekly-retention-sweep.md` | Scheduled, weekly | No — hygiene; the only flow that ever **deletes** (and only from `Processed/Duplicates` after 30d). **Never touches the staging folder.** |
 | 5 | Daily Briefing — Processing Summary Line | `daily-briefing-processing-summary.md` | Modify the existing daily-briefing flow | No — cosmetic; reads `processing_log`. |
+| 6 | LCC To Do Completion Poll (staged → Processed) | `todo-completion-poll.md` | Scheduled, every ~30 min | No — files a `staged` email once its To Do task completes. **Reuses Flow 1's Move + Flag mechanics** (different trigger + source). |
 
 ## Build sequencing (per the plan)
 
@@ -62,6 +63,10 @@ feature-flagged-rollout posture the rest of the portfolio uses.
 
 ```
 Inbox
+Intake Staged, Not Completed/  ← top-level sibling; a `staged` email lives here
+                                 (kept flagged) until its To Do completes, then
+                                 Flow 6 files it to Processed/{category}.
+                                 OUT of the retention sweep's scope — never swept.
 Processed/
   Duplicates/          ← weekly sweep permanently deletes items older than 30d
   <disposition folders>/  ← auto-filed classes; items older than 180d → Archive
@@ -70,8 +75,14 @@ Archive/
 ```
 
 - **`target_folder`** in the move payload names a path under `Processed/`
-  (e.g. `Processed/Duplicates`, `Processed/OM`, `Processed/News`). The Move flow
-  looks up / creates the destination folder by that path.
+  (e.g. `Processed/Duplicates`, `Processed/OM`, `Processed/News`) — OR the
+  top-level staging folder `Intake Staged, Not Completed` for a `staged` email.
+  The Move flow looks up / creates the destination folder by that path.
+- **The staging folder is a top-level sibling of `Processed/`**, deliberately
+  OUTSIDE `Processed/*` so the retention sweep never archives/deletes an
+  outstanding-work email. A `staged` email keeps its flag (the emit's
+  `clear_flag:false`); the flag clears + it files to `Processed/{category}` only
+  when its To Do task completes (Flow 6).
 - The retention sweep is the ONLY flow that hard-deletes, and only from
   `Processed/Duplicates` after 30 days. Everything else is a move (reversible).
 
