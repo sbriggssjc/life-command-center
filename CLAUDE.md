@@ -8257,3 +8257,42 @@ JS ships on the Railway redeploy.
 of thousands), `lcc_refresh_log` queue-refresh stays low single-digit seconds; drain to
 completion, then `POST /api/sf-account-import?backfill=1&limit=500` until `members_resolved`
 = 0 (`has_company` climbs toward ~6,000); then `POST /api/operations?_route=institution-contact-tick`.
+
+## Contacts split-brain reconcile + CONTACTS_HUB cutover (2026-07-21)
+
+Two live diverging copies of `unified_contacts` (gov `scknotsqkcheojiaewwh` + LCC Opps
+`xengecqvemvfknjvbvrq`) — the A9b migration ran but the app cutover never did. Phase 0
+grounded + reconciled the delta; full detail in `docs/CONTACTS_SPLIT_BRAIN_DELTA_2026-07-21.md`
++ `docs/CONTACTS_SPLIT_BRAIN_CUTOVER_RUNBOOK.md`.
+
+- **Canonical = LCC Opps** (it has `entity_id` + the `gov_contact_id`/`dia_contact_id`
+  enrichments gov lacks). Delta: both 29,442 / gov-only 1,053 / ops-only 561; **zero
+  content-field drift** on shared rows (only 3 domain-link columns differed).
+- **0b merge (APPLIED live to ops, reversible via `public._recon_merge_log`, batch
+  `split_reconcile_2026-07-21`):** 1,009 gov-only owner rows inserted + 63
+  `recorded_owner_id` fill-blanks + 44 email-colliders folded into their ops twin
+  (never a dup; conflicting `company_name` preserved in `merge_history`, not overwritten).
+  Merged rows tagged `field_sources._split_reconcile`.
+- **0c/0d code (ships on Railway redeploy):** `CONTACTS_HUB_PATH_RE` routes
+  `unified_contacts` + `contact_change_log` + `contact_merge_queue` **together** to the
+  hub (fixes the split-transaction hazard); app-code gov readers (`fetchHotContacts`,
+  the copilot chat-context reader) are hub-aware; operations.js `unified_contacts`
+  queries fixed from the nonexistent `id` PK → `unified_id`; the two SF auto-link PATCH
+  blocks routed through `auditedPatchGov`.
+- **Remaining Gate-1 cutover (OPERATIONAL — runbook):** repoint the 2 Deno edge readers
+  (daily-briefing/copilot-chat on Dialysis_DB) + redeploy; set `CONTACTS_HUB=ops` in
+  Railway; verify a write lands contact+change-log in the SAME DB; make gov
+  `unified_contacts` read-only (RLS is off + anon has full DML — hardening starts here).
+- **Phase 1 (NOT started; gated behind Gate 1):** backfill `entity_id` (700/31,012),
+  company/LLC owner resolution, `person→org` edges — reuse `ensureEntityLink` /
+  `linkPersonToEntity` / `sf-id.js` / `owner-cross-reference.js`, no forked matcher.
+  **⚠️ ~15k edges is the 2026-07-19 incident shape** (v_priority_queue >60s + auth-DB
+  connection saturation): dry-run+report first, bounded `--limit` batches, check
+  `lcc_refresh_priority_queue_resolved` between batches (STOP >10s), report band shift,
+  reversible by `metadata.via='contacts_reconcile:<batch_tag>'`.
+- **Known gaps (Phase 2/3, not built):** incremental reconcile tick; a merge-queue
+  worker that reaches the whole table (`detectDuplicates` scans only top-~200 by
+  `updated_at`); scheduled `engagement_score` recompute (recalculated only on write →
+  stale-high "hot leads"); Outlook contact ingestion / mail harvesting / bounceback
+  parsing; `webex_person_id` is unpopulatable by the telephony API in use (make
+  `getDataQuality.webex_linked` honest rather than always-0).

@@ -31,7 +31,14 @@ const GOV_KEY = govSupabaseKey();
 // hub. Path-based routing inside govQuery() (below) flips reads + the audited
 // write path together; everything else stays on gov.
 const CONTACTS_DB = (process.env.CONTACTS_HUB || 'gov').toLowerCase() === 'ops' ? 'ops' : 'gov';
-const UNIFIED_CONTACTS_PATH_RE = /^unified_contacts(\?|$)/;
+// A9b cutover: the contact hub is `unified_contacts` PLUS its two satellite
+// tables — `contact_change_log` (audit trail) and `contact_merge_queue`. All
+// three MUST route to the SAME database as the contact row. Routing only
+// `unified_contacts` left the change-log/merge-queue writes on gov while the
+// contact landed on ops — a split-transaction hazard (a write and its audit row
+// in different DBs). Reads of these tables follow the same routing. `system_tokens`
+// and everything else stay on gov.
+const CONTACTS_HUB_PATH_RE = /^(unified_contacts|contact_change_log|contact_merge_queue)(\?|$)/;
 
 /** Encode a user-supplied value for safe use in PostgREST filter strings */
 function pgVal(v) { return encodeURIComponent(String(v)); }
@@ -186,7 +193,7 @@ async function govQuery(method, path, body, extraHeaders = {}) {
   // A9b: when the cutover flag is on, unified_contacts ops route to the LCC
   // Opps hub. opsQuery returns the same {ok,status,data,count} shape and
   // treats a plain headers object as legacy headers, so this is drop-in.
-  if (CONTACTS_DB === 'ops' && UNIFIED_CONTACTS_PATH_RE.test(path)) {
+  if (CONTACTS_DB === 'ops' && CONTACTS_HUB_PATH_RE.test(path)) {
     return opsQuery(method, path, body, extraHeaders);
   }
   if (!GOV_URL || !GOV_KEY) {
@@ -233,7 +240,7 @@ async function auditedGovWrite({
   const resolvedWorkspaceId = workspaceId || user?.memberships?.[0]?.workspace_id || null;
   const result = await govQuery(method, path, changedFields);
   // Where the write actually landed (A9b path-routing) — for accurate audit metadata.
-  const writeTargetSource = (CONTACTS_DB === 'ops' && UNIFIED_CONTACTS_PATH_RE.test(path)) ? 'ops' : 'gov';
+  const writeTargetSource = (CONTACTS_DB === 'ops' && CONTACTS_HUB_PATH_RE.test(path)) ? 'ops' : 'gov';
 
   if (!isOpsConfigured() || !resolvedWorkspaceId) {
     return result;
@@ -970,10 +977,16 @@ async function ingestContact(req, res, user) {
         }
         if (Object.keys(sfPatch).length > 0) {
           sfPatch.sf_last_synced = new Date().toISOString();
-          await govQuery('PATCH',
-            `unified_contacts?unified_id=eq.${pgVal(created.unified_id)}`,
-            sfPatch
-          );
+          await auditedPatchGov({
+            user,
+            table: 'unified_contacts',
+            filter: `unified_id=eq.${pgVal(created.unified_id)}`,
+            recordIdentifier: created.unified_id,
+            idColumn: 'unified_id',
+            changedFields: sfPatch,
+            sourceSurface: 'contacts_ingest_sf_autolink',
+            propagationScope: 'unified_contact'
+          });
           console.log('[ingestContact] SF auto-link applied', { unified_id: created.unified_id, ...sfPatch });
         }
       }
@@ -1250,10 +1263,16 @@ async function mergeContacts(req, res, user) {
         }
         if (Object.keys(sfPatch).length > 0) {
           sfPatch.sf_last_synced = new Date().toISOString();
-          await govQuery('PATCH',
-            `unified_contacts?unified_id=eq.${pgVal(keep_id)}`,
-            sfPatch
-          );
+          await auditedPatchGov({
+            user,
+            table: 'unified_contacts',
+            filter: `unified_id=eq.${pgVal(keep_id)}`,
+            recordIdentifier: keep_id,
+            idColumn: 'unified_id',
+            changedFields: sfPatch,
+            sourceSurface: 'contacts_merge_sf_autolink',
+            propagationScope: 'unified_contact'
+          });
           console.log('[mergeContacts] SF auto-link applied', { keep_id, ...sfPatch });
         }
       }
