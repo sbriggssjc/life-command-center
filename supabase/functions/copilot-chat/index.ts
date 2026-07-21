@@ -186,10 +186,15 @@ async function fetchOpsContext(workspaceId: string, userId: string): Promise<Rec
       age_days: Math.floor((Date.now() - new Date(r.created_at as string).getTime()) / 86400000)
     }));
 
-    // Fetch hot contacts from Gov DB
+    // Fetch hot contacts from the contacts hub.
+    // 2026-07-21: `unified_contacts` was split-brained across gov and LCC Opps —
+    // two live, diverging copies. Ops is now canonical (it alone carries
+    // entity_id; the reconcile merged gov's 1,009 unique rows into it). Read
+    // contacts from ops, falling back to gov if the ops env is absent so a
+    // missing secret degrades to pre-cutover behavior rather than empty.
     let topContacts: Record<string, unknown>[] = [];
-    const govUrl = Deno.env.get("GOV_SUPABASE_URL");
-    const govKey = Deno.env.get("GOV_SUPABASE_KEY");
+    const govUrl = Deno.env.get("OPS_SUPABASE_URL") || Deno.env.get("GOV_SUPABASE_URL");
+    const govKey = Deno.env.get("OPS_SUPABASE_SERVICE_KEY") || Deno.env.get("GOV_SUPABASE_KEY");
     if (govUrl && govKey) {
       try {
         const cRes = await dbFetch(govUrl, govKey,

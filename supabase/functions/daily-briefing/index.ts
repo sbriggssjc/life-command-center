@@ -22,6 +22,16 @@ const GOV_URL = Deno.env.get("GOV_SUPABASE_URL");
 const GOV_KEY = Deno.env.get("GOV_SUPABASE_KEY");
 const DIA_URL = Deno.env.get("DIA_SUPABASE_URL");
 const DIA_KEY = Deno.env.get("DIA_SUPABASE_KEY");
+// Contacts hub (2026-07-21): `unified_contacts` was split-brained across gov and
+// LCC Opps — two live, diverging copies. Ops is now canonical (it alone carries
+// entity_id, and the reconcile merged gov's 1,009 unique rows into it). Contact
+// reads must come from ops; everything else in this function stays on gov/dia.
+// Falls back to gov if the ops env is absent, so a missing secret degrades to
+// the pre-cutover behavior instead of returning nothing.
+const OPS_URL = Deno.env.get("OPS_SUPABASE_URL");
+const OPS_KEY = Deno.env.get("OPS_SUPABASE_SERVICE_KEY");
+const CONTACTS_URL = OPS_URL || GOV_URL;
+const CONTACTS_KEY = OPS_KEY || GOV_KEY;
 const LCC_BASE_URL = Deno.env.get("LCC_BASE_URL") || "";
 const TEAMS_COLD_ALERTS_ENABLED = Deno.env.get("TEAMS_COLD_ALERTS_ENABLED") === "true";
 
@@ -468,14 +478,14 @@ export async function fetchRecentSfActivity(workspaceId: string, limit = 30): Pr
 }
 
 export async function fetchHotContacts(limit = 15): Promise<any[]> {
-  if (!GOV_URL || !GOV_KEY) return [];
+  if (!CONTACTS_URL || !CONTACTS_KEY) return [];
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     try {
       const res = await fetch(
-        `${GOV_URL}/rest/v1/unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`,
-        { headers: { apikey: GOV_KEY, Authorization: `Bearer ${GOV_KEY}` }, signal: controller.signal }
+        `${CONTACTS_URL}/rest/v1/unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`,
+        { headers: { apikey: CONTACTS_KEY, Authorization: `Bearer ${CONTACTS_KEY}` }, signal: controller.signal }
       );
       return res.ok ? await res.json() : [];
     } finally {
