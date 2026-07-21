@@ -2,13 +2,14 @@
 **One agent:** "LCC Deal Agent" (Copilot Studio). **One connector:** "LCC Intelligence"
 (Power Platform custom connector). **Start here for any Deal Agent change.** This index names the
 single canonical file for each component so we never fork versions again.
-Last reconciled: July 2026.
+Last reconciled: July 2026 (comps flow added; stale setup/ instruction copies collapsed to stubs).
 
 ## Canonical sources — edit ONLY these
 | Component | Canonical file (repo `life-command-center/`) | How the change reaches the agent |
 |---|---|---|
 | **Instructions** | `docs/copilot/agent-instructions.md` | Paste everything **below the `---`** into Copilot Studio → LCC Deal Agent → **Instructions** → Publish. |
 | **Tools / actions** | `copilot/lcc-deal-intelligence.connector.v2.swagger.json` (Swagger 2.0, "LCC Deal Intelligence" v2.1.0) | Update the **"LCC Intelligence"** custom connector from this file (Power Platform → Custom connectors → import/update), then the agent's **Tools** pick it up. |
+| **Comps action (new)** | Add `QueryComps` + `SynthesizeComps` to the v2 swagger above. Engine = shared `mcp/comps-tools.js` (`runComps`). Contract: `docs/comps-tools/openapi_comps.yaml`. | The comps flow in `agent-instructions.md` calls these. **Open item (below):** the backend endpoint currently lives on the MCP server, not the connector's host — must be reconciled before the connector can reach it. |
 | **Knowledge** | `_AI-Context/Copilot-Context/`: `BRIGGS-SYSTEM-PROMPT.md`, `BRIGGS-MASTER-CONTEXT.md`, `BRIGGS-WRITING-VOICE.md`, `BRIGGS-CRE-FRAMEWORKS.md`, `BRIGGS-BD-PLAYBOOK.md`, `BRIGGS-PERSONAL-CONTEXT.md` (+ add `CONTEXT_ROUTER.md`) | Copilot Studio → **Knowledge** → the SharePoint copies; re-sync on change. |
 | **Backend the tools call** | `life-command-center` repo (deployed to `tranquil-delight-production-633f.up.railway.app`) | Code deploy; `/openapi.json` is generated from it. |
 
@@ -23,12 +24,24 @@ Last reconciled: July 2026.
 - `_AI-Context/Copilot-Context/lcc-copilot-integration-plan.md` — a July-2026 planning doc; parts
   are stale (e.g., "ai-plugin.json is missing"). Historical only.
 - Any `DealAgent_Instructions.md` delivered in a chat — extracted from the stale manifest; ignore.
+- `docs/setup/copilot-studio-agent-instructions.md` and `docs/setup/copilot-agent-instructions.md` — **now redirect stubs** (were April-2026 forks). They point back to `agent-instructions.md`; do not edit or paste from them.
+- `docs/setup/gpt-actions-system-prompt.txt` — the **ChatGPT** surface persona (a different surface, not the Copilot Deal Agent). Keep its core rules in sync with `agent-instructions.md` when they change.
 
 ## Update protocol (keep it to these steps)
 1. **Instructions** change → edit `agent-instructions.md` → paste below the `---` into Studio → Publish.
 2. **Tool/action** change → edit the **v2 swagger** → update the "LCC Intelligence" connector → (add the backend endpoint in the repo if it's a new action).
 3. **Knowledge** change → edit the `BRIGGS-*.md` → re-sync in Studio Knowledge.
 4. **One agent, one connector — never create a second.** If Studio ever shows a duplicate agent or connector, delete the copy, don't edit it.
+
+## Known open item — comps action backend placement
+The comps engine (`mcp/comps-tools.js` → `runComps`) is deployed on the **MCP server**
+(`life-command-center-production.up.railway.app`, serving Claude's `query_comps` tool and
+`POST /api/query-comps`). But the **LCC Intelligence connector points at `tranquil-delight`**,
+and a Swagger connector has a single host — so the Deal Agent cannot reach the comps endpoint
+until the SAME `/api/query-comps` + `/api/synthesize-comps` routes are added to the
+`tranquil-delight` backend (import the same `comps-tools.js`), and `QueryComps`/`SynthesizeComps`
+are added to the v2 swagger. One connector, one host — do not add a second connector. Until then,
+the comps flow in the instructions is staged but inert on the Copilot surface (it works today on Claude).
 
 ## Known open item — per-user reads (Phase 3)
 Backend `ai-copilot` v70 resolves `user_email → lcc_users → assigned_to/owner_id`. The v2

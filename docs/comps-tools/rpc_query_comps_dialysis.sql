@@ -59,6 +59,7 @@ as $$
     left join properties p on p.property_id = s.property_id
     where s.transaction_state = 'live' and s.sold_price > 0
       and s.exclude_from_market_metrics is not true
+      and (p_government_only is false)   -- dialysis canonical is never government-tenanted
       and p_comp_type in ('sale','both','lease')
       and (p_states is null or p.state = any(p_states))
       and (p_date_from is null or s.sale_date >= p_date_from)
@@ -95,6 +96,7 @@ as $$
     left join properties p on p.property_id = al.property_id
     where p_include_onmkt
       and al.is_active and al.off_market_date is null and al.sold_date is null
+      and (p_government_only is false)   -- dialysis listings are never government-tenanted
       and (p_states is null or p.state = any(p_states))
       and (p_property_types is null or exists (
             select 1 from unnest(p_property_types) t
