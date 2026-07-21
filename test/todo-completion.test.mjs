@@ -1,144 +1,146 @@
 // Closing the Loop — Flow 6: the To Do completion poll (staged → Processed).
-// Pure helpers + the deps-injected orchestrator, no DB / no Graph.
+// PA owns the To-Do/Graph calls (OAuth connector); LCC only does DB reads/writes.
+// Pure helpers + the two deps-injected orchestrators, no DB / no Graph.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  isTodoTaskComplete,
-  buildCompletionInstruction,
-  pollTodoCompletions,
+  buildStagedWorklistItem,
+  extractCompletionKeys,
+  buildStagedWorklist,
+  applyCompletionReports,
 } from '../api/_shared/todo-completion.js';
 
-describe('isTodoTaskComplete — Graph task status', () => {
-  it('true only for status "completed" (case/space-insensitive)', () => {
-    assert.equal(isTodoTaskComplete({ status: 'completed' }), true);
-    assert.equal(isTodoTaskComplete({ status: ' Completed ' }), true);
-    assert.equal(isTodoTaskComplete({ status: 'COMPLETED' }), true);
-  });
-  it('false for every other status + missing', () => {
-    for (const s of ['notStarted', 'inProgress', 'waitingOnOthers', 'deferred', '', undefined]) {
-      assert.equal(isTodoTaskComplete({ status: s }), false, String(s));
-    }
-    assert.equal(isTodoTaskComplete(null), false);
-    assert.equal(isTodoTaskComplete({}), false);
-  });
-});
+describe('buildStagedWorklistItem', () => {
+  const mapping = { todo_task_id: 'T1', todo_list_id: 'L1' };
 
-describe('buildCompletionInstruction', () => {
-  const row = { internet_message_id: '<AAA@x>', final_target_folder: 'Processed/Deals' };
-
-  it('issues a clear_flag move to final_target_folder when the task is completed', () => {
-    assert.deepEqual(buildCompletionInstruction(row, 'completed'), {
-      internet_message_id: '<AAA@x>',
+  it('builds the PA worklist item (task ids + destination + clear_flag) for a mapped staged row', () => {
+    const row = { internet_message_id: '<a>', final_target_folder: 'Processed/Deals' };
+    assert.deepEqual(buildStagedWorklistItem(row, mapping), {
+      internet_message_id: '<a>',
+      todo_task_id: 'T1',
+      todo_list_id: 'L1',
       target_folder: 'Processed/Deals',
       clear_flag: true,
     });
   });
 
-  it('returns null when the task is not completed (incomplete / unknown)', () => {
-    assert.equal(buildCompletionInstruction(row, 'incomplete'), null);
-    assert.equal(buildCompletionInstruction(row, 'unknown'), null);
+  it('null when unmapped, or missing a list id / task id (PA can not Get-task)', () => {
+    const row = { internet_message_id: '<a>', final_target_folder: 'Processed/Deals' };
+    assert.equal(buildStagedWorklistItem(row, null), null);
+    assert.equal(buildStagedWorklistItem(row, { todo_task_id: 'T1', todo_list_id: null }), null);
+    assert.equal(buildStagedWorklistItem(row, { todo_task_id: null, todo_list_id: 'L1' }), null);
   });
 
-  it('never files without a resolved destination (no guessing a folder)', () => {
-    assert.equal(buildCompletionInstruction({ internet_message_id: '<A>', final_target_folder: null }, 'completed'), null);
-    assert.equal(buildCompletionInstruction({ internet_message_id: '<A>' }, 'completed'), null);
+  it('null without a resolved destination (never file to a guessed folder)', () => {
+    assert.equal(buildStagedWorklistItem({ internet_message_id: '<a>', final_target_folder: null }, mapping), null);
+    assert.equal(buildStagedWorklistItem({ internet_message_id: '<a>' }, mapping), null);
   });
 
-  it('returns null when the message key is missing', () => {
-    assert.equal(buildCompletionInstruction({ final_target_folder: 'Processed/Deals' }, 'completed'), null);
+  it('null when the message key is missing', () => {
+    assert.equal(buildStagedWorklistItem({ final_target_folder: 'Processed/Deals' }, mapping), null);
   });
 });
 
-// ── orchestrator harness ─────────────────────────────────────────────────────
-function makeDeps({ rows, taskMap, statuses, failFlipFor = new Set(), throwStatusFor = new Set() }) {
-  const flipped = [];
-  return {
-    flipped,
-    deps: {
-      fetchStagedRows: async (n) => rows.slice(0, n),
-      fetchTaskMapping: async (imid) => taskMap[imid] ?? null,
-      getTaskStatus: async (_listId, taskId) => {
-        if (throwStatusFor.has(taskId)) throw new Error('graph 500');
-        return statuses[taskId] ?? 'unknown';
-      },
-      markFiled: async (row) => {
-        if (failFlipFor.has(row.id)) return false; // concurrent poll already won
-        flipped.push(row.id);
-        return true;
-      },
-    },
-  };
-}
+describe('extractCompletionKeys', () => {
+  it('accepts objects (internet_message_id / internetMessageId) and bare strings', () => {
+    assert.deepEqual(
+      extractCompletionKeys([{ internet_message_id: '<a>' }, { internetMessageId: '<b>' }, '<c>']),
+      ['<a>', '<b>', '<c>'],
+    );
+  });
+  it('trims, drops blanks/junk, de-dupes', () => {
+    assert.deepEqual(extractCompletionKeys([' <a> ', '<a>', '', null, { nope: 1 }, {}]), ['<a>']);
+  });
+  it('non-array → empty', () => {
+    assert.deepEqual(extractCompletionKeys(null), []);
+    assert.deepEqual(extractCompletionKeys(undefined), []);
+    assert.deepEqual(extractCompletionKeys('x'), []);
+  });
+});
 
-describe('pollTodoCompletions — the staged → Processed orchestrator', () => {
-  it('emits a move instruction + flips only the completed, mapped staged rows', async () => {
+describe('buildStagedWorklist — the GET worklist assembler', () => {
+  it('emits only actionable items; counts unmapped + no_destination', async () => {
     const rows = [
-      { id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' }, // completed → instruct
-      { id: 2, internet_message_id: '<b>', final_target_folder: 'Processed/Infra' }, // not started → stay
-      { id: 3, internet_message_id: '<c>', final_target_folder: 'Processed/General' }, // no mapping → stay
+      { internet_message_id: '<a>', final_target_folder: 'Processed/Deals' },   // mapped → item
+      { internet_message_id: '<b>', final_target_folder: 'Processed/Infra' },   // no mapping → unmapped
+      { internet_message_id: '<c>', final_target_folder: null },                // no destination
     ];
-    const { deps, flipped } = makeDeps({
-      rows,
-      taskMap: {
-        '<a>': { todo_task_id: 'T1', todo_list_id: 'L1' },
-        '<b>': { todo_task_id: 'T2', todo_list_id: 'L1' },
-        // '<c>' unmapped
-      },
-      statuses: { T1: 'completed', T2: 'incomplete' },
+    const mappings = new Map([['<a>', { todo_task_id: 'T1', todo_list_id: 'L1' }]]);
+    let askedIds = null;
+    const r = await buildStagedWorklist(100, {
+      fetchStagedRows: async (n) => rows.slice(0, n),
+      fetchTaskMappings: async (ids) => { askedIds = ids; return mappings; },
     });
-
-    const r = await pollTodoCompletions({ limit: 100 }, deps);
-    assert.equal(r.completed, 1);
+    assert.deepEqual(askedIds, ['<a>', '<b>', '<c>']); // batch-resolved, not N+1
     assert.equal(r.count, 1);
-    assert.deepEqual(r.instructions, [
-      { internet_message_id: '<a>', target_folder: 'Processed/Deals', clear_flag: true },
-    ]);
-    assert.equal(r.unresolved, 1); // '<c>' has no mapping
-    assert.deepEqual(flipped, [1]); // only the completed one flipped staged→filed
+    assert.deepEqual(r.items, [{
+      internet_message_id: '<a>', todo_task_id: 'T1', todo_list_id: 'L1',
+      target_folder: 'Processed/Deals', clear_flag: true,
+    }]);
+    assert.equal(r.unmapped, 1);
+    assert.equal(r.no_destination, 1);
   });
 
-  it('a mapping with no list id is unresolved (can not query Graph — never guesses)', async () => {
-    const { deps, flipped } = makeDeps({
-      rows: [{ id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' }],
-      taskMap: { '<a>': { todo_task_id: 'T1', todo_list_id: null } },
-      statuses: { T1: 'completed' },
+  it('empty staged set → clean zero, no mapping lookup', async () => {
+    let mapCalls = 0;
+    const r = await buildStagedWorklist(100, {
+      fetchStagedRows: async () => [],
+      fetchTaskMappings: async () => { mapCalls++; return new Map(); },
     });
-    const r = await pollTodoCompletions({}, deps);
-    assert.equal(r.count, 0);
-    assert.equal(r.unresolved, 1);
-    assert.deepEqual(flipped, []);
+    assert.deepEqual(r, { count: 0, items: [], unmapped: 0, no_destination: 0 });
+    assert.equal(mapCalls, 0);
   });
+});
 
-  it('does NOT issue the instruction when the flip is lost to a concurrent poll', async () => {
-    const { deps, flipped } = makeDeps({
-      rows: [{ id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' }],
-      taskMap: { '<a>': { todo_task_id: 'T1', todo_list_id: 'L1' } },
-      statuses: { T1: 'completed' },
-      failFlipFor: new Set([1]),
+describe('applyCompletionReports — the POST report-back flipper', () => {
+  it('flips only the reported staged rows; ignores unknown/already-filed keys', async () => {
+    const staged = [
+      { id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' },
+      { id: 2, internet_message_id: '<b>', final_target_folder: 'Processed/Infra' },
+    ];
+    const flipped = [];
+    const r = await applyCompletionReports(['<a>', '<b>', '<gone>'], {
+      fetchStagedByKeys: async (ks) => staged.filter((s) => ks.includes(s.internet_message_id)),
+      markFiled: async (row) => { flipped.push(row.id); return true; },
     });
-    const r = await pollTodoCompletions({}, deps);
-    assert.equal(r.count, 0, 'no instruction when we did not win the flip');
-    assert.deepEqual(flipped, []);
+    assert.equal(r.requested, 3);
+    assert.equal(r.filed, 2);
+    assert.equal(r.not_staged, 1); // '<gone>' had no staged row
+    assert.deepEqual(r.filed_keys.sort(), ['<a>', '<b>']);
+    assert.deepEqual(flipped.sort(), [1, 2]);
   });
 
-  it('a Graph status error leaves that row staged (counted errored), never instructed', async () => {
-    const { deps, flipped } = makeDeps({
-      rows: [{ id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' }],
-      taskMap: { '<a>': { todo_task_id: 'T1', todo_list_id: 'L1' } },
-      statuses: {},
-      throwStatusFor: new Set(['T1']),
+  it('a lost flip (concurrent poll already filed it) is not counted', async () => {
+    const r = await applyCompletionReports(['<a>'], {
+      fetchStagedByKeys: async () => [{ id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' }],
+      markFiled: async () => false, // 0 rows affected — we did not win the flip
     });
-    const r = await pollTodoCompletions({}, deps);
-    assert.equal(r.count, 0);
-    assert.equal(r.errored, 1);
-    assert.deepEqual(flipped, []);
+    assert.equal(r.filed, 0);
+    assert.deepEqual(r.filed_keys, []);
   });
 
-  it('empty staged set → clean zero result', async () => {
-    const { deps } = makeDeps({ rows: [], taskMap: {}, statuses: {} });
-    const r = await pollTodoCompletions({}, deps);
-    assert.deepEqual(r, { checked: 0, completed: 0, unresolved: 0, errored: 0, count: 0, instructions: [] });
+  it('a markFiled throw is swallowed (row stays staged), never crashes the batch', async () => {
+    const staged = [
+      { id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' },
+      { id: 2, internet_message_id: '<b>', final_target_folder: 'Processed/Infra' },
+    ];
+    const r = await applyCompletionReports(['<a>', '<b>'], {
+      fetchStagedByKeys: async () => staged,
+      markFiled: async (row) => { if (row.id === 1) throw new Error('db 503'); return true; },
+    });
+    assert.equal(r.filed, 1);
+    assert.deepEqual(r.filed_keys, ['<b>']);
+  });
+
+  it('empty / no keys → clean zero (no DB call)', async () => {
+    let calls = 0;
+    const r = await applyCompletionReports([], {
+      fetchStagedByKeys: async () => { calls++; return []; },
+      markFiled: async () => true,
+    });
+    assert.deepEqual(r, { requested: 0, filed: 0, not_staged: 0, filed_keys: [] });
+    assert.equal(calls, 0);
   });
 });

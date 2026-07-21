@@ -152,27 +152,36 @@ appends a `staged` count to `v_processing_log_daily`). Reversible: restore the
 ## 5a. To Do Completion Poll — `staged → Processed` on task completion
 
 Microsoft To Do has no "task completed" trigger, so completion is discovered by
-POLLING. The scheduled **"LCC To Do Completion Poll"** Power Automate flow (Flow 6,
-`docs/architecture/flows/todo-completion-poll.md`, every ~30 min) calls
-`POST /api/webhooks/todo-completion-poll` → `api/sync.js` `?_route=todo-completion-poll`
-(`handleTodoCompletionPoll`; pure logic in `api/_shared/todo-completion.js`).
+POLLING. And **LCC cannot call the To-Do/Graph API directly** — Northmarq IT
+blocks Azure AD app registrations, so there is no Graph service token (the same
+reason the whole system runs on Power Automate connectors). So **the To-Do calls
+live inside Power Automate** (its Microsoft To-Do (Business) connection is already
+OAuth-authenticated); **LCC only ever does DB reads/writes here — no Graph, no
+token.**
 
-Per call it selects the open `staged` `processing_log` rows, looks up each email's
-To Do task in `todo_task_map`, reads its `status` from Graph
-(`GET /me/todo/lists/{listId}/tasks/{taskId}`, delegated `MS_GRAPH_TOKEN`), and for
-each task that is now `completed` returns a move instruction
-`{ internet_message_id, target_folder: <final_target_folder>, clear_flag: true }`
-and flips the row `staged → filed` (idempotent, guarded on `outcome=staged`, so a
-completed email is instructed exactly once). The PA flow then Moves each email to
-its `Processed/{category}` folder and clears the flag.
+The scheduled **"LCC To Do Completion Poll"** PA flow (Flow 6,
+`docs/architecture/flows/todo-completion-poll.md`, every ~30 min) uses two pure-DB
+endpoints on `api/sync.js` `?_route=todo-completion-poll` (`handleTodoCompletionPoll`;
+pure logic in `api/_shared/todo-completion.js`):
 
-- **`GET` = dry-run** (reads Graph, returns the would-be instructions, mutates
-  nothing); **`POST` = live**. Feature-flagged on `MS_GRAPH_TOKEN` — without it a
-  clean no-op so the scheduled flow never dead-letters.
-- **Optimistic-on-issue:** the flip happens when the instruction is issued, not on
-  a PA move-report, so a rare PA move failure leaves the email in
-  "Intake Staged, Not Completed" — still flagged, still visible, never lost (the
-  retention sweep never touches the staging folder).
+- **`GET` = the worklist** (LCC → PA). Selects the open `staged` `processing_log`
+  rows, batch-joins each to its To Do task in `todo_task_map`, and returns the
+  actionable items `{ internet_message_id, todo_task_id, todo_list_id,
+  target_folder (= the resolved `final_target_folder`), clear_flag: true }`. A
+  staged email with no To Do mapping / no destination is excluded (surfaced only as
+  an `unmapped` / `no_destination` count). No Graph — just a DB read.
+- PA loops the worklist, calls its **Get a to-do (V3)** action per item to check
+  `status`, and for each `completed` task does the **Move + Flag-clear itself**
+  (reusing Flow 1's mechanics), then POSTs the completed ids back.
+- **`POST` = the report-back** (PA → LCC). Body `{ completed: [{internet_message_id}
+  | "<imid>", …] }` → flips each matching row `staged → filed` (`move_status='moved'`,
+  `target_folder = final_target_folder`, `moved_at`), guarded on `outcome=staged` so
+  a re-report / concurrent poll flips it at most once (idempotent). PA already moved
+  the email, so this is bookkeeping only.
+
+If PA's move fails it simply doesn't report that id → the row stays `staged` (still
+flagged, still in "Intake Staged, Not Completed", re-offered next tick — never
+lost; the retention sweep never touches the staging folder).
 
 ## 6. Lead channels (news_alert / CREXi / LoopNet) — the edge-function twin
 
