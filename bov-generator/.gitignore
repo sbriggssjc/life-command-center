@@ -8,3 +8,8 @@ build/
 .venv/
 *.xlsx
 *.tmp
+
+# EXCEPTION: the Briggs comps templates MUST ship with the service (Docker `COPY . .`),
+# otherwise generate_comps has no template to populate. Keep these tracked.
+!templates/
+!templates/*.xlsx

@@ -47,6 +47,12 @@ TEMPLATE_DIR = Path(os.environ.get("COMPS_TEMPLATE_DIR", Path(__file__).parent /
 
 SALES_TEMPLATE = "Comps Blank Template - Briggs.xlsx"
 LEASE_TEMPLATE = "Lease Comps Template - Briggs.xlsx"
+# Dialysis-specific sales template: identical to SALES_TEMPLATE but with CHAIRS and
+# PATIENTS input columns inserted immediately after RBA (SF) on both On Market and Sold
+# sheets (formula-protected columns shift accordingly). Selected when the caller flags the
+# request dialysis (payload vertical == 'dialysis' or dialysis == true). Chairs/patients are
+# the most-recent counts, per the dialysis comp standard. Header-driven, so no other change.
+DIALYSIS_SALES_TEMPLATE = "Comps Blank Template - Briggs - Dialysis.xlsx"
 
 
 class CompsError(Exception):
@@ -60,7 +66,17 @@ def _norm(h) -> str:
     'RBA (SF)'→'rba_sf', 'SUITE / SPACE'→'suite_space', 'TI ($/SF)'→'ti_sf',
     'LEASE COMM.'→'lease_comm', 'CITY'→'city'."""
     s = re.sub(r"[^a-z0-9]+", "_", str(h or "").lower()).strip("_")
-    return s
+    return _ALIASES.get(s, s)
+
+
+# Row-key aliases → canonical Briggs header token. Lets a caller pass the comps-engine
+# field names (chairs / patient_count) straight through to the CHAIRS / PATIENTS columns.
+_ALIASES = {
+    "chair_count": "chairs",
+    "chair_ct": "chairs",
+    "patient_count": "patients",
+    "patient_ct": "patients",
+}
 
 
 def _to_number(v):
@@ -96,7 +112,22 @@ _DATE_KEYS = {"lease_exp", "list_date", "sale_date", "lease_comm", "execution_da
 _NUM_KEYS = {
     "rba_sf", "annual_noi", "init_price", "cur_price", "last_price", "sale_price",
     "sf_leased", "annual_rent", "ti_sf", "free_rent_mos", "yr_built", "renovated",
+    "chairs", "patients",   # dialysis standard — most-recent chair + patient counts
 }
+
+
+def _is_dialysis(payload: dict) -> bool:
+    """True when the caller flags a dialysis comp request → use the dialysis sales
+    template (CHAIRS/PATIENTS columns after RBA). Accepts vertical=='dialysis',
+    dialysis==true, or asset_type/property_type containing 'dialysis'."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("dialysis") is True:
+        return True
+    for k in ("vertical", "asset_type", "property_type"):
+        if "dialysis" in str(payload.get(k, "")).lower():
+            return True
+    return False
 
 
 def _header_map(ws, header_row=5):
@@ -148,7 +179,7 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
     tdir = Path(template_dir or TEMPLATE_DIR)
     comp_type = str(payload.get("comp_type", "")).lower()
     if comp_type == "sales":
-        tpl = tdir / SALES_TEMPLATE
+        tpl = tdir / (DIALYSIS_SALES_TEMPLATE if _is_dialysis(payload) else SALES_TEMPLATE)
     elif comp_type == "lease":
         tpl = tdir / LEASE_TEMPLATE
     else:
