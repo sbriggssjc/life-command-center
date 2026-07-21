@@ -256,6 +256,7 @@ app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'ow
 app.all('/api/owner-reconcile-tick', (req, res) => { req.query._route = 'owner-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-reconcile-engine-tick', (req, res) => { req.query._route = 'owner-reconcile-engine-tick'; operationsHandler(req, res); });
 app.all('/api/institution-contact-tick', (req, res) => { req.query._route = 'institution-contact-tick'; operationsHandler(req, res); });
+app.all('/api/contacts-company-link-tick', (req, res) => { req.query._route = 'contacts-company-link-tick'; operationsHandler(req, res); });
 app.all('/api/sf-list-import', (req, res) => { req.query._route = 'sf-list-import'; operationsHandler(req, res); });
 app.all('/api/sf-account-import', (req, res) => { req.query._route = 'sf-account-import'; operationsHandler(req, res); });
 app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 'developer-chain-resolve-tick'; operationsHandler(req, res); });

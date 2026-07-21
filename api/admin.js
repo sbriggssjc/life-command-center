@@ -864,6 +864,14 @@ const FEDERATED_DECISION_TYPES = new Set([
   // not_relevant records + stops asking; research spawns a generic task. No
   // domain write — this is a BD signal, never a fact.
   'loan_maturity',
+  // Phase 1b (2026-07-21): a person contact whose company_name resolves to owner
+  // org(s) by name — the exact_ambiguous (dense core -> >1 owner org) + fuzzy
+  // (distinctive shared core) tiers that the exact-unique auto-apply worker does
+  // NOT touch (LLC names are exactly where false positives live). One card per
+  // contact, value-ranked by the candidate owner's rent. link (attach the chosen
+  // owner via linkPersonToEntity) / not_a_match (record-only, stops asking) /
+  // research. Source: v_lcc_contact_company_link_candidates.
+  'contact_company_link',
 ]);
 
 // Decision types posted as (type + subject) from the PROPERTY-DETAIL signal
@@ -903,6 +911,8 @@ function federatedSubjectRef(type, s) {
     // Ownership consolidation: keyed on property only — a property with a deed +
     // lessor + discrepancy signal collapses to ONE subject_ref (one card / decision).
     case 'resolve_ownership': return (s.property_id != null) ? 'resolveown:gov:' + s.property_id : null;
+    // Phase 1b: one card per contact (unified_id) — the person->company decision.
+    case 'contact_company_link': return s.unified_id ? 'ccl:' + s.unified_id : null;
   }
   return null;
 }
@@ -1427,6 +1437,35 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = opsCnt ? await opsCnt('v_lcc_owner_parent_candidates') : out.items.length;
+    if (out.total == null) out.total = out.items.length;
+    return out;
+  }
+
+  // Phase 1b: person contact -> owner org(s) review tier (exact_ambiguous + fuzzy).
+  // The exact_unique tier is auto-applied by the contacts-company-link worker; only
+  // the tiers a human must judge surface here. Value-ranked by the candidate
+  // owner's rent. Source: v_lcc_contact_company_link_candidates.
+  if (type === 'contact_company_link') {
+    const r = await opsQuery('GET', 'v_lcc_contact_company_link_candidates?select=unified_id,'
+      + 'person_entity_id,person_name,company_name,match_class,n_candidate_orgs,owner_org_id,'
+      + 'owner_org_name,workspace_id,rank_value,candidates'
+      + '&match_class=in.(exact_ambiguous,fuzzy)&order=rank_value.desc.nullslast,person_entity_id&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: 'ccl:' + row.unified_id,
+      subject_domain: null, subject_property_id: null,
+      subject_entity_id: row.person_entity_id,
+      rank_value: Number(row.rank_value) || 0,
+      context: {
+        unified_id: row.unified_id, person_entity_id: row.person_entity_id,
+        person_name: row.person_name, company_name: row.company_name,
+        match_class: row.match_class, n_candidate_orgs: row.n_candidate_orgs,
+        owner_org_id: row.owner_org_id, owner_org_name: row.owner_org_name,
+        workspace_id: row.workspace_id, rank_value: row.rank_value,
+        candidates: Array.isArray(row.candidates) ? row.candidates : [],
+      },
+    }));
+    out.total = opsCnt ? await opsCnt('v_lcc_contact_company_link_candidates?match_class=in.(exact_ambiguous,fuzzy)') : out.items.length;
     if (out.total == null) out.total = out.items.length;
     return out;
   }
@@ -3228,6 +3267,66 @@ async function handleDecisionVerdict(req, res) {
         if (!pr.ok) { await recordEffectFailure({ [verdict]: false, error: pr.data }); return res.status(502).json({ error: verdict + '_failed', detail: pr.data }); }
         await record(verdict, 'decided', null, { bad_rent_lease: resolution });
         return res.status(200).json({ ok: true, verdict, review_id: c.review_id, resolution });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- contact_company_link (federated, Phase 1b) -------------------------
+    // "Which owner org does this contact's company belong to?" link (attach the
+    // chosen owner via linkPersonToEntity — the SAME helper the picker / worker
+    // use) / not_a_match (record-only, stops asking) / research. The chosen owner
+    // is validated to be one of the surfaced candidates; a fuzzy candidate re-passes
+    // the owner-cross-reference distinctive-core guard (verbatim) before the link.
+    if (decision.decision_type === 'contact_company_link') {
+      const personId = c.person_entity_id || decision.subject_entity_id;
+      const candidates = Array.isArray(c.candidates) ? c.candidates : [];
+      if (verdict === 'not_a_match') {
+        await record('not_a_match', 'decided', null, { link: 'not_a_match' });
+        return res.status(200).json({ ok: true, verdict: 'not_a_match' });
+      }
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'contact_company_link',
+          title: 'Resolve company for contact ' + (c.person_name || c.company_name || ''),
+          instructions: 'Decision Center: which owner org does "' + (c.company_name || '') + '" (contact '
+            + (c.person_name || '') + ') belong to? Candidates: '
+            + candidates.map((x) => x.owner_org_name).filter(Boolean).join('; ') });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      if (verdict === 'link') {
+        if (!personId) return res.status(400).json({ error: 'link requires person_entity_id in context' });
+        const override = (payload && payload.owner_entity_id) ? String(payload.owner_entity_id) : null;
+        const chosen = override || (c.owner_org_id ? String(c.owner_org_id) : null);
+        if (!chosen) return res.status(400).json({ error: 'link requires an owner candidate' });
+        const cand = candidates.find((x) => String(x.owner_org_id) === chosen);
+        if (candidates.length && !cand) return res.status(400).json({ error: 'owner_entity_id_not_a_candidate' });
+        // Re-apply the owner-cross-reference distinctive-core guard on a fuzzy
+        // candidate (verbatim reuse); an exact-tier candidate needs no re-check.
+        if (cand && cand.match_kind === 'fuzzy') {
+          const { isDistinctiveSharedCore } = await import('../_shared/owner-cross-reference.js');
+          if (!isDistinctiveSharedCore(cand.shared_core)) {
+            return res.status(400).json({ error: 'fuzzy_core_not_distinctive' });
+          }
+        }
+        // Resolve the chosen owner's workspace (robust to an override in another ws).
+        let ws = c.workspace_id || decision.workspace_id || null;
+        try {
+          const wr = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(chosen) + '&select=workspace_id&limit=1');
+          if (wr.ok && Array.isArray(wr.data) && wr.data[0] && wr.data[0].workspace_id) ws = wr.data[0].workspace_id;
+        } catch (_e) { /* keep the context workspace */ }
+        const { linkPersonToEntity } = await import('../_shared/contact-attach.js');
+        const lr = await linkPersonToEntity({ workspaceId: ws, entityId: chosen, contactEntityId: personId,
+          role: 'works_at', via: 'contacts_phase1b:manual' });
+        if (!lr.ok) {
+          await recordEffectFailure({ link: false, error: lr.detail || lr.skipped });
+          return res.status(502).json({ error: 'link_failed', detail: lr.detail || lr.skipped });
+        }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        await record('link', 'decided', { owner_entity_id: chosen, override: !!override },
+          { link: lr.existed ? 'existed' : 'created', owner_entity_id: chosen });
+        return res.status(200).json({ ok: true, verdict: 'link', owner_entity_id: chosen, existed: !!lr.existed });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
     }
