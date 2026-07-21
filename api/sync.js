@@ -2621,23 +2621,24 @@ async function handleTodoTaskCreated(req, res) {
 // TO DO COMPLETION POLL — staged → Processed on task completion (Flow 6)
 // GET/POST /api/webhooks/todo-completion-poll → /api/sync?_route=todo-completion-poll
 //
-// Microsoft To Do has NO "task completed" trigger, so the "LCC To Do Completion
-// Poll" Power Automate flow calls this on a schedule (every ~30 min). For each
-// open `staged` processing_log row it reads the linked To Do task's status from
-// Graph (delegated MS_GRAPH_TOKEN, the same token operations.js uses for To Do)
-// and, for the tasks that are now `completed`, returns a move instruction the PA
-// flow executes: Move the email to its Processed/{category} folder (the
-// final_target_folder resolved at staging time) then set the flag to notFlagged.
+// Microsoft To Do has NO "task completed" trigger, so completion is discovered
+// by polling — and, because Northmarq IT blocks Azure AD app registrations (no
+// Graph service token possible), the actual To-Do API calls live in POWER
+// AUTOMATE (its Microsoft To-Do (Business) connector is already OAuth-
+// authenticated). LCC only ever does DB reads/writes here — no Graph, no token.
 //
-// The poll flips staged→filed the moment the instruction is issued (idempotent,
-// guarded on outcome=staged), so a completed email is never re-instructed. Any
-// filed/reverted move failure just leaves the email in the staging folder, still
-// flagged + visible (never lost; the retention sweep never touches staging).
-//
-// GET = dry-run (reads Graph status, returns the would-be instructions, mutates
-// NOTHING). POST = live (flips staged→filed as it issues each instruction).
-// Feature-flagged on MS_GRAPH_TOKEN: without it, a clean no-op (empty batch) so
-// the scheduled flow never dead-letters.
+//   GET  = the WORKLIST (a pure DB read). Returns the open `staged` emails
+//          awaiting completion, joined to their To Do task ids:
+//          { internet_message_id, todo_task_id, todo_list_id, target_folder
+//          (= the Processed/{category} to file to), clear_flag }. The scheduled
+//          "LCC To Do Completion Poll" flow loops these, calls the To-Do
+//          connector's "Get task" per item to check status, and — for each
+//          COMPLETED task — does the Move + Flag-clear itself.
+//   POST = the REPORT-BACK (a pure DB write). Body { completed: [ {
+//          internet_message_id } | "<imid>", … ] } (the ids PA moved + filed).
+//          Flips each row staged→filed, guarded on outcome=staged so a
+//          re-report / concurrent poll flips it at most once (idempotent). The
+//          email was ALREADY moved by PA, so this is bookkeeping only.
 // ============================================================================
 async function handleTodoCompletionPoll(req, res) {
   // Auth: PA webhook secret OR an authenticated user (mirrors the other webhooks).
@@ -2647,93 +2648,103 @@ async function handleTodoCompletionPoll(req, res) {
     if (!user) return; // authenticate() already responded 401
   }
 
-  const graphToken = process.env.MS_GRAPH_TOKEN;
-  if (!graphToken) {
-    // No delegated Graph token ⇒ can't read To Do status. Clean no-op so the
-    // scheduled flow doesn't dead-letter every tick (the find_contacts rollout
-    // posture). The staged emails stay staged + flagged, surfaced in the folder.
-    return res.status(200).json({
-      ok: true,
-      graph_configured: false,
-      count: 0,
-      instructions: [],
-      note: 'MS_GRAPH_TOKEN not set — To Do completion polling is inert (staged emails stay staged).',
-    });
+  const {
+    buildStagedWorklist,
+    applyCompletionReports,
+    extractCompletionKeys,
+  } = await import('./_shared/todo-completion.js');
+
+  // PostgREST in.(...) list of internet_message_ids: double-quote each value
+  // (they carry <, >, @) + escape internal " / \, then encode the whole filter.
+  const inListOfMessageIds = (ids) =>
+    'in.(' + ids.map((v) => `"${String(v).replace(/(["\\])/g, '\\$1')}"`).join(',') + ')';
+
+  // ── GET: the worklist (pure DB read) ─────────────────────────────────────
+  if (req.method === 'GET') {
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 100;
+    try {
+      const result = await buildStagedWorklist(limit, {
+        // Open staged rows, oldest first — carrying the resolved final destination.
+        fetchStagedRows: async (n) => {
+          const r = await opsQuery(
+            'GET',
+            'processing_log?outcome=eq.staged' +
+              '&select=id,workspace_id,internet_message_id,final_target_folder,channel,domain' +
+              `&order=created_at.asc&limit=${n}`,
+            null,
+            { countMode: 'none' },
+          );
+          return r.ok && Array.isArray(r.data) ? r.data : [];
+        },
+        // Batch-resolve the To Do tasks for these messages → a Map keyed on imid.
+        fetchTaskMappings: async (ids) => {
+          const filter = encodeURIComponent(inListOfMessageIds(ids));
+          const r = await opsQuery(
+            'GET',
+            `todo_task_map?internet_message_id=${filter}` +
+              '&select=internet_message_id,todo_task_id,todo_list_id',
+            null,
+            { countMode: 'none' },
+          );
+          const map = new Map();
+          if (r.ok && Array.isArray(r.data)) {
+            for (const row of r.data) map.set(row.internet_message_id, row);
+          }
+          return map;
+        },
+      });
+      return res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      console.error('[todo-completion-poll] worklist error:', err?.message || err);
+      return res.status(500).json({ ok: false, error: 'internal_error' });
+    }
   }
 
-  const isDryRun = req.method === 'GET';
-  const rawLimit = parseInt(req.query.limit, 10);
-  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 100;
-
-  const { pollTodoCompletions, isTodoTaskComplete, GRAPH_API_URL } =
-    await import('./_shared/todo-completion.js');
-
-  try {
-    const result = await pollTodoCompletions({ limit }, {
-      // Open staged rows, oldest first — carrying the resolved final destination.
-      fetchStagedRows: async (n) => {
-        const r = await opsQuery(
-          'GET',
-          'processing_log?outcome=eq.staged' +
-            '&select=id,workspace_id,internet_message_id,final_target_folder,channel,domain' +
-            `&order=created_at.asc&limit=${n}`,
-          null,
-          { countMode: 'none' },
-        );
-        return r.ok && Array.isArray(r.data) ? r.data : [];
-      },
-      // The To Do task this email spawned (Flag → To Do flow).
-      fetchTaskMapping: async (imid) => {
-        const enc = encodeURIComponent(imid);
-        const r = await opsQuery(
-          'GET',
-          `todo_task_map?internet_message_id=eq.${enc}&select=todo_task_id,todo_list_id&limit=1`,
-          null,
-          { countMode: 'none' },
-        );
-        return r.ok && Array.isArray(r.data) ? r.data[0] : null;
-      },
-      // Read task status from Graph. A non-200 (task deleted / transient) ⇒
-      // 'unknown' so the email stays staged (never guess completion).
-      getTaskStatus: async (listId, taskId) => {
-        const url = `${GRAPH_API_URL}/me/todo/lists/${encodeURIComponent(listId)}` +
-          `/tasks/${encodeURIComponent(taskId)}?$select=status`;
-        const resp = await fetchWithTimeout(url, {
-          headers: { Authorization: `Bearer ${graphToken}` },
-        });
-        if (!resp.ok) return 'unknown';
-        const task = await resp.json().catch(() => null);
-        return isTodoTaskComplete(task) ? 'completed' : 'incomplete';
-      },
-      // Flip staged→filed (guarded on outcome=staged so the flip is idempotent).
-      // return=representation → the affected rows come back; a 0-row result means
-      // a concurrent poll already flipped it, so we did NOT win the flip.
-      markFiled: async (row) => {
-        if (isDryRun) return true; // dry-run reports the instruction, mutates nothing
-        const patch = await opsQuery(
-          'PATCH',
-          `processing_log?id=eq.${pgFilterVal(row.id)}&outcome=eq.staged`,
-          {
-            outcome: 'filed',
-            target_folder: row.final_target_folder,
-            move_status: 'moved',
-            moved_at: new Date().toISOString(),
-          },
-        );
-        return patch.ok && Array.isArray(patch.data) && patch.data.length > 0;
-      },
-    });
-
-    return res.status(200).json({
-      ok: true,
-      graph_configured: true,
-      dry_run: isDryRun,
-      ...result,
-    });
-  } catch (err) {
-    console.error('[todo-completion-poll] error:', err?.message || err);
-    return res.status(500).json({ ok: false, error: 'internal_error' });
+  // ── POST: report-back (pure DB write) ────────────────────────────────────
+  if (req.method === 'POST') {
+    const body = req.body || {};
+    const keys = extractCompletionKeys(body.completed || body.reports || body.items || []);
+    try {
+      const result = await applyCompletionReports(keys, {
+        // The staged rows for the reported ids (carry the resolved destination).
+        fetchStagedByKeys: async (ks) => {
+          const filter = encodeURIComponent(inListOfMessageIds(ks));
+          const r = await opsQuery(
+            'GET',
+            `processing_log?internet_message_id=${filter}&outcome=eq.staged` +
+              '&select=id,internet_message_id,final_target_folder',
+            null,
+            { countMode: 'none' },
+          );
+          return r.ok && Array.isArray(r.data) ? r.data : [];
+        },
+        // Flip staged→filed, guarded on outcome=staged so the flip is idempotent.
+        // return=representation → a 0-row result means a concurrent poll already
+        // flipped it, so we did NOT win the flip. Records the final destination
+        // (PA already moved the email there) + moved_at.
+        markFiled: async (row) => {
+          const patch = await opsQuery(
+            'PATCH',
+            `processing_log?id=eq.${pgFilterVal(row.id)}&outcome=eq.staged`,
+            {
+              outcome: 'filed',
+              target_folder: row.final_target_folder,
+              move_status: 'moved',
+              moved_at: new Date().toISOString(),
+            },
+          );
+          return patch.ok && Array.isArray(patch.data) && patch.data.length > 0;
+        },
+      });
+      return res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      console.error('[todo-completion-poll] report error:', err?.message || err);
+      return res.status(500).json({ ok: false, error: 'internal_error' });
+    }
   }
+
+  return res.status(405).json({ ok: false, error: `Method ${req.method} not allowed` });
 }
 
 // ============================================================================
