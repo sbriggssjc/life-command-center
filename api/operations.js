@@ -4004,7 +4004,7 @@ async function handleLinkContactToEntity(params, user, workspaceId) {
 
   if (!resolvedContactEntityId && contactId) {
     const ucResult = await opsQuery('GET',
-      `unified_contacts?id=eq.${encodeURIComponent(contactId)}&select=id,entity_id,full_name&limit=1`
+      `unified_contacts?unified_id=eq.${encodeURIComponent(contactId)}&select=unified_id,entity_id,full_name&limit=1`
     );
     const uc = (ucResult.data || [])[0];
     if (!uc) return { ok: false, error: `Contact ${contactId} not found.` };
@@ -4138,7 +4138,7 @@ async function handleMergeDuplicateEntities(params, user, workspaceId) {
 
   // 4. Re-parent unified_contacts referencing the secondary entity
   const ucResult = await opsQuery('GET',
-    `unified_contacts?entity_id=eq.${encodeURIComponent(secondaryId)}&select=id&limit=200`
+    `unified_contacts?entity_id=eq.${encodeURIComponent(secondaryId)}&select=unified_id&limit=200`
   );
   const movedContacts = (ucResult.data || []).length;
   if (movedContacts) {
