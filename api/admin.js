@@ -1442,14 +1442,16 @@ async function fetchFederatedSource(type, cap, opts) {
   }
 
   // Phase 1b: person contact -> owner org(s) review tier (exact_ambiguous + fuzzy).
-  // The exact_unique tier is auto-applied by the contacts-company-link worker; only
-  // the tiers a human must judge surface here. Value-ranked by the candidate
-  // owner's rent. Source: v_lcc_contact_company_link_candidates.
+  // The auto_appliable tier is auto-applied by the contacts-company-link worker
+  // (n_candidate_orgs=1 + aggressive descriptor-core equality + guards); only the
+  // tiers a human must judge surface here (auto_appliable=false). Value-ranked by
+  // the candidate owner's rent. Source: v_lcc_contact_company_link_candidates.
   if (type === 'contact_company_link') {
     const r = await opsQuery('GET', 'v_lcc_contact_company_link_candidates?select=unified_id,'
       + 'person_entity_id,person_name,company_name,match_class,n_candidate_orgs,owner_org_id,'
       + 'owner_org_name,workspace_id,rank_value,candidates'
-      + '&match_class=in.(exact_ambiguous,fuzzy)&order=rank_value.desc.nullslast,person_entity_id&limit=' + cap);
+      + '&match_class=in.(exact_ambiguous,fuzzy)&auto_appliable=eq.false'
+      + '&order=rank_value.desc.nullslast,person_entity_id&limit=' + cap);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     out.items = rows.map((row) => ({
       subject_ref: 'ccl:' + row.unified_id,
@@ -1465,7 +1467,7 @@ async function fetchFederatedSource(type, cap, opts) {
         candidates: Array.isArray(row.candidates) ? row.candidates : [],
       },
     }));
-    out.total = opsCnt ? await opsCnt('v_lcc_contact_company_link_candidates?match_class=in.(exact_ambiguous,fuzzy)') : out.items.length;
+    out.total = opsCnt ? await opsCnt('v_lcc_contact_company_link_candidates?match_class=in.(exact_ambiguous,fuzzy)&auto_appliable=eq.false') : out.items.length;
     if (out.total == null) out.total = out.items.length;
     return out;
   }
