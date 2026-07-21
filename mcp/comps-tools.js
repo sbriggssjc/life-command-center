@@ -100,6 +100,45 @@ function argsToParams(args) {
   };
 }
 
+// ── Server-side request parser — so agents only pass raw text ───────────────
+// Every surface parses differently; doing it here guarantees identical results.
+const US_STATES = { alabama:'AL', alaska:'AK', arizona:'AZ', arkansas:'AR', california:'CA',
+  colorado:'CO', connecticut:'CT', delaware:'DE', florida:'FL', georgia:'GA', hawaii:'HI',
+  idaho:'ID', illinois:'IL', indiana:'IN', iowa:'IA', kansas:'KS', kentucky:'KY', louisiana:'LA',
+  maine:'ME', maryland:'MD', massachusetts:'MA', michigan:'MI', minnesota:'MN', mississippi:'MS',
+  missouri:'MO', montana:'MT', nebraska:'NE', nevada:'NV', 'new hampshire':'NH', 'new jersey':'NJ',
+  'new mexico':'NM', 'new york':'NY', 'north carolina':'NC', 'north dakota':'ND', ohio:'OH',
+  oklahoma:'OK', oregon:'OR', pennsylvania:'PA', 'rhode island':'RI', 'south carolina':'SC',
+  'south dakota':'SD', tennessee:'TN', texas:'TX', utah:'UT', vermont:'VT', virginia:'VA',
+  washington:'WA', 'west virginia':'WV', wisconsin:'WI', wyoming:'WY', 'district of columbia':'DC' };
+const STATE_ABBRS = new Set(Object.values(US_STATES));
+export function parseRequest(text) {
+  const raw = String(text || ''); const t = raw.toLowerCase(); const out = {};
+  const states = new Set();
+  for (const [name, ab] of Object.entries(US_STATES)) if (new RegExp(`\\b${name}\\b`).test(t)) states.add(ab);
+  // Standalone 2-letter codes, but NOT 'VA' — in this domain "VA" means Veterans Affairs, not Virginia.
+  for (const a of (raw.match(/\b[A-Z]{2}\b/g) || [])) if (STATE_ABBRS.has(a) && a !== 'VA') states.add(a);
+  if (/\bnationwide\b|\bnational\b|across the (?:us|country)|\bu\.?s\.?a?\b/.test(t)) states.clear();
+  if (states.size) out.states = [...states];
+  const pt = new Set();
+  if (/\b(medical|health|healthcare|mob|clinic|hospital)\b/.test(t)) pt.add('medical');
+  if (/\b(dialysis|davita|fresenius)\b/.test(t)) pt.add('dialysis');
+  if (/\boffice\b/.test(t)) pt.add('office');
+  if (/\bretail\b/.test(t)) pt.add('retail');
+  if (/\b(industrial|warehouse|flex)\b/.test(t)) pt.add('industrial');
+  if (pt.size) out.property_types = [...pt];
+  if (/\bva\b|veterans|gsa|federal|government|\bgov\b|\bagency\b|\bssa\b|social security|municipal|\birs\b|\bfbi\b|\bdea\b|uscis|\bhhs\b|\bihs\b/.test(t)) out.government_only = true;
+  if (/on.?market|active listing|\bavailable\b|for sale/.test(t)) out.include_on_market = true;
+  let months = null, m;
+  if ((m = t.match(/(?:last|past|trailing)\s+(\d+)\s+month/))) months = parseInt(m[1], 10);
+  else if ((m = t.match(/(?:last|past|trailing)\s+(\d+)\s+year/))) months = parseInt(m[1], 10) * 12;
+  else if (/last\s+year|past\s+year|trailing\s+(?:12|twelve)|\bttm\b|last\s+12\s+months|\bt-?12\b/.test(t)) months = 12;
+  else if (/last\s+quarter|past\s+quarter/.test(t)) months = 3;
+  if (months) { const d = new Date(Date.now()); d.setMonth(d.getMonth() - months); out.date_from = d.toISOString().slice(0, 10); }
+  if ((m = t.match(/since\s+(\d{4})/))) out.date_from = `${m[1]}-01-01`;
+  return out;
+}
+
 // ── THE SHARED CORE — every surface calls this ──────────────────────────────
 // deps = { govQuery, diaQuery } (the server's PostgREST fetch helpers).
 export async function runComps(args, deps) {
@@ -127,14 +166,25 @@ export async function runComps(args, deps) {
 }
 
 export async function runSynthesize(args, deps) {
-  const route = routeIntent(args);
-  const { comps, meta } = await runComps({ ...args, verticals: route.verticals,
+  // Parse the raw request server-side, then let any explicit args override.
+  const p = args.request ? parseRequest(args.request) : {};
+  const eff = {
+    ...args,
+    states:            (args.states && args.states.length) ? args.states : p.states,
+    property_types:    (args.property_types && args.property_types.length) ? args.property_types : p.property_types,
+    government_only:   (args.government_only != null) ? args.government_only : p.government_only,
+    date_from:         args.date_from || p.date_from,
+    include_on_market: (args.include_on_market != null) ? args.include_on_market : p.include_on_market,
+  };
+  const route = routeIntent(eff);
+  const { comps, meta } = await runComps({ ...eff, verticals: route.verticals,
     government_only: route.government_only, limit: 500 }, deps);
-  const scored = comps.map(c => ({ ...c, _score: scoreComp(c, args) }))
-    .sort((x, y) => y._score - x._score).slice(0, Math.min(args.limit || 100, 300));
+  const scored = comps.map(c => ({ ...c, _score: scoreComp(c, eff) }))
+    .sort((x, y) => y._score - x._score).slice(0, Math.min(eff.limit || 100, 300));
   return { interpreted_query: {
-      comp_type: args.comp_type || 'sale', property_types: args.property_types || null,
-      states: args.states || null, government_only: route.government_only, verticals: route.verticals },
+      comp_type: eff.comp_type || 'sale', property_types: eff.property_types || null,
+      states: eff.states || null, date_from: eff.date_from || null,
+      government_only: route.government_only, verticals: route.verticals },
     comps: scored,
     meta: { returned: scored.length,
       by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}), warnings: meta.warnings } };

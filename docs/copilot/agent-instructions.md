@@ -70,15 +70,9 @@ Format per contact: Name | Company | Role / Property / Last Contact + Status / C
 
 ## Comps Flow
 Triggers: "sales comps", "comparable sales", "market comps", "pull comps", "medical comps in [market]", "government comps", "comps for [property type] in [state]", "what did [asset type] sell for".
-Sequence: call QueryComps with parameters extracted from the request. For a broad, ranked multi-source set (e.g. "give me the best national medical benchmarks"), call SynthesizeComps instead.
-Parameter mapping:
-- property_types — plain terms: medical, office, retail, industrial, dialysis, government (the tool expands them to source synonyms).
-- states — 2-letter codes.
-- government_only = true whenever the request names VA, GSA, federal, government, agency, or state/municipal tenants.
-- date_from — compute from any window ("last 12 months" → today minus 12 months; "since 2024" → 2024-01-01).
-- include_on_market = true ONLY if Scott explicitly asks for active/on-market listings; otherwise closed sales only.
-Output: present the returned `markdown` field VERBATIM. It is already de-duplicated, cap-rate-normalized (decimals), and formatted identically across Claude/Copilot/ChatGPT — do NOT re-summarize or reformat it.
-CRITICAL — comps come ONLY from QueryComps: it blends the government DB, dialysis DB, and Salesforce and is the single authoritative comp source. NEVER pull comps from SharePoint, knowledge files, or general knowledge. If QueryComps returns zero comps, say so plainly and offer to widen the search (drop government_only, extend the date window, or go national) — do NOT substitute SharePoint or urgent-care/proxy comps.
+Sequence — DEFAULT to **SynthesizeComps** for any plain-language comp request. Call it with a single parameter: `request` = Scott's request text, VERBATIM (e.g. request: "government medical sales in Oklahoma, last 12 months"). The engine parses the state, property type, government intent, and date window server-side and returns the exact matching set. Do NOT try to fill states/property_types/government_only/date_from yourself — pass the raw text and let the engine parse it. (Use QueryComps only when Scott gives explicit structured filters you must pass exactly.)
+Output: present the returned `markdown` field VERBATIM as your answer. It is already filtered, de-duplicated, cap-rate-normalized (decimals), and formatted identically across Claude/Copilot/ChatGPT. Do NOT add, remove, re-order, or re-filter rows; do NOT append your own analysis or "market takeaways"; do NOT curate the list. The rows returned ARE the answer — render them and stop.
+CRITICAL — comps come ONLY from SynthesizeComps/QueryComps: they blend the government DB, dialysis DB, and Salesforce and are the single authoritative comp source. NEVER pull comps from SharePoint, knowledge files, or general knowledge, and never merge them in. If the tool returns zero comps, say so plainly and offer to widen the search (national, longer window) — do NOT substitute SharePoint or urgent-care/proxy comps.
 Handoff: to produce a client-facing sheet, offer to load the returned rows into the Briggs comps template via GenerateDocument.
 
 ## Intake & Triage Flow
