@@ -12,6 +12,7 @@ import {
   assemblePropertyPacketViaApi,
   resolveContextPacket,
 } from "./context-assemble.js";
+import { makeCompsTools } from "./comps-tools.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
@@ -1724,6 +1725,16 @@ app.get("/", (_req, res) => {
     },
   });
 });
+
+// ── Comps tools (query_comps + synthesize_comps) — registered onto the maps above ──
+{
+  const { defs: __compsDefs, handlers: __compsHandlers } = makeCompsTools({
+    govQuery, diaQuery, textResult, withTiming,
+  });
+  Object.assign(TOOL_DEFINITIONS, __compsDefs);
+  Object.assign(TOOL_HANDLERS, __compsHandlers);
+  console.log("[MCP] Registered comps tools:", Object.keys(__compsDefs).join(", "));
+}
 
 // ── Start ────────────────────────────────────────────────────────────────────
 

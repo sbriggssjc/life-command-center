@@ -101,8 +101,8 @@ as $$
     from available_listings al
     left join properties p on p.property_id = al.property_id
     where p_include_onmkt
-      and al.is_active and al.off_market_date is null and al.sold_date is null
-      and al.exclude_from_listing_metrics is not true
+      and al.is_active and al.off_market_date is null and al.sale_transaction_id is null
+      and al.exclude_from_listing_metrics is not true  -- gov listings use sale_transaction_id (no sold_date col)
       and (p_states is null or al.state = any(p_states))
       and (p_government_only is false or p.government_type is not null)
       and (p_property_types is null or exists (

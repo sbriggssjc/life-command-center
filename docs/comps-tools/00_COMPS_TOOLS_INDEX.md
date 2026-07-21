@@ -7,8 +7,10 @@ Started July 2026. Read this first when picking the work back up.
 
 ## Current status (2026-07-21)
 - **Design:** complete and validated against live schema.
-- **SQL:** `rpc_query_comps` written for both verticals, validated read-only (not yet deployed).
-- **Tool code:** `query_comps.tool.js` written (not yet wired into `mcp/server.js`).
+- **SQL:** `rpc_query_comps` **DEPLOYED** to government + dialysis (read-only functions). Validated live.
+- **Tool code:** wired into `mcp/server.js` (2 edits) via new module `mcp/comps-tools.js`. `node --check` clean.
+- **Tested:** RPC layer live-tested; JS layer 10/10 (`test_query_comps.js`). See `08_Wiring_And_Test_Results`.
+- **To activate:** redeploy the MCP server (Railway); ensure DIA_SUPABASE_* env is set. No RPC redeploy needed.
 - **Promotion analyzed (07):** the existing `sf-promotion-worker` was read in full — comp promotion is
   currently inert (queries `pending`, but comps are `linked`) and, where it runs, targets `comparable_sales`
   (dia) / `comp_provenance` (gov), NOT `sales_transactions`. So `query_comps` reads `sf_comp_staging` directly
@@ -30,6 +32,9 @@ Started July 2026. Read this first when picking the work back up.
 | `rpc_query_comps_dialysis.sql` | Deployable RPC for the `Dialysis_DB` project (`zqzrriwuavgrquhisnoa`). |
 | `query_comps.tool.js` | MCP tool module (`query_comps` + `synthesize_comps` + synonym map + dedup). Copy to `mcp/`. |
 | `07_Comp_Promotion_Gap_Analysis.md` | Validated analysis of `sf-promotion-worker`: the 5 gaps, corrected COMP_FIELD_MAP, `lcc_merge_field` call convention. |
+| `08_Wiring_And_Test_Results_2026-07-21.md` | Deploy + wiring record and end-to-end test results (RPC live + JS 10/10). |
+| `comps-tools.js` | **The wired ESM module** — lives at `mcp/comps-tools.js`; imported by `server.js`. Authoritative tool code. |
+| `test_query_comps.js` | JS-layer test harness (`node test_query_comps.js`). |
 
 ## Key facts to remember (so we don't re-derive them)
 - **No Salesforce Connected App** — org is SSO-gated; Power Automate is the settled transport. Comps are crawled into `sf_comp_staging` on gov + dia (source_system='salesforce'), current as of 2026-07-20.

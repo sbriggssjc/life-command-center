@@ -57,8 +57,17 @@ async function pgrestRpc(vertical, fnName, params) {
 // --- Cross-source dedup --------------------------------------------------------------
 // Canonical vs SF normalize addresses differently, so recompute a consistent key here:
 //   street token + city + state + sale-year. Prefer deterministic source_sf_id links first.
+// Street-suffix synonyms so "4179 Baker St" and "4179 Baker Street" collapse to one key.
+const STREET_SUFFIX = { st: 'street', str: 'street', ave: 'avenue', av: 'avenue', rd: 'road',
+  blvd: 'boulevard', dr: 'drive', ln: 'lane', ct: 'court', cir: 'circle', pkwy: 'parkway',
+  hwy: 'highway', pl: 'place', ter: 'terrace', sq: 'square', trl: 'trail', rte: 'route',
+  n: 'north', s: 'south', e: 'east', w: 'west' };
+function normStreet(a) {
+  return String(a || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+    .split(' ').map(w => STREET_SUFFIX[w] || w).join('');
+}
 function normKey(c) {
-  const street = String(c.address || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 18);
+  const street = normStreet(c.address);
   const city = String(c.city || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const yr = String(c.sale_date || '').slice(0, 4);
   return `${street}|${city}|${(c.state || '').toLowerCase()}|${yr}`;
