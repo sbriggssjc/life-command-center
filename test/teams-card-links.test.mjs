@@ -1,59 +1,19 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mapItemForTeams, buildOutlookDesktopLink } from '../api/intake.js';
+import { mapItemForTeams, clampBody } from '../api/intake.js';
 
-// Task 1 (desktop Outlook deep link) + Task 2 (item-level `#/inbox/<id>` route)
-// server side. Both helpers are pure; these lock the Teams-card payload shape the
-// PA flow / adaptive card bind to.
-
-describe('buildOutlookDesktopLink', () => {
-  // "Find in Outlook" = the documented OWA SEARCH deep link, built from a distinctive
-  // slice of the SUBJECT. The old `ms-outlook://open?url=<owa read-link>` wrapper was
-  // dropped: New Outlook for Windows treats `ms-outlook:` as a bare app activator and
-  // ignores the wrapped message target (opens to Inbox). The exact-message path is now
-  // `email_url` (the raw web read-link); this link only helps FIND the message.
-  const SEARCH = 'https://outlook.office.com/mail/deeplink/search?query=';
-
-  it('builds a subject search deep link (reads item.title, not external_url)', () => {
-    const link = buildOutlookDesktopLink({
-      title: 'Deltona Wellness OM — asking $13.3M',
-      external_url: 'https://outlook.office.com/mail/deeplink/read/xyz',
-      metadata: { internet_message_id: '<abc123@contoso.com>', graph_rest_id: 'AAMkAG...' },
-    });
-    assert.equal(link, SEARCH + encodeURIComponent('Deltona Wellness OM — asking $13.3M'));
-  });
-
-  it('strips leading Re:/Fw:/Fwd: reply-forward prefixes (incl. repeated runs)', () => {
-    const link = buildOutlookDesktopLink({ title: 'RE: FW:  Fwd: NNN dialysis comps' });
-    assert.equal(link, SEARCH + encodeURIComponent('NNN dialysis comps'));
-  });
-
-  it('caps a long subject to a distinctive slice on a word boundary', () => {
-    const long =
-      'Offering Memorandum for a single-tenant net-leased dialysis facility located in the ' +
-      'greater metropolitan area with long remaining term';
-    const link = buildOutlookDesktopLink({ title: long });
-    const query = decodeURIComponent(link.slice(SEARCH.length));
-    assert.ok(query.length <= 80, 'query capped at 80 chars');
-    assert.ok(long.startsWith(query), 'query is a leading slice of the subject');
-    assert.ok(!/\s$/.test(query), 'trimmed');
-    assert.ok(!query.endsWith('me'), 'no truncated mid-word token');
-  });
-
-  it('returns null when the row has no usable subject', () => {
-    // No subject ⇒ nothing to search ⇒ the card omits the Find button (email_url still works).
-    assert.equal(buildOutlookDesktopLink({ title: '', external_url: 'https://outlook.office.com/x' }), null);
-    assert.equal(buildOutlookDesktopLink({ title: '   Re:  ' }), null);
-    assert.equal(buildOutlookDesktopLink({ metadata: {} }), null);
-    assert.equal(buildOutlookDesktopLink({}), null);
-    assert.equal(buildOutlookDesktopLink(null), null);
-  });
-});
+// The Teams intake card is now a SINGLE action — "View in LCC" (`lcc_item_url`).
+// The Outlook web/desktop deep-link fields (email_url / email_url_desktop) were
+// removed: New Outlook's deep-link verbs are a broken Microsoft feature (read-link
+// → "message might have been moved or deleted"; search-link hangs), and the full
+// email body now lives in the LCC inbox detail view. These tests lock the card
+// payload shape the PA flow / adaptive card bind to, and the body-cap helper that
+// keeps the stored full body from bloating LCC Opps.
 
 describe('mapItemForTeams', () => {
   const base = 'https://lcc.example.app';
 
-  it('emits an item-level #/inbox/<id> deep link (Task 2)', () => {
+  it('emits an item-level #/inbox/<id> deep link (the single View-in-LCC action)', () => {
     const out = mapItemForTeams(
       { id: '11111111-2222-3333-4444-555555555555', title: 'Deal', external_url: 'https://outlook.office.com/x', metadata: {} },
       base,
@@ -67,7 +27,7 @@ describe('mapItemForTeams', () => {
     assert.equal(out.lcc_item_url, base + '/#/inbox');
   });
 
-  it('carries the exact-message web link (email_url) + a subject-search Find link (email_url_desktop)', () => {
+  it('does NOT emit the retired Outlook link fields (email_url / email_url_desktop)', () => {
     const out = mapItemForTeams(
       {
         id: 'row-1',
@@ -77,25 +37,31 @@ describe('mapItemForTeams', () => {
       },
       base,
     );
-    // Exact-message path stays the raw web read-link (opens the message in OWA).
-    assert.equal(out.email_url, 'https://outlook.office.com/mail/deeplink/read/xyz');
-    // Desktop field is now the "Find in Outlook" subject search (same field name for the PA binding).
-    assert.equal(
-      out.email_url_desktop,
-      'https://outlook.office.com/mail/deeplink/search?query=' + encodeURIComponent('Flagged deal'),
-    );
+    assert.ok(!('email_url' in out), 'email_url dropped');
+    assert.ok(!('email_url_desktop' in out), 'email_url_desktop dropped');
+    // The card still carries sender/subject/summary for display + the LCC link.
+    assert.equal(out.sender_email, 's@ex.com');
+    assert.equal(out.subject, 'Flagged deal');
+    assert.equal(out.lcc_item_url, base + '/#/inbox/row-1');
+  });
+});
+
+describe('clampBody', () => {
+  it('returns null for empty / whitespace-only bodies (so the metadata key is omitted)', () => {
+    assert.equal(clampBody('', 100), null);
+    assert.equal(clampBody('   \n\t ', 100), null);
+    assert.equal(clampBody(null, 100), null);
+    assert.equal(clampBody(undefined, 100), null);
   });
 
-  it('the Find link is null when the row has no subject (email_url still carried when present)', () => {
-    const noSubject = mapItemForTeams(
-      { id: 'row-2', title: '', external_url: 'https://outlook.office.com/mail/deeplink/read/z', metadata: {} },
-      base,
-    );
-    assert.equal(noSubject.email_url_desktop, null);
-    assert.equal(noSubject.email_url, 'https://outlook.office.com/mail/deeplink/read/z');
+  it('passes a body through untouched when it is under the cap', () => {
+    assert.equal(clampBody('<p>hello</p>', 100), '<p>hello</p>');
+  });
 
-    const empty = mapItemForTeams({ id: 'row-3', title: '', metadata: {} }, base);
-    assert.equal(empty.email_url_desktop, null);
-    assert.equal(empty.email_url, null);
+  it('truncates a body that exceeds the cap', () => {
+    const big = 'x'.repeat(500);
+    const out = clampBody(big, 200);
+    assert.equal(out.length, 200);
+    assert.ok(big.startsWith(out));
   });
 });

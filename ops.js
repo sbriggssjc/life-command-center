@@ -921,7 +921,114 @@ async function focusInboxItem(id) {
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   el.classList.add('inbox-focus');
   setTimeout(() => { try { el.classList.remove('inbox-focus'); } catch (_) {} }, 2800);
+  // Deep-linking to a specific item (Teams "View in LCC") → open the full-body
+  // detail straight away, so the operator lands on the readable email, not just
+  // the highlighted card.
+  const toggle = el.querySelector('.inbox-view-toggle');
+  const box = el.querySelector('.inbox-detail');
+  if (toggle && box && box.style.display === 'none') {
+    try { toggleInboxDetail(id, toggle); } catch (_) {}
+  }
 }
+
+// Toggle the in-app full-email detail on an inbox card. First expand fetches the
+// single item (GET /api/inbox?id=) because the list payload strips the full body.
+async function toggleInboxDetail(id, btn) {
+  const card = btn.closest('.q-item');
+  const box = card && card.querySelector('.inbox-detail');
+  if (!box) return;
+  if (box.style.display !== 'none') {          // collapse
+    box.style.display = 'none';
+    btn.textContent = 'View full email ▾';
+    return;
+  }
+  box.style.display = 'block';
+  btn.textContent = 'Hide full email ▴';
+  if (box._inboxLoaded) return;                 // already rendered
+  box.innerHTML = '<div class="assistant-status"><span class="spinner" style="width:14px;height:14px"></span> Loading email…</div>';
+  let item = null;
+  try {
+    const res = await opsApi('/api/inbox?id=' + encodeURIComponent(id));
+    item = res && res.ok ? (res.data && res.data.item) : null;
+  } catch (_) { item = null; }
+  if (!item) {
+    box.innerHTML = '<div class="assistant-status assistant-error">Could not load the email body.</div>';
+    return;
+  }
+  renderInboxDetail(box, item);
+  box._inboxLoaded = true;
+}
+window.toggleInboxDetail = toggleInboxDetail;
+
+// Escape a string for use inside a double-quoted HTML attribute (iframe srcdoc).
+function _inboxAttrEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+// Derive readable plain text from an email body, safely (no script execution, no
+// resource loads) — DOMParser parses without running anything.
+function _inboxPlainText(md) {
+  if (md.body_text && md.body_text.trim()) return md.body_text;
+  if (md.body_html && md.body_html.trim()) {
+    try { return (new DOMParser().parseFromString(md.body_html, 'text/html').body.textContent || '').trim(); }
+    catch (_) { return md.body_html.replace(/<[^>]+>/g, ' '); }
+  }
+  return '';
+}
+
+function renderInboxDetail(box, item) {
+  const md = item.metadata || {};
+  const subject = item.title || '(No subject)';
+  const senderEmail = md.sender_email || '';
+  const senderName = md.sender_name || senderEmail || 'Unknown sender';
+  const plain = _inboxPlainText(md);
+  box._inboxPlain = plain;
+
+  // Action row: Copy text + Draft reply (mailto) + Outlook web fallback.
+  let actions = '<div class="q-actions" style="margin:0 0 8px">';
+  if (plain) {
+    actions += '<button class="q-action" onclick="event.stopPropagation();copyInboxBody(this)">Copy text</button>';
+  }
+  if (senderEmail) {
+    // Strip a leading Re:/Fw: run so the reply subject isn't "Re: Re: …".
+    let reSubj = subject;
+    let prev;
+    do { prev = reSubj; reSubj = reSubj.replace(/^(re|fw|fwd|aw|wg)\s*:\s*/i, '').trim(); } while (reSubj !== prev);
+    const mailto = 'mailto:' + encodeURIComponent(senderEmail)
+      + '?subject=' + encodeURIComponent('Re: ' + reSubj);
+    actions += '<a class="q-action primary" href="' + esc(mailto) + '" onclick="event.stopPropagation()" style="text-decoration:none">Draft reply</a>';
+  }
+  actions += '</div>';
+
+  let bodyHtml;
+  if (md.body_html && md.body_html.trim()) {
+    // Untrusted email HTML → sandboxed iframe (no scripts, no forms, no same-origin).
+    bodyHtml = '<iframe sandbox="" srcdoc="' + _inboxAttrEsc(md.body_html)
+      + '" style="width:100%;height:360px;border:1px solid var(--border);border-radius:6px;background:#fff"></iframe>';
+  } else if (plain) {
+    bodyHtml = '<pre style="white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:13px;line-height:1.5;max-height:360px;overflow:auto;margin:0;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg2,rgba(0,0,0,0.02))">' + esc(plain) + '</pre>';
+  } else {
+    bodyHtml = '<div class="assistant-status" style="font-size:12px">Full email body not captured for this message (older email, or the Outlook flow doesn’t forward the body yet). Use “Open in Outlook” above.</div>';
+  }
+
+  box.innerHTML =
+    '<div style="font-size:12px;color:var(--text3);margin:0 0 6px">From: ' + esc(senderName)
+    + (senderEmail && senderEmail !== senderName ? ' &lt;' + esc(senderEmail) + '&gt;' : '') + '</div>'
+    + actions + bodyHtml;
+}
+
+function copyInboxBody(btn) {
+  const box = btn.closest('.inbox-detail');
+  const text = box && box._inboxPlain;
+  if (!text) return;
+  const done = () => { const t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { try { btn.textContent = t; } catch (_) {} }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => {});
+  } else {
+    try { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done(); } catch (_) {}
+  }
+}
+window.copyInboxBody = copyInboxBody;
 
 function _intakeDomShort(d) {
   d = String(d || '').toLowerCase();
@@ -986,6 +1093,14 @@ function inboxItemHTML(item, idx) {
     const previewText = bodyText.substring(0, 160).replace(/\n/g, ' ');
     html += `<div class="q-item-preview" style="font-size:12px;color:var(--text3);margin:4px 0 6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(previewText)}</div>`;
   }
+
+  // Full-email detail — read / copy / draft a reply in-app (rarely need Outlook).
+  // The full body lives on the row's metadata (body_html/body_text); it's stripped
+  // from the list payload, so toggleInboxDetail fetches the single item on expand.
+  // Reference by DOM traversal (not an element id) — flagged-email ids can carry
+  // `<@.>` chars that are unsafe as an id/getElementById key.
+  html += `<button class="q-link inbox-view-toggle" onclick="event.stopPropagation();toggleInboxDetail(decodeURIComponent('${encodeURIComponent(item.id)}'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;padding:0;margin:0 0 6px;display:block">View full email ▾</button>`;
+  html += `<div class="inbox-detail" style="display:none;margin:0 0 8px"></div>`;
 
   // Open in Outlook link — prefer web URL (outlook.office.com). See
   // window.openOutlookEmail in app.js for why we no longer try the

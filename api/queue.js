@@ -859,6 +859,13 @@ async function handleInbox(req, res, user, workspaceId) {
 
     const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
     const items = result.data || [];
+    // Keep the list payload light: the FULL email body (metadata.body_html /
+    // body_text) can be hundreds of KB per row — ×100 rows would bloat the list
+    // response. Strip it here; the Inbox detail view fetches the full body
+    // on-demand via GET /api/inbox?id=<uuid> (select=* keeps it there).
+    for (const it of items) {
+      if (it && it.metadata) { delete it.metadata.body_html; delete it.metadata.body_text; }
+    }
     await attachInboxIntakeOutcome(items);
     return res.status(200).json({ items, count: result.count });
   }
