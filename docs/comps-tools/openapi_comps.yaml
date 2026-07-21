@@ -1,0 +1,125 @@
+openapi: 3.0.1
+info:
+  title: LCC Comps API
+  description: >
+    Shared comps engine for the LCC platform. Returns sales comps blended across the
+    government DB, dialysis DB, and Salesforce-staged comps, de-duplicated and normalized.
+    The SAME endpoint backs the Claude MCP tool, the Copilot Studio custom connector, and
+    the ChatGPT GPT Action, so all three surfaces return identical data and output.
+  version: "1.0.0"
+servers:
+  # Replace with your MCP server's Railway domain (the same host that serves /mcp).
+  - url: https://REPLACE-WITH-YOUR-MCP-DOMAIN.up.railway.app
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Use the LCC_API_KEY value as the bearer token.
+  schemas:
+    CompQuery:
+      type: object
+      properties:
+        comp_type: { type: string, enum: [sale, lease, both], default: sale }
+        verticals:
+          type: array
+          items: { type: string, enum: [government, dialysis] }
+          description: Which domains to search. Default both.
+        property_types:
+          type: array
+          items: { type: string }
+          description: Plain terms (medical, office, retail, industrial, dialysis, government); expanded to source synonyms.
+        states:
+          type: array
+          items: { type: string }
+          description: 2-letter state codes, e.g. ["OK","TX"].
+        metros: { type: array, items: { type: string } }
+        date_from: { type: string, format: date }
+        date_to: { type: string, format: date }
+        size_min_sf: { type: number }
+        size_max_sf: { type: number }
+        government_only: { type: boolean, description: Only government-tenanted comps. }
+        include_salesforce: { type: boolean, default: true }
+        include_on_market: { type: boolean, default: false, description: Include active listings (else closed sales only). }
+        limit: { type: integer, default: 200, maximum: 500 }
+    SynthQuery:
+      allOf:
+        - $ref: '#/components/schemas/CompQuery'
+        - type: object
+          properties:
+            request: { type: string, description: Original plain-language request (used for government-intent routing). }
+    Comp:
+      type: object
+      properties:
+        comp_id: { type: string }
+        source: { type: string, description: government_db | dialysis_db | salesforce }
+        comp_type: { type: string }
+        on_market: { type: boolean }
+        property_type: { type: string }
+        is_government: { type: boolean }
+        gov_category: { type: string, nullable: true }
+        tenant: { type: string, nullable: true }
+        address: { type: string, nullable: true }
+        city: { type: string, nullable: true }
+        state: { type: string, nullable: true }
+        building_sf: { type: number, nullable: true }
+        sale_price: { type: number, nullable: true }
+        price_withheld: { type: boolean }
+        price_per_sf: { type: number, nullable: true }
+        cap_rate: { type: number, nullable: true, description: Decimal (0.085 = 8.5%). }
+        noi: { type: number, nullable: true }
+        sale_date: { type: string, nullable: true }
+        validation_status: { type: string, nullable: true }
+        source_sf_id: { type: string, nullable: true }
+    CompResult:
+      type: object
+      properties:
+        comps:
+          type: array
+          items: { $ref: '#/components/schemas/Comp' }
+        meta:
+          type: object
+          properties:
+            returned: { type: integer }
+            total_before_cap: { type: integer }
+            truncated: { type: boolean }
+            by_source: { type: object, additionalProperties: { type: integer } }
+            warnings: { type: array, items: { type: object } }
+        markdown:
+          type: string
+          description: Pre-rendered comp table (identical format across all surfaces).
+security:
+  - bearerAuth: []
+paths:
+  /api/query-comps:
+    post:
+      operationId: queryComps
+      summary: Pull de-duplicated sales comps across all sources.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompQuery' }
+      responses:
+        "200":
+          description: Comps result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompResult' }
+        "401": { description: Unauthorized (bad or missing bearer token). }
+  /api/synthesize-comps:
+    post:
+      operationId: synthesizeComps
+      summary: Assemble one ranked, de-duplicated comp set from a plain-language request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SynthQuery' }
+      responses:
+        "200":
+          description: Ranked comps result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompResult' }
+        "401": { description: Unauthorized. }

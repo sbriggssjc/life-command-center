@@ -12,7 +12,7 @@ import {
   assemblePropertyPacketViaApi,
   resolveContextPacket,
 } from "./context-assemble.js";
-import { makeCompsTools } from "./comps-tools.js";
+import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
@@ -1734,6 +1734,13 @@ app.get("/", (_req, res) => {
   Object.assign(TOOL_DEFINITIONS, __compsDefs);
   Object.assign(TOOL_HANDLERS, __compsHandlers);
   console.log("[MCP] Registered comps tools:", Object.keys(__compsDefs).join(", "));
+
+  // Shared REST surface — same engine as the MCP tools above, for Copilot Studio
+  // custom connector + ChatGPT GPT Actions. Bearer-authenticated via `authenticate`.
+  const __compsRoutes = makeCompsHttpRoutes({ govQuery, diaQuery });
+  app.post("/api/query-comps", authenticate, __compsRoutes.queryComps);
+  app.post("/api/synthesize-comps", authenticate, __compsRoutes.synthesizeComps);
+  console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps");
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────

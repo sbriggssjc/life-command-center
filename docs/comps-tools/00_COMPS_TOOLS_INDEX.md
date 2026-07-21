@@ -8,8 +8,12 @@ Started July 2026. Read this first when picking the work back up.
 ## Current status (2026-07-21)
 - **Design:** complete and validated against live schema.
 - **SQL:** `rpc_query_comps` **DEPLOYED** to government + dialysis (read-only functions). Validated live.
-- **Tool code:** wired into `mcp/server.js` (2 edits) via new module `mcp/comps-tools.js`. `node --check` clean.
-- **Tested:** RPC layer live-tested; JS layer 10/10 (`test_query_comps.js`). See `08_Wiring_And_Test_Results`.
+- **Claude (MCP):** `query_comps` + `synthesize_comps` live and confirmed end-to-end through the connector.
+- **Multi-surface (in progress):** `comps-tools.js` refactored to a shared core (`runComps`) + REST routes.
+  `mcp/server.js` now also exposes `POST /api/query-comps` + `/api/synthesize-comps` (bearer auth) so
+  Copilot Studio and ChatGPT call the SAME engine. See `09_Multi_Surface_Rollout` + `openapi_comps.yaml`.
+  **Needs a Railway redeploy** (commit + push) to activate the REST endpoints.
+- **Tested:** RPC layer live-tested; JS dedup/synonym layer passing. See `08_Wiring_And_Test_Results`.
 - **To activate:** redeploy the MCP server (Railway); ensure DIA_SUPABASE_* env is set. No RPC redeploy needed.
 - **Promotion analyzed (07):** the existing `sf-promotion-worker` was read in full — comp promotion is
   currently inert (queries `pending`, but comps are `linked`) and, where it runs, targets `comparable_sales`

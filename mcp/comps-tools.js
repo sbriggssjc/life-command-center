@@ -1,15 +1,23 @@
 // ============================================================================
-// comps-tools.js — query_comps + synthesize_comps for the LCC MCP server
-// ESM module. Wired in server.js via:
-//   import { makeCompsTools } from "./comps-tools.js";
+// comps-tools.js — shared comps engine for the LCC platform
+// ONE core (runComps) consumed by THREE thin surfaces:
+//   • Claude   -> MCP tool `query_comps`            (makeCompsTools -> handlers)
+//   • Copilot  -> POST /api/query-comps             (makeCompsHttpRoutes)
+//   • ChatGPT  -> POST /api/query-comps (GPT Action, same endpoint)
+// Because all surfaces call runComps(), their data + output cannot diverge.
+//
+// Wired in server.js:
+//   import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
 //   const { defs, handlers } = makeCompsTools({ govQuery, diaQuery, textResult, withTiming });
 //   Object.assign(TOOL_DEFINITIONS, defs); Object.assign(TOOL_HANDLERS, handlers);
+//   const compsRoutes = makeCompsHttpRoutes({ govQuery, diaQuery });
+//   app.post("/api/query-comps", authenticate, compsRoutes.queryComps);
+//   app.post("/api/synthesize-comps", authenticate, compsRoutes.synthesizeComps);
 //
-// Reads canonical + Salesforce-staged comps via rpc_query_comps on each vertical.
-// Read-only. Validated end-to-end against live gov + dia RPCs on 2026-07-21.
+// Read-only. Validated end-to-end against live gov + dia RPCs (2026-07-21).
 // ============================================================================
 
-// Canonical request term -> source values it should loosely match (ILIKE contains).
+// ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
   medical: ['Health', 'Medical', 'MOB', 'Clinic', 'Dialysis', 'Behavioral'],
   healthcare: ['Health', 'Medical', 'MOB', 'Clinic', 'Dialysis', 'Behavioral'],
@@ -26,6 +34,7 @@ export function expandTypes(types) {
   return [...out];
 }
 
+// ── Address normalization + cross-source dedup ──────────────────────────────
 const STREET_SUFFIX = { st: 'street', str: 'street', ave: 'avenue', av: 'avenue', rd: 'road',
   blvd: 'boulevard', dr: 'drive', ln: 'lane', ct: 'court', cir: 'circle', pkwy: 'parkway',
   hwy: 'highway', pl: 'place', ter: 'terrace', sq: 'square', trl: 'trail', rte: 'route',
@@ -74,101 +83,141 @@ function scoreComp(c, a) {
   return +s.toFixed(2);
 }
 
+function argsToParams(args) {
+  return {
+    p_comp_type: args.comp_type || 'sale',
+    p_property_types: expandTypes(args.property_types),
+    p_states: args.states || null,
+    p_metros: args.metros || null,
+    p_date_from: args.date_from || null,
+    p_date_to: args.date_to || null,
+    p_sf_min: args.size_min_sf ?? null,
+    p_sf_max: args.size_max_sf ?? null,
+    p_government_only: !!args.government_only,
+    p_include_sf: args.include_salesforce !== false,
+    p_include_onmkt: !!args.include_on_market,
+    p_limit: Math.min(args.limit || 200, 500),
+  };
+}
+
+// ── THE SHARED CORE — every surface calls this ──────────────────────────────
+// deps = { govQuery, diaQuery } (the server's PostgREST fetch helpers).
+export async function runComps(args, deps) {
+  const QUERY = { government: deps.govQuery, dialysis: deps.diaQuery };
+  const params = argsToParams(args);
+  const targets = args.verticals || ['government', 'dialysis'];
+  const settled = await Promise.allSettled(targets.map(async v => {
+    const q = QUERY[v]; if (!q) throw new Error(`unknown vertical ${v}`);
+    const res = await q('POST', 'rpc/rpc_query_comps', params);
+    if (!res.ok) throw new Error(`${v}: HTTP ${res.status}`);
+    return Array.isArray(res.data) ? res.data : [];
+  }));
+  const rows = [], warnings = [];
+  settled.forEach((s, i) => s.status === 'fulfilled'
+    ? rows.push(...s.value)
+    : warnings.push({ vertical: targets[i], error: String(s.reason?.message || s.reason) }));
+  const merged = dedupe(rows);
+  const cap = params.p_limit;
+  const comps = merged.slice(0, cap);
+  return { comps,
+    meta: { returned: comps.length, total_before_cap: merged.length,
+            truncated: merged.length > cap,
+            by_source: comps.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
+            warnings, interpreted_params: params } };
+}
+
+export async function runSynthesize(args, deps) {
+  const route = routeIntent(args);
+  const { comps, meta } = await runComps({ ...args, verticals: route.verticals,
+    government_only: route.government_only, limit: 500 }, deps);
+  const scored = comps.map(c => ({ ...c, _score: scoreComp(c, args) }))
+    .sort((x, y) => y._score - x._score).slice(0, Math.min(args.limit || 100, 300));
+  return { interpreted_query: {
+      comp_type: args.comp_type || 'sale', property_types: args.property_types || null,
+      states: args.states || null, government_only: route.government_only, verticals: route.verticals },
+    comps: scored,
+    meta: { returned: scored.length,
+      by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}), warnings: meta.warnings } };
+}
+
+// ── Shared renderer — the ONE table format every surface shows ──────────────
+export function formatCompsMarkdown(result) {
+  const rows = result.comps || [];
+  if (!rows.length) return `No comps matched. ${result.meta?.warnings?.length ? '(warnings: ' + JSON.stringify(result.meta.warnings) + ')' : ''}`.trim();
+  const pct = v => (v == null ? '—' : (v * 100).toFixed(2) + '%');
+  const usd = v => (v == null ? '—' : '$' + Number(v).toLocaleString());
+  const head = '| Source | Tenant | Address | City | ST | SF | Price | Cap | $/SF | Sale date |\n|---|---|---|---|---|---|---|---|---|---|';
+  const body = rows.map(c => `| ${c.source} | ${c.tenant || '—'} | ${c.address || '—'} | ${c.city || '—'} | ${c.state || '—'} | ${c.building_sf ? Number(c.building_sf).toLocaleString() : '—'} | ${c.price_withheld ? 'withheld' : usd(c.sale_price)} | ${pct(c.cap_rate)} | ${usd(c.price_per_sf)} | ${c.sale_date || '—'} |`).join('\n');
+  const bySrc = Object.entries(result.meta?.by_source || {}).map(([k, v]) => `${v} ${k}`).join(', ');
+  return `${head}\n${body}\n\n_${rows.length} comps (${bySrc})._`;
+}
+
+// ── Surface 1: MCP tools (Claude) ───────────────────────────────────────────
 export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
-  const QUERY = { government: govQuery, dialysis: diaQuery };
-
-  async function runRpc(args) {
-    const params = {
-      p_comp_type: args.comp_type || 'sale',
-      p_property_types: expandTypes(args.property_types),
-      p_states: args.states || null,
-      p_metros: args.metros || null,
-      p_date_from: args.date_from || null,
-      p_date_to: args.date_to || null,
-      p_sf_min: args.size_min_sf ?? null,
-      p_sf_max: args.size_max_sf ?? null,
-      p_government_only: !!args.government_only,
-      p_include_sf: args.include_salesforce !== false,
-      p_include_onmkt: !!args.include_on_market,
-      p_limit: Math.min(args.limit || 200, 500),
-    };
-    const targets = args.verticals || ['government', 'dialysis'];
-    const settled = await Promise.allSettled(targets.map(async v => {
-      const q = QUERY[v]; if (!q) throw new Error(`unknown vertical ${v}`);
-      const res = await q('POST', 'rpc/rpc_query_comps', params);
-      if (!res.ok) throw new Error(`${v}: HTTP ${res.status}`);
-      return Array.isArray(res.data) ? res.data : [];
-    }));
-    const rows = [], warnings = [];
-    settled.forEach((s, i) => s.status === 'fulfilled'
-      ? rows.push(...s.value)
-      : warnings.push({ vertical: targets[i], error: String(s.reason?.message || s.reason) }));
-    return { rows: dedupe(rows), warnings, params };
-  }
-
-  async function queryComps(args = {}) {
-    return withTiming('query_comps', async () => {
-      const { rows, warnings, params } = await runRpc(args);
-      const cap = params.p_limit;
-      const by_source = rows.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {});
-      return textResult({ comps: rows.slice(0, cap),
-        meta: { returned: Math.min(rows.length, cap), total_before_cap: rows.length,
-                truncated: rows.length > cap, by_source, warnings } });
-    });
-  }
-
-  async function synthesizeComps(args = {}) {
-    return withTiming('synthesize_comps', async () => {
-      const route = routeIntent(args);
-      const { rows, warnings } = await runRpc({ ...args, verticals: route.verticals,
-        government_only: route.government_only, limit: 500 });
-      const scored = rows.map(c => ({ ...c, _score: scoreComp(c, args) }))
-        .sort((x, y) => y._score - x._score).slice(0, Math.min(args.limit || 100, 300));
-      return textResult({ interpreted_query: {
-          comp_type: args.comp_type || 'sale', property_types: args.property_types || null,
-          states: args.states || null, government_only: route.government_only, verticals: route.verticals },
-        comps: scored,
-        summary: { returned: scored.length,
-          by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}), warnings },
-        note: 'Hand comps to the briggs-comps template writer; do not overwrite formula-protected columns.' });
-    });
-  }
-
+  const deps = { govQuery, diaQuery };
   const defs = {
     query_comps: {
       name: 'query_comps',
-      description: "Pull sales comps on demand across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and de-duplicated. Canonical closed sales are gated to transaction_state='live'; Salesforce comps come from sf_comp_staging. Filters below; property_types accepts plain terms (medical, office, retail, industrial, dialysis, government) which are expanded to source synonyms. Cap rates are returned as decimals; confidential $0 sales are flagged price_withheld.",
+      description: "Pull sales comps on demand across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and de-duplicated. Canonical closed sales are gated to transaction_state='live'; Salesforce comps come from sf_comp_staging. property_types accepts plain terms (medical, office, retail, industrial, dialysis, government) expanded to source synonyms. Cap rates returned as decimals; confidential $0 sales flagged price_withheld.",
       inputSchema: { type: 'object', properties: {
-        comp_type: { type: 'string', enum: ['sale', 'lease', 'both'], description: "default 'sale'" },
-        verticals: { type: 'array', items: { type: 'string', enum: ['government', 'dialysis'] } },
-        property_types: { type: 'array', items: { type: 'string' }, description: 'e.g. ["medical"], ["office"]' },
-        states: { type: 'array', items: { type: 'string' }, description: '2-letter, e.g. ["OK","TX"]' },
-        metros: { type: 'array', items: { type: 'string' } },
-        date_from: { type: 'string', description: 'ISO date' }, date_to: { type: 'string', description: 'ISO date' },
-        size_min_sf: { type: 'number' }, size_max_sf: { type: 'number' },
-        government_only: { type: 'boolean' },
-        include_salesforce: { type: 'boolean', description: 'default true' },
-        include_on_market: { type: 'boolean', description: 'default false (closed only)' },
-        limit: { type: 'number', description: 'default 200, max 500' },
-      } },
-    },
-    synthesize_comps: {
-      name: 'synthesize_comps',
-      description: "Assemble one ranked, de-duplicated comp set from every relevant source for a plain-language request. Parse the user's request into the structured fields below (property_types, states, comp_type, date window, size) and pass them; optionally include the original text as `request` so routing can detect government intent (VA/GSA/federal). Returns comps scored by relevance, ready for the briggs-comps template.",
-      inputSchema: { type: 'object', properties: {
-        request: { type: 'string', description: 'original plain-language request (used for gov-intent routing)' },
         comp_type: { type: 'string', enum: ['sale', 'lease', 'both'] },
+        verticals: { type: 'array', items: { type: 'string', enum: ['government', 'dialysis'] } },
         property_types: { type: 'array', items: { type: 'string' } },
         states: { type: 'array', items: { type: 'string' } },
         metros: { type: 'array', items: { type: 'string' } },
         date_from: { type: 'string' }, date_to: { type: 'string' },
         size_min_sf: { type: 'number' }, size_max_sf: { type: 'number' },
         government_only: { type: 'boolean' },
+        include_salesforce: { type: 'boolean' },
         include_on_market: { type: 'boolean' },
-        limit: { type: 'number', description: 'default 100, max 300' },
+        limit: { type: 'number' },
+      } },
+    },
+    synthesize_comps: {
+      name: 'synthesize_comps',
+      description: "Assemble one ranked, de-duplicated comp set from every relevant source for a plain-language request. Parse the request into the structured fields (property_types, states, comp_type, date window, size) and pass them; optionally include the original text as `request` for government-intent routing. Returns comps scored by relevance, ready for the briggs-comps template.",
+      inputSchema: { type: 'object', properties: {
+        request: { type: 'string' },
+        comp_type: { type: 'string', enum: ['sale', 'lease', 'both'] },
+        property_types: { type: 'array', items: { type: 'string' } },
+        states: { type: 'array', items: { type: 'string' } },
+        metros: { type: 'array', items: { type: 'string' } },
+        date_from: { type: 'string' }, date_to: { type: 'string' },
+        size_min_sf: { type: 'number' }, size_max_sf: { type: 'number' },
+        government_only: { type: 'boolean' }, include_on_market: { type: 'boolean' },
+        limit: { type: 'number' },
       } },
     },
   };
+  const handlers = {
+    query_comps: (args) => withTiming('query_comps', async () => {
+      const result = await runComps(args || {}, deps);
+      return textResult({ ...result, markdown: formatCompsMarkdown(result) });
+    }),
+    synthesize_comps: (args) => withTiming('synthesize_comps', async () => {
+      const result = await runSynthesize(args || {}, deps);
+      return textResult({ ...result, markdown: formatCompsMarkdown(result) });
+    }),
+  };
+  return { defs, handlers };
+}
 
-  return { defs, handlers: { query_comps: queryComps, synthesize_comps: synthesizeComps } };
+// ── Surfaces 2 & 3: HTTP routes (Copilot Studio + ChatGPT GPT Actions) ──────
+// Returns Express handlers. Mount behind the server's `authenticate` middleware.
+export function makeCompsHttpRoutes({ govQuery, diaQuery }) {
+  const deps = { govQuery, diaQuery };
+  return {
+    queryComps: async (req, res) => {
+      try {
+        const result = await runComps(req.body || {}, deps);
+        res.json({ ...result, markdown: formatCompsMarkdown(result) });
+      } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
+    },
+    synthesizeComps: async (req, res) => {
+      try {
+        const result = await runSynthesize(req.body || {}, deps);
+        res.json({ ...result, markdown: formatCompsMarkdown(result) });
+      } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
+    },
+  };
 }
