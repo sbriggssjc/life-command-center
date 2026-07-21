@@ -23,9 +23,29 @@ and a `target_folder` — recorded in `public.processing_log`.
 
 | Outcome | When | target_folder | Mailbox action |
 |---|---|---|---|
-| `filed` | OM/lease intake staged, or a deal-closing comp recorded | `Processed/{domain}` — `Processed/Deals`, `Processed/Infra`, `Processed/Leads`, `Processed/General` | move |
-| `needs_review` | nothing captured, extraction failed, or an infra alert (kept visible until acknowledged) | *(null — left in place)* | none; existing flag/inbox surfaces it |
-| `duplicate` | a re-flag / already-ingested email | `Processed/Duplicates` | move (recoverable ~30d) |
+| `filed` | a **terminal** category where filing IS the whole job (currently a deal-closing comp is `staged`, not filed — see below) | `Processed/{domain}` — `Processed/Deals`, `Processed/Infra`, `Processed/Leads`, `Processed/General` | move + **clear flag** |
+| `staged` | intake FINISHED for a **non-terminal** category (deals / leads / general / infra) — the To Do is not done yet | `Intake Staged, Not Completed` (single "everything outstanding" view) | move + **KEEP flag** |
+| `needs_review` | nothing captured, extraction failed, or a genuinely ambiguous / low-confidence item | *(null — left in place)* | none; existing flag/inbox surfaces it |
+| `duplicate` | a re-flag / already-ingested email | `Processed/Duplicates` | move + clear flag (recoverable ~30d) |
+
+**The `staged` state (defer auto-filing until To Do completion).** Filing an
+email and completing the underlying To Do task are two different things. When
+intake finishes for a non-terminal category the email moves to a single
+**"Intake Staged, Not Completed"** folder and **keeps its flag** — it is
+outstanding work, not filed. The flag clears + the email reaches its
+`Processed/{category}` folder only when the linked Microsoft To Do task is marked
+**completed** (by Scott, or by the terminal-category auto-complete gate). The real
+`Processed/{category}` destination is resolved + stored **at staging time** on
+`processing_log.final_target_folder` (never re-derived later). Completion is
+discovered by the scheduled **To Do Completion Poll** (§6a below), which files the
+staged email once its task is done. `needs_review` stays reserved for genuinely
+ambiguous / failed items (left in the Inbox). Terminal categories
+(`news`/`reference`/`fyi`/`duplicate`) still `filed` immediately + clear the flag
+— that behavior is unchanged.
+
+The emit event also carries a **`clear_flag`** boolean (`false` for `staged`,
+`true` for `filed`/`duplicate`) so the Move flow knows whether to clear the flag
+after the move.
 
 The decision is **idempotent per `(workspace_id, internet_message_id)`** — Power
 Automate fires the flagged-email flow 3–6× per flag, and the **first emit wins**
@@ -42,11 +62,18 @@ it no-ops cleanly if the `processing_log` migration has not been applied yet
 `api/_shared/processing-complete.js`:
 
 - `needs_review` → `null` (leave in place)
+- `staged` → `Intake Staged, Not Completed` (the single outstanding-work folder)
 - `duplicate` → `Processed/Duplicates`
 - `filed`, `domain/channel = infra` → `Processed/Infra`
 - `filed`, `lead | news_alert | crexi | loopnet` → `Processed/Leads`
 - `filed`, `om | lease | deal_closing | dia | gov | netlease` → `Processed/Deals`
 - `filed`, otherwise → `Processed/General`
+
+For a `staged` email, `emitProcessingComplete` ALSO computes
+`final_target_folder = targetFolderFor('filed', { channel, domain })` and stores
+it on the `processing_log` row — the eventual `Processed/{category}` the email
+moves to once its To Do completes (resolved at staging time; the poll never
+re-derives it).
 
 ## 3. Two ways Power Automate consumes the decision
 
@@ -116,6 +143,37 @@ processing_log;`). Key columns: `internet_message_id` (stable move key),
 `v_processing_log_daily` view rolls outcomes up per workspace per day. The
 `created_at` index supports the future retention sweep of `Processed/Duplicates`.
 
+The `staged` outcome + the `final_target_folder` column were added by migration
+`20260808120000_lcc_processing_log_staged.sql` (additive: widens the outcome
+CHECK to `filed|needs_review|duplicate|staged`, adds `final_target_folder`, and
+appends a `staged` count to `v_processing_log_daily`). Reversible: restore the
+3-value CHECK + drop the column.
+
+## 5a. To Do Completion Poll — `staged → Processed` on task completion
+
+Microsoft To Do has no "task completed" trigger, so completion is discovered by
+POLLING. The scheduled **"LCC To Do Completion Poll"** Power Automate flow (Flow 6,
+`docs/architecture/flows/todo-completion-poll.md`, every ~30 min) calls
+`POST /api/webhooks/todo-completion-poll` → `api/sync.js` `?_route=todo-completion-poll`
+(`handleTodoCompletionPoll`; pure logic in `api/_shared/todo-completion.js`).
+
+Per call it selects the open `staged` `processing_log` rows, looks up each email's
+To Do task in `todo_task_map`, reads its `status` from Graph
+(`GET /me/todo/lists/{listId}/tasks/{taskId}`, delegated `MS_GRAPH_TOKEN`), and for
+each task that is now `completed` returns a move instruction
+`{ internet_message_id, target_folder: <final_target_folder>, clear_flag: true }`
+and flips the row `staged → filed` (idempotent, guarded on `outcome=staged`, so a
+completed email is instructed exactly once). The PA flow then Moves each email to
+its `Processed/{category}` folder and clears the flag.
+
+- **`GET` = dry-run** (reads Graph, returns the would-be instructions, mutates
+  nothing); **`POST` = live**. Feature-flagged on `MS_GRAPH_TOKEN` — without it a
+  clean no-op so the scheduled flow never dead-letters.
+- **Optimistic-on-issue:** the flip happens when the instruction is issued, not on
+  a PA move-report, so a rare PA move failure leaves the email in
+  "Intake Staged, Not Completed" — still flagged, still visible, never lost (the
+  retention sweep never touches the staging folder).
+
 ## 6. Lead channels (news_alert / CREXi / LoopNet) — the edge-function twin
 
 The `news_alert` (Google Alerts), `rcm` (CREXi/RCM LightBox), and `loopnet`
@@ -155,7 +213,30 @@ blocks or fails a lead ingest.
 - Fires only on a `processing_complete` emit — from `handleOutlookMessage`
   (flagged email) or a `lead-ingest` handler (§6). Mail that never went through
   intake is untouched.
-- Never deletes — moving to `Processed/*` only. Deletion = the separate
-  30-day retention sweep on `Processed/Duplicates`.
-- Infra alerts stay `needs_review` (left visible in the Inbox), by design — not
-  auto-filed.
+- Never deletes — moving to `Processed/*` or the staging folder only. Deletion =
+  the separate 30-day retention sweep on `Processed/Duplicates`.
+- **Staged emails are outstanding work, never swept.** "Intake Staged, Not
+  Completed" is a top-level sibling of `Processed/`, so the retention sweep's
+  `Processed/*` scope never touches it — a staged email is never
+  archived/deleted by age. It leaves the folder ONLY when its To Do completes
+  and the poll (§5a) files it to `Processed/{category}`.
+- **Non-terminal categories `stage` (not auto-file, not stay-in-Inbox).**
+  deals / leads / general / infra finished-intake emails move to the staging
+  folder and keep their flag until their To Do completes. Only the terminal
+  categories (`news`/`reference`/`fyi`/`duplicate`) file immediately + clear the
+  flag; `needs_review` stays reserved for genuinely ambiguous / failed items
+  (left in the Inbox).
+
+## 8. Open questions (deferred, best-judgment defaults in effect)
+
+- **needs_review → staged boundary.** The intake emit sites that previously
+  recorded `needs_review` for a finished-intake, non-terminal category
+  (infra dedup + fresh, general/OM dedup + fresh, a successfully-recorded
+  deal-closing comp) now record `staged`. Sites that record a genuine
+  failure/ambiguity (a deal-closing handler failure) still record
+  `needs_review`, and the low-confidence news-alert branch (edge-function
+  twin, §6) stays `needs_review`. Confirm with Scott whether any other
+  `needs_review` site should stage instead.
+- **Visible "staged" indicator.** No Teams card / To Do "staged vs still in
+  Inbox" indicator was added — the staging folder itself is the single
+  "everything outstanding" view. Revisit if Scott wants an explicit badge.

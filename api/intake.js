@@ -497,9 +497,11 @@ async function handleOutlookMessage(req, res) {
     // back to the freshly-computed values if the first pass predates this).
     if (infra.isInfra) {
       const tier = existing.metadata?.priority_tier || infraTier;
-      // Infra alerts stay in place (needs_review) until acknowledged — a re-flag
-      // must not move them. First emit wins, so this reaffirms that decision.
-      const processing_complete = await emitPC('needs_review', {
+      // Infra is a non-terminal category (spawns a To Do to acknowledge) → STAGED:
+      // moved to "Intake Staged, Not Completed" and KEPT flagged until the To Do
+      // completes, then filed to Processed/Infra. First emit wins, so this
+      // reaffirms the fresh pass's staged decision on a re-flag.
+      const processing_complete = await emitPC('staged', {
         channel: 'infra', domain: 'infra', inboxItemId: existing.id,
       });
       return res.status(200).json({
@@ -688,13 +690,13 @@ async function handleOutlookMessage(req, res) {
     }
 
     // Re-flag of an already-ingested email. First emit wins, so this normally
-    // returns the fresh pass's decision (now needs_review — the general path
-    // does not auto-file, see below). Records needs_review for a pre-feature
-    // email that never went through the fresh path, so an unclassified re-flag
-    // also stays visible in the Inbox rather than being moved to
-    // Processed/Duplicates. (Classified flows — infra / deal-closing — set their
-    // own outcome on their own branches above.)
-    const processing_complete = await emitPC('needs_review', {
+    // returns the fresh pass's decision (now `staged` — the general path stages
+    // finished intake, see below). Records `staged` for a pre-feature email that
+    // never went through the fresh path, so an unclassified re-flag moves to the
+    // "Intake Staged, Not Completed" folder (kept flagged) rather than being
+    // moved to Processed/Duplicates. (Classified flows — infra / deal-closing —
+    // set their own outcome on their own branches above.)
+    const processing_complete = await emitPC('staged', {
       channel: 'om', inboxItemId: existing.id,
     });
     return res.status(200).json({
@@ -804,9 +806,13 @@ async function handleOutlookMessage(req, res) {
         },
       }).catch(err => console.error('[intake] deal-closing inbox patch failed:', err?.message));
     }
-    // Filed when the closed comp was recorded; else leave in place for review.
+    // deal_closing is a non-terminal ("deals") category: a recorded comp is not
+    // the whole job (the deal work — the To Do — may still be pending), so a
+    // successful record → STAGED (moved to "Intake Staged, Not Completed", kept
+    // flagged, filed to Processed/Deals once the To Do completes). A handler
+    // failure → needs_review (genuine ambiguity, left in the Inbox).
     const processing_complete = await emitPC(
-      closingResult?.ok ? 'filed' : 'needs_review',
+      closingResult?.ok ? 'staged' : 'needs_review',
       { channel: 'deal_closing', domain: closingResult?.domain || null, inboxItemId: item?.id || null },
     );
     return res.status(200).json({
@@ -829,10 +835,12 @@ async function handleOutlookMessage(req, res) {
   // — soccer-video"). No new folder/flag/button; the user only flags the email.
   if (infra.isInfra) {
     // Fire-and-forget entity extraction is skipped for infra (no deal parties).
-    // Infra alerts stay in place (needs_review) so they remain visible + flagged
-    // until acknowledged — the classification captured the priority signal, but
-    // the raw email is not auto-filed here.
-    const processing_complete = await emitPC('needs_review', {
+    // Infra is a non-terminal category (the Flag → To Do flow creates a tiered
+    // ack task) → STAGED: moved to "Intake Staged, Not Completed" and KEPT
+    // flagged until that To Do completes, then filed to Processed/Infra. The
+    // classification captured the priority signal; the raw email is not filed
+    // here (it stages as outstanding work).
+    const processing_complete = await emitPC('staged', {
       channel: 'infra', domain: 'infra', inboxItemId: item?.id || null,
     });
     return res.status(200).json({
@@ -995,19 +1003,15 @@ async function handleOutlookMessage(req, res) {
   runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
     .catch(err => console.error('[Intake extraction error]', err.message || err));
 
-  // Disposition: this general flagged-email path has NO domain/category
-  // classification, so it must NOT auto-file. Staging an OM intake is NOT a
-  // terminal action — a real deal email (survey/title question, OM to review,
-  // anything not yet acted on) would get moved out of the Inbox prematurely.
-  // So it always records `needs_review`: the email stays visible + flagged in
-  // the Inbox (the Teams card + To Do task the PA flow creates are the surface),
-  // and no Outlook move is enqueued (needs_review → target_folder null →
-  // move_status 'skipped'). `filed` is reserved for classified flows where
-  // filing genuinely IS the terminal action (infra alerts stay in place;
-  // deal-closing announcements file a recorded comp). Re-enable auto-file here
-  // only once this path classifies the domain/category and can pick the correct
-  // Processed/* destination.
-  const processing_complete = await emitPC('needs_review', {
+  // Disposition: this general ("general" category) flagged-email path has NO
+  // domain/category classification, so it must NOT auto-file (filing IS terminal
+  // and clears the flag — an OM to review, a survey/title question, anything not
+  // yet acted on, would be filed prematurely). Instead it records `staged`: the
+  // email moves to the single "Intake Staged, Not Completed" folder and KEEPS
+  // its flag (the Teams card + To Do task the PA flow creates are the surface),
+  // and files to Processed/General only once its To Do task completes. `filed`
+  // stays reserved for terminal categories; `needs_review` for genuine failures.
+  const processing_complete = await emitPC('staged', {
     channel: 'om', inboxItemId: item?.id || null,
   });
 

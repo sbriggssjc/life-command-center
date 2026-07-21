@@ -62,6 +62,16 @@ describe('shouldAutoCompleteTodo — the confirmed category gate', () => {
     assert.equal(shouldAutoCompleteTodo('queued', 'news'), false);
   });
 
+  it('a `staged` outcome NEVER auto-completes — staging keeps the task open', () => {
+    // Staged = finished intake for a non-terminal category, moved to the staging
+    // folder but KEPT flagged; the To Do stays open until the human completes it
+    // (which is what then drives the staged → Processed move). The gate must not
+    // treat `staged` as terminal (it is not 'filed'/'duplicate'/'flagged').
+    for (const cat of ['deals', 'leads', 'general', 'infra', 'om', null, '']) {
+      assert.equal(shouldAutoCompleteTodo('staged', cat), false, `staged/${cat}`);
+    }
+  });
+
   it('is case- and whitespace-insensitive on both args', () => {
     assert.equal(shouldAutoCompleteTodo('FILED', '  News '), true);
     assert.equal(shouldAutoCompleteTodo(' Auto_Filed ', 'REFERENCE'), true);

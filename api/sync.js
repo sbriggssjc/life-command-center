@@ -211,6 +211,13 @@ export default withErrorHandler(async function handler(req, res) {
     return handleTodoTaskCreated(req, res);
   }
 
+  // Dispatch to the To Do completion poll (staged → Processed on task complete).
+  // Scheduled PA flow calls this; there is no MS To Do "completed" trigger, so
+  // completion is discovered by polling Graph for each staged email's task.
+  if (req.query._route === 'todo-completion-poll') {
+    return handleTodoCompletionPoll(req, res);
+  }
+
   // Dispatch to cross-domain contact matcher (nightly batch job)
   if (req.query._route === 'cross-domain-match' || req.query.action === 'cross-domain-match') {
     return handleCrossDomainMatch(req, res);
@@ -2427,6 +2434,14 @@ async function handleProcessingComplete(req, res) {
   // Prompt 2's classification category drives the To Do auto-complete gate. It
   // is optional (prompt 2's caller doesn't exist yet) — absent ⇒ leave open.
   const category = body.category || body.domain || null;
+  // Whether the Move flow should CLEAR the flag after moving. A `staged` email
+  // moves to the staging folder but STAYS flagged (still outstanding work), so
+  // the caller passes clear_flag=false. filed/duplicate are terminal ⇒ true.
+  // Default true preserves the pre-staged behavior for any caller that omits it.
+  const normalizedOutcome = String(outcome || '').toLowerCase();
+  const clearFlag = typeof body.clear_flag === 'boolean'
+    ? body.clear_flag
+    : normalizedOutcome !== 'staged';
 
   if (!internetMessageId || typeof internetMessageId !== 'string') {
     return res.status(400).json({ ok: false, error: 'internet_message_id is required' });
@@ -2457,6 +2472,8 @@ async function handleProcessingComplete(req, res) {
       schema_version: body.schema_version,
       subject: body.subject,
       category: category || undefined,
+      // Move-then-flag: false for a staged move (keep the flag), true otherwise.
+      clear_flag: clearFlag,
       complete_todo: todo.completeTodo,
       todo_task_id: todo.completeTodo ? todo.todoTaskId : undefined,
       todo_list_id: todo.completeTodo ? todo.todoListId : undefined,
@@ -2471,6 +2488,7 @@ async function handleProcessingComplete(req, res) {
       internet_message_id: internetMessageId,
       target_folder: targetFolder,
       outcome,
+      clear_flag: clearFlag,
       complete_todo: todo.completeTodo,
       todo_task_id: todo.completeTodo ? todo.todoTaskId : null,
       pa_status: result.status,
@@ -2596,6 +2614,125 @@ async function handleTodoTaskCreated(req, res) {
   } catch (err) {
     console.error('[todo-task-created] upsert error:', err?.message || err);
     return res.status(500).json({ ok: false, stored: false, error: 'internal_error' });
+  }
+}
+
+// ============================================================================
+// TO DO COMPLETION POLL — staged → Processed on task completion (Flow 6)
+// GET/POST /api/webhooks/todo-completion-poll → /api/sync?_route=todo-completion-poll
+//
+// Microsoft To Do has NO "task completed" trigger, so the "LCC To Do Completion
+// Poll" Power Automate flow calls this on a schedule (every ~30 min). For each
+// open `staged` processing_log row it reads the linked To Do task's status from
+// Graph (delegated MS_GRAPH_TOKEN, the same token operations.js uses for To Do)
+// and, for the tasks that are now `completed`, returns a move instruction the PA
+// flow executes: Move the email to its Processed/{category} folder (the
+// final_target_folder resolved at staging time) then set the flag to notFlagged.
+//
+// The poll flips staged→filed the moment the instruction is issued (idempotent,
+// guarded on outcome=staged), so a completed email is never re-instructed. Any
+// filed/reverted move failure just leaves the email in the staging folder, still
+// flagged + visible (never lost; the retention sweep never touches staging).
+//
+// GET = dry-run (reads Graph status, returns the would-be instructions, mutates
+// NOTHING). POST = live (flips staged→filed as it issues each instruction).
+// Feature-flagged on MS_GRAPH_TOKEN: without it, a clean no-op (empty batch) so
+// the scheduled flow never dead-letters.
+// ============================================================================
+async function handleTodoCompletionPoll(req, res) {
+  // Auth: PA webhook secret OR an authenticated user (mirrors the other webhooks).
+  const isWebhook = authenticateWebhook(req);
+  if (!isWebhook) {
+    const user = await authenticate(req, res);
+    if (!user) return; // authenticate() already responded 401
+  }
+
+  const graphToken = process.env.MS_GRAPH_TOKEN;
+  if (!graphToken) {
+    // No delegated Graph token ⇒ can't read To Do status. Clean no-op so the
+    // scheduled flow doesn't dead-letter every tick (the find_contacts rollout
+    // posture). The staged emails stay staged + flagged, surfaced in the folder.
+    return res.status(200).json({
+      ok: true,
+      graph_configured: false,
+      count: 0,
+      instructions: [],
+      note: 'MS_GRAPH_TOKEN not set — To Do completion polling is inert (staged emails stay staged).',
+    });
+  }
+
+  const isDryRun = req.method === 'GET';
+  const rawLimit = parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 100;
+
+  const { pollTodoCompletions, isTodoTaskComplete, GRAPH_API_URL } =
+    await import('./_shared/todo-completion.js');
+
+  try {
+    const result = await pollTodoCompletions({ limit }, {
+      // Open staged rows, oldest first — carrying the resolved final destination.
+      fetchStagedRows: async (n) => {
+        const r = await opsQuery(
+          'GET',
+          'processing_log?outcome=eq.staged' +
+            '&select=id,workspace_id,internet_message_id,final_target_folder,channel,domain' +
+            `&order=created_at.asc&limit=${n}`,
+          null,
+          { countMode: 'none' },
+        );
+        return r.ok && Array.isArray(r.data) ? r.data : [];
+      },
+      // The To Do task this email spawned (Flag → To Do flow).
+      fetchTaskMapping: async (imid) => {
+        const enc = encodeURIComponent(imid);
+        const r = await opsQuery(
+          'GET',
+          `todo_task_map?internet_message_id=eq.${enc}&select=todo_task_id,todo_list_id&limit=1`,
+          null,
+          { countMode: 'none' },
+        );
+        return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+      },
+      // Read task status from Graph. A non-200 (task deleted / transient) ⇒
+      // 'unknown' so the email stays staged (never guess completion).
+      getTaskStatus: async (listId, taskId) => {
+        const url = `${GRAPH_API_URL}/me/todo/lists/${encodeURIComponent(listId)}` +
+          `/tasks/${encodeURIComponent(taskId)}?$select=status`;
+        const resp = await fetchWithTimeout(url, {
+          headers: { Authorization: `Bearer ${graphToken}` },
+        });
+        if (!resp.ok) return 'unknown';
+        const task = await resp.json().catch(() => null);
+        return isTodoTaskComplete(task) ? 'completed' : 'incomplete';
+      },
+      // Flip staged→filed (guarded on outcome=staged so the flip is idempotent).
+      // return=representation → the affected rows come back; a 0-row result means
+      // a concurrent poll already flipped it, so we did NOT win the flip.
+      markFiled: async (row) => {
+        if (isDryRun) return true; // dry-run reports the instruction, mutates nothing
+        const patch = await opsQuery(
+          'PATCH',
+          `processing_log?id=eq.${pgFilterVal(row.id)}&outcome=eq.staged`,
+          {
+            outcome: 'filed',
+            target_folder: row.final_target_folder,
+            move_status: 'moved',
+            moved_at: new Date().toISOString(),
+          },
+        );
+        return patch.ok && Array.isArray(patch.data) && patch.data.length > 0;
+      },
+    });
+
+    return res.status(200).json({
+      ok: true,
+      graph_configured: true,
+      dry_run: isDryRun,
+      ...result,
+    });
+  } catch (err) {
+    console.error('[todo-completion-poll] error:', err?.message || err);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
   }
 }
 
