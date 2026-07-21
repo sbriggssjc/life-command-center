@@ -206,14 +206,9 @@ export default withErrorHandler(async function handler(req, res) {
     return handleProcessingComplete(req, res);
   }
 
-  // Dispatch to the Flag → To Do mapping receiver (records todo_task_id per email)
-  if (req.query._route === 'todo-task-created') {
-    return handleTodoTaskCreated(req, res);
-  }
-
   // Dispatch to the To Do completion poll (staged → Processed on task complete).
   // Scheduled PA flow calls this; there is no MS To Do "completed" trigger, so
-  // completion is discovered by polling Graph for each staged email's task.
+  // completion is discovered by polling the native "Flagged email" list.
   if (req.query._route === 'todo-completion-poll') {
     return handleTodoCompletionPoll(req, res);
   }
@@ -2450,15 +2445,12 @@ async function handleProcessingComplete(req, res) {
     return res.status(400).json({ ok: false, error: 'target_folder is required' });
   }
 
-  // Look up the To Do task this message spawned (Flag → To Do flow) and decide,
-  // by category, whether filing IS the whole job. Both the flag-clear (step 5)
-  // and the To Do completion fire off the SAME successful-move condition in the
-  // Move flow; LCC only sends the task ids when the category gate says complete
-  // (so a "leave open" category sends no task id → the To Do stays open). This
-  // is best-effort: a lookup/DB failure never blocks the move — the To Do just
-  // stays open (the safe default).
-  const todo = await resolveTodoCompletion(internetMessageId, outcome, category);
-
+  // Native "Flagged email" To Do model: the flagged message's task is Outlook's
+  // own flagged-email task, so CLEARING THE FLAG completes it — there is no custom
+  // task to complete inline, and no `todo_task_map` lookup. `clear_flag` is the
+  // single lever: a terminal (filed/duplicate) move clears the flag (→ the native
+  // task auto-completes); a `staged` move keeps the flag (→ the task stays open
+  // until Flow 6 files it on completion).
   const { postMoveMessage } = await import('./_shared/pa-move-message.js');
   const result = await postMoveMessage({
     internetMessageId,
@@ -2466,17 +2458,14 @@ async function handleProcessingComplete(req, res) {
     outcome,
     // Forward the fuller build-sheet fields when the caller supplies them, so the
     // relay works whether the PA trigger schema is minimal or marks these required.
-    // The To Do fields are forwarded only when the gate says auto-complete.
     passthrough: {
       correlation_id: body.correlation_id,
       schema_version: body.schema_version,
       subject: body.subject,
       category: category || undefined,
-      // Move-then-flag: false for a staged move (keep the flag), true otherwise.
+      // Move-then-flag: false for a staged move (keep the flag → native task stays
+      // open), true otherwise (clear the flag → native task auto-completes).
       clear_flag: clearFlag,
-      complete_todo: todo.completeTodo,
-      todo_task_id: todo.completeTodo ? todo.todoTaskId : undefined,
-      todo_list_id: todo.completeTodo ? todo.todoListId : undefined,
     },
     fetchImpl: fetchWithTimeout,
   });
@@ -2489,8 +2478,6 @@ async function handleProcessingComplete(req, res) {
       target_folder: targetFolder,
       outcome,
       clear_flag: clearFlag,
-      complete_todo: todo.completeTodo,
-      todo_task_id: todo.completeTodo ? todo.todoTaskId : null,
       pa_status: result.status,
       attempts: result.attempts,
     });
@@ -2499,8 +2486,8 @@ async function handleProcessingComplete(req, res) {
   // The PA relay is unset (503), rejected the payload (4xx / logical ok:false),
   // or failed after retries (5xx / network). Report it honestly — never a false
   // "moved". A 503 means the flow isn't configured yet (safe no-op). The move
-  // failed, so the To Do is NOT completed (the flag-clear + To Do complete both
-  // ride the successful-move branch in the Move flow).
+  // failed, so the flag is NOT cleared → the native "Flagged email" task stays
+  // open (the flag-clear rides the successful-move branch in the Move flow).
   const status = result.status === 503 ? 503 : 502;
   return res.status(status).json({
     ok: false,
@@ -2508,113 +2495,10 @@ async function handleProcessingComplete(req, res) {
     internet_message_id: internetMessageId,
     target_folder: targetFolder,
     outcome,
-    complete_todo: false,
     pa_status: result.status,
     detail: result.detail,
     attempts: result.attempts,
   });
-}
-
-// ── To Do completion resolution (Flag → To Do ↔ move-relay bridge) ─────────
-// Given the message + its disposition/category, decide whether the Move flow
-// should complete the linked To Do task. Returns the task ids only when the
-// category gate says filing is terminal. Best-effort: any lookup/DB error
-// resolves to "leave open" so it can never block the move or falsely complete.
-async function resolveTodoCompletion(internetMessageId, outcome, category) {
-  const { shouldAutoCompleteTodo } = await import('./_shared/todo-complete-gate.js');
-  // Gate on category BEFORE the DB lookup — a leave-open category never needs a
-  // task id, so we skip the query entirely for the common case.
-  if (!shouldAutoCompleteTodo(outcome, category)) {
-    return { completeTodo: false, todoTaskId: null, todoListId: null };
-  }
-  try {
-    const enc = encodeURIComponent(internetMessageId);
-    const r = await opsQuery(
-      'GET',
-      `todo_task_map?internet_message_id=eq.${enc}&select=todo_task_id,todo_list_id&limit=1`,
-      null,
-      { countMode: 'none' }
-    );
-    const row = r.ok && Array.isArray(r.data) ? r.data[0] : null;
-    if (!row || !row.todo_task_id) {
-      // Gate says complete, but no mapping exists (message never flagged, or the
-      // Flag → To Do POST didn't land). Nothing to complete — leave open.
-      return { completeTodo: false, todoTaskId: null, todoListId: null };
-    }
-    return {
-      completeTodo: true,
-      todoTaskId: row.todo_task_id,
-      todoListId: row.todo_list_id || null,
-    };
-  } catch (err) {
-    console.warn('[processing-complete] todo lookup failed (leaving To Do open):', err?.message || err);
-    return { completeTodo: false, todoTaskId: null, todoListId: null };
-  }
-}
-
-// ============================================================================
-// TODO TASK MAPPING RECEIVER — Flag → To Do flow → LCC
-// POST /api/webhooks/todo-task-created → /api/sync?_route=todo-task-created
-//
-// The Flag → To Do PA flow POSTs {internet_message_id, todo_task_id,
-// todo_list_id} right after it creates the Microsoft To Do task. LCC records
-// the mapping so the processing-complete move-relay can auto-complete that task
-// when the email is filed (category-gated). Idempotent upsert keyed on
-// internet_message_id (re-flag / re-POST relinks, never duplicates).
-// ============================================================================
-async function handleTodoTaskCreated(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: `Method ${req.method} not allowed` });
-  }
-
-  // Auth: PA webhook secret OR an authenticated user (mirrors the other webhooks).
-  const isWebhook = authenticateWebhook(req);
-  if (!isWebhook) {
-    const user = await authenticate(req, res);
-    if (!user) return; // authenticate() already responded 401
-  }
-
-  const body = req.body || {};
-  const internetMessageId = body.internet_message_id;
-  const todoTaskId = body.todo_task_id;
-  const todoListId = body.todo_list_id || null;
-
-  if (!internetMessageId || typeof internetMessageId !== 'string') {
-    return res.status(400).json({ ok: false, error: 'internet_message_id is required' });
-  }
-  if (!todoTaskId || typeof todoTaskId !== 'string') {
-    return res.status(400).json({ ok: false, error: 'todo_task_id is required' });
-  }
-
-  try {
-    const result = await opsQuery(
-      'POST',
-      'todo_task_map?on_conflict=internet_message_id',
-      {
-        internet_message_id: internetMessageId,
-        todo_task_id: todoTaskId,
-        todo_list_id: todoListId,
-        updated_at: new Date().toISOString(),
-      },
-      { headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } }
-    );
-    if (!result.ok) {
-      return res.status(502).json({
-        ok: false,
-        stored: false,
-        detail: `todo_task_map upsert failed (${result.status})`,
-      });
-    }
-    return res.status(200).json({
-      ok: true,
-      stored: true,
-      internet_message_id: internetMessageId,
-      todo_task_id: todoTaskId,
-    });
-  } catch (err) {
-    console.error('[todo-task-created] upsert error:', err?.message || err);
-    return res.status(500).json({ ok: false, stored: false, error: 'internal_error' });
-  }
 }
 
 // ============================================================================
@@ -2627,13 +2511,18 @@ async function handleTodoTaskCreated(req, res) {
 // AUTOMATE (its Microsoft To-Do (Business) connector is already OAuth-
 // authenticated). LCC only ever does DB reads/writes here — no Graph, no token.
 //
+// NATIVE "Flagged email" list model: LCC no longer creates/maps a custom task,
+// so there are no todo_task_id / todo_list_id to return. PA queries the native
+// "Flagged email" To Do list each tick and matches its COMPLETED tasks back to
+// these staged emails (PRIMARY: task linkedResources → source message →
+// internetMessageId; FALLBACK: subject + staging-time proximity, and only when
+// NOT subject_ambiguous). See docs/architecture/flows/todo-completion-poll.md.
+//
 //   GET  = the WORKLIST (a pure DB read). Returns the open `staged` emails
-//          awaiting completion, joined to their To Do task ids:
-//          { internet_message_id, todo_task_id, todo_list_id, target_folder
-//          (= the Processed/{category} to file to), clear_flag }. The scheduled
-//          "LCC To Do Completion Poll" flow loops these, calls the To-Do
-//          connector's "Get task" per item to check status, and — for each
-//          COMPLETED task — does the Move + Flag-clear itself.
+//          awaiting completion: { internet_message_id (the stable match key),
+//          subject + staged_at (subject-fallback anchors), subject_ambiguous
+//          (PA must NOT subject-match when true), target_folder (= the
+//          Processed/{category} to file to), clear_flag }.
 //   POST = the REPORT-BACK (a pure DB write). Body { completed: [ {
 //          internet_message_id } | "<imid>", … ] } (the ids PA moved + filed).
 //          Flips each row staged→filed, guarded on outcome=staged so a
@@ -2665,33 +2554,18 @@ async function handleTodoCompletionPoll(req, res) {
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 100;
     try {
       const result = await buildStagedWorklist(limit, {
-        // Open staged rows, oldest first — carrying the resolved final destination.
+        // Open staged rows, oldest first — carrying the resolved final destination
+        // plus subject + staging time for PA's subject-fallback match.
         fetchStagedRows: async (n) => {
           const r = await opsQuery(
             'GET',
             'processing_log?outcome=eq.staged' +
-              '&select=id,workspace_id,internet_message_id,final_target_folder,channel,domain' +
+              '&select=id,workspace_id,internet_message_id,final_target_folder,subject,created_at,channel,domain' +
               `&order=created_at.asc&limit=${n}`,
             null,
             { countMode: 'none' },
           );
           return r.ok && Array.isArray(r.data) ? r.data : [];
-        },
-        // Batch-resolve the To Do tasks for these messages → a Map keyed on imid.
-        fetchTaskMappings: async (ids) => {
-          const filter = encodeURIComponent(inListOfMessageIds(ids));
-          const r = await opsQuery(
-            'GET',
-            `todo_task_map?internet_message_id=${filter}` +
-              '&select=internet_message_id,todo_task_id,todo_list_id',
-            null,
-            { countMode: 'none' },
-          );
-          const map = new Map();
-          if (r.ok && Array.isArray(r.data)) {
-            for (const row of r.data) map.set(row.internet_message_id, row);
-          }
-          return map;
         },
       });
       return res.status(200).json({ ok: true, ...result });

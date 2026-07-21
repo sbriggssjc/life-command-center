@@ -33,12 +33,12 @@ email and completing the underlying To Do task are two different things. When
 intake finishes for a non-terminal category the email moves to a single
 **"Intake Staged, Not Completed"** folder and **keeps its flag** — it is
 outstanding work, not filed. The flag clears + the email reaches its
-`Processed/{category}` folder only when the linked Microsoft To Do task is marked
-**completed** (by Scott, or by the terminal-category auto-complete gate). The real
-`Processed/{category}` destination is resolved + stored **at staging time** on
-`processing_log.final_target_folder` (never re-derived later). Completion is
-discovered by the scheduled **To Do Completion Poll** (§6a below), which files the
-staged email once its task is done. `needs_review` stays reserved for genuinely
+`Processed/{category}` folder only when its **native "Flagged email" To Do task**
+(the one Outlook auto-creates for any flagged message) is marked **completed** by
+Scott. The real `Processed/{category}` destination is resolved + stored **at
+staging time** on `processing_log.final_target_folder` (never re-derived later).
+Completion is discovered by the scheduled **To Do Completion Poll** (§5a below),
+which files the staged email once its native task is done. `needs_review` stays reserved for genuinely
 ambiguous / failed items (left in the Inbox). Terminal categories
 (`news`/`reference`/`fyi`/`duplicate`) still `filed` immediately + clear the flag
 — that behavior is unchanged.
@@ -149,15 +149,21 @@ CHECK to `filed|needs_review|duplicate|staged`, adds `final_target_folder`, and
 appends a `staged` count to `v_processing_log_daily`). Reversible: restore the
 3-value CHECK + drop the column.
 
-## 5a. To Do Completion Poll — `staged → Processed` on task completion
+## 5a. To Do Completion Poll — `staged → Processed` on task completion (native "Flagged email" list)
 
 Microsoft To Do has no "task completed" trigger, so completion is discovered by
 POLLING. And **LCC cannot call the To-Do/Graph API directly** — Northmarq IT
 blocks Azure AD app registrations, so there is no Graph service token (the same
-reason the whole system runs on Power Automate connectors). So **the To-Do calls
-live inside Power Automate** (its Microsoft To-Do (Business) connection is already
-OAuth-authenticated); **LCC only ever does DB reads/writes here — no Graph, no
-token.**
+reason the whole system runs on Power Automate connectors). So **the To-Do/Graph
+calls live inside Power Automate** (its Microsoft To-Do (Business) connection is
+already OAuth-authenticated); **LCC only ever does DB reads/writes here — no
+Graph, no token.**
+
+**Native-list model (2026-07-21).** LCC no longer creates a custom To Do task and
+no longer stores a task mapping (`/api/webhooks/todo-task-created` + `todo_task_map`
+are retired — see below). Instead PA tracks the **native "Flagged email" To Do
+list** Outlook auto-creates for every flagged message — the list Scott actually
+works — and matches its completed tasks back to the staged emails LCC returns.
 
 The scheduled **"LCC To Do Completion Poll"** PA flow (Flow 6,
 `docs/architecture/flows/todo-completion-poll.md`, every ~30 min) uses two pure-DB
@@ -165,14 +171,19 @@ endpoints on `api/sync.js` `?_route=todo-completion-poll` (`handleTodoCompletion
 pure logic in `api/_shared/todo-completion.js`):
 
 - **`GET` = the worklist** (LCC → PA). Selects the open `staged` `processing_log`
-  rows, batch-joins each to its To Do task in `todo_task_map`, and returns the
-  actionable items `{ internet_message_id, todo_task_id, todo_list_id,
-  target_folder (= the resolved `final_target_folder`), clear_flag: true }`. A
-  staged email with no To Do mapping / no destination is excluded (surfaced only as
-  an `unmapped` / `no_destination` count). No Graph — just a DB read.
-- PA loops the worklist, calls its **Get a to-do (V3)** action per item to check
-  `status`, and for each `completed` task does the **Move + Flag-clear itself**
-  (reusing Flow 1's mechanics), then POSTs the completed ids back.
+  rows and returns the actionable items `{ internet_message_id, subject, staged_at,
+  subject_ambiguous, target_folder (= the resolved `final_target_folder`),
+  clear_flag: true }` — **no todo task ids** (LCC doesn't create/know the native
+  task). A staged email with no destination is excluded (surfaced only as a
+  `no_destination` count). No Graph — just a DB read.
+- PA resolves the native "Flagged email" list (`wellknownListName eq
+  'flaggedEmails'`), lists its **completed** tasks, and **matches each back to a
+  worklist item** — PRIMARY: the task's `linkedResources` → the source message's
+  `internetMessageId` (== the worklist `internet_message_id`); FALLBACK: `subject`
+  + `staged_at` proximity, and ONLY when `subject_ambiguous` is false and the match
+  is unique (never guess). For each matched completed task PA does the **Move +
+  Flag-clear itself** (reusing Flow 1's mechanics — clearing the flag also completes
+  the native task), then POSTs the completed ids back.
 - **`POST` = the report-back** (PA → LCC). Body `{ completed: [{internet_message_id}
   | "<imid>", …] }` → flips each matching row `staged → filed` (`move_status='moved'`,
   `target_folder = final_target_folder`, `moved_at`), guarded on `outcome=staged` so
@@ -182,6 +193,19 @@ pure logic in `api/_shared/todo-completion.js`):
 If PA's move fails it simply doesn't report that id → the row stays `staged` (still
 flagged, still in "Intake Staged, Not Completed", re-offered next tick — never
 lost; the retention sweep never touches the staging folder).
+
+> **⚠️ Confirm `linkedResources` live first.** The flag-created task's
+> `externalId`/`webUrl` format is not reliably documented — probe a real flagged
+> task (`GET /me/todo/lists/{flaggedEmailListId}/tasks?$expand=linkedResources`) and
+> confirm it carries a value mappable to `internetMessageId` before trusting the
+> primary path; otherwise the subject-proximity fallback (ambiguity-guarded) is the
+> path. Full recipe in `docs/architecture/flows/todo-completion-poll.md`.
+
+**Retired with this model:** the custom **Flag → To Do** PA flow (removed in the
+designer), `/api/webhooks/todo-task-created` + `handleTodoTaskCreated`, the
+move-relay's `resolveTodoCompletion` + `api/_shared/todo-complete-gate.js`, and the
+poll's `todo_task_map` join. `public.todo_task_map` is kept but deprecated
+(migration `20260721120000_lcc_todo_task_map_deprecate.sql`; no live writer/reader).
 
 ## 6. Lead channels (news_alert / CREXi / LoopNet) — the edge-function twin
 

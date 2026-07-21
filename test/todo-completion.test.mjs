@@ -1,6 +1,10 @@
 // Closing the Loop — Flow 6: the To Do completion poll (staged → Processed).
-// PA owns the To-Do/Graph calls (OAuth connector); LCC only does DB reads/writes.
-// Pure helpers + the two deps-injected orchestrators, no DB / no Graph.
+// NATIVE "Flagged email" list model: LCC no longer creates/maps a custom task,
+// so the worklist carries NO todo_task_id / todo_list_id. PA matches the native
+// list itself (linkedResources → internetMessageId; subject + staging-time
+// fallback, only when NOT subject_ambiguous). PA owns the To-Do/Graph calls;
+// LCC only does DB reads/writes. Pure helpers + the two deps-injected
+// orchestrators, no DB / no Graph.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,33 +17,40 @@ import {
 } from '../api/_shared/todo-completion.js';
 
 describe('buildStagedWorklistItem', () => {
-  const mapping = { todo_task_id: 'T1', todo_list_id: 'L1' };
-
-  it('builds the PA worklist item (task ids + destination + clear_flag) for a mapped staged row', () => {
-    const row = { internet_message_id: '<a>', final_target_folder: 'Processed/Deals' };
-    assert.deepEqual(buildStagedWorklistItem(row, mapping), {
+  it('builds the PA worklist item (message key + subject/staged_at + destination + clear_flag)', () => {
+    const row = {
       internet_message_id: '<a>',
-      todo_task_id: 'T1',
-      todo_list_id: 'L1',
+      final_target_folder: 'Processed/Deals',
+      subject: 'OM — 123 Main St',
+      created_at: '2026-07-21T10:00:00Z',
+    };
+    assert.deepEqual(buildStagedWorklistItem(row), {
+      internet_message_id: '<a>',
+      subject: 'OM — 123 Main St',
+      staged_at: '2026-07-21T10:00:00Z',
       target_folder: 'Processed/Deals',
       clear_flag: true,
     });
   });
 
-  it('null when unmapped, or missing a list id / task id (PA can not Get-task)', () => {
+  it('subject/staged_at are null when absent (still actionable — PA uses the linkedResources match)', () => {
     const row = { internet_message_id: '<a>', final_target_folder: 'Processed/Deals' };
-    assert.equal(buildStagedWorklistItem(row, null), null);
-    assert.equal(buildStagedWorklistItem(row, { todo_task_id: 'T1', todo_list_id: null }), null);
-    assert.equal(buildStagedWorklistItem(row, { todo_task_id: null, todo_list_id: 'L1' }), null);
+    assert.deepEqual(buildStagedWorklistItem(row), {
+      internet_message_id: '<a>',
+      subject: null,
+      staged_at: null,
+      target_folder: 'Processed/Deals',
+      clear_flag: true,
+    });
   });
 
   it('null without a resolved destination (never file to a guessed folder)', () => {
-    assert.equal(buildStagedWorklistItem({ internet_message_id: '<a>', final_target_folder: null }, mapping), null);
-    assert.equal(buildStagedWorklistItem({ internet_message_id: '<a>' }, mapping), null);
+    assert.equal(buildStagedWorklistItem({ internet_message_id: '<a>', final_target_folder: null }), null);
+    assert.equal(buildStagedWorklistItem({ internet_message_id: '<a>' }), null);
   });
 
   it('null when the message key is missing', () => {
-    assert.equal(buildStagedWorklistItem({ final_target_folder: 'Processed/Deals' }, mapping), null);
+    assert.equal(buildStagedWorklistItem({ final_target_folder: 'Processed/Deals' }), null);
   });
 });
 
@@ -61,36 +72,49 @@ describe('extractCompletionKeys', () => {
 });
 
 describe('buildStagedWorklist — the GET worklist assembler', () => {
-  it('emits only actionable items; counts unmapped + no_destination', async () => {
+  it('emits actionable items (no mapping lookup); counts no_destination', async () => {
     const rows = [
-      { internet_message_id: '<a>', final_target_folder: 'Processed/Deals' },   // mapped → item
-      { internet_message_id: '<b>', final_target_folder: 'Processed/Infra' },   // no mapping → unmapped
-      { internet_message_id: '<c>', final_target_folder: null },                // no destination
+      { internet_message_id: '<a>', final_target_folder: 'Processed/Deals', subject: 'Alpha', created_at: 't1' },
+      { internet_message_id: '<c>', final_target_folder: null, subject: 'Gamma' },          // no destination
+      { final_target_folder: 'Processed/Infra', subject: 'no-imid' },                       // no message key → dropped
     ];
-    const mappings = new Map([['<a>', { todo_task_id: 'T1', todo_list_id: 'L1' }]]);
-    let askedIds = null;
     const r = await buildStagedWorklist(100, {
       fetchStagedRows: async (n) => rows.slice(0, n),
-      fetchTaskMappings: async (ids) => { askedIds = ids; return mappings; },
     });
-    assert.deepEqual(askedIds, ['<a>', '<b>', '<c>']); // batch-resolved, not N+1
     assert.equal(r.count, 1);
     assert.deepEqual(r.items, [{
-      internet_message_id: '<a>', todo_task_id: 'T1', todo_list_id: 'L1',
-      target_folder: 'Processed/Deals', clear_flag: true,
+      internet_message_id: '<a>', subject: 'Alpha', staged_at: 't1',
+      target_folder: 'Processed/Deals', clear_flag: true, subject_ambiguous: false,
     }]);
-    assert.equal(r.unmapped, 1);
     assert.equal(r.no_destination, 1);
+    assert.ok(!('unmapped' in r)); // the mapping concept is retired
   });
 
-  it('empty staged set → clean zero, no mapping lookup', async () => {
-    let mapCalls = 0;
-    const r = await buildStagedWorklist(100, {
-      fetchStagedRows: async () => [],
-      fetchTaskMappings: async () => { mapCalls++; return new Map(); },
-    });
-    assert.deepEqual(r, { count: 0, items: [], unmapped: 0, no_destination: 0 });
-    assert.equal(mapCalls, 0);
+  it('flags subject_ambiguous when ≥2 staged emails share a subject (PA must not subject-match)', async () => {
+    const rows = [
+      { internet_message_id: '<a>', final_target_folder: 'Processed/Deals', subject: 'RE: Quarterly review' },
+      { internet_message_id: '<b>', final_target_folder: 'Processed/Deals', subject: 'quarterly review ' }, // same after norm
+      { internet_message_id: '<c>', final_target_folder: 'Processed/Deals', subject: 'Unique subject' },
+    ];
+    const r = await buildStagedWorklist(100, { fetchStagedRows: async () => rows });
+    const byId = Object.fromEntries(r.items.map((i) => [i.internet_message_id, i]));
+    assert.equal(byId['<a>'].subject_ambiguous, true);  // collides with <b> (RE:/case/space normalized)
+    assert.equal(byId['<b>'].subject_ambiguous, true);
+    assert.equal(byId['<c>'].subject_ambiguous, false); // unique
+  });
+
+  it('flags subject_ambiguous when the subject is blank (nothing to subject-match on)', async () => {
+    const rows = [
+      { internet_message_id: '<a>', final_target_folder: 'Processed/Deals', subject: '' },
+      { internet_message_id: '<b>', final_target_folder: 'Processed/Deals', subject: null },
+    ];
+    const r = await buildStagedWorklist(100, { fetchStagedRows: async () => rows });
+    assert.ok(r.items.every((i) => i.subject_ambiguous === true));
+  });
+
+  it('empty staged set → clean zero', async () => {
+    const r = await buildStagedWorklist(100, { fetchStagedRows: async () => [] });
+    assert.deepEqual(r, { count: 0, items: [], no_destination: 0 });
   });
 });
 
