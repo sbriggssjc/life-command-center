@@ -69,13 +69,25 @@ def _norm(h) -> str:
     return _ALIASES.get(s, s)
 
 
-# Row-key aliases → canonical Briggs header token. Lets a caller pass the comps-engine
-# field names (chairs / patient_count) straight through to the CHAIRS / PATIENTS columns.
+# Row-key aliases → canonical Briggs header token. Lets a caller pass the comps-engine /
+# query_comps field names straight through to the master-order template columns
+# (TENANT, LAND, BUILT, RBA, CHAIRS, PATIENTS, RENT, EXP, EXPENSES, RENEWAL OPTIONS,
+#  SOLD PRICE, DATE, INITIAL/LAST PRICE, ON MARKET, DOM ...).
 _ALIASES = {
-    "chair_count": "chairs",
-    "chair_ct": "chairs",
-    "patient_count": "patients",
-    "patient_ct": "patients",
+    "chair_count": "chairs", "chair_ct": "chairs",
+    "patient_count": "patients", "patient_ct": "patients",
+    "year_built": "built",
+    "building_sf": "rba", "rba_sf": "rba", "building_size": "rba",
+    "sale_price": "sold_price",
+    "sale_date": "date",
+    "lease_expiration": "exp", "lease_exp": "exp",
+    "lease_type": "expenses", "expense_structure": "expenses",
+    "options": "renewal_options", "renewal_option": "renewal_options", "renewal_option_text": "renewal_options",
+    "annual_rent": "rent", "annual_noi": "rent",
+    "land_acres": "land", "land_area": "land",
+    "list_date": "on_market", "on_market_date": "on_market", "listing_date": "on_market",
+    "cur_price": "last_price",   # on-market current ask = LAST PRICE column
+    "sold_sf": "sold_sf", "price_per_sf": "sold_sf",
 }
 
 
@@ -108,11 +120,14 @@ def _to_date(v):
 # Which normalized headers are DATE columns (write as true Excel dates) and which
 # are NUMERIC (write as floats). Everything else is text. Formula columns are
 # detected from the template and never written regardless of this map.
-_DATE_KEYS = {"lease_exp", "list_date", "sale_date", "lease_comm", "execution_date"}
+# NOTE: aliases are applied by _norm() BEFORE these sets are consulted, so list the
+# canonical (post-alias) tokens here — e.g. 'exp', 'date', 'on_market', 'rent', 'built'.
+_DATE_KEYS = {"exp", "date", "on_market", "lease_exp", "list_date", "sale_date", "lease_comm", "execution_date"}
 _NUM_KEYS = {
-    "rba_sf", "annual_noi", "init_price", "cur_price", "last_price", "sale_price",
+    "land", "built", "rba", "chairs", "patients", "rent",
+    "sold_price", "initial_price", "last_price",
+    "annual_noi", "init_price", "cur_price", "sale_price", "rba_sf",
     "sf_leased", "annual_rent", "ti_sf", "free_rent_mos", "yr_built", "renovated",
-    "chairs", "patients",   # dialysis standard — most-recent chair + patient counts
 }
 
 
@@ -172,6 +187,57 @@ def _write_rows(ws, rows):
     return len(rows or []), sorted(skipped_formula), sorted(unknown)
 
 
+def _row_get(row, canon):
+    """Value from a row dict whose key normalizes (post-alias) to `canon`."""
+    for k, v in (row or {}).items():
+        if _norm(k) == canon:
+            return v
+    return None
+
+
+def _sort_rows(rows, sheet):
+    """Workflow sort: Sold by DATE desc; On Market / Available by cap asc; Lease by
+    execution date desc. Missing keys sort last so blanks never lead the table."""
+    rows = list(rows or [])
+    if sheet == "Sold":
+        rows.sort(key=lambda r: (_to_date(_row_get(r, "date")) is None,
+                                 _to_date(_row_get(r, "date")) or datetime.min), reverse=True)
+    elif sheet in ("On Market", "Available"):
+        def cap(r):
+            rent = _to_number(_row_get(r, "rent")); price = _to_number(_row_get(r, "last_price"))
+            return rent / price if (rent and price) else None
+        rows.sort(key=lambda r: (cap(r) is None, cap(r) or 0))
+    elif sheet == "Lease Comps":
+        rows.sort(key=lambda r: (_to_date(_row_get(r, "execution_date")) is None,
+                                 _to_date(_row_get(r, "execution_date")) or datetime.min), reverse=True)
+    return rows
+
+
+def _trim_to_totals(ws, n):
+    """Delete the unused blank rows between the last written comp and the template's
+    AVG/TOTALS bar so the bar sits directly beneath the data, and rewrite the bar's
+    AVERAGE/COUNT ranges to the trimmed row count (Workflow step 5)."""
+    tot = None
+    for r in range(DATA_START_ROW, ws.max_row + 1):
+        if str(ws.cell(r, 1).value).strip().upper() == "AVG":
+            tot = r
+            break
+    if tot is None:
+        return
+    old_last = tot - 1                       # last pre-filled data row (e.g. 105)
+    capacity = old_last - DATA_START_ROW + 1
+    if n <= 0 or n >= capacity:
+        return
+    del_start = DATA_START_ROW + n
+    ws.delete_rows(del_start, old_last - del_start + 1)
+    tot = DATA_START_ROW + n
+    new_last = DATA_START_ROW + n - 1        # = 5 + n
+    for c in range(1, ws.max_column + 1):
+        v = ws.cell(tot, c).value
+        if isinstance(v, str) and v.startswith("="):
+            ws.cell(tot, c).value = v.replace(str(old_last), str(new_last))
+
+
 def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> dict:
     """Fill the Briggs comps template from a structured payload. Returns a summary
     { comp_type, sheets:{name:count}, skipped_formula_keys, unknown_keys, out_path }.
@@ -194,13 +260,16 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
     if comp_type == "sales":
         for sheet, key in (("On Market", "on_market"), ("Sold", "sold")):
             if sheet in wb.sheetnames and payload.get(key):
-                n, sk, un = _write_rows(wb[sheet], payload[key])
+                rows = _sort_rows(payload[key], sheet)
+                n, sk, un = _write_rows(wb[sheet], rows)
+                _trim_to_totals(wb[sheet], n)
                 summary["sheets"][sheet] = n
                 skipped_all.update(sk); unknown_all.update(un)
     else:  # lease
-        rows = payload.get("comps") or payload.get("lease_comps") or []
+        rows = _sort_rows(payload.get("comps") or payload.get("lease_comps") or [], "Lease Comps")
         if "Lease Comps" in wb.sheetnames and rows:
             n, sk, un = _write_rows(wb["Lease Comps"], rows)
+            _trim_to_totals(wb["Lease Comps"], n)
             summary["sheets"]["Lease Comps"] = n
             skipped_all.update(sk); unknown_all.update(un)
 
