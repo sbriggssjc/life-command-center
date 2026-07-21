@@ -137,6 +137,65 @@ function diaFetch(path: string, method: string, body?: unknown, prefer?: string)
   return fetch(`${url}/rest/v1/${path}`, opts);
 }
 
+// ── Activity-type taxonomy (single source of truth) ────────────────────────
+// The full vocabulary written to marketing_leads.activity_type and the
+// Salesforce Listing_Activity__c.Action → activity_type map. See
+// docs/marketing_leads_activity_taxonomy.md for the reference.
+
+// SF Listing_Activity__c.Action → marketing_leads.activity_type
+const ENGAGEMENT_ACTION_MAP: Record<string, string> = {
+  "Viewed Agreement":          "om_download",
+  "Viewed Summary":            "html_view",
+  "Viewed Executive Summary":  "exec_summary_view",
+  "Viewed Email":              "email_view",
+  "Executed Agreement":        "agreement_executed",
+  "Entered VDR":               "vdr_entry",
+  "Downloaded Docs":           "doc_download",
+  "Approved User":             "vdr_approved",
+  "Sent Email":                "email_sent",
+};
+
+// Case-insensitive lookup so "viewed agreement" and "Viewed Agreement" both map.
+const ENGAGEMENT_ACTION_LOOKUP: Record<string, string> = Object.fromEntries(
+  Object.entries(ENGAGEMENT_ACTION_MAP).map(([k, v]) => [k.toLowerCase(), v]),
+);
+
+// The known activity_type vocabulary = engagement enum + inquiry/website types.
+// Note: an unmapped Action falls back to a slug of the raw Action, so this set
+// is the KNOWN taxonomy, not a hard allow-list (the slug is the escape hatch).
+const ALLOWED_ACTIVITY_TYPES: ReadonlySet<string> = new Set<string>([
+  ...Object.values(ENGAGEMENT_ACTION_MAP),
+  "rcm_inquiry",
+  "loopnet_inquiry",
+  "website_hit",
+]);
+
+function slugifyAction(action: string): string {
+  return action
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "engagement";
+}
+
+// Map an SF Listing_Activity Action to an activity_type. Unknown/absent Action
+// falls back to a slug of the raw string (never throws, never null).
+function mapEngagementAction(action: string | null | undefined): string {
+  const a = (action || "").trim();
+  if (!a) return "engagement";
+  return ENGAGEMENT_ACTION_LOOKUP[a.toLowerCase()] || slugifyAction(a);
+}
+
+// Resolve a lead_date: prefer an explicit ISO date (validated), else now().
+// Used by all three ingest paths so lead_date is always stamped.
+function resolveLeadDate(explicit: unknown): string {
+  if (typeof explicit === "string" && explicit.trim()) {
+    const t = Date.parse(explicit.trim());
+    if (!Number.isNaN(t)) return new Date(t).toISOString();
+  }
+  return isoNow();
+}
+
 // ── Main Handler ───────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -151,8 +210,8 @@ Deno.serve(async (req: Request) => {
     if (action === "health") return handleHealth(req);
     return jsonResponse(req, {
       service: "lead-ingest",
-      version: "1.1.0",
-      valid_actions: ["rcm", "loopnet", "news_alert", "health"],
+      version: "1.2.0",
+      valid_actions: ["rcm", "loopnet", "engagement", "news_alert", "health"],
     });
   }
 
@@ -177,10 +236,11 @@ Deno.serve(async (req: Request) => {
   }
 
   switch (action) {
-    case "rcm":      return handleRcmIngest(req, body);
-    case "loopnet":  return handleLoopNetIngest(req, body);
+    case "rcm":         return handleRcmIngest(req, body);
+    case "loopnet":     return handleLoopNetIngest(req, body);
+    case "engagement":  return handleEngagementIngest(req, body);
     default:
-      return errorResponse(req, "Invalid action. Use: rcm, loopnet, news_alert, health", 400);
+      return errorResponse(req, "Invalid action. Use: rcm, loopnet, engagement, news_alert, health", 400);
   }
 });
 
@@ -485,6 +545,24 @@ async function matchAndCreateActivity(
     } catch (err) { console.error("SF match failed:", (err as Error).message); }
   }
 
+  // Extended matching (best-effort): when NO Contact matched, still try to
+  // resolve the Account/Company and Opportunity from the lead's company name /
+  // email domain, and stamp sf_company_id / sf_opportunity_id when found. A
+  // company/opp hit is weaker than a contact hit, so it does NOT flip
+  // sf_match_status to matched. Never fails the ingest.
+  if (!sfMatch) {
+    try {
+      const supp = await matchCompanyAndOpportunity(parsed, url, key);
+      const patch: Record<string, unknown> = {};
+      if (supp.sf_company_id) patch.sf_company_id = supp.sf_company_id;
+      if (supp.sf_opportunity_id) patch.sf_opportunity_id = supp.sf_opportunity_id;
+      if (supp.sf_match_method) patch.sf_match_method = supp.sf_match_method;
+      if (Object.keys(patch).length > 0) {
+        await diaFetch(`marketing_leads?lead_id=eq.${lead.lead_id}`, "PATCH", patch, "return=minimal");
+      }
+    } catch (err) { console.warn("company/opportunity match skipped:", (err as Error).message); }
+  }
+
   // Create salesforce_activities task
   let sfActivityId: string | null = null;
   try {
@@ -531,6 +609,80 @@ async function matchAndCreateActivity(
   return { sfMatch, sfActivityId };
 }
 
+// ── Company/Account + Opportunity fallback matcher (rcm/loopnet) ────────────
+// Best-effort: resolve an Account/Company and Opportunity from the lead's
+// company name (fuzzy) or email domain, for inquiry leads with no Contact
+// match. Returns ids to stamp; the caller PATCHes them. Never throws to the
+// caller — the top-level call site wraps it, and every branch swallows fetch
+// errors so a match miss can never fail the ingest.
+
+const GENERIC_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
+  "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
+  "icloud.com", "me.com", "live.com", "msn.com", "comcast.net", "ymail.com",
+]);
+
+async function matchCompanyAndOpportunity(
+  parsed: Record<string, unknown>,
+  url: string,
+  key: string,
+): Promise<{ sf_company_id: string | null; sf_opportunity_id: string | null; sf_match_method: string | null }> {
+  const out: { sf_company_id: string | null; sf_opportunity_id: string | null; sf_match_method: string | null } =
+    { sf_company_id: null, sf_opportunity_id: null, sf_match_method: null };
+  const headers = { "apikey": key, "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
+
+  const company = typeof parsed.lead_company === "string" ? parsed.lead_company.trim() : "";
+  const email = typeof parsed.lead_email === "string" ? parsed.lead_email.trim() : "";
+  const domain = email.includes("@") ? (email.split("@").pop() || "").toLowerCase().trim() : "";
+  const hasCompany = company.length >= 3;
+
+  const firstRow = async (u: URL): Promise<Record<string, unknown> | null> => {
+    try {
+      const r = await fetch(u.toString(), { headers });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return Array.isArray(d) && d.length > 0 ? d[0] : null;
+    } catch { return null; }
+  };
+
+  // 1) Account/Company by fuzzy name (salesforce_accounts).
+  if (hasCompany) {
+    const u = new URL(`${url}/rest/v1/salesforce_accounts`);
+    u.searchParams.set("select", "sf_account_id,name");
+    u.searchParams.set("name", `ilike.*${company}*`);
+    u.searchParams.set("sf_account_id", "not.is.null");
+    u.searchParams.set("limit", "1");
+    const row = await firstRow(u);
+    if (row?.sf_account_id) { out.sf_company_id = row.sf_account_id as string; out.sf_match_method = "company_name"; }
+  }
+
+  // 1b) Fallback: an existing SF contact sharing the lead's (non-generic) email
+  //     domain resolves the Account.
+  if (!out.sf_company_id && domain && !GENERIC_EMAIL_DOMAINS.has(domain)) {
+    const u = new URL(`${url}/rest/v1/salesforce_contacts`);
+    u.searchParams.set("select", "sf_account_id");
+    u.searchParams.set("email", `ilike.*@${domain}`);
+    u.searchParams.set("sf_account_id", "not.is.null");
+    u.searchParams.set("limit", "1");
+    const row = await firstRow(u);
+    if (row?.sf_account_id) { out.sf_company_id = row.sf_account_id as string; out.sf_match_method = out.sf_match_method || "email_domain"; }
+  }
+
+  // 2) Opportunity (SF Deal) by fuzzy company name on either side of the deal.
+  if (hasCompany) {
+    for (const col of ["seller_company_name", "buyer_company_name"]) {
+      const u = new URL(`${url}/rest/v1/sf_deal_staging`);
+      u.searchParams.set("select", "sf_deal_id");
+      u.searchParams.set(col, `ilike.*${company}*`);
+      u.searchParams.set("sf_deal_id", "not.is.null");
+      u.searchParams.set("limit", "1");
+      const row = await firstRow(u);
+      if (row?.sf_deal_id) { out.sf_opportunity_id = row.sf_deal_id as string; break; }
+    }
+  }
+
+  return out;
+}
+
 // ── RCM Ingest Handler ─────────────────────────────────────────────────────
 
 async function handleRcmIngest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
@@ -562,6 +714,7 @@ async function handleRcmIngest(req: Request, body: Record<string, unknown> | nul
     lead_phone: parsed.lead_phone, lead_company: parsed.lead_company,
     deal_name: parsed.deal_name, activity_type: parsed.activity_type,
     activity_detail: parsed.activity_detail,
+    lead_date: resolveLeadDate(body?.lead_date),
     notes: raw_body, status: status || "new",
     ingested_at: isoNow()
   };
@@ -626,6 +779,7 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
     lead_phone: parsed.lead_phone, lead_company: parsed.lead_company,
     deal_name: parsed.deal_name, listing_id: parsed.listing_id,
     activity_type: parsed.activity_type, activity_detail: parsed.activity_detail,
+    lead_date: resolveLeadDate(body?.lead_date),
     notes: raw_body, status: status || "new",
     ingested_at: isoNow()
   };
@@ -662,6 +816,127 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
   }
 }
 
+// ── Engagement Ingest Handler ──────────────────────────────────────────────
+// Salesforce Listing_Activity__c engagement signals (OM downloads, VDR entries,
+// executed agreements, …). A PA flow maps SF fields into the JSON contract and
+// POSTs here. Idempotent on sf_activity_id (stored in source_ref): re-POSTing
+// the same activity UPDATES the row, never duplicates.
+
+async function handleEngagementIngest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  const b = (body || {}) as Record<string, unknown>;
+
+  const sfActivityId = ((b.sf_activity_id as string) || "").trim();
+  if (!sfActivityId) return errorResponse(req, "sf_activity_id is required", 400);
+
+  const action = (b.action as string) || null;
+  const activityType = mapEngagementAction(action);
+  const sfContactId = ((b.sf_contact_id as string) || "").trim() || null;
+
+  // Person name comes only from the contact fields; fall back to a composed
+  // first+last. Route the name through the ingest contract (junk/federal guard).
+  const first = ((b.lead_first_name as string) || "").trim() || null;
+  const last = ((b.lead_last_name as string) || "").trim() || null;
+  const composedName = [first, last].filter(Boolean).join(" ").trim() || null;
+  const parsed = sanitizeLeadName({
+    lead_name: composedName,
+    lead_first_name: first,
+    lead_last_name: last,
+    lead_email: ((b.lead_email as string) || "").trim() || null,
+  });
+
+  const row: Record<string, unknown> = {
+    source: "rcm_engagement",
+    source_ref: sfActivityId,
+    listing_id: ((b.sf_listing_id as string) || "").trim() || null,
+    sf_opportunity_id: ((b.sf_opportunity_id as string) || "").trim() || null,
+    sf_contact_id: sfContactId,
+    sf_company_id: ((b.sf_company_id as string) || "").trim() || null,
+    sf_match_status: sfContactId ? "matched" : "unmatched",
+    sf_match_method: sfContactId ? "engagement_contact_id" : null,
+    lead_date: resolveLeadDate(b.activity_date),
+    activity_type: activityType,
+    activity_detail: action,
+    lead_name: parsed.lead_name,
+    lead_first_name: parsed.lead_first_name,
+    lead_last_name: parsed.lead_last_name,
+    lead_email: parsed.lead_email,
+    lead_phone: ((b.lead_phone as string) || "").trim() || null,
+    lead_company: ((b.lead_company as string) || "").trim() || null,
+    lead_title: ((b.lead_title as string) || "").trim() || null,
+    deal_name: ((b.listing_name as string) || "").trim() || null,
+    property_address: ((b.property_address as string) || "").trim() || null,
+    property_city: ((b.property_city as string) || "").trim() || null,
+    property_state: ((b.property_state as string) || "").trim() || null,
+    status: "new",
+    ingested_at: isoNow(),
+  };
+
+  try {
+    const result = await upsertEngagementLead(row);
+    if ("error" in result) {
+      return jsonResponse(req, { error: "Failed to upsert engagement lead", detail: result.detail }, result.status);
+    }
+    const { lead, created } = result;
+    return jsonResponse(req, {
+      ok: true,
+      lead_id: lead?.lead_id ?? null,
+      created,
+      updated: !created,
+      action,
+      activity_type: activityType,
+      listing_id: row.listing_id,
+      sf_opportunity_id: row.sf_opportunity_id,
+      sf_contact_id: sfContactId,
+      sf_company_id: row.sf_company_id,
+      sf_match_status: row.sf_match_status,
+      lead_date: row.lead_date,
+    }, created ? 201 : 200);
+  } catch (err) {
+    console.error("[lead-ingest] engagement error:", (err as Error).message);
+    return errorResponse(req, "Engagement ingestion failed", 500);
+  }
+}
+
+// Idempotent write for an engagement row. POST first (a duplicate
+// (source, source_ref) → 23505 via marketing_leads_engagement_uidx / the
+// composite index); on conflict, PATCH the existing row by (source, source_ref)
+// so a re-POST updates action/date/match fields instead of duplicating. The DB
+// unique index is the race backstop (mirrors salesforce_activities sf_task_id).
+async function upsertEngagementLead(
+  row: Record<string, unknown>,
+): Promise<{ lead: Record<string, unknown> | null; created: boolean } | { error: string; status: number; detail?: string }> {
+  const insertRes = await diaFetch("marketing_leads", "POST", row, "return=representation");
+
+  if (insertRes.ok) {
+    const data = await insertRes.json();
+    const lead = Array.isArray(data) ? data[0] : data;
+    if (lead && lead.lead_id) return { lead, created: true };
+    // No row returned (return=minimal semantics) — fall through to update by key.
+  } else {
+    const detail = await insertRes.text();
+    const isDup = insertRes.status === 409 || detail.includes("23505");
+    if (!isDup) return { error: "insert_failed", status: insertRes.status, detail };
+  }
+
+  // Update the existing row (idempotent re-POST path). Keep the immutable
+  // identity/audit columns; refresh everything else + updated_at.
+  const patchFields: Record<string, unknown> = { ...row };
+  delete patchFields.source;
+  delete patchFields.source_ref;
+  delete patchFields.ingested_at;
+  patchFields.updated_at = isoNow();
+
+  const q = `marketing_leads?source=eq.rcm_engagement&source_ref=eq.${encodeURIComponent(String(row.source_ref))}`;
+  const patchRes = await diaFetch(q, "PATCH", patchFields, "return=representation");
+  if (!patchRes.ok) {
+    const detail = await patchRes.text();
+    return { error: "update_failed", status: patchRes.status, detail };
+  }
+  const data = await patchRes.json();
+  const lead = Array.isArray(data) ? data[0] : data;
+  return { lead: lead ?? null, created: false };
+}
+
 // ── Health Check ───────────────────────────────────────────────────────────
 
 async function handleHealth(req: Request): Promise<Response> {
@@ -670,6 +945,8 @@ async function handleHealth(req: Request): Promise<Response> {
     dia_configured: dia.configured,
     ops_configured: !!(Deno.env.get("OPS_SUPABASE_URL") && Deno.env.get("OPS_SUPABASE_SERVICE_KEY")),
     webhook_secret_configured: !!Deno.env.get("PA_WEBHOOK_SECRET"),
+    activity_types_known: [...ALLOWED_ACTIVITY_TYPES],
+    engagement_action_map: ENGAGEMENT_ACTION_MAP,
     timestamp: isoNow()
   };
 
