@@ -33,15 +33,17 @@ Last reconciled: July 2026 (comps flow added; stale setup/ instruction copies co
 3. **Knowledge** change → edit the `BRIGGS-*.md` → re-sync in Studio Knowledge.
 4. **One agent, one connector — never create a second.** If Studio ever shows a duplicate agent or connector, delete the copy, don't edit it.
 
-## Known open item — comps action backend placement
-The comps engine (`mcp/comps-tools.js` → `runComps`) is deployed on the **MCP server**
-(`life-command-center-production.up.railway.app`, serving Claude's `query_comps` tool and
-`POST /api/query-comps`). But the **LCC Intelligence connector points at `tranquil-delight`**,
-and a Swagger connector has a single host — so the Deal Agent cannot reach the comps endpoint
-until the SAME `/api/query-comps` + `/api/synthesize-comps` routes are added to the
-`tranquil-delight` backend (import the same `comps-tools.js`), and `QueryComps`/`SynthesizeComps`
-are added to the v2 swagger. One connector, one host — do not add a second connector. Until then,
-the comps flow in the instructions is staged but inert on the Copilot surface (it works today on Claude).
+## Comps action backend placement — RECONCILED (pending deploy + connector re-import)
+Done: `/api/query-comps` + `/api/synthesize-comps` added to the **`tranquil-delight` backend**
+(`api/query-comps.js`, a thin proxy that authenticates the connector's `X-LCC-Key` and forwards to
+`GOV_API_URL` = the MCP server, which owns the shared `comps-tools.js` engine). `QueryComps` +
+`SynthesizeComps` added to the v2 swagger. One connector, one host — no second connector created.
+Claude uses the same engine via its MCP `query_comps` tool, so parity holds by construction.
+
+To activate on Copilot: (1) commit + push → main app redeploys on `tranquil-delight`; confirm
+`LCC_API_KEY` and `GOV_API_URL` are set there; (2) re-import the v2 swagger into the "LCC Intelligence"
+custom connector (Power Platform → update); (3) add the `QueryComps`/`SynthesizeComps` actions to the
+agent's Tools; (4) paste the updated `agent-instructions.md` into Studio → Instructions → Publish.
 
 ## Known open item — per-user reads (Phase 3)
 Backend `ai-copilot` v70 resolves `user_email → lcc_users → assigned_to/owner_id`. The v2

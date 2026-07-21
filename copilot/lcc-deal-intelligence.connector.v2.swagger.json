@@ -42,7 +42,7 @@
     "/api/chat": {
       "post": {
         "operationId": "dispatchCopilotAction",
-        "summary": "Copilot Action Gateway \u2014 dispatch any registered action",
+        "summary": "Copilot Action Gateway — dispatch any registered action",
         "description": "Single entry point for all Copilot actions. Validates action_id against the registry, enforces tier-based confirmation, routes internally, and logs telemetry.",
         "x-ms-summary": "Dispatch Copilot Action",
         "parameters": [
@@ -279,8 +279,8 @@
     "/api/copilot/portfolio/list-staged-intake-inbox": {
       "post": {
         "operationId": "ListStagedIntakeInbox",
-        "summary": "List inbox items awaiting triage \u2014 flagged emails, SF tasks, system alerts.",
-        "description": "**Tier 0** (read-only). Category: portfolio. List inbox items awaiting triage \u2014 flagged emails, SF tasks, system alerts.",
+        "summary": "List inbox items awaiting triage — flagged emails, SF tasks, system alerts.",
+        "description": "**Tier 0** (read-only). Category: portfolio. List inbox items awaiting triage — flagged emails, SF tasks, system alerts.",
         "x-ms-summary": "List Staged Intake Inbox",
         "tags": [
           "portfolio"
@@ -355,7 +355,7 @@
     "/api/copilot/compat/list-staged-intake-inbox": {
       "post": {
         "operationId": "list_staged_intake_inbox",
-        "summary": "List inbox items awaiting triage \u2014 flagged emails, SF tasks, system alerts.",
+        "summary": "List inbox items awaiting triage — flagged emails, SF tasks, system alerts.",
         "x-ms-summary": "List Staged Intake Inbox",
         "tags": [
           "portfolio"
@@ -430,8 +430,8 @@
     "/api/copilot/portfolio/get-my-execution-queue": {
       "post": {
         "operationId": "GetMyExecutionQueue",
-        "summary": "Get my prioritized work queue \u2014 open action items sorted by due date and priorit",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get my prioritized work queue \u2014 open action items sorted by due date and priority.",
+        "summary": "Get my prioritized work queue — open action items sorted by due date and priorit",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get my prioritized work queue — open action items sorted by due date and priority.",
         "x-ms-summary": "Get My Execution Queue",
         "tags": [
           "portfolio"
@@ -495,7 +495,7 @@
     "/api/copilot/compat/get-my-execution-queue": {
       "post": {
         "operationId": "get_my_execution_queue",
-        "summary": "Get my prioritized work queue \u2014 open action items sorted by due date and priorit",
+        "summary": "Get my prioritized work queue — open action items sorted by due date and priorit",
         "x-ms-summary": "Get My Execution Queue",
         "tags": [
           "portfolio"
@@ -795,8 +795,8 @@
     "/api/copilot/portfolio/fetch-listing-activity-context": {
       "post": {
         "operationId": "FetchListingActivityContext",
-        "summary": "Get the activity timeline for a specific entity \u2014 calls, emails, status changes,",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get the activity timeline for a specific entity \u2014 calls, emails, status changes, research.",
+        "summary": "Get the activity timeline for a specific entity — calls, emails, status changes,",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get the activity timeline for a specific entity — calls, emails, status changes, research.",
         "x-ms-summary": "Fetch Listing Activity Context",
         "tags": [
           "portfolio"
@@ -850,7 +850,7 @@
     "/api/copilot/compat/fetch-listing-activity-context": {
       "post": {
         "operationId": "fetch_listing_activity_context",
-        "summary": "Get the activity timeline for a specific entity \u2014 calls, emails, status changes,",
+        "summary": "Get the activity timeline for a specific entity — calls, emails, status changes,",
         "x-ms-summary": "Fetch Listing Activity Context",
         "tags": [
           "portfolio"
@@ -904,8 +904,8 @@
     "/api/copilot/portfolio/search-deals": {
       "post": {
         "operationId": "SearchDeals",
-        "summary": "Count and list LIVE government deals by state from the live database \u2014 currently",
-        "description": "**Tier 0** (read-only). Category: portfolio. Count and list LIVE government deals by state from the live database \u2014 currently-available listings and sales closed within the past N months. Use this for any quantitative or geographic deal question (e.g. \"how many gov deals are available in Texas\", \"what sold in Florida in the last 12 months\"). Returns exact live counts; prefer this over knowledge-file lookups for current numbers.",
+        "summary": "Count and list LIVE government deals by state from the live database — currently",
+        "description": "**Tier 0** (read-only). Category: portfolio. Count and list LIVE government deals by state from the live database — currently-available listings and sales closed within the past N months. Use this for any quantitative or geographic deal question (e.g. \"how many gov deals are available in Texas\", \"what sold in Florida in the last 12 months\"). Returns exact live counts; prefer this over knowledge-file lookups for current numbers.",
         "x-ms-summary": "Search Deals",
         "tags": [
           "portfolio"
@@ -991,7 +991,7 @@
     "/api/copilot/compat/search-deals": {
       "post": {
         "operationId": "search_deals",
-        "summary": "Count and list LIVE government deals by state from the live database \u2014 currently",
+        "summary": "Count and list LIVE government deals by state from the live database — currently",
         "x-ms-summary": "Search Deals",
         "tags": [
           "portfolio"
@@ -1184,8 +1184,8 @@
     "/api/copilot/portfolio/get-relationship-context": {
       "post": {
         "operationId": "GetRelationshipContext",
-        "summary": "Get full relationship context and relationship health summary for a contact \u2014 co",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get full relationship context and relationship health summary for a contact \u2014 communication history, engagement score, relationship health, and talking points. Use contact_name (fuzzy name lookup) or contact_id (exact match). Call this before drafting outreach to enrich with real history.",
+        "summary": "Get full relationship context and relationship health summary for a contact — co",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get full relationship context and relationship health summary for a contact — communication history, engagement score, relationship health, and talking points. Use contact_name (fuzzy name lookup) or contact_id (exact match). Call this before drafting outreach to enrich with real history.",
         "x-ms-summary": "Get Relationship Context",
         "tags": [
           "portfolio"
@@ -1204,7 +1204,7 @@
                 },
                 "contact_name": {
                   "type": "string",
-                  "description": "Contact full name \u2014 used for fuzzy lookup when contact_id is not available"
+                  "description": "Contact full name — used for fuzzy lookup when contact_id is not available"
                 }
               }
             }
@@ -1234,7 +1234,7 @@
     "/api/copilot/compat/get-relationship-context": {
       "post": {
         "operationId": "get_relationship_context",
-        "summary": "Get full relationship context and relationship health summary for a contact \u2014 co",
+        "summary": "Get full relationship context and relationship health summary for a contact — co",
         "x-ms-summary": "Get Relationship Context",
         "tags": [
           "portfolio"
@@ -1253,7 +1253,7 @@
                 },
                 "contact_name": {
                   "type": "string",
-                  "description": "Contact full name \u2014 used for fuzzy lookup when contact_id is not available"
+                  "description": "Contact full name — used for fuzzy lookup when contact_id is not available"
                 }
               }
             }
@@ -1283,8 +1283,8 @@
     "/api/copilot/portfolio/get-pipeline-intelligence": {
       "post": {
         "operationId": "GetPipelineIntelligence",
-        "summary": "Get pipeline intelligence \u2014 deal velocity, conversion rates, bottleneck analysis",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get pipeline intelligence \u2014 deal velocity, conversion rates, bottleneck analysis across domains.",
+        "summary": "Get pipeline intelligence — deal velocity, conversion rates, bottleneck analysis",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get pipeline intelligence — deal velocity, conversion rates, bottleneck analysis across domains.",
         "x-ms-summary": "Get Pipeline Intelligence",
         "tags": [
           "portfolio"
@@ -1338,7 +1338,7 @@
     "/api/copilot/compat/get-pipeline-intelligence": {
       "post": {
         "operationId": "get_pipeline_intelligence",
-        "summary": "Get pipeline intelligence \u2014 deal velocity, conversion rates, bottleneck analysis",
+        "summary": "Get pipeline intelligence — deal velocity, conversion rates, bottleneck analysis",
         "x-ms-summary": "Get Pipeline Intelligence",
         "tags": [
           "portfolio"
@@ -1392,8 +1392,8 @@
     "/api/copilot/ops/get-sync-run-health": {
       "post": {
         "operationId": "GetSyncRunHealth",
-        "summary": "Check health status of all sync connectors \u2014 Salesforce, Outlook, domain databas",
-        "description": "**Tier 0** (read-only). Category: ops. Check health status of all sync connectors \u2014 Salesforce, Outlook, domain databases.",
+        "summary": "Check health status of all sync connectors — Salesforce, Outlook, domain databas",
+        "description": "**Tier 0** (read-only). Category: ops. Check health status of all sync connectors — Salesforce, Outlook, domain databases.",
         "x-ms-summary": "Get Sync Run Health",
         "tags": [
           "ops"
@@ -1443,7 +1443,7 @@
     "/api/copilot/compat/get-sync-run-health": {
       "post": {
         "operationId": "get_sync_run_health",
-        "summary": "Check health status of all sync connectors \u2014 Salesforce, Outlook, domain databas",
+        "summary": "Check health status of all sync connectors — Salesforce, Outlook, domain databas",
         "x-ms-summary": "Get Sync Run Health",
         "tags": [
           "ops"
@@ -1493,8 +1493,8 @@
     "/api/copilot/ops/get-work-counts": {
       "post": {
         "operationId": "GetWorkCounts",
-        "summary": "Get aggregate work counts \u2014 open actions, inbox items, overdue tasks, by domain ",
-        "description": "**Tier 0** (read-only). Category: ops. Get aggregate work counts \u2014 open actions, inbox items, overdue tasks, by domain and priority.",
+        "summary": "Get aggregate work counts — open actions, inbox items, overdue tasks, by domain ",
+        "description": "**Tier 0** (read-only). Category: ops. Get aggregate work counts — open actions, inbox items, overdue tasks, by domain and priority.",
         "x-ms-summary": "Get Work Counts",
         "tags": [
           "ops"
@@ -1538,7 +1538,7 @@
     "/api/copilot/compat/get-work-counts": {
       "post": {
         "operationId": "get_work_counts",
-        "summary": "Get aggregate work counts \u2014 open actions, inbox items, overdue tasks, by domain ",
+        "summary": "Get aggregate work counts — open actions, inbox items, overdue tasks, by domain ",
         "x-ms-summary": "Get Work Counts",
         "tags": [
           "ops"
@@ -1694,7 +1694,7 @@
       "post": {
         "operationId": "RetrySyncErrorRecord",
         "summary": "Retry a failed sync job.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: ops. Retry a failed sync job.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: ops. Retry a failed sync job.",
         "x-ms-summary": "Retry Sync Error Record",
         "tags": [
           "ops"
@@ -2033,11 +2033,11 @@
                     "properties": {
                       "entity_id": {
                         "type": "string",
-                        "description": "LCC entity UUID \u2014 use with get_entity_context"
+                        "description": "LCC entity UUID — use with get_entity_context"
                       },
                       "contact_id": {
                         "type": "string",
-                        "description": "GOV contacts unified_id \u2014 use with draft_outreach_email"
+                        "description": "GOV contacts unified_id — use with draft_outreach_email"
                       },
                       "name": {
                         "type": "string"
@@ -2137,11 +2137,11 @@
                     "properties": {
                       "entity_id": {
                         "type": "string",
-                        "description": "LCC entity UUID \u2014 use with get_entity_context"
+                        "description": "LCC entity UUID — use with get_entity_context"
                       },
                       "contact_id": {
                         "type": "string",
-                        "description": "GOV contacts unified_id \u2014 use with draft_outreach_email"
+                        "description": "GOV contacts unified_id — use with draft_outreach_email"
                       },
                       "name": {
                         "type": "string"
@@ -2187,8 +2187,8 @@
     "/api/copilot/outreach/generate-prospecting-brief": {
       "post": {
         "operationId": "GenerateProspectingBrief",
-        "summary": "Generate an AI-powered daily prospecting call sheet \u2014 ranks top BD contacts from",
-        "description": "**Tier 0** (read-only). Category: outreach. Generate an AI-powered daily prospecting call sheet \u2014 ranks top BD contacts from the LCC queue by cadence urgency (days overdue) and portfolio value (annual rent). Falls back to Outlook engagement scores if no LCC queue data exists.",
+        "summary": "Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from",
+        "description": "**Tier 0** (read-only). Category: outreach. Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from the LCC queue by cadence urgency (days overdue) and portfolio value (annual rent). Falls back to Outlook engagement scores if no LCC queue data exists.",
         "x-ms-summary": "Generate Prospecting Brief",
         "tags": [
           "outreach"
@@ -2251,7 +2251,7 @@
     "/api/copilot/compat/generate-prospecting-brief": {
       "post": {
         "operationId": "generate_prospecting_brief",
-        "summary": "Generate an AI-powered daily prospecting call sheet \u2014 ranks top BD contacts from",
+        "summary": "Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from",
         "x-ms-summary": "Generate Prospecting Brief",
         "tags": [
           "outreach"
@@ -2315,7 +2315,7 @@
       "post": {
         "operationId": "DraftOutreachEmail",
         "summary": "Draft a personalized outreach email for a business development contact and autom",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Draft a personalized outreach email for a business development contact and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. ALWAYS pass contact_name when known \u2014 it drives LCC relationship enrichment and email personalization. Pass to with the recipient email. You do NOT need contact_id if you have contact_name. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Draft a personalized outreach email for a business development contact and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. ALWAYS pass contact_name when known — it drives LCC relationship enrichment and email personalization. Pass to with the recipient email. You do NOT need contact_id if you have contact_name. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
         "x-ms-summary": "Draft Outreach Email",
         "tags": [
           "outreach"
@@ -2334,11 +2334,11 @@
               "properties": {
                 "contact_id": {
                   "type": "string",
-                  "description": "Contact unified_id from GOV contacts DB (optional \u2014 use if available from a prior search)"
+                  "description": "Contact unified_id from GOV contacts DB (optional — use if available from a prior search)"
                 },
                 "contact_name": {
                   "type": "string",
-                  "description": "Contact full name \u2014 ALWAYS pass this when the person's name is known, even without a contact_id (required)"
+                  "description": "Contact full name — ALWAYS pass this when the person's name is known, even without a contact_id (required)"
                 },
                 "intent": {
                   "type": "string",
@@ -2415,11 +2415,11 @@
               "properties": {
                 "contact_id": {
                   "type": "string",
-                  "description": "Contact unified_id from GOV contacts DB (optional \u2014 use if available from a prior search)"
+                  "description": "Contact unified_id from GOV contacts DB (optional — use if available from a prior search)"
                 },
                 "contact_name": {
                   "type": "string",
-                  "description": "Contact full name \u2014 ALWAYS pass this when the person's name is known, even without a contact_id (required)"
+                  "description": "Contact full name — ALWAYS pass this when the person's name is known, even without a contact_id (required)"
                 },
                 "intent": {
                   "type": "string",
@@ -2478,7 +2478,7 @@
       "post": {
         "operationId": "DraftSellerUpdateEmail",
         "summary": "Draft a seller update email for an active listing and automatically save it to O",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Draft a seller update email for an active listing and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. Pass entity_id for the listing and to for the seller email. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Draft a seller update email for an active listing and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. Pass entity_id for the listing and to for the seller email. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
         "x-ms-summary": "Draft Seller Update Email",
         "tags": [
           "outreach"
@@ -2627,7 +2627,7 @@
       "post": {
         "operationId": "DraftReplyFromInbox",
         "summary": "Draft a context-aware reply to a flagged email already in the LCC inbox. Provide",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Draft a context-aware reply to a flagged email already in the LCC inbox. Provide inbox_item_id (UUID from inbox_items). The recipient is derived automatically from the original sender. Set create_draft=true to also create the reply as a real draft in the user's Outlook (returns draft_web_link).",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Draft a context-aware reply to a flagged email already in the LCC inbox. Provide inbox_item_id (UUID from inbox_items). The recipient is derived automatically from the original sender. Set create_draft=true to also create the reply as a real draft in the user's Outlook (returns draft_web_link).",
         "x-ms-summary": "Draft Reply From Inbox",
         "tags": [
           "outreach"
@@ -2655,7 +2655,7 @@
                 },
                 "guidance": {
                   "type": "string",
-                  "description": "Optional freeform instructions \u2014 facts to include, points to address, things to avoid."
+                  "description": "Optional freeform instructions — facts to include, points to address, things to avoid."
                 },
                 "create_draft": {
                   "type": "boolean",
@@ -2741,7 +2741,7 @@
                 },
                 "guidance": {
                   "type": "string",
-                  "description": "Optional freeform instructions \u2014 facts to include, points to address, things to avoid."
+                  "description": "Optional freeform instructions — facts to include, points to address, things to avoid."
                 },
                 "create_draft": {
                   "type": "boolean",
@@ -2980,7 +2980,7 @@
       "post": {
         "operationId": "GenerateTemplateDraft",
         "summary": "Generate an email draft from a template and context payload. Populates variables",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: outreach. Generate an email draft from a template and context payload. Populates variables and renders the template.",
+        "description": "**Tier 1** (lightweight-confirm) — requires lightweight confirmation. Category: outreach. Generate an email draft from a template and context payload. Populates variables and renders the template.",
         "x-ms-summary": "Generate Template Draft",
         "tags": [
           "outreach"
@@ -3093,7 +3093,7 @@
       "post": {
         "operationId": "GenerateBatchDrafts",
         "summary": "Generate email drafts for multiple contacts using the same template. Used for li",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Generate email drafts for multiple contacts using the same template. Used for listing blasts and market updates.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Generate email drafts for multiple contacts using the same template. Used for listing blasts and market updates.",
         "x-ms-summary": "Generate Batch Drafts",
         "tags": [
           "outreach"
@@ -3224,7 +3224,7 @@
       "post": {
         "operationId": "RecordTemplateSend",
         "summary": "Record that a template-generated draft was sent. Tracks edit distance and feeds ",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: outreach. Record that a template-generated draft was sent. Tracks edit distance and feeds the learning loop.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: outreach. Record that a template-generated draft was sent. Tracks edit distance and feeds the learning loop.",
         "x-ms-summary": "Record Template Send",
         "tags": [
           "outreach"
@@ -3364,8 +3364,8 @@
     "/api/copilot/outreach/get-template-performance": {
       "post": {
         "operationId": "GetTemplatePerformance",
-        "summary": "Get template performance analytics \u2014 open rates, reply rates, deal advancement, ",
-        "description": "**Tier 0** (read-only). Category: outreach. Get template performance analytics \u2014 open rates, reply rates, deal advancement, and edit distances. Use to evaluate which templates are working and which need revision.",
+        "summary": "Get template performance analytics — open rates, reply rates, deal advancement, ",
+        "description": "**Tier 0** (read-only). Category: outreach. Get template performance analytics — open rates, reply rates, deal advancement, and edit distances. Use to evaluate which templates are working and which need revision.",
         "x-ms-summary": "Get Template Performance",
         "tags": [
           "outreach"
@@ -3449,7 +3449,7 @@
     "/api/copilot/compat/get-template-performance": {
       "post": {
         "operationId": "get_template_performance",
-        "summary": "Get template performance analytics \u2014 open rates, reply rates, deal advancement, ",
+        "summary": "Get template performance analytics — open rates, reply rates, deal advancement, ",
         "x-ms-summary": "Get Template Performance",
         "tags": [
           "outreach"
@@ -3533,8 +3533,8 @@
     "/api/copilot/outreach/evaluate-template-health": {
       "post": {
         "operationId": "EvaluateTemplateHealth",
-        "summary": "Evaluate the health of all email templates \u2014 identifies templates with high edit",
-        "description": "**Tier 0** (read-only). Category: outreach. Evaluate the health of all email templates \u2014 identifies templates with high edit rates (needs revision), underperformance against targets, and stale templates. Auto-flags templates for revision and generates suggestions.",
+        "summary": "Evaluate the health of all email templates — identifies templates with high edit",
+        "description": "**Tier 0** (read-only). Category: outreach. Evaluate the health of all email templates — identifies templates with high edit rates (needs revision), underperformance against targets, and stale templates. Auto-flags templates for revision and generates suggestions.",
         "x-ms-summary": "Evaluate Template Health",
         "tags": [
           "outreach"
@@ -3600,7 +3600,7 @@
     "/api/copilot/compat/evaluate-template-health": {
       "post": {
         "operationId": "evaluate_template_health",
-        "summary": "Evaluate the health of all email templates \u2014 identifies templates with high edit",
+        "summary": "Evaluate the health of all email templates — identifies templates with high edit",
         "x-ms-summary": "Evaluate Template Health",
         "tags": [
           "outreach"
@@ -3667,7 +3667,7 @@
       "post": {
         "operationId": "RunListingBdPipeline",
         "summary": "Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (sa",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (same asset type/state + geographic proximity) and queues draft candidates for review.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (same asset type/state + geographic proximity) and queues draft candidates for review.",
         "x-ms-summary": "Run Listing Bd Pipeline",
         "tags": [
           "outreach"
@@ -3804,7 +3804,7 @@
       "post": {
         "operationId": "GenerateDocument",
         "summary": "Generate a document (BOV, comp package, report) using AI-assembled context.",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Generate a document (BOV, comp package, report) using AI-assembled context.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Generate a document (BOV, comp package, report) using AI-assembled context.",
         "x-ms-summary": "Generate Document",
         "tags": [
           "outreach"
@@ -3933,7 +3933,7 @@
       "post": {
         "operationId": "CreateTodoTask",
         "summary": "Create a Microsoft To Do task linked to an LCC action item.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Create a Microsoft To Do task linked to an LCC action item.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Create a Microsoft To Do task linked to an LCC action item.",
         "x-ms-summary": "Create Todo Task",
         "tags": [
           "workflow"
@@ -4079,8 +4079,8 @@
     "/api/copilot/workflow/guided-entity-merge": {
       "post": {
         "operationId": "GuidedEntityMerge",
-        "summary": "Get merge guidance for two potentially duplicate entities \u2014 shows what would be ",
-        "description": "**Tier 0** (read-only). Category: workflow. Get merge guidance for two potentially duplicate entities \u2014 shows what would be combined.",
+        "summary": "Get merge guidance for two potentially duplicate entities — shows what would be ",
+        "description": "**Tier 0** (read-only). Category: workflow. Get merge guidance for two potentially duplicate entities — shows what would be combined.",
         "x-ms-summary": "Guided Entity Merge",
         "tags": [
           "workflow"
@@ -4129,7 +4129,7 @@
     "/api/copilot/compat/guided-entity-merge": {
       "post": {
         "operationId": "guided_entity_merge",
-        "summary": "Get merge guidance for two potentially duplicate entities \u2014 shows what would be ",
+        "summary": "Get merge guidance for two potentially duplicate entities — shows what would be ",
         "x-ms-summary": "Guided Entity Merge",
         "tags": [
           "workflow"
@@ -4179,7 +4179,7 @@
       "post": {
         "operationId": "IngestOutlookFlaggedEmails",
         "summary": "Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all curr",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: workflow. Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all currently flagged emails from Outlook via Power Automate and creates LCC inbox items for each.",
+        "description": "**Tier 1** (lightweight-confirm) — requires lightweight confirmation. Category: workflow. Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all currently flagged emails from Outlook via Power Automate and creates LCC inbox items for each.",
         "x-ms-summary": "Ingest Outlook Flagged Emails",
         "tags": [
           "workflow"
@@ -4266,7 +4266,7 @@
       "post": {
         "operationId": "IngestPdfDocument",
         "summary": "Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user up",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: workflow. Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user uploads a document in Copilot chat (deed, offering memorandum, lease, brochure, financials, etc.) and wants it captured into LCC.",
+        "description": "**Tier 1** (lightweight-confirm) — requires lightweight confirmation. Category: workflow. Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user uploads a document in Copilot chat (deed, offering memorandum, lease, brochure, financials, etc.) and wants it captured into LCC.",
         "x-ms-summary": "Ingest Pdf Document",
         "tags": [
           "workflow"
@@ -4444,8 +4444,8 @@
     "/api/copilot/workflow/triage-inbox-item": {
       "post": {
         "operationId": "TriageInboxItem",
-        "summary": "Triage an inbox item \u2014 change status, set priority, assign.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires lightweight confirmation. Category: workflow. Triage an inbox item \u2014 change status, set priority, assign.",
+        "summary": "Triage an inbox item — change status, set priority, assign.",
+        "description": "**Tier 2** (explicit-confirm) — requires lightweight confirmation. Category: workflow. Triage an inbox item — change status, set priority, assign.",
         "x-ms-summary": "Triage Inbox Item",
         "tags": [
           "workflow"
@@ -4513,7 +4513,7 @@
     "/api/copilot/compat/triage-inbox-item": {
       "post": {
         "operationId": "triage_inbox_item",
-        "summary": "Triage an inbox item \u2014 change status, set priority, assign.",
+        "summary": "Triage an inbox item — change status, set priority, assign.",
         "x-ms-summary": "Triage Inbox Item",
         "tags": [
           "workflow"
@@ -4582,7 +4582,7 @@
       "post": {
         "operationId": "PromoteIntakeToAction",
         "summary": "Promote an inbox item to a shared team action item.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Promote an inbox item to a shared team action item.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Promote an inbox item to a shared team action item.",
         "x-ms-summary": "Promote Intake To Action",
         "tags": [
           "workflow"
@@ -4602,7 +4602,7 @@
                 },
                 "title": {
                   "type": "string",
-                  "description": "Action item title \u2014 defaults to the intake item title if omitted."
+                  "description": "Action item title — defaults to the intake item title if omitted."
                 },
                 "action_type": {
                   "type": "string",
@@ -4628,7 +4628,7 @@
                 "assigned_to": {
                   "type": "string",
                   "format": "uuid",
-                  "description": "UUID of the team member to assign the action to (optional \u2014 defaults to the current user)."
+                  "description": "UUID of the team member to assign the action to (optional — defaults to the current user)."
                 },
                 "due_date": {
                   "type": "string",
@@ -4638,7 +4638,7 @@
                 "entity_id": {
                   "type": "string",
                   "format": "uuid",
-                  "description": "Entity UUID to link this action to (optional \u2014 defaults to the intake item entity)."
+                  "description": "Entity UUID to link this action to (optional — defaults to the intake item entity)."
                 }
               },
               "required": [
@@ -4752,7 +4752,7 @@
       "post": {
         "operationId": "CreateListingPursuitFollowupTask",
         "summary": "Create a follow-up action item for a listing pursuit.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Create a follow-up action item for a listing pursuit.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Create a follow-up action item for a listing pursuit.",
         "x-ms-summary": "Create Listing Pursuit Followup Task",
         "tags": [
           "workflow"
@@ -4897,7 +4897,7 @@
       "post": {
         "operationId": "UpdateExecutionTaskStatus",
         "summary": "Update the status of an action item in the execution queue.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Update the status of an action item in the execution queue.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Update the status of an action item in the execution queue.",
         "x-ms-summary": "Update Execution Task Status",
         "tags": [
           "workflow"
@@ -5019,7 +5019,7 @@
       "post": {
         "operationId": "ResearchFollowup",
         "summary": "Close a research task and optionally create a follow-up action item.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Close a research task and optionally create a follow-up action item.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Close a research task and optionally create a follow-up action item.",
         "x-ms-summary": "Research Followup",
         "tags": [
           "workflow"
@@ -5154,7 +5154,7 @@
       "post": {
         "operationId": "ReassignWorkItem",
         "summary": "Reassign a work item (action, inbox, or research task) to a different team membe",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Reassign a work item (action, inbox, or research task) to a different team member.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Reassign a work item (action, inbox, or research task) to a different team member.",
         "x-ms-summary": "Reassign Work Item",
         "tags": [
           "workflow"
@@ -5291,7 +5291,7 @@
       "post": {
         "operationId": "EscalateAction",
         "summary": "Escalate an action item to a manager with a reason. Requires manager-level appro",
-        "description": "**Tier 3** (human-approval) \u2014 requires explicit confirmation. Category: workflow. Escalate an action item to a manager with a reason. Requires manager-level approval.",
+        "description": "**Tier 3** (human-approval) — requires explicit confirmation. Category: workflow. Escalate an action item to a manager with a reason. Requires manager-level approval.",
         "x-ms-summary": "Escalate Action",
         "tags": [
           "workflow"
@@ -5547,7 +5547,7 @@
       "post": {
         "operationId": "contextRetrieveEntity",
         "summary": "Retrieve full entity context (timeline + open work + recent inbox)",
-        "description": "THE memory-retrieval action. Call at the start of any conversation that mentions a specific contact, property, or organization \u2014 before drafting emails or making recommendations.",
+        "description": "THE memory-retrieval action. Call at the start of any conversation that mentions a specific contact, property, or organization — before drafting emails or making recommendations.",
         "x-ms-summary": "Retrieve full entity context (timeline + open work + recent inbox)",
         "tags": [
           "context"
@@ -5664,6 +5664,261 @@
           }
         },
         "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/query-comps": {
+      "post": {
+        "operationId": "QueryComps",
+        "summary": "Query de-duplicated sales comps across gov DB, dialysis DB, and Salesforce.",
+        "x-ms-summary": "Query Comps",
+        "description": "Returns de-duplicated, cap-normalized comps blended from the government DB, dialysis DB, and Salesforce. Present the markdown field verbatim; never substitute SharePoint or proxy comps.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "comp_type": {
+                  "type": "string",
+                  "enum": [
+                    "sale",
+                    "lease",
+                    "both"
+                  ],
+                  "description": "default sale",
+                  "x-ms-summary": "Comp type"
+                },
+                "property_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "plain terms: medical, office, retail, industrial, dialysis, government",
+                  "x-ms-summary": "Property types"
+                },
+                "states": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "2-letter state codes",
+                  "x-ms-summary": "States"
+                },
+                "metros": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "x-ms-summary": "Metros"
+                },
+                "date_from": {
+                  "type": "string",
+                  "description": "ISO date; from any time window",
+                  "x-ms-summary": "Date from"
+                },
+                "date_to": {
+                  "type": "string",
+                  "description": "ISO date",
+                  "x-ms-summary": "Date to"
+                },
+                "size_min_sf": {
+                  "type": "integer",
+                  "x-ms-summary": "Min SF"
+                },
+                "size_max_sf": {
+                  "type": "integer",
+                  "x-ms-summary": "Max SF"
+                },
+                "government_only": {
+                  "type": "boolean",
+                  "description": "true for VA/GSA/federal/government/agency",
+                  "x-ms-summary": "Government only"
+                },
+                "include_salesforce": {
+                  "type": "boolean",
+                  "description": "default true",
+                  "x-ms-summary": "Include Salesforce"
+                },
+                "include_on_market": {
+                  "type": "boolean",
+                  "description": "default false (closed sales only)",
+                  "x-ms-summary": "Include on-market"
+                },
+                "limit": {
+                  "type": "integer",
+                  "description": "default 200, max 500",
+                  "x-ms-summary": "Limit"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comps result",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "comps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "Canonical comp rows"
+                },
+                "meta": {
+                  "type": "object",
+                  "description": "returned/by_source/warnings"
+                },
+                "markdown": {
+                  "type": "string",
+                  "description": "Pre-rendered comp table — display this field VERBATIM as the answer."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — invalid or missing X-LCC-Key"
+          }
+        }
+      }
+    },
+    "/api/synthesize-comps": {
+      "post": {
+        "operationId": "SynthesizeComps",
+        "summary": "Assemble one ranked, de-duplicated comp set from a plain-language request.",
+        "x-ms-summary": "Synthesize Comps",
+        "description": "Returns de-duplicated, cap-normalized comps blended from the government DB, dialysis DB, and Salesforce. Present the markdown field verbatim; never substitute SharePoint or proxy comps.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "request": {
+                  "type": "string",
+                  "description": "Original plain-language request (used for government-intent routing).",
+                  "x-ms-summary": "Request"
+                },
+                "comp_type": {
+                  "type": "string",
+                  "enum": [
+                    "sale",
+                    "lease",
+                    "both"
+                  ],
+                  "description": "default sale",
+                  "x-ms-summary": "Comp type"
+                },
+                "property_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "plain terms: medical, office, retail, industrial, dialysis, government",
+                  "x-ms-summary": "Property types"
+                },
+                "states": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "2-letter state codes",
+                  "x-ms-summary": "States"
+                },
+                "metros": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "x-ms-summary": "Metros"
+                },
+                "date_from": {
+                  "type": "string",
+                  "description": "ISO date; from any time window",
+                  "x-ms-summary": "Date from"
+                },
+                "date_to": {
+                  "type": "string",
+                  "description": "ISO date",
+                  "x-ms-summary": "Date to"
+                },
+                "size_min_sf": {
+                  "type": "integer",
+                  "x-ms-summary": "Min SF"
+                },
+                "size_max_sf": {
+                  "type": "integer",
+                  "x-ms-summary": "Max SF"
+                },
+                "government_only": {
+                  "type": "boolean",
+                  "description": "true for VA/GSA/federal/government/agency",
+                  "x-ms-summary": "Government only"
+                },
+                "include_salesforce": {
+                  "type": "boolean",
+                  "description": "default true",
+                  "x-ms-summary": "Include Salesforce"
+                },
+                "include_on_market": {
+                  "type": "boolean",
+                  "description": "default false (closed sales only)",
+                  "x-ms-summary": "Include on-market"
+                },
+                "limit": {
+                  "type": "integer",
+                  "description": "default 200, max 500",
+                  "x-ms-summary": "Limit"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comps result",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "comps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "Canonical comp rows"
+                },
+                "meta": {
+                  "type": "object",
+                  "description": "returned/by_source/warnings"
+                },
+                "markdown": {
+                  "type": "string",
+                  "description": "Pre-rendered comp table — display this field VERBATIM as the answer."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — invalid or missing X-LCC-Key"
+          }
+        }
       }
     }
   },

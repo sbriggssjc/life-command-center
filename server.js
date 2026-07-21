@@ -47,6 +47,7 @@ import bridgesHandler from './api/bridges.js';
 import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
+import queryCompsHandler from './api/query-comps.js';
 
 // Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
 // The Dialysis_DB data-query edge function proxies to these paths when
@@ -272,6 +273,10 @@ app.all('/api/bov', bovHandler);
 
 // Comps workbook generation (proxies the Railway BOV service's /generate-comps; key stays server-side)
 app.all('/api/comps', compsHandler);
+
+// Comps QUERY (Deal Agent QueryComps/SynthesizeComps → shared engine on GOV_API_URL/MCP; key stays server-side)
+app.all('/api/query-comps', queryCompsHandler);
+app.all('/api/synthesize-comps', queryCompsHandler);
 
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
