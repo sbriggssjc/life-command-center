@@ -177,12 +177,16 @@ pure logic in `api/_shared/todo-completion.js`):
   task). A staged email with no destination is excluded (surfaced only as a
   `no_destination` count). No Graph — just a DB read.
 - PA resolves the native "Flagged email" list (`wellknownListName eq
-  'flaggedEmails'`), lists its **completed** tasks, and **matches each back to a
-  worklist item** — PRIMARY: the task's `linkedResources` → the source message's
-  `internetMessageId` (== the worklist `internet_message_id`); FALLBACK: `subject`
-  + `staged_at` proximity, and ONLY when `subject_ambiguous` is false and the match
-  is unique (never guess). For each matched completed task PA does the **Move +
-  Flag-clear itself** (reusing Flow 1's mechanics — clearing the flag also completes
+  'flaggedEmails'`), lists its **completed** tasks via the To-Do connector's
+  **"List to-do's by folder (V2)"** action (which exposes `linkedResources`), and
+  **matches each back to a worklist item by SUBJECT** — PRIMARY:
+  `linkedResources[0].displayName == subject` (probe 2026-07-21: `displayName`
+  mirrors the subject exactly, and the subject is move-independent), ONLY when
+  `subject_ambiguous` is false and — after a `staged_at` proximity check — the
+  match is unique (never guess). The task's `externalId` is an OWA ItemID that
+  drifts on the move, so it is NOT a usable match key. For each matched completed
+  task PA does the **Move + Flag-clear itself** (reusing Flow 1's mechanics —
+  clearing the flag also completes
   the native task), then POSTs the completed ids back.
 - **`POST` = the report-back** (PA → LCC). Body `{ completed: [{internet_message_id}
   | "<imid>", …] }` → flips each matching row `staged → filed` (`move_status='moved'`,
@@ -194,12 +198,14 @@ If PA's move fails it simply doesn't report that id → the row stays `staged` (
 flagged, still in "Intake Staged, Not Completed", re-offered next tick — never
 lost; the retention sweep never touches the staging folder).
 
-> **⚠️ Confirm `linkedResources` live first.** The flag-created task's
-> `externalId`/`webUrl` format is not reliably documented — probe a real flagged
-> task (`GET /me/todo/lists/{flaggedEmailListId}/tasks?$expand=linkedResources`) and
-> confirm it carries a value mappable to `internetMessageId` before trusting the
-> primary path; otherwise the subject-proximity fallback (ambiguity-guarded) is the
-> path. Full recipe in `docs/architecture/flows/todo-completion-poll.md`.
+> **✅ Strategy confirmed (probe 2026-07-21).** The "List to-do's by folder (V2)"
+> connector action exposes `linkedResources`; `displayName` mirrors the email
+> subject exactly and is move-independent, while `externalId` is an OWA ItemID that
+> drifts on the move (no clean `internetMessageId` translation). So **subject
+> (`displayName`) matching is the PRIMARY path**, guarded by `subject_ambiguous` +
+> `staged_at` proximity. A `subject_ambiguous` item won't auto-file (rare manual
+> case). No raw Graph step. Full recipe in
+> `docs/architecture/flows/todo-completion-poll.md`.
 
 **Retired with this model:** the custom **Flag → To Do** PA flow (removed in the
 designer), `/api/webhooks/todo-task-created` + `handleTodoTaskCreated`, the

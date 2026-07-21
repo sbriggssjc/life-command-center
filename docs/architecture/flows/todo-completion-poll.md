@@ -4,8 +4,10 @@ Last updated: 2026-07-21
 Owner: LCC architecture/audit track (Scott Briggs)
 Part of: `closing-the-loop-overview.md` (prompt 3 — mailbox mechanics)
 Tenant: `Default-fccf69d3-58a4-4c10-a59d-14937a5f5d3f` (NorthMarq Capital, LLC)
-Connectors: Office 365 Outlook + **Microsoft To-Do (Business)** + (for the primary
-match) an **HTTP with Microsoft Entra ID** / custom Graph action (Scott's account)
+Connectors: Office 365 Outlook + **Microsoft To-Do (Business)** — the connector's
+**"List to-do's by folder (V2)"** action DOES expose `linkedResources`
+(`displayName`/`externalId`/`webUrl`), so **no raw Graph / HTTP-with-Entra-ID step
+is needed** (confirmed by probe 2026-07-21).
 
 > **Build this AFTER Flow 1 (Processing Complete → Move Message).** Flow 6 reuses
 > Flow 1's mailbox mechanics (Move email V2 + Flag email V2) — it just drives them
@@ -59,40 +61,38 @@ task** (or clears the flag, which completes it). This flow runs on a schedule,
 asks LCC "which staged emails are awaiting completion?", finds each one's native
 task **in PA**, and files the completed ones.
 
-## ⚠️ REQUIRED FIRST STEP — probe `linkedResources` live before building the match
+## ✅ CONFIRMED — the match strategy (probe run 2026-07-21, signed in as Scott)
 
-The match strategy depends on what a native flag-created task actually exposes in
-its `linkedResources`, and **the docs do not pin this down for flag-created
-tasks** — so **confirm it against a REAL flagged task before committing.** LCC
-can't run this probe (no Graph token; the sandbox has none either) — run it in
-**Graph Explorer** (signed in as Scott) or a throwaway PA "Send an HTTP request"
-action:
+Scott probed a REAL flagged task via the native **"List to-do's by folder (V2)"**
+connector action. Findings, and the resulting decision:
 
-```http
-# 1) Find the native "Flagged email" list id (do NOT hardcode it).
-GET https://graph.microsoft.com/v1.0/me/todo/lists?$filter=wellknownListName eq 'flaggedEmails'
-#    → the single list whose wellknownListName == "flaggedEmails"; take its `id`.
+- **The "Flagged email" list id:**
+  `AAMkADI4MzMxOTI5LTEyM2ItNGQ2MC1iNzMzLThiZThjMzVlZTY4YwAuAAAAAABBxdqkZqf0RIdzC4BjZ3blAQCnShL4q_KHTb2FkYRCIsjjAAC56pC5AAA=`.
+  Still **resolve it each run** via `wellknownListName eq 'flaggedEmails'` (below)
+  — don't hardcode; it can differ per environment/account. This value is only a
+  reference for what a resolved id looks like.
+- **The connector exposes `linkedResources`** (`displayName` / `externalId` /
+  `webUrl`) on "List to-do's by folder (V2)" — **no raw Graph / HTTP-with-Entra-ID
+  step is needed.** (This corrects the earlier assumption that the connector hides
+  it and a raw Graph call was required.)
+- **`externalId` is an OWA ItemID (`AAk…` format), NOT the `internetMessageId`**
+  we store. There is no clean translation, AND the OWA ItemID **drifts when the
+  email moves** (a moved message gets a new store id), so `externalId` is
+  available-but-not-usable for matching a completed task back to a staged email.
+- **`linkedResources[0].displayName` EXACTLY mirrors the email subject line**
+  (confirmed on both sample tasks pulled). The subject is **move-independent** — it
+  survives the move to the staging folder — so it is the SOUNDER match key here.
 
-# 2) Expand linkedResources on that list's tasks and READ what's actually there.
-GET https://graph.microsoft.com/v1.0/me/todo/lists/{flaggedEmailListId}/tasks?$expand=linkedResources&$top=10
-```
+**DECISION: `displayName` (subject) matching is the PRIMARY path** (not a
+fallback), gated by the ambiguity guard below. The LCC `GET` already returns
+everything this needs — `subject`, `staged_at`, and `subject_ambiguous` — so **no
+LCC code change is required.**
 
-Look at `value[].linkedResources[0]` and record **exactly** what `webUrl`,
-`externalId`, `applicationName`, and `displayName` contain for a task you know
-maps to a specific flagged email:
-
-- **If `externalId`/`webUrl` carries the source message's Graph message id** (or
-  any value you can turn into the message's `internetMessageId`) → the PRIMARY
-  path below works; use it.
-- **If it does NOT** (opaque/immutable token, or `linkedResources` is empty) →
-  fall back to the subject + received-date path, treated as lower-confidence.
-
-Also confirm whether your **Microsoft To-Do (Business) connector actions surface
-`linkedResources` at all** — historically they do NOT, which is why the primary
-path uses a raw Graph call (**HTTP with Microsoft Entra ID**, or a Graph custom
-connector) rather than the `Get a to-do` / `List To-Dos` connector actions.
-**Report back what the field actually holds** before wiring either path — don't
-assume the docs match reality.
+> **Honest limitation (accepted):** a `subject_ambiguous` item (≥2 staged emails
+> share a normalized subject, or the subject is blank) has NO unique key here —
+> `externalId` can't disambiguate it (drifts) and the subject can't identify it —
+> so it will **not auto-file**. It stays staged (still flagged, in the folder) and
+> is a rare manual case. This is by design; never guess which task/email it is.
 
 ## The two LCC endpoints — `GET` + `POST /api/webhooks/todo-completion-poll` (SHIPPED)
 
@@ -119,16 +119,25 @@ creates, the native task):
   ] }
 ```
 
-- `internet_message_id` — **the stable match key.** PA resolves each completed
-  native task back to this (primary: via `linkedResources` → the source message's
-  `internetMessageId`).
-- `subject` + `staged_at` — the **fallback** match anchors (the native task title
-  mirrors the email subject; `staged_at` = the staging timestamp, a proxy for
-  "flagged around this time"). Used ONLY when the primary path can't resolve.
+- `subject` — **the PRIMARY match key.** The completed native task's
+  `linkedResources[0].displayName` mirrors the email subject exactly (probe
+  2026-07-21), and the subject is move-independent (unlike the OWA-ItemID
+  `externalId`, which drifts on the move). PA matches a completed task to a staged
+  item when `displayName == subject`.
+- `internet_message_id` — the stable key PA uses to FIND + move the message once a
+  subject match is made (the message query below), and the key it reports back so
+  LCC flips the row `staged → filed`. It is NOT derivable from the task
+  (`externalId` is an OWA ItemID, no clean translation), so it can't drive the
+  match — it drives the move + the report-back.
+- `staged_at` — the staging timestamp (`processing_log.created_at`), a collision
+  guard: it disambiguates a same-subject NON-staged email PA might also see in the
+  completed set (match the completed task whose flag/created time is near
+  `staged_at`, ± a small window). LCC can't see non-staged emails, so PA applies
+  this proximity check.
 - `subject_ambiguous` — `true` when ≥2 staged emails share a (normalized) subject
-  OR the subject is blank. **PA must NOT use the subject fallback for an
-  `subject_ambiguous` item** — the subject can't uniquely identify it, so leave it
-  for the next tick / the primary path. Never guess.
+  OR the subject is blank. **PA must NOT subject-match an `subject_ambiguous`
+  item** — the subject can't uniquely identify it and `externalId` can't rescue it
+  (drifts), so leave it staged (still flagged) for a manual pass. Never guess.
 - `target_folder` — the email's `final_target_folder`, the `Processed/{category}`
   resolved + stored **at staging time** (never re-derived). `clear_flag` is always
   `true` (the email is being filed → clearing the flag also completes the native
@@ -173,31 +182,29 @@ staging folder).
    `X-PA-Webhook-Secret` header. Retry: **Exponential, 4 × PT10S**. Parse JSON.
 3. **Guard — nothing to do:** a **Condition** on `body('worklist')?['count'] > 0`.
    When 0, skip to the summary (the common quiet tick).
-4. **Resolve the native "Flagged email" list id** — once per run:
-   `GET /me/todo/lists?$filter=wellknownListName eq 'flaggedEmails'` (raw Graph
-   via **HTTP with Microsoft Entra ID**), take `value[0].id`. Discover it — never
-   hardcode a per-environment id.
-5. **List the native COMPLETED tasks** — from that list, get the tasks whose
-   `status eq 'completed'`, **expanding `linkedResources`** for the primary match:
-   `GET /me/todo/lists/{flaggedEmailListId}/tasks?$filter=status eq 'completed'&$expand=linkedResources`.
-   (The standard To-Do connector doesn't expose `linkedResources`, so use the raw
-   Graph call. If you fall back to subject-only matching, the connector's `List
-   To-Dos` action is fine.)
+4. **Resolve the native "Flagged email" list id** — once per run, via the
+   **Microsoft To-Do (Business)** connector's **"Lists"** action (or, if you keep
+   the wellknown filter, `wellknownListName eq 'flaggedEmails'`); take the single
+   flaggedEmails list's `id`. Discover it — never hardcode a per-environment id.
+5. **List the native COMPLETED tasks** — the **"List to-do's by folder (V2)"**
+   connector action on that list, **expanding `linkedResources`** (it does surface
+   them — probe 2026-07-21), filtered to `status eq 'completed'`. Each returned
+   task carries `linkedResources[0].displayName` (== the email subject) — the match
+   anchor. No raw Graph call needed.
 6. **Initialize `Completed` array** (empty) — collects the ids PA files.
 7. **Apply to each worklist `items` item — match it to a completed native task:**
-   - **PRIMARY match (linkedResources → internetMessageId).** For each completed
-     task, read `linkedResources[0]`; resolve it to the source message's
-     `internetMessageId` (per the probe above — either `externalId`/`webUrl`
-     already IS a usable message id, or GET the message by it and read its
-     `internetMessageId`). A worklist item matches when that `internetMessageId`
-     equals `item()?['internet_message_id']`.
-   - **FALLBACK match (subject + time), guarded.** Only if the primary path can't
-     resolve AND `item()?['subject_ambiguous']` is **false**: match a completed
-     task whose `title` equals the item's `subject` AND whose flagged/created time
-     is near `item()?['staged_at']` (± a small window). **If the subject fallback
-     matches MORE THAN ONE completed task, do NOT act** — leave the item for the
-     next tick (it stays staged, still flagged), never guess which task/email.
-   - **On a unique match → file the email:**
+   - **PRIMARY match (subject / displayName), guarded.** Only when
+     `item()?['subject_ambiguous']` is **false**: find the completed task whose
+     `linkedResources[0].displayName` equals `item()?['subject']` (trim/normalize
+     as the worklist does). **Collision guard:** if more than one completed task
+     matches the subject, keep only the one whose flag/created time is near
+     `item()?['staged_at']` (± a small window); **if that still leaves more than
+     one, do NOT act** — leave the item staged (still flagged), never guess.
+   - **`externalId` is available but NOT a match key** — it's an OWA ItemID that
+     drifts on the move, so it can't be resolved to `internet_message_id`. Do not
+     match on it.
+   - **On a unique subject match → file the email** (using the item's
+     `internet_message_id` to find + move it):
      - **Find the message** — `Get emails (V3)` / Graph message query filtered
        `internetMessageId eq @{item()?['internet_message_id']}`, Top 1. Null-safe:
        0 results ⇒ skip (already moved/deleted).
@@ -227,16 +234,19 @@ staging folder).
 ## Locked constraints
 
 - **LCC never calls Graph/To-Do.** The native-list lookup + the completion check
-  are PA's, on its OAuth connection / an HTTP-with-Entra-ID action. LCC only reads
-  the worklist + writes the flip. No `MS_GRAPH_TOKEN`, no app registration.
+  are PA's, on its Microsoft To-Do (Business) OAuth connection. LCC only reads the
+  worklist + writes the flip. No `MS_GRAPH_TOKEN`, no app registration, no raw
+  Graph step.
 - **Discover the list id — never hardcode it.** Resolve it each run via
   `wellknownListName eq 'flaggedEmails'` (it can differ per environment/account).
-- **Confirm the linkedResources field live before trusting the primary match** —
-  the flag-created `externalId`/`webUrl` format is not reliably documented (see the
-  REQUIRED FIRST STEP). Report what it actually holds.
-- **Surface ambiguity, never guess.** The subject fallback runs ONLY when the item
-  is not `subject_ambiguous` AND it uniquely matches ONE completed task. More than
-  one candidate ⇒ leave it (never clear the wrong task's flag / move the wrong email).
+- **Subject (`displayName`) is the PRIMARY match key — `externalId` is not usable.**
+  `linkedResources[0].displayName` mirrors the subject and is move-independent; the
+  `externalId` OWA ItemID drifts on the move, so never match on it.
+- **Surface ambiguity, never guess.** Subject-match ONLY when the item is not
+  `subject_ambiguous` AND (after the `staged_at` proximity guard) it uniquely
+  matches ONE completed task. More than one candidate ⇒ leave it staged (never
+  clear the wrong task's flag / move the wrong email). A `subject_ambiguous` item
+  never auto-files — it is a rare manual case.
 - **No custom task, no mapping.** LCC does not create a task and does not store
   `todo_task_id`/`todo_list_id`. Do not re-introduce a custom-task-creation step.
 - **Reuse Flow 1's mover — do NOT re-implement move logic.** The Move + Flag steps
@@ -253,8 +263,10 @@ staging folder).
 
 ## Verify after build
 
-1. **Probe first (above):** confirm the flaggedEmails list id resolves and read a
-   real task's `linkedResources` — decide primary vs. fallback from what's there.
+1. **List id resolves:** the "Lists" / `wellknownListName eq 'flaggedEmails'`
+   lookup returns the single flaggedEmails list. (Probe 2026-07-21 already
+   confirmed the connector exposes `linkedResources.displayName` == the subject —
+   no need to re-decide the strategy.)
 2. **Seed a staged email:** flag a test mail so intake runs a `staged` category
    (deals / leads / general / infra); confirm it moves to "Intake Staged, Not
    Completed" **and keeps its flag** (Flow 1 with `clear_flag:false`), and that a
@@ -267,13 +279,14 @@ staging folder).
 4. **Task still open:** run the flow → the native task is not in the `completed`
    set, nothing matches, nothing moves, nothing reported.
 5. **Complete the native task** in Microsoft To Do (the "Flagged email" list), run
-   the flow → PA matches it to the worklist item (primary: linkedResources →
-   internetMessageId), moves the email to its `Processed/{category}` folder, clears
-   the flag, POSTs the id back, and the `processing_log` row flips `staged → filed`
+   the flow → PA matches it to the worklist item by subject
+   (`linkedResources[0].displayName == subject`), moves the email to its
+   `Processed/{category}` folder, clears the flag, POSTs the `internet_message_id`
+   back, and the `processing_log` row flips `staged → filed`
    (`move_status='moved'`). A second run returns `count` one lower (idempotent).
 6. **Ambiguity guard:** stage two emails with the same subject → both show
-   `subject_ambiguous:true`; confirm the subject fallback does NOT act on them (they
-   file only via the primary linkedResources match, or stay staged if it can't
-   resolve). Never file/clear the wrong one.
+   `subject_ambiguous:true`; confirm PA does NOT subject-match them (they stay
+   staged, still flagged — the accepted rare manual case). Never file/clear the
+   wrong one.
 7. **Report-back idempotency:** `POST { "completed": ["<that-imid>"] }` again →
    `filed:0, not_staged:1` (already filed — a clean no-op).
