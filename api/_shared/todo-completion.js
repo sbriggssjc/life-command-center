@@ -8,14 +8,28 @@
 // AUTOMATE (its Microsoft To-Do (Business) connector is already OAuth-
 // authenticated). LCC only ever does DB reads/writes here — no Graph, no token.
 //
+// NATIVE "Flagged email" list model (2026): Outlook auto-creates ONE task in the
+// system "Flagged email" To Do list for every flagged message — Scott completes
+// tasks THERE, not in a custom list. So LCC no longer creates/maps a custom task
+// (the `todo_task_map` write path + `/api/webhooks/todo-task-created` are retired,
+// and this module no longer joins to a mapping). Instead PA queries the native
+// "Flagged email" list each tick and matches its tasks back to the staged emails
+// LCC returns — PRIMARY match: the task's `linkedResources` → the source message
+// → its `internetMessageId`; FALLBACK: subject text + staging-time proximity, and
+// ONLY when unambiguous (see `subject_ambiguous`).
+//
 // The split:
 //   GET  /api/webhooks/todo-completion-poll — a pure DB read: the current
-//        worklist of `staged` emails awaiting completion, joined to their To Do
-//        task ids. { internet_message_id, todo_task_id, todo_list_id,
-//        target_folder (= the Processed/{category} to file to), clear_flag }.
-//   PA   loops the worklist, calls the To-Do connector's "Get task" per item to
-//        check status, and for each COMPLETED task does the Move + Flag-clear
-//        itself, then reports the completed ids back.
+//        worklist of `staged` emails awaiting completion. Each item is
+//        { internet_message_id (the stable match key), subject + staged_at (the
+//        subject-fallback anchors), subject_ambiguous (PA must NOT subject-match
+//        when true), target_folder (= the Processed/{category} to file to),
+//        clear_flag }. NO todo_task_id / todo_list_id — LCC doesn't know (and no
+//        longer creates) the native task; PA looks it up in the native list.
+//   PA   lists the native "Flagged email" tasks, matches each COMPLETED one back
+//        to a worklist item (linkedResources → internetMessageId; subject+time
+//        fallback only when not subject_ambiguous), does the Move + Flag-clear
+//        itself, then reports the completed internet_message_ids back.
 //   POST /api/webhooks/todo-completion-poll — a pure DB write: flip each reported
 //        row staged→filed (idempotent, guarded on outcome=staged), recording the
 //        final destination + moved_at.
@@ -24,32 +38,53 @@
 //   - LCC never calls Graph/To-Do — PA owns those (OAuth connector).
 //   - Idempotent: the flip is guarded on outcome=staged, so a re-report / a
 //     concurrent poll flips a row at most once (a resolved row is a no-op).
-//   - Never file without a resolved destination (final_target_folder), and never
-//     surface an item PA can't check (no todo_task_id / no todo_list_id).
+//   - Never file without a resolved destination (final_target_folder).
+//   - Surface ambiguity, never guess: a staged subject shared by ≥2 staged emails
+//     (or a blank subject) is flagged `subject_ambiguous` so PA's lower-confidence
+//     subject fallback leaves it rather than risk clearing the wrong task's flag.
 //   - Deps-injected + pure helpers, so both orchestrators are unit-testable with
 //     no DB. The HTTP handler (api/sync.js) wires the real DB deps.
 // ============================================================================
 
 /**
- * Build ONE worklist item for a staged row + its To Do mapping, or null when
- * the item is not actionable by PA (no mapping / no list id / no destination).
- *
- * @param {object} row      processing_log row (internet_message_id + final_target_folder)
- * @param {object|null} mapping  todo_task_map row (todo_task_id + todo_list_id)
- * @returns {null | {internet_message_id, todo_task_id, todo_list_id, target_folder, clear_flag: true}}
+ * Normalize a subject for the collision check driving `subject_ambiguous`.
+ * Aggressive on purpose (strip reply/forward prefixes, case, whitespace) —
+ * over-flagging ambiguity is the SAFE direction (PA just leaves it for the
+ * next tick / the linkedResources path).
  */
-export function buildStagedWorklistItem(row, mapping) {
+function normSubject(s) {
+  if (!s || typeof s !== 'string') return '';
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/^((re|fw|fwd|aw)\s*:\s*)+/i, '') // drop leading RE:/FW:/FWD:/AW:
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Build ONE worklist item for a staged row, or null when it is not actionable by
+ * PA (no message key / no resolved destination). No mapping arg anymore — the
+ * native "Flagged email" task is looked up by PA, not stored by LCC.
+ *
+ * `subject_ambiguous` is a CROSS-ROW property (set by buildStagedWorklist over
+ * the whole worklist), so it is left off here and stamped by the assembler.
+ *
+ * @param {object} row  processing_log row (internet_message_id + final_target_folder + subject + created_at)
+ * @returns {null | {internet_message_id, subject, staged_at, target_folder, clear_flag: true}}
+ */
+export function buildStagedWorklistItem(row) {
   const imid = row?.internet_message_id || null;
   if (!imid) return null;
-  // PA's "Get task" needs BOTH the list id and the task id.
-  if (!mapping || !mapping.todo_task_id || !mapping.todo_list_id) return null;
   // Never hand PA a destination we didn't resolve at staging time.
   const target = row.final_target_folder || null;
   if (!target) return null;
   return {
     internet_message_id: imid,
-    todo_task_id: mapping.todo_task_id,
-    todo_list_id: mapping.todo_list_id,
+    // Subject + staging time are the FALLBACK match anchors (used only when the
+    // linkedResources → internetMessageId primary path can't resolve).
+    subject: row.subject || null,
+    staged_at: row.created_at || null,
     target_folder: target,
     clear_flag: true, // the email is being filed → clear the flag on this move
   };
@@ -79,31 +114,41 @@ export function extractCompletionKeys(reports) {
 
 /**
  * GET orchestrator — assemble the worklist of staged emails awaiting completion.
- * A pure DB read (no Graph). deps-injected for testing.
+ * A pure DB read (no Graph, no mapping join). deps-injected for testing.
  *
  * @param {number} limit
  * @param {object} deps
- * @param {(n:number)=>Promise<Array>}          deps.fetchStagedRows    open staged rows, oldest first
- * @param {(ids:string[])=>Promise<Map>}        deps.fetchTaskMappings  internet_message_id → mapping row
- * @returns {Promise<{count:number, items:Array, unmapped:number, no_destination:number}>}
+ * @param {(n:number)=>Promise<Array>} deps.fetchStagedRows  open staged rows, oldest first
+ * @returns {Promise<{count:number, items:Array, no_destination:number}>}
  */
 export async function buildStagedWorklist(limit, deps = {}) {
-  const { fetchStagedRows, fetchTaskMappings } = deps;
+  const { fetchStagedRows } = deps;
   const rows = (await fetchStagedRows(limit)) || [];
-  const ids = rows.map((r) => r?.internet_message_id).filter(Boolean);
-  const mapById = ids.length ? ((await fetchTaskMappings(ids)) || new Map()) : new Map();
 
   const items = [];
-  let unmapped = 0;      // staged, has a destination, but no To Do task to poll
   let no_destination = 0; // staged but final_target_folder is missing (can't file)
   for (const row of rows) {
-    const mapping = (mapById.get && mapById.get(row?.internet_message_id)) || null;
-    const item = buildStagedWorklistItem(row, mapping);
+    const item = buildStagedWorklistItem(row);
     if (item) { items.push(item); continue; }
-    if (!row?.final_target_folder) no_destination++;
-    else unmapped++;
+    // A row with a message key but no destination is surfaced only as a count;
+    // a row with no message key at all is nothing PA can file → dropped silently.
+    if (row?.internet_message_id && !row?.final_target_folder) no_destination++;
   }
-  return { count: items.length, items, unmapped, no_destination };
+
+  // Subject-collision flag: PA's subject fallback must never guess between two
+  // staged emails that share a subject (Scott: surface ambiguity, don't pick).
+  // A blank subject is also ambiguous (nothing to subject-match on).
+  const counts = new Map();
+  for (const it of items) {
+    const key = normSubject(it.subject);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  for (const it of items) {
+    const key = normSubject(it.subject);
+    it.subject_ambiguous = key === '' || (counts.get(key) || 0) > 1;
+  }
+
+  return { count: items.length, items, no_destination };
 }
 
 /**

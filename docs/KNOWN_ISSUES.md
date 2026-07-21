@@ -27,8 +27,9 @@ it counts essentially every move-eligible email in the 24h window.
   returns 405 on the `GET` that queue design needed). PR #1435 deleted that dead
   handler.
 - The live production handler (`sync.js` `handleProcessingComplete`) reconciles the
-  mailbox move via `todo_task_map` + `pa-move-message.js` and **never touches
-  `processing_log.move_status`**.
+  mailbox move via `pa-move-message.js` and **never touches
+  `processing_log.move_status`** on the terminal path. (The To Do Completion Poll's
+  `staged → filed` flip does set `move_status='moved'` for staged emails.)
 
 So `move_status` has been unmaintained since the "Closing the Loop" redesign
 superseded the old queue design — this predates PR #1435, which neither caused nor
@@ -44,6 +45,6 @@ from the briefing line entirely (`fetchProcessingSummary` + the render in
 `api/_handlers/briefing-email-handler.js` `renderOpsAndQueue`).
 
 **Do NOT** wire a parallel PATCH-based tracker on `processing_log.move_status`. The
-`sync.js` relay + `todo_task_map` already own real move-tracking; adding a second
-mechanism would recreate the exact two-systems-doing-the-same-thing duplication
-that PR #1435 just removed.
+`sync.js` relay + the To Do Completion Poll already own real move-tracking; adding a
+second mechanism would recreate the exact two-systems-doing-the-same-thing
+duplication that PR #1435 just removed.

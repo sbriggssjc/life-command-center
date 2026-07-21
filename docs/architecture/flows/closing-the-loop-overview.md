@@ -82,7 +82,7 @@ Archive/
   OUTSIDE `Processed/*` so the retention sweep never archives/deletes an
   outstanding-work email. A `staged` email keeps its flag (the emit's
   `clear_flag:false`); the flag clears + it files to `Processed/{category}` only
-  when its To Do task completes (Flow 6).
+  when its native "Flagged email" To Do task completes (Flow 6).
 - The retention sweep is the ONLY flow that hard-deletes, and only from
   `Processed/Duplicates` after 30 days. Everything else is a move (reversible).
 
@@ -90,9 +90,13 @@ Archive/
 
 - **Never set any flow to permanently delete on first pass.** Only the Weekly
   Retention Sweep deletes, and only from `Processed/Duplicates` after 30 days.
-- **Do not duplicate the existing Flag → To Do flow** — it stays as-is as the
-  single "I want a human to look at this" mechanism. The move layer is orthogonal
-  to it (a flagged email can be both moved-and-filed AND surfaced as a To Do).
+- **Track Outlook's NATIVE "Flagged email" To Do list — do not create custom To Do
+  tasks.** Flagging an email already spawns one native task (the single "I want a
+  human to look at this" mechanism); the custom Flag → To Do flow +
+  `/api/webhooks/todo-task-created` + `todo_task_map` were retired 2026-07-21
+  (duplicate-task creation + wrong list). The move layer is orthogonal to the flag
+  (a flagged email can be both moved-and-filed AND surfaced as a native To Do);
+  Flow 6 files a `staged` email when its native task completes.
 - **Do not duplicate the existing Google-Alerts sender flow** — reconcile the
   sub-folder watch against it (sheet 3).
 
