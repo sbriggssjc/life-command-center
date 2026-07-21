@@ -5348,28 +5348,34 @@ async function fetchOpsContext(workspaceId, userId) {
       age_days: Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000)
     }));
 
-    // Fetch hot contacts from Gov DB for chat context
+    // Fetch hot contacts for chat context. A9b: the contacts hub follows
+    // CONTACTS_HUB — read the canonical LCC Opps hub when flipped, else the
+    // legacy gov copy (so this reader stays coherent with the routing flip).
     let topContacts = [];
-    const govUrl = process.env.GOV_SUPABASE_URL;
-    const govKey = govSupabaseKey();
-    if (govUrl && govKey) {
+    const contactsPath = `unified_contacts?contact_class=eq.business&engagement_score=gt.20&order=engagement_score.desc&limit=5&select=full_name,company_name,engagement_score,last_call_date,last_email_date,contact_type`;
+    const mapContacts = (contacts) => (contacts || []).map(c => ({
+      name: c.full_name,
+      company: c.company_name,
+      score: c.engagement_score,
+      type: c.contact_type,
+      last_call: c.last_call_date || 'never',
+      last_email: c.last_email_date || 'never'
+    }));
+    if ((process.env.CONTACTS_HUB || 'gov').toLowerCase() === 'ops') {
       try {
-        const cRes = await fetch(
-          `${govUrl}/rest/v1/unified_contacts?contact_class=eq.business&engagement_score=gt.20&order=engagement_score.desc&limit=5&select=full_name,company_name,engagement_score,last_call_date,last_email_date,contact_type`,
-          { headers: { 'apikey': govKey, 'Authorization': `Bearer ${govKey}` } }
-        );
-        if (cRes.ok) {
-          const contacts = await cRes.json();
-          topContacts = (contacts || []).map(c => ({
-            name: c.full_name,
-            company: c.company_name,
-            score: c.engagement_score,
-            type: c.contact_type,
-            last_call: c.last_call_date || 'never',
-            last_email: c.last_email_date || 'never'
-          }));
-        }
+        const r = await opsQuery('GET', contactsPath);
+        if (r.ok) topContacts = mapContacts(r.data);
       } catch { /* non-fatal */ }
+    } else {
+      const govUrl = process.env.GOV_SUPABASE_URL;
+      const govKey = govSupabaseKey();
+      if (govUrl && govKey) {
+        try {
+          const cRes = await fetch(`${govUrl}/rest/v1/${contactsPath}`,
+            { headers: { 'apikey': govKey, 'Authorization': `Bearer ${govKey}` } });
+          if (cRes.ok) topContacts = mapContacts(await cRes.json());
+        } catch { /* non-fatal */ }
+      }
     }
 
     return {
