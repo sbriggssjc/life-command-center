@@ -9,8 +9,12 @@ Started July 2026. Read this first when picking the work back up.
 - **Design:** complete and validated against live schema.
 - **SQL:** `rpc_query_comps` written for both verticals, validated read-only (not yet deployed).
 - **Tool code:** `query_comps.tool.js` written (not yet wired into `mcp/server.js`).
+- **Promotion analyzed (07):** the existing `sf-promotion-worker` was read in full — comp promotion is
+  currently inert (queries `pending`, but comps are `linked`) and, where it runs, targets `comparable_sales`
+  (dia) / `comp_provenance` (gov), NOT `sales_transactions`. So `query_comps` reads `sf_comp_staging` directly
+  (the only place SF comps live). Promotion fixes are scoped in 07 but are NOT required for v1.
 - **Not yet done:** deploy the two RPCs, wire the tools into server.js, add the LLM parse step for
-  `synthesize_comps`, and finish the Comp→canonical promotion (`COMP_FIELD_MAP`) to close the 84% gap.
+  `synthesize_comps`, and (optional, durable) apply the Path B promotion fixes in 07.
 
 ## Files in this folder
 | File | What it is |
@@ -25,6 +29,7 @@ Started July 2026. Read this first when picking the work back up.
 | `rpc_query_comps_government.sql` | Deployable RPC for the `government` project (`scknotsqkcheojiaewwh`). |
 | `rpc_query_comps_dialysis.sql` | Deployable RPC for the `Dialysis_DB` project (`zqzrriwuavgrquhisnoa`). |
 | `query_comps.tool.js` | MCP tool module (`query_comps` + `synthesize_comps` + synonym map + dedup). Copy to `mcp/`. |
+| `07_Comp_Promotion_Gap_Analysis.md` | Validated analysis of `sf-promotion-worker`: the 5 gaps, corrected COMP_FIELD_MAP, `lcc_merge_field` call convention. |
 
 ## Key facts to remember (so we don't re-derive them)
 - **No Salesforce Connected App** — org is SSO-gated; Power Automate is the settled transport. Comps are crawled into `sf_comp_staging` on gov + dia (source_system='salesforce'), current as of 2026-07-20.
