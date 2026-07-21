@@ -72,6 +72,14 @@ exactly one destructive action tightly scoped:
   retention sink, fully reversible.
 - **Do not delete from `Processed/*` (non-Duplicates)** — aged non-duplicate items
   are archived (moved), not deleted.
+- **The staging folder is OUT of scope — never touch "Intake Staged, Not
+  Completed".** It is a top-level sibling of `Processed/`, so both branches (the
+  `Processed/Duplicates` delete AND the `Processed/*` archive) structurally never
+  reach it. A `staged` email is outstanding work (finished intake, To Do not yet
+  complete) and must never be archived/deleted by age regardless of how long it
+  sits there — it leaves the staging folder ONLY when its To Do completes and the
+  To Do Completion Poll (Flow 6) files it to `Processed/{category}`. Do NOT widen
+  either `Get emails (V3)` scope to include the staging folder.
 
 ## Observability controls
 

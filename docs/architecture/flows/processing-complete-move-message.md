@@ -95,7 +95,8 @@ relay is never invoked and the HTTP trigger never fires.
 | `schema_version` | Payload version. Start `"1.0"`. | `"1.0"` |
 | `internet_message_id` | **The move key.** The RFC `Internet-Message-Id` header of the mail (stable, mailbox-independent). Move-by-this, not by the mutable Graph `id`. | `"<CAF…@mail.gmail.com>"` |
 | `target_folder` | Path under `Processed/` (see the taxonomy in the overview). The flow resolves/creates it. | `"Processed/OM"`, `"Processed/Duplicates"`, `"Processed/News"` |
-| `disposition` | One of `auto_filed` / `flagged` / `duplicate`. Written to `processing_log` (prompt 2) so the briefing line can count. Does NOT change the delete rule — a `duplicate` is *moved to* `Processed/Duplicates`, never deleted here. | `"auto_filed"` |
+| `disposition` | One of `auto_filed` / `flagged` / `duplicate` / `staged`. Written to `processing_log` (prompt 2) so the briefing line can count. Does NOT change the delete rule — a `duplicate` is *moved to* `Processed/Duplicates`, never deleted here; a `staged` email is *moved to* `Intake Staged, Not Completed` (kept flagged). | `"staged"` |
+| `clear_flag` | Whether the Move flow should clear the flag after moving. `false` for a `staged` move (still outstanding work — keep the flag); `true` for filed/duplicate (terminal). Relay default (absent) = true, except `staged` ⇒ false. Gates step 5. | `false` |
 | `category` | Optional (prompt 2's classification tag: `news` / `reference` / `fyi` / `deals` / `leads` / `general` / `infra` / `needs_review` / …). Drives the To Do auto-completion gate ONLY. Absent ⇒ the To Do is left open (allow-list default). | `"news"` |
 | `subject` | Optional, for the audit log only (never used as a match key). | `"OM — 123 Main St"` |
 
@@ -111,18 +112,25 @@ relay is never invoked and the HTTP trigger never fires.
    `Processed/`; if missing, create it. (Move email V2 needs a folder id/path.)
 4. **Move email (V2)** — message id from step 2 → the folder from step 3.
    Retry policy: **Exponential, 4 × PT10S**.
-5. **Clear the flag (V2) — on move success only.** After the Move succeeds, run
-   **Flag email (V2)** with **flag status `notFlagged`** to clear the flag on the
-   now-filed message. The flag = "ingest this into LCC" (the flagged-email intake
-   trigger); once the email is filed, the flag has served its purpose, so leaving
-   it set clutters the flag view forever. **Order matters — clear AFTER the move,
-   never before:** if you cleared first and the move failed, you'd strand an
-   un-flagged, un-filed email (worse than the reverse). **Id-remap gotcha:** Move
-   email (V2) returns a NEW folder-specific `Id` for the moved message; feed the
-   **Move action's output `Id`** into the Flag step (the `internet_message_id` is
-   stable but the Flag connector keys on the item `Id`, which changed on the move).
-   A Flag failure is non-fatal — the move already succeeded; log + continue (run
-   after → is successful, so a flag-clear hiccup never fails the move).
+5. **Clear the flag (V2) — on move success AND `clear_flag` true only.** After the
+   Move succeeds, IF the relay sent **`clear_flag: true`**, run **Flag email (V2)**
+   with **flag status `notFlagged`** to clear the flag on the now-filed message.
+   The flag = "ingest this into LCC" (the flagged-email intake trigger); once the
+   email is filed, the flag has served its purpose, so leaving it set clutters the
+   flag view forever. **The `clear_flag` gate is what makes a `staged` move keep
+   its flag:** a staged email moves to "Intake Staged, Not Completed" with
+   `clear_flag:false` (it is still outstanding work), so this step is SKIPPED and
+   the flag stays — the flag clears only later, when Flow 6 files it on To Do
+   completion (with `clear_flag:true`). filed/duplicate send `clear_flag:true`.
+   Wrap step 5 in a **Condition** `clear_flag is equal to true`. **Order matters —
+   clear AFTER the move, never before:** if you cleared first and the move failed,
+   you'd strand an un-flagged, un-filed email (worse than the reverse). **Id-remap
+   gotcha:** Move email (V2) returns a NEW folder-specific `Id` for the moved
+   message; feed the **Move action's output `Id`** into the Flag step (the
+   `internet_message_id` is stable but the Flag connector keys on the item `Id`,
+   which changed on the move). A Flag failure is non-fatal — the move already
+   succeeded; log + continue (run after → is successful, so a flag-clear hiccup
+   never fails the move).
 6. **Complete the linked To Do (V3) — on move success only (Option A).** Runs in
    the SAME successful-move branch as the flag-clear (step 5), off the same
    condition. Add a **Condition** `todo_task_id is not empty` (equivalently
