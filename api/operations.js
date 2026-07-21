@@ -244,6 +244,18 @@ export default withErrorHandler(async function handler(req, res) {
     return handleInstitutionContactTick(req, res);
   }
 
+  // Phase 1b — connect owners to people via company resolution (via server.js
+  // _route=contacts-company-link-tick). GET=dry-run (report the exact_unique
+  // auto-apply set + the ambiguous/fuzzy review universe, no writes) / POST=apply
+  // (attach person->owner-org edges for the exact_unique candidates via
+  // linkPersonToEntity, bounded + reversible by metadata.via batch tag).
+  // Authenticates internally.
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'contacts-company-link-tick') {
+    const { handleContactsCompanyLinkTick } = await import('./_handlers/contacts-company-link.js');
+    return handleContactsCompanyLinkTick(req, res);
+  }
+
   // Salesforce Lists (Campaigns/CampaignMembers) ingest (via vercel.json /
   // server.js _route=sf-list-import). GET=dry-run (classify + normalize, no
   // writes) / POST=ingest (reconcile-by-email → relate to company org → record

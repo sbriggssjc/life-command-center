@@ -1601,6 +1601,8 @@ var _DC_FEDERATED = new Set([
   // replaces owner_source_conflict + suspected_sale (both retired). Keep in sync
   // with admin.js FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
   'listing_event_action', 'resolve_ownership', 'loan_maturity',
+  // Phase 1b (2026-07-21): person contact -> owner org(s) review tier.
+  'contact_company_link',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -2262,6 +2264,8 @@ const _DC_FED_META = {
     intro: 'An ownership CHANGE we never recorded as a sale (gov), value-ranked by rent — a NEW GSA lessor with no recorded sale, or a deed grantee that disagrees with the prior owner with no recorded sale. Each is a LEAD, not a fact: confirm the sale (you supply the price — it writes a real sales row, cap rate computes), mark “not a sale” (refinance / name correction — stops asking), or send to research to find the price/date/buyer. We never fabricate a price.' },
   loan_maturity: { title: 'Loan maturities → refi or sell',
     intro: 'A property whose CURRENT debt matures within 24 months — or is already matured — (gov + dia), value-ranked by rent; a DISTRESSED loan (watchlist / special servicing / delinquent / DSCR<1) ranks first. A maturity wall forces the owner to refinance or sell — that is the BD opening. Pursue refi (advisory/refi outreach on the owner), pursue disposition (the owner may sell), mark not relevant (stops asking), or research. No domain write — this is a BD signal.' },
+  contact_company_link: { title: 'Contact → company owner',
+    intro: 'A person contact whose company name resolves to owner org(s) by NAME — the tiers the exact-core auto-apply worker leaves for a human (LLC names are where false positives live). exact_ambiguous = the exact name maps to >1 owner org (pick which); fuzzy = a distinctive shared name-core (e.g. Starwood Capital Group ↔ Starwood REIT). Value-ranked by the candidate owner’s rent. Link the person to the chosen owner (attaches a real contact edge), mark “not a match” (stops asking), or research.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2563,6 +2567,31 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcFed(' + i + ',\'pursue_disposition\')">Pursue disposition</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_relevant\')">Not relevant</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'contact_company_link') {
+    const cands = Array.isArray(c.candidates) ? c.candidates : [];
+    const isFuzzy = c.match_class === 'fuzzy';
+    const kindLbl = isFuzzy ? 'fuzzy name match'
+      : (Number(c.n_candidate_orgs) > 1 ? (c.n_candidate_orgs + ' owner orgs share this name') : 'exact name match');
+    const rent = _fedMoney(c.rank_value);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.person_name || 'Contact') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge' + (isFuzzy ? '' : ' type') + '">' + esc(kindLbl) + '</span>'
+      + (rent ? '<span class="q-badge">' + rent + ' rent</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">Company: <b>' + esc(c.company_name || '') + '</b></div>';
+    // Single candidate → show it; multi → a picker (default = highest-value owner).
+    if (cands.length > 1) {
+      const opts = cands.map(function (x) {
+        const v = _fedMoney(x.rank_value);
+        return '<option value="' + esc(String(x.owner_org_id)) + '"'
+          + (String(x.owner_org_id) === String(c.owner_org_id) ? ' selected' : '') + '>'
+          + esc(x.owner_org_name || String(x.owner_org_id)) + (v ? ' — ' + v : '') + '</option>';
+      }).join('');
+      body += '<div class="q-item-meta">Link to owner: <select id="ccl-owner-' + i + '" class="dc-merge-winner">' + opts + '</select></div>';
+    } else {
+      body += '<div class="q-item-meta">Link to owner: <b>' + esc(c.owner_org_name || '?') + '</b></div>';
+    }
+    actions = '<button class="q-action primary" onclick="cclLink(' + i + ')">Link →</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_a_match\')">Not a match</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -2795,6 +2824,19 @@ function dcMergeGroup(i) {
   dcFed(i, 'merge', (w && w !== def) ? { winner_id: w } : {});
 }
 window.dcMergeGroup = dcMergeGroup;
+
+// Phase 1b — link a contact to the chosen owner org. Reads the picker (default =
+// the highest-value candidate) and only sends owner_entity_id on a real override
+// (single-candidate cards send nothing → admin.js uses the best candidate).
+function cclLink(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const sel = document.getElementById('ccl-owner-' + i);
+  const def = String(c.owner_org_id || '');
+  const w = sel ? String(sel.value || '') : def;
+  dcFed(i, 'link', (w && w !== def) ? { owner_entity_id: w } : undefined);
+}
+window.cclLink = cclLink;
 
 // cms break-link hands off to the existing cms-match DELETE route (Scott's call).
 async function dcCmsUnlink(propertyId) {

@@ -145,6 +145,7 @@ describe('lane rationalization map', () => {
       'merge_duplicate_entities', 'junk_entity_name', 'property_merge',
       'provenance_conflict', 'pending_update', 'intake_disposition',
       'match_disambiguation', 'cms_link_suspect', 'sf_contact_account_mismatch', 'sos_owner_links',
+      'contact_company_link',
       'implausible_value', 'llc_research_dead', 'availability_checker_botblock',
     ];
     const laneKeys = new Set(LCC_REVIEW_LANES.map((l) => l.lane));
@@ -155,10 +156,10 @@ describe('lane rationalization map', () => {
     }
   });
 
-  it('collapses 18 decision types into the 8 logical lanes', () => {
+  it('collapses 20 decision types into the 8 logical lanes', () => {
     assert.equal(LCC_REVIEW_LANES.length, 8);
-    // 18 after the 2026-06-30 ownership consolidation added resolve_ownership.
-    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 19);
+    // 20 = 19 + Phase 1b contact_company_link (linkage lane, 2026-07-21).
+    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 20);
     // R43: cap-rate review + bad-rent leases group under the provenance lane.
     assert.equal(laneForDecisionType('caprate_review'), 'provenance');
     assert.equal(laneForDecisionType('bad_rent_lease'), 'provenance');
