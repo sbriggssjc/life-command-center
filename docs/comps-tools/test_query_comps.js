@@ -49,5 +49,28 @@ const linked = [
 const lk = dedupe(linked);
 ok('source_sf_id link collapses to 1', lk.length === 1);
 
+// --- 6. same-property same-year price-conflict twins at EQUAL confidence:
+//        surviving price is quality-chosen (master_curated) over implausible ---
+const priceConflict = [
+  { comp_id: 'dia_db:794', source: 'dialysis_db', address: '10 Clinic Rd', city: 'Denver', state: 'CO',
+    sale_date: '2017-12-28', sale_price: 3750000, confidence: 0.85,
+    raw: { cap_rate_quality: 'implausible_unverified', cap_rate_source: null } },
+  { comp_id: 'dia_db:88', source: 'dialysis_db', address: '10 Clinic Road', city: 'Denver', state: 'CO',
+    sale_date: '2017-12-28', sale_price: 3583644, confidence: 0.85,
+    raw: { cap_rate_quality: 'stated_only', cap_rate_source: 'master_curated' } },
+];
+const pc = dedupe(priceConflict);
+ok('price-conflict twins collapse to 1', pc.length === 1);
+ok('surviving price is the quality (master_curated) one, not the implausible', pc[0]?.sale_price === 3583644);
+// order-independence: even when the implausible row is seen second, quality wins
+const pc2 = dedupe([priceConflict[1], priceConflict[0]]);
+ok('quality survivor is order-independent', pc2[0]?.sale_price === 3583644);
+// no provenance on either -> unchanged (first-seen, additive tiebreaker is inert)
+const noProv = [
+  { comp_id: 'x', source: 'dialysis_db', address: '9 B St', city: 'T', state: 'OK', sale_date: '2020-01-01', sale_price: 1000000, confidence: 0.85 },
+  { comp_id: 'y', source: 'dialysis_db', address: '9 B Street', city: 'T', state: 'OK', sale_date: '2020-01-01', sale_price: 1200000, confidence: 0.85 },
+];
+ok('no-provenance tie stays first-seen (additive, no regression)', dedupe(noProv)[0]?.comp_id === 'x');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -47,6 +47,22 @@ function normKey(c) {
   const yr = String(c.sale_date || '').slice(0, 4);
   return `${normStreet(c.address)}|${String(c.city || '').toLowerCase().replace(/[^a-z0-9]/g, '')}|${(c.state || '').toLowerCase()}|${yr}`;
 }
+// Trustworthiness of a comp's sold_price, from the same cap-rate provenance the
+// sales-lane dedup ranks on (implausible LAST; master_curated / validated best).
+// Used ONLY as a tiebreaker when confidence ties — e.g. dia_db comps all carry a
+// hardcoded confidence 0.85, so without this the surviving price was first-seen
+// (arbitrary). Defensive: absent provenance -> neutral, so cross-source behavior
+// is unchanged when the signal isn't present. Mirrored in docs/comps-tools/query_comps.tool.js.
+const _GOOD_CAP_QUALITY = new Set(['validated', 'cmbs_audited', 'om_actual', 'om_confirmed', 'deed_verified', 'confirmed', 'lease_confirmed']);
+function priceQuality(c) {
+  const raw = c && c.raw;
+  const q = String((raw && raw.cap_rate_quality) || '').toLowerCase();
+  const src = String((raw && raw.cap_rate_source) || '').toLowerCase();
+  if (/implausible/.test(q)) return 0;
+  if (src === 'master_curated' || _GOOD_CAP_QUALITY.has(q)) return 3;
+  if (q) return 2;
+  return 1;
+}
 export function dedupe(rows) {
   const byId = new Map();
   for (const r of rows) if (r.source_sf_id) byId.set(r.source_sf_id, r);
@@ -56,7 +72,9 @@ export function dedupe(rows) {
     const k = normKey(r);
     if (seen.has(k)) {
       const prev = seen.get(k);
-      const better = (r.sale_price && !prev.sale_price) || (r.confidence > prev.confidence);
+      const better = (r.sale_price && !prev.sale_price)
+        || (r.confidence > prev.confidence)
+        || (r.confidence === prev.confidence && priceQuality(r) > priceQuality(prev));
       if (better) { out[out.indexOf(prev)] = r; seen.set(k, r); r._merged_with = (r._merged_with || []).concat(prev.comp_id); }
       else { prev._merged_with = (prev._merged_with || []).concat(r.comp_id); }
       continue;
