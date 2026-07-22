@@ -183,6 +183,13 @@ let activities = [];
 let emails = [];
 let emailTotalCount = 0;
 let calEvents = [];
+// Calendar page (pageCal) — its own wider window so the Today/Home widgets keep
+// the tight `calEvents` set. Loaded by loadCalendarFull(); rendered by renderCalendarFull().
+let calFullEvents = [];
+let calFullLoaded = false;
+let calViewMode = (typeof localStorage !== 'undefined' && localStorage.getItem('lcc-cal-view') === 'month') ? 'month' : 'list';
+let calMonthAnchor = null;   // { year, month } (month 1-12) of the displayed month in month view
+let calSelectedDay = null;   // 'YYYY-M-D' of the day whose events are expanded below the month grid
 let currentBizTab = 'dialysis';
 let bizSearch = '';
 let bizPage = 0;
@@ -1112,7 +1119,7 @@ function handlePageLoad(pageId) {
     case 'pageOpsHealth': if (typeof renderOpsHealthPage === 'function') renderOpsHealthPage(); break;
     case 'pageSyncHealth': if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage(); break;
     case 'pageDataQuality': if (typeof renderDataQualityPage === 'function') renderDataQualityPage(); break;
-    case 'pageCal': renderCalendarFull(); break;
+    case 'pageCal': loadCalendarFull(); break;
     case 'pageBiz':
       if (currentBizTab === 'government') {
         _setDisplay('govTabGroups', 'flex');
@@ -8192,7 +8199,7 @@ async function captureEvent() {
     if (d.status === 'created') {
       if (msg) msg.textContent = '\u2713 Added \u2014 syncs to your calendar shortly';
       if (titleEl) titleEl.value = '';
-      setTimeout(() => { try { loadCalendar(); } catch (e) {} }, 600);
+      setTimeout(() => { try { loadCalendar(); loadCalendarFull(true); } catch (e) {} }, 600);
     } else if (d.status === 'duplicate') {
       if (msg) msg.textContent = 'Already on your calendar \u2014 not duplicated';
     } else {
@@ -8201,39 +8208,256 @@ async function captureEvent() {
   } catch (e) { if (msg) msg.textContent = 'Error: ' + e.message; }
 }
 
+// Calendar page loads a WIDER window than the Home/Today widgets — recent past
+// (30d) + upcoming (60d) — so Scott can look back, not just ahead. Its own array
+// (calFullEvents) leaves the tight `calEvents` set (home stats + Today schedule)
+// untouched. Pure view-layer read of the same GET /sync/calendar-events endpoint.
+const CAL_DAYS_BACK = 30;
+const CAL_DAYS_FORWARD = 60;
+async function loadCalendarFull(force) {
+  if (calFullLoaded && !force) { renderCalendarFull(); return; }
+  const calEl = document.getElementById('calendarFull');
+  if (calEl && !calFullLoaded) calEl.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  try {
+    const res = await fetch(`${API}/sync/calendar-events?days_back=${CAL_DAYS_BACK}&days_forward=${CAL_DAYS_FORWARD}&limit=500`);
+    if (!res.ok) throw new Error('API returned ' + res.status);
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch (_) { throw new Error('Calendar API returned non-JSON'); }
+    calFullEvents = (data && data.events) || [];
+    calFullLoaded = true;
+    renderCalendarFull();
+  } catch (e) {
+    console.error('Calendar (full) load error:', e);
+    // Graceful fallback: render the already-loaded upcoming set so the page
+    // still shows something instead of an error wall.
+    if (!calFullLoaded) calFullEvents = calEvents.slice();
+    renderCalendarFull();
+  }
+}
+
+// A per-event source key so we can tell whether an overlap is a genuine
+// cross-source double-booking (two kids' games; work vs family) rather than a
+// single event that slipped de-dup. Prefer the granular feed name.
+function _calEventSource(ev) { return ev.calendar_name || ev.cortex_domain || 'unknown'; }
+function _calDayKey(d) { const p = _tzParts(d); return p ? `${p.year}-${p.month}-${p.day}` : ''; }
+function _calDayOrd(d) { const p = _tzParts(d); return p ? (p.year * 10000 + p.month * 100 + p.day) : 0; }
+function _calIsTimed(ev) {
+  if (ev.is_all_day || isCanceled(ev)) return false;
+  const s = new Date(ev.start_time).getTime(), e = new Date(ev.end_time).getTime();
+  return !isNaN(s) && !isNaN(e) && e > s;
+}
+
+// Detect double-bookings: timed events from DIFFERENT sources whose intervals
+// overlap. Returns Map<eventObj, Array<otherEventObj>>. O(n²) is fine here — the
+// page loads only a few hundred events.
+function _calComputeConflicts(events) {
+  const conflicts = new Map();
+  const timed = events.filter(_calIsTimed);
+  for (let i = 0; i < timed.length; i++) {
+    const a = timed[i], as = new Date(a.start_time).getTime(), ae = new Date(a.end_time).getTime();
+    for (let j = i + 1; j < timed.length; j++) {
+      const b = timed[j];
+      if (_calEventSource(a) === _calEventSource(b)) continue; // same feed ⇒ not a cross-booking
+      const bs = new Date(b.start_time).getTime(), be = new Date(b.end_time).getTime();
+      if (as < be && bs < ae) { // half-open interval overlap
+        if (!conflicts.has(a)) conflicts.set(a, []);
+        if (!conflicts.has(b)) conflicts.set(b, []);
+        conflicts.get(a).push(b);
+        conflicts.get(b).push(a);
+      }
+    }
+  }
+  return conflicts;
+}
+
+function _calConflictTitle(list) {
+  return 'Overlaps: ' + list.map(o => `${esc(o.subject || '(No title)')} (${formatTime(o.start_time)})`).join('; ');
+}
+
+// One event row (shared by the list view and the month-grid day detail).
+function _calItemHTML(ev, conflicts) {
+  const canceled = isCanceled(ev);
+  // QA-12: identical start/end are Outlook tasks ingested as zero-duration
+  // events — render "Task @ HH:MM", not "5:40 AM – 5:40 AM".
+  const isZeroDur = !ev.is_all_day && ev.start_time && ev.end_time
+    && new Date(ev.start_time).getTime() === new Date(ev.end_time).getTime();
+  const time = ev.is_all_day
+    ? '<span class="cal-allday">All Day</span>'
+    : (isZeroDur
+        ? `<span class="cal-task">Task @ ${formatTime(ev.start_time)}</span>`
+        : `${formatTime(ev.start_time)} – ${formatTime(ev.end_time)}`);
+  const conf = conflicts && conflicts.get(ev);
+  const conflictCls = conf ? ' cal-conflict' : '';
+  const conflictTitle = conf ? ` title="${_calConflictTitle(conf)}"` : '';
+  const badge = conf ? `<span class="cal-conflict-badge"${conflictTitle}>&#9888; Double-booked</span>` : '';
+  const dim = canceled ? ';opacity:0.4;text-decoration:line-through' : '';
+  return `<div class="cal-item${conflictCls}" style="border-left:3px solid ${ev.color || '#8E8E93'};padding-left:8px${dim}">`
+    + `<div class="cal-time">${time}</div>`
+    + `<div style="flex:1;min-width:0"><div class="cal-subj">${esc(ev.subject || '(No title)')}${badge}</div>`
+    + `${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}`
+    + `${ev.organizer_name ? `<div class="cal-loc">Organizer: ${esc(ev.organizer_name)}</div>` : ''}</div></div>`;
+}
+
+// A chronological, day-grouped block of event rows.
+function _calRenderDayGroups(events, conflicts) {
+  const byDay = new Map();
+  for (const ev of events) {
+    const label = new Date(ev.start_time).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric' });
+    if (!byDay.has(label)) byDay.set(label, []);
+    byDay.get(label).push(ev);
+  }
+  const todayKey = _calDayKey(new Date());
+  let html = '';
+  for (const [day, evs] of byDay) {
+    const isToday = _calDayKey(evs[0].start_time) === todayKey;
+    html += `<div style="font-size:14px;font-weight:600;padding:12px 0 6px;color:${isToday ? 'var(--accent)' : 'var(--text)'}">${day}${isToday ? ' (Today)' : ''}</div>`;
+    html += '<div class="widget" style="margin-bottom:8px">';
+    for (const ev of evs) html += _calItemHTML(ev, conflicts);
+    html += '</div>';
+  }
+  return html;
+}
+
+function _calListView(events, conflicts) {
+  const todayOrd = _calDayOrd(new Date());
+  const upcoming = events.filter(ev => _calDayOrd(ev.start_time) >= todayOrd);
+  const past = events.filter(ev => _calDayOrd(ev.start_time) < todayOrd);
+  let html = '';
+  html += upcoming.length
+    ? _calRenderDayGroups(upcoming, conflicts)
+    : '<div style="color:var(--text2);padding:12px 0">Nothing scheduled in the next ' + CAL_DAYS_FORWARD + ' days.</div>';
+  if (past.length) {
+    html += `<div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);border-top:1px solid var(--border);margin-top:16px;padding-top:14px">Recent · past ${CAL_DAYS_BACK} days</div>`;
+    html += _calRenderDayGroups(past, conflicts);
+  }
+  return html;
+}
+
+function _calMonthView(events, conflicts) {
+  const nowParts = _tzParts(new Date());
+  if (!calMonthAnchor) calMonthAnchor = { year: nowParts.year, month: nowParts.month };
+  const { year, month } = calMonthAnchor;
+  const first = new Date(year, month - 1, 1);
+  const monthLabel = first.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const leading = first.getDay(); // 0=Sun
+  const todayKey = `${nowParts.year}-${nowParts.month}-${nowParts.day}`;
+
+  // Bucket visible (non-canceled) events by day key.
+  const byKey = new Map();
+  for (const ev of events) {
+    if (isCanceled(ev)) continue;
+    const k = _calDayKey(ev.start_time);
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(ev);
+  }
+
+  let html = '';
+  html += '<div class="cal-grid cal-dow-row">';
+  for (const d of ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']) html += `<div class="cal-dow">${d}</div>`;
+  html += '</div>';
+  html += '<div class="cal-grid">';
+  const totalCells = Math.ceil((leading + daysInMonth) / 7) * 7;
+  for (let i = 0; i < totalCells; i++) {
+    const dayNum = i - leading + 1;
+    if (dayNum < 1 || dayNum > daysInMonth) { html += '<div class="cal-cell other-month"></div>'; continue; }
+    const key = `${year}-${month}-${dayNum}`;
+    const evs = (byKey.get(key) || []).slice().sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+    const isToday = key === todayKey;
+    const isSel = key === calSelectedDay;
+    const hasConflict = evs.some(ev => conflicts.get(ev));
+    let dots = '';
+    for (const ev of evs.slice(0, 4)) {
+      const isConf = !!conflicts.get(ev);
+      dots += `<span class="cal-dot${isConf ? ' conflict' : ''}" style="background:${ev.color || '#8E8E93'}" title="${esc(ev.subject || '(No title)')}"></span>`;
+    }
+    const more = evs.length > 4 ? `<span class="cal-more">+${evs.length - 4}</span>` : '';
+    const cls = `cal-cell${isToday ? ' today' : ''}${isSel ? ' selected' : ''}${evs.length ? ' has-events' : ''}`;
+    html += `<div class="${cls}" onclick="calSelectDay('${key}')">`
+      + `<div class="cal-daynum">${dayNum}${hasConflict ? ' <span class="cal-cell-warn" title="Double-booked">&#9888;</span>' : ''}</div>`
+      + `<div class="cal-dots">${dots}${more}</div></div>`;
+  }
+  html += '</div>';
+
+  // Selected-day detail below the grid (defaults to today when it's in view).
+  let selKey = calSelectedDay;
+  if (!selKey && todayKey.startsWith(`${year}-${month}-`) && byKey.has(todayKey)) selKey = todayKey;
+  if (selKey) {
+    const selEvs = byKey.get(selKey);
+    const [sy, sm, sd] = selKey.split('-').map(Number);
+    const selLabel = new Date(sy, sm - 1, sd).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    html += `<div style="margin-top:16px;font-size:14px;font-weight:600;color:var(--text)">${selLabel}</div>`;
+    if (selEvs && selEvs.length) {
+      html += '<div class="widget" style="margin-top:6px">';
+      for (const ev of selEvs.slice().sort((a, b) => new Date(a.start_time) - new Date(b.start_time))) html += _calItemHTML(ev, conflicts);
+      html += '</div>';
+    } else {
+      html += '<div style="color:var(--text2);padding:8px 0">No events this day.</div>';
+    }
+  }
+  return { html, monthLabel };
+}
+
+function calSetView(mode) {
+  calViewMode = (mode === 'month') ? 'month' : 'list';
+  try { localStorage.setItem('lcc-cal-view', calViewMode); } catch (_) {}
+  renderCalendarFull();
+}
+function calSelectDay(key) { calSelectedDay = (calSelectedDay === key) ? null : key; renderCalendarFull(); }
+function calMonthShift(delta) {
+  const p = _tzParts(new Date());
+  if (!calMonthAnchor) calMonthAnchor = { year: p.year, month: p.month };
+  let m = calMonthAnchor.month + delta, y = calMonthAnchor.year;
+  while (m < 1) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  calMonthAnchor = { year: y, month: m };
+  calSelectedDay = null;
+  renderCalendarFull();
+}
+function calMonthToday() {
+  const p = _tzParts(new Date());
+  calMonthAnchor = { year: p.year, month: p.month };
+  calSelectedDay = `${p.year}-${p.month}-${p.day}`;
+  renderCalendarFull();
+}
+
 function renderCalendarFull() {
   const calEl = document.getElementById('calendarFull');
   if (!calEl) return;
-  if (calEvents.length === 0) { calEl.innerHTML = '<div style="color:var(--text2)">No events loaded.</div>'; return; }
-  const byDay = {};
-  for (const ev of calEvents) {
-    const d = new Date(ev.start_time).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric' });
-    if (!byDay[d]) byDay[d] = [];
-    byDay[d].push(ev);
+  const events = (calFullLoaded || calFullEvents.length) ? calFullEvents : calEvents;
+  const conflicts = _calComputeConflicts(events);
+
+  // Header: List/Month toggle (+ month nav in month view) and a conflict summary.
+  const listBtn = `<button class="cal-view-btn${calViewMode === 'list' ? ' active' : ''}" onclick="calSetView('list')">List</button>`;
+  const monthBtn = `<button class="cal-view-btn${calViewMode === 'month' ? ' active' : ''}" onclick="calSetView('month')">Month</button>`;
+  // conflicts.size = number of events involved in an overlap (both sides keyed).
+  const conflictCount = conflicts.size;
+  const conflictNote = conflictCount
+    ? `<span class="cal-conflict-note" title="Events from different calendars that overlap in time">&#9888; ${conflictCount} double-booked</span>`
+    : '';
+
+  let body = '';
+  let monthNav = '';
+  if (!events.length) {
+    body = '<div style="color:var(--text2);padding:12px 0">No events loaded.</div>';
+  } else if (calViewMode === 'month') {
+    const m = _calMonthView(events, conflicts);
+    body = m.html;
+    monthNav = `<div class="cal-month-nav">`
+      + `<button class="cal-nav-btn" onclick="calMonthShift(-1)" title="Previous month">&#8249;</button>`
+      + `<span class="cal-month-label">${m.monthLabel}</span>`
+      + `<button class="cal-nav-btn" onclick="calMonthShift(1)" title="Next month">&#8250;</button>`
+      + `<button class="cal-view-btn" onclick="calMonthToday()">Today</button></div>`;
+  } else {
+    body = _calListView(events, conflicts);
   }
-  let html = '';
-  for (const [day, events] of Object.entries(byDay)) {
-    const isToday = tzDateStr(events[0].start_time) === tzDateStr(new Date());
-    html += `<div style="font-size:14px;font-weight:600;padding:12px 0 6px;color:${isToday ? 'var(--accent)' : 'var(--text)'}">${day}${isToday ? ' (Today)' : ''}</div>`;
-    html += '<div class="widget" style="margin-bottom:8px">';
-    for (const ev of events) {
-      const canceled = isCanceled(ev);
-      // QA-12 (2026-05-18): events with identical start_time and end_time
-      // are tasks-ingested-as-zero-duration-events from Outlook. Render them
-      // as "Task @ HH:MM" rather than "5:40 AM – 5:40 AM".
-      const isZeroDur = !ev.is_all_day && ev.start_time && ev.end_time
-        && new Date(ev.start_time).getTime() === new Date(ev.end_time).getTime();
-      const time = ev.is_all_day
-        ? '<span class="cal-allday">All Day</span>'
-        : (isZeroDur
-            ? `<span class="cal-task">Task @ ${formatTime(ev.start_time)}</span>`
-            : `${formatTime(ev.start_time)} – ${formatTime(ev.end_time)}`);
-      const cancelStyle = canceled ? ' style="opacity:0.4;text-decoration:line-through"' : '';
-      html += `<div class="cal-item" style="border-left:3px solid ${ev.color || '#8E8E93'};padding-left:8px${canceled ? ';opacity:0.4;text-decoration:line-through' : ''}"><div class="cal-time">${time}</div><div><div class="cal-subj">${esc(ev.subject || '(No title)')}</div>${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}${ev.organizer_name ? `<div class="cal-loc">Organizer: ${esc(ev.organizer_name)}</div>` : ''}</div></div>`;
-    }
-    html += '</div>';
-  }
-  calEl.innerHTML = html;
+
+  const header = `<div class="cal-toolbar">`
+    + `<div class="cal-view-toggle">${listBtn}${monthBtn}</div>`
+    + monthNav
+    + conflictNote
+    + `</div>`;
+  calEl.innerHTML = header + body;
 }
 
 // ============================================================
