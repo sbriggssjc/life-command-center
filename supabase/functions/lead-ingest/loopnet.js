@@ -70,9 +70,9 @@ export function stripHtmlToText(html) {
   // Strip any remaining tags.
   t = t.replace(/<[^>]+>/g, " ");
   t = decodeEntities(t);
-  // Normalize whitespace (treat NBSP as a space; collapse runs; trim lines).
+  // Normalize whitespace (NBSP + zero-width space -> space; collapse runs).
   t = t.replace(/\r/g, "");
-  t = t.replace(/[ \t ​]+/g, " ");
+  t = t.replace(/[ \t\u00A0\u200B]+/g, " ");
   t = t.replace(/[ \t]*\n[ \t]*/g, "\n");
   t = t.replace(/\n{2,}/g, "\n");
   return t.trim();
