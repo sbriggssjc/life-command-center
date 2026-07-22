@@ -22,6 +22,7 @@ import {
   NEWS_ALERT_DEDUP_DAYS, DEFAULT_TRACKED_TENANTS,
 } from "./news-alert.js";
 import { buildProcessingRow } from "./processing-complete.js";
+import { parseLoopNetEmail } from "./loopnet.js";
 
 // ── Auto-archive/cleanup: emit a processing_complete decision ────────────────
 // A lead channel (news_alert / rcm[CREXi] / loopnet) finishes an intake job and
@@ -455,58 +456,59 @@ function parseRcmEmail(rawBody: string, subject: string | null) {
 }
 
 // ── LoopNet Email Parser ───────────────────────────────────────────────────
+// parseLoopNetEmail(rawBody, subject) lives in ./loopnet.js (pure ESM, shared
+// with test/loopnet.test.mjs so the two never drift). It strips the HTML body to
+// text, keys off the subject to pick the inquiry vs favorite template, and
+// returns the buyer + property fields. See that module for the full contract.
 
-function parseLoopNetEmail(rawBody: string, subject: string | null) {
-  const lines = rawBody.split("\n").map(l => l.trim()).filter(Boolean);
+// ── Best-effort SF listing linkage ─────────────────────────────────────────
+// Map the parsed property to our SF listing/deal so listing_id (= SF listing id)
+// and sf_opportunity_id (= SF deal id) can be stamped on the lead. CONSERVATIVE
+// by design: it stamps ONLY on a unique, exact normalized (street + state) match
+// against v_sjc_deal_book (on DIA); anything ambiguous or unmatched leaves both
+// null. Never throws — a match miss can never fail the ingest.
+//
+// The durable fix is a persisted `loopnet_listing_id -> sf_listing_id` map (the
+// LoopNet listing id is captured on the parse as `loopnet_listing_id`); this
+// address matcher is the best we can do until that map exists.
+function normalizeAddress(s: string | null | undefined): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(street|str|st|avenue|ave|boulevard|blvd|road|rd|drive|dr|lane|ln|highway|hwy|suite|ste|unit|north|n|south|s|east|e|west|w)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  function extractAfterLabel(labels: string[]): string | null {
-    for (const label of labels) {
-      for (const line of lines) {
-        if (line.toLowerCase().startsWith(label.toLowerCase())) {
-          return line.substring(label.length).trim().replace(/^[:\s]+/, "");
-        }
-      }
+async function matchLoopNetListing(
+  parsed: { property_address?: string | null; property_state?: string | null },
+): Promise<{ listing_id: string | null; sf_opportunity_id: string | null; sf_match_method: string | null }> {
+  const out = { listing_id: null as string | null, sf_opportunity_id: null as string | null, sf_match_method: null as string | null };
+  const street = normalizeAddress(parsed.property_address);
+  const state = (parsed.property_state || "").trim().toUpperCase();
+  if (!street || street.length < 4 || !state) return out; // too weak to match confidently
+  try {
+    const url = new URL(`${diaConfig().url}/rest/v1/v_sjc_deal_book`);
+    url.searchParams.set("select", "sf_listing_id,sf_deal_id,property_address,state");
+    url.searchParams.set("state", `eq.${state}`);
+    url.searchParams.set("property_address", "not.is.null");
+    url.searchParams.set("limit", "50");
+    const res = await diaFetch(`v_sjc_deal_book?${url.searchParams.toString()}`, "GET");
+    if (!res.ok) return out;
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return out;
+    const exact = rows.filter((r: Record<string, unknown>) => normalizeAddress(r.property_address as string) === street);
+    // Only a UNIQUE exact match is confident enough to stamp.
+    if (exact.length === 1) {
+      const r = exact[0] as Record<string, unknown>;
+      out.listing_id = (r.sf_listing_id as string) || null;
+      out.sf_opportunity_id = (r.sf_deal_id as string) || null;
+      if (out.listing_id || out.sf_opportunity_id) out.sf_match_method = "loopnet_address_exact";
     }
-    return null;
+  } catch (err) {
+    console.warn("[lead-ingest] LoopNet listing match skipped:", (err as Error).message);
   }
-
-  const name = extractAfterLabel(["Name:", "Full Name:", "Contact Name:", "From:", "Sender:", "Inquirer:", "Prospect Name:", "Buyer Name:"]);
-  const company = extractAfterLabel(["Company:", "Firm:", "Organization:", "Brokerage:", "Company Name:", "Buyer Company:", "Investor Group:"]);
-  const inquiryType = extractAfterLabel(["Inquiry Type:", "Request Type:", "Type:", "Action:", "Interest:", "Lead Type:", "Inquiry About:"]);
-  const propertyRef = extractAfterLabel(["Property:", "Listing:", "Property Name:", "Property Address:", "Listing Name:", "Asset:", "Subject Property:"]);
-  const message = extractAfterLabel(["Message:", "Comments:", "Notes:", "Additional Info:", "Inquiry Message:"]);
-
-  const emailMatch = rawBody.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
-  const email = emailMatch ? emailMatch[0] : null;
-
-  const phoneMatch = rawBody.match(/\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}(\s*(x|ext\.?|extension)\s*\d+)?/i);
-  const phone = phoneMatch ? phoneMatch[0] : null;
-
-  const listingIdMatch = rawBody.match(/(?:Listing\s*(?:ID|#|Number)[:\s]*)([\d]+)/i);
-  const listingId = listingIdMatch ? listingIdMatch[1] : null;
-
-  let firstName: string | null = null, lastName: string | null = null;
-  if (name) {
-    const parts = name.split(/\s+/);
-    firstName = parts[0] || null;
-    lastName = parts.slice(1).join(" ") || null;
-  }
-
-  let dealName = subject || propertyRef || null;
-  if (dealName) {
-    dealName = dealName
-      .replace(/^(New\s+)?LoopNet\s+(Inquiry|Lead|Request)\s*[-:–]\s*/i, "")
-      .replace(/^(RE|FW|Fwd):\s*/i, "")
-      .trim();
-  }
-
-  return {
-    lead_name: name, lead_first_name: firstName, lead_last_name: lastName,
-    lead_email: email, lead_phone: phone, lead_company: company,
-    deal_name: dealName, listing_id: listingId,
-    activity_type: inquiryType || "loopnet_inquiry",
-    activity_detail: message || inquiryType || null
-  };
+  return out;
 }
 
 // ── Shared SF Match + Activity Logic ───────────────────────────────────────
@@ -754,10 +756,14 @@ async function handleRcmIngest(req: Request, body: Record<string, unknown> | nul
 // ── LoopNet Ingest Handler ─────────────────────────────────────────────────
 
 async function handleLoopNetIngest(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const { source_ref, deal_name, raw_body, status, internet_message_id } =
+  const { source_ref, deal_name, subject, raw_body, status, internet_message_id } =
     (body || {}) as Record<string, unknown>;
 
   if (!raw_body) return errorResponse(req, "raw_body is required", 400);
+
+  // The template (inquiry vs favorite) is keyed off the email SUBJECT. Prefer an
+  // explicit subject; fall back to deal_name for older PA flow payloads.
+  const emailSubject = ((subject as string) || (deal_name as string) || null);
 
   // Auto-archive/cleanup emitter (marketing_leads on DIA; processing_log on OPS).
   const emitPC = (outcome: string) =>
@@ -767,18 +773,27 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
       outcome,
       channel: "loopnet",
       sourceRef: (source_ref as string) || null,
-      subject: (deal_name as string) || null,
+      subject: emailSubject,
     });
 
-  const parsed = sanitizeLeadName(parseLoopNetEmail(raw_body as string, (deal_name || null) as string | null));
+  const parsed = sanitizeLeadName(parseLoopNetEmail(raw_body as string, emailSubject));
+
+  // Best-effort SF listing linkage: stamp listing_id (= SF listing id) +
+  // sf_opportunity_id (= SF deal id) only on a unique exact address match; leave
+  // both null otherwise. Never fails the ingest.
+  const link = await matchLoopNetListing(parsed);
 
   const insertPayload = {
     source: "loopnet", source_ref: source_ref || null,
     lead_name: parsed.lead_name, lead_first_name: parsed.lead_first_name,
     lead_last_name: parsed.lead_last_name, lead_email: parsed.lead_email,
     lead_phone: parsed.lead_phone, lead_company: parsed.lead_company,
-    deal_name: parsed.deal_name, listing_id: parsed.listing_id,
-    activity_type: parsed.activity_type, activity_detail: parsed.activity_detail,
+    deal_name: parsed.deal_name,
+    property_address: parsed.property_address, property_city: parsed.property_city,
+    property_state: parsed.property_state,
+    listing_id: link.listing_id, sf_opportunity_id: link.sf_opportunity_id,
+    sf_match_method: link.sf_match_method,
+    activity_type: parsed.activity_type, activity_detail: parsed.message,
     lead_date: resolveLeadDate(body?.lead_date),
     notes: raw_body, status: status || "new",
     ingested_at: isoNow()
@@ -806,7 +821,15 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
     const pc = await emitPC("filed");
     return jsonResponse(req, {
       ok: true, lead_id: lead.lead_id, sf_activity_id: sfActivityId,
-      parsed: { lead_name: parsed.lead_name, lead_email: parsed.lead_email, lead_phone: parsed.lead_phone, lead_company: parsed.lead_company, deal_name: parsed.deal_name, listing_id: parsed.listing_id, activity_type: parsed.activity_type },
+      parsed: {
+        lead_name: parsed.lead_name, lead_email: parsed.lead_email,
+        lead_phone: parsed.lead_phone, lead_company: parsed.lead_company,
+        property_name: parsed.property_name, property_address: parsed.property_address,
+        property_city: parsed.property_city, property_state: parsed.property_state,
+        property: parsed.property, loopnet_listing_id: parsed.loopnet_listing_id,
+        deal_name: parsed.deal_name, activity_type: parsed.activity_type,
+      },
+      listing_link: link,
       sf_match: sfMatch ? { sf_contact_id: sfMatch.sf_contact_id, name: `${sfMatch.first_name || ""} ${sfMatch.last_name || ""}`.trim() } : null,
       target_folder: pc?.target_folder ?? null, processing_complete: pc
     }, 201);
