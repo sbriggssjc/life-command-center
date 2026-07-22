@@ -1,0 +1,703 @@
+<!DOCTYPE html><html><head>
+<meta http-equiv="Content-Type" content="text/html; charset=us-ascii">
+    <title>New Lead</title>
+    <style type="text/css">
+        img {
+            height: auto;
+            line-height: 100%;
+            outline: none;
+            text-decoration: none;
+        }
+
+        p {
+            margin: 1em 0;
+            font-size: 14px;
+        }
+
+        table td {
+            border-collapse: collapse;
+        }
+    </style>
+    <!--    DARK MODE -->
+    <style type="text/css">
+        :root {
+            color-scheme: light dark;
+            supported-color-schemes: light dark;
+        }
+
+        @media (prefers-color-scheme:dark) {
+            .dark-mode-hide {
+                display: none !important;
+            }
+
+            .dark-mode-show,
+            .darkImageWrapper {
+                display: block !important;
+            }
+
+            .dark-mode-footer-background {
+                background-color: #F6F6F6 !important;
+            }
+        }
+    </style>
+    <!-- CSS Reset -->
+    <style type="text/css">
+        /*WEB FONT*/
+        @font-face {
+            font-family: "CoStar Brown";
+            src: url("https://go.costar.com/l/936613/2021-11-30/fyxhn/936613/1638284703v134VOKh/CoStarBrown_Regular.svg#CoStar Brown-Regular") format("svg");
+            src: url("https://go.costar.com/l/936613/2021-11-30/fyxhq/936613/1638284729cLGuqsH9/CoStarBrown_Regular.woff") format("woff");
+            src: url("https://go.costar.com/l/936613/2021-11-30/fx1z2/936613/1638284564kkMvjHOz/CoStarBrown_Regular.ttf") format("tff");
+        }
+
+        /* CLIENT-SPECIFIC STYLES */
+        /* What it does: Stops email clients resizing small text. */
+        * {
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }
+
+        /* What it does: Stops Outlook from adding extra spacing to tables. */
+        table,
+        td {
+            mso-table-lspace: 0pt;
+            mso-table-rspace: 0pt;
+        }
+
+        /* What it does: Forces Outlook.com to display emails full width. */
+        ReadMsgBody {
+            width: 100%;
+        }
+
+        .ExternalClass {
+            width: 100%;
+        }
+
+            .ExternalClass,
+            .ExternalClass p,
+            .ExternalClass span,
+            .ExternalClass font,
+            .ExternalClass td,
+            .ExternalClass div {
+                line-height: 100%;
+            }
+
+        /* RESET STYLES */
+        /* What it does: Remove spaces around the email design added by some email clients. */
+        /* Beware: It can remove the padding / margin and add a background color to the compose a reply window. */
+        body {
+            margin: 0 !important;
+            padding: 0 !important;
+            height: 100% !important;
+            width: 100% !important;
+            font-family: 'CoStar Brown', Helvetica, Arial, san-serif;
+        }
+
+        /* What it does: Fixes webkit padding issue. Fix for Yahoo mail table alignment bug. Applies table-layout to the first 2 tables then removes for anything nested deeper. */
+        table {
+            /*border-collapse: collapse !important;*/
+            /*border-spacing: 0 !important;*/
+            /*table-layout: fixed !important;*/
+            /*margin: 0 auto !important;*/
+        }
+
+        /* What it does: Uses a better rendering method when resizing images in IE. */
+        img {
+            -ms-interpolation-mode: bicubic;
+        }
+
+        @ms-viewport {
+            width: device-width;
+        }
+
+        /* iOS BLUE LINKS */
+        a[x-apple-data-detectors] {
+            color: inherit !important;
+            text-decoration: none !important;
+            font-size: inherit !important;
+            font-family: inherit !important;
+            font-weight: inherit !important;
+            line-height: inherit !important;
+        }
+
+        /* What is does: Centers email on Android 4.4 */
+        div[style*="margin: 16px 0"] {
+            margin: 0 !important;
+        }
+
+        < !-- Variables if needed --> %%[
+        /* Master-Template_V1 */
+        /* Master-Template_V1 */
+        ]%% < !-- End Variables Note -->
+    </style>
+    <style type="text/css">
+        Styles: .mobile-show {
+            display: none !important;
+            width: 0% !important;
+            height: 0 !important;
+            max-height: 0 !important;
+            overflow: hidden !important;
+        }
+
+        @media only screen and (max-width: 320px) {
+            .hero-divider-padding {
+                padding-left: 0px !important;
+                padding-right: 140px !important;
+            }
+        }
+
+        @media only screen and (max-width: 480px) {
+            .container {
+                width: 100% !important;
+            }
+
+            .textalign {
+                text-align: center !important;
+            }
+
+            .imagealign {
+                display: block;
+                margin-left: auto;
+                margin-right: auto;
+                width: 50%;
+            }
+
+            .footer {
+                width: auto !important;
+                margin-left: 0;
+            }
+
+            .content-padding {
+                padding: 4px !important;
+            }
+
+            .mobile-hidden {
+                display: none !important;
+            }
+
+            .mobile-show {
+                display: block !important;
+                width: 100% !important;
+                height: inherit !important;
+                max-height: inherit !important;
+                overflow: visible !important;
+            }
+
+            .hero-text-padding-left {
+                padding-left: 0px !important;
+            }
+
+            .hero-divider-padding {
+                padding-left: 0px !important;
+                padding-right: 280px !important;
+            }
+
+            .hero-title-font-size {
+                font-size: 20px !important;
+                line-height: 32px !important;
+            }
+
+            .hero-subtitle-font-size {
+                font-size: 16px !important;
+                line-height: 20px !important;
+            }
+
+            .logo {
+                display: block !important;
+                padding: 0 !important;
+            }
+
+            .footer-img img {
+                max-width: 100% !important;
+                height: auto !important;
+                max-height: auto !important;
+            }
+
+            .header img {
+                max-width: 100% !important;
+                height: auto !important;
+                max-height: auto !important;
+            }
+
+            .photo img {
+                width: 100% !important;
+                max-width: 100% !important;
+                height: auto !important;
+            }
+
+            .drop {
+                display: block !important;
+                width: 100% !important;
+                float: left;
+                clear: both;
+            }
+
+            .footerlogo {
+                display: block !important;
+                width: 100% !important;
+                padding-top: 15px;
+                float: left;
+                clear: both;
+            }
+
+            .nav4,
+            .nav5,
+            .nav6 {
+                display: none !important;
+            }
+
+            .tableBlock {
+                width: 100% !important;
+            }
+
+            .responsive-td {
+                width: 100% !important;
+                display: block !important;
+                padding: 0 !important;
+            }
+
+            .fluid,
+            .fluid-centered {
+                width: 100% !important;
+                max-width: 100% !important;
+                height: auto !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+
+            .fluid-centered {
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+            /* MOBILE GLOBAL STYLES - DO NOT CHANGE */
+            body {
+                font-size: 16px !important;
+                line-height: 150% !important;
+                padding: 0px !important;
+                font-family: 'CoStar Brown', Helvetica, Arial, san-serif;
+            }
+
+            h1 {
+                font-size: 22px !important;
+                line-height: normal !important;
+                font-family: 'CoStar Brown', Helvetica, Arial, san-serif;
+            }
+
+            h2 {
+                font-size: 20px !important;
+                line-height: normal !important;
+                font-family: 'CoStar Brown', Helvetica, Arial, san-serif;
+            }
+
+            h3 {
+                font-size: 18px !important;
+                line-height: normal !important;
+                font-family: 'CoStar Brown', Helvetica, Arial, san-serif;
+            }
+
+            .buttonstyles {
+                font-family: 'CoStar Brown', Helvetica, Arial, san-serif !important;
+                font-size: 16px !important;
+                color: #FFFFFF !important;
+                padding: 10px !important;
+                text-decoration: none;
+            }
+            /* END OF MOBILE GLOBAL STYLES - DO NOT CHANGE */
+        }
+
+        @media only screen and (max-width: 640px) {
+            .container {
+                width: 100% !important;
+            }
+
+            .logo {
+                display: block !important;
+                padding: 0 !important;
+            }
+
+            .photo img {
+                width: 100% !important;
+                height: auto !important;
+            }
+
+            .nav5,
+            .nav6 {
+                display: none !important;
+            }
+
+            .fluid,
+            .fluid-centered {
+                width: 100% !important;
+                max-width: 100% !important;
+                height: auto !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+
+            .fluid-centered {
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+        }
+    </style>
+    <!-- [if lte mso 11] ><style type="text/css" >  .buttonstyles {      width: 280px !important;      font-family: 'CoStar Brown', Helvetica, Arial, san-serif !important;  }    </style >
+    <![endif] -->
+    <!-- [if gt mso 15] ><style type="text/css" media="all" >  /* Outlook 2016 Height Fix */  table, tr, td {      border-collapse: collapse;  }    tr {      font-size: 0px;      line-height: 0px;      border-collapse: collapse;  }    </style >
+    <![endif] -->
+    <!-- [if gte mso 12] ><style type="text/css" media="all" >  /* Outlook 2007+ Width Fix */  body {      width: 600px !important;  }    </style >
+    <![endif] -->
+    <!-- [if mso] ><style type="text/css" >  /* Begin Outlook Font Fix */  body, table, td {      font-family: 'CoStar Brown', Helvetica, Arial, san-serif;      line-height: 100%;      font-size: 16px;      color: #000000;  }  /* End Outlook Font Fix */  p {      margin: 1em 0 !important;  }    </style >
+    <![endif] -->
+    <!-- [if mso] ><style type="text/css" media="all" >  .keep-black {      mso-style-textfill-type: gradient;      mso-style-textfill-fill-gradientfill-stoplist: "0 \#000000 1 100000\,99000 \#000000 1 100000";      color: #ffffff !important;  }    .keep-red {      mso-style-textfill-type: gradient;      mso-style-textfill-fill-gradientfill-stoplist: "0 \#CF0000 -1 100000\,100000 \#CF0000 -1 100000";      color: #CF0000 !important;  }    </style >
+    <![endif] -->
+    <!-- [if mso 9] ><style type="text/css" media="all" >  .keep-black {      mso-style-textfill-type: gradient;      mso-style-textfill-fill-gradientfill-stoplist: "0 \#000000 1 100000\,99000 \#000000 1 100000";      color: #ffffff !important;  }    .keep-red {      mso-style-textfill-type: gradient;      mso-style-textfill-fill-gradientfill-stoplist: "0 \#CF0000 -1 100000\,100000 \#CF0000 -1 100000";      color: #CF0000 !important;  }    </style >
+    <![endif] -->
+    <!-- [if (gte mso 9)|(IE)] ><style type="text/css" media="all" >  .keep-black {      mso-style-textfill-type: gradient;      mso-style-textfill-fill-gradientfill-stoplist: "0 \#000000 1 100000\,99000 \#000000 1 100000";      color: #ffffff !important;  }    .keep-red {      mso-style-textfill-type: gradient;      mso-style-textfill-fill-gradientfill-stoplist: "0 \#CF0000 -1 100000\,100000 \#CF0000 -1 100000";      color: #CF0000 !important;  }    </style >
+    <![endif] -->
+</head>
+<body style="margin: 0 !important; padding: 20px !important">
+    <div class="container" style="width: 640px !important; margin: 0 auto; padding: 20px; font-family: Arial, Helvetica, sans-serif;" align="center">
+        <table cellpadding="0" cellspacing="0" id="backgroundTable" align="center">
+            <tr>
+                <td align="center">
+                    <div id="tablewrap">
+                        <table id="contenttable" cellpadding="0" cellspacing="0" style="border: 1px solid #b1b3b0" align="center">
+                            <tr>
+                                <td style="padding: 0px 20px" align="center">
+                                    <table cellspacing="0" cellpadding="0" width="100%">
+                                        <tr>
+                                            <td style="text-align: center; padding-top: 24px" align="center">
+                                                <a href="https://url.us.m.mimecastprotect.com/s/4buwC4xw7gfkNp7KtOfjc4_cug?domain=link.mail.loopnet.com">
+                                                    <img src="https://www.loopnet.com/Content/images/logos/LoopNetLogoEmailTemplate.png" alt="LoopNet" height="45" style="height:45px;">
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                    <table id="contenttable" align="center" cellspacing="0" cellpadding="0" width="600" class="emailwrapto100pc">
+                                        <tr>
+                                            <td style=" padding: 46px 0 0" align="center">
+                                                <table width="600" align="center">
+                                                    <tbody>
+                                                        <!-- Title -->
+                                                        <tr>
+                                                            <td valign="top" style="padding: 0 0 0;  vertical-align: top;" colspan="2" align="left">
+                                                                <h1 id="welcome" style="font-size: 24px; margin: 0">
+                                                                    <text>New Lead</text>
+                                                                </h1>
+                                                            </td>
+                                                        </tr>
+                                                        <!-- Contact infos -->
+                                                        <tr>
+                                                            <td style="line-height: 150%; padding: 20px 0px 20px 0px" align="left">
+                                                                <span style="font-weight: bold">From: </span> Mac Dilani | +1 949-278-2993 | dilanigroup@gmail.com | (Listing ID : 38309608)
+                                                            </td>
+                                                        </tr>
+                                                            <tr>
+                                                                <td style="line-height: 150%; padding: 0px 0px 20px 0px" align="left">
+                                                                    <span style="font-weight: bold">To: </span> smartin@northmarq.com, Toby Scrivner, Scott Briggs, Anna Sidimirova, Kelly Largent, Nathanael Berwaldt, Aminatta Mbow
+                                                                </td>
+                                                            </tr>
+                                                        <!-- About the listing -->
+                                                        <tr align="center" valign="middle">
+                                                            <td width="600" align="center" class="modList primary bottomSpacing" style="padding: 0; line-height: 0;">
+                                                                <table width="100%" cellspacing="0" cellpadding="0" style="border: 1px solid #b1b3b0">
+                                                                    <tr>
+                                                                        <td>
+                                                                            <table width="100%" cellspacing="0" cellpadding="0" border="0">
+                                                                                <tr>
+                                                                                    <td>
+                                                                                        <table width="100%" cellspacing="0" cellpadding="0" border="0" style="padding: 24px 28px 28px; line-height: 150%">
+                                                                                            <tr style="padding-bottom: 0;">
+                                                                                                <td align="center" style="justify-content: center; display: flex; font-weight: bold;">
+                                                                                                    <a id="listingAddressLink" href="https://url.us.m.mimecastprotect.com/s/nIdsC5yx5jUNmVWLfOh5ckko3p?domain=link.mail.loopnet.com" style="color: #0080B5;width:100%;text-align:center;">20931 Burbank Blvd | Woodland Hills, CA 91367</a>
+                                                                                                </td>
+                                                                                            </tr>
+                                                                                            <tr>
+                                                                                                <td align="left" style="padding-top: 24px;">
+
+                                                                                                                                                                                                                                                                                                                <p>
+                                                                                                            Hi, I found Fresenius Medical Care | 20931 Burbank Blvd on LoopNet and would like to learn more about it. Thanks!
+                                                                                                        </p>
+                                                                                                </td>
+                                                                                            </tr>
+                                                                                        </table>
+                                                                                    </td>
+                                                                                </tr>
+                                                                                    <tr>
+                                                                                        <td align="center">
+                                                                                            <a id="listingPhotoLink" href="https://url.us.m.mimecastprotect.com/s/_dKtC68y5ktw2nGYSmi3c51swJ?domain=link.mail.loopnet.com">
+                                                                                                <img src="https://images1.apartments.com/i2/W2weMqJvA8ITR-3lHMwgga9JMiTq6nNPghJluFSiJPM/110/image.png" alt="20931 Burbank Blvd | Woodland Hills, CA 91367" width="600" style="width:600px;">
+                                                                                            </a>
+                                                                                        </td>
+                                                                                    </tr>
+                                                                            </table>
+                                                                        </td>
+                                                                    </tr>
+                                                                </table>
+                                                            </td>
+                                                        </tr>
+                                                        <!-- CTA See My Leads -->
+                                                            <tr style="justify-content: center;">
+                                                                <td align="center">
+                                                                    <table border="0" cellspacing="0" cellpadding="0">
+                                                                        <tr>
+                                                                            <td>&nbsp;</td>
+                                                                        </tr>
+                                                                        <tr>
+                                                                            <td id="viewMyLeadsButton" style="background-color: #cf0000; border-radius: 4px; padding: 16px 32px 14px 32px;">
+                                                                                <a href="https://url.us.m.mimecastprotect.com/s/PXQOC73z5lf75OW1fNs5co_7pd?domain=link.mail.loopnet.com" style="color: #fff; text-decoration: none" width="173px" align="center"> View My Leads </a>
+                                                                            </td>
+                                                                        </tr>
+                                                                        <tr>
+                                                                            <td>&nbsp;</td>
+                                                                        </tr>
+                                                                    </table>
+                                                                </td>
+                                                            </tr>
+                                                    </tbody>
+                                                </table>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </td>
+                            </tr>
+                            <!-- Footer -->
+                            <tr>
+                                <td style="padding: 20px 0px; background-color: #f2f2f2; display: flex; flex-direction: column; align-items: center;" width="640" align="center">
+                                    <table width="100%">
+                                        <tbody>
+                                                <tr>
+                                                    <td>
+                                                        <table border="0" cellspacing="0" cellpadding="0" width="640" style="padding-bottom: 45px">
+                                                            <tr>
+                                                                <td>
+                                                                    <p style="text-align: left; margin-left: 32px; font-weight: bold">  Make sure your listing information is up to date. </p>
+                                                                    <p style="text-align: left; margin-left: 32px; color: #63666a; margin-top: 32px; margin-bottom: 56px;">   Visit the Marketing Center to edit your listing. </p>
+                                                                    <!-- Link to Marketing Center -->
+                                                                    <table border="0" cellspacing="0" cellpadding="0" align="center">
+                                                                        <tr>
+                                                                            <td id="visitMarketingCenterButton" style="background-color: #cf0000; border-radius: 4px; padding: 16px 32px 14px 32px">
+                                                                                <a href="https://url.us.m.mimecastprotect.com/s/ncT1C82A5mS4V7wpFotjcyC5IU?domain=link.mail.loopnet.com" style="color: #fff; text-decoration: none" width="173px" align="center"> Visit Marketing Center </a>
+                                                                            </td>
+                                                                        </tr>
+                                                                    </table>
+                                                                </td>
+                                                                <td align="right">
+                                                                    <img src="https://lib.csgpmarketplace.com/cdn/web-analytics/v1/email/CroppedLoopNetListingStatsPage.png" alt="Previewing a page on LoopNet" height="264" width="231" style="height: 264px; width: 231px">
+                                                                </td>
+                                                            </tr>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+                                            <tr>
+                                                <td>
+                                                    <table border="0" cellspacing="0" cellpadding="0" width="640">
+                                                        <tr>
+                                                            <td>
+                                                                <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                    <tr>
+                                                                        <td style="padding: 32px 25px 10px 25px; " class="stylingblock-content-wrapper camarker-inner">
+                                                                            <table cellspacing="0" cellpadding="0" role="presentation" style="width: 100%;">
+                                                                                <tr>
+                                                                                    <td>
+                                                                                        <table cellspacing="0" cellpadding="0" role="presentation" style="width: 100%;">
+                                                                                            <tr>
+                                                                                                <td valign="top" class="responsive-td" style="width: 60%; padding-bottom: 0px; padding-right: 0px;">
+                                                                                                    <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="background-color: transparent; min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                                                        <tr>
+                                                                                                            <td style="padding: 0px 0px 18px; " class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                <table width="100%" cellspacing="0" cellpadding="0" role="presentation">
+                                                                                                                    <tr>
+                                                                                                                        <td align="left">
+                                                                                                                            <a href="https://url.us.m.mimecastprotect.com/s/5AwFC9rB5nf7y5YEf1uJcqhWZN?domain=link.mail.loopnet.com" title="" alias="" conversion="false" data-linkto="https://">
+                                                                                                                                <img data-assetid="812612" src="https://lib.csgpmarketplace.com/cdn/web-analytics/v1/assets/logos/160x40_LN_LoopNet_Logo_grey.png" alt="" height="40" width="160" style="display: block; padding: 0px; text-align: left; height: 40px; width: 160px; border: 0px;" class="imagealign footer-img">
+                                                                                                                            </a>
+                                                                                                                        </td>
+                                                                                                                    </tr>
+                                                                                                                </table>
+                                                                                                            </td>
+                                                                                                        </tr>
+                                                                                                    </table>
+                                                                                                </td>
+                                                                                                <td valign="top" class="responsive-td" style="width: 40%; padding-bottom: 0px; padding-left: 0px;">
+                                                                                                    <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="background-color: transparent; min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                                                        <tr>
+                                                                                                            <td style="padding: 4px 0px 22px; " class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="background-color: transparent; min-width: 100%; " class="slot-styling">
+                                                                                                                    <tr>
+                                                                                                                        <td style="padding: 0px; " class="slot-styling camarker-inner">
+                                                                                                                            <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="background-color: transparent; min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                                                                                <tr>
+                                                                                                                                    <td class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                                        <table cellspacing="0" cellpadding="0" role="presentation" style="width: 100%;">
+                                                                                                                                            <tr>
+                                                                                                                                                <td>
+                                                                                                                                                    <table cellspacing="0" cellpadding="0" role="presentation" style="width: 100%;">
+                                                                                                                                                        <tr>
+                                                                                                                                                            <td valign="top" style="width: 25%; padding-right: 3px;">
+                                                                                                                                                                <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                                                                                                                    <tr>
+                                                                                                                                                                        <td class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                                                                            <table width="100%" cellspacing="0" cellpadding="0" role="presentation">
+                                                                                                                                                                                <tr>
+                                                                                                                                                                                    <td align="center">
+                                                                                                                                                                                        <a href="https://url.us.m.mimecastprotect.com/s/t77wC0Rp64fPORrwiLC6c9PpYM?domain=link.mail.loopnet.com" title="" alias="" conversion="false" data-linkto="https://">
+                                                                                                                                                                                            <img class="footer-img" data-assetid="812611" src="https://lib.csgpmarketplace.com/cdn/web-analytics/v1/assets/logos/31x30_LN_LinkedIn_grey.png" alt="LoopNet LinkedIn" height="30" width="31" style="display: block; padding: 0px; text-align: center; height: 30px; width: 31px; border: 0px;">
+                                                                                                                                                                                        </a>
+                                                                                                                                                                                    </td>
+                                                                                                                                                                                </tr>
+                                                                                                                                                                            </table>
+                                                                                                                                                                        </td>
+                                                                                                                                                                    </tr>
+                                                                                                                                                                </table>
+                                                                                                                                                            </td>
+                                                                                                                                                            <td valign="top" style="width: 25%; padding-left: 3px; padding-right: 3px;">
+                                                                                                                                                                <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                                                                                                                    <tr>
+                                                                                                                                                                        <td class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                                                                            <table width="100%" cellspacing="0" cellpadding="0" role="presentation">
+                                                                                                                                                                                <tr>
+                                                                                                                                                                                    <td align="center">
+                                                                                                                                                                                        <a href="https://url.us.m.mimecastprotect.com/s/OS5OCgJKgviQXLYZUKFOc4qvAz?domain=link.mail.loopnet.com" title="" alias="" conversion="false" data-linkto="https://">
+                                                                                                                                                                                            <img class="footer-img" data-assetid="812613" src="https://lib.csgpmarketplace.com/cdn/web-analytics/v1/assets/logos/31x30_LN_Facebook_grey.png" alt="LoopNet Facebook" height="30" width="31" style="display: block; padding: 0px; text-align: center; height: 30px; width: 31px; border: 0px;">
+                                                                                                                                                                                        </a>
+                                                                                                                                                                                    </td>
+                                                                                                                                                                                </tr>
+                                                                                                                                                                            </table>
+                                                                                                                                                                        </td>
+                                                                                                                                                                    </tr>
+                                                                                                                                                                </table>
+                                                                                                                                                            </td>
+                                                                                                                                                            <td valign="top" style="width: 25%; padding-left: 3px; padding-right: 3px;">
+                                                                                                                                                                <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                                                                                                                    <tr>
+                                                                                                                                                                        <td class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                                                                            <table width="100%" cellspacing="0" cellpadding="0" role="presentation">
+                                                                                                                                                                                <tr>
+                                                                                                                                                                                    <td align="center">
+                                                                                                                                                                                        <a href="https://url.us.m.mimecastprotect.com/s/SPD_CjRMlyfNL7yQfMHGcmQXob?domain=link.mail.loopnet.com" title="" alias="" conversion="false" data-linkto="https://">
+                                                                                                                                                                                            <img class="footer-img" data-assetid="812609" src="https://lib.csgpmarketplace.com/cdn/web-analytics/v1/assets/logos/31x30_LN_Instagram_grey.png" alt="LoopNet Instagram" height="30" width="31" style="display: block; padding: 0px; text-align: center; height: 30px; width: 31px; border: 0px;">
+                                                                                                                                                                                        </a>
+                                                                                                                                                                                    </td>
+                                                                                                                                                                                </tr>
+                                                                                                                                                                            </table>
+                                                                                                                                                                        </td>
+                                                                                                                                                                    </tr>
+                                                                                                                                                                </table>
+                                                                                                                                                            </td>
+                                                                                                                                                            <td valign="top" style="width: 25%; padding-left: 3px;">
+                                                                                                                                                                <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="min-width: 100%; " class="stylingblock-content-wrapper">
+                                                                                                                                                                    <tr>
+                                                                                                                                                                        <td class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                                                                            <table width="100%" cellspacing="0" cellpadding="0" role="presentation">
+                                                                                                                                                                                <tr>
+                                                                                                                                                                                    <td align="center">
+                                                                                                                                                                                        <a href="https://url.us.m.mimecastprotect.com/s/gW4TCkRKmzfGVMqztDImcGhr3f?domain=link.mail.loopnet.com" title="" alias="" conversion="false" data-linkto="https://">
+                                                                                                                                                                                            <img class="footer-img" data-assetid="812610" src="https://lib.csgpmarketplace.com/cdn/web-analytics/v1/assets/logos/30x30_LN_YouTube_grey.png" alt="LoopNet YouTube" height="30" width="30" style="display: block; padding: 0px; text-align: center; height: 30px; width: 30px; border: 0px;">
+                                                                                                                                                                                        </a>
+                                                                                                                                                                                    </td>
+                                                                                                                                                                                </tr>
+                                                                                                                                                                            </table>
+                                                                                                                                                                        </td>
+                                                                                                                                                                    </tr>
+                                                                                                                                                                </table>
+                                                                                                                                                            </td>
+                                                                                                                                                        </tr>
+                                                                                                                                                    </table>
+                                                                                                                                                </td>
+                                                                                                                                            </tr>
+                                                                                                                                        </table>
+                                                                                                                                    </td>
+                                                                                                                                </tr>
+                                                                                                                            </table>
+                                                                                                                        </td>
+                                                                                                                    </tr>
+                                                                                                                </table>
+                                                                                                            </td>
+                                                                                                        </tr>
+                                                                                                    </table>
+                                                                                                </td>
+                                                                                            </tr>
+                                                                                        </table>
+                                                                                    </td>
+                                                                                </tr>
+                                                                                <tr>
+                                                                                    <td>
+                                                                                        <table cellspacing="0" cellpadding="0" role="presentation" style="width: 100%;">
+                                                                                            <tr>
+                                                                                                <td valign="top" class="responsive-td" style="width: 100%; padding-top: 0px;">
+                                                                                                    <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="background-color: transparent; min-width: 100%; border-top: 2px solid #C6C6C6; border-right: 0px; border-bottom: 0px; border-left: 0px; " class="stylingblock-content-wrapper">
+                                                                                                        <tr>
+                                                                                                            <td style="padding: 22px 0px 0px; " class="stylingblock-content-wrapper camarker-inner">
+                                                                                                                <div style="color: #63666A; font-family: 'CoStar Brown', Helvetica, Arial, san-serif; font-size: 12px; line-height: 16px; font-weight:300; text-align:left;" class="textalign">
+                                                                                                                    &copy;&nbsp;2026 CoStar Group, Inc. <br> 1201 Wilson Boulevard, Arlington, VA 22209 <br>
+                                                                                                                    
+                                                                                                                                                                                                                                            <a alias="Privacy Policy" conversion="false" href="https://url.us.m.mimecastprotect.com/s/QDCTClYLnAT4JBzNFLSnczENSp?domain=link.mail.loopnet.com" style="color:#63666A; font-family:'CoStar Brown', Helvetica, Arial, san-serif; font-size: 12px; font-weight:300; text-decoration: underline;" title="Privacy Policy"> Privacy Policy</a>
+                                                                                                                                                                                                                                                                                                                                                                <br>
+                                                                                                                                                                                                                                    </div>
+                                                                                                            </td>
+                                                                                                        </tr>
+                                                                                                    </table>
+                                                                                                </td>
+                                                                                            </tr>
+                                                                                        </table>
+                                                                                    </td>
+                                                                                </tr>
+                                                                            </table>
+                                                                        </td>
+                                                                    </tr>
+                                                                </table>
+                                                            </td>
+                                                        </tr>
+                                                    </table>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 32px 25px 10px 25px">
+                                                    <p style="color: #a7a7a7; line-height: 20px; margin: 8px 0;"> Reference code: LL-5986448-en-US </p>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                </td>
+            </tr>
+        </table>
+            <!-- Mobile App Footer -->
+            <table width="640" align="center" style="background-color:#ffffff; text-align:center !important; margin-top: 10px !important; margin-right: auto !important; margin-bottom:0 !important; margin-left: auto !important; width: 100% !important; max-width: 640px !important;">
+                <tbody>
+                    <tr>
+                        <td valign="top" style="font-family: Arial,Helvetica,sans-serif; text-align:left; padding: 20px; color: #63666a; vertical-align: top; text-align: center; max-width: 640px;">
+                            <p style="font-size: 15px; margin: 0 0 8px 0; color: #000000;">
+                                <strong>Find your next space on the go!</strong>
+                            </p>
+                            <p style="font-size: 15px; margin: 0 0 8px 0;">Leverage the power of LoopNet anytime, anywhere with our mobile apps.</p>
+                            <center>
+                                <table>
+                                    <tbody>
+                                        <tr>
+                                            <td style="padding-right: 5px;">
+                                                <a href="https://url.us.m.mimecastprotect.com/s/Qd7xCmZ6oBS4wmRNFVTDcR1DHz?domain=link.mail.loopnet.com" target="_blank" rel="noopener" track-click="2427">
+                                                    <img class="apple" src="https://www.loopnet.com/content/images/email-templates/en/DownloadOnAppStore.png?v=1" width="134" height="45" style="height: 45px; width: auto;" alt="Apple App Store">
+                                                </a>
+                                            </td>
+                                            <td style="padding-left: 5px;">
+                                                <a href="https://url.us.m.mimecastprotect.com/s/uu-1Cn5XpDCB0J6NU4UBcJrx66?domain=link.mail.loopnet.com" target="_blank" rel="noopener" track-click="2428">
+                                                    <img class="google" src="https://www.loopnet.com/content/images/email-templates/en/GetItOnGooglePlay.png?v=1" width="152" height="45" style="height: 45px; width: auto;" alt="Google Play Store">
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </center>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+<img src="https://link.mail.loopnet.com/wf/open?upn=u001.ZmaGbwXaSSvhOUVFokewnkah5-2BYzDBMmuDol9g6gy-2BMNCjFSSNzsiiUokbIpySskGoVS3RDKrlKMKhbPz8HUnt5G43k31tB1m1tU8zjT-2FMYoftobZOu5eINqB5dWfFFFLdlWGdB7FxoA68LSCBWRZNALWuwc5JMw7LRzUK7DaYLvkp87Hc1RWVChiSLdepz77o1acHHQpPANM0S0R1nDXjYg2TBHWQgbQoP-2FfNYKEaqmgphSSSMbVq77T4qp4tw46KLhrH1cfrf9ln3VJGSgmA-3D-3D" alt="" width="1" height="1" border="0" style="height:1px !important;width:1px !important;border-width:0 !important;margin-top:0 !important;margin-bottom:0 !important;margin-right:0 !important;margin-left:0 !important;padding-top:0 !important;padding-bottom:0 !important;padding-right:0 !important;padding-left:0 !important;"></body>
+</html>
+
