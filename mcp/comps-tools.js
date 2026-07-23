@@ -130,15 +130,34 @@ function isMultiTenant(c) {
   if (leased && rba && leased < rba * 0.9) return true;
   return false;
 }
-// Multi-tenant naming: "[property abbrev] ([anchor/largest tenant])" — e.g. MOB (VA), MT (SSA),
-// Park Place MOB (Concentra). The anchor is the RPC-computed largest-by-SF tenant (anchor_tenant)
-// when present, else the recorded agency. Single-tenant comps keep the tenant/agency name unchanged.
-function displayName(c) {
+// Asset class the REQUEST is focused on (from property_types) -> building abbreviation.
+function requestedAssetAbbr(reqTypes) {
+  const t = (reqTypes || []).map(x => String(x).toLowerCase());
+  if (t.some(x => /medic|health|dialysis|clinic|mob/.test(x))) return 'MOB';
+  if (t.some(x => /retail/.test(x))) return 'Retail';
+  if (t.some(x => /industrial|warehouse|flex/.test(x))) return 'Industrial';
+  if (t.some(x => /office/.test(x))) return 'Office';
+  return null;
+}
+// Multi-tenant naming, REQUEST-AWARE (Scott's house style): a medical/dialysis request leads with
+// the asset type — MOB (VA); a government request leads with MT — MT (SSA), adding the use when one
+// is specified — MT Office (SSA); a comp whose use differs from the request shows MT + the actual use
+// — MT Retail (DaVita). Anchor = RPC largest-by-SF tenant (anchor_tenant) else recorded agency.
+// A real property name wins (Park Place MOB (Concentra)). Single-tenant names are unchanged.
+function displayName(c, ctx) {
+  ctx = ctx || {};
   if (!isMultiTenant(c)) return (c.agency || c.tenant) || null;
   const anchor = c.anchor_tenant || c.agency || c.tenant || '';
   const named = String((c.raw || {}).property_name || '').trim();
-  const abbr = named || _USE_ABBR[normalizeUse(c)] || 'MT';
-  return anchor ? `${abbr} (${anchor})` : abbr;
+  if (named) return anchor ? `${named} (${anchor})` : named;
+  const reqAbbr = requestedAssetAbbr(ctx.property_types);
+  const useAbbr = _USE_ABBR[normalizeUse(c)] || null;
+  let prefix;
+  if (reqAbbr === 'MOB') prefix = 'MOB';                                   // medical/dialysis request
+  else if (ctx.government_only) prefix = reqAbbr ? `MT ${reqAbbr}` : 'MT';  // MT (SSA) / MT Office (SSA)
+  else if (reqAbbr) prefix = (useAbbr === reqAbbr) ? reqAbbr : `MT ${useAbbr || reqAbbr}`;
+  else prefix = useAbbr || 'MT';
+  return anchor ? `${prefix} (${anchor})` : prefix;
 }
 // Reliability of a comp's NOI/cap for DEFAULT inclusion. Reliable = a human-sourced NOI/cap
 // OR a NOI rolled from a prior actual NOI with captured escalations. NOT reliable = a pure
@@ -240,7 +259,7 @@ export async function runComps(args, deps) {
   // Normalize the `use` tag + apply the multi-tenant display name on every comp.
   for (const c of merged) {
     c.use = normalizeUse(c);
-    const dn = displayName(c);
+    const dn = displayName(c, { property_types: args.property_types, government_only: params.p_government_only });
     if (dn) { c.tenant = dn; if (c.agency != null) c.agency = dn; }
   }
   // Government post-filter: when government_only, drop any non-government comp that slipped
