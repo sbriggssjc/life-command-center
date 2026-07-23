@@ -468,9 +468,10 @@ function parseRcmEmail(rawBody: string, subject: string | null) {
 // against v_sjc_deal_book (on DIA); anything ambiguous or unmatched leaves both
 // null. Never throws — a match miss can never fail the ingest.
 //
-// The durable fix is a persisted `loopnet_listing_id -> sf_listing_id` map (the
-// LoopNet listing id is captured on the parse as `loopnet_listing_id`); this
-// address matcher is the best we can do until that map exists.
+// This is the SEED path for the durable `loopnet_listing_map`: resolveLoopNetLink
+// reads the map first (a persisted / manually-seeded mapping links instantly) and
+// only falls through to this address matcher when the LoopNet listing id is not
+// yet mapped — then persists the confident match so future emails link via the map.
 function normalizeAddress(s: string | null | undefined): string {
   return (s || "")
     .toLowerCase()
@@ -507,6 +508,67 @@ async function matchLoopNetListing(
     }
   } catch (err) {
     console.warn("[lead-ingest] LoopNet listing match skipped:", (err as Error).message);
+  }
+  return out;
+}
+
+// ── LoopNet listing linkage: map-first, then address match + auto-seed ──────
+// LoopNet emails carry a LoopNet Listing ID (not our SF ids), so we keep a
+// durable `loopnet_listing_map` (loopnet_listing_id -> sf_listing_id/sf_deal_id).
+// Resolution order:
+//   1. MAP FIRST — a persisted or manually-seeded mapping links instantly and is
+//      authoritative (a manual correction always wins).
+//   2. Otherwise the best-effort exact-address match (matchLoopNetListing).
+//   3. On a confident match for a lead carrying a LoopNet id, SEED the map so
+//      every future email for that listing links via step 1. resolution=
+//      ignore-duplicates so an auto-match never clobbers a manual seed.
+// Never throws — a match miss / DB hiccup can never fail the ingest.
+async function resolveLoopNetLink(
+  parsed: { loopnet_listing_id?: string | null; property_address?: string | null; property_state?: string | null },
+): Promise<{ listing_id: string | null; sf_opportunity_id: string | null; sf_match_method: string | null }> {
+  const out = { listing_id: null as string | null, sf_opportunity_id: null as string | null, sf_match_method: null as string | null };
+  const lnId = (parsed.loopnet_listing_id || "").trim();
+
+  // 1) Map first.
+  if (lnId) {
+    try {
+      const res = await diaFetch(
+        `loopnet_listing_map?loopnet_listing_id=eq.${encodeURIComponent(lnId)}&select=sf_listing_id,sf_deal_id,matched_via&limit=1`,
+        "GET",
+      );
+      if (res.ok) {
+        const rows = await res.json();
+        const row = Array.isArray(rows) ? rows[0] : null;
+        if (row && (row.sf_listing_id || row.sf_deal_id)) {
+          out.listing_id = (row.sf_listing_id as string) || null;
+          out.sf_opportunity_id = (row.sf_deal_id as string) || null;
+          out.sf_match_method = `loopnet_map:${(row.matched_via as string) || "seed"}`;
+          return out;
+        }
+      }
+    } catch (err) {
+      console.warn("[lead-ingest] loopnet_listing_map lookup skipped:", (err as Error).message);
+    }
+  }
+
+  // 2) No map hit — best-effort exact-address match.
+  const link = await matchLoopNetListing(parsed);
+  out.listing_id = link.listing_id;
+  out.sf_opportunity_id = link.sf_opportunity_id;
+  out.sf_match_method = link.sf_match_method;
+
+  // 3) Seed the map from a confident match (keyed by the LoopNet listing id).
+  if (lnId && (out.listing_id || out.sf_opportunity_id)) {
+    try {
+      await diaFetch("loopnet_listing_map", "POST", {
+        loopnet_listing_id: lnId,
+        sf_listing_id: out.listing_id,
+        sf_deal_id: out.sf_opportunity_id,
+        matched_via: link.sf_match_method || "loopnet_address_exact",
+      }, "return=minimal,resolution=ignore-duplicates");
+    } catch (err) {
+      console.warn("[lead-ingest] loopnet_listing_map seed skipped:", (err as Error).message);
+    }
   }
   return out;
 }
@@ -778,10 +840,10 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
 
   const parsed = sanitizeLeadName(parseLoopNetEmail(raw_body as string, emailSubject));
 
-  // Best-effort SF listing linkage: stamp listing_id (= SF listing id) +
-  // sf_opportunity_id (= SF deal id) only on a unique exact address match; leave
-  // both null otherwise. Never fails the ingest.
-  const link = await matchLoopNetListing(parsed);
+  // SF listing linkage: the durable map first (a persisted/manual mapping links
+  // instantly), else the best-effort exact-address match, which seeds the map for
+  // next time. Leaves ids null when unresolved; never fails the ingest.
+  const link = await resolveLoopNetLink(parsed);
 
   const insertPayload = {
     source: "loopnet", source_ref: source_ref || null,
@@ -791,6 +853,7 @@ async function handleLoopNetIngest(req: Request, body: Record<string, unknown> |
     deal_name: parsed.deal_name,
     property_address: parsed.property_address, property_city: parsed.property_city,
     property_state: parsed.property_state,
+    loopnet_listing_id: parsed.loopnet_listing_id,
     listing_id: link.listing_id, sf_opportunity_id: link.sf_opportunity_id,
     sf_match_method: link.sf_match_method,
     activity_type: parsed.activity_type, activity_detail: parsed.message,
