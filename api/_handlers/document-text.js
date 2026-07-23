@@ -39,7 +39,7 @@ import { processDeedDocument, propagateStoredDeedExtraction } from './deed-parse
 // testable; the worker injects the production wiring.
 import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
-import { granteePassesOwnerGuards, resolveDeedRecordedOwner, writeOwnerMailingAddress, writeLoanFromDeed, writeDeedPartyContact } from './sidebar-pipeline.js';
+import { granteePassesOwnerGuards, resolveDeedRecordedOwner, writeOwnerMailingAddress, writeLoanFromDeed, writeDeedPartyContact, fetchAndStoreDocBytes } from './sidebar-pipeline.js';
 import { openResearchTask } from '../_shared/research-task.js';
 
 /**
@@ -88,6 +88,70 @@ export async function fetchEligibleDocs(domain, { limit, doctype }, deps = {}) {
   const r = await q(domain, 'GET', path);
   if (!r.ok) return { ok: false, status: r.status, detail: r.data };
   return { ok: true, rows: Array.isArray(r.data) ? r.data : [] };
+}
+
+// Build-1 Unit 2 — terminal marker for a URL-only doc whose stored source_url is
+// dead (the CDN link expired before we ever fetched the bytes). Retiring the row
+// (vs leaving it 'url_captured') keeps the pending count honest and stops the
+// refetch pass re-hammering a permanently-dead link.
+export const URL_EXPIRED_TERMINAL = 'url_expired';
+
+/**
+ * Build-1 Unit 2 — the refetch-or-retire backlog: URL-only property_documents
+ * (bytes never captured at ingestion) whose CDN source_url MIGHT still be live.
+ * These can NEVER be processed by the storage-only OCR path, so we try the stored
+ * source_url once: success → store bytes + storage_path (drops into Unit-1's
+ * storage-ready path); dead link → terminal 'url_expired' (drops out). Ordered
+ * newest-first; the cap + repeat-tick model drains the whole set. Excludes
+ * already-retired rows so a re-run is idempotent.
+ */
+export async function fetchUrlBackfillDocs(domain, { limit, doctype }, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  let path =
+    'property_documents?raw_text=is.null&storage_path=is.null&source_url=not.is.null' +
+    `&or=(ingestion_status.is.null,ingestion_status.not.in.(${URL_EXPIRED_TERMINAL},deed_parsed,${DEED_NO_PARTIES_TERMINAL}))` +
+    '&select=document_id,property_id,source_url,document_type,file_name,ingestion_status' +
+    `&order=document_id.desc&limit=${limit}`;
+  if (doctype && doctype !== 'all') path += `&document_type=ilike.*${encodeURIComponent(doctype)}*`;
+  const r = await q(domain, 'GET', path);
+  if (!r.ok) return { ok: false, status: r.status, detail: r.data };
+  return { ok: true, rows: Array.isArray(r.data) ? r.data : [] };
+}
+
+/**
+ * Build-1 Unit 2 — refetch ONE url-only doc's bytes from its source_url and store
+ * them (→ storage-ready), or retire it as 'url_expired' when the link is dead.
+ * A TRANSIENT (upload) / CONFIG failure is left pending for a later tick — only a
+ * fetch-side failure (dead link, non-2xx, too-large, empty) retires the row.
+ * Outcomes: refetched | retired_url_expired | still_pending
+ */
+export async function processOneUrlRefetch(domain, row, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const store = deps.fetchAndStoreDocBytes || fetchAndStoreDocBytes;
+
+  const stored = await store(domain, {
+    docId: row.document_id, propertyId: row.property_id, sourceUrl: row.source_url,
+    documentType: row.document_type, fileName: row.file_name,
+  }, deps);
+
+  if (stored.ok) {
+    await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+      { storage_path: stored.storage_path, storage_bucket: stored.storage_bucket, ingestion_status: 'bytes_captured' },
+      { Prefer: 'return=minimal' }).catch(() => {});
+    return { document_id: row.document_id, outcome: 'refetched', storage_path: stored.storage_path };
+  }
+
+  // A transient upload / config problem is NOT a dead link — leave it pending.
+  const NOT_RETIRE = new Set(['upload_failed', 'domain_db_not_configured', 'no_absolute_url', 'no_doc_id']);
+  if (NOT_RETIRE.has(stored.reason)) {
+    return { document_id: row.document_id, outcome: 'still_pending', reason: stored.reason };
+  }
+
+  // Dead / expired link → terminal 'url_expired' so it stops counting as pending
+  // and is never re-hammered. Reversible: a status flip, not a delete.
+  await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+    { ingestion_status: URL_EXPIRED_TERMINAL }, { Prefer: 'return=minimal' }).catch(() => {});
+  return { document_id: row.document_id, outcome: 'retired_url_expired', reason: stored.reason };
 }
 
 // R58c — the terminal "no parties" marker. Bumped from the bare 'deed_no_parties'
@@ -349,6 +413,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   // deeds already parsed with a clean grantee (no re-parse / no OCR), for the
   // deeds parsed before R59 shipped whose Step 6 never ran.
   const propagateBackfill = mode === 'propagate-backfill';
+  // Build-1 Unit 2 — refetch-or-retire the url-only backlog (bytes never captured
+  // at ingestion). Fetches source_url once → stores bytes, else retires 'url_expired'.
+  const urlRefetch = mode === 'refetch-url';
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '15', 10)));
   const doctype = (req.query.doctype || 'deed').toLowerCase();          // default the headline lane
   const domainParam = (req.query.domain || 'both').toLowerCase();
@@ -356,11 +423,13 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   const tickBudgetMs = Math.max(5000, parseInt(process.env.DOC_TEXT_TICK_BUDGET_MS || '22000', 10));
 
   const result = {
-    mode: (propagateBackfill ? 'propagate-backfill' : reparse ? 'reparse' : 'drain') + (dryRun ? '_dry_run' : ''),
-    doctype, limit, reparse, propagate_backfill: propagateBackfill,
+    mode: (urlRefetch ? 'refetch-url' : propagateBackfill ? 'propagate-backfill' : reparse ? 'reparse' : 'drain') + (dryRun ? '_dry_run' : ''),
+    doctype, limit, reparse, propagate_backfill: propagateBackfill, url_refetch: urlRefetch,
     by_domain: {},
     scanned: 0, text_extracted: 0, deed_parsed: 0, needs_ocr: 0, no_source: 0, error: 0,
     no_parties: 0, no_text: 0, propagated: 0, skipped: 0,
+    // Build-1 Unit 2 — refetch-or-retire counters.
+    refetched: 0, retired_url_expired: 0, still_pending: 0,
     deed_records_created: 0, r51_fed: 0, sales_verified: 0, implied_prices_filled: 0,
     // R59 — BD-spine propagation effects (deed Units 1-4).
     sale_parties_filled: 0, ownership_events: 0, suspected_sales: 0, grantee_entities: 0,
@@ -373,7 +442,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   const deadline = Date.now() + tickBudgetMs;
   for (const domain of domains) {
     const short = domain === 'dialysis' ? 'dia' : 'gov';
-    const eligible = propagateBackfill
+    const eligible = urlRefetch
+      ? await fetchUrlBackfillDocs(domain, { limit, doctype }, deps)
+      : propagateBackfill
       ? await fetchPropagateBackfillDocs(domain, { limit }, deps)
       : reparse
       ? await fetchReparseDocs(domain, { limit }, deps)
@@ -390,7 +461,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
 
     for (const row of eligible.rows) {
       if (Date.now() > deadline) break;
-      const r = propagateBackfill
+      const r = urlRefetch
+        ? await processOneUrlRefetch(domain, row, deps)
+        : propagateBackfill
         ? await processOnePropagateBackfill(domain, row, deps)
         : reparse ? await processOneReparse(domain, row, deps) : await processOneDoc(domain, row, deps);
       r.domain = short;

@@ -18,7 +18,8 @@
 
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
-import { opsQuery, insertEntityRelationship } from '../_shared/ops-db.js';
+import { opsQuery, insertEntityRelationship, fetchWithTimeout } from '../_shared/ops-db.js';
+import { uploadArtifactToStorage } from '../_shared/artifact-storage.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { getCadenceState, entityHasBdSignal } from '../_shared/cadence-engine.js';
@@ -2253,6 +2254,122 @@ export function isJunkContactName(name) {
   return false;
 }
 
+// ── Deed / document byte capture-at-ingestion (Build 1) ───────────────
+//
+// We were LOSING the deed: the sidebar captured the CoStar CDN URL
+// (ahprd1cdn.csgpimgs.com/…) and NEVER the bytes; the CDN links expire, and the
+// storage-only document-text-tick worker can never process a url-only doc — so a
+// captured deed sat permanently unprocessable. The CDN link IS valid at the
+// MOMENT of capture, so we fetch + store the bytes then. Strictly additive /
+// best-effort: any failure leaves the url_captured row exactly as before.
+//
+// storage_path convention here is the DOMAIN `property-documents` bucket:
+//   storage_path  = <objectPath> (WITHIN the bucket, NO bucket prefix)
+//   storage_bucket = 'property-documents'
+// which is exactly what intake-prepare-upload.js writes and what
+// document-text.js::buildStorageGet reads (it prefixes the bucket itself). Do NOT
+// use the LCC `lcc-om-uploads` '<bucket>/<path>' convention here.
+export const PROPERTY_DOC_BUCKET = 'property-documents';
+
+// Bounded so a giant or hung download can't stall the sidebar write path.
+const DOC_BYTES_MAX     = Number(process.env.DOC_CAPTURE_MAX_BYTES   || 25_000_000);   // ~25 MB
+const DOC_BYTES_TIMEOUT = Number(process.env.DOC_CAPTURE_TIMEOUT_MS  || 15_000);        // 15 s
+
+function docBytesShortDomain(domain) {
+  return /^(dia|dialysis)$/i.test(domain) ? 'dia' : 'gov';
+}
+function docBytesSeg(s, fallback) {
+  const v = String(s ?? '').toLowerCase().replace(/[^\w.\-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return v || fallback;
+}
+function docBytesExt(fileName, sourceUrl) {
+  const m = /\.([a-z0-9]{2,6})(?:[?#]|$)/i.exec(String(fileName || '')) ||
+            /\.([a-z0-9]{2,6})(?:[?#]|$)/i.exec(String(sourceUrl || ''));
+  return (m?.[1] || 'pdf').toLowerCase();
+}
+
+/**
+ * Deterministic object path keyed on (domain, doctype, property_id, document_id)
+ * so a re-capture of the same (property_id, file_name) — which upserts the SAME
+ * document_id — overwrites the same object (x-upsert) rather than duplicating.
+ */
+export function documentObjectPath({ domain, documentType, propertyId, docId, fileName, sourceUrl }) {
+  const dom = docBytesShortDomain(domain);
+  const dt  = docBytesSeg(documentType, 'other');
+  const pid = docBytesSeg(propertyId, 'unknown');
+  const ext = docBytesExt(fileName, sourceUrl);
+  return `${dom}/${dt}/${pid}/${docId}.${ext}`;
+}
+
+/**
+ * Fetch a document's bytes from its (fresh) source_url and store them in the
+ * domain `property-documents` bucket. Does NOT write property_documents — returns
+ * the storage descriptor for the caller to PATCH. Bounded (size cap + timeout),
+ * best-effort (never throws), deps-injected for testing.
+ *
+ * @returns {Promise<{ok:true, storage_path, storage_bucket, bytes}
+ *                  | {ok:false, reason, status?, detail?}>}
+ */
+export async function fetchAndStoreDocBytes(domain, { docId, propertyId, sourceUrl, documentType, fileName }, deps = {}) {
+  if (docId == null) return { ok: false, reason: 'no_doc_id' };
+  if (!sourceUrl || !/^https?:\/\//i.test(String(sourceUrl))) return { ok: false, reason: 'no_absolute_url' };
+  const getCreds = deps.getDomainCredentials || getDomainCredentials;
+  const creds = getCreds(domain);
+  if (!creds) return { ok: false, reason: 'domain_db_not_configured' };
+
+  const doFetch = deps.fetchImpl || ((u, o) => fetchWithTimeout(u, o, DOC_BYTES_TIMEOUT));
+  let res;
+  try {
+    res = await doFetch(sourceUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (LCC document-capture)' } });
+  } catch (err) {
+    return { ok: false, reason: 'fetch_threw', detail: err?.message?.slice(0, 200) || String(err) };
+  }
+  if (!res || !res.ok) return { ok: false, reason: 'fetch_non_ok', status: res?.status || 0 };
+
+  const cl = Number(res.headers?.get?.('content-length') || 0);
+  if (cl && cl > DOC_BYTES_MAX) return { ok: false, reason: 'too_large', detail: `content-length=${cl}` };
+
+  let buffer;
+  try { buffer = Buffer.from(await res.arrayBuffer()); }
+  catch (err) { return { ok: false, reason: 'read_failed', detail: err?.message?.slice(0, 200) || String(err) }; }
+  if (!buffer.length) return { ok: false, reason: 'empty' };
+  if (buffer.length > DOC_BYTES_MAX) return { ok: false, reason: 'too_large', detail: `bytes=${buffer.length}` };
+
+  const objectPath = documentObjectPath({ domain, documentType, propertyId, docId, fileName, sourceUrl });
+  const upload = deps.uploadImpl || uploadArtifactToStorage;
+  const up = await upload({
+    opsUrl: creds.url, opsKey: creds.key, bucket: PROPERTY_DOC_BUCKET,
+    objectPath, mimeType: res.headers?.get?.('content-type') || 'application/pdf', buffer,
+    fetchImpl: deps.uploadFetchImpl || ((u, o) => fetchWithTimeout(u, o, DOC_BYTES_TIMEOUT)),
+  });
+  if (!up.ok) return { ok: false, reason: 'upload_failed', status: up.status || 0, detail: up.detail };
+
+  return { ok: true, storage_path: objectPath, storage_bucket: PROPERTY_DOC_BUCKET, bytes: buffer.length };
+}
+
+/**
+ * Build-1 Unit 1 — capture the bytes at ingestion for one just-upserted
+ * property_documents row and PATCH storage_path/storage_bucket/bytes_captured
+ * onto it. Idempotent (skips a row that already carries storage_path, so a
+ * re-capture never re-downloads). Best-effort — a failed capture returns a
+ * non-ok result and the caller leaves the url_captured row untouched.
+ */
+export async function captureDocumentBytesAtIngest(domain, row, deps = {}) {
+  if (row.storage_path) return { ok: true, outcome: 'already_stored' };
+  const stored = await fetchAndStoreDocBytes(domain, {
+    docId: row.document_id, propertyId: row.property_id, sourceUrl: row.source_url,
+    documentType: row.document_type, fileName: row.file_name,
+  }, deps);
+  if (!stored.ok) return { ok: false, outcome: 'capture_skipped', reason: stored.reason };
+
+  const q = deps.domainQuery || domainQuery;
+  const patch = await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+    { storage_path: stored.storage_path, storage_bucket: stored.storage_bucket, ingestion_status: 'bytes_captured' },
+    { Prefer: 'return=minimal' });
+  if (!patch.ok) return { ok: false, outcome: 'patch_failed', status: patch.status, storage_path: stored.storage_path };
+  return { ok: true, outcome: 'bytes_captured', storage_path: stored.storage_path, bytes: stored.bytes };
+}
+
 // ── Upsert document links from CoStar "Documents" section ─────────────
 
 async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
@@ -2295,6 +2412,23 @@ async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
           document_type: row.document_type,
           source_url:    row.source_url,
         });
+        // Build 1 — fetch + store the bytes NOW while the CDN link is fresh, so
+        // the storage-only document-text-tick worker can later extract text →
+        // deed parse → grantee → R51. Strictly additive + best-effort: any
+        // failure (dead link, timeout, size cap, storage hiccup) leaves the
+        // url_captured row exactly as before and never blocks the capture.
+        try {
+          await captureDocumentBytesAtIngest(domain, {
+            document_id:   docId,
+            property_id:   propertyId,
+            source_url:    row.source_url,
+            document_type: row.document_type,
+            file_name:     fileName,
+            storage_path:  inserted?.storage_path || null,
+          });
+        } catch (e) {
+          console.warn(`[doc-links] byte-capture threw for ${fileName}: ${e?.message || e}`);
+        }
       }
     }
     else console.error(`[doc-links] insert also failed for ${fileName}:`, r.status, JSON.stringify(r.data));
