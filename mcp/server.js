@@ -45,13 +45,14 @@ const PRIMARY_WORKSPACE_ID =
 
 // ── Supabase fetch helper (mirrors api/_shared/ops-db.js pattern) ────────────
 
-async function supabaseQuery(baseUrl, apiKey, method, path, body) {
+async function supabaseQuery(baseUrl, apiKey, method, path, body, prefer) {
   const url = `${baseUrl}/rest/v1/${path}`;
   const headers = {
     apikey: apiKey,
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
-    Prefer: method === "GET" ? "count=exact" : "return=representation",
+    // Callers may override Prefer (e.g. `resolution=merge-duplicates` for an upsert).
+    Prefer: prefer || (method === "GET" ? "count=exact" : "return=representation"),
   };
   const opts = { method, headers };
   if (body && (method === "POST" || method === "PATCH")) {
@@ -81,8 +82,8 @@ function opsQuery(method, path, body) {
   return supabaseQuery(OPS_SUPABASE_URL, OPS_SUPABASE_KEY, method, path, body);
 }
 
-function govQuery(method, path, body) {
-  return supabaseQuery(GOV_SUPABASE_URL, GOV_SUPABASE_KEY, method, path, body);
+function govQuery(method, path, body, prefer) {
+  return supabaseQuery(GOV_SUPABASE_URL, GOV_SUPABASE_KEY, method, path, body, prefer);
 }
 
 function enc(v) {
@@ -96,8 +97,8 @@ function enc(v) {
 const DIA_SUPABASE_URL = process.env.DIA_SUPABASE_URL || "";
 const DIA_SUPABASE_KEY =
   process.env.DIA_SUPABASE_SERVICE_KEY || process.env.DIA_SUPABASE_KEY || "";
-function diaQuery(method, path, body) {
-  return supabaseQuery(DIA_SUPABASE_URL, DIA_SUPABASE_KEY, method, path, body);
+function diaQuery(method, path, body, prefer) {
+  return supabaseQuery(DIA_SUPABASE_URL, DIA_SUPABASE_KEY, method, path, body, prefer);
 }
 
 // ── R30 discovery-ring helpers ───────────────────────────────────────────────
@@ -507,7 +508,7 @@ const TOOL_DEFINITIONS = {
   },
   generate_comps: {
     name: 'generate_comps',
-    description: "Populate a Briggs CRE comps workbook (sales or lease) from structured comp rows and return a short-lived download link. You map the raw CoStar/Salesforce export → rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate — so the output is identical no matter which team member prepared the rows. Row keys are the Briggs column names lowercased with underscores (e.g. property_name, address, city, st, rba_sf, tenant, lease_type, lease_exp, annual_noi, init_price, cur_price, list_date, last_price, sale_price, sale_date, buyer, seller, financing, bumps, options, yr_built, submarket, notes; lease: property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated). DIALYSIS comps: set vertical:'dialysis' — this selects the dialysis sales template which adds CHAIRS and PATIENTS input columns immediately after RBA; pass most-recent counts as row keys `chairs` and `patients`. Omit any field you don't have — never guess. Dates 'YYYY-MM-DD'; rents/NOI annual.",
+    description: "Populate a Briggs CRE comps workbook (sales or lease) from structured comp rows and return a short-lived download link. You map the raw CoStar/Salesforce export → rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate — so the output is identical no matter which team member prepared the rows. Row keys are the Briggs column names lowercased with underscores. SALES: address, city, state (alias st), rba (alias rba_sf), tenant, lease_type, exp (lease expiration), annual_noi, initial_price (alias init_price), cur_price, on_market (list/on-market date), last_price, sale_price, sale_date, bumps, options (renewal_options; emitted canonical as \"(N) M-yr\"), built (alias yr_built), notes. LEASE: property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated. DIALYSIS comps: set vertical:'dialysis' — selects the dialysis sales template which adds CHAIRS and PATIENTS input columns immediately after RBA; pass most-recent counts as row keys `chairs` and `patients`. buyer / seller / financing are OPT-IN only — omit them unless the user explicitly asks for buyer/seller/financing in the comps (they are not part of the default column set and are otherwise left out). Omit any field you don't have — never guess. Dates 'YYYY-MM-DD'; rents/NOI annual.",
     inputSchema: {
       type: 'object',
       required: ['comp_type'],
@@ -515,7 +516,7 @@ const TOOL_DEFINITIONS = {
         comp_type: { type: 'string', enum: ['sales', 'lease'], description: 'sales = On Market + Sold sheets | lease = Lease Comps sheet' },
         vertical: { type: 'string', description: "Set to 'dialysis' for dialysis comps — selects the dialysis sales template with CHAIRS + PATIENTS columns after RBA. Omit otherwise." },
         on_market: { type: 'array', description: 'Sales: active listings (each an object keyed by Briggs column name; dialysis: include chairs, patients).', items: { type: 'object', additionalProperties: true } },
-        sold: { type: 'array', description: 'Sales: closed comps (On Market fields + last_price, sale_price, sale_date, buyer, seller, financing; dialysis: include chairs, patients).', items: { type: 'object', additionalProperties: true } },
+        sold: { type: 'array', description: 'Sales: closed comps (On Market fields + last_price, sale_price, sale_date; dialysis: include chairs, patients. buyer/seller/financing are opt-in only — include just when the user explicitly requests them).', items: { type: 'object', additionalProperties: true } },
         comps: { type: 'array', description: 'Lease: lease comp rows (object per row).', items: { type: 'object', additionalProperties: true } },
         name: { type: 'string', description: 'Label for the filename (property/market/tenant); defaults to client last name or "Briggs".' },
         client: { type: 'object', properties: { last_name: { type: 'string' }, file_month: { type: 'string', description: 'YYYYMM' } } },

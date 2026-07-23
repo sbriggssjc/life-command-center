@@ -18,18 +18,26 @@ by hardcoded letters — robust to template column shifts. A column is treated a
 FORMULA (never written) when the template's first data row already holds a
 formula there. Rows start at DATA_START_ROW.
 
-Input contract (all keys optional; omit what you don't have — never guess):
+Input contract (all keys optional; omit what you don't have — never guess).
+Keys are the Briggs template column names; the aliases in _ALIASES let a caller
+pass the query_comps field names straight through (st→state, init_price→
+initial_price, yr_built→built, rba_sf→rba, lease_exp→exp, annual_noi/annual_rent→
+rent, list_date→on_market, sale_price→sold_price, sale_date→date …). Only columns
+the template actually has are written; anything else lands in `unknown_keys`.
   Sales:  { "comp_type":"sales",
-            "on_market":[ {property_name,address,city,st,rba_sf,tenant,lease_type,
-                           lease_exp,annual_noi,init_price,cur_price,list_date,
-                           bumps,options,yr_built,submarket,notes}, ... ],
-            "sold":[ {…on_market fields…, last_price, sale_price, sale_date,
-                      list_date, buyer, seller, financing}, ... ] }
+            "on_market":[ {address,city,state,rba,tenant,lease_type,exp,annual_noi,
+                           initial_price,cur_price,on_market,bumps,options,built,
+                           notes}, ... ],
+            "sold":[ {…on_market fields…, last_price, sale_price, sale_date}, ... ] }
   Lease:  { "comp_type":"lease",
-            "comps":[ {property_name,property_type,source,address,city,st,
-                       suite_space,sf_leased,annual_rent,lease_type,lease_comm,
-                       lease_exp,execution_date,ti_sf,free_rent_mos,rent_bumps,
-                       yr_built,renovated,submarket,notes}, ... ] }
+            "comps":[ {property_type,source,address,city,state,suite_space,
+                       sf_leased,annual_rent,lease_type,lease_comm,exp,
+                       execution_date,ti_sf,free_rent_mos,rent_bumps,built,
+                       renovated,notes}, ... ] }
+
+buyer / seller / financing are OPT-IN only — omit them unless the user explicitly
+asks for buyer/seller/financing in the comps (not part of the default column set,
+and there is no template column for them today, so they are otherwise left out).
 
 Dates accept 'YYYY-MM-DD' or 'MM/DD/YYYY' (written as true Excel dates). Numbers
 accept plain values or strings with $ , %. Text is written verbatim (already

@@ -245,6 +245,156 @@ export function parseRequest(text) {
   return out;
 }
 
+// ── Comps cap/rent reconciliation + outlier flagging (Team Briggs policy) ───
+// A sold comp whose DISPLAYED rent doesn't reconcile to its reliable cap is an
+// OUTLIER — e.g. Pearland (dia 7980): template SOLD CAP = RENT/PRICE = 4.40%,
+// but the reliable cap_rate_final = 7.00% and rent_at_sale disagrees with the
+// in-place rent. We DETECT + surface such divergence at comps-generation time
+// and route it to the domain review queue for SOURCE correction — never silently
+// ship it, and never silently "fix" it by swapping the displayed rent basis.
+// This layer is NON-DESTRUCTIVE: it annotates the comp (review_flags /
+// review_detail) and enqueues it; the comp's values are unchanged and it is
+// still returned/exported.
+//
+// Thresholds are constants so Scott can tune them in one place.
+const CAP_MISMATCH_BPS    = 0.0075;  // |implied_cap - reliable_cap| tolerance (75 bps)
+const RENT_DISAGREE_RATIO = 1.10;    // rent sources disagree beyond 10% (max/min)
+const PRICE_OVER_ASK_RATIO  = 1.10;  // sold > 110% of last/initial ask
+const PRICE_UNDER_ASK_RATIO = 0.85;  // sold < 85% of last/initial ask
+
+// A usable positive number, else null (0 / blank / non-numeric are "absent").
+function _reviewNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return (Number.isFinite(n) && n > 0) ? n : null;
+}
+
+// Per-SOLD-comp reconciliation signal. Returns { review_flags, review_detail }
+// when at least one flag trips, else null. Uses the SAME rent basis the template
+// shows today (dialysis: RENT = annual_rent; government: NOI) — it does NOT change
+// the displayed basis, only checks whether it reconciles to the reliable cap.
+export function computeReviewSignals(c) {
+  if (!c) return null;
+  const raw = c.raw || {};
+  const isGov = c.is_government === true || String(c.vertical || '').toLowerCase() === 'government';
+  const sold = _reviewNum(c.sale_price);
+  // Displayed rent basis = what the template's SOLD CAP divides PRICE into.
+  const displayedRent = isGov ? _reviewNum(c.noi) : _reviewNum(c.annual_rent);
+  // Reliable cap-of-record: dia = cap_rate_final; gov = sold_cap_rate (fall back to
+  // the RPC's top-level derived cap when the source cap column is absent).
+  const reliableCap = isGov
+    ? (_reviewNum(raw.sold_cap_rate) ?? _reviewNum(c.cap_rate))
+    : (_reviewNum(raw.cap_rate_final) ?? _reviewNum(c.cap_rate));
+  const impliedCap = (displayedRent && sold) ? +(displayedRent / sold).toFixed(6) : null;
+
+  // Available rent sources for the disagreement check.
+  const rents = {};
+  const ar  = _reviewNum(c.annual_rent);                          if (ar)  rents.annual_rent = ar;
+  const anc = _reviewNum(c.anchor_rent) ?? _reviewNum(raw.anchor_rent); if (anc) rents.anchor_rent = anc;
+  const ras = _reviewNum(raw.rent_at_sale);                       if (ras) rents.rent_at_sale = ras;
+
+  const ask = _reviewNum(c.last_price) ?? _reviewNum(c.initial_price);
+
+  const flags = [];
+  if (impliedCap != null && reliableCap != null && Math.abs(impliedCap - reliableCap) > CAP_MISMATCH_BPS)
+    flags.push('cap_mismatch');
+  const rentVals = Object.values(rents);
+  if (rentVals.length >= 2) {
+    const mx = Math.max(...rentVals), mn = Math.min(...rentVals);
+    if (mn > 0 && mx / mn > RENT_DISAGREE_RATIO) flags.push('rent_disagreement');
+  }
+  if (sold && ask && (sold > PRICE_OVER_ASK_RATIO * ask || sold < PRICE_UNDER_ASK_RATIO * ask))
+    flags.push('price_over_ask');
+  if (reliableCap == null) flags.push('no_reliable_cap');
+
+  if (!flags.length) return null;
+  return { review_flags: flags,
+    review_detail: { implied_cap: impliedCap, reliable_cap: reliableCap, rents, ask, sold } };
+}
+
+// Renewal-options normalizer — options come through as free text ("2, 5 yr",
+// "Three, 5-Year Options", "2, 5yr", "Two, 5-Year Options"). Parse count + term
+// length → canonical "(N) M-yr". Unrecognized shapes pass through unchanged + log.
+const _RENEWAL_WORDNUM = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7,
+  eight:8, nine:9, ten:10, eleven:11, twelve:12 };
+function _renewalWordNum(s) {
+  if (s == null) return null;
+  const t = String(s).trim().toLowerCase();
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  return _RENEWAL_WORDNUM[t] || null;
+}
+export function normalizeRenewalOptions(value) {
+  if (value == null) return value;
+  const s = String(value).trim();
+  if (!s) return value;
+  if (/^\(\d+\)\s*\d+-yr$/.test(s)) return s;   // already canonical
+  // count + term: "Three, 5-Year Options" / "2, 5yr" / "(2) 5 year" / "2 x 5 yr" / "two 5-year options"
+  const m = s.match(/\(?\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*\)?\s*[,x×\-\s]+\s*(\d+)\s*-?\s*(?:yr|year)s?\b/i);
+  if (m) {
+    const n = _renewalWordNum(m[1]), term = parseInt(m[2], 10);
+    if (n && term) return `(${n}) ${term}-yr`;
+  }
+  // single option, no explicit count: "5-year option" → (1) 5-yr
+  const m2 = s.match(/^\s*(?:a\s+|one\s+)?(\d+)\s*-?\s*(?:yr|year)s?\b[^,]*\boption/i);
+  if (m2) { const term = parseInt(m2[1], 10); if (term) return `(1) ${term}-yr`; }
+  console.warn(`[comps:renewal-options] unrecognized shape, passed through: ${JSON.stringify(s)}`);
+  return value;
+}
+
+// Enqueue flagged sold comps into the per-domain review queue (dia_comp_review_queue
+// / gov_comp_review_queue). Best-effort: a write failure NEVER breaks comp
+// generation. Upsert on (sale_id, flags_hash) so re-pulls don't duplicate.
+export async function enqueueReviewQueue(flagged, deps) {
+  if (!flagged || !flagged.length) return { enqueued: 0, errors: [] };
+  const byDomain = { dialysis: [], government: [] };
+  for (const c of flagged) {
+    const raw = c.raw || {};
+    const saleId = raw.sale_id;
+    if (saleId == null) continue;                       // no source row → nothing to correct
+    const isGov = c.is_government === true || String(c.vertical || '').toLowerCase() === 'government';
+    const flags = (c.review_flags || []).slice().sort();
+    const detail = c.review_detail || {};
+    const row = {
+      sale_id: String(saleId),
+      property_id: raw.property_id != null ? String(raw.property_id) : null,
+      comp_id: c.comp_id || null,
+      flags,
+      flags_hash: flags.join(','),
+      detail,
+      implied_cap: detail.implied_cap ?? null,
+      reliable_cap: detail.reliable_cap ?? null,
+      address: c.address || null,
+      city: c.city || null,
+      state: c.state || null,
+      tenant: c.tenant || null,
+      sale_date: c.sale_date || null,
+      sale_price: _reviewNum(c.sale_price),
+      // NOTE: `status` is intentionally NOT sent — on first insert it defaults to
+      // 'open'; on an upsert (re-pull) it is preserved, so a human's resolved/
+      // dismissed disposition survives. The refreshed numbers (detail/caps) do update.
+    };
+    (isGov ? byDomain.government : byDomain.dialysis).push(row);
+  }
+  const errors = []; let enqueued = 0;
+  const targets = [
+    { rows: byDomain.dialysis, q: deps.diaQuery, table: 'dia_comp_review_queue', dom: 'dialysis' },
+    { rows: byDomain.government, q: deps.govQuery, table: 'gov_comp_review_queue', dom: 'government' },
+  ];
+  for (const t of targets) {
+    if (!t.rows.length || typeof t.q !== 'function') continue;
+    try {
+      const res = await t.q('POST', `${t.table}?on_conflict=sale_id,flags_hash`, t.rows,
+        'resolution=merge-duplicates,return=minimal');
+      if (res && res.ok) enqueued += t.rows.length;
+      else errors.push({ domain: t.dom, status: res && res.status, detail: res && res.data });
+    } catch (e) {
+      errors.push({ domain: t.dom, error: String(e && e.message || e) });
+    }
+  }
+  if (errors.length) console.warn(`[comps:review-queue] enqueue errors: ${JSON.stringify(errors)}`);
+  return { enqueued, errors };
+}
+
 // ── THE SHARED CORE — every surface calls this ──────────────────────────────
 // deps = { govQuery, diaQuery } (the server's PostgREST fetch helpers).
 export async function runComps(args, deps) {
@@ -262,11 +412,13 @@ export async function runComps(args, deps) {
     ? rows.push(...s.value)
     : warnings.push({ vertical: targets[i], error: String(s.reason?.message || s.reason) }));
   const merged = dedupe(rows);
-  // Normalize the `use` tag + apply the multi-tenant display name on every comp.
+  // Normalize the `use` tag + apply the multi-tenant display name on every comp,
+  // and standardize renewal-options text so every surface emits "(N) M-yr".
   for (const c of merged) {
     c.use = normalizeUse(c);
     const dn = displayName(c, { property_types: args.property_types, government_only: params.p_government_only });
     if (dn) { c.tenant = dn; if (c.agency != null) c.agency = dn; }
+    if (c.renewal_options != null) c.renewal_options = normalizeRenewalOptions(c.renewal_options);
   }
   // Government post-filter: when government_only, drop any non-government comp that slipped
   // through from a co-queried vertical (belt-and-suspenders to the vertical restriction).
@@ -277,10 +429,26 @@ export async function runComps(args, deps) {
   if (!args.include_unreliable_noi) kept = kept.filter(noiIsReliable);
   const cap = params.p_limit;
   const comps = kept.slice(0, cap);
+  // Reconciliation: flag SOLD comps whose displayed rent doesn't reconcile to
+  // their reliable cap (or whose rent sources / sale-vs-ask diverge). Attach the
+  // signal to the comp (non-destructive) and route the flagged set to the domain
+  // review queue for source correction. Best-effort — never breaks generation.
+  const flagged = [];
+  for (const c of comps) {
+    if (c.comp_type !== 'sale' || c.on_market === true || !_reviewNum(c.sale_price)) continue;
+    const sig = computeReviewSignals(c);
+    if (sig) { c.review_flags = sig.review_flags; c.review_detail = sig.review_detail; flagged.push(c); }
+  }
+  if (flagged.length) { try { await enqueueReviewQueue(flagged, deps); } catch { /* best-effort */ } }
   return { comps,
     meta: { returned: comps.length, total_before_cap: kept.length,
             truncated: kept.length > cap, excluded_unreliable_noi: before - kept.length,
             by_source: comps.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
+            flagged_for_review: flagged.length,
+            review_flags: flagged.map(c => ({
+              comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
+              tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags,
+              ...c.review_detail })),
             warnings, interpreted_params: params } };
 }
 
@@ -308,7 +476,12 @@ export async function runSynthesize(args, deps) {
       government_only: route.government_only, verticals: route.verticals },
     comps: scored,
     meta: { returned: scored.length,
-      by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}), warnings: meta.warnings } };
+      by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
+      flagged_for_review: scored.filter(c => c.review_flags && c.review_flags.length).length,
+      review_flags: scored.filter(c => c.review_flags && c.review_flags.length).map(c => ({
+        comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
+        tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags, ...c.review_detail })),
+      warnings: meta.warnings } };
 }
 
 // ── Shared renderer — the ONE table format every surface shows ──────────────
@@ -329,7 +502,9 @@ export function formatCompsMarkdown(result) {
     return `${base}${dial} ${c.price_withheld ? 'withheld' : usd(c.sale_price)} | ${pct(c.cap_rate)} | ${usd(c.price_per_sf)} | ${c.sale_date || '—'} |`;
   }).join('\n');
   const bySrc = Object.entries(result.meta?.by_source || {}).map(([k, v]) => `${v} ${k}`).join(', ');
-  return `${head}\n${body}\n\n_${rows.length} comps (${bySrc})._`;
+  const flaggedN = result.meta?.flagged_for_review || 0;
+  const flaggedLine = flaggedN ? `\n\n⚠ ${flaggedN} comp${flaggedN === 1 ? '' : 's'} flagged for review (cap/rent reconciliation) — see meta.review_flags.` : '';
+  return `${head}\n${body}\n\n_${rows.length} comps (${bySrc})._${flaggedLine}`;
 }
 
 // ── Surface 1: MCP tools (Claude) ───────────────────────────────────────────
