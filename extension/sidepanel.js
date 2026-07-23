@@ -3198,20 +3198,46 @@ async function renderLlcResearchQueue(domain, stateFilter) {
   }
 
   const active = await getActiveLlcResearch();
-  let html = pickerHtml + '<div class="section-label">Owners awaiting SOS lookup</div>';
+  let html = pickerHtml + '<div class="section-label">Owners awaiting SOS lookup · search both states</div>';
   for (const it of items) {
     const isActive = active && active.queue_id === it.queue_id && active.domain === dom;
     const loc = [it.property_city, it.property_state].filter(Boolean).join(', ');
     const val = it.rev_value ? '$' + Math.round(it.rev_value).toLocaleString() : '';
+
+    // Two-jurisdiction doctrine: an owner LLC is searched in its FILING/formation
+    // state AND the state where its property sits. Offer a "Look up SOS" per
+    // distinct candidate state (filing first). No derivable state ⇒ one stateless
+    // search (property-less owner — needs the recorded/notice address or manual).
+    const filing = it.filing_state ? String(it.filing_state).toUpperCase() : '';
+    const asset = it.asset_state ? String(it.asset_state).toUpperCase() : '';
+    const states = [];
+    if (filing) states.push(filing);
+    if (asset && asset !== filing) states.push(asset);
+
+    let stateLabel;
+    if (filing && asset && filing !== asset) stateLabel = `filing ${filing} · asset ${asset}`;
+    else if (filing) stateLabel = filing;                 // filing (asset agrees or unknown)
+    else if (asset) stateLabel = `asset ${asset}`;         // recovered from the property
+    else stateLabel = 'state unknown';
+
+    let btns;
+    if (states.length) {
+      btns = states.map((s) =>
+        `<button class="btn btn-sm btn-primary llc-lookup-btn" style="margin-right:4px;margin-bottom:4px;"
+                data-qid="${it.queue_id}" data-oid="${escapeHtml(it.recorded_owner_id || '')}"
+                data-name="${escapeHtml(it.search_name || '')}" data-state="${escapeHtml(s)}"
+                data-domain="${dom}">Look up SOS · ${escapeHtml(s)}</button>`).join('');
+    } else {
+      btns = `<button class="btn btn-sm btn-primary llc-lookup-btn"
+                data-qid="${it.queue_id}" data-oid="${escapeHtml(it.recorded_owner_id || '')}"
+                data-name="${escapeHtml(it.search_name || '')}" data-state=""
+                data-domain="${dom}">Look up SOS</button>`;
+    }
+
     html += `<div class="context-field" style="flex-direction:column;align-items:stretch;${isActive ? 'outline:2px solid var(--accent,#2e86de);border-radius:6px;padding:6px;' : ''}">
       <div><span class="context-value" style="font-weight:600;">${escapeHtml(it.search_name || '(unnamed)')}</span></div>
-      <div style="font-size:11px;color:var(--text-secondary);">${escapeHtml(it.tenant || '')}${it.tenant && loc ? ' · ' : ''}${escapeHtml(loc)}${val ? ' · ' + val : ''}${it.guessed_state ? ' · ' + escapeHtml(it.guessed_state) : ''}</div>
-      <div style="margin-top:4px;">
-        <button class="btn btn-sm btn-primary llc-lookup-btn"
-                data-qid="${it.queue_id}" data-oid="${escapeHtml(it.recorded_owner_id || '')}"
-                data-name="${escapeHtml(it.search_name || '')}" data-state="${escapeHtml(it.guessed_state || it.property_state || '')}"
-                data-domain="${dom}">${isActive ? '✓ Active — Look up again' : 'Look up SOS'}</button>
-      </div>
+      <div style="font-size:11px;color:var(--text-secondary);">${escapeHtml(it.tenant || '')}${it.tenant && loc ? ' · ' : ''}${escapeHtml(loc)}${val ? ' · ' + val : ''} · ${escapeHtml(stateLabel)}</div>
+      <div style="margin-top:4px;">${btns}</div>
     </div>`;
   }
   body.innerHTML = html;
@@ -3231,7 +3257,7 @@ async function renderLlcResearchQueue(domain, stateFilter) {
       };
       await setActiveLlcResearch(target);
       chrome.tabs.create({ url: sosSearchUrl(target.search_name, target.state) });
-      btn.textContent = '✓ Active — Scan the SOS page, then Save';
+      btn.textContent = '✓ Scan the SOS page, then Save';
       btn.className = 'btn btn-sm btn-success llc-lookup-btn';
     });
   });

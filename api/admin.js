@@ -8100,43 +8100,64 @@ async function handleLlcResearchQueueList(req, res) {
   // worklist, and the prior 'queued'-only read showed an empty queue. Optional
   // ?state=<XX> batches one SOS site at a time; ?state=NONE = the unknown-state
   // bucket.
+  //
+  // Two-jurisdiction doctrine (Scott, 2026-07-22): to resolve an owner via SOS you
+  // search two states — the FILING/formation state (its SOS registry) AND the state
+  // where the ASSET (property) sits. They're often different. The v_llc_research_worklist
+  // view derives both per owner: filing_state = found_filing_state ‖ guessed_state;
+  // asset_state = the property state via recorded_owner_id / true_owner_id /
+  // ownership_history (never fabricated — a property-less owner stays NULL, i.e. the
+  // Unknown bucket). An owner with two distinct states appears under BOTH state chips.
   const ELIGIBLE = 'status=in.(queued,deferred)';
   const stateParam = req.query.state ? String(req.query.state).trim().toUpperCase() : null;
 
   try {
     const { domainQuery } = await import('./_shared/domain-db.js');
 
-    // State distribution across the WHOLE eligible set (cheap: guessed_state
-    // only) so the sidebar can render a state picker with honest counts.
+    // State distribution across the WHOLE eligible set so the sidebar can render a
+    // state picker with honest counts. Each owner is counted under EVERY distinct
+    // state it carries (filing + asset), so an owner whose asset state differs from
+    // its filing state appears under both chips (intended — not a duplicate). The
+    // NONE bucket ('(unknown)') is owners with neither a filing nor a derivable
+    // asset state — the genuinely property-less remainder.
     let by_state = [];
     let total_eligible = 0;
     try {
       const sRes = await domainQuery(domain, 'GET',
-        'llc_research_queue?' + ELIGIBLE + '&select=guessed_state&limit=5000');
+        'v_llc_research_worklist?' + ELIGIBLE + '&select=filing_state,asset_state&limit=5000');
       if (sRes.ok && Array.isArray(sRes.data)) {
         total_eligible = sRes.data.length;
         const counts = new Map();
+        let none = 0;
         for (const row of sRes.data) {
-          const st = (row.guessed_state && String(row.guessed_state).trim().toUpperCase()) || '(unknown)';
-          counts.set(st, (counts.get(st) || 0) + 1);
+          const st = new Set();
+          if (row.filing_state) st.add(String(row.filing_state).trim().toUpperCase());
+          if (row.asset_state)  st.add(String(row.asset_state).trim().toUpperCase());
+          if (st.size === 0) { none++; continue; }
+          for (const s of st) counts.set(s, (counts.get(s) || 0) + 1);
         }
         by_state = Array.from(counts, ([state, count]) => ({ state, count }))
           .sort((a, b) => (b.count - a.count) || a.state.localeCompare(b.state));
+        // Unknown last (workable states first); the sidebar maps it to the NONE chip.
+        if (none > 0) by_state.push({ state: '(unknown)', count: none });
       }
     } catch (_) { /* the picker is best-effort; the page still returns */ }
 
     // Pull the page of owners (optionally state-filtered). recorded_owner_id is
-    // REQUIRED so the sidebar can target the SOS write-back at the right owner.
+    // REQUIRED so the sidebar can target the SOS write-back at the right owner. A
+    // ?state=<XX> filter matches the owner's FILING or ASSET state, so working a
+    // state surfaces every owner whose formation OR property state is that state.
     let pageFilter = ELIGIBLE;
     if (stateParam === 'NONE' || stateParam === '(UNKNOWN)') {
-      pageFilter += '&guessed_state=is.null';
+      pageFilter += '&filing_state=is.null&asset_state=is.null';
     } else if (stateParam) {
-      pageFilter += '&guessed_state=eq.' + encodeURIComponent(stateParam);
+      const enc = encodeURIComponent(stateParam);
+      pageFilter += '&or=(filing_state.eq.' + enc + ',asset_state.eq.' + enc + ')';
     }
     const qRes = await domainQuery(domain, 'GET',
-      'llc_research_queue' +
+      'v_llc_research_worklist' +
       '?' + pageFilter +
-      '&select=queue_id,recorded_owner_id,property_id,search_name,guessed_state,attempts,last_attempt_at,last_error,created_at' +
+      '&select=queue_id,recorded_owner_id,property_id,search_name,guessed_state,found_filing_state,filing_state,asset_state,attempts,last_attempt_at,last_error,created_at' +
       '&order=created_at.asc' +
       '&limit=' + limit
     );
@@ -8187,6 +8208,9 @@ async function handleLlcResearchQueueList(req, res) {
         property_id:        r.property_id,
         search_name:        r.search_name,
         guessed_state:      r.guessed_state,
+        found_filing_state: r.found_filing_state || null,
+        filing_state:       r.filing_state || null,   // formation/filing SOS state
+        asset_state:        r.asset_state || null,     // state where the property sits
         attempts:           r.attempts,
         last_attempt_at:    r.last_attempt_at,
         last_error:         r.last_error,
