@@ -66,49 +66,74 @@
       }
     },
     "actions": {
-      "Compose_EmailSummary": {
-        "type": "Compose",
-        "inputs": "@{substring(triggerOutputs()?['body/bodyPreview'], 0, min(length(triggerOutputs()?['body/bodyPreview']), 220))}"
-      },
-      "HTTP_IngestEmails": {
+      "HTTP_PostIntakeMessage": {
         "type": "Http",
-        "runAfter": {
-          "Compose_EmailSummary": [
-            "Succeeded"
-          ]
-        },
+        "description": "Per-message intake. POST this ONE flagged email to LCC's /api/intake?_route=outlook-message. handleOutlookMessage extracts/stages/dedups it and returns the AUTHORITATIVE decision in the JSON `processing_complete` block (outcome + target_folder + final_target_folder + clear_flag) plus a `correlation_id`. Runs directly off the trigger — NOT dependent on the webLink lookup, so a webLink failure can never block intake or the Teams card.",
+        "runAfter": {},
         "inputs": {
           "method": "POST",
-          "uri": "@{concat(parameters('LCC_HOST'), '/api/sync?action=ingest_emails')}",
+          "uri": "@{concat(parameters('LCC_HOST'), '/api/intake?_route=outlook-message')}",
           "headers": {
             "Content-Type": "application/json",
             "x-lcc-key": "@{parameters('LCC_API_KEY')}",
             "x-lcc-workspace": "@{parameters('LCC_WORKSPACE')}"
           },
-          "body": {}
+          "body": {
+            "internet_message_id": "@{triggerOutputs()?['body/internetMessageId']}",
+            "message_id": "@{triggerOutputs()?['body/id']}",
+            "subject": "@{triggerOutputs()?['body/subject']}",
+            "body_preview": "@{triggerOutputs()?['body/bodyPreview']}",
+            "body_html": "@{triggerOutputs()?['body/body']}",
+            "web_link": "@{triggerOutputs()?['body/webLink']}",
+            "received_date_time": "@{triggerOutputs()?['body/receivedDateTime']}",
+            "from": "@{triggerOutputs()?['body/from']}",
+            "has_attachments": "@{triggerOutputs()?['body/hasAttachments']}",
+            "to_recipients": "@{triggerOutputs()?['body/toRecipients']}"
+          }
         }
       },
-      "HTTP_GetIntakeSummary": {
+      "HTTP_GetEmailWebLink": {
         "type": "Http",
-        "runAfter": {
-          "HTTP_IngestEmails": [
-            "Succeeded"
-          ]
-        },
+        "description": "Optional, NON-BLOCKING web-link enrichment. Runs in PARALLEL off the trigger (never gates intake or the card). The Teams card falls back to triggerOutputs()?['body/webLink'] if this fails, so its Succeeded/Failed status is intentionally ignored downstream.",
+        "runAfter": {},
         "inputs": {
           "method": "GET",
-          "uri": "@{concat(parameters('LCC_HOST'), '/api/intake-summary?correlation_id=', body('HTTP_IngestEmails')?['correlation_id'], '&limit=1')}",
+          "uri": "@{concat(parameters('LCC_HOST'), '/api/intake?_route=email-web-link&internet_message_id=', encodeUriComponent(triggerOutputs()?['body/internetMessageId']))}",
           "headers": {
             "x-lcc-key": "@{parameters('LCC_API_KEY')}",
             "x-lcc-workspace": "@{parameters('LCC_WORKSPACE')}"
           }
         }
       },
-      "Post_message_in_a_chat_or_channel": {
+      "HTTP_GetIntakeSummary": {
+        "type": "Http",
+        "description": "Fetch the human-readable summary for the card, keyed on the correlation_id returned by HTTP_PostIntakeMessage. Depends on intake succeeding — NOT on the webLink lookup.",
+        "runAfter": {
+          "HTTP_PostIntakeMessage": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "method": "GET",
+          "uri": "@{concat(parameters('LCC_HOST'), '/api/intake-summary?correlation_id=', body('HTTP_PostIntakeMessage')?['correlation_id'], '&limit=1')}",
+          "headers": {
+            "x-lcc-key": "@{parameters('LCC_API_KEY')}",
+            "x-lcc-workspace": "@{parameters('LCC_WORKSPACE')}"
+          }
+        }
+      },
+      "Post_card_in_a_chat_or_channel": {
         "type": "ApiConnection",
+        "description": "Teams notification. Runs after HTTP_GetEmailWebLink completes so it can prefer the enriched link, but treats it as OPTIONAL (Succeeded OR Failed) — a webLink failure must never suppress the card. Also requires HTTP_GetIntakeSummary Succeeded for the summary/outcome.",
         "runAfter": {
           "HTTP_GetIntakeSummary": [
             "Succeeded"
+          ],
+          "HTTP_GetEmailWebLink": [
+            "Succeeded",
+            "Failed",
+            "Skipped",
+            "TimedOut"
           ]
         },
         "inputs": {
@@ -120,34 +145,58 @@
           "method": "post",
           "path": "/v3/conversations/@{encodeURIComponent(parameters('TEAMS_TEAM_ID'))}/channels/@{encodeURIComponent(parameters('TEAMS_CHANNEL_ID'))}/messages",
           "body": {
-            "content": "📥 **New Intake Item Captured**\n\n**Sender:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['sender'], triggerOutputs()?['body/from'])}\n**Subject:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['subject'], triggerOutputs()?['body/subject'])}\n**Summary:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['summary'], outputs('Compose_EmailSummary'))}\n\n🔗 **LCC Item:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['lcc_item_url'], concat(parameters('LCC_HOST'), '/#/inbox'))}\n📧 **Open Email (Desktop):** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['email_url_desktop'], concat('ms-outlook://open?url=', encodeUriComponent(coalesce(triggerOutputs()?['body/webLink'], ''))))}\n🌐 **Open Email (Web):** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['email_url'], triggerOutputs()?['body/webLink'])}\n\n_Run:_ @{body('HTTP_IngestEmails')?['correlation_id']}\n_Processed:_ @{body('HTTP_IngestEmails')?['processed']}\n_Failed:_ @{body('HTTP_IngestEmails')?['failed']}"
+            "content": "📥 **New Intake Item Captured**\n\n**Sender:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['sender'], triggerOutputs()?['body/from'])}\n**Subject:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['subject'], triggerOutputs()?['body/subject'])}\n**Summary:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['summary'], triggerOutputs()?['body/bodyPreview'])}\n\n**Outcome:** @{body('HTTP_PostIntakeMessage')?['processing_complete']?['outcome']}\n**Filed to:** @{coalesce(body('HTTP_PostIntakeMessage')?['processing_complete']?['target_folder'], 'left in Inbox (needs review)')}\n\n🔗 **LCC Item:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['lcc_item_url'], concat(parameters('LCC_HOST'), '/#/inbox'))}\n📧 **Open Email (Desktop):** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['email_url_desktop'], concat('ms-outlook://open?url=', encodeUriComponent(coalesce(body('HTTP_GetEmailWebLink')?['web_link'], triggerOutputs()?['body/webLink'], ''))))}\n🌐 **Open Email (Web):** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['email_url'], body('HTTP_GetEmailWebLink')?['web_link'], triggerOutputs()?['body/webLink'])}\n\n_Run:_ @{body('HTTP_PostIntakeMessage')?['correlation_id']}"
           }
         }
       },
-      "HTTP_ProcessingComplete": {
-        "type": "Http",
-        "description": "LCC relay (Option A caller): POST the single processing-complete event so LCC's /api/webhooks/processing-complete → pa-move-message.js fires the 'LCC Processing Complete → Move Message' flow. One POST per flagged email (single internet_message_id from the trigger — never batched). Runs after the Teams card so a move failure never blocks the notification, and surfaces honestly in this flow's run history (a 502/503 marks the run failed).",
+      "Condition_ShouldMove": {
+        "type": "If",
+        "description": "Guard the move relay: only fire HTTP_ProcessingComplete when the recorded decision carries a non-empty target_folder. A `needs_review` outcome resolves target_folder to null (leave in place) and would 400 the required-target_folder receiver, so it is skipped here. Runs after the card so a move/relay failure never blocks the notification.",
         "runAfter": {
-          "Post_message_in_a_chat_or_channel": [
+          "Post_card_in_a_chat_or_channel": [
             "Succeeded"
           ]
         },
-        "inputs": {
-          "method": "POST",
-          "uri": "@{concat(parameters('LCC_HOST'), '/api/webhooks/processing-complete')}",
-          "headers": {
-            "Content-Type": "application/json",
-            "x-lcc-key": "@{parameters('LCC_API_KEY')}",
-            "x-lcc-workspace": "@{parameters('LCC_WORKSPACE')}"
-          },
-          "body": {
-            "correlation_id": "@{body('HTTP_IngestEmails')?['correlation_id']}",
-            "schema_version": "1.0",
-            "internet_message_id": "@{triggerOutputs()?['body/internetMessageId']}",
-            "target_folder": "Processed/General",
-            "disposition": "auto_filed",
-            "subject": "@{triggerOutputs()?['body/subject']}"
+        "expression": {
+          "and": [
+            {
+              "not": {
+                "equals": [
+                  "@coalesce(body('HTTP_PostIntakeMessage')?['processing_complete']?['target_folder'], '')",
+                  ""
+                ]
+              }
+            }
+          ]
+        },
+        "actions": {
+          "HTTP_ProcessingComplete": {
+            "type": "Http",
+            "description": "LCC relay (Option A caller): forward the AUTHORITATIVE recorded decision from HTTP_PostIntakeMessage's processing_complete block VERBATIM. /api/webhooks/processing-complete relays target_folder/disposition/clear_flag to pa-move-message.js, which fires the 'LCC Processing Complete → Move Message' flow. NEVER hardcode target_folder/disposition — the receiver relays the body verbatim and the pull-queue drain is retired, so a hardcoded value fires a REAL wrong move. staged → staging folder + KEEP flag; filed/duplicate → move + CLEAR flag. One POST per flagged email (single internet_message_id).",
+            "runAfter": {},
+            "inputs": {
+              "method": "POST",
+              "uri": "@{concat(parameters('LCC_HOST'), '/api/webhooks/processing-complete')}",
+              "headers": {
+                "Content-Type": "application/json",
+                "x-lcc-key": "@{parameters('LCC_API_KEY')}",
+                "x-lcc-workspace": "@{parameters('LCC_WORKSPACE')}"
+              },
+              "body": {
+                "correlation_id": "@{body('HTTP_PostIntakeMessage')?['correlation_id']}",
+                "schema_version": "1.0",
+                "internet_message_id": "@{body('HTTP_PostIntakeMessage')?['processing_complete']?['internet_message_id']}",
+                "target_folder": "@{body('HTTP_PostIntakeMessage')?['processing_complete']?['target_folder']}",
+                "final_target_folder": "@{body('HTTP_PostIntakeMessage')?['processing_complete']?['final_target_folder']}",
+                "disposition": "@{body('HTTP_PostIntakeMessage')?['processing_complete']?['outcome']}",
+                "clear_flag": "@{body('HTTP_PostIntakeMessage')?['processing_complete']?['clear_flag']}",
+                "subject": "@{triggerOutputs()?['body/subject']}"
+              }
+            }
           }
+        },
+        "else": {
+          "actions": {}
         }
       }
     }
