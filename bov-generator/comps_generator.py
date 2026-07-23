@@ -122,7 +122,8 @@ def _norm(h) -> str:
 _ALIASES = {
     "chair_count": "chairs", "chair_ct": "chairs",
     "patient_count": "patients", "patient_ct": "patients",
-    "year_built": "built",
+    "year_built": "built", "yr_built": "built",
+    "st": "state", "init_price": "initial_price",
     "building_sf": "rba", "rba_sf": "rba", "building_size": "rba",
     "sale_price": "sold_price",
     "sale_date": "date",
