@@ -8408,3 +8408,114 @@ the CoStar Public Records tab owner address + the `public-records.js` scanner
 addresses are deferred extension-capture work; the reconcile engine's
 single-`addr_key`→any-shared-address widening; a Decision-Center lane over
 `v_lcc_owner_link_review`.
+
+## ORE Option B — state-sorted SOS capture worklist + wire the SOS writeback into the observations store (2026-07-23)
+
+The compliant human-in-the-loop SOS pipeline was already built (predates the
+dead automated-SOS work): the on-demand scanner (`extension/content/public-records.js`
+`scanSOS`), its injection (`background.js` `SCAN_PAGE` → `chrome.scripting.executeScript`),
+and `POST /api/sos-writeback` (`admin.js handleSosWriteback` — writes
+`recorded_owners` manager/agent/filing + closes the `llc_research_queue` row).
+This round drives it with a real worklist and wires its captures into the
+Option-A observations store so they reconcile continuously. Reuse-not-fork ·
+additive · reversible · ≤ existing api/*.js (no new api/*.js; the helper is a
+`_shared` module). JS ships on the Railway redeploy; the RPC migration is applied
+live to LCC Opps.
+
+### Unit 0 — verified state (report before building)
+- **Permission model:** the on-demand injection relies on `activeTab` + `scripting`
+  (manifest permissions) — there are **NO host_permissions for SOS/county sites**,
+  and none are needed: `SCAN_PAGE` is user-triggered (the "Scan This Page" button),
+  and `activeTab` grants temporary host access to the active tab on user invocation.
+  So the scanner runs on **any** SOS/county page the human loads — Scott's model
+  (human loads the walled page; everything after is automated). No manifest change.
+- **Did `/api/sos-writeback` feed the Option-A store?** **NO** — it only wrote
+  `recorded_owners` + closed `llc_research_queue`. That was the Unit-2 gap.
+- **The trigger already exists:** `sidepanel.js renderLlcResearchQueue` (the driver,
+  reads `/api/admin?_route=llc-research-queue`) → "Look up SOS" stashes the target +
+  opens the Google-routed SOS search → `#scanPageBtn` → `loadOrgView` → **"SOS → Owner"**
+  (`saveSosOwnerBtn`) POSTs the writeback. NOT only a background message.
+- **Grounding refuted the worklist premise (the real fix):** the existing driver
+  reads `status=eq.queued`, but gov `llc_research_queue` has **0 queued / 887
+  deferred** (dia 0 / 1,155 deferred) — the automated llc-research tick parked the
+  whole worklist as `deferred` (the no-handler cap), so the sidebar showed an
+  EMPTY queue. The **deferred** rows (all carry `recorded_owner_id`) ARE the SOS
+  worklist. And `entity_registry_records` has **no `recorded_owner_id`** (can't
+  target a writeback) — so the recorded_owner_id-carrying `llc_research_queue` IS
+  the writeback-able worklist; the pure-LCC `v_owner_contact_worklist` owners
+  resolve to an LCC entity, not a domain `recorded_owner_id`, so they have no
+  writeback target and the union is **deferred** (surfaced, not faked).
+
+### Unit 1 — the state-sorted, value-ranked worklist (`admin.js handleLlcResearchQueueList`)
+Reads `status=in.(queued,deferred)` (the fix that makes it non-empty), adds an
+optional `?state=<XX>` filter (`?state=NONE` = the unknown-state bucket), and
+returns a `by_state` distribution (highest count first) + `total_eligible` so the
+sidebar renders a **state picker** — the operator batches ONE SOS site at a time,
+and within a state the existing `rev_value` ranking (gross_rent / dia value
+signal) surfaces the highest-value owners first. Honest count = the workable
+`queued+deferred` set; a captured owner drops out structurally (the writeback sets
+`status='done'` → out of the eligible set). `renderLlcResearchQueue(domain, state)`
+renders the chips + the value-ranked owners; the Google-routed SOS search
+(`sosSearchUrl`) is kept (works for all 50 states day one — no per-state adapter,
+the doctrine). No new worklist table/view.
+
+### Unit 2 — wire the SOS writeback into the Option-A observations store
+`handleSosWriteback`, AFTER the (untouched) `recorded_owners` write, best-effort
+(never blocks): each owner-side address the capture holds — **principal /
+registered-agent / mailing** — becomes a **DISTINCT** source-tagged observation
+via the SAME recorder RPC the CoStar path uses
+(`lcc_record_owner_address_observation`), `source_surface='sos_sidebar'`,
+`p_source_recorded_owner_id=<owner>`, `p_source_url=<SOS page>`, and the raw
+capture JSON in `source_context` (kept for audit/provenance). Never collapse — a
+principal and an agent address are two rows (the RPC dedupes on
+(owner, addr_norm, surface), so a repeat is a no-op). Migration
+`20260724120000_lcc_sos_sidebar_address_authority.sql` (applied live) gives
+`sos_sidebar` authority **70** (SOS-official tier — a human-read official filing
+outranks aggregators; a byte-identical `CREATE OR REPLACE` adding one CASE arm,
+reversible). The pure shaper is `api/_shared/sos-writeback-observations.js`
+`buildSosAddressObservations` (unit-tested). The **manager/officer contact signal
+is already recorded** by the `recorded_owners.manager_name` write → feeds
+`v_owner_contact_signals_portfolio` → the daily `lcc-owner-contact-signals-sync` →
+owner pivots — so nothing extra is written for it (reuse). The response carries
+`address_observations`; the sidebar's success toast shows "+N addresses".
+
+### Unit 3 — the closed loop (each hop verified to exist)
+worklist row (`recorded_owner_id`, state-sorted) → human opens SOS + Scans →
+`/api/sos-writeback` → `recorded_owners` (manager/agent/mailing + filing) **+**
+`lcc_owner_address_observations` (source_surface `sos_sidebar`, matchable,
+authority 70) → the daily gov crons (03:20 manager-sync / 03:22 address-sync) →
+the LCC 05:00 owner-contact-signals pull → owner pivots → cadence; AND the
+address observations → `v_lcc_owner_address_dimension` + `lcc_refresh_owner_evidence_cache`
+(both verified live to read the observations table) → the Build-2
+`shared_mailing_address` reconcile signal. The writeback also closes the queue row
+(`status='done'`), so the owner leaves the worklist (auto-retire).
+
+### Verified (2026-07-23)
+`npm run check:boot` clean; full suite **2131 pass / 0 fail / 6 skipped** (new
+`test/sos-writeback-observations.test.mjs`: distinct-per-field, never-fabricate,
+principal+agent stay distinct, situs never). **Live DB gate (LCC Opps, 0 residue):**
+a synthetic 3-address SOS capture through `lcc_record_owner_address_observation`
+landed 3 DISTINCT rows (principal/registered_agent/mailing), all `sos_sidebar` /
+matchable / authority 70 / source_url kept; a re-emit of the same (owner,addr,surface)
+returned NULL (idempotent dedup); `v_lcc_owner_address_dimension` +
+`lcc_refresh_owner_evidence_cache` both read the observations table; all synthetic
+rows deleted (residue 0). `node --check` clean (admin.js, sos-writeback-observations.js,
+sidepanel.js). LCC-Opps + the existing (blessed) sos-writeback `recorded_owners`
+write; no dia/gov PII writes; auth schema untouched.
+
+### After deploy (verify live)
+Open the SOS Research Worklist (Property tab → Research Queue) — it now shows the
+deferred owners state-sorted (gov ~887, dia ~1,155) with a state picker, not an
+empty queue. Pick a state (e.g. TX 46), "Look up SOS" on the top-value owner, Scan
+the Sunbiz/SOS page, "SOS → Owner" → the manager/agent/filing land on the owner
+AND the principal/agent/mailing addresses land as `sos_sidebar` observations
+(toast shows "+N addresses"), and the row leaves the worklist.
+
+### Follow-ups (surfaced, NOT built)
+The `v_owner_contact_worklist` union (needs a recorded_owner mapping the current
+writeback contract lacks); a Decision-Center lane over `v_lcc_owner_link_review`;
+prefilling per-state SOS URLs (the fragile per-state adapter the automated path
+abandoned — the Google-routed search is the reuse). The single conflict-review
+lane stays DEFERRED until this authenticated path has produced data to conflict
+against (Scott's doctrine: surface a decision ONCE, only when a source disagrees
+with the fully-resolved path).

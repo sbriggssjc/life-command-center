@@ -3125,19 +3125,21 @@ function sosSearchUrl(name, state) {
   return 'https://www.google.com/search?q=' + encodeURIComponent(q);
 }
 
-// Render the ranked LLC research queue into the Property tab. Highest deal
-// value first (server-ranked). "Look up" stashes the target and opens the SOS
-// search; the broker then Scans the SOS page and the org view offers a
-// one-click write-back to that owner.
-async function renderLlcResearchQueue(domain) {
+// Render the state-sorted SOS worklist into the Property tab. The operator
+// batches ONE state (SOS site) at a time; within a state, highest deal value
+// first (server-ranked). "Look up" stashes the target and opens the SOS search;
+// the broker then Scans the SOS page and the org view offers a one-click
+// write-back to that owner (which also feeds the owner-address observations).
+async function renderLlcResearchQueue(domain, stateFilter) {
   const dom = (domain === 'government' || domain === 'dialysis') ? domain : 'government';
+  const st = stateFilter ? String(stateFilter).toUpperCase() : null;  // 'NONE' = unknown-state bucket
   const header = $('#propertyHeader');
   const body = $('#propertyBody');
   const actions = $('#propertyActions');
 
-  header.innerHTML = `<div class="property-title">LLC Research Queue</div>
-    <div class="property-source">${dom === 'government' ? 'Government' : 'Dialysis'} · ranked by deal value</div>`;
-  body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading queue…</div>';
+  header.innerHTML = `<div class="property-title">SOS Research Worklist</div>
+    <div class="property-source">${dom === 'government' ? 'Government' : 'Dialysis'} · by state · ranked by deal value</div>`;
+  body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading worklist…</div>';
   actions.innerHTML = `
     <button class="btn btn-sm" id="llcQGov">Government</button>
     <button class="btn btn-sm" id="llcQDia" style="margin-left:6px;">Dialysis</button>
@@ -3146,19 +3148,44 @@ async function renderLlcResearchQueue(domain) {
   $('#llcQDia')?.addEventListener('click', () => renderLlcResearchQueue('dialysis'));
   $('#llcQBack')?.addEventListener('click', () => loadPropertyTab());
 
-  const result = await apiCall(`/api/admin?_route=llc-research-queue&domain=${dom}&limit=25`, null, 'GET');
+  const stateQs = st ? `&state=${encodeURIComponent(st)}` : '';
+  const result = await apiCall(`/api/admin?_route=llc-research-queue&domain=${dom}&limit=25${stateQs}`, null, 'GET');
   if (!result.ok) {
-    body.innerHTML = `<div class="error-state">${escapeHtml(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || 'Failed to load queue')}</div>`;
+    body.innerHTML = `<div class="error-state">${escapeHtml(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || 'Failed to load worklist')}</div>`;
     return;
   }
   const items = result.data?.items || [];
+  const byState = Array.isArray(result.data?.by_state) ? result.data.by_state : [];
+  const totalEligible = Number(result.data?.total_eligible) || 0;
+
+  // State picker — highest count first. '(unknown)' maps to the NONE bucket.
+  let pickerHtml = '';
+  if (byState.length) {
+    const stLabel = st ? (st === 'NONE' ? 'Unknown state' : st) : 'All states';
+    pickerHtml = `<div class="section-label">SOS worklist — ${escapeHtml(stLabel)} · ${totalEligible.toLocaleString()} owners awaiting SOS</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">`;
+    const allActive = !st;
+    pickerHtml += `<button class="btn btn-sm llc-state-chip ${allActive ? 'btn-primary' : ''}" data-state="">All (${totalEligible.toLocaleString()})</button>`;
+    for (const s of byState) {
+      const chipState = s.state === '(unknown)' ? 'NONE' : s.state;
+      const label = s.state === '(unknown)' ? 'Unknown' : s.state;
+      const isActive = st && st === chipState;
+      pickerHtml += `<button class="btn btn-sm llc-state-chip ${isActive ? 'btn-primary' : ''}"
+        data-state="${escapeHtml(chipState)}">${escapeHtml(label)} (${Number(s.count).toLocaleString()})</button>`;
+    }
+    pickerHtml += '</div>';
+  }
+
   if (!items.length) {
-    body.innerHTML = '<div class="empty-state">Queue is empty — no owners awaiting SOS research.</div>';
+    body.innerHTML = pickerHtml + '<div class="empty-state">No owners awaiting SOS research in this state.</div>';
+    body.querySelectorAll('.llc-state-chip').forEach((chip) => {
+      chip.addEventListener('click', () => renderLlcResearchQueue(dom, chip.dataset.state || null));
+    });
     return;
   }
 
   const active = await getActiveLlcResearch();
-  let html = '<div class="section-label">Owners awaiting SOS lookup</div>';
+  let html = pickerHtml + '<div class="section-label">Owners awaiting SOS lookup</div>';
   for (const it of items) {
     const isActive = active && active.queue_id === it.queue_id && active.domain === dom;
     const loc = [it.property_city, it.property_state].filter(Boolean).join(', ');
@@ -3175,6 +3202,10 @@ async function renderLlcResearchQueue(domain) {
     </div>`;
   }
   body.innerHTML = html;
+
+  body.querySelectorAll('.llc-state-chip').forEach((chip) => {
+    chip.addEventListener('click', () => renderLlcResearchQueue(dom, chip.dataset.state || null));
+  });
 
   body.querySelectorAll('.llc-lookup-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -3265,11 +3296,13 @@ function loadOrgView(source, domainLabel) {
         domain: target.domain,
         recorded_owner_id: target.recorded_owner_id,
         queue_id: target.queue_id,
+        source_url: source.page_url || null,   // the SOS page — kept for audit/provenance
         capture,
       });
       if (result.ok) {
         sosBtn.className = 'btn btn-sm btn-success';
-        sosBtn.textContent = `✓ Saved to ${target.search_name || 'owner'}`;
+        const nObs = Number(result.data?.address_observations) || 0;
+        sosBtn.textContent = `✓ Saved to ${target.search_name || 'owner'}${nObs ? ` (+${nObs} address${nObs === 1 ? '' : 'es'})` : ''}`;
         await setActiveLlcResearch(null);   // consume the target
       } else {
         sosBtn.disabled = false;

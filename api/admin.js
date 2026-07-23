@@ -25,6 +25,7 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { buildSosAddressObservations } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
@@ -8093,13 +8094,48 @@ async function handleLlcResearchQueueList(req, res) {
   }
   const isGov = domain === 'government';
 
+  // State-sorted SOS worklist: the actionable set is status IN (queued,deferred).
+  // 'deferred' is where the automated llc-research tick parked owners awaiting a
+  // free SOS handler (the no-handler cap) — those ARE the compliant human SOS
+  // worklist, and the prior 'queued'-only read showed an empty queue. Optional
+  // ?state=<XX> batches one SOS site at a time; ?state=NONE = the unknown-state
+  // bucket.
+  const ELIGIBLE = 'status=in.(queued,deferred)';
+  const stateParam = req.query.state ? String(req.query.state).trim().toUpperCase() : null;
+
   try {
     const { domainQuery } = await import('./_shared/domain-db.js');
-    // Pull queue rows first. recorded_owner_id is REQUIRED so the sidebar can
-    // target the SOS write-back at the right owner.
+
+    // State distribution across the WHOLE eligible set (cheap: guessed_state
+    // only) so the sidebar can render a state picker with honest counts.
+    let by_state = [];
+    let total_eligible = 0;
+    try {
+      const sRes = await domainQuery(domain, 'GET',
+        'llc_research_queue?' + ELIGIBLE + '&select=guessed_state&limit=5000');
+      if (sRes.ok && Array.isArray(sRes.data)) {
+        total_eligible = sRes.data.length;
+        const counts = new Map();
+        for (const row of sRes.data) {
+          const st = (row.guessed_state && String(row.guessed_state).trim().toUpperCase()) || '(unknown)';
+          counts.set(st, (counts.get(st) || 0) + 1);
+        }
+        by_state = Array.from(counts, ([state, count]) => ({ state, count }))
+          .sort((a, b) => (b.count - a.count) || a.state.localeCompare(b.state));
+      }
+    } catch (_) { /* the picker is best-effort; the page still returns */ }
+
+    // Pull the page of owners (optionally state-filtered). recorded_owner_id is
+    // REQUIRED so the sidebar can target the SOS write-back at the right owner.
+    let pageFilter = ELIGIBLE;
+    if (stateParam === 'NONE' || stateParam === '(UNKNOWN)') {
+      pageFilter += '&guessed_state=is.null';
+    } else if (stateParam) {
+      pageFilter += '&guessed_state=eq.' + encodeURIComponent(stateParam);
+    }
     const qRes = await domainQuery(domain, 'GET',
       'llc_research_queue' +
-      '?status=eq.queued' +
+      '?' + pageFilter +
       '&select=queue_id,recorded_owner_id,property_id,search_name,guessed_state,attempts,last_attempt_at,last_error,created_at' +
       '&order=created_at.asc' +
       '&limit=' + limit
@@ -8109,7 +8145,7 @@ async function handleLlcResearchQueueList(req, res) {
     }
     const rows = Array.isArray(qRes.data) ? qRes.data : [];
     if (rows.length === 0) {
-      return res.status(200).json({ ok: true, domain, items: [], total: 0 });
+      return res.status(200).json({ ok: true, domain, items: [], total: 0, total_eligible, by_state, state: stateParam || null });
     }
 
     // Fetch property context for each queue row (single batched query)
@@ -8172,7 +8208,10 @@ async function handleLlcResearchQueueList(req, res) {
     // Sort by rev_value DESC so highest-value research surfaces first
     items.sort((a, b) => (b.rev_value || 0) - (a.rev_value || 0));
 
-    return res.status(200).json({ ok: true, domain, items, total: items.length });
+    return res.status(200).json({
+      ok: true, domain, items, total: items.length,
+      total_eligible, by_state, state: stateParam || null,
+    });
   } catch (err) {
     console.error('[llc-research-queue]', err?.message || err);
     return res.status(500).json({ error: 'llc_research_queue_failed', message: err?.message });
@@ -8402,6 +8441,67 @@ async function handleSosWriteback(req, res) {
       `recorded_owners?recorded_owner_id=eq.${ownerId}`, ownerPatch);
     if (!r.ok) return res.status(502).json({ error: 'owner_update_failed', detail: r.data });
 
+    // ── ORE Option B/A wire — feed the append-only owner-address OBSERVATIONS
+    // store + keep the raw SOS capture for audit/provenance. The curated
+    // recorded_owners write above is UNTOUCHED; this is ADDITIVE, best-effort,
+    // and NEVER blocks the writeback. Each owner-side address the capture holds
+    // (principal / registered-agent / mailing) becomes a DISTINCT source-tagged
+    // observation (source_surface='sos_sidebar', authority 70 — SOS-official)
+    // via the SAME recorder RPC the CoStar capture path uses. The manager/
+    // officer contact signal is already recorded by the recorded_owners
+    // manager_name write above (it feeds v_owner_contact_signals_portfolio →
+    // the daily lcc-owner-contact-signals-sync → owner pivots), so nothing
+    // extra is written for it. Reuse, not fork.
+    let addressObservations = 0;
+    try {
+      const shortDomain = isGov ? 'gov' : 'dia';
+      // Canonical owner name for entity resolution (best-effort; the RPC
+      // name-resolves the LCC owner entity, else the daily backfill cron does).
+      let ownerName = cap.name ? String(cap.name).trim() : null;
+      try {
+        const oR = await domainQuery(domain, 'GET',
+          `recorded_owners?recorded_owner_id=eq.${ownerId}&select=name`);
+        const nm = Array.isArray(oR.data) ? oR.data[0]?.name : null;
+        if (oR.ok && nm) ownerName = String(nm).trim();
+      } catch (_) { /* fall back to the captured entity name */ }
+
+      const sourceUrl = body.source_url ? String(body.source_url).slice(0, 1000) : null;
+      // The raw capture rides source_context so the extracted JSON + the SOS
+      // page URL are kept for audit/provenance (the "collect and keep the raw
+      // material" doctrine).
+      const rawContext = {
+        via: 'sos_writeback',
+        queue_id: Number.isFinite(queueId) ? queueId : null,
+        filing_id: ownerPatch.filing_id || null,
+        filing_state: ownerPatch[stateCol] || null,
+        registered_agent_name: ownerPatch.registered_agent_name || null,
+        manager_name: ownerPatch.manager_name || null,
+        manager_role: ownerPatch.manager_role || null,
+        capture: cap,
+      };
+
+      const addrObs = buildSosAddressObservations(cap);
+      for (const o of addrObs) {
+        try {
+          const rr = await opsQuery('POST', 'rpc/lcc_record_owner_address_observation', {
+            p_owner_entity_id: null,
+            p_owner_name: ownerName,
+            p_source_domain: shortDomain,
+            p_source_recorded_owner_id: String(ownerId),
+            p_address: o.address,
+            p_city: null,
+            p_state: null,
+            p_source_surface: 'sos_sidebar',
+            p_address_kind: o.kind,
+            p_confidence: 0.9,                 // human-read official SOS filing
+            p_source_url: sourceUrl,
+            p_source_context: rawContext,
+          });
+          if (rr.ok) addressObservations++;
+        } catch (_) { /* per-address best-effort */ }
+      }
+    } catch (_) { /* never block the writeback on the observations wire */ }
+
     let queueClosed = false;
     if (Number.isFinite(queueId)) {
       const qr = await domainQuery(domain, 'PATCH',
@@ -8423,6 +8523,7 @@ async function handleSosWriteback(req, res) {
       queue_id: Number.isFinite(queueId) ? queueId : null,
       queue_closed: queueClosed,
       applied: ownerPatch,
+      address_observations: addressObservations,
     });
   } catch (err) {
     console.error('[sos-writeback]', err?.message || err);
