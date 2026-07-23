@@ -17,7 +17,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  parseLoopNetEmail, stripHtmlToText, pickBuyerEmail, INTERNAL_EMAIL_DOMAINS,
+  parseLoopNetEmail, stripHtmlToText, pickBuyerEmail, nameFromForwardHeader,
+  INTERNAL_EMAIL_DOMAINS,
 } from '../supabase/functions/lead-ingest/loopnet.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -75,6 +76,26 @@ describe('parseLoopNetEmail — real sample fixtures', () => {
     assert.doesNotMatch(p.lead_email, INTERNAL_EMAIL_DOMAINS);
     assert.equal(p.lead_email, 'dilanigroup@gmail.com');
   });
+
+  it('Sample 3 (forwarded inquiry): recovers the buyer name from the vendor From header', () => {
+    // A forwarded / replied thread has no pipe-form "From: <Name> | phone | email"
+    // buyer line, but the Outlook "From: Jordan Blake <leads@loopnet.com>" header
+    // still carries the buyer's name (LoopNet sends on the buyer's behalf).
+    const p = parseLoopNetEmail(
+      fixture('inquiry_forward_vendor.html'),
+      fixture('inquiry_forward_vendor.subject.txt'),
+    );
+    assert.equal(p.activity_type, 'loopnet_inquiry');
+    assert.equal(p.lead_name, 'Jordan Blake');
+    assert.equal(p.lead_first_name, 'Jordan');
+    assert.equal(p.lead_last_name, 'Blake');
+    assert.equal(p.lead_email, 'jordanblake@gmail.com');
+    assert.equal(p.loopnet_listing_id, '41229087');
+    assert.equal(p.property_name, 'Fresenius Medical Care');
+    assert.equal(p.property_state, 'CA');
+    // The internal forwarder (Bryn Feller) + recipient (Scott Briggs) are never the buyer.
+    assert.doesNotMatch(p.lead_email, INTERNAL_EMAIL_DOMAINS);
+  });
 });
 
 describe('pickBuyerEmail — internal/vendor exclusion', () => {
@@ -95,6 +116,48 @@ describe('pickBuyerEmail — internal/vendor exclusion', () => {
   });
 });
 
+describe('nameFromForwardHeader — inquiry name fallback', () => {
+  it('takes the display name against a vendor (loopnet/costar) address', () => {
+    assert.equal(
+      nameFromForwardHeader('From: Jordan Blake <leads@loopnet.com>\nSent: ...', 'jordanblake@gmail.com'),
+      'Jordan Blake',
+    );
+    assert.equal(
+      nameFromForwardHeader('Sam Rivera <notifications@costar.com>', null),
+      'Sam Rivera',
+    );
+  });
+
+  it('takes the display name against the buyer\'s own email', () => {
+    assert.equal(
+      nameFromForwardHeader('From: Dana Cole <dana@buyer.co>', 'dana@buyer.co'),
+      'Dana Cole',
+    );
+  });
+
+  it('never returns an internal NorthMarq display name', () => {
+    // A NorthMarq address is neither a vendor nor the buyer, so it is ignored;
+    // the buyer sits behind the vendor address later in the thread.
+    assert.equal(
+      nameFromForwardHeader(
+        'To: Scott Briggs <sabriggs@northmarq.com>\nFrom: Chris Vale <leads@loopnet.com>',
+        'chris@somewhere.com',
+      ),
+      'Chris Vale',
+    );
+    // No eligible pairing at all -> null (best-effort, never fabricated).
+    assert.equal(
+      nameFromForwardHeader('Kelly Largent klargent@northmarq.com', 'buyer@gmail.com'),
+      null,
+    );
+  });
+
+  it('returns null on empty / no header', () => {
+    assert.equal(nameFromForwardHeader('', 'x@y.com'), null);
+    assert.equal(nameFromForwardHeader('just some prose with no email header', null), null);
+  });
+});
+
 describe('template detection', () => {
   it('subject "<Name> favorited <property>" -> loopnet_favorite', () => {
     const p = parseLoopNetEmail(
@@ -107,6 +170,19 @@ describe('template detection', () => {
     assert.equal(p.lead_phone, '555-123-4567');
     assert.equal(p.property_address, '10 Main St');
     assert.equal(p.property_state, 'TX');
+  });
+
+  it('favorite with no in-body name falls back to the subject "<Name> favorited …"', () => {
+    // The "Your Listing Is Getting Noticed!" favorite variant carries no
+    // "favorited by <name>" line — the name comes from the subject.
+    const p = parseLoopNetEmail(
+      '<html><body>Your Listing Is Getting Noticed!<br>someone@buyer.io<br>+1 555-987-6543<br>500 Oak Ave<br>Reno, NV 89501</body></html>',
+      'Taylor Reed favorited 500 Oak Ave',
+    );
+    assert.equal(p.activity_type, 'loopnet_favorite');
+    assert.equal(p.lead_name, 'Taylor Reed');
+    assert.equal(p.lead_email, 'someone@buyer.io');
+    assert.equal(p.property_state, 'NV');
   });
 
   it('subject "LoopNet Lead for <property>" -> loopnet_inquiry', () => {
