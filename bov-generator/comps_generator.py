@@ -53,10 +53,10 @@ DATA_START_ROW = 6
 # literal " (est.)" suffix to its number format and (b) apply a light amber fill.
 _EST_FILL = PatternFill("solid", fgColor="FFF3CD")
 # (flag key on the row) -> (template header token whose value cell gets marked).
-# NOTE: NOI is intentionally NOT flagged. Team Briggs policy is to use a reliable NOI
-# (and its cap) or exclude the comp entirely — the standard reliability disclaimer
-# covers accuracy, so a modeled NOI is filtered upstream, not color-coded here.
-_ESTIMATE_FLAGS = (("rent_is_imputed", "rent"),)
+# NOTE: nothing is flagged. Team Briggs policy is reliable-or-exclude for BOTH gov NOI and
+# dialysis rent — an unreliable estimate is filtered out upstream by the comps reliability gate,
+# not color-coded, and the standard reliability disclaimer covers the accuracy of what is shown.
+_ESTIMATE_FLAGS = ()
 # Recognized non-column metadata keys — present to drive rendering/provenance, not
 # to be written into a template column, so they must NOT count as "unknown".
 _META_KEYS = {

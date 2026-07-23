@@ -165,8 +165,14 @@ function displayName(c, ctx) {
 function noiIsReliable(c) {
   const q = String((c.raw || {}).cap_rate_quality || '').toLowerCase();
   if (/implausible/.test(q)) return false;
-  const modeled = (c.noi_is_modeled === true || String(c.noi_is_modeled) === 'true');
-  if (modeled) return /rolled|escalat|prior/i.test(String(c.noi_modeled_source || ''));
+  // Rolled-forward-from-actual-rent (with captured escalations) is reliable on EITHER DB.
+  if (/rolled|escalat|prior/i.test(q) || /rolled|escalat|prior/i.test(String(c.noi_modeled_source || ''))) return true;
+  // Pure estimates are NOT reliable — same policy both verticals: gov benchmark-modeled NOI, or
+  // dialysis imputed rent (its cap derives from an estimated rent).
+  const noiModeled = (c.noi_is_modeled === true || String(c.noi_is_modeled) === 'true');
+  const rentImputed = (c.rent_is_imputed === true || String(c.rent_is_imputed) === 'true'
+                       || String(c.rent_source || '').toLowerCase() === 'imputed');
+  if (noiModeled || rentImputed) return false;
   return (c.cap_rate != null) || (c.noi != null);
 }
 
@@ -218,7 +224,7 @@ export function parseRequest(text) {
   if (/\bva\b|veterans|gsa|federal|government|\bgov\b|\bagency\b|\bssa\b|social security|municipal|\birs\b|\bfbi\b|\bdea\b|uscis|\bhhs\b|\bihs\b/.test(t)) out.government_only = true;
   if (/on.?market|active listing|\bavailable\b|for sale/.test(t)) out.include_on_market = true;
   // Opt-in to include comps whose NOI/cap isn't reliable (default excludes them).
-  if (/without noi|no noi|missing noi|estimated noi|modeled noi|include estimate|regardless of noi|all comps/.test(t)) out.include_unreliable_noi = true;
+  if (/without noi|no noi|missing noi|estimated noi|modeled noi|imputed rent|estimated rent|include estimate|regardless of noi|all comps/.test(t)) out.include_unreliable_noi = true;
   const WN = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11, twelve:12 };
   const numOf = s => (/^\d+$/.test(s) ? parseInt(s, 10) : (WN[s] || null));
   let months = null, m;
