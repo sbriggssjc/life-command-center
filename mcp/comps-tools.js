@@ -88,17 +88,65 @@ function routeIntent(a) {
   const types = (a.property_types || []).map(t => String(t).toLowerCase());
   const govWords = /\bva\b|gsa|federal|government|agency|municipal/i.test(a.request || '');
   const isMedical = types.some(t => /medic|health|mob|dialysis|clinic/.test(t));
-  return { verticals: a.verticals || ['government', 'dialysis'],
-           government_only: (govWords && !isMedical) ? true : !!a.government_only };
+  const government_only = (govWords && !isMedical) ? true : !!a.government_only;
+  // Government-only requests must NOT query the dialysis DB, or private DaVita/US Renal
+  // comps bleed into a government set. Restrict to the gov vertical in that case.
+  const verticals = a.verticals || (government_only ? ['government'] : ['government', 'dialysis']);
+  return { verticals, government_only };
 }
 function scoreComp(c, a) {
   let s = 0;
   if (a.states?.includes(c.state)) s += 3;
-  if (a.property_types?.some(t => (c.property_type || '').toLowerCase().includes(String(t).toLowerCase()))) s += 3;
+  // Credit the normalized `use` too, so an agency's asset-class doubling (VA -> Medical Office)
+  // ranks consistently rather than depending on the raw building_type value.
+  if (a.property_types?.some(t => ((c.property_type || '') + ' ' + (c.use || '')).toLowerCase().includes(String(t).toLowerCase()))) s += 3;
   if (c.sale_date) { const age = (Date.now() - Date.parse(c.sale_date)) / 3.15e10; s += Math.max(0, 3 - age); }
   if (c.sale_price) s += 1;
   if (c.confidence) s += c.confidence;
   return +s.toFixed(2);
+}
+
+// ── Use normalization + multi-tenant labeling + NOI reliability (synthesis rules) ──
+// Agencies whose facilities double as MEDICAL OFFICE comps (VA CBOCs, IHS/HHS clinics).
+const _MEDICAL_AGENCIES = new Set(['VA', 'US DEPARTMENT OF VETERANS AFFAIRS', 'DEPARTMENT OF VETERANS AFFAIRS', 'IHS', 'HHS', 'FDA']);
+// Canonical asset-class ("use") so an agency's doubling is consistent + drives ranking.
+function normalizeUse(c) {
+  const raw = String(c.use || c.property_type || '').trim();
+  const ag = String(c.agency || c.tenant || '').toUpperCase();
+  if (/medical|clinic|health|mob|hospital|dialysis|behavioral/i.test(raw)) return 'Medical Office';
+  if (_MEDICAL_AGENCIES.has(ag)) return 'Medical Office';
+  if (/office/i.test(raw)) return 'Office';
+  return raw || null;
+}
+// Asset-type abbreviation for a multi-tenant display name.
+const _USE_ABBR = { 'Medical Office': 'MOB', 'Office': 'Office', 'Retail': 'Retail',
+  'Industrial': 'Industrial', 'Flex': 'Flex', 'Warehouse': 'Warehouse' };
+function isMultiTenant(c) {
+  const raw = c.raw || {};
+  if (/multi/i.test(String(raw.Tenancy__c || ''))) return true;
+  if (Number(raw.Tenants__c) > 1) return true;
+  const leased = Number(c.gov_sf_leased), rba = Number(c.rba || c.building_sf);
+  if (leased && rba && leased < rba * 0.9) return true;
+  return false;
+}
+// Multi-tenant naming: "[property abbrev] ([anchor/largest tenant])" — e.g. MOB (VA), MT (SSA),
+// Park Place MOB (Concentra). Single-tenant comps keep the tenant/agency name unchanged.
+function displayName(c) {
+  const anchor = c.agency || c.tenant || '';
+  if (!isMultiTenant(c)) return anchor || null;
+  const named = String((c.raw || {}).property_name || '').trim();
+  const abbr = named || _USE_ABBR[normalizeUse(c)] || 'MT';
+  return anchor ? `${abbr} (${anchor})` : abbr;
+}
+// Reliability of a comp's NOI/cap for DEFAULT inclusion. Reliable = a human-sourced NOI/cap
+// OR a NOI rolled from a prior actual NOI with captured escalations. NOT reliable = a pure
+// market-benchmark modeled NOI, an implausible cap, or a comp with no NOI and no cap.
+function noiIsReliable(c) {
+  const q = String((c.raw || {}).cap_rate_quality || '').toLowerCase();
+  if (/implausible/.test(q)) return false;
+  const modeled = (c.noi_is_modeled === true || String(c.noi_is_modeled) === 'true');
+  if (modeled) return /rolled|escalat|prior/i.test(String(c.noi_modeled_source || ''));
+  return (c.cap_rate != null) || (c.noi != null);
 }
 
 function argsToParams(args) {
@@ -148,6 +196,8 @@ export function parseRequest(text) {
   if (pt.size) out.property_types = [...pt];
   if (/\bva\b|veterans|gsa|federal|government|\bgov\b|\bagency\b|\bssa\b|social security|municipal|\birs\b|\bfbi\b|\bdea\b|uscis|\bhhs\b|\bihs\b/.test(t)) out.government_only = true;
   if (/on.?market|active listing|\bavailable\b|for sale/.test(t)) out.include_on_market = true;
+  // Opt-in to include comps whose NOI/cap isn't reliable (default excludes them).
+  if (/without noi|no noi|missing noi|estimated noi|modeled noi|include estimate|regardless of noi|all comps/.test(t)) out.include_unreliable_noi = true;
   const WN = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11, twelve:12 };
   const numOf = s => (/^\d+$/.test(s) ? parseInt(s, 10) : (WN[s] || null));
   let months = null, m;
@@ -185,11 +235,24 @@ export async function runComps(args, deps) {
     ? rows.push(...s.value)
     : warnings.push({ vertical: targets[i], error: String(s.reason?.message || s.reason) }));
   const merged = dedupe(rows);
+  // Normalize the `use` tag + apply the multi-tenant display name on every comp.
+  for (const c of merged) {
+    c.use = normalizeUse(c);
+    const dn = displayName(c);
+    if (dn) { c.tenant = dn; if (c.agency != null) c.agency = dn; }
+  }
+  // Government post-filter: when government_only, drop any non-government comp that slipped
+  // through from a co-queried vertical (belt-and-suspenders to the vertical restriction).
+  let kept = params.p_government_only ? merged.filter(c => c.is_government !== false) : merged;
+  // Reliability gate (Team Briggs policy): by default include only comps whose NOI/cap is
+  // reliable; exclude pure benchmark-modeled NOI, implausible caps, and no-NOI/no-cap comps.
+  const before = kept.length;
+  if (!args.include_unreliable_noi) kept = kept.filter(noiIsReliable);
   const cap = params.p_limit;
-  const comps = merged.slice(0, cap);
+  const comps = kept.slice(0, cap);
   return { comps,
-    meta: { returned: comps.length, total_before_cap: merged.length,
-            truncated: merged.length > cap,
+    meta: { returned: comps.length, total_before_cap: kept.length,
+            truncated: kept.length > cap, excluded_unreliable_noi: before - kept.length,
             by_source: comps.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
             warnings, interpreted_params: params } };
 }
@@ -204,6 +267,7 @@ export async function runSynthesize(args, deps) {
     government_only:   (args.government_only != null) ? args.government_only : p.government_only,
     date_from:         args.date_from || p.date_from,
     include_on_market: (args.include_on_market != null) ? args.include_on_market : p.include_on_market,
+    include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : p.include_unreliable_noi,
     tenant:            args.tenant || p.tenant,
   };
   const route = routeIntent(eff);
@@ -247,7 +311,7 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
   const defs = {
     query_comps: {
       name: 'query_comps',
-      description: "Pull sales comps on demand across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and de-duplicated. Canonical closed sales are gated to transaction_state='live'; Salesforce comps come from sf_comp_staging. property_types accepts plain terms (medical, office, retail, industrial, dialysis, government) expanded to source synonyms. Cap rates returned as decimals; confidential $0 sales flagged price_withheld.",
+      description: "Pull sales comps on demand across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and de-duplicated. Canonical closed sales are gated to transaction_state='live'; Salesforce comps come from sf_comp_staging. property_types accepts plain terms (medical, office, retail, industrial, dialysis, government) expanded to source synonyms. Cap rates returned as decimals; confidential $0 sales flagged price_withheld. By default only comps with a reliable NOI/cap are returned (human-sourced, or a NOI rolled from a prior NOI with captured escalations); pass include_unreliable_noi:true to also include modeled-NOI / no-NOI comps.",
       inputSchema: { type: 'object', properties: {
         comp_type: { type: 'string', enum: ['sale', 'lease', 'both'] },
         verticals: { type: 'array', items: { type: 'string', enum: ['government', 'dialysis'] } },
@@ -259,12 +323,13 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
         government_only: { type: 'boolean' },
         include_salesforce: { type: 'boolean' },
         include_on_market: { type: 'boolean' },
+        include_unreliable_noi: { type: 'boolean' },
         limit: { type: 'number' },
       } },
     },
     synthesize_comps: {
       name: 'synthesize_comps',
-      description: "Assemble one ranked, de-duplicated comp set from every relevant source for a plain-language request. Parse the request into the structured fields (property_types, states, comp_type, date window, size) and pass them; optionally include the original text as `request` for government-intent routing. Returns comps scored by relevance, ready for the briggs-comps template.",
+      description: "Assemble one ranked, de-duplicated comp set from every relevant source for a plain-language request. Parse the request into the structured fields (property_types, states, comp_type, date window, size) and pass them; optionally include the original text as `request` for government-intent routing. Returns comps scored by relevance, ready for the briggs-comps template. By default excludes comps whose NOI/cap isn't reliable; the user can say 'including estimated NOI' (or pass include_unreliable_noi:true) to include them. Multi-tenant comps are named as abbrev + anchor tenant, e.g. 'MOB (VA)'.",
       inputSchema: { type: 'object', properties: {
         request: { type: 'string' },
         comp_type: { type: 'string', enum: ['sale', 'lease', 'both'] },
@@ -273,7 +338,7 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
         metros: { type: 'array', items: { type: 'string' } },
         date_from: { type: 'string' }, date_to: { type: 'string' },
         size_min_sf: { type: 'number' }, size_max_sf: { type: 'number' },
-        government_only: { type: 'boolean' }, include_on_market: { type: 'boolean' },
+        government_only: { type: 'boolean' }, include_on_market: { type: 'boolean' }, include_unreliable_noi: { type: 'boolean' },
         limit: { type: 'number' },
       } },
     },
