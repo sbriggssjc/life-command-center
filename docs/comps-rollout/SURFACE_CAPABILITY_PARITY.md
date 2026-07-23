@@ -43,8 +43,10 @@ Legend: ✅ wired · ⬜ gap (should be wired) · ➖ n/a / by design elsewhere 
 
 ## Gaps → to reach full parity
 1. **ChatGPT/Copilot have comps only.** The 10 context/ops/memory tools + BOV/comps workbook have **no HTTP
-   routes**, so non-Claude surfaces can't reach them. Decide the boundary:
-   - **Option A (recommended): expose the read tools over HTTP.** Add `/api/*` routes on `mcp/server.js` that
+   routes**, so non-Claude surfaces can't reach them. **DECISION: Option A chosen (2026-07) — full parity.**
+   See `prompts/CCP_option_a_all_tools_http_parity.md`. Security: read-only tools only, `log_memory` stays
+   Claude-only, key rotation prioritized, per-surface keys on the roadmap.
+   - **Option A (CHOSEN): expose the read tools over HTTP.** Add `/api/*` routes on `mcp/server.js` that
      call the same tool handlers (search_entities, get_property_context, get_contact_context, get_daily_briefing,
      get_queue_summary, get_pipeline_health), and extend the OpenAPI so ChatGPT + Copilot reach them too. Memory
      tools optional. → true parity on read capabilities.
