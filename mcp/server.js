@@ -1338,6 +1338,59 @@ function authenticate(req, res, next) {
   next();
 }
 
+// ── Read-tool HTTP surface (Option A — full read-capability parity) ──────────
+// Every READ tool is exposed over HTTP by reusing the EXACT same
+// TOOL_HANDLERS[name] implementation the MCP surface uses, then unwrapping the
+// textResult envelope back to the raw JSON the tool produced. One implementation
+// per tool ⇒ the MCP and HTTP surfaces cannot diverge — the same guarantee
+// comps-tools gets from a shared runComps, without relocating the handlers'
+// DB logic out of server.js.
+//
+// READ-ONLY by construction: only tools in READ_ONLY_HTTP_TOOLS may be mounted.
+// None of them mutates domain/CRM/queue data (they SELECT and return);
+// get_property_context may warm the shared context-packet cache exactly as its
+// MCP counterpart does. The one WRITE tool (log_memory) is intentionally
+// excluded and can never reach HTTP — makeReadHttpRoute throws if asked.
+const READ_ONLY_HTTP_TOOLS = new Set([
+  "search_entities",
+  "get_property_context",
+  "get_contact_context",
+  "get_daily_briefing",
+  "get_queue_summary",
+  "get_pipeline_health",
+  "recall_memory",
+]);
+
+// MCP tools return { content: [{ type: 'text', text: <JSON string> }] } (and
+// withTiming wraps thrown errors in the same envelope). Peel it back to the
+// object the tool actually returned so HTTP callers get plain JSON.
+function unwrapToolResult(result) {
+  const text = result?.content?.[0]?.text;
+  if (typeof text === "string") {
+    try { return JSON.parse(text); } catch { return { raw: text }; }
+  }
+  return result;
+}
+
+function makeReadHttpRoute(toolName) {
+  // Belt-and-suspenders: a wiring mistake can never expose a write tool.
+  if (!READ_ONLY_HTTP_TOOLS.has(toolName)) {
+    throw new Error(`makeReadHttpRoute refused non-read-only tool: ${toolName}`);
+  }
+  return async (req, res) => {
+    // Read-only: this route calls the read tool's handler and returns its JSON.
+    try {
+      const handler = TOOL_HANDLERS[toolName];
+      if (typeof handler !== "function") {
+        return res.status(500).json({ error: `tool ${toolName} not registered` });
+      }
+      res.json(unwrapToolResult(await handler(req.body || {})));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  };
+}
+
 // ── Auth middleware for /mcp ─────────────────────────────────────────────
 app.use('/mcp', authenticate);
 
@@ -1702,16 +1755,11 @@ app.get("/health", (_req, res) => {
     status: "ok",
     server: "lcc-mcp-server",
     version: "1.0.0",
-    tools: [
-      "get_daily_briefing",
-      "search_entities",
-      "get_property_context",
-      "get_contact_context",
-      "get_queue_summary",
-      "get_pipeline_health",
-      "generate_bov",
-      "generate_comps",
-    ],
+    // Derived so it always reflects every registered tool (incl. comps, which
+    // are Object.assign'd onto TOOL_DEFINITIONS at startup).
+    tools: Object.keys(TOOL_DEFINITIONS),
+    http_read_routes: Object.keys(READ_HTTP_ROUTES),
+    http_comps_routes: ["/api/query-comps", "/api/synthesize-comps"],
     ops_configured: !!(OPS_SUPABASE_URL && OPS_SUPABASE_KEY),
     gov_configured: !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY),
   });
@@ -1744,6 +1792,24 @@ app.get("/", (_req, res) => {
   app.post("/api/synthesize-comps", authenticate, __compsRoutes.synthesizeComps);
   console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps");
 }
+
+// ── Read-tool HTTP routes — full surface parity for ChatGPT + Copilot ────────
+// Same engine as the MCP tools above (each route reuses TOOL_HANDLERS[name] via
+// makeReadHttpRoute), Bearer-authenticated via `authenticate`. Read-only; the
+// WRITE tool log_memory has no route (stays Claude/MCP-only by design).
+const READ_HTTP_ROUTES = {
+  "/api/search-entities": "search_entities",
+  "/api/property-context": "get_property_context",
+  "/api/contact-context": "get_contact_context",
+  "/api/daily-briefing": "get_daily_briefing",
+  "/api/queue-summary": "get_queue_summary",
+  "/api/pipeline-health": "get_pipeline_health",
+  "/api/recall-memory": "recall_memory",
+};
+for (const [routePath, toolName] of Object.entries(READ_HTTP_ROUTES)) {
+  app.post(routePath, authenticate, makeReadHttpRoute(toolName));
+}
+console.log("[MCP] Registered read HTTP routes:", Object.keys(READ_HTTP_ROUTES).join(", "));
 
 // ── Start ────────────────────────────────────────────────────────────────────
 
