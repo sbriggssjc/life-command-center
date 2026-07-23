@@ -45,7 +45,7 @@ Alternatively, Railway's nixpacks will auto-detect `package.json` and run `npm s
 3. Enter:
    - **URL:** `https://your-railway-domain.up.railway.app/mcp`
    - **Authentication:** Header → `Authorization: Bearer YOUR_LCC_API_KEY`
-4. Claude will discover all 6 tools automatically
+4. Claude will discover all 12 tools automatically
 
 ## Tools
 
@@ -97,6 +97,29 @@ Check the status of all data pipelines — last run times, success rates, and an
 - "Are all pipelines healthy?"
 - "When did the GSA diff last run?"
 - "Any pipeline failures I should know about?"
+
+### 7. `search_entities` / `get_property_context` / `get_contact_context`
+See sections 2–4 above (deal/contact context).
+
+### 8. `query_comps`
+Pull sales comps on demand across the dialysis DB, government DB, and Salesforce-staged comps — normalized,
+de-duplicated, reliable-or-exclude by default (human-sourced or rolled-forward NOI; excludes modeled/imputed
+unless `include_unreliable_noi`). Cap rates as decimals; request-aware multi-tenant naming (`MOB (VA)` / `MT (SSA)`).
+
+### 9. `synthesize_comps`
+Same engine from a plain-language request (parses states, property types, tenant, date window, government intent),
+relevance-scored. Returns `meta.flagged_for_review` for comps whose cap/rent didn't reconcile.
+
+### 10. `generate_comps`
+Build the populated Briggs sales/lease comps workbook from comp rows (`vertical: "dialysis"` adds CHAIRS/PATIENTS;
+government routes to the government template). Formula-protected columns are never written.
+
+### 11. `generate_bov`
+Build the Briggs BOV workbook. Record-first: pass `property_lookup` (address) or `cre_property_id` for a known LCC
+property and every caller gets the identical workbook; hand-author only brand-new deals.
+
+### 12. `log_memory` / `recall_memory`
+Persist and recall durable notes across sessions.
 
 ## Endpoints
 
