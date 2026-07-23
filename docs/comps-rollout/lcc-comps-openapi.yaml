@@ -1,0 +1,188 @@
+openapi: 3.0.3
+info:
+  title: LCC Comps API
+  description: >
+    Unified CRE sales-comps engine for Team Briggs. One shared core (dialysis DB + government DB +
+    Salesforce-staged comps), normalized to one shape and de-duplicated, with the reliable-or-exclude
+    NOI/rent policy, request-aware multi-tenant naming (MOB/MT + anchor tenant), and cap/rent
+    reconciliation flags applied identically on every surface. Cap rates are decimals (0.0745 = 7.45%).
+    Powers the ChatGPT GPT Action and the Copilot Studio custom connector; the same logic backs the
+    Claude MCP tools query_comps / synthesize_comps.
+  version: 1.0.0
+servers:
+  - url: https://REPLACE-WITH-YOUR-MCP-RAILWAY-DOMAIN.up.railway.app
+    description: LCC MCP server (set to the value of MCP_BASE_URL; the /api/* comps routes live here)
+security:
+  - bearerAuth: []
+paths:
+  /api/query-comps:
+    post:
+      operationId: queryComps
+      summary: Pull sales comps with explicit structured filters.
+      description: >
+        Returns comps matching the given filters, de-duplicated across dialysis, government, and
+        Salesforce sources. By default only comps with a RELIABLE NOI/cap are returned (human-sourced,
+        or an NOI rolled forward from a prior NOI with captured escalations); set include_unreliable_noi
+        to also include modeled/estimated ones. Closed sales are gated to live transactions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryCompsRequest'
+      responses:
+        '200':
+          description: Ranked, de-duplicated comp set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompsResponse'
+        '401':
+          description: Missing or invalid Bearer token.
+  /api/synthesize-comps:
+    post:
+      operationId: synthesizeComps
+      summary: Assemble a ranked comp set from a plain-language request.
+      description: >
+        Parses a natural-language request (e.g. "medical office VA comps in Texas, last 12 months")
+        into structured filters, routes government-only intent away from the dialysis DB, scores by
+        relevance, and returns the ranked set. Pass the raw text as `request`; any explicit field
+        overrides the parsed value.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SynthesizeCompsRequest'
+      responses:
+        '200':
+          description: Ranked, de-duplicated, relevance-scored comp set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompsResponse'
+        '401':
+          description: Missing or invalid Bearer token.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 'Send: Authorization: Bearer <LCC_API_KEY>'
+  schemas:
+    QueryCompsRequest:
+      type: object
+      properties:
+        comp_type:
+          type: string
+          enum: [sale, lease, both]
+          default: sale
+        verticals:
+          type: array
+          items: { type: string, enum: [government, dialysis] }
+          description: Which canonical DBs to query. Omit for both.
+        property_types:
+          type: array
+          items: { type: string }
+          description: Plain terms (medical, office, retail, industrial, dialysis, government) expanded to source synonyms.
+        states:
+          type: array
+          items: { type: string }
+          description: Two-letter state codes.
+        metros:
+          type: array
+          items: { type: string }
+        date_from: { type: string, format: date }
+        date_to: { type: string, format: date }
+        size_min_sf: { type: number }
+        size_max_sf: { type: number }
+        government_only:
+          type: boolean
+          description: Restrict to government-tenanted comps (also blocks the dialysis DB).
+        include_salesforce:
+          type: boolean
+          default: true
+        include_on_market:
+          type: boolean
+          default: false
+        include_unreliable_noi:
+          type: boolean
+          default: false
+          description: Include comps whose NOI/cap is modeled/estimated (default excludes them).
+        tenant:
+          type: string
+          description: Scope to an operator/tenant (e.g. DaVita, Fresenius, US Renal).
+        limit:
+          type: number
+          default: 200
+    SynthesizeCompsRequest:
+      type: object
+      required: [request]
+      properties:
+        request:
+          type: string
+          description: Plain-language comp request.
+        comp_type: { type: string, enum: [sale, lease, both] }
+        property_types: { type: array, items: { type: string } }
+        states: { type: array, items: { type: string } }
+        metros: { type: array, items: { type: string } }
+        date_from: { type: string, format: date }
+        date_to: { type: string, format: date }
+        size_min_sf: { type: number }
+        size_max_sf: { type: number }
+        government_only: { type: boolean }
+        include_on_market: { type: boolean }
+        include_unreliable_noi: { type: boolean }
+        limit: { type: number }
+    CompsResponse:
+      type: object
+      properties:
+        comps:
+          type: array
+          items: { $ref: '#/components/schemas/Comp' }
+        meta:
+          type: object
+          properties:
+            returned: { type: integer }
+            total_before_cap: { type: integer }
+            flagged_for_review:
+              type: integer
+              description: Count of comps whose cap/rent tripped a reconciliation flag.
+            review_flags:
+              type: array
+              items: { type: object, additionalProperties: true }
+              description: Compact per-comp flag list (comp_id, address, flags, implied_cap, reliable_cap, ask, sold).
+            excluded_unreliable_noi: { type: integer }
+            by_source: { type: object, additionalProperties: { type: integer } }
+            warnings: { type: array, items: { type: object, additionalProperties: true } }
+            interpreted_params: { type: object, additionalProperties: true }
+        markdown:
+          type: string
+          description: Ready-to-render comps table (the shared format every surface shows).
+    Comp:
+      type: object
+      description: One normalized comp. Cap rates are decimals. Extra fields may be present.
+      additionalProperties: true
+      properties:
+        comp_id: { type: string }
+        source: { type: string, description: dialysis_db | government_db | salesforce }
+        vertical: { type: string, enum: [government, dialysis] }
+        tenant: { type: string, description: Display name (multi-tenant rendered as "MOB (VA)" / "MT (SSA)"). }
+        agency: { type: string }
+        address: { type: string }
+        city: { type: string }
+        state: { type: string }
+        building_sf: { type: number }
+        sale_price: { type: number }
+        price_withheld: { type: boolean }
+        cap_rate: { type: number, description: Decimal (0.0745 = 7.45%). }
+        noi: { type: number }
+        annual_rent: { type: number }
+        rent_is_imputed: { type: boolean }
+        sale_date: { type: string, format: date }
+        chairs: { type: number, description: Dialysis only. }
+        patient_count: { type: number, description: Dialysis only. }
+        review_flags:
+          type: array
+          items: { type: string }
+          description: e.g. cap_mismatch, rent_disagreement, price_over_ask (present only when flagged).
