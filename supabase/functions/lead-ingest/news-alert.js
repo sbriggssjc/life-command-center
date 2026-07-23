@@ -15,6 +15,12 @@
 // A match has a *kind* that drives the confidence gate:
 //   exact    — the article names a tracked tenant (canonical name)   -> auto
 //   alias    — the article names a known alias / DBA of a tenant      -> auto
+//   slug     — the tenant name appeared ONLY in the URL path/slug     -> review
+//              (a weaker signal than a real title/body mention: slugs are
+//               auto-generated, truncatable, and occasionally misleading, so a
+//               slug-only hit is capped BELOW the auto threshold and always
+//               routes to review; a combined signal — slug + city/state — can
+//               push it over)
 //   keyword  — only a loose domain keyword matched (no tenant named)  -> review
 //   none     — nothing recognizable matched                          -> review
 //
@@ -79,8 +85,18 @@ export const NEWS_ALERT_DEDUP_DAYS = 90;
 
 // Base confidence + per-kind ceiling: a loose keyword/none match can NEVER clear
 // the auto threshold (so it always routes to the review queue).
-const MATCH_BASE = { exact: 0.85, alias: 0.78, keyword: 0.5, none: 0.2 };
-const MATCH_CEIL = { exact: 0.98, alias: 0.92, keyword: 0.65, none: 0.4 };
+//
+// `slug` (a tenant named ONLY in the URL path) sits BETWEEN keyword and alias:
+// higher than a generic keyword (it identified a real tenant) but lower than a
+// title/body mention (a slug is a weaker, occasionally-misleading source). Tuned
+// so a slug-ONLY hit stays under the 0.7 auto threshold even with the
+// always-present article_url bonus (0.65 + 0.03 = 0.68 -> review), while a
+// combined signal (slug + city/state) crosses it (0.65 + 0.05 + 0.03 = 0.73 ->
+// auto). CHOICE FLAG: these two values (base 0.65 / ceil 0.75) are the tunable
+// slug tier — revisit against real slug-match false-positive/negative rates as
+// more mobile-share volume comes through.
+const MATCH_BASE = { exact: 0.85, alias: 0.78, slug: 0.65, keyword: 0.5, none: 0.2 };
+const MATCH_CEIL = { exact: 0.98, alias: 0.92, slug: 0.75, keyword: 0.65, none: 0.4 };
 
 // ── Normalization ────────────────────────────────────────────────────────────
 function norm(text) {
@@ -114,21 +130,33 @@ function watchlistRules(watchlist) {
   return rules;
 }
 
-/**
- * Grade how directly the given text matches a tracked tenant.
- * Accepts an array of text fragments (tenant field, subject, body snippet).
- * Returns the STRONGEST match { tenant, domain, match_kind, matched } or null.
- * Preference: exact tenant name > alias > loose keyword.
- */
-export function matchTenant(textParts, watchlist) {
-  const parts = Array.isArray(textParts) ? textParts : [textParts];
-  const haystack = norm(parts.filter(Boolean).join(" "));
+// Reduce a URL to the human-readable text of its path/slug (the portion AFTER
+// the domain), for tracked-tenant scanning. A real https URL yields its
+// `/path?query#fragment` tail (percent-decoded); a non-http / bare-host / empty
+// value yields "" (nothing to scan). Hyphens/underscores/slashes need no special
+// handling here — `norm()` collapses every non-alphanumeric run to a space, so
+// `new-net-lease-opportunity-davita-dialysis-share-…` normalizes to
+// `new net lease opportunity davita dialysis share …` and phrase-matches cleanly.
+export function urlSlugText(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  const m = /^https?:\/\/[^/]+(\/[^\s]*)?$/i.exec(raw);
+  if (!m) return "";              // not an http(s) URL (e.g. about:blank) — no slug
+  let tail = m[1] || "";          // path (+ ?query #fragment), or "" for a bare host
+  try { tail = decodeURIComponent(tail); } catch { /* keep raw on malformed % */ }
+  return tail;
+}
+
+// Grade a single normalized haystack against the watchlist rules. Returns the
+// STRONGEST match { tenant, domain, match_kind, matched } or null.
+// Preference: exact tenant name > alias > loose keyword.
+function bestMatchOver(haystack, rules) {
   if (haystack.trim() === "") return null;
 
   let bestAlias = null;
   let keywordHit = null;
 
-  for (const { domain, name, aliases, keywords } of watchlistRules(watchlist)) {
+  for (const { domain, name, aliases, keywords } of rules) {
     if (phraseIn(name, haystack)) {
       return { tenant: name, domain, match_kind: "exact", matched: name };
     }
@@ -150,6 +178,48 @@ export function matchTenant(textParts, watchlist) {
     }
   }
   return bestAlias || keywordHit;
+}
+
+/**
+ * Grade how directly the given text matches a tracked tenant.
+ * Accepts an array of text fragments (tenant field, subject, body snippet).
+ * Returns the STRONGEST match { tenant, domain, match_kind, matched } or null.
+ *
+ * When `options.url` is supplied and the CONTENT parts produced no explicit
+ * tenant name (only a keyword, or nothing), the URL path/slug is scanned as a
+ * FALLBACK. A tenant named only in the slug is returned as `match_kind:'slug'`
+ * — a LOWER confidence tier than a title/body mention (see MATCH_BASE/CEIL): it
+ * cannot auto-create on its own but a combined signal can push it over. A strong
+ * content mention (exact/alias) always wins over the slug; a keyword-only slug
+ * hit is NOT promoted (a generic domain word in a URL adds nothing over a content
+ * keyword). No `url` ⇒ byte-identical to the pre-slug behavior.
+ */
+export function matchTenant(textParts, watchlist, options = {}) {
+  const rules = watchlistRules(watchlist);
+  const parts = Array.isArray(textParts) ? textParts : [textParts];
+  const contentMatch = bestMatchOver(norm(parts.filter(Boolean).join(" ")), rules);
+
+  // A real title/body tenant mention is the strongest signal — it always wins.
+  if (contentMatch && (contentMatch.match_kind === "exact" || contentMatch.match_kind === "alias")) {
+    return contentMatch;
+  }
+
+  // Fallback: the tenant may be named only in the URL slug. Promote an exact/alias
+  // slug hit to the weaker `slug` tier (a named tenant beats a content keyword).
+  const slugMatch = bestMatchOver(norm(urlSlugText(options.url)), rules);
+  if (slugMatch && (slugMatch.match_kind === "exact" || slugMatch.match_kind === "alias")) {
+    return {
+      tenant: slugMatch.tenant,
+      domain: slugMatch.domain,
+      match_kind: "slug",
+      matched: slugMatch.matched,
+      via: "url_slug",
+      slug_source_kind: slugMatch.match_kind, // exact | alias — how the slug matched
+    };
+  }
+
+  // Otherwise keep the weaker content signal (keyword) if any, else null.
+  return contentMatch;
 }
 
 function clamp01(x) {
@@ -323,7 +393,12 @@ export function parseGoogleAlert(rawBody, subject, watchlist) {
   const subjTerm = (subj.replace(/^\s*(Fwd?|FW|RE):\s*/i, "")
     .match(/Google Alert(?:s)?\s*[-–:]\s*(.+)$/i) || [])[1] || null;
 
-  const match = matchTenant([subjTerm, subj, body.slice(0, 4000)], watchlist);
+  // Resolve the article link FIRST so its slug is available to matchTenant as a
+  // fallback signal (the publisher URL slug often names the tenant even when the
+  // html2text headline is truncated / generic).
+  const { article_url, article_title, summary } = extractArticle(body, subjTerm);
+
+  const match = matchTenant([subjTerm, subj, body.slice(0, 4000)], watchlist, { url: article_url });
   const tenant_name = (match && match.tenant) || (subjTerm ? subjTerm.trim() : null);
 
   // Location: first "City, ST" in the body — 1-3 Title-Case words directly
@@ -332,8 +407,6 @@ export function parseGoogleAlert(rawBody, subject, watchlist) {
   const loc = body.match(/\b([A-Z][a-z.\-']+(?:\s+[A-Z][a-z.\-']+){0,2}),\s*([A-Z]{2})\b/);
   const city = loc ? loc[1].trim() : null;
   const state = loc ? loc[2].trim() : null;
-
-  const { article_url, article_title, summary } = extractArticle(body, subjTerm);
 
   return {
     tenant_name,

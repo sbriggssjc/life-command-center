@@ -73,7 +73,10 @@ function isLinkedInUrl(url) {
 export function classifyMobileShare({ url, title, selected_text }, watchlist = DEFAULT_TRACKED_TENANTS) {
   const source = isLinkedInUrl(url) ? 'linkedin' : 'web_share';
   const parts = [title, selected_text];
-  const match = matchTenant(parts, watchlist);
+  // Pass the shared URL so a tenant named only in the slug (e.g. a LinkedIn post
+  // that hands the Shortcut a bare URL, no title/body) is still recognized —
+  // as the weaker `slug` tier that routes to review on its own.
+  const match = matchTenant(parts, watchlist, { url });
   const { city, state } = extractCityState([title, selected_text].filter(Boolean).join(' '));
   const article_url = /^https?:\/\//i.test(String(url || '')) ? url : null;
   const confidence = scoreNewsAlert(match, { city, state, article_url });
