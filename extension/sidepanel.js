@@ -547,6 +547,12 @@ $$('.tab-btn').forEach((btn) => {
   });
 });
 
+// Persistent Property-tab footer: the SOS Research Worklist is reachable
+// regardless of context (no scan required). Lives outside the render targets
+// (#propertyHeader/#propertyBody/#propertyActions), so it survives every
+// re-render and only needs wiring once.
+$('#sosWorklistBtn')?.addEventListener('click', () => renderLlcResearchQueue('government'));
+
 function switchTab(tab) {
   currentTab = tab;
   $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
@@ -701,9 +707,16 @@ async function loadPropertyTab(opts) {
       <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">
         Works on county assessors, recorders, SOS sites, and more
       </div>
+      <div style="margin-top:14px;">
+        <button class="btn btn-sm btn-secondary" id="worklistBtnEmpty">📋 SOS Research Worklist</button>
+        <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">
+          Start SOS research — pick a state, then an owner to look up
+        </div>
+      </div>
     </div>`;
     actions.innerHTML = '';
     wireScanButton();
+    $('#worklistBtnEmpty')?.addEventListener('click', () => renderLlcResearchQueue('government'));
     return;
   }
 
