@@ -88,6 +88,39 @@ describe('classifyMobileShare — reuses news-alert scoring', () => {
     const c = classifyMobileShare({ url: 'about:blank', title: 'DaVita opens Dallas, TX clinic' });
     assert.equal(c.article_url, null);
   });
+
+  // The real 2026 miss: a shared LinkedIn post handed the Shortcut a BARE URL —
+  // no title, no selected_text — but the slug names DaVita. Before the fix this
+  // classified match_kind 'none' / conf 0.23 → needs_review with no signal. Now
+  // the tenant is RECOGNIZED at the weaker `slug` tier (still needs_review on its
+  // own — a slug is not enough to auto-create).
+  it('DaVita in a LinkedIn URL slug (no title/body) → recognized as slug, routes to review', () => {
+    const c = classifyMobileShare({
+      url: 'https://www.linkedin.com/posts/new-net-lease-opportunity-davita-dialysis-share-7478175811510927360-R9gG',
+    });
+    assert.equal(c.source, 'linkedin');
+    assert.equal(c.match_kind, 'slug');
+    assert.equal(c.tenant, 'DaVita');
+    assert.equal(c.domain, 'dialysis');
+    assert.equal(c.route.route, 'review');           // slug-only never auto-creates
+    assert.ok(c.confidence < 0.7);
+  });
+
+  // A slug tenant plus a city/state signal from the shared text CAN cross the
+  // auto threshold (combined signal), so the tenant does not need to appear in
+  // the title/body for a strong share to auto-create.
+  it('slug tenant + city/state in the shared text → auto', () => {
+    const c = classifyMobileShare({
+      url: 'https://www.linkedin.com/posts/davita-dialysis-share-123',
+      title: 'New net lease opportunity in Dallas, TX',
+    });
+    assert.equal(c.match_kind, 'slug');
+    assert.equal(c.tenant, 'DaVita');
+    assert.equal(c.city, 'Dallas');
+    assert.equal(c.state, 'TX');
+    assert.equal(c.route.route, 'auto');
+    assert.ok(c.confidence >= 0.7);
+  });
 });
 
 describe('decideMobileShareOutcome — routing tree', () => {

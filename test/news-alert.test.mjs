@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   matchTenant, scoreNewsAlert, routeNewsAlert, parseGoogleAlert, tenantDedupKey,
-  NEWS_ALERT_AUTO_THRESHOLD, DEFAULT_TRACKED_TENANTS,
+  urlSlugText, NEWS_ALERT_AUTO_THRESHOLD, DEFAULT_TRACKED_TENANTS,
 } from '../supabase/functions/lead-ingest/news-alert.js';
 
 describe('matchTenant — cross-vertical', () => {
@@ -60,6 +60,85 @@ describe('matchTenant — cross-vertical', () => {
     assert.equal(m.tenant, 'WawaCo');
     // Seed tenants are not present in the override.
     assert.equal(matchTenant(['DaVita opens clinic'], wl), null);
+  });
+});
+
+describe('urlSlugText', () => {
+  it('returns the path/slug of an https URL', () => {
+    assert.equal(
+      urlSlugText('https://www.linkedin.com/posts/new-net-lease-opportunity-davita-dialysis-share-7478175811510927360-R9gG'),
+      '/posts/new-net-lease-opportunity-davita-dialysis-share-7478175811510927360-R9gG',
+    );
+  });
+  it('includes query + fragment, percent-decoded', () => {
+    assert.equal(urlSlugText('https://n.example/a%20b?x=davita#frag'), '/a b?x=davita#frag');
+  });
+  it('a bare host has no slug', () => {
+    assert.equal(urlSlugText('https://www.linkedin.com'), '');
+  });
+  it('a non-http value yields nothing', () => {
+    assert.equal(urlSlugText('about:blank'), '');
+    assert.equal(urlSlugText(''), '');
+    assert.equal(urlSlugText(null), '');
+  });
+});
+
+describe('matchTenant — URL-slug fallback', () => {
+  // The real miss (2026): a shared LinkedIn post handed the Shortcut a bare URL
+  // (no title/body), but the slug names the tenant. It must be RECOGNIZED, at the
+  // weaker `slug` tier, and still route to review on its own.
+  it('DaVita in a LinkedIn URL slug, no title/body → slug tier, tenant + domain resolved', () => {
+    const m = matchTenant([], DEFAULT_TRACKED_TENANTS, {
+      url: 'https://www.linkedin.com/posts/new-net-lease-opportunity-davita-dialysis-share-7478175811510927360-R9gG',
+    });
+    assert.equal(m.match_kind, 'slug');
+    assert.equal(m.tenant, 'DaVita');
+    assert.equal(m.domain, 'dialysis');
+    assert.equal(m.via, 'url_slug');
+    // A slug-only hit is capped below the auto threshold even with the
+    // always-present article_url bonus → routes to review, never auto-creates.
+    const conf = scoreNewsAlert(m, { article_url: 'https://x/y' });
+    assert.ok(conf < NEWS_ALERT_AUTO_THRESHOLD, `slug-only conf ${conf} must stay < threshold`);
+    assert.equal(routeNewsAlert(conf).route, 'review');
+  });
+
+  it('slug tenant + a city/state signal → over the auto threshold', () => {
+    const m = matchTenant(['New net lease opportunity in Dallas, TX'], DEFAULT_TRACKED_TENANTS, {
+      url: 'https://www.linkedin.com/posts/davita-dialysis-share-123',
+    });
+    // "net lease" is a content keyword; the named-tenant slug beats it.
+    assert.equal(m.match_kind, 'slug');
+    assert.equal(m.tenant, 'DaVita');
+    const conf = scoreNewsAlert(m, { city: 'Dallas', state: 'TX', article_url: 'https://x/y' });
+    assert.ok(conf >= NEWS_ALERT_AUTO_THRESHOLD, `slug + city/state conf ${conf} should clear threshold`);
+    assert.equal(routeNewsAlert(conf).route, 'auto');
+  });
+
+  it('a content mention (title/body) always wins over the slug tier', () => {
+    const m = matchTenant(['Fresenius opens a new clinic'], DEFAULT_TRACKED_TENANTS, {
+      url: 'https://www.linkedin.com/posts/davita-dialysis-123',
+    });
+    assert.equal(m.match_kind, 'exact');   // "Fresenius" from content, not the DaVita slug
+    assert.equal(m.tenant, 'Fresenius');
+  });
+
+  it('a slug that names no tracked tenant → the content result is unchanged (null)', () => {
+    assert.equal(matchTenant([], DEFAULT_TRACKED_TENANTS, {
+      url: 'https://www.linkedin.com/posts/local-bakery-expands-downtown-123',
+    }), null);
+  });
+
+  it('a keyword-only slug is NOT promoted (generic domain word in a URL)', () => {
+    // "dialysis" is a keyword; a keyword-in-slug adds nothing over content, so
+    // with no content signal the result stays null (not a slug match).
+    assert.equal(matchTenant([], DEFAULT_TRACKED_TENANTS, {
+      url: 'https://n.example/new-dialysis-center-opens-123',
+    }), null);
+  });
+
+  it('no url ⇒ byte-identical to the pre-slug behavior', () => {
+    assert.equal(matchTenant(['Local bakery expands downtown']), null);
+    assert.equal(matchTenant(['DaVita opens clinic']).match_kind, 'exact');
   });
 });
 
@@ -182,6 +261,23 @@ describe('parseGoogleAlert', () => {
     assert.equal(p.article_url, null);            // no real article link present
     assert.ok(!/logo\.png/i.test(String(p.article_title)));
     assert.ok(!/logo\.png/i.test(String(p.summary)));
+  });
+
+  it('resolves the tenant from the publisher URL slug when the headline is generic', () => {
+    // Headline names no tenant; the unwrapped publisher URL slug does. The slug
+    // fallback should identify DaVita at the weaker `slug` tier.
+    const subject = 'Google Alert - net lease';
+    const body = [
+      'New net lease investment sale closes',
+      'https://www.google.com/url?rct=j&sa=t&url=https%3A%2F%2Fnews.example%2Fdavita-dialysis-sale-leaseback&ct=ga',
+    ].join('\n');
+    const p = parseGoogleAlert(body, subject);
+    assert.equal(p.match.match_kind, 'slug');
+    assert.equal(p.match.tenant, 'DaVita');
+    assert.equal(p.match.domain, 'dialysis');
+    // Slug-only (no City, ST) stays below the auto threshold.
+    const conf = scoreNewsAlert(p.match, p);
+    assert.equal(routeNewsAlert(conf).route, 'review');
   });
 });
 
