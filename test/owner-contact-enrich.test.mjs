@@ -265,3 +265,57 @@ describe('summarizeResolution (Phase 2 acquisition-cost breakdown)', () => {
     assert.equal(out.needs_adapter, 0);
   });
 });
+
+// ORE Build 2 (2026-07-23) — reconcile-on-write (enqueue after an attach) +
+// the address dimension feeding the address-reverse adapter input.
+describe('ORE Build 2 — reconcile-on-write + address-dimension adapter feed', () => {
+  it('enqueues the owner for reconcile after a successful attach (best-effort)', async () => {
+    const enqueued = [];
+    const { deps } = recordingDeps({ enqueueReconcile: async (id, reason) => { enqueued.push([id, reason]); } });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: 'Charles Lomangino', active_authority_level: 2, active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'attached');
+    assert.deepEqual(enqueued, [['own-1', 'contact_attached']]);
+  });
+
+  it('does NOT enqueue when nothing attached (drill-through / research)', async () => {
+    const enqueued = [];
+    const { deps } = recordingDeps({ enqueueReconcile: async (id, r) => { enqueued.push([id, r]); } });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: 'Boyd Watterson Asset Management LLC', active_authority_level: 2, active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'manager_drillthrough');
+    assert.equal(enqueued.length, 0);
+  });
+
+  it('is byte-identical when no enqueueReconcile dep is injected (never throws)', async () => {
+    const { deps } = recordingDeps();   // no enqueueReconcile
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: 'Jane Smith', active_authority_level: 3, active_contact_entity_id: null }, deps);
+    assert.equal(out.outcome, 'attached');
+  });
+
+  it('address-reverse adapter is fed the owner notice address from the dimension', async () => {
+    let sawRow = null;
+    const { deps } = recordingDeps({
+      getOwnerNoticeAddress: async () => '123 Main St, Denver, CO',
+      addressLookup: async (row) => { sawRow = row; return { ok: true, person_name: 'John Q Owner', role: 'economic_owner_contact' }; },
+    });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, active_contact_entity_id: null, enrichment_action: 'address_reverse_lookup' }, deps);
+    // the adapter saw the sourced notice address, then a resolve → attach
+    assert.equal(sawRow.notice_address, '123 Main St, Denver, CO');
+    assert.equal(out.outcome, 'attached');
+    assert.equal(out.source, 'address');
+  });
+
+  it('address sourcing is skipped when no getOwnerNoticeAddress dep (unconfigured adapter path)', async () => {
+    let sawRow = null;
+    const { deps } = recordingDeps({
+      addressLookup: async (row) => { sawRow = row; return { ok: false, reason: 'unconfigured' }; },
+    });
+    const out = await processOwnerEnrichmentRow(
+      { ...ownerBase, active_contact_name: null, active_contact_entity_id: null, enrichment_action: 'address_reverse_lookup' }, deps);
+    assert.equal(sawRow.notice_address, undefined);   // never sourced → adapter no-ops
+    assert.notEqual(out.outcome, 'attached');
+  });
+});
