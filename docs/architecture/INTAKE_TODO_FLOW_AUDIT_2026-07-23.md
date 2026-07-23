@@ -165,6 +165,51 @@ The **live-risk** ones (flows/config that could actually be called):
   guard (`status=completed` AND completed 90d+), and it does **not** overlap or
   interfere with the Weekly Retention Sweep.
 
+### 4.1 One-time 60k backlog cleanup — BLOCKED, pending IT (2026-07-23)
+
+The go-forward `flagged-email-cleanup-sweep.md` flow (§4) prunes NEW completed
+tasks, but the **existing ~60k-task backlog** on the "Flagged email" To-Do list
+needs a one-time bulk delete that the sweep flow cannot reach. Investigation
+2026-07-23 established that the only viable mechanism is blocked by tenant policy:
+
+- **Path B (Power Automate `List to-do's (V2)` connector): dead.** Action is
+  hard-capped at 50 items, exposes no `$top`/`$skip`/continuation cursor, returns
+  newest-first, and the To-Do (Business) connector has no raw-HTTP action. The
+  60k historical tasks are structurally unreachable through the connector.
+- **Path A (one-shot Microsoft Graph script): viable in principle, blocked by
+  tenant policy.** Raw Graph (`GET /me/todo/lists/{id}/tasks`) paginates fully
+  via `@odata.nextLink`, so all tasks ARE reachable. Attempted delegated sign-in
+  via Microsoft Graph PowerShell (`Connect-MgGraph -Scopes "Tasks.ReadWrite"`).
+  **Result: AADSTS50105** — the *Microsoft Graph Command Line Tools* enterprise
+  app has "Assignment required = Yes" and this user is not assigned. This is an
+  **assignment** (not consent) block; app-substitution is not a valid workaround
+  and would circumvent an explicit admin control.
+
+**Ask for IT (smallest footprint first):**
+1. **Preferred:** Assign the account to the existing *Microsoft Graph Command
+   Line Tools* enterprise app — Entra admin center → Enterprise applications →
+   Microsoft Graph Command Line Tools → Users and groups → Add user. Delegated
+   `Tasks.ReadWrite`, scoped to **the user's own** To-Do only; no new app
+   registration.
+2. **Alt:** Register a single-tenant app (delegated `Tasks.ReadWrite`,
+   public-client redirect `http://localhost`) and assign the user.
+3. **Alt:** IT runs the one-shot cleanup script on the user's behalf.
+
+**Scope / blast radius for approval:** delegated auth, the user's mailbox only,
+read + delete of the user's own tasks — no org-wide permission, no application
+permission.
+
+**Recon-first discipline (do NOT skip):** once access lands, run a **read-only**
+reconnaissance pass FIRST — enumerate every To-Do list with exact task counts +
+active/completed split + created-date range (confirms WHERE the 60k live and that
+`flaggedEmails` is the source before anything destructive). Only then run the
+batched, 429-aware delete against the confirmed `listId`.
+
+This is consistent with §2's finding that all `MS_GRAPH_TOKEN` features are inert
+in the app-registration-blocked tenant — but note the SPECIFIC block here is
+**assignment-required on a first-party app**, which IT can clear without any
+registration.
+
 ---
 
 ## 5. Old Vercel deployment (`life-command-center-nine.vercel.app`) — shut down safely
