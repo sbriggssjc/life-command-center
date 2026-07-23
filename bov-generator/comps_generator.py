@@ -41,8 +41,44 @@ import re
 from datetime import datetime, date
 from pathlib import Path
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 
 DATA_START_ROW = 6
+
+# --- Estimated-value rendering -------------------------------------------------
+# When a comp row carries an "is estimated" flag, the corresponding value cell is
+# marked so an estimated cap can never be mistaken for a verified one (the guardrail
+# both the rent-imputation and gov-NOI-modeling passes require). We keep the cell
+# NUMERIC (so RENT/SF, PPSF, and every cap still compute) and only (a) append a
+# literal " (est.)" suffix to its number format and (b) apply a light amber fill.
+_EST_FILL = PatternFill("solid", fgColor="FFF3CD")
+# (flag key on the row) -> (template header token whose value cell gets marked)
+_ESTIMATE_FLAGS = (("rent_is_imputed", "rent"), ("noi_is_modeled", "noi"))
+# Recognized non-column metadata keys — present to drive rendering/provenance, not
+# to be written into a template column, so they must NOT count as "unknown".
+_META_KEYS = {
+    "rent_is_imputed", "rent_source", "rent_psf_basis", "actual_annual_rent",
+    "noi_is_modeled", "noi_modeled_source",
+}
+
+
+def _is_truthy(v) -> bool:
+    """A jsonb/bool/string flag is 'on' for True, 't', 'true', 'yes', '1'."""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("t", "true", "yes", "1")
+
+
+def _mark_estimated(cell):
+    """Flag a written numeric value cell as estimated: append ' (est.)' to its number
+    format (keeps it numeric so formulas still read it) + light fill. Idempotent."""
+    if not isinstance(cell.value, (int, float)):
+        return  # only mark a real numeric value; never a blank or text cell
+    fmt = cell.number_format or "General"
+    if "(est.)" not in fmt:
+        base = "0" if fmt in ("General", "@") else fmt
+        cell.number_format = base + '" (est.)"'
+    cell.fill = _EST_FILL
 TEMPLATE_DIR = Path(os.environ.get("COMPS_TEMPLATE_DIR", Path(__file__).parent / "templates"))
 
 SALES_TEMPLATE = "Comps Blank Template - Briggs.xlsx"
@@ -53,6 +89,13 @@ LEASE_TEMPLATE = "Lease Comps Template - Briggs.xlsx"
 # request dialysis (payload vertical == 'dialysis' or dialysis == true). Chairs/patients are
 # the most-recent counts, per the dialysis comp standard. Header-driven, so no other change.
 DIALYSIS_SALES_TEMPLATE = "Comps Blank Template - Briggs - Dialysis.xlsx"
+# Government-specific sales template: Agency-first column order with the government
+# nuances (GOV LEVEL, USE, GOV SF LEASED vs total RBA, GOV OCCP %, GROSS RENT, NOI +
+# NOI/SF, EXPIR/TERMIN., TERM REM/FIRM REM, GUARANTOR, BUMPS/DROP, ASK history). Rent/SF
+# is gross rent ÷ leased SF; PPSF and every cap are on TOTAL RBA / whole-building NOI.
+# Selected when the caller flags the request government (vertical == 'government' or
+# government == true). Header-driven, so the shared engine needs no other change.
+GOV_SALES_TEMPLATE = "Comps Blank Template - Briggs - Government.xlsx"
 
 
 class CompsError(Exception):
@@ -122,13 +165,33 @@ def _to_date(v):
 # detected from the template and never written regardless of this map.
 # NOTE: aliases are applied by _norm() BEFORE these sets are consulted, so list the
 # canonical (post-alias) tokens here — e.g. 'exp', 'date', 'on_market', 'rent', 'built'.
-_DATE_KEYS = {"exp", "date", "on_market", "lease_exp", "list_date", "sale_date", "lease_comm", "execution_date"}
+_DATE_KEYS = {"exp", "date", "on_market", "lease_exp", "list_date", "sale_date", "lease_comm", "execution_date",
+              # government sales tokens
+              "expir", "termin", "sold_date"}
 _NUM_KEYS = {
     "land", "built", "rba", "chairs", "patients", "rent",
     "sold_price", "initial_price", "last_price",
     "annual_noi", "init_price", "cur_price", "sale_price", "rba_sf",
     "sf_leased", "annual_rent", "ti_sf", "free_rent_mos", "yr_built", "renovated",
+    # government sales tokens (GOV SF LEASED, GOV OCCP %, GROSS RENT, NOI, ASK history)
+    "gov_sf_leased", "gov_occp", "gross_rent", "noi", "initial_ask", "last_ask",
 }
+
+
+def _is_government(payload: dict) -> bool:
+    """True when the caller flags a government comp request → use the government sales
+    template (Agency-first, GOV LEVEL/USE/GOV SF LEASED/NOI columns). Accepts
+    vertical=='government', government==true, or asset_type/property_type mentioning
+    'government'/'gov'. Checked BEFORE dialysis so a mislabeled row can't fall through."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("government") is True:
+        return True
+    for k in ("vertical", "asset_type", "property_type"):
+        v = str(payload.get(k, "")).lower()
+        if v in ("government", "gov") or "government" in v:
+            return True
+    return False
 
 
 def _is_dialysis(payload: dict) -> bool:
@@ -168,6 +231,8 @@ def _write_rows(ws, rows):
         r = DATA_START_ROW + i
         for key, val in (row or {}).items():
             k = _norm(key)
+            if k in _META_KEYS:
+                continue                 # rendering/provenance metadata — not a column
             if k not in hmap:
                 unknown.add(k)
                 continue
@@ -184,6 +249,13 @@ def _write_rows(ws, rows):
             if val is None:
                 continue
             ws.cell(r, col).value = val
+        # After the row's values are written, mark any estimated value cells so an
+        # imputed rent / modeled NOI reads as estimated (formula-safe: stays numeric).
+        for flag_key, target_token in _ESTIMATE_FLAGS:
+            if _is_truthy(_row_get(row, flag_key)) and target_token in hmap:
+                col, is_formula = hmap[target_token]
+                if not is_formula:
+                    _mark_estimated(ws.cell(r, col))
     return len(rows or []), sorted(skipped_formula), sorted(unknown)
 
 
@@ -245,7 +317,12 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
     tdir = Path(template_dir or TEMPLATE_DIR)
     comp_type = str(payload.get("comp_type", "")).lower()
     if comp_type == "sales":
-        tpl = tdir / (DIALYSIS_SALES_TEMPLATE if _is_dialysis(payload) else SALES_TEMPLATE)
+        if _is_government(payload):
+            tpl = tdir / GOV_SALES_TEMPLATE
+        elif _is_dialysis(payload):
+            tpl = tdir / DIALYSIS_SALES_TEMPLATE
+        else:
+            tpl = tdir / SALES_TEMPLATE
     elif comp_type == "lease":
         tpl = tdir / LEASE_TEMPLATE
     else:
