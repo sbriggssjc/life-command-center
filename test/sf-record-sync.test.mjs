@@ -33,7 +33,9 @@ describe('resolveSyncSpec', () => {
     assert.equal(error, undefined);
     assert.equal(spec.name, 'account');
     assert.equal(spec.objectType, 'Account');
-    assert.equal(spec.fields, 'Id,Name');
+    // ROE Slice 2: the Account pull also carries OwnerId/Owner.Name (the assigned
+    // Northmarq broker) so the SF sync can capture it onto the account identity.
+    assert.equal(spec.fields, 'Id,Name,OwnerId,Owner.Name');
     assert.equal(typeof spec.computeMissing, 'function');
     assert.equal(typeof spec.persist, 'function');
   });

@@ -310,7 +310,10 @@ function worklistHint(o) {
 // (and retires the row) when the operator returns.
 function openWorklistOwner(entityId) {
   _cui.worklistLoaded = false;
-  if (typeof openEntityDetail === 'function') {
+  // Worklist rows are owner ENTITIES — open the canonical Contact 360 panel.
+  if (typeof openContact360 === 'function') {
+    openContact360(entityId, { kind: 'entity', tab: 'Contacts' });
+  } else if (typeof openEntityDetail === 'function') {
     openEntityDetail(entityId, 'Contacts');
   } else if (typeof showToast === 'function') {
     showToast('Owner detail is unavailable here', 'error');
@@ -421,7 +424,7 @@ function buildContactCard(c) {
   if (c.teams_user_id) badges += '<span class="uc-src-badge uc-src-teams" title="Teams">TM</span>';
   if (c.outlook_contact_id) badges += '<span class="uc-src-badge uc-src-outlook" title="Outlook">OL</span>';
 
-  return `<div class="uc-card" onclick="openContactDetail(decodeURIComponent('${encodeURIComponent(c.unified_id)}'))">
+  return `<div class="uc-card" onclick="openContact360(decodeURIComponent('${encodeURIComponent(c.unified_id)}')${c.entity_id ? `, {entity_id:decodeURIComponent('${encodeURIComponent(c.entity_id)}')}` : ''})">
     <div class="uc-card-left">
       <div class="uc-avatar ${heatClass}">${initials(c.first_name, c.last_name)}</div>
     </div>

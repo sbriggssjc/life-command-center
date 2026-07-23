@@ -90,10 +90,50 @@ export function normalizeAccountRow(raw) {
   const rawId = pick(raw, 'Id', 'id', 'AccountId', 'account_id', 'accountId');
   const rawName = pick(raw, 'Name', 'name', 'AccountName', 'account_name');
   const name = rawName == null ? '' : String(rawName).trim();
+  // ROE (Rules of Engagement) — the SF Account OwnerId = the rep who owns the
+  // account (the "assigned broker"). Captured when the flow includes it; tolerant
+  // of a flat OwnerName field or a nested Owner:{Name} relationship object.
+  const ownerId = pick(raw, 'OwnerId', 'ownerId', 'owner_id', 'Owner_Id');
+  const ownerName = pick(raw, 'OwnerName', 'ownerName', 'owner_name')
+    || (raw && raw.Owner && typeof raw.Owner === 'object' ? pick(raw.Owner, 'Name', 'name') : undefined)
+    || (raw && raw.owner && typeof raw.owner === 'object' ? pick(raw.owner, 'Name', 'name') : undefined);
   const id18 = toSf18(rawId);                         // 15/18-safe → canonical 18; null if malformed
   if (!id18 || !isAccountId(id18)) return { skip: 'bad_id', name: name || null };
   if (!name) return { skip: 'no_name', id18 };
-  return { id18, name };
+  return {
+    id18, name,
+    ownerId: ownerId ? String(ownerId).trim() : null,
+    ownerName: ownerName ? String(ownerName).trim() : null,
+  };
+}
+
+/**
+ * ROE — record the SF Account OwnerId/OwnerName onto the account's
+ * salesforce/Account external_identity metadata (read-merge-write so `via` and
+ * any prior metadata survive). Best-effort; the account mint is never blocked by
+ * this. Reads the identity by external_id (canonical 18) → PATCHes its metadata.
+ * deps.query injectable (opsQuery-shaped).
+ *   → { ok:true } on write, { ok:false, reason } otherwise
+ */
+export async function recordSfAccountOwner({ id18, ownerId, ownerName }, deps = {}) {
+  const query = deps.query || opsQuery;
+  if (!id18 || (!ownerId && !ownerName)) return { ok: false, reason: 'no_owner' };
+  try {
+    const cur = await query('GET',
+      'external_identities?source_system=eq.salesforce&source_type=eq.Account&external_id=eq.'
+      + pgFilterVal(id18) + '&select=id,metadata&limit=1');
+    const row = (cur && cur.ok && Array.isArray(cur.data)) ? cur.data[0] : null;
+    if (!row || !row.id) return { ok: false, reason: 'identity_not_found' };
+    const md = Object.assign({}, row.metadata || {});
+    if (ownerId) md.sf_owner_id = ownerId;
+    if (ownerName) md.sf_owner_name = ownerName;
+    md.sf_owner_synced_at = new Date().toISOString();
+    const p = await query('PATCH', 'external_identities?id=eq.' + pgFilterVal(row.id),
+      { metadata: md }, { headers: { Prefer: 'return=minimal' } });
+    return { ok: !!(p && p.ok) };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
 }
 
 /**
@@ -281,6 +321,14 @@ export async function persistAccountRow(n, ctx, deps = {}) {
   }
   if (!link || !link.ok || !link.entityId) {
     return { ok: false, skipped: (link && link.skipped) || 'guard' };
+  }
+  // ROE — stamp the SF Account owner (assigned broker) onto the identity metadata
+  // when the flow supplied it. Best-effort: never fails the mint.
+  if (n.ownerId || n.ownerName) {
+    try {
+      await recordSfAccountOwner({ id18: n.id18, ownerId: n.ownerId, ownerName: n.ownerName },
+        { query: deps.query });
+    } catch (_e) { /* best-effort */ }
   }
   return { ok: true, created: !!link.createdEntity, matched: !link.createdEntity, entityId: link.entityId };
 }

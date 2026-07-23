@@ -12318,7 +12318,12 @@ async function _entityApiFetch(url) {
 // portfolio), NOT a fuzzy v_ownership_current name-match, and the Next-Step
 // reads v_priority_queue_enriched (the SAME truth as the Priority Queue /
 // Decision Center). `initialTab` lets a reload / deep-link restore the open tab.
-const ENTITY_DETAIL_TABS = ['Overview', 'Portfolio', 'Contacts', 'Activity'];
+// Contact 360 tab grammar. "Ownership" = the BD portfolio (owns/former) + the
+// developed edges; "Activity" is the unified LCC+SF timeline (broker-labeled);
+// "Engagement" is the unified_contacts + marketing signals; "ROE" is the
+// Rules-of-Engagement detail. The compact ROE verdict banner rides ABOVE every
+// tab (so you can't step on another broker at a glance).
+const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Activity', 'Engagement', 'ROE', 'Contacts'];
 
 async function openEntityDetail(entityId, initialTab) {
   _entityDetailCache = null;
@@ -12364,34 +12369,42 @@ async function openEntityDetail(entityId, initialTab) {
   if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading entity details...</p></div>';
 
   try {
-    // Fetch entity + contacts in parallel
-    const [entityData, contactsData] = await Promise.all([
-      _entityApiFetch('/api/entities?id=' + encodeURIComponent(entityId)),
-      _entityApiFetch('/api/contacts?action=list&entity_id=' + encodeURIComponent(entityId) + '&limit=50')
+    // Contact 360 — ONE aggregating fetch composes the entity (+ identities /
+    // relationships), the BD portfolio, the unified LCC+SF timeline, engagement,
+    // marketing signals, the SF-account owner, and the ROE verdict. The priority
+    // band (Next-Step) + the contacts list load in the same parallel round (band
+    // stays in its dedicated route; contacts drive the Contacts tab CTA).
+    const [c360, contactsData, band] = await Promise.all([
+      _entityApiFetch('/api/entities?action=contact360&id=' + encodeURIComponent(entityId)).catch(() => null),
+      _entityApiFetch('/api/contacts?action=list&entity_id=' + encodeURIComponent(entityId) + '&limit=50').catch(() => null),
+      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null)
     ]);
 
-    const entity = entityData?.entity || null;
+    const entity = c360?.entity || null;
     if (!entity) {
       if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Entity not found</div>';
       return;
     }
 
     const contacts = contactsData?.contacts || [];
+    const portfolio = (c360 && c360.portfolio && Array.isArray(c360.portfolio.properties)) ? c360.portfolio.properties : [];
+    const rollup = (c360 && c360.portfolio && c360.portfolio.rollup) || null;
 
-    // UI Phase 4B — authoritative portfolio (BD spine), activities, and the
-    // entity-level priority band (the Next-Step truth). All best-effort.
-    const [portfolioData, activities, band, emailRel] = await Promise.all([
-      _entityApiFetch('/api/entities?action=portfolio&id=' + encodeURIComponent(entityId)).catch(() => null),
-      _entityApiFetch('/api/activities?entity_id=' + encodeURIComponent(entityId) + '&order=occurred_at.desc&limit=20')
-        .then(d => d?.activities || []).catch(() => []),
-      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null),
-      _entityApiFetch('/api/email-relationship?entity_id=' + encodeURIComponent(entityId)).catch(() => null)
-    ]);
-
-    const portfolio = (portfolioData && Array.isArray(portfolioData.properties)) ? portfolioData.properties : [];
-    const rollup = (portfolioData && portfolioData.rollup) || null;
-
-    _entityDetailCache = { entity, entityId, contacts, portfolio, rollup, activities, band, emailRel, type: 'entity' };
+    _entityDetailCache = {
+      entity, entityId, contacts, portfolio, rollup, band, type: 'entity',
+      emailRel: (c360 && c360.email_relationship) || null,
+      // Contact 360 blocks
+      timeline: (c360 && c360.timeline) || [],
+      engagement: (c360 && c360.engagement) || null,
+      marketing: (c360 && c360.marketing) || [],
+      developed: (c360 && c360.developed) || [],
+      accountOwner: (c360 && c360.account_owner) || null,
+      roe: (c360 && c360.roe) || null,
+      subject: (c360 && c360.subject) || null,
+      // Back-compat: some render paths read `activities`; the unified timeline
+      // supersedes it (LCC events are the source-'lcc' items).
+      activities: (c360 && c360.timeline) || [],
+    };
 
     // Render header
     const typeBadge = (entity.entity_type || 'org').toUpperCase();
@@ -12432,6 +12445,36 @@ async function openEntityDetail(entityId, initialTab) {
   }
 }
 window.openEntityDetail = openEntityDetail;
+
+// ── Contact 360 — the ONE reusable trigger (Deals cards, Contacts view, the
+// coming Marketing tab). Takes a contact/entity id and opens the canonical
+// Contact 360 panel. Works for any contact:
+//   • an owner ENTITY id (or opts.kind==='entity' / opts.entity_id) → opens directly
+//   • a unified_contacts row → resolve its entity_id, then open the entity panel
+//   • a plain person/broker contact with NO entity → fall back to the lighter
+//     openContactDetail drawer (contacts-ui.js) so a broker still resolves.
+async function openContact360(id, opts = {}) {
+  if (!id) return;
+  const tab = opts.tab || 'Overview';
+  // Caller already knows the entity id.
+  if (opts.entity_id) { openEntityDetail(opts.entity_id, tab); return; }
+  if (opts.kind === 'entity') { openEntityDetail(id, tab); return; }
+
+  // Resolve a unified_contacts row → its owning/self person entity.
+  try {
+    const data = await _entityApiFetch('/api/contacts?action=get&id=' + encodeURIComponent(id)).catch(() => null);
+    const eid = data && data.contact && data.contact.entity_id;
+    if (eid) { openEntityDetail(eid, tab); return; }
+    // A real contact row with no linked entity → the lighter drawer resolves it.
+    if (data && data.contact && typeof openContactDetail === 'function') { openContactDetail(id); return; }
+  } catch (_) { /* fall through */ }
+
+  // Not a unified_contacts row (or lookup failed): the light drawer if present,
+  // else best-effort open as an entity.
+  if (typeof openContactDetail === 'function') { openContactDetail(id); return; }
+  openEntityDetail(id, tab);
+}
+window.openContact360 = openContact360;
 
 /** Open entity detail by name search (when only name is available) */
 async function openEntityDetailByName(name) {
@@ -12635,13 +12678,44 @@ function _switchEntityTab(tabName) { return switchEntityTab(tabName); }
 
 function _renderEntityTab(tab) {
   if (!_entityDetailCache) return '<div class="detail-empty">No data loaded</div>';
+  // The ROE verdict banner rides above every tab so the "don't step on another
+  // broker" signal is always visible.
+  const banner = _entityRoeBanner();
+  let body;
   switch (tab) {
-    case 'Overview': return _entityTabOverview();
-    case 'Portfolio': return _entityTabPortfolio();
-    case 'Contacts': return _entityTabContacts();
-    case 'Activity': return _entityTabActivity();
-    default: return '<div class="detail-empty">Unknown tab</div>';
+    case 'Overview': body = _entityTabOverview(); break;
+    case 'Ownership': body = _entityTabPortfolio(); break;
+    case 'Portfolio': body = _entityTabPortfolio(); break; // legacy alias
+    case 'Contacts': body = _entityTabContacts(); break;
+    case 'Activity': body = _entityTabActivity(); break;
+    case 'Engagement': body = _entityTabEngagement(); break;
+    case 'ROE': body = _entityTabRoe(); break;
+    default: body = '<div class="detail-empty">Unknown tab</div>';
   }
+  return banner + body;
+}
+
+// ── ROE verdict banner (shared across tabs) ──
+function _entityRoeColors(verdict) {
+  if (verdict === 'do_not_call') return { bg: 'rgba(239,68,68,0.12)', bd: 'var(--red,#ef4444)', fg: 'var(--red,#ef4444)', icon: '\u{1F6D1}' };
+  if (verdict === 'caution') return { bg: 'rgba(234,179,8,0.12)', bd: 'var(--yellow,#eab308)', fg: 'var(--yellow,#eab308)', icon: '\u{26A0}️' };
+  return { bg: 'rgba(34,197,94,0.10)', bd: 'var(--green,#22c55e)', fg: 'var(--green,#22c55e)', icon: '\u{2705}' };
+}
+function _entityRoeBanner() {
+  const roe = _entityDetailCache && _entityDetailCache.roe;
+  if (!roe) return '';
+  const col = _entityRoeColors(roe.verdict);
+  const clickable = 'onclick="switchEntityTab(&quot;ROE&quot;)" style="cursor:pointer;';
+  return '<div ' + clickable
+    + 'display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:8px 12px;border-radius:8px;'
+    + 'background:' + col.bg + ';border:1px solid ' + col.bd + '">'
+    + '<span style="font-size:15px">' + col.icon + '</span>'
+    + '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;color:' + col.fg + '">'
+    + esc(roe.headline || 'Rules of Engagement') + '</div>'
+    + (roe.reasons && roe.reasons.length
+        ? '<div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(roe.reasons[0]) + '</div>'
+        : '')
+    + '</div><span style="font-size:10px;color:var(--text3)">details ›</span></div>';
 }
 
 // ── Entity Overview Tab ──
@@ -12687,11 +12761,79 @@ function _entityTabOverview() {
   html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Portfolio\')"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + propCount + '</div><div class="t-meta3">Properties</div></div>';
   html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:16px;font-weight:700;color:var(--green)">' + (rollupRent ? _entityFmtMoney(rollupRent) : '—') + '</div><div class="t-meta3">Portfolio Rent</div></div>';
   html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Contacts\')"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + contacts.length + '</div><div class="t-meta3">Contacts</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Activity\')"><div style="font-size:20px;font-weight:700;color:var(--yellow, #eab308)">' + (c.activities?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Activity\')"><div style="font-size:20px;font-weight:700;color:var(--yellow, #eab308)">' + (c.timeline?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
   html += '</div></div>';
+
+  // Row-level action — Draft & Log (Topic F engine: renders a draft to Outlook,
+  // logs a completed SF activity, advances the cadence — one call, honest status).
+  const em = (c.subject && c.subject.email) || e.email || '';
+  html += '<div class="detail-section"><div class="detail-section-title">Outreach</div>';
+  html += '<button class="dns-cta" onclick="_entityDraftAndLog(this)">\u{270D}️ Draft &amp; Log →</button>';
+  if (!em) html += '<div style="font-size:11px;color:var(--text3);margin-top:6px">No email on file — the draft opens without a recipient for you to fill.</div>';
+  html += '<div id="entityDraftHost" style="margin-top:10px"></div>';
+  html += '</div>';
 
   return html;
 }
+
+// Row-level Draft & Log for the panel subject — the Topic F engine
+// (?action=draft_and_log), NOT the older _draftFromPipeline / log_to_sf split.
+async function _entityDraftAndLog(btn) {
+  const c = _entityDetailCache;
+  if (!c || !c.entityId) return;
+  const em = (c.subject && c.subject.email) || (c.entity && c.entity.email) || '';
+  const name = (c.entity && c.entity.name) || '';
+  const domain = (c.entity && c.entity.domain) || '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Drafting & logging…'; }
+  const res = await _udApiPost('/api/operations?action=draft_and_log', {
+    template_id: 'T-001',
+    entity_id: c.entityId,
+    context: { contact: { name: name, full_name: name }, property: { domain: domain }, domain: domain },
+    domain: domain || null,
+    name: name || null,
+    to: em || null,
+    mode: 'bd'
+  });
+  if (btn) { btn.disabled = false; btn.textContent = '\u{270D}️ Draft & Log →'; }
+  const host = document.getElementById('entityDraftHost');
+  if (!res || res.ok === false || !res.ok && res.error) {
+    if (host) host.innerHTML = '<div style="color:var(--red,#ef4444);font-size:12px">Draft & Log failed: ' + esc((res && res.error) || 'unknown') + '</div>';
+    return;
+  }
+  const d = res.draft || {};
+  const sf = res.sf || {};
+  const subject = d.subject || '';
+  const bodyText = d.body || '';
+  const status = [];
+  if (d.created) status.push('✓ Draft in Outlook');
+  else if (d.reason === 'no_recipient') status.push('⚠ add a recipient to draft in Outlook');
+  else status.push('Draft ready — copy/paste below');
+  if (sf.logged) status.push('✓ logged to Salesforce');
+  else if (sf.reason === 'no_sf_contact') status.push('no SF contact — SF log skipped');
+  else if (sf.reason === 'sf_not_configured') status.push('SF logging not configured yet');
+  else status.push('SF log pending');
+  if (res.cadence && res.cadence.advanced) status.push('cadence advanced');
+  const mailto = 'mailto:' + encodeURIComponent(em) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyText);
+  const openDraftBtn = d.web_link ? '<a class="dns-cta" href="' + esc(d.web_link) + '" target="_blank" rel="noopener">Open Outlook draft</a>' : '';
+  if (host) host.innerHTML =
+    (em ? '<div style="font-size:12px;margin-bottom:4px"><b>To:</b> ' + esc(em) + '</div>' : '')
+    + '<div style="font-size:12px;margin-bottom:4px"><b>Subject:</b> ' + esc(subject) + '</div>'
+    + '<textarea rows="8" style="width:100%;margin:4px 0;font-size:12px" id="entityDraftBody">' + esc(bodyText) + '</textarea>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    + '<button class="dns-cta" onclick="_entityCopyDraft()">Copy</button>'
+    + '<a class="dns-cta" href="' + esc(mailto) + '" target="_blank" rel="noopener">Open in mail</a>'
+    + openDraftBtn + '</div>'
+    + '<div style="font-size:11px;color:var(--text3);margin-top:6px">' + esc(status.join(' · ')) + '</div>';
+}
+window._entityDraftAndLog = _entityDraftAndLog;
+
+function _entityCopyDraft() {
+  const ta = document.getElementById('entityDraftBody');
+  if (ta && navigator.clipboard) navigator.clipboard.writeText(ta.value).then(() => {
+    if (typeof showToast === 'function') showToast('Draft copied', 'success');
+  }).catch(() => {});
+}
+window._entityCopyDraft = _entityCopyDraft;
 
 // Compact $ formatter for the entity rollup figures.
 function _entityFmtMoney(n) {
@@ -12706,7 +12848,8 @@ function _entityFmtMoney(n) {
 // ── Entity Activity Tab ──
 function _entityTabActivity() {
   const cache = _entityDetailCache || {};
-  const activities = cache.activities || [];
+  const timeline = cache.timeline || cache.activities || [];
+  const activities = timeline;
   const entityId = cache.entityId || (cache.entity && cache.entity.id) || '';
 
   // Cortex W3 \u2014 unified relationship: email summary + recent thread sits ABOVE the
@@ -12714,7 +12857,7 @@ function _entityTabActivity() {
   let html = _renderEmailRelationshipCard(cache.emailRel, entityId);
 
   if (!activities.length) {
-    html += '<div class="detail-empty">No structured activity events yet.</div>';
+    html += '<div class="detail-empty">No activity yet \u2014 LCC or Salesforce.</div>';
     return html;
   }
 
@@ -12724,27 +12867,146 @@ function _entityTabActivity() {
   html += '<div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">';
 
   for (const a of activities) {
-    const date = _fmtDate(a.occurred_at || a.created_at);
-    const icon = catIcon[a.category] || '\u{1F4CB}';
-    const actor = a.users?.display_name || '';
-    const cat = a.category ? a.category.replace(/_/g, ' ') : '';
+    // Unified rows carry {source,ts,category,title,body,broker,via,status}; a
+    // legacy activity_events row (fallback) carries {occurred_at,category,users,source_type}.
+    const date = _fmtDate(a.ts || a.occurred_at || a.created_at);
+    const cat = a.category || '';
+    const icon = catIcon[cat] || '\u{1F4CB}';
+    const isSf = a.source === 'sf';
+    const srcColor = isSf ? 'var(--purple)' : 'var(--accent)';
+    const catLabel = cat ? cat.replace(/_/g, ' ') : '';
+    const broker = a.broker || a.users?.display_name || '';
+    // Highlight non-Team-Briggs (other NM broker) activity in amber \u2014 the ROE tell.
+    const isTeam = /\b(briggs|sjc)\b/i.test(broker);
+    const brokerColor = broker ? (isTeam ? 'var(--green)' : 'var(--amber, #d98c00)') : '';
+    const via = a.via || a.source_type || '';
 
-    html += '<div style="padding:10px 12px;border-left:3px solid var(--accent);margin-left:8px;position:relative">';
-    html += '<div style="position:absolute;left:-10px;top:12px;width:14px;height:14px;border-radius:50%;background:var(--s1);border:2px solid var(--accent);font-size:8px;display:flex;align-items:center;justify-content:center">' + icon + '</div>';
+    html += '<div style="padding:10px 12px;border-left:3px solid ' + srcColor + ';margin-left:8px;position:relative">';
+    html += '<div style="position:absolute;left:-10px;top:12px;width:14px;height:14px;border-radius:50%;background:var(--s1);border:2px solid ' + srcColor + ';font-size:8px;display:flex;align-items:center;justify-content:center">' + icon + '</div>';
     html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
     html += '<div style="flex:1;min-width:0">';
     html += '<div style="font-weight:600;font-size:13px;color:var(--text)">' + esc(a.title || '(untitled)') + '</div>';
     if (a.body) html += '<div style="font-size:12px;color:var(--text2);margin-top:2px;white-space:pre-wrap;max-height:80px;overflow:hidden">' + esc(a.body) + '</div>';
-    html += '<div style="font-size:10px;color:var(--text3);margin-top:4px;display:flex;gap:8px;flex-wrap:wrap">';
-    if (cat) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3);text-transform:capitalize">' + esc(cat) + '</span>';
-    if (actor) html += '<span>' + esc(actor) + '</span>';
-    if (a.source_type && a.source_type !== 'manual') html += '<span>via ' + esc(a.source_type) + '</span>';
+    html += '<div style="font-size:10px;color:var(--text3);margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+    html += '<span style="padding:1px 6px;border-radius:8px;background:' + (isSf ? 'rgba(150,90,220,.16)' : 'var(--s3)') + ';font-weight:600">' + (isSf ? 'SF' : 'LCC') + '</span>';
+    if (catLabel) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3);text-transform:capitalize">' + esc(catLabel) + '</span>';
+    if (broker) html += '<span style="padding:1px 6px;border-radius:8px;background:' + (isTeam ? 'rgba(60,170,90,.16)' : 'rgba(217,140,0,.16)') + ';color:' + brokerColor + ';font-weight:600">' + esc(broker) + '</span>';
+    if (a.status) html += '<span>' + esc(a.status) + '</span>';
+    if (via && via !== 'manual') html += '<span>via ' + esc(via) + '</span>';
     html += '</div></div>';
     html += '<div style="flex-shrink:0;font-size:11px;color:var(--text3);white-space:nowrap">' + esc(date) + '</div>';
     html += '</div></div>';
   }
 
   html += '</div></div>';
+  return html;
+}
+
+// \u2500\u2500 Entity Engagement Tab (Contact 360) \u2500\u2500
+// unified_contacts engagement summary + this contact's marketing_leads signals
+// (aggregated onto the entity). marketing_leads has no viewed/clicked columns \u2014
+// we surface source / activity_type / touchpoint_count / status honestly.
+function _entityTabEngagement() {
+  const c = _entityDetailCache || {};
+  const eng = c.engagement || null;
+  const marketing = c.marketing || [];
+
+  let html = '';
+
+  if (eng) {
+    const score = eng.score != null ? Number(eng.score) : (eng.engagement_score != null ? Number(eng.engagement_score) : null);
+    const touches = eng.total_touches != null ? Number(eng.total_touches) : (eng.total_touchpoints != null ? Number(eng.total_touchpoints) : null);
+    const lastAct = eng.last_activity || eng.last_activity_at || eng.last_email || eng.last_call || null;
+    const txns = eng.total_transactions != null ? Number(eng.total_transactions) : null;
+    const vol = eng.total_volume != null ? Number(eng.total_volume) : null;
+    html += '<div class="detail-section"><div class="detail-section-title">\u{1F4CA} Engagement</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:8px 0">';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--accent)">' + (score != null ? score : '\u2014') + '</div><div class="t-meta3">Score</div></div>';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--text)">' + (touches != null ? touches : '\u2014') + '</div><div class="t-meta3">Touchpoints</div></div>';
+    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:13px;font-weight:600;color:var(--text)">' + (lastAct ? esc(_fmtDate(lastAct)) : '\u2014') + '</div><div class="t-meta3">Last activity</div></div>';
+    html += '</div>';
+    if (txns != null || vol != null) {
+      html += '<div style="display:flex;gap:16px;font-size:11px;color:var(--text3)">';
+      if (txns != null) html += '<span>Transactions: <strong style="color:var(--text2)">' + txns + '</strong></span>';
+      if (vol != null) html += '<span>Volume: <strong style="color:var(--text2)">' + _entityFmtMoney(vol) + '</strong></span>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  html += '<div class="detail-section"><div class="detail-section-title">\u{1F4E3} Marketing signals (' + marketing.length + ')</div>';
+  if (!marketing.length) {
+    html += '<div class="detail-empty" style="margin-top:6px">No marketing_leads signals on this contact.</div>';
+  } else {
+    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
+    for (const m of marketing) {
+      html += '<div style="padding:8px 10px;background:var(--s2);border-radius:8px">';
+      html += '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(m.deal_name || m.activity_type || m.source || '(signal)') + '</div><div style="font-size:10px;color:var(--text3)">' + esc(_fmtDate(m.lead_date)) + '</div></div>';
+      html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap">';
+      if (m.source) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3)">' + esc(m.source) + '</span>';
+      if (m.activity_type) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3)">' + esc(m.activity_type) + '</span>';
+      if (m.status) html += '<span>' + esc(m.status) + '</span>';
+      if (m.touchpoint_count != null) html += '<span>' + Number(m.touchpoint_count) + ' touches</span>';
+      if (m.assigned_to) html += '<span>' + esc(m.assigned_to) + '</span>';
+      html += '</div>';
+      if (m.activity_detail) html += '<div style="font-size:11px;color:var(--text2);margin-top:3px;max-height:40px;overflow:hidden">' + esc(m.activity_detail) + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+// \u2500\u2500 Entity Rules-of-Engagement Tab (Contact 360, Slice 2) \u2500\u2500
+// The full ROE verdict + the assessment grid + the "why" reasons, from the
+// contact360 endpoint's roe block (computed in api/_shared/roe.js).
+function _entityTabRoe() {
+  const c = _entityDetailCache || {};
+  const roe = c.roe || null;
+
+  if (!roe) {
+    return '<div class="detail-empty">Rules of Engagement not available for this contact.</div>';
+  }
+
+  const col = _entityRoeColors(roe.verdict);
+  let html = '';
+
+  // The headline banner (same colours as the top-of-panel ROE banner).
+  html += '<div class="detail-section">';
+  html += '<div style="padding:14px 16px;border-radius:10px;background:' + col.bg + ';border:1px solid ' + col.bd + '">';
+  html += '<div style="font-size:16px;font-weight:800;color:' + col.fg + '">' + esc(roe.headline || '') + '</div>';
+  if (roe.assigned_broker) html += '<div style="font-size:12px;color:var(--text2);margin-top:4px">Assigned broker: <strong>' + esc(roe.assigned_broker) + '</strong>' + (roe.assigned_broker_source ? ' <span style="color:var(--text3)">(' + esc(roe.assigned_broker_source) + ')</span>' : '') + '</div>';
+  html += '</div></div>';
+
+  // Assessment grid.
+  html += '<div class="detail-section"><div class="detail-section-title">Assessment</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">';
+  const cell = (label, val) => '<div style="padding:10px;background:var(--s2);border-radius:8px"><div class="t-meta3">' + label + '</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:2px">' + (val ? esc(val) : '\u2014') + '</div></div>';
+  html += cell('Verdict', roe.verdict);
+  html += cell('Account status', roe.account_status);
+  html += cell('Assigned broker', roe.assigned_broker);
+  html += cell('Broker class', roe.assigned_broker_class);
+  if (roe.last_firm_touch) {
+    const lt = roe.last_firm_touch;
+    html += cell('Most recent firm touch', (lt.broker ? lt.broker + ' \u00B7 ' : '') + (lt.date ? _fmtDate(lt.date) : ''));
+  }
+  html += '</div></div>';
+
+  // The "why" reasons.
+  if (Array.isArray(roe.reasons) && roe.reasons.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">Why</div>';
+    html += '<ul style="margin:6px 0 0 0;padding-left:18px;color:var(--text2);font-size:12px;line-height:1.7">';
+    for (const r of roe.reasons) html += '<li>' + esc(r) + '</li>';
+    html += '</ul></div>';
+  }
+
+  // Honest tip when there is no captured SF OwnerId (verdict rests on the
+  // inferred deal-level / classifier signal, not a hard account assignment).
+  if (roe.assigned_broker_source !== 'sf_owner') {
+    html += '<div class="detail-section"><div style="font-size:11px;color:var(--text3);padding:8px 10px;background:var(--s2);border-radius:8px">No Salesforce account OwnerId on file for this contact yet \u2014 the verdict is inferred from deal-level activity. It sharpens once OwnerId is captured on the SF sync.</div></div>';
+  }
+
   return html;
 }
 
@@ -12833,6 +13095,33 @@ function _entityTabPortfolio() {
     html += '</div></div>';
   }
 
+  // Developed section (Contact 360) — properties this owner is recorded as having
+  // DEVELOPED (the `developed` relationship / ownership-chain / owner_parent),
+  // resolved to names by the contact360 endpoint. Distinct from current ownership.
+  const developed = c?.developed || [];
+  if (developed.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">\u{1F3D7}️ Developed (' + developed.length + ')</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
+    for (const d of developed) {
+      const db = (d.source_domain === 'gov' || d.source_domain === 'government') ? 'gov' : (d.source_domain === 'dia' || d.source_domain === 'dialysis' ? 'dia' : '');
+      const pid = d.property_id != null ? d.property_id : d.source_property_id;
+      const nm = d.name || d.address || d.label || '(property)';
+      // Prefer opening the linked entity (developed edges resolve to entities);
+      // fall back to a domain property open when a property id is present.
+      let onclick = '';
+      if (d.entity_id) onclick = 'openContact360(\'' + esc(String(d.entity_id)) + '\', {kind:\'entity\'})';
+      else if (db && pid != null) onclick = 'openUnifiedDetail(\'' + esc(db) + '\', {property_id:\'' + esc(String(pid)) + '\'})';
+      const clickable = !!onclick;
+      html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + (clickable ? 'cursor:pointer' : '') + '"';
+      if (clickable) html += ' onclick="' + onclick + '"';
+      html += '>';
+      html += '<div style="font-weight:600;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(nm) + '</div>';
+      if (d.city || d.state) html += '<div style="font-size:11px;color:var(--text2)">' + esc((d.city || '') + (d.city && d.state ? ', ' : '') + (d.state || '')) + '</div>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
   if (!portfolio.length) {
     html += '<div class="detail-empty">No properties in the BD portfolio for this owner.</div>';
     return html;
@@ -12883,7 +13172,7 @@ function _entityTabContacts() {
     html += '<div class="detail-section"><div class="detail-section-title">Contacts (' + contacts.length + ')</div>';
     html += '<div style="display:flex;flex-direction:column;gap:8px">';
     for (const ct of contacts) {
-      html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openContactDetail(\'' + esc(ct.id) + '\')">';
+      html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openContact360(\'' + esc(ct.id) + '\')">';
       html += '<div style="display:flex;align-items:center;gap:8px">';
       html += '<div style="width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">';
       html += esc((ct.full_name || ct.display_name || '?')[0].toUpperCase());
