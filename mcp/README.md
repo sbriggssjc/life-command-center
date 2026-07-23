@@ -125,9 +125,31 @@ Persist and recall durable notes across sessions.
 
 | Path | Method | Description |
 |---|---|---|
-| `/mcp` | GET/POST | Streamable HTTP endpoint for MCP clients |
-| `/health` | GET | Health check with tool list and config status |
+| `/mcp` | GET/POST | Streamable HTTP endpoint for MCP clients (Claude) |
+| `/health` | GET | Health check — lists all tools + the HTTP routes + config status |
 | `/` | GET | Server info |
+
+### HTTP tool routes (Bearer auth — for ChatGPT + Copilot)
+
+Every **read** tool is also exposed as a Bearer-authed HTTP route so non-MCP surfaces reach the same
+engine. Each route reuses the exact same tool handler the MCP surface uses (one implementation, no drift),
+returning the tool's JSON directly. **Read-only:** none mutate data; the WRITE tool `log_memory` is
+intentionally NOT exposed over HTTP (Claude/MCP-only). Import `docs/comps-rollout/lcc-openapi.yaml` to wire
+these into a GPT Action or Copilot custom connector.
+
+| Path | Method | Tool |
+|---|---|---|
+| `/api/search-entities` | POST | search_entities |
+| `/api/property-context` | POST | get_property_context |
+| `/api/contact-context` | POST | get_contact_context |
+| `/api/daily-briefing` | POST | get_daily_briefing |
+| `/api/queue-summary` | POST | get_queue_summary |
+| `/api/pipeline-health` | POST | get_pipeline_health |
+| `/api/recall-memory` | POST | recall_memory |
+| `/api/query-comps` | POST | query_comps |
+| `/api/synthesize-comps` | POST | synthesize_comps |
+
+Body = the tool's input schema (JSON); response = the tool's JSON output. Auth: `Authorization: Bearer <LCC_API_KEY>`.
 
 ## Architecture
 

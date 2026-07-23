@@ -1,3 +1,6 @@
+# SUPERSEDED by `lcc-openapi.yaml` (the full read + comps surface). This comps-only
+# schema is retained for back-compat with connectors that already imported it. For
+# full ChatGPT/Copilot parity (the read tools + comps), import `lcc-openapi.yaml`.
 openapi: 3.0.3
 info:
   title: LCC Comps API

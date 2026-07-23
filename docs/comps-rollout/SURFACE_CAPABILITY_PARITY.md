@@ -19,8 +19,8 @@ update it whenever a capability or surface changes.
 | Northmarq Claude (team Project) | MCP connector + Project action + Project prompt | `{MCP_BASE_URL}/mcp`; `bov-generator/claude_project_action.json`; `NORTHMARQ_PROJECT_PROMPT.md` |
 | Personal Claude | MCP connector + personal skills | `{MCP_BASE_URL}/mcp`; `~/.claude/skills/*` |
 | Claude Cowork | MCP tools + Cowork skills | MCP tools; `docs/comps-rollout/comps-engine-SKILL.md`, briggs-comps, bov-underwriting, cms-npi-analysis, bov-government |
-| ChatGPT | GPT Action (OpenAPI) | `docs/comps-rollout/lcc-comps-openapi.yaml` (+ BOV/comps generation) |
-| Copilot Studio | Custom connector / agent action | same OpenAPI; `LCC Deal Agent` package (manual) |
+| ChatGPT | GPT Action (OpenAPI) | `docs/comps-rollout/lcc-openapi.yaml` (full read + comps; supersedes the comps-only `lcc-comps-openapi.yaml`) |
+| Copilot Studio | Custom connector / agent action | same OpenAPI (`lcc-openapi.yaml`); `LCC Deal Agent` package (manual) |
 | LCC in-app Copilot | `/api/chat` orchestration | `api/bridge.js`, `api/_shared/ai.js` (separate, broad) |
 
 ## Capability × Surface matrix
@@ -28,13 +28,14 @@ Legend: ✅ wired · ⬜ gap (should be wired) · ➖ n/a / by design elsewhere 
 
 | Capability | Northmarq Claude | Personal Claude | Cowork | ChatGPT | Copilot Studio | LCC in-app Copilot |
 |---|---|---|---|---|---|---|
-| search_entities | ✅ MCP | ✅ MCP | ✅ MCP | ⬜ no HTTP route | ⬜ no HTTP route | ✅ `/api/entities` |
-| get_property_context | ✅ MCP | ✅ MCP | ✅ MCP | ⬜ | ⬜ | ✅ |
-| get_contact_context | ✅ MCP | ✅ MCP | ✅ MCP | ⬜ | ⬜ | ✅ |
-| get_daily_briefing | ✅ MCP | ✅ MCP | ✅ MCP | ⬜ | ⬜ | ✅ |
-| get_queue_summary | ✅ MCP | ✅ MCP | ✅ MCP | ⬜ | ⬜ | ✅ |
-| get_pipeline_health | ✅ MCP | ✅ MCP | ✅ MCP | ⬜ | ⬜ | ✅ |
-| log_memory / recall_memory | ✅ MCP | ✅ MCP | ✅ MCP | ⬜ | ⬜ | ➖ |
+| search_entities | ✅ MCP | ✅ MCP | ✅ MCP | ✅ `POST /api/search-entities` | ✅ `POST /api/search-entities` | ✅ `/api/entities` |
+| get_property_context | ✅ MCP | ✅ MCP | ✅ MCP | ✅ `/api/property-context` | ✅ `/api/property-context` | ✅ |
+| get_contact_context | ✅ MCP | ✅ MCP | ✅ MCP | ✅ `/api/contact-context` | ✅ `/api/contact-context` | ✅ |
+| get_daily_briefing | ✅ MCP | ✅ MCP | ✅ MCP | ✅ `/api/daily-briefing` | ✅ `/api/daily-briefing` | ✅ |
+| get_queue_summary | ✅ MCP | ✅ MCP | ✅ MCP | ✅ `/api/queue-summary` | ✅ `/api/queue-summary` | ✅ |
+| get_pipeline_health | ✅ MCP | ✅ MCP | ✅ MCP | ✅ `/api/pipeline-health` | ✅ `/api/pipeline-health` | ✅ |
+| recall_memory (read) | ✅ MCP | ✅ MCP | ✅ MCP | ✅ `/api/recall-memory` | ✅ `/api/recall-memory` | ➖ |
+| log_memory (WRITE) | ✅ MCP | ✅ MCP | ✅ MCP | ➖ Claude/MCP-only (no HTTP by design) | ➖ Claude/MCP-only | ➖ |
 | query_comps | ✅ MCP | ✅ MCP | ✅ MCP | ✅ OpenAPI | ✅ OpenAPI | ⬜ |
 | synthesize_comps | ✅ MCP | ✅ MCP | ✅ MCP | ✅ OpenAPI | ✅ OpenAPI | ⬜ |
 | generate_comps (workbook) | 🔶 Project action (stale contract) | ✅ MCP | ✅ MCP | ⬜ (prompt 1) | ⬜ (prompt 1) | ➖ |
@@ -42,20 +43,29 @@ Legend: ✅ wired · ⬜ gap (should be wired) · ➖ n/a / by design elsewhere 
 | LCC orchestration (queue/workflow/sync/writes) | ➖ | ➖ | ➖ | ➖ | 🔶 (agent, partial) | ✅ |
 
 ## Gaps → to reach full parity
-1. **ChatGPT/Copilot have comps only.** The 10 context/ops/memory tools + BOV/comps workbook have **no HTTP
-   routes**, so non-Claude surfaces can't reach them. **DECISION: Option A chosen (2026-07) — full parity.**
-   See `prompts/CCP_option_a_all_tools_http_parity.md`. Security: read-only tools only, `log_memory` stays
-   Claude-only, key rotation prioritized, per-surface keys on the roadmap.
-   - **Option A (CHOSEN): expose the read tools over HTTP.** Add `/api/*` routes on `mcp/server.js` that
-     call the same tool handlers (search_entities, get_property_context, get_contact_context, get_daily_briefing,
-     get_queue_summary, get_pipeline_health), and extend the OpenAPI so ChatGPT + Copilot reach them too. Memory
-     tools optional. → true parity on read capabilities.
-   - **Option B: keep ChatGPT/Copilot comps+BOV-focused**, and route rich orchestration through the LCC in-app
-     Copilot (which already has queue/workflow/entity/sync). Document that boundary so it's intentional, not an omission.
-2. **generate_comps on ChatGPT/Copilot** — `CCP_generate_comps_action_chatgpt_copilot.md` (unify auth + schema).
+1. **✅ DONE (Option A, 2026-07) — read tools exposed over HTTP.** The 6 context/ops tools + `recall_memory`
+   now have Bearer-authed `/api/*` routes on `mcp/server.js`, each reusing the EXACT same `TOOL_HANDLERS[name]`
+   the MCP surface uses (one implementation, zero MCP-vs-HTTP drift — verified byte-identical JSON on `/mcp`
+   vs `/api`). `docs/comps-rollout/lcc-openapi.yaml` (this pass) is the single import for ChatGPT + Copilot.
+   Routes: `/api/search-entities`, `/api/property-context`, `/api/contact-context`, `/api/daily-briefing`,
+   `/api/queue-summary`, `/api/pipeline-health`, `/api/recall-memory`.
+   - **Read-only guarantee preserved:** none of the new routes mutate data (each has a one-line read-only
+     assertion; `makeReadHttpRoute` throws if handed a non-read-only tool). `log_memory` (the only WRITE tool)
+     is intentionally NOT exposed over HTTP — it stays Claude/MCP-only.
+   - **Security — single key now has broader read scope.** Auth is unchanged (Bearer `LCC_API_KEY`), but this
+     widens the one key's read reach from comps to all context/CRM/pipeline data, so: (a) the pending
+     `LCC_API_KEY` rotation (checklist P1) is now HIGHER priority, and (b) **recommended follow-up: per-surface
+     API keys** (a distinct token per connector so one leak is scoped + independently revocable). Per-surface
+     keys are NOT built in this pass — documented as the roadmap.
+   - **Data-governance note (by design, Scott approved Option A):** these routes let ChatGPT (OpenAI) and
+     Copilot (Microsoft) receive contact / CRM / pipeline data. This is intentional. If any tool should stay
+     Claude-only for PII reasons, gate it behind an env allowlist (e.g. `HTTP_TOOLS_ALLOWLIST`) — the mount
+     loop already reads a `READ_ONLY_HTTP_TOOLS` allowlist, so narrowing it is a one-line change.
+2. **generate_comps on ChatGPT/Copilot** — `CCP_generate_comps_action_chatgpt_copilot.md` (unify auth + schema;
+   append `generateComps`/`generateBov` into `lcc-openapi.yaml` under the same server + Bearer).
 3. **Northmarq Project action comps contract is stale** — fix the `/generate-comps` description in
    `claude_project_action.json` (same prompt above).
-4. **`mcp/README.md` lists only 6 tools** — update to all 12 + refresh the AI Surface Comparison (done in this pass).
+4. **`mcp/README.md`** — updated this pass to all 12 tools + the `/api/*` read routes in Endpoints.
 5. **`NORTHMARQ_PROJECT_PROMPT.md`** — add a comps section mirroring the BOV record-first §3P (text in the playbook below).
 6. **Cowork skill** — install `comps-engine-SKILL.md` (source in `docs/comps-rollout/`).
 
@@ -73,11 +83,14 @@ cms-npi-analysis, bov-government) are current; add the `comps-engine` skill if d
 
 **Cowork** — install `comps-engine` skill; other skills already present.
 
-**ChatGPT** — import `lcc-comps-openapi.yaml` (Bearer). After Option A + prompt 1, re-import to gain the read
-tools + workbook generation.
+**ChatGPT** — import `lcc-openapi.yaml` (Bearer). This is the full read + comps surface (Option A done); it
+carries `searchEntities`, `getPropertyContext`, `getContactContext`, `getDailyBriefing`, `getQueueSummary`,
+`getPipelineHealth`, `recallMemory`, `queryComps`, `synthesizeComps`. Set `servers[0].url` to `MCP_BASE_URL`.
+(Anyone still on the old comps-only `lcc-comps-openapi.yaml` should re-import `lcc-openapi.yaml` to gain the
+read tools; workbook generation is appended by the companion prompt.)
 
-**Copilot Studio** — import the same OpenAPI as a custom connector; wire into the LCC Deal Agent. Rich
-orchestration stays in the in-app Copilot per `copilot_capability_map_lcc.md`.
+**Copilot Studio** — import the same `lcc-openapi.yaml` as a custom connector; wire into the LCC Deal Agent.
+Rich orchestration stays in the in-app Copilot per `copilot_capability_map_lcc.md`.
 
 **LCC in-app Copilot** — already broad; optionally add comps query/synthesize to `/api/chat`'s tool routing so
 in-app chat can pull comps too (currently a ⬜).
@@ -86,4 +99,5 @@ in-app chat can pull comps too (currently a ⬜).
 Reliable-or-exclude NOI/rent (dialysis + gov); cap rates as decimals; request-aware multi-tenant naming
 (MOB/MT + anchor); cap/rent reconciliation flags → dialysis review queue; record-first BOV resolution
 (address/id → same workbook); `buyer`/`seller`/`financing` out of comps unless asked; formula-protected
-columns never written; all read tools read-only.
+columns never written; all read tools read-only; the WRITE tool (log_memory) is never exposed over HTTP
+(Claude/MCP-only); every HTTP surface calls the same tool handler as MCP, so results cannot diverge.
