@@ -115,6 +115,34 @@ function splitName(name) {
   return { first: parts[0] || null, last: parts.slice(1).join(" ") || null };
 }
 
+// Vendor addresses LoopNet delivers the buyer's message FROM. A forwarded /
+// replied Outlook thread keeps a "From: <Buyer Name> <leads@loopnet.com>" header
+// even after the pipe-form "From: <Name> | <phone> | <email>" buyer line is gone,
+// and the display name against a vendor address is the buyer. NOT northmarq — an
+// internal teammate is never the buyer.
+const VENDOR_FORWARD_DOMAINS = /@(loopnet\.com|costar\.com)$/i;
+// "<Display Name> <email@domain>" (Outlook header form; angle OR paren brackets).
+const FORWARD_HEADER_RE =
+  /([A-Za-z][A-Za-z.'’-]*(?:\s+[A-Za-z][A-Za-z.'’-]*){0,3})\s*[<(]\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*[>)]/g;
+
+// Best-effort inquiry name fallback: recover the buyer's name from a forwarded /
+// replied thread header. Accepts the display name ONLY when it is paired with a
+// vendor address (LoopNet/CoStar send on the buyer's behalf) or the buyer's own
+// email — never an internal northmarq address. Returns null when nothing matches.
+export function nameFromForwardHeader(text, buyerEmail) {
+  const be = (buyerEmail || "").toLowerCase();
+  const s = String(text || "");
+  FORWARD_HEADER_RE.lastIndex = 0;
+  let m;
+  while ((m = FORWARD_HEADER_RE.exec(s)) !== null) {
+    const nm = m[1].trim();
+    const em = m[2].toLowerCase();
+    const eligible = VENDOR_FORWARD_DOMAINS.test(em) || (be && em === be);
+    if (eligible && looksLikeName(nm)) return nm;
+  }
+  return null;
+}
+
 // City / State / ZIP anywhere in the text: "Woodland Hills, CA 91367".
 // Uses the FIRST occurrence, which is the subject property — the CoStar footer
 // address ("Arlington, VA 22209") always appears later in the body.
@@ -219,6 +247,9 @@ export function parseLoopNetEmail(rawBody, subject) {
       const comp = leftover.find((s) => looksLikeName(s) && s !== name);
       if (comp) company = comp;
     }
+    // Fallback: a forwarded / replied inquiry has no pipe-form buyer line, but an
+    // Outlook "From: <Buyer> <leads@loopnet.com>" header still carries the name.
+    if (!name) name = nameFromForwardHeader(text, email);
     if (!phone) phone = firstPhone(text);
     // The inquiry message: "…I found <property> on LoopNet and would like to learn more…".
     message =
