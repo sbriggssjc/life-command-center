@@ -2849,6 +2849,92 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
   return count;
 }
 
+// ── ORE Option A Unit 2 — capture EVERY observed owner address (never collapse) ─
+// The pipeline reduces the payload's many owner-address surfaces to ONE curated
+// recorded_owners write (ensureRecordedOwner). This ALSO emits an append-only
+// observation for each address-bearing surface to LCC Opps
+// (lcc_record_owner_address_observation) so the reconcile engine + Build 2's
+// address dimension see them. The curated write is untouched; this is additive,
+// best-effort, and never blocks the capture. The owner NAME is guarded (federal
+// anti-pattern / structural junk) so an address never attaches to a garbage owner;
+// the RPC name-resolves the owner entity + normalizes/dedupes server-side.
+// Pure collector (exported for tests): every owner-address surface in the
+// payload, guarded (federal anti-pattern / structural junk owner names dropped),
+// never collapsed. Returns [{ owner_name, address, surface, kind }].
+export function collectOwnerAddressObservations(metadata) {
+  const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
+  const sales    = Array.isArray(metadata?.sales_history) ? metadata.sales_history : [];
+  const obs = [];
+  const push = (name, address, surface, kind) => {
+    const nm = (typeof name === 'string' ? name.trim() : '');
+    const addr = (typeof address === 'string' ? address.trim() : '');
+    if (!nm || !addr) return;
+    if (isFederalOwnerAntiPattern(nm) || isJunkEntityName(nm)) return; // don't attach an address to a garbage owner
+    obs.push({ owner_name: nm, address: addr, surface, kind });
+  };
+  for (const c of contacts) {
+    if (!c || !c.address) continue;
+    if (c.role === 'owner')       push(c.name, c.address, 'costar_owner_panel', 'notice');
+    else if (c.role === 'true_buyer' || c.role === 'true_seller')
+                                  push(c.name, c.address, 'costar_contacts', 'notice');
+  }
+  for (const s of sales) {
+    if (!s) continue;
+    if (s.buyer  && s.buyer_address)  push(s.buyer,  s.buyer_address,  'sales_comp_contact', 'mailing');
+    if (s.seller && s.seller_address) push(s.seller, s.seller_address, 'sales_comp_contact', 'mailing');
+  }
+  return obs;
+}
+
+async function recordOwnerAddressObservations(domain, metadata) {
+  const shortDomain = domain === 'dialysis' ? 'dia' : (domain === 'government' ? 'gov' : domain);
+  const obs = collectOwnerAddressObservations(metadata);
+  if (!obs.length) return 0;
+  let recorded = 0;
+  await Promise.all(obs.map(async (o) => {
+    try {
+      const r = await opsQuery('POST', 'rpc/lcc_record_owner_address_observation', {
+        p_owner_entity_id: null,
+        p_owner_name: o.owner_name,
+        p_source_domain: shortDomain,
+        p_source_recorded_owner_id: null,
+        p_address: o.address,
+        p_city: null,
+        p_state: null,
+        p_source_surface: o.surface,
+        p_address_kind: o.kind,
+        p_confidence: 0.6,
+        p_source_url: null,
+        p_source_context: null,
+      });
+      if (r.ok) recorded++;
+    } catch (_) { /* best-effort — never blocks the capture */ }
+  }));
+  return recorded;
+}
+
+// ORE Option A Unit 4 — record a CoStar recorded↔true-owner assertion as an
+// UNVERIFIED datapoint (verified=false). NEVER written to true_owner_id from the
+// store; a deed/domain-derived link that AGREES corroborates it, one that
+// DISAGREES is a review flag (v_lcc_owner_link_review). Best-effort; never blocks.
+async function recordOwnerLinkObservation(domain, recordedOwnerName, assertedTrueOwnerName, recordedOwnerId) {
+  const shortDomain = domain === 'dialysis' ? 'dia' : (domain === 'government' ? 'gov' : domain);
+  const ro = (typeof recordedOwnerName === 'string' ? recordedOwnerName.trim() : '');
+  const tt = (typeof assertedTrueOwnerName === 'string' ? assertedTrueOwnerName.trim() : '');
+  if (!ro || !tt) return;
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_owner_link_observation', {
+      p_source_domain: shortDomain,
+      p_recorded_owner_id: recordedOwnerId ? String(recordedOwnerId) : null,
+      p_recorded_owner_name: ro,
+      p_asserted_true_owner_name: tt,
+      p_asserted_true_owner_id: null,
+      p_source: 'costar',
+      p_source_context: null,
+    });
+  } catch (_) { /* best-effort — never blocks */ }
+}
+
 // ── Domain DB propagation (direct PostgREST for both dialysis & government) ─
 
 async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
@@ -3397,6 +3483,14 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
       console.warn('[portfolio-unpack] failed (non-fatal):', err?.message);
       results.records.portfolio_constituents = { error: err?.message || String(err) };
     }
+  }
+
+  // ORE Option A Unit 2: append-only owner-address observations (never collapse).
+  // Best-effort; never blocks. The curated recorded_owners write above is intact.
+  try {
+    results.records.owner_address_observations = await recordOwnerAddressObservations(domain, metadata);
+  } catch (err) {
+    console.warn('[sidebar-pipeline] owner-address observation recording failed (non-fatal):', err?.message);
   }
 
   return { propagated: true, ...results };
@@ -8416,6 +8510,16 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
         if (toMatch.ok && toMatch.data?.length) {
           trueOwnerId = toMatch.data[0].true_owner_id;
         } else {
+          // ORE Option A Unit 4: "the recorded owner IS the true owner" is an
+          // UNVERIFIED CoStar assertion (Scott: "CoStar mis-identifies constantly").
+          // Record it as a datapoint to corroborate/review; only auto-CREATE a
+          // brand-new true_owner from it when COSTAR_TRUE_OWNER_TRUST is enabled
+          // (default off — surface it, don't trust it). A pre-existing true_owner
+          // (the toMatch branch above) is still linked; only the blind clone is gated.
+          await recordOwnerLinkObservation(domain, ro.name, ro.name, recordedOwnerId);
+          if (process.env.COSTAR_TRUE_OWNER_TRUST !== 'true' && process.env.COSTAR_TRUE_OWNER_TRUST !== '1') {
+            continue; // await corroboration; no blind recorded→true clone
+          }
           // Create new true_owner from recorded_owner data
           const toData = stripNulls({
             name: ro.name,
@@ -9363,6 +9467,19 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
 
   // Write true buyer
   if (trueBuyer) {
+    // ORE Option A Unit 4: record the CoStar recorded→true-buyer assertion as an
+    // UNVERIFIED datapoint (recorded owner from the owner panel → this true buyer)
+    // BEFORE the write. The properties.true_owner_id write is KEPT: it is CoStar's
+    // explicit True-Buyer panel (the strongest CoStar ownership signal) and the
+    // sole source of gov true_owners — gating it off would gut the gov ownership
+    // chain. It is surfaced for corroboration/review in v_lcc_owner_link_review,
+    // never blindly trusted. (Judgment call, 2026-07-23; see the round summary.)
+    try {
+      const recordedOwner = selectAuthoritativeOwner(metadata);
+      if (recordedOwner?.name) {
+        await recordOwnerLinkObservation(domain, recordedOwner.name, trueBuyer.name, null);
+      }
+    } catch (_) { /* best-effort */ }
     trueBuyerId = await ensureTrueOwner(trueBuyer, trueBuyerContacts);
     if (trueBuyerId) {
       await domainPatch(domain,
