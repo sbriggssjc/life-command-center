@@ -8296,3 +8296,115 @@ grounded + reconciled the delta; full detail in `docs/CONTACTS_SPLIT_BRAIN_DELTA
   stale-high "hot leads"); Outlook contact ingestion / mail harvesting / bounceback
   parsing; `webex_person_id` is unpopulatable by the telephony API in use (make
   `getDataQuality.webex_linked` honest rather than always-0).
+
+## ORE Option A — capture & store ALL owner addresses (append-only) + surface the domain string + record the unverified CoStar recorded↔true link (2026-07-23)
+
+Build 1 (deed byte-capture) + Build 2 (multi-signal reconcile engine +
+`v_lcc_owner_address_dimension` + the continuous review sweep) were live but
+**starved**: owner-address coverage in LCC was ~0 (`entities.address` only, 42
+owners) while **302 owners** carried a domain registered/notice address whose
+STRING was unreachable in LCC (the boolean-only `has_reg_address` Slice-1 PII
+posture). Two root causes: the CoStar capture COLLAPSED many owner-address
+surfaces to ONE curated `recorded_owners` write, and the mirror exposed only a
+boolean. Scott's doctrine (2026-07-22): "Grab and store ALL different addresses
+and reconcile later. The CoStar recorded↔true link is a datapoint to
+collect+verify — never ingest as truth." Additive · reversible · never-collapse ·
+reuse-not-fork. LCC-Opps + two gov/dia anon-view extensions; no dia/gov PII writes;
+no new api/*.js.
+
+### Unit 0 — payload inventory (grounded, agents)
+CoStar server payload address surfaces TODAY: owner-panel mailing address
+(`metadata.contacts[].address` role owner → `costar_owner_panel`); true_buyer/
+true_seller org address (`costar_contacts`); sales-history buyer/seller
+(`metadata.sales_history[].{buyer,seller}_address` → `sales_comp_contact`); parcel
+(situs, not owner). **Deferred extension-capture** (NOT sent by the CoStar
+sidebar): a distinct owner mailing address from the CoStar Public Records tab
+(not scraped); the separate `public-records.js` scanner's assessor/recorder/SOS
+owner+agent addresses (a distinct `domain:'public-records'` capture that bypasses
+`buildMetadata` — Option B territory). Deed grantee/grantor addresses flow via
+the domain mirror (source `recorded_owner_domain`), not a separate hook.
+
+### Unit 1 — the append-only OBSERVATIONS store (LCC Opps, migration `20260723123000`, applied live)
+`lcc_owner_address_observations` — one row per (owner, normalized address,
+source_surface); NEVER collapse (the same owner's DIFFERENT addresses across
+surfaces all coexist; only an exact (owner, addr_norm, surface) repeat dedupes).
+`matchable=false` for a situs address. `authority` per surface (recorded_owner_domain
+90 … sales_comp 40). `lcc_owner_link_observations` — append-only UNVERIFIED
+CoStar recorded→true assertions (never written to `true_owner_id`). Recorder RPCs
+`lcc_record_owner_address_observation` / `lcc_record_owner_link_observation`
+(SECURITY DEFINER, service_role): normalize + name-resolve the owner entity +
+dedupe server-side. Drop the tables → zero trace.
+
+### Unit 2 — stop collapsing: emit EVERY observed address (`sidebar-pipeline.js`)
+`collectOwnerAddressObservations(metadata)` (pure, exported, unit-tested) +
+`recordOwnerAddressObservations(domain, metadata)` — called best-effort at the
+end of `propagateToDomainDbDirect` (the curated `ensureRecordedOwner` write is
+UNTOUCHED). Emits owner-panel + true-buyer/seller + sales buyer/seller addresses,
+guarded (federal anti-pattern / `isJunkEntityName` — no address on a garbage
+owner). Never blocks the capture.
+
+### Unit 3 — surface the DOMAIN address STRING (the 302-owner unlock, Scott-approved)
+gov + dia `v_owner_contact_signals_portfolio` gain a `reg_address` STRING column
+(append-rule; gov prefers `recorded_owners.mailing_address` then
+`registered_agent_address`; dia prefers `true_owners.notice_address_1/2` then
+`recorded_owners.registered_agent_address`/`address`), widening `owners` to
+include address-only owners. **The view is extended — RLS on the base PII tables
+is NOT loosened** (definer-privilege anon-readable, same posture as the sibling
+name views). `lcc_owner_contact_signals` gains a `reg_address` column; the sync
+`select=` + finalize carry it; `lcc_feed_owner_signal_addresses` feeds it into the
+observations store (source `recorded_owner_domain`) resolving the owner entity via
+the `external_identities(<domain>, true_owner)` bridge. Daily cron
+`lcc-owner-address-feed` (05:07, after sync/finalize) + `lcc_resolve_owner_address_observation_entities`.
+
+### Feed Build 2 (the reconcile engine + dimension)
+Both `lcc_owner_evidence` (the TARGET gatherer) AND `lcc_refresh_owner_evidence_cache`
+(the candidate cache) now `COALESCE(lcc_normalize_address(entities.address),
+<owner's best matchable observation address>)` for `addr_key` — so the weight-50
+`shared_mailing_address` reconcile signal fires SYMMETRICALLY for the domain-address
+owners WITHOUT touching `entities.address` (curated data untouched; empty
+observations ⇒ byte-identical, cache-or-live safe). `v_lcc_owner_address_dimension`
+gains an `observation:<surface>` leg; `v_lcc_owner_shared_address` unions matchable
+observation addresses (so the review sweep re-reviews on a new cross-surface shared
+address); `v_lcc_owner_address_coverage` gains observation + string-in-LCC counts.
+**Known limitation (documented):** the reconcile engine keys on ONE `addr_key` per
+owner (highest-authority matchable); an ANY-shared-address discovery across an
+owner's multiple addresses is a deeper reconcile-engine change (follow-up).
+
+### Unit 4 — record the CoStar recorded↔true link as UNVERIFIED
+`v_lcc_owner_link_review` — unverified CoStar assertions, with `corroborated`
+(a deed/domain-derived link AGREES) / `disagrees` (a non-costar link names a
+DIFFERENT true owner → review flag). `sidebar-pipeline.js`: Path A
+(`upsertTrueOwners`, the True-Buyer panel → `properties.true_owner_id`) records
+the assertion but the write is **KEPT** (judgment call: it is CoStar's explicit
+beneficial-owner panel + the sole gov true_owner source — gating it off would gut
+the gov ownership chain; surfaced for review, not blindly trusted). Path B (the
+dia implicit "recorded IS true" clone — the code the doctrine quotes) records the
+assertion and **gates the blind CREATE behind `COSTAR_TRUE_OWNER_TRUST` (default
+OFF)** — a pre-existing true_owner is still linked; only the fabrication is gated.
+Reversible (flip the env on to restore).
+
+### Verified live (2026-07-23)
+Coverage climb: distinct matchable addresses **39 → 393**; shared-address reconcile
+candidates **6 → 42**; 302-owner gap surfaced (**415** domain strings in LCC via
+the mirror pull → feed → observations; **411** observations / 382 entity-resolved);
+reconcile `addr_key` coverage **~42 → 419**. The `shared_mailing_address` signal
+fires end-to-end (weight 50 → verdict `review`, never a silent merge — a shared
+registered-agent address across unrelated LLCs is surfaced, not auto-merged).
+Synthetic multi-surface round-trip: three DIFFERENT addresses on owner-panel /
+contacts / sales-comp all landed as DISTINCT dimension rows (never collapsed); an
+exact repeat deduped; the curated write untouched; a costar link + deed AGREE →
+`corroborated`, a conflicting deed → `disagrees`; `properties.true_owner_id` never
+written from the store. All synthetic rows deleted (0 residue); the 411 fed
+observations are real production data the daily crons maintain. `entities.address`
+untouched (still 42). Load-bearing caches rebuild clean (priority_queue 1126).
+`node --check` clean; `collectOwnerAddressObservations` unit-tested
+(`test/owner-address-observations.test.mjs`). Reversal: drop the two observation
+tables + the mirror `reg_address` column + re-create the prior Build-2 /
+evidence-cache / domain-view bodies → zero trace.
+
+### Follow-ups (surfaced, NOT built)
+Option B (the SOS human-in-the-loop sidebar) feeds the SAME observations store;
+the CoStar Public Records tab owner address + the `public-records.js` scanner
+addresses are deferred extension-capture work; the reconcile engine's
+single-`addr_key`→any-shared-address widening; a Decision-Center lane over
+`v_lcc_owner_link_review`.
