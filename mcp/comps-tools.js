@@ -123,6 +123,7 @@ const _USE_ABBR = { 'Medical Office': 'MOB', 'Office': 'Office', 'Retail': 'Reta
   'Industrial': 'Industrial', 'Flex': 'Flex', 'Warehouse': 'Warehouse' };
 function isMultiTenant(c) {
   const raw = c.raw || {};
+  if (Number(c.tenant_count) > 1) return true;            // authoritative: RPC per-tenant count
   if (/multi/i.test(String(raw.Tenancy__c || ''))) return true;
   if (Number(raw.Tenants__c) > 1) return true;
   const leased = Number(c.gov_sf_leased), rba = Number(c.rba || c.building_sf);
@@ -130,10 +131,11 @@ function isMultiTenant(c) {
   return false;
 }
 // Multi-tenant naming: "[property abbrev] ([anchor/largest tenant])" — e.g. MOB (VA), MT (SSA),
-// Park Place MOB (Concentra). Single-tenant comps keep the tenant/agency name unchanged.
+// Park Place MOB (Concentra). The anchor is the RPC-computed largest-by-SF tenant (anchor_tenant)
+// when present, else the recorded agency. Single-tenant comps keep the tenant/agency name unchanged.
 function displayName(c) {
-  const anchor = c.agency || c.tenant || '';
-  if (!isMultiTenant(c)) return anchor || null;
+  if (!isMultiTenant(c)) return (c.agency || c.tenant) || null;
+  const anchor = c.anchor_tenant || c.agency || c.tenant || '';
   const named = String((c.raw || {}).property_name || '').trim();
   const abbr = named || _USE_ABBR[normalizeUse(c)] || 'MT';
   return anchor ? `${abbr} (${anchor})` : abbr;
