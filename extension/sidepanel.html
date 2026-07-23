@@ -183,6 +183,21 @@
     .property-source { font-size: 10px; color: var(--accent); margin-top: 4px; }
     .property-body { flex: 1; overflow-y: auto; }
     .property-actions { flex-shrink: 0; padding-top: 8px; }
+    /* Persistent, always-available entry point to the SOS Research Worklist —
+       survives property/org/worklist re-renders (lives outside those containers). */
+    .property-tab-footer {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+      padding-top: 6px;
+      text-align: center;
+    }
+    .btn-link {
+      background: none;
+      color: var(--text-secondary);
+      padding: 4px 8px;
+    }
+    .btn-link:hover { color: var(--navy); opacity: 1; text-decoration: underline; }
 
     .match-status {
       display: flex; align-items: center; gap: 6px;
@@ -451,6 +466,11 @@
       <div id="propertyHeader" class="property-header-section"></div>
       <div id="propertyBody" class="property-body"></div>
       <div id="propertyActions" class="property-actions"></div>
+      <!-- Always-present secondary affordance: open the SOS Research Worklist
+           without needing to scan a page first. Wired once at init. -->
+      <div id="propertyTabFooter" class="property-tab-footer">
+        <button class="btn btn-sm btn-link" id="sosWorklistBtn">📋 SOS Research Worklist</button>
+      </div>
     </div>
 
     <!-- SEARCH TAB -->

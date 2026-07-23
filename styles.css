@@ -443,6 +443,15 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
 .detail-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; max-width: 520px; background: var(--s1); overflow-y: auto; z-index: 201; animation: slideIn 0.2s ease-out; padding: 0; display: none; }
 .detail-panel.open { display: block; }
 @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+/* Companion property panel (dual-dock) — sits to the LEFT of the main detail
+   panel so a contact/owner and a property are visible side by side. Only shown
+   on wide screens (JS gates on width); minimizes to a thin restore tab. */
+.companion-panel { position: fixed; top: 0; bottom: 0; right: 520px; width: 42vw; max-width: 480px; background: var(--s1); overflow-y: auto; z-index: 201; border-right: 1px solid var(--border); box-shadow: 8px 0 28px rgba(0,0,0,0.28); animation: slideIn 0.2s ease-out; padding: 0; display: none; }
+.companion-panel.open { display: block; }
+.companion-min { position: fixed; top: 50%; right: 520px; transform: translateY(-50%); z-index: 202; display: none; background: var(--accent); color: #fff; padding: 10px 6px; border-radius: 8px 0 0 8px; writing-mode: vertical-rl; text-orientation: mixed; cursor: pointer; font-size: 11px; font-weight: 600; box-shadow: -2px 0 10px rgba(0,0,0,0.25); }
+.companion-min.open { display: block; }
+.companion-min::after { content: 'Property'; }
 .detail-header { padding: 16px 20px; padding-top: calc(16px + var(--safe-top)); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--s1); position: sticky; top: 0; z-index: 2; }
 .detail-header-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
 .detail-back { background: none; border: none; color: var(--text1); font-size: 20px; cursor: pointer; padding: 6px 10px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; font-weight: 500; }
