@@ -25,7 +25,7 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
-import { buildSosAddressObservations } from './_shared/sos-writeback-observations.js';
+import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
@@ -8417,6 +8417,77 @@ function parseSosDate(raw) {
   return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
 
+// ── "Not registered in <state>" disposition (Unit 2, 2026 SOS rapid-ingest) ──
+// Records the negative SOS result on the llc_research_queue row WITHOUT changing
+// its status while another candidate state remains open (the two-jurisdiction
+// doctrine). The not-found trail lives in enrichment_payload.not_found_states
+// (append-only, no schema change, no invalid status). When BOTH candidate states
+// are exhausted the row is handed back for further processing (status='no_match',
+// the DB's existing "searched, none found" signal that ages out / re-queues).
+// Reversible: clear enrichment_payload.not_found_states + restore status.
+async function applySosNotRegistered(res, { domain, ownerId, queueId, searchedState }) {
+  if (!Number.isFinite(queueId)) {
+    return res.status(400).json({ error: 'queue_id required for a not_found disposition' });
+  }
+  try {
+    // Candidate states for this owner (filing + asset), from the worklist view
+    // (the view has no status filter, so it resolves them regardless of status).
+    let filingState = null, assetState = null;
+    try {
+      const wRes = await domainQuery(domain, 'GET',
+        'v_llc_research_worklist?queue_id=eq.' + queueId + '&select=filing_state,asset_state&limit=1');
+      const w = (wRes.ok && Array.isArray(wRes.data)) ? wRes.data[0] : null;
+      if (w) { filingState = w.filing_state || null; assetState = w.asset_state || null; }
+    } catch (_) { /* candidate states are best-effort; a miss just means fewer candidates */ }
+
+    // Current row (payload + status).
+    const qRes = await domainQuery(domain, 'GET',
+      'llc_research_queue?queue_id=eq.' + queueId + '&select=enrichment_payload,status&limit=1');
+    if (!qRes.ok) return res.status(502).json({ error: 'queue_fetch_failed', detail: qRes.data });
+    const row = Array.isArray(qRes.data) ? qRes.data[0] : null;
+    if (!row) return res.status(404).json({ error: 'queue_row_not_found', queue_id: queueId });
+    const curPayload = (row.enrichment_payload && typeof row.enrichment_payload === 'object') ? row.enrichment_payload : {};
+    const curStatus  = row.status || null;
+
+    const nowIso = new Date().toISOString();
+    const { notFoundStates, remaining, exhausted, searched } = computeSosNotFoundDisposition({
+      filingState, assetState, searchedState,
+      priorNotFound: Array.isArray(curPayload.not_found_states) ? curPayload.not_found_states : [],
+      at: nowIso,
+    });
+
+    const payload = { ...curPayload, not_found_states: notFoundStates, sos_last_disposition: 'not_registered' };
+    const nfLabel = notFoundStates.map((x) => x.state).filter((s) => s && s !== '(unspecified)').join(',') || 'searched';
+    const patch = { enrichment_payload: payload, last_attempt_at: nowIso };
+    if (exhausted) {
+      // Both jurisdictions exhausted → hand it back (drops out of queued/deferred).
+      patch.status      = 'no_match';
+      patch.resolved_at  = nowIso;
+      patch.last_error   = ('not_registered_in:' + nfLabel).slice(0, 500);
+    } else {
+      // Still workable under its other candidate state — keep status as-is.
+      patch.last_error   = ('not_registered_in:' + (searched || 'searched') + '; open:' + remaining.join(',')).slice(0, 500);
+    }
+
+    const uRes = await domainQuery(domain, 'PATCH', 'llc_research_queue?queue_id=eq.' + queueId, patch);
+    if (!uRes.ok) return res.status(502).json({ error: 'queue_update_failed', detail: uRes.data });
+
+    return res.status(200).json({
+      ok: true, domain,
+      recorded_owner_id: ownerId || null,
+      queue_id: queueId,
+      outcome: 'not_found',
+      searched_state: searched,
+      exhausted,
+      remaining_states: remaining,
+      status: patch.status || curStatus,
+    });
+  } catch (err) {
+    console.error('[sos-writeback:not_found]', err?.message || err);
+    return res.status(500).json({ error: 'sos_not_found_failed', message: err?.message });
+  }
+}
+
 async function handleSosWriteback(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   const user = await authenticate(req, res);
@@ -8431,6 +8502,17 @@ async function handleSosWriteback(req, res) {
   if (!['government', 'dialysis'].includes(domain)) {
     return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
   }
+
+  // ── "Not registered in <state>" disposition (Unit 2) ─────────────────────
+  // The operator searched the owner's SOS and it is NOT registered in the
+  // searched state. Record the miss (append-only) and — per the two-jurisdiction
+  // doctrine — keep the owner workable under its other candidate state; only when
+  // BOTH candidate states are exhausted hand it back for further processing
+  // (status='no_match'). Never a silent close. queue_id is the key here.
+  if (String(body.outcome || '') === 'not_found') {
+    return applySosNotRegistered(res, { domain, ownerId, queueId, searchedState: body.searched_state });
+  }
+
   if (!ownerId) {
     return res.status(400).json({ error: 'recorded_owner_id required' });
   }

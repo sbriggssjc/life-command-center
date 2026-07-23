@@ -683,6 +683,21 @@ const ORG_FIELDS = [
   ['officers', 'Officers / Members'],
 ];
 
+// SOS capture form fields (Unit 3) — the keys map 1:1 to the /api/sos-writeback
+// `capture` contract. Each is pre-filled from the scanner (auto-grab) and stays
+// editable so a scan miss never blocks capture. `true` = render a textarea.
+const SOS_CAPTURE_FIELDS = [
+  ['name', 'Entity Name'],
+  ['filing_number', 'Filing Number'],
+  ['status', 'Status'],
+  ['formation_date', 'Formation Date'],
+  ['state_of_formation', 'Jurisdiction / State of Formation'],
+  ['registered_agent', 'Registered Agent'],
+  ['agent_address', 'Agent Address', true],
+  ['principal_address', 'Principal / Mailing Address', true],
+  ['officers', 'Officers / Managers / Members', true],
+];
+
 // Round 76ek (2026-04-29): accept an optional `prefetchEntityId` to skip
 // the address-based lookup and resolve the LCC entity by id directly.
 // Passed in by the post-save flow so a successful Save immediately flips
@@ -3130,36 +3145,100 @@ function getActiveLlcResearch() {
   });
 }
 
-// Google-routed SOS search — works for all 50 states day one (the broker is
-// the parser; no per-state adapter needed). Lands them on the official SOS
-// business-entity search for the LLC.
-function sosSearchUrl(name, state) {
-  const q = `${name || ''} ${state || ''} secretary of state business entity search`.trim();
-  return 'https://www.google.com/search?q=' + encodeURIComponent(q);
+// ── Rapid click-through SOS worklist (Unit 1) ────────────────────────────────
+// The operator batches ONE state (SOS site) at a time; within a state, highest
+// deal value first (server-ranked). No per-state deep-link — finding the SOS
+// search is trivial; the broker keeps their own SOS tab open. Each owner card
+// offers "📋 Copy name" (copies the entity name + marks it the active capture
+// target) and "✕ Not in <ST>" (records the negative result). After a Save
+// (ingest) or a Not-registered disposition the list advances to the next owner
+// WITHOUT a refetch, so a not-found-but-still-workable owner isn't re-surfaced
+// under its other candidate state.
+let _sosWorklist = null; // { domain, state, items:[], done:Set, byState:[], totalEligible:0 }
+
+function _sosItemByQid(qid) {
+  return _sosWorklist ? _sosWorklist.items.find((it) => it.queue_id === qid) : null;
 }
 
-// Render the state-sorted SOS worklist into the Property tab. The operator
-// batches ONE state (SOS site) at a time; within a state, highest deal value
-// first (server-ranked). "Look up" stashes the target and opens the SOS search;
-// the broker then Scans the SOS page and the org view offers a one-click
-// write-back to that owner (which also feeds the owner-address observations).
+// Mark this owner the active capture target so a subsequent Scan → SOS→Owner
+// write-back (and the org-view form) targets the right owner.
+function _sosSetActiveTarget(item) {
+  if (!item) return;
+  return setActiveLlcResearch({
+    queue_id: item.queue_id,
+    recorded_owner_id: item.recorded_owner_id || null,
+    search_name: item.search_name || '',
+    filing_state: item._states?.[0] || '',
+    asset_state: item._states?.[1] || '',
+    domain: _sosWorklist ? _sosWorklist.domain : (item.domain || 'government'),
+  });
+}
+
+async function _sosCopyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text || ''); return true; }
+  catch (_) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text || '';
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const ok = document.execCommand('copy'); ta.remove(); return ok;
+    } catch (_e) { return false; }
+  }
+}
+
+function _sosToast(msg) {
+  const host = $('#propertyBody');
+  if (!host) return;
+  const toast = document.createElement('div');
+  toast.className = 'update-toast';
+  toast.textContent = msg;
+  host.prepend(toast);
+  setTimeout(() => toast.remove(), 5000);
+}
+
+// Mark an owner handled and re-render from the in-memory list (no refetch, so a
+// still-workable owner isn't re-surfaced), surfacing the next owner as active.
+function _sosAdvance(queueId) {
+  if (!_sosWorklist) return false;
+  _sosWorklist.done.add(queueId);
+  _renderWorklistFromState();
+  return true;
+}
+
+async function _sosDispositionNotFound(target, btn) {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Recording…'; }
+  const result = await apiCall('/api/sos-writeback', {
+    domain: target.domain,
+    recorded_owner_id: target.recorded_owner_id,
+    queue_id: target.queue_id,
+    outcome: 'not_found',
+    searched_state: target.state || null,
+  });
+  if (!result.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = orig || '✕ Not registered'; btn.classList.add('btn-danger'); }
+    _sosToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || 'Disposition failed');
+    return false;
+  }
+  const rem = Array.isArray(result.data?.remaining_states) ? result.data.remaining_states.filter(Boolean) : [];
+  _sosToast(result.data?.exhausted
+    ? 'Not registered — sent back for further processing'
+    : `Not registered in ${target.state || 'searched state'} — still open in ${rem.join(', ') || 'another state'}`);
+  return true;
+}
+
+// Render the state-sorted SOS worklist into the Property tab. Fetches once, then
+// re-renders from in-memory state on each advance.
 async function renderLlcResearchQueue(domain, stateFilter) {
   const dom = (domain === 'government' || domain === 'dialysis') ? domain : 'government';
   const st = stateFilter ? String(stateFilter).toUpperCase() : null;  // 'NONE' = unknown-state bucket
   const header = $('#propertyHeader');
   const body = $('#propertyBody');
-  const actions = $('#propertyActions');
 
   header.innerHTML = `<div class="property-title">SOS Research Worklist</div>
     <div class="property-source">${dom === 'government' ? 'Government' : 'Dialysis'} · by state · ranked by deal value</div>`;
   body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading worklist…</div>';
-  actions.innerHTML = `
-    <button class="btn btn-sm" id="llcQGov">Government</button>
-    <button class="btn btn-sm" id="llcQDia" style="margin-left:6px;">Dialysis</button>
-    <button class="btn btn-sm btn-primary" id="llcQBack" style="margin-left:6px;">← Back</button>`;
-  $('#llcQGov')?.addEventListener('click', () => renderLlcResearchQueue('government'));
-  $('#llcQDia')?.addEventListener('click', () => renderLlcResearchQueue('dialysis'));
-  $('#llcQBack')?.addEventListener('click', () => loadPropertyTab());
 
   const stateQs = st ? `&state=${encodeURIComponent(st)}` : '';
   const result = await apiCall(`/api/admin?_route=llc-research-queue&domain=${dom}&limit=25${stateQs}`, null, 'GET');
@@ -3167,19 +3246,54 @@ async function renderLlcResearchQueue(domain, stateFilter) {
     body.innerHTML = `<div class="error-state">${escapeHtml(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || 'Failed to load worklist')}</div>`;
     return;
   }
-  const items = result.data?.items || [];
-  const byState = Array.isArray(result.data?.by_state) ? result.data.by_state : [];
-  const totalEligible = Number(result.data?.total_eligible) || 0;
+  const items = (result.data?.items || []).map((it) => {
+    const filing = it.filing_state ? String(it.filing_state).toUpperCase() : '';
+    const asset = it.asset_state ? String(it.asset_state).toUpperCase() : '';
+    const states = [];
+    if (filing) states.push(filing);
+    if (asset && asset !== filing) states.push(asset);
+    return { ...it, _states: states };
+  });
+  _sosWorklist = {
+    domain: dom,
+    state: st,
+    items,
+    done: new Set(),
+    byState: Array.isArray(result.data?.by_state) ? result.data.by_state : [],
+    totalEligible: Number(result.data?.total_eligible) || 0,
+  };
+  _renderWorklistFromState();
+}
+
+// Re-render the whole worklist frame from the in-memory _sosWorklist (header
+// actions + state picker + owner cards). Called by renderLlcResearchQueue and by
+// _sosAdvance (no refetch) and after returning from the org-view capture step.
+function _renderWorklistFromState() {
+  const wl = _sosWorklist;
+  if (!wl) return;
+  const dom = wl.domain, st = wl.state;
+  const body = $('#propertyBody');
+  const actions = $('#propertyActions');
+
+  $('#propertyHeader').innerHTML = `<div class="property-title">SOS Research Worklist</div>
+    <div class="property-source">${dom === 'government' ? 'Government' : 'Dialysis'} · by state · ranked by deal value</div>`;
+
+  actions.innerHTML = `
+    <button class="btn btn-sm" id="llcQGov">Government</button>
+    <button class="btn btn-sm" id="llcQDia" style="margin-left:6px;">Dialysis</button>
+    <button class="btn btn-sm btn-primary" id="llcQBack" style="margin-left:6px;">← Back</button>`;
+  $('#llcQGov')?.addEventListener('click', () => renderLlcResearchQueue('government'));
+  $('#llcQDia')?.addEventListener('click', () => renderLlcResearchQueue('dialysis'));
+  $('#llcQBack')?.addEventListener('click', () => { _sosWorklist = null; loadPropertyTab(); });
 
   // State picker — highest count first. '(unknown)' maps to the NONE bucket.
   let pickerHtml = '';
-  if (byState.length) {
+  if (wl.byState.length) {
     const stLabel = st ? (st === 'NONE' ? 'Unknown state' : st) : 'All states';
-    pickerHtml = `<div class="section-label">SOS worklist — ${escapeHtml(stLabel)} · ${totalEligible.toLocaleString()} owners awaiting SOS</div>
+    pickerHtml = `<div class="section-label">SOS worklist — ${escapeHtml(stLabel)} · ${wl.totalEligible.toLocaleString()} owners awaiting SOS</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">`;
-    const allActive = !st;
-    pickerHtml += `<button class="btn btn-sm llc-state-chip ${allActive ? 'btn-primary' : ''}" data-state="">All (${totalEligible.toLocaleString()})</button>`;
-    for (const s of byState) {
+    pickerHtml += `<button class="btn btn-sm llc-state-chip ${!st ? 'btn-primary' : ''}" data-state="">All (${wl.totalEligible.toLocaleString()})</button>`;
+    for (const s of wl.byState) {
       const chipState = s.state === '(unknown)' ? 'NONE' : s.state;
       const label = s.state === '(unknown)' ? 'Unknown' : s.state;
       const isActive = st && st === chipState;
@@ -3189,148 +3303,182 @@ async function renderLlcResearchQueue(domain, stateFilter) {
     pickerHtml += '</div>';
   }
 
-  if (!items.length) {
-    body.innerHTML = pickerHtml + '<div class="empty-state">No owners awaiting SOS research in this state.</div>';
-    body.querySelectorAll('.llc-state-chip').forEach((chip) => {
-      chip.addEventListener('click', () => renderLlcResearchQueue(dom, chip.dataset.state || null));
-    });
+  const remaining = wl.items.filter((it) => !wl.done.has(it.queue_id));
+  if (!remaining.length) {
+    body.innerHTML = pickerHtml + `<div class="empty-state">${wl.items.length ? '✓ Worked every owner in this list.' : 'No owners awaiting SOS research in this state.'}<br><br>
+      <button class="btn btn-sm btn-primary" id="sosReloadBtn" style="margin-top:6px;">↻ Reload / next batch</button></div>`;
+    body.querySelectorAll('.llc-state-chip').forEach((chip) =>
+      chip.addEventListener('click', () => renderLlcResearchQueue(dom, chip.dataset.state || null)));
+    $('#sosReloadBtn')?.addEventListener('click', () => renderLlcResearchQueue(dom, st));
+    setActiveLlcResearch(null);
     return;
   }
 
-  const active = await getActiveLlcResearch();
-  let html = pickerHtml + '<div class="section-label">Owners awaiting SOS lookup · search both states</div>';
-  for (const it of items) {
-    const isActive = active && active.queue_id === it.queue_id && active.domain === dom;
+  // The FIRST remaining owner is the active capture target (ready to copy).
+  _sosSetActiveTarget(remaining[0]);
+
+  let html = pickerHtml + '<div class="section-label">Copy the name ▸ paste into your SOS search ▸ Scan the record — or dispose it.</div>';
+  remaining.forEach((it, idx) => {
+    const isActive = idx === 0;
     const loc = [it.property_city, it.property_state].filter(Boolean).join(', ');
     const val = it.rev_value ? '$' + Math.round(it.rev_value).toLocaleString() : '';
-
-    // Two-jurisdiction doctrine: an owner LLC is searched in its FILING/formation
-    // state AND the state where its property sits. Offer a "Look up SOS" per
-    // distinct candidate state (filing first). No derivable state ⇒ one stateless
-    // search (property-less owner — needs the recorded/notice address or manual).
-    const filing = it.filing_state ? String(it.filing_state).toUpperCase() : '';
-    const asset = it.asset_state ? String(it.asset_state).toUpperCase() : '';
-    const states = [];
-    if (filing) states.push(filing);
-    if (asset && asset !== filing) states.push(asset);
-
-    let stateLabel;
-    if (filing && asset && filing !== asset) stateLabel = `filing ${filing} · asset ${asset}`;
-    else if (filing) stateLabel = filing;                 // filing (asset agrees or unknown)
-    else if (asset) stateLabel = `asset ${asset}`;         // recovered from the property
-    else stateLabel = 'state unknown';
-
-    let btns;
-    if (states.length) {
-      btns = states.map((s) =>
-        `<button class="btn btn-sm btn-primary llc-lookup-btn" style="margin-right:4px;margin-bottom:4px;"
-                data-qid="${it.queue_id}" data-oid="${escapeHtml(it.recorded_owner_id || '')}"
-                data-name="${escapeHtml(it.search_name || '')}" data-state="${escapeHtml(s)}"
-                data-domain="${dom}">Look up SOS · ${escapeHtml(s)}</button>`).join('');
-    } else {
-      btns = `<button class="btn btn-sm btn-primary llc-lookup-btn"
-                data-qid="${it.queue_id}" data-oid="${escapeHtml(it.recorded_owner_id || '')}"
-                data-name="${escapeHtml(it.search_name || '')}" data-state=""
-                data-domain="${dom}">Look up SOS</button>`;
-    }
-
-    html += `<div class="context-field" style="flex-direction:column;align-items:stretch;${isActive ? 'outline:2px solid var(--accent,#2e86de);border-radius:6px;padding:6px;' : ''}">
+    const stateLabel = it._states.length ? it._states.join(' · ') : 'state unknown';
+    const nfBtns = (it._states.length ? it._states : ['']).map((s) =>
+      `<button class="btn btn-sm sos-nf-btn" style="margin-right:4px;margin-bottom:4px;"
+        data-qid="${it.queue_id}" data-oid="${escapeHtml(it.recorded_owner_id || '')}"
+        data-state="${escapeHtml(s)}" data-domain="${dom}">✕ Not in ${escapeHtml(s || '—')}</button>`).join('');
+    html += `<div class="context-field sos-owner-card" data-qid="${it.queue_id}" style="flex-direction:column;align-items:stretch;${isActive ? 'outline:2px solid var(--accent,#2e86de);border-radius:6px;padding:6px;' : ''}">
       <div><span class="context-value" style="font-weight:600;">${escapeHtml(it.search_name || '(unnamed)')}</span></div>
       <div style="font-size:11px;color:var(--text-secondary);">${escapeHtml(it.tenant || '')}${it.tenant && loc ? ' · ' : ''}${escapeHtml(loc)}${val ? ' · ' + val : ''} · ${escapeHtml(stateLabel)}</div>
-      <div style="margin-top:4px;">${btns}</div>
+      <div style="margin-top:6px;">
+        <button class="btn btn-sm btn-primary sos-copy-btn" style="margin-right:4px;margin-bottom:4px;"
+          data-qid="${it.queue_id}" data-name="${escapeHtml(it.search_name || '')}">📋 Copy name</button>
+        ${nfBtns}
+      </div>
     </div>`;
-  }
+  });
   body.innerHTML = html;
 
-  body.querySelectorAll('.llc-state-chip').forEach((chip) => {
-    chip.addEventListener('click', () => renderLlcResearchQueue(dom, chip.dataset.state || null));
+  body.querySelectorAll('.llc-state-chip').forEach((chip) =>
+    chip.addEventListener('click', () => renderLlcResearchQueue(dom, chip.dataset.state || null)));
+
+  body.querySelectorAll('.sos-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const item = _sosItemByQid(Number(btn.dataset.qid));
+      if (item) _sosSetActiveTarget(item);
+      const ok = await _sosCopyToClipboard(btn.dataset.name || '');
+      // Highlight this card as the active target.
+      body.querySelectorAll('.sos-owner-card').forEach((c) => { c.style.outline = ''; c.style.padding = ''; });
+      const card = btn.closest('.sos-owner-card');
+      if (card) { card.style.outline = '2px solid var(--accent,#2e86de)'; card.style.borderRadius = '6px'; card.style.padding = '6px'; }
+      btn.textContent = ok ? '✓ Copied — paste + Scan' : 'Copy failed';
+      btn.classList.remove('btn-primary'); btn.classList.add('btn-success');
+      setTimeout(() => { btn.textContent = '📋 Copy name'; btn.classList.add('btn-primary'); btn.classList.remove('btn-success'); }, 2500);
+    });
   });
 
-  body.querySelectorAll('.llc-lookup-btn').forEach((btn) => {
+  body.querySelectorAll('.sos-nf-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const target = {
         queue_id: Number(btn.dataset.qid),
         recorded_owner_id: btn.dataset.oid || null,
-        search_name: btn.dataset.name || '',
         state: btn.dataset.state || '',
-        domain: btn.dataset.domain,
+        domain: btn.dataset.domain || dom,
       };
-      await setActiveLlcResearch(target);
-      chrome.tabs.create({ url: sosSearchUrl(target.search_name, target.state) });
-      btn.textContent = '✓ Scan the SOS page, then Save';
-      btn.className = 'btn btn-sm btn-success llc-lookup-btn';
+      const ok = await _sosDispositionNotFound(target, btn);
+      if (ok) _sosAdvance(target.queue_id);
     });
   });
 }
 
 // ── Organization view (SOS / business entity lookups) ───────────────────────
 
-function loadOrgView(source, domainLabel) {
+// Renders the SOS entity as an EDITABLE capture form (Unit 3). Auto-grab pre-
+// fills each field from the scanner; the operator confirms/corrects (or types on
+// a scan miss — the form works on ANY state's SOS). Save posts the confirmed
+// fields to /api/sos-writeback and auto-advances the worklist. When there's no
+// active research target it falls back to the generic Save-to-LCC path.
+async function loadOrgView(source, domainLabel) {
   const header = $('#propertyHeader');
   const body = $('#propertyBody');
   const actions = $('#propertyActions');
 
   const name = source.name || 'Unknown Entity';
   const siteType = source.site_type || 'business-search';
+  const target = await getActiveLlcResearch();
+  const hasTarget = !!(target && target.recorded_owner_id);
 
   header.innerHTML = `
     <div class="property-title">${escapeHtml(name)}</div>
     <div class="property-source">${domainBadge(source.domain)} ${escapeHtml(domainLabel)} (${escapeHtml(siteType)})</div>
   `;
 
-  let html = '<div class="section-label">Entity Details</div>';
-  for (const [key, label] of ORG_FIELDS) {
-    const val = source[key];
-    if (val) {
-      html += `<div class="context-field">
-        <span class="context-label">${escapeHtml(label)}</span>
-        <span class="context-value">${escapeHtml(val)}</span>
-      </div>`;
-    }
-  }
+  const banner = hasTarget
+    ? `<div class="section-label">Capturing for: <span style="font-weight:600;">${escapeHtml(target.search_name || 'owner')}</span></div>`
+    : `<div class="section-label">Review the captured fields, then Save.</div>
+       <div style="font-size:10px;color:var(--text-secondary);margin-bottom:6px;">Tip: open an owner from the Worklist first so Save writes back to the right owner.</div>`;
 
-  if (!ORG_FIELDS.some(([key]) => source[key])) {
-    html += '<div class="empty-state">No entity details found</div>';
-  }
+  // Editable form — pre-filled where the scan succeeded, blank+editable otherwise.
+  const fieldHtml = SOS_CAPTURE_FIELDS.map(([key, label, multiline]) => {
+    const val = escapeHtml(source[key] || '');
+    const input = multiline
+      ? `<textarea id="sosf_${key}" rows="2" class="sos-capture-input" style="width:100%;box-sizing:border-box;">${val}</textarea>`
+      : `<input id="sosf_${key}" type="text" class="sos-capture-input" value="${val}" style="width:100%;box-sizing:border-box;" />`;
+    return `<div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">${escapeHtml(label)}</label>
+      ${input}
+    </div>`;
+  }).join('');
 
-  body.innerHTML = html;
+  body.innerHTML = banner + '<div class="section-label">SOS Entity Details (editable)</div>' + fieldHtml;
 
-  // Action: save org to LCC, search for it, write SOS filing back to the
-  // owner being researched, or browse the LLC research queue.
+  // Not-registered buttons (per candidate state) when a target is active — the
+  // operator may realise on the SOS page that this isn't the right registration.
+  const nfStates = hasTarget
+    ? Array.from(new Set([target.filing_state, target.asset_state].map((s) => (s ? String(s).toUpperCase() : '')).filter(Boolean)))
+    : [];
+  const nfBtns = hasTarget
+    ? (nfStates.length ? nfStates : ['']).map((s) =>
+        `<button class="btn btn-sm sos-org-nf-btn" style="margin-left:6px;" data-state="${escapeHtml(s)}">✕ Not in ${escapeHtml(s || '—')}</button>`).join('')
+    : '';
+
   actions.innerHTML = `
     <button class="btn btn-sm btn-success" id="saveSosOwnerBtn">SOS → Owner</button>
-    <button class="btn btn-sm btn-primary" id="llcQueueBtn" style="margin-left:6px;">Research Queue</button>
-    <button class="btn btn-sm" id="searchOrgBtn" style="margin-left:6px;">Search in LCC</button>
-    <button class="btn btn-sm" id="saveOrgBtn" style="margin-left:6px;">Save to LCC</button>
+    <button class="btn btn-sm" id="sosCopyNameBtn" style="margin-left:6px;">📋 Copy name</button>
+    ${nfBtns}
+    <button class="btn btn-sm btn-primary" id="llcQueueBtn" style="margin-left:6px;">← Worklist</button>
+    ${hasTarget ? '' : '<button class="btn btn-sm" id="searchOrgBtn" style="margin-left:6px;">Search in LCC</button><button class="btn btn-sm" id="saveOrgBtn" style="margin-left:6px;">Save to LCC</button>'}
   `;
 
-  $('#llcQueueBtn')?.addEventListener('click', () => renderLlcResearchQueue('government'));
+  $('#llcQueueBtn')?.addEventListener('click', () => {
+    if (_sosWorklist) _renderWorklistFromState();
+    else renderLlcResearchQueue(source.domain === 'dialysis' ? 'dialysis' : 'government');
+  });
 
-  // SOS → Owner: write the captured filing back to the recorded_owner the
-  // broker picked from the research queue, and close that queue row.
+  $('#sosCopyNameBtn')?.addEventListener('click', async () => {
+    const nm = (hasTarget && target.search_name) || ($('#sosf_name')?.value) || name;
+    const ok = await _sosCopyToClipboard(nm);
+    const b = $('#sosCopyNameBtn');
+    if (b) { b.textContent = ok ? '✓ Copied' : 'Copy failed'; setTimeout(() => { b.textContent = '📋 Copy name'; }, 2000); }
+  });
+
+  document.querySelectorAll('.sos-org-nf-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!hasTarget) return;
+      const ok = await _sosDispositionNotFound({
+        queue_id: target.queue_id,
+        recorded_owner_id: target.recorded_owner_id,
+        state: btn.dataset.state || '',
+        domain: target.domain,
+      }, btn);
+      if (ok) {
+        await setActiveLlcResearch(null);
+        if (_sosWorklist) _sosAdvance(target.queue_id);
+        else renderLlcResearchQueue(target.domain);
+      }
+    });
+  });
+
+  // SOS → Owner: collect the EDITED form fields and write back, then advance.
   const sosBtn = $('#saveSosOwnerBtn');
   if (sosBtn) {
     sosBtn.addEventListener('click', async () => {
-      const target = await getActiveLlcResearch();
-      const showToast = (msg) => {
-        const toast = document.createElement('div');
-        toast.className = 'update-toast';
-        toast.textContent = msg;
-        sosBtn.parentElement?.prepend(toast);
-        setTimeout(() => toast.remove(), 6000);
-      };
-      if (!target || !target.recorded_owner_id) {
-        showToast('Open the owner from "Research Queue" first so I know which owner to save to.');
+      if (!hasTarget) {
+        _sosToast('Open the owner from the Worklist first so I know which owner to save to.');
+        return;
+      }
+      const capture = {};
+      for (const [key] of SOS_CAPTURE_FIELDS) {
+        const el = $('#sosf_' + key);
+        const v = el && typeof el.value === 'string' ? el.value.trim() : '';
+        if (v) capture[key] = v;
+      }
+      if (!Object.keys(capture).length) {
+        _sosToast('Nothing to save — fill in at least one field.');
         return;
       }
       sosBtn.disabled = true;
       sosBtn.textContent = 'Saving…';
-      const capture = {};
-      // raw scanner keys map 1:1 to the sos-writeback contract
-      for (const k of ['name','registered_agent','agent_address','principal_address',
-                       'officers','filing_number','formation_date','status','state_of_formation']) {
-        if (source[k]) capture[k] = source[k];
-      }
       const result = await apiCall('/api/sos-writeback', {
         domain: target.domain,
         recorded_owner_id: target.recorded_owner_id,
@@ -3341,44 +3489,38 @@ function loadOrgView(source, domainLabel) {
       if (result.ok) {
         sosBtn.className = 'btn btn-sm btn-success';
         const nObs = Number(result.data?.address_observations) || 0;
-        sosBtn.textContent = `✓ Saved to ${target.search_name || 'owner'}${nObs ? ` (+${nObs} address${nObs === 1 ? '' : 'es'})` : ''}`;
+        sosBtn.textContent = `✓ Saved${nObs ? ` (+${nObs} address${nObs === 1 ? '' : 'es'})` : ''}`;
         await setActiveLlcResearch(null);   // consume the target
+        // Auto-advance to the next owner in the worklist.
+        if (_sosWorklist) setTimeout(() => _sosAdvance(target.queue_id), 700);
+        else setTimeout(() => renderLlcResearchQueue(target.domain), 700);
       } else {
         sosBtn.disabled = false;
         sosBtn.textContent = 'SOS → Owner (retry)';
         sosBtn.className = 'btn btn-sm btn-danger';
-        showToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || `HTTP ${result.status || 'error'}`);
+        _sosToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || `HTTP ${result.status || 'error'}`);
       }
     });
   }
 
-  const searchBtn = $('#searchOrgBtn');
-  if (searchBtn) {
-    searchBtn.addEventListener('click', () => {
-      $('#searchInput').value = name;
-      switchTab('search');
-      doSearch();
-    });
-  }
+  // Backward-compat (no active target): search + save-to-LCC.
+  $('#searchOrgBtn')?.addEventListener('click', () => {
+    $('#searchInput').value = name;
+    switchTab('search');
+    doSearch();
+  });
 
   const saveBtn = $('#saveOrgBtn');
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
-
-      const fields = {};
-      for (const [key] of ORG_FIELDS) {
-        if (source[key]) fields[key] = source[key];
-      }
-
       const result = await apiCall('/api/entities', {
         entity_type: 'organization',
         name,
-        org_type: fields.entity_type_detail || null,
+        org_type: source.entity_type_detail || null,
         description: `Imported from ${source.domain || 'public-records'}`,
       });
-
       if (result.ok) {
         saveBtn.className = 'btn btn-sm btn-success';
         saveBtn.textContent = 'Saved!';
@@ -3386,14 +3528,7 @@ function loadOrgView(source, domainLabel) {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
         saveBtn.className = 'btn btn-sm btn-danger';
-        const errMsg = toErrorMessage(result.error)
-          || toErrorMessage(result.data?.error)
-          || toErrorMessage(result.data?.message)
-          || `HTTP ${result.status || 'error'}`;
-        const toast = document.createElement('div');
-        toast.className = 'update-toast';
-        toast.textContent = errMsg;
-        saveBtn.parentElement?.prepend(toast);
+        _sosToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || toErrorMessage(result.data?.message) || `HTTP ${result.status || 'error'}`);
       }
     });
   }

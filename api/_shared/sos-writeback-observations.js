@@ -52,3 +52,70 @@ export function buildSosAddressObservations(capture) {
 }
 
 export const SOS_OBSERVATION_SURFACE = 'sos_sidebar';
+
+// ============================================================================
+// "Not registered in <state>" disposition — the two-jurisdiction outcome.
+//
+// When the operator searches an owner's SOS and finds it is NOT registered in
+// the searched state, that is a real signal (e.g. "Wiener Properties Inc" is not
+// in CA — the CA hits were a suspended family LLC / a Minnesota out-of-state
+// LLC). The doctrine (Scott, 2026-07-22): an owner LLC is searched in its
+// FILING/formation state AND the state where its property sits. A miss in one
+// state does NOT close the owner — it stays workable under its other candidate
+// state until BOTH are exhausted; only then is it handed back for further
+// processing (status='no_match', the DB's "searched, none found" signal).
+//
+// Pure so it is trivially unit-tested; the writeback handler maps the result
+// onto the enrichment_payload trail + the status transition.
+// ============================================================================
+
+function normUpper(s) {
+  return (typeof s === 'string' && s.trim()) ? s.trim().toUpperCase() : null;
+}
+
+/**
+ * computeSosNotFoundDisposition({ filingState, assetState, searchedState, priorNotFound })
+ *   → { notFoundStates, remaining, exhausted, searched }
+ *
+ * - notFoundStates: the append-only, deduped trail of { state, at } the owner
+ *   has now been searched-and-missed in (prior + the new one).
+ * - remaining: the candidate states still open to search (the owner is still
+ *   workable there).
+ * - exhausted: true when there is no OTHER candidate state left — every derivable
+ *   candidate is now not-found, OR the owner is stateless (a single stateless
+ *   miss resolves it). When exhausted the owner is handed back (no_match).
+ * - searched: the normalized state code the operator actually searched (or null
+ *   for a stateless search).
+ *
+ * Candidate states = the owner's derivable filing + asset states, PLUS the state
+ * the operator actually searched (a deliberate human signal). `priorNotFound` is
+ * the existing enrichment_payload.not_found_states array (each { state, at }).
+ * Never fabricates — an absent state contributes nothing.
+ */
+export function computeSosNotFoundDisposition({ filingState, assetState, searchedState, priorNotFound, at } = {}) {
+  const searched = normUpper(searchedState);
+  const nowIso = at || null;
+
+  // Build the append-only not-found trail (prior + new), deduped by state.
+  const prior = Array.isArray(priorNotFound) ? priorNotFound.slice() : [];
+  const nfSet = new Set(prior.map((x) => normUpper(x && x.state)).filter(Boolean));
+  const notFoundStates = prior;
+  if (searched) {
+    if (!nfSet.has(searched)) {
+      notFoundStates.push({ state: searched, at: nowIso });
+      nfSet.add(searched);
+    }
+  } else {
+    // A stateless search still records that the operator looked and missed.
+    notFoundStates.push({ state: '(unspecified)', at: nowIso });
+  }
+
+  // Candidate states the owner could be registered in.
+  const candidates = new Set([normUpper(filingState), normUpper(assetState)].filter(Boolean));
+  if (searched) candidates.add(searched);
+
+  const remaining = Array.from(candidates).filter((s) => !nfSet.has(s));
+  const exhausted = candidates.size === 0 ? true : remaining.length === 0;
+
+  return { notFoundStates, remaining, exhausted, searched };
+}

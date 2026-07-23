@@ -3,7 +3,7 @@
 // fabrication, situs never emitted (an SOS filing has none).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSosAddressObservations, SOS_OBSERVATION_SURFACE } from '../api/_shared/sos-writeback-observations.js';
+import { buildSosAddressObservations, SOS_OBSERVATION_SURFACE, computeSosNotFoundDisposition } from '../api/_shared/sos-writeback-observations.js';
 
 describe('ORE Option B — buildSosAddressObservations', () => {
   it('emits a DISTINCT observation per owner-side address field (never collapsed)', () => {
@@ -50,5 +50,63 @@ describe('ORE Option B — buildSosAddressObservations', () => {
 
   it('exports the sos_sidebar surface tag', () => {
     assert.equal(SOS_OBSERVATION_SURFACE, 'sos_sidebar');
+  });
+});
+
+describe('Not-registered disposition — computeSosNotFoundDisposition (two-jurisdiction)', () => {
+  it('a miss in ONE of two candidate states keeps the owner workable (not exhausted)', () => {
+    const d = computeSosNotFoundDisposition({
+      filingState: 'CA', assetState: 'NY', searchedState: 'CA', priorNotFound: [], at: 'T1',
+    });
+    assert.equal(d.searched, 'CA');
+    assert.equal(d.exhausted, false);
+    assert.deepEqual(d.remaining, ['NY']);
+    assert.deepEqual(d.notFoundStates, [{ state: 'CA', at: 'T1' }]);
+  });
+
+  it('the SECOND miss exhausts both jurisdictions → hand back', () => {
+    const d = computeSosNotFoundDisposition({
+      filingState: 'CA', assetState: 'NY', searchedState: 'NY',
+      priorNotFound: [{ state: 'CA', at: 'T1' }], at: 'T2',
+    });
+    assert.equal(d.exhausted, true);
+    assert.deepEqual(d.remaining, []);
+    assert.deepEqual(d.notFoundStates.map((x) => x.state).sort(), ['CA', 'NY']);
+  });
+
+  it('a single candidate state → the one miss exhausts it', () => {
+    const d = computeSosNotFoundDisposition({ filingState: 'TX', assetState: null, searchedState: 'TX', priorNotFound: [] });
+    assert.equal(d.exhausted, true);
+    assert.deepEqual(d.remaining, []);
+  });
+
+  it('a stateless owner → a single stateless miss exhausts it', () => {
+    const d = computeSosNotFoundDisposition({ filingState: null, assetState: null, searchedState: null, priorNotFound: [], at: 'T' });
+    assert.equal(d.searched, null);
+    assert.equal(d.exhausted, true);
+    assert.deepEqual(d.notFoundStates, [{ state: '(unspecified)', at: 'T' }]);
+  });
+
+  it('the operator can search a state we did NOT derive (still counts + is a candidate)', () => {
+    // Owner derives only CA; operator searched DE (a formation state we missed).
+    const d = computeSosNotFoundDisposition({ filingState: 'CA', assetState: null, searchedState: 'DE', priorNotFound: [] });
+    assert.deepEqual(d.remaining, ['CA']);        // CA still open
+    assert.equal(d.exhausted, false);
+    assert.ok(d.notFoundStates.some((x) => x.state === 'DE'));
+  });
+
+  it('is append-only + deduped: re-searching the same state does not duplicate', () => {
+    const d = computeSosNotFoundDisposition({
+      filingState: 'CA', assetState: 'NY', searchedState: 'CA',
+      priorNotFound: [{ state: 'CA', at: 'T1' }], at: 'T2',
+    });
+    assert.equal(d.notFoundStates.filter((x) => x.state === 'CA').length, 1);
+    assert.equal(d.exhausted, false);
+  });
+
+  it('normalizes case + whitespace on the searched state', () => {
+    const d = computeSosNotFoundDisposition({ filingState: 'ca', assetState: null, searchedState: '  ca  ', priorNotFound: [] });
+    assert.equal(d.searched, 'CA');
+    assert.equal(d.exhausted, true);
   });
 });
