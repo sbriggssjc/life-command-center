@@ -2,8 +2,18 @@
 
 Last updated: 2026-07-23
 Owner: LCC architecture/audit track (Scott Briggs)
-Status: **DESIGN — do NOT run any delete until Scott approves the batch/pagination plan.**
+Status: **PLAN APPROVED (Scott, 2026-07-23) — build in the PA designer, then the
+capped-first-run spot-check gates broadening.** No delete has run yet.
 Tenant: `Default-fccf69d3-58a4-4c10-a59d-14937a5f5d3f` (NorthMarq Capital, LLC)
+
+## Decisions locked (Scott, 2026-07-23)
+- **Cadence:** batched scheduled sweep spread over multiple days (2–5 days) — the
+  safe pace, accepted over any one-shot risk.
+- **Age guard:** delete only `status = completed` AND **completed 90+ days ago**
+  (`cutoff = today − 90d`). Open/incomplete tasks are never touched, on any run.
+- **Path:** **PATH B — native To-Do connector** (below). The raw-Graph test is
+  **skipped** (tenant blocks Graph app registrations); Path A is retained only as
+  a documented fallback if Path B's per-run yield proves too low.
 
 > **This is real personal history (flagged emails going back to 2023), not
 > automation junk.** Treat it with far more caution than the "Business
@@ -116,7 +126,10 @@ ANY raw-Graph path is available before building.**
 
 ### Decision gate BEFORE building: is any raw-Graph path available?
 
-Spend 5 minutes confirming ONE of these works in the tenant (in priority order):
+**RESOLVED (Scott, 2026-07-23): build PATH B directly — the Graph test is skipped.**
+The steps below are retained for reference / a future revisit if Path B's per-run
+yield is too low. To revisit, confirm ONE of these works in the tenant (in priority
+order):
 
 1. **Microsoft Graph PowerShell** (`Connect-MgGraph -Scopes Tasks.ReadWrite`,
    device-code) — uses a Microsoft **first-party, pre-consented** client, so it
