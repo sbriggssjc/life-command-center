@@ -120,7 +120,11 @@ async function accountPersist(records, neededKeys, ctx, deps = {}) {
 export const SYNC_SPECS = {
   account: {
     objectType: 'Account',
-    fields: 'Id,Name',
+    // ROE: OwnerId/Owner.Name = the rep who owns the account (the assigned
+    // broker). Captured onto the account identity metadata by persistAccountRow.
+    // A flow that can't traverse Owner.Name simply omits it → ROE falls back to
+    // the deal-level signal (honest, deploy-safe).
+    fields: 'Id,Name,OwnerId,Owner.Name',
     computeMissing: accountComputeMissing,
     persist: accountPersist,
   },

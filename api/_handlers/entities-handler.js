@@ -25,6 +25,7 @@ import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js'
 import { domainQuery } from '../_shared/domain-db.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { enrichReviewQueueContext } from '../_shared/provenance-row-context.js';
+import { computeRoe, mergeTimeline } from '../_shared/roe.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -71,70 +72,24 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         return res.status(404).json({ error: 'Entity not found' });
       }
 
-      const [rollupRes, factsRes] = await Promise.all([
-        opsQuery('GET',
-          `v_entity_portfolio_all?entity_id=eq.${id}&workspace_id=eq.${workspaceId}` +
-          `&select=entity_id,name,owner_role,primary_domain,total_property_count,current_property_count,` +
-          `dia_property_count,gov_property_count,is_cross_vertical,current_annual_rent_total,avg_cap_rate,` +
-          `earliest_acquisition_date,latest_acquisition_date&limit=1`),
-        opsQuery('GET',
-          `lcc_entity_portfolio_facts?entity_id=eq.${id}` +
-          `&select=source_domain,source_property_id,is_current,annual_rent,sale_price,cap_rate,` +
-          `ownership_start_date,ownership_end_date,ownership_source` +
-          `&order=is_current.desc,annual_rent.desc.nullslast&limit=500`)
-      ]);
-
-      const rollup = (rollupRes.ok && rollupRes.data?.length) ? rollupRes.data[0] : null;
-      const facts = (factsRes.ok && Array.isArray(factsRes.data)) ? factsRes.data : [];
-
-      // Batch-fetch property attributes for address / tenant / city. The two
-      // mirrors share (source_domain, source_property_id) but carry no declared
-      // FK, so PostgREST can't embed — fetch per-domain id sets + merge in JS.
-      const idsByDomain = {};
-      for (const f of facts) {
-        const dom = f.source_domain;
-        if (!dom || f.source_property_id == null) continue;
-        (idsByDomain[dom] = idsByDomain[dom] || []).push(String(f.source_property_id));
-      }
-      const attrMap = {};
-      await Promise.all(Object.entries(idsByDomain).map(async ([dom, ids]) => {
-        const uniq = Array.from(new Set(ids));
-        // Chunk to keep the in.() list within URL limits.
-        for (let i = 0; i < uniq.length; i += 200) {
-          const chunk = uniq.slice(i, i + 200);
-          const inList = chunk.map(v => encodeURIComponent(v)).join(',');
-          const ar = await opsQuery('GET',
-            `lcc_property_attributes?source_domain=eq.${encodeURIComponent(dom)}` +
-            `&source_property_id=in.(${inList})` +
-            `&select=source_domain,source_property_id,address,city,state,tenant_short,tenant_label,` +
-            `building_type,asset_class,annual_rent,noi`);
-          if (ar.ok && Array.isArray(ar.data)) {
-            for (const a of ar.data) attrMap[a.source_domain + ':' + a.source_property_id] = a;
-          }
-        }
-      }));
-
-      const properties = facts.map(f => {
-        const a = attrMap[f.source_domain + ':' + f.source_property_id] || {};
-        return {
-          source_domain: f.source_domain,
-          source_property_id: f.source_property_id,
-          is_current: f.is_current,
-          annual_rent: f.annual_rent != null ? Number(f.annual_rent) : (a.annual_rent != null ? Number(a.annual_rent) : null),
-          sale_price: f.sale_price != null ? Number(f.sale_price) : null,
-          cap_rate: f.cap_rate != null ? Number(f.cap_rate) : null,
-          ownership_start_date: f.ownership_start_date || null,
-          ownership_end_date: f.ownership_end_date || null,
-          address: a.address || null,
-          city: a.city || null,
-          state: a.state || null,
-          tenant: a.tenant_label || a.tenant_short || null,
-          building_type: a.building_type || null,
-          asset_class: a.asset_class || null,
-        };
-      });
-
+      const { rollup, properties } = await fetchEntityPortfolio(id, workspaceId);
       return res.status(200).json({ rollup, properties });
+    }
+
+    // Contact 360 — the single aggregating read behind the reusable contact
+    // side-panel (openEntityDetail / openContact360). Composes, in ONE call,
+    // everything the panel needs: the entity (+ external identities / relationships),
+    // the authoritative BD portfolio (owns/former), the developed edges, the
+    // UNIFIED activity timeline (LCC activity_events + dia salesforce_activities,
+    // each broker-labeled), the Outlook email relationship, engagement
+    // (unified_contacts), marketing_leads signals, the SF-account owner, and the
+    // Rules-of-Engagement verdict. Entity-keyed — a plain contact resolves to its
+    // person entity client-side (openContact360) before calling this.
+    // MUST run before the `if (id)` single-entity early-return below.
+    if (action === 'contact360' && id) {
+      const c360 = await buildContact360(id, workspaceId);
+      if (!c360) return res.status(404).json({ error: 'Entity not found' });
+      return res.status(200).json(c360);
     }
 
     // UI Phase 5 — "Owners Missing a Contact" value-ranked BD worklist.
@@ -1491,6 +1446,256 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
 });
+
+// ============================================================================
+// Contact 360 helpers (shared by action=portfolio + action=contact360)
+// ============================================================================
+
+/**
+ * Authoritative BD-spine portfolio for an entity: the v_entity_portfolio_all
+ * rollup + the per-property lcc_entity_portfolio_facts ⋈ lcc_property_attributes
+ * rows (owns/former via is_current). Returns { rollup, properties }.
+ */
+async function fetchEntityPortfolio(entityId, workspaceId) {
+  const [rollupRes, factsRes] = await Promise.all([
+    opsQuery('GET',
+      `v_entity_portfolio_all?entity_id=eq.${entityId}&workspace_id=eq.${workspaceId}` +
+      `&select=entity_id,name,owner_role,primary_domain,total_property_count,current_property_count,` +
+      `dia_property_count,gov_property_count,is_cross_vertical,current_annual_rent_total,avg_cap_rate,` +
+      `earliest_acquisition_date,latest_acquisition_date&limit=1`),
+    opsQuery('GET',
+      `lcc_entity_portfolio_facts?entity_id=eq.${entityId}` +
+      `&select=source_domain,source_property_id,is_current,annual_rent,sale_price,cap_rate,` +
+      `ownership_start_date,ownership_end_date,ownership_source` +
+      `&order=is_current.desc,annual_rent.desc.nullslast&limit=500`)
+  ]);
+
+  const rollup = (rollupRes.ok && rollupRes.data?.length) ? rollupRes.data[0] : null;
+  const facts = (factsRes.ok && Array.isArray(factsRes.data)) ? factsRes.data : [];
+
+  // Batch-fetch property attributes for address / tenant / city. The two mirrors
+  // share (source_domain, source_property_id) but carry no declared FK, so
+  // PostgREST can't embed — fetch per-domain id sets + merge in JS.
+  const idsByDomain = {};
+  for (const f of facts) {
+    const dom = f.source_domain;
+    if (!dom || f.source_property_id == null) continue;
+    (idsByDomain[dom] = idsByDomain[dom] || []).push(String(f.source_property_id));
+  }
+  const attrMap = {};
+  await Promise.all(Object.entries(idsByDomain).map(async ([dom, ids]) => {
+    const uniq = Array.from(new Set(ids));
+    for (let i = 0; i < uniq.length; i += 200) {
+      const chunk = uniq.slice(i, i + 200);
+      const inList = chunk.map(v => encodeURIComponent(v)).join(',');
+      const ar = await opsQuery('GET',
+        `lcc_property_attributes?source_domain=eq.${encodeURIComponent(dom)}` +
+        `&source_property_id=in.(${inList})` +
+        `&select=source_domain,source_property_id,address,city,state,tenant_short,tenant_label,` +
+        `building_type,asset_class,annual_rent,noi`);
+      if (ar.ok && Array.isArray(ar.data)) {
+        for (const a of ar.data) attrMap[a.source_domain + ':' + a.source_property_id] = a;
+      }
+    }
+  }));
+
+  const properties = facts.map(f => {
+    const a = attrMap[f.source_domain + ':' + f.source_property_id] || {};
+    return {
+      source_domain: f.source_domain,
+      source_property_id: f.source_property_id,
+      is_current: f.is_current,
+      annual_rent: f.annual_rent != null ? Number(f.annual_rent) : (a.annual_rent != null ? Number(a.annual_rent) : null),
+      sale_price: f.sale_price != null ? Number(f.sale_price) : null,
+      cap_rate: f.cap_rate != null ? Number(f.cap_rate) : null,
+      ownership_start_date: f.ownership_start_date || null,
+      ownership_end_date: f.ownership_end_date || null,
+      address: a.address || null,
+      city: a.city || null,
+      state: a.state || null,
+      tenant: a.tenant_label || a.tenant_short || null,
+      building_type: a.building_type || null,
+      asset_class: a.asset_class || null,
+    };
+  });
+
+  return { rollup, properties };
+}
+
+/**
+ * Resolve the SF Account owner (the rep who owns the account = the assigned
+ * broker for ROE). Reads the sf_owner_name/sf_owner_id captured on the
+ * salesforce/Account external_identity's metadata (by the SF sync going forward).
+ * Prefers the entity's OWN account identity; falls back to the account of an org
+ * the person works_at / is associated_with. Returns { name, sf_owner_id,
+ * sf_account_id, source } | null.
+ */
+async function resolveAccountOwner(entity, entityId, workspaceId) {
+  const own = (entity.external_identities || []).find(x =>
+    String(x.source_system || '').toLowerCase() === 'salesforce' &&
+    String(x.source_type || '').toLowerCase() === 'account');
+  if (own && own.metadata && (own.metadata.sf_owner_name || own.metadata.sf_owner_id)) {
+    return { name: own.metadata.sf_owner_name || null, sf_owner_id: own.metadata.sf_owner_id || null,
+             sf_account_id: own.external_id || null, source: 'entity_account' };
+  }
+
+  // Person → org (either edge direction). Fetch related org ids then their
+  // Account identity + owner metadata. Best-effort; forward-looking.
+  const relRes = await opsQuery('GET',
+    `entity_relationships?workspace_id=eq.${workspaceId}` +
+    `&or=(from_entity_id.eq.${entityId},to_entity_id.eq.${entityId})` +
+    `&relationship_type=in.(works_at,associated_with,owner_parent,managed_by)` +
+    `&select=from_entity_id,to_entity_id&limit=50`);
+  const orgIds = new Set();
+  if (relRes.ok && Array.isArray(relRes.data)) {
+    for (const r of relRes.data) {
+      if (r.from_entity_id && r.from_entity_id !== entityId) orgIds.add(r.from_entity_id);
+      if (r.to_entity_id && r.to_entity_id !== entityId) orgIds.add(r.to_entity_id);
+    }
+  }
+  if (orgIds.size) {
+    const inList = Array.from(orgIds).map(v => encodeURIComponent(v)).join(',');
+    const orgRes = await opsQuery('GET',
+      `external_identities?entity_id=in.(${inList})&source_system=eq.salesforce&source_type=eq.Account` +
+      `&select=external_id,metadata&limit=10`);
+    if (orgRes.ok && Array.isArray(orgRes.data)) {
+      const withOwner = orgRes.data.find(r => r.metadata && (r.metadata.sf_owner_name || r.metadata.sf_owner_id));
+      if (withOwner) {
+        return { name: withOwner.metadata.sf_owner_name || null, sf_owner_id: withOwner.metadata.sf_owner_id || null,
+                 sf_account_id: withOwner.external_id || null, source: 'org_account' };
+      }
+      if (orgRes.data[0]) {
+        return { name: null, sf_owner_id: null, sf_account_id: orgRes.data[0].external_id || null, source: 'org_account' };
+      }
+    }
+  }
+
+  if (own) return { name: null, sf_owner_id: null, sf_account_id: own.external_id || null, source: 'entity_account' };
+  return null;
+}
+
+/** Aggregate the engagement summary from the entity's unified_contacts row(s). */
+function buildEngagement(ucRows) {
+  if (!Array.isArray(ucRows) || !ucRows.length) return null;
+  let best = ucRows[0];
+  for (const u of ucRows) if (Number(u.engagement_score || 0) > Number(best.engagement_score || 0)) best = u;
+  return {
+    score: best.engagement_score != null ? Number(best.engagement_score) : null,
+    last_call: best.last_call_date || null,
+    last_email: best.last_email_date || null,
+    last_meeting: best.last_meeting_date || null,
+    last_activity: best.last_activity_date || null,
+    total_calls: best.total_calls || 0,
+    total_emails: best.total_emails_sent || 0,
+    total_touches: best.total_touches || 0,
+    total_transactions: best.total_transactions || 0,
+    total_volume: best.total_volume != null ? Number(best.total_volume) : null,
+  };
+}
+
+/**
+ * Compose the full Contact 360 payload for an entity. Returns null when the
+ * entity is missing / not in this workspace. Every sub-fetch is best-effort so a
+ * missing dia connection / stale table degrades to an empty block, never a 500.
+ */
+async function buildContact360(entityId, workspaceId) {
+  const entRes = await opsQuery('GET',
+    `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}` +
+    `&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`);
+  if (!entRes.ok || !entRes.data?.length) return null;
+  const entity = entRes.data[0];
+
+  // sf_contact_ids for this entity (salesforce/Contact identities + linked
+  // unified_contacts) — the join key for SF activity, engagement, marketing.
+  const sfContactIds = new Set();
+  for (const x of (entity.external_identities || [])) {
+    if (String(x.source_system || '').toLowerCase() === 'salesforce' &&
+        String(x.source_type || '').toLowerCase() === 'contact' && x.external_id) {
+      sfContactIds.add(String(x.external_id));
+    }
+  }
+  const ucRes = await opsQuery('GET',
+    `unified_contacts?entity_id=eq.${entityId}` +
+    `&select=unified_id,sf_contact_id,email,engagement_score,last_call_date,last_email_date,` +
+    `last_meeting_date,last_activity_date,total_calls,total_emails_sent,total_touches,` +
+    `total_transactions,total_volume&limit=25`);
+  const ucRows = (ucRes.ok && Array.isArray(ucRes.data)) ? ucRes.data : [];
+  for (const u of ucRows) if (u.sf_contact_id) sfContactIds.add(String(u.sf_contact_id));
+  const sfIds = Array.from(sfContactIds);
+  const inSf = sfIds.map(v => encodeURIComponent(v)).join(',');
+
+  let subjectEmail = entity.email ? String(entity.email).trim().toLowerCase() : null;
+  if (!subjectEmail) { const em = ucRows.find(u => u.email)?.email; if (em) subjectEmail = String(em).trim().toLowerCase(); }
+
+  const accountOwner = await resolveAccountOwner(entity, entityId, workspaceId);
+
+  const [portfolio, lccEvents, sfActs, mktRows, emailRel] = await Promise.all([
+    fetchEntityPortfolio(entityId, workspaceId).catch(() => ({ rollup: null, properties: [] })),
+    opsQuery('GET',
+      `activity_events?entity_id=eq.${entityId}&workspace_id=eq.${workspaceId}` +
+      `&select=occurred_at,created_at,category,title,body,source_type,users!activity_events_actor_id_fkey(display_name)` +
+      `&order=occurred_at.desc&limit=40`).then(r => (r.ok && Array.isArray(r.data)) ? r.data : []).catch(() => []),
+    sfIds.length
+      ? domainQuery('dialysis', 'GET',
+          `salesforce_activities?sf_contact_id=in.(${inSf})` +
+          `&select=subject,nm_type,task_subtype,activity_date,nm_notes,status,assigned_to,company_name` +
+          `&order=activity_date.desc&limit=40`)
+          .then(r => (r.ok && Array.isArray(r.data)) ? r.data : []).catch(() => [])
+      : Promise.resolve([]),
+    sfIds.length
+      ? opsQuery('GET',
+          `marketing_leads?sf_contact_id=in.(${inSf})` +
+          `&select=source,activity_type,activity_detail,status,touchpoint_count,assigned_to,lead_date,deal_name` +
+          `&order=lead_date.desc.nullslast&limit=20`)
+          .then(r => (r.ok && Array.isArray(r.data)) ? r.data : []).catch(() => [])
+      : Promise.resolve([]),
+    subjectEmail
+      ? Promise.all([
+          opsQuery('POST', 'rpc/lcc_email_relationship', { p_email: subjectEmail })
+            .then(r => Array.isArray(r.data) ? (r.data[0] || null) : null).catch(() => null),
+          opsQuery('POST', 'rpc/lcc_email_recent', { p_email: subjectEmail, p_limit: 12 })
+            .then(r => Array.isArray(r.data) ? r.data : []).catch(() => []),
+        ]).then(([summary, recent]) => ({ email: subjectEmail, summary, recent })).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  // Developed edges (a distinct ownership signal from owns/former). Rare; resolve
+  // the target entity names best-effort so the panel can label them.
+  const developedEdges = (entity.entity_relationships || []).filter(r => r.relationship_type === 'developed' && r.to_entity_id);
+  let developed = [];
+  if (developedEdges.length) {
+    const inDev = Array.from(new Set(developedEdges.map(e => e.to_entity_id))).map(v => encodeURIComponent(v)).join(',');
+    const devRes = await opsQuery('GET', `entities?id=in.(${inDev})&select=id,name,city,state`).catch(() => null);
+    const nameById = {};
+    if (devRes && devRes.ok && Array.isArray(devRes.data)) for (const e of devRes.data) nameById[e.id] = e;
+    developed = developedEdges.map(e => ({ entity_id: e.to_entity_id, ...(nameById[e.to_entity_id] || {}) }));
+  }
+
+  const dealAssignees = sfActs.map(a => ({ name: a.assigned_to, date: a.activity_date })).filter(a => a.name);
+  const roe = computeRoe({ accountOwnerName: accountOwner?.name || null, dealAssignees });
+  const engagement = buildEngagement(ucRows);
+  const timeline = mergeTimeline(lccEvents, sfActs, { limit: 40 });
+
+  return {
+    subject: {
+      entity_id: entityId,
+      name: entity.name,
+      entity_type: entity.entity_type,
+      domain: entity.domain,
+      email: subjectEmail,
+      sf_contact_ids: sfIds,
+    },
+    entity,
+    portfolio,
+    developed,
+    timeline,
+    engagement,
+    marketing: mktRows,
+    account_owner: accountOwner,
+    roe,
+    email_relationship: emailRel,
+  };
+}
 
 /** Pick only fields relevant to the entity type */
 function pickEntityFields(type, fields) {
