@@ -5942,6 +5942,9 @@ function closeDetail() {
     panel.style.display = 'none';
     panel.classList.remove('open');
   }
+  // Close the companion property dock (dual-panel) with the main panel — it is
+  // anchored to the contact/owner that just closed.
+  if (typeof closeCompanion === 'function') closeCompanion();
   const overlay = document.getElementById('detailOverlay');
   if (overlay) {
     overlay.classList.remove('open');
