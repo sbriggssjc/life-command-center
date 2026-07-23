@@ -230,6 +230,14 @@ async function runExternalEnrichment(row, deps) {
           ? { run: deps.deedParse || defaultDeedParse, source: 'deed', role: 'signatory' }
           : null;
   if (routed) {
+    // ORE Build 2 Unit 3: the owner-address DIMENSION feeds the address-reverse
+    // adapter — source the owner's own notice address (entities.address, via
+    // v_lcc_owner_address_dimension) so a configured `address_reverse_lookup` has
+    // an address to reverse. Best-effort; the dep is present only when the adapter
+    // is configured, so an unconfigured worker is byte-identical (no extra query).
+    if (routed.source === 'address' && !row.notice_address && deps.getOwnerNoticeAddress) {
+      try { row.notice_address = await deps.getOwnerNoticeAddress(row.entity_id); } catch (_e) { /* soft */ }
+    }
     const res = await routed.run(row);
     if (res && res.ok && res.person_name) {
       const r = await attachPersonToOwner(row, normalizePersonName(res.person_name), res.role || routed.role, deps, routed.source + '_lookup');
@@ -303,6 +311,16 @@ export async function processOwnerEnrichmentRow(row, deps) {
     await touchPivot(deps, row.entity_id, out.disposition);
     delete out.disposition;
   }
+
+  // ORE Build 2 reconcile-on-write: a newly-attached contact changes the owner's
+  // same-party evidence (it becomes connected / carries a person link), so
+  // re-triangulate the owner. Best-effort, never blocks; the reconcile queue feeds
+  // the gated engine drain, and the continuous fingerprint sweep re-reviews on any
+  // address change. Low-volume (the bounded enrich path) — deliberately NOT the hot
+  // CoStar-burst path (the R7 connection-budget lesson).
+  if (out && out.outcome === 'attached' && deps.enqueueReconcile) {
+    try { await deps.enqueueReconcile(row.entity_id, 'contact_attached'); } catch (_e) { /* soft */ }
+  }
   return out;
 }
 
@@ -363,6 +381,25 @@ function buildDeps() {
     // no confident match ⇒ the row flows on to SOS/web/manual.
     crossRef: buildCrossRefAdapter({ opsQuery }),
     manualResearch: buildManualResearchProducer(buildManualResearchDeps()),
+    // ORE Build 2 reconcile-on-write: re-triangulate an owner after a contact
+    // attaches (best-effort; enqueues to the reconcile queue that feeds the gated
+    // engine drain). Never blocks the attach.
+    enqueueReconcile: async (entityId, reason) =>
+      opsQuery('POST', 'rpc/lcc_enqueue_owner_reconcile', { p_entity_id: entityId, p_reason: reason }),
+    // ORE Build 2 Unit 3: the owner-address dimension feeds the address-reverse
+    // adapter — provide the owner's notice address ONLY when the adapter is
+    // configured, so an unconfigured worker never spends a query per contactless
+    // row (byte-identical to before when OWNER_ENRICH_ADDRESS_URL is unset).
+    ...(isConfiguredAddress()
+      ? {
+          getOwnerNoticeAddress: async (entityId) => {
+            const r = await opsQuery('GET',
+              'v_lcc_owner_address_dimension?select=address_raw&source=eq.entity_capture&owner_entity_id=eq.'
+              + pgFilterVal(entityId) + '&limit=1');
+            return (r.ok && Array.isArray(r.data) && r.data[0]) ? r.data[0].address_raw : '';
+          },
+        }
+      : {}),
   };
 }
 
