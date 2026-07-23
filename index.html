@@ -546,6 +546,15 @@
   <div class="next-action-bar" id="detailNextActionBar" style="display:none"></div>
 </div>
 
+<!-- Companion property panel — dual-dock beside a contact/owner panel. Opens on
+     the opposite side when a property is clicked inside a contact panel; both
+     stay visible; independently minimizable/closable. -->
+<div class="companion-panel" id="companionPanel">
+  <div class="detail-header" id="companionHeader"></div>
+  <div class="detail-body" id="companionBody"></div>
+</div>
+<div class="companion-min" id="companionMin" onclick="restoreCompanion()" title="Restore property panel"></div>
+
 <!-- Log Call Modal -->
 <div class="modal-overlay" id="logCallModal" role="dialog" aria-label="Log Activity" onclick="if(event.target===this)closeLogCall()">
   <div class="modal">

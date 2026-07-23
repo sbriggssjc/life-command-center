@@ -26,6 +26,7 @@ import { domainQuery } from '../_shared/domain-db.js';
 import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { enrichReviewQueueContext } from '../_shared/provenance-row-context.js';
 import { computeRoe, mergeTimeline } from '../_shared/roe.js';
+import { sf15, toSf18 } from '../_shared/sf-id.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -1593,6 +1594,101 @@ function buildEngagement(ucRows) {
   };
 }
 
+// Relationship types that carry each BD role, in priority order. The role
+// drives the whole Contact 360 layout (owner-portfolio vs broker deal-intel).
+const OWNER_REL_TYPES = new Set(['owns', 'developed']);
+const BROKER_REL_TYPES = new Set(['brokers']);
+const BUYER_REL_TYPES = new Set(['purchases']);
+
+/**
+ * Detect the entity's BD role from its OUT (from-side) relationship edges.
+ * owner (owns/developed) > broker (brokers) > buyer (purchases) > contact.
+ * A person captured as a "Listing Broker at <firm>" carries `brokers` edges →
+ * broker mode. An org/person with owns edges → owner mode. Returns
+ * { role, has_owner_edges, has_broker_edges, has_buyer_edges }.
+ */
+export function detectEntityRole(entity) {
+  const edges = Array.isArray(entity?.entity_relationships) ? entity.entity_relationships : [];
+  let owner = false, broker = false, buyer = false;
+  for (const e of edges) {
+    const t = e?.relationship_type;
+    if (OWNER_REL_TYPES.has(t)) owner = true;
+    else if (BROKER_REL_TYPES.has(t)) broker = true;
+    else if (BUYER_REL_TYPES.has(t)) buyer = true;
+  }
+  // An asset entity is never a contact — but Contact 360 is only opened on
+  // person/org, so we key purely on the edges. Priority: owner > broker > buyer.
+  let role = 'contact';
+  if (owner) role = 'owner';
+  else if (broker) role = 'broker';
+  else if (buyer) role = 'buyer';
+  return { role, has_owner_edges: owner, has_broker_edges: broker, has_buyer_edges: buyer };
+}
+
+/**
+ * Broker deal intelligence — replaces owner-portfolio for broker entities.
+ * Counts deals brokered off the `brokers` OUT edges and splits by
+ * metadata.role (listing_broker = represents SELLERS; buyer_broker = represents
+ * BUYERS — the signal is on the LCC edge, no cross-DB name-match needed).
+ * Target markets = the states/cities of the linked asset entities. Returns
+ * { total_deals, represents_sellers, represents_buyers, represents_unknown,
+ *   markets:[{state, count}], recent_deals:[{name, city, state, role}] }.
+ */
+export async function buildBrokerDealIntel(entity, entityId, queryFn = opsQuery) {
+  const edges = (Array.isArray(entity?.entity_relationships) ? entity.entity_relationships : [])
+    .filter(e => e?.relationship_type === 'brokers' && e.to_entity_id);
+  if (!edges.length) {
+    return { total_deals: 0, represents_sellers: 0, represents_buyers: 0,
+             represents_unknown: 0, markets: [], recent_deals: [] };
+  }
+
+  let sellers = 0, buyers = 0, unknown = 0;
+  for (const e of edges) {
+    const r = String(e.metadata?.role || '').toLowerCase();
+    if (r === 'listing_broker') sellers++;
+    else if (r === 'buyer_broker') buyers++;
+    else unknown++;
+  }
+
+  // Resolve the linked asset entities (name / city / state) for target markets
+  // + a recent-deals sample. Asset entities carry city/state directly.
+  const assetIds = Array.from(new Set(edges.map(e => e.to_entity_id)));
+  const assetById = {};
+  for (let i = 0; i < assetIds.length; i += 200) {
+    const inList = assetIds.slice(i, i + 200).map(v => encodeURIComponent(v)).join(',');
+    const ar = await queryFn('GET',
+      `entities?id=in.(${inList})&select=id,name,city,state`).catch(() => null);
+    if (ar && ar.ok && Array.isArray(ar.data)) for (const a of ar.data) assetById[a.id] = a;
+  }
+
+  const marketCounts = {};
+  const recent = [];
+  for (const e of edges) {
+    const a = assetById[e.to_entity_id] || {};
+    const st = (a.state || '').trim().toUpperCase();
+    if (st) marketCounts[st] = (marketCounts[st] || 0) + 1;
+    const r = String(e.metadata?.role || '').toLowerCase();
+    recent.push({
+      name: a.name || null, city: a.city || null, state: st || null,
+      role: r === 'listing_broker' ? 'seller' : r === 'buyer_broker' ? 'buyer' : 'unknown',
+      at: e.metadata?.extracted_at || e.created_at || null,
+    });
+  }
+  const markets = Object.entries(marketCounts)
+    .map(([state, count]) => ({ state, count }))
+    .sort((a, b) => b.count - a.count);
+  recent.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+
+  return {
+    total_deals: edges.length,
+    represents_sellers: sellers,
+    represents_buyers: buyers,
+    represents_unknown: unknown,
+    markets,
+    recent_deals: recent.slice(0, 15),
+  };
+}
+
 /**
  * Compose the full Contact 360 payload for an entity. Returns null when the
  * entity is missing / not in this workspace. Every sub-fetch is best-effort so a
@@ -1622,7 +1718,18 @@ async function buildContact360(entityId, workspaceId) {
   const ucRows = (ucRes.ok && Array.isArray(ucRes.data)) ? ucRes.data : [];
   for (const u of ucRows) if (u.sf_contact_id) sfContactIds.add(String(u.sf_contact_id));
   const sfIds = Array.from(sfContactIds);
-  const inSf = sfIds.map(v => encodeURIComponent(v)).join(',');
+  // dia salesforce_activities.sf_contact_id is overwhelmingly 15-char, but the
+  // LCC external_identities are 18-char — a raw match misses every SF activity.
+  // Query BOTH forms (15-char base + canonical 18-char) so the fold-in populates.
+  const sfIdVariants = new Set();
+  for (const id of sfContactIds) {
+    const s = String(id).trim();
+    if (!s) continue;
+    sfIdVariants.add(s);
+    const b15 = sf15(s);
+    if (b15) { sfIdVariants.add(b15); const c18 = toSf18(b15); if (c18) sfIdVariants.add(c18); }
+  }
+  const inSf = Array.from(sfIdVariants).map(v => encodeURIComponent(v)).join(',');
 
   let subjectEmail = entity.email ? String(entity.email).trim().toLowerCase() : null;
   if (!subjectEmail) { const em = ucRows.find(u => u.email)?.email; if (em) subjectEmail = String(em).trim().toLowerCase(); }
@@ -1643,7 +1750,7 @@ async function buildContact360(entityId, workspaceId) {
           .then(r => (r.ok && Array.isArray(r.data)) ? r.data : []).catch(() => [])
       : Promise.resolve([]),
     sfIds.length
-      ? opsQuery('GET',
+      ? domainQuery('dialysis', 'GET',
           `marketing_leads?sf_contact_id=in.(${inSf})` +
           `&select=source,activity_type,activity_detail,status,touchpoint_count,assigned_to,lead_date,deal_name` +
           `&order=lead_date.desc.nullslast&limit=20`)
@@ -1676,6 +1783,13 @@ async function buildContact360(entityId, workspaceId) {
   const engagement = buildEngagement(ucRows);
   const timeline = mergeTimeline(lccEvents, sfActs, { limit: 40 });
 
+  // Role drives the layout. Broker mode replaces owner-portfolio with the
+  // deal-intelligence block (deals brokered + buyer/seller representation).
+  const roleInfo = detectEntityRole(entity);
+  const brokerIntel = roleInfo.role === 'broker'
+    ? await buildBrokerDealIntel(entity, entityId).catch(() => null)
+    : null;
+
   return {
     subject: {
       entity_id: entityId,
@@ -1684,7 +1798,11 @@ async function buildContact360(entityId, workspaceId) {
       domain: entity.domain,
       email: subjectEmail,
       sf_contact_ids: sfIds,
+      role: roleInfo.role,
     },
+    role: roleInfo.role,
+    role_flags: roleInfo,
+    broker_intel: brokerIntel,
     entity,
     portfolio,
     developed,

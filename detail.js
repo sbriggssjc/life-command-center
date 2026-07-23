@@ -12323,10 +12323,31 @@ async function _entityApiFetch(url) {
 // "Engagement" is the unified_contacts + marketing signals; "ROE" is the
 // Rules-of-Engagement detail. The compact ROE verdict banner rides ABOVE every
 // tab (so you can't step on another broker at a glance).
-const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Activity', 'Engagement', 'ROE', 'Contacts'];
+// The union of every entity-detail tab (used only for the initial deep-link
+// validation before the role is known). The ACTUAL tab set is role-driven —
+// see _entityTabsForRole. Broker mode swaps Ownership→Deals and drops Contacts.
+const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'Activity', 'Engagement', 'ROE', 'Contacts'];
+
+/**
+ * Role-aware tab set. Owner/buyer get Ownership (their portfolio); a broker gets
+ * Deals (deal-intelligence) instead — no Ownership. The Contacts tab (the linked
+ * people at an org) is shown ONLY for organization entities — never for a person
+ * or broker, where it was the ~50 unrelated contacts (item #3).
+ */
+function _entityTabsForRole(role, entityType) {
+  if (role === 'broker') return ['Overview', 'Deals', 'Activity', 'Engagement', 'ROE'];
+  const tabs = ['Overview'];
+  if (role === 'owner' || role === 'buyer') tabs.push('Ownership');
+  tabs.push('Activity', 'Engagement', 'ROE');
+  if (entityType === 'organization') tabs.push('Contacts');
+  return tabs;
+}
 
 async function openEntityDetail(entityId, initialTab) {
   _entityDetailCache = null;
+  // A fresh entity open resets any stale companion property dock (it's anchored
+  // to the previously-open contact/owner).
+  if (typeof closeCompanion === 'function') closeCompanion();
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
   if (!panel || !overlay) return;
@@ -12390,8 +12411,16 @@ async function openEntityDetail(entityId, initialTab) {
     const portfolio = (c360 && c360.portfolio && Array.isArray(c360.portfolio.properties)) ? c360.portfolio.properties : [];
     const rollup = (c360 && c360.portfolio && c360.portfolio.rollup) || null;
 
+    // Role drives the whole layout (owner-portfolio vs broker deal-intel + which
+    // tabs render + whether the owner BD-queue chrome shows). From contact360.
+    const role = (c360 && c360.role) || 'contact';
+    const tabs = _entityTabsForRole(role, entity.entity_type);
+    const effectiveTab = tabs.includes(activeTab) ? activeTab : tabs[0];
+
     _entityDetailCache = {
       entity, entityId, contacts, portfolio, rollup, band, type: 'entity',
+      role, tabs,
+      brokerIntel: (c360 && c360.broker_intel) || null,
       emailRel: (c360 && c360.email_relationship) || null,
       // Contact 360 blocks
       timeline: (c360 && c360.timeline) || [],
@@ -12429,16 +12458,20 @@ async function openEntityDetail(entityId, initialTab) {
       </div>
       <button class="detail-close" onclick="closeDetail()">&times;</button>`;
 
-    // Render tabs (property-detail grammar)
-    if (tabsEl) tabsEl.innerHTML = ENTITY_DETAIL_TABS.map(t =>
-      '<button class="detail-tab ' + (t === activeTab ? 'active' : '') + '" onclick="switchEntityTab(decodeURIComponent(\'' + encodeURIComponent(t) + '\'))">' + esc(t) + '</button>'
+    // Render tabs (property-detail grammar) — role-driven set.
+    if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
+      '<button class="detail-tab ' + (t === effectiveTab ? 'active' : '') + '" onclick="switchEntityTab(decodeURIComponent(\'' + encodeURIComponent(t) + '\'))">' + esc(t) + '</button>'
     ).join('');
 
-    // Shared rail + Next-Step (next-action at the owner level).
-    _entityRenderCompletenessRail();
-    _entityRenderNextStep();
+    // Shared rail + Next-Step are the OWNER BD-queue chrome (connection/portfolio
+    // completeness + the priority-band next action) — only meaningful for
+    // owner/buyer entities. A broker/plain contact leaves them hidden (item #5).
+    if (role === 'owner' || role === 'buyer') {
+      _entityRenderCompletenessRail();
+      _entityRenderNextStep();
+    }
 
-    if (bodyEl) bodyEl.innerHTML = _renderEntityTab(activeTab);
+    if (bodyEl) bodyEl.innerHTML = _renderEntityTab(effectiveTab);
   } catch (err) {
     console.error('Entity detail error:', err);
     if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading entity: ' + esc(err.message) + '</div>';
@@ -12663,6 +12696,10 @@ async function openContactDetailByName(name) {
 // ── Entity Tab Switching (UI Phase 4B — mirrors switchUnifiedTab) ──
 function switchEntityTab(tabName) {
   if (!_entityDetailCache || _entityDetailCache.type !== 'entity') return;
+  // Guard against a tab not in this entity's role-driven set (e.g. a legacy
+  // deep-link to Ownership on a broker) — fall back to the first tab.
+  const tabs = _entityDetailCache.tabs;
+  if (Array.isArray(tabs) && tabs.length && !tabs.includes(tabName)) tabName = tabs[0];
   // Mirror the tab into the hash (replace, so reload keeps it / no history noise),
   // exactly like the property detail's switchUnifiedTab.
   if (typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
@@ -12686,6 +12723,7 @@ function _renderEntityTab(tab) {
     case 'Overview': body = _entityTabOverview(); break;
     case 'Ownership': body = _entityTabPortfolio(); break;
     case 'Portfolio': body = _entityTabPortfolio(); break; // legacy alias
+    case 'Deals': body = _entityTabBrokerDeals(); break;
     case 'Contacts': body = _entityTabContacts(); break;
     case 'Activity': body = _entityTabActivity(); break;
     case 'Engagement': body = _entityTabEngagement(); break;
@@ -12718,10 +12756,22 @@ function _entityRoeBanner() {
     + '</div><span style="font-size:10px;color:var(--text3)">details ›</span></div>';
 }
 
+// Plain-language label + colour for a detected BD role (item #1 — the panel
+// says what KIND of contact this is, prominently).
+const _ENTITY_ROLE_META = {
+  owner:   { label: 'Owner',   color: 'var(--accent)' },
+  broker:  { label: 'Broker',  color: 'var(--amber, #d98c00)' },
+  buyer:   { label: 'Buyer',   color: 'var(--purple)' },
+  contact: { label: 'Contact', color: 'var(--text3)' },
+};
+function _entityRoleMeta(role) { return _ENTITY_ROLE_META[role] || _ENTITY_ROLE_META.contact; }
+
 // ── Entity Overview Tab ──
 function _entityTabOverview() {
   const c = _entityDetailCache;
   const e = c.entity;
+  const role = c.role || 'contact';
+  const rm = _entityRoleMeta(role);
   const contacts = c.contacts || [];
   const rollup = c.rollup || null;
   const propCount = rollup && rollup.total_property_count != null
@@ -12729,9 +12779,21 @@ function _entityTabOverview() {
 
   let html = '';
 
+  // Role banner — the panel is no longer owner-framed; it states the role.
+  html += '<div style="display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:8px 12px;border-radius:8px;background:var(--s2);border-left:3px solid ' + rm.color + '">'
+    + '<span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:' + rm.color + '">' + esc(rm.label) + '</span>';
+  if (role === 'broker' && c.brokerIntel) {
+    const bi = c.brokerIntel;
+    html += '<span style="font-size:11px;color:var(--text2)">' + Number(bi.total_deals || 0) + ' deal' + (Number(bi.total_deals) === 1 ? '' : 's') + ' brokered in our markets</span>';
+  } else if ((role === 'owner' || role === 'buyer') && propCount) {
+    html += '<span style="font-size:11px;color:var(--text2)">' + propCount + ' propert' + (propCount === 1 ? 'y' : 'ies') + ' in the BD portfolio</span>';
+  }
+  html += '</div>';
+
   // Entity info section
   html += '<div class="detail-section"><div class="detail-section-title">Entity Information</div><div class="detail-grid">';
   html += _row('Name', e.name);
+  html += _row('Role', rm.label);
   html += _row('Type', e.entity_type);
   html += _row('Domain', e.domain);
   html += _row('Org Type', e.org_type);
@@ -12754,14 +12816,30 @@ function _entityTabOverview() {
     html += '</div></div>';
   }
 
-  // Quick stats (portfolio count + Σ rent from the authoritative rollup)
-  const rollupRent = rollup && rollup.current_annual_rent_total != null ? Number(rollup.current_annual_rent_total) : null;
+  // Quick stats — role-aware. A broker shows deal-intelligence tiles (deals +
+  // buyers/sellers represented), NOT owner-portfolio + the 50 unrelated contacts.
+  const stat = (val, label, color, onclick) =>
+    '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"'
+    + (onclick ? ' onclick="' + onclick + '"' : '') + '>'
+    + '<div style="font-size:' + (String(val).length > 6 ? 16 : 20) + 'px;font-weight:700;color:' + color + '">' + val + '</div>'
+    + '<div class="t-meta3">' + label + '</div></div>';
+  const actTile = stat(c.timeline?.length || 0, 'Activities', 'var(--yellow, #eab308)', 'switchEntityTab(\'Activity\')');
   html += '<div class="detail-section"><div class="detail-section-title">Summary</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-top:4px">';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Portfolio\')"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + propCount + '</div><div class="t-meta3">Properties</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:16px;font-weight:700;color:var(--green)">' + (rollupRent ? _entityFmtMoney(rollupRent) : '—') + '</div><div class="t-meta3">Portfolio Rent</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Contacts\')"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + contacts.length + '</div><div class="t-meta3">Contacts</div></div>';
-  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px;cursor:pointer" onclick="switchEntityTab(\'Activity\')"><div style="font-size:20px;font-weight:700;color:var(--yellow, #eab308)">' + (c.timeline?.length || 0) + '</div><div class="t-meta3">Activities</div></div>';
+  if (role === 'broker') {
+    const bi = c.brokerIntel || {};
+    html += stat(Number(bi.total_deals || 0), 'Deals brokered', 'var(--accent)', 'switchEntityTab(\'Deals\')');
+    html += stat(Number(bi.represents_sellers || 0), 'Repr. sellers', 'var(--green)', 'switchEntityTab(\'Deals\')');
+    html += stat(Number(bi.represents_buyers || 0), 'Repr. buyers', 'var(--purple)', 'switchEntityTab(\'Deals\')');
+    html += actTile;
+  } else {
+    const rollupRent = rollup && rollup.current_annual_rent_total != null ? Number(rollup.current_annual_rent_total) : null;
+    html += stat(propCount, 'Properties', 'var(--accent)', 'switchEntityTab(\'Ownership\')');
+    html += stat(rollupRent ? _entityFmtMoney(rollupRent) : '—', 'Portfolio Rent', 'var(--green)', null);
+    // Contacts tile only when the Contacts tab exists (org entities).
+    if ((c.tabs || []).includes('Contacts')) html += stat(contacts.length, 'Contacts', 'var(--purple)', 'switchEntityTab(\'Contacts\')');
+    html += actTile;
+  }
   html += '</div></div>';
 
   // Row-level action — Draft & Log (Topic F engine: renders a draft to Outlook,
@@ -12845,6 +12923,112 @@ function _entityFmtMoney(n) {
   return '$' + Math.round(v);
 }
 
+// ── Companion property dock (dual-panel, item #6) ─────────────────────────────
+// Opens a focused property card BESIDE the contact/owner panel so both are
+// visible at once. The row summary is looked up from the entity cache by index
+// (no re-fetch, no escaping-in-onclick, no failure mode). "Open full ↗" promotes
+// it to the main detail panel (the existing zoom path). On screens too narrow for
+// two panels it falls back to the full single-panel open (existing behavior).
+const DUAL_DOCK_MIN_WIDTH = 980;
+let _companionState = null;
+
+function _dualCapable() {
+  return typeof window !== 'undefined' && window.innerWidth >= DUAL_DOCK_MIN_WIDTH;
+}
+
+// Drill a property clicked INSIDE a contact/owner panel. `source` selects the
+// cache array (portfolio | developed | deal), `idx` the row. Dual-docks beside
+// the contact when there's room; else the full single-panel open.
+function _entityDrillProperty(db, propertyId, source, idx) {
+  const c = _entityDetailCache || {};
+  let row = {};
+  if (source === 'portfolio') row = (c.portfolio || [])[idx] || {};
+  else if (source === 'developed') row = (c.developed || [])[idx] || {};
+  const summary = {
+    address: row.address || row.name || null,
+    city: row.city || null,
+    state: row.state || null,
+    tenant: row.tenant || null,
+    rent: row.annual_rent != null ? _entityFmtMoney(row.annual_rent) : null,
+    is_current: row.is_current,
+  };
+  if (_dualCapable()) { openCompanionProperty(db, propertyId, summary); return; }
+  if (typeof openUnifiedDetail === 'function') openUnifiedDetail(db, { property_id: propertyId });
+}
+window._entityDrillProperty = _entityDrillProperty;
+
+function openCompanionProperty(db, propertyId, summary = {}) {
+  db = (db === 'gov' || db === 'government') ? 'gov' : 'dia';
+  const panel = document.getElementById('companionPanel');
+  const header = document.getElementById('companionHeader');
+  const body = document.getElementById('companionBody');
+  const minTab = document.getElementById('companionMin');
+  if (!panel || !header || !body) { if (typeof openUnifiedDetail === 'function') openUnifiedDetail(db, { property_id: propertyId }); return; }
+  if (minTab) minTab.classList.remove('open');
+  panel.classList.add('open');
+  panel.style.display = 'block';
+  _companionState = { db, propertyId };
+
+  const addr = summary.address || '(property)';
+  const loc = (summary.city || '') + (summary.city && summary.state ? ', ' : '') + (summary.state || '');
+  const badge = db.toUpperCase();
+  header.innerHTML =
+    '<div class="detail-header-info" style="width:100%">'
+    + '<div style="flex:1;min-width:0"><div class="detail-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(addr) + '</div>'
+    + '<div class="detail-subtitle">' + esc(loc) + '</div></div>'
+    + '<span class="detail-badge" style="background:' + (db === 'gov' ? 'var(--gov-green)' : 'var(--purple)') + ';color:#fff">' + esc(badge) + '</span>'
+    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
+    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
+    + '</div>';
+
+  const rows = [];
+  const addRow = (l, v) => { if (v != null && v !== '') rows.push('<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)"><span class="t-meta3">' + l + '</span><span style="font-size:12px;color:var(--text);text-align:right">' + esc(String(v)) + '</span></div>'); };
+  addRow('Address', summary.address);
+  addRow('City / State', loc);
+  addRow(db === 'gov' ? 'Agency / Tenant' : 'Tenant', summary.tenant);
+  addRow('Annual rent', summary.rent);
+  if (summary.is_current === false) addRow('Status', 'Former');
+
+  body.innerHTML =
+    '<div class="detail-section"><div class="detail-section-title">Property</div>' + (rows.join('') || '<div class="detail-empty">No details.</div>') + '</div>'
+    + '<div class="detail-section"><button class="dns-cta" onclick="_companionOpenFull()">Open full detail ↗</button>'
+    + '<div style="font-size:11px;color:var(--text3);margin-top:6px">Full property panel — replaces this dock.</div></div>';
+}
+window.openCompanionProperty = openCompanionProperty;
+
+function _companionOpenFull() {
+  const s = _companionState;
+  if (!s) return;
+  closeCompanion();
+  if (typeof openUnifiedDetail === 'function') openUnifiedDetail(s.db, { property_id: s.propertyId });
+}
+window._companionOpenFull = _companionOpenFull;
+
+function minimizeCompanion() {
+  const panel = document.getElementById('companionPanel');
+  const minTab = document.getElementById('companionMin');
+  if (panel) panel.classList.remove('open');
+  if (minTab && _companionState) minTab.classList.add('open');
+}
+window.minimizeCompanion = minimizeCompanion;
+
+function restoreCompanion() {
+  const panel = document.getElementById('companionPanel');
+  const minTab = document.getElementById('companionMin');
+  if (minTab) minTab.classList.remove('open');
+  if (panel && _companionState) { panel.classList.add('open'); panel.style.display = 'block'; }
+}
+window.restoreCompanion = restoreCompanion;
+
+function closeCompanion() {
+  const panel = document.getElementById('companionPanel');
+  const minTab = document.getElementById('companionMin');
+  if (panel) { panel.classList.remove('open'); panel.style.display = 'none'; }
+  if (minTab) minTab.classList.remove('open');
+  _companionState = null;
+}
+window.closeCompanion = closeCompanion;
+
 // ── Entity Activity Tab ──
 function _entityTabActivity() {
   const cache = _entityDetailCache || {};
@@ -12857,6 +13041,17 @@ function _entityTabActivity() {
   let html = _renderEmailRelationshipCard(cache.emailRel, entityId);
 
   if (!activities.length) {
+    // Broker mode: a broker outside our firm often has no logged LCC/SF touch \u2014
+    // surface their brokered-deal intelligence as the activity (item #4).
+    if (cache.role === 'broker' && cache.brokerIntel && Number(cache.brokerIntel.total_deals)) {
+      const bi = cache.brokerIntel;
+      html += '<div class="detail-section"><div class="detail-section-title">Brokered-deal activity</div>';
+      html += '<div style="font-size:12px;color:var(--text2);margin:4px 0 8px">No logged LCC / Salesforce touches \u2014 this broker\u2019s activity in our markets is the '
+        + Number(bi.total_deals) + ' deal' + (Number(bi.total_deals) === 1 ? '' : 's') + ' they brokered ('
+        + Number(bi.represents_sellers || 0) + ' seller-side \u00b7 ' + Number(bi.represents_buyers || 0) + ' buyer-side).</div>';
+      html += '<button class="dns-cta" onclick="switchEntityTab(\'Deals\')">See brokered deals \u2192</button></div>';
+      return html;
+    }
     html += '<div class="detail-empty">No activity yet \u2014 LCC or Salesforce.</div>';
     return html;
   }
@@ -13068,6 +13263,67 @@ async function _cortexPullHistory(entityId) {
 }
 window._cortexPullHistory = _cortexPullHistory;
 
+// ── Entity Deals Tab (Broker mode) ──
+// Replaces owner-portfolio for a broker: how many deals brokered in our target
+// markets + who they represent (SELLERS via listing_broker / BUYERS via
+// buyer_broker — the signal is on the LCC `brokers` edge, no cross-DB name-match).
+function _entityTabBrokerDeals() {
+  const c = _entityDetailCache || {};
+  const bi = c.brokerIntel || null;
+  if (!bi || !Number(bi.total_deals)) {
+    return '<div class="detail-empty">No brokered deals linked to this broker in our target markets yet.</div>';
+  }
+
+  let html = '';
+
+  // Headline tiles: total deals + representation split.
+  html += '<div class="detail-section"><div class="detail-section-title">Deals brokered — our markets</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:4px">';
+  const tile = (v, l, col) => '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:' + col + '">' + v + '</div><div class="t-meta3">' + l + '</div></div>';
+  html += tile(Number(bi.total_deals || 0), 'Deals', 'var(--accent)');
+  html += tile(Number(bi.represents_sellers || 0), 'Represents sellers', 'var(--green)');
+  html += tile(Number(bi.represents_buyers || 0), 'Represents buyers', 'var(--purple)');
+  html += '</div>';
+  if (Number(bi.represents_unknown)) {
+    html += '<div style="font-size:11px;color:var(--text3);margin-top:6px">' + Number(bi.represents_unknown) + ' deal(s) with unrecorded side.</div>';
+  }
+  html += '</div>';
+
+  // Target markets (states of the brokered assets).
+  const markets = Array.isArray(bi.markets) ? bi.markets : [];
+  if (markets.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">Target markets</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">';
+    for (const m of markets) {
+      html += '<span style="font-size:11px;padding:3px 9px;border-radius:8px;background:var(--s3);color:var(--text2);border:1px solid var(--border)">'
+        + esc(m.state) + ' <strong style="color:var(--text)">' + Number(m.count) + '</strong></span>';
+    }
+    html += '</div></div>';
+  }
+
+  // Recent brokered deals.
+  const recent = Array.isArray(bi.recent_deals) ? bi.recent_deals : [];
+  if (recent.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">Recent deals (' + recent.length + ')</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">';
+    for (const d of recent) {
+      const loc = (d.city || '') + (d.city && d.state ? ', ' : '') + (d.state || '');
+      const sideColor = d.role === 'seller' ? 'var(--green)' : d.role === 'buyer' ? 'var(--purple)' : 'var(--text3)';
+      const sideLabel = d.role === 'seller' ? 'listing (seller)' : d.role === 'buyer' ? 'procuring (buyer)' : 'side n/a';
+      html += '<div style="padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
+      html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">';
+      html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.name || '(property)') + '</div>';
+      if (loc) html += '<div style="font-size:11px;color:var(--text2)">' + esc(loc) + '</div>';
+      html += '</div>';
+      html += '<span style="font-size:10px;padding:1px 7px;border-radius:8px;background:var(--s3);color:' + sideColor + ';font-weight:600;white-space:nowrap">' + esc(sideLabel) + '</span>';
+      html += '</div></div>';
+    }
+    html += '</div></div>';
+  }
+
+  return html;
+}
+
 // ── Entity Portfolio Tab (UI Phase 4B — authoritative BD-spine portfolio) ──
 // Sourced from lcc_entity_portfolio_facts ⋈ lcc_property_attributes (via
 // /api/entities?action=portfolio), NOT a fuzzy v_ownership_current name-match.
@@ -13102,15 +13358,16 @@ function _entityTabPortfolio() {
   if (developed.length) {
     html += '<div class="detail-section"><div class="detail-section-title">\u{1F3D7}️ Developed (' + developed.length + ')</div>';
     html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
-    for (const d of developed) {
+    for (let di = 0; di < developed.length; di++) {
+      const d = developed[di];
       const db = (d.source_domain === 'gov' || d.source_domain === 'government') ? 'gov' : (d.source_domain === 'dia' || d.source_domain === 'dialysis' ? 'dia' : '');
       const pid = d.property_id != null ? d.property_id : d.source_property_id;
       const nm = d.name || d.address || d.label || '(property)';
       // Prefer opening the linked entity (developed edges resolve to entities);
-      // fall back to a domain property open when a property id is present.
+      // fall back to a companion property dock when a property id is present.
       let onclick = '';
       if (d.entity_id) onclick = 'openContact360(\'' + esc(String(d.entity_id)) + '\', {kind:\'entity\'})';
-      else if (db && pid != null) onclick = 'openUnifiedDetail(\'' + esc(db) + '\', {property_id:\'' + esc(String(pid)) + '\'})';
+      else if (db && pid != null) onclick = '_entityDrillProperty(\'' + esc(db) + '\', \'' + esc(String(pid)) + '\', \'developed\', ' + di + ')';
       const clickable = !!onclick;
       html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + (clickable ? 'cursor:pointer' : '') + '"';
       if (clickable) html += ' onclick="' + onclick + '"';
@@ -13123,14 +13380,15 @@ function _entityTabPortfolio() {
   }
 
   if (!portfolio.length) {
-    html += '<div class="detail-empty">No properties in the BD portfolio for this owner.</div>';
+    html += '<div class="detail-empty">No properties in the BD portfolio yet.</div>';
     return html;
   }
 
   html += '<div class="detail-section"><div class="detail-section-title">Properties (' + portfolio.length + ')</div>';
   html += '<div style="display:flex;flex-direction:column;gap:6px">';
 
-  for (const p of portfolio) {
+  for (let pi = 0; pi < portfolio.length; pi++) {
+    const p = portfolio[pi];
     const addr = p.address || '(No address)';
     const loc = (p.city || '') + (p.city && p.state ? ', ' : '') + (p.state || '');
     const db = (p.source_domain === 'gov' || p.source_domain === 'government') ? 'gov' : 'dia';
@@ -13141,7 +13399,9 @@ function _entityTabPortfolio() {
     const dim = p.is_current === false ? 'opacity:0.6;' : '';
 
     html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + dim + (pid != null ? 'cursor:pointer' : '') + '"';
-    if (pid != null) html += ' onclick="openUnifiedDetail(\'' + esc(db) + '\', {property_id:\'' + esc(String(pid)) + '\'})"';
+    // Dual-dock the property BESIDE this contact panel (item #6); narrow screens
+    // fall back to the full single-panel open inside _entityDrillProperty.
+    if (pid != null) html += ' onclick="_entityDrillProperty(\'' + esc(db) + '\', \'' + esc(String(pid)) + '\', \'portfolio\', ' + pi + ')"';
     html += '>';
     html += '<div style="display:flex;gap:12px;align-items:flex-start">';
     html += '<div style="flex:1;min-width:0">';
