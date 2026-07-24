@@ -12415,6 +12415,11 @@ async function openEntityDetail(entityId, initialTab) {
     // tabs render + whether the owner BD-queue chrome shows). From contact360.
     const role = (c360 && c360.role) || 'contact';
     const tabs = _entityTabsForRole(role, entity.entity_type);
+    // A person contact with direct/affiliated ownership gets an Ownership tab so
+    // the person-level linked-properties section (Contact 360 refinement) is reachable.
+    const _ownedP = (c360 && c360.owned_properties) || null;
+    const _hasOwned = _ownedP && ((_ownedP.direct && _ownedP.direct.length) || (_ownedP.affiliated && _ownedP.affiliated.properties && _ownedP.affiliated.properties.length));
+    if (_hasOwned && !tabs.includes('Ownership')) tabs.splice(1, 0, 'Ownership');
     const effectiveTab = tabs.includes(activeTab) ? activeTab : tabs[0];
 
     _entityDetailCache = {
@@ -12426,6 +12431,8 @@ async function openEntityDetail(entityId, initialTab) {
       timeline: (c360 && c360.timeline) || [],
       engagement: (c360 && c360.engagement) || null,
       marketing: (c360 && c360.marketing) || [],
+      openTasks: (c360 && c360.open_tasks) || [],
+      ownedProperties: (c360 && c360.owned_properties) || null,
       developed: (c360 && c360.developed) || [],
       accountOwner: (c360 && c360.account_owner) || null,
       roe: (c360 && c360.roe) || null,
@@ -12842,6 +12849,22 @@ function _entityTabOverview() {
   }
   html += '</div></div>';
 
+  // Open Tasks + Marketing follow-ups (Contact 360 refinement) — mirror the
+  // Pipeline card "Open Tasks (N)" pattern; each links to its detail tab. The
+  // linked deal/opportunity shows in the marketing follow-ups (deal_name).
+  const _openN = (c.openTasks || []).length;
+  const _mktN = (c.marketing || []).length;
+  if (_openN || _mktN) {
+    html += '<div class="detail-section"><div style="display:flex;gap:10px;flex-wrap:wrap">';
+    html += '<div onclick="switchEntityTab(\'Activity\')" style="flex:1;min-width:130px;cursor:pointer;padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px">'
+      + '<div style="font-size:16px;font-weight:700;color:var(--accent)">' + _openN + '</div>'
+      + '<div class="t-meta3">Open Tasks →</div></div>';
+    html += '<div onclick="switchEntityTab(\'Engagement\')" style="flex:1;min-width:130px;cursor:pointer;padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px">'
+      + '<div style="font-size:16px;font-weight:700;color:var(--purple)">' + _mktN + '</div>'
+      + '<div class="t-meta3">Marketing follow-ups →</div></div>';
+    html += '</div></div>';
+  }
+
   // Row-level action — Draft & Log (Topic F engine: renders a draft to Outlook,
   // logs a completed SF activity, advances the cadence — one call, honest status).
   const em = (c.subject && c.subject.email) || e.email || '';
@@ -13039,6 +13062,25 @@ function _entityTabActivity() {
   // Cortex W3 \u2014 unified relationship: email summary + recent thread sits ABOVE the
   // structured activity_events timeline (which carries calls/SF/meetings/etc.).
   let html = _renderEmailRelationshipCard(cache.emailRel, entityId);
+
+  // Open Tasks (non-completed SF tasks) \u2014 Contact 360 refinement. dia carries no
+  // WhatId, so the account (company_name) is the link; the opportunity/deal shows
+  // under Marketing follow-ups (Engagement tab).
+  const openTasks = cache.openTasks || [];
+  if (openTasks.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">\u{1F4CC} Open Tasks (' + openTasks.length + ')</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
+    for (const t of openTasks) {
+      html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
+      html += '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(t.subject || '(task)') + '</div><div style="font-size:10px;color:var(--text3)">' + esc(_fmtDate(t.date)) + '</div></div>';
+      html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap">';
+      if (t.status) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3)">' + esc(t.status) + '</span>';
+      if (t.account) html += '<span>Account: ' + esc(t.account) + '</span>';
+      if (t.assigned_to) html += '<span>' + esc(t.assigned_to) + '</span>';
+      html += '</div></div>';
+    }
+    html += '</div></div>';
+  }
 
   if (!activities.length) {
     // Broker mode: a broker outside our firm often has no logged LCC/SF touch \u2014
@@ -13379,8 +13421,48 @@ function _entityTabPortfolio() {
     html += '</div></div>';
   }
 
+  // Person-level ownership / linked properties (Contact 360 refinement) — a person
+  // usually owns via their affiliated org, not directly. Show direct owner edges +
+  // the affiliated org's BD portfolio (resolved by the contact360 endpoint).
+  const owned = c?.ownedProperties || null;
+  if (owned && ((owned.direct && owned.direct.length) || (owned.affiliated && owned.affiliated.properties && owned.affiliated.properties.length))) {
+    if (owned.direct && owned.direct.length) {
+      html += '<div class="detail-section"><div class="detail-section-title">\u{1F511} Owns directly (' + owned.direct.length + ')</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
+      for (const d of owned.direct) {
+        const onclick = d.entity_id ? 'openContact360(\'' + esc(String(d.entity_id)) + '\', {kind:\'entity\'})' : '';
+        html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
+        html += '<div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(d.name || '(property)') + '</div>';
+        if (d.city || d.state) html += '<div style="font-size:11px;color:var(--text2)">' + esc((d.city || '') + (d.city && d.state ? ', ' : '') + (d.state || '')) + '</div>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+    }
+    const aff = owned.affiliated;
+    if (aff && aff.properties && aff.properties.length) {
+      const orgClick = aff.org_entity_id ? ' onclick="openContact360(\'' + esc(String(aff.org_entity_id)) + '\', {kind:\'entity\'})" style="cursor:pointer"' : '';
+      html += '<div class="detail-section"><div class="detail-section-title"' + orgClick + '>\u{1F3E2} Via ' + esc(aff.org_name || 'affiliated company') + ' (' + aff.properties.length + ')</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
+      for (const p of aff.properties) {
+        const db = (p.source_domain === 'gov' || p.source_domain === 'government') ? 'gov' : 'dia';
+        const pid = p.source_property_id;
+        const nm = p.address || p.tenant_label || p.tenant_short || '(property)';
+        const onclick = pid != null ? 'openUnifiedDetail(\'' + db + '\', {property_id:\'' + esc(String(pid)) + '\'})' : '';
+        html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
+        html += '<div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(nm) + '</div>';
+        if (p.city || p.state) html += '<div style="font-size:11px;color:var(--text2)">' + esc((p.city || '') + (p.city && p.state ? ', ' : '') + (p.state || '')) + '</div>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+    }
+  }
+
   if (!portfolio.length) {
-    html += '<div class="detail-empty">No properties in the BD portfolio yet.</div>';
+    // A person with no BD-portfolio rollup still shows their direct/affiliated
+    // ownership above; only show the empty note when there's truly nothing.
+    if (!owned || (!(owned.direct && owned.direct.length) && !(owned.affiliated && owned.affiliated.properties && owned.affiliated.properties.length))) {
+      html += '<div class="detail-empty">No properties in the BD portfolio yet.</div>';
+    }
     return html;
   }
 
