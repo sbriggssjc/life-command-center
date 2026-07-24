@@ -10,6 +10,10 @@ Update these as the engine changes.
 - **comps-engine-SKILL.md** — the Claude Cowork skill wrapping query/synthesize/generate with the Team Briggs policies (reliable-or-exclude, MOB/MT naming, reconciliation flags, export mapping).
 - **prompts/** — Claude Code prompts behind the engine build (RPC perf, reconciliation + review queue, Pearland/dedup, CMS-link/census cleanup) — for provenance and re-runs.
 
+## No-approval team rollout (when Northmarq IT connector approval isn't available)
+- **copilot-deal-agent-team-sharing-runbook.md** — give the team live LCC tools via the Copilot Deal Agent (DLP self-check first, maker-provided credentials, direct share).
+- **northmarq-claude-project-setup.md** — get the Team Briggs methodology into a shared Northmarq Claude Project as knowledge + instructions (no live DB access; pair with Copilot for live pulls).
+
 ## Before rolling out
 1. Rotate `LCC_API_KEY` and the government DB password (both were exposed in chat); update the env on the MCP + BOV Railway services.
 2. Fill your live `MCP_BASE_URL` into the OpenAPI `servers` block and the setup guides.
