@@ -17,6 +17,8 @@
 // Read-only. Validated end-to-end against live gov + dia RPCs (2026-07-21).
 // ============================================================================
 
+import { enforceHttpResponseSize } from "./http-response-bound.js";
+
 // ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
   medical: ['Health', 'Medical', 'MOB', 'Clinic', 'Dialysis', 'Behavioral'],
@@ -560,19 +562,26 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
 
 // ── Surfaces 2 & 3: HTTP routes (Copilot Studio + ChatGPT GPT Actions) ──────
 // Returns Express handlers. Mount behind the server's `authenticate` middleware.
+// The comps response is limit-bounded (query ≤500 / synthesize ≤300 rows) and
+// value-ranked, so it is usually well under the ChatGPT Action / Copilot cap —
+// but a wide result with full `raw` provenance on every row can exceed it, so
+// the HTTP responses pass through enforceHttpResponseSize as a final safety net
+// (byte-identical under the ceiling; over it, the array tail is trimmed and the
+// response is stamped `truncated`). The MCP tools (makeCompsTools above) are NOT
+// bounded — Claude keeps full fidelity.
 export function makeCompsHttpRoutes({ govQuery, diaQuery }) {
   const deps = { govQuery, diaQuery };
   return {
     queryComps: async (req, res) => {
       try {
         const result = await runComps(req.body || {}, deps);
-        res.json({ ...result, markdown: formatCompsMarkdown(result) });
+        res.json(enforceHttpResponseSize({ ...result, markdown: formatCompsMarkdown(result) }));
       } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
     },
     synthesizeComps: async (req, res) => {
       try {
         const result = await runSynthesize(req.body || {}, deps);
-        res.json({ ...result, markdown: formatCompsMarkdown(result) });
+        res.json(enforceHttpResponseSize({ ...result, markdown: formatCompsMarkdown(result) }));
       } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
     },
   };

@@ -30,6 +30,14 @@ Bearer-authed HTTP routes on `mcp/server.js`, each reusing the same MCP handler 
 - **Data governance (by design, Scott approved):** these routes let ChatGPT (OpenAI) + Copilot (Microsoft)
   receive contact/CRM/pipeline data. If a specific tool must stay Claude-only for PII, narrow the
   `READ_ONLY_HTTP_TOOLS` allowlist in `server.js` (one line).
+- **Action-size-bounded (2026-07):** every `/api/*` read route (the 7 read tools + query/synthesize-comps)
+  is capped under the ChatGPT Action / Copilot ~100k-char limit by `mcp/http-response-bound.js`
+  (`MAX_HTTP_RESPONSE_CHARS = 45000`), wired into `makeReadHttpRoute` + the comps HTTP routes. Rich tools
+  default small — `daily-briefing` returns top-N per band (display fields only, `limit`); `property-context`
+  caps nested arrays + drops raw/document blobs (`verbose` / `limit` / `sections` to expand); `queue-summary`
+  / `recall-memory` / `search-entities` already default to small `limit`s. Anything still over the ceiling is
+  shrunk (array tail dropped — highest-ranked kept, blobs removed) and stamped `truncated` + `truncation_note`.
+  **The `/mcp` (Claude) surface is unchanged — it returns full, unbounded payloads.**
 
 ## Assets delivered
 - `lcc-openapi.yaml` — **the single** OpenAPI 3.0 schema (7 read ops + queryComps + synthesizeComps; one
