@@ -1,5 +1,11 @@
 # Claude Code / Cowork Instructions — Life Command Center
 
+> **🧭 START HERE for architecture: [`LCC-OS.md`](LCC-OS.md) → `docs/os/README.md`.**
+> One brain (LCC + Cortex), one instruction/policy canon (`docs/os/canon/`), many surfaces (Copilot, Claude
+> Personal/Cowork, Northmarq Claude, ChatGPT). Edit rules in the canon, bump the version, run
+> `docs/os/SURFACE-SYNC-PROTOCOL.md` to update every surface. **Never start from scratch, never fork a source,
+> never overwrite canon without bumping its version.** Consolidation map: `docs/os/REGISTRY.md`.
+
 > **CRITICAL: Read .github/AI_INSTRUCTIONS.md before modifying any files in /api/.**
 
 ## ⚠️ PRODUCTION RUNS ON RAILWAY (Vercel retired 2026-07-20)
