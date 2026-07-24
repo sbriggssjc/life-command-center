@@ -1,8 +1,11 @@
 # MCP Server Unification — one URL for every surface
 
-> **Status: OPEN decision — recommended: UNIFY.** Canonical here (repo). A copy also lives at
-> `Team Briggs – Documents/_WORKFLOW/ARCHITECTURE_HANDOFF_MCP_SERVER_UNIFICATION.md` (SharePoint). Findings
-> verified live against production 2026-07-24.
+> **Status: Phase 1 LIVE (2026-07-24).** `tranquil-delight` now serves the 6 read ops + a bounded
+> `/api/ai/daily-briefing` by proxying the shared engine (`GOV_API_URL`) — one base URL for ChatGPT/Copilot,
+> the working Claude connector unchanged. Implementation + verify runbook: `unification-changeset.md` (Phase 1).
+> Phase 2 (collapse into a single service, retire the standby) is optional/later. Canonical here (repo); a
+> copy of the original handoff lives at `Team Briggs – Documents/_WORKFLOW/ARCHITECTURE_HANDOFF_MCP_SERVER_UNIFICATION.md`.
+> Findings verified live against production 2026-07-24.
 
 ## Why this is an OS-level issue
 The consistency contract says single-source every capability. Today there are **two deployments** from the

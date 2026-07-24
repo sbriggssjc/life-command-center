@@ -46,10 +46,14 @@ body with a one-line redirect to the canonical source in §A (the stub pattern).
 - ✅ Relocated `connected-agent-*.md` into `docs/os/architecture/`; redirect stubs left in `docs/comps-rollout/`.
 - ✅ Migrated Copilot `docs/copilot/agent-instructions.md` to a canon-managed region (`render --write-live`;
   parity ✓). Publish it into Studio to make Copilot fully canon-driven.
-- Migrate the ChatGPT persona (`docs/setup/gpt-actions-system-prompt.txt`) to CANON markers next (same bootstrap).
-- ▶ MCP unification: changeset authored (`architecture/unification-changeset.md`) — flag-gated, single
-  implementation, capability-preserving. NOT yet applied to prod; execute via the verify-first cutover runbook
-  (guided curls) before enabling `LCC_MOUNT_MCP=1`.
+- ✅ Migrated the ChatGPT persona (`docs/setup/gpt-actions-system-prompt.txt`) to a canon-managed region
+  (`render --write-live`; parity ✓). Paste it into the GPT to make ChatGPT canon-driven.
+- ✅ MCP unification Phase 1 LIVE: `api/ai-read.js` proxy + `server.js` routes + openapi briefing path merged
+  and deployed to `tranquil-delight`. One base URL for the AI surfaces; engine is now an internal backend.
+  Phase 2 (in-process single service, retire standby) optional — `architecture/unification-changeset.md`.
+- §F conflating docs (`MULTI_AI_DEPLOYMENT_CHECKLIST.md`, `CONTEXT_ROUTER.md`, `Capability_Access_Matrix.md`,
+  `AI_ECOSYSTEM_GUIDE_v2.md`) are NOT in this repo — they live in SharePoint `_WORKFLOW`. Correct them there
+  (via Copilot in-tenant) now that Phase 1 makes `tranquil-delight` the true single AI-surface URL.
 
 ## F. Consolidation ledger — one source per capability (corrections tracked, nothing deleted)
 The MCP-unification handoff exposed docs that conflate the two deployments. Correct these once the unify/stopgap
