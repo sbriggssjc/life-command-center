@@ -15,6 +15,9 @@ or *historical* (kept for history; never edit/wire).
 | Agent/surface architecture | `docs/os/architecture/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
 | Instruction enforcement (render/parity) | `docs/os/RENDER-AND-PARITY.md`, `docs/os/tools/*`, `docs/os/canon/blocks/*`, `docs/os/render.manifest.json` |
 | Deployment / MCP unification (one URL) | `docs/os/architecture/mcp-server-unification.md` (the decision) + `docs/os/architecture/unification-changeset.md` (ready-to-apply changeset + cutover runbook) + `INFRASTRUCTURE.md` |
+| Build status ("are we done") | `docs/os/BUILD-STATUS.md` |
+| Access & device topology | `docs/os/ACCESS-TOPOLOGY.md` |
+| Office Scripts (workbook edits) | `docs/os/architecture/office-scripts/` |
 | Engine × surface parity | `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` |
 | Deal Agent component map | `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md` |
 | Deal Agent instructions | `docs/copilot/agent-instructions.md` |
