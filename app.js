@@ -1138,6 +1138,7 @@ function handlePageLoad(pageId) {
       }
       break;
     case 'pageContacts': if (typeof renderContactsPage === 'function') renderContactsPage(); break;
+    case 'pageMarketing': if (typeof renderMarketingWorkspace === 'function') renderMarketingWorkspace(); break;
     case 'pageMessages': loadMessages(); break;
     case 'pageSettings': renderSettings(); break;
   }
@@ -2201,6 +2202,7 @@ const ROUTE_SLUG_TO_PAGE = {
   research: 'pageResearch',
   'data-quality': 'pageDataQuality',
   messages: 'pageMessages',
+  marketing: 'pageMarketing',
   contacts: 'pageContacts',
   entities: 'pageEntities',
   business: 'pageBiz',
