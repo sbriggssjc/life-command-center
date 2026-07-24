@@ -19,7 +19,12 @@
 
   // Scan the page based on type
   let data;
-  if (siteType === 'assessor') {
+  if (isBizfileHost(hostname)) {
+    // CA Secretary of State (bizfileonline.sos.ca.gov) — a JSON SPA whose detail
+    // modal renders a clean label→value drawer that the generic findValue
+    // heuristic mis-maps. Use a bizfile-specific parser instead (2026-07-24).
+    data = scanBizfile();
+  } else if (siteType === 'assessor') {
     data = scanAssessor();
   } else if (siteType === 'recorder') {
     data = scanRecorder();
@@ -135,7 +140,180 @@
     };
   }
 
+  // ── CA Secretary of State (bizfileonline) parser ─────────────────────────
+  // bizfileonline.sos.ca.gov renders the entity detail as a modal with a
+  // `NAME (NUMBER)` title + a clean label→value drawer. The generic findValue
+  // heuristic mis-maps it (grabbed the entity number as the name, "Standing -
+  // Agent: Good" as the Registered Agent, the Principal Address block as the
+  // Officers, etc.). This host-specific parser anchors on the exact bizfile
+  // label text so the SOS capture form auto-populates correctly.
+  //
+  // The bizfile drawer labels (ground truth from a live record):
+  //   Initial Filing Date · Status · Standing - SOS/FTB/Agent/VCFCF · Formed In
+  //   · Entity Type · Principal Address · Mailing Address · Statement of Info
+  //   Due Date · Agent  (Agent is a multi-line block: type, then the agent NAME,
+  //   then the agent ADDRESS). "Standing - Agent" is a compliance flag, NOT the
+  //   registered agent.
+
+  function isBizfileHost(host) {
+    return /(^|\.)bizfileonline\.sos\.ca\.gov$/i.test(host || '');
+  }
+
+  // Known bizfile drawer labels — used to delimit a label's value block (the
+  // value runs from the label line to the next known label line). Any
+  // "Standing - *" line is treated as a label (via isStandingLabel). Declared
+  // as a hoisted function (not a module-scope const) because the top-of-file
+  // dispatch calls scanBizfile before a const would be initialized (TDZ).
+  function bizfileLabelSet() {
+    return [
+      'initial filing date', 'status', 'formed in', 'entity type',
+      'principal address', 'mailing address', 'statement of info due date',
+      'agent', 'entity name', 'entity number', 'formation date', 'jurisdiction',
+      'registered agent', 'history', 'filings', 'document type',
+    ];
+  }
+
+  function isBizfileLabelLine(line) {
+    const l = (line || '').trim().toLowerCase().replace(/:\s*$/, '');
+    if (!l) return false;
+    if (isStandingLabel(l)) return true;
+    return bizfileLabelSet().includes(l);
+  }
+
+  // Find the detail drawer/modal container that holds the entity detail (has the
+  // `(NUMBER)` title AND detail labels), so we don't scan a search-results table.
+  function bizfileRoot() {
+    // The parenthesized entity number is alphanumeric — LLC "201022910090",
+    // corp "C1234567" — but ≥6 chars with no spaces, so a phone fragment like
+    // "(916)" (3 chars) never matches.
+    const titleRe = /\(\s*[A-Za-z0-9][A-Za-z0-9-]{5,}\s*\)/;
+    const detailRe = /agent|principal address|formed in|entity type/i;
+    const sels = [
+      '[role="dialog"]', '.modal', '[class*="drawer"]', '[class*="Drawer"]',
+      '[class*="Detail"]', '[class*="detail"]', '[class*="Record"]', 'main',
+    ];
+    for (const sel of sels) {
+      for (const el of document.querySelectorAll(sel)) {
+        const t = el.innerText || el.textContent || '';
+        if (titleRe.test(t) && detailRe.test(t)) return el;
+      }
+    }
+    return document.body;
+  }
+
+  function bizfileLines() {
+    const root = bizfileRoot();
+    const raw = root.innerText || root.textContent || '';
+    return raw
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s && s.length < 300);
+  }
+
+  // Title: `NAME (NUMBER)` → { name, number }. NUMBER is alphanumeric
+  // (LLC 12-digit, corp "C1234567"), ≥6 chars, no spaces.
+  function bizfileTitle(lines) {
+    const re = /^(.+?)\s*\(\s*([A-Za-z0-9][A-Za-z0-9-]{5,})\s*\)\s*$/;
+    for (const line of lines) {
+      const m = line.match(re);
+      if (m) return { name: m[1].trim(), number: m[2] };
+    }
+    return { name: null, number: null };
+  }
+
+  // Value for an EXACT bizfile label: the following line(s) up to the next known
+  // label line. `multi` returns the array of value lines; otherwise the first.
+  // Also handles an inline "Label: value" on the same line. Never matches a
+  // "Standing - *" line.
+  function bizfileValue(lines, label, opts) {
+    const multi = opts && opts.multi;
+    const target = label.toLowerCase();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (isStandingLabel(line)) continue;
+      const lower = line.toLowerCase().replace(/:\s*$/, '');
+      if (lower === target) {
+        const vals = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          if (isBizfileLabelLine(lines[j])) break;
+          vals.push(lines[j]);
+        }
+        if (vals.length) return multi ? vals : vals[0];
+      } else if (lower.startsWith(target + ':')) {
+        const rest = line.slice(line.indexOf(':') + 1).trim();
+        if (rest && !isBizfileLabelLine(rest)) return multi ? [rest] : rest;
+      }
+    }
+    return multi ? [] : null;
+  }
+
+  // The Agent block: an optional type token (Individual / Corporation), then the
+  // agent NAME, then the agent ADDRESS (one or more lines, ending at a ZIP).
+  function bizfileAgent(lines) {
+    const block = bizfileValue(lines, 'Agent', { multi: true });
+    if (!block.length) return { name: null, address: null };
+    let i = 0;
+    if (/^(individual|corporation|corporate|entity|person|business|trust)$/i.test(block[i])) i++;
+    const name = block[i] || null;
+    const rest = block.slice(i + 1);
+    const addrParts = [];
+    for (const ln of rest) {
+      addrParts.push(ln);
+      if (/\b\d{5}(-\d{4})?\s*$/.test(ln)) break; // stop at a 5-digit ZIP
+    }
+    if (!addrParts.length && rest.length) addrParts.push(rest[0]);
+    const address = addrParts.join(', ').trim() || null;
+    return { name, address };
+  }
+
+  function scanBizfile() {
+    const lines = bizfileLines();
+    const title = bizfileTitle(lines);
+    const agent = bizfileAgent(lines);
+
+    // Scalar fields fall back to the (now Standing-guarded) generic matcher only
+    // when the bizfile-specific parse comes up empty — the agent NEVER falls
+    // back (its value is a multi-line block the generic matcher would flatten).
+    const biz = (label) => bizfileValue(lines, label);
+
+    return {
+      entity_type: 'organization',
+      name: title.name || findValue('Entity Name', 'Business Name', 'Company Name'),
+      filing_number: title.number || biz('Entity Number') || findValue('Filing Number', 'Entity Number', 'Entity ID'),
+      status: biz('Status') || findValue('Status', 'Entity Status'),
+      formation_date: biz('Initial Filing Date') || biz('Formation Date') || findValue('Formation Date', 'Filing Date', 'Date Filed'),
+      entity_type_detail: biz('Entity Type') || findValue('Entity Type', 'Business Type'),
+      state_of_formation: biz('Formed In') || findValue('State of Formation', 'Jurisdiction'),
+      registered_agent: agent.name,
+      agent_address: agent.address,
+      principal_address: biz('Principal Address') || biz('Mailing Address'),
+      // bizfile's basic detail modal does NOT separately list members/officers
+      // (that needs the Statement of Information PDF, out of scope) — leave it
+      // blank-but-editable rather than mis-fill it with the address block.
+      officers: null,
+    };
+  }
+
   // ── Generic field extraction ─────────────────────────────────────────────
+
+  // A label beginning with "Standing -" (e.g. "Standing - Agent",
+  // "Standing - SOS") is a compliance FLAG, not the field it appears to name.
+  // On CA bizfile the "Standing - Agent: Good" row otherwise false-matched the
+  // "Agent" keyword and populated the Registered Agent field with "Good".
+  // Guard the generic heuristic so a Standing-* label can never populate the
+  // agent / officer / name fields on ANY SOS site (defense-in-depth).
+  function isStandingLabel(text) {
+    return /^\s*standing\s*[-–—]/i.test(text || '');
+  }
+
+  // Central label matcher used by every findValue strategy: excludes Standing-*
+  // flags, then does the existing case-insensitive substring keyword match.
+  function labelMatches(labelText, keywords) {
+    const t = (labelText || '').trim();
+    if (!t || isStandingLabel(t)) return false;
+    const lower = t.toLowerCase();
+    return keywords.some((kw) => lower.includes(kw.toLowerCase()));
+  }
 
   function findValue(...keywords) {
     // Strategy 1: label/value pairs in tables
@@ -146,7 +324,7 @@
         const cells = row.querySelectorAll('th, td');
         if (cells.length >= 2) {
           const labelText = cells[0].textContent?.trim().toLowerCase() || '';
-          if (keywords.some((kw) => labelText.includes(kw.toLowerCase()))) {
+          if (labelMatches(labelText, keywords)) {
             const value = cells[1].textContent?.trim();
             if (value && value.length < 500) return value;
           }
@@ -158,7 +336,7 @@
     const dts = document.querySelectorAll('dt');
     for (const dt of dts) {
       const text = dt.textContent?.trim().toLowerCase() || '';
-      if (keywords.some((kw) => text.includes(kw.toLowerCase()))) {
+      if (labelMatches(text, keywords)) {
         const dd = dt.nextElementSibling;
         if (dd?.tagName === 'DD') {
           const value = dd.textContent?.trim();
@@ -171,7 +349,7 @@
     const labelEls = document.querySelectorAll('label, .label, [class*="label"], [class*="Label"], strong, b, span[class*="field"], span[class*="caption"]');
     for (const el of labelEls) {
       const text = el.textContent?.trim().toLowerCase().replace(/:$/, '') || '';
-      if (keywords.some((kw) => text.includes(kw.toLowerCase()))) {
+      if (labelMatches(text, keywords)) {
         // Check next sibling
         const sibling = el.nextElementSibling;
         if (sibling) {
@@ -200,7 +378,7 @@
       const labelEl = container.querySelector('[class*="label"], [class*="key"], [class*="name"], [class*="caption"], strong, b, th');
       if (!labelEl) continue;
       const text = labelEl.textContent?.trim().toLowerCase().replace(/:$/, '') || '';
-      if (keywords.some((kw) => text.includes(kw.toLowerCase()))) {
+      if (labelMatches(text, keywords)) {
         const valueEl = container.querySelector('[class*="value"], [class*="data"], [class*="content"], dd, td:last-child');
         if (valueEl && valueEl !== labelEl) {
           const value = valueEl.textContent?.trim();
