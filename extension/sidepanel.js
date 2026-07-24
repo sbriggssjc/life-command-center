@@ -3556,11 +3556,55 @@ async function loadOrgView(source, domainLabel) {
 
 // ── Scan This Page ──────────────────────────────────────────────────────────
 
+// The SOS/county worklist targets an open-ended set of Secretary-of-State and
+// county-assessor sites, so those hosts can't be a static manifest allow-list.
+// `SCAN_PAGE` injects content/public-records.js via chrome.scripting.executeScript
+// in the background, which needs a HOST permission for the active tab. `activeTab`
+// does NOT cover a side-panel button click (it's only granted from the toolbar
+// action, a context menu, or a keyboard command), so without this the injection
+// throws "Cannot access contents of the page…" and the scan fails silently.
+//
+// Fix: request the broad `<all_urls>` optional host permission from the Scan
+// click (a real user gesture — chrome.permissions.request REQUIRES one, and the
+// side-panel click is the reliable gesture; the background message handler is
+// not). The grant is one-time and persists across sessions, so every SOS/county
+// page the operator later opens scans silently. Requested at runtime (not baked
+// into the install) to keep the default permission footprint minimal.
+async function ensureScanHostPermission() {
+  const origins = ['<all_urls>'];
+  try {
+    if (await chrome.permissions.contains({ origins })) return { granted: true };
+  } catch {
+    // contains() can reject in some builds; fall through to request().
+  }
+  try {
+    const granted = await chrome.permissions.request({ origins });
+    return { granted };
+  } catch (err) {
+    return { granted: false, error: err?.message };
+  }
+}
+
 function wireScanButton() {
   const scanBtn = $('#scanPageBtn');
   if (!scanBtn) return;
 
   scanBtn.addEventListener('click', async () => {
+    // Acquire the host permission FIRST, inside this click gesture, before any
+    // long async work — chrome.permissions.request needs the user gesture.
+    const perm = await ensureScanHostPermission();
+    if (!perm.granted) {
+      scanBtn.textContent = 'Permission Denied';
+      scanBtn.className = 'btn btn-sm btn-danger';
+      _sosToast('Permission to read this page was denied. Click Scan again and choose "Allow" so the scanner can read the SOS record.');
+      setTimeout(() => {
+        scanBtn.disabled = false;
+        scanBtn.textContent = 'Scan This Page';
+        scanBtn.className = 'btn btn-sm btn-primary';
+      }, 2500);
+      return;
+    }
+
     scanBtn.disabled = true;
     scanBtn.textContent = 'Scanning...';
 
