@@ -28,6 +28,13 @@ run `../SURFACE-SYNC-PROTOCOL.md`.
 | `intake-triage.md` | Staged intake triage + classification taxonomy |
 | `personal.md` | Personal-life domains and how they bind to the same OS |
 
+## Enforcement (blocks · render · parity)
+The rules above are **rendered** to every surface, not re-typed. The enforced, portable rule for each topic is
+`blocks/<id>.md`; surfaces receive those via `../render.manifest.json` → `tools/render-surfaces.mjs` (which
+generates the `../surfaces/<id>.canon.md` bundles) and are kept honest by `tools/check-parity.mjs` (non-zero
+exit on drift). See `../RENDER-AND-PARITY.md`. To change a rule: edit `blocks/<id>.md`, bump `CANON_VERSION`,
+re-render.
+
 ## Handler template (copy this to add a new module)
 ```md
 # <Topic> Canon
@@ -46,3 +53,5 @@ Canon: v<X.Y.Z>
 - **1.0.0** (2026-07-24) — Initial canon: comps, filing, email-and-routing, logging-and-touchpoints,
   writing-voice, bov, intake-triage, personal. Distilled from `docs/copilot/agent-instructions.md`,
   `SURFACE_CAPABILITY_PARITY.md`, the Cowork skills, and `lcc_intelligent_operating_system_v2.md`.
+  Added the enforced `blocks/` layer + render/parity tooling (`tools/`, `render.manifest.json`,
+  `surfaces/`) — a structural enforcement addition, no rule change.

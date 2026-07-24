@@ -33,8 +33,8 @@ Document lands in the correct convention folder; a link is returned; Cortex reco
 
 ## Surface bindings
 Copilot: Document Files Agent (Work IQ SharePoint) + Document Assembly Agent — see
-`architecture/connected-agent-descriptions.md`. Reasoning-plane surfaces hand files to Copilot or use manual
-upload/download.
+`../architecture/connected-agent-descriptions.md`. Reasoning-plane surfaces hand files to Copilot or use
+manual upload/download.
 
 ## Extension notes
 New document types get a folder-convention line here + a trigger phrase — the agents already generalize.

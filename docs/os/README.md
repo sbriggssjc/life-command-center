@@ -32,7 +32,8 @@ engines were copied and diverged). Full statement: `architecture/connected-agent
 | **Instruction & policy canon** | **`docs/os/canon/`** (this folder) | The rules for each topic — the thing surfaces render |
 | **Knowledge / context** | `_AI-Context/Copilot-Context/BRIGGS-*` (SharePoint) + `CONTEXT_ROUTER.md` | Voice, frameworks, personal |
 | **Surface bindings** | `docs/os/SURFACE-SYNC-PROTOCOL.md` | How each surface renders the canon + how to update them all |
-| **Agent/surface architecture** | `docs/os/architecture/` → currently `docs/comps-rollout/connected-agent-*.md` | Orchestrator + specialists |
+| **Agent/surface architecture** | `docs/os/architecture/connected-agent-*.md` | Orchestrator + specialists |
+| **Render & parity (enforcement)** | `docs/os/RENDER-AND-PARITY.md` + `docs/os/tools/` + `canon/blocks/` | Renders canon to surfaces; fails on drift |
 | **Per-capability parity** | `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` | Engine × surface matrix |
 | **Deal Agent component map** | `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md` | Canonical file per Deal Agent component |
 | **Everything else (historical/reference)** | `docs/os/REGISTRY.md` | Non-destructive index of all docs |

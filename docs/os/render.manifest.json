@@ -1,0 +1,33 @@
+{
+  "bundleDir": "surfaces",
+  "note": "Structure only. CANON_VERSION is read from canon/00-INDEX.md (single source). Each surface renders the listed canon blocks (blocks/<id>.md). liveArtifact paths are relative to docs/os; external surfaces are updated by the sync protocol, not by --write-live.",
+  "surfaces": {
+    "copilot": {
+      "liveArtifact": "../copilot/agent-instructions.md",
+      "markerBegin": "<!-- CANON:BEGIN -->",
+      "markerEnd": "<!-- CANON:END -->",
+      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov", "intake-triage", "personal"]
+    },
+    "chatgpt": {
+      "liveArtifact": "../setup/gpt-actions-system-prompt.txt",
+      "markerBegin": "# CANON:BEGIN",
+      "markerEnd": "# CANON:END",
+      "blocks": ["comps", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov"]
+    },
+    "northmarq": {
+      "external": true,
+      "liveArtifact": null,
+      "blocks": ["comps", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov"]
+    },
+    "claude-personal": {
+      "external": true,
+      "liveArtifact": null,
+      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov", "intake-triage", "personal"]
+    },
+    "claude-cowork": {
+      "external": true,
+      "liveArtifact": null,
+      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov", "intake-triage", "personal"]
+    }
+  }
+}

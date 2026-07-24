@@ -12,7 +12,8 @@ or *historical* (kept for history; never edit/wire).
 | Global invariants + canon version | `docs/os/canon/00-INDEX.md` |
 | Topic rules | `docs/os/canon/*.md` (comps, filing, email-and-routing, logging-and-touchpoints, writing-voice, bov, intake-triage, personal) |
 | Surface update procedure | `docs/os/SURFACE-SYNC-PROTOCOL.md` |
-| Agent/surface architecture | `docs/comps-rollout/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
+| Agent/surface architecture | `docs/os/architecture/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
+| Instruction enforcement (render/parity) | `docs/os/RENDER-AND-PARITY.md`, `docs/os/tools/*`, `docs/os/canon/blocks/*`, `docs/os/render.manifest.json` |
 | Engine × surface parity | `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` |
 | Deal Agent component map | `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md` |
 | Deal Agent instructions | `docs/copilot/agent-instructions.md` |
@@ -41,8 +42,9 @@ body with a one-line redirect to the canonical source in §A (the stub pattern).
 3. Never let a rule live in two editable places. One source, many renderers.
 
 ## E. Open follow-ups (tracked, not yet done)
-- Relocate `connected-agent-*.md` from `docs/comps-rollout/` into `docs/os/architecture/` with redirect stubs
-  (kept in place for now to avoid breaking references).
+- ✅ Relocated `connected-agent-*.md` into `docs/os/architecture/`; redirect stubs left in `docs/comps-rollout/`.
+- Migrate the live `agent-instructions.md` + ChatGPT persona to CANON markers so `render --write-live` drives
+  them (bootstrap in `RENDER-AND-PARITY.md`).
 - Rotate `LCC_API_KEY` (parity checklist P1); move to per-surface keys.
 - Build the single instruction/policy canon renderers so each surface imports rather than copies (this folder
   is step 1; the renderers/parity test are step 2).
