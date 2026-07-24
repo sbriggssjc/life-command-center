@@ -1,23 +1,34 @@
-# Comps Engine — Rollout & Reference
+# Comps Engine — Code Artifacts (operational docs live in Team Briggs `_WORKFLOW`)
 
-Living docs for the unified CRE comps engine (`mcp/comps-tools.js`) and its rollout across surfaces.
-Update these as the engine changes.
+**One source of truth.** The canonical *operational* docs for deploying/updating every AI surface live in
+`Team Briggs - Documents/_WORKFLOW/` (OneDrive), registered in `CONTEXT_ROUTER.md`. Do not maintain a second
+copy here — update the canonical docs, not this folder, when process changes:
 
-## Contents
-- **comps-rollout-checklist.md** — every surface, what's built vs. what needs config, owners, status. Start here.
-- **comps-surface-setup-guides.md** — step-by-step registration for each surface (Claude MCP, Cowork skill, ChatGPT GPT Action, Copilot Studio).
-- **lcc-comps-openapi.yaml** — OpenAPI 3.0 schema for the HTTP routes (`/api/query-comps`, `/api/synthesize-comps`); import into ChatGPT + Copilot. Set `servers[0].url` to your `MCP_BASE_URL`.
-- **comps-engine-SKILL.md** — the Claude Cowork skill wrapping query/synthesize/generate with the Team Briggs policies (reliable-or-exclude, MOB/MT naming, reconciliation flags, export mapping).
-- **prompts/** — Claude Code prompts behind the engine build (RPC perf, reconciliation + review queue, Pearland/dedup, CMS-link/census cleanup) — for provenance and re-runs.
+| Topic | Canonical doc (Team Briggs `_WORKFLOW/`) |
+|---|---|
+| What to upload/update, where, per surface | `MULTI_AI_DEPLOYMENT_CHECKLIST.md` |
+| Capability × surface status grid | `Capability_Access_Matrix.md` |
+| Team methodology / prompt (comps §3C, BOV §3P) | `NORTHMARQ_PROJECT_PROMPT.md` (v1.9+) |
+| The master map of where everything lives | `CONTEXT_ROUTER.md` |
 
-## No-approval team rollout (when Northmarq IT connector approval isn't available)
-- **copilot-deal-agent-team-sharing-runbook.md** — give the team live LCC tools via the Copilot Deal Agent (DLP self-check first, maker-provided credentials, direct share).
-- **northmarq-claude-project-setup.md** — get the Team Briggs methodology into a shared Northmarq Claude Project as knowledge + instructions (no live DB access; pair with Copilot for live pulls).
+## What this folder IS — the code artifacts those docs reference
+These are versioned with the code and imported/installed by the surfaces per the checklist:
+- **`lcc-openapi.yaml`** — the unified OpenAPI 3.0 schema (9 ops: comps `synthesize`/`query` + the 7 read tools,
+  Bearer auth). Import into ChatGPT Actions + the Copilot custom connector; set `servers[0].url` to your MCP base URL.
+- **`comps-engine-SKILL.md`** — the Cowork skill wrapping the comps engine with the Team Briggs policies.
+- **`prompts/`** — the Claude Code prompts behind the build (RPC perf, reconciliation + review queue, Pearland/dedup,
+  CMS-link/census, census-writer root cause, Option A HTTP parity, generate-comps action, salesforce_activities fix) —
+  provenance + re-runs.
 
-## Before rolling out
-1. Rotate `LCC_API_KEY` and the government DB password (both were exposed in chat); update the env on the MCP + BOV Railway services.
-2. Fill your live `MCP_BASE_URL` into the OpenAPI `servers` block and the setup guides.
-3. Work the checklist per surface; verify each with the same prompt for parity.
+## Superseded (folded into the canonical docs — kept for reference only)
+These were an early parallel draft; the canonical Team Briggs docs above are authoritative. Don't update these:
+- `SURFACE_CAPABILITY_PARITY.md` → superseded by `Capability_Access_Matrix.md`.
+- `comps-surface-setup-guides.md`, `comps-rollout-checklist.md`, `lcc-comps-openapi.yaml` (comps-only) →
+  superseded by `MULTI_AI_DEPLOYMENT_CHECKLIST.md` + `lcc-openapi.yaml`.
+- `copilot-deal-agent-team-sharing-runbook.md`, `northmarq-claude-project-setup.md` → the no-approval steps are
+  now summarized in the checklist's "July 2026 Reconciliation" section; keep these two as the detailed how-to.
 
-## Engine invariants (don't let a surface diverge)
-Reliable-or-exclude NOI/rent (dialysis + government); cap rates as decimals; request-aware multi-tenant naming (MOB/MT + anchor); cap/rent reconciliation flags → dialysis review queue; `buyer`/`seller`/`financing` out of comps unless explicitly requested; formula-protected workbook columns never written.
+## Engine invariants (unchanged, enforced server-side)
+Reliable-or-exclude NOI/rent (dialysis + gov); cap rates as decimals; request-aware multi-tenant naming (MOB/MT +
+anchor); cap/rent reconciliation flags → dialysis review queue; record-first BOV; `buyer`/`seller`/`financing` out
+of comps unless asked; formula-protected columns never written; read tools read-only (`log_memory` never over HTTP).

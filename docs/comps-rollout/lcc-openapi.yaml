@@ -1,4 +1,4 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: LCC API (full read + comps surface)
   description: >
@@ -19,7 +19,7 @@ info:
     file so ChatGPT/Copilot reach full parity from one import.
   version: 2.0.0
 servers:
-  - url: https://REPLACE-WITH-YOUR-MCP-RAILWAY-DOMAIN.up.railway.app
+  - url: https://tranquil-delight-production-633f.up.railway.app
     description: LCC MCP server (set to the value of MCP_BASE_URL; all /api/* routes live here)
 security:
   - bearerAuth: []
@@ -180,10 +180,12 @@ components:
     # Read tools return rich, nested JSON; the object shapes are permissive by design.
     JsonObject:
       type: object
+      properties: {}
       additionalProperties: true
       description: The tool's JSON output — identical to the Claude MCP tool of the same name.
     EmptyRequest:
       type: object
+      properties: {}
       additionalProperties: false
     SearchEntitiesRequest:
       type: object
