@@ -80,7 +80,7 @@ paths:
       responses:
         '200': { description: Contact relationship context., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
         '401': { description: Missing or invalid Bearer token. }
-  /api/daily-briefing:
+  /api/ai/daily-briefing:
     post:
       operationId: getDailyBriefing
       summary: Today's strategic / important / urgent priorities.

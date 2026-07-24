@@ -6,7 +6,36 @@
 > Grounded in the verified code review (`mcp-server-unification.md`). CANON: this is the canonical unification
 > spec; the SharePoint handoff is its source.
 
-## Design decisions (capability-preserving)
+## Phase 1 — IMPLEMENTED (2026-07-24): one URL via a thin proxy (low-risk, testable)
+Rather than refactor the 82 KB engine blind, Phase 1 fronts the missing read ops on `tranquil-delight` as
+thin proxies to the shared engine (`GOV_API_URL`) — the exact proven pattern of `api/query-comps.js`. This
+gives ChatGPT/Copilot ONE base URL with bounded responses, reusing existing env, without touching the engine
+or the working Claude connector. Applied changes (committed, NOT yet deployed):
+- `api/ai-read.js` — new proxy handler (twin of `query-comps.js`): authenticates `X-LCC-Key`, forwards to
+  `${GOV_API_URL}${target}`, returns the engine's bounded JSON.
+- `server.js` — registers the 6 read routes (`/api/search-entities`, `/property-context`, `/contact-context`,
+  `/queue-summary`, `/pipeline-health`, `/recall-memory`) + the bounded `/api/ai/daily-briefing`, all → the
+  proxy. Additive only — none of those paths existed on this host, so no collision, no behavior change to the
+  web app. The full `/api/daily-briefing` (admin) is untouched.
+- `docs/comps-rollout/lcc-openapi.yaml` — `getDailyBriefing` path → `/api/ai/daily-briefing` (bounded). The
+  `servers[0].url` was already `tranquil-delight`; the 6 read paths already match. Re-import **after** deploy+verify.
+
+**Deploy & verify Phase 1 (guided — run the curls):**
+1. Deploy `tranquil-delight` (these routes are additive → the web app + existing `/api/*` are unchanged).
+   Confirm `GOV_API_URL` + `LCC_API_KEY` are set on it (they are — `query-comps` already uses them).
+2. `POST https://tranquil-delight…/api/search-entities` (Bearer `LCC_API_KEY`) → 200, JSON, length < 45,000.
+   Repeat for the other 5 read ops. `POST /api/ai/daily-briefing` → 200, `source:'briefing_intel_snapshot'`,
+   length < 45,000. `POST /api/daily-briefing` (web app) → still the full admin briefing (unchanged).
+3. Re-import `lcc-openapi.yaml` into ChatGPT + Copilot → "today's briefing" returns a real briefing, no
+   ResponseTooLargeError; all 9 ops resolve from the one URL.
+4. Rollback if needed: the new routes are isolated; removing them (or reverting the two server.js edits)
+   restores the prior state. Nothing else was touched.
+
+**Phase 1 leaves the engine as an internal backend** (like `GOV_API_URL` already is for comps) — one
+client-facing URL, no competing surfaces. Phase 2 below (optional) collapses it into a single service.
+
+## Phase 2 (optional, later) — in-process single service
+
 1. **Single implementation.** Extract the MCP wiring into `mountLccMcp(app)` and call it from BOTH root
    `server.js` (unified) and `mcp/server.js` (standby, identical behavior) — no duplicated route logic.
 2. **Namespaced AI read surface.** The bounded HTTP read routes mount under **`/api/ai/*`** on root so they

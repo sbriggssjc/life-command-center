@@ -48,6 +48,7 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 import queryCompsHandler from './api/query-comps.js';
+import aiReadHandler from './api/ai-read.js';
 
 // Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
 // The Dialysis_DB data-query edge function proxies to these paths when
@@ -276,6 +277,23 @@ app.all('/api/comps', compsHandler);
 // Comps QUERY (Deal Agent QueryComps/SynthesizeComps → shared engine on GOV_API_URL/MCP; key stays server-side)
 app.all('/api/query-comps', queryCompsHandler);
 app.all('/api/synthesize-comps', queryCompsHandler);
+
+// ── AI read surface (ChatGPT / Copilot) — UNIFICATION Phase 1 ───────────────
+// These 6 read ops + the BOUNDED daily-briefing previously 404'd on this host
+// (only the separate MCP service served them), which is why ChatGPT threw
+// ResponseTooLargeError on the unbounded /api/daily-briefing and 404'd the rest.
+// They now proxy to the SAME shared engine (GOV_API_URL) Claude reaches via /mcp,
+// so every surface returns identical, bounded JSON from ONE base URL. Single
+// engine → no drift. The web app's full /api/daily-briefing (admin) is untouched;
+// the bounded briefing lives at /api/ai/daily-briefing so no capability is lost.
+// See docs/os/architecture/unification-changeset.md.
+app.all('/api/search-entities',   (req, res) => { req.query._mcpTarget = '/api/search-entities';   aiReadHandler(req, res); });
+app.all('/api/property-context',  (req, res) => { req.query._mcpTarget = '/api/property-context';  aiReadHandler(req, res); });
+app.all('/api/contact-context',   (req, res) => { req.query._mcpTarget = '/api/contact-context';   aiReadHandler(req, res); });
+app.all('/api/queue-summary',     (req, res) => { req.query._mcpTarget = '/api/queue-summary';     aiReadHandler(req, res); });
+app.all('/api/pipeline-health',   (req, res) => { req.query._mcpTarget = '/api/pipeline-health';   aiReadHandler(req, res); });
+app.all('/api/recall-memory',     (req, res) => { req.query._mcpTarget = '/api/recall-memory';     aiReadHandler(req, res); });
+app.all('/api/ai/daily-briefing', (req, res) => { req.query._mcpTarget = '/api/daily-briefing';    aiReadHandler(req, res); });
 
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
