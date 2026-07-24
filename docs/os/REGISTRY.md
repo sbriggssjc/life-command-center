@@ -14,6 +14,7 @@ or *historical* (kept for history; never edit/wire).
 | Surface update procedure | `docs/os/SURFACE-SYNC-PROTOCOL.md` |
 | Agent/surface architecture | `docs/os/architecture/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
 | Instruction enforcement (render/parity) | `docs/os/RENDER-AND-PARITY.md`, `docs/os/tools/*`, `docs/os/canon/blocks/*`, `docs/os/render.manifest.json` |
+| Deployment / MCP unification (one URL) | `docs/os/architecture/mcp-server-unification.md` (repo copy of the SharePoint handoff) + `INFRASTRUCTURE.md` |
 | Engine × surface parity | `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` |
 | Deal Agent component map | `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md` |
 | Deal Agent instructions | `docs/copilot/agent-instructions.md` |
@@ -43,8 +44,19 @@ body with a one-line redirect to the canonical source in §A (the stub pattern).
 
 ## E. Open follow-ups (tracked, not yet done)
 - ✅ Relocated `connected-agent-*.md` into `docs/os/architecture/`; redirect stubs left in `docs/comps-rollout/`.
-- Migrate the live `agent-instructions.md` + ChatGPT persona to CANON markers so `render --write-live` drives
-  them (bootstrap in `RENDER-AND-PARITY.md`).
+- ✅ Migrated Copilot `docs/copilot/agent-instructions.md` to a canon-managed region (`render --write-live`;
+  parity ✓). Publish it into Studio to make Copilot fully canon-driven.
+- Migrate the ChatGPT persona (`docs/setup/gpt-actions-system-prompt.txt`) to CANON markers next (same bootstrap).
+
+## F. Consolidation ledger — one source per capability (corrections tracked, nothing deleted)
+The MCP-unification handoff exposed docs that conflate the two deployments. Correct these once the unify/stopgap
+decision lands (`architecture/mcp-server-unification.md`); until then they are **misleading, not canonical**:
+- `MULTI_AI_DEPLOYMENT_CHECKLIST.md` (~225–226: asserts tranquil-delight is the MCP server — the sentence that
+  sent the fix to the wrong service).
+- `CONTEXT_ROUTER.md`, `Capability_Access_Matrix.md`, `AI_ECOSYSTEM_GUIDE_v2.md` (same conflation).
+Deduped so far: connected-agent docs (moved + stubbed); comps/email/filing/etc. invariants (now single-sourced
+in `canon/blocks/` and rendered, not re-typed per surface); Copilot instructions (invariant prose removed in
+favor of the canon region, mechanics kept).
 - Rotate `LCC_API_KEY` (parity checklist P1); move to per-surface keys.
 - Build the single instruction/policy canon renderers so each surface imports rather than copies (this folder
   is step 1; the renderers/parity test are step 2).

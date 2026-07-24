@@ -20,6 +20,14 @@ How the canon reaches every surface, and how to update them all systematically w
 Cross-reference the engine×surface state in `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` and the Deal
 Agent component map in `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md`.
 
+**Base URL (deployment):** all HTTP/MCP surfaces should point at ONE base URL. Today there are two servers
+(`architecture/mcp-server-unification.md`); the endpoint state after unifying onto `tranquil-delight` is the
+target. Until then, ChatGPT/Copilot `lcc-openapi.yaml` `servers[0].url` must match the server that actually
+serves all 9 bounded `/api/*` ops — not the web-app-only host.
+
+**Migration status:** Copilot `agent-instructions.md` now carries a generated `CANON:BEGIN…END` region
+(`render --write-live`); paste-and-publish to Studio applies it. ChatGPT persona is next.
+
 ## 2. Propagation matrix — which surfaces to update when a canon module changes
 
 | Canon module | Copilot (agent-instructions) | Northmarq prompt | Claude skills | ChatGPT persona | Engines (`mcp`/`api`) | Knowledge |

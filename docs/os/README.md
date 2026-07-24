@@ -34,6 +34,7 @@ engines were copied and diverged). Full statement: `architecture/connected-agent
 | **Surface bindings** | `docs/os/SURFACE-SYNC-PROTOCOL.md` | How each surface renders the canon + how to update them all |
 | **Agent/surface architecture** | `docs/os/architecture/connected-agent-*.md` | Orchestrator + specialists |
 | **Render & parity (enforcement)** | `docs/os/RENDER-AND-PARITY.md` + `docs/os/tools/` + `canon/blocks/` | Renders canon to surfaces; fails on drift |
+| **Deployment truth (one URL)** | `docs/os/architecture/mcp-server-unification.md` + `INFRASTRUCTURE.md` | Two servers today → unify to one base URL for Claude/ChatGPT/Copilot |
 | **Per-capability parity** | `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` | Engine × surface matrix |
 | **Deal Agent component map** | `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md` | Canonical file per Deal Agent component |
 | **Everything else (historical/reference)** | `docs/os/REGISTRY.md` | Non-destructive index of all docs |
