@@ -66,6 +66,7 @@ import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { buildTeamContextWithSales, getTrackRecordSummary } from './_shared/team-context.js';
 import { getCadenceForDraft, advanceCadence, getCadenceState } from './_shared/cadence-engine.js';
 import { linkPersonToEntity, stampContactOnActiveCadence } from './_shared/contact-attach.js';
+import { computeRoe } from './_shared/roe.js';
 import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSuggestion } from './_shared/template-refinement.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -366,7 +367,10 @@ export default withErrorHandler(async function handler(req, res) {
       case 'property_signals': return await getPropertySignals(req, res, user, workspaceId);
       case 'bd_worklist': return await getBdWorklist(req, res, user, workspaceId);
       case 'activation_review': return await getActivationReview(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review' });
+      case 'marketing_listings': return await getMarketingListings(req, res, user, workspaceId);
+      case 'marketing_engagement': return await getMarketingEngagement(req, res, user, workspaceId);
+      case 'marketing_bd': return await getMarketingBd(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review, marketing_listings, marketing_engagement, marketing_bd' });
     }
   }
 
@@ -391,6 +395,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'qualify_contact':    return await bridgeQualifyContact(req, res, user, workspaceId);
       case 'qualify_contacts_bulk': return await bridgeQualifyContactsBulk(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
+      case 'marketing_reassign': return await bridgeMarketingReassign(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
       case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
       case 'snooze_cadence':     return await bridgeSnoozeCadence(req, res, user, workspaceId);
@@ -1262,6 +1267,247 @@ async function getPropertyGeo(req, res, user, workspaceId) {
     // (the ~3.4% gov / ~13.6% dia ungeocoded tail) — callers can fall back
     // (e.g. dia same-county competitors) rather than show "broken".
     coverage_note: subjectGeocoded ? null : 'subject_not_geocoded',
+  });
+}
+
+// ============================================================================
+// Marketing tab (Slice 3a) — the active Team Briggs listings that spine the
+// owner-centric BD workspace. Reads the dia SJC Deal Book (v_sjc_deal_book)
+// filtered to Team Briggs + active marketing stages. Server-side domainSelect
+// (service key) bypasses the browser data-query allowlist. Blank, never
+// fabricated: a listing with no linked_property_id / cap / status is returned
+// as-is (the client renders the blanks honestly).
+// GET ?action=marketing_listings
+// ============================================================================
+const MARKETING_ACTIVE_STAGES = ['active_listing', 'under_loi', 'in_escrow'];
+const MARKETING_LISTING_FIELDS = [
+  'deal_name', 'property_address', 'city', 'state', 'primary_use',
+  'asking_price', 'cap_rate', 'noi', 'marketing_status', 'first_broadcast_date',
+  'sf_listing_id', 'linked_property_id', 'sf_deal_id', 'broker_name', 'deal_stage',
+];
+
+async function getMarketingListings(req, res, user, workspaceId) {
+  const team = String(req.query.team || 'Team Briggs').trim();
+  const select = MARKETING_LISTING_FIELDS.join(',');
+  const path = 'v_sjc_deal_book'
+    + '?sjc_team=eq.' + encodeURIComponent(team)
+    + '&deal_stage=in.(' + MARKETING_ACTIVE_STAGES.join(',') + ')'
+    + '&select=' + select
+    + '&order=first_broadcast_date.desc.nullslast';
+  const r = await domainSelect('dia', path);
+  if (!r.ok) {
+    return res.status(502).json({ ok: false, error: 'deal_book_unavailable', status: r.status, listings: [] });
+  }
+  // The BD sections + property_geo anchor on the linked property; the deal book
+  // is the dia CRM, so every listing's domain is 'dia'.
+  const listings = (Array.isArray(r.data) ? r.data : []).map(row => ({
+    ...row,
+    domain: 'dia',
+    listing_key: row.sf_deal_id || row.sf_listing_id || row.deal_name,
+  }));
+  return res.status(200).json({ ok: true, team, count: listings.length, listings });
+}
+
+// domain PATCH (service key) — mirrors domainSelect for writes.
+async function domainPatch(domain, pathWithQuery, body) {
+  const isGov = domain === 'gov' || domain === 'government';
+  const baseUrl = isGov ? process.env.GOV_SUPABASE_URL : process.env.DIA_SUPABASE_URL;
+  const key = isGov ? govSupabaseKey() : diaSupabaseKey();
+  if (!baseUrl || !key) return { ok: false, status: 503 };
+  try {
+    const resp = await fetch(baseUrl + '/rest/v1/' + pathWithQuery, {
+      method: 'PATCH',
+      headers: { apikey: key, Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+    return { ok: resp.ok, status: resp.status };
+  } catch (_e) { return { ok: false, status: 500 }; }
+}
+
+// ============================================================================
+// Marketing tab (Slice 3b) — engagement on ONE listing.
+// GET ?action=marketing_engagement&listing_id=<sf_listing_id>&opp_id=<sf_deal_id>[&limit=]
+// Rolls up dia marketing_leads (RCM om_download/exec_summary_view + inquiries)
+// per engaged contact, then resolves each sf_contact_id → LCC entity so the row
+// opens the role-aware Contact 360. Blank never fabricated.
+// ============================================================================
+async function getMarketingEngagement(req, res, user, workspaceId) {
+  const listingId = req.query.listing_id != null ? String(req.query.listing_id).trim() : '';
+  const oppId = req.query.opp_id != null ? String(req.query.opp_id).trim() : '';
+  if (!listingId && !oppId) return res.status(400).json({ error: 'listing_id or opp_id required' });
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 500));
+
+  const r = await domainRpc('dia', 'dia_marketing_engagement', {
+    p_listing_id: listingId || null,
+    p_opp_id: oppId || null,
+    p_limit: limit,
+  });
+  if (!r.ok) return res.status(502).json({ ok: false, error: 'engagement_unavailable', status: r.status, contacts: [] });
+
+  const contacts = Array.isArray(r.data) ? r.data : [];
+
+  // Resolve sf_contact_id → LCC entity (best-effort; unresolved rows still render
+  // + fall back to a name/company Contact-360 open). SF ids are alnum, safe in in.().
+  const sfIds = [...new Set(contacts.map(c => c.sf_contact_id).filter(Boolean))];
+  const entityMap = {};
+  if (sfIds.length) {
+    const sel = 'external_identities?source_system=eq.salesforce&source_type=eq.Contact'
+      + '&external_id=in.(' + sfIds.join(',') + ')&select=entity_id,external_id';
+    const er = await opsQuery('GET', sel, null, { countMode: 'none' });
+    if (er.ok && Array.isArray(er.data)) {
+      for (const row of er.data) if (row.external_id) entityMap[row.external_id] = row.entity_id;
+    }
+  }
+
+  const enriched = contacts.map(c => ({
+    ...c,
+    entity_id: (c.sf_contact_id && entityMap[c.sf_contact_id]) || null,
+  }));
+  return res.status(200).json({ ok: true, count: enriched.length, contacts: enriched });
+}
+
+// ============================================================================
+// Marketing tab (Slice 3b) — reassign an engaged contact to another broker.
+// POST ?action=marketing_reassign { listing_id, opp_id, sf_contact_id, new_owner }
+// Writes the LCC-consumed assignment (dia marketing_leads.assigned_to) and, when
+// wired, the SF Task OwnerId (Slice-4 dependency — flagged on SF_TASK_REASSIGN_URL,
+// honest 'not configured' until then). Effect-first + outcome-truthful.
+// ============================================================================
+async function bridgeMarketingReassign(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const listingId = b.listing_id != null ? String(b.listing_id).trim() : '';
+  const oppId = b.opp_id != null ? String(b.opp_id).trim() : '';
+  const sfContactId = b.sf_contact_id != null ? String(b.sf_contact_id).trim() : '';
+  const newOwner = b.new_owner != null ? String(b.new_owner).trim() : '';
+  if (!newOwner) return res.status(400).json({ error: 'new_owner required' });
+  if (!sfContactId) return res.status(400).json({ error: 'sf_contact_id required' });
+  if (!listingId && !oppId) return res.status(400).json({ error: 'listing_id or opp_id required' });
+
+  // LCC-consumed assignment: PATCH the engagement rows for this contact on this
+  // listing. (Re-ingest durability is a Slice-4 concern — reported honestly.)
+  const orParts = [];
+  if (listingId) orParts.push('listing_id.eq.' + encodeURIComponent(listingId));
+  if (oppId) orParts.push('sf_opportunity_id.eq.' + encodeURIComponent(oppId));
+  const path = 'marketing_leads'
+    + '?or=(' + orParts.join(',') + ')'
+    + '&sf_contact_id=eq.' + encodeURIComponent(sfContactId);
+  const patch = await domainPatch('dia', path, { assigned_to: newOwner });
+
+  // SF Task OwnerId write — Slice-4 dependency, flagged.
+  const sfConfigured = !!process.env.SF_TASK_REASSIGN_URL;
+  const sf = { reassigned: false, reason: sfConfigured ? 'sf_reassign_deferred' : 'sf_reassign_not_configured' };
+
+  if (!patch.ok) {
+    return res.status(502).json({ ok: false, error: 'assignment_write_failed', status: patch.status, sf });
+  }
+  return res.status(200).json({ ok: true, lcc: { reassigned: true, new_owner: newOwner }, sf });
+}
+
+// ============================================================================
+// Marketing tab (Slice 3c) — the three BD prospect sections for ONE listing.
+//   B1 Area Ownership   — nearby owners (reuse dia_nearby_same_owner proximity)
+//   B2 Regional Owners  — same-asset owners in the listing's state, by portfolio
+//   B3 Owners in Market — v_prospect_targets scored prospects in the state
+// Targets are OWNERS not tenants; operator-as-owner rows (DaVita/Fresenius …) are
+// filtered. Each row resolves to an LCC owner entity (Contact 360) and carries a
+// Rules-of-Engagement verdict (computeRoe). Blank never fabricated.
+// GET ?action=marketing_bd&property_id=<linked>&state=<ST>[&limit=]
+// ============================================================================
+const MKT_OPERATOR_OWNER_RE = /\b(davita|fresenius|us renal|u\.s\. renal|american renal|dsi renal|satellite health|renal care group|dci\b|physicians dialysis)\b/i;
+// Placeholder owner names carry no prospecting value — anchored so a real name
+// containing the word (e.g. "Various Trades LLC") is not false-positived.
+const MKT_JUNK_OWNER_RE = /^(undisclosed|unknown|not disclosed|n\/?a|none|redacted|withheld|confidential|various|multiple|tbd|owner)$/i;
+function mktOwnerNameOk(nm) {
+  const s = String(nm || '').trim();
+  return !!s && !MKT_OPERATOR_OWNER_RE.test(s) && !MKT_JUNK_OWNER_RE.test(s);
+}
+
+async function getMarketingBd(req, res, user, workspaceId) {
+  const propertyId = req.query.property_id != null ? String(req.query.property_id).trim() : '';
+  const state = req.query.state != null ? String(req.query.state).trim().toUpperCase() : '';
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 25, 60));
+  const hasProp = /^\d+$/.test(propertyId);
+
+  // B1 — nearby owners (proximity). Reuses the existing dia_nearby_same_owner
+  // primitive; empty when the linked property has no lat/lng (honest, not broken).
+  let b1 = [];
+  if (hasProp) {
+    const nr = await domainRpc('dia', 'dia_nearby_same_owner', { p_property_id: Number(propertyId), p_radius_miles: 25, p_limit: 15 });
+    if (nr.ok && Array.isArray(nr.data)) {
+      const seen = new Set();
+      for (const row of nr.data) {
+        const nm = (row.owner_name || '').trim();
+        if (!nm || seen.has(nm.toLowerCase()) || !mktOwnerNameOk(nm)) continue;
+        seen.add(nm.toLowerCase());
+        const loc = [row.city, row.state].filter(Boolean).join(', ');
+        const dist = row.distance_miles != null ? Number(row.distance_miles).toFixed(1) + ' mi' : '';
+        b1.push({ section: 'b1', owner_name: nm, true_owner_id: null, prop_count: null,
+          context: [loc, dist].filter(Boolean).join(' · ') });
+      }
+    }
+  }
+
+  // B2/B3 — one v_prospect_targets read for the state, split into scored prospects
+  // (B3) and the broader area-owner set (B2). Operators filtered.
+  let b2 = [], b3 = [];
+  if (state) {
+    const sel = 'v_prospect_targets?state=eq.' + encodeURIComponent(state)
+      + '&select=true_owner_id,name,prop_count,is_prospect,is_developer,last_contact_date,latest_note_summary'
+      + '&order=prop_count.desc.nullslast&limit=80';
+    const pr = await domainSelect('dia', sel);
+    const rows = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+    const clean = rows.filter(r => mktOwnerNameOk(r.name));
+    const scored = clean.filter(r => r.is_prospect || r.is_developer);
+    const scoredIds = new Set(scored.map(r => r.true_owner_id));
+    const mapRow = (r, section) => ({
+      section, owner_name: r.name, true_owner_id: r.true_owner_id || null,
+      prop_count: r.prop_count != null ? Number(r.prop_count) : null,
+      is_developer: !!r.is_developer, is_prospect: !!r.is_prospect,
+      last_contact_date: r.last_contact_date || null,
+      note: r.latest_note_summary || null,
+      context: (r.prop_count ? Number(r.prop_count) + ' dialysis propert' + (Number(r.prop_count) === 1 ? 'y' : 'ies') + ' in ' + state : 'Owner in ' + state)
+        + (r.is_developer ? ' · developer' : ''),
+    });
+    b3 = scored.slice(0, 15).map(r => mapRow(r, 'b3'));
+    b2 = clean.filter(r => !scoredIds.has(r.true_owner_id)).slice(0, limit).map(r => mapRow(r, 'b2'));
+  }
+
+  // Resolve owner true_owner_id → LCC entity (Contact 360 anchor).
+  const ownerIds = [...new Set([...b2, ...b3].map(r => r.true_owner_id).filter(Boolean))];
+  const entityMap = {};
+  if (ownerIds.length) {
+    const sel = 'external_identities?source_system=eq.dia&source_type=eq.true_owner'
+      + '&external_id=in.(' + ownerIds.join(',') + ')&select=entity_id,external_id';
+    const er = await opsQuery('GET', sel, null, { countMode: 'none' });
+    if (er.ok && Array.isArray(er.data)) for (const row of er.data) if (row.external_id) entityMap[row.external_id] = row.entity_id;
+  }
+
+  // In-pipeline signal: owners already carrying an active cadence in LCC are
+  // Team Briggs' own work (→ ROE self/safe). One batch.
+  const entIds = [...new Set(Object.values(entityMap).filter(Boolean))];
+  const inPipeline = new Set();
+  if (entIds.length) {
+    const cq = await opsQuery('GET',
+      'touchpoint_cadence?entity_id=in.(' + entIds.join(',') + ')&phase=not.in.(paused,unsubscribed)&select=entity_id',
+      null, { countMode: 'none' });
+    if (cq.ok && Array.isArray(cq.data)) for (const r of cq.data) if (r.entity_id) inPipeline.add(r.entity_id);
+  }
+
+  const decorate = (r) => {
+    const entity_id = (r.true_owner_id && entityMap[r.true_owner_id]) || null;
+    const worked = entity_id && inPipeline.has(entity_id);
+    // computeRoe: an owner already in Team Briggs' pipeline resolves 'self' (safe);
+    // a cold prospect with no conflicting assignment is the honest 'safe' default.
+    const roe = computeRoe({ accountOwnerName: worked ? 'Team Briggs' : null, dealAssignees: [], accountClosedWon: false });
+    return { ...r, entity_id, in_pipeline: !!worked,
+      roe: { verdict: roe.verdict, headline: roe.headline, reasons: roe.reasons } };
+  };
+
+  return res.status(200).json({
+    ok: true,
+    anchor: { state: state || null, property_id: hasProp ? Number(propertyId) : null },
+    b1: b1.map(decorate), b2: b2.map(decorate), b3: b3.map(decorate),
   });
 }
 

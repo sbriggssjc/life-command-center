@@ -1736,7 +1736,7 @@ async function buildContact360(entityId, workspaceId) {
 
   const accountOwner = await resolveAccountOwner(entity, entityId, workspaceId);
 
-  const [portfolio, lccEvents, sfActs, mktRows, emailRel] = await Promise.all([
+  const [portfolio, lccEvents, sfActs, mktRows, emailRel, sfOpenTasks] = await Promise.all([
     fetchEntityPortfolio(entityId, workspaceId).catch(() => ({ rollup: null, properties: [] })),
     opsQuery('GET',
       `activity_events?entity_id=eq.${entityId}&workspace_id=eq.${workspaceId}` +
@@ -1764,7 +1764,56 @@ async function buildContact360(entityId, workspaceId) {
             .then(r => Array.isArray(r.data) ? r.data : []).catch(() => []),
         ]).then(([summary, recent]) => ({ email: subjectEmail, summary, recent })).catch(() => null)
       : Promise.resolve(null),
+    // Open SF tasks (Not Started / Open / In Progress) — completed tasks dominate
+    // the recent-activity window, so a dedicated open-status query is needed. dia
+    // salesforce_activities carries no WhatId, so the linked "opportunity" surfaces
+    // via the marketing array's deal_name; the account is company_name.
+    sfIds.length
+      ? domainQuery('dialysis', 'GET',
+          `salesforce_activities?sf_contact_id=in.(${inSf})` +
+          `&status=in.(${encodeURIComponent('Not Started')},Open,${encodeURIComponent('In Progress')})` +
+          `&select=subject,nm_type,task_subtype,activity_date,status,assigned_to,company_name` +
+          `&order=activity_date.desc.nullslast&limit=15`)
+          .then(r => (r.ok && Array.isArray(r.data)) ? r.data : []).catch(() => [])
+      : Promise.resolve([]),
   ]);
+
+  const openTasks = (Array.isArray(sfOpenTasks) ? sfOpenTasks : []).map(t => ({
+    subject: t.subject || '(task)',
+    status: t.status || null,
+    date: t.activity_date || null,
+    account: t.company_name || null,
+    type: t.task_subtype || t.nm_type || null,
+    assigned_to: t.assigned_to || null,
+  }));
+
+  // Person-level ownership / linked properties (Contact 360 refinement): a person
+  // often owns via their affiliated org, not directly. Resolve (a) direct
+  // owns/purchases edges to asset entities and (b) the first affiliated org's BD
+  // portfolio. Reuses the true-owner graph + fetchEntityPortfolio (no new engine).
+  let ownedProperties = { direct: [], affiliated: null };
+  if (entity.entity_type === 'person') {
+    const fromEdges = entity.entity_relationships || [];
+    const ownEdges = fromEdges.filter(r => (r.relationship_type === 'owns' || r.relationship_type === 'purchases') && r.to_entity_id);
+    if (ownEdges.length) {
+      const inIds = Array.from(new Set(ownEdges.map(e => e.to_entity_id))).map(v => encodeURIComponent(v)).join(',');
+      const ar = await opsQuery('GET', `entities?id=in.(${inIds})&select=id,name,city,state,entity_type,domain`).catch(() => null);
+      const byId = {};
+      if (ar && ar.ok && Array.isArray(ar.data)) for (const e of ar.data) byId[e.id] = e;
+      ownedProperties.direct = ownEdges.map(e => ({ entity_id: e.to_entity_id, rel: e.relationship_type, ...(byId[e.to_entity_id] || {}) }));
+    }
+    const orgEdge = fromEdges.find(r => (r.relationship_type === 'associated_with' || r.relationship_type === 'works_at') && r.to_entity_id);
+    if (orgEdge) {
+      const orgRes = await opsQuery('GET', `entities?id=eq.${orgEdge.to_entity_id}&select=id,name,entity_type`).catch(() => null);
+      const org = orgRes && orgRes.ok && orgRes.data && orgRes.data[0];
+      if (org) {
+        const p = await fetchEntityPortfolio(org.id, workspaceId).catch(() => ({ properties: [] }));
+        if (p && Array.isArray(p.properties) && p.properties.length) {
+          ownedProperties.affiliated = { org_entity_id: org.id, org_name: org.name, rollup: p.rollup || null, properties: p.properties.slice(0, 25) };
+        }
+      }
+    }
+  }
 
   // Developed edges (a distinct ownership signal from owns/former). Rare; resolve
   // the target entity names best-effort so the panel can label them.
@@ -1809,6 +1858,8 @@ async function buildContact360(entityId, workspaceId) {
     timeline,
     engagement,
     marketing: mktRows,
+    open_tasks: openTasks,
+    owned_properties: ownedProperties,
     account_owner: accountOwner,
     roe,
     email_relationship: emailRel,

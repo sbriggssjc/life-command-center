@@ -2232,3 +2232,86 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .t-meta3 { font-size: 11px; color: var(--text3); }
 .t-meta3-sm { font-size: 12px; color: var(--text3); }
 .t-cap { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* ============================================================
+   Marketing tab (Slice 3) — owner-centric BD workspace
+   ============================================================ */
+#marketingPageInner { padding: 12px 14px 90px; max-width: 1100px; margin: 0 auto; }
+.mkt-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.mkt-header h2 { font-size:20px; margin:0; }
+.mkt-subtitle { font-size:12px; color:var(--text3); margin-top:2px; }
+.mkt-header-meta { font-size:12px; color:var(--text3); white-space:nowrap; padding-top:6px; }
+.mkt-empty { padding:24px; text-align:center; color:var(--text3); font-size:13px; }
+.mkt-empty-sm { padding:12px; font-size:12px; }
+.mkt-list { display:flex; flex-direction:column; gap:10px; }
+
+.mkt-listing { border:1px solid var(--border); border-radius:12px; background:var(--s2); overflow:hidden; }
+.mkt-listing.open { border-color:var(--accent); }
+.mkt-listing-head { display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; }
+.mkt-listing-head:hover { background:var(--s3); }
+.mkt-caret { color:var(--text3); font-size:12px; width:12px; flex:none; }
+.mkt-listing-title { flex:1; min-width:0; }
+.mkt-listing-name { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mkt-listing-sub { font-size:12px; color:var(--text3); margin-top:1px; }
+.mkt-listing-chips { display:flex; align-items:center; gap:6px; flex:none; }
+.mkt-chip { font-size:11px; color:var(--text2); background:var(--s3); border:1px solid var(--border); border-radius:6px; padding:2px 7px; white-space:nowrap; }
+.mkt-badge { font-size:11px; font-weight:600; border-radius:6px; padding:2px 8px; white-space:nowrap; }
+.mkt-badge-active { background:color-mix(in srgb, var(--green) 18%, transparent); color:var(--green); }
+.mkt-badge-loi { background:color-mix(in srgb, var(--yellow) 20%, transparent); color:var(--yellow); }
+.mkt-badge-escrow { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }
+
+.mkt-listing-body { padding:0; }
+.mkt-listing.open .mkt-listing-body { padding:4px 14px 14px; border-top:1px solid var(--border); }
+
+.mkt-section { margin-top:12px; }
+.mkt-summary { margin-top:4px; }
+.mkt-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px 16px; }
+.mkt-fact-label { font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:.03em; }
+.mkt-fact-value { font-size:13px; color:var(--text); margin-top:1px; }
+.mkt-blank { color:var(--text3); }
+
+.mkt-section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:6px; padding-top:6px; border-top:1px solid var(--border); }
+.mkt-section-title { font-size:13px; font-weight:600; }
+.mkt-section-sub { font-size:11px; color:var(--text3); margin-top:1px; }
+.mkt-section-body { }
+.mkt-loading-sm { padding:12px; text-align:center; }
+
+.mkt-btn { font-size:12px; padding:4px 10px; border-radius:7px; border:1px solid var(--border); background:var(--s2); color:var(--text); cursor:pointer; }
+.mkt-btn:hover { border-color:var(--accent); }
+
+/* Marketing — engagement rows (Slice 3b) */
+.mkt-eng-list { display:flex; flex-direction:column; gap:6px; }
+.mkt-eng-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:9px; background:var(--s1); }
+.mkt-eng-row:hover { border-color:var(--accent); }
+.mkt-eng-main { flex:1; min-width:0; cursor:pointer; }
+.mkt-eng-name { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mkt-eng-co { font-weight:400; color:var(--text3); }
+.mkt-eng-meta { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin-top:3px; font-size:11px; color:var(--text3); }
+.mkt-ev { background:var(--s3); border:1px solid var(--border); border-radius:5px; padding:1px 6px; color:var(--text2); }
+.mkt-ev-count { color:var(--text3); }
+.mkt-eng-when { color:var(--text3); }
+.mkt-eng-owner { color:var(--accent); font-weight:500; }
+.mkt-eng-owner:empty { display:none; }
+.mkt-eng-actions { display:flex; align-items:center; gap:5px; flex:none; flex-wrap:wrap; justify-content:flex-end; }
+.mkt-act { font-size:11px; padding:4px 9px; border-radius:6px; border:1px solid var(--border); background:var(--s2); color:var(--text); cursor:pointer; text-decoration:none; white-space:nowrap; }
+.mkt-act:hover { border-color:var(--accent); }
+.mkt-act-off, .mkt-act[disabled] { opacity:.45; cursor:not-allowed; }
+
+/* Marketing — BD prospect sections (Slice 3c) */
+.mkt-bd-list { display:flex; flex-direction:column; gap:6px; }
+.mkt-bd-row { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:9px; background:var(--s1); }
+.mkt-bd-main { flex:1; min-width:0; }
+.mkt-bd-name { font-size:13px; font-weight:600; }
+.mkt-bd-ctx { font-size:11px; color:var(--text3); margin-top:2px; }
+.mkt-bd-inpipe { color:var(--accent); }
+.mkt-bd-note { font-size:11px; color:var(--text2); margin-top:3px; font-style:italic; }
+.mkt-bd-foot { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:5px; }
+.mkt-bd-actions { display:flex; flex-direction:column; gap:5px; flex:none; align-items:flex-end; }
+.mkt-roe { font-size:11px; font-weight:600; border-radius:5px; padding:2px 7px; white-space:nowrap; }
+.mkt-roe-green { background:color-mix(in srgb, var(--green) 16%, transparent); color:var(--green); }
+.mkt-roe-amber { background:color-mix(in srgb, var(--yellow) 20%, transparent); color:var(--yellow); }
+.mkt-roe-red { background:color-mix(in srgb, var(--red) 18%, transparent); color:var(--red); }
+.mkt-research { display:flex; align-items:center; gap:8px; font-size:11px; }
+.mkt-research-label { color:var(--text3); }
+.mkt-rlink { color:var(--accent); text-decoration:none; }
+.mkt-rlink:hover { text-decoration:underline; }
