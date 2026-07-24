@@ -19,7 +19,7 @@ Last reconciled: July 2026 (comps flow added; stale setup/ instruction copies co
   (a different, plugin-style path). Not the live agent's instructions.
 - `_AI-Context/Copilot-Context/ai-plugin.json` → `…/openapi.json` — legacy plugin-style
   integration; **superseded by the "LCC Intelligence" custom connector.** Do not attach both.
-- `copilot/lcc-deal-intelligence.connector.v1.swagger.json` — superseded by **v2**.
+- `_superseded/copilot/lcc-deal-intelligence.connector.v1.swagger.json` — superseded by **v2**; moved to the `_superseded/` graveyard (see `_superseded/README.md`).
 - `copilot/actions/*.yaml` — old per-action drafts.
 - `_AI-Context/Copilot-Context/lcc-copilot-integration-plan.md` — a July-2026 planning doc; parts
   are stale (e.g., "ai-plugin.json is missing"). Historical only.

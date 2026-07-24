@@ -30,7 +30,13 @@ or *historical* (kept for history; never edit/wire).
 - `docs/comps-rollout/*` setup guides, `northmarq-claude-project-setup.md`, `copilot-deal-agent-team-sharing-runbook.md`.
 - `docs/architecture/context_broker_api_spec.md`, `context_packet_schema.md`, `signal_table_schema.sql` — Cortex substrate.
 
-## C. Historical (kept, never edit/wire) — examples
+## C. Historical (kept, never edit/wire)
+**Graveyard:** superseded repo files are moved to **`_superseded/`** (see `_superseded/README.md` for the
+old→canonical map). Moved so far: `copilot/…connector.v1.swagger.json` (→ v2), `app.js.restored`,
+`dialysis.js.backup`, `gov.js.backup`. Left in place but marked superseded: `docs/comps-rollout/lcc-comps-openapi.yaml`
+(→ `lcc-openapi.yaml`, back-compat only) and `copilot/actions/*.yaml` (names match live `_preset_action`s).
+
+### Historical examples (SharePoint / not moved)
 Per `DEAL-AGENT-SOURCE-OF-TRUTH.md`: `declarative-copilot-updated.json`, `ai-plugin.json`, connector v1 swagger,
 `copilot/actions/*.yaml`, `docs/setup/*` redirect stubs, any `DealAgent_Instructions.md` from a chat.
 General rule: superseded plans/round-logs stay in place as history; if one still claims a live rule, replace its
