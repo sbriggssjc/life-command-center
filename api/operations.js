@@ -366,7 +366,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'property_signals': return await getPropertySignals(req, res, user, workspaceId);
       case 'bd_worklist': return await getBdWorklist(req, res, user, workspaceId);
       case 'activation_review': return await getActivationReview(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review' });
+      case 'marketing_listings': return await getMarketingListings(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review, marketing_listings' });
     }
   }
 
@@ -1263,6 +1264,44 @@ async function getPropertyGeo(req, res, user, workspaceId) {
     // (e.g. dia same-county competitors) rather than show "broken".
     coverage_note: subjectGeocoded ? null : 'subject_not_geocoded',
   });
+}
+
+// ============================================================================
+// Marketing tab (Slice 3a) — the active Team Briggs listings that spine the
+// owner-centric BD workspace. Reads the dia SJC Deal Book (v_sjc_deal_book)
+// filtered to Team Briggs + active marketing stages. Server-side domainSelect
+// (service key) bypasses the browser data-query allowlist. Blank, never
+// fabricated: a listing with no linked_property_id / cap / status is returned
+// as-is (the client renders the blanks honestly).
+// GET ?action=marketing_listings
+// ============================================================================
+const MARKETING_ACTIVE_STAGES = ['active_listing', 'under_loi', 'in_escrow'];
+const MARKETING_LISTING_FIELDS = [
+  'deal_name', 'property_address', 'city', 'state', 'primary_use',
+  'asking_price', 'cap_rate', 'noi', 'marketing_status', 'first_broadcast_date',
+  'sf_listing_id', 'linked_property_id', 'sf_deal_id', 'broker_name', 'deal_stage',
+];
+
+async function getMarketingListings(req, res, user, workspaceId) {
+  const team = String(req.query.team || 'Team Briggs').trim();
+  const select = MARKETING_LISTING_FIELDS.join(',');
+  const path = 'v_sjc_deal_book'
+    + '?sjc_team=eq.' + encodeURIComponent(team)
+    + '&deal_stage=in.(' + MARKETING_ACTIVE_STAGES.join(',') + ')'
+    + '&select=' + select
+    + '&order=first_broadcast_date.desc.nullslast';
+  const r = await domainSelect('dia', path);
+  if (!r.ok) {
+    return res.status(502).json({ ok: false, error: 'deal_book_unavailable', status: r.status, listings: [] });
+  }
+  // The BD sections + property_geo anchor on the linked property; the deal book
+  // is the dia CRM, so every listing's domain is 'dia'.
+  const listings = (Array.isArray(r.data) ? r.data : []).map(row => ({
+    ...row,
+    domain: 'dia',
+    listing_key: row.sf_deal_id || row.sf_listing_id || row.deal_name,
+  }));
+  return res.status(200).json({ ok: true, team, count: listings.length, listings });
 }
 
 // ============================================================================
