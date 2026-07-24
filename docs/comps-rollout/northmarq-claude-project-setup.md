@@ -14,11 +14,15 @@ zero IT approval; live database pulls come from the Copilot Deal Agent (see `cop
 2. **Paste the instructions.** Copy the full text of `NORTHMARQ_PROJECT_PROMPT.md` (v1.9+) into the Project's
    custom-instructions field. (Per that file's maintenance header: edit the master `.md` first, bump the version,
    then re-paste — never edit the Project directly.)
-3. **Upload the Project knowledge** the prompt's Section 0 Context Router expects — from `Team Briggs - Documents/_WORKFLOW/`:
-   `CONTEXT_ROUTER.md`, `Briggs_Brand_Standards_v3.md`, `BOV_Underwriting_Standards.md`, `Comps_Column_Mapping.md`,
-   `Briggs_Comps_Workflow.md`, `BRIGGS-WRITING-VOICE.md`, `BRIGGS-CRE-FRAMEWORKS.md`, `BRIGGS-BD-PLAYBOOK.md`,
-   `BRIGGS-MASTER-CONTEXT.md`, plus the Briggs comp/BOV templates from `Templates/`. (These are the account/Team-Briggs
-   knowledge files the prompt references; upload whatever your Context Router lists.)
+3. **Upload the Project knowledge** the Context Router (`CONTEXT_ROUTER.md`) lists, from these two folders:
+   - From `_WORKFLOW/`: `CONTEXT_ROUTER.md`, `Briggs_Brand_Standards_v3.md`, `BOV_Underwriting_Standards.md`,
+     `Comps_Column_Mapping.md`, `Briggs_Comps_Workflow.md`, `AI_ECOSYSTEM_GUIDE_v2.md`, `Capability_Access_Matrix.md`,
+     `Team_Rollout_Architecture.md`, `Team_Member_Access_and_Flows_Setup.md`.
+   - From `_AI-Context/Copilot-Context/` (identity/voice/frameworks/BD/personal): `BRIGGS-MASTER-CONTEXT.md`,
+     `BRIGGS-WRITING-VOICE.md`, `BRIGGS-CRE-FRAMEWORKS.md`, `BRIGGS-BD-PLAYBOOK.md`, `BRIGGS-PERSONAL-CONTEXT.md`
+     (and `BRIGGS-SYSTEM-PROMPT.md` if you want the full core).
+   - From `Templates/`: the Briggs BOV + comps templates (NNN, MOB, comps standard/dialysis/**government**, lease).
+   Upload whatever the Context Router's table lists as authoritative sources — that table is the master.
 4. **Test.** Paste a small CoStar/SF comp export: "Build the Briggs sold-comps rows from this per Section 3C, apply
    reliable-or-exclude and MOB/MT naming, flag any outliers." Confirm it excludes unreliable-NOI comps, names
    multi-tenant MOB/MT, flags cap/rent mismatches, and hands off the payload to the /comps page (no claim of live DB access).
