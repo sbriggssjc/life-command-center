@@ -3318,6 +3318,18 @@ function _renderWorklistFromState() {
   _sosSetActiveTarget(remaining[0]);
 
   let html = pickerHtml + '<div class="section-label">Copy the name ▸ paste into your SOS search ▸ Scan the record — or dispose it.</div>';
+  // Persistent scan entry point — the active browser tab IS the SOS record the
+  // operator navigated to (independent of which owner card is highlighted), so
+  // this is a single worklist-level button, not per-card. Reuses the same
+  // SCAN_PAGE trigger as the empty-state (wireScanButton, wired below): the scan
+  // result flows through loadOrgView → the editable capture form pre-filled with
+  // the active owner as the save target.
+  html += `<div style="margin:6px 0 10px;">
+    <button class="btn btn-sm btn-primary" id="scanPageBtn" style="width:100%;">⎙ Scan this SOS page</button>
+    <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">
+      Open the owner's record on your SOS site, then Scan to capture agent / principal address / officers.
+    </div>
+  </div>`;
   remaining.forEach((it, idx) => {
     const isActive = idx === 0;
     const loc = [it.property_city, it.property_state].filter(Boolean).join(', ');
@@ -3338,6 +3350,12 @@ function _renderWorklistFromState() {
     </div>`;
   });
   body.innerHTML = html;
+
+  // Wire the persistent "Scan this SOS page" button to the existing SCAN_PAGE
+  // trigger (same path the Property-tab empty-state uses). On a scan the result
+  // flows CONTEXT_DETECTED → loadPropertyTab → loadOrgView (the editable capture
+  // form) with the active worklist owner as the save target.
+  wireScanButton();
 
   body.querySelectorAll('.llc-state-chip').forEach((chip) =>
     chip.addEventListener('click', () => renderLlcResearchQueue(dom, chip.dataset.state || null)));
