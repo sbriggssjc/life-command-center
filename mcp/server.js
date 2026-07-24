@@ -13,6 +13,7 @@ import {
   resolveContextPacket,
 } from "./context-assemble.js";
 import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
+import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
@@ -1378,13 +1379,24 @@ function makeReadHttpRoute(toolName) {
     throw new Error(`makeReadHttpRoute refused non-read-only tool: ${toolName}`);
   }
   return async (req, res) => {
-    // Read-only: this route calls the read tool's handler and returns its JSON.
+    // Read-only: this route calls the read tool's handler and returns its JSON,
+    // BOUNDED so the payload stays under the ChatGPT Action / Copilot ~100k-char
+    // cap. The MCP surface calls the same handler unbounded (Claude keeps full
+    // fidelity) — only this HTTP layer shrinks. See mcp/http-response-bound.js.
     try {
       const handler = TOOL_HANDLERS[toolName];
       if (typeof handler !== "function") {
         return res.status(500).json({ error: `tool ${toolName} not registered` });
       }
-      res.json(unwrapToolResult(await handler(req.body || {})));
+      const args = req.body || {};
+      const raw = unwrapToolResult(await handler(args));
+      const before = jsonLen(raw);
+      const bounded = boundHttpToolResult(toolName, raw, args);
+      const after = jsonLen(bounded);
+      console.log(
+        `[http-bound] ${toolName} before=${before} after=${after} truncated=${!!(bounded && bounded.truncated)}`
+      );
+      res.json(bounded);
     } catch (e) {
       res.status(500).json({ error: String(e?.message || e) });
     }

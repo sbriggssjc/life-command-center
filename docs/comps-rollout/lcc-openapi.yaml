@@ -13,6 +13,13 @@ info:
     READ-ONLY: every operation in this schema is read-only — none mutates data. The Cortex WRITE tool
     (log_memory) is intentionally NOT exposed over HTTP; it stays on the Claude / MCP surfaces only.
 
+    ACTION-SIZE-BOUNDED: unlike the Claude MCP surface (which returns full payloads), these HTTP
+    responses are bounded to stay under the ChatGPT Action / Copilot connector ~100k-char limit. Rich
+    tools default to small, value-ranked sets (top-N per band / capped nested arrays, raw & document
+    blobs dropped) — request the specific record, pass a smaller `limit`, or (for property-context)
+    `verbose: true` for full detail. When a response was still shrunk it carries `truncated: true` and
+    a `truncation_note`.
+
     Supersedes `lcc-comps-openapi.yaml` (the comps-only subset, retained for back-compat). Workbook
     generation (generateComps / generateBov) is added under the SAME server + Bearer auth by the
     companion prompt `CCP_generate_comps_action_chatgpt_copilot.md`; merge those operations into this
@@ -200,6 +207,12 @@ components:
       properties:
         entity_id: { type: string, description: LCC entity UUID. }
         address: { type: string, description: Property address (alternative to entity_id). }
+        verbose: { type: boolean, description: 'Return the full context packet. Default false (HTTP responses cap nested arrays and drop raw/document blobs to stay under the Action size limit).' }
+        limit: { type: number, description: 'Per-array cap for nested lists (comps, leases, ownership history, tasks, contacts). Default 8, max 50.' }
+        sections:
+          type: array
+          items: { type: string, enum: [entity, property, active_tasks, context_packet, tenant_guarantor, gov_data, dia_data] }
+          description: 'Optional — return only these top-level sections (entity identity is always retained).'
       description: Provide entity_id OR address.
     ContactContextRequest:
       type: object
@@ -212,6 +225,7 @@ components:
       type: object
       properties:
         workspace_id: { type: string, description: LCC workspace UUID (defaults to the primary workspace). }
+        limit: { type: number, description: 'Max items per priority band (urgent / high / normal). Default 10, max 50. HTTP responses return display fields only, not the full snapshot.' }
     QueueSummaryRequest:
       type: object
       properties:
