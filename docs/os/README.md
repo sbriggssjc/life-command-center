@@ -5,6 +5,10 @@
 > start from scratch, never fork a source, never overwrite canon without bumping its version.**
 >
 > **Canon version:** see `canon/00-INDEX.md`. **Owner:** Team Briggs / Scott Briggs. **Source of truth:** this repo.
+>
+> **Top router across every door (team + repo):** `Team Briggs - Documents/_WORKFLOW/CONTEXT_ROUTER.md`. This
+> `docs/os/` tree is the **system-architecture + enforcement home** that router points to; `REGISTRY.md` is its
+> repo-side sub-index. See `UNIFIED-ARCHITECTURE.md` for how the two homes reconcile into one brain.
 
 ## 1. What this is
 

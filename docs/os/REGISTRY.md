@@ -1,5 +1,9 @@
 # Registry — Canonical Map & Consolidation Index
 
+> **This is the repo-side sub-index under the top router** `Team Briggs - Documents/_WORKFLOW/CONTEXT_ROUTER.md`
+> (which spans team + repo — one master per topic, loaded first at every door). Two-home reconciliation:
+> `UNIFIED-ARCHITECTURE.md`.
+
 Non-destructive index so nothing is lost and every future build resumes from one place. **Nothing here is
 deleted.** Each entry is *canonical* (the source of truth), *reference* (useful, stable, not the rule source),
 or *historical* (kept for history; never edit/wire).
