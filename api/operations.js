@@ -367,7 +367,8 @@ export default withErrorHandler(async function handler(req, res) {
       case 'bd_worklist': return await getBdWorklist(req, res, user, workspaceId);
       case 'activation_review': return await getActivationReview(req, res, user, workspaceId);
       case 'marketing_listings': return await getMarketingListings(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review, marketing_listings' });
+      case 'marketing_engagement': return await getMarketingEngagement(req, res, user, workspaceId);
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review, marketing_listings, marketing_engagement' });
     }
   }
 
@@ -392,6 +393,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'qualify_contact':    return await bridgeQualifyContact(req, res, user, workspaceId);
       case 'qualify_contacts_bulk': return await bridgeQualifyContactsBulk(req, res, user, workspaceId);
       case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
+      case 'marketing_reassign': return await bridgeMarketingReassign(req, res, user, workspaceId);
       case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
       case 'advance_cadence':    return await bridgeAdvanceCadence(req, res, user, workspaceId);
       case 'snooze_cadence':     return await bridgeSnoozeCadence(req, res, user, workspaceId);
@@ -1302,6 +1304,102 @@ async function getMarketingListings(req, res, user, workspaceId) {
     listing_key: row.sf_deal_id || row.sf_listing_id || row.deal_name,
   }));
   return res.status(200).json({ ok: true, team, count: listings.length, listings });
+}
+
+// domain PATCH (service key) — mirrors domainSelect for writes.
+async function domainPatch(domain, pathWithQuery, body) {
+  const isGov = domain === 'gov' || domain === 'government';
+  const baseUrl = isGov ? process.env.GOV_SUPABASE_URL : process.env.DIA_SUPABASE_URL;
+  const key = isGov ? govSupabaseKey() : diaSupabaseKey();
+  if (!baseUrl || !key) return { ok: false, status: 503 };
+  try {
+    const resp = await fetch(baseUrl + '/rest/v1/' + pathWithQuery, {
+      method: 'PATCH',
+      headers: { apikey: key, Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+    return { ok: resp.ok, status: resp.status };
+  } catch (_e) { return { ok: false, status: 500 }; }
+}
+
+// ============================================================================
+// Marketing tab (Slice 3b) — engagement on ONE listing.
+// GET ?action=marketing_engagement&listing_id=<sf_listing_id>&opp_id=<sf_deal_id>[&limit=]
+// Rolls up dia marketing_leads (RCM om_download/exec_summary_view + inquiries)
+// per engaged contact, then resolves each sf_contact_id → LCC entity so the row
+// opens the role-aware Contact 360. Blank never fabricated.
+// ============================================================================
+async function getMarketingEngagement(req, res, user, workspaceId) {
+  const listingId = req.query.listing_id != null ? String(req.query.listing_id).trim() : '';
+  const oppId = req.query.opp_id != null ? String(req.query.opp_id).trim() : '';
+  if (!listingId && !oppId) return res.status(400).json({ error: 'listing_id or opp_id required' });
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 500));
+
+  const r = await domainRpc('dia', 'dia_marketing_engagement', {
+    p_listing_id: listingId || null,
+    p_opp_id: oppId || null,
+    p_limit: limit,
+  });
+  if (!r.ok) return res.status(502).json({ ok: false, error: 'engagement_unavailable', status: r.status, contacts: [] });
+
+  const contacts = Array.isArray(r.data) ? r.data : [];
+
+  // Resolve sf_contact_id → LCC entity (best-effort; unresolved rows still render
+  // + fall back to a name/company Contact-360 open). SF ids are alnum, safe in in.().
+  const sfIds = [...new Set(contacts.map(c => c.sf_contact_id).filter(Boolean))];
+  const entityMap = {};
+  if (sfIds.length) {
+    const sel = 'external_identities?source_system=eq.salesforce&source_type=eq.Contact'
+      + '&external_id=in.(' + sfIds.join(',') + ')&select=entity_id,external_id';
+    const er = await opsQuery('GET', sel, null, { countMode: 'none' });
+    if (er.ok && Array.isArray(er.data)) {
+      for (const row of er.data) if (row.external_id) entityMap[row.external_id] = row.entity_id;
+    }
+  }
+
+  const enriched = contacts.map(c => ({
+    ...c,
+    entity_id: (c.sf_contact_id && entityMap[c.sf_contact_id]) || null,
+  }));
+  return res.status(200).json({ ok: true, count: enriched.length, contacts: enriched });
+}
+
+// ============================================================================
+// Marketing tab (Slice 3b) — reassign an engaged contact to another broker.
+// POST ?action=marketing_reassign { listing_id, opp_id, sf_contact_id, new_owner }
+// Writes the LCC-consumed assignment (dia marketing_leads.assigned_to) and, when
+// wired, the SF Task OwnerId (Slice-4 dependency — flagged on SF_TASK_REASSIGN_URL,
+// honest 'not configured' until then). Effect-first + outcome-truthful.
+// ============================================================================
+async function bridgeMarketingReassign(req, res, user, workspaceId) {
+  const b = req.body || {};
+  const listingId = b.listing_id != null ? String(b.listing_id).trim() : '';
+  const oppId = b.opp_id != null ? String(b.opp_id).trim() : '';
+  const sfContactId = b.sf_contact_id != null ? String(b.sf_contact_id).trim() : '';
+  const newOwner = b.new_owner != null ? String(b.new_owner).trim() : '';
+  if (!newOwner) return res.status(400).json({ error: 'new_owner required' });
+  if (!sfContactId) return res.status(400).json({ error: 'sf_contact_id required' });
+  if (!listingId && !oppId) return res.status(400).json({ error: 'listing_id or opp_id required' });
+
+  // LCC-consumed assignment: PATCH the engagement rows for this contact on this
+  // listing. (Re-ingest durability is a Slice-4 concern — reported honestly.)
+  const orParts = [];
+  if (listingId) orParts.push('listing_id.eq.' + encodeURIComponent(listingId));
+  if (oppId) orParts.push('sf_opportunity_id.eq.' + encodeURIComponent(oppId));
+  const path = 'marketing_leads'
+    + '?or=(' + orParts.join(',') + ')'
+    + '&sf_contact_id=eq.' + encodeURIComponent(sfContactId);
+  const patch = await domainPatch('dia', path, { assigned_to: newOwner });
+
+  // SF Task OwnerId write — Slice-4 dependency, flagged.
+  const sfConfigured = !!process.env.SF_TASK_REASSIGN_URL;
+  const sf = { reassigned: false, reason: sfConfigured ? 'sf_reassign_deferred' : 'sf_reassign_not_configured' };
+
+  if (!patch.ok) {
+    return res.status(502).json({ ok: false, error: 'assignment_write_failed', status: patch.status, sf });
+  }
+  return res.status(200).json({ ok: true, lcc: { reassigned: true, new_owner: newOwner }, sf });
 }
 
 // ============================================================================

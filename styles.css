@@ -2278,3 +2278,21 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 
 .mkt-btn { font-size:12px; padding:4px 10px; border-radius:7px; border:1px solid var(--border); background:var(--s2); color:var(--text); cursor:pointer; }
 .mkt-btn:hover { border-color:var(--accent); }
+
+/* Marketing — engagement rows (Slice 3b) */
+.mkt-eng-list { display:flex; flex-direction:column; gap:6px; }
+.mkt-eng-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:9px; background:var(--s1); }
+.mkt-eng-row:hover { border-color:var(--accent); }
+.mkt-eng-main { flex:1; min-width:0; cursor:pointer; }
+.mkt-eng-name { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mkt-eng-co { font-weight:400; color:var(--text3); }
+.mkt-eng-meta { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin-top:3px; font-size:11px; color:var(--text3); }
+.mkt-ev { background:var(--s3); border:1px solid var(--border); border-radius:5px; padding:1px 6px; color:var(--text2); }
+.mkt-ev-count { color:var(--text3); }
+.mkt-eng-when { color:var(--text3); }
+.mkt-eng-owner { color:var(--accent); font-weight:500; }
+.mkt-eng-owner:empty { display:none; }
+.mkt-eng-actions { display:flex; align-items:center; gap:5px; flex:none; flex-wrap:wrap; justify-content:flex-end; }
+.mkt-act { font-size:11px; padding:4px 9px; border-radius:6px; border:1px solid var(--border); background:var(--s2); color:var(--text); cursor:pointer; text-decoration:none; white-space:nowrap; }
+.mkt-act:hover { border-color:var(--accent); }
+.mkt-act-off, .mkt-act[disabled] { opacity:.45; cursor:not-allowed; }

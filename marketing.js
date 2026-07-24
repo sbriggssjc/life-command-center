@@ -219,12 +219,137 @@
       + '</div></div>';
   }
 
-  // ---- section loaders (Slice 3a: scaffold; wired to real endpoints in 3b/3c) ----
-  function mktLoadEngagement(i) {
+  // ---- Slice 3b: engagement ----
+  S.eng = S.eng || {};
+
+  const MKT_EVENT_LABEL = {
+    om_download: 'OM download',
+    exec_summary_view: 'Viewed summary',
+    loopnet_inquiry: 'LoopNet inquiry',
+    rcm_inquiry: 'RCM inquiry',
+    loopnet_favorite: 'LoopNet favorite',
+    website_hit: 'Website visit',
+  };
+  function mktRelDate(v) {
+    if (!v) return '';
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return '';
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    if (days <= 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 30) return days + 'd ago';
+    return mktDate(v);
+  }
+
+  async function mktLoadEngagement(i) {
     const body = document.getElementById('mktSecBody-engagement-' + i);
     if (!body) return;
-    body.innerHTML = '<div class="mkt-empty mkt-empty-sm">Engagement loads in Slice 3b.</div>';
+    const l = S.listings[i];
+    const qs = [];
+    if (l.sf_listing_id) qs.push('listing_id=' + encodeURIComponent(l.sf_listing_id));
+    if (l.sf_deal_id) qs.push('opp_id=' + encodeURIComponent(l.sf_deal_id));
+    if (!qs.length) { body.innerHTML = '<div class="mkt-empty mkt-empty-sm">No Salesforce listing/deal id on this record — engagement unavailable.</div>'; return; }
+
+    const r = await opsApi('/api/operations?action=marketing_engagement&' + qs.join('&')).catch(() => ({ ok: false }));
+    if (!r || !r.ok || !r.data || !r.data.ok) {
+      body.innerHTML = '<div class="mkt-empty mkt-empty-sm">Could not load engagement.</div>';
+      return;
+    }
+    const contacts = Array.isArray(r.data.contacts) ? r.data.contacts : [];
+    S.eng[i] = contacts;
+    // Update the section subtitle count.
+    const sec = document.getElementById('mktSec-engagement-' + i);
+    const sub = sec && sec.querySelector('.mkt-section-sub');
+    if (sub) sub.textContent = contacts.length + ' engaged contact' + (contacts.length === 1 ? '' : 's');
+
+    if (!contacts.length) {
+      body.innerHTML = '<div class="mkt-empty mkt-empty-sm">No engagement recorded on this listing yet.</div>';
+      return;
+    }
+    body.innerHTML = '<div class="mkt-eng-list">' + contacts.map((c, j) => mktEngRowHTML(c, i, j)).join('') + '</div>';
   }
+
+  function mktEngRowHTML(c, i, j) {
+    const name = c.lead_name || '';
+    const company = c.lead_company || '';
+    const primary = name || company || '(unknown contact)';
+    const secondary = name && company ? company : '';
+    const events = (Array.isArray(c.event_types) ? c.event_types : [])
+      .map(t => '<span class="mkt-ev">' + mktEsc(MKT_EVENT_LABEL[t] || t) + '</span>').join('');
+    const count = Number(c.event_count) > 1 ? '<span class="mkt-ev-count">×' + c.event_count + '</span>' : '';
+    const when = mktRelDate(c.last_activity);
+    const owner = c.assigned_to ? '<span class="mkt-eng-owner" id="mktEngOwner-' + i + '-' + j + '">' + mktEsc(c.assigned_to) + '</span>' : '<span class="mkt-eng-owner" id="mktEngOwner-' + i + '-' + j + '"></span>';
+    const canLog = !!c.entity_id;
+
+    const actions = []
+      .concat('<button class="mkt-act" onclick="mktOpenContact(' + i + ',' + j + ')" title="Open Contact 360">Contact 360</button>')
+      .concat(c.lead_phone ? '<a class="mkt-act" href="tel:' + mktEsc(String(c.lead_phone).replace(/[^0-9+]/g, '')) + '">Call</a>' : '')
+      .concat('<button class="mkt-act' + (canLog ? '' : ' mkt-act-off') + '" ' + (canLog ? 'onclick="mktLog(' + i + ',' + j + ',\'call\')"' : 'disabled title="No linked contact — open Contact 360 to link first"') + '>Log Call</button>')
+      .concat('<button class="mkt-act' + (canLog ? '' : ' mkt-act-off') + '" ' + (canLog ? 'onclick="mktLog(' + i + ',' + j + ',\'attempt\')"' : 'disabled title="No linked contact"') + '>Log Attempt</button>')
+      .concat(c.sf_contact_id ? '<button class="mkt-act" onclick="mktReassign(' + i + ',' + j + ')">Reassign</button>' : '')
+      .filter(Boolean).join('');
+
+    return '<div class="mkt-eng-row" id="mktEng-' + i + '-' + j + '">'
+      + '<div class="mkt-eng-main" onclick="mktOpenContact(' + i + ',' + j + ')" role="button" tabindex="0">'
+      + '<div class="mkt-eng-name">' + mktEsc(primary) + (secondary ? ' <span class="mkt-eng-co">· ' + mktEsc(secondary) + '</span>' : '') + '</div>'
+      + '<div class="mkt-eng-meta">' + events + count + (when ? '<span class="mkt-eng-when">' + mktEsc(when) + '</span>' : '') + owner + '</div>'
+      + '</div>'
+      + '<div class="mkt-eng-actions">' + actions + '</div>'
+      + '</div>';
+  }
+
+  // Contact 360 — reuse the ONE canonical trigger. entity_id → open directly;
+  // else fall back to a name search so a broker still resolves.
+  window.mktOpenContact = function (i, j) {
+    const c = (S.eng[i] || [])[j];
+    if (!c) return;
+    if (c.entity_id && typeof openContact360 === 'function') { openContact360(c.entity_id, { kind: 'entity', tab: 'Overview' }); return; }
+    const nm = c.lead_name || c.lead_company;
+    if (nm && typeof openEntityDetailByName === 'function') { openEntityDetailByName(nm); return; }
+    if (typeof showToast === 'function') showToast('No linked contact record for this engagement', '');
+  };
+
+  window.mktLog = async function (i, j, kind) {
+    const c = (S.eng[i] || [])[j];
+    if (!c || !c.entity_id) { showToast('No linked contact to log against', ''); return; }
+    const l = S.listings[i];
+    const who = c.lead_name || c.lead_company || 'contact';
+    const subject = (kind === 'attempt' ? 'Outreach attempt — ' : 'Call — ') + who;
+    const notes = 'Marketing: ' + (l.deal_name || l.property_address || '');
+    const r = await opsPost('/api/operations?action=log_call', {
+      entity_id: c.entity_id, domain: 'dia', subject: subject, notes: notes,
+      outcome: kind === 'attempt' ? 'no_answer' : 'connected',
+    }).catch(() => ({ ok: false }));
+    if (r && r.ok) showToast(kind === 'attempt' ? 'Attempt logged' : 'Call logged', 'success');
+    else showToast('Log failed', 'error');
+  };
+
+  window.mktReassign = async function (i, j) {
+    const c = (S.eng[i] || [])[j];
+    if (!c || !c.sf_contact_id) { showToast('No Salesforce contact id — cannot reassign', ''); return; }
+    const l = S.listings[i];
+    const cur = c.assigned_to || '';
+    const to = window.prompt('Reassign this engaged contact to which broker?', cur);
+    if (to == null) return;
+    const owner = String(to).trim();
+    if (!owner || owner === cur) return;
+    const r = await opsPost('/api/operations?action=marketing_reassign', {
+      listing_id: l.sf_listing_id || null,
+      opp_id: l.sf_deal_id || null,
+      sf_contact_id: c.sf_contact_id,
+      new_owner: owner,
+    }).catch(() => ({ ok: false }));
+    if (r && r.ok && r.data && r.data.ok) {
+      c.assigned_to = owner;
+      const el = document.getElementById('mktEngOwner-' + i + '-' + j);
+      if (el) el.textContent = owner;
+      const sfReason = r.data.sf && r.data.sf.reason;
+      showToast('Reassigned to ' + owner + (sfReason === 'sf_reassign_not_configured' ? ' (SF Task owner update pending — Slice 4)' : ''), 'success');
+    } else {
+      showToast('Reassign failed: ' + ((r.data && r.data.error) || r.error || 'unknown'), 'error');
+    }
+  };
+
   function mktLoadBd(i) {
     ['b1', 'b2', 'b3'].forEach(k => {
       const body = document.getElementById('mktSecBody-' + k + '-' + i);
