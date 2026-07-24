@@ -350,12 +350,110 @@
     }
   };
 
-  function mktLoadBd(i) {
+  // ---- Slice 3c: the three BD prospect sections ----
+  S.bd = S.bd || {};
+
+  async function mktLoadBd(i) {
+    const l = S.listings[i];
+    const qs = [];
+    if (l.linked_property_id != null && l.linked_property_id !== '') qs.push('property_id=' + encodeURIComponent(l.linked_property_id));
+    if (l.state) qs.push('state=' + encodeURIComponent(l.state));
     ['b1', 'b2', 'b3'].forEach(k => {
-      const body = document.getElementById('mktSecBody-' + k + '-' + i);
-      if (body) body.innerHTML = '<div class="mkt-empty mkt-empty-sm">Prospects load in Slice 3c.</div>';
+      const b = document.getElementById('mktSecBody-' + k + '-' + i);
+      if (b) b.innerHTML = '<div class="mkt-loading-sm"><span class="spinner"></span></div>';
     });
+    const r = await opsApi('/api/operations?action=marketing_bd&' + qs.join('&')).catch(() => ({ ok: false }));
+    if (!r || !r.ok || !r.data || !r.data.ok) {
+      ['b1', 'b2', 'b3'].forEach(k => {
+        const b = document.getElementById('mktSecBody-' + k + '-' + i);
+        if (b) b.innerHTML = '<div class="mkt-empty mkt-empty-sm">Could not load prospects.</div>';
+      });
+      return;
+    }
+    S.bd[i] = { b1: r.data.b1 || [], b2: r.data.b2 || [], b3: r.data.b3 || [] };
+    ['b1', 'b2', 'b3'].forEach(k => mktRenderBdSection(i, k));
   }
+
+  function mktRenderBdSection(i, k) {
+    const body = document.getElementById('mktSecBody-' + k + '-' + i);
+    if (!body) return;
+    const rows = (S.bd[i] && S.bd[i][k]) || [];
+    const sec = document.getElementById('mktSec-' + k + '-' + i);
+    const sub = sec && sec.querySelector('.mkt-section-sub');
+    if (sub && rows.length) sub.textContent = rows.length + ' owner' + (rows.length === 1 ? '' : 's');
+    if (!rows.length) {
+      const msg = k === 'b1'
+        ? 'No geocoded nearby owners for this listing.'
+        : 'No matching owners in this market.';
+      body.innerHTML = '<div class="mkt-empty mkt-empty-sm">' + msg + '</div>';
+      return;
+    }
+    body.innerHTML = '<div class="mkt-bd-list">' + rows.map((row, j) => mktBdRowHTML(row, i, k, j)).join('') + '</div>';
+  }
+
+  function mktRoeBadge(roe) {
+    if (!roe) return '';
+    const v = roe.verdict || 'safe';
+    const cls = v === 'do_not_call' ? 'mkt-roe-red' : v === 'caution' ? 'mkt-roe-amber' : 'mkt-roe-green';
+    const icon = v === 'do_not_call' ? '⛔' : v === 'caution' ? '⚠' : '✓';
+    return '<span class="mkt-roe ' + cls + '" title="' + mktEsc(roe.headline || '') + '">' + icon + ' ' + mktEsc(roe.headline || v) + '</span>';
+  }
+
+  function mktResearchLinks(owner, state) {
+    const g = q => 'https://www.google.com/search?q=' + encodeURIComponent(q);
+    const o = owner || '';
+    const st = state || '';
+    return '<div class="mkt-research">'
+      + '<span class="mkt-research-label">Research:</span>'
+      + '<a class="mkt-rlink" href="' + g('"' + o + '" ' + st + ' real estate') + '" target="_blank" rel="noopener">Web</a>'
+      + '<a class="mkt-rlink" href="' + g(o + ' costar') + '" target="_blank" rel="noopener">CoStar</a>'
+      + '<a class="mkt-rlink" href="' + g(o + ' ' + st + ' secretary of state business search') + '" target="_blank" rel="noopener">County/SOS</a>'
+      + '</div>';
+  }
+
+  function mktBdRowHTML(row, i, k, j) {
+    const canOpen = !!(row.entity_id || row.owner_name);
+    const canDraft = !!row.entity_id;
+    const note = row.note ? '<div class="mkt-bd-note">' + mktEsc(row.note) + '</div>' : '';
+    const actions = []
+      .concat(canOpen ? '<button class="mkt-act" onclick="mktOpenBdContact(\'' + i + '\',\'' + k + '\',' + j + ')" title="Open Contact 360 (SF-aware)">Contact 360</button>' : '')
+      .concat(canDraft ? '<button class="mkt-act" onclick="mktBdDraft(\'' + i + '\',\'' + k + '\',' + j + ',this)">Draft &amp; Log</button>' : '')
+      .filter(Boolean).join('');
+    return '<div class="mkt-bd-row">'
+      + '<div class="mkt-bd-main">'
+      + '<div class="mkt-bd-name">' + mktEsc(row.owner_name || '(unknown owner)') + '</div>'
+      + '<div class="mkt-bd-ctx">' + mktEsc(row.context || '') + (row.in_pipeline ? ' <span class="mkt-bd-inpipe">· in your pipeline</span>' : '') + '</div>'
+      + note
+      + '<div class="mkt-bd-foot">' + mktRoeBadge(row.roe) + mktResearchLinks(row.owner_name, S.listings[i].state) + '</div>'
+      + '</div>'
+      + '<div class="mkt-bd-actions">' + actions + '</div>'
+      + '</div>';
+  }
+
+  window.mktOpenBdContact = function (i, k, j) {
+    const row = ((S.bd[i] || {})[k] || [])[j];
+    if (!row) return;
+    if (row.entity_id && typeof openContact360 === 'function') { openContact360(row.entity_id, { kind: 'entity', tab: 'Overview' }); return; }
+    if (row.owner_name && typeof openEntityDetailByName === 'function') { openEntityDetailByName(row.owner_name); return; }
+    if (typeof showToast === 'function') showToast('No linked owner record', '');
+  };
+
+  // Outreach on a BD prospect routes through the Draft & Log engine (BD mode).
+  window.mktBdDraft = function (i, k, j, btn) {
+    const row = ((S.bd[i] || {})[k] || [])[j];
+    if (!row || !row.entity_id) { showToast('No linked owner to draft against', ''); return; }
+    if (row.roe && row.roe.verdict === 'do_not_call') {
+      if (!window.confirm((row.roe.headline || 'Do not call') + '\n\nDraft anyway?')) return;
+    }
+    if (typeof cadDraftAndLog === 'function') {
+      // (cadenceId, entityId, templateId, name, domain, contactEmail, contactId, btn)
+      cadDraftAndLog(null, row.entity_id, null, row.owner_name || '', 'dia', '', null, btn);
+    } else {
+      showToast('Draft & Log unavailable', 'error');
+    }
+  };
+
+  function mktLoadBdLegacyNoop() {}
 
   window.mktReload = function () { renderMarketingWorkspace(true); };
 
