@@ -9,9 +9,9 @@
       "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov", "intake-triage", "personal"]
     },
     "chatgpt": {
-      "liveArtifact": "../setup/gpt-actions-system-prompt.txt",
-      "markerBegin": "# CANON:BEGIN",
-      "markerEnd": "# CANON:END",
+      "external": true,
+      "liveArtifact": null,
+      "deliverAs": "GPT Knowledge upload of surfaces/chatgpt.canon.md — Custom GPT instructions cap at 8000 chars, so the canon rides as a Knowledge file (no cap) and the instructions stay a short persona that points at it.",
       "blocks": ["comps", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov"]
     },
     "northmarq": {

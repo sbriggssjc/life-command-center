@@ -11,7 +11,7 @@ How the canon reaches every surface, and how to update them all systematically w
 | **Northmarq Claude (team Project)** | `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md` (paste into Project instructions) | MCP connector (if admin-added); BRIGGS-* knowledge |
 | **Personal Claude** | `~/.claude/skills/*` (comps-engine, briggs-comps, bov-underwriting, …) | MCP connector; BRIGGS-PERSONAL-CONTEXT |
 | **Claude Cowork** | Cowork skills (same skill set) | MCP tools |
-| **ChatGPT** | `docs/setup/gpt-actions-system-prompt.txt` (persona) | GPT Action (`lcc-openapi.yaml`) |
+| **ChatGPT** | persona `docs/setup/gpt-actions-system-prompt.txt` (**≤8000 chars**) + canon uploaded as **GPT Knowledge** = `docs/os/surfaces/chatgpt.canon.md` | GPT Action (`lcc-openapi.yaml`) |
 | **LCC in-app Copilot** | `/api/chat` routing (`api/bridge.js`, `api/_shared/ai.js`) | — |
 | **Engines / data (all surfaces)** | `mcp/` + `api/` — one implementation | Identical JSON on MCP + HTTP |
 | **Knowledge (Copilot/Northmarq)** | `_AI-Context/Copilot-Context/BRIGGS-*` (SharePoint) | re-sync in Studio Knowledge |
@@ -25,8 +25,10 @@ Agent component map in `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md`.
 target. Until then, ChatGPT/Copilot `lcc-openapi.yaml` `servers[0].url` must match the server that actually
 serves all 9 bounded `/api/*` ops — not the web-app-only host.
 
-**Migration status:** Copilot `agent-instructions.md` now carries a generated `CANON:BEGIN…END` region
-(`render --write-live`); paste-and-publish to Studio applies it. ChatGPT persona is next.
+**Migration status:** Copilot `agent-instructions.md` carries a generated `CANON:BEGIN…END` region
+(`render --write-live`); published. **ChatGPT**: instructions cap at 8000 chars, so the canon does NOT embed
+in the persona — it rides as a **GPT Knowledge file** (upload `surfaces/chatgpt.canon.md`, named "LCC-CANON")
+and the persona stays a short pointer. Same pattern applies to any surface with an instruction-length cap.
 
 ## 2. Propagation matrix — which surfaces to update when a canon module changes
 

@@ -55,8 +55,9 @@ body with a one-line redirect to the canonical source in §A (the stub pattern).
 - ✅ Relocated `connected-agent-*.md` into `docs/os/architecture/`; redirect stubs left in `docs/comps-rollout/`.
 - ✅ Migrated Copilot `docs/copilot/agent-instructions.md` to a canon-managed region (`render --write-live`;
   parity ✓). Publish it into Studio to make Copilot fully canon-driven.
-- ✅ Migrated the ChatGPT persona (`docs/setup/gpt-actions-system-prompt.txt`) to a canon-managed region
-  (`render --write-live`; parity ✓). Paste it into the GPT to make ChatGPT canon-driven.
+- ✅ ChatGPT canon-driven via a **Knowledge file** (Custom GPT instructions cap at 8000 chars): the persona
+  `docs/setup/gpt-actions-system-prompt.txt` (~3.6k) stays a short pointer; the canon rides as an uploaded
+  Knowledge file = `docs/os/surfaces/chatgpt.canon.md`. Paste the persona + upload the Knowledge file.
 - ✅ MCP unification Phase 1 LIVE: `api/ai-read.js` proxy + `server.js` routes + openapi briefing path merged
   and deployed to `tranquil-delight`. One base URL for the AI surfaces; engine is now an internal backend.
   Phase 2 (in-process single service, retire standby) optional — `architecture/unification-changeset.md`.
