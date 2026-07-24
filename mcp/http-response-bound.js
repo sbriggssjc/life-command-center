@@ -142,11 +142,32 @@ export function shapeDailyBriefing(result, args = {}) {
       : r;
   const band = (rows) => (Array.isArray(rows) ? rows.slice(0, n).map(pickFields) : rows);
 
+  // Curated intel snapshot (briefing_intel_snapshot): keep the short text
+  // fields whole (analyst_take / capital_markets — deepTrim only touches
+  // objects, so plain strings pass through), cap the verbose jsonb arrays &
+  // objects (market_data / sector_news / reading_list / weekly_changes /
+  // key_numbers / fed_outlook) to top-N and drop any raw blobs, and cap the
+  // priorities bands. A real ~16 KB snapshot stays well under the HTTP ceiling.
+  if (result.source === "briefing_intel_snapshot") {
+    const out = { ...result };
+    for (const k of ["market_data", "sector_news", "reading_list", "weekly_changes", "key_numbers", "fed_outlook"]) {
+      if (out[k] && typeof out[k] === "object") {
+        out[k] = deepTrim(out[k], { arrayCap: n, dropHeavy: true });
+      }
+    }
+    if (out.priorities && typeof out.priorities === "object") {
+      const p = out.priorities;
+      out.priorities = { urgent: band(p.urgent), high: band(p.high), normal: band(p.normal) };
+    }
+    return out;
+  }
+
   if (Array.isArray(result.urgent) || Array.isArray(result.high) || Array.isArray(result.normal)) {
     return { ...result, urgent: band(result.urgent), high: band(result.high), normal: band(result.normal) };
   }
-  // Snapshot path (a single, potentially large briefing row): bound it — cap any
-  // nested arrays to N and drop raw/document blobs — rather than return it whole.
+  // Legacy snapshot path (a single, potentially large `briefing` row): bound it
+  // — cap any nested arrays to N and drop raw/document blobs — rather than
+  // return it whole.
   if (result.briefing) {
     return { ...result, briefing: deepTrim(result.briefing, { arrayCap: n, dropHeavy: true }) };
   }

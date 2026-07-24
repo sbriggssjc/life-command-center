@@ -659,21 +659,22 @@ const TOOL_HANDLERS = {
       // which causes a PostgreSQL 22P02 UUID parse error on action_items.
       const wsId = workspace_id || PRIMARY_WORKSPACE_ID;
 
-      // Try daily_briefing_snapshot first
-      const snapshot = await opsQuery(
-        "GET",
-        `daily_briefing_snapshot?workspace_id=eq.${enc(wsId)}&order=created_at.desc&limit=1`
-      );
-
-      if (snapshot.ok && snapshot.data?.length) {
-        return textResult({
-          source: "daily_briefing_snapshot",
-          briefing: snapshot.data[0],
-        });
-      }
-
-      // Fallback: build from queue/action_items by priority
-      const [urgent, high, normal] = await Promise.all([
+      // The curated intel briefing lives in `briefing_intel_snapshot` (the
+      // `lcc-briefing-intel-snapshot` cron populates it daily; the retired
+      // `daily_briefing_snapshot` table never existed — see the fix note).
+      // It is a GLOBAL snapshot: `workspace_id` is NULL on every row, so we
+      // take the latest by (as_of_date, generated_at) and do NOT filter on
+      // `workspace_id=eq.<ws>` — that matched nothing and always fell through
+      // to the raw action-items fallback. Two variants coexist ('daily' /
+      // 'friday_deep_dive'); the newest snapshot wins regardless of variant.
+      // Action items are ALWAYS fetched now: they ride along as a `priorities`
+      // section of the full briefing, and stand alone only when no snapshot
+      // exists.
+      const [snapshot, urgent, high, normal] = await Promise.all([
+        opsQuery(
+          "GET",
+          `briefing_intel_snapshot?order=as_of_date.desc,generated_at.desc&limit=1`
+        ),
         opsQuery(
           "GET",
           `action_items?workspace_id=eq.${enc(wsId)}&priority=eq.urgent&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
@@ -688,12 +689,38 @@ const TOOL_HANDLERS = {
         ),
       ]);
 
-      return textResult({
-        source: "action_items_fallback",
-        date: new Date().toISOString().split("T")[0],
+      const priorities = {
         urgent: urgent.data || [],
         high: high.data || [],
         normal: normal.data || [],
+      };
+
+      if (snapshot.ok && snapshot.data?.length) {
+        const s = snapshot.data[0];
+        return textResult({
+          source: "briefing_intel_snapshot",
+          as_of_date: s.as_of_date,
+          variant: s.variant,
+          generated_at: s.generated_at,
+          key_numbers: s.key_numbers,
+          market_data: s.market_data,
+          fed_outlook: s.fed_outlook,
+          analyst_take: s.analyst_take,
+          capital_markets: s.capital_markets,
+          sector_news: s.sector_news,
+          reading_list: s.reading_list,
+          weekly_changes: s.weekly_changes,
+          priorities,
+        });
+      }
+
+      // No snapshot exists — fall back to the raw priority action-items only.
+      return textResult({
+        source: "action_items_fallback",
+        date: new Date().toISOString().split("T")[0],
+        urgent: priorities.urgent,
+        high: priorities.high,
+        normal: priorities.normal,
       });
     });
   },

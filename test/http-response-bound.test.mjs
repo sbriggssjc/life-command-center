@@ -103,7 +103,7 @@ describe('shapeDailyBriefing', () => {
     assert.equal(out.urgent[0].id, 'id-0');
   });
 
-  it('bounds the snapshot path (deep-trims the briefing row)', () => {
+  it('bounds the legacy snapshot path (deep-trims the briefing row)', () => {
     const result = {
       source: 'daily_briefing_snapshot',
       briefing: { id: 1, items: Array.from({ length: 100 }, (_, i) => i), raw: 'x'.repeat(9999) },
@@ -111,6 +111,56 @@ describe('shapeDailyBriefing', () => {
     const out = shapeDailyBriefing(result, {});
     assert.equal(out.briefing.items.length <= 10, true);
     assert.equal('raw' in out.briefing, false);
+  });
+
+  it('keeps intel text whole, caps the jsonb arrays, and caps the priorities bands', () => {
+    const result = {
+      source: 'briefing_intel_snapshot',
+      as_of_date: '2026-07-24',
+      variant: 'friday_deep_dive',
+      analyst_take: 'A'.repeat(500),
+      capital_markets: 'C'.repeat(500),
+      key_numbers: Array.from({ length: 6 }, (_, i) => ({ label: `k${i}`, value: i })),
+      sector_news: { dialysis: Array.from({ length: 30 }, (_, i) => `news ${i}`) },
+      reading_list: Array.from({ length: 20 }, (_, i) => ({ title: `t${i}`, raw: 'x'.repeat(9999) })),
+      weekly_changes: Array.from({ length: 20 }, (_, i) => `chg ${i}`),
+      priorities: {
+        urgent: Array.from({ length: 25 }, (_, i) => ({ ...bigRow(i), extra: 'noise' })),
+        high: [],
+        normal: [],
+      },
+    };
+    const out = shapeDailyBriefing(result, {});
+    // Short text fields pass through whole (< 2000-char cap).
+    assert.equal(out.analyst_take.length, 500);
+    assert.equal(out.capital_markets.length, 500);
+    // Verbose jsonb arrays capped to the default 10; raw blobs dropped.
+    assert.equal(out.sector_news.dialysis.length, 10);
+    assert.equal(out.reading_list.length, 10);
+    assert.equal('raw' in out.reading_list[0], false);
+    assert.equal(out.weekly_changes.length, 10);
+    // Priorities bands capped to display fields only.
+    assert.equal(out.priorities.urgent.length, 10);
+    assert.deepEqual(Object.keys(out.priorities.urgent[0]).sort(),
+      ['due_date', 'entity_id', 'id', 'priority', 'status', 'title']);
+  });
+
+  it('keeps a real-size intel snapshot under the HTTP ceiling', () => {
+    const result = {
+      source: 'briefing_intel_snapshot',
+      as_of_date: '2026-07-24',
+      variant: 'friday_deep_dive',
+      analyst_take: 'A'.repeat(3000),
+      capital_markets: 'C'.repeat(3000),
+      key_numbers: Array.from({ length: 6 }, (_, i) => ({ label: `k${i}`, value: i })),
+      sector_news: { dialysis: Array.from({ length: 40 }, (_, i) => 'n'.repeat(500)) },
+      reading_list: Array.from({ length: 20 }, (_, i) => ({ title: `t${i}` })),
+      weekly_changes: Array.from({ length: 40 }, () => 'w'.repeat(500)),
+      priorities: { urgent: [], high: [], normal: [] },
+    };
+    const out = boundHttpToolResult('get_daily_briefing', result, {});
+    assert.equal(JSON.stringify(out).length <= 45000, true);
+    assert.equal(out.source, 'briefing_intel_snapshot');
   });
 });
 
