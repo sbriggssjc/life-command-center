@@ -14,7 +14,7 @@ or *historical* (kept for history; never edit/wire).
 | Surface update procedure | `docs/os/SURFACE-SYNC-PROTOCOL.md` |
 | Agent/surface architecture | `docs/os/architecture/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
 | Instruction enforcement (render/parity) | `docs/os/RENDER-AND-PARITY.md`, `docs/os/tools/*`, `docs/os/canon/blocks/*`, `docs/os/render.manifest.json` |
-| Deployment / MCP unification (one URL) | `docs/os/architecture/mcp-server-unification.md` (repo copy of the SharePoint handoff) + `INFRASTRUCTURE.md` |
+| Deployment / MCP unification (one URL) | `docs/os/architecture/mcp-server-unification.md` (the decision) + `docs/os/architecture/unification-changeset.md` (ready-to-apply changeset + cutover runbook) + `INFRASTRUCTURE.md` |
 | Engine × surface parity | `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` |
 | Deal Agent component map | `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md` |
 | Deal Agent instructions | `docs/copilot/agent-instructions.md` |
@@ -47,6 +47,9 @@ body with a one-line redirect to the canonical source in §A (the stub pattern).
 - ✅ Migrated Copilot `docs/copilot/agent-instructions.md` to a canon-managed region (`render --write-live`;
   parity ✓). Publish it into Studio to make Copilot fully canon-driven.
 - Migrate the ChatGPT persona (`docs/setup/gpt-actions-system-prompt.txt`) to CANON markers next (same bootstrap).
+- ▶ MCP unification: changeset authored (`architecture/unification-changeset.md`) — flag-gated, single
+  implementation, capability-preserving. NOT yet applied to prod; execute via the verify-first cutover runbook
+  (guided curls) before enabling `LCC_MOUNT_MCP=1`.
 
 ## F. Consolidation ledger — one source per capability (corrections tracked, nothing deleted)
 The MCP-unification handoff exposed docs that conflate the two deployments. Correct these once the unify/stopgap
