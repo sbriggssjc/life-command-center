@@ -403,12 +403,12 @@ components:
       type: object
       required: [deal]
       properties:
-        deal: { type: string, description: Deal name, address, or entity id (e.g. "Fresenius Woodland Hills"). }
+        deal: { type: string, description: 'Deal name, address, or entity id (e.g. Fresenius Woodland Hills).' }
     DealCheckpointsRequest:
       type: object
       required: [deal]
       properties:
-        deal: { type: string, description: Deal name, address, or entity id. }
+        deal: { type: string, description: 'Deal name, address, or entity id.' }
         within_days: { type: integer, description: Due-soon window in days (default 14). }
     DealDossier:
       type: object
@@ -444,13 +444,13 @@ components:
             date: { type: string }
             status: { type: string }
             condition: { type: string }
-            flag: { type: string, description: overdue | due-soon | pending | met | waived }
+            flag: { type: string, description: 'overdue | due-soon | pending | met | waived' }
         checkpoints: { type: array, items: { type: object } }
     SfLogActivityRequest:
       type: object
       required: [deal, subject, user_confirmed]
       properties:
-        deal: { type: string, description: Deal name/address/entity id. }
+        deal: { type: string, description: 'Deal name/address/entity id.' }
         subject: { type: string }
         note: { type: string }
         activity_type: { type: string, description: "Call | Email | Meeting (default Call)." }
@@ -461,7 +461,7 @@ components:
       properties:
         deal: { type: string }
         subject: { type: string }
-        due_date: { type: string, description: YYYY-MM-DD }
+        due_date: { type: string, description: 'YYYY-MM-DD' }
         assignee_email: { type: string }
         user_confirmed: { type: boolean }
     SfUpdateOpportunityRequest:
