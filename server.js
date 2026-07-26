@@ -55,6 +55,9 @@ import aiReadHandler from './api/ai-read.js';
 // GOV_API_URL=https://life-command-center-production.up.railway.app.
 import govEvidenceRouter from './api/gov-evidence.js';
 
+import { makeDealDossierTools, makeDealDossierHttpRoutes } from './api/deal-dossier-tools.js';
+import { makeSfWritebackRoutes } from './api/sf-writeback.js';
+
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
