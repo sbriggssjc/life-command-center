@@ -13,6 +13,8 @@ import {
   resolveContextPacket,
 } from "./context-assemble.js";
 import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
+import { makeDealDossierTools, makeDealDossierHttpRoutes } from "../api/deal-dossier-tools.js";
+import { makeSfWritebackRoutes } from "../api/sf-writeback.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
@@ -1830,6 +1832,30 @@ app.get("/", (_req, res) => {
   app.post("/api/query-comps", authenticate, __compsRoutes.queryComps);
   app.post("/api/synthesize-comps", authenticate, __compsRoutes.synthesizeComps);
   console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps");
+}
+
+// ── Deal dossier + Salesforce write-back — tools + REST surface (same engine) ──
+{
+  const logMemory = (a) => TOOL_HANDLERS.log_memory(a);
+
+  const { defs: __ddDefs, handlers: __ddHandlers } = makeDealDossierTools({
+    opsQuery, textResult, withTiming, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
+  });
+  Object.assign(TOOL_DEFINITIONS, __ddDefs);
+  Object.assign(TOOL_HANDLERS, __ddHandlers);
+  console.log("[MCP] Registered deal-dossier tools:", Object.keys(__ddDefs).join(", "));
+
+  // REST surface (POST + JSON body) — the root proxy forwards POST, so these are POST.
+  const __ddRoutes = makeDealDossierHttpRoutes({ opsQuery, enc });
+  app.post("/api/deal/dossier",     authenticate, __ddRoutes.getDossier);
+  app.post("/api/deal/checkpoints", authenticate, __ddRoutes.listCheckpoints);
+
+  // Salesforce write-back — enqueue into sf_sync_queue (confirmation-gated in the module).
+  const __sfRoutes = makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
+  app.post("/api/sf/log-activity",       authenticate, __sfRoutes.logActivity);
+  app.post("/api/sf/create-task",        authenticate, __sfRoutes.createTask);
+  app.post("/api/sf/update-opportunity", authenticate, __sfRoutes.updateOpportunity);
+  console.log("[MCP] Registered deal-dossier + SF write-back HTTP routes");
 }
 
 // ── Read-tool HTTP routes — full surface parity for ChatGPT + Copilot ────────

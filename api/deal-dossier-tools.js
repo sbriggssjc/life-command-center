@@ -142,11 +142,11 @@ export function makeDealDossierTools({ opsQuery, textResult, withTiming, enc, WO
 
 export function makeDealDossierHttpRoutes({ opsQuery, enc }) {
   return {
-    getDossier: async (req, res) => { const out = await readDossier(req.query.deal, { opsQuery, enc }); res.status(out.error ? (out.candidates ? 409 : 400) : 200).json(out); },
+    getDossier: async (req, res) => { const out = await readDossier(req.body?.deal ?? req.query.deal, { opsQuery, enc }); res.status(out.error ? (out.candidates ? 409 : 400) : 200).json(out); },
     listCheckpoints: async (req, res) => {
-      const d = await readDossier(req.query.deal, { opsQuery, enc });
+      const d = await readDossier(req.body?.deal ?? req.query.deal, { opsQuery, enc });
       if (d.error) return res.status(d.candidates ? 409 : 400).json(d);
-      res.json({ entity_id: d.entity_id, name: d.name, ...checkpointFlags(d.milestones, req.query.within_days) });
+      res.json({ entity_id: d.entity_id, name: d.name, ...checkpointFlags(d.milestones, req.body?.within_days ?? req.query.within_days) });
     },
   };
 }

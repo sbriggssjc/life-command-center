@@ -177,6 +177,82 @@ paths:
   # workbook-generation operations — are appended here by the companion prompt
   # CCP_generate_comps_action_chatgpt_copilot.md, under this same server + bearerAuth.
 
+  /api/deal/dossier:
+    post:
+      operationId: getDealDossier
+      summary: Read a deal's dossier — entity snapshot + correspondence/activity + milestones.
+      description: >
+        Returns the deal's entity snapshot plus its correspondence/activity log and milestone
+        timeline, projected from entities + activity_events. Identify the deal by name, address,
+        or entity id (e.g. "Fresenius Woodland Hills").
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DealDossierRequest' }
+      responses:
+        '200': { description: Dossier projection., content: { application/json: { schema: { $ref: '#/components/schemas/DealDossier' } } } }
+        '400': { description: Missing/unmatched deal. }
+        '401': { description: Missing or invalid Bearer token. }
+        '409': { description: Ambiguous deal match (candidates returned). }
+  /api/deal/checkpoints:
+    post:
+      operationId: listDealCheckpoints
+      summary: List a deal's milestone checkpoints, flagging overdue / due-soon.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DealCheckpointsRequest' }
+      responses:
+        '200': { description: Checkpoints., content: { application/json: { schema: { $ref: '#/components/schemas/Checkpoints' } } } }
+        '401': { description: Missing or invalid Bearer token. }
+  /api/sf/log-activity:
+    post:
+      operationId: logSalesforceActivity
+      summary: Queue a Salesforce activity/note on a deal (enqueues sf_sync_queue). Requires confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SfLogActivityRequest' }
+      responses:
+        '202': { description: Queued. }
+        '400': { description: Bad request. }
+        '401': { description: Missing or invalid Bearer token. }
+        '409': { description: Ambiguous deal match. }
+        '428': { description: Confirmation required (resend with user_confirmed=true). }
+  /api/sf/create-task:
+    post:
+      operationId: createSalesforceTask
+      summary: Queue a Salesforce task/follow-up on a deal. Requires confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SfCreateTaskRequest' }
+      responses:
+        '202': { description: Queued. }
+        '400': { description: Bad request. }
+        '401': { description: Missing or invalid Bearer token. }
+        '409': { description: Ambiguous deal match. }
+        '428': { description: Confirmation required. }
+  /api/sf/update-opportunity:
+    post:
+      operationId: updateSalesforceOpportunity
+      summary: Queue a Salesforce Opportunity field update on a deal. Requires confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SfUpdateOpportunityRequest' }
+      responses:
+        '202': { description: Queued. }
+        '400': { description: Bad request (no fields / disallowed field). }
+        '401': { description: Missing or invalid Bearer token. }
+        '409': { description: Ambiguous deal match. }
+        '428': { description: Confirmation required. }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -323,3 +399,78 @@ components:
           type: array
           items: { type: string }
           description: e.g. cap_mismatch, rent_disagreement, price_over_ask (present only when flagged).
+    DealDossierRequest:
+      type: object
+      required: [deal]
+      properties:
+        deal: { type: string, description: Deal name, address, or entity id (e.g. "Fresenius Woodland Hills"). }
+    DealCheckpointsRequest:
+      type: object
+      required: [deal]
+      properties:
+        deal: { type: string, description: Deal name, address, or entity id. }
+        within_days: { type: integer, description: Due-soon window in days (default 14). }
+    DealDossier:
+      type: object
+      properties:
+        entity_id: { type: string }
+        name: { type: string }
+        address: { type: string }
+        city: { type: string }
+        state: { type: string }
+        domain: { type: string }
+        correspondence:
+          type: array
+          items:
+            type: object
+            properties:
+              occurred_at: { type: string }
+              category: { type: string }
+              title: { type: string }
+              body: { type: string }
+              source_type: { type: string }
+              external_url: { type: string }
+        milestones: { type: array, items: { type: object } }
+        activity_count: { type: integer }
+    Checkpoints:
+      type: object
+      properties:
+        entity_id: { type: string }
+        name: { type: string }
+        next_checkpoint:
+          type: object
+          properties:
+            milestone: { type: string }
+            date: { type: string }
+            status: { type: string }
+            condition: { type: string }
+            flag: { type: string, description: overdue | due-soon | pending | met | waived }
+        checkpoints: { type: array, items: { type: object } }
+    SfLogActivityRequest:
+      type: object
+      required: [deal, subject, user_confirmed]
+      properties:
+        deal: { type: string, description: Deal name/address/entity id. }
+        subject: { type: string }
+        note: { type: string }
+        activity_type: { type: string, description: "Call | Email | Meeting (default Call)." }
+        user_confirmed: { type: boolean, description: Must be true — show the resolved deal + change first. }
+    SfCreateTaskRequest:
+      type: object
+      required: [deal, subject, user_confirmed]
+      properties:
+        deal: { type: string }
+        subject: { type: string }
+        due_date: { type: string, description: YYYY-MM-DD }
+        assignee_email: { type: string }
+        user_confirmed: { type: boolean }
+    SfUpdateOpportunityRequest:
+      type: object
+      required: [deal, fields, user_confirmed]
+      properties:
+        deal: { type: string }
+        fields:
+          type: object
+          description: "Whitelisted only: stage, close_date, amount, probability, next_step (confirm SF API names)."
+          additionalProperties: true
+        user_confirmed: { type: boolean }

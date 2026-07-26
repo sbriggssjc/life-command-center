@@ -55,8 +55,8 @@ import aiReadHandler from './api/ai-read.js';
 // GOV_API_URL=https://life-command-center-production.up.railway.app.
 import govEvidenceRouter from './api/gov-evidence.js';
 
-import { makeDealDossierTools, makeDealDossierHttpRoutes } from './api/deal-dossier-tools.js';
-import { makeSfWritebackRoutes } from './api/sf-writeback.js';
+// NOTE: deal-dossier + SF write-back tools/routes live in the MCP engine (mcp/server.js),
+// not here. This host reaches them via the aiReadHandler proxy (see /api/deal/* + /api/sf/* below).
 
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -297,6 +297,15 @@ app.all('/api/queue-summary',     (req, res) => { req.query._mcpTarget = '/api/q
 app.all('/api/pipeline-health',   (req, res) => { req.query._mcpTarget = '/api/pipeline-health';   aiReadHandler(req, res); });
 app.all('/api/recall-memory',     (req, res) => { req.query._mcpTarget = '/api/recall-memory';     aiReadHandler(req, res); });
 app.all('/api/ai/daily-briefing', (req, res) => { req.query._mcpTarget = '/api/daily-briefing';    aiReadHandler(req, res); });
+
+// ── Deal dossier + Salesforce write-back — proxied to the shared MCP engine ──
+// aiReadHandler is a generic authenticated POST-forwarder (the "read" name is historical);
+// it forwards the JSON body (incl. user_confirmed) and returns the engine status verbatim (202/428/409).
+app.all('/api/deal/dossier',         (req, res) => { req.query._mcpTarget = '/api/deal/dossier';         aiReadHandler(req, res); });
+app.all('/api/deal/checkpoints',     (req, res) => { req.query._mcpTarget = '/api/deal/checkpoints';     aiReadHandler(req, res); });
+app.all('/api/sf/log-activity',      (req, res) => { req.query._mcpTarget = '/api/sf/log-activity';      aiReadHandler(req, res); });
+app.all('/api/sf/create-task',       (req, res) => { req.query._mcpTarget = '/api/sf/create-task';       aiReadHandler(req, res); });
+app.all('/api/sf/update-opportunity',(req, res) => { req.query._mcpTarget = '/api/sf/update-opportunity'; aiReadHandler(req, res); });
 
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
