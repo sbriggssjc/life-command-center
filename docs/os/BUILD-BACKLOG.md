@@ -1,4 +1,5 @@
 # Build Backlog — the one resumable punch list
+> **Master sequence & anti-overlap invariant: `UNIFIED-BUILD-PLAN.md`.** This backlog is the checklist; that is the order.
 _Last updated: 2026-07-27._ Everything not-yet-fully-built, grouped, with dependencies + where it's designed.
 Legend: 🔴 not started · 🟡 partially built · 🟢 designed/specced, ready to build · ⚪ optional/roadmap.
 Pick up any item at any time; each points to its design doc.
