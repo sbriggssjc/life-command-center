@@ -18,13 +18,13 @@ async function resolveEntity(deal, { opsQuery, enc }) {
   const key = String(deal || '').trim();
   if (!key) return { error: 'deal (name / address / entity id) is required' };
   if (/^[0-9a-f-]{36}$/i.test(key)) {
-    const r = await opsQuery('GET', `entities?id=eq.${enc(key)}&select=id,name,domain&limit=1`);
+    const r = await opsQuery('GET', `entities?id=eq.${enc(key)}&select=id,name,entity_type,domain&limit=1`);
     if (r.data?.[0]) return { entity: r.data[0] };
   }
   const like = `*${enc(key)}*`;
-  const r = await opsQuery('GET', `entities?entity_type=eq.asset&or=(name.ilike.${like},address.ilike.${like})&select=id,name,domain&limit=6`);
+  const r = await opsQuery('GET', `entities?entity_type=in.(person,asset)&or=(name.ilike.${like},address.ilike.${like})&select=id,name,entity_type,domain&limit=6`);
   const rows = r.data || [];
-  if (!rows.length) return { error: `no asset entity matched "${key}" — refusing to enqueue blind` };
+  if (!rows.length) return { error: `no person or deal matched "${key}" — refusing to enqueue blind` };
   if (rows.length > 1) return { error: 'ambiguous', candidates: rows.map(x => ({ id: x.id, name: x.name })) };
   return { entity: rows[0] };
 }
