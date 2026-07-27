@@ -2833,9 +2833,11 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       const docRes = await domainQuery(
         effectiveMatch.domain,
         'POST',
-        'property_documents',
+        // Idempotent: re-ingesting the same file upserts instead of 409ing on
+        // uix_prop_doc (property_id, file_name). Matches the helper above.
+        'property_documents?on_conflict=property_id,file_name',
         docPayload,
-        { Prefer: 'return=representation' }
+        { Prefer: 'return=representation,resolution=merge-duplicates' }
       );
       if (docRes.ok) {
         const inserted = Array.isArray(docRes.data) ? docRes.data[0] : docRes.data;
