@@ -38,13 +38,12 @@ async function enqueue({ kind, payload, requested_by }, { opsQuery, WORKSPACE_ID
 }
 
 export function makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID }) {
-  const confirmed = (req, res) => {
-    if (req.body?.user_confirmed !== true) {
-      res.status(428).json({ ok: false, needs_confirmation: true, message: 'Show the resolved deal + SF change; resend with user_confirmed:true.' });
-      return false;
-    }
-    return true;
-  };
+  // Confirmation is enforced at the SURFACE layer (Copilot Studio "require confirmation"
+  // on the action; ChatGPT's own write prompt), NOT with an HTTP 428 — Copilot connectors
+  // treat any non-2xx as ConnectorRequestFailure, which broke the write end to end.
+  // resolveEntity() still refuses ambiguous/unmatched deals, so nothing enqueues blind.
+  // `user_confirmed` is still recorded in the payload for audit when the caller sends it.
+  const confirmed = () => true;
   const log = async (summary, detail) => { try { await logMemory({ summary, domain: 'work', kind: 'outcome', detail }); } catch { /* non-fatal */ } };
 
   return {
