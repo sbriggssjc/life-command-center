@@ -70,7 +70,7 @@ export function makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID }
       await log(`Call logged in LCC for ${rec.entity.name}: ${subject}`.slice(0, 200), { entity_id: rec.entity.id, kind: 'log_activity', lcc_activity_id });
       // (2) Salesforce gets a LINK/pointer ONLY — interaction notes are NOT synced out of LCC.
       const lcc_ref = `Logged in LCC (activity ${lcc_activity_id}) — full notes retained in LCC, not synced to Salesforce.`;
-      const ok = await enqueue({ kind: 'log_activity', requested_by: req.body.requested_by,
+      const ok = await enqueue({ kind: 'log_call', requested_by: req.body.requested_by,
         payload: { entity_id: rec.entity.id, activity_type, subject, lcc_activity_id, lcc_ref, link_only: true } }, { opsQuery, WORKSPACE_ID });
       res.status(ok ? 202 : 502).json({ ok, queued: ok, deal: rec.entity.name, lcc_activity_id, salesforce: 'link-only (notes retained in LCC)' });
     },
@@ -94,9 +94,12 @@ export function makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID }
       const bad = Object.keys(fields).filter(k => !ALLOWED.includes(k));
       if (bad.length) return res.status(400).json({ ok: false, error: `fields not allowed: ${bad.join(', ')}` });
       if (!confirmed(req, res)) return;
-      await log(`SF opportunity update queued for ${rec.entity.name}: ${Object.keys(fields).join(', ')}`.slice(0, 200), { entity_id: rec.entity.id, kind: 'update_opportunity', fields });
-      const ok = await enqueue({ kind: 'update_opportunity', requested_by: req.body.requested_by,
-        payload: { entity_id: rec.entity.id, fields } }, { opsQuery, WORKSPACE_ID });
+      // The existing sf_sync_queue poller vocabulary supports STAGE advancement
+      // (advance_opportunity_stage). Other Opportunity fields aren't wired to a poller kind yet.
+      if (!fields.stage) return res.status(400).json({ ok: false, error: 'SF poller currently supports Opportunity STAGE advancement only — send fields.stage. (close_date/amount/etc. need a poller kind first.)' });
+      await log(`SF opportunity stage advance queued for ${rec.entity.name}: ${fields.stage}`.slice(0, 200), { entity_id: rec.entity.id, kind: 'advance_opportunity_stage', fields });
+      const ok = await enqueue({ kind: 'advance_opportunity_stage', requested_by: req.body.requested_by,
+        payload: { entity_id: rec.entity.id, stage: fields.stage } }, { opsQuery, WORKSPACE_ID });
       res.status(ok ? 202 : 502).json({ ok, queued: ok, deal: rec.entity.name });
     },
   };
