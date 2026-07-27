@@ -37,6 +37,8 @@ async function enqueue({ kind, payload, requested_by }, { opsQuery, WORKSPACE_ID
   return r.ok !== false;
 }
 
+const SYSTEM_ACTOR = 'b0000000-0000-0000-0000-000000000001'; // service actor (matches activity_events data)
+
 export function makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID }) {
   // Confirmation is enforced at the SURFACE layer (Copilot Studio "require confirmation"
   // on the action; ChatGPT's own write prompt), NOT with an HTTP 428 — Copilot connectors
@@ -52,10 +54,25 @@ export function makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID }
       const rec = await resolveEntity(req.body?.deal, { opsQuery, enc });
       if (rec.error) return res.status(rec.candidates ? 409 : 400).json(rec);
       if (!confirmed(req, res)) return;
-      await log(`SF activity queued for ${rec.entity.name}: ${req.body.subject || req.body.note || ''}`.slice(0, 200), { entity_id: rec.entity.id, kind: 'log_activity' });
+      const subject = req.body.subject || 'Call';
+      const note = req.body.note || '';
+      const activity_type = req.body.activity_type || 'Call';
+      const cat = ({ email: 'email', meeting: 'meeting' })[String(activity_type).toLowerCase()] || 'call';
+      // (1) System of record: the FULL interaction detail lives in LCC (activity_events call row on the deal).
+      const lcc_activity_id = globalThis.crypto.randomUUID();
+      try {
+        await opsQuery('POST', 'activity_events', {
+          id: lcc_activity_id, workspace_id: WORKSPACE_ID, actor_id: SYSTEM_ACTOR, visibility: 'shared',
+          category: cat, title: subject, body: note, entity_id: rec.entity.id,
+          source_type: 'lcc:copilot', metadata: { logged_via: 'copilot', sf_link_only: true },
+        });
+      } catch { /* non-fatal: still queue the SF link */ }
+      await log(`Call logged in LCC for ${rec.entity.name}: ${subject}`.slice(0, 200), { entity_id: rec.entity.id, kind: 'log_activity', lcc_activity_id });
+      // (2) Salesforce gets a LINK/pointer ONLY — interaction notes are NOT synced out of LCC.
+      const lcc_ref = `Logged in LCC (activity ${lcc_activity_id}) — full notes retained in LCC, not synced to Salesforce.`;
       const ok = await enqueue({ kind: 'log_activity', requested_by: req.body.requested_by,
-        payload: { entity_id: rec.entity.id, activity_type: req.body.activity_type || 'Call', subject: req.body.subject, note: req.body.note } }, { opsQuery, WORKSPACE_ID });
-      res.status(ok ? 202 : 502).json({ ok, queued: ok, deal: rec.entity.name });
+        payload: { entity_id: rec.entity.id, activity_type, subject, lcc_activity_id, lcc_ref, link_only: true } }, { opsQuery, WORKSPACE_ID });
+      res.status(ok ? 202 : 502).json({ ok, queued: ok, deal: rec.entity.name, lcc_activity_id, salesforce: 'link-only (notes retained in LCC)' });
     },
     // POST { deal, subject, due_date?, assignee_email?, user_confirmed }
     createTask: async (req, res) => {
