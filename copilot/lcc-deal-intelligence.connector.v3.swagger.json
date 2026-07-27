@@ -6039,7 +6039,25 @@
                   "type": "string"
                 },
                 "next_checkpoint": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "milestone": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "condition": {
+                      "type": "string"
+                    },
+                    "flag": {
+                      "type": "string",
+                      "description": "overdue | due-soon | pending | met | waived"
+                    }
+                  }
                 },
                 "checkpoints": {
                   "type": "array",
@@ -6198,7 +6216,30 @@
                 },
                 "fields": {
                   "type": "object",
-                  "description": "Whitelisted only: stage, close_date, amount, probability, next_step (confirm SF API names)."
+                  "description": "Whitelisted SF Opportunity fields to update (all optional).",
+                  "properties": {
+                    "stage": {
+                      "type": "string",
+                      "x-ms-summary": "Stage"
+                    },
+                    "close_date": {
+                      "type": "string",
+                      "x-ms-summary": "Close date",
+                      "description": "YYYY-MM-DD"
+                    },
+                    "amount": {
+                      "type": "number",
+                      "x-ms-summary": "Amount"
+                    },
+                    "probability": {
+                      "type": "number",
+                      "x-ms-summary": "Probability"
+                    },
+                    "next_step": {
+                      "type": "string",
+                      "x-ms-summary": "Next step"
+                    }
+                  }
                 },
                 "user_confirmed": {
                   "type": "boolean",
