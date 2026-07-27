@@ -3419,12 +3419,7 @@
                 "deal": {
                   "type": "string",
                   "x-ms-summary": "Deal",
-                  "description": "Deal name, address, or entity id."
-                },
-                "within_days": {
-                  "type": "integer",
-                  "x-ms-summary": "Within days",
-                  "description": "Due-soon window in days (default 14)."
+                  "description": "Deal name, address, or entity id (e.g. Fresenius Woodland Hills)."
                 }
               }
             }
@@ -3442,29 +3437,9 @@
                 "name": {
                   "type": "string"
                 },
-                "next_checkpoint": {
-                  "type": "object",
-                  "properties": {
-                    "milestone": {
-                      "type": "string"
-                    },
-                    "date": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "string"
-                    },
-                    "condition": {
-                      "type": "string"
-                    },
-                    "flag": {
-                      "type": "string",
-                      "description": "overdue | due-soon | pending | met | waived"
-                    }
-                  }
-                },
                 "checkpoints": {
                   "type": "array",
+                  "description": "Milestone checkpoints, each flagged overdue/due-soon/pending/met/waived.",
                   "items": {
                     "type": "object"
                   }
