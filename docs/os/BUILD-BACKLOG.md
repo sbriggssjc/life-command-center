@@ -23,6 +23,25 @@ Design: `architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md`
 - 🟢 **B4. Idempotency key** on `logActivity` (prevents dup activity_events on connector retry).
 - 🟢 **B5. Repeatable contact onboarding** — resolve a deal's roster into LCC + link SF (Frank Meyrath was manual).
 
+## NBA. Next-Best-Action layer + App layout  (the unifying synthesis — sits ABOVE all domains)
+Design: `architecture/next-best-action-and-app-layout.md`
+- 🟢 **NBA1. All domains emit `action_items`** — one universal action store (exists, barely used); adapters from reconcile/comps/BOV/lease/cadence/marketing. Start with E.
+- 🟢 **NBA2. Generalize the ranker** — extend `v_priority_queue` bands to score every action type; expose `next_best_action(user, context)`.
+- 🟢 **NBA3. App "Today" home** — ranked next-best-action stream + one-tap execution; drill to dossier/pipeline/listing/worklists; team→user→role lenses.
+- 🟢 **NBA4. Domain F feeds** — listing-scoped likely-buyers (F1) + buyer-intent boost (F2) into the stream.
+- 🟢 **NBA5. Cross-surface parity** — every surface reads the same queue (`get_queue_summary`/`GetMyExecutionQueue`).
+
+## F. Marketing & Audience Expansion (Domain F — next frontier after E)
+Frame: `LCC-SYSTEM-MAP.md`
+- 🟡 **F1. Ownership-of-similar "likely buyers" query** — rank likely acquirers for a listing from `entity_relationships` (owns/purchases) + owner-reconcile. Data exists; logic doesn't.
+- 🔴 **F2. Buyer-intent ingestion** — webhits / OM downloads / saved searches (CREXi/Buildout/LoopNet) → `activity_events` intent touchpoints on buyer entities. **Genuinely unbuilt.**
+- 🟡 **F3. Investor-outreach manager** (= Track1 A8) — consumes F1+F2 to drive prioritized broad-marketing outreach.
+- ⚪ **F4. OM distribution + engagement tracking** loop.
+
+## G. Cross-cutting principles (design invariants to hold)
+- 🟢 **G1. Vertical-neutral build** — quarantine asset-type logic to 3 plug-in points (comps source, BOV skill, enrichment). Adding net-lease/other = new vertical value + those 3, no spine change. `LCC-SYSTEM-MAP.md`.
+- 🟢 **G2. Anti-overlap invariant** — all domains read/write the shared substrates; no sibling stores. `UNIFIED-BUILD-PLAN.md`.
+
 ## C. OS rollout  (from BUILD-STATUS.md "what done needs")
 - 🔴 **C0. `git push`** — commit this session's changes (mcp/sf-writeback.js, connector v3/v4, all the new docs). ← do first.
 - 🟡 **C1. Surface applies** — paste ChatGPT persona; sync Northmarq / Personal / Cowork bundles (parity ✓, paste pending).
