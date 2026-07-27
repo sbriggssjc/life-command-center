@@ -105,10 +105,15 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       }
 
       // Upsert bd_opportunities on sf_opp_id (idempotent — H5)
+      // is_open is a GENERATED column = (closed_at IS NULL) — never write it directly;
+      // openness derives from closed_at. Set closed_at/closed_won only when the deal is closed.
+      const isClosed = stage === 'closed';
       const row = {
         workspace_id: WORKSPACE_ID, entity_id: rec.entity_id, sf_opp_id: b.sf_opp_id,
-        stage, is_open: stage !== 'closed',
+        stage,
         amount: (b.amount ?? null), expected_close_date: (b.close_date || null),
+        closed_at: isClosed ? new Date().toISOString() : null,
+        closed_won: isClosed ? true : null,
         owner_user_id, vertical: (b.vertical || null), last_synced_at: new Date().toISOString(),
         metadata: b.owner_sf_user_id && !owner_user_id ? { owner_sf_user_id: b.owner_sf_user_id } : {},
       };
