@@ -15,6 +15,7 @@ import {
 import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
 import { makeDealDossierTools, makeDealDossierHttpRoutes } from "./deal-dossier-tools.js";
 import { makeSfWritebackRoutes } from "./sf-writeback.js";
+import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
@@ -1855,7 +1856,11 @@ app.get("/", (_req, res) => {
   app.post("/api/sf/log-activity",       authenticate, __sfRoutes.logActivity);
   app.post("/api/sf/create-task",        authenticate, __sfRoutes.createTask);
   app.post("/api/sf/update-opportunity", authenticate, __sfRoutes.updateOpportunity);
-  console.log("[MCP] Registered deal-dossier + SF write-back HTTP routes");
+
+  // Inbound SF Opportunity -> LCC deal backbone (BUILD 01) — idempotent on (workspace_id, sf_opp_id).
+  const __oppSync = makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
+  app.post("/api/pipeline/ingest-opportunity", authenticate, __oppSync.ingest);
+  console.log("[MCP] Registered deal-dossier + SF write-back + opportunity-sync HTTP routes");
 }
 
 // ── Read-tool HTTP routes — full surface parity for ChatGPT + Copilot ────────
