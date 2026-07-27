@@ -1,7 +1,7 @@
 # Build Status — where the OS architecture actually stands
 
 One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo, pending a manual apply ·
-📐 designed/specced, not built · 🚫 excluded by decision · 🔮 roadmap. Last updated: 2026-07-24.
+📐 designed/specced, not built · 🚫 excluded by decision · 🔮 roadmap. Last updated: 2026-07-27.
 
 ## Foundation (the consistency contract)
 - ✅ **Canon** — `docs/os/canon/` (8 topic modules + blocks) is the single source of the rules.
@@ -46,6 +46,21 @@ One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo,
 - ✅ **Personal binding** — `canon/personal.md` (same brain/memory/voice, scoped off team surfaces).
 - ✅ **Access/device topology** — `ACCESS-TOPOLOGY.md` maps devices × storage × surfaces; flags the D-drive
   island; gives the personal-project homing rules.
+
+## Deal intelligence — dossier + Salesforce write-back (NEW, 2026-07-27)
+- ✅ **Deal Dossier** — `get_deal_dossier` / `list_deal_checkpoints` LIVE on the engine; a per-deal projection
+  over `entities` + `activity_events` (snapshot + milestone timeline w/ overdue/due-soon flags + correspondence).
+  Fresenius Woodland Hills seeded. Read proven on Copilot + the connector.
+- ✅ **Salesforce write-back (LCC-brokered, link-only)** — LIVE end to end. LCC is system of record; deal calls
+  stay in LCC; BD calls with a person post a link-only SF Task (`Description="Ref: <lcc_activity_id>"`, notes
+  never egress). `mcp/sf-writeback.js` → `sf_sync_queue` → PA "LCC → SF Queue Drainer" → existing SF Task flow.
+  Proven with Frank Meyrath (SF Task `00TVs00001ND0eFMAT`).
+- ✅ **Canonical connector** — `copilot/lcc-deal-intelligence.connector.v4.swagger.json` (53 ops, de-duped,
+  dialog-safe). Full resume guide: `architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md`.
+- ⏳ **Drainer → other kinds** — extend to `create_task` + `advance_opportunity_stage` (pattern proven for log_call).
+- 📐 **Proactive Deal Monitor** — the automation-plane loop that reads `list_deal_checkpoints` on a schedule and
+  acts on overdue/due-soon milestones (notify / draft / update). Foundation now exists; loop not yet built.
+- 📐 **Mail-intake → dossier** — Outlook deal-mail distilled into `activity_events` so correspondence auto-appends.
 
 ## Consolidation & hygiene
 - ✅ **Graveyard** — superseded files moved to `_superseded/` with an index; back-compat items documented.
