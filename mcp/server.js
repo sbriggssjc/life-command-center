@@ -13,8 +13,8 @@ import {
   resolveContextPacket,
 } from "./context-assemble.js";
 import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
-import { makeDealDossierTools, makeDealDossierHttpRoutes } from "../api/deal-dossier-tools.js";
-import { makeSfWritebackRoutes } from "../api/sf-writeback.js";
+import { makeDealDossierTools, makeDealDossierHttpRoutes } from "./deal-dossier-tools.js";
+import { makeSfWritebackRoutes } from "./sf-writeback.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
