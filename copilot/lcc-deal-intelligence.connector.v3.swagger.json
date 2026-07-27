@@ -107,7 +107,8 @@
                 },
                 "params": {
                   "type": "object",
-                  "description": "Action-specific parameters (see individual action schemas)"
+                  "description": "Action-specific parameters (see individual action schemas)",
+                  "additionalProperties": true
                 },
                 "surface": {
                   "type": "string",
@@ -139,7 +140,8 @@
                   "type": "string"
                 },
                 "data": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "requires_confirmation": {
                   "type": "boolean"
@@ -204,7 +206,8 @@
               "properties": {
                 "briefing": {
                   "type": "object",
-                  "description": "Structured briefing with priority sections"
+                  "description": "Structured briefing with priority sections",
+                  "additionalProperties": true
                 },
                 "generated_at": {
                   "type": "string",
@@ -263,7 +266,8 @@
               "properties": {
                 "briefing": {
                   "type": "object",
-                  "description": "Structured briefing with priority sections"
+                  "description": "Structured briefing with priority sections",
+                  "additionalProperties": true
                 },
                 "generated_at": {
                   "type": "string",
@@ -1116,7 +1120,8 @@
               "type": "object",
               "properties": {
                 "dossier": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "provider": {
                   "type": "string"
@@ -1169,7 +1174,8 @@
               "type": "object",
               "properties": {
                 "dossier": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "provider": {
                   "type": "string"
@@ -1218,7 +1224,8 @@
               "properties": {
                 "contact": {
                   "type": "object",
-                  "description": "Contact profile with engagement metrics and relationship health"
+                  "description": "Contact profile with engagement metrics and relationship health",
+                  "additionalProperties": true
                 },
                 "response": {
                   "type": "string",
@@ -1267,7 +1274,8 @@
               "properties": {
                 "contact": {
                   "type": "object",
-                  "description": "Contact profile with engagement metrics and relationship health"
+                  "description": "Contact profile with engagement metrics and relationship health",
+                  "additionalProperties": true
                 },
                 "response": {
                   "type": "string",
@@ -1326,7 +1334,8 @@
               "properties": {
                 "intelligence": {
                   "type": "object",
-                  "description": "Pipeline metrics and analysis"
+                  "description": "Pipeline metrics and analysis",
+                  "additionalProperties": true
                 }
               }
             }
@@ -1380,7 +1389,8 @@
               "properties": {
                 "intelligence": {
                   "type": "object",
-                  "description": "Pipeline metrics and analysis"
+                  "description": "Pipeline metrics and analysis",
+                  "additionalProperties": true
                 }
               }
             }
@@ -1526,7 +1536,8 @@
               "properties": {
                 "counts": {
                   "type": "object",
-                  "description": "Categorized work counts"
+                  "description": "Categorized work counts",
+                  "additionalProperties": true
                 }
               }
             }
@@ -1570,7 +1581,8 @@
               "properties": {
                 "counts": {
                   "type": "object",
-                  "description": "Categorized work counts"
+                  "description": "Categorized work counts",
+                  "additionalProperties": true
                 }
               }
             }
@@ -1608,7 +1620,8 @@
                 },
                 "data": {
                   "type": "object",
-                  "description": "Data payload to render into the card"
+                  "description": "Data payload to render into the card",
+                  "additionalProperties": true
                 }
               },
               "required": [
@@ -1626,7 +1639,8 @@
               "properties": {
                 "card": {
                   "type": "object",
-                  "description": "Adaptive card JSON"
+                  "description": "Adaptive card JSON",
+                  "additionalProperties": true
                 }
               }
             }
@@ -1663,7 +1677,8 @@
                 },
                 "data": {
                   "type": "object",
-                  "description": "Data payload to render into the card"
+                  "description": "Data payload to render into the card",
+                  "additionalProperties": true
                 }
               },
               "required": [
@@ -1681,7 +1696,8 @@
               "properties": {
                 "card": {
                   "type": "object",
-                  "description": "Adaptive card JSON"
+                  "description": "Adaptive card JSON",
+                  "additionalProperties": true
                 }
               }
             }
@@ -1726,7 +1742,8 @@
               "type": "object",
               "properties": {
                 "job": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -1773,7 +1790,8 @@
               "type": "object",
               "properties": {
                 "job": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -2923,7 +2941,8 @@
               "properties": {
                 "template": {
                   "type": "object",
-                  "description": "Full template definition"
+                  "description": "Full template definition",
+                  "additionalProperties": true
                 }
               }
             }
@@ -2967,7 +2986,8 @@
               "properties": {
                 "template": {
                   "type": "object",
-                  "description": "Full template definition"
+                  "description": "Full template definition",
+                  "additionalProperties": true
                 }
               }
             }
@@ -2999,7 +3019,8 @@
                 },
                 "context": {
                   "type": "object",
-                  "description": "Merged context payload with contact, property, listing data"
+                  "description": "Merged context payload with contact, property, listing data",
+                  "additionalProperties": true
                 },
                 "strict": {
                   "type": "boolean",
@@ -3021,10 +3042,12 @@
               "properties": {
                 "draft": {
                   "type": "object",
-                  "description": "Rendered draft with subject, body, variable resolution status"
+                  "description": "Rendered draft with subject, body, variable resolution status",
+                  "additionalProperties": true
                 },
                 "metadata": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -3055,7 +3078,8 @@
                 },
                 "context": {
                   "type": "object",
-                  "description": "Merged context payload with contact, property, listing data"
+                  "description": "Merged context payload with contact, property, listing data",
+                  "additionalProperties": true
                 },
                 "strict": {
                   "type": "boolean",
@@ -3077,10 +3101,12 @@
               "properties": {
                 "draft": {
                   "type": "object",
-                  "description": "Rendered draft with subject, body, variable resolution status"
+                  "description": "Rendered draft with subject, body, variable resolution status",
+                  "additionalProperties": true
                 },
                 "metadata": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -3112,13 +3138,15 @@
                 "contacts": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   },
                   "description": "Array of contact context objects"
                 },
                 "shared_context": {
                   "type": "object",
-                  "description": "Shared listing/property context merged with each contact"
+                  "description": "Shared listing/property context merged with each contact",
+                  "additionalProperties": true
                 },
                 "strict": {
                   "type": "boolean"
@@ -3177,13 +3205,15 @@
                 "contacts": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   },
                   "description": "Array of contact context objects"
                 },
                 "shared_context": {
                   "type": "object",
-                  "description": "Shared listing/property context merged with each contact"
+                  "description": "Shared listing/property context merged with each contact",
+                  "additionalProperties": true
                 },
                 "strict": {
                   "type": "boolean"
@@ -3279,7 +3309,8 @@
               "properties": {
                 "send": {
                   "type": "object",
-                  "description": "Created template_send record"
+                  "description": "Created template_send record",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -3349,7 +3380,8 @@
               "properties": {
                 "send": {
                   "type": "object",
-                  "description": "Created template_send record"
+                  "description": "Created template_send record",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -3572,7 +3604,8 @@
                 },
                 "summary": {
                   "type": "object",
-                  "description": "Counts by status: needs_revision, underperforming, stale, healthy"
+                  "description": "Counts by status: needs_revision, underperforming, stale, healthy",
+                  "additionalProperties": true
                 },
                 "evaluations": {
                   "type": "array",
@@ -3638,7 +3671,8 @@
                 },
                 "summary": {
                   "type": "object",
-                  "description": "Counts by status: needs_revision, underperforming, stale, healthy"
+                  "description": "Counts by status: needs_revision, underperforming, stale, healthy",
+                  "additionalProperties": true
                 },
                 "evaluations": {
                   "type": "array",
@@ -3716,11 +3750,13 @@
                 },
                 "t011_same_asset": {
                   "type": "object",
-                  "description": "T-011 match results (same asset type/state)"
+                  "description": "T-011 match results (same asset type/state)",
+                  "additionalProperties": true
                 },
                 "t012_geographic": {
                   "type": "object",
-                  "description": "T-012 match results (geographic proximity)"
+                  "description": "T-012 match results (geographic proximity)",
+                  "additionalProperties": true
                 },
                 "total_queued": {
                   "type": "integer"
@@ -3784,11 +3820,13 @@
                 },
                 "t011_same_asset": {
                   "type": "object",
-                  "description": "T-011 match results (same asset type/state)"
+                  "description": "T-011 match results (same asset type/state)",
+                  "additionalProperties": true
                 },
                 "t012_geographic": {
                   "type": "object",
-                  "description": "T-012 match results (geographic proximity)"
+                  "description": "T-012 match results (geographic proximity)",
+                  "additionalProperties": true
                 },
                 "total_queued": {
                   "type": "integer"
@@ -3853,7 +3891,8 @@
               "properties": {
                 "document": {
                   "type": "object",
-                  "description": "Generated document content"
+                  "description": "Generated document content",
+                  "additionalProperties": true
                 },
                 "provider": {
                   "type": "string"
@@ -3917,7 +3956,8 @@
               "properties": {
                 "document": {
                   "type": "object",
-                  "description": "Generated document content"
+                  "description": "Generated document content",
+                  "additionalProperties": true
                 },
                 "provider": {
                   "type": "string"
@@ -3991,7 +4031,8 @@
               "properties": {
                 "task": {
                   "type": "object",
-                  "description": "Created To Do task"
+                  "description": "Created To Do task",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -4064,7 +4105,8 @@
               "properties": {
                 "task": {
                   "type": "object",
-                  "description": "Created To Do task"
+                  "description": "Created To Do task",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -4117,7 +4159,8 @@
               "properties": {
                 "guidance": {
                   "type": "object",
-                  "description": "Merge preview with field-by-field comparison"
+                  "description": "Merge preview with field-by-field comparison",
+                  "additionalProperties": true
                 }
               }
             }
@@ -4166,7 +4209,8 @@
               "properties": {
                 "guidance": {
                   "type": "object",
-                  "description": "Merge preview with field-by-field comparison"
+                  "description": "Merge preview with field-by-field comparison",
+                  "additionalProperties": true
                 }
               }
             }
@@ -4498,7 +4542,8 @@
               "type": "object",
               "properties": {
                 "item": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -4566,7 +4611,8 @@
               "type": "object",
               "properties": {
                 "item": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -4655,7 +4701,8 @@
               "properties": {
                 "action": {
                   "type": "object",
-                  "description": "Created action item"
+                  "description": "Created action item",
+                  "additionalProperties": true
                 },
                 "inbox_status": {
                   "type": "string"
@@ -4736,7 +4783,8 @@
               "properties": {
                 "action": {
                   "type": "object",
-                  "description": "Created action item"
+                  "description": "Created action item",
+                  "additionalProperties": true
                 },
                 "inbox_status": {
                   "type": "string"
@@ -4812,7 +4860,8 @@
               "type": "object",
               "properties": {
                 "action": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -4881,7 +4930,8 @@
               "type": "object",
               "properties": {
                 "action": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -4945,7 +4995,8 @@
               "type": "object",
               "properties": {
                 "action": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -5003,7 +5054,8 @@
               "type": "object",
               "properties": {
                 "action": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "ok": {
                   "type": "boolean"
@@ -5038,7 +5090,8 @@
                 },
                 "outcome": {
                   "type": "object",
-                  "description": "Research outcome data"
+                  "description": "Research outcome data",
+                  "additionalProperties": true
                 },
                 "followup_title": {
                   "type": "string"
@@ -5074,7 +5127,8 @@
                   "type": "string"
                 },
                 "action": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -5105,7 +5159,8 @@
                 },
                 "outcome": {
                   "type": "object",
-                  "description": "Research outcome data"
+                  "description": "Research outcome data",
+                  "additionalProperties": true
                 },
                 "followup_title": {
                   "type": "string"
@@ -5141,7 +5196,8 @@
                   "type": "string"
                 },
                 "action": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -5460,7 +5516,8 @@
                   }
                 },
                 "seed_data": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 }
               },
               "required": [
@@ -5583,7 +5640,8 @@
                   "type": "boolean"
                 },
                 "entity": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": true
                 },
                 "recent_interactions": {
                   "type": "array",
@@ -5770,13 +5828,15 @@
                 "comps": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   },
                   "description": "Canonical comp rows"
                 },
                 "meta": {
                   "type": "object",
-                  "description": "returned/by_source/warnings"
+                  "description": "returned/by_source/warnings",
+                  "additionalProperties": true
                 },
                 "markdown": {
                   "type": "string",
@@ -5900,13 +5960,15 @@
                 "comps": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   },
                   "description": "Canonical comp rows"
                 },
                 "meta": {
                   "type": "object",
-                  "description": "returned/by_source/warnings"
+                  "description": "returned/by_source/warnings",
+                  "additionalProperties": true
                 },
                 "markdown": {
                   "type": "string",
@@ -5973,13 +6035,15 @@
                   "type": "array",
                   "description": "Correspondence + activity log.",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   }
                 },
                 "milestones": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   }
                 },
                 "activity_count": {
@@ -6037,7 +6101,8 @@
                   "type": "array",
                   "description": "Milestone checkpoints, each flagged overdue/due-soon/pending/met/waived.",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   }
                 }
               }
