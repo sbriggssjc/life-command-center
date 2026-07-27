@@ -17,6 +17,12 @@ in-tenant execution door** (M365 read/write).
   `bd_opportunities` + `unified_contacts`. **Out:** LCC-brokered write-back → drainer → SF (**live**).
 - **Web / enrichment** — ownership data (reconcile), comps sources (CoStar), **buyer-intent (webhits/OM downloads — NOT yet)**.
 
+## Fact Ingestion & Propagation (foundational — beneath the domains)
+The brain LEARNS from every point and stays coherent: every learned fact (lease abstraction, closing, extension,
+email, enrichment, SF) is written through `lcc_merge_field` (+source/priority) into canonical facts, and every change
+propagates to all consumers. Design: `architecture/fact-ingestion-and-propagation.md`. Domains are producers/consumers;
+this layer keeps them consistent.
+
 ## The Next-Best-Action layer (ABOVE the domains — the synthesis)
 All six domains emit work into ONE `action_items` store, ranked by ONE band-scorer into each user's prioritized
 "next best action" stream — which is the backbone of the app's push-forward. Design:

@@ -38,6 +38,25 @@ Frame: `LCC-SYSTEM-MAP.md`
 - 🟡 **F3. Investor-outreach manager** (= Track1 A8) — consumes F1+F2 to drive prioritized broad-marketing outreach.
 - ⚪ **F4. OM distribution + engagement tracking** loop.
 
+## FP. Fact Ingestion & Propagation  (foundational data-coherence layer — `architecture/fact-ingestion-and-propagation.md`)
+- 🟢 **FP1. Coverage audit** — every learning point writes-through `lcc_merge_field` (+source) and emits propagation; list ad-hoc writers.
+- 🟢 **FP2. Canonical lease record + lease-abstraction merge writer** — lease structure becomes first-class + provenanced (your lease example).
+- 🟢 **FP3. Closing propagator** — ownership edge + **sale-comp creation** + deal-close + SF + dossier from one closing event.
+- 🟡 **FP4. Generalize propagation** on `sync_inflight`/`listing_events` rails with H5 idempotency + dead-letter.
+
+## H. Cross-cutting layers to DESIGN (pre-build review — `architecture/design-considerations.md` · **designs in `architecture/cross-cutting-design.md`**)
+- 🟢 **H1. Identity, Users, Roles & Permissions (RBAC)** — biggest gap; design **before** the app "Today" home.
+- 🟢 **H2. Feedback / learning loop** — outcomes → tune cadence/scoring/tiering; build NBA ranker as configurable weights from day one.
+- 🟢 **H3. Autonomy & Trust ladder** — one policy for autonomous vs propose vs confirm, per action-type.
+- 🟢 **H4. Lifecycle off-ramps** — lost / dormant / revived deals + account attrition.
+- 🟢 **H5. Pipeline resilience & explainability** — idempotency, dead-letter, reconciliation, self-monitoring, "why".
+
+## R. Redesign candidates (fix before building further on them)
+- 🟡 **R1. Dossier `.md` = pure render of the LCC dossier** (one writer; kill drift).
+- 🟡 **R2. Collapse two-server topology** (unification Phase 2) — killed a class of deploy bugs this session.
+- 🟡 **R3. Commit to the v4 connector repave** — end v3/v4 drift.
+- 🟢 **R4. NBA ranker = configurable weights** (ties H2).
+
 ## G. Cross-cutting principles (design invariants to hold)
 - 🟢 **G1. Vertical-neutral build** — quarantine asset-type logic to 3 plug-in points (comps source, BOV skill, enrichment). Adding net-lease/other = new vertical value + those 3, no spine change. `LCC-SYSTEM-MAP.md`.
 - 🟢 **G2. Anti-overlap invariant** — all domains read/write the shared substrates; no sibling stores. `UNIFIED-BUILD-PLAN.md`.
