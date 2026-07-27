@@ -47,16 +47,27 @@ async function resolveDealEntity(body, { opsQuery, enc, WORKSPACE_ID }) {
     if (linked.data?.[0]?.entity_id) return { entity_id: linked.data[0].entity_id, created: false };
   }
   const { tenant, city, state } = parseDealName(name);
-  // 2. Match an existing asset by city + state + tenant token (robust to name-format differences)
+  const tok = String(tenant || '').split(/\s+/)[0].toLowerCase();
+  // 2. Resolve by city + state. LCC assets are frequently named by ADDRESS
+  //    (e.g. "2155 Main Street East, Snellville, GA") with no tenant string on
+  //    the row, so the tenant token is used ONLY to break collisions — never as
+  //    a hard pre-filter (that would miss address-named assets and duplicate them).
   if (city) {
-    let q = `entities?entity_type=eq.asset&city=ilike.${enc('*' + city + '*')}`;
+    let q = `entities?entity_type=eq.asset&city=ilike.${enc(city)}`;
     if (state) q += `&state=eq.${enc(state)}`;
-    if (tenant) q += `&name=ilike.${enc('*' + tenant.split(/\s+/)[0] + '*')}`;
-    q += `&select=id,name,city,state&limit=6`;
+    q += `&select=id,name,address,canonical_name,domain&limit=60`;
     const r = await opsQuery('GET', q);
     const rows = r.data || [];
     if (rows.length === 1) return { entity_id: rows[0].id, created: false };
-    if (rows.length > 1) return { ambiguous: true, candidates: rows.map(x => ({ id: x.id, name: x.name })) };
+    if (rows.length > 1) {
+      // Collision: prefer the asset whose name/address/canonical_name contains the tenant token.
+      const hits = tok
+        ? rows.filter(x => `${x.name} ${x.address || ''} ${x.canonical_name || ''}`.toLowerCase().includes(tok))
+        : [];
+      if (hits.length === 1) return { entity_id: hits[0].id, created: false };
+      return { ambiguous: true, tenant, city, state,
+               candidates: rows.map(x => ({ id: x.id, name: x.name })) };
+    }
   }
   // 3. Create the deal entity (source-tagged; FP: convert to lcc_merge_field when the fact-fabric writer lands)
   const id = globalThis.crypto.randomUUID();
