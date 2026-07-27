@@ -154,7 +154,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/QueryCompsRequest' }
       responses:
-        '200': { description: Ranked, de-duplicated comp set., content: { application/json: { schema: { $ref: '#/components/schemas/CompsResponse' } } } }
+        '200': { description: 'Ranked, de-duplicated comp set.', content: { application/json: { schema: { $ref: '#/components/schemas/CompsResponse' } } } }
         '401': { description: Missing or invalid Bearer token. }
   /api/synthesize-comps:
     post:
@@ -170,7 +170,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/SynthesizeCompsRequest' }
       responses:
-        '200': { description: Ranked, relevance-scored comp set., content: { application/json: { schema: { $ref: '#/components/schemas/CompsResponse' } } } }
+        '200': { description: 'Ranked, relevance-scored comp set.', content: { application/json: { schema: { $ref: '#/components/schemas/CompsResponse' } } } }
         '401': { description: Missing or invalid Bearer token. }
 
   # NOTE: generateComps (/generate-comps) and generateBov (/generate-bov) — the
@@ -274,10 +274,10 @@ components:
       type: object
       required: [query]
       properties:
-        query: { type: string, description: Name, address, or keyword (min 2 chars). }
+        query: { type: string, description: 'Name, address, or keyword (min 2 chars).' }
         entity_type: { type: string, enum: [person, organization, asset], description: Optional entity-type filter. }
         domain: { type: string, enum: [government, dialysis, both], description: Optional domain filter. }
-        limit: { type: number, description: Max results (default 10, max 50). }
+        limit: { type: number, description: 'Max results (default 10, max 50).' }
     PropertyContextRequest:
       type: object
       properties:
@@ -307,14 +307,14 @@ components:
       properties:
         domain: { type: string, enum: [government, dialysis, all], description: Domain filter. }
         status: { type: string, enum: [pending, in_progress, all], description: Status filter. }
-        limit: { type: number, description: Max items (default 25, max 100). }
+        limit: { type: number, description: 'Max items (default 25, max 100).' }
     RecallMemoryRequest:
       type: object
       properties:
         query: { type: string, description: Keyword to match within the memory summary. }
         domain: { type: string, enum: [work, personal, global] }
         kind: { type: string, enum: [decision, fact, outcome, preference, note] }
-        limit: { type: number, description: Max entries (default 20, max 50). }
+        limit: { type: number, description: 'Max entries (default 20, max 50).' }
     QueryCompsRequest:
       type: object
       properties:
@@ -337,7 +337,7 @@ components:
         include_salesforce: { type: boolean, default: true }
         include_on_market: { type: boolean, default: false }
         include_unreliable_noi: { type: boolean, default: false, description: Include modeled/estimated NOI/cap comps (default excludes). }
-        tenant: { type: string, description: Scope to an operator/tenant (e.g. DaVita, Fresenius, US Renal). }
+        tenant: { type: string, description: 'Scope to an operator/tenant (e.g. DaVita, Fresenius, US Renal).' }
         limit: { type: number, default: 200 }
     SynthesizeCompsRequest:
       type: object
