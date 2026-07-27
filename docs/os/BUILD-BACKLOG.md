@@ -38,6 +38,13 @@ Frame: `LCC-SYSTEM-MAP.md`
 - 🟡 **F3. Investor-outreach manager** (= Track1 A8) — consumes F1+F2 to drive prioritized broad-marketing outreach.
 - ⚪ **F4. OM distribution + engagement tracking** loop.
 
+## E-DESIGN. Edge layers (designed — `architecture/edge-layers-design.md`)
+- 🟢 **E1. Reporting & Analytics** — BI views/snapshots over substrates; RBAC-scoped; app Reports + scheduled emails.
+- 🟢 **E2. Onboarding & Backfill** — bulk backfill + repeatable contact/deal onboarding tools (generalize the Frank steps).
+- 🟢 **E3. Compliance/Governance/Retention** — PII+RBAC, retention config, audit view, compliance canon module.
+- 🟢 **E4. Integration Catalog** — CoStar / CREXi-Buildout-LoopNet (intent) / county recorders / title-escrow, all via LCC broker + fact-fabric.
+- 🟢 **E5. System QA & Trust Validation** — fixtures + invariant checks + regression gate (folds into H5).
+
 ## FP. Fact Ingestion & Propagation  (foundational data-coherence layer — `architecture/fact-ingestion-and-propagation.md`)
 - 🟢 **FP1. Coverage audit** — every learning point writes-through `lcc_merge_field` (+source) and emits propagation; list ad-hoc writers.
 - 🟢 **FP2. Canonical lease record + lease-abstraction merge writer** — lease structure becomes first-class + provenanced (your lease example).
