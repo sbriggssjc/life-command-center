@@ -123,9 +123,16 @@ One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo,
 - ✅ **cadence-scan is now REAL** — with attributed activity the digest went from 16 needs-first-touch / 0
   actionable to **4 overdue + 1 on-track** (e.g. a Listing Signed deal 82 days past its 14-day cadence). The
   spine connects end to end: SF pipeline → backbone → scope → correspondence → next-best-touch.
-- 📐 **Next** — schedule the matcher (PA recurrence / cron); the **Weekly Pipeline Email (Spine #6)** now has real
-  data; add **address / escrow# / OM-PSA** signals for recall (misses e.g. Innovative Renal Care); store the SF
-  `deal_name` on `bd_opportunities`; contact-entity resolution backfill; the SF 15-char-id helper.
+- ✅ **Weekly / pipeline email LIVE (BUILD 05, Spine #6)** — `GET /api/pipeline/weekly-digest` returns a
+  ready-to-send email (`subject` + engine-composed `html` + `text`; shared `computeScan` with cadence-scan). PA
+  flow "Team Briggs Weekly Pipeline" (Recurrence → POST `match-deal-emails` → GET `weekly-digest` → Outlook Send
+  Email V2 with `@{body('Get_Digest')?['subject']}` and Body in code/HTML view `@{body('Get_Digest')?['html']}`)
+  delivers it. **Verified end-to-end in-inbox** — overdue-first, tenant/city labels, stages, days-overdue,
+  contractual section. The recurrence also schedules the matcher (keeps attribution fresh).
+- 📐 **Next / backlog** — fold the digest into the existing **daily LCC email** as a section (leaner
+  `cadence-section` variant); add **address / escrow# / OM-PSA** matcher signals for recall (misses e.g.
+  Innovative Renal Care); store SF `deal_name` on `bd_opportunities`; contact-entity resolution backfill; the
+  shared SF 15-char-id helper.
 - 📐 **Proactive Deal Monitor** — the automation-plane loop that reads `list_deal_checkpoints` on a schedule and
   acts on overdue/due-soon milestones (notify / draft / update). Foundation now exists; loop not yet built.
 - 📐 **Mail-intake → dossier** — Outlook deal-mail distilled into `activity_events` so correspondence auto-appends.
