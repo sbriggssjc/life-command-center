@@ -1,18 +1,19 @@
 // ============================================================================
 // opportunity-sync.js — BUILD 01: inbound SF Opportunity → LCC (deal backbone)
-// Place in mcp/opportunity-sync.js (engine deploy context). Register in mcp/server.js
-// next to sf-writeback, and add a proxy route in root server.js (ai-read pattern).
+// Place in mcp/opportunity-sync.js (engine deploy context).
 //
 //   import { makeOpportunitySyncRoute } from './opportunity-sync.js';
 //   const oppSync = makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-//   app.post('/api/pipeline/ingest-opportunity', authenticate, oppSync.ingest);
+//   app.post('/api/pipeline/ingest-opportunity',   authenticate, oppSync.ingest);      // single
+//   app.post('/api/pipeline/ingest-opportunities', authenticate, oppSync.ingestBatch); // batch
 //
-// Body (per Opportunity, from the "SF -> LCC Opportunity Sync" PA flow):
-//   { sf_opp_id, name:"Tenant - City, State", stage_name, amount, close_date,
-//     owner_sf_user_id?, property_address?, vertical? }
+// Single body:  { sf_opp_id|Id, name|Name:"Tenant - City, State", stage_name|StageName,
+//                 amount|Amount, close_date|CloseDate, owner_sf_user_id|OwnerId, ... }
+// Batch body:   { "deals": [ <raw SF Opportunity records> ] }  — engine loops server-side
+//               so Power Automate makes ONE call instead of a 590-iteration Apply-to-each.
 // ============================================================================
 
-// SF Opportunity StageName -> bd_opportunities.stage (confirm the picklist matches exactly)
+// SF Opportunity StageName -> bd_opportunities.stage
 const STAGE_MAP = {
   'BOV': 'bov',
   'ELA': 'ela',
@@ -22,6 +23,28 @@ const STAGE_MAP = {
   'Closed': 'closed',
 };
 const CONTRACTUAL = new Set(['loi_executed', 'in_escrow', 'non_refundable']);
+
+// Accept both the raw SF record shape (Id/Name/StageName/...) and the internal shape.
+function normalizeDeal(d) {
+  d = d || {};
+  return {
+    sf_opp_id: d.sf_opp_id ?? d.Id ?? d.id ?? null,
+    name: d.name ?? d.Name ?? null,
+    stage_name: d.stage_name ?? d.StageName ?? null,
+    owner_sf_user_id: d.owner_sf_user_id ?? d.OwnerId ?? null,
+    amount: d.amount ?? d.Amount ?? null,
+    close_date: d.close_date ?? d.CloseDate ?? null,
+    vertical: d.vertical ?? null,
+    property_address: d.property_address ?? null,
+  };
+}
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms${label ? ' (' + label + ')' : ''}`)), ms)),
+  ]);
+}
 
 // Parse "Tenant - City, State" -> {tenant, city, state}
 function parseDealName(name) {
@@ -69,12 +92,12 @@ async function resolveDealEntity(body, { opsQuery, enc, WORKSPACE_ID }) {
         ? rows.filter(x => `${x.name} ${x.address || ''} ${x.canonical_name || ''}`.toLowerCase().includes(tok))
         : [];
       if (hits.length === 1) return { entity_id: hits[0].id, created: false };
-      // Ambiguous: NEVER block the sync (a 409 fails the Power Automate loop). Fall through
-      // to create a flagged entity and record the candidates in metadata for later merge.
+      // Ambiguous: NEVER block the sync. Fall through to create a flagged entity and
+      // record the candidates in metadata for later merge.
       ambiguousCandidates = rows.map(x => ({ id: x.id, name: x.name }));
     }
   }
-  // 3. Create the deal entity (source-tagged; FP: convert to lcc_merge_field when the fact-fabric writer lands)
+  // 3. Create the deal entity (source-tagged).
   const id = globalThis.crypto.randomUUID();
   const eMeta = { source: 'salesforce', sf_opp_id, provenance: 'opportunity_sync' };
   if (ambiguousCandidates) eMeta.ambiguous_resolution = ambiguousCandidates;
@@ -88,75 +111,126 @@ async function resolveDealEntity(body, { opsQuery, enc, WORKSPACE_ID }) {
   return { entity_id: id, created: true, ambiguous: !!ambiguousCandidates };
 }
 
+// Core per-deal logic. Returns { status, body } — never sends a response itself, so it is
+// reused by both the single route and the batch loop.
+async function processDeal(raw, deps) {
+  const { opsQuery, enc, WORKSPACE_ID } = deps;
+  const b = normalizeDeal(raw);
+  if (!b.sf_opp_id || !b.name || !b.stage_name) {
+    return { status: 400, body: { ok: false, error: 'sf_opp_id, name, stage_name required', sf_opp_id: b.sf_opp_id } };
+  }
+  // Map the SF stage. Unknown stages are normalized to a slug and flagged, never dropped.
+  let stage = STAGE_MAP[b.stage_name];
+  let unmappedStage = false;
+  if (!stage) {
+    unmappedStage = true;
+    stage = String(b.stage_name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown';
+  }
+
+  const rec = await resolveDealEntity(b, deps);
+  if (rec.error) return { status: 502, body: { ok: false, ...rec, sf_opp_id: b.sf_opp_id } };
+
+  // Owner: map SF user -> lcc_users.salesforce_owner_id (graceful if unmapped).
+  let owner_user_id = null;
+  if (b.owner_sf_user_id) {
+    const u = await opsQuery('GET',
+      `lcc_users?salesforce_owner_id=eq.${enc(b.owner_sf_user_id)}&select=lcc_user_id&limit=1`);
+    owner_user_id = u.data?.[0]?.lcc_user_id || null;
+  }
+
+  // Vertical: use what the flow sent, else inherit the resolved entity's domain.
+  let vertical = b.vertical || null;
+  if (!vertical && rec.entity_id) {
+    const e = await opsQuery('GET', `entities?id=eq.${enc(rec.entity_id)}&select=domain&limit=1`);
+    vertical = e.data?.[0]?.domain || null;
+  }
+
+  // is_open is GENERATED = (closed_at IS NULL). 'Closed' (mapped) = won; lost/terminated = closed-lost.
+  const isLost = /(lost|dead|dropped|withdrawn|terminat|cancel|expired|no[ _-]?sale)/i.test(String(b.stage_name));
+  const isWon = stage === 'closed';
+  const isClosed = isWon || isLost;
+  const meta = {};
+  if (b.owner_sf_user_id && !owner_user_id) meta.owner_sf_user_id = b.owner_sf_user_id;
+  if (unmappedStage) { meta.unmapped_stage = true; meta.sf_stage_label = b.stage_name; }
+  if (rec.ambiguous) meta.ambiguous_resolution = true;
+  const row = {
+    workspace_id: WORKSPACE_ID, entity_id: rec.entity_id, sf_opp_id: b.sf_opp_id,
+    stage,
+    amount: (b.amount ?? null), expected_close_date: (b.close_date || null),
+    closed_at: isClosed ? new Date().toISOString() : null,
+    closed_won: isClosed ? isWon : null,
+    owner_user_id, vertical, last_synced_at: new Date().toISOString(),
+    metadata: meta,
+  };
+  const up = await opsQuery('POST',
+    'bd_opportunities?on_conflict=workspace_id,sf_opp_id', row,
+    { Prefer: 'return=representation,resolution=merge-duplicates' });
+  if (up.ok === false) return { status: 502, body: { ok: false, error: 'upsert_failed', detail: up.data, sf_opp_id: b.sf_opp_id } };
+  const saved = Array.isArray(up.data) ? up.data[0] : up.data;
+
+  return { status: 200, body: {
+    ok: true, entity_id: rec.entity_id, created_entity: rec.created,
+    bd_opportunity_id: saved?.id || null, stage, unmapped_stage: unmappedStage,
+    ambiguous_resolution: !!rec.ambiguous, closed: isClosed,
+    needs_psa_timeline: CONTRACTUAL.has(stage), sf_opp_id: b.sf_opp_id,
+  } };
+}
+
 export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
+  const deps = { opsQuery, enc, WORKSPACE_ID };
   return {
+    // Single deal — used by Copilot / manual calls.
     ingest: async (req, res) => {
-      const b = req.body || {};
-      if (!b.sf_opp_id || !b.name || !b.stage_name) {
-        return res.status(400).json({ ok: false, error: 'sf_opp_id, name, stage_name required' });
+      try {
+        const r = await processDeal(req.body || {}, deps);
+        return res.status(r.status).json(r.body);
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: String(e?.message || e) });
       }
-      // Map the SF stage. Unknown stages are NOT rejected (that would silently drop real
-      // deals as the sale pipeline evolves / for IS buy-side + co-broke record types that
-      // may use their own stages) — normalize to a slug and flag for later reconciliation.
-      let stage = STAGE_MAP[b.stage_name];
-      let unmappedStage = false;
-      if (!stage) {
-        unmappedStage = true;
-        stage = String(b.stage_name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown';
+    },
+
+    // Batch — Power Automate posts the whole Get-records array in ONE call; the engine
+    // loops server-side with bounded concurrency and per-deal timeouts, so no single
+    // record can stall the run (the failure mode of the PA Apply-to-each loop).
+    ingestBatch: async (req, res) => {
+      const body = req.body || {};
+      const deals = Array.isArray(body) ? body : (body.deals || body.value || []);
+      if (!Array.isArray(deals)) {
+        return res.status(400).json({ ok: false, error: 'expected { deals: [ ... ] }' });
       }
-
-      const rec = await resolveDealEntity(b, { opsQuery, enc, WORKSPACE_ID });
-      if (rec.error) return res.status(502).json({ ok: false, ...rec });
-
-      // Owner: map SF user -> lcc_users (graceful if unmapped)
-      // lcc_users PK is lcc_user_id; the SF owner id lives in salesforce_owner_id (all 4 users mapped)
-      let owner_user_id = null;
-      if (b.owner_sf_user_id) {
-        const u = await opsQuery('GET',
-          `lcc_users?salesforce_owner_id=eq.${enc(b.owner_sf_user_id)}&select=lcc_user_id&limit=1`);
-        owner_user_id = u.data?.[0]?.lcc_user_id || null;
-      }
-
-      // Upsert bd_opportunities on sf_opp_id (idempotent — H5)
-      // Vertical: use what the flow sent, else inherit the resolved entity's domain
-      // (drives multi-vertical routing for cadence / next-best-action).
-      let vertical = b.vertical || null;
-      if (!vertical && rec.entity_id) {
-        const e = await opsQuery('GET', `entities?id=eq.${enc(rec.entity_id)}&select=domain&limit=1`);
-        vertical = e.data?.[0]?.domain || null;
-      }
-
-      // is_open is a GENERATED column = (closed_at IS NULL) — never write it directly;
-      // openness derives from closed_at. 'Closed' (mapped) = won; any stage containing
-      // lost/dead/withdrawn (e.g. the Sale Deal Lost record type) = closed-lost.
-      const isLost = /(lost|dead|dropped|withdrawn|terminat|cancel|expired|no[ _-]?sale)/i.test(String(b.stage_name));
-      const isWon = stage === 'closed';
-      const isClosed = isWon || isLost;
-      const meta = {};
-      if (b.owner_sf_user_id && !owner_user_id) meta.owner_sf_user_id = b.owner_sf_user_id;
-      if (unmappedStage) { meta.unmapped_stage = true; meta.sf_stage_label = b.stage_name; }
-      if (rec.ambiguous) meta.ambiguous_resolution = true;   // created a flagged entity; needs manual merge
-      const row = {
-        workspace_id: WORKSPACE_ID, entity_id: rec.entity_id, sf_opp_id: b.sf_opp_id,
-        stage,
-        amount: (b.amount ?? null), expected_close_date: (b.close_date || null),
-        closed_at: isClosed ? new Date().toISOString() : null,
-        closed_won: isClosed ? isWon : null,
-        owner_user_id, vertical, last_synced_at: new Date().toISOString(),
-        metadata: meta,
+      const summary = {
+        total: deals.length, succeeded: 0, created: 0, resolved: 0,
+        ambiguous: 0, closed: 0, unmapped_stage: 0, failed: 0, errors: [],
       };
-      const up = await opsQuery('POST',
-        'bd_opportunities?on_conflict=workspace_id,sf_opp_id', row,
-        { Prefer: 'return=representation,resolution=merge-duplicates' });
-      if (up.ok === false) return res.status(502).json({ ok: false, error: 'upsert_failed', detail: up.data });
-      const saved = Array.isArray(up.data) ? up.data[0] : up.data;
-
-      return res.status(200).json({
-        ok: true, entity_id: rec.entity_id, created_entity: rec.created,
-        bd_opportunity_id: saved?.id || null, stage, unmapped_stage: unmappedStage,
-        ambiguous_resolution: !!rec.ambiguous,
-        needs_psa_timeline: CONTRACTUAL.has(stage),   // signal for FP/E5 milestone population
-      });
+      const CONC = 8;
+      let i = 0;
+      async function worker() {
+        while (i < deals.length) {
+          const d = deals[i++];
+          try {
+            const r = await withTimeout(processDeal(d, deps), 20000, 'processDeal');
+            if (r.status === 200 && r.body.ok) {
+              summary.succeeded++;
+              if (r.body.created_entity) summary.created++; else summary.resolved++;
+              if (r.body.ambiguous_resolution) summary.ambiguous++;
+              if (r.body.closed) summary.closed++;
+              if (r.body.unmapped_stage) summary.unmapped_stage++;
+            } else {
+              summary.failed++;
+              if (summary.errors.length < 50) {
+                summary.errors.push({ sf_opp_id: r.body.sf_opp_id ?? (d && (d.Id || d.sf_opp_id)) ?? null, status: r.status, error: r.body.error || 'unknown' });
+              }
+            }
+          } catch (e) {
+            summary.failed++;
+            if (summary.errors.length < 50) {
+              summary.errors.push({ sf_opp_id: (d && (d.Id || d.sf_opp_id)) ?? null, error: String(e?.message || e) });
+            }
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONC, deals.length) }, worker));
+      return res.status(200).json({ ok: true, ...summary });
     },
   };
 }

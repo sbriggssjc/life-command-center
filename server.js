@@ -306,7 +306,8 @@ app.all('/api/deal/checkpoints',     (req, res) => { req.query._mcpTarget = '/ap
 app.all('/api/sf/log-activity',      (req, res) => { req.query._mcpTarget = '/api/sf/log-activity';      aiReadHandler(req, res); });
 app.all('/api/sf/create-task',       (req, res) => { req.query._mcpTarget = '/api/sf/create-task';       aiReadHandler(req, res); });
 app.all('/api/sf/update-opportunity',(req, res) => { req.query._mcpTarget = '/api/sf/update-opportunity'; aiReadHandler(req, res); });
-app.all('/api/pipeline/ingest-opportunity', (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-opportunity'; aiReadHandler(req, res); });
+app.all('/api/pipeline/ingest-opportunity',  (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-opportunity';  aiReadHandler(req, res); });
+app.all('/api/pipeline/ingest-opportunities', (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-opportunities'; aiReadHandler(req, res); });
 
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });

@@ -1347,7 +1347,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: '30mb' }));   // batch opportunity sync posts the whole SF Get-records array
 app.use(express.urlencoded({ extended: true }));
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
@@ -1859,7 +1859,8 @@ app.get("/", (_req, res) => {
 
   // Inbound SF Opportunity -> LCC deal backbone (BUILD 01) — idempotent on (workspace_id, sf_opp_id).
   const __oppSync = makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/ingest-opportunity", authenticate, __oppSync.ingest);
+  app.post("/api/pipeline/ingest-opportunity",   authenticate, __oppSync.ingest);       // single deal
+  app.post("/api/pipeline/ingest-opportunities", authenticate, __oppSync.ingestBatch);  // batch (PA sends whole array)
   console.log("[MCP] Registered deal-dossier + SF write-back + opportunity-sync HTTP routes");
 }
 
