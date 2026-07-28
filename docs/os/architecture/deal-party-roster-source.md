@@ -51,8 +51,10 @@ complete, and it produces the roster as a side effect.
    email-sender that isn't entity-resolved silently drops.
 
 ## Recommended next steps
-1. **Inspect `Deal_Participants__c`** (fields + a sample) — decide if it's the real party source. Fastest via
-   the SF Object Manager. If yes, re-point Slice B at it (small).
+1. ✅ **DONE 2026-07-28 — `Deal_Participants__c` inspected via SF Object Manager.** Confirmed NOT the TB party
+   source (its `Deal` lookup is `Fannie_Mae_Deal__c`, the lending/agency object, not the Opportunity). No
+   re-point. Net: **no structured SF object holds TB IS deal parties** → matcher (email-derived) + `.md` rosters
+   are the roster. Contact-entity backfill (A2) therefore defers to the matcher's lazy resolution — no bulk build.
 2. **Disable / pause the empty OCR flow** — it pulls 7,201 rows daily and writes nothing.
 3. **Build the matcher strong-signal-primary** regardless of #1 — it doesn't depend on the roster source.
 4. Backlog: the SF-id-normalize helper + the contact-entity resolution backfill.
