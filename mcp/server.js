@@ -16,6 +16,7 @@ import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
 import { makeDealDossierTools, makeDealDossierHttpRoutes } from "./deal-dossier-tools.js";
 import { makeSfWritebackRoutes } from "./sf-writeback.js";
 import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
+import { makeDealRosterRoute } from "./deal-roster.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
@@ -1861,6 +1862,10 @@ app.get("/", (_req, res) => {
   const __oppSync = makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
   app.post("/api/pipeline/ingest-opportunity",   authenticate, __oppSync.ingest);       // single deal
   app.post("/api/pipeline/ingest-opportunities", authenticate, __oppSync.ingestBatch);  // batch (PA sends whole array)
+
+  // Deal Roster (BUILD 02, Slice A) — Team Briggs deal-team edges for owned/partnership scope.
+  const __roster = makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
+  app.post("/api/pipeline/ingest-deal-parties", authenticate, __roster.ingestParties);
   console.log("[MCP] Registered deal-dossier + SF write-back + opportunity-sync HTTP routes");
 }
 

@@ -31,6 +31,17 @@ const STAGE_MAP = {
 };
 const CONTRACTUAL = new Set(['loi_executed', 'in_escrow', 'non_refundable']);
 
+// Cadence regime per stage (shared with cadence-scan + the deal monitor so producer and consumers
+// agree). A = active-listing / pursuit (cadence-driven, ball-in-court = us); B = contractual
+// (milestone/deadline-driven, NOT touch cadence); C = terminal (low-frequency nurture/revive).
+// Derived, never stored. Unknown/new stages default to 'A' — surfaced, not silently ignored.
+export const STAGE_REGIME = {
+  identified: 'A', bov: 'A', ela: 'A', listing_signed: 'A', off_market_listing: 'A',
+  loi_executed: 'B', in_escrow: 'B', non_refundable: 'B',
+  closed: 'C', terminated: 'C',
+};
+export function stageRegime(stage) { return STAGE_REGIME[stage] || 'A'; }
+
 // Accept both the raw SF record shape (Id/Name/StageName/...) and the internal shape.
 function normalizeDeal(d) {
   d = d || {};
@@ -178,7 +189,7 @@ async function processDeal(raw, deps) {
   return { status: 200, body: {
     ok: true, entity_id: rec.entity_id, created_entity: rec.created,
     bd_opportunity_id: saved?.id || null, stage, unmapped_stage: unmappedStage,
-    ambiguous_resolution: !!rec.ambiguous, closed: isClosed,
+    ambiguous_resolution: !!rec.ambiguous, closed: isClosed, regime: stageRegime(stage),
     needs_psa_timeline: CONTRACTUAL.has(stage), sf_opp_id: b.sf_opp_id,
   } };
 }
