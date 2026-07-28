@@ -1874,6 +1874,8 @@ app.get("/", (_req, res) => {
   const __cadence = makeCadenceScanRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
   app.get("/api/pipeline/cadence-scan",  authenticate, __cadence.scan);
   app.post("/api/pipeline/cadence-scan", authenticate, __cadence.scan);
+  app.get("/api/pipeline/weekly-digest",  authenticate, __cadence.weeklyDigest);   // engine-composed email
+  app.post("/api/pipeline/weekly-digest", authenticate, __cadence.weeklyDigest);
 
   // Deal-Email Matcher (BUILD 04) — attribute Outlook emails to deals by tenant+city; self-builds roster.
   const __matcher = makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
