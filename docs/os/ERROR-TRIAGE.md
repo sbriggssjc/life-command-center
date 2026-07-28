@@ -127,8 +127,26 @@ data is being lost — but the To-Do sync + Unflag flows failing daily means tho
 
 ---
 
+## Slice 3 — GOV + DIA Supabase advisor sweeps — ✅ RESOLVED 2026-07-28
+Same pattern as OPS, no 🔴 critical (neither had a sensitive-token table). Both engine connections use
+service/secret keys with **no anon key configured**, and both are backend warehouses (server-side ingestion,
+no frontend), so the hardening is safe. Verified after each: `get_pipeline_health` government + dialysis both
+`ok` with full data.
+
+> **GOV (`scknotsqkcheojiaewwh`): security ERROR 304 → 0.** 108 tables RLS-enabled, 196 views → security_invoker.
+> Migration: `supabase/migrations/government/20260728140000_gov_rls_security_hardening.sql`.
+> **DIA (`zqzrriwuavgrquhisnoa`): security ERROR 489 → 0.** 215 tables RLS-enabled, 274 views → security_invoker.
+> Migration: `supabase/migrations/dialysis/20260728140000_dia_rls_security_hardening.sql`.
+> DIA's first bulk attempt deadlocked against a live CMS ingestion → switched to a lock_timeout + per-object-skip
+> pass (deadlock-proof, idempotent). Final: 0 tables without RLS on either project.
+
+**Running total across all three DBs: 928 security ERRORs cleared (OPS 135 + GOV 304 + DIA 489), zero breakage.**
+Remaining everywhere = WARN/INFO only: `function_search_path_mutable`, `*_security_definer_function_executable`,
+`rls_enabled_no_policy` (intended deny-all), plus DIA `vulnerable_postgres_version` (PG15 — upgrade) and a few
+`materialized_view_in_api` (matviews can't take security_invoker; revoke-from-anon is the fix, low urgency since
+no anon exists). These are the "function hardening + minor toggles" follow-up pass, not ERRORs.
+
 ## Later slices (planned)
-- **Slice 3 — GOV + DIA advisor sweeps** (same DB treatment, other two projects).
 - **Slice 4 — Engine runtime errors** — `get_logs` (api/postgres/edge-function) + Railway logs for 4xx/5xx.
 - **Slice 5 — Known functional gaps** — matcher recall misses (e.g. Innovative Renal Care), deal_name not
   stored on `bd_opportunities`, contact-entity resolution backfill (5,651/17,289 resolve).
