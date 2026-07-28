@@ -1,7 +1,7 @@
 # Build Status — where the OS architecture actually stands
 
 One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo, pending a manual apply ·
-📐 designed/specced, not built · 🚫 excluded by decision · 🔮 roadmap. Last updated: 2026-07-27.
+📐 designed/specced, not built · 🚫 excluded by decision · 🔮 roadmap. Last updated: 2026-07-28.
 
 ## Foundation (the consistency contract)
 - ✅ **Canon** — `docs/os/canon/` (8 topic modules + blocks) is the single source of the rules.
@@ -58,6 +58,44 @@ One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo,
 - ✅ **Canonical connector** — `copilot/lcc-deal-intelligence.connector.v4.swagger.json` (53 ops, de-duped,
   dialog-safe). Full resume guide: `architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md`.
 - ⏳ **Drainer → other kinds** — extend to `create_task` + `advance_opportunity_stage` (pattern proven for log_call).
+
+## Deal backbone — SF Deal/Opportunity → LCC sync (BUILD 01, LIVE 2026-07-28)
+- ✅ **Pipeline sync LIVE** — PA flow "SF Deal → LCC Opportunity Sync" (scheduled ~30 min, On) pulls all Team
+  Briggs Opportunity records (the object labeled "Deal" IS the standard `Opportunity`) filtered to 6 investment-
+  sales record types, and POSTs the whole Get-records array to the engine batch endpoint
+  `POST /api/pipeline/ingest-opportunities`. **592 deals on `bd_opportunities`**: 219 closed-won, 339 closed-lost,
+  34 open (the real active pipeline). Idempotent, self-healing full-refresh.
+- ✅ **Engine endpoints** — `mcp/opportunity-sync.js`: single (`/ingest-opportunity`, Copilot/manual) + batch
+  (`/ingest-opportunities`, server-side loop, concurrency 8, per-deal 20s timeout). Resolves deal→asset by
+  city+state (tenant token breaks collisions), idempotent upsert on `(workspace_id, sf_opp_id)`, inherits
+  vertical from the entity domain, maps owner via `lcc_users.salesforce_owner_id` (4/4 mapped; historical deals
+  owned by other brokers keep their raw SF owner id in metadata).
+- ✅ **Stage vocabulary (real, in-org)** — STAGE_MAP covers BOV, ELA, LOI Executed, In Escrow, Non-Refundable,
+  Closed, Listing Signed, Off-Market Listing, Closed IS (=closed-won), Terminated IS (=closed-lost). Won/lost
+  derived into `closed_at`/`closed_won`; `is_open` is a GENERATED column.
+- 📐 **Entity reconciliation (NEW — needed at scale)** — 232 deals in multi-asset cities created flagged
+  entities (`entities.metadata.ambiguous_resolution` = candidate list) rather than matching an existing asset.
+  Needs a review/merge pass; now a first-class build, not a footnote.
+- ⏳ **Incremental optimization** — currently full-refresh every 30 min (cheap + robust). Optional later:
+  add a `LastModifiedDate` window (needs the Compose-action pattern; the inline `@{}` token would not take).
+- **Hard-won fixes banked**: engine deploys from `mcp/` (import via `./`); PA Filter Query is **OData not SOQL**
+  (`eq`/`or`/`and`, filter on direct `RecordTypeId`, not `RecordType.Name`); **batch endpoint replaced the PA
+  Apply-to-each** (which hung 10h on record 1 with no timeout); **`opsQuery` now forwards `Prefer`** (upsert was
+  silently insert-only → 23505 collision on every re-sync); generated `is_open`; all-dash "Tenant - City - State"
+  name parsing; ambiguous resolution never 409s (creates flagged entity); Closed-IS won detection.
+
+## Deal Roster — Team Briggs scope (BUILD 02 Slice A, LIVE 2026-07-28)
+- ✅ **Team-roster edges LIVE** — PA flow "SF Deal Team → LCC Roster" (Deal Team Member object, OData filter
+  `UserId` ∈ the 4 TB users) → batch `POST /api/pipeline/ingest-deal-parties` → `mcp/deal-roster.js` writes
+  `entity_relationships` `deal_party` edges (deal-asset → TB person, role `our_broker`, source `sf_opp_team`).
+  **192 edges / 192 deals.** Idempotent check-then-insert (no unique constraint added to the 109k-edge graph).
+- ✅ **Scope is now accurate** — open Team Briggs deals = **23 of 34** (19 owned + 4 partnership-only); 11 correctly
+  excluded. Rule: `owner_user_id ∈ TB  OR  deal_party edge to a TB person  OR  metadata.team_briggs_include`;
+  default = exclude. (`docs/os/architecture/deal-backbone-design-refinements.md`.)
+- ✅ **STAGE_REGIME** shipped in `mcp/opportunity-sync.js` (A active-listing / B contractual / C terminal) and
+  returned by the ingest endpoint; cadence-scan + deal monitor read it.
+- 📐 **Slice B (next)** — external contact roles (`OpportunityContactRole` → seller/buyer/… `deal_party` edges via
+  `unified_contacts`) for the dossier + deal-email matcher (Spine #3).
 - 📐 **Proactive Deal Monitor** — the automation-plane loop that reads `list_deal_checkpoints` on a schedule and
   acts on overdue/due-soon milestones (notify / draft / update). Foundation now exists; loop not yet built.
 - 📐 **Mail-intake → dossier** — Outlook deal-mail distilled into `activity_events` so correspondence auto-appends.
