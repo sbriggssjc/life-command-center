@@ -3397,10 +3397,14 @@ async function loadOrgView(source, domainLabel) {
   const body = $('#propertyBody');
   const actions = $('#propertyActions');
 
-  const name = source.name || 'Unknown Entity';
   const siteType = source.site_type || 'business-search';
   const target = await getActiveLlcResearch();
   const hasTarget = !!(target && target.recorded_owner_id);
+  // Fall back to the worklist's active owner name when the SOS page title wasn't
+  // captured (the bizfile parser never pulls a name from the results grid, so it
+  // leaves `name` blank rather than guess). The editable field stays correctable.
+  if (!source.name && hasTarget && target.search_name) source.name = target.search_name;
+  const name = source.name || 'Unknown Entity';
 
   header.innerHTML = `
     <div class="property-title">${escapeHtml(name)}</div>

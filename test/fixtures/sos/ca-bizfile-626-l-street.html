@@ -1,0 +1,65 @@
+<!--
+  Captured DOM from bizfileonline.sos.ca.gov — entity detail for
+  "626 L STREET LLC (201911310222)" (a 1505-corporate-agent LLC).
+
+  The page holds BOTH the search-RESULTS grid (table.search-results, top match
+  "626 16TH STREET, LLC" — a DIFFERENT entity) AND the open entity-DETAIL modal
+  (table.details-list). The parser must read ONLY the details-list, never the
+  grid, and must exclude the "Standing - *" compliance-flag rows.
+-->
+<div class="app-shell">
+  <!-- Search results grid (the WRONG data — must never be read) -->
+  <table class="search-results container-fluid">
+    <tbody>
+      <tr class="result-row">
+        <td class="col-name">626 16TH STREET, LLC</td>
+        <td class="col-agent">Click to expand</td>
+        <td class="col-date">07/30/2020</td>
+        <td class="col-status">Active</td>
+        <td class="col-type">Limited Liability Company - CA</td>
+      </tr>
+      <tr class="result-row">
+        <td class="col-name">626 BROADWAY HOLDINGS LLC</td>
+        <td class="col-agent">Click to expand</td>
+        <td class="col-date">01/12/2018</td>
+        <td class="col-status">Active</td>
+        <td class="col-type">Limited Liability Company - CA</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Entity detail modal (the RIGHT data) -->
+  <div class="modal" role="dialog">
+    <div class="transaction-header">626 L STREET LLC (201911310222)</div>
+    <table class="details-list container-fluid">
+      <tbody>
+        <tr class="detail"><td class="label">Initial Filing Date</td><td class="value">04/18/2019</td></tr>
+        <tr class="detail"><td class="label">Status</td><td class="value">Active</td></tr>
+        <tr class="detail"><td class="label">Standing - SOS</td><td class="value">Good</td></tr>
+        <tr class="detail"><td class="label">Standing - FTB</td><td class="value">Good</td></tr>
+        <tr class="detail"><td class="label">Standing - Agent</td><td class="value">Good</td></tr>
+        <tr class="detail"><td class="label">Standing - VCFCF</td><td class="value">Good</td></tr>
+        <tr class="detail"><td class="label">Formed In</td><td class="value">CALIFORNIA</td></tr>
+        <tr class="detail"><td class="label">Entity Type</td><td class="value">Limited Liability Company - CA</td></tr>
+        <tr class="detail"><td class="label">Principal Address</td><td class="value">626 L STREET
+CHULA VISTA, CA 91910</td></tr>
+        <tr class="detail"><td class="label">Mailing Address</td><td class="value">740 BAY BLVD
+CHULA VISTA,CA91910</td></tr>
+        <tr class="detail"><td class="label">Statement of Info Due Date</td><td class="value">04/30/2027</td></tr>
+        <tr class="detail"><td class="label">Agent</td><td class="value">1505 Corporation
+LEGALZOOM.COM, INC.
+</td></tr>
+        <tr class="detail"><td class="label">CA Registered Corporate (1505) Agent Authorized Employee(s)</td><td class="value">SANDRA MENJIVAR
+500 N BRAND BLVD, SUITE 890, GLENDALE, CA
+Jesse Camarena
+500 N BRAND BLVD, SUITE 890, GLENDALE, CA
+Maria Lopez
+500 N BRAND BLVD, SUITE 890, GLENDALE, CA
+Robert Chen
+500 N BRAND BLVD, SUITE 890, GLENDALE, CA
+David Kim
+500 N BRAND BLVD, SUITE 890, GLENDALE, CA</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
