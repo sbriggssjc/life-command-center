@@ -93,10 +93,16 @@ error surface after the DB. Grouped:
   collection or a per-item action erroring (mirrors the old matcher Apply-to-each pattern).
 - **`HTTP-Switch`** — failed at **"flow body"** (07-28 17:00Z).
 
-### 🟠 Cron / feed failures
-- **`field-provenance-prune`** scheduled job — fails **daily at 04:30Z** (07-25 → 07-28). A pg_cron/engine job
-  erroring; check `get_logs` postgres/cron.
-- **Feed stale:** `feed:gov:loans` — last data 06-23, **31d old vs 30d SLA**. Feed may have stopped.
+### Cron / feed failures
+- ✅ **`field-provenance-prune`** (pg_cron jobid 23, `30 4 * * *`) — **FIXED 2026-07-28**
+  (`supabase/migrations/20260728130000_fix_field_provenance_prune.sql`). Two bugs: the self-FK
+  `superseded_by_id` was unindexed (per-row FK check on a bulk DELETE over 1.6M rows → 2min statement-timeout),
+  and the bulk DELETE could remove a row still referenced by a kept row (→ FK violation). Fix = partial index on
+  `superseded_by_id` + rewrite prune to batched (5k), FK-safe (nulls external referrers first), time-budgeted
+  (exits by 90s, under the 2min timeout). Verified: one run deleted 14,224 eligible rows, nulled 66 refs, exited
+  cleanly; dry-run after = 0 candidates. The 947MB table is legit audit volume, not prune backlog.
+- 🟡 **Feed stale:** `feed:gov:loans` — last data 06-23, **31d old vs 30d SLA**. Feed may have stopped; GOV-domain
+  ingest, needs a look at the loans ingest job. Lower priority (informational alert, not a hard failure).
 
 ### ⚪ Stale-but-not-failing pipelines (informational)
 - dialysis `cms_ingestion` last ran 33d ago; dialysis `email` 117d ago; several gov pipelines 13–27d
