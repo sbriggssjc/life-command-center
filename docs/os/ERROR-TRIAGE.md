@@ -86,12 +86,25 @@ wait until the RLS strategy is decided.
 `get_pipeline_health` reports **16 open LCC automation alerts** — real recurring failures, the highest-signal
 error surface after the DB. Grouped:
 
-### 🟠 Recurring Power Automate flow failures (daily, ongoing)
-- **`To Do - Life Command Center Sync`** — fails daily at action **"Update file"** (~04:00Z). Most persistent;
-  failing every day 07-24 → 07-28. Likely a stale file handle / renamed-or-locked target file in the sync.
-- **`Unflag Completed Email Tasks`** — fails daily at **"Apply to each"** (~03:15–03:45Z). Likely an empty/null
-  collection or a per-item action erroring (mirrors the old matcher Apply-to-each pattern).
-- **`HTTP-Switch`** — failed at **"flow body"** (07-28 17:00Z).
+### 🟠 Recurring Power Automate flow failures — ROOT-CAUSED 2026-07-28 (browser run-history review)
+**Single shared root cause: a Microsoft To-Do list was deleted/renamed, orphaning hardcoded list IDs in two
+flows.** Both fail at a To-Do "List…" action with **404 NotFound** (the alert's `failed_action` was the skipped
+downstream step, not the true failure). These run hourly/half-hourly, not just daily — failing every run.
+- **`To Do - Life Command Center Sync`** (flow id `fee2a0fe-…`, Scheduled, hourly) — action
+  **`List to-do's by folder (V2) 2`** returns **statusCode 404 / "Item not found"**. Inputs: connection
+  `shared_todo`, op `ListToDosByFolderV2`, `folderId = AAMkADI4MzMxOTI5LTEyM2ItNGQ2MC1iNz…` (dead). The FIRST
+  `List to-do's by folder (V2)` succeeds — only this second list ID is stale.
+- **`LCC To Do Completion Poll`** (flow id `a77e7a00-…`, Scheduled, every 30 min — this is the alert's
+  "Unflag Completed Email Tasks") — action **`List Flagged Tasks`** returns **NotFound**; downstream
+  `Apply to each` (the alerted action) is skipped as a result. Uses the Office 365 Outlook + To-Do connections.
+
+**Fix (Scott, in the flow editor — one per flow):** open the failing To-Do action and re-pick the correct list
+from the folder/list dropdown. If the referenced To-Do list was intentionally deleted, either recreate it or
+delete that action + its dependent branch. This is a To-Do list-ID repair; I can't pick the right replacement
+list for you (and editing re-auths the connection), so it needs your hands. Repairing the list reference should
+clear both flows at once since they share the cause.
+- **`HTTP-Switch`** — failed once at "flow body" (07-28 17:00Z); single occurrence, likely transient — watch,
+  don't fix yet.
 
 ### Cron / feed failures
 - ✅ **`field-provenance-prune`** (pg_cron jobid 23, `30 4 * * *`) — **FIXED 2026-07-28**
