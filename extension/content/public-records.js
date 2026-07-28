@@ -2,10 +2,254 @@
 // LCC Assistant — Content Script: Public Records Scanner
 // Heuristic scanner for county assessor, SOS, recorder of deeds, and other
 // government / public records sites. Injected on-demand via SCAN_PAGE message.
+//
+// The CA Secretary of State (bizfileonline.sos.ca.gov) entity DETAIL modal is a
+// clean `table.details-list` (label→value drawer) — parsed by an anchored,
+// bizfile-specific path (`scanBizfileFromRoot`) that targets the detail table
+// explicitly and NEVER the search-results grid. Everything else uses the generic
+// `findValue` heuristic.
+//
+// This file is injected as a classic content script (isolated world). The pure
+// bizfile parse functions live at top level so a Node test can eval this file in
+// a `vm` sandbox and import them (`module.exports`, no-op in the browser); the
+// live "scan the page" logic is wrapped in a guarded IIFE that only runs when a
+// real `document`/`chrome.runtime` is present.
 // ============================================================================
 
+'use strict';
+
+// ── Standing-label guard (shared) ─────────────────────────────────────────────
+// A label beginning with "Standing -" (e.g. "Standing - Agent", "Standing - SOS")
+// is a compliance FLAG, not the field it appears to name. On CA bizfile the
+// "Standing - Agent: Good" row otherwise false-matched the "Agent" keyword and
+// populated the Registered Agent field with "Good". This guard keeps a Standing-*
+// label from ever populating the agent / officer / name fields on ANY SOS site.
+function isStandingLabel(text) {
+  return /^\s*standing\s*[-–—]/i.test(text || '');
+}
+
+// ── CA Secretary of State (bizfileonline) parser — DOM-anchored ──────────────
+// The bizfile entity detail renders as `table.details-list` with one
+// `tr.detail` per field: `td.label` → `td.value`. We select THAT table
+// explicitly (never the results grid) and map by EXACT label. Ground-truth DOM
+// (626 L Street LLC): Initial Filing Date · Status · Standing - SOS/FTB/Agent/
+// VCFCF · Formed In · Entity Type · Principal Address · Mailing Address ·
+// Statement of Info Due Date · Agent · CA Registered Corporate (1505) Agent
+// Authorized Employee(s). The entity name + number live in the modal title
+// (`NAME (NUMBER)`), NOT in the details table.
+
+function isBizfileHost(host) {
+  return /(^|\.)bizfileonline\.sos\.ca\.gov$/i.test(host || '');
+}
+
+// Does a line look like a US street/mailing-address line (so it belongs in an
+// ADDRESS, not a NAME)? Used to split the Agent block (name vs address) and to
+// pair Authorized-Employee name/address lines. Deliberately conservative — a
+// leading house/registration NUMBER ("1505 Corporation") is NOT an address.
+function looksLikeAddressLine(line) {
+  const s = String(line || '');
+  if (/\b\d{5}(-\d{4})?\b/.test(s)) return true; // ZIP
+  if (/\b(suite|ste|floor|fl|unit|apt|room|rm|po box|p\.o\. box|#)\b/i.test(s)) return true;
+  if (/\b(st|street|ave|avenue|blvd|boulevard|rd|road|dr|drive|ln|lane|ct|court|pl|place|way|pkwy|parkway|hwy|highway|cir|circle|ter|terrace|sq|square)\b/i.test(s)) return true;
+  if (/,\s*[A-Z]{2}\b/.test(s) && /\d/.test(s)) return true; // "…, CA 90012"-shaped with a number
+  return false;
+}
+
+// A multi-line address value ("626 L STREET\nCHULA VISTA, CA 91910") →
+// { joined: "626 L STREET, CHULA VISTA, CA 91910", parts:{street,city,state,zip} }.
+function splitAddressLines(value) {
+  const lines = String(value || '')
+    .split(/\r?\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return { joined: lines.join(', '), parts: parseAddressParts(lines) };
+}
+
+function parseAddressParts(lines) {
+  const parts = { street: '', city: '', state: '', zip: '' };
+  if (!lines || !lines.length) return parts;
+  parts.street = lines[0] || '';
+  const tail = lines.slice(1).join(', ');
+  if (!tail) return parts;
+  const m = tail.match(/^(.*?),?\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?\s*$/);
+  if (m) {
+    parts.city = (m[1] || '').replace(/,\s*$/, '').trim();
+    parts.state = m[2] || '';
+    parts.zip = m[3] || '';
+  } else {
+    parts.city = tail;
+  }
+  return parts;
+}
+
+// The Agent value block. A commercial registered-agent service reads as one or
+// more FIRM lines with no address ("1505 Corporation\nLEGALZOOM.COM, INC.") →
+// registered_agent is the whole block joined by " / ", no address. An individual
+// agent reads name + address ("KAI HUNG LIN\n123 Main St\nLA, CA 90012") →
+// name = the pre-address lines, address = the address lines.
+function parseAgentBlock(value) {
+  const lines = String(value || '')
+    .split(/\r?\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!lines.length) return { name: '', address: '' };
+  const addrIdx = lines.findIndex(looksLikeAddressLine);
+  if (addrIdx > 0) {
+    return {
+      name: lines.slice(0, addrIdx).join(' ').trim(),
+      address: lines.slice(addrIdx).join(', ').trim(),
+    };
+  }
+  // No address lines (commercial service) OR the very first line already looks
+  // like an address (no name to split off) → treat every line as the agent name.
+  return { name: lines.join(' / '), address: '' };
+}
+
+// The "CA Registered Corporate (1505) Agent Authorized Employee(s)" block:
+// alternating name / address lines. → { list:[{name,address}], text:"name — addr\n…" }.
+function parseAuthorizedEmployees(value) {
+  const lines = String(value || '')
+    .split(/\r?\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const list = [];
+  let cur = null;
+  for (const line of lines) {
+    if (looksLikeAddressLine(line)) {
+      if (cur) cur.address = cur.address ? `${cur.address}, ${line}` : line;
+      // an address with no preceding name is dropped (rare / malformed)
+    } else {
+      cur = { name: line, address: '' };
+      list.push(cur);
+    }
+  }
+  const text = list.map((e) => (e.address ? `${e.name} — ${e.address}` : e.name)).join('\n');
+  return { list, text };
+}
+
+// Modal title `NAME (NUMBER)` → { name, number }. NUMBER is the CA entity number
+// (12-digit LLC "201911310222" / corp "C1234567"): ≥6 chars, no internal spaces,
+// so a phone fragment like "(916) 768-5544" never matches. The exact title
+// element/class is uncertain across bizfile skins, so we scan a set of
+// header-ish candidates; a miss returns nulls (the caller falls back to the
+// worklist's active owner name). NEVER pulls from the results grid.
+function bizfileTitle(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return { name: null, number: null };
+  const re = /^(.+?)\s*\(\s*([A-Za-z0-9][A-Za-z0-9-]{5,})\s*\)\s*$/;
+  const sels = [
+    '.transaction-header',
+    '.detail-header',
+    '.entity-title',
+    '[class*="EntityName"]',
+    '[class*="entity-name"]',
+    '[class*="title"]',
+    '[class*="Title"]',
+    '[class*="header"]',
+    'h1',
+    'h2',
+    'h3',
+  ];
+  for (const sel of sels) {
+    let els;
+    try {
+      els = root.querySelectorAll(sel);
+    } catch (_e) {
+      continue;
+    }
+    for (const el of els) {
+      const t = (el.textContent || '').trim();
+      const m = t.match(re);
+      if (m) return { name: m[1].trim(), number: m[2] };
+    }
+  }
+  return { name: null, number: null };
+}
+
+// Read the entity DETAIL table (`table.details-list`) into [{label,value}].
+// Explicitly targets the detail table so the search-results grid is never read.
+function readBizfileDetailRows(root) {
+  if (!root || typeof root.querySelector !== 'function') return [];
+  const table = root.querySelector('table.details-list');
+  if (!table) return [];
+  const rows = [];
+  for (const tr of table.querySelectorAll('tr.detail')) {
+    const labelEl = tr.querySelector('td.label');
+    if (!labelEl) continue;
+    const valueEl = tr.querySelector('td.value');
+    const label = (labelEl.textContent || '').trim();
+    // Keep internal newlines (multi-line address / agent / employee cells),
+    // trim only the outer whitespace.
+    const value = (valueEl ? valueEl.textContent || '' : '').replace(/\r/g, '').replace(/^\s+|\s+$/g, '');
+    if (label) rows.push({ label, value });
+  }
+  return rows;
+}
+
+// Map the exact bizfile labels → the SOS capture form fields. Standing-* rows
+// are skipped so no field is ever "Good". Never returns a value read from the
+// results grid (only `table.details-list` rows are input).
+function mapBizfileFields(rows, title, fallbackName) {
+  const map = new Map();
+  let employeesRaw = '';
+  for (const row of rows || []) {
+    const rawLabel = (row.label || '').trim();
+    if (!rawLabel || isStandingLabel(rawLabel)) continue; // Standing-* guard
+    const key = rawLabel.toLowerCase().replace(/\s+/g, ' ').replace(/:$/, '').trim();
+    if (/authorized employee/.test(key)) {
+      if (!employeesRaw) employeesRaw = row.value || '';
+      continue;
+    }
+    if (!map.has(key)) map.set(key, row.value || ''); // first wins
+  }
+  const get = (label) => map.get(label) || '';
+  const t = title || {};
+  const agent = parseAgentBlock(get('agent'));
+  const employees = parseAuthorizedEmployees(employeesRaw);
+  const principal = splitAddressLines(get('principal address'));
+  const mailing = splitAddressLines(get('mailing address'));
+
+  return {
+    entity_type: 'organization',
+    // Name/number come from the modal title, else the worklist active owner
+    // (fallbackName); the number is left blank when the title wasn't captured —
+    // never pulled from the results grid.
+    name: t.name || fallbackName || '',
+    filing_number: t.number || '',
+    status: get('status'),
+    formation_date: get('initial filing date') || get('formation date'),
+    entity_type_detail: get('entity type'),
+    state_of_formation: get('formed in'),
+    registered_agent: agent.name,
+    agent_address: agent.address,
+    principal_address: principal.joined || mailing.joined,
+    principal_address_parts: principal.parts,
+    mailing_address: mailing.joined,
+    officers: employees.text,
+    agent_authorized_employees: employees.list,
+  };
+}
+
+// Orchestrator: read the detail table + title from a root (document / modal
+// element) and return the mapped SOS fields. `fallbackName` = the worklist's
+// active owner name (used for the entity name when the title wasn't captured).
+function scanBizfileFromRoot(root, fallbackName) {
+  return mapBizfileFields(
+    readBizfileDetailRows(root),
+    bizfileTitle(root),
+    fallbackName || '',
+  );
+}
+
+// ── Browser run (guarded so a Node test can import this file without executing) ─
 (function () {
-  'use strict';
+  if (
+    typeof document === 'undefined' ||
+    typeof window === 'undefined' ||
+    typeof chrome === 'undefined' ||
+    !chrome.runtime
+  ) {
+    return;
+  }
 
   // Prevent double-injection
   if (window.__lccPublicRecordsScanned) return;
@@ -20,10 +264,10 @@
   // Scan the page based on type
   let data;
   if (isBizfileHost(hostname)) {
-    // CA Secretary of State (bizfileonline.sos.ca.gov) — a JSON SPA whose detail
-    // modal renders a clean label→value drawer that the generic findValue
-    // heuristic mis-maps. Use a bizfile-specific parser instead (2026-07-24).
-    data = scanBizfile();
+    // CA Secretary of State (bizfileonline.sos.ca.gov) — anchored to the entity
+    // detail modal's `table.details-list`. The content script can't reach the
+    // sidepanel worklist, so the name-fallback is applied there (loadOrgView).
+    data = scanBizfileFromRoot(document, null);
   } else if (siteType === 'assessor') {
     data = scanAssessor();
   } else if (siteType === 'recorder') {
@@ -122,7 +366,7 @@
     };
   }
 
-  // ── Secretary of State / Business Entity scanner ─────────────────────────
+  // ── Secretary of State / Business Entity scanner (generic) ───────────────
 
   function scanSOS() {
     return {
@@ -140,171 +384,7 @@
     };
   }
 
-  // ── CA Secretary of State (bizfileonline) parser ─────────────────────────
-  // bizfileonline.sos.ca.gov renders the entity detail as a modal with a
-  // `NAME (NUMBER)` title + a clean label→value drawer. The generic findValue
-  // heuristic mis-maps it (grabbed the entity number as the name, "Standing -
-  // Agent: Good" as the Registered Agent, the Principal Address block as the
-  // Officers, etc.). This host-specific parser anchors on the exact bizfile
-  // label text so the SOS capture form auto-populates correctly.
-  //
-  // The bizfile drawer labels (ground truth from a live record):
-  //   Initial Filing Date · Status · Standing - SOS/FTB/Agent/VCFCF · Formed In
-  //   · Entity Type · Principal Address · Mailing Address · Statement of Info
-  //   Due Date · Agent  (Agent is a multi-line block: type, then the agent NAME,
-  //   then the agent ADDRESS). "Standing - Agent" is a compliance flag, NOT the
-  //   registered agent.
-
-  function isBizfileHost(host) {
-    return /(^|\.)bizfileonline\.sos\.ca\.gov$/i.test(host || '');
-  }
-
-  // Known bizfile drawer labels — used to delimit a label's value block (the
-  // value runs from the label line to the next known label line). Any
-  // "Standing - *" line is treated as a label (via isStandingLabel). Declared
-  // as a hoisted function (not a module-scope const) because the top-of-file
-  // dispatch calls scanBizfile before a const would be initialized (TDZ).
-  function bizfileLabelSet() {
-    return [
-      'initial filing date', 'status', 'formed in', 'entity type',
-      'principal address', 'mailing address', 'statement of info due date',
-      'agent', 'entity name', 'entity number', 'formation date', 'jurisdiction',
-      'registered agent', 'history', 'filings', 'document type',
-    ];
-  }
-
-  function isBizfileLabelLine(line) {
-    const l = (line || '').trim().toLowerCase().replace(/:\s*$/, '');
-    if (!l) return false;
-    if (isStandingLabel(l)) return true;
-    return bizfileLabelSet().includes(l);
-  }
-
-  // Find the detail drawer/modal container that holds the entity detail (has the
-  // `(NUMBER)` title AND detail labels), so we don't scan a search-results table.
-  function bizfileRoot() {
-    // The parenthesized entity number is alphanumeric — LLC "201022910090",
-    // corp "C1234567" — but ≥6 chars with no spaces, so a phone fragment like
-    // "(916)" (3 chars) never matches.
-    const titleRe = /\(\s*[A-Za-z0-9][A-Za-z0-9-]{5,}\s*\)/;
-    const detailRe = /agent|principal address|formed in|entity type/i;
-    const sels = [
-      '[role="dialog"]', '.modal', '[class*="drawer"]', '[class*="Drawer"]',
-      '[class*="Detail"]', '[class*="detail"]', '[class*="Record"]', 'main',
-    ];
-    for (const sel of sels) {
-      for (const el of document.querySelectorAll(sel)) {
-        const t = el.innerText || el.textContent || '';
-        if (titleRe.test(t) && detailRe.test(t)) return el;
-      }
-    }
-    return document.body;
-  }
-
-  function bizfileLines() {
-    const root = bizfileRoot();
-    const raw = root.innerText || root.textContent || '';
-    return raw
-      .split('\n')
-      .map((s) => s.trim())
-      .filter((s) => s && s.length < 300);
-  }
-
-  // Title: `NAME (NUMBER)` → { name, number }. NUMBER is alphanumeric
-  // (LLC 12-digit, corp "C1234567"), ≥6 chars, no spaces.
-  function bizfileTitle(lines) {
-    const re = /^(.+?)\s*\(\s*([A-Za-z0-9][A-Za-z0-9-]{5,})\s*\)\s*$/;
-    for (const line of lines) {
-      const m = line.match(re);
-      if (m) return { name: m[1].trim(), number: m[2] };
-    }
-    return { name: null, number: null };
-  }
-
-  // Value for an EXACT bizfile label: the following line(s) up to the next known
-  // label line. `multi` returns the array of value lines; otherwise the first.
-  // Also handles an inline "Label: value" on the same line. Never matches a
-  // "Standing - *" line.
-  function bizfileValue(lines, label, opts) {
-    const multi = opts && opts.multi;
-    const target = label.toLowerCase();
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (isStandingLabel(line)) continue;
-      const lower = line.toLowerCase().replace(/:\s*$/, '');
-      if (lower === target) {
-        const vals = [];
-        for (let j = i + 1; j < lines.length; j++) {
-          if (isBizfileLabelLine(lines[j])) break;
-          vals.push(lines[j]);
-        }
-        if (vals.length) return multi ? vals : vals[0];
-      } else if (lower.startsWith(target + ':')) {
-        const rest = line.slice(line.indexOf(':') + 1).trim();
-        if (rest && !isBizfileLabelLine(rest)) return multi ? [rest] : rest;
-      }
-    }
-    return multi ? [] : null;
-  }
-
-  // The Agent block: an optional type token (Individual / Corporation), then the
-  // agent NAME, then the agent ADDRESS (one or more lines, ending at a ZIP).
-  function bizfileAgent(lines) {
-    const block = bizfileValue(lines, 'Agent', { multi: true });
-    if (!block.length) return { name: null, address: null };
-    let i = 0;
-    if (/^(individual|corporation|corporate|entity|person|business|trust)$/i.test(block[i])) i++;
-    const name = block[i] || null;
-    const rest = block.slice(i + 1);
-    const addrParts = [];
-    for (const ln of rest) {
-      addrParts.push(ln);
-      if (/\b\d{5}(-\d{4})?\s*$/.test(ln)) break; // stop at a 5-digit ZIP
-    }
-    if (!addrParts.length && rest.length) addrParts.push(rest[0]);
-    const address = addrParts.join(', ').trim() || null;
-    return { name, address };
-  }
-
-  function scanBizfile() {
-    const lines = bizfileLines();
-    const title = bizfileTitle(lines);
-    const agent = bizfileAgent(lines);
-
-    // Scalar fields fall back to the (now Standing-guarded) generic matcher only
-    // when the bizfile-specific parse comes up empty — the agent NEVER falls
-    // back (its value is a multi-line block the generic matcher would flatten).
-    const biz = (label) => bizfileValue(lines, label);
-
-    return {
-      entity_type: 'organization',
-      name: title.name || findValue('Entity Name', 'Business Name', 'Company Name'),
-      filing_number: title.number || biz('Entity Number') || findValue('Filing Number', 'Entity Number', 'Entity ID'),
-      status: biz('Status') || findValue('Status', 'Entity Status'),
-      formation_date: biz('Initial Filing Date') || biz('Formation Date') || findValue('Formation Date', 'Filing Date', 'Date Filed'),
-      entity_type_detail: biz('Entity Type') || findValue('Entity Type', 'Business Type'),
-      state_of_formation: biz('Formed In') || findValue('State of Formation', 'Jurisdiction'),
-      registered_agent: agent.name,
-      agent_address: agent.address,
-      principal_address: biz('Principal Address') || biz('Mailing Address'),
-      // bizfile's basic detail modal does NOT separately list members/officers
-      // (that needs the Statement of Information PDF, out of scope) — leave it
-      // blank-but-editable rather than mis-fill it with the address block.
-      officers: null,
-    };
-  }
-
   // ── Generic field extraction ─────────────────────────────────────────────
-
-  // A label beginning with "Standing -" (e.g. "Standing - Agent",
-  // "Standing - SOS") is a compliance FLAG, not the field it appears to name.
-  // On CA bizfile the "Standing - Agent: Good" row otherwise false-matched the
-  // "Agent" keyword and populated the Registered Agent field with "Good".
-  // Guard the generic heuristic so a Standing-* label can never populate the
-  // agent / officer / name fields on ANY SOS site (defense-in-depth).
-  function isStandingLabel(text) {
-    return /^\s*standing\s*[-–—]/i.test(text || '');
-  }
 
   // Central label matcher used by every findValue strategy: excludes Standing-*
   // flags, then does the existing case-insensitive substring keyword match.
@@ -403,3 +483,20 @@
     return null;
   }
 })();
+
+// ── Test export (no-op in the browser: `module` is undefined in the isolated world) ─
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    isStandingLabel,
+    isBizfileHost,
+    looksLikeAddressLine,
+    splitAddressLines,
+    parseAddressParts,
+    parseAgentBlock,
+    parseAuthorizedEmployees,
+    bizfileTitle,
+    readBizfileDetailRows,
+    mapBizfileFields,
+    scanBizfileFromRoot,
+  };
+}
