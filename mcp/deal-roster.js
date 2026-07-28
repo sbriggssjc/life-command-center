@@ -158,8 +158,11 @@ export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
           if (!assetId) { summary.skipped_no_deal++; continue; }
           let personId = contactCache.get(c.sf_contact_id);
           if (personId === undefined) {
+            // SF ids come 15- OR 18-char; unified_contacts stores mostly 15. Match on the 15-char prefix
+            // (a stored 18-char value also starts with the same 15), and require a resolved entity.
+            const cid15 = String(c.sf_contact_id).slice(0, 15);
             const u = await opsQuery('GET',
-              `unified_contacts?sf_contact_id=eq.${enc(c.sf_contact_id)}&select=entity_id&limit=1`);
+              `unified_contacts?sf_contact_id=like.${enc(cid15 + '*')}&entity_id=not.is.null&select=entity_id&limit=1`);
             personId = u.data?.[0]?.entity_id || null; contactCache.set(c.sf_contact_id, personId);
           }
           if (!personId) { summary.skipped_no_contact++; continue; }
