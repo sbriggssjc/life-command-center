@@ -343,8 +343,14 @@
       c.assigned_to = owner;
       const el = document.getElementById('mktEngOwner-' + i + '-' + j);
       if (el) el.textContent = owner;
-      const sfReason = r.data.sf && r.data.sf.reason;
-      showToast('Reassigned to ' + owner + (sfReason === 'sf_reassign_not_configured' ? ' (SF Task owner update pending — Slice 4)' : ''), 'success');
+      // The LCC assignment always succeeded here; the SF Task OwnerId write-back
+      // (Slice 4) is best-effort — surface its honest outcome as a suffix.
+      const sf = r.data.sf || {};
+      let suffix = '', tone = 'success';
+      if (sf.reassigned) suffix = ' — SF Task owner updated';
+      else if (sf.reason === 'sf_reassign_not_configured') suffix = ' (SF Task owner update not configured yet)';
+      else { suffix = ' (SF Task update failed: ' + (sf.reason || 'unknown') + ')'; tone = ''; }
+      showToast('Reassigned to ' + owner + suffix, tone);
     } else {
       showToast('Reassign failed: ' + ((r.data && r.data.error) || r.error || 'unknown'), 'error');
     }

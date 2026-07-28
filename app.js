@@ -2143,7 +2143,8 @@ function renderDiaTab(){
 document.querySelectorAll('.bnav[data-page]').forEach(btn => {
   btn.addEventListener('click', () => {
     const targetPage = btn.dataset.page;
-    // Dialysis, Government, Marketing primary nav shortcuts — navigate to pageBiz with domain tab
+    // Dialysis, Government primary nav shortcuts — navigate to pageBiz with domain
+    // tab. (Marketing is its own page — pageMarketing — via the generic path below.)
     const domainShortcuts = { pageDia: 'dialysis', pageGov: 'government' };
     if (domainShortcuts[targetPage]) {
       document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));

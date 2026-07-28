@@ -121,6 +121,74 @@ async function callSfLookupFlow(body) {
 export { pickFlowMessage };
 
 /**
+ * Reassign the Salesforce Task OwnerId behind a marketing engagement, via the PA
+ * "SF Task reassign" flow. Feature-flagged on SF_TASK_REASSIGN_URL (the flow's
+ * signed HTTP-trigger URL — same signed-URL contract as SF_LOOKUP_WEBHOOK_URL);
+ * a clean `sf_reassign_not_configured` no-op until Scott wires the flow.
+ *
+ * The flow receives { sf_task_id | what_id, new_owner } (+ context ids) and
+ * PATCHes the Task OwnerId in Salesforce, returning { ok:true, reassigned:N }.
+ * Never throws — returns a structured result so the caller surfaces success /
+ * failure honestly (the LCC assignment is authoritative; this is best-effort).
+ *
+ *   POST <SF_TASK_REASSIGN_URL>
+ *   { operation:'reassign_task_owner', sf_task_id, what_id, sf_contact_id,
+ *     listing_id, opp_id, new_owner }
+ *   -> { ok:true, reassigned:N } | { ok:false, reason, detail? }
+ *
+ * @param {{sf_task_id?:string, what_id?:string, opp_id?:string, listing_id?:string,
+ *          sf_contact_id?:string, new_owner:string}} args
+ * @returns {Promise<{ok:boolean, reason?:string, status?:number, reassigned?:number|boolean, detail?:string}>}
+ */
+export async function reassignSalesforceTaskOwner(args) {
+  const url = process.env.SF_TASK_REASSIGN_URL;
+  if (!url) return { ok: false, reason: 'sf_reassign_not_configured' };
+
+  const a = args || {};
+  const newOwner = String(a.new_owner || '').trim();
+  if (!newOwner) return { ok: false, reason: 'no_new_owner' };
+  const sfTaskId = String(a.sf_task_id || '').trim();
+  const whatId = String(a.what_id || a.opp_id || a.listing_id || '').trim();
+  if (!sfTaskId && !whatId) return { ok: false, reason: 'no_task_target' };
+
+  const body = {
+    operation: 'reassign_task_owner',
+    sf_task_id: sfTaskId || null,
+    what_id: whatId || null,
+    sf_contact_id: a.sf_contact_id ? String(a.sf_contact_id).trim() : null,
+    listing_id: a.listing_id ? String(a.listing_id).trim() : null,
+    opp_id: a.opp_id ? String(a.opp_id).trim() : null,
+    new_owner: newOwner,
+  };
+
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 15000);
+  } catch (e) {
+    return { ok: false, reason: 'flow_unreachable', detail: String((e && e.message) || e).slice(0, 300) };
+  }
+
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
+
+  if (!res.ok) {
+    const detailRaw = pickFlowMessage(json?.error) || pickFlowMessage(json?.detail)
+      || (typeof text === 'string' ? text : '') || '';
+    return { ok: false, reason: 'flow_http_error', status: res.status, detail: String(detailRaw).slice(0, 500) };
+  }
+  if (!json || json.ok !== true) {
+    const detailRaw = pickFlowMessage(json?.detail) || pickFlowMessage(json?.error) || '';
+    return { ok: false, reason: json?.reason || 'flow_reported_failure', detail: detailRaw ? String(detailRaw).slice(0, 500) : null };
+  }
+  return { ok: true, reassigned: json.reassigned != null ? json.reassigned : true };
+}
+
+/**
  * Normalize a business name for fuzzy comparison: lowercase, strip
  * punctuation, strip entity suffixes (LP/LLC/Inc/Corp/Co/Ltd/LLP/PLLC).
  */

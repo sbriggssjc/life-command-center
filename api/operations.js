@@ -1394,13 +1394,37 @@ async function bridgeMarketingReassign(req, res, user, workspaceId) {
     + '&sf_contact_id=eq.' + encodeURIComponent(sfContactId);
   const patch = await domainPatch('dia', path, { assigned_to: newOwner });
 
-  // SF Task OwnerId write — Slice-4 dependency, flagged.
-  const sfConfigured = !!process.env.SF_TASK_REASSIGN_URL;
-  const sf = { reassigned: false, reason: sfConfigured ? 'sf_reassign_deferred' : 'sf_reassign_not_configured' };
-
   if (!patch.ok) {
-    return res.status(502).json({ ok: false, error: 'assignment_write_failed', status: patch.status, sf });
+    // LCC assignment failed — do NOT touch Salesforce.
+    return res.status(502).json({
+      ok: false, error: 'assignment_write_failed', status: patch.status,
+      sf: { reassigned: false, reason: 'lcc_write_failed' },
+    });
   }
+
+  // SF Task OwnerId write-back (Slice 4) — runs ONLY after the LCC assignment
+  // write succeeds AND SF_TASK_REASSIGN_URL is configured. Best-effort +
+  // outcome-truthful: a Salesforce failure never rolls back the LCC assignment;
+  // the honest result rides back in `sf` so the UI can surface it. No auto-send
+  // beyond the reassignment the operator just clicked.
+  let sf;
+  if (!process.env.SF_TASK_REASSIGN_URL) {
+    sf = { reassigned: false, reason: 'sf_reassign_not_configured' };
+  } else {
+    const { reassignSalesforceTaskOwner } = await import('./_shared/salesforce.js');
+    const r = await reassignSalesforceTaskOwner({
+      sf_task_id: b.sf_task_id != null ? String(b.sf_task_id).trim() : '',
+      what_id: oppId || listingId,
+      opp_id: oppId,
+      listing_id: listingId,
+      sf_contact_id: sfContactId,
+      new_owner: newOwner,
+    });
+    sf = (r && r.ok)
+      ? { reassigned: true, reason: 'sf_reassigned', count: r.reassigned }
+      : { reassigned: false, reason: (r && r.reason) || 'sf_reassign_failed', status: r && r.status, detail: r && r.detail };
+  }
+
   return res.status(200).json({ ok: true, lcc: { reassigned: true, new_owner: newOwner }, sf });
 }
 
