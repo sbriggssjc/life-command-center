@@ -54,6 +54,21 @@ anything for the operators where loosening is dangerous.
   writing**, so precision is validated on real data before the live run. Threshold tunable via query param.
 - Ship behind the dry-run: review the would-attribute set for the newly-recalled deals, then run live.
 
-## Status
-Design validated on live data (the table above). Not yet built — this is the next matcher build, and it carries
-its own dry-run validation gate because it touches the precision profile Scott validated on BUILD 04.
+## Dry-run outcome (2026-07-28) — tenant-alone REFUTED, shipped v2.1 instead
+Built v2 (frequency-adaptive) behind `?dry_run=1` and ran it live. **The dry-run killed tenant-alone:** the
+"distinctive tenant" deals it would have recovered were mostly **same operator, different property**:
+- "Innovative Renal" tenant-alone → 8 emails, all about **Innovative Renal Care _Arvada, CO_** — NOT the
+  Milwaukee deal. The Milwaukee thread simply isn't in the corpus; city-matching was correctly rejecting Arvada.
+- "DaVita-Anchored" → San Francisco & Middletown CT listings (deal is Springfield IL). "Action Behavior" →
+  Fort Worth (deal is Duncanville). All wrong-location.
+- Plus substring FP ("Essentia" ⊂ "Essential") and the weekly digest self-attributing (it lists every deal).
+
+**Lesson: city is load-bearing** — dropping it mis-attributes same-operator mail across properties. tenant-alone
+is abandoned.
+
+## What shipped — v2.1 (city REQUIRED, plus the safe wins the dry-run surfaced)
+1. **Core-tenant + city** — strip generic descriptors so "DaVita in Queens" matches the "DaVita Dialysis -
+   Queens" deal (v1 required "DaVita Dialysis" verbatim, missed it). City still required → precision preserved.
+2. **Word-boundary match** — `\bEssentia\b` no longer matches "Essential".
+3. **Digest exclusion** — skip mail containing the engine-digest footer "LCC cadence engine".
+`?dry_run=1` retained for future re-validation. Live-run pending a clean dry-run on v2.1.
