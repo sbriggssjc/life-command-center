@@ -18,6 +18,7 @@ import { makeSfWritebackRoutes } from "./sf-writeback.js";
 import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
 import { makeDealRosterRoute } from "./deal-roster.js";
 import { makeCadenceScanRoute } from "./cadence-scan.js";
+import { makeDealEmailMatcherRoute } from "./deal-email-matcher.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
@@ -1873,6 +1874,10 @@ app.get("/", (_req, res) => {
   const __cadence = makeCadenceScanRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
   app.get("/api/pipeline/cadence-scan",  authenticate, __cadence.scan);
   app.post("/api/pipeline/cadence-scan", authenticate, __cadence.scan);
+
+  // Deal-Email Matcher (BUILD 04) — attribute Outlook emails to deals by tenant+city; self-builds roster.
+  const __matcher = makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
+  app.post("/api/pipeline/match-deal-emails", authenticate, __matcher.match);
   console.log("[MCP] Registered deal-dossier + SF write-back + opportunity-sync HTTP routes");
 }
 
