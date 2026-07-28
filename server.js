@@ -309,6 +309,7 @@ app.all('/api/sf/update-opportunity',(req, res) => { req.query._mcpTarget = '/ap
 app.all('/api/pipeline/ingest-opportunity',  (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-opportunity';  aiReadHandler(req, res); });
 app.all('/api/pipeline/ingest-opportunities', (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-opportunities'; aiReadHandler(req, res); });
 app.all('/api/pipeline/ingest-deal-parties',  (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-deal-parties';  aiReadHandler(req, res); });
+app.all('/api/pipeline/cadence-scan',         (req, res) => { req.query._mcpTarget = '/api/pipeline/cadence-scan';         aiReadHandler(req, res); });
 
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });

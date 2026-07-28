@@ -17,6 +17,7 @@ import { makeDealDossierTools, makeDealDossierHttpRoutes } from "./deal-dossier-
 import { makeSfWritebackRoutes } from "./sf-writeback.js";
 import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
 import { makeDealRosterRoute } from "./deal-roster.js";
+import { makeCadenceScanRoute } from "./cadence-scan.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
@@ -1866,6 +1867,11 @@ app.get("/", (_req, res) => {
   // Deal Roster (BUILD 02, Slice A) — Team Briggs deal-team edges for owned/partnership scope.
   const __roster = makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
   app.post("/api/pipeline/ingest-deal-parties", authenticate, __roster.ingestParties);
+
+  // Cadence Engine (BUILD 03) — read-only "what needs a touch" scan over in-scope open deals.
+  const __cadence = makeCadenceScanRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
+  app.get("/api/pipeline/cadence-scan",  authenticate, __cadence.scan);
+  app.post("/api/pipeline/cadence-scan", authenticate, __cadence.scan);
   console.log("[MCP] Registered deal-dossier + SF write-back + opportunity-sync HTTP routes");
 }
 
