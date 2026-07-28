@@ -171,7 +171,7 @@ async function processDeal(raw, deps) {
   };
   const up = await opsQuery('POST',
     'bd_opportunities?on_conflict=workspace_id,sf_opp_id', row,
-    { Prefer: 'return=representation,resolution=merge-duplicates' });
+    'resolution=merge-duplicates,return=representation');   // prefer must be a STRING (see govQuery/comps upserts)
   if (up.ok === false) return { status: 502, body: { ok: false, error: 'upsert_failed', detail: up.data, sf_opp_id: b.sf_opp_id } };
   const saved = Array.isArray(up.data) ? up.data[0] : up.data;
 

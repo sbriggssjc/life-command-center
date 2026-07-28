@@ -82,8 +82,8 @@ async function supabaseQuery(baseUrl, apiKey, method, path, body, prefer) {
   return { ok: res.ok, status: res.status, data, count };
 }
 
-function opsQuery(method, path, body) {
-  return supabaseQuery(OPS_SUPABASE_URL, OPS_SUPABASE_KEY, method, path, body);
+function opsQuery(method, path, body, prefer) {
+  return supabaseQuery(OPS_SUPABASE_URL, OPS_SUPABASE_KEY, method, path, body, prefer);
 }
 
 function govQuery(method, path, body, prefer) {
