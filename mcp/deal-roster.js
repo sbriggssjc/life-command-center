@@ -66,7 +66,8 @@ export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
     const map = {};
     const d = await opsQuery('GET',
       `bd_opportunities?workspace_id=eq.${enc(WORKSPACE_ID)}&sf_opp_id=not.is.null&select=sf_opp_id,entity_id&limit=5000`);
-    for (const r of (d.data || [])) if (r.sf_opp_id && r.entity_id) map[r.sf_opp_id] = r.entity_id;
+    // Key by the 15-char id prefix so a 15- or 18-char OpportunityId from OCR both match.
+    for (const r of (d.data || [])) if (r.sf_opp_id && r.entity_id) map[String(r.sf_opp_id).slice(0, 15)] = r.entity_id;
     return map;
   }
 
@@ -154,7 +155,7 @@ export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
         try {
           const c = normContact(raw);
           if (!c.sf_opp_id || !c.sf_contact_id) { summary.skipped_no_contact++; continue; }
-          const assetId = dealMap[c.sf_opp_id];
+          const assetId = dealMap[String(c.sf_opp_id).slice(0, 15)];
           if (!assetId) { summary.skipped_no_deal++; continue; }
           let personId = contactCache.get(c.sf_contact_id);
           if (personId === undefined) {
