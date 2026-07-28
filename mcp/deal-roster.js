@@ -60,6 +60,16 @@ export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
     return map;
   }
 
+  // Preload the backbone deals once (sf_opp_id -> asset entity_id) so a firm-wide OpportunityContactRole
+  // pull is filtered IN MEMORY — no per-row deal lookup, non-backbone contacts skipped for free.
+  async function loadDealMap() {
+    const map = {};
+    const d = await opsQuery('GET',
+      `bd_opportunities?workspace_id=eq.${enc(WORKSPACE_ID)}&sf_opp_id=not.is.null&select=sf_opp_id,entity_id&limit=5000`);
+    for (const r of (d.data || [])) if (r.sf_opp_id && r.entity_id) map[r.sf_opp_id] = r.entity_id;
+    return map;
+  }
+
   return {
     ingestParties: async (req, res) => {
       const body = req.body || {};
@@ -133,8 +143,8 @@ export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
       if (!Array.isArray(rows)) {
         return res.status(400).json({ ok: false, error: 'expected { parties: [ ... ] }' });
       }
-      const dealCache = new Map();       // sf_opp_id -> asset entity_id | null
-      const contactCache = new Map();    // sf_contact_id -> person entity_id | null
+      const dealMap = await loadDealMap();   // sf_opp_id -> asset entity_id (backbone only), preloaded once
+      const contactCache = new Map();        // sf_contact_id -> person entity_id | null
       const touched = new Set();
       const summary = {
         total: rows.length, resolved: 0, edges_created: 0, edges_existing: 0,
@@ -144,12 +154,7 @@ export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
         try {
           const c = normContact(raw);
           if (!c.sf_opp_id || !c.sf_contact_id) { summary.skipped_no_contact++; continue; }
-          let assetId = dealCache.get(c.sf_opp_id);
-          if (assetId === undefined) {
-            const d = await opsQuery('GET',
-              `bd_opportunities?workspace_id=eq.${enc(WORKSPACE_ID)}&sf_opp_id=eq.${enc(c.sf_opp_id)}&select=entity_id&limit=1`);
-            assetId = d.data?.[0]?.entity_id || null; dealCache.set(c.sf_opp_id, assetId);
-          }
+          const assetId = dealMap[c.sf_opp_id];
           if (!assetId) { summary.skipped_no_deal++; continue; }
           let personId = contactCache.get(c.sf_contact_id);
           if (personId === undefined) {
