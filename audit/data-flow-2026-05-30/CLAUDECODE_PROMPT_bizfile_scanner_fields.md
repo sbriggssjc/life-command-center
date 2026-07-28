@@ -1,106 +1,105 @@
-# Claude Code (LCC extension) — fix the CA bizfile field extraction so the SOS capture auto-populates correctly
+# Claude Code (LCC extension) — CA bizfile SOS parser, anchored to the real detail-modal DOM
 
-The Option-B SOS capture loop is **confirmed working end to end** (a real Linchao LLC capture
-wrote `recorded_owners` + an `sos_sidebar` address observation). But the auto-grab from CA
-bizfileonline (`bizfileonline.sos.ca.gov`) mis-maps the fields — the generic `findValue`
-heuristic in `extension/content/public-records.js` grabs the wrong rows. Operator wants the form
-auto-populated correctly (editing every field defeats the "rapid click-through" goal).
+The Option-B SOS capture loop is **confirmed working end to end** (Linchao LLC wrote
+`recorded_owners` + an `sos_sidebar` observation). But the CA bizfileonline auto-grab is broken
+two ways, both now root-caused with the real DOM:
 
-## The observed mis-maps (real Linchao LLC capture, 2026-07-24)
+1. **Wrong region.** The generic `findValue` heuristic in `extension/content/public-records.js`
+   reads the whole page and matched the **search RESULTS grid** (a table of "626 …" entities)
+   instead of the open entity **detail modal**. Symptom: capturing "626 L Street LLC" pulled
+   "626 16TH STREET, LLC" (row 1 of the results) and `Agent Address = "Click to expand,
+   07/30/2020 Active Limited Liability Company - CA…"` (raw results-table cell text).
+2. **Loose label matching.** "Registered Agent" matched "Standing - Agent: Good" instead of the
+   real "Agent" row.
 
-| Form field | Scanner grabbed | Correct value | Why it's wrong |
-|---|---|---|---|
-| Entity Name | `entity number` | `LINCHAO LLC` | grabbed a label, not the modal title |
-| Filing Number | (blank) | `201022910090` | in the modal title `LINCHAO LLC (201022910090)` |
-| Registered Agent | `Good` | `KAI HUNG LIN` | matched **"Standing - Agent: Good"** (label contains "Agent") instead of the real **"Agent"** row |
-| Agent Address | (blank) | `1369 BENTLEY CT, WEST COVINA, CA 91791` | the Agent row's address wasn't parsed |
-| Jurisdiction / State of Formation | (blank) | `CALIFORNIA` | it's the **"Formed In"** row |
-| Officers / Managers / Members | `1369 BENTLEY CT…` (address) | the manager/officer name | grabbed the address block |
-| Status | `Active` | `Active` | ✅ correct |
-| Formation Date | `08/16/2010` | `08/16/2010` | ✅ correct |
-| Principal / Mailing Address | `1369 BENTLEY CT…` | `1369 BENTLEY CT, WEST COVINA, CA 91791` | ✅ correct |
+## The real detail-modal DOM (captured live from bizfile, 626 L Street LLC)
 
-## The bizfile detail-modal label structure (ground truth from the live record)
+The detail card is a clean table, class **`details-list`**, one `tr.detail` per field with a
+`td.label` and a `td.value`:
 
-bizfile renders the entity detail as a modal with a title + a clean label→value list:
-
-```
-  Title:  LINCHAO LLC (201022910090)          ← entity name + filing/entity number
-  Initial Filing Date   08/16/2010
-  Status                Active
-  Standing - SOS        Good
-  Standing - FTB        Good
-  Standing - Agent      Good                    ← NOT the registered agent — a standing flag
-  Standing - VCFCF      Good
-  Formed In             CALIFORNIA              ← jurisdiction / state of formation
-  Entity Type           Limited Liability Company - CA
-  Principal Address     1369 BENTLEY CT, WEST COVINA, CA 91791
-  Mailing Address       1369 BENTLEY CT, WEST COVINA, CA 91791
-  Statement of Info Due Date  08/31/2026
-  Agent                 Individual                ← the REAL registered agent block
-                        KAI HUNG LIN
-                        1369 BENTLEY CT, WEST COVINA, CA 91791
+```html
+<table class="details-list container-fluid"><tbody>
+  <tr class="detail"><td class="label">Initial Filing Date</td><td class="value">04/18/2019</td></tr>
+  <tr class="detail"><td class="label">Status</td><td class="value">Active</td></tr>
+  <tr class="detail"><td class="label">Standing - SOS</td><td class="value">Good</td></tr>
+  <tr class="detail"><td class="label">Standing - FTB</td><td class="value">Good</td></tr>
+  <tr class="detail"><td class="label">Standing - Agent</td><td class="value">Good</td></tr>
+  <tr class="detail"><td class="label">Standing - VCFCF</td><td class="value">Good</td></tr>
+  <tr class="detail"><td class="label">Formed In</td><td class="value">CALIFORNIA</td></tr>
+  <tr class="detail"><td class="label">Entity Type</td><td class="value">Limited Liability Company - CA</td></tr>
+  <tr class="detail"><td class="label">Principal Address</td><td class="value">626 L STREET\nCHULA VISTA, CA 91910</td></tr>
+  <tr class="detail"><td class="label">Mailing Address</td><td class="value">740 BAY BLVD\nCHULA VISTA,CA91910</td></tr>
+  <tr class="detail"><td class="label">Statement of Info Due Date</td><td class="value">04/30/2027</td></tr>
+  <tr class="detail"><td class="label">Agent</td><td class="value">1505 Corporation\nLEGALZOOM.COM, INC.\n</td></tr>
+  <tr class="detail"><td class="label">CA Registered Corporate (1505) Agent Authorized Employee(s)</td>
+      <td class="value">SANDRA MENJIVAR \n500 N BRAND BLVD, SUITE 890, GLENDALE, CA\nJesse Camarena \n500 N BRAND BLVD…\n…</td></tr>
+</tbody></table>
 ```
 
-## The fix — a targeted bizfile parser (don't rely on the generic heuristic)
+## The parser (host = `bizfileonline.sos.ca.gov`)
 
-In `public-records.js`, when the page host is `bizfileonline.sos.ca.gov` (CA SOS), use a
-bizfile-specific extraction path instead of the generic label matcher:
+Add a bizfile-specific extraction path in `public-records.js`. Select the detail modal
+explicitly — **`document.querySelector('table.details-list')`** — NOT the results grid. Walk
+`tr.detail`, read `td.label` → `td.value` into a map, then map by exact label:
 
-- **Entity name + number:** from the modal title `NAME (NUMBER)` → `entity_name` = NAME,
-  `filing_number`/`entity_number` = NUMBER.
-- **Registered agent:** read the standalone **"Agent"** row (exact label `Agent`, NOT any label
-  starting with `Standing`). Its value is an `Individual`/`Corporation` line, then the agent NAME
-  line, then the agent ADDRESS lines → `registered_agent` = the name (KAI HUNG LIN),
-  `agent_address` = the address block. **Explicitly exclude any label beginning with `Standing`**
-  from agent/name matching — that's the false match that produced "Good".
-- **Jurisdiction / state of formation:** the **"Formed In"** row → `CALIFORNIA`.
-- **Principal / Mailing address:** the "Principal Address" / "Mailing Address" rows (already
-  working — keep).
-- **Status:** "Status" row (already working — keep).
-- **Formation date:** "Initial Filing Date" (already working — keep).
-- **Officers / Managers / Members:** bizfile's basic detail modal does NOT list members
-  separately (only the agent) — so leave officers blank rather than mis-filling it with the
-  address. (The manager may require the "Statement of Information" PDF, out of scope; blank-but-
-  editable is correct here.)
+| bizfile label | form field |
+|---|---|
+| `Initial Filing Date` | formation_date |
+| `Status` | status |
+| `Formed In` | jurisdiction / state_of_formation |
+| `Entity Type` | entity_type |
+| `Principal Address` | principal_address (split the `\n` into street / city-state-zip) |
+| `Mailing Address` | mailing_address |
+| `Agent` | registered_agent (here: "1505 Corporation / LEGALZOOM.COM, INC.") |
+| `CA Registered Corporate (1505) Agent Authorized Employee(s)` | officers / agent_authorized_employees (name + address per person; multi-line) |
+| `Standing - *` | **IGNORE** (status flags, never agent/name) |
 
-Guard the generic heuristic so a `Standing - *` label can never populate the agent/officer/name
-fields on ANY SOS site (defense-in-depth for the next state too).
+- **Entity name + number** are NOT in `table.details-list` — they're in the modal **title**
+  (the brown header, e.g. `626 L STREET LLC (201911310222)`). Target that heading element for
+  `entity_name` + `filing_number`/`entity_number`. If its selector is uncertain, fall back to
+  the worklist's active owner name (the panel already shows "CAPTURING FOR: <name>") for
+  entity_name and leave the number blank — do NOT pull it from the results grid.
+- **Registered-agent-service note:** for many LLCs the `Agent` is a commercial service
+  (LegalZoom / CT Corporation / 1505 Corporation) and the "Authorized Employee(s)" are the
+  service's staff, NOT the owner's people. Capture them as-is (agent = the service; officers =
+  the listed employees) but do not treat them as the owner's decision-maker. (Surfacing "agent is
+  a service → real manager needs the Statement of Information" is a later enrichment concern, not
+  this parser.)
+- Keep the **`Standing -` exclusion** as a global guard so no SOS site can populate agent/name
+  fields from a standing flag.
 
-## Precise selectors
+Everything downstream is unchanged: the parsed fields pre-fill the editable form (operator can
+still correct), Save posts to `/api/sos-writeback`.
 
-The label text above is reliable, but the exact DOM (how bizfile marks up each label/value pair
-+ the Agent sub-block) determines the selectors. If the label-text approach doesn't cleanly parse
-the multi-line Agent block, **ask Scott to capture the detail modal's `outerHTML`** (right-click
-the modal → Inspect → right-click the modal's root element → Copy → Copy outerHTML) and commit it
-as a fixture under `extension/` test fixtures, then parse against that real DOM. Don't guess the
-sub-block structure — anchor it to a captured fixture.
+## Fixture + test
+
+Commit the captured DOM above as a fixture (`extension/` test fixtures) and add a unit test that
+parses it and asserts: entity via title/fallback; formation `04/18/2019`; status `Active`;
+jurisdiction `CALIFORNIA`; principal `626 L STREET, CHULA VISTA, CA 91910`; mailing `740 BAY
+BLVD, CHULA VISTA, CA 91910`; agent `1505 Corporation / LEGALZOOM.COM, INC.`; officers = the 5
+authorized employees; and that **no field equals "Good"** and **no field contains results-grid
+text**.
 
 ## Boundaries
 
-Extension only (`content/public-records.js`) · a bizfile-host-specific parser path + a global
-`Standing -` exclusion guard · the editable form stays (auto-grab pre-fills, operator can still
-correct) · the SCAN_PAGE → loadOrgView → sos-writeback flow is unchanged · ships on
-unpacked-reload.
+Extension only (`content/public-records.js` + a fixture/test) · select `table.details-list`
+explicitly (never the results grid) · exact-label map + `Standing -` guard · the editable form
+stays · SCAN_PAGE → loadOrgView → sos-writeback unchanged · ships on unpacked-reload.
 
 ## Verify
 
-1. `node --check extension/content/public-records.js`.
-2. Re-scan the Linchao LLC bizfile record → the form auto-fills: Entity Name `LINCHAO LLC`,
-   Filing Number `201022910090`, Registered Agent `KAI HUNG LIN`, Agent Address `1369 Bentley
-   Ct…`, Jurisdiction `CALIFORNIA`, Status `Active`, Formation `08/16/2010`, Principal Address
-   `1369 Bentley Ct…` — Registered Agent is NEVER `Good`.
-3. Save → `recorded_owners` gets `registered_agent_name = KAI HUNG LIN` (not "Good"),
-   `manager_name` not an address; the LCC observations capture principal + agent addresses as
-   distinct rows.
-4. Spot-check on a second CA entity to confirm it's not Linchao-specific.
+1. `node --check` + the fixture unit test green.
+2. Re-scan 626 L Street LLC's bizfile detail → form auto-fills correctly (entity `626 L STREET
+   LLC`, formation `04/18/2019`, jurisdiction `CALIFORNIA`, principal `626 L Street…`, mailing
+   `740 Bay Blvd…`, agent `1505 Corporation / LegalZoom`, officers = the 5 employees), Registered
+   Agent is NEVER `Good`, and NO field shows another entity's data.
+3. Re-scan Linchao LLC (agent `KAI HUNG LIN`) to confirm it works for an individual-agent entity too.
+4. Save → `recorded_owners` + LCC observations reflect the correct values.
 
 ## Context
 
-Final data-quality polish on the now-working Option-B SOS capture. The plumbing is proven live;
-this makes the auto-grab actually correct on CA bizfile so the operator clicks through instead of
-retyping. Each state's SOS has a different layout — CA bizfile is the first; the same
-label-anchored approach (+ the `Standing -` guard) extends to Sunbiz/others as they're worked.
-Also note: the Linchao test capture created a second `recorded_owners` row (a pre-existing
-`sos_registry` Linchao row with manager "Amanda Lin" already existed) — the owner-reconcile
-engine handles the dup by name; not part of this fix.
+Final data-quality fix on the working Option-B SOS capture. The plumbing is proven live; this
+anchors the CA bizfile parse to its real DOM so the auto-grab is correct and the operator clicks
+through instead of retyping. `table.details-list` + `td.label`/`td.value` is bizfile's structure;
+other states differ, but the same anchor-to-the-detail-container + exact-label approach extends
+to Sunbiz/etc. as they're worked.
