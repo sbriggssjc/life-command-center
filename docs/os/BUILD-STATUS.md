@@ -94,8 +94,38 @@ One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo,
   default = exclude. (`docs/os/architecture/deal-backbone-design-refinements.md`.)
 - ✅ **STAGE_REGIME** shipped in `mcp/opportunity-sync.js` (A active-listing / B contractual / C terminal) and
   returned by the ingest endpoint; cadence-scan + deal monitor read it.
-- 📐 **Slice B (next)** — external contact roles (`OpportunityContactRole` → seller/buyer/… `deal_party` edges via
-  `unified_contacts`) for the dossier + deal-email matcher (Spine #3).
+- 🚫 **Slice B via SF OpportunityContactRole — DEAD END for TB.** Endpoint `ingest-deal-contacts` built + working
+  (verified with a real pair), but OCR is **empty for Team Briggs deals** (7,201 rows firm-wide, 0 on any of the
+  592 backbone deals, confirmed after 15-char id normalization). TB does not track external parties in standard
+  contact roles. **Re-spec:** `docs/os/architecture/deal-party-roster-source.md`. Party source is likely the
+  custom **`Deal_Participants__c`** object (verify next) and/or the `.md` dossier rosters; the deal-email matcher
+  pivots to **strong-signal-primary** (address / escrow# / OM-PSA) with the roster as a byproduct. Pause the empty
+  OCR flow.
+- 📌 **Identity rules surfaced** — (1) match SF↔LCC ids on the **15-char prefix** everywhere (needs a shared
+  helper); (2) **contact-entity resolution backfill** — only 5,651/17,289 SF contacts resolve to a person entity,
+  which caps the roster + matcher.
+
+## Cadence Engine — cadence-scan (BUILD 03, LIVE 2026-07-28)
+- ✅ **`GET/POST /api/pipeline/cadence-scan`** — read-only "what needs a touch" digest over IN-SCOPE open deals
+  (`mcp/cadence-scan.js`). Reads `bd_opportunities` + `STAGE_REGIME` + `activity_events`. Regime A → touch-due
+  (interval per stage: identified 7d, active listings 14d) vs last call/email; Regime B → surfaced as contractual
+  (the deal monitor owns cadence there); Regime C → skipped. Ranked overdue → needs-first-touch → due-soon →
+  on-track. **Verified live: 21 in-scope open (16 A, 5 contractual), 16 needs-first-touch.**
+- ✅ **Sharpened by BUILD 04** — see below; last-touch now reflects attributed email.
+
+## Deal-Email Matcher (BUILD 04, LIVE 2026-07-28)
+- ✅ **`POST /api/pipeline/match-deal-emails`** (`mcp/deal-email-matcher.js`) — attributes Outlook emails to
+  in-scope open deals by STRONG SIGNAL (**tenant AND city** in subject/body; precision-first — city-alone
+  over-attributes badly, validated). On a match it writes a deal-attributed `activity_events` row on the asset
+  (idempotent by `entity_id`+`external_id`) AND an `email_derived` `deal_party` edge — **the roster self-builds**.
+  **First run: 65 emails → 8 deals, 17 roster edges, 0 dupes; spot-checked precise** (Valley MOB marketing +
+  diligence threads).
+- ✅ **cadence-scan is now REAL** — with attributed activity the digest went from 16 needs-first-touch / 0
+  actionable to **4 overdue + 1 on-track** (e.g. a Listing Signed deal 82 days past its 14-day cadence). The
+  spine connects end to end: SF pipeline → backbone → scope → correspondence → next-best-touch.
+- 📐 **Next** — schedule the matcher (PA recurrence / cron); the **Weekly Pipeline Email (Spine #6)** now has real
+  data; add **address / escrow# / OM-PSA** signals for recall (misses e.g. Innovative Renal Care); store the SF
+  `deal_name` on `bd_opportunities`; contact-entity resolution backfill; the SF 15-char-id helper.
 - 📐 **Proactive Deal Monitor** — the automation-plane loop that reads `list_deal_checkpoints` on a schedule and
   acts on overdue/due-soon milestones (notify / draft / update). Foundation now exists; loop not yet built.
 - 📐 **Mail-intake → dossier** — Outlook deal-mail distilled into `activity_events` so correspondence auto-appends.
