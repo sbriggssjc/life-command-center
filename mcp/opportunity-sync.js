@@ -27,10 +27,13 @@ const CONTRACTUAL = new Set(['loi_executed', 'in_escrow', 'non_refundable']);
 function parseDealName(name) {
   const s = String(name || '').trim();
   let tenant = s, city = null, state = null;
-  const parts = s.split(/\s+-\s+/);              // "Tenant" | "City, State"
+  const parts = s.split(/\s+-\s+/);              // "Tenant" | "City, State" | "City" | "State"
   if (parts.length >= 2) {
     tenant = parts[0].trim();
-    const loc = parts.slice(1).join(' - ').trim();
+    // Deals come in two shapes: "Tenant - City, State" (comma) AND "Tenant - City - State"
+    // (all dashes, e.g. "SSA - Forest - MS"). Normalize the remaining dashes to commas
+    // so both forms split into city + state the same way.
+    const loc = parts.slice(1).join(' - ').replace(/\s+-\s+/g, ', ').trim();
     const cm = loc.split(',');
     city = (cm[0] || '').trim() || null;
     state = (cm[1] || '').trim() || null;
@@ -123,7 +126,7 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       // is_open is a GENERATED column = (closed_at IS NULL) — never write it directly;
       // openness derives from closed_at. 'Closed' (mapped) = won; any stage containing
       // lost/dead/withdrawn (e.g. the Sale Deal Lost record type) = closed-lost.
-      const isLost = /(lost|dead|dropped|withdrawn)/i.test(String(b.stage_name));
+      const isLost = /(lost|dead|dropped|withdrawn|terminat|cancel|expired|no[ _-]?sale)/i.test(String(b.stage_name));
       const isWon = stage === 'closed';
       const isClosed = isWon || isLost;
       const meta = {};
