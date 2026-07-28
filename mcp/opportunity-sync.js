@@ -53,7 +53,8 @@ function normalizeDeal(d) {
     amount: d.amount ?? d.Amount ?? null,
     close_date: d.close_date ?? d.CloseDate ?? null,
     vertical: d.vertical ?? null,
-    property_address: d.property_address ?? null,
+    // A5b: SF Opportunity carries the property address in formula fields — capture it.
+    property_address: d.property_address ?? d.Property_Address__c ?? d.Property_Address_Line_1__c ?? null,
   };
 }
 
@@ -82,6 +83,18 @@ function parseDealName(name) {
   return { tenant, city, state };
 }
 
+// A5b: address disambiguation key — leading street number + first 2 non-directional street words.
+// "2860 S US Highway 83" and "2860 US Highway 83 South" both -> "2860 us highway" (same property).
+function addrKey(a) {
+  const s = String(a || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const m = s.match(/^(\d+)\s+(.+)$/);
+  if (!m) return null;
+  const dir = new Set(['n', 's', 'e', 'w', 'north', 'south', 'east', 'west', 'ne', 'nw', 'se', 'sw']);
+  const words = m[2].split(' ').filter(w => w && !dir.has(w));
+  if (!words.length) return null;
+  return m[1] + ' ' + words.slice(0, 2).join(' ');
+}
+
 async function resolveDealEntity(body, { opsQuery, enc, WORKSPACE_ID }) {
   const { sf_opp_id, name } = body;
   // 1. Already linked via a prior sync?
@@ -105,6 +118,13 @@ async function resolveDealEntity(body, { opsQuery, enc, WORKSPACE_ID }) {
     const rows = r.data || [];
     if (rows.length === 1) return { entity_id: rows[0].id, created: false };
     if (rows.length > 1) {
+      // A5b: property address is the strongest disambiguator. If the deal's address keys to exactly one
+      // candidate asset, take it — no ambiguous flag. (Falls through to tenant/flag when absent or unclear.)
+      const dealKey = addrKey(body.property_address);
+      if (dealKey) {
+        const aHits = rows.filter(x => addrKey(x.address) === dealKey);
+        if (aHits.length === 1) return { entity_id: aHits[0].id, created: false };
+      }
       // Collision: prefer the asset whose name/address/canonical_name contains the tenant token.
       const hits = tok
         ? rows.filter(x => `${x.name} ${x.address || ''} ${x.canonical_name || ''}`.toLowerCase().includes(tok))
@@ -174,6 +194,7 @@ async function processDeal(raw, deps) {
   const row = {
     workspace_id: WORKSPACE_ID, entity_id: rec.entity_id, sf_opp_id: b.sf_opp_id,
     deal_name: b.name || null,   // A4: keep the SF Opportunity Name on the backbone (was parsed then discarded)
+    property_address: b.property_address || null,   // A5b: store the property address for reconcile + matching
     stage,
     amount: (b.amount ?? null), expected_close_date: (b.close_date || null),
     closed_at: isClosed ? new Date().toISOString() : null,
