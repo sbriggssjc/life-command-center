@@ -149,8 +149,12 @@ export function makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID }) {
           for (const m of matches) {
             const key = m.external_id || m.id;   // idempotency key for the deal-attributed row
             try {
+              // Idempotency aligned to the DB unique constraint (workspace_id, source_type, external_id):
+              // an email can be a deal-match activity ONCE. If it's already attributed (to ANY deal), skip the
+              // insert — prevents the 23505 collision when a blast/thread names two deals. The roster edge (2b)
+              // below still runs, so the person is added to this deal's roster regardless.
               const ex = await opsQuery('GET',
-                `activity_events?entity_id=eq.${enc(d.entity_id)}&external_id=eq.${enc(key)}&category=eq.email&select=id&limit=1`);
+                `activity_events?workspace_id=eq.${enc(WORKSPACE_ID)}&source_type=eq.${enc('lcc:deal_match')}&external_id=eq.${enc(key)}&select=id&limit=1`);
               if (ex.data?.[0]?.id) {
                 summary.already_attributed++;
               } else {
