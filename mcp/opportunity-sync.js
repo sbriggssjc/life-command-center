@@ -51,6 +51,7 @@ async function resolveDealEntity(body, { opsQuery, enc, WORKSPACE_ID }) {
   }
   const { tenant, city, state } = parseDealName(name);
   const tok = String(tenant || '').split(/\s+/)[0].toLowerCase();
+  let ambiguousCandidates = null;   // set when city+state has multiple assets the tenant token can't disambiguate
   // 2. Resolve by city + state. LCC assets are frequently named by ADDRESS
   //    (e.g. "2155 Main Street East, Snellville, GA") with no tenant string on
   //    the row, so the tenant token is used ONLY to break collisions — never as
@@ -68,20 +69,23 @@ async function resolveDealEntity(body, { opsQuery, enc, WORKSPACE_ID }) {
         ? rows.filter(x => `${x.name} ${x.address || ''} ${x.canonical_name || ''}`.toLowerCase().includes(tok))
         : [];
       if (hits.length === 1) return { entity_id: hits[0].id, created: false };
-      return { ambiguous: true, tenant, city, state,
-               candidates: rows.map(x => ({ id: x.id, name: x.name })) };
+      // Ambiguous: NEVER block the sync (a 409 fails the Power Automate loop). Fall through
+      // to create a flagged entity and record the candidates in metadata for later merge.
+      ambiguousCandidates = rows.map(x => ({ id: x.id, name: x.name }));
     }
   }
   // 3. Create the deal entity (source-tagged; FP: convert to lcc_merge_field when the fact-fabric writer lands)
   const id = globalThis.crypto.randomUUID();
+  const eMeta = { source: 'salesforce', sf_opp_id, provenance: 'opportunity_sync' };
+  if (ambiguousCandidates) eMeta.ambiguous_resolution = ambiguousCandidates;
   const ins = await opsQuery('POST', 'entities', {
     id, workspace_id: WORKSPACE_ID, entity_type: 'asset',
     name, canonical_name: name, city, state, domain: body.vertical || null,
     owner_role: 'unknown', address: body.property_address || null,
-    metadata: { source: 'salesforce', sf_opp_id, provenance: 'opportunity_sync' },
+    metadata: eMeta,
   });
   if (ins.ok === false) return { error: 'entity_create_failed', detail: ins.data };
-  return { entity_id: id, created: true };
+  return { entity_id: id, created: true, ambiguous: !!ambiguousCandidates };
 }
 
 export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
@@ -102,7 +106,6 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       }
 
       const rec = await resolveDealEntity(b, { opsQuery, enc, WORKSPACE_ID });
-      if (rec.ambiguous) return res.status(409).json({ ok: false, ambiguous: true, candidates: rec.candidates });
       if (rec.error) return res.status(502).json({ ok: false, ...rec });
 
       // Owner: map SF user -> lcc_users (graceful if unmapped)
@@ -132,6 +135,7 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       const meta = {};
       if (b.owner_sf_user_id && !owner_user_id) meta.owner_sf_user_id = b.owner_sf_user_id;
       if (unmappedStage) { meta.unmapped_stage = true; meta.sf_stage_label = b.stage_name; }
+      if (rec.ambiguous) meta.ambiguous_resolution = true;   // created a flagged entity; needs manual merge
       const row = {
         workspace_id: WORKSPACE_ID, entity_id: rec.entity_id, sf_opp_id: b.sf_opp_id,
         stage,
@@ -150,6 +154,7 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       return res.status(200).json({
         ok: true, entity_id: rec.entity_id, created_entity: rec.created,
         bd_opportunity_id: saved?.id || null, stage, unmapped_stage: unmappedStage,
+        ambiguous_resolution: !!rec.ambiguous,
         needs_psa_timeline: CONTRACTUAL.has(stage),   // signal for FP/E5 milestone population
       });
     },
