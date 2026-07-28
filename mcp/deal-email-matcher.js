@@ -30,6 +30,12 @@ const SYSTEM_ACTOR = 'b0000000-0000-0000-0000-000000000001';
 const REL = 'deal_party';
 const CAND_LIMIT = 1200;   // per-deal candidate cap (core-tenant substring hits); word+city filter in memory
 const DIGEST_MARKER = 'lcc cadence engine';   // footer of the engine-composed pipeline digest — never a real deal email
+// The weekly pipeline digest lists every in-scope deal, so it self-attributes. Its stored body often lacks the
+// footer marker, but its SUBJECT is reliably "<scope> pipeline — N overdue, M due soon". Exclude on that shape.
+function isDigestEmail(titleL, hayL) {
+  if (hayL.includes(DIGEST_MARKER)) return true;
+  return /\bpipeline\b/.test(titleL) && /\b(overdue|due soon)\b/.test(titleL);
+}
 
 function tenantSegment(name) {
   return String(name || '').split(/\s+-\s+/)[0].replace(/\(.*\)/g, '').trim();
@@ -124,8 +130,9 @@ export function makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID }) {
             `&select=id,entity_id,title,body,occurred_at,external_id,domain&limit=${CAND_LIMIT}`);
           const matches = [];
           for (const m of (cand.data || [])) {
+            const titleL = String(m.title || '').toLowerCase();
             const hay = `${m.title || ''} ${m.body || ''}`.toLowerCase();
-            if (hay.includes(DIGEST_MARKER)) { summary.digest_excluded++; continue; }   // self-referential digest
+            if (isDigestEmail(titleL, hay)) { summary.digest_excluded++; continue; }    // self-referential digest
             if (hasWord(hay, coreL) && hasWord(hay, cl)) matches.push(m);               // tenant (word) AND city
           }
           if (matches.length) summary.deals_with_matches++;
