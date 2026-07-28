@@ -30,6 +30,19 @@ function normParty(d) {
   };
 }
 
+function slug(s) { return String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); }
+
+// SF OpportunityContactRole (relabeled "Deal Contact Role"): external deal parties.
+function normContact(d) {
+  d = d || {};
+  return {
+    sf_opp_id: d.sf_opp_id ?? d.OpportunityId ?? d.opportunity_id ?? null,
+    sf_contact_id: d.sf_contact_id ?? d.ContactId ?? null,
+    role: d.role ?? d.Role ?? null,
+    is_primary: d.is_primary ?? d.IsPrimary ?? null,
+  };
+}
+
 export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
   // Resolve Team Briggs users once per request: SF owner id -> person entity id.
   // lcc_users.display_name matches the person entity name exactly for all four.
@@ -103,6 +116,67 @@ export function makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID }) {
             continue;
           }
           summary.edges_created++; touched.add(p.sf_opp_id);
+        } catch (e) {
+          if (summary.errors.length < 50) summary.errors.push({ error: String(e?.message || e) });
+        }
+      }
+      summary.deals_touched = touched.size;
+      return res.status(200).json({ ok: true, ...summary });
+    },
+
+    // Slice B — external contact roles (seller / buyer / counsel / escrow / …). Resolves the SF contact
+    // to its person entity via unified_contacts and writes deal_party edges (deal-asset → person). These
+    // give the deal-email matcher (Spine #3) its "is a deal party on this thread" signal.
+    ingestContactRoles: async (req, res) => {
+      const body = req.body || {};
+      const rows = Array.isArray(body) ? body : (body.parties || body.contacts || body.value || []);
+      if (!Array.isArray(rows)) {
+        return res.status(400).json({ ok: false, error: 'expected { parties: [ ... ] }' });
+      }
+      const dealCache = new Map();       // sf_opp_id -> asset entity_id | null
+      const contactCache = new Map();    // sf_contact_id -> person entity_id | null
+      const touched = new Set();
+      const summary = {
+        total: rows.length, resolved: 0, edges_created: 0, edges_existing: 0,
+        deals_touched: 0, skipped_no_deal: 0, skipped_no_contact: 0, errors: [],
+      };
+      for (const raw of rows) {
+        try {
+          const c = normContact(raw);
+          if (!c.sf_opp_id || !c.sf_contact_id) { summary.skipped_no_contact++; continue; }
+          let assetId = dealCache.get(c.sf_opp_id);
+          if (assetId === undefined) {
+            const d = await opsQuery('GET',
+              `bd_opportunities?workspace_id=eq.${enc(WORKSPACE_ID)}&sf_opp_id=eq.${enc(c.sf_opp_id)}&select=entity_id&limit=1`);
+            assetId = d.data?.[0]?.entity_id || null; dealCache.set(c.sf_opp_id, assetId);
+          }
+          if (!assetId) { summary.skipped_no_deal++; continue; }
+          let personId = contactCache.get(c.sf_contact_id);
+          if (personId === undefined) {
+            const u = await opsQuery('GET',
+              `unified_contacts?sf_contact_id=eq.${enc(c.sf_contact_id)}&select=entity_id&limit=1`);
+            personId = u.data?.[0]?.entity_id || null; contactCache.set(c.sf_contact_id, personId);
+          }
+          if (!personId) { summary.skipped_no_contact++; continue; }
+          summary.resolved++;
+          const ex = await opsQuery('GET',
+            `entity_relationships?workspace_id=eq.${enc(WORKSPACE_ID)}&from_entity_id=eq.${enc(assetId)}` +
+            `&to_entity_id=eq.${enc(personId)}&relationship_type=eq.${REL}&select=id&limit=1`);
+          if (ex.data?.[0]?.id) { summary.edges_existing++; touched.add(c.sf_opp_id); continue; }
+          const ins = await opsQuery('POST', 'entity_relationships', {
+            workspace_id: WORKSPACE_ID, from_entity_id: assetId, to_entity_id: personId,
+            relationship_type: REL,
+            metadata: {
+              role: slug(c.role) || 'contact', sf_role: c.role || null,
+              is_primary: c.is_primary === true || c.is_primary === 'true' || null,
+              sf_contact_id: c.sf_contact_id, source: 'sf_opp_contact',
+            },
+          });
+          if (ins.ok === false) {
+            if (summary.errors.length < 50) summary.errors.push({ sf_opp_id: c.sf_opp_id, sf_contact_id: c.sf_contact_id, detail: ins.data });
+            continue;
+          }
+          summary.edges_created++; touched.add(c.sf_opp_id);
         } catch (e) {
           if (summary.errors.length < 50) summary.errors.push({ error: String(e?.message || e) });
         }

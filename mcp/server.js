@@ -1866,7 +1866,8 @@ app.get("/", (_req, res) => {
 
   // Deal Roster (BUILD 02, Slice A) — Team Briggs deal-team edges for owned/partnership scope.
   const __roster = makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/ingest-deal-parties", authenticate, __roster.ingestParties);
+  app.post("/api/pipeline/ingest-deal-parties",  authenticate, __roster.ingestParties);       // team members
+  app.post("/api/pipeline/ingest-deal-contacts", authenticate, __roster.ingestContactRoles);   // external contact roles
 
   // Cadence Engine (BUILD 03) — read-only "what needs a touch" scan over in-scope open deals.
   const __cadence = makeCadenceScanRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
