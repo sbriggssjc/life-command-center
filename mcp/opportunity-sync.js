@@ -15,12 +15,19 @@
 
 // SF Opportunity StageName -> bd_opportunities.stage
 const STAGE_MAP = {
+  // Sale Deal record-type stages
   'BOV': 'bov',
   'ELA': 'ela',
   'LOI Executed': 'loi_executed',
   'In Escrow': 'in_escrow',
   'Non-Refundable': 'non_refundable',
+  'Non-refundable': 'non_refundable',
   'Closed': 'closed',
+  // IS record-type stages (Buy Side / Off-Market / Co-Broke / Referral)
+  'Listing Signed': 'listing_signed',
+  'Off-Market Listing': 'off_market_listing',
+  'Closed IS': 'closed',          // completed investment sale = closed-won
+  'Terminated IS': 'terminated',  // dead investment sale = closed-lost
 };
 const CONTRACTUAL = new Set(['loi_executed', 'in_escrow', 'non_refundable']);
 
@@ -147,7 +154,7 @@ async function processDeal(raw, deps) {
 
   // is_open is GENERATED = (closed_at IS NULL). 'Closed' (mapped) = won; lost/terminated = closed-lost.
   const isLost = /(lost|dead|dropped|withdrawn|terminat|cancel|expired|no[ _-]?sale)/i.test(String(b.stage_name));
-  const isWon = stage === 'closed';
+  const isWon = !isLost && (stage === 'closed' || /(closed|sold|won|settled)/i.test(String(b.stage_name)));
   const isClosed = isWon || isLost;
   const meta = {};
   if (b.owner_sf_user_id && !owner_user_id) meta.owner_sf_user_id = b.owner_sf_user_id;
