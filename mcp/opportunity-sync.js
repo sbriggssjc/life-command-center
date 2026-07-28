@@ -173,6 +173,7 @@ async function processDeal(raw, deps) {
   if (rec.ambiguous) meta.ambiguous_resolution = true;
   const row = {
     workspace_id: WORKSPACE_ID, entity_id: rec.entity_id, sf_opp_id: b.sf_opp_id,
+    deal_name: b.name || null,   // A4: keep the SF Opportunity Name on the backbone (was parsed then discarded)
     stage,
     amount: (b.amount ?? null), expected_close_date: (b.close_date || null),
     closed_at: isClosed ? new Date().toISOString() : null,
