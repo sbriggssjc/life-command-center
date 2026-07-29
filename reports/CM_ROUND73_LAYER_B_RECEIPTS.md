@@ -130,7 +130,7 @@ on the cap-basis question.
   showed the master **under-covers dia** — ~50 real NM listing deals were never in
   it. Dia NM identity can't come from the master; it waits for the authoritative
   source.
-- **Round 74 — `CLAUDE_CODE_PROMPT_round74_salesforce_authoritative_nm.md`:** make
+- **Round 74 — `docs/history/CLAUDE_CODE_PROMPT_round74_salesforce_authoritative_nm.md`:** make
   Salesforce the live authoritative source for `is_northmarq` on both verticals,
   via a **multi-signal OR'd classifier** (tenant/operator dictionaries, agency
   patterns, lease-ID format, property linkage, NM-broker signal) — NOT a single SF

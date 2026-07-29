@@ -14,7 +14,7 @@
 | Inventory item | Source | Status |
 |---|---|---|
 | Supabase project regions, IDs, PG versions | Supabase API (`list_projects`) | ✅ done (in plan doc) |
-| Edge function inventory + URLs | `EDGE_FUNCTION_AUDIT.md` | ✅ done |
+| Edge function inventory + URLs | `docs/history/EDGE_FUNCTION_AUDIT.md` | ✅ done |
 | LCC env-var references (all `*_SUPABASE_*`) | `api/_shared/*-db.js`, `server.js`, `.env.example` | ✅ done (this doc) |
 | Postgres 15 → 17 dialect compatibility test | `pg_dump`/`pg_restore` against Dialysis dump in PG17 sandbox | ⛔ **needs user** |
 | Power Automate flow audit | PA flow exports / dashboard | ⛔ **needs user** |
@@ -33,7 +33,7 @@ in external systems plus one explicit go/no-go decision.
 
 All three live in the same org, simplifying RLS roles and billing.
 
-## 2. Edge function inventory (cross-ref `EDGE_FUNCTION_AUDIT.md`)
+## 2. Edge function inventory (cross-ref `docs/history/EDGE_FUNCTION_AUDIT.md`)
 
 Post-consolidation, 16 unique edge functions move to the consolidated
 project; 5 are deleted along the way (3 stubs + 2 LCC Opps duplicates,

@@ -1,7 +1,7 @@
 # Fixes for the Broken Auto-Link / Cleanup Jobs
 
 **Date:** 2026-05-21
-**Companion to:** `RECONCILE_FUNCTION_AUDIT_2026-05-21.md`
+**Companion to:** `docs/history/RECONCILE_FUNCTION_AUDIT_2026-05-21.md`
 **Status:** DRAFT patches for branch implementation + test. NOT applied — these are logic fixes to production cleanup functions; deploy after testing, on the affected DB.
 
 The audit found these scheduled cleanup jobs failing silently. Root causes + concrete fixes below, in priority order.

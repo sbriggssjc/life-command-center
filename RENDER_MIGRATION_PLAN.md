@@ -66,7 +66,7 @@ every variable to a secure scratchpad. Expected groups, based on
   (server-side).
 - **Edge function URL**: `EDGE_FUNCTION_URL` — currently points at
   the `Dialysis_DB` project's `ai-copilot` function (see
-  `EDGE_FUNCTION_AUDIT.md`).
+  `docs/history/EDGE_FUNCTION_AUDIT.md`).
 - **AI configuration**: `AI_CHAT_PROVIDER`, `AI_CHAT_URL`,
   `AI_CHAT_MODEL`, `AI_CHAT_POLICY`, `AI_PROVIDER`, `AI_MODEL`,
   `AI_API_BASE_URL`, `AI_TIMEOUT_S`, `OPENAI_API_KEY`.
@@ -179,7 +179,7 @@ Known PA targets (from `server.js` route comments):
 2. **Supabase edge functions** — the CORS allowlist in shared
    `_shared/cors.ts` files lists Railway URLs as fallbacks. Add the
    Render URL to `ALLOWED_ORIGINS`. Affected functions (per
-   `EDGE_FUNCTION_AUDIT.md`): `data-query`, `npi-lookup`,
+   `docs/history/EDGE_FUNCTION_AUDIT.md`): `data-query`, `npi-lookup`,
    `npi-registry-sync`, `availability-checker`. Redeploy each.
 3. **`.env.example`** in the repo: update the `LCC_BASE_URL` example
    value once the cut-over is complete (this branch reverted it to

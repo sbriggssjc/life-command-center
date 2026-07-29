@@ -1,7 +1,7 @@
 # DQ-7 Root Cause + Recommended Code Fix (handoff)
 
 **Date:** 2026-05-21
-**Companion to:** `DATA_INTEGRITY_AUDIT_2026-05-20.md`, `DATA_INTEGRITY_REMEDIATION_LOG_2026-05-20.md`
+**Companion to:** `docs/history/DATA_INTEGRITY_AUDIT_2026-05-20.md`, `docs/history/DATA_INTEGRITY_REMEDIATION_LOG_2026-05-20.md`
 **Status:** Diagnosis complete + DB-side remediation done & verified. The code change below is **recommended, NOT applied** — it touches the live OM-intake path and must be implemented on a feature branch and pass `pytest` before merge (per repo CLAUDE.md).
 
 ---

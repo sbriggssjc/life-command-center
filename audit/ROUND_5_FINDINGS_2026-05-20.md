@@ -57,7 +57,7 @@ auto-remediated. The real-time pipeline and propagation are healthy.
 
 App is a vanilla-JS SPA at repo root (`index.html` + `app.js`, `gov.js`,
 `dialysis.js`, `detail.js`, `contacts-ui.js`, `capital-markets.js`, `treasury.js`,
-`ops.js`, …). Prior audit `APP_AUDIT_REMAINING_ISSUES.md` (Mar 2026) had most issues
+`ops.js`, …). Prior audit `docs/history/APP_AUDIT_REMAINING_ISSUES.md` (Mar 2026) had most issues
 resolved; 5 open are data-enrichment (gov leases missing address/city; gov entity
 dedup; 1,050 flagged-email count; dia operator-name normalization; 42% Unknown
 agency). Cleanliness: stray `app.js.restored`, `dialysis.js.backup`, `gov.js.backup`.

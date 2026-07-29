@@ -5,7 +5,7 @@
 > Last reviewed: 2026-05-10.
 >
 > Pairs with `LONG_TERM_HOSTING_STRATEGY.md` (Months 2–3 sequencing entry).
-> Cross-references `EDGE_FUNCTION_AUDIT.md` for the per-function URL inventory.
+> Cross-references `docs/history/EDGE_FUNCTION_AUDIT.md` for the per-function URL inventory.
 
 ## Goal
 
@@ -124,7 +124,7 @@ you ever onboard a third-party subspecialty operator.
    PG17. Get its project ref + connection string.
 2. Take Supabase backups of all three source projects via
    `supabase db dump` or the dashboard. Store in S3 / Drive.
-3. Inventory edge function project URLs — see `EDGE_FUNCTION_AUDIT.md`
+3. Inventory edge function project URLs — see `docs/history/EDGE_FUNCTION_AUDIT.md`
    for the 21-function list.
 4. Inventory PA flow targets that hit Supabase project URLs **directly**
    (not via LCC server.js).
@@ -173,7 +173,7 @@ Budget 8 hours total for this. The actual `pg_dump`/`restore` is fast
 
 ### Phase 3 — Edge function migration (3 hours)
 
-For each function listed in `EDGE_FUNCTION_AUDIT.md`:
+For each function listed in `docs/history/EDGE_FUNCTION_AUDIT.md`:
 
 1. Update `Deno.env.get("...SUPABASE_URL")` references in the function
    source. Most use `OPS_SUPABASE_URL` / `GOV_SUPABASE_URL` /
@@ -187,7 +187,7 @@ For each function listed in `EDGE_FUNCTION_AUDIT.md`:
 5. Delete the old project's edge function only after the consolidated
    one is verified working (Phase 6).
 
-Reuse `EDGE_FUNCTION_AUDIT.md` Gap E here — the LCC Opps duplicates
+Reuse `docs/history/EDGE_FUNCTION_AUDIT.md` Gap E here — the LCC Opps duplicates
 should be retired during this phase, not migrated.
 
 ### Phase 4 — Application layer (1 hour)
@@ -243,7 +243,7 @@ Hold any production schema changes for the duration of this window.
 3. Update LCC `INFRASTRUCTURE.md` to reflect the consolidated topology.
 4. **Saves $50/mo recurring** going forward.
 
-## Edge function URL inventory (cross-ref `EDGE_FUNCTION_AUDIT.md`)
+## Edge function URL inventory (cross-ref `docs/history/EDGE_FUNCTION_AUDIT.md`)
 
 Post-consolidation, all edge functions live on the consolidated
 project. Inventory of what gets migrated vs deleted:
