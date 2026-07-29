@@ -1529,7 +1529,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Tenant name — appears as a label/value pair on property detail pages
       // e.g. "Tenant" label followed by "VA Madison East Clinic" or "DaVita..."
       // Reject CoStar section header labels that follow a "Tenant" label in page text.
-      const TENANT_REJECT = /^(public\s+record|building|building\s+info|land|market|market\s+data|submarket|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type|lease\s+term|lease\s+start|lease\s+expir.*|rent\/?sf|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score|industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner)$/i;
+      // 2026-07-29: added the CoStar detail-page TAB-BAR labels (summary|property|
+      // lease|loan|financials|images|map). The redesigned page renders the tab
+      // strip "… Tenant Loan Financials …" as adjacent lines, so the "Tenant" tab
+      // label was matched and the NEXT tab ("Loan") captured as the tenant name.
+      const TENANT_REJECT = /^(public\s+record|building|building\s+info|land|market|market\s+data|submarket|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type|lease\s+term|lease\s+start|lease\s+expir.*|rent\/?sf|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score|industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner|summary|property|lease|loan|financials|images|map)$/i;
 
       // Bug 76w (2026-04-27): TENANT_REJECT has 'data' alone but not 'my data'.
       // Without TENANT_LABEL_BUTTON_REJECT, a 'Tenant\nMy Data' (CoStar
@@ -2715,6 +2719,8 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         // that starts with "Name" and is composed only of tenant-table headers.
         'get\\s+access', 'request\\s+access', 'unlock',
         'name(?:\\s+(?:expiration|exp|move[\\s-]?(?:in|out)?|lease|floor|suite|space|term|start|end|date|rent|sf|occupied|type|renewal|options?))+',
+        // CoStar detail-page tab-bar labels (the "Tenant Loan Financials …" strip)
+        'summary', 'property', 'lease', 'loan', 'financials', 'images', 'map',
         'lease\\s+activity', 'sign\\s+date', 'leased', 'use', 'services',
         'rent\\s+(type|schedule|steps|adjust(?:ment)?s?|escalation\\s+type)',
         'use\\s+type', 'space\\s+(use|type|category|id)',
@@ -3686,39 +3692,66 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
 
   function extractDocumentLinks() {
     const docLinks = [];
-    try {
-      // Strategy 1: Find by DOM selectors (CoStar uses various class patterns)
-      let docContainer = document.querySelector(
-        '[class*="document"], [data-testid*="document"]'
-      );
+    const seen = new Set();
 
-      // Strategy 2: Walk headings to find "Documents" and grab next sibling
-      if (!docContainer) {
-        const headings = document.querySelectorAll(
-          'h1, h2, h3, h4, h5, h6, [class*="heading"], [class*="title"]'
-        );
-        for (const h of headings) {
-          if (/^\s*documents\s*$/i.test(h.textContent)) {
-            docContainer = h.nextElementSibling
-              || h.closest('section')
-              || h.parentElement;
-            break;
-          }
+    // Obvious page-chrome labels that are never a real document link.
+    const CHROME_LABEL_RE = /^(public\s+record|analytics|get\s+access|request\s+access|see\s+more|view\s+all|reports?|help|share|feedback|print|download\s+all|add\s+a\s+listing)$/i;
+
+    // Push one anchor as a document. In non-strict mode (inside a known
+    // "Documents" section) any real link qualifies; in strict mode (a global
+    // fallback scan) the href/label must clearly denote a document file.
+    const pushLink = (a, strict) => {
+      const label = (a.textContent || '').replace(/\s+/g, ' ').trim()
+        || a.getAttribute('title') || a.getAttribute('aria-label') || '';
+      const href = a.href || a.getAttribute('href') || '';
+      if (!label || label.length > 120) return;
+      if (href && /^javascript:/i.test(href)) return;
+      if (CHROME_LABEL_RE.test(label)) return;
+      if (strict) {
+        const looksDoc =
+          /\.(pdf|docx?|xlsx?|pptx?)(\?|#|$)/i.test(href)
+          || /\/(document|documents|attachment|marketing|brochure|flyer|offering)/i.test(href)
+          || /^ms-/i.test(label)
+          || /\b(offering\s+memorandum|marketing\s+(brochure|package|material)|brochure|flyer|rent\s*roll|om\b|floor\s*plan|site\s*plan)\b/i.test(label);
+        if (!looksDoc) return;
+      }
+      const key = (href || '') + '|' + label.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      docLinks.push({ label, url: href || null, type: inferDocType(label) });
+    };
+
+    try {
+      // Strategy 1: an explicit document container by class/testid.
+      const tagged = document.querySelectorAll(
+        '[class*="document"], [data-testid*="document"], [class*="Document"]'
+      );
+      tagged.forEach(c => c.querySelectorAll('a[href]').forEach(a => pushLink(a, false)));
+
+      // Strategy 2: find every "Documents" heading and collect the anchors in
+      // the nearest bounded ancestor that actually contains links. CoStar's
+      // redesigned layout nests the file under a "For Sale" sub-label inside the
+      // Documents card, so h.nextElementSibling (the old approach) missed it.
+      const headings = document.querySelectorAll(
+        'h1, h2, h3, h4, h5, h6, [class*="heading"], [class*="title"], [class*="Header"], [class*="header"]'
+      );
+      for (const h of headings) {
+        const own = (getOwnText(h) || h.textContent || '').trim();
+        if (!/^documents(\s*\(\d+\))?$/i.test(own)) continue;
+        let container = h;
+        for (let i = 0; i < 5; i++) {
+          if (!container || container === document.body) { container = null; break; }
+          if (container.querySelector && container.querySelector('a[href]')
+              && (container.textContent || '').length < 3000) break;
+          container = container.parentElement;
         }
+        if (container) container.querySelectorAll('a[href]').forEach(a => pushLink(a, false));
       }
 
-      if (docContainer) {
-        docContainer.querySelectorAll('a[href]').forEach(a => {
-          const label = a.textContent?.trim() || a.getAttribute('title') || '';
-          const href = a.href;
-          if (href && !href.startsWith('javascript:') && label) {
-            docLinks.push({
-              label,
-              url: href,
-              type: inferDocType(label),
-            });
-          }
-        });
+      // Strategy 3 (fallback): if nothing found in a section, scan the whole
+      // page but only accept anchors whose href/label clearly denote a file.
+      if (docLinks.length === 0) {
+        document.querySelectorAll('a[href]').forEach(a => pushLink(a, true));
       }
     } catch (err) {
       console.warn('[LCC CoStar] document link extraction error:', err);
