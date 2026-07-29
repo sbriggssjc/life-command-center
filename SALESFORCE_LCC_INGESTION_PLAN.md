@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-14
 **Scope:** All Salesforce data, all verticals (dialysis, government, and the cross-vertical LCC layer) — initial ingestion *and* ongoing scheduled updates — delivered through Power Automate into the LCC orchestration layer and the Supabase domain databases.
-**Companion docs:** `SALESFORCE_LCC_DOCUMENT_INGESTION_AUDIT.md` (the file/flyer slice), `EDGE_FUNCTION_AUDIT.md`, `backend_webhook_contract.md` (the email-intake contract this plan's contract is modeled on).
+**Companion docs:** `docs/history/SALESFORCE_LCC_DOCUMENT_INGESTION_AUDIT.md` (the file/flyer slice), `docs/history/EDGE_FUNCTION_AUDIT.md`, `backend_webhook_contract.md` (the email-intake contract this plan's contract is modeled on).
 
 ---
 

@@ -1,6 +1,6 @@
 # Ownership Data Provenance & Responsibility Tracking — Schema Design
 
-**Date:** May 29, 2026 | **Context:** dia + gov ownership data quality (closes audit gap **G15**) | **Companion to:** `Lease_Data_Provenance_Schema_Design.md`, `OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`
+**Date:** May 29, 2026 | **Context:** dia + gov ownership data quality (closes audit gap **G15**) | **Companion to:** `Lease_Data_Provenance_Schema_Design.md`, `docs/history/OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`
 
 ---
 

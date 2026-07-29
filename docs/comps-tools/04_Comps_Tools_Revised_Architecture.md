@@ -2,7 +2,7 @@
 
 **Date:** July 21, 2026
 **Supersedes:** the Salesforce-integration sections of `LCC_Comps_Tools_Design.md` (the canonical-schema and orchestrator concepts still stand; the *access path* changes)
-**Basis:** review of `SALESFORCE_LCC_INGESTION_PLAN.md`, `SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md`, `flow-a-lcc-stage-om-http.json`, `SALESFORCE_LCC_DOCUMENT_INGESTION_AUDIT.md`, `mcp/README.md`, and the real GSA comp export.
+**Basis:** review of `SALESFORCE_LCC_INGESTION_PLAN.md`, `SALES_AND_AVAILABLE_COMPS_DEFINITION_AUDIT_2026-05-29.md`, `flow-a-lcc-stage-om-http.json`, `docs/history/SALESFORCE_LCC_DOCUMENT_INGESTION_AUDIT.md`, `mcp/README.md`, and the real GSA comp export.
 
 ---
 

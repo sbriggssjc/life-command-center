@@ -419,5 +419,5 @@ ORDER BY start_time DESC LIMIT 20;
 ---
 
 *Generated 2026-05-22 during the post-work documentation pass at the
-end of the 16-topic session. See DEVELOPER_BD_AUDIT_v3.md §11.22 –
+end of the 16-topic session. See docs/history/DEVELOPER_BD_AUDIT_v3.md §11.22 –
 §11.37 for the full per-topic implementation log.*

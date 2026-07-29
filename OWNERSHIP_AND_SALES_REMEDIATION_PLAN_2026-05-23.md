@@ -1,6 +1,6 @@
 # Ownership & Sales — Remediation Plan (2026-05-23)
 
-**Companion to:** `OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`. Gap IDs (G1–G15) referenced below map directly to §1 of the audit.
+**Companion to:** `docs/history/OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`. Gap IDs (G1–G15) referenced below map directly to §1 of the audit.
 
 **Goal:** Move the system from "duplicates accumulate; orphans drift; entities fragment" to "the database self-cleans, ingestion writes the right thing the first time, and what's already there is fixed once and stays fixed."
 
@@ -328,4 +328,4 @@ These were the open questions from the audit's §6; all are now answered and loc
 
 ---
 
-*Plan prepared 2026-05-23. Direct extension of `OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`.*
+*Plan prepared 2026-05-23. Direct extension of `docs/history/OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`.*
