@@ -35,6 +35,15 @@ that no longer exists. They are not doing any live work — the current loop run
 > cover, stop and tell me — but per the audit they were fully superseded.
 
 ### 1A-fix. `LCC To-Do Completion Poll` failing 404 (`ErrorItemNotFound`) → stop hard-coding the folder id
+> **✅ FIXED & VERIFIED 2026-07-29.** Implemented via Option 2. Final working layout (from the saved export):
+> `HTTP_GetStagedWorklist → Parse_JSON → Initialize_variable` (array `CompletedIds`, at **top level** — PA forbids
+> Initialize-variable inside a Condition) `→ Get_Lists → Filter_FlaggedList` (`from: @body('Get_Lists')`,
+> `where: @equals(item()?['wellknownListName'],'flaggedEmails')`) `→ Condition @greater(length(body('Filter_FlaggedList')),0)`
+> { **yes:** `List_Flagged_Tasks` (folderId `@first(body('Filter_FlaggedList'))?['id']`) → `Apply_to_each`;
+> **no:** `Terminate` Succeeded } `→ HTTP_1`. Confirmed schema: the To-Do **Lists** action returns the array
+> directly at `@body('Get_Lists')` (not `body/value`) and exposes `wellknownListName`. A zero-flagged run correctly
+> takes the Terminate branch (clean no-op). *Still to do once: flag one email + run to exercise the If-yes path end-to-end.*
+
 **Finding (confirmed 2026-07-29):** the poll's `List to-do's by folder (V2)` action has its **`folderId`
 hard-coded** to `AAMkADI4…AAC56pC5AAA=` — which is the *exact reference/probe value* the spec
 (`flows/todo-completion-poll.md`) warned **not** to hardcode ("resolve it each run via
@@ -85,33 +94,75 @@ change `List_Flagged_Tasks.inputs.parameters.folderId` to `"@first(body('Filter_
 `runAfter` to `{ "Filter_FlaggedList": ["Succeeded"] }`. Re-importing an edited export re-binds connections, so the
 designer route is usually less fuss.
 
-### 1B. `SF -> LCC: Daily Bulk File Backfill` → fix the `Apply_to_each` (Map-to-Manifest gap)
-**Finding:** this is the scheduled sibling of Flow 6 (`SF -> LCC: On-demand File Backfill`,
-id `aaa452c0-7eb5-4c98-bfe2-f6d872d80639`). It fails at `Apply_to_each` because of a **known architectural gap**
-documented in `docs/architecture/sf_file_backfill_flow6_next_steps.md`: the `Map Files to Manifest` step maps
-`ContentDocumentLink` rows straight into a manifest, but `ContentDocumentLink` carries no `VersionData` / `Title` /
-`FileExtension` / `ContentSize`, so the manifest items are null and the downstream loop iterates over malformed
-data and red-errors. (The observed run had one empty `foreachItems:[]` iteration and one with a real
-`ContentDocumentId` that then failed — exactly this shape.)
+### 1B. `SF -> LCC: Daily Bulk File Backfill` → fix the manifest `HTTP` body (invalid JSON from `@json(concat(...))`)
+**Updated finding (from the 2026-07-29 export — the flow is already restructured):** this flow was **already
+rebuilt** to the correct per-link inner-loop shape (`Get_records_2` Comp__c → `Apply_to_each_1` →
+`Get_records` ContentDocumentLink → `Apply_to_each` → `Get_records_1` ContentVersion → `HTTP` manifest →
+`Condition` → Send/Upload/PUT/POST). The old "Map-to-Manifest gap" is gone. So the failure is **not** structural.
 
-**Two options (same as the Flow 6 notes):**
+**Why the daily "failed at Apply_to_each" alert fires:** the flow has a **dead-letter pattern** — `Filter_array`
+(`runAfter` = `TimedOut/Skipped/Failed`) collects failed iterations from `@result('Apply_to_each_1')`,
+`PostDeadLetter` records them to `lcc_record_flow_failure`, and **`Terminate` is set to `runStatus: Failed`** to
+surface it in Ops Health. That's *by design* — the alert is the safety net, not the bug. The bug is a single inner
+iteration erroring. Once it's fixed, no iteration fails → `Filter_array`/`Terminate` are skipped → the run ends
+**Succeeded**. (Leave the dead-letter/Terminate as-is.)
 
-- **Immediate stopgap (stops the daily alert in ~2 min):** add a **Condition** right before `Apply_to_each`:
-  `length(<the to_fetch / manifest array>)` **is greater than** `0`. Put the loop on the **If yes** branch.
-  This makes an empty/short-circuit run end cleanly instead of red-erroring. It does **not** make backfill
-  actually work — it just stops the false failure while you do the real fix.
-- **Real fix (recommended) — restructure to a per-link inner loop:** replace `Map Files to Manifest` +
-  `POST File Manifest` + the outer `Apply_to_each` with a single `Apply_to_each` over
-  `body('Get_records')?['value']` (the `ContentDocumentLink` array), and **inside** the loop:
-  1. `Get records` on **`ContentVersion`**, Filter `ContentDocumentId eq '@{items('Apply_to_each')?['ContentDocumentId']}' and IsLatest eq true`, Top 1.
-  2. `POST File Manifest (single item)` to `intake-salesforce-files?action=manifest` — now with the real
-     `VersionData`, `Title`, `FileExtension`, `ContentSize`.
-  3. `Get File Bytes` (Salesforce Send-HTTP `GET .../ContentVersion/<Id>/VersionData`).
-  4. `Get Upload URL` (`intake-salesforce-files?action=upload-url`) → `PUT bytes` → `POST File Bytes` (`action=bytes`).
+**Root cause (the actual bug):** the manifest `HTTP` action builds its body with `@json(concat('{…', <values>, '…}'))`
+— hand-concatenated JSON. That produces **invalid JSON** (so `@json()` throws and the iteration fails) in two cases,
+which is exactly why *some* comps fail and others succeed:
+1. **Unescaped file metadata** — `title` (`Title`) and `file_name` (`PathOnClient`) are interpolated raw. Any file
+   whose name/title contains a `"`, `\`, apostrophe, or newline breaks the string. (Common in real OM filenames.)
+2. **Null numbers** — `"version_number":',string(…VersionNumber),',"size_bytes":'` yields `"version_number":,`
+   (a syntax error) whenever `Get_records_1` returns no version, so `string(null)` is empty.
 
-  Remember NorthMarq's convention: **OMs live on the `Comp__c` record, not `Property__c`** — query
-  `ContentDocumentLink` by `LinkedEntityId`, and the PA Salesforce **Get records** Filter Query is **OData**
-  (`eq`, not `=`). The `intake-salesforce-files` edge function (v5) is deployed and proven, no change needed.
+The receiving edge function (`intake-salesforce-files?action=manifest`) stores `title/file_name/version_number/
+size_bytes` **as-is and tolerates null**, and filters out empty `content_version_id` — so it imposes no type
+requirement. The *only* thing failing is JSON validity inside Power Automate.
+
+**The fix — replace the manifest `HTTP` action's Body with a native JSON object** (PA JSON-escapes dynamic content
+placed inside a real JSON body; and `coalesce` removes the null-number syntax error). Paste this in place of the
+`@json(concat(...))` body, keeping the action's headers/URI unchanged:
+
+```json
+{
+  "payload_version": "sf-files-2026-05-v4",
+  "batch_id": "@{variables('BatchId')}",
+  "files": [
+    {
+      "vertical": "auto",
+      "linked_entity_type": "Comp__c",
+      "linked_entity_sf_id": "@{items('Apply_to_each_1')?['Id']}",
+      "linked_entity_tenant": "@{coalesce(items('Apply_to_each_1')?['Tenant_Name2__c'],'')}",
+      "linked_entity_property_type": "@{coalesce(items('Apply_to_each_1')?['Property_Type__c'],'')}",
+      "linked_entity_name": "@{coalesce(items('Apply_to_each_1')?['Name'],'')}",
+      "content_version_id": "@{coalesce(first(outputs('Get_records_1')?['body/value'])?['Id'],'')}",
+      "content_document_id": "@{items('Apply_to_each')?['ContentDocumentId']}",
+      "title": "@{coalesce(first(outputs('Get_records_1')?['body/value'])?['Title'],'')}",
+      "file_name": "@{coalesce(first(outputs('Get_records_1')?['body/value'])?['PathOnClient'],'')}",
+      "extension": "@{coalesce(first(outputs('Get_records_1')?['body/value'])?['FileExtension'],'')}",
+      "version_number": "@{string(coalesce(first(outputs('Get_records_1')?['body/value'])?['VersionNumber'],0))}",
+      "size_bytes": "@{string(coalesce(first(outputs('Get_records_1')?['body/value'])?['ContentSize'],0))}",
+      "sf_download_url": "@{concat('/services/data/v59.0/sobjects/ContentVersion/',coalesce(first(outputs('Get_records_1')?['body/value'])?['Id'],''),'/VersionData')}"
+    }
+  ]
+}
+```
+
+Everything downstream (`Condition` on `length(body('HTTP')?['to_fetch'])`, Send/Upload/PUT/POST) then works
+unchanged, because a valid manifest always returns `to_fetch`.
+
+**Confirm it's this bug:** open the latest failed run → `Apply_to_each_1` (red comp) → `Apply_to_each` (red link) →
+the red action should be **`HTTP`**, with an error like *"InvalidTemplate … 'json' … cannot be parsed"* or
+*"unexpected character"*. If instead a *different* action is red (e.g. `Send_an_HTTP_request` or `PUT_bytes`), send
+me its error and I'll adjust — but the `@json(concat)` body is the overwhelming likely cause.
+
+**Two non-blocking notes (separate from the fix):**
+- **Scale/efficiency:** `Get_records_2` pulls up to **5,000** comps every day and re-walks every file; the manifest
+  dedup means already-ingested files are cheap, but it's a lot of Salesforce API calls. Worth narrowing later
+  (e.g. `LastModifiedDate` window, or only comps whose files aren't all ingested). Not causing the failure.
+- **Security:** the exported flow embeds the `X-PA-Webhook-Secret` and Supabase keys in cleartext — normal for a
+  live flow, but don't commit raw flow exports to a shared/public repo. (These reference docs never contain the
+  secret values.)
 
 ---
 
