@@ -317,6 +317,26 @@ Feature-flagged (`OCR_CLOUD_*`, `OPENAI_API_KEY`); unset ⇒ honest `needs_ocr`.
 
 ---
 
+## Inert-feature registry (audit §4.4.3) — make "off" visible
+
+Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
+`supabase/migrations/20260809120000_lcc_feature_flags_registry.sql`). Columns: `flag` (PK), `purpose`,
+`surface`, `env_var`, `state` (`on|off|partial`, CHECK-enforced), `off_since` (NULL = never enabled /
+unknown), `owner`, `notes`. The daily briefing email prints a **"Dormant Capabilities"** section — one
+line per flag off (or partial) > 30 days — via `fetchDormantCapabilities()`
+(`api/_shared/briefing-data.js`) → `renderDormantCapabilities()`
+(`api/_handlers/briefing-email-handler.js`, HTML + plain-text). The audit finding: *a flag-gated no-op
+looks identical to a healthy quiet pipeline* — this table is the single source of truth that surfaces it.
+
+- **Whenever you add a new `process.env.<FLAG>` / `Deno.env.get()` capability toggle** (not a tuning
+  knob — a whole feature that no-ops when unset), **INSERT a `feature_flags_registry` row** (idempotent
+  seed uses `ON CONFLICT (flag) DO UPDATE`). Grep `api/` + `supabase/functions/` for `process.env.` /
+  `Deno.env.get` when auditing coverage. SOS per-state adapters are gated in code by
+  `SOS_STATE_ADAPTERS[X].enabled` AND the shared `OWNER_ENRICH_SOS_URL` webhook — registered as
+  `SOS_STATE_ADAPTERS.<ST>` flags.
+- **`state`/`off_since` are operator-curated** — flip a flag's row to `on` (or update `off_since`) when
+  you actually enable it in the Railway env; `updated_at` auto-touches on UPDATE.
+
 ## Pointers to canonical docs
 
 - **Architecture start:** `LCC-OS.md` → `docs/os/README.md`; canon in `docs/os/canon/`; consolidation map
