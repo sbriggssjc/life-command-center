@@ -126,7 +126,7 @@ self-hosted Postgres).
   designed; intended as the primary LCC backend
 - LCC's edge functions ended up deployed on `Dialysis_DB` (not
   `LCC Opps`) for historical reasons — see
-  `EDGE_FUNCTION_AUDIT.md` Gap F
+  `docs/history/EDGE_FUNCTION_AUDIT.md` Gap F
 
 None of these reasons is architectural. A single project with three
 schemas and proper RLS policies serves the same use case at a third
@@ -212,7 +212,7 @@ with it.
 2. Migrate `gov`, `dia`, `lcc` schemas via `pg_dump`/`pg_restore`
    or Supabase's branch feature
 3. Update edge function project URLs in one batch (see
-   `EDGE_FUNCTION_AUDIT.md` for the inventory)
+   `docs/history/EDGE_FUNCTION_AUDIT.md` for the inventory)
 4. Update `.env` references in LCC and gov-write services
 5. Validate dual-running for one week (read from new, write to both)
 6. Cut over fully, retire the two extra Supabase projects

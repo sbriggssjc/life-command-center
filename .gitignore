@@ -34,3 +34,13 @@ scripts/audit/snapshots/*.sql.gz
 # SF deal-level exports (do not commit — PII/deal data)
 docs/capital-markets/sf-exports/
 *.xlsx
+
+# Repo-root cleanup (2026-07): keep one-off data/report artifacts out of git.
+# Root-level CSVs are throwaway audit/report dumps (some very large) — never commit.
+/*.csv
+# Compressed archives / tarballs.
+*.tar.gz
+# Ad-hoc scratch/quarantine directory.
+_to_delete/
+# Runtime logs.
+logs/

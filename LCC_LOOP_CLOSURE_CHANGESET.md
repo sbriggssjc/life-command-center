@@ -8,7 +8,7 @@ This file isolates the remaining visible worktree items related to the loop-clos
 
 ### Loop-closure files still modified or new
 
-- `LCC_AUDIT_LOOP_CLOSURE_WORKLOG.md`
+- `docs/history/LCC_AUDIT_LOOP_CLOSURE_WORKLOG.md`
 - `LCC_LOOP_CLOSURE_ROLLOUT_SUMMARY.md`
 - `detail.js`
 
@@ -20,7 +20,7 @@ This file isolates the remaining visible worktree items related to the loop-clos
 
 If the goal is to prepare a clean loop-closure commit or deployment review, limit the scope to:
 
-- `LCC_AUDIT_LOOP_CLOSURE_WORKLOG.md`
+- `docs/history/LCC_AUDIT_LOOP_CLOSURE_WORKLOG.md`
 - `LCC_LOOP_CLOSURE_ROLLOUT_SUMMARY.md`
 - `detail.js`
 
@@ -38,7 +38,7 @@ The broader loop-closure implementation summary is in:
 
 The full running implementation log is in:
 
-- `LCC_AUDIT_LOOP_CLOSURE_WORKLOG.md`
+- `docs/history/LCC_AUDIT_LOOP_CLOSURE_WORKLOG.md`
 
 ## Notes
 

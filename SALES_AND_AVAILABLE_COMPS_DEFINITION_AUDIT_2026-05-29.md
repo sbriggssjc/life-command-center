@@ -14,7 +14,7 @@ withdrawn.
 **Method:** Live view-definition extraction + row-level cross-tabs on both
 domain databases, cross-referenced against the frontend/API read paths.
 
-> This audit is a **companion** to `OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md` and
+> This audit is a **companion** to `docs/history/OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md` and
 > `OWNERSHIP_AND_SALES_REMEDIATION_PLAN_2026-05-23.md`. Those docs built the
 > *cleanup machinery* (Track A/B/C — `transaction_state`, dedup worker, stub
 > reclassifier). **This audit finds that the cleanup machinery and the
@@ -288,4 +288,4 @@ NOT NULL OR sold_date IS NOT NULL` should be 0.
 
 *Audit prepared 2026-05-29. View definitions and counts pulled live from
 `zqzrriwuavgrquhisnoa` (dia) and `scknotsqkcheojiaewwh` (gov). Companion to
-`OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`.*
+`docs/history/OWNERSHIP_AND_SALES_AUDIT_2026-05-23.md`.*

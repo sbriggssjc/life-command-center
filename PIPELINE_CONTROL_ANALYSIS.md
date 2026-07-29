@@ -496,7 +496,7 @@ if (run.error_summary && run.run_status === 'failed') {
 
 ## REFERENCES
 
-- **UX Audit Report**: GOV_UX_AUDIT_REPORT.md (Issue 3.1-3.5)
+- **UX Audit Report**: docs/history/GOV_UX_AUDIT_REPORT.md (Issue 3.1-3.5)
 - **Related Issues**:
   - Issue 5.2-5.4: Missing success toasts on research saves (patchRecord callers)
   - Issue 4.1: Monitor Dashboard placeholder data (comparison point)

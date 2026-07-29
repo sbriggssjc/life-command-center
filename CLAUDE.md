@@ -678,7 +678,7 @@ Both views live on gov + dia DBs.
 
 End-to-end BD data layer shipped in topics 10–20 across a single
 session. See `docs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` for the
-post-work audit and `DEVELOPER_BD_AUDIT_v3.md` §11.22 – §11.37 for the
+post-work audit and `docs/history/DEVELOPER_BD_AUDIT_v3.md` §11.22 – §11.37 for the
 full per-topic implementation log.
 
 ### Core artifacts (LCC Opps)

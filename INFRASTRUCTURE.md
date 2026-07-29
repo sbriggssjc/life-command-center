@@ -27,7 +27,7 @@
 | LCC Express server (consolidates 9 API handlers from `api/`) | **Railway** — `tranquil-delight` service in `handsome-luck` project, **Hobby plan** (subscribed 2026-05-10) | $5/mo + usage above $5 of monthly credits (verified pricing screenshot 2026-05-09) |
 | LCC frontend (`index.html`, `office-addins/`) | Same Railway service via `express.static` | (included) |
 | LCC API handlers (`actions.js`, `admin.js`, `apply-change.js`, `domains.js`, `entity-hub.js`, `intake.js`, `operations.js`, `queue.js`, `sync.js`) | Loaded as Express routes by `server.js`; not Vercel serverless functions in production | (included) |
-| Edge functions (21 total across 3 projects — see `EDGE_FUNCTION_AUDIT.md`) | Supabase | Included in Pro plans |
+| Edge functions (21 total across 3 projects — see `docs/history/EDGE_FUNCTION_AUDIT.md`) | Supabase | Included in Pro plans |
 | Operational database | Supabase `LCC Opps` (us-east-1) | Pro plan, $25/mo |
 | Government domain database | Supabase `government` (us-west-2) | Pro plan, $25/mo |
 | Dialysis domain database | Supabase `Dialysis_DB` (us-west-1) | Pro plan, $25/mo |
@@ -52,7 +52,7 @@ server (`server.js` on a deploy branch). The Express server consolidates
 the 13 files into 9 canonical mounts plus aliased rewrite routes,
 sidestepping the 12-function cap. That server is what Railway runs.
 
-See `LCC_VERCEL_404_AUDIT_WORKLOG.md` for the original triage notes
+See `docs/history/LCC_VERCEL_404_AUDIT_WORKLOG.md` for the original triage notes
 from that period.
 
 ## Hosting plan: near-term Railway Hobby, long-term Render Starter
@@ -174,7 +174,7 @@ unblocked in this revision:
 - **`RENDER_MIGRATION_PLAN.md`** — trigger-based step-by-step Render
   setup, env var inventory, smoke tests, Power Automate repoint,
   Railway shutdown.
-- **`EDGE_FUNCTION_AUDIT.md`** — 21-function inventory of edge
+- **`docs/history/EDGE_FUNCTION_AUDIT.md`** — 21-function inventory of edge
   functions across the three Supabase projects, with a gap register
   (Gaps A–F) and three obvious deletion candidates.
 
@@ -204,7 +204,7 @@ in-process queries.
   + API + Office Add-in manifests (Railway Hobby, $5/mo)
 - `zqzrriwuavgrquhisnoa.supabase.co` (`Dialysis_DB`) — 21 edge functions,
   most of them belonging to LCC (architectural mismatch, see
-  `EDGE_FUNCTION_AUDIT.md` Gap F)
+  `docs/history/EDGE_FUNCTION_AUDIT.md` Gap F)
 - `xengecqvemvfknjvbvrq.supabase.co` (`LCC Opps`) — 4 edge functions,
   3 of which are duplicates of the `Dialysis_DB` versions
 - `scknotsqkcheojiaewwh.supabase.co` (`government`) — 2 edge functions
