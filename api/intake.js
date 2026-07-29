@@ -33,6 +33,7 @@ import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
 import { parseOmLeaseAbstract, processOmDocument } from './_handlers/om-parser.js';
 import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
 import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
+import { writeIntakeFeedback } from './_handlers/intake-feedback.js';
 import { stageOmIntake } from './_shared/intake-om-pipeline.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { firstOf, joinedOf, detectInfraAlert, buildInfraScoringItem, priorityTierFromScore } from './_shared/intake-classify.js';
@@ -2006,6 +2007,48 @@ async function handleIntakePromote(req, res) {
     pipeline_result: pipelineResult,
     promoted_at: new Date().toISOString(),
   });
+
+  // 5b. W1.1 (audit finding 3.4.3): a human promote is an IMPLICIT APPROVAL of
+  //     the matcher's #1 suggestion — this path applies the machine's resolved
+  //     property_id (matchPid), not req.body.property_id — so record it as
+  //     matcher feedback so the self-learning loop (compute_matcher_accuracy →
+  //     v_matcher_accuracy_recent) sees the positive label. Snapshot the
+  //     machine's latest match row (never a confidence-1.0 manual pick) via the
+  //     canonical writer. Best-effort: a failure here never breaks the promote.
+  try {
+    const machineMatch = await opsQuery('GET',
+      `staged_intake_matches?intake_id=eq.${encodeURIComponent(intake_id)}` +
+      `&decision=neq.manual_match&select=id,reason,property_id,confidence,match_result,domain` +
+      `&order=created_at.desc,id.desc&limit=1`);
+    const mrow = (machineMatch.ok && Array.isArray(machineMatch.data) && machineMatch.data[0])
+      ? machineMatch.data[0] : null;
+    if (mrow) {
+      const machinePid = mrow.property_id != null ? String(mrow.property_id) : null;
+      const machineDom = (mrow.match_result && mrow.match_result.domain) || mrow.domain || null;
+      // If the operator explicitly passed a DIFFERENT property_id than the
+      // machine suggested, log a correction; otherwise it's an approval.
+      const overridePid = property_id != null ? String(property_id) : null;
+      const corrected = !!(overridePid && machinePid && overridePid !== machinePid);
+      await writeIntakeFeedback({
+        workspaceId,
+        intakeId: intake_id,
+        matchId: mrow.id || null,
+        userId: user.user_id || null,
+        decision: corrected ? 'corrected' : 'approved',
+        correctedDomain: corrected ? (matchDomain || null) : null,
+        correctedPropertyId: corrected ? overridePid : null,
+        reasonText: 'intake_promote',
+        metadata: { source: 'intake_promote', implicit: !corrected,
+                    intake_source: metadata._intake_source || null },
+        matchReason: mrow.reason || null,
+        matchDomain: machineDom,
+        matchPropertyId: machinePid,
+        matchConfidence: typeof mrow.confidence === 'number' ? mrow.confidence : null,
+      });
+    }
+  } catch (err) {
+    console.warn('[intake-promote] match feedback (implicit approve) skipped:', err?.message || err);
+  }
 
   // 6. Update intake item status. 'finalized' is the terminal state in the
   //    staged_intake_items_status_check set; 'promoted' is NOT allowed and was

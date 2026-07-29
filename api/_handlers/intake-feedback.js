@@ -27,6 +27,141 @@ const VALID_DECISIONS = new Set([
 ]);
 
 // ============================================================================
+// writeIntakeFeedback — the CANONICAL matcher-feedback writer.
+//
+// This is the single place that snapshots the matcher's suggestion and
+// persists one staged_intake_feedback row. The HTTP handler (recordFeedback)
+// and every internal caller (Decision Center match_disambiguation verdicts in
+// api/admin.js, the human promote path in api/intake.js) go through this so we
+// never duplicate the snapshot/upsert/409-fallback logic (audit finding 3.4.3,
+// W1.1). It performs NO auth and returns a plain result object — callers own
+// their own req/res + authorization.
+//
+// Snapshot sourcing (in order):
+//   1. Caller-provided matcher fields (matchReason/matchDomain/matchPropertyId/
+//      matchConfidence) — preferred when the caller already read the machine's
+//      row (e.g. admin.js reads the machine row to decide approved-vs-corrected).
+//   2. staged_intake_matches lookup — latest row for the intake. Pass
+//      excludeManualInLookup:true to skip the confidence-1.0 manual pick rows
+//      so the accuracy bands reflect the MACHINE's real confidence, not the
+//      human's 1.0.
+//
+// Returns { ok, status, feedback?, originalMatch?, upserted?, error?, detail? }.
+// ============================================================================
+
+export async function writeIntakeFeedback(params = {}) {
+  const {
+    workspaceId,
+    intakeId,
+    matchId = null,
+    userId = null,
+    decision,
+    correctedDomain = null,
+    correctedPropertyId = null,
+    reasonText = null,
+    metadata = {},
+    // Caller-provided matcher snapshot (preferred). If none are supplied, the
+    // machine's latest match row is looked up below.
+    matchReason,
+    matchDomain,
+    matchPropertyId,
+    matchConfidence,
+    excludeManualInLookup = false,
+  } = params;
+
+  if (!workspaceId) return { ok: false, status: 400, error: 'workspace_required' };
+  if (!intakeId || typeof intakeId !== 'string') {
+    return { ok: false, status: 400, error: 'intake_id_required' };
+  }
+  if (!decision || !VALID_DECISIONS.has(decision)) {
+    return { ok: false, status: 400, error: 'invalid_decision', valid: [...VALID_DECISIONS] };
+  }
+
+  let originalMatch = null;
+  if (matchReason || matchDomain || matchPropertyId != null || matchConfidence != null) {
+    originalMatch = {
+      id:           matchId || null,
+      reason:       matchReason     || null,
+      property_id:  matchPropertyId != null ? String(matchPropertyId) : null,
+      confidence:   typeof matchConfidence === 'number' ? matchConfidence : null,
+      match_result: { domain: matchDomain || null },
+    };
+  } else {
+    // Exclude the manual/decision-center pick rows (confidence 1.0) when asked,
+    // so we snapshot the matcher's real output for the accuracy bands.
+    const manualFilter = excludeManualInLookup ? '&decision=neq.manual_match' : '';
+    const matchLookup = await opsQuery('GET',
+      `staged_intake_matches?intake_id=eq.${pgFilterVal(intakeId)}${manualFilter}` +
+      `&select=id,reason,property_id,confidence,match_result` +
+      `&order=created_at.desc,id.desc&limit=1`
+    );
+    if (matchLookup.ok && Array.isArray(matchLookup.data) && matchLookup.data.length) {
+      originalMatch = matchLookup.data[0];
+    } else {
+      console.warn('[intake-feedback] match snapshot lookup empty or failed:',
+        JSON.stringify({
+          ok:       matchLookup.ok,
+          status:   matchLookup.status,
+          rowCount: Array.isArray(matchLookup.data) ? matchLookup.data.length : null,
+        }));
+    }
+  }
+
+  const row = {
+    workspace_id:          workspaceId,
+    intake_id:             intakeId,
+    match_id:              matchId || originalMatch?.id || null,
+    user_id:               userId || null,
+    decision,
+    original_match_reason: originalMatch?.reason               || null,
+    original_domain:       originalMatch?.match_result?.domain || null,
+    original_property_id:  originalMatch?.property_id != null
+                             ? String(originalMatch.property_id)
+                             : null,
+    original_confidence:   originalMatch?.confidence           ?? null,
+    corrected_domain:      correctedDomain                     || null,
+    corrected_property_id: correctedPropertyId != null
+                             ? String(correctedPropertyId)
+                             : null,
+    reason_text:           reasonText || null,
+    metadata:              metadata && typeof metadata === 'object' ? metadata : {},
+  };
+
+  // resolution=merge-duplicates so a repeat vote from the same user on the same
+  // intake updates the prior row (respects uq_sif_intake_user).
+  const insertResult = await opsQuery(
+    'POST',
+    'staged_intake_feedback?on_conflict=intake_id,user_id',
+    row,
+    { Prefer: 'return=representation,resolution=merge-duplicates' }
+  );
+
+  // If on_conflict can't resolve against the partial unique index on some
+  // deployments, fall back to an explicit PATCH (only meaningful when a user is
+  // attached — the partial index is WHERE user_id IS NOT NULL).
+  if (!insertResult.ok && insertResult.status === 409 && userId) {
+    const patchResult = await opsQuery(
+      'PATCH',
+      `staged_intake_feedback?intake_id=eq.${pgFilterVal(intakeId)}` +
+        `&user_id=eq.${pgFilterVal(userId)}`,
+      row,
+      { Prefer: 'return=representation' }
+    );
+    if (patchResult.ok) {
+      const patched = Array.isArray(patchResult.data) ? patchResult.data[0] : patchResult.data;
+      return { ok: true, status: 200, feedback: patched, originalMatch, upserted: true };
+    }
+  }
+
+  if (!insertResult.ok) {
+    return { ok: false, status: insertResult.status || 500, error: 'insert_failed', detail: insertResult.data };
+  }
+
+  const inserted = Array.isArray(insertResult.data) ? insertResult.data[0] : insertResult.data;
+  return { ok: true, status: 200, feedback: inserted, originalMatch };
+}
+
+// ============================================================================
 // POST /api/intake/feedback — record a decision
 // GET  /api/intake/feedback?intake_id=UUID — list history for an intake
 // ============================================================================
@@ -83,114 +218,39 @@ async function recordFeedback(req, res) {
     });
   }
 
-  // Build the originalMatch snapshot from two sources, in order:
-  //   1. Fields provided by the caller in the POST body (preferred — fresh
-  //      from the extract response the UI just saw).
-  //   2. staged_intake_matches lookup (fallback — useful for out-of-band
-  //      callers like Power Automate flows that don't have the match in hand).
-  let originalMatch = null;
-
-  if (match_reason || match_domain || match_property_id != null || match_confidence != null) {
-    originalMatch = {
-      id:           match_id || null,
-      reason:       match_reason     || null,
-      property_id:  match_property_id != null ? String(match_property_id) : null,
-      confidence:   typeof match_confidence === 'number' ? match_confidence : null,
-      match_result: { domain: match_domain || null },
-    };
-  } else {
-    const matchLookup = await opsQuery('GET',
-      `staged_intake_matches?intake_id=eq.${pgFilterVal(intake_id)}` +
-      `&select=id,reason,property_id,confidence,match_result` +
-      `&order=id.desc&limit=1`
-    );
-    if (matchLookup.ok && Array.isArray(matchLookup.data) && matchLookup.data.length) {
-      originalMatch = matchLookup.data[0];
-    } else {
-      // Log the exact state so we can debug silent failures (either the
-      // matcher never wrote, or the query fell afoul of a schema mismatch).
-      console.warn('[intake-feedback] match snapshot lookup empty or failed:',
-        JSON.stringify({
-          ok:     matchLookup.ok,
-          status: matchLookup.status,
-          rowCount: Array.isArray(matchLookup.data) ? matchLookup.data.length : null,
-          detail: JSON.stringify(matchLookup.data || {}).slice(0, 200),
-        }));
-    }
-  }
-
-  const row = {
-    workspace_id:          workspaceId,
-    intake_id,
-    match_id:              match_id || originalMatch?.id || null,
-    user_id:               user.id,
+  // Delegate to the canonical writer. The HTTP path keeps its historical
+  // snapshot behavior (latest match row, manual rows NOT excluded) so this
+  // refactor is behavior-neutral for existing triage-UI callers.
+  const result = await writeIntakeFeedback({
+    workspaceId,
+    intakeId:            intake_id,
+    matchId:             match_id || null,
+    userId:              user.id,
     decision,
-    original_match_reason: originalMatch?.reason                       || null,
-    original_domain:       originalMatch?.match_result?.domain         || null,
-    original_property_id:  originalMatch?.property_id != null
-                             ? String(originalMatch.property_id)
-                             : null,
-    original_confidence:   originalMatch?.confidence                   ?? null,
-    corrected_domain:      corrected_domain                            || null,
-    corrected_property_id: corrected_property_id != null
-                             ? String(corrected_property_id)
-                             : null,
-    reason_text:           reason_text || null,
-    metadata:              metadata && typeof metadata === 'object' ? metadata : {},
-  };
+    correctedDomain:     corrected_domain,
+    correctedPropertyId: corrected_property_id,
+    reasonText:          reason_text,
+    metadata,
+    matchReason:         match_reason,
+    matchDomain:         match_domain,
+    matchPropertyId:     match_property_id,
+    matchConfidence:     match_confidence,
+  });
 
-  // Use resolution=merge-duplicates so a second vote from the same user on
-  // the same intake updates the previous row (respects uq_sif_intake_user).
-  // PostgREST requires `on_conflict=col1,col2` in the URL to know which
-  // unique index to target; without it the INSERT fails with 409 instead of
-  // upserting.
-  const insertResult = await opsQuery(
-    'POST',
-    'staged_intake_feedback?on_conflict=intake_id,user_id',
-    row,
-    { Prefer: 'return=representation,resolution=merge-duplicates' }
-  );
-
-  // If the partial unique index (WHERE user_id IS NOT NULL) prevents
-  // on_conflict from resolving on some deployments, fall back to an
-  // explicit PATCH on the matching row.
-  if (!insertResult.ok && insertResult.status === 409) {
-    const patchResult = await opsQuery(
-      'PATCH',
-      `staged_intake_feedback?intake_id=eq.${pgFilterVal(intake_id)}` +
-        `&user_id=eq.${pgFilterVal(user.id)}`,
-      row,
-      { Prefer: 'return=representation' }
-    );
-    if (patchResult.ok) {
-      const patched = Array.isArray(patchResult.data) ? patchResult.data[0] : patchResult.data;
-      return res.status(200).json({
-        ok: true,
-        feedback: patched,
-        intake_status: await updateIntakeStatus(intake_id, decision),
-        upserted: true,
-      });
-    }
-    // Fall through to the generic error below if PATCH also failed.
-  }
-
-  if (!insertResult.ok) {
-    return res.status(insertResult.status || 500).json({
-      error: 'insert_failed',
-      detail: insertResult.data,
+  if (!result.ok) {
+    return res.status(result.status || 500).json({
+      error:  result.error || 'insert_failed',
+      detail: result.detail,
     });
   }
-
-  const inserted = Array.isArray(insertResult.data)
-    ? insertResult.data[0]
-    : insertResult.data;
 
   const newStatus = await updateIntakeStatus(intake_id, decision);
 
   return res.status(200).json({
     ok: true,
-    feedback: inserted,
+    feedback: result.feedback,
     intake_status: newStatus,
+    ...(result.upserted ? { upserted: true } : {}),
   });
 }
 
