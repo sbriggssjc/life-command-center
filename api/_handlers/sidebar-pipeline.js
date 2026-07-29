@@ -11104,6 +11104,71 @@ async function upsertGovListings(propertyId, entity, metadata) {
   return { count: 1, insertedListingId };
 }
 
+// ── W1.4-L3b: promote outcome + silent-failure telemetry ────────────────────
+
+/**
+ * W1.4-L3b (2026-07-29): derive the operator-facing promote OUTCOME from the
+ * propagation result + classified domain. Pure — no I/O, unit-testable.
+ *
+ * A sidebar "Promote to DB" that classified NO domain (domain:null) or failed
+ * to write any domain row is a FAILURE the sidebar must surface — not a silent
+ * HTTP-200 that reads as success. Repro (2026-07-29, entity property
+ * 281c485a-…): the classifier searchText was just the literal entity name
+ * (45 chars, hasPdfTexts=false, matchedPattern='none') → domain:null, zero DB
+ * writes, _pipeline_status='failed', and NO user-visible error.
+ */
+export function pipelinePromoteOutcome({ propagated, domain, reason } = {}) {
+  const failed = !propagated;
+  return {
+    pipeline_status: failed ? 'failed' : 'success',
+    pipeline_failed: failed,
+    pipeline_reason: failed
+      ? (reason || (domain ? 'propagation_failed' : 'no_domain_classified'))
+      : null,
+  };
+}
+
+/**
+ * W1.4-L3b: emit a lcc_health_alerts row on a pipeline-failed promote so
+ * repeated silent failures become visible in Ops Health. Fire-and-forget —
+ * never throws, never blocks the promote. Deduped on the unresolved
+ * (kind, source=entity) pair so a retry loop can't flood the table.
+ */
+async function recordSidebarPipelineFailure({ entityId, workspaceId, domain, reason, classifierDiag, propagation } = {}) {
+  try {
+    const source = `sidebar_promote:${entityId}`;
+    const existing = await opsQuery('GET',
+      `lcc_health_alerts?alert_kind=eq.sidebar_promote_pipeline_failed`
+      + `&source=eq.${encodeURIComponent(source)}&resolved_at=is.null&select=alert_id&limit=1`
+    );
+    if (existing.ok && Array.isArray(existing.data) && existing.data.length) return;
+    await opsQuery('POST', 'lcc_health_alerts', {
+      alert_kind: 'sidebar_promote_pipeline_failed',
+      source,
+      severity: 'warn',
+      summary: `Sidebar promote produced no DB writes (reason: ${reason || 'unknown'}, domain: ${domain || 'null'})`,
+      details: {
+        entity_id: entityId,
+        workspace_id: workspaceId || null,
+        domain: domain || null,
+        reason: reason || null,
+        propagation_reason: (propagation && propagation.reason) || null,
+        classifier: classifierDiag ? {
+          result: classifierDiag.result,
+          matchedPattern: classifierDiag.matchedPattern,
+          searchTextLen: classifierDiag.searchTextLen,
+          searchTextFirst200: classifierDiag.searchTextFirst200,
+          hasPdfTexts: classifierDiag.hasPdfTexts,
+          hasSaleNotes: classifierDiag.hasSaleNotes,
+        } : null,
+      },
+    }, { 'Prefer': 'return=minimal' });
+  } catch (err) {
+    // Telemetry, not control flow — never propagate.
+    console.warn('[recordSidebarPipelineFailure] suppressed:', err?.message || err);
+  }
+}
+
 // ── Main pipeline entry point ───────────────────────────────────────────────
 
 /**
@@ -11261,6 +11326,22 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     { metadata: updatedMeta, updated_at: new Date().toISOString() }
   );
 
+  // W1.4-L3b: classify the promote outcome so the API response tells the sidebar
+  // success-vs-failure (not just HTTP-200), and emit a health alert on failure.
+  const promoteOutcome = pipelinePromoteOutcome({
+    propagated: propagation.propagated,
+    domain,
+    reason: propagation.reason,
+  });
+  if (promoteOutcome.pipeline_failed) {
+    recordSidebarPipelineFailure({
+      entityId, workspaceId, domain,
+      reason: promoteOutcome.pipeline_reason,
+      classifierDiag: _lastClassifierDiag,
+      propagation,
+    }).catch((e) => console.warn('[sidebar-pipeline] alert record failed (suppressed):', e?.message || e));
+  }
+
   console.log(`[Sidebar pipeline] Done: entity=${entityId}, domain=${domain}, contacts=${totalContacts}, sales=${salesCount}, propagated=${propagation.propagated}`);
 
   return {
@@ -11278,6 +11359,9 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     // banner without parsing the nested diagnostic.
     domain_mismatch_warning: (_lastClassifierDiag && _lastClassifierDiag.mismatchWarning) || null,
     _classifier_diag: _lastClassifierDiag,
+    // W1.4-L3b: explicit promote status so the sidebar can render a failure
+    // inline instead of a false "success" toast on a no-domain / no-write run.
+    ...promoteOutcome,
     processed_at: new Date().toISOString(),
   };
 }

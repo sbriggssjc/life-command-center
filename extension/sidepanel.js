@@ -102,6 +102,34 @@ async function getLCCConfig() {
   });
 }
 
+// W1.4-L3b (2026-07-29): does a capture (fresh page ctx OR a stored entity's
+// metadata) carry anything the domain classifier / pipeline can actually
+// extract? Guards "Promote to DB" so it never fires on an empty capture whose
+// only signal is the entity name — which silently classifies domain:null and
+// writes zero rows. Content = an address, OR a core property/financial/lease
+// field, OR PDF text, OR a non-empty content array.
+function hasExtractableContent(src) {
+  if (!src || typeof src !== 'object') return false;
+  if (src.address && String(src.address).trim()) return true;
+  const SCALAR_KEYS = [
+    'tenant_name', 'primary_tenant', 'building_name', 'property_subtype', 'sub_type',
+    'asking_price', 'cap_rate', 'noi', 'price_per_sf', 'sale_price', 'annual_rent',
+    'square_footage', 'year_built', 'parcel_number',
+    'lease_expiration', 'lease_commencement', 'lease_type',
+  ];
+  for (const k of SCALAR_KEYS) {
+    if (src[k] != null && String(src[k]).trim() !== '') return true;
+  }
+  const ARRAY_KEYS = [
+    'tenants', 'contacts', 'sales_history', 'portfolio_properties',
+    'pdf_extracted_texts', 'documents', 'document_links',
+  ];
+  for (const k of ARRAY_KEYS) {
+    if (Array.isArray(src[k]) && src[k].length > 0) return true;
+  }
+  return false;
+}
+
 async function pollPipelineStatus(entityId, container) {
   // Round 76af 2026-04-28: poll up to 4 times (3.5s, 6s, 10s, 16s) before
   // giving up. The previous single-poll-at-3.5s would frequently render
@@ -1299,6 +1327,17 @@ async function loadPropertyTab(opts) {
     rerunBtn.textContent = pipelineLabel;
     actions.appendChild(rerunBtn);
 
+    // W1.4-L3b: don't let a promote fire on an empty capture. Allow when the
+    // live page ctx OR the already-stored entity metadata has extractable
+    // content; otherwise disable with a rescan tooltip.
+    const canPromote = hasExtractableContent(ctx) || hasExtractableContent(meta);
+    if (!canPromote) {
+      rerunBtn.disabled = true;
+      rerunBtn.title = 'Nothing extracted from this capture — rescan the page';
+      rerunBtn.style.opacity = '0.5';
+      rerunBtn.style.cursor = 'not-allowed';
+    }
+
     rerunBtn.addEventListener('click', async () => {
       rerunBtn.disabled = true;
       rerunBtn.textContent = 'Running...';
@@ -1308,7 +1347,11 @@ async function loadPropertyTab(opts) {
         force: true,
       });
 
-      if (result.ok) {
+      // W1.4-L3b: HTTP-200 is not success. A promote that classified no domain
+      // or wrote nothing returns pipeline_failed=true — surface it, don't toast
+      // "success".
+      const pipelineFailed = !!result.data?.pipeline_failed;
+      if (result.ok && !pipelineFailed) {
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
         toast.textContent = 'Pipeline re-ran successfully';
@@ -1317,6 +1360,17 @@ async function loadPropertyTab(opts) {
           rerunBtn.textContent = 'Re-run Pipeline';
           rerunBtn.disabled = false;
         });
+      } else if (result.ok && pipelineFailed) {
+        const reason = toErrorMessage(result.data?.pipeline_reason)
+          || 'no domain classified — nothing was written';
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.style.background = 'var(--red, #dc2626)';
+        toast.style.color = '#fff';
+        toast.textContent = `Promote failed — ${reason}. Rescan the page and retry.`;
+        actions.prepend(toast);
+        rerunBtn.textContent = 'Retry Pipeline (Failed)';
+        rerunBtn.disabled = false;
       } else {
         const errMsg = toErrorMessage(result.data?.error)
           || toErrorMessage(result.error)
@@ -2006,6 +2060,22 @@ function wirePropertyActions(ctx, lccEntity) {
   const saveBtn = $('#saveLccBtn');
   const domain = ctx.domain || 'source';
   const domainLabel = DOMAIN_LABELS[domain] || domain;
+
+  // W1.4-L3b: a Save/Update promote runs the same domain-classifier pipeline as
+  // the Re-run button. If the capture has nothing extractable (only the entity
+  // name), the promote silently classifies domain:null and writes zero rows —
+  // so disable the button with a rescan tooltip rather than let it fail quietly.
+  const canPromote = hasExtractableContent(ctx)
+    || hasExtractableContent(lccEntity && lccEntity.metadata);
+  if (!canPromote) {
+    for (const b of [updateBtn, saveBtn]) {
+      if (!b) continue;
+      b.disabled = true;
+      b.title = 'Nothing extracted from this capture — rescan the page';
+      b.style.opacity = '0.5';
+      b.style.cursor = 'not-allowed';
+    }
+  }
 
   if (updateBtn) {
     updateBtn.addEventListener('click', async () => {
