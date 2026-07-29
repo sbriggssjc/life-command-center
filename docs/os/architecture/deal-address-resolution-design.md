@@ -64,3 +64,27 @@ through the sweep instead of piling up.
 3. **Phase 3 — sweep + secondary feeds:** the scored `reconcile_deal_addresses_sweep` on a schedule; add the
    matched-email and geocode feeds; wire the SF-Property feed if/when access is granted.
 4. **Backstop:** the `reconcile-entity` review endpoint (built) always handles the residual tail.
+
+## Backlog sweep — sweep v3 (2026-07-29)
+Ran the flagged-deal reconcile backlog to ground (per the pre-rollout audit). Two safe extensions, migration
+`20260729130000_deal_address_sweep_v3_closed_and_dedup.sql`:
+
+- **`p_include_closed`** — v1/v2 only touched OPEN deals, so the closed won/lost backlog (on placeholder
+  entities) was permanently unreconciled. v3 sweeps closed deals too (default off; 2-arg callers unaffected). A
+  closed won deal linked to its real property becomes a proper comp; a closed-lost is market history.
+- **addr_key dedup tie-break** — when every top-scored candidate is a duplicate row of ONE property (identical
+  non-null `addr_key`), the tie is spurious → link. Hard-guarded (single non-null addr_key, no nulls in the set);
+  genuinely distinct properties still fall to review. No confidence-bar change: a link still needs score ≥ threshold
+  (a unique tenant+geo match = 70).
+
+**Outcome (verified live):** flagged backlog **238 → 197** (41 auto-linked). Closed-TB 42→27, closed-non-TB
+188→162, open-non-TB 8→8 (correctly untouched — no address). Integrity: 0 orphaned deals, 0 deals left pointing at
+a tombstoned placeholder, open pipeline unchanged (40). Every link was a unique tenant match in the deal's own
+city (spot-checked 39/39 — e.g. rebranded "American Renal"/"Innovative Renal Care" Arvada both consolidated to
+one property). Reversible via `merged_into` tombstones.
+
+**The residual 197 are honestly unresolvable without new data, not a defect:** ~150 have no tenant match in
+`lcc_property_attributes` (score 10, awaiting an address observation) and ~35 are genuine multi-property ties
+(several distinct buildings of a national operator in one city — need the specific street address or a human pick).
+They drain automatically as the OM-extraction (A1f) and SF browser-read (A1g) address feeds come online. This is
+the finite, shrinking review tail the engine was designed to produce — not a silent gap.
