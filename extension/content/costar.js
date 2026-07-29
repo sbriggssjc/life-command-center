@@ -2723,6 +2723,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         'summary', 'property', 'lease', 'loan', 'financials', 'images', 'map',
         // The "Tenants" section header / "Tenancy: Multi" label leaking in as a row
         'tenant', 'tenants', 'tenant\\s+name', 'tenancy(?:\\s*[:\\-].*)?',
+        // Tenant-tab grid column headers, legend, and store-type/date cells
+        'store\\s+type', 'employees?', 'move[\\s-]?in', 'move[\\s-]?out', 'expiration',
+        'occupied', 'moving\\s+(in|out)', 'data\\s+not\\s+available', 'stacking\\s+plan',
+        '[a-z]+(?:\\s*\\/\\s*[a-z.]+)+',                       // Dollar/Variety/Thrift, MD/DDS
+        '(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\s+\\d{4}\\s*)+', // Oct 2021 Oct 2031
+        'donut\\s+shop', 'donuts?', 'bank', 'coffee(\\s+shop)?', 'pharmacy', 'grocery',
         'lease\\s+activity', 'sign\\s+date', 'leased', 'use', 'services',
         'rent\\s+(type|schedule|steps|adjust(?:ment)?s?|escalation\\s+type)',
         'use\\s+type', 'space\\s+(use|type|category|id)',
@@ -2795,7 +2801,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Lease tab — without this, parseTenantSection bled past the
       // tenant block into 'Sign Date' / 'Use' / 'Services' / 'Rent Type'
       // column headers and captured them as tenant rows.
-      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|sale\s+contacts|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property|architect|developer|broker|firm)|amenities|airport|drive(\s+time|\s+to)?|costar|costar\s+comp\s+contact|investment\s+highlights|property\s+highlights|property\s+summary|location\s+highlights|tenant\s+highlights|sale\s+highlights|sale\s+notes|conditions|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available|lease\s+activity|true\s+(seller|buyer)|recorded\s+(seller|buyer)|listing\s+broker|listing\s+contacts?)/i.test(line)) break;
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|sale\s+contacts|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property|architect|developer|broker|firm)|amenities|airport|drive(\s+time|\s+to)?|costar|costar\s+comp\s+contact|investment\s+highlights|property\s+highlights|property\s+summary|location\s+highlights|tenant\s+highlights|sale\s+highlights|sale\s+notes|conditions|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available|lease\s+activity|stacking\s+plan|data\s+not\s+available|help\s+with\s+features|request\s+training|share\s+feedback|terms\s+of\s+use|all\s+rights\s+reserved|true\s+(seller|buyer)|recorded\s+(seller|buyer)|listing\s+broker|listing\s+contacts?)/i.test(line)) break;
 
       // Skip CoStar UI elements + OM section headers + compound metadata strings + NAICS sectors
       if (COSTAR_UI_REJECT.test(line)) continue;
@@ -2803,8 +2809,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       if (COMPOUND_METADATA_REJECT.test(line)) continue;
       if (NAICS_SECTOR_REJECT.test(line)) continue;
 
-      // Skip lines that are just dates (month/year) — these are column values, not names
-      if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(line)) continue;
+      // Skip lines that are just dates (month/year) — these are column values, not
+      // names. 2026-07-29: the Tenant-tab grid concatenates the Move-In and
+      // Expiration cells onto one line ("Oct 2021 Oct 2031"), so match one OR
+      // MORE month-year tokens, not just a single one.
+      if (/^((jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\s*)+$/i.test(line)) continue;
       // Round 76ej.l: also skip "Since Jun 23, 2009" / "Mar 26, 2026" /
       // "Q2 2026" / "1/15/2024" / ISO-date / "2020-2025" residue.
       if (/^(since\s+)?((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)(?:uary|ruary|ch|il|y|e|y|ust|tember|ober|ember)?\s+\d{1,2},?\s+\d{4}|q[1-4]\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{4}\s*[-–]\s*\d{4})\s*$/i.test(line)) continue;
@@ -2848,7 +2857,14 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
 
       // Tenant name: anything else that's a reasonable-length text line
       // Reject CoStar field labels that appear in Lease/Sale tabs
-      const TENANT_SECTION_REJECT = /^(industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|submarket|market|market\s+data|analytics|reports|demographics|transit|walk\s+score|name|source|available|vacant|none|sf|sf\s+occupied|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|lease\s+type|lease\s+term|rent\/?sf|move\s+date|exp\s+date|floor|assessment|investment|research|my\s+notes|contacts|data|verified|confirmed|population|households|median\s+age|median\s+hh\s+income|daytime\s+employees|traffic|traffic\s+vol|last\s+measured|collection\s+street|cross\s+street|distance|location|nearby|environmental|flood|tax\s+history|assessment\s+history|transportation)$/i;
+      const TENANT_SECTION_REJECT = /^(industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|submarket|market|market\s+data|analytics|reports|demographics|transit|walk\s+score|name|source|available|vacant|none|sf|sf\s+occupied|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|lease\s+type|lease\s+term|rent\/?sf|move\s+date|exp\s+date|floor|assessment|investment|research|my\s+notes|contacts|data|verified|confirmed|population|households|median\s+age|median\s+hh\s+income|daytime\s+employees|traffic|traffic\s+vol|last\s+measured|collection\s+street|cross\s+street|distance|location|nearby|environmental|flood|tax\s+history|assessment\s+history|transportation|tenant|tenants|store\s+type|employees?|move[\s-]?in|move[\s-]?out|expiration|occupied|moving\s+(in|out))$/i;
+      // 2026-07-29: the dedicated Tenant tab is a grid whose Store-Type cells
+      // ("Dollar/Variety/Thrift", "MD/DDS", "Bank", "Donut Shop") interleave
+      // with the tenant-name column. Reject slash-joined category tokens and a
+      // known CoStar store-type/use taxonomy so those cells aren't captured as
+      // tenants. Anchored exact-match — real named tenants ("Valley National
+      // Bank", "Restaurant Depot") are unaffected.
+      const TENANT_STORE_TYPE_REJECT = /^([a-z]+(?:\s*\/\s*[a-z.]+)+|bank|donut\s+shop|coffee(\s+shop)?|restaurant|fast\s+food|quick\s+service|pharmacy|drug\s+store|grocery|supermarket|convenience(\s+store)?|apparel|clothing|fitness(\s+center)?|gym|salon|spa|dental|medical|urgent\s+care|gas\s+station|auto(\s+parts)?|hardware|pet(\s+store|\s+supplies)?|liquor(\s+store)?|wireless|electronics|furniture|jewelry|shoes?|books?(store)?|toys?(\s+store)?|sporting\s+goods|dollar\s+store|variety|thrift|discount|department\s+store|florist|bakery|deli|pizza|ice\s+cream|nail\s+salon|barber|cleaners|laundr(y|omat)|tax\s+service|insurance|title|mortgage|credit\s+union|day\s?care|preschool|tutoring|theater|cinema|donut|donuts)$/i;
       // Also reject: street names (ending in Ave/St/Blvd + optional direction),
       // product attribution, growth projections, and store-type labels
       const TENANT_STREET_JUNK = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
@@ -2873,6 +2889,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       if (line.length > 2 && line.length < 80 && /^[A-Z]/.test(line) &&
           !/^\d/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
           !TENANT_SECTION_REJECT.test(line) &&
+          !TENANT_STORE_TYPE_REJECT.test(line) &&
           !TENANT_STREET_JUNK.test(line) &&
           !TENANT_JUNK_PATTERN.test(line) &&
           !TENANT_PLACEHOLDER.test(line) &&
