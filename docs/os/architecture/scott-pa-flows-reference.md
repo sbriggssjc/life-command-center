@@ -34,6 +34,57 @@ that no longer exists. They are not doing any live work — the current loop run
 > If, when you open them, either turns out to be doing something you still rely on that the native model doesn't
 > cover, stop and tell me — but per the audit they were fully superseded.
 
+### 1A-fix. `LCC To-Do Completion Poll` failing 404 (`ErrorItemNotFound`) → stop hard-coding the folder id
+**Finding (confirmed 2026-07-29):** the poll's `List to-do's by folder (V2)` action has its **`folderId`
+hard-coded** to `AAMkADI4…AAC56pC5AAA=` — which is the *exact reference/probe value* the spec
+(`flows/todo-completion-poll.md`) warned **not** to hardcode ("resolve it each run via
+`wellknownListName eq 'flaggedEmails'` … it can differ per environment/account"). Outlook deletes and
+recreates the native **Flagged email** To-Do list (with a **new** id) whenever your flagged count hits zero, so
+the hard-coded id now 404s every run. This is a repoint/rebuild of that one action, not a retirement — the poll
+itself is current and needed.
+
+**Exact flow shape (from the 2026-07-29 export, flow `LCC To Do Completion Poll`):**
+`HTTP_GetStagedWorklist` → `Parse_JSON` → **`List_Flagged_Tasks`** (`ListToDosByFolderV2`, conn `shared_todo`,
+param `folderId` = the hard-coded `AAMk…AAA=`) → `Initialize_variable` → `Apply_to_each`
+(`@body('Parse_JSON')?['items']`) → `HTTP_1`. Inside the loop, `Filter_MatchingTasks` reads
+`@body('List_Flagged_Tasks')` and matches `status == completed` AND `linkedResources[0].displayName == subject`.
+Only `List_Flagged_Tasks` is wrong; everything else stays as-is.
+
+#### Option 1 — 30-second stopgap (gets it green now)
+Open **`List_Flagged_Tasks`** → the **Folder / List** field → clear the hard-coded id → re-pick **Flagged email**
+from the dropdown → Save → Test. Works immediately, but the id will go stale again the next time your flagged
+count hits zero and Outlook recreates the list. Do Option 2 for a permanent fix. (If "Flagged email" isn't in the
+dropdown, reconnect the Microsoft To-Do (Business) connection `shared_todo` and reselect.)
+
+#### Option 2 — durable fix: resolve the list id each run (recommended)
+Insert two actions between **`Parse_JSON`** and **`List_Flagged_Tasks`**, then repoint the folder:
+
+1. **`Get_Lists`** — add Microsoft To-Do (Business) → **"Lists"** action (no parameters; uses your `shared_todo`
+   connection). It returns every To-Do list, each with `id`, `displayName`, `wellknownListName`.
+2. **`Filter_FlaggedList`** — add Data Operation → **Filter array**:
+   - **From:** `@outputs('Get_Lists')?['body/value']`
+   - **Condition (advanced mode):** `@equals(item()?['wellknownListName'], 'flaggedEmails')`
+3. **Repoint `List_Flagged_Tasks`:** open it, delete the hard-coded `folderId`, switch the field to **Enter custom
+   value / expression**, and set:
+   `@first(body('Filter_FlaggedList'))?['id']`
+   (Its `runAfter` becomes `Filter_FlaggedList` once you insert the two steps in sequence — the designer wires
+   this automatically.)
+4. **Guard the empty state (optional but kills the last 404 risk):** add a **Condition** right after
+   `Filter_FlaggedList`: `@greater(length(body('Filter_FlaggedList')), 0)`. Move `List_Flagged_Tasks` +
+   `Initialize_variable` + `Apply_to_each` + `HTTP_1` into **If yes**; put a single **Terminate (Succeeded)** in
+   **If no** (no flagged emails right now = nothing to poll, a clean no-op, not a failure). If moving four actions
+   into a branch is more surgery than you want, skip this — with staged emails always kept flagged, the list
+   effectively always exists when there's work, so steps 1–3 alone fix the observed failure.
+5. Save + **Test**.
+
+**JSON-edit equivalent** (if you patch the export directly — same connection `shared_todo`, apiId
+`shared_todo`): add a `Get_Lists` action (`operationId` **Lists** — confirm the exact id from the action picker,
+some tenants surface it as `GetLists`) running after `Parse_JSON`; add a `Filter_FlaggedList` (`Query`) with
+`from: "@outputs('Get_Lists')?['body/value']"`, `where: "@equals(item()?['wellknownListName'],'flaggedEmails')"`;
+change `List_Flagged_Tasks.inputs.parameters.folderId` to `"@first(body('Filter_FlaggedList'))?['id']"` and its
+`runAfter` to `{ "Filter_FlaggedList": ["Succeeded"] }`. Re-importing an edited export re-binds connections, so the
+designer route is usually less fuss.
+
 ### 1B. `SF -> LCC: Daily Bulk File Backfill` → fix the `Apply_to_each` (Map-to-Manifest gap)
 **Finding:** this is the scheduled sibling of Flow 6 (`SF -> LCC: On-demand File Backfill`,
 id `aaa452c0-7eb5-4c98-bfe2-f6d872d80639`). It fails at `Apply_to_each` because of a **known architectural gap**
