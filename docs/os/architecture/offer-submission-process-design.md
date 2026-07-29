@@ -97,8 +97,32 @@ The intake spine already ingests these emails; this adds a detection + generatio
    LOI **expiration as a critical date** in cadence, save the LOI to the deal doc set; ShareFile + SF logging (Phase 4).
 8. **Seller Response (on request)** — generate the DDP/standard counter from the seller's authorized terms.
 
-## §7 — the one data gap to close
-The quartile analysis needs **ask price + in-place NOI**, and the seller-of-record/contact for addressing — none of
-which are on the LCC `bd_opportunities` record today (verified: Snellville deal metadata is sparse). Capture these on
-listing-signing (from SF or the OM/listing packet) so the generator has a source; until then the email leaves
-`[OM ASK]` / `[NOI]` and the recipient as marked fill-ins.
+## §7 — Auto-context assembly (make it self-serve — Scott's directive 2026-07-29)
+The single biggest lever: **a chat working an inbound offer should already have the listing context, without Scott
+attaching the OM.** When LCC recognizes the subject is one of our listings (stage `listing_signed`/on-market), it
+should auto-assemble and hand the generator:
+
+- **Listing economics** — ask price, in-place NOI, ask cap, $/SF, tenant/guarantor, lease structure (term
+  remaining, escalations, expiration, options), seller-of-record + seller contact. Source: the **Salesforce listing
+  record** (primary) + the OM. _(Verified for Snellville from the uploaded OM: ask **$4,513,274**, NOI **$255,000**,
+  cap **5.65%**, 8,260 SF, Honey Dialysis LLC dba DaVita / guarantor DaVita Inc. NYSE:DVA (S&P BB), NNN, 14 yrs to
+  3/31/2040, ~10% every 5 yrs. None of this was on the LCC deal record — exactly the gap.)_
+- **Linked deal files** — the **Offering Memorandum** and listing documents from the **Team Briggs – Documents**
+  shared folder (SharePoint) and Salesforce Files, linked to the deal entity so any chat/skill can open them. This
+  reuses the folder-feed + `intake-salesforce-files` backfill we just fixed — point it at the listing's folder and
+  index the OM/PSA/lease/DD docs against the deal.
+
+**How to close it (build):**
+1. **Populate the deal record at listing-signing** — when a deal reaches `listing_signed`, write ask/NOI/cap/lease/
+   seller-of-record/seller-contact onto `bd_opportunities` (from the SF listing + OM extraction). One-time per listing.
+2. **Link the listing document set** — index the Team Briggs – Documents folder for the property (OM, lease, PSA, DD)
+   + SF Files against the deal entity, so the offer generator (and any chat) pulls the OM automatically.
+3. **Expose a "deal context packet"** — a single call that returns the listing economics + linked files for a deal,
+   so both the automation and an interactive chat start with full context instead of a blank slate + manual upload.
+
+Until (1)–(2) land, the generator falls back to marked fill-ins (`[OM ASK]`/`[NOI]`/recipient). With them, the
+Snellville-style email drafts end-to-end from the moment the LOI lands.
+
+_Grounding note: the OM confirms the standard DaVita brokerage team (Scott Briggs SVP, Kelly Largent VP, Nathanael
+Berwaldt Associate, Sarah Martin Sr. Transaction Manager; GA broker Brett Butler; Capital Markets Chad Owens / Mason
+Brower) and seller-side facts — this is the context that should attach automatically._
