@@ -1189,11 +1189,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // and leaving the sidebar in empty state on /for-sale/ pages.
       // Round 76ex (2026-04-29): on /public-record sub-tabs, the page is
       // dominated by historical sale data (Last Sale, Sale/Loan History,
-      // assessment/loan rows). Even though the URL is /detail/for-sale/...,
+      // assessment/loan rows). Even though the URL is a for-sale listing,
       // the body content has "Sale Price" labels for every historical sale.
       // Restrict to exact "Asking Price" so the 1997 DOT easement at $18,500
       // can't masquerade as a current-listing asking price.
-      const isForSaleUrl = /\/detail\/for-sale\//i.test(pageUrl || '');
+      // 2026-07-29: CoStar relocated the For Sale listing detail page from
+      // /detail/for-sale/<id>/<tab> to /listings/for-sale/detail/<id>/<tab>.
+      // Match /for-sale/ in EITHER layout so the flag keeps firing — otherwise
+      // for-sale captures on the new URL are misclassified as public-record
+      // pages (phantom closed-sale writes + no available_listings row).
+      const isForSaleUrl = /\/for-sale\//i.test(pageUrl || '');
       const isPublicRecordTab = /\/public-record(?:\b|\/|$)/i.test(pageUrl || '');
       const askingLabelRe = (isForSaleUrl && !isPublicRecordTab)
         ? /^(asking\s+price|for\s+sale|sale\s+price|price)$/i

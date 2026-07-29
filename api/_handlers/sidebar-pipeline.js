@@ -10426,7 +10426,13 @@ async function upsertDialysisListings(propertyId, metadata) {
   // already be a closed sale of that price in sales_history (which would
   // mean it's a historical sold price, not the current asking).
   const sourceUrl = String(metadata.page_url || metadata.url || '');
-  const onForSaleUrl = /\/detail\/for-sale\//i.test(sourceUrl);
+  // 2026-07-29: CoStar relocated the For Sale listing detail page from
+  // /detail/for-sale/<id>/<tab> to /listings/for-sale/detail/<id>/<tab>. Match
+  // /for-sale/ in EITHER layout so this flag (sale_price→asking_price inference,
+  // the price-less Active-row path, and the early-exit bypass below) keeps
+  // firing — otherwise new-URL for-sale captures with no explicit asking price
+  // never create an available_listings row.
+  const onForSaleUrl = /\/for-sale\//i.test(sourceUrl);
   if (!parsedAskingPrice) {
     const sp = parseCurrency(metadata.sale_price);
     if (onForSaleUrl && sp && sp >= 1000) {

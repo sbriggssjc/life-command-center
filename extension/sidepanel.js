@@ -1435,7 +1435,10 @@ async function loadPropertyTab(opts) {
         // upsertDialysisListings only fires on full pipeline runs;
         // the verify endpoint's auto-create reads the request body
         // directly, so we mirror the same fallback chain client-side.
-        const onForSaleUrl = /\/detail\/for-sale\//i.test(String(liveCtx.page_url || window.location?.href || ''));
+        // 2026-07-29: CoStar moved the For Sale detail page to
+        // /listings/for-sale/detail/<id>/<tab>; match /for-sale/ in either the
+        // old (/detail/for-sale/) or new layout so the sale_price fallback fires.
+        const onForSaleUrl = /\/for-sale\//i.test(String(liveCtx.page_url || window.location?.href || ''));
         const cleanPrice = (() => {
           const raw = liveCtx.asking_price
             ?? liveCtx.list_price
