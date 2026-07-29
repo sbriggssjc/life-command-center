@@ -9793,6 +9793,7 @@ function createLiveIngestDomainState() {
     lookupLoading: false,
     lookupResults: [],
     boundTarget: null,
+    bindSuggestion: null,
     entityLoading: false,
     entityResults: [],
     selectedEntity: null,
@@ -9960,7 +9961,7 @@ function renderLiveIngestWorkbench(domainKey) {
           <label for="${prefix}-notes">Instructions / context</label>
           <textarea id="${prefix}-notes" placeholder="Describe what should be extracted or where the data should land.">${esc(state.notes)}</textarea>
         </div>
-        ${state.error ? `<div class="live-ingest-callout warn">${esc(state.error)}</div>` : ''}
+        ${state.error ? `<div class="live-ingest-callout warn">${esc(state.error)}${state.bindSuggestion && state.bindSuggestion.label ? `<div style="margin-top:8px"><button class="btn-secondary" type="button" data-live-ingest-bind-open="${domainKey}">Bind ${esc(state.bindSuggestion.label)}</button></div>` : ''}</div>` : ''}
         <div class="live-ingest-actions">
           <button class="btn-primary" type="button" data-live-ingest-extract="${domainKey}" ${state.extracting ? 'disabled' : ''}>${state.extracting ? 'Extracting...' : 'Extract + Map Changes'}</button>
           <div class="live-ingest-stamp">Allowed tables: ${LIVE_INGEST_ALLOWED_TABLES[domainKey].map(esc).join(', ')}</div>
@@ -10522,6 +10523,17 @@ function bindLiveIngestWorkbench(domainKey) {
     state.lookupResults = [];
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-bind-open="${domainKey}"]`)?.addEventListener('click', () => {
+    if (!state.bindSuggestion) return;
+    state.boundTarget = state.bindSuggestion;
+    state.bindSuggestion = null;
+    state.error = '';
+    state.lookupResults = [];
+    state.selectedEntity = null;
+    state.entityResults = [];
+    rerenderLiveIngestDomain(domainKey);
+    searchLiveIngestEntities(domainKey);
+  });
   document.querySelector(`[data-live-ingest-search-entity="${domainKey}"]`)?.addEventListener('click', () => {
     const term = state.selectedEntity ? '' : (entityEl?.value || deriveLiveIngestEntityQuery(domainKey));
     searchLiveIngestEntities(domainKey, term);
@@ -10832,6 +10844,47 @@ function getLiveIngestCurrentContext(domainKey) {
       state: rec.state || null,
       operator_name: rec.operator_name || rec.chain_organization || null
     } : null
+  };
+}
+
+function getLiveIngestOpenDetailSuggestion(domainKey) {
+  // When nothing is bound in Live Intake, offer the property/detail record the
+  // operator already has open elsewhere in the app as a one-click bind. Shape
+  // mirrors state.boundTarget so it flows through the existing bind path.
+  try {
+    const wantDb = domainKey === 'government' ? 'gov' : 'dia';
+    const detail = (typeof _routeCurrentDetail === 'object' && _routeCurrentDetail) ? _routeCurrentDetail : null;
+    if (!detail || detail.kind !== 'prop' || detail.db !== wantDb || detail.id == null || detail.id === '') return null;
+    const idNum = /^\d+$/.test(String(detail.id)) ? Number(detail.id) : detail.id;
+    const stackTop = Array.isArray(_detailStack)
+      ? _detailStack.find((e) => e && e.kind === 'prop' && e.db === wantDb && String(e.id) === String(detail.id))
+      : null;
+    const label = (stackTop && stackTop.label) ? stackTop.label : `Property ${detail.id}`;
+    return {
+      source_table: 'properties',
+      label,
+      subtitle: 'Open in detail view',
+      current_record: { property_id: idNum, property_name: null, address: null, city: null, state: null }
+    };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function liveIngestBindPreflight(effectiveContext, openSuggestion) {
+  // Pre-flight for Live Intake extract/apply. The assistant endpoint returns an
+  // opaque http_400 when it is invoked with no bound record (no research row
+  // selected, no manual target). Catch that state here and hand back a friendly
+  // message (plus an optional one-click bind suggestion) instead. Pure so it can
+  // be fixture-tested.
+  if (effectiveContext && effectiveContext.current_record) return { ok: true, message: '', suggestion: null };
+  const base = 'Bind a record first \u2014 use the Target Record Lookup\u2019s Find to select the property or record these facts belong to.';
+  return {
+    ok: false,
+    message: (openSuggestion && openSuggestion.label)
+      ? `${base} Or bind the record you have open: ${openSuggestion.label}.`
+      : base,
+    suggestion: openSuggestion || null
   };
 }
 
@@ -11592,6 +11645,15 @@ async function runLiveIngestExtraction(domainKey) {
     rerenderLiveIngestDomain(domainKey);
     return;
   }
+
+  const _extractPreflight = liveIngestBindPreflight(getLiveIngestEffectiveContext(domainKey), getLiveIngestOpenDetailSuggestion(domainKey));
+  if (!_extractPreflight.ok) {
+    state.error = _extractPreflight.message;
+    state.bindSuggestion = _extractPreflight.suggestion || null;
+    rerenderLiveIngestDomain(domainKey);
+    return;
+  }
+  state.bindSuggestion = null;
 
   state.extracting = true;
   state.loadingSnapshots = false;
@@ -12495,6 +12557,15 @@ function extractLiveIngestEvidenceSnippet(text, tokens) {
 
 async function applyLiveIngestProposal(domainKey) {
   const state = getLiveIngestState(domainKey);
+  const _applyPreflight = liveIngestBindPreflight(getLiveIngestEffectiveContext(domainKey), getLiveIngestOpenDetailSuggestion(domainKey));
+  if (!_applyPreflight.ok) {
+    state.error = _applyPreflight.message;
+    state.bindSuggestion = _applyPreflight.suggestion || null;
+    rerenderLiveIngestDomain(domainKey);
+    showToast(_applyPreflight.message, 'warning');
+    return;
+  }
+  state.bindSuggestion = null;
   const ops = (state.proposal?.operations || []).filter((op) => op._selected !== false);
   if (!ops.length) {
     showToast('Select at least one proposed operation', 'warning');
