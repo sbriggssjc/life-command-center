@@ -90,11 +90,13 @@ was deleted (grep).
 ```
 
 #### W0.3 · Database archive schema + bloat + misplacement — **Cowork**
+> ✅ **EXECUTED 2026-07-29 via Cowork** (migrations `w0_3_archive_schema_backup_tables` on dia+gov, `w0_3b_archive_field_cleanups`, `w0_3c_archive_deprecated_tables`, `w0_3d_archive_agency_debt_programs`). Do not re-run.
+> ⚠️ **CORRECTION:** the original prompt below listed `dq5_*`/`dq7_*` as candidates — WRONG. Those are LIVE operational ledgers (`apply_owner_merge()` writes `dq5_owner_merge_log`; the maps are FK-repoint references; W3.3 audits them). They stay in `public`. Patterns struck below.
 ```
 In my Supabase projects Dialysis_DB and government, using the Supabase MCP:
 1. Create schema `archive` on both. Move every public table matching
    *_backup_*, *_purged_*, *_snapshot_20*, r37_*, r38_*, r40_*, t9b_*, t9c_*, t9d_*,
-   t9e_*, dq5_*, dq7_* (list them first and show me before executing) via
+   t9e_* (NOT dq5_*/dq7_* — live ledgers) (list them first and show me before executing) via
    ALTER TABLE ... SET SCHEMA archive. Record a manifest table archive.manifest
    (table_name, moved_at, drop_after date = moved_at + 90d, reason).
 2. gov: after showing me row samples, DROP the four tables commented

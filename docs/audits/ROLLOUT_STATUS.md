@@ -23,11 +23,12 @@
 
 | Unit | What | Status | Notes |
 |---|---|---|---|
-| W0.1 | Repo root cleanup (.gitignore, move worklogs to docs/history/) | ⬜ | Claude Code session |
-| W0.2 | Distill CLAUDE.md ≤30KB | ⬜ | Claude Code session |
+| W0.1 | Repo root cleanup (.gitignore, move worklogs to docs/history/) | ✅ 2026-07-29 | Claude Code (Scott) |
+| W0.2 | Distill CLAUDE.md ≤30KB | ✅ 2026-07-29 | Claude Code (Scott) |
 | W0.3 | Archive schema + bloat + agency_debt_programs move | ✅ 2026-07-29 | Cowork. archive schema + manifest on dia+gov. Moved: 36 dia backup/ledger tables (incl. field_cleanups — NOT empty as audit claimed: 838k rows, legacy correction log dormant since 2025-10; and agency_debt_programs 1.6GB, zero code refs, Scott-approved) + 15 gov backup tables + 4 gov DEPRECATED tables. Excluded: _sweep_candidates_2026_06_11 (referenced by cleanup-contaminated-hertz-lease.mjs). VACUUM FULL pending_updates: 196MB→2.2MB. Drop-after dates in archive.manifest (90d default). |
 | W0.4 | Inert-feature registry + briefing digest | ⬜ | Claude Code session |
 | W0.5 | Retention policies for mega-tables | ⬜ | Cowork |
+| W0.3f | Remove agency_debt_programs ref from merge_dialysis_dup_property, then re-archive the table | ⬜ | Code session; Scott already approved the archive |
 | W0.6 | dia Postgres 15.8 → 17 upgrade | ⬜ | MANUAL (Scott, Supabase dashboard; before 6am UTC crons). Decided 2026-07-29: track here, revisit at W1.V |
 | W0.7 | anon EXECUTE revoke on SECURITY DEFINER fns (103 LCC / 61 dia / 38 gov) | ⬜ | Code session: grep front-end for anon-key supabase.rpc() calls first, then revoke migration excluding those. Scott-approved audit-first 2026-07-29 |
 | W0.V | Advisors triage (all 3 projects) | ✅ 2026-07-29 | Cowork. 0 ERROR-level on all 3. WARNs: anon/authenticated SECURITY DEFINER execute (→W0.7); function_search_path_mutable (130/150/228 — defer, bundle with W0.7 migration); rls_policy_always_true (6 gov/16 dia — review in W0.7 session); materialized_view_in_api (2/5/13 — review); dia vulnerable_postgres_version (→W0.6); leaked-password protection off on LCC (dashboard toggle). 136/120/224 RLS-no-policy INFO = service-role-only by design, accepted. |
@@ -92,6 +93,13 @@
 | W6.4 | Delete dead code (api/sync.js copy, sos-lookup stubs, pipeline/) | ⬜ | |
 | W6.5 | Front-end decomposition | ⬜ | |
 | W6.6 | Monthly standing audit (scheduled task) | ⬜ | |
+
+## Corrections log
+
+- **2026-07-29:** W0.3 prompt in the plan wrongly listed `dq5_*`/`dq7_*` as archive candidates. They are LIVE ledgers (`apply_owner_merge()` writes dq5_owner_merge_log; hourly gov owner_merge_tick is an active caller; W3.3 audits them). They were never moved; plan text corrected. Lesson applied: before archiving anything, check pg function bodies (`pg_get_functiondef`) for table references, not just views + app code.
+- **2026-07-29:** field_cleanups "0 rows" claim was stale planner stats; actually 838k rows (legacy ledger, archived not dropped).
+- **2026-07-29 (W0.3e):** The pg-function reference check found 4 archived tables that are live write-targets of running functions: `cap_recompute_backup` (dia AND gov — written by the nightly `*_recompute_caps_*` functions), `gov_sale_lease_date_backup` (written by `gov_guard_sale_lease_dates`), and `agency_debt_programs` (`merge_dialysis_dup_property` repoints `matched_property_id` on every dia property merge). All 4 restored to public via `w0_3e_restore_function_referenced_tables`; manifest cleaned. Post-check: 0 remaining function references to archived tables on both DBs. FOLLOW-UP (W0.3f, Code session): remove the `agency_debt_programs` UPDATE from `merge_dialysis_dup_property`, then re-archive that table per Scott's standing approval. Rule for all future archive/drop work: the sweep MUST include `pg_proc.prosrc` + trigger + view + app-code checks.
+- **2026-07-29:** gov's 4 DEPRECATED tables: archived with drop_after=2026-10-27 is the INTENDED end state (Claude Code question answered — no further action; the manifest policy handles the hard drop).
 
 ## Session log
 
