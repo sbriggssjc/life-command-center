@@ -23,12 +23,13 @@ Research is then run against Salesforce (prior offers/closings), buyer + broker 
 ### Header block
 | Field | Standard |
 |---|---|
-| **Subject** | `LOI: [City], [State] ([Buyer Entity])` (portfolio: `Portfolio LOI: [City, ST] + [City, ST] ([Buyer])`) |
-| **To** | DaVita/DDP deals → Michelle Pagnano <michelle.pagnano@davita.com>; Marshall Stewman <marshall.stewman@davita.com> |
-| **CC** | James Gibson <jgibson@northmarq.com> — **always** |
-| **BCC** | Sarah Martin <smartin@northmarq.com> — as applicable |
+| **Subject** | `LOI: [Tenant] - [City], [State] ([Buyer])` — as-sent standard (tenant included, full state name), e.g. `LOI: DaVita - Snellville, Georgia (Alexander Frid)`. Portfolio: `Portfolio LOI: [City, ST] + [City, ST] ([Buyer])` |
+| **To** | **The seller contact resolved from the deal** — the LCC correspondence graph (who we've actually been emailing on this project) + the listing owner record — **never a hardcoded default**. (Snellville → **Frank Meyrath, VP, RCG Ventures, LLC · frankm@rcgventures.com**, pulled live from the deal's email thread. Note: the owner/seller is RCG Ventures — DaVita is only the tenant; do not assume DaVita/Genesis contacts from the tenant name.) |
+| **CC** | James Gibson <jgibson@northmarq.com> — on **DaVita/Genesis-owned** deals (relationship-specific; the RCG-owned Snellville send had **no CC**). Confirm per owner — not universal. |
+| **BCC** | Sarah Martin <smartin@northmarq.com> — standard. |
 | **Importance** | High |
-| **Attachment** | `Offer_DaVita_[City]_[ST]_[MM_DD_YY].doc` |
+| **Attachment** | **The buyer's executed LOI PDF, exactly as received** (Scott forwards the signed LOI itself — e.g. `Signed LOI Davita .pdf`). A generated `Offer_DaVita_[City]_[ST].doc` is the **counter / Seller Response** artifact, not the initial submission. |
+| **Signature** | Northmarq / **Scott Briggs · Senior Vice President · Commercial Investment Sales** · D (918) 794-9787 · sabriggs@northmarq.com · 6120 S. Yale Ave., Ste. 300, Tulsa, OK 74136 · Northmarq service-line tagline · northmarq.com. **(Tulsa office is the current block — supersedes the NY address in the old project reference.)** |
 
 ### Body sequence
 1. Salutation — first name(s) only.
@@ -52,13 +53,27 @@ Research is then run against Salesforce (prior offers/closings), buyer + broker 
    equity source, portfolio, financing plan, prior visits). Inline `[SALESFORCE: confirm prior offers from …]`.
 7. **Broker / track-record paragraph** — name, title, firm profile, prior transactions with our team, prior
    buyer-broker pairings. Facts only; `[SALESFORCE: …]` where CRM confirmation is needed.
-8. **Close** — offer to discuss counter strategy, invite a call. **(Strategy lives here — verbal, not written.)**
-9. **Signature block** + `CC: James Gibson, Managing Director | Northmarq`.
+8. **Close** — offer to discuss a **response strategy** and invite a call. **(Strategy lives here — verbal, not written.)**
+9. **Signature block** — the Tulsa Northmarq block above. (The `CC: James Gibson` line only on DaVita/Genesis deals.)
 
-### Styling (email HTML)
-Font `Aptos, Calibri, sans-serif` 11pt, line-height 1.15. Highlights table ~420pt, 1pt `#7F7F7F` borders,
-`#F2F2F2` odd-row banding, label column bold+uppercase. Analysis table ~641pt, bold underlined header, `#F2F2F2`
-even-row banding, right-aligned numerics. Portfolio asset table `#1F3864` header fill, white bold, bordered total.
+_Broker-row phrasing (as-sent): frame co-op as `Co-Broker (Buyer Broker Requesting X%)` when the commission is the
+buyer-broker's ask rather than a settled term. Buyer paragraph includes 1031/motivation when known (e.g. "closed on
+the relinquished property; must identify replacement by [date]"). No `[SALESFORCE]` placeholders survive to the
+final — they're resolved or removed before the draft is saved._
+
+### Styling (email HTML) — unified Northmarq brand (updated 2026-07-29)
+Adopt the **Northmarq Capital Markets brand layer** (`public/reports/cm_brand_tokens.json`) that the Excel/PDF work
+products share, so the email reads as one system with them — not the old plain-gray table spec:
+- **Font:** Calibri Light / Calibri (brand deliverable standard), 11pt body, line-height 1.15.
+- **Palette:** `nm_navy #003DA5` (header rows / label column fill, white bold text; subject line), `nm_pale #E0E8F4`
+  (table zebra / value fills), `nm_bg_alt #E7E6E6` (thin table borders / dividers), `nm_text #191919` (body),
+  `nm_text_muted #666666` (footnote/source), `nm_blue_mid #265AB2` (the deliberate fill-in tint). Negative
+  variances in accounting red `#C00000`.
+- **Shared grammar:** branded header (NORTHMARQ wordmark + "Offer Submission" label + subject-property identity
+  block in `nm_navy`), the standard table style (navy header row, pale zebra, thin borders, right-aligned
+  numerics), and a muted **footer band** (prepared-by + source attribution + non-binding disclaimer).
+- Portfolio asset table keeps the `nm_navy` header fill + bordered total row. _(Realized in
+  `Offer_Submission_Snellville_DaVita.html` — the format-standard reference.)_
 
 ## Standing rules (guardrails)
 - **Never send with `[morning/afternoon]` or `[SALESFORCE]` placeholders live** — deliberate fill-ins for Scott.
@@ -91,17 +106,45 @@ The intake spine already ingests these emails; this adds a detection + generatio
    the paragraphs as drafts with `[SALESFORCE: …]` confirmations left for Scott.
 5. **Email template engine** — populate the HTML email (header block, highlights, analysis, diligence) from the
    extracted data + merge schema; leave the deliberate fill-ins.
-6. **Deliver as an Outlook draft — never auto-send** (reuse `LCC Create Outlook Draft`): To DaVita/DDP contacts,
-   CC James Gibson, BCC Sarah Martin, High importance, LOI attached.
-7. **Log/track** — `activity_event` on the deal + advance to `offer_received`, create the review To-Do, register the
-   LOI **expiration as a critical date** in cadence, save the LOI to the deal doc set; ShareFile + SF logging (Phase 4).
-8. **Seller Response (on request)** — generate the DDP/standard counter from the seller's authorized terms.
+6. **Save as an Outlook draft in the Drafts folder — never auto-send** (reuse `LCC Create Outlook Draft`): the
+   branded HTML body, To = the resolved seller contact, BCC Sarah Martin (CC James Gibson only on DaVita/Genesis
+   deals), High importance, **the buyer's executed LOI PDF attached** exactly as received. It lands in Scott's
+   Drafts folder ready to review and send — nothing leaves the mailbox automatically.
+7. **Save to files** — write the generated submission (and the LOI) to the **deal's folder in Team Briggs –
+   Documents (SharePoint) / ShareFile**, the same folder the OM/listing docs live in, so the record is filed where
+   the team expects it.
+8. **Log/track in LCC + SF** — `activity_event` on the deal + advance to `offer_received`, create the review To-Do,
+   register the LOI **expiration as a critical date** in cadence, link the LOI to the deal doc set; Salesforce offer
+   record ("Offer Received — Pending Seller Response").
+9. **Seller Response (on request)** — generate the DDP/standard counter from the seller's authorized terms.
+
+## Cross-surface invocation — one process, any chat (Scott's directive 2026-07-29)
+The whole flow above must be a **single canonical LCC capability**, not a Claude-Project-only script, so that **any**
+chat surface — Claude (Cowork/personal), ChatGPT, Copilot — can pick up "here's an LOI on our Snellville listing"
+and produce the **same** output: the branded submission drafted, **saved to the Drafts folder**, the files **saved
+to the deal folder**, and the offer **logged in the LCC**. Realize it as:
+- **An LCC skill + MCP endpoint** (`offer-submission`) that takes `{deal | property, LOI file}` and runs stages 1–8,
+  reusing the shared pieces: entity/deal match, correspondence-graph contact resolution, the analysis generator, the
+  brand-token email builder, `LCC Create Outlook Draft` (→ Drafts), the folder-feed writer (→ Team Briggs Documents),
+  and the `activity_events`/To-Do/critical-date loggers. One implementation; every surface calls it.
+- **Surface parity via the canon.** Register the capability in `docs/os/surfaces/*.canon.md` so each surface
+  (claude-cowork, chatgpt, copilot, northmarq) advertises the same command and output contract — same draft, same
+  filing, same log, regardless of where the request is typed.
+- **Deterministic output contract:** (a) a Drafts-folder email (branded, LOI attached, resolved recipient); (b) the
+  submission + LOI filed to the deal folder; (c) an LCC offer log + To-Do + critical date. A surface that can't do
+  one leg (e.g. no mailbox connector) still returns the artifact and queues the rest.
 
 ## §7 — Auto-context assembly (make it self-serve — Scott's directive 2026-07-29)
 The single biggest lever: **a chat working an inbound offer should already have the listing context, without Scott
 attaching the OM.** When LCC recognizes the subject is one of our listings (stage `listing_signed`/on-market), it
 should auto-assemble and hand the generator:
 
+- **Seller contact — resolved, not guessed.** Pull who we've actually been corresponding with on the deal from the
+  **LCC correspondence graph** (`activity_events` + contact/entity resolution) and the listing owner record, and use
+  that as the addressee. _(Verified live for Snellville: the graph already held the full email thread with **Frank
+  Meyrath, VP, RCG Ventures, LLC — frankm@rcgventures.com**, incl. his Atlanta signature block — so the process
+  addresses the seller correctly with zero guessing. It also surfaced a second RCG contact, Mike McMillen. Gap: his
+  email wasn't yet promoted onto the deal's contact roster — link it so the generator reads it directly.)_
 - **Listing economics** — ask price, in-place NOI, ask cap, $/SF, tenant/guarantor, lease structure (term
   remaining, escalations, expiration, options), seller-of-record + seller contact. Source: the **Salesforce listing
   record** (primary) + the OM. _(Verified for Snellville from the uploaded OM: ask **$4,513,274**, NOI **$255,000**,
