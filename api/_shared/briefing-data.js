@@ -1310,3 +1310,48 @@ export async function fetchResearchProgress(workspaceId, days = 7) {
     government: wrap(gov),
   };
 }
+
+// ---------------------------------------------------------------------------
+// fetchDormantCapabilities — the inert-feature registry (audit §4.4.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read `feature_flags_registry` (LCC Opps) for env-gated capabilities that are
+ * NOT on and have been off longer than `minDaysOff` days — the "half the
+ * automation is silently off" finding. NULL off_since (never enabled /
+ * duration unknown) is surfaced too, so a capability that was never wired up
+ * doesn't hide behind a missing date.
+ *
+ * Returns `{ min_days_off, count, items: [{ flag, purpose, surface, env_var,
+ * state, off_since, days_off, owner, notes }] }`, ordered longest-off first
+ * (NULL off_since last). Best-effort: a missing table (migration not yet
+ * applied) or any read error returns an empty set so the briefing never
+ * fails on it.
+ */
+export async function fetchDormantCapabilities(minDaysOff = 30) {
+  const cutoffIso = new Date(Date.now() - minDaysOff * 86_400_000)
+    .toISOString().slice(0, 10);
+  // state <> 'on' AND (off_since IS NULL OR off_since <= cutoff)
+  const path =
+    'feature_flags_registry' +
+    '?state=neq.on' +
+    `&or=(off_since.is.null,off_since.lte.${cutoffIso})` +
+    '&select=flag,purpose,surface,env_var,state,off_since,owner,notes' +
+    '&order=off_since.asc.nullslast' +
+    '&limit=200';
+  const res = await opsQuery('GET', path, undefined, { countMode: 'none' })
+    .catch(() => ({ ok: false, data: null }));
+  const rows = res.ok && Array.isArray(res.data) ? res.data : [];
+  const today = new Date();
+  const items = rows.map((r) => {
+    let daysOff = null;
+    if (r.off_since) {
+      const d = new Date(`${r.off_since}T00:00:00Z`);
+      if (!Number.isNaN(d.getTime())) {
+        daysOff = Math.max(0, Math.floor((today - d) / 86_400_000));
+      }
+    }
+    return { ...r, days_off: daysOff };
+  });
+  return { min_days_off: minDaysOff, count: items.length, items };
+}
