@@ -163,6 +163,38 @@ Ran during the pre-rollout SYSTEM-AUDIT re-check. Two items surfaced and were ac
   freshness-sync` ran green today). **Action = 🧑 restart the upstream GOV loans source**; nothing to fix in-DB.
   Non-blocking for rollout (deal-spine is OPS, unaffected).
 
+## Slice 7 — Function hardening pass (WARN) — 2026-07-29
+Cleared the long-standing WARN `function_search_path_mutable` across all three DBs, plus a pollution backstop.
+
+- ✅ **`search_path` pinned on every function we own** — OPS 84, GOV + DIA the rest (migrations
+  `…_pin_function_search_path_{ops,gov,dia}.sql`). Value `public, extensions, pg_temp` (a superset — can't break
+  unqualified refs — while making search_path non-mutable, closing the SECURITY DEFINER injection surface).
+  Extension-owned functions skipped by design (not ours to alter), so the advisor will still list those few as
+  WARN — expected, not actionable. **Verified: 0 of our functions unpinned on any DB; OPS engine smoke test
+  green (helper/threshold/addr_key/reconcile sweep), get_pipeline_health full, no new alerts.** Lock-safe on
+  GOV/DIA (short lock_timeout + per-function skip; DIA PG15 has live CMS ingestion). Reversible per-function.
+- ✅ **Self-healing display-name trigger** (`…_users_display_name_selfheal_trigger.sql`) — a BEFORE INSERT/UPDATE
+  guard on `users` that rewrites the hardcoded "Scott Briggs" literal onto a non-Scott email to an email-derived
+  name. Prevents the actor-registry pollution (Slice/attribution work) from recurring no matter which writer
+  creates the row.
+- ✅ **EXECUTE revoked from anon/authenticated on all SECURITY DEFINER functions** — migrations
+  `…_revoke_execute_sd_functions_{ops,gov,dia}.sql`. Clears `anon_/authenticated_security_definer_function_executable`.
+  Grant structure confirmed first: EXECUTE was a *direct* grant to `authenticated` (+ `postgres`, `service_role`),
+  so revoking PUBLIC/anon/authenticated leaves `postgres` + `service_role` intact — engine unaffected. Safe: no
+  `.rpc()`/`.from()` anywhere in the frontend/extension (anon key = Auth only); GOV/DIA have no anon key.
+  **Verified: 0 SD functions left exposed to anon/authenticated on any DB; service_role retained; engine smoke
+  green (get_pipeline_health full for gov + dia).** Reversible.
+
+**DIA Postgres version (reviewed 2026-07-29):** still `supabase-postgres-15.8.1.044` — the upgrade has NOT been
+applied to this project. WARN `vulnerable_postgres_version` (security patches available). It's a Supabase
+dashboard/infra action (Settings → Infrastructure → Upgrade, maintenance window) — cannot run via SQL/MCP. 🧑.
+
+Remaining WARN/INFO everywhere = extension-owned function search_path / execute grants (not ours to change),
+`rls_enabled_no_policy` (intended deny-all), DIA `vulnerable_postgres_version` (dashboard upgrade — 🧑), a few
+`materialized_view_in_api` (matviews can't take security_invoker; no anon key to exploit — low urgency).
+**No ERROR-level items on any DB.** The security audit is effectively complete: the only actionable security WARN
+left (DIA PG patch) requires the dashboard.
+
 ## Later slices (planned)
 - **Slice 4 — Engine runtime errors** — `get_logs` (api/postgres/edge-function) + Railway logs for 4xx/5xx.
 - **Slice 5 — Known functional gaps** — matcher recall misses (e.g. Innovative Renal Care), deal_name not
