@@ -967,13 +967,28 @@ const _provImportance = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(S
   : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? 300 : 50;
 
 // Set of subject_refs already decided (decided/skipped/superseded) for a lane.
+// Pages in 1000-row strides: PostgREST caps EVERY response at 1000 rows
+// regardless of `limit`, so the old `&limit=5000` silently returned only the
+// first 1000 decided subjects — a lane with more than 1000 decisions then
+// re-surfaced already-decided rows as "open" (and deflated the summary count).
+// On a fetch error we THROW so the lane fails visibly (handleDecisionsList
+// → 502) instead of returning an under-populated exclusion set, which would
+// silently resurrect every decided subject as unworked.
 async function fetchExcludedRefs(type) {
   const set = new Set();
-  try {
+  const PAGE = 1000;
+  for (let offset = 0; ; offset += PAGE) {
     const r = await opsQuery('GET', 'lcc_decisions?select=subject_ref&decision_type=eq.'
-      + pgFilterVal(type) + '&status=neq.open&subject_ref=not.is.null&limit=5000');
-    if (r.ok && Array.isArray(r.data)) for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
-  } catch (_e) { /* soft-fail → no exclusion */ }
+      + pgFilterVal(type) + '&status=neq.open&subject_ref=not.is.null'
+      + '&order=id.asc&limit=' + PAGE + '&offset=' + offset);
+    if (!r.ok) {
+      throw new Error('fetchExcludedRefs(' + type + ') failed: HTTP ' + r.status
+        + ' ' + JSON.stringify(r.data).slice(0, 160));
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
+    for (const row of rows) if (row.subject_ref) set.add(row.subject_ref);
+    if (rows.length < PAGE) break;
+  }
   return set;
 }
 
