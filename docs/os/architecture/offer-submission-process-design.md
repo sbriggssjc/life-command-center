@@ -118,6 +118,25 @@ The intake spine already ingests these emails; this adds a detection + generatio
    record ("Offer Received — Pending Seller Response").
 9. **Seller Response (on request)** — generate the DDP/standard counter from the seller's authorized terms.
 
+## Built 2026-07-29 — context assembler + skill (rolled into the build)
+- **`lcc_offer_context(deal)`** (OPS RPC, live + version-controlled `…_lcc_offer_context_assembler.sql`) — the one
+  connectivity call. Returns `deal`, `seller_owner`, `correspondents[]`, `economics`, `documents[]`, and `gaps[]`,
+  composing existing sources with graceful nulls. **Grounded/tested on Snellville:** correctly surfaced the seller
+  **Frank Meyrath / RCG (frankm@rcgventures.com)** from the correspondence — across fragmented sibling entities —
+  and flagged the real gaps (`economics_missing`, `cre_property_missing`, `documents_missing`).
+- **`offer-submission` skill** (`offer-submission-SKILL.md`) — surface-agnostic; consumes `lcc_offer_context`, runs
+  steps 1–10, degrades on `gaps[]`. Delivered for install; roll into the plugin/skill set.
+
+### Connectivity gaps to close (so the packet fills without manual OM)
+Found while grounding — the plumbing tables exist but this listing wasn't fully ingested:
+1. **Entity reconciliation.** The seller thread lives on sibling entities, not the listing's deal entity — the
+   assembler bridges by city today, but the reconcile engine should MERGE them so the deal is one entity.
+2. **Economics + owner link.** No `lcc_cre_properties` row / `bov_extraction` for the listing → capture ask/NOI/cap
+   + `owner_entity_id` (RCG) at listing-signing (SF + OM extraction), which also makes seller resolution deterministic
+   (owner → active contact) instead of correspondence-heuristic.
+3. **Document indexing.** The OM isn't in `sharepoint_documents` → point the folder-feed at the Team Briggs –
+   Documents folder for the listing and index/link the OM/lease/PSA to the deal entity.
+
 ## Cross-surface invocation — one process, any chat (Scott's directive 2026-07-29)
 The whole flow above must be a **single canonical LCC capability**, not a Claude-Project-only script, so that **any**
 chat surface — Claude (Cowork/personal), ChatGPT, Copilot — can pick up "here's an LOI on our Snellville listing"

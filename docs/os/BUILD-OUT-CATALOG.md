@@ -80,6 +80,16 @@ and waiting on a list repair. The items below are what remains.
 | F1 | **Unification Phase 2** | 🔮 | Collapse the two-server topology into one service, retire the standby (`unification-changeset.md`). |
 | F2 | **Roadmap Work IQ** | 🔮 | Word/User/Calendar, Azure AI Document Intelligence, Approvals, a `Sites.Selected` Graph app. |
 
+## G. Work products — Offer Submission (LOI → Seller)  (Track 5, `offer-submission-process-design.md`)
+| # | Item | Status | Owner | Pri | Notes |
+|---|---|---|---|---|---|
+| G1 | **Offer-submission process design** | ✅ | 🤖 | — | Grounded in the live Claude Project + as-sent Snellville example; two deliverables (submission email HTML, Seller Response DOCX); brand + recipients + Drafts/file/log + cross-surface contract. |
+| G2 | **`lcc_offer_context(deal)` assembler** | ✅ LIVE | 🤖 | — | One connectivity call (identity, correspondents→seller contact, economics, docs, `gaps[]`). `…_lcc_offer_context_assembler.sql`. Tested on Snellville. |
+| G3 | **`offer-submission` skill** | ✅ drafted | 🤖 | P1 | `offer-submission-SKILL.md` — surface-agnostic; consumes G2; save-to-Drafts + file + log. Install into the skill/plugin set. |
+| G4 | **Seller Response (counter) generator** | 📐 | 🤖 | P2 | On-request post-call; DDP (Genesis) vs standard (owner-of-record) template from the existing deal-docs set. |
+| G5 | **Close context gaps** (ingestion) | 🔨 | 🤖+🧑 | P1 | (a) reconcile fragmented deal entities; (b) capture ask/NOI/cap + `owner_entity_id` at listing-signing; (c) index the Team Briggs – Documents OM/lease/PSA to the deal (folder-feed). Makes the packet fill without a manual OM. |
+| G6 | **Draft/file/log wiring** | 🔨 | 🧑 | P1 | `LCC Create Outlook Draft` → Drafts (LOI attached); folder writer → deal folder; `activity_events`/To-Do/critical-date/SF loggers. Scott deploys the mailbox/file legs. |
+
 ---
 
 ## Design forks that need a decision before building (the "stop us" items)
