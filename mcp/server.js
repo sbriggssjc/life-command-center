@@ -18,6 +18,7 @@ import { makeSfWritebackRoutes } from "./sf-writeback.js";
 import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
 import { makeDealRosterRoute } from "./deal-roster.js";
 import { makeCadenceScanRoute } from "./cadence-scan.js";
+import { makeEntityReconcileRoute } from "./entity-reconcile.js";
 import { makeDealEmailMatcherRoute } from "./deal-email-matcher.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
@@ -1876,6 +1877,11 @@ app.get("/", (_req, res) => {
   app.post("/api/pipeline/cadence-scan", authenticate, __cadence.scan);
   app.get("/api/pipeline/weekly-digest",  authenticate, __cadence.weeklyDigest);   // engine-composed email
   app.post("/api/pipeline/weekly-digest", authenticate, __cadence.weeklyDigest);
+  // A1 entity reconciliation — review flagged deals + merge a placeholder onto a canonical asset.
+  const __reconcile = makeEntityReconcileRoute({ opsQuery });
+  app.get("/api/pipeline/flagged-deals",     authenticate, __reconcile.list);
+  app.post("/api/pipeline/flagged-deals",    authenticate, __reconcile.list);
+  app.post("/api/pipeline/reconcile-entity", authenticate, __reconcile.reconcile);
 
   // Deal-Email Matcher (BUILD 04) — attribute Outlook emails to deals by tenant+city; self-builds roster.
   const __matcher = makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });

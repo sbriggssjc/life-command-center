@@ -313,6 +313,8 @@ app.all('/api/pipeline/ingest-deal-contacts', (req, res) => { req.query._mcpTarg
 app.all('/api/pipeline/cadence-scan',         (req, res) => { req.query._mcpTarget = '/api/pipeline/cadence-scan';         aiReadHandler(req, res); });
 app.all('/api/pipeline/match-deal-emails',    (req, res) => { req.query._mcpTarget = '/api/pipeline/match-deal-emails';    aiReadHandler(req, res); });
 app.all('/api/pipeline/weekly-digest',        (req, res) => { req.query._mcpTarget = '/api/pipeline/weekly-digest';        aiReadHandler(req, res); });
+app.all('/api/pipeline/flagged-deals',        (req, res) => { req.query._mcpTarget = '/api/pipeline/flagged-deals';        aiReadHandler(req, res); });
+app.all('/api/pipeline/reconcile-entity',     (req, res) => { req.query._mcpTarget = '/api/pipeline/reconcile-entity';     aiReadHandler(req, res); });
 
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
