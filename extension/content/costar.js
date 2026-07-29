@@ -1357,6 +1357,17 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         }
       }
 
+      // 2026-07-29: CoStar's redesigned listing header carries the property type
+      // as its own bullet segment ("… • Office Property • … Submarket • City, ST")
+      // which getPageLines surfaces as a standalone line. On the Summary tab there
+      // is no "Type" label row, so without this the type stayed blank and the
+      // sidebar's Asset Type fell back to property_subtype (the submarket). Match a
+      // bounded set of known CoStar property types in the "<Type> Property" form.
+      if (!data.property_type
+          && /^(office|retail|industrial|multi-?family|apartments?|hospitality|hotel|health\s*care|medical(\s+office)?|specialty|flex|mixed[\s-]*use|self[\s-]*storage|sports?(\s*&\s*\w+)?|warehouse|land)\s+property$/i.test(line)) {
+        data.property_type = line.trim();
+      }
+
       if (!data.noi && /^noi$/i.test(line)) {
         if (/^\$?[\d,]+/.test(next)) data.noi = next;
         else if (/^\$?[\d,]+/.test(prev)) data.noi = prev;
@@ -1623,9 +1634,20 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Property subtype (e.g., "Medical Office" from submarket line)
       if (!data.property_subtype && /submarket$/i.test(line) && line.length < 60) {
         // "Medical Office - Midway Submarket" → "Medical Office"
-        const sub = line.split(/\s*[-–]\s*/)[0].trim();
+        const parts = line.split(/\s*[-–]\s*/);
+        const sub = parts[0].trim();
         const headerRe = /^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i;
-        if (sub && sub.length < 40 && !headerRe.test(sub)) data.property_subtype = sub;
+        // 2026-07-29: only accept the "<subtype> - <area> Submarket" form (a real
+        // hyphen delimiter present). CoStar's redesigned header renders the
+        // submarket as its own bullet ("Brisbane/Daly City Submarket") with no
+        // subtype prefix; splitting a bare "<area> Submarket" bullet left the
+        // whole submarket name in `sub`, which then surfaced as the Asset Type.
+        if (parts.length >= 2
+            && sub && sub.length < 40
+            && !headerRe.test(sub)
+            && !/submarket$/i.test(sub)) {
+          data.property_subtype = sub;
+        }
       }
 
       // Comp status
@@ -2687,6 +2709,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     const FINAL_JUNK_RE = new RegExp(
       '^(' + [
         // CoStar UI labels and column headers
+        // 2026-07-29: the redesigned For Sale Tenants panel surfaces a paywall
+        // CTA ("Get Access") and a run-on column-header row ("Name Expiration
+        // Date SF Occupied") as tenant rows. Drop the CTA and any header run-on
+        // that starts with "Name" and is composed only of tenant-table headers.
+        'get\\s+access', 'request\\s+access', 'unlock',
+        'name(?:\\s+(?:expiration|exp|move[\\s-]?(?:in|out)?|lease|floor|suite|space|term|start|end|date|rent|sf|occupied|type|renewal|options?))+',
         'lease\\s+activity', 'sign\\s+date', 'leased', 'use', 'services',
         'rent\\s+(type|schedule|steps|adjust(?:ment)?s?|escalation\\s+type)',
         'use\\s+type', 'space\\s+(use|type|category|id)',
