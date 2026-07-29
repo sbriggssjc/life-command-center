@@ -2941,7 +2941,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // Shared reject pattern for strings that should never be treated as a contact name.
   // Covers: city/state/zip lines, date strings ("Since ..."), role labels,
   // job titles when standalone, CoStar UI chrome, and address fragments.
-  const CONTACT_NAME_REJECT = /^(since\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|since\s+\d|seller\s*$|buyer\s*$|buyer\s+contacts?|seller\s+contacts?|investment\s+manager|research\s+consultant|other\s*[-–—]\s*private|president|vice\s+president|officer|director|manager|analyst|consultant|partner|principal|agent|broker|owner|lender|not\s+disclosed|not\s+available|no\s+buyer|no\s+seller|confirmed|verified|research\s+complete|comp\s+status|united\s+states|[a-z].*,\s*[a-z]{2}\s+\d{5}|listing\s+id\b|(?:sale|comp|loan|parcel|record|property|space|building)\s+id\b|id\s*[:#]\s*\d|logo|source|add\s+notes|name$|developer(\s*[-–—]\s*\w+)?$|sale\s+notes?$|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport(\s|$)|drive(\s+time|\s+to|\s+distance)?$|costar\s+(est|group|comp|research)|investment\s+highlights|property\s+(highlights|summary)|developer\s*[-–—]\s*(regional|national|local))/i;
+  const CONTACT_NAME_REJECT = /^(since\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|since\s+\d|seller\s*$|buyer\s*$|buyer\s+contacts?|seller\s+contacts?|investment\s+manager|research\s+consultant|other\s*[-–—]\s*private|president|vice\s+president|officer|director|manager|analyst|consultant|partner|principal|agent|broker|owner|lender|not\s+disclosed|not\s+available|no\s+buyer|no\s+seller|confirmed|verified|research\s+complete|comp\s+status|united\s+states|[a-z].*,\s*[a-z]{2}\s+\d{5}|listing\s+id\b|(?:sale|comp|loan|parcel|record|property|space|building)\s+id\b|id\s*[:#]\s*\d|help\s+with\s+features|request\s+training|share\s+feedback|give\s+feedback|help\s+center|contact\s+us|terms\s+of\s+use|privacy\s+policy|all\s+rights\s+reserved|sign\s+(in|out)|log\s?(in|out)|logo|source|add\s+notes|name$|developer(\s*[-–—]\s*\w+)?$|sale\s+notes?$|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport(\s|$)|drive(\s+time|\s+to|\s+distance)?$|costar\s+(est|group|comp|research)|investment\s+highlights|property\s+(highlights|summary)|developer\s*[-–—]\s*(regional|national|local))/i;
 
   // Pure job titles that sometimes slip in as "names" when the DOM puts a
   // title on its own line (no preceding Name/Title pair to anchor on).
@@ -3315,7 +3315,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const line = lines[j];
 
       // Stop at section boundaries and page footer content (prefix match)
-      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources|verification|sale\s+comp|comparable|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
+      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources|verification|sale\s+comp|comparable|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date|help\s+with\s+features|request\s+training|share\s+feedback|help\s+center|terms\s+of\s+use|privacy\s+policy|all\s+rights\s+reserved)/i.test(line)) break;
       // Stop at any contact-section header that appears as a standalone line.
       // Required to prevent one section's parser (e.g. Listing Broker) from
       // sweeping across adjacent sections (True Buyer, Recorded Buyer, Current
@@ -3439,7 +3439,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // after them belongs to any contact role). Matching is done against
   // getOwnText (not textContent) to avoid matching parents that happen to
   // contain the label deep in their subtree.
-  const SECTION_END_SENTINEL_RE = /^(my\s+notes|sources(\s+&\s+research)?|verification|documents?|assessment(\s+at\s+sale)?|public\s+record|tenants?\s+at|sale\s+comp\s+id|income\s+&\s+expenses|transaction\s+details|building(\s+summary|\s+information)?|land\b|market|investment\s+highlights)/i;
+  const SECTION_END_SENTINEL_RE = /^(my\s+notes|sources(\s+&\s+research)?|verification|documents?|assessment(\s+at\s+sale)?|public\s+record|tenants?\s+at|sale\s+comp\s+id|income\s+&\s+expenses|transaction\s+details|building(\s+summary|\s+information)?|land\b|market|investment\s+highlights|help\s+with\s+features|request\s+training|share\s+feedback|help\s+center|terms\s+of\s+use|privacy\s+policy|all\s+rights\s+reserved)/i;
 
   // `a.compareDocumentPosition(b) & FOLLOWING` is true when b follows a in
   // document order (or is a descendant of a). We use this to bucket each
