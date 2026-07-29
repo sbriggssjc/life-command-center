@@ -86,10 +86,11 @@ High importance, **the buyer's executed LOI PDF attached exactly as received**. 
 Save the submission + the LOI to the **deal's folder in Team Briggs – Documents (SharePoint) / ShareFile** — the
 same folder as the OM/listing docs.
 
-### 10. Log in the LCC (+ Salesforce)
-`activity_event` on the deal (offer received, terms), advance to **`offer_received`**, create the review **To-Do**,
-register the LOI **expiration as a critical date** (cadence/briefing), link the LOI to the deal doc set; Salesforce
-offer record "Offer Received — Pending Seller Response."
+### 10. Log in the LCC (+ Salesforce) — one call
+Call **`lcc_log_offer(deal, offer)`** (RPC / `/api/pipeline/offer-log`): it writes the `activity_event` (offer
+received), creates the review **To-Do** in `action_items` due on the offer expiration, and enqueues the Salesforce
+**create_task** ("Offer Received — Pending Seller Response") to `sf_sync_queue`. Idempotent. Pass `offer` with an
+ISO `expiration_date` (for the To-Do due date) plus the display fields.
 
 ## Standing rules
 - **Facts-only in writing; strategy on the call.** No recommendation/counter number in the submission email.
@@ -115,6 +116,8 @@ After the seller call, draft the **Seller Response (counter)** from the seller's
 (seller-of-record from the deal, e.g. RCG Ventures). Not produced at intake.
 
 ## Toolchain
-`lcc_offer_context` (context assembler) · LOI/OM PDF extraction · Salesforce + web diligence · brand email builder
-(`cm_brand_tokens.json`) · `LCC Create Outlook Draft` (→ Drafts) · folder writer (→ Team Briggs Documents) ·
-`activity_events` / To-Do / critical-date / SF offer loggers.
+`lcc_offer_context(deal)` (context assembler) · LOI/OM PDF extraction · Salesforce + web diligence · brand email
+builder (`cm_brand_tokens.json`) · stage LOI → `intake-salesforce-files?action=upload-url` (signed URL) ·
+`createOutlookDraftViaPA({to,bcc,subject,body_html,attachment_url})` → **Drafts** · POST submission+LOI to
+`PA_DEALFOLDER_FILE_URL` → **deal folder** · `lcc_log_offer(deal,offer)` → activity + To-Do + SF create_task.
+_(Deploy/PA wiring: `offer-submission-DELIVERY-LEGS.md` + `…DEPLOY-1.1-and-2.2.md`.)_

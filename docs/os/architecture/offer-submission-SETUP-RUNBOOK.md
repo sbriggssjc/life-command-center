@@ -5,9 +5,14 @@ what, where, when, who. 🤖 = Claude/DB-drivable (mostly done); 🧑 = you (dep
 Legend for **When**: **Once** (one-time infra), **Per-listing** (at listing-signing), **Per-offer** (each LOI)._
 
 ## Status at a glance
-- ✅ **Done (live):** `lcc_offer_context(deal)` assembler; Snellville deal record seeded (economics + seller);
-  Frank Meyrath contact enriched; the skill drafted; design + catalog updated.
-- 🧑 **Needs you:** the deploy + PA/SharePoint/SF wiring below. Nothing auto-sends or auto-files until these land.
+- ✅ **Done (live, DB):** `lcc_offer_context(deal)` assembler; **`lcc_log_offer(deal,offer)`** logging leg
+  (activity + To-Do + SF create_task); Snellville deal record seeded (economics + seller) and its offer logged
+  (To-Do due 2026-07-31); the skill drafted; design + catalog updated.
+- 🤖 **Code delivered to merge:** expose `lcc_offer_context`/`lcc_log_offer` as tools+routes (DEPLOY-1.1);
+  `outlook-draft.js` Bcc; `opportunity-sync.js` economics capture (DELIVERY-LEGS).
+- 🧑 **Needs you:** Railway deploy of the above + the PA/SharePoint/SF wiring below (draft flow Bcc+attachment,
+  file-back flow, SF create_task branch, listing-field mapping, folder-feed enrich, env vars). Nothing auto-sends
+  or auto-files until these land. Exact steps: `offer-submission-DELIVERY-LEGS.md` + `…DEPLOY-1.1-and-2.2.md`.
 
 ---
 
