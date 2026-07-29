@@ -37,7 +37,7 @@ and waiting on a list repair. The items below are what remains.
 | # | Item | Status | Owner | Pri | Notes |
 |---|------|--------|-------|-----|-------|
 | B1 | **Per-broker delivery (Flow B)** | 📐 ready, **PARKED** | 🧑 | P2 | Owner-scoped digests are live in the engine + specced as a PA flow. **Deferred by Scott** until build-out done + errors triaged. Un-park when ready. |
-| B2 | **Team mailbox intake** (Kelly/Sarah/Nate) | 📐 | 🤖+🧑 | **P1 for accuracy** | LCC ingests only Scott's mailbox today, so "overdue" is only trustworthy for his deals. Ingesting the team's Outlook is the real fix (the coverage-caveat banner is the interim honesty). This is the accuracy backbone for the whole cadence engine. |
+| B2 | **Team mailbox intake** (Kelly/Sarah/Nate) | 📐 designed, **PARKED** | 🤖+🧑 | P1 for accuracy | **Specced 2026-07-28** (`team-mailbox-intake-design.md`). Biggest cadence-accuracy lever (LCC sees only Scott's mailbox; all outlook rows are `SYSTEM_ACTOR` — no per-broker attribution). Extends the existing intake pipeline; core change = stamp `actor_id` per broker; privacy via match-then-persist. **Auth = Option A confirmed**: email access is a per-mailbox PA Outlook flow (not app-login; only Webex uses stored OAuth) — so adding brokers = replicate Scott's flow, no admin. **Deferred by Scott.** Phase 1 (attribution) is buildable independently, no mailbox changes. |
 
 ## C. Surfaces & rollout  (Track 3 — mostly your tenant)
 
