@@ -49,7 +49,7 @@ that member's account. Source flow names in your environment shown in `code`.
 | # | Per-person flow | Purpose | Connection |
 |---|---|---|---|
 | 1 | `LCC - Outlook Intake to Teams (Hardened)` | **The key one** — their mailbox → `activity_events`, stamped with THEIR identity so cadence/last-touch is accurate for their deals | Outlook |
-| 2 | `To Do - Life Command Center Sync` + `LCC To Do Completion Poll` + `Flagged Email to To Do` | Their task loop (flag mail → task → completion writes back) | Outlook + To Do |
+| 2 | `LCC Processing Complete → Move Message` + `LCC To-Do Completion Poll` (native Flagged-email model) | Their task loop (flag mail → native list → completion clears flag). **NOT** the retired `To Do - Life Command Center Sync`/`Unflag Completed Email Tasks` (those are turned off — see scott-pa-flows-reference.md) | Outlook |
 | 3 | `LCC Outlook Calendar Write` + `Outlook Calendar - Life Command Center Sync` | Their calendar ↔ LCC | Outlook |
 | 4 | `LCC Create Outlook Draft` | LCC drafts replies in their mailbox | Outlook |
 | 5 | `Inbox Janitor` + `LCC Flagged Email Cleanup Sweep` | Their mailbox hygiene | Outlook |
@@ -158,5 +158,9 @@ Per-member gates (Kelly first):
   still NOT required for Kelly's cadence.
 - **Sarah's ops surface** — separate mini-design (most divergent role; no deal cadence).
 - **Nate's subspecialty DB** — separate build track (urgent care / medical net-lease domain) at his transition.
-- **To-Do PA flows** currently failing (deleted To-Do list) — repair before those flows are part of anyone's
-  bundle (see ERROR-TRIAGE.md).
+- **To-Do PA flows** currently failing are **RETIRED artifacts**, not a repair job (per
+  `INTAKE_TODO_FLOW_AUDIT_2026-07-23.md`): the 2026-07-20/21 rework replaced custom-task To-Do with native
+  Flagged-email list tracking + the Completion Poll. Action = **turn off** `To Do - Life Command Center Sync` +
+  `Unflag Completed Email Tasks` (they must NOT be in anyone's bundle); the broker-core "task loop" is the native
+  Flagged-email model + `LCC Processing Complete → Move Message` + `LCC To-Do Completion Poll`. Full per-flow
+  instructions for Scott's user: `architecture/scott-pa-flows-reference.md`.
