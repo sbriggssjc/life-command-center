@@ -88,14 +88,32 @@ async function enrichFlOwners({ limit = 100, dryRun = false }) {
 
 // ── STAGE 2+3: compare enriched owners to unified_contacts, link strong ──────
 async function compareAndLink({ limit = 100, dryRun = false }) {
-  const out = { scanned: 0, candidates: 0, auto_linked: 0, review_queued: 0, errors: 0 };
+  const out = { scanned: 0, compared: 0, candidates: 0, auto_linked: 0, review_queued: 0, errors: 0 };
 
-  // Owners enriched this cycle that aren't yet compared (no link row + matched).
+  // Owners enriched to an exact SOS match that have NOT yet been compared to the
+  // contact graph. The `sos_compared_at` watermark (migration 20260811121000) +
+  // a stable ORDER BY make each enriched owner get compared EXACTLY once — the
+  // old unordered, watermark-less query re-fetched the same physical-order first
+  // `limit` rows every run and never drained the ~1,133-owner backlog past the
+  // head.
   const q = await domainQuery(DOM, 'GET',
-    `recorded_owners?sos_match_kind=eq.exact&select=recorded_owner_id,name,registered_agent_name,registered_agent_address,manager_name&limit=${limit}`);
+    `recorded_owners?sos_match_kind=eq.exact&sos_compared_at=is.null` +
+    `&select=recorded_owner_id,name,registered_agent_name,registered_agent_address,manager_name` +
+    `&order=recorded_owner_id.asc&limit=${limit}`);
   if (!q.ok) return { ...out, error: { stage: 'list', detail: q.data } };
   const owners = Array.isArray(q.data) ? q.data : [];
   out.scanned = owners.length;
+
+  // Stamp the compare watermark so a processed owner is never re-compared. A
+  // failed stamp leaves sos_compared_at NULL (owner retried next run); dry-run
+  // never writes. Called on EVERY non-error terminal path (incl. no-match), so
+  // the drain converges.
+  const markCompared = async (ownerId) => {
+    if (dryRun) return true;
+    const r = await domainQuery(DOM, 'PATCH', `recorded_owners?recorded_owner_id=eq.${pgv(ownerId)}`,
+      { sos_compared_at: new Date().toISOString() });
+    return r.ok;
+  };
 
   for (const o of owners) {
     try {
@@ -105,7 +123,7 @@ async function compareAndLink({ limit = 100, dryRun = false }) {
       if (o.registered_agent_name) keys.push({ signal: 'registered_agent_name', val: normLoose(o.registered_agent_name) });
       if (o.name) keys.push({ signal: 'owner_name', val: normLoose(o.name) });
       const matchable = keys.filter(k => k.val && k.val.length >= 4);
-      if (matchable.length === 0) continue;
+      if (matchable.length === 0) { if (await markCompared(o.recorded_owner_id)) out.compared++; continue; }
 
       // Find unified_contacts whose full_name or company_name coincides with any key.
       // Exact (normalized) coincidence only — no fuzzy, per the precision rule.
@@ -162,6 +180,9 @@ async function compareAndLink({ limit = 100, dryRun = false }) {
         if (ins.ok) { if (strength === 'strong') out.auto_linked++; else out.review_queued++; }
         else out.errors++;
       }
+      // Owner fully compared this run — stamp the watermark so it's not
+      // re-compared next tick (drains the backlog exactly once per owner).
+      if (await markCompared(o.recorded_owner_id)) out.compared++;
     } catch (e) { out.errors++; }
   }
   return out;
