@@ -8523,7 +8523,7 @@ function parseSosDate(raw) {
 // are exhausted the row is handed back for further processing (status='no_match',
 // the DB's existing "searched, none found" signal that ages out / re-queues).
 // Reversible: clear enrichment_payload.not_found_states + restore status.
-async function applySosNotRegistered(res, { domain, ownerId, queueId, searchedState }) {
+async function applySosNotRegistered(res, { domain, ownerId, queueId, searchedState, extVersion }) {
   if (!Number.isFinite(queueId)) {
     return res.status(400).json({ error: 'queue_id required for a not_found disposition' });
   }
@@ -8555,6 +8555,7 @@ async function applySosNotRegistered(res, { domain, ownerId, queueId, searchedSt
     });
 
     const payload = { ...curPayload, not_found_states: notFoundStates, sos_last_disposition: 'not_registered' };
+    if (extVersion) payload.sos_capture_ext_version = extVersion;
     const nfLabel = notFoundStates.map((x) => x.state).filter((s) => s && s !== '(unspecified)').join(',') || 'searched';
     const patch = { enrichment_payload: payload, last_attempt_at: nowIso };
     if (exhausted) {
@@ -8596,6 +8597,9 @@ async function handleSosWriteback(req, res) {
   const ownerId = body.recorded_owner_id ? String(body.recorded_owner_id) : null;
   const queueId = body.queue_id != null ? Number(body.queue_id) : null;
   const cap     = body.capture || {};
+  // Which extension build produced this capture — stamped through to the
+  // provenance context / disposition payload for audit (never gates a write).
+  const extVersion = body.ext_version ? String(body.ext_version).slice(0, 40) : null;
 
   if (!['government', 'dialysis'].includes(domain)) {
     return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
@@ -8608,7 +8612,7 @@ async function handleSosWriteback(req, res) {
   // BOTH candidate states are exhausted hand it back for further processing
   // (status='no_match'). Never a silent close. queue_id is the key here.
   if (String(body.outcome || '') === 'not_found') {
-    return applySosNotRegistered(res, { domain, ownerId, queueId, searchedState: body.searched_state });
+    return applySosNotRegistered(res, { domain, ownerId, queueId, searchedState: body.searched_state, extVersion });
   }
 
   if (!ownerId) {
@@ -8681,6 +8685,7 @@ async function handleSosWriteback(req, res) {
         registered_agent_name: ownerPatch.registered_agent_name || null,
         manager_name: ownerPatch.manager_name || null,
         manager_role: ownerPatch.manager_role || null,
+        ext_version: extVersion,
         capture: cap,
       };
 

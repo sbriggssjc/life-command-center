@@ -3200,6 +3200,12 @@ function _sosToast(msg) {
   setTimeout(() => toast.remove(), 5000);
 }
 
+// The running extension build (manifest version), stamped onto every SOS capture
+// payload so the writeback provenance records which sidebar build produced it.
+function _extVersion() {
+  try { return chrome.runtime.getManifest().version || null; } catch { return null; }
+}
+
 // Mark an owner handled and re-render from the in-memory list (no refetch, so a
 // still-workable owner isn't re-surfaced), surfacing the next owner as active.
 function _sosAdvance(queueId) {
@@ -3218,6 +3224,7 @@ async function _sosDispositionNotFound(target, btn) {
     queue_id: target.queue_id,
     outcome: 'not_found',
     searched_state: target.state || null,
+    ext_version: _extVersion(),            // which extension build made this disposition (audit)
   });
   if (!result.ok) {
     if (btn) { btn.disabled = false; btn.textContent = orig || '✕ Not registered'; btn.classList.add('btn-danger'); }
@@ -3505,6 +3512,7 @@ async function loadOrgView(source, domainLabel) {
         recorded_owner_id: target.recorded_owner_id,
         queue_id: target.queue_id,
         source_url: source.page_url || null,   // the SOS page — kept for audit/provenance
+        ext_version: _extVersion(),            // which extension build made this capture (audit)
         capture,
       });
       if (result.ok) {
