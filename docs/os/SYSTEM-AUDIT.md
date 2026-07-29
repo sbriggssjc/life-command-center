@@ -17,6 +17,8 @@ Sync → roster → matcher → cadence → digest is connected end-to-end and p
 
 ## ✅ Fixes verified holding
 - **Security advisors: 0 ERRORs across all 3 DBs** (OPS/GOV/DIA; 928 cleared) — verified no engine breakage.
+  _(Re-check 2026-07-29: OPS had regressed to **2** ERRORs — two tables created after the 07-28 sweep with RLS
+  off. Fixed via `20260729120000_rls_enable_two_stragglers_ops.sql`; **OPS back to 0**. See ERROR-TRIAGE Slice 6.)_
 - **`field-provenance-prune` cron: FIXED** — 2026-07-29 04:30 run `succeeded` (the nightly timeout/FK failures
   have stopped).
 - **Matcher v2.1** precision fixes (word-boundary, digest exclusion) live.
@@ -27,7 +29,7 @@ Sync → roster → matcher → cadence → digest is connected end-to-end and p
 |---|---|---|---|
 | **To-Do flows failing daily** (`To Do - Life Command Center Sync`, `Unflag Completed Email Tasks`) | error | 🧑 | Root-caused: a deleted/renamed Microsoft To-Do list → 404. Repair the list reference; fixes both. Blocks these being in anyone's rollout bundle. |
 | **NEW: `SF -> LCC: Daily Bulk File Backfill`** fails at `Apply_to_each` | error | 🧑 | Same benign class — an empty/edge-case collection into a loop. Shared file-backfill flow, not spine-critical. Add a null-guard / "length > 0" condition before the loop. |
-| **`feed:gov:loans` stale** (31d vs 30d SLA) | warn | 🤖+🧑 | Loans ingest may have stopped; investigate the GOV loans job. Non-blocking. |
+| **`feed:gov:loans` stale** (~36d vs 30d SLA) | warn | 🧑 | **Root-caused 07-29:** no loans-ingest cron exists in either project — loans is fed by an external/upstream pull that halted ~06-23 (inserts tapered to zero). Monitoring + enrichment jobs are green. Fix = restart the upstream GOV loans source. Non-blocking (deal-spine is OPS). |
 
 ## 📐 Known/expected — not errors
 - **`bd_opportunities.property_address` is null** for all deals — by design: the SF address can't flow through

@@ -146,6 +146,23 @@ Remaining everywhere = WARN/INFO only: `function_search_path_mutable`, `*_securi
 `materialized_view_in_api` (matviews can't take security_invoker; revoke-from-anon is the fix, low urgency since
 no anon exists). These are the "function hardening + minor toggles" follow-up pass, not ERRORs.
 
+## Slice 6 — Pre-rollout audit follow-ups — 2026-07-29
+Ran during the pre-rollout SYSTEM-AUDIT re-check. Two items surfaced and were actioned:
+
+- 🔴→✅ **OPS security ERRORs regressed 0 → 2, now back to 0.** Two tables created *after* the 2026-07-28
+  hardening sweep had RLS off: `feature_flags_registry` and `staged_intake_feedback_backfill_w1_1_log`. Applied
+  `20260729120000_rls_enable_two_stragglers_ops.sql` (enable-RLS-no-policy; service_role bypasses, frontend never
+  reads OPS with anon). **Verified: OPS security ERROR count 2 → 0.** GOV/DIA remain 0 ERRORs (WARN/INFO only).
+  *Lesson: new public tables need RLS-on at creation — fold an `enable row level security` default into future
+  table-creating migrations so this can't regress again.*
+- 🟡 **`feed:gov:loans` root-caused (not a broken job).** GOV `loans` inserts tapered from ~592/wk (mid-May) to 1
+  in the week of 06-22, then stopped; newest row 2026-06-23 (now ~36d vs 30d SLA). **There is no loans-ingest
+  pg_cron in either the GOV or OPS project** — the only loans job, `lcc-gov-sales-enrich-from-loans-tick`, merely
+  *reads* loans to enrich sales and is running green hourly. So loans is fed by an **external/upstream pull**
+  (data-provider or PA/manual job) that halted ~06-23. Monitoring + freshness sync are healthy (`lcc-feed-
+  freshness-sync` ran green today). **Action = 🧑 restart the upstream GOV loans source**; nothing to fix in-DB.
+  Non-blocking for rollout (deal-spine is OPS, unaffected).
+
 ## Later slices (planned)
 - **Slice 4 — Engine runtime errors** — `get_logs` (api/postgres/edge-function) + Railway logs for 4xx/5xx.
 - **Slice 5 — Known functional gaps** — matcher recall misses (e.g. Innovative Renal Care), deal_name not
