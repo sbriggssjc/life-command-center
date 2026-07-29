@@ -496,7 +496,7 @@ async function _loadGovPhase2(startTime) {
          gsaSnapshotsRes, frppRes, loansRes, countyAuthRes, salesCompsRes
     ] = await Promise.all([
       govQueryAll('ownership_history',
-        'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
+        'ownership_id, property_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
         { order: 'estimated_value.desc' }
       ),
       govQueryAll('contacts',
