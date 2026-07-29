@@ -604,6 +604,11 @@ export async function buildStrategicPriorities(roleView, myWork, inboxItems, sfA
     touchpointCandidates.map(async (contact) => {
       let weight = 1.0;
       try {
+        // contact.id is a unified_contacts.unified_id; signals.entity_id stores
+        // entities.id. The RPC resolves unified_id -> entity_id internally (W1.3
+        // Fix 2, migration 20260811120000) so this pass-through is correct for
+        // either id-space — do not "pre-resolve" here (the gov contacts hub has
+        // no entity_id column to resolve from).
         const weightResult = await Promise.race([
           opsQuery('POST', 'rpc/get_contact_recommendation_weight', { p_entity_id: contact.id }),
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 500))

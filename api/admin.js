@@ -967,13 +967,28 @@ const _provImportance = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(S
   : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? 300 : 50;
 
 // Set of subject_refs already decided (decided/skipped/superseded) for a lane.
+// Pages in 1000-row strides: PostgREST caps EVERY response at 1000 rows
+// regardless of `limit`, so the old `&limit=5000` silently returned only the
+// first 1000 decided subjects — a lane with more than 1000 decisions then
+// re-surfaced already-decided rows as "open" (and deflated the summary count).
+// On a fetch error we THROW so the lane fails visibly (handleDecisionsList
+// → 502) instead of returning an under-populated exclusion set, which would
+// silently resurrect every decided subject as unworked.
 async function fetchExcludedRefs(type) {
   const set = new Set();
-  try {
+  const PAGE = 1000;
+  for (let offset = 0; ; offset += PAGE) {
     const r = await opsQuery('GET', 'lcc_decisions?select=subject_ref&decision_type=eq.'
-      + pgFilterVal(type) + '&status=neq.open&subject_ref=not.is.null&limit=5000');
-    if (r.ok && Array.isArray(r.data)) for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
-  } catch (_e) { /* soft-fail → no exclusion */ }
+      + pgFilterVal(type) + '&status=neq.open&subject_ref=not.is.null'
+      + '&order=id.asc&limit=' + PAGE + '&offset=' + offset);
+    if (!r.ok) {
+      throw new Error('fetchExcludedRefs(' + type + ') failed: HTTP ' + r.status
+        + ' ' + JSON.stringify(r.data).slice(0, 160));
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
+    for (const row of rows) if (row.subject_ref) set.add(row.subject_ref);
+    if (rows.length < PAGE) break;
+  }
   return set;
 }
 
@@ -6586,30 +6601,54 @@ async function handleChainConnectTick(req, res) {
     const summary = { scanned: 0, owners_seen: 0, entities_created: 0, entities_linked: 0,
       skipped_junk: 0, skipped_placeholder: 0, errored: 0, items: [] };
 
-    // Ledger = batch cursor. Pull already-logged property ids for this domain
-    // (bounded by processed count) so we drain NOT-yet-walked properties.
-    let loggedIds = new Set();
-    if (!reprocess) {
-      const lg = await opsQuery('GET',
-        `lcc_chain_connection_log?source_domain=eq.${dom}&select=source_property_id&limit=5000`);
-      if (lg.ok && Array.isArray(lg.data)) loggedIds = new Set(lg.data.map(r => String(r.source_property_id)));
-    }
+    // Ledger-as-cursor. The old code pulled the whole ledger with `limit=5000`
+    // (PostgREST caps every response at 1000, so `loggedIds` never held more than
+    // the first 1000) and fetched a FIXED `min(2000, ...)` rent-desc candidate
+    // window — so once the ~2000 highest-rent properties were all logged, every
+    // tick re-fetched the same logged head, filtered it to empty, and NEVER
+    // advanced into the tail (starvation). Replace with a page-walk cursor: page
+    // the value-ranked candidate view and, per page, consult the ledger for
+    // EXACTLY that page's property ids (a bounded IN() — immune to the 1000-row
+    // cap). Keep paging DEEPER until we collect `limit` not-yet-walked properties
+    // or run out, so the cursor always advances past the logged head. Each tick
+    // re-scans the logged head (bounded by the wall-clock budget); the guarantee
+    // is forward progress, not zero re-scan. source_property_id.asc is the
+    // tiebreaker so rent ties keep a stable order across pages/ticks.
+    const CHAIN_PAGE = 500;
+    const rows = [];
+    let candErr = null;
+    for (let offset = 0; rows.length < limit; offset += CHAIN_PAGE) {
+      if (Date.now() > deadline) { summary.budget_stopped = true; result.budget_stopped = true; break; }
+      const cand = await opsQuery('GET',
+        `v_lcc_ownership_chain_completeness?source_domain=eq.${dom}&chain_complete=eq.false` +
+        `&select=source_domain,source_property_id,workspace_id,current_owner_name,current_annual_rent` +
+        `&order=current_annual_rent.desc.nullslast,source_property_id.asc` +
+        `&limit=${CHAIN_PAGE}&offset=${offset}`, undefined, { countMode: 'none' });
+      if (!cand.ok) { candErr = { stage: 'candidates', status: cand.status, detail: cand.data }; break; }
+      const page = Array.isArray(cand.data) ? cand.data : [];
+      if (page.length === 0) break;
 
-    // Candidate chain properties, value-prioritized by rent. Fetch a window big
-    // enough to step past the already-logged head (capped) and filter in JS.
-    const fetchN = Math.min(2000, limit + loggedIds.size + 5);
-    const cand = await opsQuery('GET',
-      `v_lcc_ownership_chain_completeness?source_domain=eq.${dom}&chain_complete=eq.false` +
-      `&select=source_domain,source_property_id,workspace_id,current_owner_name,current_annual_rent` +
-      `&order=current_annual_rent.desc.nullslast&limit=${fetchN}`);
-    if (!cand.ok) {
-      summary.error = { stage: 'candidates', status: cand.status, detail: cand.data };
+      let logged = new Set();
+      if (!reprocess) {
+        const idList = page.map(r => encodeURIComponent(String(r.source_property_id))).join(',');
+        const lg = await opsQuery('GET',
+          `lcc_chain_connection_log?source_domain=eq.${dom}&source_property_id=in.(${idList})` +
+          `&select=source_property_id&limit=${CHAIN_PAGE}`, undefined, { countMode: 'none' });
+        if (!lg.ok) { candErr = { stage: 'ledger', status: lg.status, detail: lg.data }; break; }
+        logged = new Set((Array.isArray(lg.data) ? lg.data : []).map(r => String(r.source_property_id)));
+      }
+
+      for (const r of page) {
+        if (!logged.has(String(r.source_property_id))) rows.push(r);
+        if (rows.length >= limit) break;
+      }
+      if (page.length < CHAIN_PAGE) break;   // candidate list exhausted
+    }
+    if (candErr) {
+      summary.error = candErr;
       result.by_domain[dom] = summary;
       continue;
     }
-    const rows = (Array.isArray(cand.data) ? cand.data : [])
-      .filter(r => !loggedIds.has(String(r.source_property_id)))
-      .slice(0, limit);
     summary.scanned = rows.length;
     result.scanned += rows.length;
 

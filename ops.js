@@ -5244,6 +5244,7 @@ async function renderResearchPage(page = opsResearchPage) {
         <div class="q-actions">
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="_opsBtnGuard(this, completeResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, createFollowup, decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
+          ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, dismissResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>` : ''}
           <button class="q-action" onclick="_opsBtnGuard(this, runResearchAssistant, decodeURIComponent('${encodeURIComponent(item.id)}'))">Assist</button>
           <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'chatgpt')">ChatGPT</button>
           <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'claude')">Claude</button>
@@ -5287,6 +5288,27 @@ async function completeResearch(id) {
   });
   if (res.ok) {
     showToast('Research completed', 'success');
+    if (!_opsAdvanceAfterComplete(id)) refreshActiveOpsPage();
+  } else {
+    showToast(res.error || 'Failed', 'error');
+    refreshActiveOpsPage();
+  }
+}
+
+// W1.3 Fix 3 — dismiss a research recommendation. Closes the task with
+// outcome 'dismissed', which the research-loop turns into a
+// `recommendation_ignored` signal so the generator stops re-proposing it (and
+// ignored_recommendation_contacts / get_contact_recommendation_weight can
+// down-weight the contact). Same endpoint as Complete, with a dismissal outcome.
+async function dismissResearch(id) {
+  if (typeof lccConfirm === 'function'
+      && !(await lccConfirm('Dismiss this recommendation? It stops being re-proposed.', 'Dismiss'))) return;
+  const res = await opsPost('/api/workflows?action=research_followup', {
+    research_task_id: id,
+    outcome: { status: 'dismissed' }
+  });
+  if (res.ok) {
+    showToast('Recommendation dismissed', 'success');
     if (!_opsAdvanceAfterComplete(id)) refreshActiveOpsPage();
   } else {
     showToast(res.error || 'Failed', 'error');
