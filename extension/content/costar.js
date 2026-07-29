@@ -191,7 +191,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         for (const raw of candidates) {
           const txt = (raw || '').trim();
           if (!txt || txt.toLowerCase().indexOf(addrLc) === -1) continue;
-          const segs = txt.split(/\s+[-–—|]\s+/).map((s) => s.trim()).filter(Boolean);
+          const segs = txt.split(/\s*[•·]\s*|\s+[-–—|]\s+/).map((s) => s.trim()).filter(Boolean);
           if (segs.length < 2) continue;
           // Find the segment that IS the resolved address; the occupant is the
           // NEXT segment (so "Sale Comps | 13838 Buffalo Speedway - State of
@@ -954,6 +954,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     return out;
   }
 
+  // 2026-07-29: CoStar's redesigned For Sale header renders drive-time chips
+  // like "9 min drive" / "12 min walk" near the map. Their leading number +
+  // "drive"/"walk" street-type token let them masquerade as a street address
+  // (findAddressInLines then paired "9 min drive" with the broker's
+  // "Bakersfield, CA 93311"). Reject them outright.
+  const DRIVE_TIME_RE = /^\d+\s+min(?:ute)?s?\s+(?:drive|walk|driving|walking)\b/i;
+
   function parseAddress(raw) {
     if (!raw || raw.length < 3) return null;
     raw = stripListingStatusPrefix(raw);
@@ -963,7 +970,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // segment is the section name and the real address is in segment [1].
     // Also accept number-range addresses (215-225) which were previously
     // rejected because the regex required digit-then-whitespace.
-    const segments = raw.split(/\s+[-–—|]\s+/).map(s => s.trim()).filter(Boolean);
+    // 2026-07-29: also split on the "•"/"·" bullet CoStar's new listing header
+    // uses between address and occupant ("1055 El Camino Real • DeVita Kidney
+    // Care") — without it the occupant junk stays glued to the address and the
+    // street-suffix check runs against the wrong tail.
+    const segments = raw.split(/\s*[•·]\s*|\s+[-–—|]\s+/).map(s => s.trim()).filter(Boolean);
     // Round 76dk: added Expy, Expressway, Trl, Sq, Square, Ter, Terrace, Cv, Cove,
     // Crk, Creek, Hill, Bnd, Bend, Run. Without Expy, addresses like
     // "2700 S Central Expy" failed validation, which broke findSplitAddressInLines'
@@ -978,7 +989,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // Houston road) parsed to null because "Speedway" wasn't a known street type
     // (and \bway\b can't match inside "Speedway"), so the sidebar fell back to the
     // empty "unsupported site" state on 13838 Buffalo Speedway (Comp 5194120).
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
+    // 2026-07-29: added California/Spanish street types (camino/paseo/calle/
+    // alameda/avenida/arroyo/rancho/mesa/vista) so "1055 El Camino Real"
+    // (El Camino Real, Colma CA) validates. "camino"/"avenida" carry the
+    // "Real"-suffixed streets without adding bare "real" (which would false-
+    // match "Real Estate"/"Realty" broker lines).
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr|camino|paseo|calle|alameda|avenida|arroyo|rancho|mesa|vista)\b/i;
     // Salt Lake City-style grid addresses have no street-type word.
     // Form: <building#> <dir> <grid#> <dir> — e.g. "3854 W 5400 S",
     // "3000 E 7800 S". Without this branch, Taylorsville/SLC properties
@@ -995,6 +1011,8 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const cleaned = stripListingStatusPrefix(seg).trim();
       // Reject pagination patterns like "1 of 2,000 Records"
       if (/^\d+\s+of\s+[\d,]+/i.test(cleaned)) continue;
+      // Reject drive-time chips ("9 min drive") — see DRIVE_TIME_RE above.
+      if (DRIVE_TIME_RE.test(cleaned)) continue;
       // Must start with a number (or number range like 215-225) AND
       // either contain a street-type word OR match a grid-style street
       // (e.g. "5400 S" in Salt Lake City's quadrant numbering).
@@ -1050,11 +1068,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // DOES match the Highway/Route forms, so evaluating both the split-combine
     // (a) and the single-line parse (b) in document order makes the top-of-page
     // subject win regardless of suffix shape.
-    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
+    // 2026-07-29: added California/Spanish street types (Camino/Paseo/Calle/
+    // Alameda/Avenida/Arroyo/Rancho/Mesa/Vista) to mirror parseAddress so
+    // "1055 El Camino Real"-style subjects pair with their city line here too.
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing|Camino|Paseo|Calle|Alameda|Avenida|Arroyo|Rancho|Mesa|Vista)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (!line || line.length < 5 || line.length > 120) continue;
+      // Reject CoStar drive-time chips ("9 min drive") — their leading number +
+      // "drive"/"walk" token otherwise matches STREET_RE and gets paired with a
+      // nearby (broker) city/state/zip line. See DRIVE_TIME_RE at parseAddress.
+      if (DRIVE_TIME_RE.test(line)) continue;
       // Foreign-address-block guard (Round 76ds/76ff): skip any line that
       // sits just below a Buyer / Seller / Owner / Lender / Broker header.
       if (isInsideForeignAddressSection(lines, i)) continue;
