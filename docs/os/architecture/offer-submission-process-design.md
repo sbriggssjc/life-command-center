@@ -119,11 +119,15 @@ The intake spine already ingests these emails; this adds a detection + generatio
 9. **Seller Response (on request)** — generate the DDP/standard counter from the seller's authorized terms.
 
 ## Built 2026-07-29 — context assembler + skill (rolled into the build)
-- **`lcc_offer_context(deal)`** (OPS RPC, live + version-controlled `…_lcc_offer_context_assembler.sql`) — the one
-  connectivity call. Returns `deal`, `seller_owner`, `correspondents[]`, `economics`, `documents[]`, and `gaps[]`,
-  composing existing sources with graceful nulls. **Grounded/tested on Snellville:** correctly surfaced the seller
-  **Frank Meyrath / RCG (frankm@rcgventures.com)** from the correspondence — across fragmented sibling entities —
-  and flagged the real gaps (`economics_missing`, `cre_property_missing`, `documents_missing`).
+- **`lcc_offer_context(deal)`** (OPS RPC, live; final `…_lcc_offer_context_v31.sql`) — the one connectivity call.
+  Reads the **deal record first** (`bd_opportunities.metadata.listing` economics + `.seller` of-record/contact,
+  captured at listing-signing), with `bov_extraction` + the correspondence graph as fallbacks; returns `deal`,
+  `seller`, `seller_owner`, `economics`, `correspondents[]`, `documents[]`, and `gaps[]`. Multi-token resolver
+  ("DaVita Snellville" matches by city). **Snellville now returns a complete, deterministic packet** — seller
+  RCG Ventures / Frank Meyrath, economics ask $4,513,274 / NOI $255,000 / cap 5.65% — with only `documents_missing`
+  left (OM not yet folder-indexed). The fragmented seller thread (attributed to *people's* timelines — Ryu, Brigham,
+  Largent — not the deal) is bridged by city; those are people, not deal fragments, so they are **not** merged.
+  **All human/PA/SF/SharePoint/deploy pieces to make this self-serve are in `offer-submission-SETUP-RUNBOOK.md`.**
 - **`offer-submission` skill** (`offer-submission-SKILL.md`) — surface-agnostic; consumes `lcc_offer_context`, runs
   steps 1–10, degrades on `gaps[]`. Delivered for install; roll into the plugin/skill set.
 
