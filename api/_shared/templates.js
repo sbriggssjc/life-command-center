@@ -335,9 +335,16 @@ export async function recordTemplateSend(params) {
     subject_line_used: params.final_subject || params.rendered_subject || null,
     edit_distance_pct: params.edit_distance_pct ?? null,
     domain: params.domain || null,
-    opened: false,
-    replied: false,
-    deal_advanced: false,
+    // W1.2 — NULL means "not yet observed" (the correct open state), not false.
+    // A boolean false asserts a negative outcome the send loop cannot yet know;
+    // the reply loop (recordTemplateResponse, below) flips replied → true when a
+    // two-way reply is attributed, and the template-health rollup / the
+    // `idx_template_sends_pending_reply` partial index (WHERE replied IS NULL)
+    // both key on this open state. An open-outcome sweep may later flip a truly
+    // un-replied send to false when its window closes.
+    opened: null,
+    replied: null,
+    deal_advanced: null,
     sent_at: new Date().toISOString()
   };
 
@@ -366,6 +373,100 @@ export async function recordTemplateSend(params) {
   });
 
   return { ok: true, send };
+}
+
+/**
+ * W1.2 — Close the template loop: attribute a two-way reply to the template
+ * that (most plausibly) prompted it.
+ *
+ * When a reply is attributed to a contact/entity with a `template_sends` row in
+ * the last `window_days` (default 45), flip the LATEST not-yet-replied send to
+ * `replied=true` (+ `replied_at`) and emit a `signals` row
+ * `signal_type='template_response'` in the exact payload shape the
+ * `high_performing_templates` view (schema/027_signal_feedback_rules.sql) reads
+ * (`payload->>'template_id'` — and, to group into the same bucket as the
+ * `template_sent` signal, NO `template_name` key, matching `recordTemplateSend`).
+ *
+ * Honest counts (Consumption-Layer doctrine): exactly ONE send is flipped per
+ * reply — the most recent unanswered one — so one reply produces one
+ * `template_response`, never one-per-send. A contact with no recent open send is
+ * a clean no-op.
+ *
+ * Fire-and-forget-safe: returns a small status object and never throws.
+ *
+ * @param {object} params
+ * @param {string} [params.contact_id]   The replying person/contact entity id
+ * @param {string} [params.entity_id]    The resolved LCC entity id (owner/contact)
+ * @param {number} [params.window_days]  Look-back window (default 45)
+ * @param {string} [params.replied_at]   ISO timestamp of the reply (default now)
+ * @param {string} [params.domain]       Optional domain tag for the signal
+ * @param {string} [params.user_id]      Optional acting user for the signal
+ * @param {string} [params.source]       Provenance for the signal payload
+ * @returns {Promise<{ ok: boolean, send_id?: string, template_id?: string,
+ *                     reason?: string, error?: string }>}
+ */
+export async function recordTemplateResponse(params = {}) {
+  const windowDays = params.window_days || 45;
+
+  // Match on either id column — a send records both contact_id (the person) and
+  // entity_id (the resolved LCC entity); a reply may resolve to either.
+  const ids = [];
+  if (params.contact_id) ids.push(params.contact_id);
+  if (params.entity_id && params.entity_id !== params.contact_id) ids.push(params.entity_id);
+  if (!ids.length) return { ok: false, reason: 'no_contact' };
+
+  const sinceIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+
+  // The latest send within the window that is not already marked replied
+  // (replied IS NULL "not yet observed" OR the legacy false). `not.is.true`
+  // matches both. AND-combined with the id OR-group + the recency floor.
+  const orClause = ids
+    .map((id) => `contact_id.eq.${pgFilterVal(id)},entity_id.eq.${pgFilterVal(id)}`)
+    .join(',');
+  const path = `template_sends?or=(${orClause})`
+    + `&replied=not.is.true`
+    + `&sent_at=gte.${encodeURIComponent(sinceIso)}`
+    + `&order=sent_at.desc&limit=1`;
+
+  let res;
+  try {
+    res = await opsQuery('GET', path, null, { countMode: 'none' });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  const rows = res?.ok ? (res.data || []) : [];
+  if (!rows.length) return { ok: false, reason: 'no_recent_send' };
+
+  const send = rows[0];
+  const repliedAt = params.replied_at || new Date().toISOString();
+
+  const patch = await opsQuery('PATCH', `template_sends?id=eq.${pgFilterVal(send.id)}`, {
+    replied: true,
+    replied_at: repliedAt,
+  });
+  if (!patch?.ok) {
+    return { ok: false, error: 'Failed to patch template_sends', detail: patch?.data };
+  }
+
+  // Fire-and-forget signal — same payload keys as the `template_sent` signal so
+  // both group into the same (template_id) bucket in high_performing_templates.
+  writeSignal({
+    signal_type: 'template_response',
+    signal_category: 'communication',
+    entity_type: 'contact',
+    entity_id: params.entity_id || params.contact_id || null,
+    domain: params.domain || send.domain || null,
+    user_id: params.user_id || null,
+    payload: {
+      template_id: send.template_id,
+      template_version: send.template_version,
+      send_id: send.id,
+      source: params.source || 'reply',
+    },
+    outcome: 'positive',
+  });
+
+  return { ok: true, send_id: send.id, template_id: send.template_id };
 }
 
 /**

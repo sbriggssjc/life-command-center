@@ -65,6 +65,10 @@ import { appendActivityEvent as defaultAppendActivityEvent } from '../_shared/ac
 import { findEntityBySfId as defaultFindEntityBySfId } from '../_shared/bridge-handlers-salesforce.js';
 import { opsQuery, resolvePrimaryWorkspaceId } from '../_shared/ops-db.js';
 import { ensureEntityLink, normalizeEmail } from '../_shared/entity-link.js';
+// W1.2 — close the template loop: a two-way reply flips the prompting send's
+// template_sends.replied and emits a `template_response` signal so the
+// template-health rollup can compute a real response rate.
+import { recordTemplateResponse as defaultRecordTemplateResponse } from '../_shared/templates.js';
 import {
   advanceCadence as defaultAdvanceCadence,
   resolveCadenceForEntity as defaultResolveCadenceForEntity,
@@ -491,6 +495,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
   const resolveOrCreateSfContact = deps.resolveOrCreateSfContact || defaultResolveOrCreateSfContact;
   const openMismatch   = deps.openSfMismatchDecision || defaultOpenSfMismatchDecision;
   const enqueueResolve = deps.enqueueSfContactResolve || defaultEnqueueSfContactResolve;
+  const recordTemplateReply = deps.recordTemplateResponse || defaultRecordTemplateResponse;
   const { workspaceId, actorId } = ctx || {};
 
   const summary = {
@@ -502,6 +507,7 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
     deduped: 0,
     errors: 0,
     replies_captured: 0,
+    template_replies_attributed: 0,   // W1.2 — replies matched to a template_sends row
     cadences_grown: 0,
     contacts_minted: 0,       // Unit 1 — WhoId contacts newly created as entities
     contacts_reconciled: 0,   // Unit 2 — WhoId contacts attached to an existing person by email
@@ -684,6 +690,21 @@ export async function processSfActivityBatch(records, ctx, deps = {}) {
           // owner's active contact (engaged → human takes over). Best-effort.
           const applyFeedback = deps.applyOwnerContactFeedback || defaultApplyOwnerContactFeedback;
           await applyFeedback(cad?.entity_id || entityId, 'two_way');
+          // W1.2 — close the template loop: attribute this reply to the template
+          // send that (most plausibly) prompted it. Flips the latest not-yet-
+          // replied template_sends row for the contact in the last 45 days and
+          // emits a `template_response` signal. Best-effort; a contact with no
+          // recent template send is a clean no-op.
+          try {
+            const tr = await recordTemplateReply({
+              contact_id: entityId,
+              entity_id: cad?.entity_id || entityId,
+              domain: it.domain || null,
+              replied_at: it.occurredAt || undefined,
+              source: 'sf_reply',
+            });
+            if (tr && tr.ok) summary.template_replies_attributed += 1;
+          } catch (_e) { /* non-blocking — the reply is still captured */ }
         } catch (err) {
           // non-blocking — the activity is recorded regardless
           replyAdvanced = false;
