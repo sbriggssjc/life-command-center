@@ -1,7 +1,18 @@
 # LCC Team Rollout — Per-Member Flows & Authorizations
 
-_Living document. How we bring each Team Briggs member into the LCC. Rollout order: **Kelly Largent** (now) →
+_Living document. How we bring each Team Briggs member into the LCC. Rollout order: **Kelly Largent** →
 **Nate Berwaldt** → **Sarah Martin**. Last updated 2026-07-28._
+
+> ## 🚦 STATUS: PACKAGE READY — DO NOT EXECUTE YET
+> Per Scott's directive, **no member is onboarded until the full LCC design is worked end-to-end, errors are
+> triaged, and the system is verified working as intended.** This document is the ready-to-run package we hold
+> until that gate clears; it is kept current as the design evolves. Go-live checklist for lifting the hold is at
+> the bottom.
+>
+> **Engine readiness (good news):** cadence accuracy for a new broker comes from *ingesting their mailbox*
+> (their deals then get activity → last-touch → accurate cadence), and the matcher/cadence already handle any
+> Team-Briggs-scoped deal — so **no LCC engine change is required to onboard Kelly**; it's his flows + connections.
+> (Per-broker *attribution* — who-touched-it — is a separate provenance task tracked under "Known gaps.")
 
 ## The model — three tiers of flow
 The ~50 Power Automate flows fall into three buckets. Onboarding a person is really about tiers 2 and 3.
@@ -104,9 +115,44 @@ digest (design her surface separately, since it diverges most from the broker te
 
 ---
 
-## Open items to finalize as we roll out
-- **B2 Phase 1 (per-broker attribution)** — prerequisite for Kelly; build first.
-- **Flow packaging** — decide the replication mechanism: Save-As-and-reconnect per member, or export the
-  broker-core as a **Solution/package** each member imports (cleaner for 3+ people). Recommend a Solution.
-- **Sarah's ops surface** — needs its own mini-design (most divergent role).
-- **Nate's subspecialty DB** — separate build track when he transitions.
+## Execution recipe (how to actually replicate a per-person flow) — HELD until go-live
+For each broker-core flow (1–8), the replication is the same 3-step recipe. Two packaging options; recommend the
+Solution for 3+ people.
+
+**Option 1 — Save-As-and-reconnect (fastest for one person):**
+1. Open the source flow → **Save As** → rename with the member's name (e.g. `Kelly — Outlook Intake`).
+2. Open the copy → for every action, **repoint the connection** to the member's account (Outlook/To-Do/Teams/
+   SharePoint) — the member signs into each connection once when prompted.
+3. Update any hardcoded owner value (mailbox address, "to" recipient, briefing target) to the member; turn On.
+
+**Option 2 — Solution package (recommended, cleaner at scale):**
+1. Scott adds the 8 broker-core flows to a Power Automate **Solution** with the connections as
+   **connection references** (not hardcoded).
+2. **Export** the Solution (managed) once.
+3. Each member **imports** it and, during import, binds the connection references to their own connections.
+   One import per member instead of 8 Save-As operations. *(Scott builds the Solution; Claude can't export from
+   here — this is the one packaging step that must happen in the PA UI.)*
+
+## Per-member go-live checklist (lift the hold only when ALL are ✅)
+System-level gates (must be true before ANY member):
+- [ ] Full deal-intelligence spine verified end-to-end (sync → roster → matcher → cadence → digest).
+- [ ] Error triage complete: 0 open ERROR-level items; ops-health alerts resolved or explained.
+- [ ] Reconciliation verified (open flagged backlog = 0; addresses correct — ✅ done 2026-07-28).
+- [ ] Owner-scoped digest verified per-broker (dry-run against a broker with deals).
+
+Per-member gates (Kelly first):
+- [ ] Member authorizes the 4 connections (Outlook, To Do, Teams, SharePoint).
+- [ ] Broker-core flows 1–8 stood up (via Solution import or Save-As), connections repointed, turned On.
+- [ ] Verify: member's mailbox produces `activity_events`; their in-scope deals gain last-touch; their
+      owner-scoped digest renders with real content.
+- [ ] Un-park B1 (per-broker delivery) for that member; retire the coverage caveat for their deals.
+
+## Known gaps / dependencies (tracked, not blocking the package)
+- **Actor-identity reconciliation (attribution).** For team-visibility "who-touched-it", the `users` actor table
+  needs real broker identities — today `klargent@`, `smartin@`, etc. rows all read "Scott Briggs"; the correct
+  identities live in `lcc_users`. And the intake attributes to the auth user, not the mailbox owner. This is a
+  deliberate identity build (provenance, not cadence). Scoped separately; NOT required for Kelly's cadence.
+- **Sarah's ops surface** — separate mini-design (most divergent role; no deal cadence).
+- **Nate's subspecialty DB** — separate build track (urgent care / medical net-lease domain) at his transition.
+- **To-Do PA flows** currently failing (deleted To-Do list) — repair before those flows are part of anyone's
+  bundle (see ERROR-TRIAGE.md).
