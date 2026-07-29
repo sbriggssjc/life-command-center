@@ -42,6 +42,21 @@ export const STAGE_REGIME = {
 };
 export function stageRegime(stage) { return STAGE_REGIME[stage] || 'A'; }
 
+// A5b: the property address lives on the related Property object (Opportunity.Property2__c lookup); the
+// Property_Address__c formula that concatenates it is FLS-hidden from the integration user, so we pull the
+// source relationship fields (Property2__r.Street__c / City__c / State_Province__c / Zip_Code__c) instead.
+// PA returns parent-relationship fields nested (record.Property2__r.Street__c); tolerate flattened keys too.
+function dealAddress(d) {
+  if (d.property_address) return d.property_address;
+  if (d.Property_Address__c) return d.Property_Address__c;                 // if FLS is ever granted
+  const p = d.Property2__r || {};
+  const g = (k) => p[k] ?? d['Property2__r.' + k] ?? null;
+  const street = g('Street__c'), city = g('City__c'), state = g('State_Province__c'), zip = g('Zip_Code__c');
+  const line2 = [city, state].filter(Boolean).join(', ');
+  const parts = [street, line2, zip].map(s => s && String(s).trim()).filter(Boolean);
+  return parts.length ? parts.join(', ') : (d.Property_Address_Line_1__c ?? null);
+}
+
 // Accept both the raw SF record shape (Id/Name/StageName/...) and the internal shape.
 function normalizeDeal(d) {
   d = d || {};
@@ -53,8 +68,8 @@ function normalizeDeal(d) {
     amount: d.amount ?? d.Amount ?? null,
     close_date: d.close_date ?? d.CloseDate ?? null,
     vertical: d.vertical ?? null,
-    // A5b: SF Opportunity carries the property address in formula fields — capture it.
-    property_address: d.property_address ?? d.Property_Address__c ?? d.Property_Address_Line_1__c ?? null,
+    // A5b: address comes from the related Property object (see dealAddress) — FLS-safe.
+    property_address: dealAddress(d),
   };
 }
 

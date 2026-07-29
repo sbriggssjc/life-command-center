@@ -59,6 +59,7 @@ import {
   fetchPipelineRollup,
   fetchMarketStats,
   fetchResearchProgress,
+  fetchDormantCapabilities,
   normalizePersonalContext,
 } from '../_shared/briefing-data.js';
 
@@ -1086,6 +1087,52 @@ function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, p
     );
 }
 
+// Dormant capabilities — the inert-feature registry (audit §4.4.3). One line
+// per env-gated capability that is off (or partial) and has been so for more
+// than 30 days. "Half the automation found in this audit was silently off;
+// make 'off' visible."
+function renderDormantCapabilities({ dormantCapabilities }) {
+  const items = dormantCapabilities?.items || [];
+  if (!items.length) return '';
+
+  const stateBadge = (state) => {
+    const color = state === 'partial' ? BRAND.blueMid : BRAND.axis;
+    const label = state === 'partial' ? 'PARTIAL' : 'OFF';
+    return `<span style="display:inline-block;font-size:9px;font-weight:600;` +
+      `letter-spacing:0.5px;color:#fff;background:${color};` +
+      `padding:1px 5px;border-radius:2px;vertical-align:middle;">${label}</span>`;
+  };
+
+  const rows = items.map((it) => {
+    const flag = escapeHtml(it.flag || it.env_var || 'unknown');
+    const purpose = escapeHtml(truncate(it.purpose || '', 110));
+    const since = it.days_off != null
+      ? `off ${it.days_off}d`
+      : (it.off_since ? `off since ${escapeHtml(String(it.off_since))}` : 'off (never enabled)');
+    const owner = it.owner ? ` · ${escapeHtml(truncate(String(it.owner), 24))}` : '';
+    return (
+      `<tr>` +
+      `<td style="${FONT}padding:6px 10px;vertical-align:top;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `white-space:nowrap;">${stateBadge(it.state)} ` +
+      `<span style="font-size:12px;font-weight:600;color:${BRAND.text};font-family:monospace;">${flag}</span></td>` +
+      `<td style="${FONT}padding:6px 10px;vertical-align:top;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:12px;color:${BRAND.textMuted};">${purpose}</td>` +
+      `<td style="${FONT}padding:6px 10px;vertical-align:top;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:11px;color:${BRAND.axis};white-space:nowrap;text-align:right;">${since}${owner}</td>` +
+      `</tr>`
+    );
+  }).join('');
+
+  const subtitle = `${items.length} env-gated capabilit${items.length === 1 ? 'y' : 'ies'} ` +
+    'off > 30 days — a flag-gated no-op looks identical to a healthy quiet pipeline';
+  return sectionHeader('Dormant Capabilities', subtitle) +
+    bodyCell(
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
+      `style="margin:12px 0;border:1px solid ${BRAND.bgAlt};background:#fafbfc;">` +
+      `${rows}</table>`,
+    );
+}
+
 function renderFooter(intelSnapshot) {
   const ver = intelSnapshot?.variant === 'friday_deep_dive' ? 'v2.0 Friday Deep Dive' : 'v2.0';
   const snapBit = intelSnapshot
@@ -1124,6 +1171,7 @@ function renderHtml(ctx) {
     renderSectorWatch(ctx) +
     renderReadingList(ctx) +
     renderOpsAndQueue(ctx) +
+    renderDormantCapabilities(ctx) +
     renderFooter(ctx.intelSnapshot) +
     `</table>`
   );
@@ -1223,6 +1271,19 @@ function renderText(ctx) {
   lines.push('QUEUE SUMMARY');
   lines.push(`  Open: ${wc.open || 0}  Overdue: ${wc.overdue || 0}  Due today: ${wc.due_today || 0}`);
   lines.push(`  Inbox new: ${ctx.inboxSummary?.total_new || 0}  OM intakes 24h: ${ctx.newIntakes?.count || 0}`);
+  lines.push('');
+
+  const dormant = ctx.dormantCapabilities?.items || [];
+  if (dormant.length) {
+    lines.push('DORMANT CAPABILITIES (env-gated, off > 30 days)');
+    dormant.forEach((it) => {
+      const since = it.days_off != null
+        ? `off ${it.days_off}d`
+        : (it.off_since ? `off since ${it.off_since}` : 'off (never enabled)');
+      const tag = it.state === 'partial' ? 'PARTIAL' : 'OFF';
+      lines.push(`  [${tag}] ${it.flag || it.env_var}  (${since})  ${truncate(it.purpose || '', 80)}`);
+    });
+  }
 
   return lines.join('\n');
 }
@@ -1381,7 +1442,7 @@ export async function briefingEmailHandler(req, res) {
     workCounts, myWork, inboxSummary, unassignedWork, syncHealth,
     sfActivity, hotContacts, diaPipeline, newIntakes,
     intelSnapshot, salesComps, expirations, newListings, pipelineRollup,
-    marketStats, researchProgress, processingSummary,
+    marketStats, researchProgress, processingSummary, dormantCapabilities,
   ] = await Promise.all([
     safe(() => fetchWorkCounts(workspaceId, userId), defaultWorkCounts, 'fetchWorkCounts'),
     safe(() => fetchMyWork(workspaceId, userId, 15), [], 'fetchMyWork'),
@@ -1409,6 +1470,8 @@ export async function briefingEmailHandler(req, res) {
     safe(() => fetchProcessingSummary(workspaceId, 24),
       { filed: 0, needs_review: 0, duplicate: 0, pending_moves: 0 },
       'fetchProcessingSummary'),
+    safe(() => fetchDormantCapabilities(30),
+      { min_days_off: 30, count: 0, items: [] }, 'fetchDormantCapabilities'),
   ]);
 
   let priorities;
@@ -1465,7 +1528,7 @@ export async function briefingEmailHandler(req, res) {
     personalContext, intelSnapshot: effectiveSnapshot,
     priorities, syncHealth, workCounts, inboxSummary, newIntakes,
     salesComps, expirations, newListings, pipelineRollup,
-    marketStats, researchProgress, processingSummary,
+    marketStats, researchProgress, processingSummary, dormantCapabilities,
     weather: personalContext.weather,
   };
 
