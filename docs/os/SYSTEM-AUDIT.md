@@ -24,12 +24,14 @@ Sync → roster → matcher → cadence → digest is connected end-to-end and p
 - **Matcher v2.1** precision fixes (word-boundary, digest exclusion) live.
 - **Address-resolution engine** live; the reconciliation backlog for the open pipeline is clear.
 
-## ⚠️ Open items (mostly your PA tenant — gate before rollout)
-| Item | Severity | Owner | Notes |
-|---|---|---|---|
-| **To-Do flows failing daily** (`To Do - Life Command Center Sync`, `Unflag Completed Email Tasks`) | error | 🧑 | Root-caused: a deleted/renamed Microsoft To-Do list → 404. Repair the list reference; fixes both. Blocks these being in anyone's rollout bundle. |
-| **NEW: `SF -> LCC: Daily Bulk File Backfill`** fails at `Apply_to_each` | error | 🧑 | Same benign class — an empty/edge-case collection into a loop. Shared file-backfill flow, not spine-critical. Add a null-guard / "length > 0" condition before the loop. |
-| **`feed:gov:loans` stale** (~36d vs 30d SLA) | warn | 🧑 | **Root-caused 07-29:** no loans-ingest cron exists in either project — loans is fed by an external/upstream pull that halted ~06-23 (inserts tapered to zero). Monitoring + enrichment jobs are green. Fix = restart the upstream GOV loans source. Non-blocking (deal-spine is OPS). |
+## ✅ Rollout-gate PA-flow items — CLEARED 2026-07-29
+| Item | Status | Notes |
+|---|---|---|
+| **To-Do flows failing daily** (`To Do - Life Command Center Sync`, `Unflag Completed Email Tasks`) | ✅ resolved | Confirmed RETIRED (2026-07-20/21 native-Flagged-email rework), **turned OFF**. No failures since. |
+| **`LCC To-Do Completion Poll`** 404 | ✅ fixed+tested | Was hard-coding the Flagged-email `folderId`; now resolves it each run (`Get_Lists`+filter `wellknownListName=flaggedEmails`) + empty-guard. Saved, tested green. |
+| **`SF -> LCC: Daily Bulk File Backfill`** fails at `Apply_to_each` | ✅ fixed+tested | Not the loop — the manifest `HTTP` body used `@json(concat(...))` → invalid JSON on special-char filenames / null versions. Rebuilt as native JSON body. **Test run ingested 4 files to `stored`, no failure.** |
+| **`feed:gov:loans` stale** (~36d vs 30d SLA) | ⚠️ warn / 🧑 | External upstream GOV loans pull halted ~06-23; restart the source. Non-blocking (deal-spine is OPS). |
+| **`LoopNet_Power_Automate`** flow_failure (07-28) | ⚠️ warn / 🧑 | Likely stale `*.vercel.app` host; repoint RCM/LoopNet backfill to Railway. Low priority. |
 
 ## 📐 Known/expected — not errors
 - **`bd_opportunities.property_address` is null** for all deals — by design: the SF address can't flow through
@@ -39,14 +41,16 @@ Sync → roster → matcher → cadence → digest is connected end-to-end and p
 - Several long-cadence GOV/DIA ingests show "last ran N days ago" — expected for quarterly/annual feeds; the two
   dialysis ones (`cms_ingestion` 33d, `email` 118d) are worth a confirm.
 
-## 🔨 Remaining hardening (🤖-drivable, low priority, non-blocking)
-- Function `search_path` pinning + revoke-execute-from-anon across all 3 DBs (WARN-level).
-- DIA Postgres 15 → current (advisor `vulnerable_postgres_version`).
-- Actor-identity reconciliation (broker `users` rows read "Scott Briggs") — needed for per-broker *attribution*,
-  not for cadence. Tracked in TEAM-ROLLOUT "Known gaps".
+## 🔨 Remaining hardening — mostly DONE since first audit
+- ✅ Function `search_path` pinning **done** (all 3 DBs); ✅ EXECUTE revoked from anon/authenticated on SD
+  functions **done**; ✅ RLS regression on 2 OPS tables **fixed**. Security audit effectively complete — 0 ERRORs.
+- 🧑 DIA Postgres 15 → current (`vulnerable_postgres_version`) — dashboard/infra upgrade, still pending.
+- Actor-identity reconciliation: ✅ DB foundation **done** (broker identities fixed, `lcc_actor_for_mailbox`,
+  self-heal trigger). Per-broker *attribution* goes live when the intake code change deploys (🧑). Not needed for cadence.
 
-## Verdict
-The **core LCC and the deal-intelligence spine are working as designed** — data is flowing, correct, and
-self-healing. The rollout gate is not yet clear only because of **your-tenant PA-flow errors** (To-Do + backfill)
-and a couple of low-priority hardening items. None is a defect in the LCC engine itself. Clear the PA-flow errors
-and confirm the two dialysis feeds, and the system is rollout-ready.
+## Verdict (updated 2026-07-29)
+The **core LCC and the deal-intelligence spine are working as designed**, and the **rollout-gate PA-flow errors are
+now cleared** (To-Do zombies off, Completion Poll fixed, Bulk File Backfill fixed + test-ingested). Remaining items
+are non-blocking: the DIA PG patch (dashboard), the gov:loans upstream restart, one stale LoopNet host, and
+deploying the per-broker attribution code (cadence works without it). **The system is rollout-ready** pending
+those housekeeping items and a final go/no-go.

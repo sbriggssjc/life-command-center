@@ -95,6 +95,11 @@ change `List_Flagged_Tasks.inputs.parameters.folderId` to `"@first(body('Filter_
 designer route is usually less fuss.
 
 ### 1B. `SF -> LCC: Daily Bulk File Backfill` → fix the manifest `HTTP` body (invalid JSON from `@json(concat(...))`)
+> **✅ FIXED & VERIFIED 2026-07-29.** Manifest `HTTP` body converted to a native JSON object (coalesced strings +
+> `string(coalesce(...,0))` numbers). Manual test run ingested **4 dialysis files to `stored`** at 20:48 UTC with
+> **no dead-letter/Terminate failure** — the full inner path (manifest → VersionData → upload-url → PUT → bytes)
+> ran clean. Low count is expected (manifest dedup → only new files fetched). Dead-letter/Terminate left as-is.
+
 **Updated finding (from the 2026-07-29 export — the flow is already restructured):** this flow was **already
 rebuilt** to the correct per-link inner-loop shape (`Get_records_2` Comp__c → `Apply_to_each_1` →
 `Get_records` ContentDocumentLink → `Apply_to_each` → `Get_records_1` ContentVersion → `HTTP` manifest →
