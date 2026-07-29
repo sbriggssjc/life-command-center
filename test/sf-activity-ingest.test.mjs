@@ -345,6 +345,65 @@ describe('processSfActivityBatch reply capture (R24 Unit 2)', () => {
     assert.equal(advanceCalls.length, 0);
   });
 
+  it('attributes a fresh inbound reply to the prompting template send (W1.2)', async () => {
+    const { fn } = captureAppend();
+    const fakeAdvance = async () => ({ ok: true });
+    const fakeResolve = async (entityId) => ({ id: `cad-for-${entityId}`, entity_id: `owner-${entityId}` });
+    const trCalls = [];
+    const fakeRecordTemplateResponse = async (args) => { trCalls.push(args); return { ok: true, send_id: 's1', template_id: 'T-001' }; };
+
+    const out = await processSfActivityBatch([
+      { sf_id: 'r3', type: 'Email', subject: 'RE: your offering', who_id: '003aaa', activity_date: '2026-07-05' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      advanceCadence: fakeAdvance, resolveCadenceForEntity: fakeResolve,
+      recordTemplateResponse: fakeRecordTemplateResponse,
+    });
+
+    assert.equal(out.template_replies_attributed, 1, 'the reply was attributed to a template send');
+    assert.equal(trCalls.length, 1);
+    assert.equal(trCalls[0].contact_id, 'ent-contact-1', 'attributed to the replying contact entity');
+    assert.equal(trCalls[0].source, 'sf_reply');
+  });
+
+  it('does not attribute a template reply on an OUTBOUND email (W1.2)', async () => {
+    const { fn } = captureAppend();
+    const fakeAdvance = async () => ({ ok: true });
+    const fakeResolve = async (e) => ({ id: `cad-${e}`, entity_id: e });
+    const trCalls = [];
+    const fakeRecordTemplateResponse = async (args) => { trCalls.push(args); return { ok: true }; };
+
+    const out = await processSfActivityBatch([
+      { sf_id: 'o2', type: 'Email', subject: 'Sent you the OM', who_id: '003aaa' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      advanceCadence: fakeAdvance, resolveCadenceForEntity: fakeResolve,
+      recordTemplateResponse: fakeRecordTemplateResponse,
+    });
+
+    assert.equal(out.template_replies_attributed, 0);
+    assert.equal(trCalls.length, 0, 'outbound email never attributes a template reply');
+  });
+
+  it('reply capture survives a template-response recorder failure (W1.2, best-effort)', async () => {
+    const { fn } = captureAppend();
+    const fakeAdvance = async () => ({ ok: true });
+    const fakeResolve = async (entityId) => ({ id: `cad-${entityId}`, entity_id: entityId });
+    const fakeRecordTemplateResponse = async () => { throw new Error('ops down'); };
+
+    const out = await processSfActivityBatch([
+      { sf_id: 'r4', type: 'Email', subject: 'RE: hi', who_id: '003aaa' },
+    ], ctx, {
+      findEntityBySfId: fakeFindEntity, appendActivityEvent: fn,
+      advanceCadence: fakeAdvance, resolveCadenceForEntity: fakeResolve,
+      recordTemplateResponse: fakeRecordTemplateResponse,
+    });
+
+    assert.equal(out.inserted, 1, 'the reply activity is still mirrored');
+    assert.equal(out.replies_captured, 1, 'the cadence still advanced');
+    assert.equal(out.template_replies_attributed, 0, 'a recorder failure is swallowed');
+  });
+
   it('does NOT treat an outbound email as a reply', async () => {
     const { fn, calls } = captureAppend();
     const advanceCalls = [];
