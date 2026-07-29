@@ -83,7 +83,7 @@ Verified the already-applied W0.3/W0.3c archive moves against live DB state and 
 
 | Unit | What | Status | Notes |
 |---|---|---|---|
-| W2.1 | lcc_merge_field concurrency + unique invariant | ⬜ | |
+| W2.1 | lcc_merge_field concurrency + unique invariant | ✅ 2026-07-29 | Claude Code (`claude/lcc-merge-field-concurrency-dcqwxp`). Migration `20260812120000_lcc_w2_1_merge_field_concurrency_invariant.sql` **applied live to LCC Opps**. (1) Deduped **1,798 duplicate live-write keys / 2,964 loser rows** → demoted to `superseded`, logged to reversible ledger `field_provenance_dedup_w2_1_log` (2,964 rows / 1,798 keys). (2) Partial unique index `uq_field_provenance_live_write` on `(target_database,target_table,record_pk_value,field_name) WHERE decision='write'`. (3) `lcc_merge_field` rewritten: per-key `pg_advisory_xact_lock(hashtextextended(db\|tbl\|pk\|field,0))` around read-decide-write, current-row read ordered `recorded_at DESC, id DESC`, supersede-before-insert. (4) Same supersede-before-insert reorder applied to the two other live-write producers (`lcc_record_field_resolution` — the Decision Center path was insert-first and would have violated the index; `record_cleanup_provenance`); `lcc_autoresolve_same_source_provenance` already invariant-safe (unchanged). **Load test:** genuine 20-way concurrent race on one key (all same-source refresh) → exactly **1 live write, 19 superseded, 0 dupes, 0 unique_violations** (advisory lock serialized: v1→…→v20, no repeats). Global `dup_live_keys=0`. Reversal runbook in migration header/footer. |
 | W2.2 | Record effect not intent (sidebar provenance ordering) | ⬜ | |
 | W2.3 | Watermark mirror sync (gov at 18-page ceiling NOW) | ⬜ | |
 | W2.4 | Null semantics + listing_events retraction | ⬜ | |
