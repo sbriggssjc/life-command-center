@@ -2445,6 +2445,60 @@ async function handleDecisionVerdict(req, res) {
 
     const c = decision.context || {};
 
+    // W1.1 (audit finding 3.4.3): feed human intake match decisions into the
+    // matcher self-learning loop (staged_intake_feedback → compute_matcher_
+    // accuracy → v_matcher_accuracy_recent). Snapshots the MACHINE's latest
+    // suggestion (excludes the confidence-1.0 manual pick rows so the accuracy
+    // bands reflect the matcher's real output) and records ONE feedback row via
+    // the CANONICAL writer in _handlers/intake-feedback.js. Best-effort: a
+    // failure here never blocks the operator's verdict.
+    const emitIntakeMatchFeedback = async (opts = {}) => {
+      const { intakeId: fbIntakeId, fbDecision, verdictLabel,
+              pickPropId = null, pickDomain = null } = opts;
+      try {
+        if (!fbIntakeId) return;
+        let ws = decision.workspace_id || null;
+        if (!ws) { try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; } }
+        ws = ws || process.env.LCC_DEFAULT_WORKSPACE_ID || null;
+        if (!ws) return;
+        const mm = await opsQuery('GET',
+          'staged_intake_matches?intake_id=eq.' + encodeURIComponent(fbIntakeId) +
+          '&decision=neq.manual_match&select=id,reason,property_id,confidence,match_result,domain' +
+          '&order=created_at.desc,id.desc&limit=1');
+        const mrow = (mm.ok && Array.isArray(mm.data) && mm.data[0]) ? mm.data[0] : null;
+        const machinePid = (mrow && mrow.property_id != null) ? String(mrow.property_id) : null;
+        const machineDom = (mrow && ((mrow.match_result && mrow.match_result.domain) || mrow.domain)) || null;
+        let dec = fbDecision || null;
+        let correctedDomain = null, correctedPropertyId = null;
+        // Derive approved-vs-corrected for a property PICK: approved when the
+        // human confirmed the machine's #1 property; corrected otherwise.
+        if (!dec && pickPropId != null) {
+          const approved = !!machinePid && machinePid === String(pickPropId)
+            && (!machineDom || !pickDomain || machineDom === pickDomain);
+          dec = approved ? 'approved' : 'corrected';
+          if (!approved) { correctedDomain = pickDomain || null; correctedPropertyId = String(pickPropId); }
+        }
+        if (!dec) return;
+        const { writeIntakeFeedback } = await import('./_handlers/intake-feedback.js');
+        await writeIntakeFeedback({
+          workspaceId: ws,
+          intakeId: fbIntakeId,
+          matchId: mrow ? mrow.id : null,
+          userId: user.id || null,
+          decision: dec,
+          correctedDomain,
+          correctedPropertyId,
+          reasonText: 'decision_center:' + (verdictLabel || dec),
+          metadata: { source: 'decision_center', decision_type: decision.decision_type,
+                      decision_id: decisionId, verdict: verdictLabel || dec },
+          matchReason: mrow ? mrow.reason : null,
+          matchDomain: machineDom,
+          matchPropertyId: machinePid,
+          matchConfidence: (mrow && typeof mrow.confidence === 'number') ? mrow.confidence : null,
+        });
+      } catch (e) { console.warn('[decision-verdict] intake match feedback skipped:', e && e.message ? e.message : e); }
+    };
+
     // ---- intake_disposition (federated) ------------------------------------
     // Staged-intake review. The heavy actions (create property / re-extract)
     // ride the existing intake routes via a hand-off; dismiss/research are safe.
@@ -2464,11 +2518,13 @@ async function handleDecisionVerdict(req, res) {
         const pid = (c.match_property_id != null && /^\d+$/.test(String(c.match_property_id)))
           ? String(c.match_property_id) : null;
         await record('open_property', 'decided', payload, { handoff: 'intake_open_property' });
+        await emitIntakeMatchFeedback({ intakeId: c.intake_id, fbDecision: 'approved', verdictLabel: 'open_property' });
         return res.status(200).json({ ok: true, verdict: 'open_property',
           next: (dom && pid) ? { action: 'intake_open_property', domain: dom, property_id: pid } : null });
       }
       if (verdict === 'create_property') {
         await record('create_property', 'decided', payload, { handoff: 'intake_create_property' });
+        await emitIntakeMatchFeedback({ intakeId: c.intake_id, fbDecision: 'no_match', verdictLabel: 'create_property' });
         return res.status(200).json({ ok: true, verdict: 'create_property',
           next: { action: 'intake_create_property', intake_id: c.intake_id } });
       }
@@ -3057,11 +3113,13 @@ async function handleDecisionVerdict(req, res) {
         if (!sp.ok) { await recordEffectFailure({ pick: 'match_written_status_patch_failed', error: sp.data }); return res.status(502).json({ error: 'pick_status_failed', detail: sp.data }); }
         await record('pick', 'decided', { domain: payload.domain, property_id: propId },
           { match: 'manual_disambiguation', domain: payload.domain, property_id: propId });
+        await emitIntakeMatchFeedback({ intakeId, verdictLabel: 'pick', pickPropId: propId, pickDomain: payload.domain });
         return res.status(200).json({ ok: true, verdict: 'pick',
           next: { action: 'intake_promote', intake_id: intakeId, domain: payload.domain, property_id: propId } });
       }
       if (verdict === 'create_property') {
         await record('create_property', 'decided', payload, { handoff: 'intake_create_property' });
+        await emitIntakeMatchFeedback({ intakeId, fbDecision: 'no_match', verdictLabel: 'create_property' });
         return res.status(200).json({ ok: true, verdict: 'create_property',
           next: { action: 'intake_create_property', intake_id: intakeId } });
       }
@@ -3074,6 +3132,7 @@ async function handleDecisionVerdict(req, res) {
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        await emitIntakeMatchFeedback({ intakeId, fbDecision: 'deferred', verdictLabel: 'research' });
         return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
