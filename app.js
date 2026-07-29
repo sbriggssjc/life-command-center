@@ -9784,6 +9784,23 @@ const liveIngestState = {
   dialysis: createLiveIngestDomainState()
 };
 
+function liveIngestProposalHeader(proposal) {
+  // Header text for the Proposed Writeback panel. When the proposal has zero
+  // operations we suppress the model's past-tense narrative (proposal.summary,
+  // which often reads as if a write happened) and show an explicit terminal
+  // state instead. Pure so it can be fixture-tested.
+  const ops = Array.isArray(proposal && proposal.operations) ? proposal.operations : [];
+  if (ops.length === 0) {
+    const hasMissing = Array.isArray(proposal && proposal.missing_information) && proposal.missing_information.length > 0;
+    const hasAlready = Array.isArray(proposal && proposal.already_on_file) && proposal.already_on_file.length > 0;
+    if (hasAlready || !hasMissing) {
+      return { text: 'Everything extracted already exists \u2014 nothing to apply \u2713', zeroOps: true, tone: 'ok' };
+    }
+    return { text: 'Nothing to apply \u2014 see missing information below.', zeroOps: true, tone: 'warn' };
+  }
+  return { text: (proposal && typeof proposal.summary === 'string' && proposal.summary) ? proposal.summary : 'No summary returned', zeroOps: false, tone: 'default' };
+}
+
 function createLiveIngestDomainState() {
   return {
     sourceLabel: '',
@@ -9844,6 +9861,8 @@ function renderLiveIngestWorkbench(domainKey) {
 
   const proposal = state.proposal;
   const ops = Array.isArray(proposal?.operations) ? proposal.operations : [];
+  const proposalHeader = liveIngestProposalHeader(proposal);
+  const hasApplicableOps = ops.some((op) => op && op._selected !== false);
   const visibleOpIndices = filterLiveIngestOperationIndexesByTrust(ops, state.provenanceTrustFilter);
   const effectiveContext = getLiveIngestEffectiveContext(domainKey);
   const extractionDocsHtml = renderLiveIngestExtractionDocs(state.extractionDocs || []);
@@ -9856,11 +9875,12 @@ function renderLiveIngestWorkbench(domainKey) {
         <div class="live-ingest-results-head">
           <div>
             <div class="live-ingest-results-title">Proposed Writeback</div>
-            <div class="live-ingest-results-sub">${esc(proposal.summary || 'No summary returned')}</div>
+            <div class="live-ingest-results-sub${proposalHeader.zeroOps ? ' live-ingest-results-sub--empty' : ''}">${esc(proposalHeader.text)}</div>
           </div>
           <div class="live-ingest-results-meta">${ops.length} op${ops.length === 1 ? '' : 's'}</div>
         </div>
         ${proposal.missing_information?.length ? `<div class="live-ingest-callout warn">${proposal.missing_information.map(esc).join('<br>')}</div>` : ''}
+        ${proposal.already_on_file?.length ? `<div class="live-ingest-callout"><strong>Already on file (matched to existing rows \u2014 no write needed):</strong><br>${proposal.already_on_file.map(esc).join('<br>')}</div>` : ''}
         ${proposal.notes_for_user?.length ? `<div class="live-ingest-callout">${proposal.notes_for_user.map(esc).join('<br>')}</div>` : ''}
         ${extractionDocsHtml}
         ${state.loadingSnapshots ? '<div class="live-ingest-callout">Loading current record snapshots for before/after review...</div>' : ''}
@@ -9895,7 +9915,7 @@ function renderLiveIngestWorkbench(domainKey) {
             <input type="checkbox" data-live-ingest-worsened-ack="${domainKey}" ${state.worsenedRetryAcknowledged ? 'checked' : ''}>
             <span>I reviewed operations tied to OCR sources that got worse after retry.</span>
           </label>` : ''}
-          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged) || (hasWorsenedRetryRisk && !state.worsenedRetryAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
+          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || !hasApplicableOps || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged) || (hasWorsenedRetryRisk && !state.worsenedRetryAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
           <button class="btn-secondary" type="button" data-live-ingest-clear-proposal="${domainKey}">Clear Proposal</button>
           ${state.lastAppliedAt ? `<div class="live-ingest-stamp">Last applied ${esc(state.lastAppliedAt)}</div>` : ''}
         </div>
@@ -12259,6 +12279,7 @@ function buildLiveIngestPrompt(domainKey, state, context) {
     'Return JSON only. Do not wrap it in markdown.',
     'Never invent record IDs, table names, or values not supported by the source material or provided context.',
     'If a change cannot be safely targeted, put it in missing_information instead of making an operation.',
+    'When an extracted fact already exists in the current record/context (no write needed), do NOT emit an operation for it \u2014 add a short human-readable line to already_on_file describing the matched fact and its source, e.g. "sale 2021-09-21 $5.8M from costar_export".',
     `Allowed target tables: ${allowedTables.join(', ')}.`,
     'Allowed operation kinds:',
     '- update: { kind, target_source, table, id_column, record_identifier, fields, reason, propagation_scope?, match_filters?, source_refs? }',
@@ -12266,7 +12287,7 @@ function buildLiveIngestPrompt(domainKey, state, context) {
     '- bridge: { kind, action, payload, reason, source_refs? }',
     'Allowed bridge actions: update_entity, complete_research, save_ownership, log_activity.',
     'JSON schema:',
-    '{ "summary": string, "confidence": "high"|"medium"|"low", "notes_for_user": string[], "missing_information": string[], "operations": [] }',
+    '{ "summary": string, "confidence": "high"|"medium"|"low", "notes_for_user": string[], "missing_information": string[], "already_on_file": string[], "operations": [] }',
     `Source label: ${state.sourceLabel || 'not provided'}.`,
     `User instructions: ${state.notes || 'Extract facts and map them to the right writes.'}.`,
     `Current context: ${JSON.stringify(context.current_record || null)}`,
@@ -12304,6 +12325,7 @@ function parseLiveIngestProposal(raw, domainKey, options = {}) {
   parsed.summary = typeof parsed.summary === 'string' ? parsed.summary : '';
   parsed.notes_for_user = Array.isArray(parsed.notes_for_user) ? parsed.notes_for_user : [];
   parsed.missing_information = Array.isArray(parsed.missing_information) ? parsed.missing_information : [];
+  parsed.already_on_file = Array.isArray(parsed.already_on_file) ? parsed.already_on_file.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()) : [];
   const lowConfidenceOcrSources = Array.isArray(options.lowConfidenceOcrSources) ? options.lowConfidenceOcrSources : [];
   const hasLowConfidenceOcr = lowConfidenceOcrSources.length > 0;
   const extractionDocs = Array.isArray(options.extractionDocs) ? options.extractionDocs : [];
@@ -12566,9 +12588,12 @@ async function applyLiveIngestProposal(domainKey) {
     return;
   }
   state.bindSuggestion = null;
+  const totalOps = (state.proposal?.operations || []).length;
   const ops = (state.proposal?.operations || []).filter((op) => op._selected !== false);
   if (!ops.length) {
-    showToast('Select at least one proposed operation', 'warning');
+    // A 0-operation proposal ("everything already exists") disables Apply in the
+    // UI, so only nudge when operations exist but none are selected.
+    if (totalOps > 0) showToast('Select at least one proposed operation', 'warning');
     return;
   }
   const invalidOp = ops.find((op) => op._parseError);
