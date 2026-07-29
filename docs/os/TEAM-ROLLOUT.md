@@ -149,9 +149,13 @@ Per-member gates (Kelly first):
 
 ## Known gaps / dependencies (tracked, not blocking the package)
 - **Actor-identity reconciliation (attribution).** For team-visibility "who-touched-it", the `users` actor table
-  needs real broker identities — today `klargent@`, `smartin@`, etc. rows all read "Scott Briggs"; the correct
-  identities live in `lcc_users`. And the intake attributes to the auth user, not the mailbox owner. This is a
-  deliberate identity build (provenance, not cadence). Scoped separately; NOT required for Kelly's cadence.
+  needs real broker identities. **DB foundation DONE 2026-07-29** (`architecture/actor-attribution-phase1.md`,
+  `…_actor_identity_foundation.sql`): broker names fixed (was all "Scott Briggs"), Nate's identity created, and a
+  `lcc_actor_for_mailbox(email)` helper added for the promoter. Remaining = 3 small code edits (Scott deploys) +
+  a one-line `mailbox_owner` constant added to each broker's intake flow (folded into the broker-core bundle).
+  Known limitation: Scott's identity == the SYSTEM_ACTOR sentinel, so his own mail stays system-attributed;
+  Kelly/Sarah/Nate attribute distinctly (which is what per-broker visibility needs). Provenance, not cadence —
+  still NOT required for Kelly's cadence.
 - **Sarah's ops surface** — separate mini-design (most divergent role; no deal cadence).
 - **Nate's subspecialty DB** — separate build track (urgent care / medical net-lease domain) at his transition.
 - **To-Do PA flows** currently failing (deleted To-Do list) — repair before those flows are part of anyone's

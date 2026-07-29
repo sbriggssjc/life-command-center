@@ -65,6 +65,13 @@ retires as each mailbox comes online (track per-broker coverage; only flag deals
 1. **Attribution first (no new mailboxes):** thread `mailbox_owner` through the intake promoter → set
    `actor_id` to the broker identity. Backfill Scott's existing rows to his identity. Cadence immediately
    distinguishes owner activity. Small, safe, unblocks everything.
+   > **DB foundation DONE 2026-07-29** (`architecture/actor-attribution-phase1.md`,
+   > `…_actor_identity_foundation.sql`): fixed the "everyone is Scott Briggs" `users`-registry pollution,
+   > created Nate's actor identity, and added the `lcc_actor_for_mailbox(email)` helper the promoter will call.
+   > Remaining = 3 small code edits (Scott deploys) + a one-line `mailbox_owner` constant per broker flow.
+   > Known limitation: Scott's identity == the SYSTEM_ACTOR sentinel (email is UNIQUE), so his own mail stays
+   > system-attributed; Kelly/Sarah/Nate attribute distinctly. Backfill of Scott's history is a no-op for that
+   > reason. Splitting the sentinel is a later optional refinement.
 2. **Kelly's mailbox (highest value):** stand up her intake flow (Option A) — she owns 17 of the open deals, so
    her mail is where the accuracy gap is largest. Validate her digest goes from empty to real.
 3. **Sarah + Nate:** same pattern.
