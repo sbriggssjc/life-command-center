@@ -195,6 +195,28 @@ Remaining WARN/INFO everywhere = extension-owned function search_path / execute 
 **No ERROR-level items on any DB.** The security audit is effectively complete: the only actionable security WARN
 left (DIA PG patch) requires the dashboard.
 
+## Slice 8 — Rollout-gate PA-flow fixes (Scott's tenant) — ✅ CLEARED 2026-07-29
+The three daily ERROR-level `flow_failure` items that gated the rollout hold are resolved (full per-flow steps in
+`architecture/scott-pa-flows-reference.md`). Verified against live exports + DB:
+
+- ✅ **`To Do - Life Command Center Sync` + `Unflag Completed Email Tasks`** — confirmed RETIRED (2026-07-20/21
+  rework → native Flagged-email model). **Turned OFF.** No failures since (last 06:00 / 03:59 UTC, before disable).
+- ✅ **`LCC To-Do Completion Poll`** (the current replacement) was itself failing 404 — root cause: a **hard-coded**
+  `folderId` (the reference value the spec said never to hardcode). Fixed to resolve the Flagged-email list id each
+  run via `Get_Lists` + `Filter_FlaggedList` (`wellknownListName == flaggedEmails`) + empty-guard/Terminate. Saved +
+  tested green.
+- ✅ **`SF -> LCC: Daily Bulk File Backfill`** — flow was already restructured (per-link loop); real bug was the
+  manifest `HTTP` body built via `@json(concat(...))` → invalid JSON on files with special-char names or null
+  version numbers. Fixed to a native JSON body (coalesced). **Manual test 2026-07-29 20:48 UTC ingested 4 dialysis
+  files to `stored`, no dead-letter failure.** (The dead-letter + `Terminate:Failed` pattern is by design — the
+  alert was the safety net, not the bug.)
+
+**Still pending (Scott):** the intake `mailbox_owner` field is added to the Hardened flow, but per-broker
+attribution isn't live until the paired engine change deploys (`api/intake.js` threads `mailbox_owner` → the
+promoter sets `actor_id` via `lcc_actor_for_mailbox`; spec in `actor-attribution-phase1.md`). Harmless until then.
+**New lower-priority item:** `LoopNet_Power_Automate` flow_failure (2026-07-28) — likely the stale `*.vercel.app`
+host; repoint to Railway (`RCM`/`LoopNet` backfill flows, flagged in the flow audit).
+
 ## Later slices (planned)
 - **Slice 4 — Engine runtime errors** — `get_logs` (api/postgres/edge-function) + Railway logs for 4xx/5xx.
 - **Slice 5 — Known functional gaps** — matcher recall misses (e.g. Innovative Renal Care), deal_name not
