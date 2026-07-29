@@ -3099,6 +3099,46 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         continue;
       }
 
+      // ── Sales Company / Sales Contacts (new For Sale Contacts tab) ─────────
+      // 2026-07-29: CoStar's redesigned listing Contacts tab labels the sales
+      // broker firm + its agents as "Sales Company"/"Sales Contacts"/"Listing
+      // Contacts" instead of "Listing Broker". Same parse, listing_broker role.
+      if (/^(sales?\s+comp(?:any|anies)|sales?\s+contacts?|listing\s+contacts?)$/i.test(line)) {
+        const peek = lines[i + 1];
+        if (peek && /^(no\s+|not\s+available)/i.test(peek)) continue;
+        const people = parsePersonBlocks(lines, i + 1);
+        for (const p of people) {
+          p.role = 'listing_broker';
+          p.sale_buyer  = currentGroupBuyer;
+          p.sale_seller = currentGroupSeller;
+          contacts.push(p);
+        }
+        continue;
+      }
+
+      // ── True Owner (new For Sale Contacts tab) → owner entity + principals ──
+      // 2026-07-29: the redesigned Contacts tab lists the beneficial owner as
+      // "True Owner" (org + a principal contact). Parse it as an owner entity
+      // block; write the org and each individual with role 'owner' (the backend
+      // maps owner → owner, filling name/email/phone/address). This is where the
+      // owner's reachable contact (email/phone) finally gets ingested.
+      if (/^true\s+owner$/i.test(line)) {
+        const { entity, individuals } = parseEntityBlock(lines, i + 1);
+        if (entity.name) {
+          contacts.push({
+            role: 'owner', name: entity.name, type: 'entity',
+            address: entity.address || null, city: entity.city || null,
+            state: entity.state || null, zip: entity.zip || null,
+            phone: entity.phone || null, email: entity.email || null,
+            website: entity.website || null,
+          });
+          for (const ind of individuals) {
+            contacts.push({ ...ind, role: 'owner', company: entity.name });
+          }
+        }
+        continue;
+      }
+
       // ── Buyer Broker section → parse person blocks ────────────
       if (/^buyer\s+broker$/i.test(line)) {
         const peek = lines[i + 1];
@@ -3140,7 +3180,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     function isCityState(s) { return /^[A-Za-z].*,\s*[A-Z]{2}\s+\d{5}/.test(s); }
 
     // Stop at the next contact group OR any CoStar comp detail section
-    const STOP_PATTERN = /^(true\s+(buyer|seller)|recorded\s+(buyer|seller|owner)|listing\s+broker|buyer\s+broker|current\s+owner|lender|transaction\s+details|market\s+at\s+sale|building$|land$|vacancy\s+rates|market\s+asking\s+rent|submarket\s+(leasing|sales)|public\s+record|assessment\s+at\s+sale|documents|my\s+notes|sources|verification|©\s*\d{4}|by\s+using\s+this|comp\s+status|research\s+complete|last\s+updated|report\s+an\s+error|comparable|building\s+summary|building\s+information|market\s+at\s+sale|lease\s+information|investment\s+highlights)/i;
+    const STOP_PATTERN = /^(true\s+(buyer|seller|owner)|recorded\s+(buyer|seller|owner)|listing\s+broker|buyer\s+broker|sales?\s+comp(?:any|anies)|sales?\s+contacts?|listing\s+contacts?|property\s+manage(?:r|ment)|current\s+owner|lender|transaction\s+details|market\s+at\s+sale|building$|land$|vacancy\s+rates|market\s+asking\s+rent|submarket\s+(leasing|sales)|public\s+record|assessment\s+at\s+sale|documents|my\s+notes|sources|verification|©\s*\d{4}|by\s+using\s+this|comp\s+status|research\s+complete|last\s+updated|report\s+an\s+error|comparable|building\s+summary|building\s+information|market\s+at\s+sale|lease\s+information|investment\s+highlights)/i;
 
     // Reject lines that are CoStar UI labels/data values, not entity info
     const COSTAR_UI_LABELS = /^(country\s+of\s+origin|buyer\s+origin|seller\s+origin|buyer\s+type|seller\s+type|secondary\s+type|activity\s+\(last|sale\s+date|sale\s+price|price\/sf|price\s+status|hold\s+period|recording\s+date|sale\s+type|document\s+#|comp\s+status|seller\s+contacts|[\d]\s+star|star\s+office|national|institutional|private|individual|other\/unknown)/i;
@@ -3255,7 +3295,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Required to prevent one section's parser (e.g. Listing Broker) from
       // sweeping across adjacent sections (True Buyer, Recorded Buyer, Current
       // Owner, Lender, …) and tagging those people with the wrong role.
-      if (j > startIdx && /^(true\s+(buyer|seller)|current\s+owner|recorded\s+(owner|buyer|seller)|buyer\s+broker|listing\s+(broker|agent)|lender|seller|buyer)$/i.test(line)) break;
+      if (j > startIdx && /^(true\s+(buyer|seller|owner)|current\s+owner|recorded\s+(owner|buyer|seller)|buyer\s+broker|listing\s+(broker|agent)|sales?\s+comp(?:any|anies)|sales?\s+contacts?|listing\s+contacts?|property\s+manage(?:r|ment)|lender|seller|buyer)$/i.test(line)) break;
 
       // Handle "logo" as separator — both standalone and concatenated
       if (/^logo$/i.test(line)) { pushCurrent(); continue; }
@@ -3335,6 +3375,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // finds nothing (caller falls back to text-based parsing).
 
   // Map section header text → contact role
+  // 2026-07-29: CoStar's redesigned For Sale "Contacts" tab uses new section
+  // headers — "Sales Company" (the listing/sales broker firm + its agents),
+  // "True Owner" (owner entity + its principal), and "Property Manager/
+  // Management". Without these the DOM extractor bucketed none of the mailto/
+  // tel links to a role and dropped every broker + owner contact. "Sales
+  // Company"/"Sales Contact"/"Listing Contacts" → listing_broker (a person
+  // role the backend writes); "True Owner" → owner (entity role). "Property
+  // Manager" is mapped so it bounds the True Owner section (the backend has no
+  // property-manager role, so those rows are ignored downstream — but they must
+  // not leak into the owner bucket above them).
   const SECTION_ROLE_MAP = [
     [/^true\s+buyer$/i,       'true_buyer_contact'],
     [/^true\s+seller$/i,      'true_seller_contact'],
@@ -3342,9 +3392,14 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     [/^recorded\s+seller$/i,  'seller'],
     [/^listing\s+broker$/i,   'listing_broker'],
     [/^buyer\s+broker$/i,     'buyer_broker'],
+    [/^sales?\s+comp(?:any|anies)$/i, 'listing_broker'],
+    [/^sales?\s+contacts?$/i, 'listing_broker'],
+    [/^listing\s+contacts?$/i, 'listing_broker'],
     [/^lender$/i,             'lender'],
     [/^recorded\s+owner$/i,   'owner'],
     [/^current\s+owner$/i,    'owner'],
+    [/^true\s+owner$/i,       'owner'],
+    [/^property\s+manage(?:r|ment)$/i, 'property_manager'],
   ];
 
   function roleFromHeader(headerText) {
