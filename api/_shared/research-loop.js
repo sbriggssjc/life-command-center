@@ -1,6 +1,18 @@
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { canTransitionResearch } from './lifecycle.js';
 import { ensureEntityLink } from './entity-link.js';
+import { writeSignal } from './signals.js';
+
+// Outcome statuses that mean the human is NOT pursuing the recommendation (a
+// dismissal), as opposed to a completion/resolution ('completed', 'gap_resolved',
+// 'needs_followup', …). A dismissal emits a `recommendation_ignored` signal so
+// the research-task generator's skip-set + ignored_recommendation_contacts +
+// get_contact_recommendation_weight learn from it (W1.3 Fix 3).
+const DISMISS_OUTCOMES = new Set([
+  'dismissed', 'dismiss', 'ignored', 'not_pursuing', 'no_action', 'declined',
+  'rejected', 'skipped', 'skip',
+]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function unwrap(result) {
   return Array.isArray(result?.data) ? result.data[0] : result?.data;
@@ -169,6 +181,43 @@ export async function closeResearchLoop({
   const patchTask = await opsQuery('PATCH', `research_tasks?id=eq.${task.id}`, taskUpdates);
   if (!patchTask.ok) {
     return { ok: false, status: patchTask.status, error: 'Failed to update research task', detail: patchTask.data };
+  }
+
+  // W1.3 Fix 3 — negative-feedback signal on dismissal. When a recommendation is
+  // dismissed (not completed/resolved), emit `recommendation_ignored` so the
+  // generator stops re-proposing it and the contact can be down-weighted.
+  // `signals.entity_id` is UUID, so we key on the first UUID-shaped id among the
+  // resolved entity, the task entity, and the NBA feed's source_record_id (which
+  // is the entity_id the generator's skip-set compares — a UUID for the
+  // recorded_owner/unified_entity feed rows; property-kind rows carry a numeric
+  // id we can't store here, so they're skipped: the contact-scoped view/RPC only
+  // key on UUID entities). entity_type='contact' is the exact shape both the
+  // ignored_recommendation_contacts view and get_contact_recommendation_weight
+  // filter on. Fire-and-forget (writeSignal never throws / blocks the close).
+  const outcomeStatus = (typeof outcome === 'string' ? outcome : outcome?.status) || null;
+  if (outcomeStatus && DISMISS_OUTCOMES.has(String(outcomeStatus).toLowerCase())) {
+    const dismissEntityId = [resolvedEntityId, task.entity_id, task.source_record_id]
+      .map((v) => (v == null ? null : String(v)))
+      .find((v) => v && UUID_RE.test(v)) || null;
+    if (dismissEntityId) {
+      await writeSignal({
+        signal_type: 'recommendation_ignored',
+        signal_category: 'intelligence',
+        entity_type: 'contact',
+        entity_id: dismissEntityId,
+        domain: domain || task.domain || null,
+        user_id: user.id,
+        payload: {
+          research_task_id: task.id,
+          research_type: task.research_type || researchType || null,
+          source_table: task.source_table || null,
+          source_record_id: task.source_record_id || null,
+          dismissed_via: 'research_close',
+          outcome: outcomeStatus,
+        },
+        outcome: 'negative',
+      });
+    }
   }
 
   let followupAction = null;
