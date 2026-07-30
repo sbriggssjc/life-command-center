@@ -957,6 +957,64 @@ export function ownerReconcileLabelVerdict(verdict) {
   return null;   // research / unknown -> not a label
 }
 
+// ── W3.6 display-name resolution (owner_reconcile lane) ──────────────────────
+// The gov owner_unification seeder carries only candidate_unified_id (a uuid),
+// so the card used to render "contact <hex8>". These pure helpers turn a
+// resolved gov unified_contacts row into a real counterpart name + a
+// human-readable match reason. Resolution is BATCHED (one query per page) in
+// fetchFederatedSource; these just format what it resolved.
+export function ownerReconcileMatchReason(reason) {
+  const r = String(reason || '').toLowerCase();
+  const map = {
+    tier0_ambiguous: 'Exact name match (multiple candidates — confirm the right one)',
+    tier0_exact: 'Exact name match',
+    tier0: 'Exact name match',
+    tier1_normalized: 'Normalized-name match',
+    tier1: 'Normalized-name match',
+    tier2_fuzzy: 'Fuzzy name match',
+    tier2: 'Fuzzy name match',
+  };
+  return map[r] || (reason ? String(reason).replace(/_/g, ' ') : null);
+}
+
+// "Jane Smith (Smith Realty)" from a resolved unified_contacts row. Falls back
+// to company, then to a short id tag only when nothing resolved.
+export function formatOwnerReconcileCandidate(contact, fallbackId) {
+  const c = contact || {};
+  const name = (c.full_name != null && String(c.full_name).trim()) ? String(c.full_name).trim() : null;
+  const company = (c.company_name != null && String(c.company_name).trim()) ? String(c.company_name).trim() : null;
+  if (name && company && name.toLowerCase() !== company.toLowerCase()) return name + ' (' + company + ')';
+  if (name) return name;
+  if (company) return company;
+  return fallbackId ? ('contact ' + String(fallbackId).slice(0, 8)) : 'unresolved contact';
+}
+
+// Build the enriched owner_unification card context from the queue row + the
+// batched-resolved unified_contact + the recorded owner's representative
+// property. Evidence carries the actual comparison facts (owner vs contact
+// name/company/location + shared property state), not just "tier0_ambiguous".
+export function buildOwnerUnificationContext(row, contact, ownerProp) {
+  const c = contact || {};
+  const op = ownerProp || {};
+  const candName = (c.full_name != null && String(c.full_name).trim()) ? String(c.full_name).trim() : null;
+  const candCompany = (c.company_name != null && String(c.company_name).trim()) ? String(c.company_name).trim() : null;
+  const candState = c.state || null;
+  const ownerState = op.state || null;
+  return {
+    kind: 'owner_unification', domain: 'gov', queue_id: row.id,
+    recorded_owner_id: row.recorded_owner_id, owner_name: row.owner_name,
+    candidate_unified_id: row.candidate_unified_id, match_tier: row.match_tier,
+    match_score: row.match_score, reason: row.reason,
+    candidate_name: candName, candidate_company: candCompany,
+    candidate_email: c.email || null, candidate_city: c.city || null, candidate_state: candState,
+    candidate_display: formatOwnerReconcileCandidate(c, row.candidate_unified_id),
+    match_reason_label: ownerReconcileMatchReason(row.reason),
+    owner_property_address: op.address || null, owner_property_city: op.city || null,
+    owner_property_state: ownerState,
+    shared_state: !!(candState && ownerState && String(candState).toUpperCase() === String(ownerState).toUpperCase()),
+  };
+}
+
 // Idempotent (on subject_ref) insert into the entity_match_labels training corpus.
 async function writeEntityMatchLabel(row) {
   return opsQuery('POST', 'entity_match_labels?on_conflict=subject_ref', row,
@@ -1572,13 +1630,35 @@ async function fetchFederatedSource(type, cap, opts) {
       + 'owner_name,candidate_unified_id,match_tier,match_score,reason&status=eq.pending_review'
       + '&order=match_score.desc.nullslast,id&limit=' + cap);
     const bRows = (bR.ok && Array.isArray(bR.data)) ? bR.data : [];
+    // W3.6 — resolve the unified-contact counterparts + the recorded owner's
+    // representative property in ONE query EACH (batched — never per-card), so
+    // the card renders "Owner ↔ Jane Smith (Smith Realty)" with real comparison
+    // facts instead of "contact <hex8>".
+    const bUids = [...new Set(bRows.map((r) => r.candidate_unified_id).filter(Boolean))];
+    const bRoids = [...new Set(bRows.map((r) => r.recorded_owner_id).filter(Boolean))];
+    const contactById = new Map();
+    if (bUids.length) {
+      const cr = await domainQuery('gov', 'GET',
+        'unified_contacts?select=unified_id,full_name,company_name,email,city,state&unified_id=in.('
+        + bUids.map((u) => '"' + String(u) + '"').join(',') + ')');
+      if (cr.ok && Array.isArray(cr.data)) for (const c of cr.data) contactById.set(String(c.unified_id), c);
+    }
+    const ownerPropById = new Map();
+    if (bRoids.length) {
+      const pr = await domainQuery('gov', 'GET',
+        'properties?select=recorded_owner_id,address,city,state&recorded_owner_id=in.('
+        + bRoids.map((u) => '"' + String(u) + '"').join(',') + ')&limit=2000');
+      if (pr.ok && Array.isArray(pr.data)) for (const p of pr.data) {
+        const k = String(p.recorded_owner_id);
+        if (!ownerPropById.has(k)) ownerPropById.set(k, p);   // first property is representative
+      }
+    }
     const bItems = bRows.map((row) => ({
       subject_ref: 'ownrec:govu:' + row.id, subject_domain: 'gov', subject_property_id: null,
       subject_entity_id: null, rank_value: num(row.match_score) * 100,
-      context: { kind: 'owner_unification', domain: 'gov', queue_id: row.id,
-        recorded_owner_id: row.recorded_owner_id, owner_name: row.owner_name,
-        candidate_unified_id: row.candidate_unified_id, match_tier: row.match_tier,
-        match_score: row.match_score, reason: row.reason },
+      context: buildOwnerUnificationContext(row,
+        contactById.get(String(row.candidate_unified_id)) || null,
+        ownerPropById.get(String(row.recorded_owner_id)) || null),
     }));
 
     const fetchEmc = async (dom) => {

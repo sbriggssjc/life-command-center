@@ -2803,7 +2803,7 @@ function _fedCardHTML(it, i, isNext) {
   } else if (_dcFedType === 'owner_reconcile') {
     const kind = c.kind;
     const nameA = c.owner_name || c.source_name || '?';
-    const nameB = c.candidate_name || c.target_name
+    const nameB = c.candidate_display || c.candidate_name || c.target_name
       || (c.candidate_unified_id ? ('contact ' + String(c.candidate_unified_id).slice(0, 8)) : '?');
     const kindLbl = kind === 'ore' ? 'ORE multi-signal'
       : kind === 'owner_unification' ? 'Owner unification (gov)'
@@ -2819,19 +2819,33 @@ function _fedCardHTML(it, i, isNext) {
         return '<span class="q-badge">' + esc(lbl + w) + '</span>';
       }).join('');
     } else if (kind === 'owner_unification') {
-      evChips = (c.reason ? '<span class="q-badge">' + esc(String(c.reason)) + '</span>' : '')
-        + (c.match_tier != null ? '<span class="q-badge">tier ' + esc(String(c.match_tier)) + '</span>' : '');
+      // W3.6 — real comparison facts, not the bare "tier0_ambiguous" token.
+      evChips = (c.match_reason_label ? '<span class="q-badge">' + esc(String(c.match_reason_label)) + '</span>'
+          : (c.reason ? '<span class="q-badge">' + esc(String(c.reason)) + '</span>' : ''))
+        + (c.match_tier != null ? '<span class="q-badge">tier ' + esc(String(c.match_tier)) + '</span>' : '')
+        + (c.shared_state ? '<span class="q-badge type">same state ' + esc(String(c.candidate_state)) + '</span>' : '');
     } else if (kind === 'entity_match_candidate') {
       evChips = (c.match_method ? '<span class="q-badge">' + esc(String(c.match_method)) + '</span>' : '')
         + (c.source_table ? '<span class="q-badge">' + esc(String(c.source_table)) + ' &rarr; ' + esc(String(c.target_table || '')) + '</span>' : '');
     }
     const conflictBadge = c.high_authority_conflict ? '<span class="q-badge pri-high">high-authority conflict</span>' : '';
     const mergeVerb = kind === 'ore' ? 'Merge (same party) &rarr;' : 'Confirm match &rarr;';
+    let cmpMeta = '';
+    if (kind === 'owner_unification') {
+      const contactBits = [c.candidate_company, c.candidate_email,
+        [c.candidate_city, c.candidate_state].filter(Boolean).join(', ')].filter(Boolean).join(' \u00b7 ');
+      const ownerLoc = [c.owner_property_address, c.owner_property_city, c.owner_property_state].filter(Boolean).join(', ');
+      cmpMeta = '<div class="q-item-meta">Owner (recorded): <b>' + esc(c.owner_name || '?') + '</b>'
+          + (ownerLoc ? ' \u00b7 ' + esc(ownerLoc) : '') + '</div>'
+        + '<div class="q-item-meta">Contact: <b>' + esc(c.candidate_name || c.candidate_company || 'unresolved') + '</b>'
+          + (contactBits ? ' \u00b7 ' + esc(contactBits) : '') + '</div>';
+    }
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(nameA)
       + ' <span style="opacity:.6">&harr;</span> ' + esc(nameB) + '</span>'
       + '<div class="q-item-badges"><span class="q-badge type">' + esc(kindLbl) + '</span>'
       + (score ? '<span class="q-badge">' + esc(score) + '</span>' : '') + conflictBadge + '</div></div>'
       + (evChips ? '<div class="q-item-meta">Evidence: ' + evChips + '</div>' : '')
+      + cmpMeta
       + '<div class="q-item-meta">Are these the SAME owner / party?</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">' + mergeVerb + '</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject (distinct)</button>'
@@ -5450,62 +5464,102 @@ function _renderReviewSourceBacklog(res) {
     + '</div>';
 }
 
-// The comp reconciliation review drain: list open flagged-comp reviews across
-// dia + gov (GET /api/comp-reviews), resolve or dismiss each (POST
-// /api/comp-reviews/resolve). Mirrors renderSosLinkWorklist's self-propelling
-// worklist contract.
-async function renderCompReviewLane() {
+// The comp reconciliation review drain: list open (or resolved) flagged-comp
+// reviews across dia + gov (GET /api/comp-reviews), resolve/dismiss/REOPEN each
+// (POST /api/comp-reviews/resolve). W3.6: each card names the exact action, deep-
+// links to the property, shows the INPUTS behind both caps (rent/NOI value +
+// source + as-of, so the reviewer sees WHICH number is stale), and can un-resolve.
+var _compReviewStatus = 'open';
+var _compReviewPct = function (v) { return v == null ? '\u2014' : (Number(v) * 100).toFixed(2) + '%'; };
+var _compReviewUsd = function (v) { return v == null ? '\u2014' : '$' + Number(v).toLocaleString(); };
+
+// The two-line caps block: implied cap + its rent/NOI value + source + as-of,
+// then reliable cap + its source + the value it implies. Old rows reconstruct
+// the value from cap x price; new rows also carry detail.implied_basis.
+function compReviewCapsHtml(it) {
+  var pct = _compReviewPct, usd = _compReviewUsd;
+  var d = (it && it.detail) || {};
+  var ib = d.implied_basis || {};
+  var rb = d.reliable_basis || {};
+  var price = (it.sale_price != null) ? Number(it.sale_price) : null;
+  var impliedVal = (ib.value != null) ? Number(ib.value)
+    : (it.implied_cap != null && price != null ? Number(it.implied_cap) * price : null);
+  var impliedKind = ib.kind || (it.domain === 'gov' ? 'NOI' : 'rent');
+  var reliableVal = (it.reliable_cap != null && price != null) ? Number(it.reliable_cap) * price : null;
+  var impliedSrcBits = [ib.source, ib.as_of ? ('as of ' + String(ib.as_of).slice(0, 10)) : null].filter(Boolean).join(' \u00b7 ');
+  var reliableSrc = rb.source || (it.domain === 'gov' ? 'ingested sale cap' : 'cap_rate_final');
+  var line1 = '<div class="q-item-meta">implied cap <b>' + pct(it.implied_cap) + '</b>'
+    + (impliedVal != null ? ' \u2014 ' + esc(impliedKind) + ' ' + usd(Math.round(impliedVal)) : '')
+    + (impliedSrcBits ? ' <span style="opacity:.7">(' + esc(impliedSrcBits) + ')</span>' : '') + '</div>';
+  var line2 = '<div class="q-item-meta">reliable cap <b>' + pct(it.reliable_cap) + '</b>'
+    + ' <span style="opacity:.7">(' + esc(reliableSrc) + ')</span>'
+    + (reliableVal != null ? ' \u2014 implies ' + esc(impliedKind) + ' ' + usd(Math.round(reliableVal)) : '') + '</div>';
+  return line1 + line2;
+}
+
+// Pure per-card renderer (one flagged comp). Kept pure so it is render-testable.
+function compReviewCardHtml(it, isNext) {
+  var usd = _compReviewUsd;
+  var flags = Array.isArray(it.flags) ? it.flags.join(', ') : '';
+  var rowid = 'compreview-' + it.domain + '-' + it.id;
+  var isOpen = !it.status || it.status === 'open';
+  var jid = JSON.stringify(it.id);
+  var openProp = (it.property_id != null && typeof openUnifiedDetail === 'function')
+    ? '<button class="q-action" onclick="openUnifiedDetail(\'' + esc(it.domain) + '\', {property_id: ' + esc(String(it.property_id)) + '}, {}, \'Overview\')">Open property \u2192</button>'
+    : '';
+  var actions;
+  if (isOpen) {
+    actions = '<button class="q-action primary" onclick="resolveCompReview(\'' + it.domain + '\', ' + jid + ', \'resolved\')">Mark resolved \u2014 I corrected the data at source</button>'
+      + '<button class="q-action" onclick="resolveCompReview(\'' + it.domain + '\', ' + jid + ', \'dismissed\')">Dismiss \u2014 not a real problem</button>'
+      + openProp;
+  } else {
+    actions = '<span class="q-badge">' + (it.status === 'resolved' ? 'Resolved \u2713' : 'Dismissed') + '</span>'
+      + '<button class="q-action primary" onclick="resolveCompReview(\'' + it.domain + '\', ' + jid + ', \'open\')">Reopen</button>'
+      + openProp;
+  }
+  return '<div class="q-item' + (isNext ? ' pq-next' : '') + (isOpen ? '' : ' resolved') + '" id="' + rowid + '">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(it.tenant || it.address || ('Comp ' + it.id)) + '</span>'
+    + '<div class="q-item-badges"><span class="q-badge">' + esc(it.domain) + '</span><span class="q-badge">' + esc(flags) + '</span></div></div>'
+    + '<div class="q-item-meta">' + esc([it.address, it.city, it.state].filter(Boolean).join(', ') || '\u2014')
+    + (it.sale_date ? ' \u00b7 sold ' + esc(String(it.sale_date).slice(0, 10)) : '')
+    + (it.sale_price != null ? ' \u00b7 ' + usd(it.sale_price) : '') + '</div>'
+    + compReviewCapsHtml(it)
+    + '<div class="q-actions">' + actions + '</div></div>';
+}
+
+async function renderCompReviewLane(status) {
+  _compReviewStatus = status || _compReviewStatus || 'open';
   var el = document.getElementById('reviewConsoleContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-  var res = await opsApi('/api/comp-reviews?status=open&limit=200');
+  var res = await opsApi('/api/comp-reviews?status=' + encodeURIComponent(_compReviewStatus) + '&limit=200');
   if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderCompReviewLane()', 'Could not load comp reviews'); return; }
   var items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
   var counts = (res.data && res.data.counts) || {};
+  var toggle = _compReviewStatus === 'open'
+    ? '<button class="q-action" onclick="renderCompReviewLane(\'all\')">Show resolved too</button>'
+    : '<button class="q-action" onclick="renderCompReviewLane(\'open\')">Show open only</button>';
   var html = '<div class="ops-header"><h2>Comp reconciliation reviews</h2>'
-    + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Decision Center</button></div>';
-  html += '<div class="rc-intro">Sold comps whose displayed rent doesn\'t reconcile to their reliable cap (cap_mismatch / rent_disagreement / price_over_ask / no_reliable_cap). Fix the source cap/rent, then <b>Resolve</b>; or <b>Dismiss</b> if it\'s not a real problem. The comps engine preserves your disposition on re-pull.</div>';
-  if (!items.length) { html += '<div class="ops-empty">No open comp reviews. \u2713</div>'; el.innerHTML = html; return; }
-  html += '<div class="rc-progress"><span id="compReviewRemaining">' + items.length + '</span> to review'
+    + '<div class="ops-controls">' + toggle
+    + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Decision Center</button></div></div>';
+  html += '<div class="rc-intro">Sold comps whose displayed rent/NOI doesn\'t reconcile to their reliable cap (cap_mismatch / rent_disagreement / price_over_ask / no_reliable_cap). Each card shows the inputs behind BOTH caps so you can see which number is stale. Fix it at the source, then <b>Mark resolved</b>; or <b>Dismiss</b> if it\'s not a real problem. You can <b>Reopen</b> a resolved row. The comps engine preserves your disposition on re-pull.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No ' + esc(_compReviewStatus === 'open' ? 'open' : '') + ' comp reviews. \u2713</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="compReviewRemaining">' + items.length + '</span> ' + (_compReviewStatus === 'open' ? 'to review' : 'shown')
     + ' <span class="q-badge">' + (Number(counts.dialysis) || 0) + ' dia</span>'
     + ' <span class="q-badge">' + (Number(counts.government) || 0) + ' gov</span></div>';
-  var pct = function (v) { return v == null ? '\u2014' : (Number(v) * 100).toFixed(2) + '%'; };
-  var usd = function (v) { return v == null ? '\u2014' : '$' + Number(v).toLocaleString(); };
-  items.forEach(function (it, _ix) {
-    var flags = Array.isArray(it.flags) ? it.flags.join(', ') : '';
-    var rowid = 'compreview-' + it.domain + '-' + it.id;
-    html += '<div class="q-item' + (_ix === 0 ? ' pq-next' : '') + '" id="' + rowid + '">'
-      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.tenant || it.address || ('Comp ' + it.id)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(it.domain) + '</span><span class="q-badge">' + esc(flags) + '</span></div></div>'
-      + '<div class="q-item-meta">' + esc([it.address, it.city, it.state].filter(Boolean).join(', ') || '\u2014')
-      + (it.sale_date ? ' \u00b7 sold ' + esc(String(it.sale_date).slice(0, 10)) : '')
-      + (it.sale_price != null ? ' \u00b7 ' + usd(it.sale_price) : '') + '</div>'
-      + '<div class="q-item-meta">implied cap <b>' + pct(it.implied_cap) + '</b> vs reliable cap <b>' + pct(it.reliable_cap) + '</b></div>'
-      + '<div class="q-actions">'
-      + '<button class="q-action primary" onclick="resolveCompReview(\'' + it.domain + '\', ' + JSON.stringify(it.id) + ', \'resolved\')">Resolve (fixed at source)</button>'
-      + '<button class="q-action" onclick="resolveCompReview(\'' + it.domain + '\', ' + JSON.stringify(it.id) + ', \'dismissed\')">Dismiss (not a problem)</button>'
-      + '</div></div>';
-  });
+  items.forEach(function (it, _ix) { html += compReviewCardHtml(it, _ix === 0); });
   el.innerHTML = html;
 }
 window.renderCompReviewLane = renderCompReviewLane;
 
 async function resolveCompReview(domain, id, disposition) {
   var res = await opsApi('/api/comp-reviews/resolve', { method: 'POST', body: JSON.stringify({ domain: domain, id: id, disposition: disposition }) });
-  var row = document.getElementById('compreview-' + domain + '-' + id);
   if (res.ok && res.data && res.data.ok) {
-    if (typeof showToast === 'function') showToast(disposition === 'resolved' ? 'Marked resolved' : 'Dismissed', 'success');
-    if (row) {
-      row.style.opacity = '0.5';
-      row.classList.add('resolved');
-      var acts = row.querySelector('.q-actions');
-      if (acts) acts.innerHTML = '<span class="q-badge">' + (disposition === 'resolved' ? 'Resolved \u2713' : 'Dismissed') + '</span>';
-    }
-    var scope = document.getElementById('reviewConsoleContent');
-    var pending = scope ? scope.querySelectorAll('.q-item[id^="compreview-"]:not(.resolved)') : [];
-    var remEl = document.getElementById('compReviewRemaining');
-    if (remEl) remEl.textContent = String(pending.length);
-    if (pending.length) { pending[0].classList.add('pq-next'); pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    if (typeof showToast === 'function') showToast(
+      disposition === 'resolved' ? 'Marked resolved' : disposition === 'dismissed' ? 'Dismissed' : 'Reopened', 'success');
+    // Re-render so the row reflects its new disposition (and reopen works in the
+    // resolved view). The lane is small and self-propels to the next open item.
+    renderCompReviewLane(_compReviewStatus);
   } else {
     if (typeof showToast === 'function') showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
   }
@@ -5532,6 +5586,19 @@ async function renderMetadataBackfillWidget(parentEl) {
   parentEl.insertBefore(w, parentEl.firstChild);
 }
 window.renderMetadataBackfillWidget = renderMetadataBackfillWidget;
+
+// W3.6 — build a PROPERTY-SPECIFIC CoStar search from address+city+state. The
+// backfill view's costar_search_url points at product.costar.com/all-properties
+// with an unencoded "#?search=" fragment that CoStar's SPA ignores, dumping the
+// user on the generic all-properties page. Prefer a well-formed www.costar.com
+// search (same pattern as the detail-panel CoStar Lookup); fall back to the
+// view URL only when we have no address to build from.
+function buildCostarSearchUrl(address, city, state, fallback) {
+  var q = [address, city, state].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  if (q) return 'https://www.costar.com/search?q=' + encodeURIComponent(q);
+  return fallback || null;
+}
+window.buildCostarSearchUrl = buildCostarSearchUrl;
 
 async function renderMetadataBackfillPage() {
   var el = document.getElementById('researchContent');
@@ -5561,7 +5628,10 @@ async function renderMetadataBackfillPage() {
       + '<div class="q-item-meta">Missing: <b>' + esc(miss || '\u2014') + '</b>'
       + (it.most_recent_sold_price != null ? ' \u00b7 last sold ' + usd(it.most_recent_sold_price) : '') + '</div>'
       + '<div class="q-actions">'
-      + (it.costar_search_url ? '<a class="q-action primary" href="' + esc(it.costar_search_url) + '" target="_blank" rel="noopener">Open CoStar \u2192</a>' : '<span class="q-badge">no CoStar URL</span>')
+      + (function () {
+          var u = buildCostarSearchUrl(it.address, it.city, it.state, it.costar_search_url);
+          return u ? '<a class="q-action primary" href="' + esc(u) + '" target="_blank" rel="noopener">Open CoStar \u2192</a>' : '<span class="q-badge">no CoStar URL</span>';
+        })()
       + '</div></div>';
   });
   el.innerHTML = html;

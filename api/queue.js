@@ -25,6 +25,7 @@ import {
   INBOX_TRANSITIONS, PRIORITIES, VISIBILITY_SCOPES, INBOX_SOURCE_TYPES, isValidEnum
 } from './_shared/lifecycle.js';
 import { writeTriageSignal, writePromotionSignal } from './_shared/signals.js';
+import { applyListingBdEntityNames, collectListingBdEntityIds } from './_shared/listing-bd.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -831,6 +832,29 @@ async function attachInboxIntakeOutcome(items) {
   }
 }
 
+// W3.6 — resolve display names for the grouped Listing-BD inbox view. The
+// producer already writes contact_name/listing_name into metadata, but when a
+// match landed on an entity without a populated name the cards rendered "New
+// listing" / "Unknown contact". Fill the gaps with ONE batched entities read
+// per page (never one lookup per card), then merge names in via the shared
+// pure helper. Soft-fails so the inbox still renders on a hiccup.
+async function attachListingBdNames(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  const ids = collectListingBdEntityIds(items);
+  if (!ids.length) return;
+  const entityById = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    try {
+      const r = await opsQuery('GET',
+        'entities?select=id,name,address,city,state,email&id=in.(' + chunk.join(',') + ')',
+        undefined, { countMode: 'none' });
+      if (r.ok && Array.isArray(r.data)) for (const e of r.data) entityById.set(String(e.id), e);
+    } catch (_e) { /* soft-fail: cards fall back to their existing labels */ }
+  }
+  applyListingBdEntityNames(items, entityById);
+}
+
 async function handleInbox(req, res, user, workspaceId) {
   // GET
   if (req.method === 'GET') {
@@ -867,6 +891,7 @@ async function handleInbox(req, res, user, workspaceId) {
       if (it && it.metadata) { delete it.metadata.body_html; delete it.metadata.body_text; }
     }
     await attachInboxIntakeOutcome(items);
+    await attachListingBdNames(items);
     return res.status(200).json({ items, count: result.count });
   }
 
