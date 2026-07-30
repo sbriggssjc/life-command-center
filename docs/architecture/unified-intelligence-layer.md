@@ -7,6 +7,12 @@ single prioritized list of exactly what needs doing (work + personal), much of i
 subagents. Extends `offer-context-connectivity.md` (same close-the-loop pattern, applied to the activity layer)
 and operationalizes the **Producer/Consumer Consumption Layer** doctrine in `CLAUDE.md`._
 
+> **Lineage / reconciliation:** this is the *built realization* of the April-2026 vision in
+> `context_packet_schema.md` + `context_broker_api_spec.md`. Key evolution: the packet is realized as
+> **projections over the spine** (SQL RPCs — `lcc_offer_context`, `mcp/deal-dossier-tools.js`), **not** the
+> separate stateful "Packet Assembly microservice" those drafts proposed. Same thesis, leaner realization
+> (assemble-on-read from one enriched spine). Do not build the microservice; enrich the spine + resolve on read.
+
 ## Thesis
 A to-do you have to remember to check is a failed to-do. The list should be the *output* of an intelligence layer
 that already knows what happened (activity), what it means (resolution), and what's next (cadence) — ranked by the
@@ -61,8 +67,53 @@ scored queue. AI + subagents do the preparatory work ahead of you; you make the 
 - **Same engine → same result on every surface** (Copilot/ChatGPT/Claude): resolution lives in `mcp/`+`api/`, not
   per-surface.
 
+## The living context object (projection model — the key architectural fact)
+The deal dossier, the offer-context packet, and the priority queue are **projections over the same spine**, not
+stored blobs (`mcp/deal-dossier-tools.js`: identity = `entities`; correspondence/milestones = `activity_events`;
+economics = domain record + `lcc_cre_bov_extraction`). Because they're computed on read, they are **already
+continuously current** — the packet reflects the spine at query time. So "keep the dossier continuously updated"
+is NOT a storage problem; it is two things: (a) **maximize what flows into the spine** from every source, and
+(b) **run resolution/enrichment as signal arrives** so the projection reads resolved links, not raw fragments.
+The seller-resolver (`offer-context-connectivity.md`) is the first instance: same spine, richer projection, zero
+new storage. Every future enrichment follows this shape — feed the spine + resolve on read/arrival.
+
+### The spine (single set of inputs every projection reads)
+`entities` (identity + links via `external_identities` to domain `dia|gov:asset`) · `activity_events` (every
+touch: email in/out, call, meeting, note, milestone) · `entity_relationships` (owner/party edges) ·
+`touchpoint_cadence` · domain property facts (`dia`/`gov`) · `sharepoint_documents` (ShareFile/OM/lease) ·
+`lcc_cre_bov_extraction` · `field_provenance` (who said what, confidence). Enrich any of these and **every**
+projection (dossier, offer-context, queue, briefing) gets richer at once.
+
+### Lifecycle enrichment triggers (enrich at every step — ingestion → close → re-prospect)
+Each step fires enrichment into the spine; nothing waits for a manual refresh:
+- **Ingestion (DB layer):** a property enters → kick owner/history enrichment (public records, deed/SOS when
+  un-blocked; domain facts; CMS/tenant) → seed the entity + first links.
+- **Listing / BD:** OM/lease arrives → extract economics → **fill-blanks** to domain property + `lcc_listing_economics`;
+  correspondence arrives → resolve seller candidate (built) → promote to a durable owner edge when confidence clears.
+- **Every interaction:** each email (in **and out**), call, meeting → `activity_events` → advances cadence (single
+  owner) → auto-resolves the to-do it satisfies → feeds draft/template + cadence-timing learning.
+- **Docs:** folder-feed links every new ShareFile/OM/lease to the entity (`property_entity_id`).
+- **Close & beyond:** on closing, spawn the **buyer as a new prospect** — a new entity/cadence seeded from the
+  closing activity (the buyer who just bought is the highest-signal lead for the next deal). The dossier persists;
+  post-close touches keep enriching it.
+Each trigger obeys the invariants below (fill-blanks · provenance · reversible · single-advance-owner · honest counts).
+
 ## First concrete step
 Ingest **sent email** (Outlook Sent → intake → `activity_events`, actor=human, through the cadence-advance owner) and
 wire the **first auto-retire predicate** (`offer_review` To-Do auto-closes when the offer submission draft is sent).
 That single slice proves the loop end-to-end: a human action the system now sees → a to-do that closes itself →
 cadence that advances from reality — and becomes the template for every other activity type.
+
+## Build log
+- **2026-07-30 — seller-resolver (offer-context):** `lcc_offer_context` resolves a correspondence-inferred, deduped,
+  confidence-scored `seller_candidates[]` when no seller edge exists (RCG surfaced for Snellville). Live.
+- **2026-07-30 — keystone, engine + DB (deploy to activate):** `POST /api/intake?_route=outlook-sent`
+  (`handleOutlookSent` in `api/intake.js`) logs a SENT email as an OUTBOUND `email` `activity_event` on the deal
+  (resolved by recipient-is-a-known-correspondent), deduped on `(workspace_id,'outlook_sent',internet_message_id)`;
+  the SQL cadence trigger advances the touch. `lcc_autoresolve_offer_review(entity,activity)` then **completes the
+  open "Review & submit offer" To-Do** (reversible, provenance-tagged) — the first auto-retire predicate. Both
+  `node --check`-clean; DB function live. **Remaining:** the PA **Sent-Items capture flow** (Outlook Sent → this
+  route) — portal spec delivered; import + redeploy to light the loop end-to-end.
+- **Next predicates to add** (same shape): "call X back" closes on a logged outbound call to X; "reply to Y" closes
+  on a sent email to Y; generalize `lcc_autoresolve_offer_review` → `lcc_autoresolve_todos(activity)` keyed by
+  `action_type`.

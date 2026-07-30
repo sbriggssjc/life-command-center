@@ -2,7 +2,8 @@
 // Unified Intake API — Consolidated from intake-outlook-message.js + intake-summary.js
 // Life Command Center  (cache-bust: force rebuild of handler imports)
 //
-// POST /api/intake?_route=outlook-message   — deterministic single-message intake
+// POST /api/intake?_route=outlook-message   — deterministic single-message intake (inbound flagged)
+// POST /api/intake?_route=outlook-sent      — outbound SENT email → activity_events (self-resolving layer)
 // GET  /api/intake?_route=summary           — Teams/Automation formatted summary
 // POST /api/intake?_route=extract           — manual document extraction trigger
 // POST /api/intake?_route=copilot-action    — Copilot action gateway (dispatches by action_id)
@@ -105,6 +106,8 @@ export default withErrorHandler(async function handler(req, res) {
       }
       return handleOutlookMessage(req, res);
     }
+    case 'outlook-sent':
+      return handleOutlookSent(req, res);
     case 'summary':
       return handleIntakeSummary(req, res);
     case 'extract':
@@ -186,7 +189,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy'
       });
   }
 });
@@ -305,6 +308,85 @@ function pickPrimaryOmAttachment(atts) {
       || eligible.find(a => a.inline_data || a.content || a.contentBytes)
       || eligible[0]
       || null;
+}
+
+// ============================================================================
+// OUTLOOK SENT-ITEMS INTAKE — outbound email → activity_events (self-resolving layer)
+// POST /api/intake?_route=outlook-sent
+// Logs a SENT email as an OUTBOUND `email` activity on the deal it belongs to,
+// resolved by "a recipient is already a correspondent on an open deal" (attributed to
+// the most-recent such deal). Dedup on (workspace_id,'outlook_sent',internet_message_id).
+// The SQL cadence trigger advances the touch (single-advance-owner); then
+// lcc_autoresolve_offer_review completes the offer-review To-Do the send satisfies
+// (reversible, provenance-tagged). Lean by design — none of the inbound OM/infra
+// machinery. See docs/architecture/unified-intelligence-layer.md.
+// ============================================================================
+async function handleOutlookSent(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+  if (!requireRole(user, 'operator', workspaceId)) return res.status(403).json({ error: 'Operator role required' });
+
+  const payload = req.body || {};
+  const internetMsgId = firstNonEmpty(payload.internet_message_id, payload.internetMessageId, payload.message_id, payload.id, null);
+  if (!internetMsgId) return res.status(400).json({ error: 'internet_message_id (or message_id/id) is required' });
+
+  const subject = firstNonEmpty(payload.subject, '(No subject)');
+  const sentAtIso = isoOrNow(firstNonEmpty(payload.sent_date_time, payload.sentDateTime, payload.received_date_time, null));
+  const fromAddr = normalizeSender(firstNonEmpty(payload.from, payload.sender, null)).email;
+  const bodySnippet = (firstNonEmpty(payload.body_preview, payload.bodyPreview, payload.body_text, payload.body, '') || '').toString().slice(0, 500) || null;
+  const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
+
+  const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+  const rawTo = String(firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, payload.recipients, '') || '');
+  const rawCc = String(firstNonEmpty(payload.cc_recipients, payload.ccRecipients, payload.cc, '') || '');
+  const recips = [...new Set((rawTo.match(EMAIL_RE) || []).concat(rawCc.match(EMAIL_RE) || []).map(e => e.toLowerCase()))]
+    .filter(e => !e.includes('northmarq'));
+  if (recips.length === 0) return res.status(200).json({ ok: true, logged: false, reason: 'no_external_recipient' });
+
+  // Resolve the deal: the most-recent open-deal correspondence that already includes any recipient.
+  const orList = recips.map(e => `body.ilike.*${e}*`).join(',');
+  const match = await opsQuery('GET',
+    `activity_events?workspace_id=eq.${pgFilterVal(workspaceId)}&entity_id=not.is.null&or=(${orList})` +
+    `&select=entity_id&order=occurred_at.desc&limit=1`);
+  const dealEntityId = match.data?.[0]?.entity_id || null;
+
+  const row = {
+    workspace_id: workspaceId,
+    actor_id: user.id || user.user_id || 'b0000000-0000-0000-0000-000000000001',
+    category: 'email',
+    title: ('Sent: ' + subject).slice(0, 500),
+    body: bodySnippet,
+    entity_id: dealEntityId,
+    source_type: 'outlook_sent',
+    external_id: String(internetMsgId),
+    occurred_at: sentAtIso,
+    external_url: webLink,
+    visibility: 'shared',
+    metadata: { direction: 'outbound', from: fromAddr, to: recips, via: 'outlook_sent' },
+  };
+  const ins = await opsQuery('POST', 'activity_events?on_conflict=workspace_id,source_type,external_id',
+    row, { Prefer: 'return=representation,resolution=ignore-duplicates' });
+  const inserted = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+  const activityId = inserted?.id || null;
+  const wasNew = !!activityId;
+
+  // Self-resolve: a sent email to a deal's correspondent completes the "submit offer" To-Do (reversible).
+  let autoResolved = null;
+  if (wasNew && dealEntityId) {
+    const rr = await opsQuery('POST', 'rpc/lcc_autoresolve_offer_review', { p_entity_id: dealEntityId, p_activity_id: activityId });
+    autoResolved = Array.isArray(rr.data) ? rr.data[0] : rr.data;
+  }
+
+  return res.status(200).json({
+    ok: true, logged: wasNew, duplicate: !wasNew,
+    activity_id: activityId, deal_entity_id: dealEntityId,
+    recipients: recips, auto_resolved: autoResolved,
+    note: dealEntityId ? 'logged outbound touch on deal; cadence advances via trigger'
+                       : 'logged unattached (no matching deal correspondent)',
+  });
 }
 
 async function handleOutlookMessage(req, res) {
