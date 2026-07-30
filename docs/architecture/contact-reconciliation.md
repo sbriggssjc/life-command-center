@@ -139,3 +139,37 @@ as every other tick worker.
 
 **Status:** RPC + `correspondent_backfill_log` applied live (OPS); worker + routes in the working tree,
 `node --check`-clean, imports resolve, subroute guard 4/4 green. **Deploy to activate**, then run the drain.
+
+### Live drain results (2026-07-30, deploy `ba725dbf14b1`)
+
+Drained the entire **≥5-touch** band (head + 5–9 band) via `POST /api/correspondent-party-backfill-tick`.
+Runtime note: `findSalesforceContactByEmail` runs server-side, so the drain was triggered from the cloud session
+against the live engine using the `X-LCC-Key` header (base `tranquil-delight-production-633f`). `no_match` cap
+lowered from 2→1 mid-run (a `no_match` is definitive — a transient SF failure returns `error`, not `no_match` —
+so a single pass suffices; halves tail cost).
+
+- **163 resolved** to `person` entities (144 carry the email directly; ~19 are alias/secondary addresses of an
+  already-linked person — see alias note below). Verified real: Deana Moore & Michelle Pagnano (DaVita), Nick
+  Cartus (ValueNet), Trent Jemmett (CBRE), Scott Briggs (Stan Johnson), etc. Attach-by-email reused existing
+  CoStar/RCA/SF entities (no duplicates).
+- **295 no_match**, **0 errors**. Both ≥5 bands now at **0 remaining**.
+
+**FINDING — the `no_match` set is a Salesforce coverage gap, not noise.** A large share of Scott's most active
+counterparties are absent from SF **by that email**: `susan.holdsworth@davita.com` (711 touches), many
+`@firstam.com` (First American title), `@cbre.com` / `@stanjohnsonco.com` cooperating brokers, `@foley.com` /
+`@ltglegal.com` / `@buchalter.com` counsel, and government tenant/buyer contacts (`@gsa.gov`, `@ssa.gov`,
+`@boydwatterson.com`, `@easterlyreit.com`). The rest is genuine noise (newsletters, docusign, personal/family
+mail) and correctly stays unmatched. Because LCC has no SF admin and never writes back to SF, the clean action
+is: add the high-value ones to Salesforce, then **delete their `correspondent_backfill_log` row to re-queue** and
+re-drain. (A future option: mint a provisional person entity from correspondence for no_match *business* domains,
+but the historical `outlook` rows carry no display name — name source would still need to come from SF or the OM.)
+
+**Alias gap (the ~19).** When two correspondent emails map to the same SF contact, the person entity carries the
+SF *primary* email; the alias resolves (logged, entity linked) but `entities.email` holds the primary, so a future
+mail from the alias won't stamp `party_entity_id` by email. Follow-up: write resolved aliases as
+`external_identities('outlook','email')` on the linked entity so alias mail also resolves. Low volume; deferred.
+
+**Long tail (min_touches 1–4, ~2,100 mostly one-off/no_match) NOT yet drained** — deliberately paused to protect
+the Power Automate daily request quota (a 2,000-lookup burst could throttle Scott's other flows). It is durable
+and self-caching, so it can run incrementally over days: `POST …?limit=20&min_touches=1` repeated, or lower the
+band as the head clears. Awaiting Scott's go-ahead.
