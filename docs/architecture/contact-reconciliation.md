@@ -79,3 +79,11 @@ the phone-ready identity table for the WebEx layer — no WebEx dependency to st
 - **Remaining in slice:** person-entity resolution when the email isn't on a person entity (e.g. Frank Meyrath has
   none) — backfill `external_identities('outlook','email')` or set `entities.email`. WebEx phone side (register
   `webex` source_system + import) is the following slice.
+- **Dual-anchor backfill (2026-07-30):** the 42 existing `outlook_sent` rows re-stamped **non-destructively** —
+  `metadata.deal_entity_id` (OPEN deal) on **25**, `metadata.party_entity_id` on **9**, across **4** deals;
+  `entity_id` untouched (reversible via `metadata.dual_anchor_backfilled`). Honors relationship-primary: no
+  single-deal overwrite. **Next 3 threads to finish the linkage:** (a) projections (`lcc_offer_context`,
+  deal-dossier) should PREFER `metadata.deal_entity_id` over the fuzzy city bridge; (b) the LIVE inbound path
+  (`handleOutlookMessage`/`stageOmIntake`) stamps the same dual anchor at ingest; (c) **party backfill**
+  (email→person entity, name+email match → fill `entities.email`/`external_identities('outlook')`) to lift party
+  coverage past 9/27 — the piece that makes the relationship dossier real.

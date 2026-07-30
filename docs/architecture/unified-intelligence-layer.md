@@ -153,6 +153,11 @@ cadence that advances from reality — and becomes the template for every other 
   deal via a city bridge; `frankm@rcgventures.com` → Snellville ✓); `handleOutlookSent` now prefers the resolved
   **deal** over the person (deploy + re-attribute existing rows). Finding: correspondence isn't linked to assets —
   the clean fix is linking correspondence→deal at ingest via `deal-email-matcher`. Details: `contact-reconciliation.md`.
+- **2026-07-30 — lifecycle-aware resolver + dual-anchor:** `lcc_resolve_contact` now returns party + deals with
+  `is_open` (primary_deal = OPEN only); `handleOutlookSent` stamps `metadata.party_entity_id` + `deal_entity_id`
+  (relationship-primary, deal-subfilter). Existing 42 sent rows dual-anchored non-destructively (25 deal / 9 party;
+  `entity_id` preserved). Next: projections read `metadata.deal_entity_id`; inbound ingest stamps the anchor;
+  party (email→person) backfill.
 
 ## Roadmap: ingestion sources & layers on deck (decisions on record)
 1. **Personal email — deliberately EXCLUDED from the professional sent-ingest** (2026-07-30 decision). The
