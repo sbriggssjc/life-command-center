@@ -351,10 +351,13 @@ async function handleOutlookSent(req, res) {
 
   // Resolve the DEAL via the contact resolver (prefers the asset/deal over the person via the city bridge);
   // fall back to the most-recent correspondent entity when the resolver finds no deal.
-  let dealEntityId = null;
+  // Dual anchor (relationship-primary, deal-subfilter): capture the PARTY (durable BD unit) and the OPEN deal
+  // (active sub-context). A closed-only contact yields no primary_deal — attention rides the party, by design.
+  let dealEntityId = null, partyEntityId = null;
   for (const e of recips) {
     const rc = await opsQuery('POST', 'rpc/lcc_resolve_contact', { p_email: e, p_phone: null });
     const packet = Array.isArray(rc.data) ? rc.data[0] : rc.data;
+    if (packet?.party_entity_id && !partyEntityId) partyEntityId = packet.party_entity_id;
     if (packet?.primary_deal) { dealEntityId = packet.primary_deal; break; }
   }
   if (!dealEntityId) {
@@ -377,7 +380,8 @@ async function handleOutlookSent(req, res) {
     occurred_at: sentAtIso,
     external_url: webLink,
     visibility: 'shared',
-    metadata: { direction: 'outbound', from: fromAddr, to: recips, via: 'outlook_sent' },
+    metadata: { direction: 'outbound', from: fromAddr, to: recips, via: 'outlook_sent',
+                party_entity_id: partyEntityId, deal_entity_id: dealEntityId },
   };
   const ins = await opsQuery('POST', 'activity_events?on_conflict=workspace_id,source_type,external_id',
     row, { Prefer: 'return=representation,resolution=ignore-duplicates' });

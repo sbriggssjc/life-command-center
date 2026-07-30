@@ -67,6 +67,32 @@ scored queue. AI + subagents do the preparatory work ahead of you; you make the 
 - **Same engine → same result on every surface** (Copilot/ChatGPT/Claude): resolution lives in `mcp/`+`api/`, not
   per-surface.
 
+## Relationship-primary, deal-subfilter (the transactional lifecycle) — foundational model
+**The durable BD unit is the PARTY (client / broker), not the deal.** Deals are sub-contexts under a relationship.
+This is a hard requirement from how the business actually works (2026-07-30, Scott):
+- **Heavy-volume sellers/brokers** transact many deals — anchoring their context to any single deal is wrong;
+  their context lives at the **relationship** level, with **deal-level subfilters**.
+- **The business is transactional.** A deal's topics **end at disposition**. Once sold, that deal's context is
+  **retained as history** (valuable, categorized) but **active BD attention shifts to the relationship** — the
+  next opportunity with that party — and essentially never returns to the sold deal (barring minor one-off follow-ups).
+
+**Implementation — dual anchor on every activity/touch:**
+- `activity_events.entity_id` = the **active (OPEN) deal** when one exists (keeps the deal timeline / dossier /
+  cadence intact); when only closed deals or no deal exist, it rides the **party**.
+- `metadata.party_entity_id` = the **relationship** (person/org) — always stamped, so the **relationship dossier**
+  aggregates every touch across all that party's deals.
+- `metadata.deal_entity_id` = the **deal subfilter**.
+- **Relationship dossier** = aggregate by `party_entity_id` (spans deals, persists past close). **Deal dossier** =
+  filter by the deal. **Cadence:** on disposition the **deal cadence retires** (auto-retire); the **relationship
+  cadence continues** and re-aims at the next opportunity — never re-surfacing the sold deal.
+- **Resolver encodes it:** `lcc_resolve_contact` returns the party + deals with `is_open`, and `primary_deal` is the
+  **OPEN** deal only (active BD anchor); a closed-only contact returns `has_open_deal:false` → attention at the party.
+
+This is why we did NOT bulk-re-attribute sent emails to single deals: that would bury the relationship. Instead the
+dual anchor keeps the party primary and the (open) deal as the sub-context. `handleOutlookSent` now stamps both.
+The **correspondence→deal linkage at ingest** (next build, via `deal-email-matcher`) sets the same dual anchor at
+the source, so every projection reads relationship + deal correctly, and the fuzzy city-bridge retires.
+
 ## The living context object (projection model — the key architectural fact)
 The deal dossier, the offer-context packet, and the priority queue are **projections over the same spine**, not
 stored blobs (`mcp/deal-dossier-tools.js`: identity = `entities`; correspondence/milestones = `activity_events`;
