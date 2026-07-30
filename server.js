@@ -48,18 +48,11 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 import queryCompsHandler from './api/query-comps.js';
-import compReviewsHandler from './api/comp-reviews.js';
-import omCompResolveHandler from './api/om-comp-resolve.js';
-import metadataBackfillHandler from './api/metadata-backfill.js';
-import aiReadHandler from './api/ai-read.js';
 
 // Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
 // The Dialysis_DB data-query edge function proxies to these paths when
 // GOV_API_URL=https://life-command-center-production.up.railway.app.
 import govEvidenceRouter from './api/gov-evidence.js';
-
-// NOTE: deal-dossier + SF write-back tools/routes live in the MCP engine (mcp/server.js),
-// not here. This host reaches them via the aiReadHandler proxy (see /api/deal/* + /api/sf/* below).
 
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -155,6 +148,7 @@ app.all('/api/daily-briefing', (req, res) => { req.query._route = 'edge-brief'; 
 app.all('/api/cms-match', (req, res) => { req.query._route = 'cms-match'; adminHandler(req, res); });
 app.all('/api/ownership-reconcile', (req, res) => { req.query._route = 'ownership-reconcile'; adminHandler(req, res); });
 app.all('/api/sf-sync-queue', (req, res) => { req.query._route = 'sf-sync-queue'; adminHandler(req, res); });
+app.all('/api/sf-owner-sync', (req, res) => { req.query._route = 'sf-owner-sync'; adminHandler(req, res); });
 app.all('/api/storage-cleanup', (req, res) => { req.query._route = 'storage-cleanup'; adminHandler(req, res); });
 app.all('/api/consolidate-property', (req, res) => { req.query._route = 'consolidate-property'; adminHandler(req, res); });
 app.all('/api/geocode-tick', (req, res) => { req.query._route = 'geocode-tick'; adminHandler(req, res); });
@@ -259,7 +253,6 @@ app.all('/api/context', (req, res) => { req.query._route = 'context'; operations
 app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.query.action = 'weekly-intelligence-report'; operationsHandler(req, res); });
 app.all('/api/contact-acquisition-tick', (req, res) => { req.query._route = 'contact-acquisition-tick'; operationsHandler(req, res); });
 app.all('/api/sf-contact-resolve-tick', (req, res) => { req.query._route = 'sf-contact-resolve-tick'; operationsHandler(req, res); });
-app.all('/api/correspondent-party-backfill-tick', (req, res) => { req.query._route = 'correspondent-party-backfill-tick'; operationsHandler(req, res); });
 app.all('/api/sf-link-reconcile-tick', (req, res) => { req.query._route = 'sf-link-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'owner-contact-enrich-tick'; operationsHandler(req, res); });
 app.all('/api/owner-reconcile-tick', (req, res) => { req.query._route = 'owner-reconcile-tick'; operationsHandler(req, res); });
@@ -284,59 +277,6 @@ app.all('/api/comps', compsHandler);
 // Comps QUERY (Deal Agent QueryComps/SynthesizeComps → shared engine on GOV_API_URL/MCP; key stays server-side)
 app.all('/api/query-comps', queryCompsHandler);
 app.all('/api/synthesize-comps', queryCompsHandler);
-
-// Comp-review DRAIN (W3.4) — list/resolve flagged-comp reviews via the shared
-// engine on the MCP server (same as query-comps; key stays server-side).
-app.all('/api/comp-reviews/resolve', compReviewsHandler);
-app.all('/api/comp-reviews', compReviewsHandler);
-
-// OM-financials → automatic comp-review resolution (W3.7). For each open comp
-// review row whose deal has a Salesforce-linked OM (sf_files), reuse the extracted
-// financial summary → gov NOI write-through (confirmed_document) + projections →
-// auto-resolve when implied (OM NOI ÷ price) reconciles to the reliable cap, else
-// leave open with the OM figures attached. Dry-run by default; apply=true writes.
-app.all('/api/om-comp-resolve', omCompResolveHandler);
-
-// Property metadata-backfill worklist (W3.4) — Research sub-page read via the
-// shared engine on the MCP server (service-role; no edge allowlist dependency).
-app.all('/api/metadata-backfill', metadataBackfillHandler);
-
-// ── AI read surface (ChatGPT / Copilot) — UNIFICATION Phase 1 ───────────────
-// These 6 read ops + the BOUNDED daily-briefing previously 404'd on this host
-// (only the separate MCP service served them), which is why ChatGPT threw
-// ResponseTooLargeError on the unbounded /api/daily-briefing and 404'd the rest.
-// They now proxy to the SAME shared engine (GOV_API_URL) Claude reaches via /mcp,
-// so every surface returns identical, bounded JSON from ONE base URL. Single
-// engine → no drift. The web app's full /api/daily-briefing (admin) is untouched;
-// the bounded briefing lives at /api/ai/daily-briefing so no capability is lost.
-// See docs/os/architecture/unification-changeset.md.
-app.all('/api/search-entities',   (req, res) => { req.query._mcpTarget = '/api/search-entities';   aiReadHandler(req, res); });
-app.all('/api/property-context',  (req, res) => { req.query._mcpTarget = '/api/property-context';  aiReadHandler(req, res); });
-app.all('/api/contact-context',   (req, res) => { req.query._mcpTarget = '/api/contact-context';   aiReadHandler(req, res); });
-app.all('/api/queue-summary',     (req, res) => { req.query._mcpTarget = '/api/queue-summary';     aiReadHandler(req, res); });
-app.all('/api/pipeline-health',   (req, res) => { req.query._mcpTarget = '/api/pipeline-health';   aiReadHandler(req, res); });
-app.all('/api/recall-memory',     (req, res) => { req.query._mcpTarget = '/api/recall-memory';     aiReadHandler(req, res); });
-app.all('/api/ai/daily-briefing', (req, res) => { req.query._mcpTarget = '/api/daily-briefing';    aiReadHandler(req, res); });
-
-// ── Deal dossier + Salesforce write-back — proxied to the shared MCP engine ──
-// aiReadHandler is a generic authenticated POST-forwarder (the "read" name is historical);
-// it forwards the JSON body (incl. user_confirmed) and returns the engine status verbatim (202/428/409).
-app.all('/api/deal/dossier',         (req, res) => { req.query._mcpTarget = '/api/deal/dossier';         aiReadHandler(req, res); });
-app.all('/api/deal/checkpoints',     (req, res) => { req.query._mcpTarget = '/api/deal/checkpoints';     aiReadHandler(req, res); });
-app.all('/api/sf/log-activity',      (req, res) => { req.query._mcpTarget = '/api/sf/log-activity';      aiReadHandler(req, res); });
-app.all('/api/sf/create-task',       (req, res) => { req.query._mcpTarget = '/api/sf/create-task';       aiReadHandler(req, res); });
-app.all('/api/sf/update-opportunity',(req, res) => { req.query._mcpTarget = '/api/sf/update-opportunity'; aiReadHandler(req, res); });
-app.all('/api/pipeline/ingest-opportunity',  (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-opportunity';  aiReadHandler(req, res); });
-app.all('/api/pipeline/ingest-opportunities', (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-opportunities'; aiReadHandler(req, res); });
-app.all('/api/pipeline/ingest-deal-parties',  (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-deal-parties';  aiReadHandler(req, res); });
-app.all('/api/pipeline/ingest-deal-contacts', (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-deal-contacts'; aiReadHandler(req, res); });
-app.all('/api/pipeline/cadence-scan',         (req, res) => { req.query._mcpTarget = '/api/pipeline/cadence-scan';         aiReadHandler(req, res); });
-app.all('/api/pipeline/offer-context',        (req, res) => { req.query._mcpTarget = '/api/pipeline/offer-context';        aiReadHandler(req, res); });
-app.all('/api/pipeline/offer-log',            (req, res) => { req.query._mcpTarget = '/api/pipeline/offer-log';            aiReadHandler(req, res); });
-app.all('/api/pipeline/match-deal-emails',    (req, res) => { req.query._mcpTarget = '/api/pipeline/match-deal-emails';    aiReadHandler(req, res); });
-app.all('/api/pipeline/weekly-digest',        (req, res) => { req.query._mcpTarget = '/api/pipeline/weekly-digest';        aiReadHandler(req, res); });
-app.all('/api/pipeline/flagged-deals',        (req, res) => { req.query._mcpTarget = '/api/pipeline/flagged-deals';        aiReadHandler(req, res); });
-app.all('/api/pipeline/reconcile-entity',     (req, res) => { req.query._mcpTarget = '/api/pipeline/reconcile-entity';     aiReadHandler(req, res); });
 
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });

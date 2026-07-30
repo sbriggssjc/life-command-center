@@ -839,3 +839,51 @@ export async function getSalesforceContactById(whoId) {
     },
   };
 }
+
+// ============================================================================
+// Batch owner lookup — powers the SF owner-capture (owner-scoped My Day).
+// ----------------------------------------------------------------------------
+// Reuses the same Power Automate lookup flow (SF_LOOKUP_WEBHOOK_URL) via a NEW
+// flow operation `owners_by_ids`. The flow receives a batch of SF record Ids for
+// one sObject and returns their owner. See docs/architecture/sf-owner-capture.md
+// and docs/setup/power-automate-sf-owner-flow.md for the exact flow build.
+//
+// FLOW CONTRACT (owners_by_ids):
+//   POST <SF_LOOKUP_WEBHOOK_URL>
+//   Body: { "operation":"owners_by_ids", "sobject":"Account"|"Opportunity",
+//           "ids": ["001...","001..."] }        // ≤ 200 ids/call
+//   Success (PA 200): { "ok":true, "operation":"owners_by_ids",
+//     "owners":[ {"Id":"001...","OwnerId":"005...","OwnerName":"Scott Briggs"}, ... ] }
+//   Tolerant of a flow that returns `records` instead of `owners`, and of
+//   Owner.Name arriving as a nested {Owner:{Name}} object.
+//
+// Returns { ok:true, owners:[{sf_id, sf_owner_id, owner_name}] } or
+// { ok:false, reason }. Never throws.
+// ============================================================================
+export async function getSalesforceOwnersByIds(ids, sobject = 'Account') {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const clean = Array.from(new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((s) => String(s || '').trim())
+      .filter((s) => /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(s))
+  ));
+  if (!clean.length) return { ok: true, owners: [] };
+
+  const result = await callSfLookupFlow({ operation: 'owners_by_ids', sobject, ids: clean });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  const rows = Array.isArray(result.owners) ? result.owners
+             : Array.isArray(result.records) ? result.records
+             : [];
+  const owners = rows.map((r) => {
+    const ownerName = r.OwnerName || r.ownerName
+      || (r.Owner && (r.Owner.Name || r.Owner.name)) || null;
+    return {
+      sf_id:       r.Id || r.id || null,
+      sf_owner_id: r.OwnerId || r.ownerId || (r.Owner && (r.Owner.Id || r.Owner.id)) || null,
+      owner_name:  ownerName,
+    };
+  }).filter((o) => o.sf_id);
+  return { ok: true, owners };
+}
