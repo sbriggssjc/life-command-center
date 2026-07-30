@@ -26,7 +26,7 @@ def org(d): return ORG.get(d.lower(), d)
 
 biz  = [r for r in rows if r["party_kind"]=="business"]
 over = [r for r in rows if r["party_kind"]=="overlap"]
-excl = [r for r in rows if r["party_kind"] in ("personal","noise")]
+excl = [r for r in rows if r["party_kind"] in ("personal","noise","vendor")]
 biz.sort(key=lambda r:(PRIO.get(r["category"],99), -r["touches"]))
 over.sort(key=lambda r:-r["touches"])
 excl.sort(key=lambda r:(-r["touches"]))
@@ -62,7 +62,7 @@ ws2=wb.create_sheet("Personal & Noise (excluded)")
 H2=["#","Kind","Email","Touches","Deal Threads","Last Contact","Why excluded"]; W2=[5,12,34,9,11,12,44]
 hdr(ws2,H2,W2)
 for i,r in enumerate(excl,1):
-    why = "Automated/newsletter - ignore" if r["party_kind"]=="noise" else "No CRE-deal-thread signal - treated personal (verify if you disagree)"
+    why = ("Automated/newsletter/travel marketing - ignore" if r["party_kind"]=="noise" else "Facilities/service vendor (paint/pest/etc.) - not a BD contact" if r["party_kind"]=="vendor" else "No CRE-deal-thread signal - treated personal (verify if you disagree)")
     row=[i,r["party_kind"],r["email"],r["touches"],r.get("distinct_deal_subjects",0),r["last_seen"],why]
     for c,v in enumerate(row,1):
         x=ws2.cell(i+1,c,v); x.font=Font(name=FONT,size=10); x.border=bd; x.alignment=ctr if c in (1,2,4,5,6) else wrap

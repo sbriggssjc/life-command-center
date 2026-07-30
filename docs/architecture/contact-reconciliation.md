@@ -201,11 +201,26 @@ layer too — a projection can filter to business+overlap parties, and the overl
 **Tuning knob:** the overlap threshold is `distinct_deal_subjects >= 3` inside `lcc_recompute_correspondent_kind()`
 — lower it to widen the verify net. Recompute after any new correspondence ingest.
 
+**Human overrides (durable).** `correspondent_kind_override` (email → party_kind + note) is consulted at the END
+of the recompute, so a manual verdict SURVIVES the truncate+rebuild (recompute would otherwise wipe it). Scott's
+first verdicts (2026-07-30): the 5 no-match overlaps — julie.f.gillespie, curtisblasingame, tomnikolich,
+michaelmadden4444, nadeem.shoukry — confirmed **business**. (Overlap dropped 10→5 globally, 5→0 in the worklist.)
+
+**Vendor sub-tier (BUILT 2026-07-30).** A 5th kind, `vendor`: a business-DOMAIN facilities/service provider
+(paint, pest, HVAC, janitorial, roofing, waste — a CONSERVATIVE curated pattern) is not a BD counterparty, so it
+drops out of the add-to-SF worklist + BD cadence while staying distinct from personal/noise. **Detection is
+curated, NOT behavioral** — the calibration finding was decisive: `distinct_deal_subjects = 0` is NOT a vendor
+signal (CBRE 151 contacts / Colliers / Stan Johnson / JLL / Cushman brokers all legitimately show 0 because
+individual brokers rarely hit the deal-keyword regex), so a behavioral gate would demote real brokers. Result: 4
+vendors caught (spectrumpaint, tulsapaintco, rentokil-terminix ×2), **zero brokers demoted**; travel/loyalty
+MARKETING blasts (Marriott, Southwest) folded into `noise` (+3). Worklist v2 excludes vendor+noise+personal.
+
 **Still crude / next refinements (documented, not silently assumed solved):** (a) a Salesforce **Lead** match
 would be a strong business signal but isn't wired (the no-match set is by definition absent from SF Contacts;
-Leads are a separate object — a future `find_lead_by_email` op); (b) business-domain **vendors** (paint, pest,
-airlines) are classified `business` but aren't BD — a sub-tier could demote them; (c) the CRE keyword list is
-hand-curated — worth revisiting as new deal vocabulary appears.
+Leads are a separate object — a future `find_lead_by_email` op); (b) the CRE keyword + vendor pattern lists are
+hand-curated — worth revisiting as new deal/vendor vocabulary appears; (c) ambiguous domains left as `business`
+on purpose (e.g. `sarhanhotelgroup` could be a hotel-owning principal, `verizon.net` a client's ISP address) —
+the override is the correction path, not a broader auto-rule.
 
 ## Thread (a) BUILT — projections prefer the deal anchor over the city bridge (2026-07-30)
 
