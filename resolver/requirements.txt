@@ -1,0 +1,34 @@
+# Entity-Resolution microservice (W4.2) — CPU-only, Railway-hosted.
+# Heavy native/model deps (postal, sentence-transformers, splink) are OPTIONAL at
+# runtime: the service degrades to documented deterministic fallbacks when they are
+# absent (see resolver/README.md §"Optional heavy dependencies"). They ARE installed
+# in the Docker image so production runs the real libpostal / bge-small / splink path.
+
+# --- API layer (always required) ---
+fastapi>=0.110,<0.116
+uvicorn[standard]>=0.29,<0.35
+pydantic>=2.6,<3
+
+# --- Storage / corpus loading ---
+httpx>=0.27,<0.29           # Supabase Storage REST download (no supabase SDK needed)
+
+# --- Modeling engine (installed in Docker; optional in bare venv) ---
+# splink estimates the Fellegi-Sunter m/u parameters on the DuckDB backend during
+# /train; the scorer is a self-contained FS evaluator that reads the persisted
+# weights, so /match never hard-depends on splink at request time.
+splink>=4.0,<5 ; python_version >= "3.9"
+duckdb>=0.10
+
+# --- Address + company-name normalization (installed in Docker) ---
+# `postal` are the libpostal Python bindings; libpostal itself is a C library the
+# Dockerfile builds from source. Without it, normalize.py uses a regex normalizer.
+postal>=1.1.10 ; sys_platform == "linux"
+
+# --- Embeddings for the KNN blocking fallback (installed in Docker) ---
+# bge-small-en-v1.5 via sentence-transformers. Without it, embeddings.py uses a
+# deterministic char-n-gram hashing embedding so blocking still functions.
+sentence-transformers>=2.7,<4
+numpy>=1.26
+
+# --- Test / tooling ---
+pytest>=8.0
