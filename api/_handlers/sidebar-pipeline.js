@@ -262,23 +262,126 @@ const BOOKKEEPING_PROV_FIELDS = new Set([
   'sale_id',      // FK → sales_transactions
   'sale_role',    // link role (buyer/seller)
   'data_source',  // ingest-channel metadata, not a contested value
+  'updated_at',   // W2.2: audit timestamp bumped on every capture — not a contested value
 ]);
+
+// ── W2.2: record what a write LANDED as (audit 3.3.3 / 3.3.8) ───────────────
+// Pure helpers (unit-tested in test/sidebar-provenance-effect.test.mjs).
+
+// Resolve how recordFieldProvenance should record a value. Returns null to DROP
+// (an ABSENT field), else { value, forceDecision }. `undefined` => drop;
+// forceDecision==='failed_write' wins (the write did not land); an explicit
+// `null` => 'cleared' (a column actively set null); otherwise a normal write
+// (forceDecision null → lcc_merge_field decides write/skip/conflict).
+export function resolveProvenanceRecording(value, forceDecision) {
+  if (value === undefined) return null;
+  if (forceDecision === 'failed_write') return { value, forceDecision: 'failed_write' };
+  if (value === null) return { value: null, forceDecision: 'cleared' };
+  return { value, forceDecision: forceDecision || null };
+}
+
+// The curated set of sales_transactions columns the provenance ledger + parser
+// miss-rate diagnostics care about. Superset across dia + gov (column names
+// differ per domain); only keys actually present in the SENT payload are
+// recorded, so a field the priority gate DROPPED never appears (it isn't in the
+// filtered payload) and is therefore never claimed as written.
+export const SALES_PROV_FIELDS = [
+  'sale_date', 'sold_price',
+  'buyer', 'buyer_name', 'seller', 'seller_name',
+  'stated_cap_rate', 'sold_cap_rate',
+  'listing_broker', 'procuring_broker', 'purchasing_broker',
+  'transaction_type',
+  'cap_rate_noi_source_table', 'cap_rate_noi_source_id', 'cap_rate_quality',
+  'firm_term_years_at_sale',
+  'initial_price', 'last_price', 'on_market_date', 'days_on_market',
+  'had_price_change', 'pct_of_initial',
+];
+
+// Build the provenance field map from the payload ACTUALLY SENT to the DB (post
+// field-priority filter). Explicit nulls are preserved — a deliberately-cleared
+// column — so recordFieldProvenance can log them as decision='cleared'.
+export function buildSalesProvenanceFields(sentPayload) {
+  const out = {};
+  if (!sentPayload || typeof sentPayload !== 'object') return out;
+  for (const key of SALES_PROV_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(sentPayload, key)) out[key] = sentPayload[key];
+  }
+  return out;
+}
+
+// Compute the parser-diagnostic written_* booleans from the payload that
+// ACTUALLY LANDED (filtered + PATCH/INSERT succeeded). An empty payload (write
+// failed, or nothing survived the gate) yields all-false — the honest "nothing
+// landed" signal the re-baselined miss-rate view now measures.
+export function computeWrittenSalesFlags(writtenPayload) {
+  const sd = writtenPayload || {};
+  const truthyStr = (v) => !!(v && String(v).trim());
+  return {
+    written_listing_broker:   truthyStr(sd.listing_broker),
+    written_procuring_broker: truthyStr(sd.procuring_broker || sd.purchasing_broker),
+    written_buyer:            truthyStr(sd.buyer_name || sd.buyer),
+    written_seller:           truthyStr(sd.seller_name || sd.seller),
+    written_cap_rate:         sd.stated_cap_rate != null || sd.sold_cap_rate != null
+                              || sd.calculated_cap_rate != null,
+    written_sold_price:       sd.sold_price != null && Number(sd.sold_price) > 0,
+  };
+}
+
+// Push a sales provenance entry built from the FILTERED payload actually sent,
+// gated on the write result. A failed write records decision='failed_write' for
+// every attempted field so the ledger never claims a value that didn't land.
+export function pushSalesProvenance(provCollect, recordPk, sentPayload, writeResult) {
+  if (!Array.isArray(provCollect) || recordPk == null || !sentPayload) return;
+  const fields = buildSalesProvenanceFields(sentPayload);
+  if (Object.keys(fields).length === 0) return;
+  const failed = !!(writeResult && writeResult.ok === false);
+  provCollect.push({
+    table: 'sales_transactions',
+    recordPk: String(recordPk),
+    fields,
+    recordNulls: true,
+    forceDecision: failed ? 'failed_write' : null,
+  });
+}
 
 async function recordFieldProvenance(args) {
   const { workspaceId, targetDatabase, targetTable, recordPk, fieldName,
-          value, source, sourceRunId, confidence, recordedBy } = args;
-  if (value === undefined || value === null) return null;
+          value, source, sourceRunId, confidence, recordedBy, forceDecision } = args;
+  // W2.2: distinguish an ABSENT field (undefined → drop) from an EXPLICITLY
+  // cleared field (null → decision='cleared') and from a write that did NOT land
+  // (forceDecision='failed_write'). Only `undefined` is dropped here now.
+  const recording = resolveProvenanceRecording(value, forceDecision);
+  if (recording === null) return null;
   if (!targetTable || !recordPk || !fieldName || !source) return null;
   // R19: skip link/FK/metadata fields — never a source-precedence question.
   if (BOOKKEEPING_PROV_FIELDS.has(fieldName)) return null;
   try {
+    // W2.2: failed_write / cleared route through the dedicated outcome recorder
+    // (keeps the single-live-write invariant + advisory lock). Everything else
+    // goes through the normal priority-merge path.
+    if (recording.forceDecision) {
+      const outcome = await opsQuery('POST', 'rpc/lcc_record_field_write_outcome', {
+        p_workspace_id:     workspaceId || null,
+        p_target_database:  targetDatabase,
+        p_target_table:     targetTable,
+        p_record_pk:        String(recordPk),
+        p_field_name:       fieldName,
+        p_value:            recording.value,
+        p_source:           source,
+        p_source_run_id:    sourceRunId || null,
+        p_confidence:       confidence ?? null,
+        p_recorded_by:      recordedBy || null,
+        p_decision:         recording.forceDecision,
+      });
+      return outcome.ok ? { decision: recording.forceDecision } : null;
+    }
     const res = await opsQuery('POST', 'rpc/lcc_merge_field', {
       p_workspace_id:     workspaceId || null,
       p_target_database:  targetDatabase,
       p_target_table:     targetTable,
       p_record_pk:        String(recordPk),
       p_field_name:       fieldName,
-      p_value:            value,
+      p_value:            recording.value,
       p_source:           source,
       p_source_run_id:    sourceRunId || null,
       p_confidence:       confidence ?? null,
@@ -349,7 +452,7 @@ function pushProvenance(provCollect, table, recordPk, fields, confidence, source
   provCollect.push({ table, recordPk: String(recordPk), fields: filtered, confidence, source });
 }
 
-async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}, perFieldSource = {}) {
+async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}, perFieldSource = {}, opts = {}) {
   if (!ctx?.targetTable || !ctx?.recordPk) return;
   // Round 76af 2026-04-28: respect ctx.sourceTag so RCA captures land as
   // source='rca_sidebar' instead of being mis-tagged as costar_sidebar.
@@ -358,9 +461,16 @@ async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence
   // values (crexi_sidebar_description) from structured-panel values
   // (crexi_sidebar) inside a single capture.
   const batchSource = ctx.sourceTag || 'costar_sidebar';
+  // W2.2: opts.recordNulls lets the sales "record what landed" flush pass
+  // EXPLICIT nulls through so recordFieldProvenance logs them decision='cleared';
+  // opts.forceDecision (e.g. 'failed_write') overrides the decision for the whole
+  // batch. Default is unchanged: drop nulls, no forced decision.
+  const recordNulls = opts.recordNulls === true;
+  const forceDecision = opts.forceDecision || null;
   const promises = [];
   for (const [fieldName, value] of Object.entries(fieldValues)) {
-    if (value === undefined || value === null) continue;
+    if (value === undefined) continue;
+    if (value === null && !recordNulls) continue;
     promises.push(recordFieldProvenance({
       workspaceId:    ctx.workspaceId,
       targetDatabase: ctx.targetDatabase,
@@ -372,6 +482,7 @@ async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence
       sourceRunId:    ctx.sidebarRunId,
       confidence:     perFieldConfidence[fieldName] ?? COSTAR_DEFAULT_CONFIDENCE,
       recordedBy:     ctx.actorId,
+      forceDecision,
     }));
   }
   await Promise.allSettled(promises);
@@ -3391,7 +3502,8 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
           { ...provCtx, targetTable: `${tablePrefix}.${entry.table}`, recordPk: entry.recordPk },
           entry.fields,
           perField,
-          entryFieldSource
+          entryFieldSource,
+          { forceDecision: entry.forceDecision || null, recordNulls: entry.recordNulls === true }
         );
       }
     }
@@ -5892,6 +6004,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // Round 76gp.d: track the resolved sale_id across both write branches
     // so we can emit a single diagnostic per iteration at the end.
     let loopSaleId = null;
+    // W2.2: the payload that ACTUALLY landed (filtered + write ok) — drives the
+    // diagnostic written_* flags and stays {} when the write failed.
+    let loopWrittenPayload = null;
 
     // R37 (2026-06-17): resolve the write action at the source. A price-less
     // capture (no price on the page) that matches no existing row is NOT a
@@ -5994,8 +6109,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         return patchData;
       });
 
-      await domainPatch(domain,
+      const salesPatchRes = await domainPatch(domain,
         `sales_transactions?sale_id=eq.${existing.sale_id}`, filteredSalesPatch, 'upsertDomainSales');
+      // W2.2 (audit 3.3.3): record EFFECT, not intent. loopWrittenPayload is the
+      // FILTERED payload that actually landed — {} when the PATCH failed — so the
+      // diagnostic written_* flags reflect what the DB now holds, not the attempt.
+      loopWrittenPayload = (salesPatchRes && salesPatchRes.ok === false) ? {} : filteredSalesPatch;
       // Close any still-active listings for this property now that a
       // confirmed sale exists. Fire-and-forget relative to the sale write —
       // failures are logged but do not affect the sales_transactions result.
@@ -6007,31 +6126,11 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       );
       // Link brokers from text fields to sale_brokers table
       await linkSaleBrokers(domain, existing.sale_id, saleData);
-      // Phase 2.2.b: record per-row provenance for the refreshed sale
-      pushProvenance(provCollect, 'sales_transactions', existing.sale_id, {
-        sale_date:        saleData.sale_date,
-        sold_price:       saleData.sold_price,
-        buyer_name:       saleData.buyer_name || saleData.buyer || null,
-        seller_name:      saleData.seller_name || saleData.seller || null,
-        stated_cap_rate:  saleData.stated_cap_rate ?? null,
-        sold_cap_rate:    saleData.sold_cap_rate ?? null,
-        listing_broker:   saleData.listing_broker || null,
-        procuring_broker: saleData.procuring_broker || saleData.purchasing_broker || null,
-        transaction_type: saleData.transaction_type || null,
-        // Round 76ek.f: cap-rate NOI provenance (gov only; null on dia)
-        cap_rate_noi_source_table: saleData.cap_rate_noi_source_table || null,
-        cap_rate_noi_source_id:    saleData.cap_rate_noi_source_id ?? null,
-        cap_rate_quality:          saleData.cap_rate_quality || null,
-        // Sale-Notes at-sale term (gov only; null when stripped/absent)
-        firm_term_years_at_sale: patchData.firm_term_years_at_sale ?? null,
-        // Round 77: listing price-history (gov only; null/absent on dia)
-        initial_price:    saleData.initial_price ?? null,
-        last_price:       saleData.last_price ?? null,
-        on_market_date:   saleData.on_market_date || null,
-        days_on_market:   saleData.days_on_market ?? null,
-        had_price_change: saleData.had_price_change ?? null,
-        pct_of_initial:   saleData.pct_of_initial ?? null,
-      });
+      // W2.2: provenance from the FILTERED payload actually PATCHed, gated on the
+      // result. A field the priority gate dropped is absent from filteredSalesPatch
+      // → never recorded; a failed PATCH records decision='failed_write'; an
+      // explicit null (a deliberately-cleared column) records decision='cleared'.
+      pushSalesProvenance(provCollect, existing.sale_id, filteredSalesPatch, salesPatchRes);
     } else {
       // Create new
       // Fresh audit A-2 (2026-05-18): label the POST so the 409-recovery
@@ -6048,6 +6147,10 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       // the lookup misses but the unique index still rejects. Pre-patch
       // observed: 26+ silent 409s per gov sidebar capture.
       let recoveredSaleId = null;
+      // W2.2: capture the recovery PATCH result + the payload it actually sent so
+      // provenance/diagnostics reflect what landed on the recovered row.
+      let recoveryPatchRes = null;
+      let recoverySentPayload = null;
       if (!result.ok
           && result.status === 409
           && /uq_st_property_date_price/.test(JSON.stringify(result.data || {}))) {
@@ -6072,7 +6175,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
             confidence:  metadata._intake_promoted ? 0.7 : 0.6,
             fields:      patchData,
           }).catch(() => patchData);
-          await domainPatch(domain,
+          recoverySentPayload = filteredRecoveryPatch;
+          recoveryPatchRes = await domainPatch(domain,
             `sales_transactions?sale_id=eq.${recoveredSaleId}`,
             filteredRecoveryPatch,
             'upsertDomainSales:409Recovery'
@@ -6103,24 +6207,14 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         );
         // Link brokers from text fields to sale_brokers table
         await linkSaleBrokers(domain, newSaleId, saleData);
-        // Phase 2.2.b: record per-row provenance for the sale (insert or recovery)
+        // W2.2 (audit 3.3.3): record EFFECT — provenance from the payload actually
+        // sent (saleData on a fresh INSERT; the filtered recovery patch on a 409
+        // recovery), gated on that write's result.
         if (newSaleId) {
-          pushProvenance(provCollect, 'sales_transactions', newSaleId, {
-            sale_date:        saleData.sale_date,
-            sold_price:       saleData.sold_price,
-            buyer_name:       saleData.buyer_name || saleData.buyer || null,
-            seller_name:      saleData.seller_name || saleData.seller || null,
-            stated_cap_rate:  saleData.stated_cap_rate ?? null,
-            sold_cap_rate:    saleData.sold_cap_rate ?? null,
-            listing_broker:   saleData.listing_broker || null,
-            procuring_broker: saleData.procuring_broker || saleData.purchasing_broker || null,
-            transaction_type: saleData.transaction_type || null,
-            cap_rate_noi_source_table: saleData.cap_rate_noi_source_table || null,
-            cap_rate_noi_source_id:    saleData.cap_rate_noi_source_id ?? null,
-            cap_rate_quality:          saleData.cap_rate_quality || null,
-            // Sale-Notes at-sale term (gov only; null/absent on dia)
-            firm_term_years_at_sale:   saleData.firm_term_years_at_sale ?? null,
-          });
+          const sentPayload = result.ok ? saleData : recoverySentPayload;
+          const writeRes    = result.ok ? result   : recoveryPatchRes;
+          loopWrittenPayload = (writeRes && writeRes.ok === false) ? {} : sentPayload;
+          pushSalesProvenance(provCollect, newSaleId, sentPayload, writeRes);
         }
       }
     }
@@ -6146,6 +6240,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       metadata,
       sale,
       saleData,
+      // W2.2: the filtered + succeeded payload (what LANDED). {} when the write
+      // failed; a gate-dropped field is absent → written_* honestly false.
+      writtenPayload:         loopWrittenPayload || {},
       isMostRecent:           datePart === mostRecentSaleDatePart,
       isCurrent:              isCurrentSale,
       brokerFallbackAllowed:  brokerFallbackAllowed,
@@ -6265,15 +6362,16 @@ async function recordSalesParserDiagnostic(ctx) {
     const parserSawCapRate       = ctx.sale?.cap_rate != null || ctx.metadata?.cap_rate != null;
     const parserSawSoldPrice     = ctx.sale?.sale_price != null;
 
-    const sd = ctx.saleData || {};
-    const wroteListingBroker   = !!(sd.listing_broker && String(sd.listing_broker).trim());
-    const wroteProcuringBroker = !!((sd.procuring_broker || sd.purchasing_broker) &&
-                                    String(sd.procuring_broker || sd.purchasing_broker).trim());
-    const wroteBuyer  = !!((sd.buyer_name || sd.buyer) && String(sd.buyer_name || sd.buyer).trim());
-    const wroteSeller = !!((sd.seller_name || sd.seller) && String(sd.seller_name || sd.seller).trim());
-    const wroteCap    = sd.stated_cap_rate != null || sd.sold_cap_rate != null
-                     || sd.calculated_cap_rate != null;
-    const wroteSoldPrice = sd.sold_price != null && Number(sd.sold_price) > 0;
+    // W2.2 (audit 3.3.3): written_* measure what LANDED — the filtered payload
+    // that actually PATCHed/INSERTed (ctx.writtenPayload), NOT the raw parsed
+    // saleData (intent). A gate-dropped or failed-write field is honestly false.
+    const written = computeWrittenSalesFlags(ctx.writtenPayload);
+    const wroteListingBroker   = written.written_listing_broker;
+    const wroteProcuringBroker = written.written_procuring_broker;
+    const wroteBuyer  = written.written_buyer;
+    const wroteSeller = written.written_seller;
+    const wroteCap    = written.written_cap_rate;
+    const wroteSoldPrice = written.written_sold_price;
 
     const daysSinceClose = ctx.saleDate
       ? Math.max(0, Math.round((Date.now() - new Date(ctx.saleDate).getTime()) / (24 * 60 * 60 * 1000)))
