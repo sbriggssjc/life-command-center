@@ -49,6 +49,7 @@ import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 import queryCompsHandler from './api/query-comps.js';
 import compReviewsHandler from './api/comp-reviews.js';
+import omCompResolveHandler from './api/om-comp-resolve.js';
 import metadataBackfillHandler from './api/metadata-backfill.js';
 import aiReadHandler from './api/ai-read.js';
 
@@ -288,6 +289,13 @@ app.all('/api/synthesize-comps', queryCompsHandler);
 // engine on the MCP server (same as query-comps; key stays server-side).
 app.all('/api/comp-reviews/resolve', compReviewsHandler);
 app.all('/api/comp-reviews', compReviewsHandler);
+
+// OM-financials → automatic comp-review resolution (W3.7). For each open comp
+// review row whose deal has a Salesforce-linked OM (sf_files), reuse the extracted
+// financial summary → gov NOI write-through (confirmed_document) + projections →
+// auto-resolve when implied (OM NOI ÷ price) reconciles to the reliable cap, else
+// leave open with the OM figures attached. Dry-run by default; apply=true writes.
+app.all('/api/om-comp-resolve', omCompResolveHandler);
 
 // Property metadata-backfill worklist (W3.4) — Research sub-page read via the
 // shared engine on the MCP server (service-role; no edge allowlist dependency).

@@ -388,7 +388,10 @@ ${documentBody}
   "asking_price": null,
   "price_per_sf": null,
   "cap_rate": null,
+  "sold_price": null,
+  "sold_cap_rate": null,
   "noi": null,
+  "financial_projections": null,
   "annual_rent": null,
   "rent_per_sf": null,
   "lease_commencement": null,
@@ -417,6 +420,9 @@ ${documentBody}
   "parcel_number": null,
   "confidence_notes": null
 }
+
+"noi" is the IN-PLACE / current NOI the document states (net operating income), a number only. "cap_rate" is the current/asking cap (decimal fraction). If the document also states a CLOSED SALE (a sold price and/or sold cap for THIS property), return "sold_price" (number) and "sold_cap_rate" (decimal fraction); leave both null for a purely on-market OM.
+"financial_projections": if the document presents a MULTI-YEAR rent / expense / NOI schedule (e.g. an OM cash-flow proforma or lease escalation table with per-year figures), return a JSON array of objects, one per year: [{"year": 2025, "gross_rent": null, "expenses": null, "noi": null}, …]. Use numbers only; use null for any per-year field the table does not state; return null (not []) when the document has no multi-year schedule. Do NOT fabricate years or interpolate — include only years the document explicitly tabulates.
 
 Responsibility fields: for roof, hvac, structure, parking — return "tenant", "landlord", or "shared" based on lease language.
 Look for keywords like "repair", "replace", "maintain", "responsible" near "roof", "HVAC"/"heating"/"cooling", "structural"/"foundation"/"walls", "parking"/"lot"/"striping".
