@@ -243,6 +243,53 @@ describe('resolveReviewRow — Fort Wayne end-to-end', () => {
   });
 });
 
+// ── W3.7b: the REAL Fort Wayne OM lives on the LISTING, not the Comp ─────────
+// gov.sf_comp_staging: comp a1YVs000002BnvVMAS → listing a0jVs000005AqaLIAS,
+// deal 006Vs00000MV4aYIAT (all live). Once file discovery sweeps Listing__c, the
+// OM is an sf_files row linked_entity_type='Listing__c', linked_entity_sf_id +
+// sf_listing_id = the listing. This proves the resolver reaches a LISTING-attached
+// OM through the comp→listing traversal and resolves end-to-end (dry-run).
+const FW_LISTING = 'a0jVs000005AqaLIAS';
+const FW_DEAL = '006Vs00000MV4aYIAT';
+const FW_COMP = 'a1YVs000002BnvVMAS';
+describe('W3.7b — Fort Wayne OM discovered off the LISTING resolves end-to-end', () => {
+  function listingAttachedMock(overrides = {}) {
+    return makeMockDeps({
+      // real comp staging: comp id + listing id + deal id all populated
+      compStaging: [{ sf_comp_id: FW_COMP, sf_deal_id: FW_DEAL, sf_listing_id: FW_LISTING,
+        linked_property_id: 16261, linked_sale_id: fortWayneReview.sale_id }],
+      // the OM is attached to the LISTING (not the comp) — the W3.7b discovery target
+      files: [{ file_id: 777, title: 'US Department of Veterans Affairs - Fort Wayne - IN - OM',
+        extension: 'pdf', linked_entity_type: 'Listing__c', linked_entity_sf_id: FW_LISTING,
+        sf_listing_id: FW_LISTING, sf_comp_id: null, sf_deal_id: null,
+        extraction_status: 'extracted', ingestion_status: 'stored',
+        process_notes: `intake:${FW_INTAKE} extract:review_required match:matched` }],
+      snapshotByIntake: { [FW_INTAKE]: { document_type: 'om', noi: FORT_WAYNE_OM_NOI,
+        cap_rate: 8.1, asking_price: FORT_WAYNE_SOLD, building_sf: 45000 } },
+      ...overrides,
+    });
+  }
+
+  it('LINK reaches the LISTING-attached file via the comp→listing traversal', async () => {
+    const deps = listingAttachedMock();
+    const files = await findOmFilesForReview('gov', fortWayneReview, deps);
+    assert.equal(files.length, 1);
+    assert.equal(files[0].linked_entity_type, 'Listing__c');
+    assert.equal(files[0].sf_listing_id, FW_LISTING);
+  });
+
+  it('DRY-RUN resolves Fort Wayne from the listing OM (8.10% ≈ reliable 8.0%)', async () => {
+    const deps = listingAttachedMock({ rpcDecision: 'dry_run' });
+    const r = await resolveReviewRow({ domain: 'gov', review: fortWayneReview, apply: false }, deps);
+    assert.equal(r.outcome, 'resolved');
+    assert.equal(r.within_tolerance, true);
+    assert.equal(r.sf_file_id, '777');
+    assert.equal(r.writethrough, 'dry_run');
+    assert.equal(deps.capture.rpc[0].p_dry_run, true, 'dry-run only');
+    assert.equal(deps.capture.patches.length, 0, 'dry-run must not PATCH');
+  });
+});
+
 // ── Backfill aggregation ────────────────────────────────────────────────────
 describe('runOmCompResolution', () => {
   it('aggregates scanned/with_om/resolved and honest counts', async () => {

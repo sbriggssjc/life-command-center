@@ -141,9 +141,12 @@ function reviewTable(d) { return isGovDomain(d) ? 'gov_comp_review_queue' : 'dia
 // ── 1. LINK — reachable sf_files for one comp review row ─────────────────────
 // Traverse sale/property → sf_comp_staging (matching linked_sale_id OR
 // linked_property_id) → collect the comp's SF id plus its sf_deal_id/sf_listing_id
-// → sf_files whose linked_entity_sf_id is any of those. Today every sf_file is
-// linked_entity_type='Comp__c'; deal/listing ids are included for when SF file
-// discovery expands to those objects.
+// → sf_files linked to any of those. W3.7b: file discovery now reaches Listing__c
+// and Deal (Opportunity) attachments, not only Comp__c — the Fort Wayne OM lives
+// on the LISTING (a0jVs…). A discovered file carries linked_entity_sf_id (the SF
+// record the ContentDocumentLink hangs off) AND a stamped sf_comp_id/sf_listing_id/
+// sf_deal_id traversal column; we match on either so a listing/deal-attached OM is
+// reachable regardless of which its linked_entity_sf_id happens to be.
 export async function findOmFilesForReview(domain, review, deps) {
   const dq = deps.domainQuery;
   const dom = domainKey(domain);
@@ -168,8 +171,16 @@ export async function findOmFilesForReview(domain, review, deps) {
   if (!sfIds.size) return [];
 
   const inList = [...sfIds].map((x) => `"${x}"`).join(',');
+  // Match a file whose linked_entity_sf_id OR any of the traversal columns
+  // (sf_comp_id/sf_listing_id/sf_deal_id) is one of the comp's SF ids.
+  const orFilter = [
+    `linked_entity_sf_id.in.(${inList})`,
+    `sf_comp_id.in.(${inList})`,
+    `sf_listing_id.in.(${inList})`,
+    `sf_deal_id.in.(${inList})`,
+  ].join(',');
   const fq = await dq(dom, 'GET',
-    `sf_files?select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name,extension,extraction_status,ingestion_status,process_notes,storage_path&linked_entity_sf_id=in.(${inList})`);
+    `sf_files?select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,sf_comp_id,sf_listing_id,sf_deal_id,title,file_name,extension,extraction_status,ingestion_status,process_notes,storage_path&or=(${orFilter})`);
   if (!fq.ok || !Array.isArray(fq.data)) return [];
   return fq.data;
 }
