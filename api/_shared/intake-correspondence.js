@@ -23,6 +23,8 @@
 import { appendActivityEvent as defaultAppendActivityEvent } from './activity-events.js';
 import { growCadenceFromOutreach as defaultGrowCadenceFromOutreach } from './cadence-engine.js';
 import { opsQuery as defaultOpsQuery, resolvePrimaryWorkspaceId } from './ops-db.js';
+import { deriveNextStep } from './next-step-ai.js';
+import { invokeExtractionAI } from './ai.js';
 
 // activity_events.domain carries the canonical short form 'dia' | 'gov'.
 // The matcher hands us 'dialysis' | 'government' (or null for an lcc-direct
@@ -185,15 +187,26 @@ export async function logInboundCorrespondenceDualAnchor({
   });
 
   // Self-updating to-do engine (inbound): the awaited party got back — resolve
-  // the open seller follow-up and write the next step ("review response & set
-  // next step"). Fresh insert only; best-effort. Subject rides as context so the
-  // new to-do carries what the reply was about.
+  // the open seller follow-up and write the next step. Phase 1 derives the SPECIFIC
+  // next action (type/title/due) from the message content; when it can't read a
+  // clear intent (feature off, ambiguous, low confidence, AI down) it returns null
+  // and the RPC falls back to the generic "review response & set next step". Fresh
+  // insert only; best-effort. Subject rides as context so the new to-do carries
+  // what the reply was about.
   if (res?.inserted && (dealEntityId || partyEntityId)) {
+    let ns = null;
+    try {
+      ns = await deriveNextStep(ctx.subject, ctx.body_snippet || '', null, { invokeExtractionAI });
+    } catch (_e) { ns = null; } // deriveNextStep self-guards; this is belt-and-suspenders
     try {
       await query('POST', 'rpc/lcc_advance_todos', {
         p_entity_id: dealEntityId, p_activity_id: res.id || null,
         p_party_entity_id: partyEntityId, p_channel: 'email', p_direction: 'inbound',
         p_context: ctx.subject ? ('Seller replied: ' + String(ctx.subject).slice(0, 160)) : null,
+        // Phase 1 AI-derived next step (null-safe: unset => generic review_response):
+        p_next_action: ns?.next_action ?? null,
+        p_next_type: ns?.action_type ?? null,
+        p_next_due_offset: ns?.due_offset ?? null,
       });
     } catch (_e) { /* best-effort */ }
   }

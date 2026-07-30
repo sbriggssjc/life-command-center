@@ -527,9 +527,72 @@ async function invokeOpenAIExtraction({ prompt, model, cfg }) {
  * @param {string} prompt - Self-contained extraction prompt
  * @returns Same shape as invokeChatProvider, plus a `tried` array describing fallbacks
  */
+/**
+ * Local Ollama extraction (GaryBuilt on-prem model, task #65).
+ * Same return shape as invokeOpenAIExtraction: { ok, status, provider, data:{ response, model } }.
+ *
+ * Gated on OLLAMA_URL — when unset this is never called and the cloud edge→OpenAI
+ * chain is unchanged. When set, invokeExtractionAI tries this FIRST (local-primary)
+ * and falls through to the cloud chain on any failure/timeout, so a powered-off
+ * GaryBuilt degrades to cloud rather than breaking the pipeline. Cutover is
+ * config-only. Ollama serves an OpenAI-compatible endpoint at <base>/v1/chat/completions.
+ * Playbook: docs/setup/garybuilt-local-model.md.
+ */
+async function invokeOllamaExtraction({ prompt }) {
+  const base = String(process.env.OLLAMA_URL || '').trim().replace(/\/+$/, '');
+  if (!base) return { ok: false, status: 503, provider: 'ollama', data: { error: 'OLLAMA_URL missing' } };
+  const model = String(process.env.OLLAMA_MODEL || 'qwen2.5:14b').trim();
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 45_000);
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Present only if a proxy (Cloudflare Access / bearer) fronts the endpoint.
+        ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: String(prompt || '') }],
+        temperature: 0.1,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    let data = null;
+    try { data = await res.json(); } catch { data = { error: 'Invalid Ollama response' }; }
+    const responseText = data?.choices?.[0]?.message?.content || '';
+    return {
+      ok: res.ok,
+      status: res.status,
+      provider: 'ollama',
+      data: { ...data, model: data?.model || model, response: responseText },
+    };
+  } catch (err) {
+    // AbortError (timeout) or network failure → transient, so the chain falls through.
+    return { ok: false, status: 0, provider: 'ollama', data: { error: err?.message || String(err) } };
+  } finally {
+    clearTimeout(to);
+  }
+}
+
 export async function invokeExtractionAI({ prompt }) {
   const cfg = getAiConfig();
   const tried = [];
+
+  // Step 0: local Ollama primary (only when OLLAMA_URL is set). On any failure or
+  // timeout we fall through to the cloud edge primary + fallback chain below, so the
+  // local box is a cost-saving fast-path, never a single point of failure.
+  if (process.env.OLLAMA_URL) {
+    const local = await invokeOllamaExtraction({ prompt });
+    tried.push({ stage: 'local', provider: 'ollama', status: local.status });
+    if (local.ok && !isRateLimitOrTransient(local)) {
+      return { ...local, tried };
+    }
+    // else: fall through to cloud (fallback net).
+  }
 
   // Step 1: primary
   const primary = await invokeChatProvider({
