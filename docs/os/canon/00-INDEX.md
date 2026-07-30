@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.0.0** — 2026-07-24. Bump this on any rule change; record it in the changelog below and
+**CANON_VERSION: 1.1.0** — 2026-07-30. Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 
 ## Global invariants (apply to every topic, every surface)
@@ -23,6 +23,7 @@ run `../SURFACE-SYNC-PROTOCOL.md`.
 | `filing.md` | Saving/reading/updating documents in Team Briggs SharePoint |
 | `email-and-routing.md` | Outreach/seller-update drafting + inbound ingestion→classify→route |
 | `logging-and-touchpoints.md` | Logging calls/touchpoints + BD cadence targets |
+| `offer-submission` (block) | Inbound LOI → seller submission: assemble context, draft (BCC Sarah), file-back, generic-SF log. Full workflow: `skills/offer-submission-SKILL.md` |
 | `writing-voice.md` | How written deliverables sound and are formatted |
 | `bov.md` | BOV / valuation-memo / pro-forma generation and the lease-terms-first rule |
 | `intake-triage.md` | Staged intake triage + classification taxonomy |
@@ -50,6 +51,7 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.1.0** (2026-07-30) — Added the `offer-submission` block (inbound LOI → seller submission: context-assemble → draft-to-Drafts with BCC Sarah + LOI attached → file-back via property-doc-writeback → `log_offer` with LCC full detail + a GENERIC Salesforce Task). Rendered to all 5 surfaces. Engine: `mcp/offer-context.js` (offer-context/offer-log routes + `get_offer_context`/`log_offer` MCP tools), `outlook-draft.js` Bcc.
 - **1.0.0** (2026-07-24) — Initial canon: comps, filing, email-and-routing, logging-and-touchpoints,
   writing-voice, bov, intake-triage, personal. Distilled from `docs/copilot/agent-instructions.md`,
   `SURFACE_CAPABILITY_PARITY.md`, the Cowork skills, and `lcc_intelligent_operating_system_v2.md`.

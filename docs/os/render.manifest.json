@@ -6,28 +6,28 @@
       "liveArtifact": "../copilot/agent-instructions.md",
       "markerBegin": "<!-- CANON:BEGIN -->",
       "markerEnd": "<!-- CANON:END -->",
-      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov", "intake-triage", "personal"]
+      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "offer-submission", "writing-voice", "bov", "intake-triage", "personal"]
     },
     "chatgpt": {
       "external": true,
       "liveArtifact": null,
       "deliverAs": "GPT Knowledge upload of surfaces/chatgpt.canon.md — Custom GPT instructions cap at 8000 chars, so the canon rides as a Knowledge file (no cap) and the instructions stay a short persona that points at it.",
-      "blocks": ["comps", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov"]
+      "blocks": ["comps", "email-and-routing", "logging-and-touchpoints", "offer-submission", "writing-voice", "bov"]
     },
     "northmarq": {
       "external": true,
       "liveArtifact": null,
-      "blocks": ["comps", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov"]
+      "blocks": ["comps", "email-and-routing", "logging-and-touchpoints", "offer-submission", "writing-voice", "bov"]
     },
     "claude-personal": {
       "external": true,
       "liveArtifact": null,
-      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov", "intake-triage", "personal"]
+      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "offer-submission", "writing-voice", "bov", "intake-triage", "personal"]
     },
     "claude-cowork": {
       "external": true,
       "liveArtifact": null,
-      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "writing-voice", "bov", "intake-triage", "personal"]
+      "blocks": ["comps", "filing", "email-and-routing", "logging-and-touchpoints", "offer-submission", "writing-voice", "bov", "intake-triage", "personal"]
     }
   }
 }

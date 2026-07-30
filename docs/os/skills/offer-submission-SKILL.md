@@ -83,8 +83,13 @@ Save to the **Drafts folder** (via `LCC Create Outlook Draft`): branded HTML bod
 High importance, **the buyer's executed LOI PDF attached exactly as received**. Stop there — Scott reviews and sends.
 
 ### 9. File the record
-Save the submission + the LOI to the **deal's folder in Team Briggs – Documents (SharePoint) / ShareFile** — the
-same folder as the OM/listing docs.
+File the submission + the LOI into the deal's folder in Team Briggs – Documents (SharePoint) — the same folder as
+the OM/listing docs — via **`POST /api/property-doc-writeback`** `{ domain, property_id, file_name, doc_type,
+content_base64 }` (base64 each file). This is the ONE filing mechanism: it resolves the destination folder
+confidently or **REFUSES** (never a guessed write), `[LCC]`-tags the name, dedupes (never overwrites), uploads,
+links the `property_documents` row, and records provenance. Resolve `domain` + `property_id` for the listing from
+the deal (the offer-context packet / the asset's domain identity). On `422 folder_unresolved`, skip the file leg
+(non-fatal) and note it — do not write to a guessed path.
 
 ### 10. Log in the LCC (+ Salesforce) — one call
 Call **`lcc_log_offer(deal, offer)`** (RPC / `/api/pipeline/offer-log`): it writes the `activity_event` (offer
@@ -118,6 +123,8 @@ After the seller call, draft the **Seller Response (counter)** from the seller's
 ## Toolchain
 `lcc_offer_context(deal)` (context assembler) · LOI/OM PDF extraction · Salesforce + web diligence · brand email
 builder (`cm_brand_tokens.json`) · stage LOI → `intake-salesforce-files?action=upload-url` (signed URL) ·
-`createOutlookDraftViaPA({to,bcc,subject,body_html,attachment_url})` → **Drafts** · POST submission+LOI to
-`PA_DEALFOLDER_FILE_URL` → **deal folder** · `lcc_log_offer(deal,offer)` → activity + To-Do + SF create_task.
+`createOutlookDraftViaPA({to,bcc,subject,body_html,attachment_url})` → **Drafts** · file submission+LOI via
+`POST /api/property-doc-writeback {domain,property_id,file_name,doc_type,content_base64}` → **deal folder**
+(resolve-or-refuse · [LCC]-tag · dedupe · DB-link · provenance) · `log_offer(deal,offer)` (`/api/pipeline/offer-log`)
+→ activity + To-Do + generic SF Task.
 _(Deploy/PA wiring: `offer-submission-DELIVERY-LEGS.md` + `…DEPLOY-1.1-and-2.2.md`.)_

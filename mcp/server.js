@@ -19,6 +19,7 @@ import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
 import { makeDealRosterRoute } from "./deal-roster.js";
 import { makeCadenceScanRoute } from "./cadence-scan.js";
 import { makeEntityReconcileRoute } from "./entity-reconcile.js";
+import { makeOfferContextRoute, makeOfferLogRoute } from "./offer-context.js";
 import { makeDealEmailMatcherRoute } from "./deal-email-matcher.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 
@@ -387,6 +388,27 @@ const TOOL_DEFINITIONS = {
         entity_id: { type: 'string', description: 'LCC entity UUID' },
         address: { type: 'string', description: 'Property address (alternative to entity_id)' }
       }
+    }
+  },
+  get_offer_context: {
+    name: 'get_offer_context',
+    description: "Assemble full context for an inbound offer on one of our listings — deal identity, resolved seller (of-record + contact), listing economics (ask/NOI/cap/lease), linked documents, external correspondents, and a gaps[] list. Call FIRST in the offer-submission flow. Pass a property name/address, e.g. 'DaVita Snellville'.",
+    inputSchema: {
+      type: 'object',
+      properties: { deal: { type: 'string', description: "Property name/address (e.g. 'DaVita Snellville' or '2155 Main Street East')" } },
+      required: ['deal']
+    }
+  },
+  log_offer: {
+    name: 'log_offer',
+    description: "Log an inbound offer atomically: activity_event + review To-Do (due on the offer expiration) + a generic Salesforce create_task enqueue. Idempotent. Call LAST in the offer-submission flow. Pass the deal and the extracted offer terms (with an ISO expiration_date).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        deal: { type: 'string', description: 'Property name/address the offer is on' },
+        offer: { type: 'object', description: 'Extracted LOI terms: buyer, price, cap_rate, deposit, dd_days, financing, expiration, expiration_date (ISO), summary' }
+      },
+      required: ['deal']
     }
   },
   get_contact_context: {
@@ -858,6 +880,25 @@ const TOOL_HANDLERS = {
         entities,
         properties,
       });
+    });
+  },
+
+  get_offer_context: async ({ deal }) => {
+    return withTiming("get_offer_context", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) return textResult({ error: "OPS database not configured" });
+      if (!deal) return textResult({ error: "deal is required" });
+      const r = await opsQuery("POST", "rpc/lcc_offer_context", { p_deal: String(deal) });
+      const packet = Array.isArray(r.data) ? r.data[0] : r.data;
+      return textResult(packet || { error: `rpc_failed_${r.status}` });
+    });
+  },
+  log_offer: async ({ deal, offer }) => {
+    return withTiming("log_offer", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) return textResult({ error: "OPS database not configured" });
+      if (!deal) return textResult({ error: "deal is required" });
+      const r = await opsQuery("POST", "rpc/lcc_log_offer", { p_deal: String(deal), p_offer: offer || {} });
+      const packet = Array.isArray(r.data) ? r.data[0] : r.data;
+      return textResult(packet || { error: `rpc_failed_${r.status}` });
     });
   },
 
@@ -1882,6 +1923,13 @@ app.get("/", (_req, res) => {
   app.get("/api/pipeline/flagged-deals",     authenticate, __reconcile.list);
   app.post("/api/pipeline/flagged-deals",    authenticate, __reconcile.list);
   app.post("/api/pipeline/reconcile-entity", authenticate, __reconcile.reconcile);
+
+  // Offer-submission (BUILD 05) — assemble context + log an inbound offer (LCC + generic SF).
+  const __offerCtx = makeOfferContextRoute({ opsQuery });
+  const __offerLog = makeOfferLogRoute({ opsQuery });
+  app.get ("/api/pipeline/offer-context", authenticate, __offerCtx.get);
+  app.post("/api/pipeline/offer-context", authenticate, __offerCtx.get);
+  app.post("/api/pipeline/offer-log",     authenticate, __offerLog.post);
 
   // Deal-Email Matcher (BUILD 04) — attribute Outlook emails to deals by tenant+city; self-builds roster.
   const __matcher = makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });

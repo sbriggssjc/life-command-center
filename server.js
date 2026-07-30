@@ -311,6 +311,8 @@ app.all('/api/pipeline/ingest-opportunities', (req, res) => { req.query._mcpTarg
 app.all('/api/pipeline/ingest-deal-parties',  (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-deal-parties';  aiReadHandler(req, res); });
 app.all('/api/pipeline/ingest-deal-contacts', (req, res) => { req.query._mcpTarget = '/api/pipeline/ingest-deal-contacts'; aiReadHandler(req, res); });
 app.all('/api/pipeline/cadence-scan',         (req, res) => { req.query._mcpTarget = '/api/pipeline/cadence-scan';         aiReadHandler(req, res); });
+app.all('/api/pipeline/offer-context',        (req, res) => { req.query._mcpTarget = '/api/pipeline/offer-context';        aiReadHandler(req, res); });
+app.all('/api/pipeline/offer-log',            (req, res) => { req.query._mcpTarget = '/api/pipeline/offer-log';            aiReadHandler(req, res); });
 app.all('/api/pipeline/match-deal-emails',    (req, res) => { req.query._mcpTarget = '/api/pipeline/match-deal-emails';    aiReadHandler(req, res); });
 app.all('/api/pipeline/weekly-digest',        (req, res) => { req.query._mcpTarget = '/api/pipeline/weekly-digest';        aiReadHandler(req, res); });
 app.all('/api/pipeline/flagged-deals',        (req, res) => { req.query._mcpTarget = '/api/pipeline/flagged-deals';        aiReadHandler(req, res); });

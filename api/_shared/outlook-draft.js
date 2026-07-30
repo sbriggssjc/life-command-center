@@ -25,6 +25,7 @@ const DEFAULT_TIMEOUT_MS = 15000;
  * @param {Object} draft
  * @param {string|string[]} draft.to                 Recipient address(es). Required.
  * @param {string|string[]} [draft.cc]               CC address(es).
+ * @param {string|string[]} [draft.bcc]              BCC address(es) (e.g. Sarah Martin on offer submissions).
  * @param {string}          draft.subject            Subject line. Required.
  * @param {string}          draft.body_html          HTML body. Required.
  * @param {string}          [draft.in_reply_to]      Internet messageId of the message
@@ -48,6 +49,7 @@ export async function createOutlookDraftViaPA(draft = {}, opts = {}) {
 
   const to = Array.isArray(draft.to) ? draft.to : (draft.to ? [draft.to] : []);
   const cc = Array.isArray(draft.cc) ? draft.cc : (draft.cc ? [draft.cc] : []);
+  const bcc = Array.isArray(draft.bcc) ? draft.bcc : (draft.bcc ? [draft.bcc] : []);
 
   if (to.length === 0) return { ok: false, error: 'to (recipient) is required', fallback: 'text' };
   if (!draft.subject) return { ok: false, error: 'subject is required', fallback: 'text' };
@@ -57,6 +59,7 @@ export async function createOutlookDraftViaPA(draft = {}, opts = {}) {
   const payload = {
     to: to.join(';'),
     cc: cc.join(';'),
+    bcc: bcc.join(';'),
     subject: draft.subject,
     body_html: draft.body_html,
     in_reply_to: draft.in_reply_to || '',
