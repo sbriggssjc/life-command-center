@@ -9440,6 +9440,30 @@ async function crossReferenceSalesforce(domain, propertyId) {
 
 // ── Step 5d2: Upsert true owners (true buyer / true seller) ────────────────
 
+// ── W3.3 Unit 2: gov recorded→true owner resolver helpers ──────────────
+// JS mirror of SQL gov_owner_strict_core(): strip ONLY pure legal-entity
+// forms (keep CO/COMPANY/GROUP/PARTNERS/HOLDINGS). Used to decide an
+// exact-normalized true_owner match (auto-link) vs a fuzzy one (review).
+export function govOwnerStrictCoreJS(name) {
+  let s = (name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  s = s.replace(/^the/, '');
+  s = s.replace(/(limitedliabilitylimitedpartnership|limitedliabilitycompany|limitedpartnership|incorporated|corporation|limited|lllp|llp|llc|corp|ltd|inc|dst|lp)+$/, '');
+  return s;
+}
+// Dice bigram similarity in [0,1] — deterministic, dependency-free; used as
+// the entity_match_candidates.similarity score for a routed review pair.
+export function nameBigramSimilarity(a, b) {
+  a = a || ''; b = b || '';
+  if (!a.length || !b.length) return 0;
+  if (a === b) return 1;
+  const grams = (s) => { const m = new Map(); for (let i = 0; i < s.length - 1; i++) { const g = s.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); } return m; };
+  const ma = grams(a), mb = grams(b);
+  let inter = 0, total = 0;
+  for (const [g, c] of ma) { total += c; if (mb.has(g)) inter += Math.min(c, mb.get(g)); }
+  for (const [, c] of mb) total += c;
+  return total ? (2 * inter) / total : 0;
+}
+
 async function upsertTrueOwners(domain, propertyId, metadata) {
   const contacts = metadata.contacts || [];
 
@@ -9506,34 +9530,83 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
       .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
     if (domain === 'government') {
-      // Check true_owners table first (canonical buyer intelligence)
-      const normalized = owner.name.trim().toUpperCase()
-        .replace(/\b(LLC|INC|CORP|LTD|LP|LLP|GLOBAL|ASSET\s+MANAGEMENT)\b\.?/gi, '')
-        .replace(/[^A-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      // W3.3 Unit 2: retire the unanchored substring `canonical_name=ilike.*X*`
+      // first-row-wins resolver. EXACT-normalized match auto-links; a non-exact
+      // (fuzzy/ambiguous) candidate is NEVER linked from a substring hit — the
+      // incoming owner is created fresh and the fuzzy existing owner is filed to
+      // entity_match_candidates (the W3.2 owner-reconcile lane) for a human merge.
+      const createFreshTrueOwner = async () => {
+        const r = await domainQuery('government', 'POST', 'true_owners', {
+          name:           owner.name,
+          canonical_name: owner.name.toUpperCase(),
+          entity_type:    'buyer',
+          contact_info:   JSON.stringify({
+            address: owner.address || null,
+            city:    owner.city    || null,
+            state:   owner.state   || null,
+            phone:   owner.phone   || null,
+          }),
+        });
+        return r.ok && r.data
+          ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
+          : null;
+      };
 
-      const lookup = await domainQuery('government', 'GET',
-        `true_owners?canonical_name=ilike.*${encodeURIComponent(normalized)}*` +
-        `&select=true_owner_id,name&limit=1`
+      const incomingCore = govOwnerStrictCoreJS(owner.name);
+      if (!incomingCore) return await createFreshTrueOwner();
+
+      // Bounded fetch of existing true_owners sharing the leading token, then
+      // compare by strict core in JS — no unanchored substring auto-link.
+      const firstTok = (owner.name.toUpperCase().match(/[A-Z0-9]{2,}/) || [''])[0];
+      let candidates = [];
+      if (firstTok) {
+        const c = await domainQuery('government', 'GET',
+          `true_owners?canonical_name=ilike.*${encodeURIComponent(firstTok)}*` +
+          `&merged_into_true_owner_id=is.null&select=true_owner_id,name,canonical_name&limit=40`
+        );
+        if (c.ok && Array.isArray(c.data)) candidates = c.data;
+      }
+      const exact = candidates.filter(
+        (x) => govOwnerStrictCoreJS(x.name || x.canonical_name) === incomingCore
       );
-      if (lookup.ok && lookup.data?.length) {
-        return lookup.data[0].true_owner_id;
+      if (exact.length === 1) {
+        // exact-normalized + unambiguous → auto-link to the existing true_owner
+        return exact[0].true_owner_id;
       }
 
-      // Not in true_owners — create a new record
-      const r = await domainQuery('government', 'POST', 'true_owners', {
-        name:           owner.name,
-        canonical_name: owner.name.toUpperCase(),
-        entity_type:    'buyer',
-        contact_info:   JSON.stringify({
-          address: owner.address || null,
-          city:    owner.city    || null,
-          state:   owner.state   || null,
-          phone:   owner.phone   || null,
-        }),
-      });
-      return r.ok && r.data
-        ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
-        : null;
+      // Non-exact (0 exact, or >1 ambiguous): create the incoming owner fresh so
+      // the property links to a NEW row, never a substring hit; then file the best
+      // existing candidate for human review through the W3.2 lane.
+      const freshId = await createFreshTrueOwner();
+      let best = null, bestSim = 0;
+      for (const x of candidates) {
+        const sim = nameBigramSimilarity(incomingCore, govOwnerStrictCoreJS(x.name || x.canonical_name));
+        if (sim > bestSim) { bestSim = sim; best = x; }
+      }
+      if (exact.length > 1) { best = exact[0]; bestSim = 1; }
+      if (best && freshId && best.true_owner_id !== freshId) {
+        try {
+          const dup = await domainQuery('government', 'GET',
+            `entity_match_candidates?source_name=eq.${encodeURIComponent(owner.name)}` +
+            `&target_id=eq.${best.true_owner_id}&match_method=eq.costar_true_owner_fuzzy` +
+            `&status=in.(pending_review,pending)&select=id&limit=1`
+          );
+          if (!(dup.ok && dup.data?.length)) {
+            await domainQuery('government', 'POST', 'entity_match_candidates', {
+              source_table: 'true_owners',
+              source_id:    freshId,
+              source_name:  owner.name,
+              target_table: 'true_owners',
+              target_id:    best.true_owner_id,
+              target_name:  best.name,
+              match_method: 'costar_true_owner_fuzzy',
+              similarity:   Number(bestSim.toFixed(4)),
+              status:       'pending_review',
+            });
+          }
+        } catch (_) { /* best-effort: never block ingest on a review-file */ }
+      }
+      return freshId;
     }
 
     // Dialysis: true_owners table
