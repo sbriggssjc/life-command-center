@@ -43,9 +43,22 @@ async function readDossier(deal, { opsQuery, enc }) {
   const rec = await resolveEntity(deal, { opsQuery, enc });
   if (rec.error) return rec;
   const e = rec.entity;
-  const acts = (await opsQuery('GET',
-    `activity_events?entity_id=eq.${enc(e.id)}&select=occurred_at,category,title,body,source_type,external_url,metadata` +
-    `&order=occurred_at.desc&limit=50`)).data || [];
+  // Prefer the deal anchor over entity_id ALONE: dual-anchor mail (thread b) and
+  // the backfill stamp the deal in metadata.deal_entity_id while entity_id may be
+  // the original/other value, so an entity_id-only read misses stamped
+  // correspondence. Read BOTH anchors and merge (two simple filters rather than
+  // an or() with a JSON accessor, which is PostgREST-version-sensitive), dedupe
+  // by id, sort desc, cap 50.
+  const sel = 'select=id,occurred_at,category,title,body,source_type,external_url,metadata';
+  const [byEntity, byDealAnchor] = await Promise.all([
+    opsQuery('GET', `activity_events?entity_id=eq.${enc(e.id)}&${sel}&order=occurred_at.desc&limit=50`),
+    opsQuery('GET', `activity_events?metadata->>deal_entity_id=eq.${enc(e.id)}&${sel}&order=occurred_at.desc&limit=50`),
+  ]);
+  const seen = new Set();
+  const acts = [...((byEntity.data) || []), ...((byDealAnchor.data) || [])]
+    .filter(a => { const k = a.id || `${a.occurred_at}|${a.external_url}|${a.title}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => String(b.occurred_at || '').localeCompare(String(a.occurred_at || '')))
+    .slice(0, 50);
   const milestones = acts.filter(a => a.category === 'status_change' && a.metadata && a.metadata.milestone);
   const correspondence = acts.filter(a => ['email', 'call', 'meeting', 'note'].includes(a.category));
   return {

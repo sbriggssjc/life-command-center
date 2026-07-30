@@ -207,6 +207,27 @@ Leads are a separate object — a future `find_lead_by_email` op); (b) business-
 airlines) are classified `business` but aren't BD — a sub-tier could demote them; (c) the CRE keyword list is
 hand-curated — worth revisiting as new deal vocabulary appears.
 
+## Thread (a) BUILT — projections prefer the deal anchor over the city bridge (2026-07-30)
+
+With mail now carrying `metadata.deal_entity_id` (backfill + thread b), the projections stop leaning on the fuzzy
+city bridge:
+
+- **`lcc_offer_context` (OPS)** — correspondence was gathered by `entity_id = deal` **OR `title ilike '%city%'`**
+  (the city bridge over-matched unrelated same-city deals). Now: precise anchor first — `entity_id = v_eid OR
+  metadata->>'deal_entity_id' = v_eid` — and correspondents are extracted from BOTH the body regex AND the
+  dual-anchor metadata (inbound `from`, outbound `to[]`), so stamped mail surfaces even when the address isn't in
+  the body snippet. The **city bridge is now a FALLBACK**, used only when the deal has zero anchored mail (older
+  pre-stamp deals). Response carries `corr_source: deal_anchor | city_bridge_fallback` for observability.
+  Verified on "DaVita Dialysis - The Villages": `corr_source=deal_anchor`, 5 correspondents, all the actual deal
+  team (First American title rep on "1050 Old Camp Rd", the appraiser, the OM sender) — no fuzzy city noise.
+- **Deal dossier (`mcp/deal-dossier-tools.js::readDossier`)** — read `entity_id` ONLY, which MISSED anchored
+  mail: the dual-anchor backfill preserved original `entity_id` and stamped the deal in `metadata.deal_entity_id`,
+  so only 1 of 16 anchored rows carried `entity_id = deal`. Now reads BOTH anchors (two simple PostgREST filters
+  merged + deduped in JS — avoiding an `or()` with a JSON accessor, which is version-sensitive). Verified: The
+  Villages dossier goes from **46 → 61** correspondence rows (the 15 metadata-only stamped rows now surface).
+  `node --check` + import clean. **Deploy to activate** (DB fn is live immediately; the dossier JS ships on the
+  Railway redeploy).
+
 ## Thread (b) BUILT — live inbound dual-anchor stamp (2026-07-30)
 
 The outbound path (`handleOutlookSent`) already stamps the dual anchor; the **inbound** path did not, so new mail
