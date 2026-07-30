@@ -87,3 +87,55 @@ the phone-ready identity table for the WebEx layer — no WebEx dependency to st
   (`handleOutlookMessage`/`stageOmIntake`) stamps the same dual anchor at ingest; (c) **party backfill**
   (email→person entity, name+email match → fill `entities.email`/`external_identities('outlook')`) to lift party
   coverage past 9/27 — the piece that makes the relationship dossier real.
+
+## Thread (c) BUILT — SF-sourced party backfill (2026-07-30)
+
+**The clean-source decision.** Correspondence carries no sender NAMES (the historical `outlook` rows store only
+`from_email`/`to_emails`/`cc_emails`; the `outlook_sent` rows store `from`/`to`). So a person entity can't be
+minted from the mail itself without fuzzy body-name extraction — which would seed junk. The authoritative
+email↔name↔account source is **Salesforce**. The backfill therefore resolves each unresolved correspondent
+**email** against SF and links the person through the SAME machinery the WhoId resolver uses — no new fuzzy path.
+
+**Honest scope (measured 2026-07-30, OPS `xengecqvemvfknjvbvrq`).** Over 6,455 historical `outlook` + 43
+`outlook_sent` rows: **2,560 distinct external correspondents** (excluding `@northmarq.com` colleagues, Scott's
+own personal address, and system noise; personal domains like gmail/yahoo/rr.com are KEPT — heavy-volume sellers
+use them). Only **334 resolve** to an entity today (`entities.email`); **2,226 are unresolved**. The head is
+Zipfian and is exactly the durable BD graph: DaVita real-estate contacts (Holdsworth 711, Moore 649, Pagnano
+414), cooperating brokers (CBRE, Cushman, Kidder, Adler, ValueNet), title (First American), and counsel. **294**
+correspondents have ≥10 touches; **458** have ≥5.
+
+**How it's keyed (self-clearing, no queue table).** `lcc_unresolved_correspondents(p_limit, p_min_touches,
+p_nomatch_cap, p_error_cap)` (OPS) materializes the correspondent universe, LEFT JOINs `entities.email` (already
+resolved) and `correspondent_backfill_log` (terminal outcomes), and returns the ranked workable head
+(highest-touch first). An email leaves the set the instant an entity carries it OR the log records a terminal
+outcome — nothing to keep in sync. **Reversible:** delete a `correspondent_backfill_log` row to re-queue an email.
+
+**The worker.** `api/_handlers/correspondent-party-backfill.js` — `GET` = dry-run (ranked head, no SF calls),
+`POST` = drain (bounded by `limit` + `SF_RESOLVE_BUDGET_MS` wall-clock). Per email:
+`findSalesforceContactByEmail(email)` → on a hit, `defaultResolveOrCreateSfContact({whoId: SF Contact Id, name,
+email, accountId, …})` — which routes through `ensureEntityLink`'s **R39 email tier** (ATTACH-by-email to an
+existing CoStar/RCA/SF person = one entity, never a duplicate) and the junk/implausible-person **name guards**
+(garbage is rejected, never minted). SF account↔email-domain mismatches are surfaced to the Decision Center
+(best-effort, never inherited). Feature-gated on `SF_LOOKUP_WEBHOOK_URL` — no-ops honestly (`byemail_configured:
+false`) when unset. **Never writes back to Salesforce** (LCC-writes-back doctrine off); the only SF touch is the
+read-only email lookup.
+
+**Routing.** `GET|POST /api/correspondent-party-backfill-tick` (server.js → operations.js `_route`, guarded by
+`test/operations-subroutes.test.mjs`, positioned before the bridge action router). Sibling to
+`/api/sf-contact-resolve-tick` (WhoId-keyed) — the two drains cover the same identity spine from both ends.
+
+**Runtime constraint (why the drain runs after deploy).** `findSalesforceContactByEmail` executes **server-side**
+on the Railway engine (holds `SF_LOOKUP_WEBHOOK_URL`); it is NOT callable from a DB/MCP session. So the DB
+enumeration + worker + routes were built here, and the SF-dependent drain runs once deployed — same operator loop
+as every other tick worker.
+
+**Drain procedure (after redeploy).**
+1. Dry-run: `GET /api/correspondent-party-backfill-tick?min_touches=10` — confirm the ranked head + counts, no writes.
+2. Drain the high-value head: `POST /api/correspondent-party-backfill-tick?limit=25&min_touches=10`, repeat until
+   `workable_returned` drops (each tick is bounded; `no_match` is negative-cached so re-ticks don't re-hammer SF).
+3. Lower `min_touches` (5 → 2 → 1) to widen coverage down the long tail as the head clears.
+4. Spot-check: a resolved correspondent (e.g. `susan.holdsworth@davita.com`) should now carry `entities.email`,
+   so a fresh sent/inbound email from them stamps `party_entity_id` — closing the loop the dual-anchor backfill left open.
+
+**Status:** RPC + `correspondent_backfill_log` applied live (OPS); worker + routes in the working tree,
+`node --check`-clean, imports resolve, subroute guard 4/4 green. **Deploy to activate**, then run the drain.

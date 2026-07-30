@@ -213,6 +213,18 @@ export default withErrorHandler(async function handler(req, res) {
     return handleSfContactResolveTick(req, res);
   }
 
+  // SF-SOURCED PARTY BACKFILL — email-keyed correspondent resolver (via
+  // server.js _route=correspondent-party-backfill-tick). GET=dry-run (ranked
+  // workable head) / POST=drain: resolve each unresolved external correspondent
+  // EMAIL against Salesforce (findSalesforceContactByEmail) and link a person
+  // entity through the shared SF-contact machinery. Complements the WhoId
+  // resolver above (which keys on a Task's WhoId). Authenticates internally.
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'correspondent-party-backfill-tick') {
+    const { handleCorrespondentPartyBackfillTick } = await import('./_handlers/correspondent-party-backfill.js');
+    return handleCorrespondentPartyBackfillTick(req, res);
+  }
+
   // CONTACT-SELECTION Slice 3 — owner-contact enrichment worker (via vercel.json
   // _route=owner-contact-enrich-tick). GET=dry-run / POST=drain. Attaches the
   // ranked decision-maker (or runs the enrichment action) so owners leave
