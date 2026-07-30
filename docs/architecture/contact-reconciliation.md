@@ -59,3 +59,23 @@ the new source_systems first** (the "never introduce a new spelling" invariant),
 Steps 1–3 + 5: register the source_systems, backfill `outlook` email identities from correspondence, ship the
 resolver, and point `handleOutlookSent` at it to prefer the deal. That alone fixes the attribution finding and lays
 the phone-ready identity table for the WebEx layer — no WebEx dependency to start.
+
+## Progress (2026-07-30)
+- **`lcc_resolve_contact(email, phone)` — built + live.** Resolves the person entity (`entities.email` →
+  `external_identities` outlook → phone) AND the deal(s) via a **city bridge** — real deal-assets
+  (`bd_opportunities`) whose city appears in an activity title mentioning the email (the same bridge
+  `lcc_offer_context` uses). Verified: `frankm@rcgventures.com` → `primary_deal` = Snellville ✓.
+- **`handleOutlookSent` now prefers `primary_deal`** (asset/deal over person), falling back to the most-recent
+  correspondent. `node --check`-clean. **Deploy to activate.**
+- **KEY FINDING — the deeper fix:** correspondence is NOT linked to asset entities; both `lcc_offer_context` and
+  this resolver lean on the **city bridge** (title match), which is fuzzy and can't attribute a same-city
+  same-brand ambiguity. The clean fix is linking **correspondence → deal at INGEST** via `deal-email-matcher.js`
+  (tenant+city attribution → set `activity_events.entity_id` to the asset). Once correspondence carries the asset
+  `entity_id`, the resolver's deal lookup becomes a direct graph read, not a heuristic. **This is the next
+  connectivity item** (and it retro-sharpens offer-context, the dossier, and the sent-email attribution at once).
+- **Existing 42 backfilled sent rows** were attributed the old (person-preferring) way and are dedup-locked, so a
+  re-run won't re-point them — re-attribute via a one-time `UPDATE ... SET entity_id = lcc_resolve_contact(...)`
+  over `source_type='outlook_sent'` rows (reversible).
+- **Remaining in slice:** person-entity resolution when the email isn't on a person entity (e.g. Frank Meyrath has
+  none) — backfill `external_identities('outlook','email')` or set `entities.email`. WebEx phone side (register
+  `webex` source_system + import) is the following slice.

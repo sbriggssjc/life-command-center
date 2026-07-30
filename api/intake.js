@@ -349,12 +349,21 @@ async function handleOutlookSent(req, res) {
     .filter(e => !e.includes('northmarq'));
   if (recips.length === 0) return res.status(200).json({ ok: true, logged: false, reason: 'no_external_recipient' });
 
-  // Resolve the deal: the most-recent open-deal correspondence that already includes any recipient.
-  const orList = recips.map(e => `body.ilike.*${e}*`).join(',');
-  const match = await opsQuery('GET',
-    `activity_events?workspace_id=eq.${pgFilterVal(workspaceId)}&entity_id=not.is.null&or=(${orList})` +
-    `&select=entity_id&order=occurred_at.desc&limit=1`);
-  const dealEntityId = match.data?.[0]?.entity_id || null;
+  // Resolve the DEAL via the contact resolver (prefers the asset/deal over the person via the city bridge);
+  // fall back to the most-recent correspondent entity when the resolver finds no deal.
+  let dealEntityId = null;
+  for (const e of recips) {
+    const rc = await opsQuery('POST', 'rpc/lcc_resolve_contact', { p_email: e, p_phone: null });
+    const packet = Array.isArray(rc.data) ? rc.data[0] : rc.data;
+    if (packet?.primary_deal) { dealEntityId = packet.primary_deal; break; }
+  }
+  if (!dealEntityId) {
+    const orList = recips.map(e => `body.ilike.*${e}*`).join(',');
+    const match = await opsQuery('GET',
+      `activity_events?workspace_id=eq.${pgFilterVal(workspaceId)}&entity_id=not.is.null&or=(${orList})` +
+      `&select=entity_id&order=occurred_at.desc&limit=1`);
+    dealEntityId = match.data?.[0]?.entity_id || null;
+  }
 
   const row = {
     workspace_id: workspaceId,

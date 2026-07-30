@@ -123,6 +123,10 @@ cadence that advances from reality — and becomes the template for every other 
   Refinement found: some sends attributed to the **contact/person** entity, not the **asset/deal** (matcher takes
   the most-recent entity mentioning the recipient) — fixed by §4 contact reconciliation (resolve contact→deal;
   attach to both). Full design: `contact-reconciliation.md`.
+- **2026-07-30 — contact-reconciliation slice 1:** `lcc_resolve_contact(email,phone)` live (resolves person +
+  deal via a city bridge; `frankm@rcgventures.com` → Snellville ✓); `handleOutlookSent` now prefers the resolved
+  **deal** over the person (deploy + re-attribute existing rows). Finding: correspondence isn't linked to assets —
+  the clean fix is linking correspondence→deal at ingest via `deal-email-matcher`. Details: `contact-reconciliation.md`.
 
 ## Roadmap: ingestion sources & layers on deck (decisions on record)
 1. **Personal email — deliberately EXCLUDED from the professional sent-ingest** (2026-07-30 decision). The
