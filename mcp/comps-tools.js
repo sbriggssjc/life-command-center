@@ -310,8 +310,27 @@ export function computeReviewSignals(c) {
   if (reliableCap == null) flags.push('no_reliable_cap');
 
   if (!flags.length) return null;
+  // W3.6 — record the INPUTS behind each cap so the reviewer can see WHICH number
+  // is stale. implied_basis = the rent/NOI that divides PRICE (gov: NOI; dia:
+  // annual_rent) + its source + as-of date; reliable_basis = the cap-of-record's
+  // provenance. The value is reconstructable from implied_cap×price on old rows,
+  // but the source/as_of only live here.
+  const impliedBasis = (displayedRent != null) ? {
+    value: displayedRent,
+    kind: isGov ? 'NOI' : 'RENT',
+    source: isGov
+      ? (c.noi_is_modeled ? ('modeled: ' + (c.noi_modeled_source || 'benchmark'))
+          : (c.noi_source || raw.noi_source || c.provenance_tag || c.data_source || 'property NOI'))
+      : (raw.cap_rate_final != null ? 'cap_rate_final' : (c.data_source || 'reported rent')),
+    as_of: c.noi_as_of_date || raw.noi_as_of_date || c.as_of_date || raw.as_of_date || null,
+  } : null;
+  const reliableBasis = (reliableCap != null) ? {
+    value: reliableCap,
+    source: isGov ? 'ingested sale cap (sold_cap_rate)' : 'cap_rate_final',
+  } : null;
   return { review_flags: flags,
-    review_detail: { implied_cap: impliedCap, reliable_cap: reliableCap, rents, ask, sold } };
+    review_detail: { implied_cap: impliedCap, reliable_cap: reliableCap, rents, ask, sold,
+      implied_basis: impliedBasis, reliable_basis: reliableBasis } };
 }
 
 // Renewal-options normalizer — options come through as free text ("2, 5 yr",
