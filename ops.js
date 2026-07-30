@@ -87,6 +87,7 @@ let opsSyncData = null;
 
 let opsMyWorkFilter = 'all';      // all | open | in_progress | waiting | overdue
 let opsInboxFilter = 'new';       // new | triaged | all
+let opsInboxSourceFilter = null;   // null | 'listing_bd_trigger' (W3.5 grouped consumer view)
 let opsEntityFilter = 'all';      // all | person | organization | asset (server-side filter)
 let opsEntitySearch = '';         // backend name search term (B6, 2026-06-06)
 let opsResearchFilter = 'active'; // active | completed | all
@@ -707,7 +708,7 @@ async function renderInboxTriage() {
   // Inbox header disagreed with the Metrics page (which uses inbox_new
   // from work_counts) by ~7,000.
   const [res, countsRes] = await Promise.all([
-    opsApi(`/api/inbox?action=list&status=${opsInboxFilter === 'all' ? '' : opsInboxFilter}&limit=100`),
+    opsApi(`/api/inbox?action=list&status=${opsInboxFilter === 'all' ? '' : opsInboxFilter}${opsInboxSourceFilter ? '&source_type=' + encodeURIComponent(opsInboxSourceFilter) : ''}&limit=100`),
     opsApi('/api/queue-v2?view=work_counts'),
   ]);
   const workCounts = countsRes.ok ? (countsRes.data || {}) : {};
@@ -797,6 +798,21 @@ async function renderInboxTriage() {
   html += filterPill('all', 'All', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
   html += '</div>';
 
+  // W3.5 — Listing-BD source filter. When active, the Inbox switches to a
+  // grouped-by-listing consumer view (one card per listing with its N matched
+  // contacts) that drains the listing_bd_trigger fan-out into outreach drafts.
+  html += '<div class="ops-filters" style="margin-top:6px">';
+  html += `<button class="ops-filter ${opsInboxSourceFilter === 'listing_bd_trigger' ? 'active' : ''}" onclick="opsInboxSetSourceFilter('listing_bd_trigger')" title="Owners matched from active listings — grouped by listing">📣 Listing BD</button>`;
+  html += '</div>';
+
+  if (opsInboxSourceFilter === 'listing_bd_trigger') {
+    html += renderListingBdTriageBody(opsInboxData);
+    el.innerHTML = html;
+    perf.end();
+    _listingBdSyncCheckboxes();
+    return;
+  }
+
   // Triage bar with select-all and bulk actions
   if (opsInboxData.length > 0 && !opsInboxData[0]._edge_source) {
     html += `<div class="triage-bar" id="triageBar">
@@ -864,6 +880,175 @@ function opsInboxLoadMore(step) {
 function opsInboxSetFilter() {
   opsInboxWindow = 50;
   renderInboxTriage();
+}
+
+// ============================================================================
+// W3.5 — Listing-BD inbox consumer (audit 3.4.2)
+// The producer fanned listing_bd_trigger inbox_items out one-per-matched-contact.
+// This view groups them by listing (one card, N contacts), lets the operator
+// select contacts and generate outreach drafts via the listing_bd draft
+// consumer (dedupes by contact across a 7-day window; records template_sends so
+// W1.2's reply loop measures the channel). Selection reuses opsInboxSelected.
+// ============================================================================
+function opsInboxSetSourceFilter(src) {
+  // Toggle: clicking the active chip clears it back to the normal inbox.
+  opsInboxSourceFilter = (opsInboxSourceFilter === src) ? null : src;
+  opsInboxWindow = 50;
+  opsInboxSelected.clear();
+  renderInboxTriage();
+}
+
+function renderListingBdTriageBody(items) {
+  items = items || [];
+  if (!items.length) {
+    return emptyStateHTML(
+      '<path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8"/><rect x="3" y="5" width="18" height="14" rx="2"/>',
+      'No listing-BD candidates',
+      'When a new listing is captured, matched owners appear here grouped by listing. Select contacts and click "Draft outreach" to generate personalized emails.',
+      null, null
+    );
+  }
+
+  // Group by listing_entity_id (fall back to a stable per-row key).
+  const groups = new Map();
+  for (const it of items) {
+    const key = (it.metadata && it.metadata.listing_entity_id) || ('_' + it.id);
+    if (!groups.has(key)) groups.set(key, { key, listing: it.metadata || {}, items: [] });
+    groups.get(key).items.push(it);
+  }
+
+  let html = '';
+  // Global action bar (draft/dismiss operate on the shared selection set).
+  html += `<div class="triage-bar" id="listingBdBar">
+    <span class="triage-count" id="listingBdCount">0 selected</span>
+    <div class="triage-actions">
+      <button class="q-action primary" onclick="submitListingBdDrafts(this)" title="Generate outreach drafts for the selected contacts (deduped by contact across a 7-day window; records template_sends)">Draft outreach for selected</button>
+      <button class="q-action danger" onclick="bulkTriageInbox('dismissed')" title="Dismiss selected">Dismiss</button>
+    </div>
+  </div>`;
+
+  for (const g of groups.values()) {
+    const l = g.listing || {};
+    const listingLabel = esc(l.listing_name || 'New listing');
+    const loc = esc([l.listing_city, l.listing_state].filter(Boolean).join(', '));
+    const asset = l.listing_asset_type || l.domain || '';
+    html += `<div class="q-item" data-listing-group="${esc(g.key)}">`;
+    html += `<div class="q-item-header">`;
+    html += `<label style="display:flex;align-items:center;gap:6px;font-weight:600;cursor:pointer">`;
+    html += `<input type="checkbox" onchange="listingBdSelectListing(decodeURIComponent('${encodeURIComponent(g.key)}'), this.checked)">`;
+    html += `<span class="q-item-title">📣 ${listingLabel}</span></label>`;
+    html += `<div class="q-item-badges">`;
+    if (asset) html += typeBadge(asset);
+    html += `<span class="q-badge">${g.items.length} contact${g.items.length === 1 ? '' : 's'}</span>`;
+    html += `</div></div>`;
+    if (loc) html += `<div class="q-item-meta"><span>${loc}</span></div>`;
+
+    html += `<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">`;
+    for (const it of g.items) {
+      const m = it.metadata || {};
+      const cname = esc(m.contact_name || it.entity_name || 'Unknown contact');
+      const cloc = esc([m.contact_city, m.contact_state].filter(Boolean).join(', '));
+      const email = m.contact_email ? esc(m.contact_email) : '';
+      const tmpl = m.template_id === 'T-011' ? 'Same asset' : 'Near listing';
+      const drafted = m.listing_bd_drafted ? ' · ✓ drafted' : '';
+      const checked = opsInboxSelected.has(it.id) ? ' checked' : '';
+      html += `<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:var(--s2);font-size:12px;cursor:pointer">`;
+      html += `<input type="checkbox" data-listing-bd-id="${esc(it.id)}"${checked} onchange="toggleListingBdItem(decodeURIComponent('${encodeURIComponent(it.id)}'), this.checked)">`;
+      html += `<span style="flex:1"><strong>${cname}</strong>${cloc ? ' · ' + cloc : ''}${email ? ' · ' + email : ''}</span>`;
+      html += `<span style="color:var(--text3);white-space:nowrap">${tmpl}${drafted}</span>`;
+      html += `</label>`;
+    }
+    html += `</div></div>`;
+  }
+  return html;
+}
+
+// Reuse the shared inbox selection set so Dismiss/bulk actions keep working.
+function toggleListingBdItem(id, checked) {
+  if (checked) opsInboxSelected.add(id);
+  else opsInboxSelected.delete(id);
+  updateListingBdCount();
+}
+
+function listingBdSelectListing(groupKey, checked) {
+  const card = document.querySelector('[data-listing-group="' + (window.CSS && CSS.escape ? CSS.escape(String(groupKey)) : String(groupKey)) + '"]');
+  if (!card) return;
+  card.querySelectorAll('input[data-listing-bd-id]').forEach(cb => {
+    cb.checked = checked;
+    const id = cb.getAttribute('data-listing-bd-id');
+    if (checked) opsInboxSelected.add(id);
+    else opsInboxSelected.delete(id);
+  });
+  updateListingBdCount();
+}
+
+function updateListingBdCount() {
+  const el = document.getElementById('listingBdCount');
+  if (el) el.textContent = opsInboxSelected.size + ' selected';
+}
+
+// Re-check boxes + refresh the count after a grouped re-render.
+function _listingBdSyncCheckboxes() {
+  document.querySelectorAll('input[data-listing-bd-id]').forEach(cb => {
+    cb.checked = opsInboxSelected.has(cb.getAttribute('data-listing-bd-id'));
+  });
+  updateListingBdCount();
+}
+
+async function submitListingBdDrafts(btn) {
+  const ids = Array.from(opsInboxSelected);
+  if (!ids.length) {
+    if (typeof showToast === 'function') showToast('Select at least one contact to draft.', 'warn');
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Drafting…'; }
+  const res = await opsApi('/api/operations?_route=draft&action=listing_bd', {
+    method: 'POST',
+    body: JSON.stringify({ inbox_item_ids: ids })
+  });
+  if (btn) { btn.disabled = false; btn.textContent = 'Draft outreach for selected'; }
+  if (!res.ok) {
+    if (typeof showToast === 'function') showToast('Draft failed: ' + (res.error || (res.data && res.data.error) || 'unknown'), 'error');
+    return;
+  }
+  const d = res.data || {};
+  if (typeof showToast === 'function') showToast(d.message || ('Drafted ' + (d.drafted || 0) + ' email(s).'), 'success');
+  opsInboxSelected.clear();
+  showListingBdDraftsModal(d.drafts || []);
+  renderInboxTriage();
+}
+
+// Lightweight preview modal so the operator can copy the generated drafts.
+function showListingBdDraftsModal(drafts) {
+  if (!drafts || !drafts.length) return;
+  const existing = document.getElementById('listingBdDraftModal');
+  if (existing) existing.remove();
+  let inner = '';
+  for (const d of drafts) {
+    const cover = d.covered_listings > 1 ? ` <span class="q-badge">covers ${d.covered_listings} listings</span>` : '';
+    inner += `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--s1)">`;
+    inner += `<div style="font-weight:600;margin-bottom:2px">${esc(d.contact_name || 'Contact')}${cover}</div>`;
+    inner += `<div style="font-size:11px;color:var(--text3);margin-bottom:8px">${esc(d.contact_email || '')} · ${esc(d.template_id || '')}</div>`;
+    inner += `<div style="font-size:12px;font-weight:600;margin-bottom:4px">${esc(d.subject || '(no subject)')}</div>`;
+    inner += `<textarea readonly style="width:100%;min-height:120px;font-size:12px;font-family:inherit;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(d.body || '')}</textarea>`;
+    if (d.unresolved_variables && d.unresolved_variables.length) {
+      inner += `<div style="font-size:11px;color:var(--text3);margin-top:4px">Fill before sending: ${esc(d.unresolved_variables.join(', '))}</div>`;
+    }
+    inner += `</div>`;
+  }
+  const modal = document.createElement('div');
+  modal.id = 'listingBdDraftModal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML = `<div style="background:var(--bg);border-radius:12px;max-width:640px;width:100%;max-height:85vh;overflow:auto;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0">Listing-BD drafts (${drafts.length})</h3>
+      <button class="q-action" onclick="document.getElementById('listingBdDraftModal').remove()">Close</button>
+    </div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Drafts recorded to template_sends (reply tracking on). Copy into Outlook to send.</div>
+    ${inner}
+  </div>`;
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
 }
 
 // Item-level inbox deep-link target (`#/inbox/<id>` — the Teams "View in LCC"
