@@ -301,8 +301,12 @@ simulation so Snellville sits correctly at "awaiting seller." My Day now shows t
 to-do (offer_review gone) with its full multi-channel timeline. `node --check` + suite green.
 
 **Next (documented):** (a) a content-aware next-step — read the reply body via the AI layer and set a specific
-title (countered $X → "Review counter & respond"; accepted → "Open escrow"); (b) a cadence sweep that re-nudges a
-`seller_follow_up` if it goes stale with no reply; (c) generalize beyond seller deals to buyer/broker premises.
+title (countered $X → "Review counter & respond"; accepted → "Open escrow"). **Scoped in
+`ai-next-step-engine-scope.md`** — rides the EXISTING `invokeExtractionAI` path (edge→Claude + OpenAI fallback) at
+~$0 net-new for phase 1; Azure-OpenAI-on-Northmarq-tenant for enterprise privacy (phase 2); optional on-prem
+Ollama + LoRA-on-our-email-corpus for the local, our-data-only ideal (phase 3) — all via the one `ollama`/provider
+seam `ai.js` already anticipates. (b) a cadence sweep that re-nudges a `seller_follow_up` if it goes stale with no
+reply; (c) generalize beyond seller deals to buyer/broker premises.
 
 ## Multi-channel auto-resolve BUILT — a call (not just a send) closes a to-do (2026-07-30)
 
