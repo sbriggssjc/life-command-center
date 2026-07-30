@@ -1236,6 +1236,14 @@ const COSTAR_PLACEHOLDER_RE = /^(unkwn|unknown|n\/?a|tbd|none|null|-+|—+|\.{2,
 // Date strings landing as tenants — 'Since Jun 23, 2009',
 // 'Mar 26, 2026', 'Q2 2026', 'Jan 2024 - Dec 2028' etc.
 const COSTAR_DATE_RE = /^(since\s+)?((?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2},?\s+\d{4}|q[1-4]\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{4}\s*-\s*\d{4})\s*$/i;
+// 2026-07-30: Google Maps embed chrome leaking into the tenant list from
+// CoStar's redesigned For-Sale Summary page (the map renders adjacent to the
+// Tenants panel). Mirror of the extension's MAP_WIDGET_REJECT
+// (extension/content/costar.js) — defense-in-depth so a map artifact is
+// rejected at write time even if a scraper build predates the client fix.
+// Anchored; deliberately does NOT reject bare "google"/"satellite" ("Satellite
+// Healthcare" is a real dialysis operator; "Google" can be a real tenant).
+const MAP_WIDGET_RE = /^(keyboard\s+shortcuts|map\s+data(\s+.*)?|imagery(\s+.*)?|©\s*\d{4}\b.*|report\s+a\s+map\s+error|terms(\s+of\s+use)?|this\s+page\s+can'?t\s+load\s+google\s+maps\s+correctly|do\s+you\s+own\s+this\s+website\?|map\s+details?|\d{1,4}\s*(ft|mi|m|km|yd))\s*$/i;
 function isJunkTenant(name) {
   if (!name || name.trim().length < 3) return true;
   const n = name.trim();
@@ -1253,6 +1261,7 @@ function isJunkTenant(name) {
   if (COSTAR_INDUSTRY_ROLE_RE.test(n)) return true;
   if (COSTAR_PLACEHOLDER_RE.test(n)) return true;
   if (COSTAR_DATE_RE.test(n)) return true;
+  if (MAP_WIDGET_RE.test(n)) return true;
   // City+state+zip residue — "West Chicago, IL 60185" or just "<city>, <state>"
   if (/^[a-z\s]+,\s*[a-z]{2}(\s+\d{5}(-\d{4})?)?$/i.test(n)) return true;
   return false;
