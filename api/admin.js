@@ -2289,7 +2289,15 @@ async function handleDecisionVerdict(req, res) {
         if (!pr.ok) { await recordEffectFailure({ dispositioned: false, error: pr.data });
           return res.status(502).json({ error: 'disposition_failed', detail: pr.data }); }
         effects.dispositioned = patch.status;
-        labelRow = { owner_a: rc.owner_name || null, owner_b: null,
+        // W3.7 rider — capture the contact's RESOLVED name as owner_b so the
+        // Wave-4 training pair is complete (was null, weakening owner_unification
+        // pairs). candidate_display is the fully-resolved label built in the card
+        // (formatOwnerReconcileCandidate, e.g. "Micah Pinney (Legend Development
+        // LLC)"); fall back to the raw candidate name/company. The 50 pre-existing
+        // null rows are backfilled from lcc_decisions.context by migration
+        // 20260817120000_lcc_w3_7_entity_match_label_owner_b_backfill.sql.
+        labelRow = { owner_a: rc.owner_name || null,
+          owner_b: rc.candidate_display || rc.candidate_name || rc.candidate_company || null,
           entity_a: rc.recorded_owner_id != null ? String(rc.recorded_owner_id) : null,
           entity_b: rc.candidate_unified_id != null ? String(rc.candidate_unified_id) : null,
           match_score: rc.match_score != null ? Number(rc.match_score) : null,
