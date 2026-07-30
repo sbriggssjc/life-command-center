@@ -5587,6 +5587,19 @@ async function renderMetadataBackfillWidget(parentEl) {
 }
 window.renderMetadataBackfillWidget = renderMetadataBackfillWidget;
 
+// W3.6 — build a PROPERTY-SPECIFIC CoStar search from address+city+state. The
+// backfill view's costar_search_url points at product.costar.com/all-properties
+// with an unencoded "#?search=" fragment that CoStar's SPA ignores, dumping the
+// user on the generic all-properties page. Prefer a well-formed www.costar.com
+// search (same pattern as the detail-panel CoStar Lookup); fall back to the
+// view URL only when we have no address to build from.
+function buildCostarSearchUrl(address, city, state, fallback) {
+  var q = [address, city, state].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  if (q) return 'https://www.costar.com/search?q=' + encodeURIComponent(q);
+  return fallback || null;
+}
+window.buildCostarSearchUrl = buildCostarSearchUrl;
+
 async function renderMetadataBackfillPage() {
   var el = document.getElementById('researchContent');
   if (!el) return;
@@ -5615,7 +5628,10 @@ async function renderMetadataBackfillPage() {
       + '<div class="q-item-meta">Missing: <b>' + esc(miss || '\u2014') + '</b>'
       + (it.most_recent_sold_price != null ? ' \u00b7 last sold ' + usd(it.most_recent_sold_price) : '') + '</div>'
       + '<div class="q-actions">'
-      + (it.costar_search_url ? '<a class="q-action primary" href="' + esc(it.costar_search_url) + '" target="_blank" rel="noopener">Open CoStar \u2192</a>' : '<span class="q-badge">no CoStar URL</span>')
+      + (function () {
+          var u = buildCostarSearchUrl(it.address, it.city, it.state, it.costar_search_url);
+          return u ? '<a class="q-action primary" href="' + esc(u) + '" target="_blank" rel="noopener">Open CoStar \u2192</a>' : '<span class="q-badge">no CoStar URL</span>';
+        })()
       + '</div></div>';
   });
   el.innerHTML = html;
