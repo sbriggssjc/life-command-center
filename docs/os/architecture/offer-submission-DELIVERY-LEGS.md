@@ -1,3 +1,9 @@
+> **⚠️ SUPERSEDED (2026-07-30) — build history only.** These legs are DONE and deployed, and the file-back leg
+> CHANGED: filing now goes through **`property-doc-writeback`** (resolve-or-refuse · dedupe · provenance), NOT the
+> old `PA_DEALFOLDER_FILE_URL` approach described below. Routes/tools (`get_offer_context`/`log_offer`) and
+> `outlook-draft.js` Bcc are merged. **Current source of truth:** `docs/os/skills/offer-submission-SKILL.md` +
+> `docs/os/canon/blocks/offer-submission.md` + `docs/architecture/offer-context-connectivity.md`.
+
 # Offer-submission — delivery + logging legs (code changes + PA/SF instructions)
 
 _2026-07-29. Wires the last legs of the skill: **log** (done, DB), **draft to Drafts** (code + PA), **file-back**

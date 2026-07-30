@@ -117,3 +117,32 @@ cadence that advances from reality — and becomes the template for every other 
 - **Next predicates to add** (same shape): "call X back" closes on a logged outbound call to X; "reply to Y" closes
   on a sent email to Y; generalize `lcc_autoresolve_offer_review` → `lcc_autoresolve_todos(activity)` keyed by
   `action_type`.
+
+## Roadmap: ingestion sources & layers on deck (decisions on record)
+1. **Personal email — deliberately EXCLUDED from the professional sent-ingest** (2026-07-30 decision). The
+   `outlook-sent` handler writes `visibility:'shared'` into the Briggs CRE workspace; personal sends must never
+   enter the shared professional deal graph (canon: personal context never on team surfaces). Personal ingest is a
+   later, separately-scoped path (personal mailbox → `visibility:'private'` + personal domain → personal to-dos),
+   never wired into the shared route.
+2. **Shared marketing mailbox `teambriggs@northmarq.com`** (Scott + Sarah Martin). The front door for marketing
+   inquiries + leads — highest-value BD signal (OM downloaders, buyer inquiries), today reaching LCC only
+   indirectly (Sarah forwards→broker flags, or SF log). Build as its own **inbound** capture (attribute to
+   listing+broker via the deal-email-matcher; create lead/cadence) plus Sarah's outbound responses as touches.
+   **Dedup is the crux:** the same inquiry arrives 3 ways — shared-box original, Sarah's forward (a NEW
+   message-id), and the SF log — so exact-id dedup is insufficient; need thread/content-level dedup. Professional/
+   shared scope (fits this workspace).
+3. **WebEx softphone (desk / direct office line) — the call layer.** Schema is already primed:
+   `activity_events` has a `source_type='webex'` unique index (`ux_activity_webex_extid`). Ingest inbound/outbound
+   calls (+ forwarded-voicemail flagged emails) as `webex` activities through the single cadence-advance owner.
+   Then extend the auto-retire predicate so an **outbound call to a contact's number OR an email follow-up to that
+   contact completes the contact's outstanding To-Do** and triggers the clean/sort/file sweep. Requires §4.
+4. **Cross-surface contact reconciliation (WebEx ↔ Outlook ↔ LCC) — the identity spine for §3.** One person =
+   one LCC entity resolvable by BOTH phone (WebEx) and email (Outlook). Extend `external_identities`
+   (`source_system` webex/outlook, keyed on phone/email) + `owner_contact_pivot` + `entity-link.js` so a phone
+   number or an email resolves to the same entity/contact/deal. This is the prerequisite that lets "outbound call
+   to number X" and "email to contact X" resolve to the SAME to-do. Reconcile via matching phone+email+name,
+   provenance-tagged, confidence-scored, reversible — never a blind merge.
+
+Build order for the call layer: **§4 contact reconciliation first** (identity), then **§3 WebEx call ingest +
+generalized auto-retire**, so a call and an email to the same person close the same to-do. §2 (shared mailbox) is
+independent and can slot in anytime; §1 (personal) waits for the personal-domain layer.

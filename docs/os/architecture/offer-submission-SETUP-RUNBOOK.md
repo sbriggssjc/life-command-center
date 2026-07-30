@@ -1,3 +1,8 @@
+> **✅ MOSTLY COMPLETE (2026-07-30) — setup history.** The offer-submission build is live end-to-end (draft · log ·
+> generic-SF · file-back via `property-doc-writeback` · rendered to all surfaces). Note: file-back replaced the old
+> `PA_DEALFOLDER_FILE_URL` step with `property-doc-writeback`. **Current source of truth:**
+> `docs/os/skills/offer-submission-SKILL.md` + `docs/architecture/offer-context-connectivity.md`.
+
 # Offer-Submission — Manual / Human Setup Runbook
 
 _2026-07-29. Everything a human must wire so the `offer-submission` skill runs self-serve from any chat surface —

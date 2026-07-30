@@ -1,3 +1,8 @@
+> **⚠️ SUPERSEDED (2026-07-30) — build history only.** Both wire-ups are DONE: `lcc_offer_context`/`lcc_log_offer`
+> are exposed as routes + MCP tools (`mcp/offer-context.js`, merged + deployed), and folder-feed indexing is live
+> (`SHAREPOINT_LIST_URL` wired). **Current source of truth:** `docs/os/skills/offer-submission-SKILL.md` +
+> `docs/architecture/offer-context-connectivity.md`.
+
 # Turnkey deploy — 1.1 (expose `lcc_offer_context` as a tool/route) + 2.2 (folder-feed indexing)
 
 _2026-07-29. Copy-paste PR for the two highest-leverage human wire-ups from the setup runbook. 1.1 is a Railway
