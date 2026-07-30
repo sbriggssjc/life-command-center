@@ -44,7 +44,7 @@ describe('logCallDualAnchor', () => {
   });
 
   it('infers outbound for a placed call and builds a deterministic external_id', async () => {
-    const { deps, calls } = harness({});
+    const { deps, calls } = harness({ party_entity_id: 'P', primary_deal: 'D' });
     await logCallDualAnchor({
       call: { phone: '918-794-9787', direction: 'placed', occurred_at: '2026-07-30T13:00:00Z', source_system: 'webex' },
     }, deps);
@@ -52,6 +52,18 @@ describe('logCallDualAnchor', () => {
     assert.equal(row.metadata.direction, 'outbound');
     assert.equal(row.externalId, 'webex:9187949787:2026-07-30T13:00:00Z');
     assert.equal(row.title, 'Call to 918-794-9787');           // no name → phone
+    // an outbound call auto-resolves "reach out" to-dos (multi-channel loop)
+    assert.ok(calls.resolve.some(c => c.path.includes('lcc_autoresolve_todos') && c.body.p_direction === 'outbound'),
+      'outbound call should invoke lcc_autoresolve_todos');
+  });
+
+  it('does NOT auto-resolve on an inbound (received) call', async () => {
+    const { deps, calls } = harness({ party_entity_id: 'P', primary_deal: 'D' });
+    await logCallDualAnchor({
+      call: { phone: '303-876-1155', direction: 'received', occurred_at: '2026-07-30T15:00:00Z' },
+    }, deps);
+    assert.ok(!calls.resolve.some(c => c.path.includes('lcc_autoresolve_todos')),
+      'received call must not auto-resolve a follow_up (you did not reach out)');
   });
 
   it('skips a sub-10-digit phone', async () => {

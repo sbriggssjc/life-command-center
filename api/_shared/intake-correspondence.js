@@ -275,6 +275,19 @@ export async function logCallDualAnchor({ workspaceId, actorId, call }, deps = {
       deal_entity_id:   dealEntityId,
     },
   });
+
+  // Multi-channel auto-resolve: an OUTBOUND (placed) call closes a "reach out"
+  // follow_up on the party/deal, the same way a send does. Fresh insert + outbound
+  // only; best-effort (never blocks). Inbound/received calls just log on the spine.
+  if (res?.inserted && dir === 'outbound' && (dealEntityId || partyEntityId)) {
+    try {
+      await query('POST', 'rpc/lcc_autoresolve_todos', {
+        p_entity_id: dealEntityId, p_activity_id: res.id || null,
+        p_party_entity_id: partyEntityId, p_channel: 'call', p_direction: 'outbound',
+      });
+    } catch (_e) { /* best-effort */ }
+  }
+
   return {
     ok: true, inserted: !!res?.inserted,
     party_entity_id: partyEntityId, deal_entity_id: dealEntityId,

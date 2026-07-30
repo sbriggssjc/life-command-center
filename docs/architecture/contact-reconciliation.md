@@ -222,6 +222,33 @@ hand-curated — worth revisiting as new deal/vendor vocabulary appears; (c) amb
 on purpose (e.g. `sarhanhotelgroup` could be a hotel-owning principal, `verizon.net` a client's ISP address) —
 the override is the correction path, not a broader auto-rule.
 
+## Multi-channel auto-resolve BUILT — a call (not just a send) closes a to-do (2026-07-30)
+
+The capture layer was complete (email in/out + calls all on the dual-anchor spine); this closes the
+Producer/Consumer loop from that capture — real activity, any channel, auto-retires the to-do it satisfies
+(doctrine: close the loop from activity, not a separate manual queue). `lcc_autoresolve_offer_review` only closed
+`offer_review` on a send; generalized to **`lcc_autoresolve_todos(p_entity_id, p_activity_id, p_party_entity_id,
+p_channel, p_direction)`** (OPS, live):
+- **offer_review** — an outbound submission to the DEAL completes it (unchanged semantics).
+- **follow_up** ("reach out to new contact / party") — an OUTBOUND touch of ANY channel (email sent OR call
+  placed) to the PARTY *or* the DEAL completes it. Resolves `open`+`in_progress`; leaves waiting/completed/
+  cancelled. The dual anchor is what makes this work: the activity carries both its deal and its party, so a
+  deal-tagged send/call also clears a party-level follow_up.
+- **Guardrails:** only `p_direction='outbound'` auto-resolves (an inbound reply / received call never closes a
+  "you reach out" to-do — returns `not_outbound`); high-confidence only; provenance-stamped
+  (`auto_resolved`, reason `offer_submission_sent`|`outreach_touch`, channel, `reversible:true`); honest per-type
+  counts returned. `lcc_autoresolve_offer_review` kept as a thin **delegating wrapper** so the deployed caller
+  never breaks.
+
+Wiring: `handleOutlookSent` now calls `lcc_autoresolve_todos` with the party + `email`/`outbound` (so a send also
+clears party follow_ups, not just the deal's offer_review); `logCallDualAnchor` calls it for OUTBOUND calls with
+`call`/`outbound`. Both stay gated on `!backfill` / fresh-insert so replayed history never mass-closes to-dos.
+
+**Verified:** DB smoke (non-match → 0 closed; inbound → `not_outbound`, real to-dos untouched); `call-dual-anchor`
+test asserts an outbound call invokes `lcc_autoresolve_todos` and a received call does NOT (17/17 suite green);
+`node --check` clean. **Deploy to activate** (DB fn live now; JS ships on the redeploy). Current to-do taxonomy is
+thin (`offer_review`, `follow_up`) — as new `action_type`s appear, add their outbound-satisfied premise here.
+
 ## WebEx call layer BUILT — calls join the dual-anchor spine (2026-07-30)
 
 WebEx call history was ingested (`contacts-handler.js::ingestWebexCalls` → `/telephony/calls/history`) but only
