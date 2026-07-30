@@ -146,3 +146,32 @@ cadence that advances from reality — and becomes the template for every other 
 Build order for the call layer: **§4 contact reconciliation first** (identity), then **§3 WebEx call ingest +
 generalized auto-retire**, so a call and an email to the same person close the same to-do. §2 (shared mailbox) is
 independent and can slot in anytime; §1 (personal) waits for the personal-domain layer.
+
+## Learned cadence & content (BD / marketing effectiveness) — the soft layer over the hard rules
+The cadence targets in `logging-and-touchpoints` (7 touches / ~4× yr / weekly-report) and the stage intervals in
+`cadence-scan.js` (`INTERVAL_DAYS`) are the **floor** — the minimum that should never be missed. On top of that,
+the timing AND content of the *next* touch should be **learned per owner** from their actual response history and
+our background with them — better than any fixed rule (Scott's directive). The enriched spine now makes this
+possible: with sent emails, replies, and calls all flowing in, the system can *see* what each owner responds to.
+
+**Timing (per-owner cadence learning):** derive each owner's responsiveness profile from `activity_events` —
+reply latency, preferred channel, day/time that gets answered, how they went cold before — and let the queue
+rank/schedule the next touch by *predicted* responsiveness, not just the stage interval. Surface as a recommended
+next-touch date + channel (resolve-or-refuse; the floor still guarantees a minimum). Never below the doctrine floor.
+
+**Content (per-owner + per-topic learning):** feed reply/no-reply outcomes back through the existing template loop
+(`recordTemplateSend` → `template-refinement`) keyed by owner + topic — which subject line, angle, length, and
+deliverable actually drew a response from *this* owner and on *this* asset class. The next draft is pre-shaped by
+what converts, and carries the relationship background (prior deals, tone, what they care about) the enriched
+dossier already holds.
+
+**Self-improvement loop (marketing/BD effectiveness):** a scheduled sweep measures response/engagement rate by
+subject-angle × owner-segment × asset class, and promotes the highest-converting patterns into the template/cadence
+recommendations — a closed loop that raises marketing response rates and BD effectiveness over time. Honest metrics
+(real replies, not sends); every recommendation is a suggestion the human can override; provenance + confidence on
+every learned signal. This is the payoff of feeding the spine: the more we ingest (sends, replies, calls), the
+smarter the timing and content of every next step becomes.
+
+**Dependencies / order:** needs the ingest keystone (sends — built) + replies (inbound intake — exists) + calls
+(§3) + contact identity (§4) flowing, so responses attribute to the right owner. Build the measurement/learning
+sweep AFTER the call layer, so timing/content learning sees all channels — not just email.

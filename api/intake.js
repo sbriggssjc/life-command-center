@@ -330,6 +330,9 @@ async function handleOutlookSent(req, res) {
   if (!requireRole(user, 'operator', workspaceId)) return res.status(403).json({ error: 'Operator role required' });
 
   const payload = req.body || {};
+  // Backfill mode: log the historical outbound touch but DO NOT auto-resolve to-dos or advance-cadence side
+  // effects that only forward-going sends should trigger (avoids mass-closing open to-dos from replayed history).
+  const backfill = payload.backfill === true || payload.backfill === 'true' || req.query.backfill === '1';
   const internetMsgId = firstNonEmpty(payload.internet_message_id, payload.internetMessageId, payload.message_id, payload.id, null);
   if (!internetMsgId) return res.status(400).json({ error: 'internet_message_id (or message_id/id) is required' });
 
@@ -375,7 +378,7 @@ async function handleOutlookSent(req, res) {
 
   // Self-resolve: a sent email to a deal's correspondent completes the "submit offer" To-Do (reversible).
   let autoResolved = null;
-  if (wasNew && dealEntityId) {
+  if (wasNew && dealEntityId && !backfill) {
     const rr = await opsQuery('POST', 'rpc/lcc_autoresolve_offer_review', { p_entity_id: dealEntityId, p_activity_id: activityId });
     autoResolved = Array.isArray(rr.data) ? rr.data[0] : rr.data;
   }
@@ -383,7 +386,7 @@ async function handleOutlookSent(req, res) {
   return res.status(200).json({
     ok: true, logged: wasNew, duplicate: !wasNew,
     activity_id: activityId, deal_entity_id: dealEntityId,
-    recipients: recips, auto_resolved: autoResolved,
+    recipients: recips, auto_resolved: autoResolved, backfill,
     note: dealEntityId ? 'logged outbound touch on deal; cadence advances via trigger'
                        : 'logged unattached (no matching deal correspondent)',
   });
