@@ -2803,7 +2803,7 @@ function _fedCardHTML(it, i, isNext) {
   } else if (_dcFedType === 'owner_reconcile') {
     const kind = c.kind;
     const nameA = c.owner_name || c.source_name || '?';
-    const nameB = c.candidate_name || c.target_name
+    const nameB = c.candidate_display || c.candidate_name || c.target_name
       || (c.candidate_unified_id ? ('contact ' + String(c.candidate_unified_id).slice(0, 8)) : '?');
     const kindLbl = kind === 'ore' ? 'ORE multi-signal'
       : kind === 'owner_unification' ? 'Owner unification (gov)'
@@ -2819,19 +2819,33 @@ function _fedCardHTML(it, i, isNext) {
         return '<span class="q-badge">' + esc(lbl + w) + '</span>';
       }).join('');
     } else if (kind === 'owner_unification') {
-      evChips = (c.reason ? '<span class="q-badge">' + esc(String(c.reason)) + '</span>' : '')
-        + (c.match_tier != null ? '<span class="q-badge">tier ' + esc(String(c.match_tier)) + '</span>' : '');
+      // W3.6 — real comparison facts, not the bare "tier0_ambiguous" token.
+      evChips = (c.match_reason_label ? '<span class="q-badge">' + esc(String(c.match_reason_label)) + '</span>'
+          : (c.reason ? '<span class="q-badge">' + esc(String(c.reason)) + '</span>' : ''))
+        + (c.match_tier != null ? '<span class="q-badge">tier ' + esc(String(c.match_tier)) + '</span>' : '')
+        + (c.shared_state ? '<span class="q-badge type">same state ' + esc(String(c.candidate_state)) + '</span>' : '');
     } else if (kind === 'entity_match_candidate') {
       evChips = (c.match_method ? '<span class="q-badge">' + esc(String(c.match_method)) + '</span>' : '')
         + (c.source_table ? '<span class="q-badge">' + esc(String(c.source_table)) + ' &rarr; ' + esc(String(c.target_table || '')) + '</span>' : '');
     }
     const conflictBadge = c.high_authority_conflict ? '<span class="q-badge pri-high">high-authority conflict</span>' : '';
     const mergeVerb = kind === 'ore' ? 'Merge (same party) &rarr;' : 'Confirm match &rarr;';
+    let cmpMeta = '';
+    if (kind === 'owner_unification') {
+      const contactBits = [c.candidate_company, c.candidate_email,
+        [c.candidate_city, c.candidate_state].filter(Boolean).join(', ')].filter(Boolean).join(' \u00b7 ');
+      const ownerLoc = [c.owner_property_address, c.owner_property_city, c.owner_property_state].filter(Boolean).join(', ');
+      cmpMeta = '<div class="q-item-meta">Owner (recorded): <b>' + esc(c.owner_name || '?') + '</b>'
+          + (ownerLoc ? ' \u00b7 ' + esc(ownerLoc) : '') + '</div>'
+        + '<div class="q-item-meta">Contact: <b>' + esc(c.candidate_name || c.candidate_company || 'unresolved') + '</b>'
+          + (contactBits ? ' \u00b7 ' + esc(contactBits) : '') + '</div>';
+    }
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(nameA)
       + ' <span style="opacity:.6">&harr;</span> ' + esc(nameB) + '</span>'
       + '<div class="q-item-badges"><span class="q-badge type">' + esc(kindLbl) + '</span>'
       + (score ? '<span class="q-badge">' + esc(score) + '</span>' : '') + conflictBadge + '</div></div>'
       + (evChips ? '<div class="q-item-meta">Evidence: ' + evChips + '</div>' : '')
+      + cmpMeta
       + '<div class="q-item-meta">Are these the SAME owner / party?</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">' + mergeVerb + '</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject (distinct)</button>'

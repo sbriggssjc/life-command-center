@@ -684,3 +684,58 @@ export async function runListingBdDraftConsumer(params) {
     drafts
   };
 }
+
+// ============================================================================
+// W3.6 — Listing-BD inbox display-name resolution (batched, render-time join)
+// ============================================================================
+// The producer stores contact_name/listing_name in metadata, but when a match
+// landed on an entity whose name wasn't populated yet, the grouped Listing-BD
+// view rendered "New listing" + "Unknown contact". This pure helper fills the
+// missing names/locations from an already-fetched entity map (id -> entity row
+// with name/address/city/state/email). The caller does ONE batched entities
+// query per page (never one lookup per card) and passes the map here.
+export function applyListingBdEntityNames(items, entityById) {
+  if (!Array.isArray(items)) return items;
+  const get = (id) => {
+    if (id == null || !entityById) return null;
+    if (typeof entityById.get === 'function') return entityById.get(String(id)) || null;
+    return entityById[String(id)] || null;
+  };
+  const blank = (v) => v == null || String(v).trim() === '';
+  for (const it of items) {
+    if (!it || it.source_type !== 'listing_bd_trigger') continue;
+    const m = it.metadata = it.metadata || {};
+    // Listing (the group header) — resolve from the listing entity.
+    const le = get(m.listing_entity_id);
+    if (le) {
+      if (blank(m.listing_name)) m.listing_name = le.name || le.address || null;
+      if (blank(m.listing_city)) m.listing_city = le.city || null;
+      if (blank(m.listing_state)) m.listing_state = le.state || null;
+    }
+    // Contact (each row) — resolve from the inbox item's own entity_id.
+    const ce = get(it.entity_id);
+    if (ce) {
+      if (blank(m.contact_name)) m.contact_name = ce.name || null;
+      if (blank(m.contact_city)) m.contact_city = ce.city || null;
+      if (blank(m.contact_state)) m.contact_state = ce.state || null;
+      if (blank(m.contact_email)) m.contact_email = ce.email || null;
+      if (blank(it.entity_name)) it.entity_name = ce.name || null;
+    }
+  }
+  return items;
+}
+
+// Collect the distinct entity ids a listing_bd_trigger page needs resolved
+// (listing entities + contact entities that still lack a display name).
+export function collectListingBdEntityIds(items) {
+  const ids = new Set();
+  if (!Array.isArray(items)) return [];
+  const blank = (v) => v == null || String(v).trim() === '';
+  for (const it of items) {
+    if (!it || it.source_type !== 'listing_bd_trigger') continue;
+    const m = it.metadata || {};
+    if (m.listing_entity_id != null && blank(m.listing_name)) ids.add(String(m.listing_entity_id));
+    if (it.entity_id != null && blank(m.contact_name) && blank(it.entity_name)) ids.add(String(it.entity_id));
+  }
+  return [...ids];
+}
