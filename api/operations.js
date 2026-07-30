@@ -62,7 +62,7 @@ import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance, chooseBestTemplate } from './_shared/templates.js';
-import { runListingBdPipeline } from './_shared/listing-bd.js';
+import { runListingBdPipeline, runListingBdDraftConsumer } from './_shared/listing-bd.js';
 import { buildTeamContextWithSales, getTrackRecordSummary } from './_shared/team-context.js';
 import { getCadenceForDraft, advanceCadence, getCadenceState } from './_shared/cadence-engine.js';
 import { linkPersonToEntity, stampContactOnActiveCadence } from './_shared/contact-attach.js';
@@ -6377,11 +6377,55 @@ async function handleDraftRoute(req, res) {
       });
     }
 
-    // POST ?action=listing_bd — run listing-as-BD pipeline
+    // POST ?action=listing_bd — two modes:
+    //   • CONSUMER (W3.5, audit 3.4.2): inbox_item_ids[] present → drain the
+    //     selected listing_bd_trigger inbox items into reviewable drafts +
+    //     template_sends rows (dedupes by contact across a 7-day window). This is
+    //     the caller the grouped Inbox "Draft outreach" button hits — the
+    //     consumer the producer historically lacked.
+    //   • PRODUCER (legacy): listing_entity_id present → (re)run the matching
+    //     pipeline that fans out inbox_items for a listing.
     if (action === 'listing_bd') {
-      const { listing_entity_id, exclude_entity_ids, limit: bdLimit } = req.body || {};
+      const body = req.body || {};
+
+      // ---- CONSUMER mode (W3.5) --------------------------------------------
+      if (Array.isArray(body.inbox_item_ids) && body.inbox_item_ids.length > 0) {
+        const ids = body.inbox_item_ids.filter(Boolean).slice(0, 500);
+        if (!ids.length) {
+          return res.status(400).json({ error: 'inbox_item_ids must contain at least one id' });
+        }
+        // Load the selected rows (workspace-scoped); keep only OPEN
+        // listing_bd_trigger items (new/triaged) — never re-draft a
+        // promoted/dismissed one.
+        const idList = ids.map(pgFilterVal).join(',');
+        const itemsRes = await opsQuery('GET',
+          `inbox_items?id=in.(${idList})&workspace_id=eq.${workspaceId}` +
+          `&source_type=eq.listing_bd_trigger&status=in.(new,triaged)&select=*`,
+          undefined, { countMode: 'none' }
+        );
+        if (!itemsRes.ok) {
+          return res.status(500).json({ error: 'Failed to load inbox items', detail: itemsRes.data });
+        }
+        const inboxItems = itemsRes.data || [];
+        if (!inboxItems.length) {
+          return res.status(404).json({ error: 'No open listing_bd inbox items found for the given ids' });
+        }
+        const consumed = await runListingBdDraftConsumer({
+          inboxItems, workspaceId, userId: user.id,
+          windowDays: Number(body.window_days) || 7,
+          strict: !!body.strict
+        });
+        return res.status(200).json({
+          ...consumed,
+          message: `Drafted ${consumed.drafted} outreach email(s) for ${consumed.deduped_contacts} contact(s); ` +
+                   `${consumed.items_triaged} inbox item(s) triaged, ${consumed.sends_recorded} send(s) recorded.`
+        });
+      }
+
+      // ---- PRODUCER mode (legacy pipeline) ---------------------------------
+      const { listing_entity_id, exclude_entity_ids, limit: bdLimit } = body;
       if (!listing_entity_id) {
-        return res.status(400).json({ error: 'listing_entity_id is required' });
+        return res.status(400).json({ error: 'listing_entity_id or inbox_item_ids is required' });
       }
 
       // Fetch the listing entity

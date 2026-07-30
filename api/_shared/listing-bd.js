@@ -24,6 +24,7 @@
 
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { writeSignal } from './signals.js';
+import { generateDraft, recordTemplateSend } from './templates.js';
 
 // ============================================================================
 // CONTACT MATCHING — Same Asset Type / Same State (T-011)
@@ -348,4 +349,338 @@ function buildDraftPreview(listing, contact, templateId, matchReason) {
   }
 
   return lines.join('\n');
+}
+
+// ============================================================================
+// W3.5 — LISTING-BD CONSUMER (audit 3.4.2)
+//
+// The producer above fanned ~1,080 runs/14d of matched-contact inbox_items out
+// to the operator, while the T-011/T-012 templates it feeds had 0 sends in 120
+// days: a pure producer with no consumer. This section is the named consumer.
+// Given a set of listing_bd_trigger inbox items the operator selected in the
+// grouped Inbox view, it:
+//   1. Dedupes by contact across a 7-day window — a contact matched by three
+//      listings in a week gets ONE draft covering all three, not three drafts.
+//   2. Renders the contact's template into a draft.
+//   3. Records a template_sends row (replied=null — "not yet observed") so
+//      W1.2's reply loop (recordTemplateResponse) measures THIS channel from day
+//      one; a reply flips replied=true + emits the template_response signal.
+//   4. Marks the drained inbox items 'triaged' (reversible; never hard-deleted),
+//      with a metadata tag so the honest inbox count stops showing worked items.
+// Consumption-Layer doctrine: honest counts (one send per drafted contact, not
+// one per matched row), reversible, idempotent.
+// ============================================================================
+
+const LISTING_BD_TRIGGER = 'listing_bd_trigger';
+
+/**
+ * Best-effort epoch (ms) for a listing_bd inbox item, preferring the producer's
+ * generated_at stamp, then received_at/created_at. Undated items sort as "now"
+ * so a selection with no timestamps still groups into one window.
+ */
+function _itemEpoch(item) {
+  const raw = item?.metadata?.generated_at || item?.received_at || item?.created_at;
+  const t = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(t) ? t : Date.now();
+}
+
+/**
+ * The listing identity for a listing_bd inbox item (its metadata.listing_entity_id).
+ */
+function _listingKey(item) {
+  return item?.metadata?.listing_entity_id || null;
+}
+
+/**
+ * The contact identity for a listing_bd inbox item. Prefer the entity_id (the
+ * matched owner/contact); fall back to a normalized contact_email so two items
+ * for the same person without an entity id still collapse.
+ */
+function _contactKey(item) {
+  if (item?.entity_id) return `ent:${item.entity_id}`;
+  const email = item?.metadata?.contact_email;
+  if (email) return `email:${String(email).trim().toLowerCase()}`;
+  return null;
+}
+
+/**
+ * Cross-listing dedupe (Part 3). Groups listing_bd inbox items by contact, then
+ * splits each contact's items into windows of `windowDays` (default 7): all
+ * items within `windowDays` of the group's most-recent item become ONE draft
+ * covering every distinct listing; items older than the window start a new
+ * group. Pure — no I/O — so it is directly unit-testable.
+ *
+ * @param {object[]} items - listing_bd_trigger inbox items (with metadata)
+ * @param {object} [opts]
+ * @param {number} [opts.windowDays=7]
+ * @returns {Array<{contactKey, contactId, contactName, contactEmail, domain,
+ *   templateId, matchReason, items, listings}>}
+ */
+export function dedupeListingBdItemsByContact(items, opts = {}) {
+  const windowMs = (opts.windowDays ?? 7) * 24 * 60 * 60 * 1000;
+
+  // Bucket by contact
+  const byContact = new Map();
+  for (const item of (items || [])) {
+    if (!item || item.source_type !== LISTING_BD_TRIGGER) continue;
+    const ck = _contactKey(item);
+    if (!ck) continue; // no contact identity → cannot draft, skip
+    if (!byContact.has(ck)) byContact.set(ck, []);
+    byContact.get(ck).push(item);
+  }
+
+  const groups = [];
+  for (const [contactKey, contactItems] of byContact.entries()) {
+    // Most-recent first so the window anchors on the freshest match.
+    contactItems.sort((a, b) => _itemEpoch(b) - _itemEpoch(a));
+
+    let bucket = [];
+    let anchor = null;
+    const flush = () => {
+      if (!bucket.length) return;
+      groups.push(_buildContactGroup(contactKey, bucket));
+      bucket = [];
+    };
+    for (const item of contactItems) {
+      const t = _itemEpoch(item);
+      if (anchor === null || (anchor - t) <= windowMs) {
+        if (anchor === null) anchor = t;
+        bucket.push(item);
+      } else {
+        flush();
+        anchor = t;
+        bucket.push(item);
+      }
+    }
+    flush();
+  }
+  return groups;
+}
+
+function _buildContactGroup(contactKey, bucket) {
+  const first = bucket[0];
+  const m0 = first.metadata || {};
+  // Distinct listings for this contact within the window.
+  const seenListing = new Set();
+  const listings = [];
+  for (const it of bucket) {
+    const lk = _listingKey(it) || it.id;
+    if (seenListing.has(lk)) continue;
+    seenListing.add(lk);
+    const m = it.metadata || {};
+    listings.push({
+      listing_entity_id: m.listing_entity_id || null,
+      name: m.listing_name || null,
+      city: m.listing_city || null,
+      state: m.listing_state || null,
+      city_state: [m.listing_city, m.listing_state].filter(Boolean).join(', ') || (m.listing_state || null),
+      asset_type: m.listing_asset_type || null
+    });
+  }
+  return {
+    contactKey,
+    contactId: first.entity_id || null,
+    contactName: m0.contact_name || first.entity_name || null,
+    contactEmail: m0.contact_email || null,
+    domain: m0.domain || first.domain || null,
+    // T-011 (same asset) is a stronger hook than T-012 (proximity); if a contact
+    // matched both, lead with T-011.
+    templateId: bucket.some(b => (b.metadata || {}).template_id === 'T-011') ? 'T-011' : (m0.template_id || 'T-012'),
+    matchReason: m0.match_reason || null,
+    items: bucket,
+    listings
+  };
+}
+
+/**
+ * Build a template-render context for a deduped contact group. Best-effort: the
+ * caller renders with strict:false so a variable the producer never captured
+ * (e.g. listing.cap_rate) renders blank rather than blocking the draft.
+ * `listingEntity` (optional) is the fetched listing entity whose metadata
+ * enriches the primary listing (cap rate, asking price, summary).
+ */
+export function buildListingBdContext(group, listingEntity = null) {
+  const primary = group.listings[0] || {};
+  const lm = (listingEntity && listingEntity.metadata) || {};
+  const fullName = group.contactName || '';
+  const firstName = String(fullName).trim().split(/\s+/)[0] || fullName || null;
+  const fmtPrice = (v) => (v == null || v === '' ? null
+    : (typeof v === 'number' ? `$${v.toLocaleString('en-US')}` : String(v)));
+  // The T-011/T-012 templates append a literal '%' after {{listing.cap_rate}},
+  // so this returns the BARE percentage number (no '%') to avoid '7.08%%'.
+  // 0.0708 → '7.08'; 7.08 → '7.08'; '7.08%' → '7.08'.
+  const fmtCap = (v) => {
+    if (v == null || v === '') return null;
+    if (typeof v === 'string') {
+      const s = v.trim().replace(/%\s*$/, '');
+      const n = Number(s);
+      return Number.isFinite(n) ? String(n) : (s || null);
+    }
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return n < 1 ? String(Number((n * 100).toFixed(2))) : String(n);
+  };
+
+  // Humanize the domain for prose ("dia-leased" → "dialysis-leased"). The
+  // canonical short form stays on context.domain / the send row.
+  const domLabel = ({ dia: 'dialysis', gov: 'government' })[group.domain] || group.domain || null;
+
+  const context = {
+    domain: group.domain || null,
+    contact: {
+      full_name: fullName || null,
+      first_name: firstName,
+      firm: fullName || null,
+      geography: primary.city_state || primary.state || null,
+      email: group.contactEmail || null
+    },
+    property: {
+      // "you own a <asset> in <state>" — the reason we reached out.
+      tenant: primary.asset_type || domLabel || null,
+      city_state: primary.city_state || primary.state || null,
+      domain: domLabel
+    },
+    listing: {
+      tenant: primary.asset_type || lm.tenant_name || lm.building_name || primary.name || 'our new listing',
+      name: primary.name || lm.building_name || null,
+      city_state: primary.city_state || primary.state || null,
+      domain: domLabel,
+      cap_rate: fmtCap(lm.cap_rate),
+      list_price: fmtPrice(lm.asking_price ?? lm.list_price),
+      property_summary: lm.property_summary || lm._pipeline_summary || null
+    }
+  };
+
+  // Cross-listing: enumerate the OTHER listings this contact matched so the
+  // draft can reference "and two others" honestly.
+  if (group.listings.length > 1) {
+    context.listing.additional_listings = group.listings.slice(1).map(l => ({
+      name: l.name, city_state: l.city_state
+    }));
+    context.listing.additional_count = group.listings.length - 1;
+  }
+  return context;
+}
+
+/**
+ * Run the listing-BD draft consumer over a set of selected inbox items.
+ *
+ * @param {object} params
+ * @param {object[]} params.inboxItems - the selected listing_bd_trigger rows
+ * @param {string}  params.workspaceId
+ * @param {string}  [params.userId]
+ * @param {number}  [params.windowDays=7]
+ * @param {boolean} [params.strict=false] - fail a draft on missing mandatory vars
+ * @returns {Promise<{ok, drafted, sends_recorded, items_triaged, skipped, drafts}>}
+ */
+export async function runListingBdDraftConsumer(params) {
+  const {
+    inboxItems = [], workspaceId, userId = null,
+    windowDays = 7, strict = false
+  } = params || {};
+
+  const valid = (inboxItems || []).filter(i => i && i.source_type === LISTING_BD_TRIGGER);
+  const groups = dedupeListingBdItemsByContact(valid, { windowDays });
+
+  // Prefetch distinct listing entities once (enrich the drafts) — best-effort.
+  const listingIds = [...new Set(groups.map(g => g.listings[0]?.listing_entity_id).filter(Boolean))];
+  const listingById = new Map();
+  if (listingIds.length) {
+    try {
+      const idList = listingIds.map(pgFilterVal).join(',');
+      const r = await opsQuery('GET',
+        `entities?id=in.(${idList})&workspace_id=eq.${pgFilterVal(workspaceId)}&select=id,name,metadata`,
+        undefined, { countMode: 'none' }
+      );
+      if (r.ok) for (const e of (r.data || [])) listingById.set(e.id, e);
+    } catch (err) {
+      console.warn('[listing_bd consumer] listing prefetch failed (non-blocking):', err?.message || err);
+    }
+  }
+
+  const drafts = [];
+  let sendsRecorded = 0;
+  let itemsTriaged = 0;
+  const skipped = [];
+
+  for (const group of groups) {
+    const listingEntity = listingById.get(group.listings[0]?.listing_entity_id) || null;
+    const context = buildListingBdContext(group, listingEntity);
+
+    let draftResult;
+    try {
+      draftResult = await generateDraft(group.templateId, context, { strict });
+    } catch (err) {
+      draftResult = { ok: false, error: err?.message || String(err) };
+    }
+    if (!draftResult.ok) {
+      skipped.push({ contactKey: group.contactKey, reason: draftResult.error || 'draft_failed',
+        missing: draftResult.missing || null });
+      continue;
+    }
+
+    // Record ONE send per drafted contact (honest count). replied=null via
+    // recordTemplateSend's open-outcome semantics; entity_id + contact_id set to
+    // the matched owner so W1.2's reply loop can attribute a reply back.
+    let sendId = null;
+    try {
+      const rec = await recordTemplateSend({
+        template_id: group.templateId,
+        template_version: draftResult.draft?.template_version || 1,
+        user_id: userId,
+        entity_id: group.contactId,
+        contact_id: group.contactId,
+        entity_type: 'contact',
+        domain: group.domain
+      });
+      if (rec.ok) { sendsRecorded++; sendId = rec.send?.id || null; }
+    } catch (err) {
+      console.warn('[listing_bd consumer] recordTemplateSend failed (non-blocking):', err?.message || err);
+    }
+
+    // Drain the inbox items for this group → triaged (reversible tag).
+    const nowIso = new Date().toISOString();
+    for (const item of group.items) {
+      try {
+        const meta = { ...(item.metadata || {}),
+          listing_bd_drafted: true,
+          listing_bd_drafted_at: nowIso,
+          listing_bd_send_id: sendId,
+          listing_bd_covered_listings: group.listings.length
+        };
+        const patch = await opsQuery('PATCH',
+          `inbox_items?id=eq.${pgFilterVal(item.id)}&workspace_id=eq.${pgFilterVal(workspaceId)}`,
+          { status: 'triaged', triaged_at: nowIso, metadata: meta, updated_at: nowIso }
+        );
+        if (patch.ok) itemsTriaged++;
+      } catch (err) {
+        console.warn('[listing_bd consumer] inbox triage failed (non-blocking):', err?.message || err);
+      }
+    }
+
+    drafts.push({
+      contact_id: group.contactId,
+      contact_name: group.contactName,
+      contact_email: group.contactEmail,
+      domain: group.domain,
+      template_id: group.templateId,
+      covered_listings: group.listings.length,
+      listings: group.listings.map(l => l.name || l.city_state).filter(Boolean),
+      send_id: sendId,
+      subject: draftResult.draft?.subject || '',
+      body: draftResult.draft?.body || '',
+      unresolved_variables: draftResult.draft?.unresolved_variables || []
+    });
+  }
+
+  return {
+    ok: true,
+    selected: valid.length,
+    deduped_contacts: groups.length,
+    drafted: drafts.length,
+    sends_recorded: sendsRecorded,
+    items_triaged: itemsTriaged,
+    skipped,
+    drafts
+  };
 }
