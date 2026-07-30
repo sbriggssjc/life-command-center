@@ -2640,6 +2640,20 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // value attached — observed 2026-04-27 from a CoStar Tenants horizontal
   // table layout.
   const NAICS_SECTOR_REJECT = /^(agriculture|mining|utilities|construction|manufacturing|wholesale\s+trade|retail\s+trade|transportation\s+and\s+warehousing|information|finance\s+and\s+insurance|real\s+estate(\s+and\s+rental(\s+and\s+leasing)?)?|professional(,?\s+scientific(,?\s+and\s+technical\s+services)?)?|management\s+of\s+companies|administrative(\s+and\s+support)?|educational\s+services|health\s+care(\s+and\s+social\s+assistance)?|arts(,?\s+entertainment(,?\s+and\s+recreation)?)?|accommodation(\s+and\s+food\s+services)?|other\s+services|public\s+administration)\s*$/i;
+  // 2026-07-30: CoStar's redesigned For-Sale Summary renders the Google Maps
+  // embed immediately adjacent to the Tenants panel, so parseTenantSection
+  // bled into the map's chrome and captured "Keyboard shortcuts", "Map data
+  // ©2026 Google", "Terms", and "Report a map error" as tenant rows (live
+  // capture 8925 N Highway 6, Houston TX — Fresenius/Heffernan Bbq were real,
+  // the four map-widget lines were not). Anchored ^...$ so a real tenant whose
+  // name merely contains one of these words is unaffected. Deliberately NOT
+  // rejecting bare "google"/"satellite" — "Satellite Healthcare" is a real
+  // dialysis operator (and is in MEDICAL_TENANT_PRIORITY) and "Google" can be
+  // a legitimate office tenant; only the unambiguous attribution/control forms
+  // are dropped. Used as a section-break (stop parsing once the map begins) AND
+  // a per-line skip, and mirrored into FINAL_JUNK_RE below + the server-side
+  // isJunkTenant() (sidebar-pipeline.js).
+  const MAP_WIDGET_REJECT = /^(keyboard\s+shortcuts|map\s+data(\s+.*)?|imagery(\s+.*)?|©\s*\d{4}\b.*|report\s+a\s+map\s+error|terms|terms\s+of\s+use|this\s+page\s+can'?t\s+load\s+google\s+maps\s+correctly|do\s+you\s+own\s+this\s+website\?|map\s+details?|\d{1,4}\s*(ft|mi|m|km|yd))\s*$/i;
   // Building-size sanity guard: any tenant entry with leased SF below this
   // threshold is almost certainly a NAICS-percentage or footer-stat artifact,
   // not a real tenant. Real commercial tenants don't lease 15 SF.
@@ -2759,6 +2773,14 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         '[a-z\\s]+,\\s*[a-z]{2}(\\s+\\d{5}(-\\d{4})?)?',
         // Generic country names
         'united\\s+states', 'usa', 'us',
+        // Google Maps embed chrome (CoStar new For-Sale layout, 2026-07-30).
+        // Mirror of MAP_WIDGET_REJECT — kept here too so a map line captured by
+        // a path that bypasses parseTenantSection is still dropped.
+        'keyboard\\s+shortcuts', 'map\\s+data(?:\\s+.*)?', 'imagery(?:\\s+.*)?',
+        '©\\s*\\d{4}\\b.*', 'report\\s+a\\s+map\\s+error', 'terms(?:\\s+of\\s+use)?',
+        'this\\s+page\\s+can\'?t\\s+load\\s+google\\s+maps\\s+correctly',
+        'do\\s+you\\s+own\\s+this\\s+website\\?', 'map\\s+details?',
+        '\\d{1,4}\\s*(?:ft|mi|m|km|yd)',
       ].join('|') + ')\\s*$',
       'i'
     );
@@ -2802,6 +2824,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // tenant block into 'Sign Date' / 'Use' / 'Services' / 'Rent Type'
       // column headers and captured them as tenant rows.
       if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|sale\s+contacts|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property|architect|developer|broker|firm)|amenities|airport|drive(\s+time|\s+to)?|costar|costar\s+comp\s+contact|investment\s+highlights|property\s+highlights|property\s+summary|location\s+highlights|tenant\s+highlights|sale\s+highlights|sale\s+notes|conditions|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available|lease\s+activity|stacking\s+plan|data\s+not\s+available|help\s+with\s+features|request\s+training|share\s+feedback|terms\s+of\s+use|all\s+rights\s+reserved|true\s+(seller|buyer)|recorded\s+(seller|buyer)|listing\s+broker|listing\s+contacts?)/i.test(line)) break;
+
+      // Google Maps embed chrome sits adjacent to the Tenants panel in CoStar's
+      // new For-Sale layout ("Keyboard shortcuts", "Map data ©2026 Google",
+      // "Terms", "Report a map error"). Skip each line rather than break, so a
+      // stray map line interleaved with the list can't truncate a real tenant.
+      if (MAP_WIDGET_REJECT.test(line)) continue;
 
       // Skip CoStar UI elements + OM section headers + compound metadata strings + NAICS sectors
       if (COSTAR_UI_REJECT.test(line)) continue;
