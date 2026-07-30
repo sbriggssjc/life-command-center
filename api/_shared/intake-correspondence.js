@@ -183,6 +183,21 @@ export async function logInboundCorrespondenceDualAnchor({
       deal_entity_id:  dealEntityId,
     },
   });
+
+  // Self-updating to-do engine (inbound): the awaited party got back — resolve
+  // the open seller follow-up and write the next step ("review response & set
+  // next step"). Fresh insert only; best-effort. Subject rides as context so the
+  // new to-do carries what the reply was about.
+  if (res?.inserted && (dealEntityId || partyEntityId)) {
+    try {
+      await query('POST', 'rpc/lcc_advance_todos', {
+        p_entity_id: dealEntityId, p_activity_id: res.id || null,
+        p_party_entity_id: partyEntityId, p_channel: 'email', p_direction: 'inbound',
+        p_context: ctx.subject ? ('Seller replied: ' + String(ctx.subject).slice(0, 160)) : null,
+      });
+    } catch (_e) { /* best-effort */ }
+  }
+
   return {
     ok: true, inserted: !!res?.inserted,
     party_entity_id: partyEntityId, deal_entity_id: dealEntityId,

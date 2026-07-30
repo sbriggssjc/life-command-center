@@ -393,9 +393,11 @@ async function handleOutlookSent(req, res) {
   // Self-resolve: a sent email to a deal's correspondent completes the "submit offer" To-Do (reversible).
   let autoResolved = null;
   if (wasNew && (dealEntityId || partyEntityId) && !backfill) {
-    // Generalized auto-resolve (multi-channel): an outbound send closes the deal's
-    // offer_review AND any "reach out" follow_up on the party or deal.
-    const rr = await opsQuery('POST', 'rpc/lcc_autoresolve_todos',
+    // Self-updating to-do engine (outbound): resolve the deal's offer_review +
+    // reach-out follow_ups AND, when an offer was just submitted, SCHEDULE the
+    // seller follow-up (due +1 day). One call closes what the send satisfies and
+    // writes the next step.
+    const rr = await opsQuery('POST', 'rpc/lcc_advance_todos',
       { p_entity_id: dealEntityId, p_activity_id: activityId, p_party_entity_id: partyEntityId, p_channel: 'email', p_direction: 'outbound' });
     autoResolved = Array.isArray(rr.data) ? rr.data[0] : rr.data;
   }

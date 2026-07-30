@@ -268,7 +268,41 @@ durable win.
 OwnerId.** Map SF OwnerId → `lcc_users.salesforce_owner_id` (Scott `0051I0…`, Kelly `0058W0…`) on the
 opportunity/entity during SF sync, writing `owner_user_id`. Then `lcc_my_day` auto-scopes to each user with no
 further change (override still wins). Until then every queue row reads `unassigned` (team) — shown, not hidden —
-which is honest.
+which is honest. **SF map helper built:** `lcc_map_sf_owner(sf_owner_id)` → lcc_user (via
+`lcc_users.salesforce_owner_id`; verified Scott `0051I0…`→Scott, Kelly `0058W0…`→Kelly). The remaining wire-up is
+SF OwnerId CAPTURE (the sync/PA must carry each opportunity's OwnerId, then write `owner_user_id = lcc_map_sf_owner(OwnerId)`).
+**Finding:** `action_items.owner_id` FKs to `users` (auth), while `owner_user_id`/overrides key on `lcc_users` —
+two user tables that need reconciling before owner attribution is fully clean.
+
+## Self-updating to-do engine BUILT — the list writes itself from the latest interaction (2026-07-30)
+
+Scott's vision: "the LCC should read the correspondence, sort the inbox, and generate a LIVE to-do list based on
+the latest context — offer sent → schedule a seller follow-up; seller replies → resolve it and create the next
+step; and so on for all email/call activity." Built as **`lcc_advance_todos(entity, activity, party, channel,
+direction, context, follow_due, owner)`** (OPS, live) — the create-capable evolution of `lcc_autoresolve_todos`:
+an interaction both RESOLVES the to-do it satisfies AND WRITES the next step.
+- **Outbound** (a send): completes the deal's `offer_review` + reach-out `follow_up`s; and when an offer was just
+  submitted, SCHEDULES a `seller_follow_up` (due +1 day, premise `awaiting_seller`) — idempotent (never two open).
+- **Inbound** (a reply from the awaited party): resolves the open `seller_follow_up` (they got back) and creates a
+  `review_response` to-do ("Review seller response & set next step", high, due today), carrying the reply subject
+  as context. A content-derived next-action title is the future AI enhancement; the review-and-respond to-do is
+  the honest, actionable v1.
+- Reversible (provenance in metadata), high-confidence only, direction-gated (an inbound never closes a "you
+  reach out" premise; an outbound never fabricates a reply).
+
+**Wiring:** `handleOutlookSent` → `lcc_advance_todos` outbound; `logInboundCorrespondenceDualAnchor` →
+`lcc_advance_todos` inbound (with the reply subject as context). Both gated on fresh-insert / `!backfill`.
+
+**Verified live on Snellville (the real deal):** ran the outbound engine → `offer_review` **completed** + a
+`seller_follow_up` "Follow up with seller — 2155 Main Street East, Snellville" **created, due 2026-07-31**, with
+the real context ("Offer $4.2M, Alexander Frid submitted; seller conferring with partners, expected back today").
+Then simulated the seller reply → `resolved_awaiting:1` + a `review_response` created → **reverted** the
+simulation so Snellville sits correctly at "awaiting seller." My Day now shows the seller follow-up as the top
+to-do (offer_review gone) with its full multi-channel timeline. `node --check` + suite green.
+
+**Next (documented):** (a) a content-aware next-step — read the reply body via the AI layer and set a specific
+title (countered $X → "Review counter & respond"; accepted → "Open escrow"); (b) a cadence sweep that re-nudges a
+`seller_follow_up` if it goes stale with no reply; (c) generalize beyond seller deals to buyer/broker premises.
 
 ## Multi-channel auto-resolve BUILT — a call (not just a send) closes a to-do (2026-07-30)
 

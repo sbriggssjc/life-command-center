@@ -11,7 +11,7 @@ due_soon=sum(1 for t in todos if t.get('due_date') and dt(t['due_date'])<=today+
 touches=sum(t.get('touch_count',0) or 0 for t in todos)
 
 PR={'urgent':('Urgent','critical'),'high':('High','serious'),'normal':('Normal','neutral'),'low':('Low','neutral')}
-ACT={'offer_review':'Offer review','follow_up':'Follow-up'}
+ACT={'offer_review':'Offer review','follow_up':'Follow-up','seller_follow_up':'Seller follow-up','review_response':'Review response'}
 CH={'email':'✉','call':'☎','note':'▤','meeting':'▣'}
 def band_role(b):
     return 'crit' if b in('P0','P0.4') else 'serious' if b in('P0.5','P-BUYER','P-CONTACT','P1') else 'neutral'
