@@ -22,7 +22,7 @@
 
 import { appendActivityEvent as defaultAppendActivityEvent } from './activity-events.js';
 import { growCadenceFromOutreach as defaultGrowCadenceFromOutreach } from './cadence-engine.js';
-import { opsQuery as defaultOpsQuery } from './ops-db.js';
+import { opsQuery as defaultOpsQuery, resolvePrimaryWorkspaceId } from './ops-db.js';
 
 // activity_events.domain carries the canonical short form 'dia' | 'gov'.
 // The matcher hands us 'dialysis' | 'government' (or null for an lcc-direct
@@ -181,6 +181,98 @@ export async function logInboundCorrespondenceDualAnchor({
       via:             'outlook_inbound',
       party_entity_id: partyEntityId,
       deal_entity_id:  dealEntityId,
+    },
+  });
+  return {
+    ok: true, inserted: !!res?.inserted,
+    party_entity_id: partyEntityId, deal_entity_id: dealEntityId,
+  };
+}
+
+// ============================================================================
+// CALL dual-anchor stamp — the WebEx/telephony mirror of the email loggers
+// ----------------------------------------------------------------------------
+// WebEx call history lands in unified_contacts (engagement scoring) but never
+// reached the OPS activity_events spine, so calls were invisible to the deal
+// dossier / offer-context / cadence. This logs a call as a `call` activity on
+// the SAME relationship-primary, deal-subfilter spine as email: it resolves the
+// caller's PARTY + OPEN deal by PHONE (and email if known) via
+// lcc_resolve_contact and stamps the dual anchor. Now that a `webex` phone
+// identity can persist (external_identities CHECK widened), resolution improves
+// as identities accrue; until then it falls back to entities.phone.
+//
+// Doctrine mirrors the email loggers: relationship-primary (a caller with no
+// open deal still logs on the party; entity_id null → attention rides the
+// relationship), dedup on (workspace, source_type, external_id) so a re-ingest
+// is a no-op, fire-and-forget (never blocks the contacts pipeline; a resolver
+// hiccup still logs the raw call with null anchors).
+//
+// @param {object} args
+// @param {string} [args.workspaceId]  — OPS workspace; resolved if omitted
+// @param {string} [args.actorId]      — defaults to the system actor
+// @param {object} args.call           — { phone, name?, email?, direction
+//                                        ('placed'|'received'|'outbound'|'inbound'),
+//                                        occurred_at, external_id?, duration_seconds?,
+//                                        disposition?, source_system? ('webex') }
+// @param {object} [deps]              — { appendActivityEvent, opsQuery, resolveWorkspace }
+export async function logCallDualAnchor({ workspaceId, actorId, call }, deps = {}) {
+  const append = deps.appendActivityEvent || defaultAppendActivityEvent;
+  const query  = deps.opsQuery || defaultOpsQuery;
+  const resolveWs = deps.resolveWorkspace || resolvePrimaryWorkspaceId;
+
+  const c = call || {};
+  const phone = String(c.phone || '').trim();
+  const digits = phone.replace(/[^0-9]/g, '');
+  if (digits.length < 10) return { ok: false, skipped: 'no_phone' };
+
+  const sys = (c.source_system || 'webex').toLowerCase();
+  // Deterministic dedup key when the source has no stable call id (WebEx call
+  // history is {type,name,number,time}): system + last-10 + timestamp.
+  const externalId = c.external_id || `${sys}:${digits.slice(-10)}:${c.occurred_at || ''}`;
+
+  const ws = workspaceId || (await resolveWs({ opsQuery: query }).catch(() => null));
+  if (!ws) return { ok: false, skipped: 'no_workspace' };
+  const actor = actorId || 'b0000000-0000-0000-0000-000000000001';
+
+  // Resolve PARTY (durable BD unit) + OPEN deal (active sub-context) by phone
+  // (+ email when known). Best-effort: a resolver failure still logs the call.
+  let partyEntityId = null, dealEntityId = null;
+  try {
+    const rc = await query('POST', 'rpc/lcc_resolve_contact', { p_email: c.email || null, p_phone: phone });
+    const packet = Array.isArray(rc.data) ? rc.data[0] : rc.data;
+    if (packet?.party_entity_id) partyEntityId = packet.party_entity_id;
+    if (packet?.primary_deal)    dealEntityId  = packet.primary_deal;
+  } catch (_e) { /* best-effort */ }
+
+  const dir = (c.direction === 'placed' || c.direction === 'outbound') ? 'outbound'
+            : (c.direction === 'received' || c.direction === 'inbound') ? 'inbound'
+            : (c.direction || null);
+  const who = c.name || phone;
+  const title = ((dir === 'outbound' ? 'Call to ' : dir === 'inbound' ? 'Call from ' : 'Call: ') + who).slice(0, 500);
+  const bodyBits = [];
+  if (c.disposition) bodyBits.push('Disposition: ' + c.disposition);
+  if (c.duration_seconds) bodyBits.push(c.duration_seconds + 's');
+
+  const res = await append({
+    workspaceId: ws,
+    actorId: actor,
+    category:    'call',
+    title,
+    body:        bodyBits.length ? bodyBits.join(' · ') : null,
+    entityId:    dealEntityId,           // OPEN-deal anchor (nullable → rides the party)
+    sourceType:  sys + '_call',          // e.g. 'webex_call'
+    externalId,
+    occurredAt:  c.occurred_at || null,
+    metadata: {
+      channel:          'call',
+      via:              sys,
+      direction:        dir,
+      phone,
+      name:             c.name || null,
+      duration_seconds: c.duration_seconds || null,
+      disposition:      c.disposition || null,
+      party_entity_id:  partyEntityId,
+      deal_entity_id:   dealEntityId,
     },
   });
   return {

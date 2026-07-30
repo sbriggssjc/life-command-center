@@ -222,6 +222,39 @@ hand-curated — worth revisiting as new deal/vendor vocabulary appears; (c) amb
 on purpose (e.g. `sarhanhotelgroup` could be a hotel-owning principal, `verizon.net` a client's ISP address) —
 the override is the correction path, not a broader auto-rule.
 
+## WebEx call layer BUILT — calls join the dual-anchor spine (2026-07-30)
+
+WebEx call history was ingested (`contacts-handler.js::ingestWebexCalls` → `/telephony/calls/history`) but only
+fed **`unified_contacts`** (engagement scoring, GOV db) — calls never reached the **OPS `activity_events` spine**,
+so they were invisible to the deal dossier, offer-context, and cadence, and the relationship graph knew emails but
+not calls. Worse, `lcc_resolve_contact`'s phone tier queries `external_identities.source_system='webex'`, but the
+CHECK constraint forbade `webex`, so that tier was **inert** (no webex rows could ever exist).
+
+Built:
+- **`external_identities` CHECK widened** (live) to allow the phone/identity systems the unified-contacts pipeline
+  already uses: `webex, teams, iphone, icloud, manual, sms`. The resolver's `webex` phone tier is now live; phone
+  identities can persist and resolution sharpens as they accrue (until then it falls back to `entities.phone`).
+- **`logCallDualAnchor`** (`api/_shared/intake-correspondence.js`) — the telephony mirror of the email loggers.
+  Resolves the caller's PARTY + OPEN deal **by phone** (+ email if known) via `lcc_resolve_contact` and appends a
+  `call` activity (`source_type='webex_call'`) stamped with `metadata.party_entity_id` + `deal_entity_id`
+  (`entity_id` = the open deal, nullable → rides the party). Direction inferred (placed→outbound / received→inbound);
+  deterministic dedup `external_id` = `webex:<last10>:<time>` (WebEx call history has no stable call id). Relationship-
+  primary, fire-and-forget, deduped on `(workspace, source_type, external_id)`.
+- **Wired into `ingestWebexCalls`** — each ingested call now ALSO lands on the spine (fire-and-forget; never blocks
+  the `unified_contacts` engagement update). So a call from a known party attaches to its relationship + open deal
+  exactly like an email; from an unknown number it logs the raw call and back-fills its anchors once the party
+  enters the graph.
+- **Verified:** `test/call-dual-anchor.test.mjs` (4/4) + full correspondence/inbound suite (16/16 green);
+  `node --check` + import clean on both files. **Deploy to activate** (DB CHECK is live now; the JS ships on the
+  Railway redeploy). The ingest stays gated on the WebEx OAuth token (`WEBEX_ACCESS_TOKEN`/refresh) — unset → the
+  whole path no-ops honestly (503 on the action), so the spine-logging inherits that gate.
+
+**Now the spine is multi-channel:** outbound email, inbound email, AND calls all stamp the same dual anchor at
+ingest — the relationship-primary, deal-subfilter model the whole thread has been building. Follow-ups: (a) mint a
+`webex` phone identity on a resolved call so future calls from that number resolve without re-deriving; (b) SMS/
+Teams calls reuse `logCallDualAnchor` with `source_system` set accordingly; (c) generalize
+`lcc_autoresolve_offer_review` → `lcc_autoresolve_todos` so a call (not just a send) can auto-resolve a to-do.
+
 ## Thread (a) BUILT — projections prefer the deal anchor over the city bridge (2026-07-30)
 
 With mail now carrying `metadata.deal_entity_id` (backfill + thread b), the projections stop leaning on the fuzzy

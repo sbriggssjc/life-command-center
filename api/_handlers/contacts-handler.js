@@ -19,6 +19,7 @@
 
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, isOpsConfigured, withErrorHandler } from '../_shared/ops-db.js';
+import { logCallDualAnchor } from '../_shared/intake-correspondence.js';
 import { lookupSalesforceIds } from '../_shared/salesforce-sync.js';
 import { isSalesforceConfigured } from '../_shared/salesforce.js';
 import { govSupabaseKey } from '../_shared/supabase-keys.js';
@@ -1457,6 +1458,22 @@ async function ingestWebexCalls(req, res, user) {
       const direction = call.type; // 'placed' or 'received'
 
       if (!phone) continue;
+
+      // Join the RELATIONSHIP SPINE (LCC OPS activity_events + dual anchor):
+      // log this call as a `call` activity, resolving the caller's party + open
+      // deal by phone via lcc_resolve_contact — the telephony mirror of the email
+      // loggers, so calls surface in the dossier / offer-context / cadence like
+      // email. Fire-and-forget + deduped on (workspace, source_type, external_id);
+      // never blocks the unified_contacts engagement update below.
+      logCallDualAnchor({
+        actorId: user?.id || user?.user_id || 'b0000000-0000-0000-0000-000000000001',
+        call: {
+          phone, name: (name && !['WIRELESS CALLER','UNKNOWN','ANONYMOUS','PRIVATE'].includes(String(name).toUpperCase())) ? name : null,
+          direction, occurred_at: new Date(callDate).toISOString(),
+          duration_seconds: call.duration || null, disposition: call.disposition || null,
+          source_system: 'webex',
+        },
+      }).catch(() => null);
 
       // Skip generic/unknown callers like "WIRELESS CALLER"
       const skipNames = ['WIRELESS CALLER', 'UNKNOWN', 'ANONYMOUS', 'PRIVATE'];
