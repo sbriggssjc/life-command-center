@@ -25,6 +25,7 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
@@ -106,6 +107,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-listing-confirmation': return handleResolveListingConfirmation(req, res);
     case 'geocode-tick':         return handleGeocodeTick(req, res);
     case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
+    case 'provenance-event-flush':  return handleProvenanceEventFlush(req, res);
     case 'llc-research-tick':       return handleLlcResearchTick(req, res);
     case 'chain-connect-tick':      return handleChainConnectTick(req, res);
     case 'chain-classify-tick':     return handleChainClassifyTick(req, res);
@@ -6232,6 +6234,216 @@ async function handleDiaLinkProvenanceReplay(req, res) {
     replayed: results.replayed,
     failed:   results.failed,
     by_source: results.by_source,
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// W2.5 — provenance_event_log flush (audit 3.3.1).
+//
+// Drains a domain's public.provenance_event_log (SQL-trigger / function-driven
+// field writes that cannot reach LCC Opps lcc_merge_field() from trigger
+// context) into the LCC Opps field_provenance ledger, so field_source_priority
+// stops arbitrating against phantom trigger state.
+//
+// This handler is a THIN cross-DB shuttle: it pulls a modest page of undrained
+// events from the domain (dia|gov), hands them to lcc_flush_provenance_events()
+// — the single source of transform truth (normalize target_table, skip markers,
+// call lcc_merge_field with source='domain_trigger') — then marks the processed
+// rows drained on the domain and advances the per-domain cursor. It loops pages
+// under a per-run cap and a wall-clock budget so it never serializes live
+// sidebar traffic behind a large batch (lcc_merge_field takes a per-key advisory
+// lock; chunks stay small).
+//
+// GET  → dry-run (classifies the first page; no merge, no drain).
+// POST → apply.
+// Query params: domain=dia|gov (required); limit=page size (default 200, max
+//   500); cap=max events per run (default gov 4000 / dia 2000); budget_ms
+//   (default 25000).
+// ────────────────────────────────────────────────────────────────────────────
+async function handleProvenanceEventFlush(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const dryRun = req.method === 'GET';
+  const domain = String(req.query.domain || '').toLowerCase();
+  if (!['dia', 'gov'].includes(domain)) {
+    return res.status(400).json({ error: 'domain must be dia or gov' });
+  }
+  const domainName = domain === 'dia' ? 'dialysis' : 'government';
+
+  const pageSize = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
+  const runCap = Math.min(
+    50000,
+    Math.max(pageSize, parseInt(req.query.cap || (domain === 'gov' ? '4000' : '2000'), 10))
+  );
+  const timeBudgetMs = Math.min(50000, Math.max(3000, parseInt(req.query.budget_ms || '25000', 10)));
+  const startedAt = Date.now();
+
+  const eventSelect =
+    'select=id,target_table,record_pk_value,field_name,new_value,source,confidence,metadata';
+
+  // 1. Read the per-domain cursor / running totals.
+  const stRes = await opsQuery(
+    'GET',
+    `lcc_provenance_flush_state?domain=eq.${domain}` +
+    `&select=last_flushed_event_id,rows_merged_total,markers_skipped_total,last_success_at`
+  );
+  if (!stRes.ok) {
+    return res.status(500).json({ error: 'flush state fetch failed', detail: stRes.data });
+  }
+  const state = (Array.isArray(stRes.data) && stRes.data[0]) || {
+    last_flushed_event_id: 0, rows_merged_total: 0, markers_skipped_total: 0, last_success_at: null,
+  };
+
+  // Marker predicate (isProvenanceMarker) is shared with the RPC contract and is
+  // used for dry-run classification only; apply-mode marker handling lives in the
+  // RPC.
+
+  const totals = {
+    pages: 0, merged: 0, skipped_markers: 0, errors: 0,
+    decisions: {}, first_id: null, last_id: 0,
+  };
+  let watermark = Number(state.last_flushed_event_id || 0);
+
+  // ── DRY-RUN: classify the first page, no writes ──
+  if (dryRun) {
+    const evRes = await domainQuery(
+      domainName, 'GET',
+      `provenance_event_log?flushed_to_lcc_opps_at=is.null&order=id.asc&limit=${pageSize}&${eventSelect}`
+    );
+    if (!evRes.ok) {
+      return res.status(502).json({ error: 'domain event fetch failed', domain, detail: evRes.data });
+    }
+    const events = Array.isArray(evRes.data) ? evRes.data : [];
+    for (const e of events) {
+      if (isProvenanceMarker(e)) totals.skipped_markers++; else totals.merged++;
+    }
+    if (events.length) { totals.first_id = events[0].id; totals.last_id = events[events.length - 1].id; }
+    // Observe the current undrained backlog.
+    const cntRes = await domainQuery(
+      domainName, 'GET',
+      'provenance_event_log?flushed_to_lcc_opps_at=is.null&select=id&limit=1',
+      null, { Prefer: 'count=exact' }
+    );
+    return res.status(200).json({
+      mode: 'dry_run', domain,
+      page_events: events.length,
+      would_merge: totals.merged,
+      would_skip_markers: totals.skipped_markers,
+      first_id: totals.first_id, last_id: totals.last_id,
+      undrained_remaining: cntRes.ok ? (cntRes.count ?? null) : null,
+    });
+  }
+
+  // ── APPLY: loop pages under cap + time budget ──
+  while (
+    (totals.merged + totals.skipped_markers) < runCap &&
+    (Date.now() - startedAt) < timeBudgetMs
+  ) {
+    const evRes = await domainQuery(
+      domainName, 'GET',
+      `provenance_event_log?flushed_to_lcc_opps_at=is.null&order=id.asc&limit=${pageSize}&${eventSelect}`
+    );
+    if (!evRes.ok) {
+      return res.status(502).json({ error: 'domain event fetch failed', domain, detail: evRes.data, totals });
+    }
+    const events = Array.isArray(evRes.data) ? evRes.data : [];
+    if (events.length === 0) break;
+    if (totals.first_id == null) totals.first_id = events[0].id;
+
+    // Transform + merge via the single-source-of-truth RPC.
+    const rpcRes = await opsQuery(
+      'POST', 'rpc/lcc_flush_provenance_events',
+      { p_domain: domain, p_events: events, p_default_confidence: 0.9 },
+      { timeoutMs: 30000 }
+    );
+    if (!rpcRes.ok) {
+      return res.status(500).json({ error: 'flush rpc failed', domain, detail: rpcRes.data, totals });
+    }
+    const r = rpcRes.data || {};
+    const mergedIds = Array.isArray(r.merged_ids) ? r.merged_ids : [];
+    const skippedIds = Array.isArray(r.skipped_ids) ? r.skipped_ids : [];
+    const errList = Array.isArray(r.errors) ? r.errors : [];
+    const drainedIds = mergedIds.concat(skippedIds);
+
+    // Mark processed rows drained on the domain (authoritative drained-ness).
+    if (drainedIds.length) {
+      const patchRes = await domainQuery(
+        domainName, 'PATCH',
+        `provenance_event_log?id=in.(${drainedIds.join(',')})`,
+        { flushed_to_lcc_opps_at: new Date().toISOString() },
+        { Prefer: 'return=minimal' }
+      );
+      if (!patchRes.ok) {
+        return res.status(502).json({ error: 'domain drain PATCH failed', domain, detail: patchRes.data, totals });
+      }
+    }
+    // Record per-event errors on their domain rows (best-effort); leave them
+    // undrained so they retry next run.
+    for (const er of errList) {
+      await domainQuery(
+        domainName, 'PATCH',
+        `provenance_event_log?id=eq.${er.id}`,
+        { flush_last_error: String(er.error || '').slice(0, 500) },
+        { Prefer: 'return=minimal' }
+      ).catch(() => {});
+    }
+
+    totals.merged += mergedIds.length;
+    totals.skipped_markers += skippedIds.length;
+    totals.errors += errList.length;
+    for (const [k, v] of Object.entries(r.decisions || {})) {
+      totals.decisions[k] = (totals.decisions[k] || 0) + v;
+    }
+    totals.last_id = events[events.length - 1].id;
+    if (Number(r.max_event_id || 0) > watermark) watermark = Number(r.max_event_id);
+    totals.pages++;
+
+    // If a whole page errored (nothing drained), stop to avoid an infinite loop.
+    if (drainedIds.length === 0) break;
+    if (events.length < pageSize) break; // reached the tail
+  }
+
+  // Observe the remaining backlog for the health check.
+  let undrained = null;
+  const cntRes = await domainQuery(
+    domainName, 'GET',
+    'provenance_event_log?flushed_to_lcc_opps_at=is.null&select=id&limit=1',
+    null, { Prefer: 'count=exact' }
+  );
+  if (cntRes.ok && typeof cntRes.count === 'number') undrained = cntRes.count;
+
+  const nowIso = new Date().toISOString();
+  await opsQuery(
+    'PATCH',
+    `lcc_provenance_flush_state?domain=eq.${domain}`,
+    {
+      last_flushed_event_id: watermark,
+      undrained_remaining: undrained,
+      rows_merged_last_run: totals.merged,
+      rows_merged_total: Number(state.rows_merged_total || 0) + totals.merged,
+      markers_skipped_total: Number(state.markers_skipped_total || 0) + totals.skipped_markers,
+      errors_last_run: totals.errors,
+      last_run_at: nowIso,
+      last_success_at: nowIso,
+      last_error: totals.errors ? `${totals.errors} event(s) errored this run` : null,
+      updated_at: nowIso,
+    }
+  );
+
+  return res.status(200).json({
+    mode: 'apply', domain,
+    pages: totals.pages,
+    merged: totals.merged,
+    skipped_markers: totals.skipped_markers,
+    errors: totals.errors,
+    decisions: totals.decisions,
+    from_id: totals.first_id, to_id: totals.last_id,
+    watermark,
+    undrained_remaining: undrained,
   });
 }
 
