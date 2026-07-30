@@ -280,8 +280,20 @@ export function computeReviewSignals(c) {
   const raw = c.raw || {};
   const isGov = c.is_government === true || String(c.vertical || '').toLowerCase() === 'government';
   const sold = _reviewNum(c.sale_price);
-  // Displayed rent basis = what the template's SOLD CAP divides PRICE into.
-  const displayedRent = isGov ? _reviewNum(c.noi) : _reviewNum(c.annual_rent);
+  // W3.6b — the number PRICE is divided into. Prefer the CAP ENGINE's income
+  // (gov_compute_cap_rate NOI / dia_compute_cap_rate net rent) — the same
+  // reconciled, active-lease-anchored figure the cap engine already uses — over
+  // the stale properties value (gov: properties.noi, mostly estimated_comp_ratio
+  // @2026-03-31; dia: annual_rent). runComps attaches c.engine_income (+ source /
+  // confidence) for sold comps via the batch RPCs; when the engine has nothing
+  // (c.engine_income absent) we fall back to the displayed basis, so behavior is
+  // unchanged wherever the engine can't reconcile. This is the systemic W3.6b fix:
+  // 54/61 gov cap_mismatch rows were the stale-properties.noi pattern the engine
+  // already agreed with.
+  const engineIncome = _reviewNum(c.engine_income);
+  const fallbackRent = isGov ? _reviewNum(c.noi) : _reviewNum(c.annual_rent);
+  const usedEngine = engineIncome != null;
+  const displayedRent = usedEngine ? engineIncome : fallbackRent;
   // Reliable cap-of-record: dia = cap_rate_final; gov = sold_cap_rate (fall back to
   // the RPC's top-level derived cap when the source cap column is absent).
   const reliableCap = isGov
@@ -318,11 +330,21 @@ export function computeReviewSignals(c) {
   const impliedBasis = (displayedRent != null) ? {
     value: displayedRent,
     kind: isGov ? 'NOI' : 'RENT',
-    source: isGov
-      ? (c.noi_is_modeled ? ('modeled: ' + (c.noi_modeled_source || 'benchmark'))
-          : (c.noi_source || raw.noi_source || c.provenance_tag || c.data_source || 'property NOI'))
-      : (raw.cap_rate_final != null ? 'cap_rate_final' : (c.data_source || 'reported rent')),
-    as_of: c.noi_as_of_date || raw.noi_as_of_date || c.as_of_date || raw.as_of_date || null,
+    // W3.6b — label WHICH source fed the number so the reviewer sees whether the
+    // implied cap came from the reconciled engine (with its income source +
+    // confidence) or the stale properties fallback.
+    source: usedEngine
+      ? `engine:${c.engine_income_source || (isGov ? 'gov_compute_cap_rate' : 'dia_compute_cap_rate')}`
+        + (c.engine_income_confidence ? ` (${c.engine_income_confidence})` : '')
+      : (isGov
+          ? (c.noi_is_modeled ? ('modeled: ' + (c.noi_modeled_source || 'benchmark'))
+              : (c.noi_source || raw.noi_source || c.provenance_tag || c.data_source || 'property NOI'))
+          : (raw.cap_rate_final != null ? 'cap_rate_final' : (c.data_source || 'reported rent'))),
+    // Engine income is valued as of the sale date; the fallback carries its own as-of.
+    as_of: usedEngine
+      ? (c.sale_date || null)
+      : (c.noi_as_of_date || raw.noi_as_of_date || c.as_of_date || raw.as_of_date || null),
+    engine_used: usedEngine,
   } : null;
   const reliableBasis = (reliableCap != null) ? {
     value: reliableCap,
@@ -360,6 +382,66 @@ export function normalizeRenewalOptions(value) {
   if (m2) { const term = parseInt(m2[1], 10); if (term) return `(1) ${term}-yr`; }
   console.warn(`[comps:renewal-options] unrecognized shape, passed through: ${JSON.stringify(s)}`);
   return value;
+}
+
+// ── W3.6b — attach the cap ENGINE's income to sold comps ────────────────────
+// The review producer used to divide PRICE into the stale properties value
+// (gov: properties.noi @ estimated_comp_ratio; dia: annual_rent), flagging
+// cap_mismatch even when the authoritative cap engine already reconciled the
+// deal to its reliable cap. This enriches each sold comp with the ENGINE income
+// — gov_compute_cap_rate's NOI / dia_compute_cap_rate's net rent, the SAME source
+// the engine reconciles against (active-lease NOI where available, with its
+// provenance) — so computeReviewSignals derives implied_cap from it and only
+// GENUINE conflicts flag. One batched RPC per domain; best-effort — any failure
+// leaves the comp on its fallback basis (unchanged behavior). Sets
+// c.engine_income / c.engine_income_source / c.engine_income_confidence /
+// c.engine_cap on each matched sold comp.
+export async function attachEngineIncome(comps, deps) {
+  if (!Array.isArray(comps) || !comps.length || !deps) return { gov: 0, dia: 0, errors: [] };
+  const govItems = [], diaItems = [];
+  const govBySale = new Map(), diaBySale = new Map();
+  for (const c of comps) {
+    if (!c || c.comp_type !== 'sale' || c.on_market === true) continue;
+    const raw = c.raw || {};
+    const price = _reviewNum(c.sale_price);
+    const pid = raw.property_id != null ? Number(raw.property_id) : NaN;
+    const saleId = raw.sale_id != null ? String(raw.sale_id) : null;
+    if (!price || !Number.isFinite(pid) || !saleId) continue;
+    const item = { sale_id: saleId, property_id: pid, price, as_of: c.sale_date || null };
+    const isGov = c.is_government === true || String(c.vertical || '').toLowerCase() === 'government';
+    if (isGov) { govItems.push(item); govBySale.set(saleId, c); }
+    else       { diaItems.push(item); diaBySale.set(saleId, c); }
+  }
+  const jobs = [], errors = [];
+  if (govItems.length && typeof deps.govQuery === 'function')
+    jobs.push(_applyEngineBatch(deps.govQuery, 'rpc/gov_engine_noi_batch', govItems, govBySale)
+      .catch(e => errors.push({ domain: 'government', error: String(e && e.message || e) })));
+  if (diaItems.length && typeof deps.diaQuery === 'function')
+    jobs.push(_applyEngineBatch(deps.diaQuery, 'rpc/dia_engine_rent_batch', diaItems, diaBySale)
+      .catch(e => errors.push({ domain: 'dialysis', error: String(e && e.message || e) })));
+  await Promise.all(jobs);
+  if (errors.length) console.warn(`[comps:engine-income] enrich errors: ${JSON.stringify(errors)}`);
+  return { gov: govItems.length, dia: diaItems.length, errors };
+}
+
+// One batched engine-income RPC call → map the results back onto the comps by
+// sale_id. The RPC returns a uniform shape { sale_id, engine_income, engine_cap,
+// income_source, income_confidence } (gov: engine_income = NOI; dia: net rent).
+async function _applyEngineBatch(q, path, items, bySale) {
+  const res = await q('POST', path, { p_items: items }, 'return=representation');
+  if (!res || !res.ok || !Array.isArray(res.data)) return;
+  for (const row of res.data) {
+    const c = bySale.get(String(row.sale_id));
+    if (!c) continue;
+    const inc = Number(row.engine_income);
+    if (Number.isFinite(inc) && inc > 0) {
+      c.engine_income = inc;
+      c.engine_income_source = row.income_source || null;
+      c.engine_income_confidence = row.income_confidence || null;
+      c.engine_cap = (row.engine_cap != null && Number.isFinite(Number(row.engine_cap)))
+        ? Number(row.engine_cap) : null;
+    }
+  }
 }
 
 // Enqueue flagged sold comps into the per-domain review queue (dia_comp_review_queue
@@ -544,6 +626,10 @@ export async function runComps(args, deps) {
   // their reliable cap (or whose rent sources / sale-vs-ask diverge). Attach the
   // signal to the comp (non-destructive) and route the flagged set to the domain
   // review queue for source correction. Best-effort — never breaks generation.
+  // W3.6b — enrich sold comps with the cap ENGINE's income (NOI / net rent) so
+  // computeReviewSignals divides PRICE into the reconciled active-lease figure,
+  // not a stale properties value. Best-effort — a failure leaves the fallback.
+  try { await attachEngineIncome(comps, deps); } catch { /* falls back to properties basis */ }
   const flagged = [];
   for (const c of comps) {
     if (c.comp_type !== 'sale' || c.on_market === true || !_reviewNum(c.sale_price)) continue;
