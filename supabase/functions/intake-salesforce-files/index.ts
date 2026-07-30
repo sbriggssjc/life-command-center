@@ -8,6 +8,10 @@
 //   POST ?action=bytes         — store one file's bytes, finalize + enqueue extraction
 //   POST ?action=retry-files   — return stuck (discovered/failed) files as a to-fetch list
 //   POST ?action=fetch         — server-side: download discovered files from Salesforce
+//   POST ?action=discover      — server-side: sweep ContentDocumentLink/ContentVersion
+//                                for staged Comp/Listing/Deal records and record newly
+//                                discovered files into sf_files (ingestion_status:"discovered").
+//                                W3.7b: extends the sweep past Comp__c to Listing__c + Deal.
 //   POST ?action=stage-queued  — drain sf_files at extraction_status:"queued" through
 //                                LCC's /api/intake/stage-om pipeline (real OM extraction +
 //                                property matching). Marks rows extraction_status:"extracted"
@@ -18,8 +22,14 @@
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
+import {
+  DISCOVERY_OBJECTS, buildContentDocumentLinkSoql, buildContentVersionSoql,
+  mapVersionToFileRow, filterNewVersions, isDiscoverableExtension, linkedTypeFromCdl,
+  sanitizeSfId, chunk, traversalColumnForType, CDL_ID_CHUNK, type ContentVersionRow,
+} from "./discovery.ts";
 
-const PAYLOAD_VERSION = "sf-files-2026-05-v5";
+const PAYLOAD_VERSION = "sf-files-2026-07-v6";
+const SF_API_VERSION = "v60.0";
 const BUCKET = "salesforce-files";
 const MAX_INLINE_BYTES = 6 * 1024 * 1024;
 
@@ -104,6 +114,25 @@ async function sfDownloadBytes(auth: { token: string; instanceUrl: string }, pat
   return { ok: true, bytes, contentType: res.headers.get("content-type") || "application/octet-stream" };
 }
 
+// Run a SOQL query via the Connected App, following nextRecordsUrl pagination.
+async function sfQuery(
+  auth: { token: string; instanceUrl: string }, soql: string,
+): Promise<{ ok: boolean; status: number; records: Record<string, unknown>[]; error?: string }> {
+  const records: Record<string, unknown>[] = [];
+  let next: string | null = `/services/data/${SF_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
+  let status = 200;
+  while (next) {
+    const url = next.startsWith("http") ? next : `${auth.instanceUrl}${next}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
+    status = res.status;
+    if (!res.ok) return { ok: false, status, records, error: (await res.text()).slice(0, 400) };
+    const data = (await res.json()) as { records?: Record<string, unknown>[]; done?: boolean; nextRecordsUrl?: string };
+    if (Array.isArray(data.records)) records.push(...data.records);
+    next = data.done === false && data.nextRecordsUrl ? data.nextRecordsUrl : null;
+  }
+  return { ok: true, status, records };
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
@@ -159,7 +188,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(req, {
       service: "intake-salesforce-files",
       version: PAYLOAD_VERSION,
-      actions: ["manifest", "upload-url", "bytes", "retry-files", "fetch", "stage-queued"],
+      actions: ["manifest", "upload-url", "bytes", "retry-files", "fetch", "discover", "stage-queued"],
     });
   }
 
@@ -175,6 +204,7 @@ Deno.serve(async (req: Request) => {
     if (action === "bytes") return await handleBytes(req, body);
     if (action === "retry-files") return await handleRetryFiles(req, body);
     if (action === "fetch") return await handleFetch(req, body);
+    if (action === "discover") return await handleDiscover(req, body);
     if (action === "stage-queued") return await handleStageQueued(req, body);
     return errorResponse(req, `Unknown POST action: ${action}`, 400);
   } catch (err) {
@@ -213,24 +243,32 @@ async function handleManifest(req: Request, body: Record<string, unknown> | null
       statusByCvid[String(r.content_version_id)] = String(r.ingestion_status);
     }
 
-    const newRows = vFiles.filter((f) => !(String(f.content_version_id) in statusByCvid)).map((f) => ({
-      content_document_id: f.content_document_id ?? null,
-      content_version_id: f.content_version_id ?? null,
-      linked_entity_type: f.linked_entity_type ?? null,
-      linked_entity_sf_id: f.linked_entity_sf_id ?? null,
-      title: f.title ?? null,
-      file_name: f.file_name ?? null,
-      extension: f.extension ?? null,
-      version_number: f.version_number ?? null,
-      size_bytes: f.size_bytes ?? null,
-      sf_download_url: f.sf_download_url ?? null,
-      source_system: "salesforce",
-      import_batch: batchId,
-      ingestion_status: "discovered",
-      extraction_status: "pending",
-      discovered_at: isoNow(),
-      updated_at: isoNow(),
-    }));
+    const newRows = vFiles.filter((f) => !(String(f.content_version_id) in statusByCvid)).map((f) => {
+      const row: Record<string, unknown> = {
+        content_document_id: f.content_document_id ?? null,
+        content_version_id: f.content_version_id ?? null,
+        linked_entity_type: f.linked_entity_type ?? null,
+        linked_entity_sf_id: f.linked_entity_sf_id ?? null,
+        title: f.title ?? null,
+        file_name: f.file_name ?? null,
+        extension: f.extension ?? null,
+        version_number: f.version_number ?? null,
+        size_bytes: f.size_bytes ?? null,
+        sf_download_url: f.sf_download_url ?? null,
+        source_system: "salesforce",
+        import_batch: batchId,
+        ingestion_status: "discovered",
+        extraction_status: "pending",
+        discovered_at: isoNow(),
+        updated_at: isoNow(),
+      };
+      // W3.7b: stamp the traversal convenience column (sf_comp_id/sf_listing_id/
+      // sf_deal_id) so a manifest-discovered Listing/Deal file is reachable the
+      // same way a server-discovered one is.
+      const col = traversalColumnForType(String(f.linked_entity_type || ""));
+      if (col) row[col] = f.linked_entity_sf_id ?? null;
+      return row;
+    });
 
     if (newRows.length) {
       const res = await dbFetch(vertical as Vertical, "POST", `sf_files`, newRows, "return=minimal");
@@ -366,6 +404,152 @@ async function handleRetryFiles(req: Request, body: Record<string, unknown> | nu
     report[vertical] = rows.length;
   }
   return jsonResponse(req, { ok: true, count: toFetch.length, by_vertical: report, to_fetch: toFetch });
+}
+
+// ── POST ?action=discover ───────────────────────────────────────────────────
+// Server-side ContentDocumentLink → ContentVersion sweep via the Connected App.
+// W3.7b: extends the file-discovery sweep past Comp__c to Listing__c + Deal
+// (Opportunity). For each staged Comp/Listing/Deal SF id it queries
+// ContentDocumentLink, then the latest ContentVersion per document, and records
+// newly discovered files into sf_files (ingestion_status='discovered') with the
+// same dedup contract (content_version_id) and the sf_comp_id/sf_listing_id/
+// sf_deal_id traversal column stamped. The existing ?action=fetch drains those
+// 'discovered' rows to bytes, and ?action=stage-queued feeds the extractor —
+// no new extraction engine.
+//
+// body: {
+//   vertical?: 'dia'|'gov',            // default both
+//   object_types?: ['comp','listing','deal'],  // default all three
+//   entity_ids?: string[],             // scoped backfill (e.g. one Listing id);
+//                                      // applied to the requested object_types
+//   limit?: number,                    // per staging table (backfill sweep size)
+//   only_unprocessed?: boolean,        // staging rows with processed=false only
+//   batch_id?: string,
+// }
+// Clean no-op (200, configured:false) when the Connected App is not configured,
+// so a driving cron is safe before credentials land.
+async function handleDiscover(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  const b = body || {};
+  const auth = await getSfToken();
+  if (!auth) {
+    return jsonResponse(req, {
+      ok: true, configured: false,
+      note: "Salesforce Connected App not configured (SF_INSTANCE_URL/SF_CLIENT_ID/SF_CLIENT_SECRET) — discover is a no-op until credentials land.",
+    });
+  }
+
+  const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
+  const wantKeys = Array.isArray(b.object_types) && b.object_types.length
+    ? new Set((b.object_types as unknown[]).map((k) => String(k).toLowerCase()))
+    : null;
+  const objects = DISCOVERY_OBJECTS.filter((o) => !wantKeys || wantKeys.has(o.key));
+  const scopedIds = Array.isArray(b.entity_ids)
+    ? (b.entity_ids as unknown[]).map(sanitizeSfId).filter(Boolean) as string[]
+    : null;
+  const perTableLimit = Math.min(Number(b.limit) || 2000, 5000);
+  const onlyUnprocessed = b.only_unprocessed === true;
+  const batchId = String(b.batch_id || `discover-${isoNow()}`);
+
+  const report: Record<string, unknown> = {};
+
+  for (const vertical of verticals) {
+    const env = dbEnv(vertical);
+    const vReport: Record<string, unknown> = { by_object: {} };
+    if (!env) { vReport.error = `${vertical} DB not configured`; report[vertical] = vReport; continue; }
+
+    for (const obj of objects) {
+      const oStats = {
+        staged_ids: 0, content_links: 0, documents: 0, latest_versions: 0,
+        discoverable: 0, new_discovered: 0, skipped_existing: 0, errors: [] as string[],
+      };
+
+      // 1. entity ids to sweep — scoped list, else staged parent ids.
+      let entityIds: string[] = [];
+      if (scopedIds) {
+        entityIds = scopedIds;
+      } else {
+        const filter = onlyUnprocessed ? "&processed=eq.false" : "";
+        const res = await dbFetch(vertical, "GET",
+          `${obj.stagingTable}?select=${obj.sfIdColumn}${filter}&${obj.sfIdColumn}=not.is.null&limit=${perTableLimit}`);
+        const rows = Array.isArray(res.data) ? res.data as Record<string, unknown>[] : [];
+        entityIds = rows.map((r) => sanitizeSfId(r[obj.sfIdColumn])).filter(Boolean) as string[];
+      }
+      entityIds = [...new Set(entityIds)];
+      oStats.staged_ids = entityIds.length;
+      if (!entityIds.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
+
+      // 2. ContentDocumentLink for these entities → document ids (+ which entity).
+      const docToEntity: Record<string, { entityId: string; type: string }> = {};
+      for (const ids of chunk(entityIds, CDL_ID_CHUNK)) {
+        const q = await sfQuery(auth, buildContentDocumentLinkSoql(ids));
+        if (!q.ok) { oStats.errors.push(`CDL query: ${q.status} ${q.error || ""}`.slice(0, 200)); continue; }
+        for (const cdl of q.records) {
+          const docId = sanitizeSfId(cdl.ContentDocumentId);
+          const entId = sanitizeSfId(cdl.LinkedEntityId);
+          if (!docId || !entId) continue;
+          oStats.content_links++;
+          // First entity wins per document (deterministic); type from the row,
+          // falling back to this object's SF type.
+          if (!docToEntity[docId]) {
+            docToEntity[docId] = { entityId: entId, type: linkedTypeFromCdl(cdl) || obj.sfType };
+          }
+        }
+      }
+      const docIds = Object.keys(docToEntity);
+      oStats.documents = docIds.length;
+      if (!docIds.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
+
+      // 3. latest ContentVersion per document → candidate sf_files rows.
+      const candidates: Record<string, unknown>[] = [];
+      for (const ids of chunk(docIds, CDL_ID_CHUNK)) {
+        const q = await sfQuery(auth, buildContentVersionSoql(ids));
+        if (!q.ok) { oStats.errors.push(`CV query: ${q.status} ${q.error || ""}`.slice(0, 200)); continue; }
+        for (const cv of q.records as ContentVersionRow[]) {
+          oStats.latest_versions++;
+          if (!isDiscoverableExtension(cv.FileExtension)) continue;
+          oStats.discoverable++;
+          const link = docToEntity[String(cv.ContentDocumentId)];
+          if (!link) continue;
+          candidates.push(mapVersionToFileRow({
+            cv, linkedEntityType: link.type, linkedEntityId: link.entityId,
+            batchId, nowIso: isoNow(), apiVersion: SF_API_VERSION,
+          }));
+        }
+      }
+      if (!candidates.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
+
+      // 4. dedup vs existing sf_files.content_version_id (this vertical).
+      const cvids = candidates.map((c) => String(c.content_version_id)).filter(Boolean);
+      const existing = new Set<string>();
+      for (const ids of chunk(cvids, CDL_ID_CHUNK)) {
+        const inList = ids.map((c) => `"${c}"`).join(",");
+        const ex = await dbFetch(vertical, "GET",
+          `sf_files?content_version_id=in.(${inList})&select=content_version_id`);
+        for (const r of (Array.isArray(ex.data) ? ex.data : []) as Record<string, unknown>[]) {
+          existing.add(String(r.content_version_id));
+        }
+      }
+      const fresh = filterNewVersions(candidates, existing);
+      oStats.skipped_existing = candidates.length - fresh.length;
+
+      // 5. insert the fresh discovered rows.
+      if (fresh.length) {
+        const ins = await dbFetch(vertical, "POST", "sf_files", fresh, "return=minimal");
+        if (ins.ok) oStats.new_discovered = fresh.length;
+        else oStats.errors.push(`insert: ${ins.status} ${JSON.stringify(ins.data).slice(0, 160)}`);
+      }
+
+      (vReport.by_object as Record<string, unknown>)[obj.key] = oStats;
+    }
+
+    report[vertical] = vReport;
+  }
+
+  return jsonResponse(req, {
+    ok: true, configured: true, mode: "discover", batch_id: batchId,
+    note: "Swept ContentDocumentLink/ContentVersion for staged Comp/Listing/Deal records; new files are ingestion_status='discovered'. Run ?action=fetch then ?action=stage-queued to store + extract.",
+    by_vertical: report,
+  });
 }
 
 // ── POST ?action=fetch ──────────────────────────────────────────────────────
