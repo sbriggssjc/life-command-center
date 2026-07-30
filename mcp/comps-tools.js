@@ -397,6 +397,96 @@ export async function enqueueReviewQueue(flagged, deps) {
   return { enqueued, errors };
 }
 
+// ── Comp-review DRAIN — list + resolve the flagged-comp review queues ────────
+// enqueueReviewQueue() (above) is the PRODUCER: it writes flagged sold comps to
+// dia_comp_review_queue / gov_comp_review_queue with status='open' on first
+// insert (preserved on re-pull). Until W3.4 there was no CONSUMER — the queues
+// were orphaned (86 dia + 96 gov open, never worked). These two cores are the
+// drain: a human (Claude MCP / Copilot HTTP / the Decision-Center lane) LISTS
+// the open reviews and RESOLVES each one, writing the disposition to the
+// existing status/resolved_at/resolution_note columns. The comps engine already
+// preserves human status on re-pull, so a resolved row won't re-open.
+const _COMP_REVIEW_TABLES = {
+  dialysis:   { q: 'diaQuery', table: 'dia_comp_review_queue' },
+  government: { q: 'govQuery', table: 'gov_comp_review_queue' },
+};
+function _compReviewDomain(d) {
+  const s = String(d || '').toLowerCase();
+  if (s === 'dia' || s === 'dialysis') return 'dialysis';
+  if (s === 'gov' || s === 'government') return 'government';
+  return null;
+}
+const _COMP_REVIEW_SELECT =
+  'id,sale_id,property_id,comp_id,flags,detail,implied_cap,reliable_cap,address,city,state,tenant,sale_date,sale_price,status,first_flagged_at,last_flagged_at,resolved_at,resolution_note';
+
+// List open (or any-status) comp reviews across both domain queues, newest-flagged
+// first. Returns a unified, domain-tagged list + per-domain counts.
+export async function runListCompReviews(args, deps) {
+  const status = args.status || 'open';                     // 'open' | 'resolved' | 'dismissed' | 'all'
+  const limit = Math.min(Math.max(Number(args.limit) || 100, 1), 500);
+  const only = _compReviewDomain(args.domain);              // null → both
+  const targets = Object.entries(_COMP_REVIEW_TABLES)
+    .filter(([dom]) => !only || dom === only)
+    .map(([dom, cfg]) => ({ dom, ...cfg }));
+  const items = []; const counts = {}; const errors = [];
+  for (const t of targets) {
+    const q = deps[t.q];
+    if (typeof q !== 'function') { errors.push({ domain: t.dom, error: `${t.q} not configured` }); continue; }
+    let path = `${t.table}?select=${_COMP_REVIEW_SELECT}&order=first_flagged_at.desc&limit=${limit}`;
+    if (status !== 'all') path += `&status=eq.${encodeURIComponent(status)}`;
+    try {
+      const res = await q('GET', path, undefined, 'count=exact');
+      const rows = Array.isArray(res && res.data) ? res.data : [];
+      counts[t.dom] = (res && typeof res.count === 'number') ? res.count : rows.length;
+      for (const r of rows) items.push({ domain: t.dom === 'government' ? 'gov' : 'dia', ...r });
+    } catch (e) { errors.push({ domain: t.dom, error: String(e && e.message || e) }); }
+  }
+  // Interleave newest-first across domains, then cap.
+  items.sort((a, b) => String(b.first_flagged_at || '').localeCompare(String(a.first_flagged_at || '')));
+  return { items: items.slice(0, limit), counts, total: items.length, errors };
+}
+
+// Resolve one comp review: set status ('resolved' fixed at source, or 'dismissed'
+// = not a real problem) + resolved_at + resolution_note. Fill-only on the
+// disposition columns; never touches the flagged comp's values.
+export async function runResolveCompReview(args, deps) {
+  const dom = _compReviewDomain(args.domain);
+  if (!dom) return { ok: false, error: `unknown domain ${JSON.stringify(args.domain)} (use dia|gov)` };
+  const id = args.id != null ? String(args.id) : null;
+  if (!id) return { ok: false, error: 'id required' };
+  const disposition = String(args.disposition || 'resolved').toLowerCase();
+  if (!['resolved', 'dismissed', 'open'].includes(disposition))
+    return { ok: false, error: `disposition must be resolved|dismissed|open, got ${disposition}` };
+  const cfg = _COMP_REVIEW_TABLES[dom];
+  const q = deps[cfg.q];
+  if (typeof q !== 'function') return { ok: false, error: `${cfg.q} not configured` };
+  const patch = {
+    status: disposition,
+    resolved_at: disposition === 'open' ? null : new Date().toISOString(),
+    resolution_note: args.note != null ? String(args.note).slice(0, 2000) : null,
+  };
+  try {
+    const res = await q('PATCH', `${cfg.table}?id=eq.${encodeURIComponent(id)}`, patch,
+      'return=representation');
+    const ok = !!(res && res.ok);
+    const row = ok && Array.isArray(res.data) && res.data[0] ? res.data[0] : null;
+    if (!ok) return { ok: false, error: `PATCH failed (HTTP ${res && res.status})`, detail: res && res.data };
+    if (!row) return { ok: false, error: `no comp review with id ${id} in ${cfg.table}` };
+    return { ok: true, domain: args.domain, id, status: row.status, resolved_at: row.resolved_at };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+}
+
+// Compact markdown for the MCP surface (Claude).
+export function formatCompReviewsMarkdown(result) {
+  const rows = result.items || [];
+  const cnt = Object.entries(result.counts || {}).map(([k, v]) => `${v} ${k === 'government' ? 'gov' : 'dia'}`).join(', ');
+  if (!rows.length) return `No open comp reviews. (${cnt || '0'})`;
+  const head = '| Domain | id | Address | City | ST | Tenant | Flags | Implied cap | Reliable cap | Flagged |\n|---|---|---|---|---|---|---|---|---|---|';
+  const pct = v => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%');
+  const body = rows.map(r => `| ${r.domain} | ${r.id} | ${r.address || '—'} | ${r.city || '—'} | ${r.state || '—'} | ${r.tenant || '—'} | ${(r.flags || []).join(', ')} | ${pct(r.implied_cap)} | ${pct(r.reliable_cap)} | ${String(r.first_flagged_at || '').slice(0, 10)} |`).join('\n');
+  return `${head}\n${body}\n\n_${rows.length} open comp reviews (${cnt}). Resolve with resolve_comp_review {domain,id,disposition:'resolved'|'dismissed',note}._`;
+}
+
 // ── THE SHARED CORE — every surface calls this ──────────────────────────────
 // deps = { govQuery, diaQuery } (the server's PostgREST fetch helpers).
 export async function runComps(args, deps) {
@@ -546,6 +636,25 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
         limit: { type: 'number' },
       } },
     },
+    list_comp_reviews: {
+      name: 'list_comp_reviews',
+      description: "List flagged sold comps awaiting human review in the dialysis + government comp-review queues (dia_comp_review_queue / gov_comp_review_queue). These are comps whose displayed rent doesn't reconcile to their reliable cap (cap_mismatch / rent_disagreement / price_over_ask / no_reliable_cap) — routed here for SOURCE correction, never silently shipped. Defaults to open items across both domains, newest-flagged first. Resolve each with resolve_comp_review.",
+      inputSchema: { type: 'object', properties: {
+        domain: { type: 'string', enum: ['dia', 'gov', 'dialysis', 'government'], description: 'limit to one domain; omit for both' },
+        status: { type: 'string', enum: ['open', 'resolved', 'dismissed', 'all'], description: "default 'open'" },
+        limit: { type: 'number' },
+      } },
+    },
+    resolve_comp_review: {
+      name: 'resolve_comp_review',
+      description: "Record a disposition on one flagged comp review. disposition='resolved' (the source cap/rent was corrected) or 'dismissed' (reviewed — not a real problem); 'open' re-opens. Writes status + resolved_at + resolution_note to the queue row; the comps engine preserves this on re-pull so it won't re-open. Get {domain,id} from list_comp_reviews.",
+      inputSchema: { type: 'object', properties: {
+        domain: { type: 'string', enum: ['dia', 'gov', 'dialysis', 'government'] },
+        id: { type: ['number', 'string'], description: 'the comp-review row id' },
+        disposition: { type: 'string', enum: ['resolved', 'dismissed', 'open'] },
+        note: { type: 'string', description: 'optional resolution note' },
+      }, required: ['domain', 'id'] },
+    },
   };
   const handlers = {
     query_comps: (args) => withTiming('query_comps', async () => {
@@ -555,6 +664,14 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
     synthesize_comps: (args) => withTiming('synthesize_comps', async () => {
       const result = await runSynthesize(args || {}, deps);
       return textResult({ ...result, markdown: formatCompsMarkdown(result) });
+    }),
+    list_comp_reviews: (args) => withTiming('list_comp_reviews', async () => {
+      const result = await runListCompReviews(args || {}, deps);
+      return textResult({ ...result, markdown: formatCompReviewsMarkdown(result) });
+    }),
+    resolve_comp_review: (args) => withTiming('resolve_comp_review', async () => {
+      const result = await runResolveCompReview(args || {}, deps);
+      return textResult(result);
     }),
   };
   return { defs, handlers };
@@ -582,6 +699,21 @@ export function makeCompsHttpRoutes({ govQuery, diaQuery }) {
       try {
         const result = await runSynthesize(req.body || {}, deps);
         res.json(enforceHttpResponseSize({ ...result, markdown: formatCompsMarkdown(result) }));
+      } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
+    },
+    // GET /api/comp-reviews?domain=&status=&limit= — list the flagged-comp drain.
+    listCompReviews: async (req, res) => {
+      try {
+        const args = { ...(req.query || {}), ...(req.body || {}) };
+        const result = await runListCompReviews(args, deps);
+        res.json(enforceHttpResponseSize(result));
+      } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
+    },
+    // POST /api/comp-reviews/resolve {domain,id,disposition,note} — record disposition.
+    resolveCompReview: async (req, res) => {
+      try {
+        const result = await runResolveCompReview(req.body || {}, deps);
+        res.status(result.ok ? 200 : 400).json(result);
       } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
     },
   };

@@ -79,6 +79,8 @@ export const GOV_READ_TABLES = new Set([
   // already-allowlisted recorded_owners / contacts (no emails/phones/SSNs).
   'ownership_research_queue',
   'v_recorded_owner_link_review',
+  // W3.4 (2026-07-30): property metadata-backfill worklist (Research sub-page).
+  'v_property_metadata_backfill_queue',
   'v_recorded_owner_link_status',
   'v_recorded_vs_assessor_owner_divergence',
   // R4-D (2026-06-05): post-verification residue — frontend queried these but
@@ -147,6 +149,8 @@ export const DIA_READ_TABLES = new Set([
   'v_clinic_lease_renewal_watchlist',
   'v_ingestion_reconciliation',
   'v_clinic_research_priority',
+  // W3.4 (2026-07-30): property metadata-backfill worklist (Research sub-page).
+  'v_property_metadata_backfill_queue',
   'v_cms_data',
   'v_sales_comps',
   'v_available_listings',
