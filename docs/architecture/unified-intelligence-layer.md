@@ -117,6 +117,12 @@ cadence that advances from reality — and becomes the template for every other 
 - **Next predicates to add** (same shape): "call X back" closes on a logged outbound call to X; "reply to Y" closes
   on a sent email to Y; generalize `lcc_autoresolve_offer_review` → `lcc_autoresolve_todos(activity)` keyed by
   `action_type`.
+- **2026-07-30 — keystone VERIFIED on live data (backfill):** the Sent-Items backfill ingested **42** sends →
+  **30 auto-attributed across 8 deals**, **0** wrongly auto-resolved (the `backfill:true` guard held); **cadence
+  advanced from real history** (next-touch-due computed — Edwin Ryu 10/15, Ben Brigham 10/28, Toby Scrivner 10/21).
+  Refinement found: some sends attributed to the **contact/person** entity, not the **asset/deal** (matcher takes
+  the most-recent entity mentioning the recipient) — fixed by §4 contact reconciliation (resolve contact→deal;
+  attach to both). Full design: `contact-reconciliation.md`.
 
 ## Roadmap: ingestion sources & layers on deck (decisions on record)
 1. **Personal email — deliberately EXCLUDED from the professional sent-ingest** (2026-07-30 decision). The
@@ -142,6 +148,14 @@ cadence that advances from reality — and becomes the template for every other 
    number or an email resolves to the same entity/contact/deal. This is the prerequisite that lets "outbound call
    to number X" and "email to contact X" resolve to the SAME to-do. Reconcile via matching phone+email+name,
    provenance-tagged, confidence-scored, reversible — never a blind merge.
+5. **Deep historical ingest (10+ yr Sent + Inbox) — build the past, not just the future** (Scott's directive).
+   Backfill as much email history as retention allows via a **LEAN correspondence path** (log `activity_events` +
+   attribute + dedup on `internet_message_id`; `backfill:true`, no auto-resolve) — NOT the live inbound-triage/OM
+   pipeline (far too heavy for decade-old mail, and we don't want to re-stage old OMs). This retro-populates the
+   relationship graph (who we've worked with, on what, how they responded) and is the **training corpus** for the
+   learned-cadence/content layer. Run in date-windowed batches; attribution sharpens as §4 identity resolves.
+   Inbound history uses the same lean handler with `direction:'inbound'` (a sibling of `outlook-sent`), keeping the
+   heavy triage for LIVE mail only.
 
 Build order for the call layer: **§4 contact reconciliation first** (identity), then **§3 WebEx call ingest +
 generalized auto-retire**, so a call and an email to the same person close the same to-do. §2 (shared mailbox) is
