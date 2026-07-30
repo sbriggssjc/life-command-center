@@ -142,7 +142,7 @@ describe('lane rationalization map', () => {
     // The full set of types the Decision Center renders today (+ the SOS key).
     const types = [
       'confirm_true_owner', 'resolve_ownership', 'confirm_buyer_parent', 'map_sf_parent_account',
-      'merge_duplicate_entities', 'junk_entity_name', 'property_merge',
+      'merge_duplicate_entities', 'owner_reconcile', 'junk_entity_name', 'property_merge',
       'provenance_conflict', 'pending_update', 'intake_disposition',
       'match_disambiguation', 'cms_link_suspect', 'sf_contact_account_mismatch', 'sos_owner_links',
       'contact_company_link',
@@ -156,10 +156,11 @@ describe('lane rationalization map', () => {
     }
   });
 
-  it('collapses 20 decision types into the 8 logical lanes', () => {
+  it('collapses 21 decision types into the 8 logical lanes', () => {
     assert.equal(LCC_REVIEW_LANES.length, 8);
-    // 20 = 19 + Phase 1b contact_company_link (linkage lane, 2026-07-21).
-    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 20);
+    // 21 = 19 + Phase 1b contact_company_link (linkage, 2026-07-21)
+    //         + W3.2 owner_reconcile (entity_merge lane, 2026-07-30).
+    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 21);
     // R43: cap-rate review + bad-rent leases group under the provenance lane.
     assert.equal(laneForDecisionType('caprate_review'), 'provenance');
     assert.equal(laneForDecisionType('bad_rent_lease'), 'provenance');

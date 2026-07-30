@@ -1603,6 +1603,9 @@ var _DC_FEDERATED = new Set([
   'listing_event_action', 'resolve_ownership', 'loan_maturity',
   // Phase 1b (2026-07-21): person contact -> owner org(s) review tier.
   'contact_company_link',
+  // W3.2 (audit 3.2.3): owner reconcile - ORE verdicts-only feed + two folded
+  // orphan queues (gov owner_unification_review_queue, gov+dia entity_match_candidates).
+  'owner_reconcile',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1664,6 +1667,7 @@ async function renderReviewConsolePage() {
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
+    { dt: 'owner_reconcile', label: 'Owner reconcile — same party?', open: "renderFederatedLane('owner_reconcile')" },
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
@@ -2266,6 +2270,8 @@ const _DC_FED_META = {
     intro: 'A property whose CURRENT debt matures within 24 months — or is already matured — (gov + dia), value-ranked by rent; a DISTRESSED loan (watchlist / special servicing / delinquent / DSCR<1) ranks first. A maturity wall forces the owner to refinance or sell — that is the BD opening. Pursue refi (advisory/refi outreach on the owner), pursue disposition (the owner may sell), mark not relevant (stops asking), or research. No domain write — this is a BD signal.' },
   contact_company_link: { title: 'Contact → company owner',
     intro: 'A person contact whose company name resolves to owner org(s) by NAME — the tiers the exact-core auto-apply worker leaves for a human (LLC names are where false positives live). exact_ambiguous = the exact name maps to >1 owner org (pick which); fuzzy = a distinctive shared name-core (e.g. Starwood Capital Group ↔ Starwood REIT). Value-ranked by the candidate owner’s rent. Link the person to the chosen owner (attaches a real contact edge), mark “not a match” (stops asking), or research.' },
+  owner_reconcile: { title: 'Owner reconcile — same party?',
+    intro: 'Candidate SAME-PARTY owner pairs from three sources folded into one drain: the ORE multi-signal engine (LCC — verdicts only, auto-merge is OFF), the gov owner-unification queue, and gov+dia entity-match candidates. Each card shows the two owner records plus the evidence that linked them. Approve (LCC pairs merge via lcc_merge_entity; gov/dia rows are dispositioned — the domain merge is the resolver job), reject (records them distinct), or research. Every verdict is recorded so it is not re-asked AND writes a labeled pair into entity_match_labels — the training corpus for the Wave 4 resolver.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2591,6 +2597,42 @@ function _fedCardHTML(it, i, isNext) {
     }
     actions = '<button class="q-action primary" onclick="cclLink(' + i + ')">Link →</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_a_match\')">Not a match</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'owner_reconcile') {
+    const kind = c.kind;
+    const nameA = c.owner_name || c.source_name || '?';
+    const nameB = c.candidate_name || c.target_name
+      || (c.candidate_unified_id ? ('contact ' + String(c.candidate_unified_id).slice(0, 8)) : '?');
+    const kindLbl = kind === 'ore' ? 'ORE multi-signal'
+      : kind === 'owner_unification' ? 'Owner unification (gov)'
+      : 'Entity match (' + (c.domain || '') + ')';
+    const score = (c.weighted_score != null) ? ('score ' + Math.round(Number(c.weighted_score)))
+      : (c.match_score != null) ? ('score ' + Number(c.match_score).toFixed(2))
+      : (c.similarity != null) ? ('sim ' + Number(c.similarity).toFixed(2)) : '';
+    let evChips = '';
+    if (kind === 'ore' && Array.isArray(c.agreeing_signals)) {
+      evChips = c.agreeing_signals.map(function (s) {
+        var lbl = String((s && s.signal) || '').replace(/_/g, ' ');
+        var w = (s && s.weight != null) ? (' ' + s.weight) : '';
+        return '<span class="q-badge">' + esc(lbl + w) + '</span>';
+      }).join('');
+    } else if (kind === 'owner_unification') {
+      evChips = (c.reason ? '<span class="q-badge">' + esc(String(c.reason)) + '</span>' : '')
+        + (c.match_tier != null ? '<span class="q-badge">tier ' + esc(String(c.match_tier)) + '</span>' : '');
+    } else if (kind === 'entity_match_candidate') {
+      evChips = (c.match_method ? '<span class="q-badge">' + esc(String(c.match_method)) + '</span>' : '')
+        + (c.source_table ? '<span class="q-badge">' + esc(String(c.source_table)) + ' &rarr; ' + esc(String(c.target_table || '')) + '</span>' : '');
+    }
+    const conflictBadge = c.high_authority_conflict ? '<span class="q-badge pri-high">high-authority conflict</span>' : '';
+    const mergeVerb = kind === 'ore' ? 'Merge (same party) &rarr;' : 'Confirm match &rarr;';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(nameA)
+      + ' <span style="opacity:.6">&harr;</span> ' + esc(nameB) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge type">' + esc(kindLbl) + '</span>'
+      + (score ? '<span class="q-badge">' + esc(score) + '</span>' : '') + conflictBadge + '</div></div>'
+      + (evChips ? '<div class="q-item-meta">Evidence: ' + evChips + '</div>' : '')
+      + '<div class="q-item-meta">Are these the SAME owner / party?</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">' + mergeVerb + '</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject (distinct)</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body

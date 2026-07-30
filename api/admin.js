@@ -875,6 +875,12 @@ const FEDERATED_DECISION_TYPES = new Set([
   // owner via linkPersonToEntity) / not_a_match (record-only, stops asking) /
   // research. Source: v_lcc_contact_company_link_candidates.
   'contact_company_link',
+  // W3.2 (audit 3.2.3): owner reconcile — the ORE engine's verdicts-only review
+  // feed PLUS two folded orphan queues (gov owner_unification_review_queue,
+  // gov+dia entity_match_candidates), one drain. Approve -> lcc_merge_entity (LCC
+  // pairs) or a source disposition (gov/dia); every verdict labels a pair into
+  // entity_match_labels (Wave 4 training corpus).
+  'owner_reconcile',
 ]);
 
 // Decision types posted as (type + subject) from the PROPERTY-DETAIL signal
@@ -916,8 +922,45 @@ function federatedSubjectRef(type, s) {
     case 'resolve_ownership': return (s.property_id != null) ? 'resolveown:gov:' + s.property_id : null;
     // Phase 1b: one card per contact (unified_id) — the person->company decision.
     case 'contact_company_link': return s.unified_id ? 'ccl:' + s.unified_id : null;
+    // W3.2: three seeders, one lane — each namespaced so a verdict routes back to
+    // the right source. ORE pairs are canonicalized (sorted ids) so the reciprocal
+    // pair (B,A) maps to the same subject as (A,B).
+    case 'owner_reconcile': {
+      if (s.kind === 'ore') {
+        if (s.entity_id == null || s.candidate_entity_id == null) return null;
+        const pr = [String(s.entity_id), String(s.candidate_entity_id)].sort();
+        return 'ownrec:lcc:' + pr[0] + ':' + pr[1];
+      }
+      if (s.kind === 'owner_unification') return s.queue_id != null ? 'ownrec:govu:' + s.queue_id : null;
+      if (s.kind === 'entity_match_candidate') return (s.domain && s.candidate_id != null) ? 'ownrec:emc:' + s.domain + ':' + s.candidate_id : null;
+      return null;
+    }
   }
   return null;
+}
+
+// ============================================================================
+// W3.2 - owner-reconcile lane helpers (pure + label writer). Exported for tests.
+// ============================================================================
+// Canonical LCC ORE pair subject_ref (order-independent). Mirrors federatedSubjectRef.
+export function oreCanonicalPairRef(a, b) {
+  if (a == null || b == null) return null;
+  const pr = [String(a), String(b)].sort();
+  return 'ownrec:lcc:' + pr[0] + ':' + pr[1];
+}
+
+// Map a lane verdict token -> the training LABEL (positive/negative) or null.
+export function ownerReconcileLabelVerdict(verdict) {
+  const v = String(verdict || '').toLowerCase();
+  if (v === 'approve' || v === 'confirm' || v === 'same_party' || v === 'merge') return 'same_party';
+  if (v === 'reject' || v === 'distinct' || v === 'not_a_match' || v === 'keep_separate') return 'distinct';
+  return null;   // research / unknown -> not a label
+}
+
+// Idempotent (on subject_ref) insert into the entity_match_labels training corpus.
+async function writeEntityMatchLabel(row) {
+  return opsQuery('POST', 'entity_match_labels?on_conflict=subject_ref', row,
+    { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
 }
 
 // Project + classify ONE staged-intake row for the create lane. `row` is the
@@ -1490,6 +1533,87 @@ async function fetchFederatedSource(type, cap, opts) {
     return out;
   }
 
+  if (type === 'owner_reconcile') {
+    // Three folded seeders -> one drain (audit 3.2.3 / 3.4):
+    //   A. LCC ORE reconcile - v_lcc_owner_reconcile_review (flagged_review +
+    //      auto_merge_eligible pairs of LCC entities). Approve -> lcc_merge_entity.
+    //   B. gov owner_unification_review_queue - recorded_owner <-> unified_contact.
+    //   C. gov+dia entity_match_candidates (status='pending_review').
+    // B/C are verdicts-only here: approve DISPOSITIONS the source row + labels the
+    // pair (the domain merge/link is the resolver's job - W3.3/W4). Ranked by the
+    // seeder confidence signal (weighted_score / match_score / similarity).
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+    const aR = await opsQuery('GET', 'v_lcc_owner_reconcile_review?select=id,entity_id,owner_name,'
+      + 'candidate_entity_id,candidate_name,verdict,weighted_score,threshold,action,agreeing_signals,'
+      + 'high_authority_conflict,created_at&order=weighted_score.desc.nullslast,created_at.desc&limit=' + cap);
+    const aRows = (aR.ok && Array.isArray(aR.data)) ? aR.data : [];
+    const seenPair = new Set();
+    const aItems = [];
+    for (const row of aRows) {
+      if (row.candidate_entity_id == null) continue;
+      const ref = oreCanonicalPairRef(row.entity_id, row.candidate_entity_id);
+      if (!ref || seenPair.has(ref)) continue;
+      seenPair.add(ref);
+      aItems.push({
+        subject_ref: ref, subject_domain: 'lcc', subject_property_id: null,
+        subject_entity_id: row.entity_id, rank_value: num(row.weighted_score),
+        context: { kind: 'ore', domain: 'lcc', evidence_id: row.id,
+          entity_id: row.entity_id, candidate_entity_id: row.candidate_entity_id,
+          owner_name: row.owner_name, candidate_name: row.candidate_name,
+          engine_verdict: row.verdict, action: row.action,
+          weighted_score: row.weighted_score, threshold: row.threshold,
+          high_authority_conflict: row.high_authority_conflict === true,
+          agreeing_signals: Array.isArray(row.agreeing_signals) ? row.agreeing_signals : [] },
+      });
+    }
+
+    const bR = await domainQuery('gov', 'GET', 'owner_unification_review_queue?select=id,recorded_owner_id,'
+      + 'owner_name,candidate_unified_id,match_tier,match_score,reason&status=eq.pending_review'
+      + '&order=match_score.desc.nullslast,id&limit=' + cap);
+    const bRows = (bR.ok && Array.isArray(bR.data)) ? bR.data : [];
+    const bItems = bRows.map((row) => ({
+      subject_ref: 'ownrec:govu:' + row.id, subject_domain: 'gov', subject_property_id: null,
+      subject_entity_id: null, rank_value: num(row.match_score) * 100,
+      context: { kind: 'owner_unification', domain: 'gov', queue_id: row.id,
+        recorded_owner_id: row.recorded_owner_id, owner_name: row.owner_name,
+        candidate_unified_id: row.candidate_unified_id, match_tier: row.match_tier,
+        match_score: row.match_score, reason: row.reason },
+    }));
+
+    const fetchEmc = async (dom) => {
+      const r = await domainQuery(dom, 'GET', 'entity_match_candidates?select=id,source_table,source_id,'
+        + 'source_name,target_table,target_id,target_name,match_method,similarity&status=eq.pending_review'
+        + '&order=similarity.desc.nullslast,id&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'ownrec:emc:' + dom + ':' + row.id, subject_domain: dom, subject_property_id: null,
+        subject_entity_id: null, rank_value: num(row.similarity) * 100,
+        context: { kind: 'entity_match_candidate', domain: dom, candidate_id: row.id,
+          source_table: row.source_table, source_id: row.source_id, source_name: row.source_name,
+          target_table: row.target_table, target_id: row.target_id, target_name: row.target_name,
+          match_method: row.match_method, similarity: row.similarity },
+      }));
+    };
+    const [cGov, cDia] = await Promise.all([fetchEmc('gov'), fetchEmc('dia')]);
+
+    out.items = aItems.concat(bItems).concat(cGov).concat(cDia)
+      .sort((a, b) => b.rank_value - a.rank_value);
+
+    // Honest counts (each seeder's pending universe). The LCC review count is an
+    // upper bound (multiple evidence rows can exist per pair - deduped in items);
+    // the deduped item list is authoritative (mirrors merge_duplicate_entities).
+    const [ac, bc, ccGov, ccDia] = await Promise.all([
+      opsCnt('v_lcc_owner_reconcile_review'),
+      domCnt('gov', 'owner_unification_review_queue?status=eq.pending_review'),
+      domCnt('gov', 'entity_match_candidates?status=eq.pending_review'),
+      domCnt('dia', 'entity_match_candidates?status=eq.pending_review'),
+    ]);
+    out.total = (ac == null && bc == null && ccGov == null && ccDia == null)
+      ? null : (ac || 0) + (bc || 0) + (ccGov || 0) + (ccDia || 0);
+    return out;
+  }
+
   return out;
 }
 
@@ -2022,6 +2146,103 @@ async function handleDecisionVerdict(req, res) {
       { effects, updated_at: new Date().toISOString() });
 
   try {
+    // ---- owner_reconcile (W3.2 / audit 3.2.3) --------------------------------
+    // Three folded seeders, one verdict shape. Every verdict writes lcc_decisions
+    // (don't-re-ask) AND a labeled pair into entity_match_labels (Wave 4 corpus).
+    // approve -> LCC pairs call lcc_merge_entity; gov/dia rows disposition their
+    // source (verdicts only - the domain merge is the resolver's job, W3.3/W4).
+    if (decision.decision_type === 'owner_reconcile') {
+      const rc = decision.context || {};
+      const kind = rc.kind;
+      const label = ownerReconcileLabelVerdict(verdict);
+      const isApprove = label === 'same_party';
+      const isReject = label === 'distinct';
+      const isResearch = String(verdict).toLowerCase() === 'research';
+      if (!isApprove && !isReject && !isResearch) {
+        return res.status(400).json({ error: 'unknown verdict for owner_reconcile: ' + verdict });
+      }
+      if (isResearch) {
+        const rt = await createResearchTask({ research_type: 'owner_reconcile_research',
+          title: 'Confirm owner match: ' + (rc.owner_name || rc.source_name || '?')
+            + ' <-> ' + (rc.candidate_name || rc.target_name || rc.candidate_unified_id || '?'),
+          instructions: 'Confirm or refute that these two owner records are the SAME party. '
+            + 'Seeder: ' + (kind || '?') + '. ' + (rc.reason || '') });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        await record('research', 'deferred', payload, { research_task: true });
+        return res.status(200).json({ ok: true, verdict: 'research' });
+      }
+      const effects = {};
+      let labelRow = null;
+      if (kind === 'ore') {
+        const tgt = rc.entity_id, cand = rc.candidate_entity_id;
+        if (tgt == null || cand == null) return res.status(400).json({ error: 'ore pair missing entity ids' });
+        if (isApprove) {
+          const inList = [tgt, cand].map((id) => pgFilterVal(id)).join(',');
+          const sfR = await opsQuery('GET', 'lcc_owner_evidence_cache?select=entity_id,sf_account&entity_id=in.(' + inList + ')');
+          const sfBy = {};
+          if (sfR.ok && Array.isArray(sfR.data)) for (const x of sfR.data) sfBy[x.entity_id] = x.sf_account || null;
+          let winner = tgt, loser = cand;
+          if (sfBy[cand] && !sfBy[tgt]) { winner = cand; loser = tgt; }
+          if (payload.winner_id && (payload.winner_id === tgt || payload.winner_id === cand)) {
+            winner = payload.winner_id; loser = (winner === tgt) ? cand : tgt;
+          }
+          const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: loser, p_winner: winner });
+          if (!mr.ok) { await recordEffectFailure({ merged: false, error: mr.data });
+            return res.status(502).json({ error: 'merge_failed', detail: mr.data }); }
+          effects.merged = { winner, loser };
+          await refreshQueueAfterDecision();
+        } else {
+          effects.recorded = 'kept_distinct';
+        }
+        labelRow = { owner_a: rc.owner_name || null, owner_b: rc.candidate_name || null,
+          entity_a: tgt != null ? String(tgt) : null, entity_b: cand != null ? String(cand) : null,
+          match_score: rc.weighted_score != null ? Number(rc.weighted_score) : null,
+          evidence_json: { agreeing_signals: rc.agreeing_signals || [], engine_verdict: rc.engine_verdict,
+            threshold: rc.threshold, high_authority_conflict: rc.high_authority_conflict === true } };
+      } else if (kind === 'owner_unification') {
+        const qid = rc.queue_id;
+        if (qid == null) return res.status(400).json({ error: 'owner_unification queue_id missing' });
+        const patch = { status: isApprove ? 'confirmed_match' : 'rejected',
+          resolved_by: 'decision_center', resolved_at: new Date().toISOString() };
+        const pr = await domainQuery('gov', 'PATCH', 'owner_unification_review_queue?id=eq.' + encodeURIComponent(qid), patch);
+        if (!pr.ok) { await recordEffectFailure({ dispositioned: false, error: pr.data });
+          return res.status(502).json({ error: 'disposition_failed', detail: pr.data }); }
+        effects.dispositioned = patch.status;
+        labelRow = { owner_a: rc.owner_name || null, owner_b: null,
+          entity_a: rc.recorded_owner_id != null ? String(rc.recorded_owner_id) : null,
+          entity_b: rc.candidate_unified_id != null ? String(rc.candidate_unified_id) : null,
+          match_score: rc.match_score != null ? Number(rc.match_score) : null,
+          evidence_json: { match_tier: rc.match_tier, reason: rc.reason } };
+      } else if (kind === 'entity_match_candidate') {
+        const cid = rc.candidate_id, dom = rc.domain;
+        if (cid == null || !dom) return res.status(400).json({ error: 'entity_match_candidate id/domain missing' });
+        const patch = { status: isApprove ? 'confirmed_match' : 'rejected',
+          resolved_by: 'decision_center', resolved_at: new Date().toISOString() };
+        const pr = await domainQuery(dom, 'PATCH', 'entity_match_candidates?id=eq.' + encodeURIComponent(cid), patch);
+        if (!pr.ok) { await recordEffectFailure({ dispositioned: false, error: pr.data });
+          return res.status(502).json({ error: 'disposition_failed', detail: pr.data }); }
+        effects.dispositioned = patch.status;
+        labelRow = { owner_a: rc.source_name || null, owner_b: rc.target_name || null,
+          entity_a: rc.source_id != null ? String(rc.source_id) : null,
+          entity_b: rc.target_id != null ? String(rc.target_id) : null,
+          match_score: rc.similarity != null ? Number(rc.similarity) : null,
+          evidence_json: { match_method: rc.match_method, source_table: rc.source_table, target_table: rc.target_table } };
+      } else {
+        return res.status(400).json({ error: 'unknown owner_reconcile seeder kind: ' + kind });
+      }
+      const lw = await writeEntityMatchLabel(Object.assign({
+        seeder: kind === 'ore' ? 'ore_reconcile' : kind,
+        source_domain: rc.domain || decision.subject_domain || null,
+        verdict: label, raw_verdict: verdict,
+        decision_id: decisionId, subject_ref: decision.subject_ref,
+        decided_by: user.id || null, decided_at: new Date().toISOString(),
+      }, labelRow || {}));
+      effects.label_written = !!lw.ok;
+      await record(verdict, isApprove ? 'decided' : 'skipped', payload, effects);
+      return res.status(200).json({ ok: true, verdict, label, effects });
+    }
+
     // ---- listing_event_action (R48) -----------------------------------------
     // A closed sale → the next BD action. Effect-FIRST, then mark the event
     // processed so the queue drains; a failed effect keeps the decision open and

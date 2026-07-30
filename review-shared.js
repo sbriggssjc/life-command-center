@@ -51,6 +51,7 @@ var LCC_DECISION_LANE_MAP = {
   confirm_buyer_parent:          { lane: 'buyer_mapping', merges: false },
   map_sf_parent_account:         { lane: 'buyer_mapping', merges: false },
   merge_duplicate_entities:      { lane: 'entity_merge',  merges: 'entity' },
+  owner_reconcile:               { lane: 'entity_merge',  merges: 'entity' },
   junk_entity_name:              { lane: 'entity_merge',  merges: 'entity' },
   property_merge:                { lane: 'property_merge', merges: 'property' },
   provenance_conflict:           { lane: 'provenance',    merges: false },
