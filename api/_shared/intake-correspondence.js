@@ -22,6 +22,7 @@
 
 import { appendActivityEvent as defaultAppendActivityEvent } from './activity-events.js';
 import { growCadenceFromOutreach as defaultGrowCadenceFromOutreach } from './cadence-engine.js';
+import { opsQuery as defaultOpsQuery } from './ops-db.js';
 
 // activity_events.domain carries the canonical short form 'dia' | 'gov'.
 // The matcher hands us 'dialysis' | 'government' (or null for an lcc-direct
@@ -106,4 +107,84 @@ export async function logEmailIntakeCorrespondence({
     } catch (_e) { /* best-effort — the timeline row is written regardless */ }
   }
   return res;
+}
+
+// ============================================================================
+// LIVE INBOUND dual-anchor stamp — the inbound mirror of handleOutlookSent
+// ----------------------------------------------------------------------------
+// logEmailIntakeCorrespondence (above) only fires on a CONFIDENT property/OM
+// match, so ordinary inbound BD mail from a known party — a broker reply, a
+// seller note — was never logged or party-stamped. This logs EVERY flagged
+// inbound email as an `outlook_inbound` activity, resolving the sender's PARTY
+// (the durable BD unit) and OPEN deal (active sub-context) via
+// lcc_resolve_contact and stamping the dual anchor — exactly as the outbound
+// path (handleOutlookSent) does for sent mail. This is what makes NEW inbound
+// mail self-resolve to the relationship going forward, with no re-drain.
+//
+// Doctrine:
+//   - Relationship-primary: the PARTY is the durable anchor; the OPEN deal is a
+//     subfilter. A sender with no open deal still logs on the party (entity_id
+//     null → attention rides the relationship, by design).
+//   - Skip internal (northmarq) / empty senders — not a BD party.
+//   - Dedup on (workspace, source_type='outlook_inbound', internet_message_id)
+//     via appendActivityEvent, so PA's 3–6 replays are a no-op.
+//   - Fire-and-forget: never blocks OM intake; a resolver hiccup still logs the
+//     raw inbound touch (party/deal simply null).
+//
+// @param {object} args
+// @param {string} args.workspaceId
+// @param {string} args.actorId
+// @param {object} args.emailContext  — { internet_message_id, subject,
+//                                       body_snippet, web_link, received_at,
+//                                       from, to }
+// @param {object} [deps]             — { appendActivityEvent, opsQuery } for testing
+export async function logInboundCorrespondenceDualAnchor({
+  workspaceId,
+  actorId,
+  emailContext,
+}, deps = {}) {
+  const append = deps.appendActivityEvent || defaultAppendActivityEvent;
+  const query  = deps.opsQuery || defaultOpsQuery;
+
+  const ctx  = emailContext || {};
+  const from = (ctx.from || '').toString().trim().toLowerCase();
+  // Guard: only external senders are BD parties (internal/self carry no party).
+  if (!from || from.includes('northmarq')) return { ok: false, skipped: 'internal_or_no_sender' };
+  const externalId = ctx.internet_message_id || ctx.message_id || null;
+  if (!externalId) return { ok: false, skipped: 'no_message_id' };
+
+  // Resolve the PARTY (durable BD unit) + OPEN deal (active sub-context) from
+  // the sender. Best-effort: a resolver failure still logs the raw touch.
+  let partyEntityId = null, dealEntityId = null;
+  try {
+    const rc = await query('POST', 'rpc/lcc_resolve_contact', { p_email: from, p_phone: null });
+    const packet = Array.isArray(rc.data) ? rc.data[0] : rc.data;
+    if (packet?.party_entity_id) partyEntityId = packet.party_entity_id;
+    if (packet?.primary_deal)    dealEntityId  = packet.primary_deal;
+  } catch (_e) { /* best-effort */ }
+
+  const res = await append({
+    workspaceId,
+    actorId,
+    category:    'email',
+    title:       ('Received: ' + (ctx.subject || '(no subject)')).slice(0, 500),
+    body:        ctx.body_snippet || null,
+    entityId:    dealEntityId,          // OPEN-deal anchor (nullable → rides the party)
+    sourceType:  'outlook_inbound',
+    externalId,
+    externalUrl: ctx.web_link || null,
+    occurredAt:  ctx.received_at || null,
+    metadata: {
+      direction:       'inbound',
+      from,
+      to:              ctx.to || null,
+      via:             'outlook_inbound',
+      party_entity_id: partyEntityId,
+      deal_entity_id:  dealEntityId,
+    },
+  });
+  return {
+    ok: true, inserted: !!res?.inserted,
+    party_entity_id: partyEntityId, deal_entity_id: dealEntityId,
+  };
 }

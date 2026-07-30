@@ -24,6 +24,7 @@ import { createRequire } from 'module';
 const nodeRequire = createRequire(import.meta.url);
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { logInboundCorrespondenceDualAnchor } from './_shared/intake-correspondence.js';
 import { getAiConfig } from './_shared/ai.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -522,6 +523,19 @@ async function handleOutlookMessage(req, res) {
     from: sender?.email || null,
     to: firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null),
   };
+
+  // ── Live inbound dual-anchor stamp (relationship-primary, deal-subfilter) ──
+  // The inbound mirror of handleOutlookSent: log this flagged inbound email as
+  // an `outlook_inbound` activity, resolving the sender's PARTY (durable BD
+  // unit) + OPEN deal via lcc_resolve_contact and stamping the dual anchor, so
+  // NEW mail self-resolves to the relationship going forward (no re-drain).
+  // Fire-and-forget + deduped on (workspace, source_type, internet_message_id),
+  // so PA's 3–6 replays are a no-op and it never blocks OM intake below.
+  logInboundCorrespondenceDualAnchor({
+    workspaceId,
+    actorId: user.id || user.user_id || 'b0000000-0000-0000-0000-000000000001',
+    emailContext,
+  }).catch(() => null);
 
   // Dedup guard: Power Automate's flagged-email trigger fires multiple times
   // (typically 3–6) for the same email within a minute. Check if this

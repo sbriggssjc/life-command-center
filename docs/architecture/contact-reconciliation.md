@@ -140,6 +140,52 @@ as every other tick worker.
 **Status:** RPC + `correspondent_backfill_log` applied live (OPS); worker + routes in the working tree,
 `node --check`-clean, imports resolve, subroute guard 4/4 green. **Deploy to activate**, then run the drain.
 
+### Deliverable — SF-contact-gap worklist (`backfill-artifacts/`)
+
+The `no_match` set is not failure noise — it is a **Salesforce coverage gap**. Delivered `TeamBriggs_Salesforce_Contact_Gaps.xlsx`
+(saved under `docs/architecture/backfill-artifacts/`, with `build_worklist.py` + `README.md` for regeneration): 295
+no-match correspondents classified by domain into business types (title/escrow, cooperating broker, buyer/capital,
+legal, lender, consultant, government, client/operator) vs personal/noise, ranked by touch volume. Workflow: add
+the high-value business contacts to SF → delete their `correspondent_backfill_log` row (re-queues) → re-drain →
+they link to their full email history.
+
+**OPEN — business/personal/overlap classification remediation (Scott, 2026-07-30).** The current split is a crude
+**domain heuristic** and Scott flagged it explicitly: the personal/noise bucket contains real business contacts
+(a client or broker who corresponds from gmail/yahoo lands in "Personal"), and some parties **genuinely overlap**
+(both a personal relationship and a BD counterparty). Domain alone cannot separate these. The remediation signal is
+**behavioral, not lexical**: a personal-domain address that (a) appears in threads whose subject/body names a
+property/deal, (b) co-occurs with known business contacts, (c) matches a Salesforce **Lead** (not just Contact),
+or (d) sends during business context → promote to business (or tag `overlap`). Design intent: replace the
+single-label domain CASE with a **scored, multi-signal classifier** writing a `party_kind` = business | personal |
+overlap (with provenance), so the worklist and the packet layer both respect the relationship's true nature. This
+is its own thread — do NOT let the crude domain buckets harden into truth. Until built, treat the worklist's
+Personal tab as "likely personal, verify" not "excluded."
+
+## Thread (b) BUILT — live inbound dual-anchor stamp (2026-07-30)
+
+The outbound path (`handleOutlookSent`) already stamps the dual anchor; the **inbound** path did not, so new mail
+didn't self-resolve to the relationship without a re-drain. Now it does. `logInboundCorrespondenceDualAnchor`
+(`api/_shared/intake-correspondence.js`) is the inbound mirror: on every flagged inbound email
+(`handleOutlookMessage`), it resolves the **sender's** PARTY (durable BD unit) + OPEN deal (active sub-context) via
+`lcc_resolve_contact` and logs an `outlook_inbound` `activity_events` row stamped with `metadata.party_entity_id`
++ `deal_entity_id` (and `entity_id` = the open deal, nullable → attention rides the party). Fire-and-forget +
+deduped on `(workspace, source_type='outlook_inbound', internet_message_id)`, so PA's 3–6 replays are a no-op and
+it never blocks OM intake. This closes the loop the earlier `logEmailIntakeCorrespondence` left open — that one
+only fired on a confident property/OM match, so ordinary inbound BD mail (a broker reply, a seller note) was never
+logged or party-stamped; now it always is.
+
+- **Wiring:** `intake.js` imports the helper and calls it right after `emailContext` is built, before the inbox
+  dedup/OM-staging logic.
+- **Verified:** `test/inbound-dual-anchor.test.mjs` (5/5) — external stamps dual anchor; internal/no-id skipped;
+  resolver-miss and resolver-throw still log the raw touch with null anchors (re-drainable). `node --check`-clean.
+- **Deploy to activate.** Once live, a flagged inbound email from a resolved party self-stamps; from an
+  as-yet-unresolved party it logs the raw touch and back-fills its anchors the moment the party enters the graph
+  (via the SF-sourced backfill above), with no re-processing of the email.
+- **Effect on the model:** inbound + outbound now both carry the dual anchor at ingest — the relationship-primary,
+  deal-subfilter spine stays current going forward without backfills. Remaining forward threads: (a) projections
+  (`lcc_offer_context`, deal-dossier) should PREFER `metadata.deal_entity_id` over the fuzzy city bridge;
+  (b) the party/personal classifier above; (c) WebEx call layer (register `webex` source_system).
+
 ### Live drain results (2026-07-30, deploy `ba725dbf14b1`)
 
 Drained the entire **≥5-touch** band (head + 5–9 band) via `POST /api/correspondent-party-backfill-tick`.
