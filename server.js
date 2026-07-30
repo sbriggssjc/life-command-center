@@ -48,6 +48,8 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 import queryCompsHandler from './api/query-comps.js';
+import compReviewsHandler from './api/comp-reviews.js';
+import metadataBackfillHandler from './api/metadata-backfill.js';
 import aiReadHandler from './api/ai-read.js';
 
 // Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
@@ -280,6 +282,15 @@ app.all('/api/comps', compsHandler);
 // Comps QUERY (Deal Agent QueryComps/SynthesizeComps → shared engine on GOV_API_URL/MCP; key stays server-side)
 app.all('/api/query-comps', queryCompsHandler);
 app.all('/api/synthesize-comps', queryCompsHandler);
+
+// Comp-review DRAIN (W3.4) — list/resolve flagged-comp reviews via the shared
+// engine on the MCP server (same as query-comps; key stays server-side).
+app.all('/api/comp-reviews/resolve', compReviewsHandler);
+app.all('/api/comp-reviews', compReviewsHandler);
+
+// Property metadata-backfill worklist (W3.4) — Research sub-page read via the
+// shared engine on the MCP server (service-role; no edge allowlist dependency).
+app.all('/api/metadata-backfill', metadataBackfillHandler);
 
 // ── AI read surface (ChatGPT / Copilot) — UNIFICATION Phase 1 ───────────────
 // These 6 read ops + the BOUNDED daily-briefing previously 404'd on this host

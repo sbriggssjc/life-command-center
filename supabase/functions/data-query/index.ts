@@ -66,6 +66,9 @@ const GOV_READ_TABLES = new Set([
   // ownership-divergence + SOS-link-status badges (were silently 403'ing).
   "ownership_research_queue",
   "v_recorded_owner_link_review",
+  // W3.4 (2026-07-30): the property metadata-backfill worklist (prioritized,
+  // with suggested CoStar URLs) — surfaced as a Research sub-page. Was 403'ing.
+  "v_property_metadata_backfill_queue",
   "v_recorded_owner_link_status",
   "v_recorded_vs_assessor_owner_divergence",
   // R4-D (2026-06-05): post-verification residue. Frontend queried these gov
@@ -135,6 +138,8 @@ const DIA_READ_TABLES = new Set([
   "v_npi_inventory_signal_summary", "v_npi_inventory_signals",
   "v_clinic_property_link_review_queue", "v_clinic_lease_backfill_candidates",
   "v_clinic_lease_data_gaps", "v_clinic_lease_renewal_watchlist",
+  // W3.4 (2026-07-30): property metadata-backfill worklist (Research sub-page).
+  "v_property_metadata_backfill_queue",
   "v_ingestion_reconciliation", "v_clinic_research_priority",
   "v_cms_data", "v_sales_comps", "v_available_listings", "v_loans",
   "v_listings_needing_manual_confirmation",

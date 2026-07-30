@@ -1877,7 +1877,50 @@ app.get("/", (_req, res) => {
   const __compsRoutes = makeCompsHttpRoutes({ govQuery, diaQuery });
   app.post("/api/query-comps", authenticate, __compsRoutes.queryComps);
   app.post("/api/synthesize-comps", authenticate, __compsRoutes.synthesizeComps);
-  console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps");
+  // W3.4: the comp-review DRAIN — list + resolve the flagged-comp queues. GET
+  // lists open reviews across dia+gov; POST records a disposition. Same engine
+  // the Decision-Center comp-review lane (ops.js) proxies to via /api/comp-reviews.
+  app.get("/api/comp-reviews", authenticate, __compsRoutes.listCompReviews);
+  app.post("/api/comp-reviews/resolve", authenticate, __compsRoutes.resolveCompReview);
+  console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps, /api/comp-reviews[, /resolve]");
+}
+
+// ── Property metadata-backfill worklist (W3.4, audit 3.4 item 4) ─────────────
+// The prioritized backfill worklist (v_property_metadata_backfill_queue, with a
+// suggested CoStar URL per property) was psql-only. Surface it for the Research
+// sub-page via the service-role domain readers here (no data-query edge
+// allowlist dependency), proxied by the root app at /api/metadata-backfill.
+{
+  const MB_SELECT_GOV = 'queue_id,property_id,missing_fields,priority,status,attempts,last_attempt_at,address,city,state,agency_full,most_recent_sale_date,most_recent_sold_price,costar_search_url';
+  const MB_SELECT_DIA = 'queue_id,property_id,missing_fields,priority,status,attempts,last_attempt_at,address,city,state,tenant,parcel_number,most_recent_sale_date,most_recent_sold_price,costar_search_url';
+  app.get("/api/metadata-backfill", authenticate, async (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
+    const only = String(req.query.domain || '').toLowerCase();
+    const wantGov = !only || only === 'gov' || only === 'government';
+    const wantDia = !only || only === 'dia' || only === 'dialysis';
+    const order = 'order=priority.desc.nullslast,most_recent_sold_price.desc.nullslast';
+    const items = []; const counts = {}; const errors = [];
+    const legs = [];
+    if (wantGov) legs.push({ dom: 'gov', q: govQuery, sel: MB_SELECT_GOV });
+    if (wantDia) legs.push({ dom: 'dia', q: diaQuery, sel: MB_SELECT_DIA });
+    await Promise.all(legs.map(async (leg) => {
+      if (typeof leg.q !== 'function') { errors.push({ domain: leg.dom, error: 'not configured' }); return; }
+      try {
+        const r = await leg.q('GET',
+          `v_property_metadata_backfill_queue?select=${leg.sel}&${order}&limit=${limit}`,
+          undefined, 'count=exact');
+        const rows = Array.isArray(r && r.data) ? r.data : [];
+        counts[leg.dom] = (r && typeof r.count === 'number') ? r.count : rows.length;
+        for (const row of rows) items.push({ domain: leg.dom, ...row });
+      } catch (e) { errors.push({ domain: leg.dom, error: String(e && e.message || e) }); }
+    }));
+    // Value-rank across domains (priority desc, then most-recent sold price desc), cap.
+    items.sort((a, b) =>
+      (Number(b.priority) || 0) - (Number(a.priority) || 0)
+      || (Number(b.most_recent_sold_price) || 0) - (Number(a.most_recent_sold_price) || 0));
+    res.json({ items: items.slice(0, limit), counts, total: items.length, errors });
+  });
+  console.log("[MCP] Registered metadata-backfill HTTP route: /api/metadata-backfill");
 }
 
 // ── Deal dossier + Salesforce write-back — tools + REST surface (same engine) ──

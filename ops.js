@@ -1628,9 +1628,10 @@ async function renderReviewConsolePage() {
   // R7 Phase 2: every lane is now a real decision lane (no more "More review
   // work" deep-links). Decision-lane counts (seeded + federated, each labeled
   // with its mode) + the SOS owner-contact count, in parallel.
-  const [decR, res] = await Promise.all([
+  const [decR, res, compR] = await Promise.all([
     opsApi('/api/decisions?summary=1'),
     opsApi('/api/review-counts'),
+    opsApi('/api/comp-reviews?status=open&limit=1'),
   ]);
 
   let html = '<div class="ops-header"><h2>Decision Center</h2></div>';
@@ -1654,6 +1655,13 @@ async function renderReviewConsolePage() {
     if (s && typeof s.count === 'number') sosN = s.count;
   }
   dc['sos_owner_links'] = sosN;
+  // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
+  // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
+  let compN = 0;
+  if (compR && compR.ok && compR.data && compR.data.counts) {
+    compN = Object.values(compR.data.counts).reduce(function (a, b) { return a + (Number(b) || 0); }, 0);
+  }
+  dc['comp_review'] = compN;
 
   // Every sub-lane (decision_type) with its existing renderer — NOTHING lost.
   // Grouped into the 8 logical lanes via the Tier 3 lane map (review-shared.js).
@@ -1679,6 +1687,7 @@ async function renderReviewConsolePage() {
     { dt: 'cms_link_suspect', label: 'CMS ↔ property link suspects', open: "renderFederatedLane('cms_link_suspect')" },
     { dt: 'sf_contact_account_mismatch', label: 'Salesforce contact ↔ account mismatch', open: "renderDecisionLane('sf_contact_account_mismatch')" },
     { dt: 'sos_owner_links', label: 'Owner-contact links to confirm', open: 'renderSosLinkWorklist()' },
+    { dt: 'comp_review', label: 'Comp reconciliation reviews (dia+gov)', open: 'renderCompReviewLane()' },
     { dt: 'implausible_value', label: 'Implausible values', open: "renderFederatedLane('implausible_value')" },
     { dt: 'llc_research_dead', label: 'LLC research dead-letters', open: "renderDecisionLane('llc_research_dead')" },
     { dt: 'availability_checker_botblock', label: 'Availability bot-blocks', open: "renderDecisionLane('availability_checker_botblock')" },
@@ -1742,6 +1751,14 @@ async function renderReviewConsolePage() {
     + '<span class="rc-section-count">' + dqG.need.toLocaleString() + ' in the queue</span></div>'
     + '<div class="rc-section-sub">A large, mostly self-clearing data-quality backlog worked on demand — NOT part of the badge above.</div>'
     + dqG.html + '</div>';
+
+  // W3.4: the /api/review-counts endpoint computes seven live SOURCE-BACKLOG
+  // lanes but ops.js only ever extracted sos_owner_links. Render the other six
+  // as an honest, count-moded "source backlog" strip (headline queue depths
+  // across LCC Opps + gov + dia) that deep-links to each working surface — a
+  // separate signal from the bounded verdict lanes above, never inflating the
+  // badge.
+  html += _renderReviewSourceBacklog(res);
 
   if (typeof setReviewNavBadge === 'function') setReviewNavBadge(totalOpen);
 
@@ -5215,6 +5232,157 @@ async function viewEntity(entityId) {
 // ============================================================================
 // RESEARCH — research task queue
 // ============================================================================
+// ============================================================================
+// W3.4 — Comp reconciliation review lane (Decision Center) + the six source-
+// backlog lanes + the property metadata-backfill worklist (Research).
+// ============================================================================
+
+// The six computed-but-previously-unrendered /api/review-counts lanes, as a
+// compact source-backlog strip. sos_owner_links is excluded (already a verdict
+// sub-lane above). Best-effort: renders nothing if review-counts failed.
+function _renderReviewSourceBacklog(res) {
+  if (!res || !res.ok || !res.data || !Array.isArray(res.data.lanes)) return '';
+  var lanes = res.data.lanes.filter(function (l) { return l.key !== 'sos_owner_links'; });
+  if (!lanes.length) return '';
+  var modeLabel = { estimated: 'est.', cached: 'cached', exact: '' };
+  var cards = lanes.map(function (l) {
+    var cnt = (typeof l.count === 'number') ? l.count.toLocaleString() : '—';
+    var mode = modeLabel[l.count_mode] || '';
+    var stale = (l.status === 'stale' || l.status === 'partial');
+    var page = l.href || 'pageResearch';
+    var sub = mode ? mode : '';
+    if (stale) sub = (sub ? sub + ' · ' : '') + (l.status === 'partial' ? 'partial' : 'stale');
+    return '<button type="button" class="rc-lane ' + (l.tone || '') + '" onclick="navTo(\'' + page + '\')">'
+      + '<div class="rc-lane-count">' + cnt + '</div>'
+      + '<div class="rc-lane-label">' + esc(l.label || l.key) + '</div>'
+      + (sub ? '<div class="rc-lane-parts">' + esc(sub) + '</div>' : '')
+      + '<div class="rc-lane-cta">Open →</div></button>';
+  }).join('');
+  return '<div class="rc-section rc-section-dq">'
+    + '<div class="rc-section-head"><h3>Source backlog <span class="rc-section-tag">live counts</span></h3></div>'
+    + '<div class="rc-section-sub">Headline queue depths across LCC Opps + gov + dia — the raw source counts behind the verdict lanes. Deep-links to each working surface; not part of the badge.</div>'
+    + '<div class="rc-lanes-grouped"><div class="rc-glane"><div class="rc-sublanes rc-lanes-strip">' + cards + '</div></div></div>'
+    + '</div>';
+}
+
+// The comp reconciliation review drain: list open flagged-comp reviews across
+// dia + gov (GET /api/comp-reviews), resolve or dismiss each (POST
+// /api/comp-reviews/resolve). Mirrors renderSosLinkWorklist's self-propelling
+// worklist contract.
+async function renderCompReviewLane() {
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/comp-reviews?status=open&limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderCompReviewLane()', 'Could not load comp reviews'); return; }
+  var items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var counts = (res.data && res.data.counts) || {};
+  var html = '<div class="ops-header"><h2>Comp reconciliation reviews</h2>'
+    + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Decision Center</button></div>';
+  html += '<div class="rc-intro">Sold comps whose displayed rent doesn\'t reconcile to their reliable cap (cap_mismatch / rent_disagreement / price_over_ask / no_reliable_cap). Fix the source cap/rent, then <b>Resolve</b>; or <b>Dismiss</b> if it\'s not a real problem. The comps engine preserves your disposition on re-pull.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No open comp reviews. \u2713</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="compReviewRemaining">' + items.length + '</span> to review'
+    + ' <span class="q-badge">' + (Number(counts.dialysis) || 0) + ' dia</span>'
+    + ' <span class="q-badge">' + (Number(counts.government) || 0) + ' gov</span></div>';
+  var pct = function (v) { return v == null ? '\u2014' : (Number(v) * 100).toFixed(2) + '%'; };
+  var usd = function (v) { return v == null ? '\u2014' : '$' + Number(v).toLocaleString(); };
+  items.forEach(function (it, _ix) {
+    var flags = Array.isArray(it.flags) ? it.flags.join(', ') : '';
+    var rowid = 'compreview-' + it.domain + '-' + it.id;
+    html += '<div class="q-item' + (_ix === 0 ? ' pq-next' : '') + '" id="' + rowid + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.tenant || it.address || ('Comp ' + it.id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(it.domain) + '</span><span class="q-badge">' + esc(flags) + '</span></div></div>'
+      + '<div class="q-item-meta">' + esc([it.address, it.city, it.state].filter(Boolean).join(', ') || '\u2014')
+      + (it.sale_date ? ' \u00b7 sold ' + esc(String(it.sale_date).slice(0, 10)) : '')
+      + (it.sale_price != null ? ' \u00b7 ' + usd(it.sale_price) : '') + '</div>'
+      + '<div class="q-item-meta">implied cap <b>' + pct(it.implied_cap) + '</b> vs reliable cap <b>' + pct(it.reliable_cap) + '</b></div>'
+      + '<div class="q-actions">'
+      + '<button class="q-action primary" onclick="resolveCompReview(\'' + it.domain + '\', ' + JSON.stringify(it.id) + ', \'resolved\')">Resolve (fixed at source)</button>'
+      + '<button class="q-action" onclick="resolveCompReview(\'' + it.domain + '\', ' + JSON.stringify(it.id) + ', \'dismissed\')">Dismiss (not a problem)</button>'
+      + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderCompReviewLane = renderCompReviewLane;
+
+async function resolveCompReview(domain, id, disposition) {
+  var res = await opsApi('/api/comp-reviews/resolve', { method: 'POST', body: JSON.stringify({ domain: domain, id: id, disposition: disposition }) });
+  var row = document.getElementById('compreview-' + domain + '-' + id);
+  if (res.ok && res.data && res.data.ok) {
+    if (typeof showToast === 'function') showToast(disposition === 'resolved' ? 'Marked resolved' : 'Dismissed', 'success');
+    if (row) {
+      row.style.opacity = '0.5';
+      row.classList.add('resolved');
+      var acts = row.querySelector('.q-actions');
+      if (acts) acts.innerHTML = '<span class="q-badge">' + (disposition === 'resolved' ? 'Resolved \u2713' : 'Dismissed') + '</span>';
+    }
+    var scope = document.getElementById('reviewConsoleContent');
+    var pending = scope ? scope.querySelectorAll('.q-item[id^="compreview-"]:not(.resolved)') : [];
+    var remEl = document.getElementById('compReviewRemaining');
+    if (remEl) remEl.textContent = String(pending.length);
+    if (pending.length) { pending[0].classList.add('pq-next'); pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  } else {
+    if (typeof showToast === 'function') showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
+window.resolveCompReview = resolveCompReview;
+
+// ── Unit 2: property metadata-backfill worklist (surfaced under Research) ──
+// A compact widget on the Research page + a full prioritized worklist page. The
+// worklist (v_property_metadata_backfill_queue) carries a suggested CoStar URL
+// per property so the operator can go straight to the source.
+async function renderMetadataBackfillWidget(parentEl) {
+  if (!parentEl) return;
+  var res = await opsApi('/api/metadata-backfill?limit=1');
+  var counts = (res.ok && res.data && res.data.counts) || {};
+  var total = (Number(counts.gov) || 0) + (Number(counts.dia) || 0);
+  var w = document.createElement('div');
+  w.className = 'widget';
+  w.innerHTML = '<div class="widget-title">Property metadata backfill</div>'
+    + '<div class="widget-body"><div class="rc-progress"><span>' + total.toLocaleString() + '</span> properties missing metadata'
+    + ' <span class="q-badge">' + (Number(counts.gov) || 0) + ' gov</span>'
+    + ' <span class="q-badge">' + (Number(counts.dia) || 0) + ' dia</span></div>'
+    + '<div class="ops-help">Prioritized worklist with a suggested CoStar URL per property.</div>'
+    + '<button class="q-action primary" onclick="renderMetadataBackfillPage()">Open worklist \u2192</button></div>';
+  parentEl.insertBefore(w, parentEl.firstChild);
+}
+window.renderMetadataBackfillWidget = renderMetadataBackfillWidget;
+
+async function renderMetadataBackfillPage() {
+  var el = document.getElementById('researchContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/metadata-backfill?limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderMetadataBackfillPage()', 'Could not load the metadata-backfill worklist'); return; }
+  var items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var counts = (res.data && res.data.counts) || {};
+  var html = '<div class="ops-header"><h2>Property metadata backfill</h2>'
+    + '<button class="q-action" onclick="renderResearchPage()">\u2190 Back to Research</button></div>';
+  html += '<div class="rc-intro">Properties missing key metadata (see the flags on each row), value-ranked by priority then most-recent sold price. Each row links to a suggested CoStar search so you can capture the missing fields at the source.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No properties awaiting metadata backfill. \u2713</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span>' + items.length + '</span> shown'
+    + ' <span class="q-badge">' + (Number(counts.gov) || 0) + ' gov</span>'
+    + ' <span class="q-badge">' + (Number(counts.dia) || 0) + ' dia</span></div>';
+  var usd = function (v) { return v == null ? '\u2014' : '$' + Number(v).toLocaleString(); };
+  items.forEach(function (it) {
+    var miss = Array.isArray(it.missing_fields) ? it.missing_fields.join(', ') : '';
+    var loc = [it.address, it.city, it.state].filter(Boolean).join(', ');
+    var who = it.agency_full || it.tenant || '';
+    html += '<div class="q-item">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(loc || ('Property ' + it.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(it.domain) + '</span>'
+      + (it.priority != null ? '<span class="q-badge">P' + esc(String(it.priority)) + '</span>' : '') + '</div></div>'
+      + (who ? '<div class="q-item-meta">' + esc(who) + '</div>' : '')
+      + '<div class="q-item-meta">Missing: <b>' + esc(miss || '\u2014') + '</b>'
+      + (it.most_recent_sold_price != null ? ' \u00b7 last sold ' + usd(it.most_recent_sold_price) : '') + '</div>'
+      + '<div class="q-actions">'
+      + (it.costar_search_url ? '<a class="q-action primary" href="' + esc(it.costar_search_url) + '" target="_blank" rel="noopener">Open CoStar \u2192</a>' : '<span class="q-badge">no CoStar URL</span>')
+      + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderMetadataBackfillPage = renderMetadataBackfillPage;
+
 async function renderResearchPage(page = opsResearchPage) {
   const el = document.getElementById('researchContent');
   if (!el) return;
@@ -5320,6 +5488,11 @@ async function renderResearchPage(page = opsResearchPage) {
         await renderAgencyDriftQueueWidget(widgetsEl);
       }
     } catch (e) { console.warn('[ResearchPage] agency-drift widget render failed:', e?.message); }
+    try {
+      if (typeof renderMetadataBackfillWidget === 'function') {
+        await renderMetadataBackfillWidget(widgetsEl);
+      }
+    } catch (e) { console.warn('[ResearchPage] metadata-backfill widget render failed:', e?.message); }
   }
   perf.end();
 }
