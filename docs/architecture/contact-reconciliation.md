@@ -222,6 +222,54 @@ hand-curated — worth revisiting as new deal/vendor vocabulary appears; (c) amb
 on purpose (e.g. `sarhanhotelgroup` could be a hotel-owning principal, `verizon.net` a client's ISP address) —
 the override is the correction path, not a broader auto-rule.
 
+## "Today" surfacing BUILT — the spine made visible (2026-07-30)
+
+The capture+resolve engine now has a read surface. Two artifacts (OPS, live):
+- **`v_activity_unified`** (SECURITY INVOKER view) — one normalized timeline over email + call + meeting + note
+  `activity_events`, exposing `entity_id` + the dual anchor (`party_entity_id`, `deal_entity_id`), `channel`, and
+  `direction`. The reusable READ side of the relationship-primary spine; excludes `metadata.lcc_test` rows.
+- **`lcc_today(p_limit)`** — ranks open+in_progress `action_items` by **priority + urgency (overdue/due) +
+  staleness**, enriched with each to-do's real multi-channel context (`last_touch_at`, `days_since_touch`,
+  `channels`, `touch_count`, last 6 unified touches). A to-do's touches match where the entity is the activity's
+  `entity_id` OR `party_entity_id` OR `deal_entity_id`. Delivered as the `team-briggs-today` HTML artifact
+  (`backfill-artifacts/build_today.py`, rendered from `lcc_today()::text`) — a SNAPSHOT; the DB layer is the
+  durable win. **Superseded by the owner-scoped `lcc_my_day` (below).**
+
+## Owner-scoped "My Day" BUILT — your work only, band-ranked toward BD targets (2026-07-30)
+
+Scott's ask: "under my day / my inbox I want to only see the things **I** need to do (not Kelly's), driving the
+BD pipeline by hierarchical priority toward our targets." His decisions: inbox = **my to-dos + the top pipeline I
+drive**; ownership = **SF default, LCC override wins**.
+
+**Finding (honest):** neither `action_items` nor the BD spine (`bd_opportunities`, `v_priority_queue_enriched`)
+carries a populated per-record owner — `owner_user_id` is ~all NULL (1,146 unassigned), so nothing is attributed
+to Kelly vs Scott in the data yet. The Kelly items Scott sees are team-shared queue rows, not owner-tagged. So
+the owner-resolution + exclusion MECHANISM is built now; it activates the moment ownership is attributed.
+
+Built (OPS, live):
+- **`lcc_entity_owner_override`** (entity_id → lcc_user) — the LCC override that WINS over the SF-derived owner.
+- **`lcc_band_rank(band)`** — the doctrinal hierarchy P0<P0.4<P0.5<P-BUYER<P-CONTACT<P1..P8 as a sort key (drives
+  toward BD targets).
+- **`lcc_my_day(p_owner_user_id=Scott, p_todo_limit, p_pipeline_limit)`** — owner-scoped inbox. Effective owner =
+  `coalesce(override, action assignee/owner if a real user, queue owner_user_id)`. Returns (a) **to-dos** where
+  eff_owner = me OR unassigned, EXCLUDING a teammate's explicit item, ranked by urgency + enriched with the
+  multi-channel timeline (`v_activity_unified`); and (b) **pipeline** — the priority-queue relationships where
+  eff_owner = me OR unassigned, ranked by **band → days_overdue → rent value**, capped. Each pipeline row carries
+  `unassigned` so the UI can tag team-vs-mine.
+- **Exclusion verified:** assigning a top pipeline entity to Kelly via override → `in_scott_view:false,
+  in_kelly_view:true`; removing it restores. LCC override wins, as chosen.
+
+**Deliverable:** the `team-briggs-today` artifact upgraded to the owner-scoped **"My Day"** dashboard
+(`backfill-artifacts/build_myday.py`, from `lcc_my_day()::text`) — ranked to-dos with timelines + a "Pipeline I
+drive · top N of 1,146 by band" section (P0.4 ownership-resolution relationships first). Snapshot; DB layer is the
+durable win.
+
+**The one remaining wire-up (to fully hide Kelly automatically): populate `owner_user_id` from Salesforce
+OwnerId.** Map SF OwnerId → `lcc_users.salesforce_owner_id` (Scott `0051I0…`, Kelly `0058W0…`) on the
+opportunity/entity during SF sync, writing `owner_user_id`. Then `lcc_my_day` auto-scopes to each user with no
+further change (override still wins). Until then every queue row reads `unassigned` (team) — shown, not hidden —
+which is honest.
+
 ## Multi-channel auto-resolve BUILT — a call (not just a send) closes a to-do (2026-07-30)
 
 The capture layer was complete (email in/out + calls all on the dual-anchor spine); this closes the
