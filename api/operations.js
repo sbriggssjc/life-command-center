@@ -71,7 +71,7 @@ import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSugges
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
-import { logSalesforceActivity, resolveDraftLogMode } from './_shared/salesforce.js';
+import { logSalesforceActivity, resolveDraftLogMode, createSalesforceTask } from './_shared/salesforce.js';
 import { ACTION_SCHEMAS, generateOpenApiSpec, generateSwagger2Spec, generatePluginManifest } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
 import { ingestPdfWorker } from './intake.js';
@@ -931,15 +931,46 @@ async function bridgeDraftAndLog(req, res, user, workspaceId) {
   //    already wrote the template_sends row → skip_template_send). Marketing logs
   //    against the Deal (no BD-sequence advance) per the SPEC.
   let cadenceOut = { advanced: false, id: cadence?.id || null, next_touch_due: cadence?.next_touch_due || null };
+  // 6b. SF task reschedule (Scott's ask: "reschedule the open task in the LCC AND
+  //     Salesforce per the cadence schedule"). The LCC side is the cadence advance
+  //     below; the SF side is a NEW OPEN task dated to the freshly-advanced
+  //     next_touch_due. Additive, best-effort, feature-flagged on the SF flow —
+  //     no-ops honestly (reason 'sf_not_configured') until wired. Idempotent on
+  //     (cadence, next-due) so a re-draft to the same date can't stack tasks.
+  let sfReschedule = { created: false, task_id: null, reason: whoId ? null : 'no_sf_contact' };
   if (cadence && mode !== 'marketing') {
     try {
       const adv = await advanceCadence(cadence.id, {
         type: 'email', template_id: templateId, outcome: 'sent', skip_template_send: true
       });
       if (adv?.ok) {
-        cadenceOut = { advanced: true, id: cadence.id, next_touch_due: adv.cadence?.next_touch_due || null };
+        const newDue = adv.cadence?.next_touch_due || null;
+        const newType = adv.cadence?.next_touch_type || null;
+        cadenceOut = { advanced: true, id: cadence.id, next_touch_due: newDue };
         // Slice-1 staleness contract — the card leaves its band immediately.
         try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        // Create the next OPEN SF task at the advanced due date (only when we have
+        // an SF contact + a real next date). Mirrors the completed-activity log's
+        // BD subject/privacy posture; status='Open' + activity_date = the cadence.
+        if (whoId && newDue) {
+          try {
+            const dueYmd = String(newDue).slice(0, 10);
+            const nextLabel = (b.deal_name || b.account_name || b.label || b.name || cadence?.property_address || 'Account');
+            const nextN = (touchNumber != null) ? (Number(touchNumber) + 1) : null;
+            const sfr = await createSalesforceTask({
+              whoId,
+              subject: `LCC-BD · ${String(nextLabel).slice(0, 60)} · Next ${newType || 'touch'}${nextN ? ` ${nextN}` : ''}`,
+              nmType: '',
+              status: 'Open',
+              activityDate: dueYmd,
+              idempotencyKey: `dlnext:${cadence.id}:${dueYmd}`,
+              comments: `LCC-BD · Next ${newType || 'touch'} due ${dueYmd}${(resolvedEntityId || cadence?.id) ? ` · ${resolvedEntityId || cadence.id}` : ''}`,
+            });
+            sfReschedule = { created: !!sfr.ok, task_id: sfr.task?.Id || null, reason: sfr.ok ? null : (sfr.reason || 'sf_failed'), due: dueYmd };
+          } catch (err) {
+            sfReschedule = { created: false, task_id: null, reason: 'sf_error: ' + (err.message || 'unknown') };
+          }
+        }
       }
     } catch (err) {
       console.warn('[draft_and_log] cadence advance failed (non-blocking):', err.message);
@@ -968,6 +999,7 @@ async function bridgeDraftAndLog(req, res, user, workspaceId) {
              unresolved_variables: rendered.unresolved_variables || [] },
     sf: sfOut,
     cadence: cadenceOut,
+    sf_reschedule: sfReschedule,
     recorded
   });
 }
