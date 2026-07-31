@@ -245,6 +245,29 @@ tab, and it reuses the owner-reconciliation engine already built.
 
 ---
 
+## Part 4b — Progress log (2026-07-31)
+**P0.1 — owner-display fallback: FIXED (frontend, ships next redeploy).** Confirmed the property
+entity's stored owner fields are null and the backend ownership block correctly resolves null (no deed
+on file). The "Owner: Fresenius Medical Care" was a **frontend fallback** in `detail.js` `_udKeyFields`
+(the property panel key-fields grid): it rendered `own.true_owner` without the `true_owner_is_operator`
+guard that the Ownership tab already applies (line ~2281). Fix: apply the same guard in the panel
+header — when the resolver flagged the value as the operator (no real deed owner), show
+**"Owner: Unresolved"** (italic) instead of asserting the tenant/operator owns the building. Syntax-checked.
+
+**P0.6 — portfolio audit of the owner gap: DONE.** Of **4,837 asset entities, only 102 (~2%) carry a
+reconciled owner** (`lcc_owner_evidence` / `lcc_entity_owner_override`); ~4,735 have none — which is why
+the operator-as-owner fallback was so pervasive and why the home screen shows “4,983 ownership changes
+need research.” Open deals: **31/40 have owner evidence** (also the point-person source for My Work), 9
+do not. Conclusion: the display fix (P0.1) stops the *misinformation* now; the **owner feeders**
+(P0.2 own-deal buyer, P0.3 county deed) are what actually *populate* the 98% — highest-leverage next.
+
+**My Work / Team Queue scoping (new, from Scott's screenshot): foundation built + verified.** See
+`access-scoping-and-my-work.md`. Root cause: deal to-dos are system-owned, not scoped to the deal
+point person, so Kelly's deals flood Scott's My Work. Built + verified `v_my_work_scoped` (migration
+`20260818280000`) resolving each to-do's point person; it correctly splits Scott 13 / Kelly 17 / 1
+unassigned. Wiring (queue.js point-person filter + Team-Queue lead-gate + correspondence privacy) is
+specified in that doc and pending a per-user smoke test.
+
 ## Part 5 — Connections to existing architecture
 - **Owner reconciliation engine** (`owner-reconciliation-engine.md`, `lcc_owner_evidence`,
   `lcc_reconcile_owner`, `lcc_reconcile_all_owners`): Findings A/P0.2/P0.3 are new **feeders** into it,

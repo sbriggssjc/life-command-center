@@ -606,8 +606,15 @@ function _udKeyFields(db, prop, own) {
   }
   if (own) {
     // Prefer canonical names (Layer H.2.a) so casing/SPE variants collapse to one consistent label.
-    const ownerName = own.true_owner_canonical || own.true_owner || own.recorded_owner_canonical || own.recorded_owner || '';
+    // P0.1 fix: never show the operator/tenant as "Owner". When the resolver flagged
+    // true_owner_is_operator (no real deed owner — it fell back to the operator), suppress it,
+    // same guard as the Ownership tab (see _trueOwnerOk below). Show "Unresolved" so the panel
+    // reads honestly and points to Resolve, instead of asserting the tenant owns the building.
+    const trueOwnerOk = !own.true_owner_is_operator;
+    const ownerName = (trueOwnerOk ? (own.true_owner_canonical || own.true_owner) : '')
+      || own.recorded_owner_canonical || own.recorded_owner || '';
     if (ownerName) html += `<div><span class="t-muted3">Owner:</span> <span class="t-body">${esc(ownerName)}</span></div>`;
+    else html += `<div><span class="t-muted3">Owner:</span> <span class="t-body" style="opacity:.65;font-style:italic">Unresolved</span></div>`;
   }
   if (prop.estimated_value) html += `<div><span class="t-muted3">Est. Value:</span> <span style="color:var(--green);font-weight:600">${fmt(prop.estimated_value)}</span></div>`;
   if (prop.deal_grade) html += `<div><span class="t-muted3">Grade:</span> <span style="color:var(--accent);font-weight:600">${esc(prop.deal_grade)}</span></div>`;
