@@ -436,10 +436,28 @@ async function v2GetWorkCounts(req, user, workspaceId) {
   const counts = result.data?.[0] || {};
   const userCounts = userResult.data?.[0] || {};
 
+  // Point-person scoping (parity with v2GetMyWork): the mv_user_work_counts row is
+  // keyed by auth user_id and is NOT point-person aware, so its my_actions/my_overdue
+  // could disagree with the scoped My Work list. Override with exact scoped probes over
+  // v_my_work_scoped so the Today "My Actions" metric matches the list. Legacy MV values
+  // stand when the user isn't mapped to an lcc_user.
+  const { lccUserId } = await resolveLccIdentity(user);
+  let scopedActions = null, scopedOverdue = null;
+  if (lccUserId) {
+    const base = myWorkScopedPath(workspaceId, lccUserId, user.id);
+    const today = new Date().toISOString().split('T')[0];
+    const [aRes, oRes] = await Promise.all([
+      opsQuery('GET', `${base}&select=id&limit=0`, undefined, { countMode: 'exact' }),
+      opsQuery('GET', `${base}&status=in.(open,in_progress)&due_date=lt.${today}&select=id&limit=0`, undefined, { countMode: 'exact' }),
+    ]);
+    scopedActions = aRes.count ?? null;
+    scopedOverdue = oRes.count ?? null;
+  }
+
   return {
     view: 'work_counts',
-    my_actions: userCounts.my_actions || 0,
-    my_overdue: userCounts.my_overdue || 0,
+    my_actions: scopedActions ?? (userCounts.my_actions || 0),
+    my_overdue: scopedOverdue ?? (userCounts.my_overdue || 0),
     my_inbox: userCounts.my_inbox || 0,
     my_research: userCounts.my_research || 0,
     my_completed_week: userCounts.my_completed_week || 0,

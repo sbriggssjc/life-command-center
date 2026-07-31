@@ -7304,12 +7304,14 @@ function renderPriorityTasks() {
     }
     // Mirror the "Open Activities" stat in renderHomeStats (same expression)
     // so the Today widget total and the stat are guaranteed to agree. Both
-    // prefer the exact MV-backed count; only fall back to pagination.total
-    // (now also exact post inbox-exclusion, so no longer a bad estimate) when
-    // canonicalCounts hasn't loaded yet. QA4 refinement.
-    const total = canonicalCounts
-      ? (canonicalCounts.open_actions || canonicalCounts.my_actions || 0)
-      : (canonicalMyWork.pagination?.total || 0);
+    // This is the MY WORK widget, so "View all N" must match the point-person-scoped
+    // list the user lands on (pageMyWork). Prefer the scoped list total
+    // (canonicalMyWork.pagination.total); fall back to the now-scoped work_counts
+    // my_actions, then workspace open_actions only if neither loaded. (Not open_actions
+    // first — that's the workspace-wide count and over-counts a scoped list.)
+    const total = (canonicalMyWork && canonicalMyWork.pagination?.total != null)
+      ? canonicalMyWork.pagination.total
+      : (canonicalCounts ? (canonicalCounts.my_actions || canonicalCounts.open_actions || 0) : 0);
     if (total > 5) {
       html += `<div class="widget-more" onclick="navTo('pageMyWork')">View all ${total} items</div>`;
     }

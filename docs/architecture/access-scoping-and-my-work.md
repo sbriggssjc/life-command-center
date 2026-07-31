@@ -61,9 +61,11 @@ shows only his deals, Team Queue shows all; log in as a `team` user (Kelly) — 
 Team Queue is empty/restricted.
 
 **Known follow-ups:**
-- **v2 `work_counts` badge** reads `mv_user_work_counts` keyed by auth `user_id`; it is NOT yet
-  point-person-scoped, so the Today badge may not match the scoped My Work list until that MV is made
-  point-person-aware (or the badge reads the scoped count). The v1 `counts` probe IS scoped.
+- **v2 `work_counts` badge — DONE (2026-07-31).** `v2GetWorkCounts` now overrides `my_actions` /
+  `my_overdue` with exact point-person-scoped probes over `v_my_work_scoped` (parity with the list);
+  the MV values stand only when the user isn't mapped. The Today **“View all N items”** on the My Work
+  widget (`app.js`) now uses the scoped list total (`canonicalMyWork.pagination.total`) instead of the
+  workspace-wide `open_actions`, so the badge, the “My Actions” metric, and the list all agree.
 - **Frontend Team Queue subtab** still renders for everyone; the backend gate protects the data, but
   hide the subtab for non-leads (reuse `_teamQueueDisabledHTML()`) once the client knows `isLead`.
 - **Research rows**: `v_my_work_scoped` is actions-only (see caveat below).
