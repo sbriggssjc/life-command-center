@@ -14,7 +14,7 @@ Ollama later) and writes back through the engines we already have (`lcc_advance_
 
 ## Components (composable; each stands alone)
 
-### 1. Role-aware next-step engine  *(recommended first — extends shipped Phase 1)*
+### 1. Role-aware next-step engine  ✅ **BUILT (2026-07-31) — ships on next redeploy**
 Today `deriveNextStep` (next-step-ai.js) is **seller-framed**: its intents map to
 seller_follow_up / review_counter / advance_to_contract. Generalize to the correspondent's
 **premise** relative to the deal — seller, buyer, cooperating broker, or other — and frame
@@ -23,12 +23,14 @@ intents + action types per role:
 - **buyer**: interested→send_om/schedule_tour, needs_time→buyer_follow_up, made_offer→review_offer, wants_info→send_info, passed→log_pass.
 - **broker**: sent_listing→review_listing, wants_bov→prep_bov, intro→qualify_relationship.
 
-Premise is resolved deterministically from the entity graph: the relationship between the
-`party_entity_id` and the `deal_entity_id` (`sells`/`owns`→seller, `purchases`→buyer,
-`brokers`→broker), which the dual-anchor resolver already stamps. Falls back to seller. Wire
-into `logInboundCorrespondenceDualAnchor`; `lcc_advance_todos` gains role-appropriate titles.
-**Why first:** small, bounded, extends a live engine, and directly serves the buy-side
-relationships (Boyd Watterson, Easterly) prominent in the touchpoints section.
+Premise is resolved deterministically from the entity graph via **`lcc_party_role(party, deal)`**
+(`sells`/`owns`→seller, `purchases`→buyer, `brokers`→broker, else other), defaulting to seller.
+`next-step-ai.js` gained `intentMapFor(premise)` — the same premise-neutral intents map to
+role-appropriate action types/verbs (buyer_follow_up / review_offer vs seller_follow_up /
+review_counter). `logInboundCorrespondenceDualAnchor` resolves the premise and passes it to
+`deriveNextStep`; `lcc_advance_todos` already accepts the derived title/type (Phase 1), so no DB
+change there. 25 unit tests green. **Built; live on next redeploy** (`lcc_party_role` already
+applied). Directly serves the buy-side relationships (Boyd Watterson, Easterly) in touchpoints.
 
 ### 2. Content-aware deal next-steps
 The deal-stage engine writes a generic line per stage. When a deal *has* recent activity

@@ -27,24 +27,37 @@ const TRUTHY = { '1': 1, 'true': 1, 'on': 1, 'yes': 1 };
 export const NEXT_STEP_AI_ENABLED = () =>
   String(process.env.NEXT_STEP_AI || '').trim().toLowerCase() in TRUTHY;
 
-// intent -> {action_type, verb, default_due_offset_days}
-// due_offset is a *relative* number of days from today; 0 = today, 1 = tomorrow.
-export const INTENT_MAP = {
-  // Seller/counterparty is deciding — we chase on a cadence.
-  needs_time:        { action_type: 'seller_follow_up',    verb: 'Follow up with seller',                due: 1 },
-  will_get_back:     { action_type: 'seller_follow_up',    verb: 'Follow up with seller',                due: 1 },
-  // Counterparty asked us for something specific.
-  requests_info:     { action_type: 'send_info',           verb: 'Send requested info to seller',        due: 0 },
-  requests_docs:     { action_type: 'send_info',           verb: 'Send requested documents to seller',   due: 0 },
-  wants_call:        { action_type: 'schedule_call',       verb: 'Schedule a call with seller',          due: 0 },
-  // Deal-moving responses.
-  counter_offer:     { action_type: 'review_counter',      verb: 'Review seller counter & respond',      due: 0 },
-  accepted:          { action_type: 'advance_to_contract', verb: 'Move to PSA / open escrow',            due: 0 },
-  verbal_yes:        { action_type: 'advance_to_contract', verb: 'Confirm terms & send PSA',             due: 0 },
-  declined:          { action_type: 'log_pass',            verb: 'Log seller pass & set nurture cadence', due: 0 },
-  // Generic — hand back to the caller's default.
-  unclear:           null,
-};
+// Role-aware intent maps. Intents (from the classifier) are premise-neutral; only the
+// FRAMING (action_type + verb) changes by who we're corresponding with. Since our deals are
+// listings, inbound mail is usually a BUYER or cooperating BROKER, not the seller — so a
+// buyer's "we'll get back" must become buyer_follow_up, not seller_follow_up.
+export const PREMISES = ['seller', 'buyer', 'broker', 'other'];
+
+// Build the intent→{action_type,verb,due} map for a given premise.
+export function intentMapFor(premise = 'seller') {
+  const p = PREMISES.includes(premise) ? premise : 'other';
+  const who = p === 'buyer' ? 'buyer' : p === 'broker' ? 'cooperating broker' : p === 'seller' ? 'seller' : 'counterparty';
+  const follow = p === 'buyer' ? 'buyer_follow_up' : p === 'broker' ? 'broker_follow_up' : 'seller_follow_up';
+  const docWord = p === 'buyer' ? 'diligence' : 'documents';
+  const counterType = p === 'seller' ? 'review_counter' : 'review_offer';
+  const counterWord = p === 'seller' ? 'counter' : 'offer';
+  const acceptVerb = p === 'buyer' ? 'Confirm terms & open escrow with buyer' : 'Move to PSA / open escrow';
+  return {
+    needs_time:    { action_type: follow, verb: `Follow up with ${who}`, due: 1 },
+    will_get_back: { action_type: follow, verb: `Follow up with ${who}`, due: 1 },
+    requests_info: { action_type: 'send_info', verb: `Send requested info to ${who}`, due: 0 },
+    requests_docs: { action_type: 'send_info', verb: `Send requested ${docWord} to ${who}`, due: 0 },
+    wants_call:    { action_type: 'schedule_call', verb: `Schedule a call with ${who}`, due: 0 },
+    counter_offer: { action_type: counterType, verb: `Review ${who} ${counterWord} & respond`, due: 0 },
+    accepted:      { action_type: 'advance_to_contract', verb: acceptVerb, due: 0 },
+    verbal_yes:    { action_type: 'advance_to_contract', verb: 'Confirm terms & send PSA', due: 0 },
+    declined:      { action_type: 'log_pass', verb: `Log ${who} pass & set nurture cadence`, due: 0 },
+    unclear:       null,
+  };
+}
+
+// Default (seller) map — retained for back-compat and as the fallback premise.
+export const INTENT_MAP = intentMapFor('seller');
 
 // Fast deterministic classifier. Returns an intent key or null (=> escalate to AI).
 // Ordered most-specific first; the first hit wins.
@@ -80,14 +93,17 @@ export function classifyDeterministic(text) {
   return null; // ambiguous -> AI (if enabled) or generic fallback
 }
 
-// Build the shaped result from an intent key + optional explicit due override.
-export function shapeFromIntent(intent, { confidence = 0.7, source = 'deterministic', dueOverride = null } = {}) {
-  if (!intent || !(intent in INTENT_MAP)) return null;
-  const spec = INTENT_MAP[intent];
+// Build the shaped result from an intent key + optional explicit due override, framed for
+// the given premise (seller/buyer/broker/other).
+export function shapeFromIntent(intent, { confidence = 0.7, source = 'deterministic', dueOverride = null, premise = 'seller' } = {}) {
+  const map = intentMapFor(premise);
+  if (!intent || !(intent in map)) return null;
+  const spec = map[intent];
   if (!spec) return null; // 'unclear' -> generic fallback
   const due = dueOverride == null ? spec.due : Math.max(0, Number(dueOverride) || 0);
   return {
     intent,
+    premise,
     next_action: spec.verb,               // human verb; lcc_advance_todos appends " — <deal>"
     action_type: spec.action_type,        // canonical type the queue understands
     due_offset: due,                      // integer days from today
@@ -97,10 +113,11 @@ export function shapeFromIntent(intent, { confidence = 0.7, source = 'determinis
 }
 
 // The AI escalation prompt — strict JSON, single intent from a closed set.
-export function buildPrompt(subject, body, dealName) {
+export function buildPrompt(subject, body, dealName, premise = 'seller') {
   const intents = Object.keys(INTENT_MAP).join(', ');
   return [
     'You are triaging one inbound message on a commercial real estate deal to decide the broker’s single next action.',
+    premise && premise !== 'seller' ? `The sender is the ${premise === 'broker' ? 'cooperating broker' : premise} on this deal.` : null,
     dealName ? `Deal: ${dealName}` : null,
     `Subject: ${subject || '(none)'}`,
     `Message:\n${String(body || '').slice(0, 4000)}`,
@@ -141,11 +158,16 @@ export async function deriveNextStep(subject, body, dealName = null, deps = {}) 
     const text = `${subject || ''}\n${body || ''}`;
     if (!text.trim()) return null;
 
+    // Premise = who the sender is relative to the deal (seller/buyer/broker/other). Defaults
+    // to seller. The caller resolves it (e.g. via lcc_party_role) and passes deps.premise.
+    const premise = PREMISES.includes(deps.premise) ? deps.premise : 'seller';
+    const map = intentMapFor(premise);
+
     // 1) Deterministic pass — free, and the common cases resolve here.
     const detIntent = classifyDeterministic(text);
     if (detIntent) {
       // High confidence for the deterministic hits; they're keyword-anchored.
-      return shapeFromIntent(detIntent, { confidence: 0.85, source: 'deterministic' });
+      return shapeFromIntent(detIntent, { confidence: 0.85, source: 'deterministic', premise });
     }
 
     // 2) AI escalation — only for the genuinely ambiguous tail.
@@ -154,7 +176,7 @@ export async function deriveNextStep(subject, body, dealName = null, deps = {}) 
 
     let resp;
     try {
-      resp = await invoke({ prompt: buildPrompt(subject, body, dealName) });
+      resp = await invoke({ prompt: buildPrompt(subject, body, dealName, premise) });
     } catch (_e) {
       return null; // never block the correspondence path on an AI failure
     }
@@ -166,13 +188,13 @@ export async function deriveNextStep(subject, body, dealName = null, deps = {}) 
     const intent = j.intent.trim().toLowerCase();
     const conf = Number(j.confidence);
     // Confidence gate: below floor OR unclear -> generic fallback.
-    if (!(intent in INTENT_MAP) || INTENT_MAP[intent] == null) return null;
+    if (!(intent in map) || map[intent] == null) return null;
     if (!Number.isFinite(conf) || conf < 0.6) return null;
 
     const dueOverride = Number.isFinite(Number(j.due_offset))
       ? Math.min(7, Math.max(0, Math.round(Number(j.due_offset))))
       : null;
-    return shapeFromIntent(intent, { confidence: conf, source: 'ai', dueOverride });
+    return shapeFromIntent(intent, { confidence: conf, source: 'ai', dueOverride, premise });
   } catch (_e) {
     return null; // total guard — the engine is invisible when it fails
   }

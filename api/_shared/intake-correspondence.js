@@ -194,15 +194,26 @@ export async function logInboundCorrespondenceDualAnchor({
   // insert only; best-effort. Subject rides as context so the new to-do carries
   // what the reply was about.
   if (res?.inserted && (dealEntityId || partyEntityId)) {
+    // Resolve the sender's premise (seller/buyer/broker/other) from the entity graph so the
+    // next-step is framed for who actually wrote — our deals are listings, so inbound mail is
+    // usually a buyer or cooperating broker, not the seller. Best-effort; defaults to seller.
+    let premise = 'seller';
+    if (partyEntityId && dealEntityId) {
+      try {
+        const pr = await query('POST', 'rpc/lcc_party_role', { p_party: partyEntityId, p_deal: dealEntityId });
+        const role = Array.isArray(pr.data) ? pr.data[0] : pr.data;
+        if (typeof role === 'string' && role) premise = role;
+      } catch (_e) { /* keep default */ }
+    }
     let ns = null;
     try {
-      ns = await deriveNextStep(ctx.subject, ctx.body_snippet || '', null, { invokeExtractionAI });
+      ns = await deriveNextStep(ctx.subject, ctx.body_snippet || '', null, { invokeExtractionAI, premise });
     } catch (_e) { ns = null; } // deriveNextStep self-guards; this is belt-and-suspenders
     try {
       await query('POST', 'rpc/lcc_advance_todos', {
         p_entity_id: dealEntityId, p_activity_id: res.id || null,
         p_party_entity_id: partyEntityId, p_channel: 'email', p_direction: 'inbound',
-        p_context: ctx.subject ? ('Seller replied: ' + String(ctx.subject).slice(0, 160)) : null,
+        p_context: ctx.subject ? (((premise === 'broker' ? 'Broker' : premise === 'buyer' ? 'Buyer' : premise === 'other' ? 'Contact' : 'Seller')) + ' replied: ' + String(ctx.subject).slice(0, 160)) : null,
         // Phase 1 AI-derived next step (null-safe: unset => generic review_response):
         p_next_action: ns?.next_action ?? null,
         p_next_type: ns?.action_type ?? null,

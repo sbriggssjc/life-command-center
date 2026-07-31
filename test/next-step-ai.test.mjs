@@ -5,7 +5,44 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   deriveNextStep, classifyDeterministic, shapeFromIntent, parseModelJson, INTENT_MAP,
+  intentMapFor,
 } from '../api/_shared/next-step-ai.js';
+
+// --- role-aware premise framing -------------------------------------------
+
+test('intentMapFor: buyer premise frames follow-up as buyer_follow_up', () => {
+  const m = intentMapFor('buyer');
+  assert.equal(m.needs_time.action_type, 'buyer_follow_up');
+  assert.match(m.needs_time.verb, /buyer/i);
+  assert.equal(m.counter_offer.action_type, 'review_offer');
+});
+
+test('intentMapFor: broker premise frames follow-up as broker_follow_up', () => {
+  const m = intentMapFor('broker');
+  assert.equal(m.needs_time.action_type, 'broker_follow_up');
+  assert.match(m.needs_time.verb, /cooperating broker/i);
+});
+
+test('intentMapFor: seller (default) unchanged from prior behavior', () => {
+  const m = intentMapFor('seller');
+  assert.equal(m.needs_time.action_type, 'seller_follow_up');
+  assert.equal(m.counter_offer.action_type, 'review_counter');
+});
+
+test('shapeFromIntent honors premise', () => {
+  const s = shapeFromIntent('will_get_back', { premise: 'buyer' });
+  assert.equal(s.action_type, 'buyer_follow_up');
+  assert.equal(s.premise, 'buyer');
+});
+
+test('deriveNextStep: buyer premise on "get back to you" -> buyer_follow_up', async () => {
+  process.env.NEXT_STEP_AI = '1';
+  const r = await deriveNextStep('Re: your listing', "We'll get back to you next week.", 'Snellville',
+    { invokeExtractionAI: async () => ({ data: { response: '{}' } }), premise: 'buyer' });
+  assert.equal(r.action_type, 'buyer_follow_up');
+  assert.equal(r.premise, 'buyer');
+  delete process.env.NEXT_STEP_AI;
+});
 
 // --- deterministic classifier ---------------------------------------------
 
