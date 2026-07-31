@@ -16,85 +16,56 @@ operation below exists and LCC is redeployed, it's live.
 
 ## Part A — build the flow operation (you, in Power Automate)
 
-Open **Power Automate → My flows →** the existing "SF Lookup" flow (the one whose HTTP
-trigger URL is in `SF_LOOKUP_WEBHOOK_URL`) → **Edit**.
+Confirmed from the flow export: the flow is an HTTP trigger → **Switch on
+`@triggerBody()?['operation']`**, and each case runs the Salesforce **Execute a SOQL query**
+action (`ExecuteSoqlQuery`). The `find_account_by_name` case already selects
+`OwnerId, Owner.Name`, so we just add one more SOQL case. Open the flow → **Edit**.
 
-### A1. Let the trigger accept the new fields
-Open the **When an HTTP request is received** trigger. In its **Request Body JSON Schema**,
-make sure these properties exist (add `sobject` and `ids`):
+### A1. Trigger schema — add `sobject` and `ids`
+Open **When an HTTP request is received** → **Request Body JSON Schema**, replace with:
 ```json
-{
-  "type": "object",
-  "properties": {
-    "operation": { "type": "string" },
-    "value":     { "type": "string" },
-    "sobject":   { "type": "string" },
-    "ids":       { "type": "array", "items": { "type": "string" } }
-  }
-}
+{"type":"object","properties":{"operation":{"type":"string"},"value":{"type":"string"},"sobject":{"type":"string"},"ids":{"type":"array","items":{"type":"string"}}}}
 ```
 
-### A2. Branch on the operation
-If the flow already has a **Switch** on `operation`, add a case. If it uses a single
-Salesforce action, add a **Switch** (Control → Switch) `On = triggerBody()?['operation']`
-and move the existing logic into its own case, then add a new case:
+### A2. Add a Switch case `owners_by_ids`
+On the existing **Switch**, **+ Add case**. Set the case value to exactly:
+```
+owners_by_ids
+```
+Add these three actions inside it, in order:
 
-**Case: `owners_by_ids`**
-
-### A3. Build the quoted Id list
 1. **Data Operation → Select** — rename **Select_QuotedIds**
-   - **From:** `@{triggerBody()?['ids']}`
-   - Switch the map to **text mode** (the little icon on the right) and enter:
-     `@{concat('''', item(), '''')}`  → produces `'001…'` per id.
+   - **From:** `@triggerBody()?['ids']`
+   - Toggle map to **text mode** (icon top-right of the Map box), value:
+     `@{concat('''', item(), '''')}`   *(four single-quotes = one literal quote → `'001…'`)*
 2. **Data Operation → Join** — rename **Join_Ids**
-   - **From:** `@{body('Select_QuotedIds')}`
-   - **Join with:** `,`  → produces `'001…','001…'`
-
-### A4. Query Salesforce (handle Account and Opportunity)
-Add a **Condition**: `triggerBody()?['sobject']` **is equal to** `Opportunity`.
-
-- **If yes → Salesforce → Get records (V3)**
-  - **Salesforce Object Type:** `Opportunity`
-  - **Filter Query:** `Id IN (@{outputs('Join_Ids')})`
-  - **Select Query:** `Id, OwnerId`  *(add `, Owner.Name` if you want the name too — optional; LCC maps OwnerId on its own)*
-- **If no → Salesforce → Get records (V3)**
-  - **Salesforce Object Type:** `Account`
-  - **Filter Query:** `Id IN (@{outputs('Join_Ids')})`
-  - **Select Query:** `Id, OwnerId`
-
-> Only `Id` and `OwnerId` are required. LCC maps `OwnerId` (a 005… User Id) to the right
-> teammate via each user's `salesforce_owner_id`, which is already populated for all four
-> users — so you do **not** need Owner.Name.
-
-### A5. Shape the response
-In **each** branch, after Get records:
-1. **Data Operation → Select** — **Select_Owners**
-   - **From:** the Get records **value** array — `@{outputs('Get_records')?['body/value']}`
-     (use the dynamic-content "value" from that branch's Get records action)
-   - Map (object mode):
-     - `Id`      → `@{item()?['Id']}`
-     - `OwnerId` → `@{item()?['OwnerId']}`
-     - `OwnerName` → `@{item()?['Owner']?['Name']}`  *(only if you selected Owner.Name)*
-2. **Response** action (or **Respond to the HTTP request**)
-   - **Status Code:** `200`
-   - **Headers:** `Content-Type: application/json`
-   - **Body:**
-     ```json
-     {
-       "ok": true,
-       "operation": "owners_by_ids",
-       "owners": @{body('Select_Owners')}
-     }
+   - **From:** `@body('Select_QuotedIds')`
+   - **Join with:** `,`
+3. **Salesforce → Execute a SOQL query** — rename **SoqlOwners**
+   - **Query:**
+     ```
+     SELECT Id, OwnerId, Owner.Name FROM @{coalesce(triggerBody()?['sobject'], 'Account')} WHERE Id IN (@{outputs('Join_Ids')}) LIMIT 200
      ```
 
-### A6. Error path
-Match the flow's existing error convention. Simplest: wrap A4–A5 in a **Scope**, add a
-second **Response** with **Configure run after → has failed**, returning:
-```json
-{ "ok": false, "reason": "flow_error", "detail": "owners_by_ids failed" }
-```
+### A3. Response
+Add **Response** (Request → Response) — rename **Respond_owners**:
+- **Status Code:** `200`
+- **Headers:** `Content-Type` = `application/json`
+- **Body:**
+  ```json
+  {"ok": true, "operation": "owners_by_ids", "owners": "@outputs('SoqlOwners')?['body']?['records']"}
+  ```
 
-**Save.** The trigger URL is unchanged, so `SF_LOOKUP_WEBHOOK_URL` stays the same.
+### A4. Error path (match the flow's PostDeadLetter/Terminate convention)
+Optional but recommended: on **SoqlOwners**, **Configure run after** → also add a **Response**
+with run-after **has failed / timed out**, Status `200`, body
+`{"ok": false, "reason": "flow_error", "operation": "owners_by_ids"}`.
+
+**Save.** The trigger URL is unchanged, so `SF_LOOKUP_WEBHOOK_URL` stays the same — no env change.
+
+> Only `Id` and `OwnerId` are strictly needed; LCC maps the 005… OwnerId to the right teammate
+> via each user's `salesforce_owner_id` (already set for all four). `Owner.Name` is included as
+> a convenience and is used as a fallback match.
 
 ---
 
