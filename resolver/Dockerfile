@@ -7,7 +7,11 @@
 # Multi-stage: stage 1 compiles libpostal; stage 2 is the slim runtime.
 
 # ---------- stage 1: build libpostal ----------
-FROM python:3.11-slim AS libpostal-build
+# PINNED to bookworm (Debian 12 / GCC 12): the trixie-based python:3.11-slim ships
+# GCC 14, where implicit function declarations are hard errors and libpostal v1.1's
+# crf_context.c (double_equals without float_utils.h) fails to compile.
+# Found via Railway build failure 2026-07-31 — see docs/resolver/RUNBOOK §1 note.
+FROM python:3.11-slim-bookworm AS libpostal-build
 
 ARG LIBPOSTAL_REF=v1.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,6 +22,10 @@ WORKDIR /opt
 RUN git clone --depth 1 --branch ${LIBPOSTAL_REF} https://github.com/openvenues/libpostal || \
     git clone --depth 1 https://github.com/openvenues/libpostal
 # Data dir kept OUTSIDE the source tree so it survives into the runtime image.
+# Belt-and-suspenders for newer GCC: give crf_context.c the float_utils.h include
+# it relies on implicitly (upstream v1.1 omission; harmless no-op when already fixed).
+RUN grep -q 'float_utils.h' libpostal/src/crf_context.c || \
+    sed -i 's/#include "crf_context.h"/#include "crf_context.h"\n#include "float_utils.h"/' libpostal/src/crf_context.c
 RUN cd libpostal \
     && ./bootstrap.sh \
     && ./configure --datadir=/opt/libpostal_data --prefix=/usr/local \
@@ -26,7 +34,8 @@ RUN cd libpostal \
     && ldconfig
 
 # ---------- stage 2: runtime ----------
-FROM python:3.11-slim AS runtime
+# Same base as stage 1 — the copied libpostal .so must match this stage's glibc.
+FROM python:3.11-slim-bookworm AS runtime
 
 # Runtime shared libs for libpostal + build tools for the `postal` python wheel.
 RUN apt-get update && apt-get install -y --no-install-recommends \

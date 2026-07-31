@@ -26,6 +26,16 @@ the Railway dashboard**; this runbook is the exact click-path + verification.
 7. First build compiles libpostal from source (~5–10 min) and pre-downloads bge-small.
    Subsequent deploys are cached.
 
+> **Build-failure note (2026-07-31, session 33):** the first Railway build FAILED at the
+> libpostal `make` step — `crf_context.c:366: implicit declaration of 'double_equals'`.
+> Cause: `python:3.11-slim` moved to Debian trixie / **GCC 14**, where implicit function
+> declarations are hard errors; libpostal v1.1 predates that (calls `double_equals`
+> without including `float_utils.h`). Fixed in the Dockerfile by (a) pinning BOTH stages
+> to `python:3.11-slim-bookworm` (GCC 12 — glibc must match across stages since the .so
+> is copied) and (b) a guarded sed that adds the missing `#include "float_utils.h"` —
+> verified against the v1.1 tag source. If a future base bump reintroduces toolchain
+> errors, check this note first before touching libpostal itself.
+
 ### Resources
 - **CPU-only.** No GPU. bge-small runs fine on CPU; libpostal is C.
 - Memory: set **≥ 2 GB** (libpostal data + the embedding model). 1 GB will OOM on the
