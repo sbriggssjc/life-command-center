@@ -28,7 +28,7 @@ duplicate carried **consistent rent** (underwriting unaffected), keeping the doc
 - **Property 31964 (DaVita):** lease 25384 ($206,108) vs 18657 ($68,252) — a **3× rent gap**. Both
   documented. Which rent is correct?
 
-## B. Property-owner accuracy — AUDIT (no data changed yet; needs direction)
+## B. Property-owner accuracy — operator-suppression SHIPPED + coverage plan
 
 **Coverage:** 1,799 of 4,854 assets resolved (**37%**). Source mix: relationship_graph 1,767 (avg conf
 0.88), sf_seller 23, manual 8, rel_owns 1. Of the gap: ~1,019 assets have evidence but no candidate
@@ -42,18 +42,22 @@ A handful of resolved "owners" are actually **operators/tenants**, not owners:
   ambiguous: `Davita Hemodialysis Center LLC`.
 These come from `owns` graph edges that mis-captured the operator as owner (conf 1.00 = single candidate).
 
-**Recommended owner-accuracy plan (needs Scott's pick):**
-1. **Operator-suppression guard (accuracy, quick).** Add a known-operator exclusion to the property-owner
-   feeder/reconciler so operator entities (DaVita, Fresenius, US Renal, American Renal, DCI, Satellite,
-   etc.) can never resolve as *owner*; clean the ~4 clear operator-as-owner rows to "Unresolved" (per
-   doctrine, Unresolved beats showing the operator). **Needs Scott's canonical operator list** (or I seed
-   one from the tenant/operator columns).
-2. **Deed/county feeder (coverage, bigger).** The highest-authority non-human source (`deed_recorded`,
-   weight 6) is still unbuilt — this is the real lever for the 2,036 no-evidence assets and to override
-   graph guesses. Connector-dependent.
-3. **Re-reconcile the ~1,019 evidenced-but-unresolved** — tune the tie-break / decay so more clear cases
-   clear the bar without lowering it blindly.
+**SHIPPED — operator-suppression guard (accuracy).** Migration
+`supabase/migrations/20260818370000_property_owner_operator_suppression.sql` (live):
+- New `lcc_owner_operator_block` (keyed by the operator's **entity id** — precise, so legitimate
+  owner-SPEs like "CG Davita WI LLC" / "CSRE Davita Garfield Park LLC" are untouched), seeded with
+  `DaVita HealthCare Prtnrs` + `Fresenius Medical Care`.
+- `lcc_reconcile_property_owner` now excludes blocked candidates from the vote.
+- Cleaned the 4 operator-as-owner rows → the 3 DaVita assets are now **Unresolved** (correct), and
+  suppressing Fresenius on the 4th **surfaced a real owner candidate** ("Platform Ventures", a purchaser
+  the operator had drowned out) at conf 0.50 — just under the 0.55 bar, so left Unresolved honestly.
+- Reversible (delete the block rows + re-run the feeder). **Grow the block as more operators surface**
+  (US Renal, American Renal, DCI, Satellite, …) — always by entity id.
 
-**Recommendation:** do #1 first (fast accuracy win, needs the operator list), then scope #2 (the coverage
-lever). Holding on data changes to owners until Scott confirms the operator list, since "who owns it" is
-core BD truth.
+**Still open (coverage — bigger levers):**
+1. **Deed/county feeder.** The highest-authority non-human source (`deed_recorded`, weight 6) is still
+   unbuilt — the real lever for the ~2,036 no-evidence assets and to override graph guesses.
+   Connector-dependent.
+2. **Re-reconcile the ~1,019 evidenced-but-unresolved.** The Platform Ventures case (0.50, just under the
+   0.55 bar) shows real owners sitting just below the line — tune the tie-break/decay so more clear cases
+   clear without lowering the bar blindly.
