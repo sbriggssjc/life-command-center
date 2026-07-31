@@ -168,11 +168,22 @@ un-paged worker always restarts from the top so it never reaches the tail. Fix:
   or clearing the marker.
 - Response now also returns `missing_only` + `deals_swept`.
 
-**Coverage checkpoint (2026-07-31):** 40 open deals; **21 swept / have mail**, **19 unswept**. Deals
-already carrying `email_intake` mail were pre-marked swept so the batched run targets only the tail.
-**Next (after this worker redeploys):** run `?missing_only=1&limit=8` ~3x to finish the 19, then verify
-deal staleness/last-touch across My Day. Some of the 19 will be **true negatives** (no deal-name-subject
-match) until the v2 **email-based search** lands — those get marked swept once and stop being retried.
+**Coverage checkpoint (2026-07-31) — COMPLETE:** ran `?missing_only=1&limit=8` in batches until
+`deals_searched:0`. Final state: **40/40 open deals swept, 0 unswept**; **872** deal-stamped
+`email_intake` messages across 63 entities; **27** open `deal_next_step` to-dos now carry
+correspondence evidence (`ball_in_court`/`correspondence_count`). My Day for Scott now shows **23
+active deals, 13 stale, 6 at-risk** with real last-touch + days-since-touch + risk scoring. One
+transient `flow_unreachable (operation aborted)` on a single deal self-healed on the next batch (it
+wasn't marked swept, so it was retried). Batching held every request well under the ~88s wall.
+
+**Observations for later (not blocking):**
+- Backfilled threads are historical, so a deal's *last_touch* can still be a recent internal note
+  (e.g. "LCC Morning Briefing") rather than the newest email — correct, but see next point.
+- **Briefings as deal last-touch:** "LCC Morning Briefing" notes appear to be stamped on deal
+  `entity_id` as `email`/`note` activity, which can mask true correspondence staleness. Candidate for
+  a data-hygiene pass (exclude briefing/system notes from deal last-touch). Logged here to circle back.
+- The v2 **email-based search** remains the recall upgrade for deals whose mail doesn't carry the
+  deal name in the subject (those were marked swept with 0 messages and won't retry until v2).
 
 ## Reconciliation refinement (2026-07-31) — deal correspondence -> deal_next_step to-dos
 The existing self-updating engines (`lcc_advance_todos`, `lcc_autoresolve_todos`) only reconcile
