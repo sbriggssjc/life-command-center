@@ -79,10 +79,21 @@ export async function handleSfOwnerSync(req, res) {
 
     const resolved = ownerMap.filter((o) => o.sf_owner_id || o.owner_name).length;
     if (dry) {
+      // Distinct owner distribution — shows whether deal-linked accounts are owned
+      // by real reps or a generic integration user (why entities_written can be 0).
+      const byOwner = new Map();
+      for (const o of ownerMap) {
+        const key = `${o.sf_owner_id || '?'}|${o.owner_name || '?'}`;
+        byOwner.set(key, (byOwner.get(key) || 0) + 1);
+      }
+      const owner_breakdown = [...byOwner.entries()]
+        .map(([k, count]) => { const [sf_owner_id, owner_name] = k.split('|'); return { sf_owner_id, owner_name, count }; })
+        .sort((a, b) => b.count - a.count);
       return res.status(200).json({
         ok: true, dry: true, sf_ids: sfIds.length,
         accounts: byObj.Account.length, opportunities: byObj.Opportunity.length,
-        owners_returned: ownerMap.length, owners_resolved: resolved, errors,
+        owners_returned: ownerMap.length, owners_resolved: resolved,
+        owner_breakdown, errors,
       });
     }
 
