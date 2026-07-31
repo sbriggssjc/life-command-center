@@ -2,20 +2,38 @@
 // intake-salesforce-files — Salesforce file intake for the SF -> LCC bridge
 // Life Command Center
 //
+// TRANSPORT DOCTRINE (SALESFORCE_LCC_INGESTION_PLAN.md §2): the Northmarq org is
+// SSO-gated and CANNOT provision a Salesforce Connected App (no admin). ALL
+// Salesforce access therefore flows through Power Automate — a PA flow holds the
+// interactive-SSO SF connection, reads Salesforce, and POSTs to the webhook
+// actions below under X-PA-Webhook-Secret. PA is transport only; it never writes
+// a domain table. The server-side Connected-App sweep (?action=discover / =fetch)
+// is RETIRED (W3.7c) — see the tombstone below.
+//
 // Routes:
+//   GET  ?action=discovery-worklist — W3.7c: return a batch of staged Comp/Listing/
+//                                Deal SF ids (both domains) that have NO sf_files row
+//                                and no discovery attempt in N days; stamps each served
+//                                id as attempted (lease). This is what the PA File-
+//                                Discovery flow pulls.
+//   POST ?action=discover-webhook — W3.7c: accept PA's array of read-from-Salesforce
+//                                file metadata → insert sf_files 'discovered' rows via
+//                                the shared discovery dedup logic (content_version_id).
+//   POST ?action=file-content  — W3.7c: accept one file's base64 bytes → store to the
+//                                salesforce-files bucket, verify sha256 + size cap,
+//                                flip the row to stored/queued (idempotent on
+//                                content_version_id) → feeds ?action=stage-queued.
 //   POST ?action=manifest      — record discovered files, return the to-fetch list
 //   POST ?action=upload-url    — mint a Storage signed-upload URL for one file
 //   POST ?action=bytes         — store one file's bytes, finalize + enqueue extraction
 //   POST ?action=retry-files   — return stuck (discovered/failed) files as a to-fetch list
-//   POST ?action=fetch         — server-side: download discovered files from Salesforce
-//   POST ?action=discover      — server-side: sweep ContentDocumentLink/ContentVersion
-//                                for staged Comp/Listing/Deal records and record newly
-//                                discovered files into sf_files (ingestion_status:"discovered").
-//                                W3.7b: extends the sweep past Comp__c to Listing__c + Deal.
 //   POST ?action=stage-queued  — drain sf_files at extraction_status:"queued" through
 //                                LCC's /api/intake/stage-om pipeline (real OM extraction +
 //                                property matching). Marks rows extraction_status:"extracted"
 //                                with intake_id in process_notes.
+//   POST ?action=discover      — RETIRED (410). Connected-App sweep; use the PA-collector
+//                                worklist + discover-webhook above.
+//   POST ?action=fetch         — RETIRED (410). Connected-App byte mover; use file-content.
 //   GET  (no action)           — info
 // ============================================================================
 
@@ -23,15 +41,19 @@ import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
 import {
-  DISCOVERY_OBJECTS, buildContentDocumentLinkSoql, buildContentVersionSoql,
-  mapVersionToFileRow, filterNewVersions, isDiscoverableExtension, linkedTypeFromCdl,
-  sanitizeSfId, chunk, traversalColumnForType, CDL_ID_CHUNK, type ContentVersionRow,
+  WORKLIST_OBJECTS, DEFAULT_WORKLIST_STALE_DAYS, staleCutoffIso, makeWorklistItem,
+  mapDiscoveredFileToRow, filterNewVersions, fileContentDecision,
+  sanitizeSfId, chunk, traversalColumnForType, normalizeVertical,
+  CDL_ID_CHUNK, type WorklistItem, type DiscoverWebhookFile,
 } from "./discovery.ts";
 
-const PAYLOAD_VERSION = "sf-files-2026-07-v6";
-const SF_API_VERSION = "v60.0";
+const PAYLOAD_VERSION = "sf-files-2026-07-v7";
 const BUCKET = "salesforce-files";
 const MAX_INLINE_BYTES = 6 * 1024 * 1024;
+// W3.7c ?action=file-content byte cap. OMs are ~6-9MB; the stage-queued drain
+// caps at 15MB, so files past this must ride ?action=upload-url + a bucket upload
+// (large-file lane in the flow spec) rather than a base64 body.
+const FILE_CONTENT_MAX_BYTES = 15 * 1024 * 1024;
 
 type Vertical = "dia" | "gov" | "ops";
 
@@ -87,51 +109,17 @@ async function storageUpload(vertical: Vertical, path: string, bytes: Uint8Array
   return { ok: false, status: res.status, error: await res.text() };
 }
 
-// ── Salesforce auth (Connected App, optional) ──────────────────────────────
-const SF_INSTANCE_URL = Deno.env.get("SF_INSTANCE_URL") ?? "";
-const SF_CLIENT_ID = Deno.env.get("SF_CLIENT_ID") ?? "";
-const SF_CLIENT_SECRET = Deno.env.get("SF_CLIENT_SECRET") ?? "";
-let sfTokenCache: { token: string; instanceUrl: string; expiresAt: number } | null = null;
-
-async function getSfToken(): Promise<{ token: string; instanceUrl: string } | null> {
-  if (!SF_INSTANCE_URL || !SF_CLIENT_ID || !SF_CLIENT_SECRET) return null;
-  const now = Date.now();
-  if (sfTokenCache && sfTokenCache.expiresAt > now + 60_000) return { token: sfTokenCache.token, instanceUrl: sfTokenCache.instanceUrl };
-  const form = new URLSearchParams({ grant_type: "client_credentials", client_id: SF_CLIENT_ID, client_secret: SF_CLIENT_SECRET });
-  const res = await fetch(`${SF_INSTANCE_URL}/services/oauth2/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() });
-  if (!res.ok) return null;
-  const data = (await res.json()) as { access_token?: string; instance_url?: string };
-  if (!data.access_token) return null;
-  sfTokenCache = { token: data.access_token, instanceUrl: data.instance_url || SF_INSTANCE_URL, expiresAt: now + 25 * 60 * 1000 };
-  return { token: sfTokenCache.token, instanceUrl: sfTokenCache.instanceUrl };
-}
-
-async function sfDownloadBytes(auth: { token: string; instanceUrl: string }, path: string): Promise<{ ok: boolean; bytes?: Uint8Array; contentType?: string; error?: string }> {
-  const url = path.startsWith("http") ? path : `${auth.instanceUrl}${path}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
-  if (!res.ok) return { ok: false, error: `${res.status} ${await res.text()}` };
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  return { ok: true, bytes, contentType: res.headers.get("content-type") || "application/octet-stream" };
-}
-
-// Run a SOQL query via the Connected App, following nextRecordsUrl pagination.
-async function sfQuery(
-  auth: { token: string; instanceUrl: string }, soql: string,
-): Promise<{ ok: boolean; status: number; records: Record<string, unknown>[]; error?: string }> {
-  const records: Record<string, unknown>[] = [];
-  let next: string | null = `/services/data/${SF_API_VERSION}/query?q=${encodeURIComponent(soql)}`;
-  let status = 200;
-  while (next) {
-    const url = next.startsWith("http") ? next : `${auth.instanceUrl}${next}`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` } });
-    status = res.status;
-    if (!res.ok) return { ok: false, status, records, error: (await res.text()).slice(0, 400) };
-    const data = (await res.json()) as { records?: Record<string, unknown>[]; done?: boolean; nextRecordsUrl?: string };
-    if (Array.isArray(data.records)) records.push(...data.records);
-    next = data.done === false && data.nextRecordsUrl ? data.nextRecordsUrl : null;
-  }
-  return { ok: true, status, records };
-}
+// ── Salesforce Connected-App path — RETIRED (W3.7c, 2026-07-31) ─────────────
+// The org is SSO-gated and cannot provision a Connected App (no admin;
+// SALESFORCE_LCC_INGESTION_PLAN.md §2 — a client-credentials login returns
+// INVALID_SSO_GATEWAY_URL). The former getSfToken()/sfQuery()/sfDownloadBytes()
+// read SF_INSTANCE_URL / SF_CLIENT_ID / SF_CLIENT_SECRET, which would surface as
+// dormant capability flags that can NEVER turn on. They are DELETED so nothing
+// reads those env vars. Salesforce reads now flow exclusively through Power
+// Automate → ?action=discovery-worklist + ?action=discover-webhook +
+// ?action=file-content. Do NOT re-introduce SF_CLIENT_ID/SF_CLIENT_SECRET or a
+// Connected-App token flow — see the STANDING ARCHITECTURE RULE in
+// docs/audits/ROLLOUT_STATUS.md (2026-07-31 correction).
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 function b64ToBytes(b64: string): Uint8Array {
@@ -188,7 +176,12 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(req, {
       service: "intake-salesforce-files",
       version: PAYLOAD_VERSION,
-      actions: ["manifest", "upload-url", "bytes", "retry-files", "fetch", "discover", "stage-queued"],
+      transport: "power-automate-only (Connected-App path retired W3.7c)",
+      actions: [
+        "discovery-worklist (GET)", "discover-webhook", "file-content",
+        "manifest", "upload-url", "bytes", "retry-files", "stage-queued",
+      ],
+      retired: ["discover", "fetch"],
     });
   }
 
@@ -197,15 +190,32 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // W3.7c: the PA File-Discovery flow GETs its worklist.
+    if (req.method === "GET" && action === "discovery-worklist") {
+      return await handleDiscoveryWorklist(req);
+    }
     if (req.method !== "POST") return errorResponse(req, `Method ${req.method} not allowed`, 405);
     const body = (await parseBody(req)) as Record<string, unknown> | null;
+    if (action === "discover-webhook") return await handleDiscoverWebhook(req, body);
+    if (action === "file-content") return await handleFileContent(req, body);
     if (action === "manifest") return await handleManifest(req, body);
     if (action === "upload-url") return await handleUploadUrl(req, body);
     if (action === "bytes") return await handleBytes(req, body);
     if (action === "retry-files") return await handleRetryFiles(req, body);
-    if (action === "fetch") return await handleFetch(req, body);
-    if (action === "discover") return await handleDiscover(req, body);
     if (action === "stage-queued") return await handleStageQueued(req, body);
+    // W3.7c: the Connected-App sweep + byte mover are retired — the org can't
+    // provision a Connected App, so these can never work. Answer 410 with the
+    // PA-collector replacement rather than a silent no-op.
+    if (action === "discover" || action === "fetch") {
+      return jsonResponse(req, {
+        ok: false, retired: true, action,
+        replacement: action === "discover"
+          ? ["GET ?action=discovery-worklist", "POST ?action=discover-webhook"]
+          : ["POST ?action=file-content"],
+        reason: "Salesforce Connected-App path retired (org is SSO-gated, no admin). " +
+          "Salesforce access flows through Power Automate only — see SALESFORCE_LCC_INGESTION_PLAN.md §2.",
+      }, 410);
+    }
     return errorResponse(req, `Unknown POST action: ${action}`, 400);
   } catch (err) {
     console.error("[intake-salesforce-files]", err);
@@ -406,212 +416,262 @@ async function handleRetryFiles(req: Request, body: Record<string, unknown> | nu
   return jsonResponse(req, { ok: true, count: toFetch.length, by_vertical: report, to_fetch: toFetch });
 }
 
-// ── POST ?action=discover ───────────────────────────────────────────────────
-// Server-side ContentDocumentLink → ContentVersion sweep via the Connected App.
-// W3.7b: extends the file-discovery sweep past Comp__c to Listing__c + Deal
-// (Opportunity). For each staged Comp/Listing/Deal SF id it queries
-// ContentDocumentLink, then the latest ContentVersion per document, and records
-// newly discovered files into sf_files (ingestion_status='discovered') with the
-// same dedup contract (content_version_id) and the sf_comp_id/sf_listing_id/
-// sf_deal_id traversal column stamped. The existing ?action=fetch drains those
-// 'discovered' rows to bytes, and ?action=stage-queued feeds the extractor —
-// no new extraction engine.
+// ── GET ?action=discovery-worklist ──────────────────────────────────────────
+// W3.7c PA-collector, step 1. Returns a batch of staged Comp/Listing/Deal SF ids
+// (both domains) that (a) have NO sf_files row yet and (b) have not been attempted
+// in `stale_days` days. Every id it serves is STAMPED last_file_discovery_at=now()
+// (the lease) so an id that yields no files isn't re-served every run. The PA File-
+// Discovery flow pulls this, then reads each id's ContentDocumentLinks/ContentVersion
+// via its SSO Salesforce connection and POSTs back to ?action=discover-webhook.
 //
-// body: {
-//   vertical?: 'dia'|'gov',            // default both
-//   object_types?: ['comp','listing','deal'],  // default all three
-//   entity_ids?: string[],             // scoped backfill (e.g. one Listing id);
-//                                      // applied to the requested object_types
-//   limit?: number,                    // per staging table (backfill sweep size)
-//   only_unprocessed?: boolean,        // staging rows with processed=false only
-//   batch_id?: string,
-// }
-// Clean no-op (200, configured:false) when the Connected App is not configured,
-// so a driving cron is safe before credentials land.
-async function handleDiscover(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const b = body || {};
-  const auth = await getSfToken();
-  if (!auth) {
-    return jsonResponse(req, {
-      ok: true, configured: false,
-      note: "Salesforce Connected App not configured (SF_INSTANCE_URL/SF_CLIENT_ID/SF_CLIENT_SECRET) — discover is a no-op until credentials land.",
-    });
-  }
+// query: ?limit=<total, default 200, cap 1000>&stale_days=<default 7>
+//        &vertical=<dia|gov optional>&object_types=<comp,listing,deal optional csv>
+async function handleDiscoveryWorklist(req: Request): Promise<Response> {
+  const params = queryParams(req);
+  const limit = Math.min(Math.max(Number(params.get("limit")) || 200, 1), 1000);
+  const staleDays = Number(params.get("stale_days"));
+  const cutoff = staleCutoffIso(Date.now(), Number.isFinite(staleDays) ? staleDays : DEFAULT_WORKLIST_STALE_DAYS);
+  const vParam = normalizeVertical(params.get("vertical"));
+  const verticals: Vertical[] = vParam ? [vParam] : ["gov", "dia"];
+  const otParam = (params.get("object_types") || "").toLowerCase();
+  const wantKeys = otParam ? new Set(otParam.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+  const objects = WORKLIST_OBJECTS.filter((o) => !wantKeys || wantKeys.has(o.key));
 
-  const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
-  const wantKeys = Array.isArray(b.object_types) && b.object_types.length
-    ? new Set((b.object_types as unknown[]).map((k) => String(k).toLowerCase()))
-    : null;
-  const objects = DISCOVERY_OBJECTS.filter((o) => !wantKeys || wantKeys.has(o.key));
-  const scopedIds = Array.isArray(b.entity_ids)
-    ? (b.entity_ids as unknown[]).map(sanitizeSfId).filter(Boolean) as string[]
-    : null;
-  const perTableLimit = Math.min(Number(b.limit) || 2000, 5000);
-  const onlyUnprocessed = b.only_unprocessed === true;
-  const batchId = String(b.batch_id || `discover-${isoNow()}`);
-
-  const report: Record<string, unknown> = {};
+  const nowIso = isoNow();
+  const worklist: WorklistItem[] = [];
+  const byVertical: Record<string, unknown> = {};
+  // Split the batch budget across the requested domains so neither starves.
+  const perVerticalBudget = Math.ceil(limit / verticals.length);
 
   for (const vertical of verticals) {
+    const vReport: Record<string, unknown> = { by_object: {}, served: 0 };
     const env = dbEnv(vertical);
-    const vReport: Record<string, unknown> = { by_object: {} };
-    if (!env) { vReport.error = `${vertical} DB not configured`; report[vertical] = vReport; continue; }
+    if (!env) { vReport.error = `${vertical} DB not configured`; byVertical[vertical] = vReport; continue; }
+    let vBudget = perVerticalBudget;
 
     for (const obj of objects) {
-      const oStats = {
-        staged_ids: 0, content_links: 0, documents: 0, latest_versions: 0,
-        discoverable: 0, new_discovered: 0, skipped_existing: 0, errors: [] as string[],
-      };
+      const oStats = { candidates: 0, with_files: 0, served: 0 };
+      if (vBudget <= 0) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
 
-      // 1. entity ids to sweep — scoped list, else staged parent ids.
-      let entityIds: string[] = [];
-      if (scopedIds) {
-        entityIds = scopedIds;
-      } else {
-        const filter = onlyUnprocessed ? "&processed=eq.false" : "";
-        const res = await dbFetch(vertical, "GET",
-          `${obj.stagingTable}?select=${obj.sfIdColumn}${filter}&${obj.sfIdColumn}=not.is.null&limit=${perTableLimit}`);
-        const rows = Array.isArray(res.data) ? res.data as Record<string, unknown>[] : [];
-        entityIds = rows.map((r) => sanitizeSfId(r[obj.sfIdColumn])).filter(Boolean) as string[];
-      }
-      entityIds = [...new Set(entityIds)];
-      oStats.staged_ids = entityIds.length;
-      if (!entityIds.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
+      // 1. staging ids not attempted within the lease window (null or stale).
+      //    Over-fetch past the budget so file-covered ids can be filtered out
+      //    and still leave a full budget of fresh ids. PostgREST caps at 1000.
+      const fetchLimit = Math.min(vBudget + 300, 1000);
+      const orFilter = `or=(last_file_discovery_at.is.null,last_file_discovery_at.lt.${encodeURIComponent(cutoff)})`;
+      const cand = await dbFetch(vertical, "GET",
+        `${obj.stagingTable}?select=${obj.sfIdColumn}&${obj.sfIdColumn}=not.is.null&${orFilter}` +
+        `&order=last_file_discovery_at.asc.nullsfirst&limit=${fetchLimit}`);
+      const candIds = [...new Set(
+        (Array.isArray(cand.data) ? cand.data as Record<string, unknown>[] : [])
+          .map((r) => sanitizeSfId(r[obj.sfIdColumn])).filter(Boolean) as string[],
+      )];
+      oStats.candidates = candIds.length;
+      if (!candIds.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
 
-      // 2. ContentDocumentLink for these entities → document ids (+ which entity).
-      const docToEntity: Record<string, { entityId: string; type: string }> = {};
-      for (const ids of chunk(entityIds, CDL_ID_CHUNK)) {
-        const q = await sfQuery(auth, buildContentDocumentLinkSoql(ids));
-        if (!q.ok) { oStats.errors.push(`CDL query: ${q.status} ${q.error || ""}`.slice(0, 200)); continue; }
-        for (const cdl of q.records) {
-          const docId = sanitizeSfId(cdl.ContentDocumentId);
-          const entId = sanitizeSfId(cdl.LinkedEntityId);
-          if (!docId || !entId) continue;
-          oStats.content_links++;
-          // First entity wins per document (deterministic); type from the row,
-          // falling back to this object's SF type.
-          if (!docToEntity[docId]) {
-            docToEntity[docId] = { entityId: entId, type: linkedTypeFromCdl(cdl) || obj.sfType };
-          }
-        }
-      }
-      const docIds = Object.keys(docToEntity);
-      oStats.documents = docIds.length;
-      if (!docIds.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
-
-      // 3. latest ContentVersion per document → candidate sf_files rows.
-      const candidates: Record<string, unknown>[] = [];
-      for (const ids of chunk(docIds, CDL_ID_CHUNK)) {
-        const q = await sfQuery(auth, buildContentVersionSoql(ids));
-        if (!q.ok) { oStats.errors.push(`CV query: ${q.status} ${q.error || ""}`.slice(0, 200)); continue; }
-        for (const cv of q.records as ContentVersionRow[]) {
-          oStats.latest_versions++;
-          if (!isDiscoverableExtension(cv.FileExtension)) continue;
-          oStats.discoverable++;
-          const link = docToEntity[String(cv.ContentDocumentId)];
-          if (!link) continue;
-          candidates.push(mapVersionToFileRow({
-            cv, linkedEntityType: link.type, linkedEntityId: link.entityId,
-            batchId, nowIso: isoNow(), apiVersion: SF_API_VERSION,
-          }));
-        }
-      }
-      if (!candidates.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
-
-      // 4. dedup vs existing sf_files.content_version_id (this vertical).
-      const cvids = candidates.map((c) => String(c.content_version_id)).filter(Boolean);
-      const existing = new Set<string>();
-      for (const ids of chunk(cvids, CDL_ID_CHUNK)) {
+      // 2. which of these already have an sf_files row (traversal col OR linked id).
+      const withFiles = new Set<string>();
+      for (const ids of chunk(candIds, CDL_ID_CHUNK)) {
         const inList = ids.map((c) => `"${c}"`).join(",");
         const ex = await dbFetch(vertical, "GET",
-          `sf_files?content_version_id=in.(${inList})&select=content_version_id`);
+          `sf_files?select=${obj.traversalColumn},linked_entity_sf_id` +
+          `&or=(${obj.traversalColumn}.in.(${inList}),linked_entity_sf_id.in.(${inList}))`);
         for (const r of (Array.isArray(ex.data) ? ex.data : []) as Record<string, unknown>[]) {
-          existing.add(String(r.content_version_id));
+          const t = r[obj.traversalColumn]; if (t) withFiles.add(String(t));
+          const l = r.linked_entity_sf_id; if (l) withFiles.add(String(l));
         }
       }
-      const fresh = filterNewVersions(candidates, existing);
-      oStats.skipped_existing = candidates.length - fresh.length;
+      oStats.with_files = candIds.filter((id) => withFiles.has(id)).length;
 
-      // 5. insert the fresh discovered rows.
-      if (fresh.length) {
-        const ins = await dbFetch(vertical, "POST", "sf_files", fresh, "return=minimal");
-        if (ins.ok) oStats.new_discovered = fresh.length;
-        else oStats.errors.push(`insert: ${ins.status} ${JSON.stringify(ins.data).slice(0, 160)}`);
+      // 3. serve the file-less ids, up to the remaining budget.
+      const served = candIds.filter((id) => !withFiles.has(id)).slice(0, vBudget);
+      if (!served.length) { (vReport.by_object as Record<string, unknown>)[obj.key] = oStats; continue; }
+
+      // 4. STAMP the lease on served ids so they aren't re-served for stale_days
+      //    even if PA finds no files for them.
+      for (const ids of chunk(served, CDL_ID_CHUNK)) {
+        const inList = ids.map((c) => `"${c}"`).join(",");
+        await dbFetch(vertical, "PATCH",
+          `${obj.stagingTable}?${obj.sfIdColumn}=in.(${inList})`,
+          { last_file_discovery_at: nowIso });
       }
 
+      for (const id of served) worklist.push(makeWorklistItem(vertical, obj, id));
+      oStats.served = served.length;
+      vBudget -= served.length;
+      (vReport.served as number) += served.length;
       (vReport.by_object as Record<string, unknown>)[obj.key] = oStats;
     }
-
-    report[vertical] = vReport;
+    byVertical[vertical] = vReport;
   }
 
   return jsonResponse(req, {
-    ok: true, configured: true, mode: "discover", batch_id: batchId,
-    note: "Swept ContentDocumentLink/ContentVersion for staged Comp/Listing/Deal records; new files are ingestion_status='discovered'. Run ?action=fetch then ?action=stage-queued to store + extract.",
-    by_vertical: report,
+    ok: true, mode: "discovery-worklist",
+    generated_at: nowIso, stale_days: Number.isFinite(staleDays) ? staleDays : DEFAULT_WORKLIST_STALE_DAYS,
+    limit, count: worklist.length, by_vertical: byVertical, worklist,
   });
 }
 
-// ── POST ?action=fetch ──────────────────────────────────────────────────────
-// Server-side byte mover via Salesforce Connected App. Drains rows still at
-// ingestion_status='discovered'. Requires SF_INSTANCE_URL + SF_CLIENT_ID + SF_CLIENT_SECRET.
-async function handleFetch(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const b = body || {};
-  const limit = Math.min(Number(b.limit) || 25, 100);
-  const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
-  const auth = await getSfToken();
-  if (!auth) return errorResponse(req, "Salesforce not configured", 503);
+// ── POST ?action=discover-webhook ────────────────────────────────────────────
+// W3.7c PA-collector, step 2. Accepts the array of file metadata Power Automate
+// read from Salesforce (ContentDocumentLink → latest ContentVersion) for the
+// worklist ids, and records new files into sf_files (ingestion_status='discovered')
+// via the SHARED discovery dedup logic (mapDiscoveredFileToRow + filterNewVersions,
+// keyed on content_version_id). Same insert path the retired server-side sweep used
+// — only the transport (PA vs Connected App) changed.
+//
+// body: {
+//   vertical?: 'dia'|'gov',           // batch default; per-file override honored
+//   batch_id?: string,
+//   files: [{ linked_entity_type, linked_entity_id, content_document_id,
+//             content_version_id, title, file_name, extension, version_number,
+//             size_bytes, vertical? }]
+// }
+async function handleDiscoverWebhook(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  if (!body) return errorResponse(req, "Missing JSON body", 400);
+  const files = Array.isArray(body.files) ? body.files as DiscoverWebhookFile[] : null;
+  if (!files) return errorResponse(req, "files[] is required", 400);
+  const batchId = String(body.batch_id || `discover-webhook-${isoNow()}`);
+  const bodyVertical = normalizeVertical(body.vertical);
+
+  // Route each file to its vertical, then map → dedup → insert per vertical.
+  const byVerticalRows: Record<Vertical, Record<string, unknown>[]> = { dia: [], gov: [], ops: [] };
+  let skippedInvalid = 0;
+  for (const f of files) {
+    const v = normalizeVertical(f.vertical) || bodyVertical || routeFileVertical(f as Record<string, unknown>);
+    const vert: Vertical = (v === "gov" || v === "dia") ? v : "dia";
+    const row = mapDiscoveredFileToRow({ file: f, batchId, nowIso: isoNow() });
+    if (!row) { skippedInvalid++; continue; }
+    byVerticalRows[vert].push(row);
+  }
+
   const report: Record<string, unknown> = {};
-  for (const vertical of verticals) {
-    const vStats = { discovered: 0, stored: 0, failed: 0, skipped: 0, errors: [] as string[] };
-    const pending = await dbFetch(vertical, "GET",
-      `sf_files?ingestion_status=eq.discovered&source_system=eq.salesforce` +
-      `&select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name,sf_download_url` +
-      `&limit=${limit}`);
-    const rows = Array.isArray(pending.data) ? pending.data as Record<string, unknown>[] : [];
-    vStats.discovered = rows.length;
-    for (const row of rows) {
-      const dlPath = String(row.sf_download_url || "");
-      if (!dlPath) {
-        vStats.skipped++;
-        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-          ingestion_status: "failed", process_notes: "no sf_download_url on row", updated_at: isoNow(),
-        });
-        continue;
+  let discovered = 0, skippedExisting = 0, errors = 0;
+  const insertErrors: string[] = [];
+
+  for (const vertical of ["gov", "dia"] as Vertical[]) {
+    const rows = byVerticalRows[vertical];
+    const vStats = { candidates: rows.length, discovered: 0, skipped_existing: 0, errors: 0 };
+    if (!rows.length) { report[vertical] = vStats; continue; }
+
+    // Dedup vs existing sf_files.content_version_id in this DB.
+    const cvids = rows.map((r) => String(r.content_version_id)).filter(Boolean);
+    const existing = new Set<string>();
+    for (const ids of chunk([...new Set(cvids)], CDL_ID_CHUNK)) {
+      const inList = ids.map((c) => `"${c}"`).join(",");
+      const ex = await dbFetch(vertical, "GET",
+        `sf_files?content_version_id=in.(${inList})&select=content_version_id`);
+      for (const r of (Array.isArray(ex.data) ? ex.data : []) as Record<string, unknown>[]) {
+        existing.add(String(r.content_version_id));
       }
-      const dl = await sfDownloadBytes(auth, dlPath);
-      if (!dl.ok || !dl.bytes) {
-        vStats.failed++;
-        vStats.errors.push(`${row.content_version_id}: ${dl.error}`);
-        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-          ingestion_status: "failed", process_notes: `download failed: ${dl.error}`, updated_at: isoNow(),
-        });
-        continue;
+    }
+    const fresh = filterNewVersions(rows, existing);
+    vStats.skipped_existing = rows.length - fresh.length;
+    skippedExisting += vStats.skipped_existing;
+
+    if (fresh.length) {
+      const ins = await dbFetch(vertical, "POST", "sf_files", fresh, "return=minimal");
+      if (ins.ok) { vStats.discovered = fresh.length; discovered += fresh.length; }
+      else {
+        vStats.errors = fresh.length; errors += fresh.length;
+        const msg = `${vertical}: status=${ins.status} data=${JSON.stringify(ins.data).slice(0, 200)}`;
+        insertErrors.push(msg);
+        console.error("[intake-salesforce-files] discover-webhook insert failed", msg);
       }
-      const path = storagePath(row);
-      const up = await storageUpload(vertical, path, dl.bytes, dl.contentType || "application/octet-stream");
-      if (!up.ok) {
-        vStats.failed++;
-        vStats.errors.push(`${row.content_version_id}: storage ${up.error}`);
-        await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-          ingestion_status: "failed", process_notes: `storage upload failed: ${up.error}`, updated_at: isoNow(),
-        });
-        continue;
-      }
-      const sha = await sha256Hex(dl.bytes);
-      await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
-        ingestion_status: "stored", extraction_status: "queued",
-        storage_path: path, sha256: sha, size_bytes: dl.bytes.byteLength,
-        stored_at: isoNow(), updated_at: isoNow(),
-      });
-      vStats.stored++;
     }
     report[vertical] = vStats;
   }
+
   return jsonResponse(req, {
-    ok: true, mode: "server-side fetch",
-    note: "Drained sf_files rows at ingestion_status='discovered'.",
+    ok: errors === 0, mode: "discover-webhook", batch_id: batchId,
+    received: files.length, discovered,
+    skipped_existing: skippedExisting, skipped_invalid: skippedInvalid, errors,
+    insert_errors: insertErrors.length ? insertErrors : undefined,
     by_vertical: report,
+    note: "New files are ingestion_status='discovered'. POST ?action=file-content with " +
+      "each new content_version_id's bytes to store + queue them for extraction.",
+  });
+}
+
+// ── POST ?action=file-content ────────────────────────────────────────────────
+// W3.7c PA-collector, step 3. Accepts one file's bytes (base64) keyed by
+// content_version_id, verifies sha256 + a size cap, writes to the salesforce-files
+// bucket, and flips the sf_files row to stored/queued — feeding the EXISTING
+// ?action=stage-queued extraction path (no new engine). Idempotent on
+// content_version_id: a row already stored is a no-op (never re-extracts).
+//
+// body: { vertical?, content_version_id, sha256?, file_base64 (| content | base64),
+//         mime_type? }
+async function handleFileContent(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  if (!body) return errorResponse(req, "Missing JSON body", 400);
+  const cvid = sanitizeSfId(body.content_version_id);
+  if (!cvid) return errorResponse(req, "content_version_id is required (valid SF id)", 400);
+  const b64 = String(body.file_base64 || body.content || body.base64 || "");
+  if (!b64) return errorResponse(req, "Provide file_base64 (base64 content)", 400);
+  const providedSha = body.sha256 ? String(body.sha256) : null;
+
+  // Resolve which DB holds the row (PA echoes vertical from the worklist; probe
+  // both if absent). content_version_id is unique per source_system.
+  const hint = normalizeVertical(body.vertical);
+  const tryVerticals: Vertical[] = hint ? [hint] : ["gov", "dia"];
+  let vertical: Vertical | null = null;
+  let row: Record<string, unknown> | null = null;
+  for (const v of tryVerticals) {
+    const lookup = await dbFetch(v, "GET",
+      `sf_files?content_version_id=eq.${encodeURIComponent(cvid)}&source_system=eq.salesforce` +
+      `&select=file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,title,file_name,ingestion_status,extraction_status,sha256&limit=1`);
+    const rows = Array.isArray(lookup.data) ? lookup.data as Record<string, unknown>[] : [];
+    if (rows.length) { vertical = v; row = rows[0]; break; }
+  }
+  if (!row || !vertical) return errorResponse(req, `No sf_files row for content_version_id ${cvid}`, 404);
+
+  // Idempotency: already stored → no-op (never reset an in-flight/extracted row).
+  if (String(row.ingestion_status) === "stored") {
+    return jsonResponse(req, {
+      ok: true, idempotent: true, vertical, content_version_id: cvid, file_id: row.file_id,
+      ingestion_status: "stored", extraction_status: row.extraction_status ?? null,
+      note: "Row already stored — content-fetch is a no-op (idempotent on content_version_id).",
+    });
+  }
+
+  // Decode + hash.
+  let bytes: Uint8Array;
+  try { bytes = b64ToBytes(b64); }
+  catch { return errorResponse(req, "file_base64 is not valid base64", 400); }
+  const computedSha = await sha256Hex(bytes);
+  const decision = fileContentDecision({
+    sizeBytes: bytes.byteLength, maxBytes: FILE_CONTENT_MAX_BYTES, providedSha, computedSha,
+  }).verdict;
+  if (decision === "empty") return errorResponse(req, "Decoded file is empty", 400);
+  if (decision === "too_large") {
+    const human = `${(bytes.byteLength / (1024 * 1024)).toFixed(1)}MB`;
+    return errorResponse(req, `File ${human} exceeds the ${FILE_CONTENT_MAX_BYTES} byte cap — use ?action=upload-url + a bucket upload for large files`, 413);
+  }
+  if (decision === "sha_mismatch") {
+    return errorResponse(req, `sha256 mismatch: provided ${providedSha}, computed ${computedSha}`, 422);
+  }
+
+  // Store to the bucket.
+  const path = storagePath(row);
+  const up = await storageUpload(vertical, path, bytes, String(body.mime_type || "application/octet-stream"));
+  if (!up.ok) {
+    await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
+      ingestion_status: "failed", process_notes: `storage upload failed: ${up.error}`, updated_at: isoNow(),
+    });
+    return errorResponse(req, `Storage upload failed: ${up.error}`, up.status || 500);
+  }
+
+  // Flip to stored/queued — feeds the existing ?action=stage-queued drain.
+  const patch = await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
+    ingestion_status: "stored", extraction_status: "queued",
+    storage_path: path, sha256: computedSha, size_bytes: bytes.byteLength,
+    stored_at: isoNow(), updated_at: isoNow(),
+  });
+
+  return jsonResponse(req, {
+    ok: patch.ok, idempotent: false, vertical, content_version_id: cvid, file_id: row.file_id,
+    storage_path: path, sha256: computedSha, size_bytes: bytes.byteLength,
+    extraction_status: "queued",
+    note: "Stored to salesforce-files bucket; queued for extraction via ?action=stage-queued.",
   });
 }
 

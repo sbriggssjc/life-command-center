@@ -1,0 +1,181 @@
+{
+  "name": "flow-sf-file-discovery",
+  "description": "SF -> LCC: File Discovery (PA-collector, W3.7c). Weekly scheduled flow that discovers Salesforce Files attached to staged Comp/Listing/Deal records and lands them in Supabase sf_files, then moves the bytes. Replaces the retired server-side Connected-App sweep (the org is SSO-gated, no Connected App). Power Automate is transport only; all dedup/routing/storage/extraction happen on the LCC edge side. See docs/flows/FLOW_sf_file_discovery.md.",
+  "trigger": {
+    "type": "Recurrence",
+    "suggested_schedule": "Weekly, Sunday 06:00 America/Chicago",
+    "cadence_knob": "Recurrence interval — weekly default; the file corpus changes slowly."
+  },
+  "parameters": {
+    "FN_BASE": {
+      "type": "string",
+      "example": "https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1",
+      "note": "intake-salesforce-files is deployed on Dialysis_DB and reaches both gov+dia via env vars — one base URL covers both domains."
+    },
+    "LCC_PA_WEBHOOK_SECRET": {
+      "type": "securestring",
+      "note": "Equals the edge function PA_WEBHOOK_SECRET. Sent on every HTTP action as header X-PA-Webhook-Secret."
+    },
+    "SALESFORCE_CONNECTION": {
+      "type": "connectionReference",
+      "note": "One interactively-authenticated (SSO) Salesforce connection, reused by every SF action. The only manual maintenance surface."
+    },
+    "WORKLIST_LIMIT": { "type": "int", "default": 150, "note": "Ids fetched per run (edge caps 1000, split across domains)." },
+    "STALE_DAYS": { "type": "int", "default": 7, "note": "Re-attempt window — a served id is leased this long." }
+  },
+  "steps": [
+    {
+      "name": "HTTP_GetWorklist",
+      "type": "HTTP",
+      "method": "GET",
+      "uri": "@{concat(parameters('FN_BASE'), '/intake-salesforce-files?action=discovery-worklist&limit=', parameters('WORKLIST_LIMIT'), '&stale_days=', parameters('STALE_DAYS'))}",
+      "headers": { "X-PA-Webhook-Secret": "@{parameters('LCC_PA_WEBHOOK_SECRET')}" },
+      "note": "Returns staged Comp/Listing/Deal ids (BOTH domains) with no sf_files row and no attempt in STALE_DAYS. Stamps each served id (lease)."
+    },
+    {
+      "name": "Parse_Worklist",
+      "type": "ParseJson",
+      "content": "@body('HTTP_GetWorklist')",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "count": { "type": "integer" },
+          "worklist": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "vertical": { "type": "string" },
+                "object_type": { "type": "string" },
+                "sf_type": { "type": "string" },
+                "linked_entity_sf_id": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Init_DiscoveredFiles",
+      "type": "InitializeVariable",
+      "variable": { "name": "DiscoveredFiles", "type": "array", "value": [] }
+    },
+    {
+      "name": "ForEach_WorklistItem",
+      "type": "Foreach",
+      "foreach": "@body('Parse_Worklist')?['worklist']",
+      "concurrency": 5,
+      "actions": [
+        {
+          "name": "SF_GetContentDocumentLinks",
+          "type": "SalesforceGetRecords",
+          "connection": "@parameters('SALESFORCE_CONNECTION')",
+          "sobject": "ContentDocumentLink",
+          "filter": "LinkedEntityId = '@{items('ForEach_WorklistItem')?['linked_entity_sf_id']}'",
+          "note": "ContentDocumentLink requires a bounded LinkedEntityId filter."
+        },
+        {
+          "name": "ForEach_Document",
+          "type": "Foreach",
+          "foreach": "@body('SF_GetContentDocumentLinks')?['value']",
+          "actions": [
+            {
+              "name": "SF_GetLatestContentVersion",
+              "type": "SalesforceGetRecords",
+              "connection": "@parameters('SALESFORCE_CONNECTION')",
+              "sobject": "ContentVersion",
+              "filter": "ContentDocumentId = '@{items('ForEach_Document')?['ContentDocumentId']}' AND IsLatest = true",
+              "select": "Id,ContentDocumentId,Title,FileExtension,PathOnClient,VersionNumber,ContentSize"
+            },
+            {
+              "name": "ForEach_Version",
+              "type": "Foreach",
+              "foreach": "@body('SF_GetLatestContentVersion')?['value']",
+              "actions": [
+                {
+                  "name": "Filter_DocumentExtension",
+                  "type": "Condition",
+                  "expression": "contains(createArray('pdf','docx','doc','xlsx','xls'), toLower(items('ForEach_Version')?['FileExtension']))",
+                  "ifTrue": [
+                    {
+                      "name": "Append_DiscoveredFile",
+                      "type": "AppendToArrayVariable",
+                      "variable": "DiscoveredFiles",
+                      "value": {
+                        "vertical": "@{items('ForEach_WorklistItem')?['vertical']}",
+                        "linked_entity_type": "@{items('ForEach_WorklistItem')?['sf_type']}",
+                        "linked_entity_id": "@{items('ForEach_WorklistItem')?['linked_entity_sf_id']}",
+                        "content_document_id": "@{items('ForEach_Document')?['ContentDocumentId']}",
+                        "content_version_id": "@{items('ForEach_Version')?['Id']}",
+                        "title": "@{items('ForEach_Version')?['Title']}",
+                        "file_name": "@{items('ForEach_Version')?['PathOnClient']}",
+                        "extension": "@{items('ForEach_Version')?['FileExtension']}",
+                        "version_number": "@{items('ForEach_Version')?['VersionNumber']}",
+                        "size_bytes": "@{items('ForEach_Version')?['ContentSize']}"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "HTTP_DiscoverWebhook",
+      "type": "HTTP",
+      "method": "POST",
+      "uri": "@{concat(parameters('FN_BASE'), '/intake-salesforce-files?action=discover-webhook')}",
+      "headers": { "Content-Type": "application/json", "X-PA-Webhook-Secret": "@{parameters('LCC_PA_WEBHOOK_SECRET')}" },
+      "batching": "Slice DiscoveredFiles into batches of 200 (Do-until with take()/skip()) — one POST per slice.",
+      "body": {
+        "batch_id": "@{concat('sf-files-', utcNow())}",
+        "files": "@take(skip(variables('DiscoveredFiles'), variables('Offset')), 200)"
+      },
+      "note": "Edge maps each file -> sf_files 'discovered' row, dedup on content_version_id, routes by item.vertical. Returns discovered/skipped_existing/skipped_invalid."
+    },
+    {
+      "name": "ForEach_NewFile_MoveBytes",
+      "type": "Foreach",
+      "foreach": "@variables('DiscoveredFiles')",
+      "concurrency": 3,
+      "note": "For each newly-discovered file: read VersionData bytes and POST them to file-content. (Skip ids the discover-webhook reported as skipped_existing.)",
+      "actions": [
+        {
+          "name": "SF_GetVersionData",
+          "type": "HTTP",
+          "method": "GET",
+          "uri": "@{concat('/services/data/v60.0/sobjects/ContentVersion/', items('ForEach_NewFile_MoveBytes')?['content_version_id'], '/VersionData')}",
+          "authorization": "@parameters('SALESFORCE_CONNECTION')",
+          "note": "Or use the Salesforce 'Get file content' connector action."
+        },
+        {
+          "name": "Compose_Base64",
+          "type": "Compose",
+          "input": "@base64(body('SF_GetVersionData'))"
+        },
+        {
+          "name": "HTTP_FileContent",
+          "type": "HTTP",
+          "method": "POST",
+          "uri": "@{concat(parameters('FN_BASE'), '/intake-salesforce-files?action=file-content')}",
+          "headers": { "Content-Type": "application/json", "X-PA-Webhook-Secret": "@{parameters('LCC_PA_WEBHOOK_SECRET')}" },
+          "body": {
+            "vertical": "@{items('ForEach_NewFile_MoveBytes')?['vertical']}",
+            "content_version_id": "@{items('ForEach_NewFile_MoveBytes')?['content_version_id']}",
+            "file_base64": "@{outputs('Compose_Base64')}"
+          },
+          "runAfterPolicy": "Configure run after Succeeded/Failed; append failures to a Failures array (never abort the batch).",
+          "note": "Edge verifies sha256 (mismatch->422) + 15MB cap (over->413; use ?action=upload-url for large files), stores bytes, flips row to stored/queued. Idempotent on content_version_id."
+        }
+      ]
+    }
+  ],
+  "extraction": "Automatic — the existing sf-files-extract-queued-hourly cron drains extraction_status='queued' via ?action=stage-queued -> /api/intake/stage-om. No PA action.",
+  "retired_actions": {
+    "note": "?action=discover and ?action=fetch (server-side Connected-App sweep) return HTTP 410. The org cannot provision a Connected App; do NOT use SF_CLIENT_ID/SF_CLIENT_SECRET. Salesforce access is PA-only.",
+    "doctrine": "SALESFORCE_LCC_INGESTION_PLAN.md section 2; docs/audits/ROLLOUT_STATUS.md 2026-07-31 correction."
+  }
+}
