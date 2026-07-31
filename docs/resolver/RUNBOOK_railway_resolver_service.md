@@ -64,6 +64,17 @@ All optional — the service has safe defaults. Set these on the service:
 | `RESOLVER_CORPUS_BUCKET` | `entity-resolution` | (default) Storage bucket W4.1 writes to. |
 | `RESOLVER_CORPUS_PATH` | `w4_1/labeled_pairs.jsonl` | (default) object path. |
 
+> **Band override caveat (2026-07-31):** `RESOLVER_AUTO_LINK=0.9` /
+> `RESOLVER_AUTO_REJECT=0.1` are SET on the service — but session-33 verification
+> found these env vars are **dead config**: config.py reads them, yet /match and
+> /train use the MODEL's trained bands (`fs.auto_link`), never the settings
+> values. So the live bands are whatever the last /train calibrated (0.005 as of
+> 2026-07-31 — non-transferable to live populations, the W4.3 finding). This is
+> tolerable ONLY because nothing consumes /match in production yet. **W4.4 must
+> either wire the env override as a floor/clamp or delete the dead config, plus
+> add the calibration band floor** — do not point any consumer at /match bands
+> before that lands.
+
 > ⚠️ **Do not copy env from `cms-ingestion`/`public-record-ingest`** (the W3.1b footgun —
 > those point `SUPABASE_URL` at the wrong project). This service's `SUPABASE_URL` is only
 > the **Storage** host for the corpus and is read-only; it needs no domain DB creds at all.
