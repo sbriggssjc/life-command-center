@@ -907,3 +907,68 @@ export async function getSalesforceOwnersByIds(ids, sobject = 'Account', ownerIn
   }
   return { ok: true, owners };
 }
+
+// ============================================================================
+// Multi-signal owner lookup (Phase 2) — the reconciliation-engine feeder.
+// ----------------------------------------------------------------------------
+// The flow's upgraded `owners_by_ids` op returns MULTIPLE ownership signals per account,
+// keyed by source, in one call:
+//   { ok:true, operation:"owners_by_ids", signals: {
+//       "sf_task":        [ {AccountId, OwnerId, Owner:{Name}, LastModifiedDate}, ... ],
+//       "sf_opportunity": [ {AccountId, OwnerId, Owner:{Name}, LastModifiedDate}, ... ]
+//   }}
+// Task is queried by Task.AccountId (auto-populated from the account OR the contact on the
+// task) so contact-logged activity is captured. Opportunity is the explicit deal owner.
+// Back-compat: a flat `owners`/`records` array (old flow) is treated as sf_task.
+//
+// Returns { ok:true, signals:[{sf_id, sf_owner_id, owner_name, source, observed_at}] },
+// deduped to the most-recent row per (sf_id, source). Never throws.
+// ============================================================================
+export async function getSalesforceOwnerSignals(ids, ownerIn = null) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const clean = Array.from(new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((s) => String(s || '').trim())
+      .filter((s) => /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(s))
+  ));
+  if (!clean.length) return { ok: true, signals: [] };
+
+  const result = await callSfLookupFlow({ operation: 'owners_by_ids', ids: clean, owner_in: ownerIn || null });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+
+  const collected = [];
+  const pushRows = (rows, source) => {
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      const ownerName = r.OwnerName || r.ownerName
+        || (r.Owner && (r.Owner.Name || r.Owner.name))
+        || (r.User && (r.User.Name || r.User.name)) || null;
+      const sf_id = r.AccountId || r.accountId || r.WhatId || r.whatId || r.Id || r.id || null;
+      const sf_owner_id = r.OwnerId || r.ownerId || r.UserId || r.userId
+        || (r.Owner && (r.Owner.Id || r.Owner.id)) || null;
+      if (sf_id && sf_owner_id) {
+        collected.push({ sf_id, sf_owner_id, owner_name: ownerName, source,
+          observed_at: r.LastModifiedDate || r.lastModifiedDate || r.SystemModstamp || '' });
+      }
+    }
+  };
+
+  if (result.signals && typeof result.signals === 'object' && !Array.isArray(result.signals)) {
+    for (const [source, rows] of Object.entries(result.signals)) pushRows(rows, source);
+  } else {
+    pushRows(result.signals || result.owners || result.records, 'sf_task'); // back-compat
+  }
+
+  // Dedupe to the most recent row per (account, source).
+  collected.sort((a, b) => String(b.observed_at).localeCompare(String(a.observed_at)));
+  const seen = new Set();
+  const signals = [];
+  for (const s of collected) {
+    const k = `${s.sf_id}|${s.source}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    signals.push(s);
+  }
+  return { ok: true, signals };
+}

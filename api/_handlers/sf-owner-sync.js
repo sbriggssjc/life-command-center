@@ -18,16 +18,17 @@
 // Feature-gated on SF_LOOKUP_WEBHOOK_URL (isSalesforceConfigured). Never throws.
 // ============================================================================
 import { opsQuery } from '../_shared/ops-db.js';
-import { isSalesforceConfigured, getSalesforceOwnersByIds } from '../_shared/salesforce.js';
+import { isSalesforceConfigured, getSalesforceOwnerSignals } from '../_shared/salesforce.js';
 
 const BATCH = 150; // keep SOQL IN() + URL length safe
 
-// SF Id key-prefix → sObject. 001=Account, 006=Opportunity.
-function sobjectForId(sfId) {
-  const p = String(sfId || '').slice(0, 3);
-  if (p === '006') return 'Opportunity';
-  return 'Account'; // 001 and anything else we treat as Account
-}
+// Reconciliation weight per Salesforce signal source (keep in sync with the engine doc).
+const SOURCE_WEIGHTS = {
+  sf_opportunity: 1.0,   // explicit deal owner
+  sf_task: 0.8,          // task assignee on the account (WhatId/WhoId via Task.AccountId)
+  sf_account_team: 0.6,
+  sf_campaign: 0.5,
+};
 
 function chunk(arr, n) {
   const out = [];
@@ -76,46 +77,50 @@ export async function handleSfOwnerSync(req, res) {
     }
     if (!sfIds.length) return res.status(200).json({ ok: true, sf_ids: 0, note: 'no linked deals' });
 
-    // Split by sObject and query owners in batches.
-    const byObj = { Account: [], Opportunity: [] };
-    for (const id of sfIds) byObj[sobjectForId(id)].push(id);
-
-    const ownerMap = []; // [{sf_id, sf_owner_id, owner_name}]
+    // Pull ALL Salesforce ownership signals per account in one flow call, batched.
+    const allSignals = []; // [{sf_id, sf_owner_id, owner_name, source, observed_at}]
     const errors = [];
-    for (const sobject of ['Account', 'Opportunity']) {
-      for (const batch of chunk(byObj[sobject], BATCH)) {
-        const r = await getSalesforceOwnersByIds(batch, sobject, ownerIn);
-        if (!r.ok) { errors.push({ sobject, reason: r.reason, detail: r.detail || null }); continue; }
-        for (const o of r.owners) ownerMap.push(o);
-      }
+    for (const batch of chunk(sfIds, BATCH)) {
+      const r = await getSalesforceOwnerSignals(batch, ownerIn);
+      if (!r.ok) { errors.push({ reason: r.reason, detail: r.detail || null }); continue; }
+      for (const s of r.signals) allSignals.push(s);
     }
 
-    const resolved = ownerMap.filter((o) => o.sf_owner_id || o.owner_name).length;
+    // Group signals by source; each source carries a reconciliation weight.
+    const bySource = {};
+    for (const s of allSignals) (bySource[s.source] ||= []).push(s);
+
     if (dry) {
-      // Distinct owner distribution — shows whether deal-linked accounts are owned
-      // by real reps or a generic integration user (why entities_written can be 0).
-      const byOwner = new Map();
-      for (const o of ownerMap) {
-        const key = `${o.sf_owner_id || '?'}|${o.owner_name || '?'}`;
-        byOwner.set(key, (byOwner.get(key) || 0) + 1);
+      const owner_breakdown = {};
+      for (const [source, rows] of Object.entries(bySource)) {
+        const byOwner = new Map();
+        for (const o of rows) {
+          const key = `${o.sf_owner_id || '?'}|${o.owner_name || '?'}`;
+          byOwner.set(key, (byOwner.get(key) || 0) + 1);
+        }
+        owner_breakdown[source] = [...byOwner.entries()]
+          .map(([k, count]) => { const [sf_owner_id, owner_name] = k.split('|'); return { sf_owner_id, owner_name, count }; })
+          .sort((a, b) => b.count - a.count);
       }
-      const owner_breakdown = [...byOwner.entries()]
-        .map(([k, count]) => { const [sf_owner_id, owner_name] = k.split('|'); return { sf_owner_id, owner_name, count }; })
-        .sort((a, b) => b.count - a.count);
       return res.status(200).json({
         ok: true, dry: true, sf_ids: sfIds.length,
-        accounts: byObj.Account.length, opportunities: byObj.Opportunity.length,
-        owners_returned: ownerMap.length, owners_resolved: resolved,
+        signals_returned: allSignals.length,
+        by_source: Object.fromEntries(Object.entries(bySource).map(([k, v]) => [k, v.length])),
         owner_breakdown, errors,
       });
     }
 
-    // Record SF-Task owners as EVIDENCE (weight 0.8) into the reconciliation engine,
-    // then fold in the pure-DB feeders (outbound email) and reconcile every deal to a
-    // best-answer owner with confidence + provenance. Manual overrides are preserved.
-    const sfEvidence = await opsQuery('POST', 'rpc/lcc_record_sf_owner_evidence', {
-      p_map: ownerMap, p_source: 'sf_task', p_weight: 0.8,
-    }).catch((e) => ({ error: String(e?.message || e) }));
+    // Record each SF signal as weighted evidence, then fold in the pure-DB feeders
+    // (outbound email) and reconcile every deal. Manual overrides are preserved.
+    const sfEvidence = {};
+    for (const [source, rows] of Object.entries(bySource)) {
+      const map = rows.map((s) => ({ sf_id: s.sf_id, sf_owner_id: s.sf_owner_id, owner_name: s.owner_name }));
+      const weight = SOURCE_WEIGHTS[source] ?? 0.5;
+      const r = await opsQuery('POST', 'rpc/lcc_record_sf_owner_evidence', {
+        p_map: map, p_source: source, p_weight: weight,
+      }).catch((e) => ({ error: String(e?.message || e) }));
+      sfEvidence[source] = r?.data ?? r;
+    }
 
     const reconcile = await opsQuery('POST', 'rpc/lcc_reconcile_owners_run', {
       p_min_confidence: 0.55, p_write: true,
@@ -123,9 +128,9 @@ export async function handleSfOwnerSync(req, res) {
 
     return res.status(200).json({
       ok: true, sf_ids: sfIds.length,
-      accounts: byObj.Account.length, opportunities: byObj.Opportunity.length,
-      owners_returned: ownerMap.length,
-      sf_evidence: sfEvidence?.data ?? sfEvidence,
+      signals_returned: allSignals.length,
+      by_source: Object.fromEntries(Object.entries(bySource).map(([k, v]) => [k, v.length])),
+      sf_evidence: sfEvidence,
       reconcile: reconcile?.data ?? reconcile,
       errors,
     });

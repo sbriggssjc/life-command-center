@@ -47,34 +47,39 @@ Add these three actions inside it, in order:
 2. **Data Operation → Join** — rename **Join_Ids**
    - **From:** `@body('Select_QuotedIds')`
    - **Join with:** `,`
-3. **Salesforce → Execute a SOQL query** — rename **SoqlOwners**
-   - **Query:** (a **Join** action's result is referenced with `body(...)`, not `outputs(...)`)
+3. **Salesforce → Execute a SOQL query** — **SoqlOwners** (the Task signal)
+   - **Query:** query by **`Task.AccountId`** (auto-populated from the account OR the contact
+     on the task — catches contact-logged activity that `WhatId` alone misses):
      ```
-     SELECT WhatId, OwnerId, Owner.Name, LastModifiedDate FROM Task WHERE WhatId IN (@{body('Join_Ids')}) AND OwnerId IN (@{triggerBody()?['owner_in']}) ORDER BY LastModifiedDate DESC
+     SELECT AccountId, OwnerId, Owner.Name, LastModifiedDate FROM Task WHERE AccountId IN (@{body('Join_Ids')}) AND OwnerId IN (@{triggerBody()?['owner_in']}) ORDER BY LastModifiedDate DESC
      ```
-     `WhatId` = the account/opportunity the task is on (LCC passes account ids in `ids`);
-     `owner_in` = the team's user ids, already quoted, passed by LCC. Most-recent first so
-     LCC keeps the latest task's owner per account.
+4. **Salesforce → Execute a SOQL query** — add **SoqlOpps** (the Opportunity signal —
+   the explicit deal owner, highest weight):
+   ```
+   SELECT AccountId, OwnerId, Owner.Name, LastModifiedDate FROM Opportunity WHERE AccountId IN (@{body('Join_Ids')}) AND OwnerId IN (@{triggerBody()?['owner_in']}) AND IsClosed = false ORDER BY LastModifiedDate DESC
+   ```
 
-### A3. Response
-Add **Response** (Request → Response) — rename **Respond_owners**:
-- **Status Code:** `200`
-- **Headers:** `Content-Type` = `application/json`
-- **Body:**
+### A3. Response (multi-signal)
+Set **Respond_owners** Body to return each signal array keyed by source:
+- **Status Code:** `200`, Header `Content-Type: application/json`, Body:
   ```json
-  {"ok": true, "operation": "owners_by_ids", "owners": "@outputs('SoqlOwners')?['body']?['records']"}
+  {"ok": true, "operation": "owners_by_ids", "signals": {"sf_task": "@outputs('SoqlOwners')?['body']?['records']", "sf_opportunity": "@outputs('SoqlOpps')?['body']?['records']"}}
   ```
+  LCC reads `AccountId` per row, maps `OwnerId`→teammate, records each source as weighted
+  evidence (Opportunity 1.0, Task 0.8), and reconciles. Empty arrays are fine.
 
 ### A4. Error path (match the flow's PostDeadLetter/Terminate convention)
-Optional but recommended: on **SoqlOwners**, **Configure run after** → also add a **Response**
-with run-after **has failed / timed out**, Status `200`, body
+Optional: on the SOQL actions, **Configure run after** → add a **Response** with run-after
+**has failed / timed out**, Status `200`, body
 `{"ok": false, "reason": "flow_error", "operation": "owners_by_ids"}`.
 
 **Save.** The trigger URL is unchanged, so `SF_LOOKUP_WEBHOOK_URL` stays the same — no env change.
 
-> Only `Id` and `OwnerId` are strictly needed; LCC maps the 005… OwnerId to the right teammate
-> via each user's `salesforce_owner_id` (already set for all four). `Owner.Name` is included as
-> a convenience and is used as a fallback match.
+> Only `AccountId` and `OwnerId` are strictly needed; LCC maps the 005… OwnerId to the right
+> teammate via each user's `salesforce_owner_id`. `Owner.Name` is a convenience fallback.
+> Back-compat: if you only do the `AccountId` change and keep the old flat `owners` response,
+> LCC still reads it (as the Task signal) — the multi-signal `signals` object just adds the
+> Opportunity source.
 
 ---
 
