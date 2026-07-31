@@ -1,6 +1,6 @@
 {
   "bands": {
-    "auto_link": 0.005,
+    "auto_link": 0.5,
     "auto_reject": 0.0008
   },
   "comparisons": {

@@ -175,7 +175,10 @@ def train(req: TrainRequest):
     fs = train_model(train_pairs, req.model)
     fs.meta["corpus"] = source
 
-    report = calibration_report(fs, test_pairs, target_precision=req.target_precision)
+    band_floor = req.band_floor if req.band_floor is not None else settings.auto_link_band_floor
+    report = calibration_report(
+        fs, test_pairs, target_precision=req.target_precision, band_floor=band_floor
+    )
     fs.auto_link = report["bands"]["auto_link"]
     fs.auto_reject = report["bands"]["auto_reject"]
 
@@ -195,6 +198,8 @@ def train(req: TrainRequest):
         n_train_pairs=len(train_pairs),
         n_test_pairs=len(test_pairs),
         bands={"auto_link": fs.auto_link, "auto_reject": fs.auto_reject},
+        band_floor=report["band_floor"],
+        auto_link_floored=report["auto_link_floored"],
         calibration=report_summary,
         persisted_path=persisted,
     )

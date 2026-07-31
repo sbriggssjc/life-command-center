@@ -127,11 +127,12 @@ done
 
 - `corpus` in the response must read `storage://entity-resolution/...` (NOT `fixtures`) —
   that confirms it trained on the real set, not the stub.
-- The trained models persist to the service's model dir. **Note:** Railway's filesystem is
-  ephemeral across redeploys — a redeploy re-bakes the fixture-trained defaults. For
-  durable retrained models either (a) re-run `/train` after each deploy (cheap; it's the
-  W4.4 nightly loop anyway), or (b) mount a Railway volume at `RESOLVER_MODEL_DIR` and set
-  that env. The W4.4 nightly `/train` makes (a) the intended steady state.
+- The trained models persist to the service's model dir. **Railway's filesystem is
+  ephemeral across redeploys** — a redeploy re-bakes the committed defaults. The **W4.4
+  nightly loop is the steady-state fix**: it re-runs `/train` every night (see §6), so a
+  redeploy self-heals on the next tick. No manual retrain-after-deploy is needed. (A
+  Railway volume at `RESOLVER_MODEL_DIR` is an optional alternative but unnecessary with
+  the loop running.)
 3. Copy the fresh calibration into the repo: re-run
    `python resolver/scripts/gen_models_and_calibration.py` against the same corpus (point
    `SUPABASE_URL`/`RESOLVER_STORAGE_KEY` locally) and commit the updated
@@ -147,14 +148,57 @@ Per the rollout plan — the resolver only scores; these are the writer paths:
   (`model=owner_sf`), auto-links ≥ auto-link band via the **existing** `admin.js:7396`
   sf-link attach path with `source='splink_v1'`, auto-rejects ≤ reject band, routes the
   middle band to the W3.4 review lane.
-- **W4.4** — register `splink_v1` in `field_source_priority`; nightly append new
-  `entity_match_labels` → corpus → weekly `/train` + recalibration; point the ORE
-  candidate scorer at `/match` (fail-closed to `needs_review` if the service is down —
-  never fail-open to a merge).
+- **W4.4 — SHIPPED (2026-07-31).** (1) `splink_v1` + `sf_link_review_human` registered in
+  `field_source_priority` (the flush preserves them as first-class sources; 3,442+51
+  historical rows re-attributed). (2) The **nightly retrain loop** (§7). (3) The **ORE
+  candidate scorer** gates auto-merges on `/match` (fail-closed to `needs_review` when the
+  service is down — never fail-open to a merge; `ORE_USE_RESOLVER=1` + `RESOLVER_URL`). (4)
+  A **calibration band floor** (0.5) so a corpus with easy negatives can't produce a
+  sub-0.5 auto-link band; the splink training smoke-test is retired (count estimator is the
+  sole, exact estimator — see resolver/README.md).
 
 ---
 
-## 6. Troubleshooting
+## 6. Nightly retrain loop (W4.4 — steady state)
+
+`w44-retrain-tick` (edge fn on **Dialysis_DB**) runs nightly via pg_cron
+(`w44-resolver-retrain-nightly`, `30 7 * * *`): refresh corpus (`w41-corpus-export?action=export`)
+→ POST `/train` for `owner_owner`/`owner_sf`/`contact` (`use_storage`, `target_precision:0.995`)
+→ record + alarm via the ops RPC `lcc_record_resolver_retrain`. Sequenced: a failed corpus
+refresh does **not** train. This also heals the ephemeral-model problem after any redeploy.
+
+It writes each night's calibration to `resolver_calibration_history` (LCC Opps) and opens
+`lcc_health_alerts`:
+- `resolver_calibration_drift` (warn) — holdout precision drops >1pt vs the model's prior
+  run, an unexpected trainer, or the **auto_link band hit the floor** (= corpus negatives
+  still too easy, the transfer gap resurfacing → the corpus needs harder negatives).
+- `resolver_retrain_failure` (error) — the corpus refresh or any `/train` failed (loud;
+  never silent). Auto-resolves on a clean run.
+
+**Operator steps to make the loop live** (one-time, mirrors how w41-corpus-export /
+intake-salesforce-files were deployed):
+1. **Deploy the edge fn** — `supabase functions deploy w44-retrain-tick` (or via the
+   Supabase MCP) to the **Dialysis_DB** project (`zqzrriwuavgrquhisnoa`). Until then the
+   nightly POST 404s harmlessly and the tick opens one deduped `resolver_retrain_failure`
+   alert.
+2. **Set `RESOLVER_URL`** on the Dialysis_DB edge secrets (the Railway resolver base URL,
+   e.g. `https://gracious-radiance-production-eeaf.up.railway.app`). Until set, `/train`
+   no-ops and the loop alerts. Optional: `RESOLVER_TARGET_PRECISION` (default `0.995`).
+3. **Flip the flag** — set `feature_flags_registry.RESOLVER_RETRAIN_LOOP.state='on'` once
+   `RESOLVER_URL` is configured.
+4. **Force-run once** to verify: `POST …/functions/v1/w44-retrain-tick` with the
+   `X-PA-Webhook-Secret`; the response should show `corpus_refreshed:true` and each model
+   with `precision`/`auto_link`, and `resolver_calibration_history` should gain 3 rows.
+
+**Regenerate the committed report/models after the loop is live** — with
+`SUPABASE_URL`/`RESOLVER_STORAGE_KEY` set locally, run
+`python resolver/scripts/gen_models_and_calibration.py` and commit the refreshed
+`docs/resolver/CALIBRATION.md` + `resolver/fixtures/model_*.json`. The nightly `/train`
+applies the band floor automatically at runtime.
+
+---
+
+## 7. Troubleshooting
 
 - **`/health` shows `libpostal:false`** → the libpostal build stage failed or the data
   dir didn't copy. Rebuild; check the build log for the `make install` step. The service

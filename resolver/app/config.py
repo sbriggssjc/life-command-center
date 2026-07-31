@@ -45,6 +45,11 @@ class Settings:
     # them per model from the W4.1 test split.
     auto_link_threshold: float = _f("RESOLVER_AUTO_LINK", 0.92)
     auto_reject_threshold: float = _f("RESOLVER_AUTO_REJECT", 0.20)
+    # Hard floor for the calibrated auto-link band (W4.4 defect 1). The threshold sweep
+    # may never place auto_link below this — a sub-floor "safe" band means the corpus
+    # negatives are too easy (calibration-transfer gap), not that the band is safe. When
+    # the floor binds, the nightly retrain loop opens a drift alert. Default 0.5.
+    auto_link_band_floor: float = _f("RESOLVER_AUTO_LINK_BAND_FLOOR", 0.5)
 
     # --- Supabase Storage (read-only, for /train corpus fetch) ---
     supabase_url: Optional[str] = os.environ.get("SUPABASE_URL")

@@ -7,6 +7,20 @@
 > Built by the `w41-corpus-export` edge function (Dialysis_DB) — re-runnable,
 > deterministic (seeded shuffle + FNV split hash), idempotent (x-upsert).
 
+> **W4.4 — corpus v2+ now accrues, refreshed NIGHTLY.** The `w44-retrain-tick`
+> nightly loop (W4.4) re-runs `w41-corpus-export?action=export` before each `/train`,
+> so every new `entity_match_labels` row flows into the corpus automatically. The
+> most important new inflow is the **`sf_link_review` seeder** — each Decision-Center
+> SF-link verdict Scott works appends a `same_party`/`distinct` label (the human-
+> adjudicated HARD negatives). These are the fix for the W4.3 calibration-transfer gap:
+> the v1 corpus's generated negatives were too *easy* (same-state/same-city with a
+> rare-token guard), so the swept auto-link band came out at 0.005 (see CALIBRATION.md).
+> As the hard negatives accrue, the swept band should rise on its own; until it clears
+> the 0.5 band floor, the nightly loop keeps that floor and raises a
+> `resolver_calibration_drift` alert (= still too few hard negatives). The pair count /
+> sha below are the v1 snapshot; re-read `entity-resolution/w4_1/corpus_report.json` for
+> the current export.
+
 ## Headline numbers
 
 | Metric | Value |
