@@ -205,9 +205,16 @@ the "BD copilot" heart of what Scott wants, and it's ~80% wiring of machinery we
   single "Next best action" hero atop Overview (tone-colored, one CTA reusing `_entityAcquireContact` /
   `_entityDraftAndLog`). Pure function — **unit-tested (8/8 ladder cases pass)** against the live file.
 
+- **SF task reschedule (shipped)** — `draft_and_log` now opens the **next SF task** at the advanced
+  `next_touch_due` (`createSalesforceTask` status:'Open', idempotent on `dlnext:<cadence>:<due>`),
+  completing the "reschedule the open task in the LCC **and** Salesforce" ask. Flag-gated (no-ops until
+  the PA `create_opportunity` case honors `status:'Open'`). Full analysis: `closed-loop-reconciliation.md`.
+
 **Still open (next steps):**
-- **Closed-loop reconciliation** — make sent-capture (`handleOutlookSent`) the source of truth vs.
-  `draft_and_log`'s optimistic pre-log; add the **SF task reschedule** op (draft_and_log advances the LCC
-  cadence + logs a completed SF task, but does not yet reschedule the *next* SF task).
+- **Advance-ownership migration (test-gated)** — make the Outlook sent-capture the single source of truth
+  vs. `draft_and_log`'s optimistic draft-time advance. Confirmed a live cadence-advance **trigger** on
+  `activity_events`, but the sent activity anchors to the **deal** entity while the prospecting cadence is
+  keyed to the **contact** — so a blind flip would leave some cadences un-advanced. Needs a real Outlook
+  send to verify anchor reach before flipping. Detail: `closed-loop-reconciliation.md`.
 - **Data-quality note** — `finances` edges are polluted with brokerage firms (CBRE/JLL/Cushman appear as
   "financed_by"); the Relationships lender section inherits that noise. Upstream graph-labeling fix (P2).
