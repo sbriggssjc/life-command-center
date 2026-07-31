@@ -109,7 +109,7 @@ Build domain-generic where possible; branch only on the domain-specific nuances.
 | P0.6 | Portfolio owner audit | **DONE** (98% were unresolved; now 1,800+) |
 | P1 | Second contact/owner sidebar + party-link chips + move contact fns off property | **OPEN** |
 | P2 | Property/Deal Dossier (format + local-AI gen + PDF; replace ChatGPT/Claude brief links) | **OPEN** |
-| P3.1 | Overview: pipeline-name default; Actions buttons | **OPEN** |
+| P3.1 | Overview: **pipeline-name header default** (“Fresenius – Woodland Hills, CA”) | **DONE** (title). Actions-buttons audit = OPEN |
 | **P3.2** | Deal History: party rows CLICKABLE (Seller/Buyer/Listing+Procuring Broker) | **DONE** (chips). Developer/loan origin SKIPPED — 0 graph coverage; lives in OM/correspondence (P2 extraction) |
 | **P3.3** | Ownership & CRM: **Current Owner card** (clickable chip + provenance + verified date) | **DONE** (owner card). Prospecting status + developer chain + move contact fns off = OPEN |
 | P3.4 | Activity Log → data ingestion/reconciliation lineage only | **OPEN** |

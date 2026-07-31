@@ -548,7 +548,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
 
     // Update header with real data (page_title or fallback to tenant/address)
     if (synthProperty) {
-      const realTitle = synthProperty.page_title || synthProperty.facility_name || fallback.tenant_operator || fallback.agency || synthProperty.address || fallback.address || '(Unknown)';
+      // P3.1 — prefer the familiar pipeline name ("Fresenius – Woodland Hills, CA"); keep the
+      // long legal/facility name as the subtitle so nothing is lost.
+      const legalName = synthProperty.page_title || synthProperty.facility_name || fallback.tenant_operator || fallback.agency || null;
+      const pipelineName = _udPipelineName(synthProperty, fallback, db);
+      const realTitle = pipelineName || legalName || synthProperty.address || fallback.address || '(Unknown)';
       // UI Phase 4: refine this level's breadcrumb crumb to the loaded title.
       if (typeof _detailStackSetLabel === 'function' && (propertyId || ids.property_id)) {
         _detailStackSetLabel({ kind: 'prop', db, id: propertyId || ids.property_id }, realTitle);
@@ -559,6 +563,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       // "Washington, DC" twice in a row.
       const loc2ForSubtitle = (loc2 && realTitle && realTitle.toLowerCase().includes(loc2.toLowerCase())) ? '' : loc2;
       const subtitleSuffix = synthProperty.county ? (loc2ForSubtitle ? ' · ' : '') + esc(synthProperty.county) + ' County' : '';
+      // P3.1 — when the title is the clean pipeline name, surface the full legal/facility name as
+      // the subtitle (the pipeline name already carries city/state).
+      const _usedPipeline = !!pipelineName && realTitle === pipelineName;
+      const _subtitleHtml = (_usedPipeline && legalName && legalName.toLowerCase() !== String(pipelineName).toLowerCase())
+        ? `<div class="detail-subtitle">${esc(legalName)}</div>`
+        : ((loc2ForSubtitle || subtitleSuffix) ? `<div class="detail-subtitle">${esc(loc2ForSubtitle)}${subtitleSuffix}</div>` : '');
       // "Not a Lead" button for dia-clinic records (dismiss from clinic lead pipeline)
       const dismissBtn = (db === 'dia' && (fallback.clinic_id || fallback.medicare_id))
         ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
@@ -567,7 +577,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         <div class="detail-header-info">
           <div style="flex:1">
             <div class="detail-title">${esc(realTitle)}</div>
-            ${(loc2ForSubtitle || subtitleSuffix) ? `<div class="detail-subtitle">${esc(loc2ForSubtitle)}${subtitleSuffix}</div>` : ''}
+            ${_subtitleHtml}
             ${_udKeyFields(db, synthProperty, ownership)}
           </div>
           ${dismissBtn}
@@ -608,6 +618,32 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
 }
 
 /** Key fields bar under the header */
+// P3.1 — the familiar pipeline display name: "[Operator] – [City], [State]" (dia) /
+// "[Agency] – [City], [State]" (gov), matching how deals are named across the pipeline.
+// Returns null when the pieces aren't available (caller falls back to the legal/facility name).
+// Domain-generic: only the operator-vs-agency source differs.
+function _udPipelineName(prop, fb, db) {
+  prop = prop || {}; fb = fb || {};
+  const city = prop.city || fb.city || fb.property_city || null;
+  const state = prop.state || fb.state || fb.property_state || null;
+  if (!city || !state) return null;
+  let op = null;
+  if (db === 'gov') {
+    op = prop.agency_short || fb.tenant_agency || fb.agency || null;
+  } else {
+    let det = null;
+    try { det = (typeof _udDetectOperator === 'function') ? _udDetectOperator(prop.rankings || fb.rankings || prop) : null; } catch (_e) { det = null; }
+    const detLabel = (det && det.label && ['unknown','independent','—',''].indexOf(String(det.label).toLowerCase()) === -1) ? det.label : null;
+    op = detLabel
+      || (typeof normalizeOperatorName === 'function' ? normalizeOperatorName(prop.operator_name || fb.operator_name || prop.chain_organization || fb.chain_organization || '') : null)
+      || prop.operator_name || fb.operator_name || prop.chain_organization || fb.chain_organization || null;
+  }
+  // Clean the operator label to the familiar short form ("Fresenius (FMC)" -> "Fresenius").
+  op = op && String(op).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!op || op.toLowerCase() === 'unknown') return null;
+  return `${op} – ${city}, ${state}`;
+}
+
 function _udKeyFields(db, prop, own) {
   let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
   if (prop.address) html += `<div><span class="t-muted3">Address:</span> <span class="t-body">${esc(prop.address)}</span></div>`;

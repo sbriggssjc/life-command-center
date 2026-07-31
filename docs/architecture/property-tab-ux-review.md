@@ -300,6 +300,14 @@ makes the owner chip a gateway to their whole book.
 **Remaining P3.3:** the rep backfill (above), the developer→owner chain (blocked on 0-coverage `developed`
 data), and moving contact/call actions fully onto the contact sidebar (P1 sidebar dependency).
 
+### P3.1 pipeline-name header default (DONE, 2026-07-31)
+The property header defaulted to the long legal/tenant name (“Bio-Medical Applications of Delaware, Inc.
+dba Fresenius Kidney Care Woodland Hills…”). New `_udPipelineName(prop, fb, db)` builds the familiar
+pipeline name **“[Operator] – [City], [State]”** (dia: cleaned chain label via `_udDetectOperator`, e.g.
+“Fresenius – Woodland Hills, CA”; gov: **“[Agency] – [City], [State]”**) and uses it as the header title;
+the full legal/facility name drops to the **subtitle** so nothing is lost. Falls back to the legal name
+when operator/city/state aren't all present. Domain-generic (only the operator-vs-agency source differs).
+
 **Domain note (Scott, 2026-07-31):** this whole property-tab design was reviewed on **dialysis** but
 applies to **government** and future net-lease subspecialties too — build the shared shell once; branch
 only on lease/operational nuances (gov: GSA lease numbers, agency credit, FRPP/OPM, cap-rate framework;
