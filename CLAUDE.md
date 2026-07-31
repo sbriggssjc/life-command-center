@@ -347,6 +347,16 @@ looks identical to a healthy quiet pipeline* — this table is the single source
 - **Provenance / self-learning loop:** `docs/architecture/data_quality_self_learning_loop.md`.
 - **Consumption-layer doctrine (long form):** `audit/data-flow-2026-05-30/CONSUMPTION_LAYER_DOCTRINE_2026-06-23.md`.
 - **Ownership Resolution Engine:** government-lease `docs/OWNERSHIP_RESOLUTION_ENGINE.md`.
+- **Property-owner subsystem + SF-as-a-source doctrine:** `docs/architecture/property-owner-subsystem.md`
+  + `docs/architecture/property-owner-source-authority-and-doctrine.md`. **Point person ≠ property owner:**
+  `lcc_entity_owner_override.owner_user_id` is the POINT PERSON (lcc_user) who works the deal and drives
+  My Work / Team Queue scoping (`v_my_work_scoped`); the PROPERTY owner (which entity owns the building)
+  lives in the SEPARATE `lcc_property_owner`. Never feed owner entities through the point-person engine.
+  Salesforce is one reconcilable source (authority ladder: manual>deed>rel_purchase>sf_seller>rel_owns);
+  write back to SF only for direct team benefit.
+- **Access scoping (My Work / Team Queue / correspondence privacy):** `docs/architecture/access-scoping-and-my-work.md`.
+- **Deal correspondence ingestion + reconciliation:** `docs/architecture/correspondence-ingestion-design.md`.
+- **Property-tab UX review + rollout plan:** `docs/architecture/property-tab-ux-review.md`.
 - **Full per-round worklog (verbatim archive of everything trimmed here):**
   [`docs/history/CLAUDE_full_2026-07.md`](docs/history/CLAUDE_full_2026-07.md). Round-specific implementation
   logs (R5→R64, R76* ingestion, ORE phases, CONNECTIVITY, OUTREACH, UI Phases, SF-reconcile, T9d, CM) live

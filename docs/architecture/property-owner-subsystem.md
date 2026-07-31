@@ -94,6 +94,19 @@ not the landlord. Whether that's a genuine sale-leaseback or SF labeling the acc
 Salesforce data-quality question. Per doctrine LCC reconciles around SF (never writes back); if those
 should be the landlord, the fix is upstream in SF or a higher-authority feeder (deed/county).
 
+## Source authority + Salesforce doctrine (2026-07-31) — see companion doc
+Full detail in **`property-owner-source-authority-and-doctrine.md`**. Summary:
+- **SF is a source, not truth.** Authority ladder (evidence weight; recency decay on top):
+  `manual` 8 > `deed_recorded` 6 > `rel_purchase` 4 > `sf_seller` **3.5** > `rel_owns` 3.
+  `sf_seller` lowered 4.5→3.5 (migrations `20260818300000` label fix + `20260818310000` ladder),
+  handler constant `SF_SELLER_WEIGHT` synced to 3.5.
+- **`lcc_pin_property_owner(entity, owner, note)`** — human-authority override (manual weight 8, reversible).
+- **Genesis KC Development, LLC** (`d45f3645-…`) created + pinned as owner on all 8 DaVita sale-leaseback
+  listings (Scott-confirmed; the SF account had the operator, not the title entity). Snellville kept its
+  real landlord (RCG Ventures).
+- **LCC writes back to Salesforce ONLY for direct team benefit** (email/contact correction, BD marketing
+  list add, ROE territory via logged call) — never merely to sync. Governs any future SF-write feature.
+
 ## Remaining wiring
 3. **Bulk + cadence.** Re-run the feeder as new `owns`/`purchases` land (e.g. from the correspondence/
    comps pipelines); consider a scheduled sweep like the deal-correspondence backfill.

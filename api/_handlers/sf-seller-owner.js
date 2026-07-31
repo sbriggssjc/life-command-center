@@ -25,10 +25,13 @@ import { getSalesforceOpportunityAccounts, isSalesforceConfigured } from '../_sh
 
 const SYS = 'b0000000-0000-0000-0000-000000000001';
 const WS_FALLBACK = 'a0000000-0000-0000-0000-000000000001';
-// sf_seller is our authoritative pre-sale owner; > rel_owns (3) and rel_purchase (4)
-// so the client/seller wins on an open listing, while a later recorded purchase
-// (recency-weighted) can still transfer ownership after a close.
-const SF_SELLER_WEIGHT = 4.5;
+// sf_seller = the deal's Salesforce Opportunity Account: a broker-entered CRM hint,
+// NOT truth (doctrine: SF is one reconcilable source, never automatically accurate).
+// Weight 3.5 sits on the authority ladder BELOW manual (8) / deed_recorded (6) /
+// rel_purchase (4) — so a recorded purchase transfers ownership on a close and any
+// higher-authority source wins — while still resolving our own listings when it is
+// the only evidence. Keep in sync with migration 20260818310000.
+const SF_SELLER_WEIGHT = 3.5;
 
 async function recordSellerOwner(dealEntityId, accountId, accountName, ws, observedAt) {
   if (!dealEntityId || !accountId) return { ok: false, reason: 'missing_input' };
