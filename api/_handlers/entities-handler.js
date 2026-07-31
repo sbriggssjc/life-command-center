@@ -432,7 +432,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         if (hit && hit.id) {
           try {
             const po = await opsQuery('GET',
-              `lcc_property_owner?entity_id=eq.${hit.id}&select=owner_entity_id,owner_name,confidence,source&limit=1`);
+              `lcc_property_owner?entity_id=eq.${hit.id}&select=owner_entity_id,owner_name,confidence,source,resolved_at&limit=1`);
             if (po.data && po.data[0] && po.data[0].owner_name) hit.property_owner = po.data[0];
           } catch (_e) { /* best-effort */ }
         }

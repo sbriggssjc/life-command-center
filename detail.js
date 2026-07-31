@@ -408,6 +408,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         // still wins when present. See docs/architecture/property-owner-subsystem.md.
         if (ent && ent.property_owner && ent.property_owner.owner_name) {
           if (!ownership) ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+          ownership.lcc_property_owner = ent.property_owner;   // P3.3 — Current Owner card provenance
           const domainHasRealOwner = ownership.true_owner && !ownership.true_owner_is_operator;
           if (!domainHasRealOwner) {
             ownership.true_owner = ent.property_owner.owner_name;
@@ -6892,12 +6893,42 @@ window._udEnrichOwnershipSignals = _udEnrichOwnershipSignals;
 window._udOwnershipLadder = _udOwnershipLadder;
 // ============================================================================
 
+// P3.3 — Current Owner card: the reconciled PROPERTY owner (lcc_property_owner) shown
+// prominently as a clickable chip that opens the owner sidebar, with provenance +
+// last-verified. Domain-generic. Renders only when we have a resolved owner (never the
+// operator). See docs/architecture/property-owner-subsystem.md.
+function _udCurrentOwnerCard(own, db) {
+  if (!own) return '';
+  const po = own.lcc_property_owner || null;
+  const name = (po && po.owner_name)
+    || (own.true_owner && !own.true_owner_is_operator ? (own.true_owner_canonical || own.true_owner) : null)
+    || null;
+  if (!name) return '';
+  const id = (po && po.owner_entity_id) || own.owner_entity_id || null;
+  // With a resolved owner_entity_id, open it directly (entity type uses the id);
+  // else fall back to name resolution (owner type).
+  const chip = entityLink(name, id ? 'entity' : 'owner', id, db);
+  const srcMap = { sf_seller: 'Salesforce seller', manual: 'Verified (manual)',
+                   relationship_graph: 'Ownership graph', deed_recorded: 'County deed' };
+  const src = po ? (srcMap[po.source] || po.source || 'Reconciled')
+                 : (own.owner_source === 'lcc_property_owner' ? 'Reconciled' : 'Domain record');
+  const conf = (po && po.confidence != null) ? ` · ${Math.round(Number(po.confidence) * 100)}% conf` : '';
+  const when = (po && po.resolved_at) ? ` · verified ${_fmtDate(po.resolved_at)}` : '';
+  let h = '<div class="detail-section"><div class="detail-section-title">Current Owner</div>';
+  h += `<div style="font-size:15px;font-weight:600;margin-bottom:4px">${chip}</div>`;
+  h += `<div style="font-size:11px;color:var(--text3)">${esc(src)}${conf}${when}</div>`;
+  h += '</div>';
+  return h;
+}
+
 function _udTabOwnership() {
   const own = _udCache.ownership;
   const chain = _udCache.chain || [];
   const db = _udCache.db;
 
   let html = '';
+  // P3.3 — lead with the reconciled current owner (clickable to the owner sidebar).
+  html += _udCurrentOwnerCard(own, db);
 
   // If no ownership data but fallback has ownership fields, show them
   if (!own && chain.length === 0) {

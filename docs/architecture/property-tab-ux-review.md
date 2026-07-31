@@ -248,6 +248,24 @@ the history (needs the `developed` relationship joined into the deal-history dat
 row (loan broker + lender) from the `finances` relationship / deal dossier + emails. Both need a
 backend data join (the sale-row normalize carries buyer/seller/broker but not developer/lender yet).
 
+### P3.2 developer/loan join — SKIPPED (data-thin, 2026-07-31)
+Reviewed before building: **0 of 40 open deals** carry a `developed` (developer) or `finances` (lender)
+relationship on the asset (`developed` = 6 rows portfolio-wide). The developer/loan info for our deals
+lives in the **OM / correspondence** (unstructured), so surfacing it is a **P2/dossier extraction task**,
+not a graph join. Deferred; the `_salesPartyRow` helper is ready to render developer/lender chips the
+moment that data lands.
+
+### P3.3 Ownership & CRM — Current Owner card (DONE, 2026-07-31)
+Pivoted here (32/40 deals + 1,768 portfolio have a reconciled owner — real data). Added
+`_udCurrentOwnerCard` at the top of `_udTabOwnership`: the reconciled **property owner** shown as a
+**clickable chip** (opens the owner sidebar by entity id, else by name) with **provenance + confidence +
+“verified ‹date›”** (source labelled Salesforce seller / Verified (manual) / Ownership graph / County deed).
+Backed by `lcc_property_owner` — `entities?action=lookup_asset` now returns `resolved_at`; `detail.js`
+attaches the packet to `ownership.lcc_property_owner`. Domain-generic. Never shows the operator.
+**Remaining P3.3:** prospecting status/ranking on the owner (touchpoint_cadence + correspondence recency),
+developer→owner chain (blocked on the same 0-coverage `developed` data), and moving contact/call actions
+fully onto the contact sidebar (P1 sidebar dependency).
+
 **Domain note (Scott, 2026-07-31):** this whole property-tab design was reviewed on **dialysis** but
 applies to **government** and future net-lease subspecialties too — build the shared shell once; branch
 only on lease/operational nuances (gov: GSA lease numbers, agency credit, FRPP/OPM, cap-rate framework;
