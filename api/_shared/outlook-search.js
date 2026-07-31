@@ -28,11 +28,23 @@ export async function getDealThreads({ subjects = [], emails = [], since = null,
     .map((e) => String(e || '').trim().toLowerCase()).filter((e) => e.includes('@'))));
   if (!cleanSubjects.length && !cleanEmails.length) return { ok: true, messages: [] };
 
+  // Never send null-typed fields: Power Automate's Request trigger validates the body
+  // against its JSON schema and 400s (TriggerInputSchemaMismatch) on a null where it typed
+  // a string. Build the payload with only non-null values; `since` is omitted when absent
+  // (the flow doesn't require it, and omitted != required since the schema marks nothing required).
+  const payload = {
+    operation: 'deal_thread_search',
+    subjects: cleanSubjects,
+    emails: cleanEmails,
+    top: Number.isFinite(Number(top)) ? Number(top) : 50,
+  };
+  if (typeof since === 'string' && since.trim()) payload.since = since.trim();
+
   try {
     const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operation: 'deal_thread_search', subjects: cleanSubjects, emails: cleanEmails, since, top }),
+      body: JSON.stringify(payload),
     }, 20000);
     const text = await res.text();
     let json = null;

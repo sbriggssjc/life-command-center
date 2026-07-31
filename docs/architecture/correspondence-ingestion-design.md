@@ -108,6 +108,47 @@ The backfill worker now echoes the flow's HTTP `status` + `detail` per error (wa
 next run surfaces the exact failure. Next: read the flow's run history to see which action fails,
 apply the `runAfter` hardening, and re-run.
 
+### Root cause of `flow_http_error` (2026-07-31, resolved on LCC side)
+After widening `Response.runAfter` (Scott applied it) and re-firing `?limit=3`, the worker's richer
+error surfaced the true cause on all three deals:
+```
+HTTP 400 TriggerInputSchemaMismatch — "The input body for trigger 'manual' ... did not match its
+schema definition. Error details: 'Invalid type. Expected String but got Null.'"
+```
+**Diagnosis:** `getDealThreads()` sent `"since": null`, and the Power Automate **Request trigger
+validates the body against its JSON schema** and rejects a null where `since` is typed `string` —
+so it 400s *before any action runs* (which is also why there was no run history until LCC called it,
+and why the 502/runAfter theory was only half the story). The flow doesn't even use `since` today
+(it searches on `first(subjects)` + `top` only).
+**Fix (durable, LCC side):** `outlook-search.js` now builds the payload with only non-null fields —
+`operation/subjects/emails/top` always, and `since` included **only** when it's a non-empty string.
+No null ever reaches the trigger. Ships on next redeploy; then re-fire `?limit=3`.
+**Optional flow-side hardening (immediate, no redeploy):** in the trigger schema change
+`"since": { "type": "string" }` to `"type": ["string", "null"]` (or drop `since` from the schema).
+That unblocks the *currently-deployed* LCC too; it becomes moot once the LCC fix ships.
+
+## Flow completion status + planned v2 (2026-07-31)
+**Done / intended for this layer:**
+- Trigger contract `{operation, subjects[], emails[], since?, top}` — stable; `since` now optional.
+- Inbox + Sent search via `GetEmailsV3`, `searchQuery = first(subjects)`, `top` from body.
+- `Response` returns `{ok:true, messages: union(Inbox.value, Sent.value)}`; runAfter widened to
+  Succeeded/Failed/TimedOut so a single-folder hiccup still returns partial results.
+- LCC: `getDealThreads` proxy + null-safe payload; `deal-correspondence-backfill` receiver + worker
+  with per-message deal-stamp, dedup on `internet_message_id`, direction inference, and
+  `lcc_reconcile_deal_todo` wiring; worker echoes flow `status`+`detail` on error.
+**Planned v2 (documented to circle back — not blocking):**
+1. **Email-based search.** The seed's `correspondent_emails` are currently unused by the flow (it
+   searches the deal-name subject only). Add a from/to-in-`emails` search branch (Graph `$search`
+   `"from:a@x.com OR to:a@x.com"` or a filtered Get) and union it in — higher recall on threads that
+   don't carry the deal name in the subject.
+2. **Multi-subject.** Search all `subjects`, not just `first(subjects)` (loop or OR the search query).
+3. **`since` date bound.** Once the flow uses `since`, pass a real lookback from LCC (e.g. deal
+   created_at − N days) to cap the search window; today it's omitted and the flow relies on `top`.
+4. **Cadence run.** After the one-time backfill, schedule the worker (no-body worker mode) on a
+   cadence to catch stragglers — same posture as the SF-owner sync.
+5. **Ongoing-capture tightening** (design §A): ensure deal counterparties (buyer/broker emails on the
+   SF opp) resolve to the deal so *new* live mail self-stamps without a re-backfill.
+
 ## Reconciliation refinement (2026-07-31) — deal correspondence -> deal_next_step to-dos
 The existing self-updating engines (`lcc_advance_todos`, `lcc_autoresolve_todos`) only reconcile
 `offer_review` / `follow_up` / `seller_follow_up`. But the bulk of open work is `deal_next_step`
