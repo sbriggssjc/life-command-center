@@ -116,6 +116,29 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(200).json({ entity_id: id, count: rows.length, rows, groups });
     }
 
+    // Tab 2 "Portfolio & History" (Scott ask #1) — every role the party has played
+    // on every asset over time (owner / buyer / seller / broker / lender /
+    // developer), current-vs-prior, capped per role with an honest role_total.
+    // Pure graph read via lcc_party_history(p_entity, p_per_role).
+    // GET /api/entities?action=history&id=<uuid>[&per_role=]
+    if (action === 'history' && id) {
+      const entRes = await opsQuery('GET',
+        `entities?id=eq.${id}&workspace_id=eq.${workspaceId}&select=id`);
+      if (!entRes.ok || !entRes.data?.length) return res.status(404).json({ error: 'Entity not found' });
+      const perRole = Math.min(Math.max(1, Number(req.query.per_role) || 25), 100);
+      const r = await opsQuery('POST', 'rpc/lcc_party_history',
+        { p_entity: id, p_per_role: perRole }).catch(() => null);
+      const rows = (r && r.ok && Array.isArray(r.data)) ? r.data : [];
+      const groups = {};
+      const totals = {};
+      for (const row of rows) {
+        const g = row.party_role || 'other';
+        (groups[g] = groups[g] || []).push(row);
+        if (totals[g] == null) totals[g] = row.role_total != null ? Number(row.role_total) : (groups[g].length);
+      }
+      return res.status(200).json({ entity_id: id, count: rows.length, rows, groups, totals });
+    }
+
     // UI Phase 5 — "Owners Missing a Contact" value-ranked BD worklist.
     // GET /api/entities?action=owner_worklist[&min_value=&limit=&offset=]
     //   rows ← v_owner_contact_worklist (contactless valued owners, value-ranked).

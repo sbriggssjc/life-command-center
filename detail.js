@@ -12449,7 +12449,7 @@ async function _entityApiFetch(url) {
 // The union of every entity-detail tab (used only for the initial deep-link
 // validation before the role is known). The ACTUAL tab set is role-driven —
 // see _entityTabsForRole. Broker mode swaps Ownership→Deals and drops Contacts.
-const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'Relationships', 'Activity', 'Engagement', 'ROE', 'Contacts'];
+const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'History', 'Relationships', 'Activity', 'Engagement', 'ROE', 'Contacts'];
 
 /**
  * Role-aware tab set. Owner/buyer get Ownership (their portfolio); a broker gets
@@ -12460,10 +12460,11 @@ const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'Relationships', '
 function _entityTabsForRole(role, entityType) {
   // Relationships (Scott ask #2): working-relationship intelligence — relevant
   // for any transacting party (owner/buyer/broker), so it rides in every role set.
-  if (role === 'broker') return ['Overview', 'Deals', 'Relationships', 'Activity', 'Engagement', 'ROE'];
+  if (role === 'broker') return ['Overview', 'Deals', 'History', 'Relationships', 'Activity', 'Engagement', 'ROE'];
   const tabs = ['Overview'];
   if (role === 'owner' || role === 'buyer') tabs.push('Ownership');
-  tabs.push('Relationships', 'Activity', 'Engagement', 'ROE');
+  // History (Scott ask #1): all roles over time — rides in every role set.
+  tabs.push('History', 'Relationships', 'Activity', 'Engagement', 'ROE');
   if (entityType === 'organization') tabs.push('Contacts');
   return tabs;
 }
@@ -12860,6 +12861,7 @@ function _renderEntityTab(tab) {
     case 'Portfolio': body = _entityTabPortfolio(); break; // legacy alias
     case 'Deals': body = _entityTabBrokerDeals(); break;
     case 'Relationships': body = _entityTabRelationships(); break;
+    case 'History': body = _entityTabHistory(); break;
     case 'Contacts': body = _entityTabContacts(); break;
     case 'Activity': body = _entityTabActivity(); break;
     case 'Engagement': body = _entityTabEngagement(); break;
@@ -13247,6 +13249,80 @@ function _entityRenderRelationships(data) {
       if (r.last_date) html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">last: ' + esc(_fmtDate(r.last_date)) + '</div>';
       html += '</div>';
     }
+    html += '</div></div>';
+  }
+  return html;
+}
+
+// ── Entity History Tab (Scott ask #1: Portfolio & History) ──
+// Every role the party has played on every asset over time (owner / buyer /
+// seller / broker / lender / developer), current-first, via lcc_party_history.
+// Complements the economics-rich Ownership tab (this is the all-roles timeline).
+const _ENTITY_HISTORY_SECTIONS = [
+  { key: 'owns',       title: 'As owner',      note: 'current & prior ownership' },
+  { key: 'purchases',  title: 'As buyer',      note: 'assets acquired' },
+  { key: 'sells',      title: 'As seller',     note: 'assets sold' },
+  { key: 'brokers',    title: 'As broker',     note: 'listings & sales brokered' },
+  { key: 'finances',   title: 'As lender',     note: 'assets financed' },
+  { key: 'developed',  title: 'As developer',  note: 'assets developed' },
+];
+
+function _entityTabHistory() {
+  const c = _entityDetailCache || {};
+  if (c.history) return _entityRenderHistory(c.history);
+  const eid = c.entityId || (c.entity && c.entity.id) || '';
+  if (!eid) return '<div class="detail-empty">No entity for history lookup.</div>';
+  setTimeout(function(){ _entityLoadHistory(eid); }, 0);
+  return '<div id="entityHistHost"><div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span><p style="margin-top:10px">Loading portfolio & history…</p></div></div>';
+}
+
+async function _entityLoadHistory(eid) {
+  let data = null;
+  try {
+    data = await _entityApiFetch('/api/entities?action=history&id=' + encodeURIComponent(eid) + '&per_role=25');
+  } catch (_e) { data = null; }
+  const c = _entityDetailCache || {};
+  const stillHere = (c.entityId || (c.entity && c.entity.id)) === eid;
+  if (stillHere) c.history = data || { rows: [], groups: {}, totals: {} };
+  const host = document.getElementById('entityHistHost');
+  if (host && stillHere) host.innerHTML = _entityRenderHistory(c.history);
+}
+
+function _entityRenderHistory(data) {
+  const groups = (data && data.groups) || {};
+  const totals = (data && data.totals) || {};
+  const total = (data && data.count) || 0;
+  if (!total) {
+    return '<div class="detail-empty">No ownership/transaction history in the graph for this party.</div>';
+  }
+  let html = '';
+  for (const sec of _ENTITY_HISTORY_SECTIONS) {
+    const rows = groups[sec.key];
+    if (!rows || !rows.length) continue;
+    const roleTotal = totals[sec.key] != null ? Number(totals[sec.key]) : rows.length;
+    let hdr = esc(sec.title) + ' (' + roleTotal + ')';
+    html += '<div class="detail-section"><div class="detail-section-title">' + hdr + '</div>';
+    html += '<div style="font-size:10px;color:var(--text3);margin:-2px 0 8px">' + esc(sec.note) + '</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px">';
+    for (const r of rows) {
+      const nm = r.asset_name || '(asset)';
+      const loc = (r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '');
+      const cur = !!r.is_current;
+      const onclick = r.asset_id ? 'openContact360(\'' + esc(String(r.asset_id)) + '\', {kind:\'entity\'})' : '';
+      html += '<div style="padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
+      html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">';
+      html += '<div style="font-weight:600;font-size:13px;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(nm) + '</div>';
+      html += '<div style="flex-shrink:0"><span style="font-size:9px;padding:1px 7px;border-radius:9px;font-weight:700;' + (cur ? 'background:rgba(34,197,94,0.12);color:var(--green,#22c55e);border:1px solid rgba(34,197,94,0.3)' : 'background:var(--s3);color:var(--text3);border:1px solid var(--border)') + '">' + (cur ? 'CURRENT' : 'PRIOR') + '</span></div>';
+      html += '</div>';
+      const meta = [];
+      if (loc) meta.push(loc);
+      if (r.sub_role && r.sub_role !== sec.key && String(r.sub_role).replace(/_/g,' ') !== sec.title.replace(/^As /,'')) meta.push(String(r.sub_role).replace(/_/g, ' '));
+      if (r.effective_from) meta.push(esc(_fmtDate(r.effective_from)));
+      if (r.effective_to) meta.push('ended ' + esc(_fmtDate(r.effective_to)));
+      if (meta.length) html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap">' + meta.map(function(m){return '<span>' + m + '</span>';}).join('') + '</div>';
+      html += '</div>';
+    }
+    if (roleTotal > rows.length) html += '<div style="font-size:10px;color:var(--text3);margin-top:6px">showing ' + rows.length + ' of ' + roleTotal + '</div>';
     html += '</div></div>';
   }
   return html;

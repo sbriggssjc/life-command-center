@@ -190,10 +190,15 @@ the "BD copilot" heart of what Scott wants, and it's ~80% wiring of machinery we
   email"** button reusing `_entityDraftAndLog` (the existing closed loop). Verified via handler syntax +
   contract; browser render pending Scott's eyes.
 
+- **Tab 2 "History" (ask #1)** — new RPC **`lcc_party_history(p_entity, p_per_role)`** (migrations
+  `20260818350000` + `…350001` dedupe, live): every role the party has played on every asset over time
+  (as owner / buyer / seller / broker / lender / developer), deduped per (role, asset), current-first,
+  capped per role with an honest `role_total`. Served via `GET /api/entities?action=history&id=`
+  (grouped + totals). Frontend `_entityTabHistory` lazy-loads role-segmented sections with CURRENT/PRIOR
+  badges; each asset chip → its entity panel. Complements the economics-rich Ownership tab (this is the
+  all-roles timeline). Verified live on Boyd Watterson (254 owned · 273 bought · 16 sold · 1 brokered).
+
 **Still open (next steps):**
-- **Tab 2 "Portfolio & History" (ask #1)** — extend the Ownership tab to all roles over time (as owner /
-  developer / broker / lender), not just current portfolio. Data via `entity_relationships` by type +
-  effective dates (same graph the Relationships RPC walks).
 - **Hero next-action** `_nextActionForContact(c360)` — deterministic ladder using the new `cadence` block
   (overdue → log due touch; unanswered inbound → follow up; not-in-SF → connect; else → log touchpoint).
 - **Closed-loop reconciliation** — make sent-capture (`handleOutlookSent`) the source of truth vs.
