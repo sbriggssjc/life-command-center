@@ -42,9 +42,9 @@ Add these three actions inside it, in order:
    - **From:** `@body('Select_QuotedIds')`
    - **Join with:** `,`
 3. **Salesforce → Execute a SOQL query** — rename **SoqlOwners**
-   - **Query:**
+   - **Query:** (a **Join** action's result is referenced with `body(...)`, not `outputs(...)`)
      ```
-     SELECT Id, OwnerId, Owner.Name FROM @{coalesce(triggerBody()?['sobject'], 'Account')} WHERE Id IN (@{outputs('Join_Ids')}) LIMIT 200
+     SELECT Id, OwnerId, Owner.Name FROM @{coalesce(triggerBody()?['sobject'], 'Account')} WHERE Id IN (@{body('Join_Ids')}) LIMIT 200
      ```
 
 ### A3. Response
