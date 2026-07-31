@@ -32,8 +32,22 @@
 
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
+import {
+  matchOwnerNamePair, gateFromMatch, oreResolverEnabled, resolverConfigured,
+} from '../_shared/resolver-client.js';
 
 const WALL_CLOCK_MS = 20000;
+
+/**
+ * Pure: the final action after the resolver merge-gate (W4.4). A pair only ever
+ * MERGES when it was already a same_party merge AND the resolver confirmed the
+ * name match; a resolver veto OR a fail-closed fallback (service down/timeout)
+ * downgrades it to flag_review. It never promotes a non-merge action.
+ */
+export function finalMergeAction(baseAction, gate) {
+  if (baseAction !== 'merge' || !gate) return baseAction;
+  return gate.decision === 'confirm' ? 'merge' : 'flag_review';
+}
 
 /**
  * Pure per-candidate action from the resolver verdict. The auto-merge subset is
@@ -69,6 +83,8 @@ export function pickMergeWinner(targetId, members) {
 
 /** Build the ids-only evidence-trace detail for one candidate pair. */
 function evidenceRow(targetId, pair, action, workspaceId) {
+  const detail = { candidate_name: pair.candidate_name, workspace_id: workspaceId || null };
+  if (pair._resolver) detail.resolver = pair._resolver;   // W4.4: name-gate trace
   return {
     entity_id: targetId,
     candidate_entity_id: pair.candidate_entity_id,
@@ -78,7 +94,7 @@ function evidenceRow(targetId, pair, action, workspaceId) {
     agreeing_signals: pair.agreeing_signals,
     high_authority_conflict: !!pair.high_authority_conflict,
     action,
-    detail: { candidate_name: pair.candidate_name, workspace_id: workspaceId || null },
+    detail,
     created_at: new Date().toISOString(),
   };
 }
@@ -163,8 +179,15 @@ export async function handleOwnerReconcileEngineTick(req, res) {
   const sampleMerge = [];
   const sampleReview = [];
   const started = Date.now();
+  // W4.4: resolver name-gate on auto-merges. When ORE_USE_RESOLVER is on, every
+  // would-be merge is confirmed by the resolver /match; a veto or a fail-closed
+  // fallback (service down/timeout) downgrades it to needs_review (never merges).
+  const useResolver = oreResolverEnabled();
+  const resolverStats = { enabled: useResolver, configured: resolverConfigured(),
+    confirmed: 0, vetoed: 0, fallback: 0 };
   const summary = { source, targets: targets.length, owners_processed: 0,
-    merged_entities: 0, review_pairs: 0, distinct_pairs: 0, evidence_written: 0, failed: 0 };
+    merged_entities: 0, review_pairs: 0, distinct_pairs: 0, evidence_written: 0, failed: 0,
+    resolver: resolverStats };
 
   for (const tgt of targets) {
     if (!dryRun && Date.now() - started > WALL_CLOCK_MS) break;
@@ -180,7 +203,31 @@ export async function handleOwnerReconcileEngineTick(req, res) {
     for (const p of pairs) {
       const v = (p.verdict === 'same_party') ? 'same_party' : (p.verdict === 'review' ? 'review' : 'distinct');
       byVerdict[v] = (byVerdict[v] || 0) + 1;
-      const action = classifyReconcilePair(p);
+      let action = classifyReconcilePair(p);
+
+      // W4.4: gate a would-be auto-merge on the resolver name-similarity signal.
+      // Fail-closed: veto OR service-down → needs_review, never a merge.
+      if (action === 'merge' && useResolver) {
+        let gate;
+        try {
+          gate = gateFromMatch(await matchOwnerNamePair(tgt.owner_name, p.candidate_name, { timeoutMs: 3000 }));
+        } catch (_e) {
+          gate = { decision: 'fallback', error: 'threw' };
+        }
+        action = finalMergeAction('merge', gate);
+        if (gate.decision === 'confirm') {
+          resolverStats.confirmed += 1;
+          p._resolver = { decision: 'confirm', probability: gate.probability };
+        } else if (gate.decision === 'fallback') {
+          resolverStats.fallback += 1;
+          p._resolver = { decision: 'fallback', error: gate.error };
+          console.warn('[ore-resolver] fail-closed fallback (no merge):', tgt.owner_name, 'vs', p.candidate_name, '-', gate.error);
+        } else {
+          resolverStats.vetoed += 1;
+          p._resolver = { decision: 'veto', band: gate.band, probability: gate.probability };
+        }
+      }
+
       byAction[action] = (byAction[action] || 0) + 1;
       if (action === 'merge') {
         mergePairs.push(p);
@@ -234,7 +281,8 @@ export async function handleOwnerReconcileEngineTick(req, res) {
     } catch (_e) { /* soft */ }
     return res.status(200).json({ ok: true, dry_run: true, source, targets: targets.length,
       by_verdict: byVerdict, by_action: byAction, sample_merge: sampleMerge,
-      sample_review: sampleReview, true_owner_noise: noise, min_value: minValue });
+      sample_review: sampleReview, true_owner_noise: noise, min_value: minValue,
+      resolver: resolverStats });
   }
 
   if (!doMerge) summary.note = 'merge disabled (?merge=0) — same-party pairs recorded as flagged_review';

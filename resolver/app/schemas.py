@@ -77,6 +77,9 @@ class TrainRequest(BaseModel):
     use_storage: bool = True          # pull the W4.1 corpus from Storage when configured
     persist: bool = True              # write the trained model JSON to disk
     target_precision: float = 0.995
+    # Hard floor for the calibrated auto_link band (W4.4 defect 1). None → the service
+    # default (settings.auto_link_band_floor, 0.5). The band may never fall below this.
+    band_floor: Optional[float] = None
 
 
 class TrainResponse(BaseModel):
@@ -86,5 +89,7 @@ class TrainResponse(BaseModel):
     n_train_pairs: int
     n_test_pairs: int
     bands: Dict[str, float]
+    band_floor: float                 # the floor applied to the auto_link band
+    auto_link_floored: bool           # True → the floor bound (drift signal: easy negatives)
     calibration: dict
     persisted_path: Optional[str]

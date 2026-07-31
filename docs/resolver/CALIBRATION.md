@@ -7,6 +7,8 @@
 
 > ✅ **This report is computed on the live W4.1 corpus** (delivered 2026-07-31 — see docs/resolver/W4_1_CORPUS_REPORT.md for composition and known gaps: sf_account/email are null in this corpus, so the owner_sf and contact models are effectively name/address-calibrated until W4.3 feeds back SF-linked pairs).
 
+> ⚠️ **W4.4 band floor (2026-07-31):** the swept auto-link threshold below is **0.005** — precision 1.0 on the held-out split, yet on the live 30k backlog it would auto-link ~26k rows incl. `'2200 Main LLC' → '900 South Main LLC'` (the calibration-transfer gap: the corpus's generated negatives are too *easy*, so the "safe" band is a symptom, not safety). A hard **auto-link band floor of 0.5** (`RESOLVER_AUTO_LINK_BAND_FLOOR`, `resolver/app/calibration.py`) now clamps it: the shipped model JSONs carry **`auto_link = 0.5`** (see the curve — precision is still **1.0 at 0.5**, recall only 0.9926→0.9828, so the floor costs ~1pt recall for far more live-backlog safety). When a nightly retrain's swept band still lands below the floor, the loop opens a `resolver_calibration_drift` alert = the corpus needs *harder* negatives (the accruing `sf_link_review` verdicts). The tables below show the pre-floor swept values; **0.5 governs at runtime**. The nightly loop (W4.4) regenerates this report + the model JSONs from the refreshed corpus.
+
 - Train pairs: **4795**  
 - Test pairs: **547**  
 - Split key: `entity_group` (no group spans train+test → no leakage).

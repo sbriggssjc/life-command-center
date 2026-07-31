@@ -47,16 +47,36 @@ def pr_curve(scored: List[Tuple[float, int]], steps: int = 101) -> List[dict]:
     return rows
 
 
-def select_bands(scored: List[Tuple[float, int]], target_precision: float = 0.995) -> Dict[str, float]:
+DEFAULT_BAND_FLOOR = 0.5
+
+
+def select_bands(
+    scored: List[Tuple[float, int]],
+    target_precision: float = 0.995,
+    band_floor: float = DEFAULT_BAND_FLOOR,
+) -> Dict[str, float]:
     import math
 
     curve = pr_curve(scored, steps=201)
     # auto_link: lowest threshold achieving target precision with some recall.
-    auto_link = 1.0
+    auto_link_raw = 1.0
     for row in curve:
         if row["precision"] >= target_precision and row["recall"] > 0:
-            auto_link = row["threshold"]
+            auto_link_raw = row["threshold"]
             break
+
+    # --- Band-floor invariant (W4.4, defect 1: calibration-transfer gap) ---
+    # A precision-targeted sweep can find a *sub-floor* "safe" auto-link threshold when
+    # the negative population in the corpus is too easy (the W4.3 finding: corpus
+    # negatives were label-safe/easy, so a 0.005 band scored precision 1.0 on the held-out
+    # split yet would auto-link ~26k live-backlog rows incl. '2200 Main LLC'→'900 South
+    # Main LLC'). A sub-0.5 band is a SYMPTOM of easy negatives, not evidence of safety —
+    # so the auto-link threshold may never fall below the floor regardless of the sweep.
+    # When the floor binds (`auto_link_floored`), the retrain loop raises a drift alert:
+    # the transfer gap has resurfaced and the corpus needs harder negatives.
+    band_floor = max(0.0, min(1.0, float(band_floor)))
+    auto_link = max(auto_link_raw, band_floor)
+    auto_link_floored = auto_link > auto_link_raw + 1e-9
 
     # auto_reject: the highest threshold that is BOTH (a) strictly below every true
     # positive (recall-safe — no positive is ever auto-rejected) AND (b) strictly below
@@ -69,13 +89,24 @@ def select_bands(scored: List[Tuple[float, int]], target_precision: float = 0.99
     # Nudge one 4dp grid step down if the floored value still touches either bound.
     if auto_reject >= min_pos_prob or auto_reject >= auto_link:
         auto_reject = max(0.0, round(auto_reject - 0.0001, 4))
-    return {"auto_link": round(auto_link, 4), "auto_reject": round(auto_reject, 4)}
+    return {
+        "auto_link": round(auto_link, 4),
+        "auto_reject": round(auto_reject, 4),
+        "auto_link_raw": round(auto_link_raw, 4),
+        "band_floor": round(band_floor, 4),
+        "auto_link_floored": auto_link_floored,
+    }
 
 
-def calibration_report(fs: FSModel, test_pairs: List[dict], target_precision: float = 0.995) -> dict:
+def calibration_report(
+    fs: FSModel,
+    test_pairs: List[dict],
+    target_precision: float = 0.995,
+    band_floor: float = DEFAULT_BAND_FLOOR,
+) -> dict:
     scored = score_split(fs, test_pairs)
     curve = pr_curve(scored, steps=101)
-    bands = select_bands(scored, target_precision)
+    bands = select_bands(scored, target_precision, band_floor=band_floor)
     n_pos = sum(1 for _, y in scored if y == 1)
     n_neg = sum(1 for _, y in scored if y == 0)
 
@@ -93,6 +124,8 @@ def calibration_report(fs: FSModel, test_pairs: List[dict], target_precision: fl
         "n_pos": n_pos,
         "n_neg": n_neg,
         "target_precision": target_precision,
+        "band_floor": bands["band_floor"],
+        "auto_link_floored": bands["auto_link_floored"],
         "bands": bands,
         "auto_link": {
             "threshold": bands["auto_link"],

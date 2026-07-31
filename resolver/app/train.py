@@ -1,20 +1,27 @@
 """Model training: estimate Fellegi-Sunter m/u parameters from labeled pairs.
 
-Two estimators, selected at runtime:
-
-1. splink (preferred, DuckDB backend) — when the `splink` package is importable, we
-   build a Splink Linker with comparison levels that mirror app/features.py and let it
-   estimate m/u on DuckDB. The estimated parameters are exported to our JSON model shape.
-   (Splink's EM refines u from the data and m from labels/pairwise agreement.)
-
-2. count_estimator (fallback, always available) — direct supervised m/u estimation:
+**count_estimator is THE estimator** — direct supervised m/u estimation:
      m(level) = P(comparison at `level` | label==1)
      u(level) = P(comparison at `level` | label==0)
-   with Laplace smoothing. This is the closed-form supervised version of what splink's
-   EM approximates; because W4.1 gives us *labels*, the supervised counts are actually
-   the more honest estimator, and splink is used mainly for scale/validation.
+with Laplace smoothing. Because W4.1 gives us *labels*, the supervised counts are the
+exact, honest estimator — nothing to approximate.
 
-Both paths persist an identical JSON model, so /match is estimator-agnostic.
+splink retirement (W4.4 defect 2, 2026-07-31)
+---------------------------------------------
+`/train` used to call a `splink_estimate()` smoke-test first. That path NEVER fed the
+model: even on success it returned `count_estimate(...)` re-tagged `splink_u+count_m`
+(splink's data-driven `u` was deliberately discarded — "we HAVE labels"), so the model
+bytes were identical either way. Its only observable effect was the `trainer` label, and
+a splink 4.x API-shape mismatch made it throw and *silently* fall back — which is why
+`/health` reported `splink:true` while `/train` reported `trainer:count_estimator` and
+looked broken. It was not broken: the count estimator is exact given labels.
+
+So the vestigial smoke-test is **retired from the training path**. `train_model` calls
+`count_estimate` directly; the `trainer` label is honestly `count_estimator`. `splink`
+stays an OPTIONAL import surfaced at `/health` (`splink_available()`) for build parity —
+importability there does NOT mean splink trains the model. Re-integrating splink's `u`
+(a real change, not a bug fix) is future work; if taken up, wire its estimated `u` into
+the persisted JSON and tag the trainer accordingly.
 """
 from __future__ import annotations
 
@@ -96,6 +103,12 @@ def count_estimate(pairs: List[dict], model: str, embed_cosines: Optional[List[f
 
 
 def splink_available() -> bool:
+    """Whether the `splink` package is importable in this build.
+
+    Surfaced at /health for build parity ONLY. splink is NOT in the training path
+    (see the module docstring, W4.4 defect 2) — importability here does not mean it
+    trains the model; `train_model` always uses the exact supervised count estimator.
+    """
     try:  # pragma: no cover - Docker path
         import splink  # noqa: F401
 
@@ -104,61 +117,14 @@ def splink_available() -> bool:
         return False
 
 
-def splink_estimate(pairs: List[dict], model: str) -> Optional[FSModel]:  # pragma: no cover - Docker path
-    """Estimate u via splink on DuckDB, m from labels; export to our JSON shape.
-
-    Returns None if splink isn't usable so the caller falls back to count_estimate.
-    We keep the supervised m from labels (we HAVE labels) and take splink's data-driven
-    u (random-agreement) estimate, which is splink's strength on large unlabeled scale.
-    """
-    if not splink_available():
-        return None
-    try:
-        import duckdb  # noqa: F401
-        # NOTE: splink 4.x API. We construct records, register a comparison template that
-        # mirrors features.py, run estimate_u_using_random_records, and read the trained
-        # settings. To keep this module import-safe without splink installed, everything
-        # splink-specific stays inside this try. On ANY failure we fall back to counts,
-        # which are exact given labels.
-        from splink import DuckDBAPI, Linker, SettingsCreator, block_on
-        import splink.comparison_library as cl
-
-        # Flatten to the record shape splink expects.
-        records = []
-        for i, pair in enumerate(pairs):
-            left, right, label = pair_to_records(pair)
-            records.append({"unique_id": f"{i}_a", **{f"{k}": left.get(k) for k in ("name", "address", "state")}})
-            records.append({"unique_id": f"{i}_b", **{f"{k}": right.get(k) for k in ("name", "address", "state")}})
-
-        comparisons = [
-            cl.JaroWinklerAtThresholds("name", [0.95, 0.8]),
-            cl.LevenshteinAtThresholds("address", [1, 4]),
-            cl.ExactMatch("state"),
-        ]
-        db_api = DuckDBAPI()
-        stg = SettingsCreator(
-            link_type="dedupe_only",
-            comparisons=comparisons,
-            blocking_rules_to_generate_predictions=[block_on("state")],
-        )
-        linker = Linker(records, stg, db_api=db_api)
-        linker.training.estimate_u_using_random_records(max_pairs=1_000_000)
-        # We do NOT trust splink's unsupervised m over our labels; keep supervised counts
-        # for m but let splink's presence validate the pipeline end-to-end. Return the
-        # count model tagged as splink-validated so the calibration report is honest.
-        fs = count_estimate(pairs, model)
-        fs.meta["trainer"] = "splink_u+count_m"
-        return fs
-    except Exception:
-        return None
-
-
 def train_model(pairs: List[dict], model: str) -> FSModel:
-    """Train `model` on `pairs` (train split only should be passed by the caller)."""
-    fs = splink_estimate(pairs, model)
-    if fs is None:
-        fs = count_estimate(pairs, model)
-    return fs
+    """Train `model` on `pairs` (train split only should be passed by the caller).
+
+    The count estimator is exact given labels, so it is the sole estimator; the
+    trainer label is honestly `count_estimator` (W4.4 defect 2 retired the vestigial
+    splink smoke-test that never fed the model).
+    """
+    return count_estimate(pairs, model)
 
 
 def train_pairs_for(model: str) -> List[dict]:

@@ -51,9 +51,15 @@ contributed).
    pick the **auto-link** band at precision ≥ 0.995 and a recall-safe **auto-reject**
    band. Report: `docs/resolver/CALIBRATION.md`.
 
-`splink` (DuckDB backend) is used in `/train` to estimate parameters at scale when
-installed; the scorer reads the persisted m/u JSON, so `/match` never depends on splink
-at request time. See `app/train.py` for the estimator selection.
+**Estimator:** `/train` uses the supervised **count estimator** — exact given the W4.1
+labels — as the sole m/u estimator (`trainer: count_estimator`). `splink` is **not** in
+the training path: the old `splink_estimate()` smoke-test never fed the model (it
+discarded splink's `u` and returned the count model re-labelled), and a splink 4.x API
+mismatch made it throw and silently fall back, which is why `/health` reported
+`splink:true` while `/train` reported `trainer:count_estimator` and looked broken — it
+was not. That vestigial path is **retired** (W4.4 defect 2). `splink` remains an optional
+import surfaced at `/health` for build parity only; re-integrating its `u` estimate is
+future work. The scorer reads the persisted m/u JSON, so `/match` never depends on splink.
 
 ## Optional heavy dependencies (graceful degradation)
 
@@ -65,7 +71,7 @@ the real path. When a dep is absent the service degrades, honestly reported at `
 |---|---|---|
 | `postal` (libpostal) | full address expand+parse | regex address normalizer |
 | `sentence-transformers` bge-small | real embeddings for KNN blocking | deterministic char-n-gram hashing embedding |
-| `splink` + `duckdb` | scale parameter estimation | supervised count estimator (exact given labels) |
+| `splink` + `duckdb` | importable, surfaced at `/health` (retired from training — W4.4 defect 2) | supervised count estimator (exact given labels) — the sole estimator in both builds |
 
 ## Training corpus
 
