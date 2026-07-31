@@ -238,6 +238,21 @@ correspondence + files + OM for the dossier now, backfill Medicare when the prop
 - P3.5 Operations: source operations summary from Seller correspondence + files + OM (dossier now;
   Medicare later).
 
+### P3.2 progress (2026-07-31)
+**Party rows now CLICKABLE (DONE, ships next redeploy).** Deal History sale/paired-event rows render
+Seller / Buyer / Listing Broker / Procuring Broker as **clickable chips** via `entityLink` (opens the
+contact/owner/broker sidebar; resolves by name when no entity id yet) — helper `_salesPartyRow` in
+`detail.js`, wired at both sale-render sites. **Domain-generic** (dia + gov normalize the same fields).
+**Remaining P3.2 (still open):** (a) original-development origin event + linked developer at the start of
+the history (needs the `developed` relationship joined into the deal-history data); (b) loan origination
+row (loan broker + lender) from the `finances` relationship / deal dossier + emails. Both need a
+backend data join (the sale-row normalize carries buyer/seller/broker but not developer/lender yet).
+
+**Domain note (Scott, 2026-07-31):** this whole property-tab design was reviewed on **dialysis** but
+applies to **government** and future net-lease subspecialties too — build the shared shell once; branch
+only on lease/operational nuances (gov: GSA lease numbers, agency credit, FRPP/OPM, cap-rate framework;
+dia: CMS/clinic, NNN net rent). The party chips, sidebar, dossier, and history rows are all shared.
+
 **Dependencies:** C←B (P0.5←P0.4); most of Phase 3 party displays ←E (P1.2); Dossier (Phase 2) consumes
 the reconciled data from Phase 0 and the operations summary (P3.5). Phase 0 is the highest-leverage
 start because it fixes the "database is polluted / not reconciling" complaints that recur across every

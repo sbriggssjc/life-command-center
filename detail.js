@@ -7770,6 +7770,14 @@ function _salesNormalizeSaleRow(r) {
   });
 }
 
+// P3.2 (Deal History) — render a transaction party as a CLICKABLE chip that opens
+// the contact/owner/broker sidebar (entityLink resolves by name when no id yet).
+// Domain-generic: dia + gov both normalize buyer/seller/broker the same way.
+function _salesPartyRow(label, name, type, db) {
+  if (!name) return '';
+  return `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">${label}:</span> <span class="t-body">${entityLink(name, type, null, db)}</span></div>`;
+}
+
 function _udTabSales() {
   const txns = _salesCache ? (_salesCache.transactions || []) : [];
   const listings = _salesCache ? (_salesCache.listings || []) : [];
@@ -8188,10 +8196,11 @@ function _salesRenderSale(s) {
   const seller = s.seller_name || s.seller;
   const broker = s.broker_name || s.listing_broker;
   const procBroker = s.procuring_broker || null;
-  if (buyer)  html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Buyer:</span> <span class="t-body">${esc(buyer)}</span></div>`;
-  if (seller) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Seller:</span> <span class="t-body">${esc(seller)}</span></div>`;
-  if (broker) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Listing Broker:</span> <span class="t-body">${esc(broker)}</span></div>`;
-  if (procBroker) html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Procuring Broker:</span> <span class="t-body">${esc(procBroker)}</span></div>`;
+  const _pdb = _udCache && _udCache.db;
+  html += _salesPartyRow('Seller', seller, 'owner', _pdb);
+  html += _salesPartyRow('Buyer', buyer, 'buyer', _pdb);
+  html += _salesPartyRow('Listing Broker', broker, 'broker', _pdb);
+  html += _salesPartyRow('Procuring Broker', procBroker, 'broker', _pdb);
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
@@ -8306,22 +8315,14 @@ function _salesRenderCombined(l, s) {
   // Parties
   const buyer = s.buyer_name || s.buyer;
   const seller = s.seller_name || s.seller;
-  if (buyer) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Buyer:</span> <span class="t-body">${esc(buyer)}</span></div>`;
-  }
-  if (seller) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Seller:</span> <span class="t-body">${esc(seller)}</span></div>`;
-  }
-
   // Broker: prefer sale record, fall back to listing
   const broker = s.broker_name || s.listing_broker || l.listing_broker;
   const procBroker2 = s.procuring_broker || null;
-  if (broker) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Listing Broker:</span> <span class="t-body">${esc(broker)}</span></div>`;
-  }
-  if (procBroker2) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Procuring Broker:</span> <span class="t-body">${esc(procBroker2)}</span></div>`;
-  }
+  const _pdb = _udCache && _udCache.db;
+  html += _salesPartyRow('Seller', seller, 'owner', _pdb);
+  html += _salesPartyRow('Buyer', buyer, 'buyer', _pdb);
+  html += _salesPartyRow('Listing Broker', broker, 'broker', _pdb);
+  html += _salesPartyRow('Procuring Broker', procBroker2, 'broker', _pdb);
 
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;

@@ -357,6 +357,8 @@ looks identical to a healthy quiet pipeline* — this table is the single source
 - **Access scoping (My Work / Team Queue / correspondence privacy):** `docs/architecture/access-scoping-and-my-work.md`.
 - **Deal correspondence ingestion + reconciliation:** `docs/architecture/correspondence-ingestion-design.md`.
 - **Property-tab UX review + rollout plan:** `docs/architecture/property-tab-ux-review.md`.
+- **Connectivity map + open threads (email/phone/SF route status — START HERE for continuity):**
+  `docs/architecture/connectivity-and-open-threads.md`.
 - **Full per-round worklog (verbatim archive of everything trimmed here):**
   [`docs/history/CLAUDE_full_2026-07.md`](docs/history/CLAUDE_full_2026-07.md). Round-specific implementation
   logs (R5→R64, R76* ingestion, ORE phases, CONNECTIVITY, OUTREACH, UI Phases, SF-reconcile, T9d, CM) live
