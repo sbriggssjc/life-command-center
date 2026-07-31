@@ -21,10 +21,16 @@ Confirmed from the flow export: the flow is an HTTP trigger → **Switch on
 action (`ExecuteSoqlQuery`). The `find_account_by_name` case already selects
 `OwnerId, Owner.Name`, so we just add one more SOQL case. Open the flow → **Edit**.
 
-### A1. Trigger schema — add `sobject` and `ids`
+> **Owner source = the Task assignee.** In this org the Account owner is a generic
+> integration user, so we don't read Account.OwnerId. The real deal owner is whoever
+> the Salesforce **Task** on that account is assigned to. The query below reads Task by
+> `WhatId` (the account/opportunity the task is on), filtered to the team's user ids,
+> most-recent first; LCC takes the most recent task's owner as the deal owner.
+
+### A1. Trigger schema — add `ids` and `owner_in`
 Open **When an HTTP request is received** → **Request Body JSON Schema**, replace with:
 ```json
-{"type":"object","properties":{"operation":{"type":"string"},"value":{"type":"string"},"sobject":{"type":"string"},"ids":{"type":"array","items":{"type":"string"}}}}
+{"type":"object","properties":{"operation":{"type":"string"},"value":{"type":"string"},"sobject":{"type":"string"},"ids":{"type":"array","items":{"type":"string"}},"owner_in":{"type":"string"}}}
 ```
 
 ### A2. Add a Switch case `owners_by_ids`
@@ -44,8 +50,11 @@ Add these three actions inside it, in order:
 3. **Salesforce → Execute a SOQL query** — rename **SoqlOwners**
    - **Query:** (a **Join** action's result is referenced with `body(...)`, not `outputs(...)`)
      ```
-     SELECT Id, OwnerId, Owner.Name FROM @{coalesce(triggerBody()?['sobject'], 'Account')} WHERE Id IN (@{body('Join_Ids')}) LIMIT 200
+     SELECT WhatId, OwnerId, Owner.Name, LastModifiedDate FROM Task WHERE WhatId IN (@{body('Join_Ids')}) AND OwnerId IN (@{triggerBody()?['owner_in']}) ORDER BY LastModifiedDate DESC
      ```
+     `WhatId` = the account/opportunity the task is on (LCC passes account ids in `ids`);
+     `owner_in` = the team's user ids, already quoted, passed by LCC. Most-recent first so
+     LCC keeps the latest task's owner per account.
 
 ### A3. Response
 Add **Response** (Request → Response) — rename **Respond_owners**:

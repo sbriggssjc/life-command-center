@@ -53,6 +53,19 @@ export async function handleSfOwnerSync(req, res) {
     const dry = String(req.query?.dry || '') === '1';
     const limit = req.query?.limit ? Number(req.query.limit) : null;
 
+    // Team user ids — the deal owner is the assignee of the SF Task, so we filter
+    // the Task query to these (Kelly/Sarah/Nate/Scott). Preformatted for the flow's
+    // OwnerId IN (...) clause. Durable: driven by lcc_users, not hardcoded.
+    let ownerIn = null;
+    try {
+      const tu = await opsQuery('GET', 'lcc_users?select=salesforce_owner_id&salesforce_owner_id=not.is.null');
+      const ids = (tu?.data || []).map((r) => String(r.salesforce_owner_id || '').trim()).filter(Boolean);
+      if (ids.length) ownerIn = ids.map((id) => `'${id}'`).join(',');
+    } catch (_e) { /* fall through — flow will still run, just unfiltered */ }
+    if (!ownerIn) {
+      return res.status(200).json({ ok: false, reason: 'no_team_owner_ids' });
+    }
+
     const sfIds = await gatherDealSfIds(limit);
     if (!sfIds) {
       return res.status(200).json({
@@ -71,7 +84,7 @@ export async function handleSfOwnerSync(req, res) {
     const errors = [];
     for (const sobject of ['Account', 'Opportunity']) {
       for (const batch of chunk(byObj[sobject], BATCH)) {
-        const r = await getSalesforceOwnersByIds(batch, sobject);
+        const r = await getSalesforceOwnersByIds(batch, sobject, ownerIn);
         if (!r.ok) { errors.push({ sobject, reason: r.reason, detail: r.detail || null }); continue; }
         for (const o of r.owners) ownerMap.push(o);
       }

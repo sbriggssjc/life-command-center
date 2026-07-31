@@ -843,24 +843,31 @@ export async function getSalesforceContactById(whoId) {
 // ============================================================================
 // Batch owner lookup — powers the SF owner-capture (owner-scoped My Day).
 // ----------------------------------------------------------------------------
-// Reuses the same Power Automate lookup flow (SF_LOOKUP_WEBHOOK_URL) via a NEW
-// flow operation `owners_by_ids`. The flow receives a batch of SF record Ids for
-// one sObject and returns their owner. See docs/architecture/sf-owner-capture.md
-// and docs/setup/power-automate-sf-owner-flow.md for the exact flow build.
+// Reuses the same Power Automate lookup flow (SF_LOOKUP_WEBHOOK_URL) via the flow
+// operation `owners_by_ids`. In Team Briggs' org the deal owner is NOT the Account
+// owner (that's a generic integration user) — it's the assignee of the Salesforce
+// TASK on the account. So the flow queries Task by WhatId (the account/opportunity
+// the task relates to), filtered to the team's user ids, most-recent first. We take
+// the most recent task's owner as the deal owner. See
+// docs/setup/power-automate-sf-owner-flow.md for the exact flow build.
 //
 // FLOW CONTRACT (owners_by_ids):
 //   POST <SF_LOOKUP_WEBHOOK_URL>
-//   Body: { "operation":"owners_by_ids", "sobject":"Account"|"Opportunity",
-//           "ids": ["001...","001..."] }        // ≤ 200 ids/call
-//   Success (PA 200): { "ok":true, "operation":"owners_by_ids",
-//     "owners":[ {"Id":"001...","OwnerId":"005...","OwnerName":"Scott Briggs"}, ... ] }
-//   Tolerant of a flow that returns `records` instead of `owners`, and of
-//   Owner.Name arriving as a nested {Owner:{Name}} object.
+//   Body: { "operation":"owners_by_ids", "ids":["001..",..], "owner_in":"'005..','005..'" }
+//   Flow SOQL: SELECT WhatId, OwnerId, Owner.Name, LastModifiedDate FROM Task
+//              WHERE WhatId IN (<ids>) AND OwnerId IN (<owner_in>) ORDER BY LastModifiedDate DESC
+//   Success (PA 200): { "ok":true, "operation":"owners_by_ids", "owners":[<Task records>] }
+//   Each record: { WhatId, OwnerId, Owner:{Name}, LastModifiedDate }. Tolerant of
+//   `records` vs `owners`, of Id in place of WhatId, and of a flat OwnerName.
 //
-// Returns { ok:true, owners:[{sf_id, sf_owner_id, owner_name}] } or
-// { ok:false, reason }. Never throws.
+// @param {string[]} ids       — account/opportunity ids (become the WhatId filter)
+// @param {string}   sobject   — retained for back-compat; unused by the Task query
+// @param {string}   ownerIn   — preformatted quoted, comma-joined team user ids
+//                               ("'005..','005..'") for the OwnerId IN (...) filter
+// Returns { ok:true, owners:[{sf_id, sf_owner_id, owner_name}] } deduped to the most
+// recent task-owner per sf_id, or { ok:false, reason }. Never throws.
 // ============================================================================
-export async function getSalesforceOwnersByIds(ids, sobject = 'Account') {
+export async function getSalesforceOwnersByIds(ids, sobject = 'Account', ownerIn = null) {
   if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
   const clean = Array.from(new Set(
     (Array.isArray(ids) ? ids : [])
@@ -869,21 +876,34 @@ export async function getSalesforceOwnersByIds(ids, sobject = 'Account') {
   ));
   if (!clean.length) return { ok: true, owners: [] };
 
-  const result = await callSfLookupFlow({ operation: 'owners_by_ids', sobject, ids: clean });
+  const result = await callSfLookupFlow({
+    operation: 'owners_by_ids', sobject, ids: clean, owner_in: ownerIn || null,
+  });
   if (!result || result.ok !== true) {
     return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
   }
   const rows = Array.isArray(result.owners) ? result.owners
              : Array.isArray(result.records) ? result.records
              : [];
-  const owners = rows.map((r) => {
+  const mapped = rows.map((r) => {
     const ownerName = r.OwnerName || r.ownerName
       || (r.Owner && (r.Owner.Name || r.Owner.name)) || null;
     return {
-      sf_id:       r.Id || r.id || null,
-      sf_owner_id: r.OwnerId || r.ownerId || (r.Owner && (r.Owner.Id || r.Owner.id)) || null,
-      owner_name:  ownerName,
+      sf_id:         r.WhatId || r.whatId || r.Id || r.id || null,
+      sf_owner_id:   r.OwnerId || r.ownerId || (r.Owner && (r.Owner.Id || r.Owner.id)) || null,
+      owner_name:    ownerName,
+      last_modified: r.LastModifiedDate || r.lastModifiedDate || r.SystemModstamp || '',
     };
-  }).filter((o) => o.sf_id);
+  }).filter((o) => o.sf_id && o.sf_owner_id);
+
+  // Reduce multiple task rows per account → the most recent task's owner.
+  mapped.sort((a, b) => String(b.last_modified).localeCompare(String(a.last_modified)));
+  const seen = new Set();
+  const owners = [];
+  for (const o of mapped) {
+    if (seen.has(o.sf_id)) continue;
+    seen.add(o.sf_id);
+    owners.push({ sf_id: o.sf_id, sf_owner_id: o.sf_owner_id, owner_name: o.owner_name });
+  }
   return { ok: true, owners };
 }
