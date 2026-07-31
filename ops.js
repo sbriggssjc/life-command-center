@@ -1791,6 +1791,10 @@ var _DC_FEDERATED = new Set([
   // W3.2 (audit 3.2.3): owner reconcile - ORE verdicts-only feed + two folded
   // orphan queues (gov owner_unification_review_queue, gov+dia entity_match_candidates).
   'owner_reconcile',
+  // W4.3 follow-up (2026-07-31): SF-link candidate review (v_sf_link_review_queue,
+  // gov + dia). Rendered via renderFederatedLane; count read live from
+  // /api/review-counts. Keep in sync with admin.js FEDERATED_DECISION_TYPES.
+  'sf_link_candidate',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1840,6 +1844,16 @@ async function renderReviewConsolePage() {
     if (s && typeof s.count === 'number') sosN = s.count;
   }
   dc['sos_owner_links'] = sosN;
+  // W4.3: the SF-link candidate lane is federated (mint-at-verdict), but its badge
+  // reads the LIVE v_sf_link_review_queue depth from /api/review-counts (gov+dia),
+  // not the decisions-summary federated count — the view self-clears worked rows,
+  // so this is the honest workable backlog.
+  let sfLinkN = 0;
+  if (res.ok && res.data && Array.isArray(res.data.lanes)) {
+    const s = res.data.lanes.find(function (l) { return l.key === 'sf_link_candidate'; });
+    if (s && typeof s.count === 'number') sfLinkN = s.count;
+  }
+  dc['sf_link_candidate'] = sfLinkN;
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
   let compN = 0;
@@ -1859,6 +1873,7 @@ async function renderReviewConsolePage() {
     { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
+    { dt: 'sf_link_candidate', label: 'Salesforce link — confirm candidate', open: "renderFederatedLane('sf_link_candidate')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
     { dt: 'owner_reconcile', label: 'Owner reconcile — same party?', open: "renderFederatedLane('owner_reconcile')" },
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
@@ -2474,6 +2489,8 @@ const _DC_FED_META = {
     intro: 'A person contact whose company name resolves to owner org(s) by NAME — the tiers the exact-core auto-apply worker leaves for a human (LLC names are where false positives live). exact_ambiguous = the exact name maps to >1 owner org (pick which); fuzzy = a distinctive shared name-core (e.g. Starwood Capital Group ↔ Starwood REIT). Value-ranked by the candidate owner’s rent. Link the person to the chosen owner (attaches a real contact edge), mark “not a match” (stops asking), or research.' },
   owner_reconcile: { title: 'Owner reconcile — same party?',
     intro: 'Candidate SAME-PARTY owner pairs from three sources folded into one drain: the ORE multi-signal engine (LCC — verdicts only, auto-merge is OFF), the gov owner-unification queue, and gov+dia entity-match candidates. Each card shows the two owner records plus the evidence that linked them. Approve (LCC pairs merge via lcc_merge_entity; gov/dia rows are dispositioned — the domain merge is the resolver job), reject (records them distinct), or research. Every verdict is recorded so it is not re-asked AND writes a labeled pair into entity_match_labels — the training corpus for the Wave 4 resolver.' },
+  sf_link_candidate: { title: 'Salesforce link — confirm candidate',
+    intro: 'The W4.3 splink batch’s best Salesforce-account match per owner (gov + dia), value-ranked by owner impact. Link attaches the SF id via the existing owner-sync semantics (never overwrites a different existing id — that renders a three-way conflict card instead); Not a match records the pair distinct. Every verdict writes a labeled pair into entity_match_labels — the hard-negative training data the W4.4 retrain needs. Work them fast; the population is homogeneous (~0.85 probability), so trust your eyes per row.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -2850,6 +2867,36 @@ function _fedCardHTML(it, i, isNext) {
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">' + mergeVerb + '</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject (distinct)</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'sf_link_candidate') {
+    const owner = c.owner_name || c.canonical_name || 'Owner';
+    const cand = c.sf_account_name_resolved || '(unnamed account)';
+    const prob = (c.score_resolved != null && isFinite(Number(c.score_resolved))) ? Number(c.score_resolved) : null;
+    const existing = c.conflict_existing_id ? String(c.conflict_existing_id) : '';
+    const isConflict = !!existing;
+    const pc = (c.property_count != null) ? Number(c.property_count) : null;
+    const badges = '<span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge">' + esc(c.source_table || '') + '</span>'
+      + (pc != null ? '<span class="q-badge">' + pc + ' propert' + (pc === 1 ? 'y' : 'ies') + '</span>' : '')
+      + (prob != null ? '<span class="q-badge">p=' + prob.toFixed(2) + '</span>' : '')
+      + (isConflict ? '<span class="q-badge pri-high">conflict — existing link</span>' : '');
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(owner)
+        + ' <span style="opacity:.6">&harr;</span> ' + esc(cand) + '</span>'
+        + '<div class="q-item-badges">' + badges + '</div></div>'
+        + '<div class="q-item-meta">' + (c.state ? esc(c.state) + ' · ' : '')
+          + 'Salesforce account: <b>' + esc(cand) + '</b>'
+          + (c.sf_account_id_resolved ? ' <span style="opacity:.6">(' + esc(String(c.sf_account_id_resolved)) + ')</span>' : '') + '</div>';
+    if (isConflict) {
+      body += '<div class="q-item-meta">⚠ This owner is already linked to a DIFFERENT Salesforce account: <b>' + esc(existing) + '</b></div>'
+        + '<div class="q-item-meta">Keep the existing link, switch to the candidate above, or research.</div>';
+      actions = '<button class="q-action" onclick="dcFed(' + i + ',\'keep_existing\')">Keep existing</button>'
+        + '<button class="q-action primary" onclick="dcFed(' + i + ',\'switch\')">Switch to candidate →</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+    } else {
+      body += '<div class="q-item-meta">Is this owner the SAME party as the Salesforce account?</div>';
+      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">Link →</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Not a match</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+    }
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + '<div class="q-actions">' + actions + '</div></div>';
@@ -3063,6 +3110,15 @@ async function dcFed(i, verdict, payload) {
     } else {
       _dcAdvanceFed();
     }
+  } else if (_dcFedType === 'sf_link_candidate' && res.data && res.data.conflict) {
+    // A DIFFERENT Salesforce id landed since W4.3 — the Link button never
+    // overwrites; re-render THIS card as the three-way conflict variant so the
+    // operator can keep the existing link, switch, or research.
+    it.context = it.context || {};
+    it.context.conflict_existing_id = res.data.existing_sf_id || it.context.conflict_existing_id;
+    const wasNext = row && row.classList.contains('pq-next');
+    if (row) row.outerHTML = _fedCardHTML(it, i, wasNext);
+    if (typeof showToast === 'function') showToast('A different Salesforce link now exists — confirm which to keep', 'info');
   } else {
     const err = (res.data && (res.data.error || res.data.message)) || res.error || 'unknown';
     if (typeof showToast === 'function') showToast('Action failed: ' + err, 'error');

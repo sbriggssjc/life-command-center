@@ -33,6 +33,7 @@ import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask } from './_shared/salesforce.js';
 import { handleSfOwnerSync, handleOwnerReconcile } from './_handlers/sf-owner-sync.js';
+import { planSfLinkVerdict, sfLinkColumn, sfLinkTarget, parseConflictExistingId } from './_handlers/sf-link-review.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
@@ -328,6 +329,7 @@ async function handleReviewCounts(req, res) {
     provConflicts, staleIdentities, unlinkedEntities,
     diaResearch, govOwnershipQueue, diaLlc, govLlc,
     govDupAddr, govPending, govSosLinks, stagedIntakeReview,
+    govSfLink, diaSfLink,
   ] = await Promise.all([
     opsLane('data_conflicts',    'v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
     opsLane('stale_identities',  'v_stale_identities'),
@@ -346,6 +348,11 @@ async function handleReviewCounts(req, res) {
     // Its per-item actions (Create property / Re-extract OCR / View extraction)
     // now live on the Inbox cards, so the lane deep-links there.
     withLaneTimeout(opsCount('staged_intake_items?status=in.(review_required,failed)')),
+    // W4.3 review lane: live view depth per domain (the view self-clears a worked
+    // row, so its count IS the workable backlog). Drives the sf_link_candidate
+    // sublane badge — the lane is mint-at-verdict, NOT a 3,452-row lcc_decisions mint.
+    withLaneTimeout(domCount('gov', 'v_sf_link_review_queue')),
+    withLaneTimeout(domCount('dia', 'v_sf_link_review_queue')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -397,6 +404,11 @@ async function handleReviewCounts(req, res) {
       parts: { review_required_or_failed: val(stagedIntakeReview) },
       count_mode: 'exact', status: laneStatus(stagedIntakeReview),
       href: 'pageInbox', tone: 'yellow' },
+    { key: 'sf_link_candidate', label: 'Salesforce link — confirm candidate',
+      count: sum(govSfLink, diaSfLink),
+      parts: { gov: val(govSfLink), dia: val(diaSfLink) },
+      count_mode: 'exact', status: laneStatus(govSfLink, diaSfLink),
+      href: 'pageDataQuality', tone: '' },
   ];
 
   return res.status(200).json({
@@ -886,6 +898,14 @@ const FEDERATED_DECISION_TYPES = new Set([
   // pairs) or a source disposition (gov/dia); every verdict labels a pair into
   // entity_match_labels (Wave 4 training corpus).
   'owner_reconcile',
+  // W4.3 follow-up (2026-07-31): confirm/decline the splink SF-link candidate per
+  // owner. Source = v_sf_link_review_queue (gov + dia, needs_review status).
+  // Link applies the SF link via the existing attach semantics (null-guarded — a
+  // pre-existing DIFFERENT id renders a three-way conflict card, never an
+  // overwrite); every verdict writes an entity_match_labels row (the W4.4
+  // hard-negative training data). Mint-at-verdict (no 3,452-row lcc_decisions
+  // pre-mint); the sublane badge reads the live view count via /api/review-counts.
+  'sf_link_candidate',
 ]);
 
 // Decision types posted as (type + subject) from the PROPERTY-DETAIL signal
@@ -940,6 +960,8 @@ function federatedSubjectRef(type, s) {
       if (s.kind === 'entity_match_candidate') return (s.domain && s.candidate_id != null) ? 'ownrec:emc:' + s.domain + ':' + s.candidate_id : null;
       return null;
     }
+    // W4.3: one card per queued owner (queue_id), namespaced by domain.
+    case 'sf_link_candidate': return (s.domain && s.queue_id != null) ? 'sf_link:' + s.domain + ':' + s.queue_id : null;
   }
   return null;
 }
@@ -1699,6 +1721,46 @@ async function fetchFederatedSource(type, cap, opts) {
     return out;
   }
 
+  if (type === 'sf_link_candidate') {
+    // W4.3 review lane. Source = v_sf_link_review_queue (status='needs_review',
+    // ordered priority_score DESC — the view already ranks by owner impact, so we
+    // read it, not re-derive the ordering). The 18 dia conflict rows carry the
+    // pre-existing sf_company_id in last_error; parseConflictExistingId lifts it so
+    // the card renders the three-way (keep existing / switch / research) variant.
+    // The queue self-clears a worked row (status leaves 'needs_review'), so the
+    // view count IS the live workable depth.
+    const sel = 'queue_id,source_table,source_id,owner_name,canonical_name,state,'
+      + 'property_count,priority_score,sf_account_id_resolved,sf_account_name_resolved,'
+      + 'score_resolved,last_error';
+    const fetchDom = async (dom) => {
+      const r = await domainQuery(dom, 'GET', 'v_sf_link_review_queue?select=' + sel
+        + '&order=priority_score.desc.nullslast,queue_id&limit=' + cap);
+      const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+      return rows.map((row) => ({
+        subject_ref: 'sf_link:' + dom + ':' + row.queue_id,
+        subject_domain: dom, subject_property_id: null, subject_entity_id: null,
+        rank_value: Number(row.priority_score) || 0,
+        context: {
+          domain: dom, queue_id: row.queue_id, source_table: row.source_table,
+          source_id: row.source_id, owner_name: row.owner_name, canonical_name: row.canonical_name,
+          state: row.state, property_count: row.property_count,
+          sf_account_id_resolved: row.sf_account_id_resolved,
+          sf_account_name_resolved: row.sf_account_name_resolved,
+          score_resolved: row.score_resolved,
+          conflict_existing_id: parseConflictExistingId(row.last_error),
+        },
+      }));
+    };
+    const [g, d, gc, dc] = await Promise.all([
+      fetchDom('gov'), fetchDom('dia'),
+      domCnt('gov', 'v_sf_link_review_queue'),
+      domCnt('dia', 'v_sf_link_review_queue'),
+    ]);
+    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
+    return out;
+  }
+
   return out;
 }
 
@@ -2334,6 +2396,130 @@ async function handleDecisionVerdict(req, res) {
       effects.label_written = !!lw.ok;
       await record(verdict, isApprove ? 'decided' : 'skipped', payload, effects);
       return res.status(200).json({ ok: true, verdict, label, effects });
+    }
+
+    // ---- sf_link_candidate (W4.3 follow-up) ----------------------------------
+    // Confirm/decline the splink SF-link candidate for one queued owner. Applies
+    // the link via the EXISTING attach semantics (handleSfLinkTick), null-guarded
+    // (a pre-existing DIFFERENT id → conflict card, NEVER an overwrite), and writes
+    // an entity_match_labels row per verdict (the W4.4 hard-negative corpus). Every
+    // domain write is provenance-logged + reversible; the verdict endpoint is
+    // safe to retry (all writes idempotent). The queue row self-retires (status
+    // leaves 'needs_review'), so the lane count is live.
+    if (decision.decision_type === 'sf_link_candidate') {
+      const rc = decision.context || {};
+      const dom = rc.domain === 'government' ? 'gov' : rc.domain === 'dialysis' ? 'dia' : rc.domain;
+      if (dom !== 'gov' && dom !== 'dia') return res.status(400).json({ error: 'sf_link_candidate: bad domain' });
+      const queueId = rc.queue_id;
+      if (queueId == null) return res.status(400).json({ error: 'sf_link_candidate: queue_id missing' });
+
+      // Research: leave the queue row needs_review, spawn a task, write no label.
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'sf_link_candidate_research',
+          title: 'Confirm Salesforce link: ' + (rc.owner_name || '?') + ' <-> ' + (rc.sf_account_name_resolved || '?'),
+          instructions: 'Confirm or refute that owner "' + (rc.owner_name || '?') + '" is the Salesforce account "'
+            + (rc.sf_account_name_resolved || '?') + '" (' + (rc.sf_account_id_resolved || '?') + '). Domain: ' + dom
+            + '. Queue ' + queueId + '.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        await record('research', 'deferred', payload, { research_task: true });
+        return res.status(200).json({ ok: true, verdict: 'research' });
+      }
+
+      const sfColumn = sfLinkColumn(dom);
+      const tgt = sfLinkTarget(rc.source_table);
+      // Fetch the LIVE SF-column value for the null-guard (approve) + old_value
+      // audit (switch). A row that already holds a different id makes approve a
+      // conflict; switch is the deliberate override that preserves old_value.
+      let currentSfId = null;
+      if (verdict === 'approve' || verdict === 'switch') {
+        const cur = await domainQuery(dom, 'GET',
+          tgt.table + '?' + tgt.idColumn + '=eq.' + encodeURIComponent(rc.source_id)
+          + '&select=' + sfColumn + '&limit=1');
+        if (cur.ok && Array.isArray(cur.data) && cur.data[0]) currentSfId = cur.data[0][sfColumn] || null;
+      }
+
+      const plan = planSfLinkVerdict({ domain: dom, verdict, ctx: rc, currentSfId });
+      if (!plan.ok) return res.status(400).json({ error: plan.error });
+
+      // Conflict: a different non-null SF id appeared since W4.3. Do NOT write, do
+      // NOT record a verdict — return the conflict so the card re-renders as the
+      // three-way (keep existing / switch / research) variant (non-negotiable #1).
+      // HTTP 200 (not 4xx): the frontend fetch wrapper (opsApi) drops the body on a
+      // non-2xx status, so the structured conflict payload must ride a 200. The
+      // body's `ok:false` keeps it from being treated as a completed verdict.
+      if (plan.conflict) {
+        return res.status(200).json({ ok: false, error: 'sf_link_conflict', conflict: true,
+          existing_sf_id: plan.conflictExistingId,
+          candidate_sf_id: rc.sf_account_id_resolved || null,
+          candidate_sf_name: rc.sf_account_name_resolved || null });
+      }
+
+      const effects = {};
+      const nowIso = new Date().toISOString();
+
+      // 1. Source SF-column write (approve non-idempotent, or switch override).
+      if (plan.writeSource) {
+        const patchBody = { [sfColumn]: plan.landedSfId };
+        if (dom === 'gov') patchBody.sf_last_synced = nowIso;   // dia has no sync stamp
+        const wr = await domainQuery(dom, 'PATCH',
+          tgt.table + '?' + tgt.idColumn + '=eq.' + encodeURIComponent(rc.source_id), patchBody);
+        if (!wr.ok) { await recordEffectFailure({ source_write: false, error: wr.data });
+          return res.status(502).json({ error: 'source_write_failed', detail: wr.data }); }
+        effects.source_write = { table: tgt.table, column: sfColumn, value: plan.landedSfId };
+        // Provenance — one row per applied link (reversible audit; old_value is the
+        // pre-write id, null on a clean attach). old_value/new_value are jsonb;
+        // PostgREST encodes the JS string/null into a jsonb scalar directly.
+        const targetDb = dom === 'gov' ? 'gov_db' : 'dia_db';
+        const pv = await domainQuery(dom, 'POST', 'provenance_event_log', {
+          target_database: targetDb, target_table: tgt.table,
+          record_pk_value: String(rc.source_id), field_name: sfColumn,
+          old_value: currentSfId != null ? currentSfId : null, new_value: plan.landedSfId,
+          source: 'sf_link_review_human',
+          confidence: rc.score_resolved != null ? Number(rc.score_resolved) : null,
+          metadata: { batch: 'w4_3_review', queue_id: queueId },
+        }, { Prefer: 'return=minimal' });
+        effects.provenance_written = !!pv.ok;   // audit best-effort; the link already applied
+      }
+
+      // 2. Queue disposition. Only the fields the plan specifies are patched
+      //    (undefined => left as-is), so a reject/keep-existing never disturbs the
+      //    resolved candidate it doesn't own.
+      const qPatch = { status: plan.queueStatus, resolved_at: nowIso, updated_at: nowIso };
+      if (plan.queueLastError !== undefined) qPatch.last_error = plan.queueLastError;
+      if (plan.queueResolvedId !== undefined) qPatch.sf_account_id_resolved = plan.queueResolvedId;
+      if (plan.queueResolvedName !== undefined) qPatch.sf_account_name_resolved = plan.queueResolvedName;
+      const qr = await domainQuery(dom, 'PATCH',
+        'sf_link_research_queue?queue_id=eq.' + encodeURIComponent(queueId), qPatch);
+      if (!qr.ok) { await recordEffectFailure(Object.assign({ queue_disposition: false, error: qr.data }, effects));
+        return res.status(502).json({ error: 'queue_disposition_failed', detail: qr.data }); }
+      effects.queue_status = plan.queueStatus;
+
+      // 3. Label write — THE point of the lane (W4.4 training fuel). NOT optional:
+      //    a failed label write surfaces an error, it does not silently proceed.
+      if (plan.makeLabel) {
+        const lw = await writeEntityMatchLabel({
+          seeder: 'sf_link_review', source_domain: dom,
+          owner_a: rc.owner_name || null, owner_b: rc.sf_account_name_resolved || null,
+          entity_a: rc.source_id != null ? String(rc.source_id) : null,
+          entity_b: rc.sf_account_id_resolved != null ? String(rc.sf_account_id_resolved) : null,
+          verdict: plan.labelVerdict, raw_verdict: plan.rawVerdict,
+          match_score: rc.score_resolved != null ? Number(rc.score_resolved) : null,
+          subject_ref: decision.subject_ref, decision_id: decisionId,
+          decided_by: user.id || null, decided_at: nowIso,
+          evidence_json: { batch: 'w4_3_splink_v1_2026_07_31',
+            probability: rc.score_resolved != null ? Number(rc.score_resolved) : null,
+            source_table: rc.source_table, sf_account_id: rc.sf_account_id_resolved || null,
+            conflict_existing_id: rc.conflict_existing_id || null },
+        });
+        if (!lw.ok) { await recordEffectFailure(Object.assign({ label_written: false, error: lw.data }, effects));
+          return res.status(502).json({ error: 'label_write_failed', detail: lw.data }); }
+        effects.label_written = true;
+      }
+
+      const finalStatus = (plan.verdictKind === 'reject') ? 'skipped' : 'decided';
+      await record(plan.rawVerdict || verdict, finalStatus, payload, effects);
+      return res.status(200).json({ ok: true, verdict: plan.rawVerdict || verdict, label: plan.labelVerdict, effects });
     }
 
     // ---- listing_event_action (R48) -----------------------------------------
