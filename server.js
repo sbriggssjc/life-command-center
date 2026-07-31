@@ -48,6 +48,7 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 import queryCompsHandler from './api/query-comps.js';
+import { handleListingPageCrawl } from './api/_handlers/listing-page-crawl.js';
 
 // Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
 // The Dialysis_DB data-query edge function proxies to these paths when
@@ -267,6 +268,9 @@ app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 
 app.all('/api/contact-writeback-tick', (req, res) => { req.query._route = 'contact-writeback-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-lookup-tick', (req, res) => { req.query._route = 'sf-record-lookup-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-sync-tick', (req, res) => { req.query._route = 'sf-record-sync-tick'; operationsHandler(req, res); });
+// SPEC Part B2 — external listing/property webpage crawl worker (cron:
+// lcc-listing-page-crawl every 30m via lcc_cron_post).
+app.all('/api/listing-page-crawl', (req, res) => handleListingPageCrawl(req, res));
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 

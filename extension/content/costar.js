@@ -355,6 +355,22 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // ── Extract "Documents" section links (deeds, OMs, brochures) ─────
     data.document_links = extractDocumentLinks();
 
+    // New For-Sale layout embeds the OM as a "Marketing Brochure" — capture it
+    // as offering material so the sidebar routes it through the OM intake
+    // pipeline (stage-om), not just as a display-only doc link. Deduped by URL.
+    const brochureDocs = extractMarketingBrochure();
+    if (brochureDocs && brochureDocs.length) {
+      const seenDocUrls = new Set((data.document_links || []).map((d) => d.url));
+      for (const d of brochureDocs) {
+        if (d.url && !seenDocUrls.has(d.url)) { data.document_links.push(d); seenDocUrls.add(d.url); }
+      }
+    }
+
+    // Part B1: capture external property-webpage URL(s) (broker listing page)
+    // for later server-side webcrawl (availability + proactive detail).
+    const externalUrls = extractExternalListingUrls();
+    if (externalUrls && externalUrls.length) data.listing_external_urls = externalUrls;
+
     // Derive tenant_name from the tenants array. Prefer it over any
     // standalone-label-finder result, since the array goes through the
     // full reject filter chain (OM section headers, NAICS sectors,
@@ -3735,6 +3751,196 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     if (lower.includes('lease')) return 'lease';
     if (lower.includes('survey') || lower.includes('plat')) return 'survey';
     return 'other';
+  }
+
+  // ── Marketing Brochure / embedded-OM helpers (new For-Sale layout) ──────
+  // 2026-07-31: CoStar's redesigned For-Sale detail page embeds the offering
+  // material inline under a "Marketing Brochure" heading (an embedded viewer +
+  // an "open in new tab" control) instead of a plain anchor in the "Documents"
+  // card, so extractDocumentLinks() missed it and the OM was never captured or
+  // extracted. classifyBrochureHref() (pure, unit-tested) decides whether an
+  // href/src is a fetchable offering document.
+  const BROCHURE_HEADING_RE = /^(marketing\s+brochure|offering\s+memorandum|marketing\s+(package|material|flyer)|brochure|flyer|\bom\b)$/i;
+  function classifyBrochureHref(href) {
+    if (!href || /^javascript:/i.test(href) || /^(mailto|tel):/i.test(href)) return false;
+    if (/\.(pdf|docx?)(\?|#|$)/i.test(href)) return true;
+    if (/\/(document|documents|attachment|marketing|brochure|flyer|offering|memorandum)/i.test(href)) return true;
+    // CoStar / cloud CDNs that serve the signed offering document blob.
+    if (/(ahprd\d*cdn|csgpimgs|blob\.core|amazonaws|cloudfront|azureedge)/i.test(href)) return true;
+    return false;
+  }
+
+  // Find the embedded Marketing Brochure / OM on for-sale|for-lease listing
+  // pages and return it as offering-material doc link(s) so the sidebar routes
+  // it through the OM intake pipeline. Scoped to listing pages so a stray
+  // "brochure" link on a comp/public-record page isn't reclassified as an OM.
+  function extractMarketingBrochure() {
+    const pageUrl = (window.location && window.location.href) || '';
+    if (!/\/(for-sale|for-lease)\//i.test(pageUrl)) return null;
+
+    const out = [];
+    const seen = new Set();
+    const diagCandidates = [];
+    const push = (url, label) => {
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      out.push({
+        label: (label && label.trim()) || 'Marketing Brochure',
+        url,
+        type: 'marketing_brochure',
+        is_offering_material: true,
+        source: 'forsale_brochure_embed',
+      });
+    };
+
+    let sawHeadingOuter = false;
+    try {
+      const headings = document.querySelectorAll(
+        'h1,h2,h3,h4,h5,h6,[class*="heading"],[class*="title"],[class*="Header"],[class*="header"]'
+      );
+      let sawHeading = false;
+      for (const h of headings) {
+        const own = (getOwnText(h) || h.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!BROCHURE_HEADING_RE.test(own)) continue;
+        sawHeading = true;
+        sawHeadingOuter = true;
+        // Climb to the nearest bounded ancestor that actually holds a link/embed.
+        let container = h;
+        for (let i = 0; i < 6; i++) {
+          if (!container || container === document.body) { container = null; break; }
+          if (container.querySelector
+              && container.querySelector('a[href],iframe[src],embed[src],object[data]')
+              && (container.textContent || '').length < 6000) break;
+          container = container.parentElement;
+        }
+        if (!container) continue;
+        container.querySelectorAll('a[href]').forEach((a) => {
+          const href = a.href || a.getAttribute('href') || '';
+          diagCandidates.push(href);
+          if (classifyBrochureHref(href)) push(href, (a.textContent || '').trim() || own);
+        });
+        container.querySelectorAll('iframe[src],embed[src],object[data]').forEach((el) => {
+          const src = el.getAttribute('src') || el.getAttribute('data') || '';
+          diagCandidates.push(src);
+          if (classifyBrochureHref(src)) push(src, own);
+        });
+        // The redesigned For-Sale layout renders the brochure behind an "open in
+        // new tab" / "view" / "download" control rather than a bare .pdf anchor,
+        // so classifyBrochureHref (which keys on file/CDN shape) can miss it.
+        // Scoped to the brochure container (low false-positive risk), accept an
+        // http(s)/blob anchor that opens in a new tab or is labeled open/view/
+        // download. Only when the strict pass found nothing.
+        if (out.length === 0) {
+          container.querySelectorAll('a[href]').forEach((a) => {
+            const href = a.href || a.getAttribute('href') || '';
+            if (!/^(https?:|blob:)/i.test(href)) return;
+            const hint = `${a.getAttribute('aria-label') || ''} ${a.getAttribute('title') || ''} ${a.className || ''}`.toLowerCase();
+            if (a.getAttribute('target') === '_blank'
+                || /\b(open|view|download|brochure|document|flyer|external|new\s*tab)\b/.test(hint)) {
+              push(href, (a.textContent || '').trim() || 'Marketing Brochure');
+            }
+          });
+        }
+      }
+      // Fallback: a brochure heading exists but the embed wasn't in a bounded
+      // container — accept a page-wide anchor/embed whose URL clearly names the
+      // offering document.
+      if (out.length === 0 && sawHeading) {
+        document.querySelectorAll('a[href],iframe[src],embed[src],object[data]').forEach((el) => {
+          const href = el.href || el.getAttribute('href') || el.getAttribute('src') || el.getAttribute('data') || '';
+          if (classifyBrochureHref(href) && /(brochure|offering|memorandum|marketing|flyer)/i.test(href)) {
+            push(href, 'Marketing Brochure');
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('[LCC CoStar] marketing brochure extraction error:', err);
+    }
+    // Diagnostic (helps live-page triage): one concise line on for-sale pages so
+    // a miss is explainable without a DevTools deep-dive — did we see a brochure
+    // heading, how many candidate links were in its container, what did we keep.
+    try {
+      console.log('[LCC CoStar] Marketing Brochure detect →', {
+        heading_found: sawHeadingOuter,
+        candidates_in_container: diagCandidates.length,
+        captured: out.length,
+        urls: out.map((o) => o.url),
+        candidate_sample: diagCandidates.slice(0, 8),
+      });
+    } catch { /* ignore */ }
+    return out.length ? out : null;
+  }
+
+  // ── External property-webpage URL helpers (Part B1) ─────────────────────
+  // The broker's property webpage (brokerage listing page) is linked from the
+  // contact card / brochure area. We capture the URL only (reading an href
+  // needs no host permission); a server-side worker crawls it later for
+  // availability + proactive detail. isExcludedHost()/pickExternalListingUrls()
+  // are pure and unit-tested.
+  const EXCLUDED_URL_HOST_RE = /(^|\.)(costar\.com|csgpimgs\.com|google\.[a-z.]+|gstatic\.com|googleapis\.com|facebook\.com|twitter\.com|x\.com|linkedin\.com|instagram\.com|youtube\.com|bing\.com|apple\.com|microsoft\.com|schema\.org|w3\.org|adobe\.com)$/i;
+  const GENERIC_EMAIL_DOMAINS = new Set(['gmail.com','yahoo.com','outlook.com','hotmail.com','aol.com','icloud.com','costar.com','me.com','msn.com','live.com']);
+  const WEBSITE_LABEL_RE = /\b(website|view\s+listing|property\s+(site|website|page)|marketing\s+(site|website)|learn\s+more|listing\s+page|view\s+(the\s+)?property)\b/i;
+  function isExcludedHost(host) {
+    if (!host) return true;
+    return EXCLUDED_URL_HOST_RE.test(String(host).toLowerCase());
+  }
+  // Decide which external links to keep. `links` = [{url,label,host}], `emailDomains`
+  // = Set of broker email domains found on the page. Keep a link when its host
+  // matches a broker email domain (strong signal) OR its label is website-ish.
+  function pickExternalListingUrls(links, emailDomains) {
+    const kept = [];
+    const seen = new Set();
+    for (const l of links || []) {
+      const host = String(l.host || '').toLowerCase();
+      if (!host || isExcludedHost(host)) continue;
+      const key = String(l.url || '').split('#')[0].toLowerCase();
+      if (!key || seen.has(key)) continue;
+      const matched = Array.from(emailDomains || []).some(
+        (d) => d && (host === d || host.endsWith('.' + d)));
+      const websiteish = WEBSITE_LABEL_RE.test(l.label || '');
+      if (!matched && !websiteish) continue;
+      seen.add(key);
+      kept.push({ url: l.url, label: (l.label || host).slice(0, 160), host, matched_broker_domain: matched });
+    }
+    // Broker-domain matches first (most authoritative), cap to keep it tight.
+    kept.sort((a, b) => (b.matched_broker_domain === true) - (a.matched_broker_domain === true));
+    return kept.slice(0, 6);
+  }
+
+  // Collect non-generic email domains present on the page (mailto: + body text).
+  function collectPageEmailDomains() {
+    const set = new Set();
+    try {
+      document.querySelectorAll('a[href^="mailto:"]').forEach((a) => {
+        const m = /mailto:([^?]+)/i.exec(a.getAttribute('href') || '');
+        if (m && m[1].includes('@')) set.add(m[1].split('@')[1].toLowerCase().trim());
+      });
+      const text = (document.body && document.body.innerText) || '';
+      const re = /[a-z0-9._%+-]+@([a-z0-9.-]+\.[a-z]{2,})/gi;
+      let mm;
+      while ((mm = re.exec(text)) !== null) set.add(mm[1].toLowerCase());
+    } catch { /* best-effort */ }
+    for (const d of GENERIC_EMAIL_DOMAINS) set.delete(d);
+    return set;
+  }
+
+  // DOM driver for Part B1 — scoped to for-sale/for-lease listing pages.
+  function extractExternalListingUrls() {
+    const pageUrl = (window.location && window.location.href) || '';
+    if (!/\/(for-sale|for-lease)\//i.test(pageUrl)) return [];
+    const links = [];
+    try {
+      document.querySelectorAll('a[href]').forEach((a) => {
+        const href = a.href || a.getAttribute('href') || '';
+        if (!/^https?:\/\//i.test(href)) return;
+        let host = '';
+        try { host = new URL(href).hostname; } catch { return; }
+        links.push({ url: href, label: (a.textContent || '').replace(/\s+/g, ' ').trim(), host });
+      });
+    } catch (err) {
+      console.warn('[LCC CoStar] external URL extraction error:', err);
+    }
+    return pickExternalListingUrls(links, collectPageEmailDomains());
   }
 
   function extractDocumentLinks() {

@@ -2499,6 +2499,12 @@ async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
   let count = 0;
   for (const doc of docs) {
     if (!doc.url) continue;
+    // Offering material (embedded For-Sale "Marketing Brochure") is routed
+    // client-side through the OM intake pipeline (STAGE_OM_VIA_TAB → stage-om),
+    // where the bytes are fetched in the live tab. Skip it here so we don't
+    // mint a url_captured pointer + attempt a server-side CDN re-fetch that
+    // always dies (the signed URL is bound to the browser session).
+    if (doc.is_offering_material || doc.type === 'marketing_brochure') continue;
     const fileName = doc.label || doc.url.split('/').pop() || 'unknown';
     const row = {
       property_id: propertyId,
@@ -2554,6 +2560,48 @@ async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
     else console.error(`[doc-links] insert also failed for ${fileName}:`, r.status, JSON.stringify(r.data));
   }
   return count;
+}
+
+// SPEC Part B1/B2 — register external property-webpage URLs (broker listing
+// pages) captured by the sidebar (`metadata.listing_external_urls`) into the
+// LCC Opps `lcc_listing_web_pages` registry. The server-side listing-page-crawl
+// worker (Railway egress; the extension can't fetch arbitrary broker sites)
+// then saves an HTML snapshot, checks availability, and — flag-gated —
+// proactively extracts additional detail. Idempotent per (domain, property_id,
+// url): GET-then-POST so we never clobber an existing row's crawl schedule/state.
+async function registerExternalListingPages(domain, propertyId, metadata) {
+  const urls = Array.isArray(metadata.listing_external_urls) ? metadata.listing_external_urls : [];
+  if (!urls.length || propertyId == null) return { registered: 0, skipped: 0 };
+  const normDomain = /gov/i.test(domain) ? 'gov' : 'dia';
+  let registered = 0;
+  let skipped = 0;
+  for (const u of urls.slice(0, 6)) {
+    const url = String((u && u.url) || '').trim();
+    if (!url || !/^https?:\/\//i.test(url)) { skipped++; continue; }
+    try {
+      const existing = await opsQuery('GET',
+        `lcc_listing_web_pages?domain=eq.${normDomain}` +
+        `&property_id=eq.${encodeURIComponent(propertyId)}` +
+        `&url=eq.${encodeURIComponent(url)}&select=id&limit=1`);
+      if (existing.ok && Array.isArray(existing.data) && existing.data.length) { skipped++; continue; }
+      const ins = await opsQuery('POST', 'lcc_listing_web_pages', {
+        domain: normDomain,
+        property_id: propertyId,
+        url,
+        label: (u && u.label) || null,
+        source: 'costar_sidebar',
+        matched_broker_domain: !!(u && u.matched_broker_domain),
+      }, { headers: { Prefer: 'return=minimal' } });
+      if (ins.ok) registered++; else skipped++;
+    } catch (e) {
+      skipped++;
+      console.warn('[external-pages] register failed for', url, e?.message || e);
+    }
+  }
+  if (registered || skipped) {
+    console.log(`[external-pages] ${normDomain}/${propertyId}: ${registered} registered / ${skipped} skipped`);
+  }
+  return { registered, skipped };
 }
 
 async function upsertSidebarContacts(domain, propertyId, entity, metadata, provCollect) {
@@ -3122,6 +3170,12 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
 
   // Step 5b0: Upsert document links from CoStar "Documents" section
   results.records.document_links = await upsertDocumentLinks(domain, propertyId, metadata, provCollect);
+
+  // Step 5b0.1 (SPEC Part B1/B2): register external property-webpage URLs for
+  // the server-side listing-page-crawl worker (HTML snapshot + availability +
+  // proactive detail). The extension can't fetch arbitrary broker sites; the
+  // registry (LCC Opps) is the single source the worker crawls.
+  results.records.external_pages = await registerExternalListingPages(domain, propertyId, metadata);
 
   // Step 5b0.5: Auto-stage gov comp to sf_comps_staging for Salesforce sync
   if (domain === 'government' && results.records.sales > 0) {
