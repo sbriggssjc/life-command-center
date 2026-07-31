@@ -329,7 +329,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
 
     const property = safeExtract(0)[0] || null;
     const leasesRaw = safeExtract(1) || [];
-    const ownership = safeExtract(2)[0] || null;
+    let ownership = safeExtract(2)[0] || null;
     const chain = safeExtract(3) || [];
     const rankings = safeExtract(4)[0] || null;
     const propertyCmsRow = safeExtract(5)[0] || null;
@@ -401,6 +401,21 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         // reflects the truth across reopens.
         if (ent && ent.id && ownership && !ownership.owner_entity_id) {
           ownership.owner_entity_id = ent.id;
+        }
+        // Property-owner truth: the LCC entity lookup carries the reconciled property
+        // owner (lcc_property_owner). Show it as the Owner when the DOMAIN ownership row
+        // has no real owner (absent, or the operator-as-owner fallback). Domain deed data
+        // still wins when present. See docs/architecture/property-owner-subsystem.md.
+        if (ent && ent.property_owner && ent.property_owner.owner_name) {
+          if (!ownership) ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+          const domainHasRealOwner = ownership.true_owner && !ownership.true_owner_is_operator;
+          if (!domainHasRealOwner) {
+            ownership.true_owner = ent.property_owner.owner_name;
+            ownership.true_owner_name = ent.property_owner.owner_name;
+            ownership.true_owner_is_operator = false;
+            ownership.owner_entity_id = ent.property_owner.owner_entity_id || ownership.owner_entity_id || ent.id;
+            ownership.owner_source = 'lcc_property_owner';
+          }
         }
       }
     } catch (e) {

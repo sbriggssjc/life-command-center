@@ -35,6 +35,7 @@ import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTa
 import { handleSfOwnerSync, handleOwnerReconcile } from './_handlers/sf-owner-sync.js';
 import { planSfLinkVerdict, sfLinkColumn, sfLinkTarget, parseConflictExistingId } from './_handlers/sf-link-review.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
+import { handleSfSellerOwner } from './_handlers/sf-seller-owner.js';
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
@@ -102,6 +103,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'sf-owner-sync':       return handleSfOwnerSync(req, res);
     case 'owner-reconcile':     return handleOwnerReconcile(req, res);
     case 'deal-correspondence-backfill': return handleDealCorrespondenceBackfill(req, res);
+    case 'sf-seller-owner':      return handleSfSellerOwner(req, res);
     case 'storage-cleanup':     return handleStorageCleanup(req, res);
     case 'artifact-offload':    return handleArtifactOffload(req, res);
     case 'consolidate-property': return handleConsolidateProperty(req, res);
