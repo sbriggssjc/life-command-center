@@ -13,14 +13,20 @@
 # Found via Railway build failure 2026-07-31 — see docs/resolver/RUNBOOK §1 note.
 FROM python:3.11-slim-bookworm AS libpostal-build
 
-ARG LIBPOSTAL_REF=v1.1
+# PINNED to a modern master commit (2026-07 HEAD), NOT the 2018 v1.1 tag: pypostal
+# >=1.1.10 (requirements.txt) binds APIs the v1.1 C library lacks (e.g.
+# libpostal_expand_address_root) — with v1.1 the wheel compiles with implicit-decl
+# warnings, then fails at link. Found via the second Railway build failure 2026-07-31.
+# This commit also carries the upstream GCC-14 crf_context.c fix.
+ARG LIBPOSTAL_REF=25099c506612b34b23b1bfe286ca6321fcf06f35
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates build-essential autoconf automake libtool pkg-config git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt
-RUN git clone --depth 1 --branch ${LIBPOSTAL_REF} https://github.com/openvenues/libpostal || \
-    git clone --depth 1 https://github.com/openvenues/libpostal
+# Tarball fetch works for any ref (sha or tag) and skips git history.
+RUN curl -fsSL https://github.com/openvenues/libpostal/archive/${LIBPOSTAL_REF}.tar.gz | tar -xz \
+    && mv libpostal-${LIBPOSTAL_REF}* libpostal
 # Data dir kept OUTSIDE the source tree so it survives into the runtime image.
 # Belt-and-suspenders for newer GCC: give crf_context.c the float_utils.h include
 # it relies on implicitly (upstream v1.1 omission; harmless no-op when already fixed).

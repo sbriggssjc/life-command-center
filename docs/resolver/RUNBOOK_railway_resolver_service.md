@@ -35,6 +35,13 @@ the Railway dashboard**; this runbook is the exact click-path + verification.
 > is copied) and (b) a guarded sed that adds the missing `#include "float_utils.h"` —
 > verified against the v1.1 tag source. If a future base bump reintroduces toolchain
 > errors, check this note first before touching libpostal itself.
+>
+> **Build-failure #2 (same day):** with the bookworm pin the C library built, but the
+> `postal` Python wheel failed at link — pypostal >=1.1.10 binds
+> `libpostal_expand_address_root`, which the 2018 **v1.1 tag doesn't have**. Fix:
+> `LIBPOSTAL_REF` now pins master commit `25099c50…` (2026-07 HEAD, fetched as a
+> tarball; also carries the upstream GCC-14 fix, making the sed guard a no-op). Rule of
+> thumb: pypostal tracks libpostal master, not the ancient release tags.
 
 ### Resources
 - **CPU-only.** No GPU. bge-small runs fine on CPU; libpostal is C.
