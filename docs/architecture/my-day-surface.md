@@ -14,7 +14,12 @@ returns `{todos, active_deals, next_touchpoints, pipeline}` + counts.
    (offer/seller flow) **and** the deal-stage next-steps (below).
 2. **Active deals** (`active_deals`): open `bd_opportunities`, ranked by proximity to close
    (non_refundable → loi_executed → off_market → listing_signed → bov → identified). Owner from
-   the entity override → `bd_opportunities.owner_user_id`.
+   the entity override → `bd_opportunities.owner_user_id`. Each deal carries its **last touch**
+   (from `v_activity_unified`) and a stage-aware **`stale` / going-cold flag** (non_refundable &
+   loi_executed >7d quiet, listing_signed & off_market >14d, bov >10d, or no logged activity);
+   stale deals sort first, and `active_deal_stale` counts them. This is the "which deals need a
+   touch now" signal — it sharpens as intake logs more activity (today 11 of 40 open deals have
+   spine activity; the rest read as no-touch → stale by design).
 3. **Next best touchpoints** (`next_touchpoints`): `touchpoint_cadence` rows due/overdue (stale
    >400d dropped), ranked by tier (A>B) then client value (deal volume/engagement) then overdue.
    Name resolved from contact → unified_contacts → entity → property; cadence `notes` surfaced.
