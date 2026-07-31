@@ -87,9 +87,12 @@ block inbound ports, so use an **outbound** tunnel — no port-forwarding, no st
    Windows service so it survives reboots. Cloudflare's "Connect an application" guide
    walks this in 5 minutes.
 4. **Lock it down** (this is an open inference endpoint): put **Cloudflare Access** in
-   front of the hostname with a service-token policy, and set the matching
-   `OLLAMA_API_KEY` in Railway so only LCC can call it. (The seam already sends
-   `Authorization: Bearer $OLLAMA_API_KEY` when that var is set.)
+   front of the hostname with a **Service Auth** policy + service token.
+   **CORRECTED 2026-07-31 (session 33):** Access service tokens authenticate with the
+   `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers — a Bearer header does
+   NOT pass an Access policy. The seam now sends those headers when
+   `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` are set in Railway (ai.js
+   patched this session; `OLLAMA_API_KEY`/Bearer remains for other proxy styles).
 
 ### Option B — Tailscale (simplest if you don't want a public hostname)
 1. Install Tailscale on GaryBuilt **and** add it to the Railway service (Tailscale has a

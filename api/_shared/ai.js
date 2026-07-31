@@ -550,8 +550,18 @@ async function invokeOllamaExtraction({ prompt }) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // Present only if a proxy (Cloudflare Access / bearer) fronts the endpoint.
+        // Present only if a bearer-style proxy fronts the endpoint.
         ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+        // Cloudflare Access service-token auth (the GaryBuilt named-tunnel path):
+        // Access requires these two headers — a Bearer header does NOT pass an
+        // Access policy. Set CF_ACCESS_CLIENT_ID/SECRET in Railway when the
+        // tunnel hostname is protected by a Service Auth policy.
+        ...(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+          ? {
+              'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID,
+              'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET,
+            }
+          : {}),
       },
       body: JSON.stringify({
         model,
