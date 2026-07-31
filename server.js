@@ -149,6 +149,7 @@ app.all('/api/cms-match', (req, res) => { req.query._route = 'cms-match'; adminH
 app.all('/api/ownership-reconcile', (req, res) => { req.query._route = 'ownership-reconcile'; adminHandler(req, res); });
 app.all('/api/sf-sync-queue', (req, res) => { req.query._route = 'sf-sync-queue'; adminHandler(req, res); });
 app.all('/api/sf-owner-sync', (req, res) => { req.query._route = 'sf-owner-sync'; adminHandler(req, res); });
+app.all('/api/owner-reconcile', (req, res) => { req.query._route = 'owner-reconcile'; adminHandler(req, res); });
 app.all('/api/storage-cleanup', (req, res) => { req.query._route = 'storage-cleanup'; adminHandler(req, res); });
 app.all('/api/consolidate-property', (req, res) => { req.query._route = 'consolidate-property'; adminHandler(req, res); });
 app.all('/api/geocode-tick', (req, res) => { req.query._route = 'geocode-tick'; adminHandler(req, res); });

@@ -110,17 +110,43 @@ export async function handleSfOwnerSync(req, res) {
       });
     }
 
-    // Apply through the DB sink (maps owner → lcc_user, preserves manual overrides).
-    const apply = await opsQuery('POST', 'rpc/lcc_apply_owner_backfill', {
-      p_map: ownerMap, p_set_by: 'sf_owner_backfill',
+    // Record SF-Task owners as EVIDENCE (weight 0.8) into the reconciliation engine,
+    // then fold in the pure-DB feeders (outbound email) and reconcile every deal to a
+    // best-answer owner with confidence + provenance. Manual overrides are preserved.
+    const sfEvidence = await opsQuery('POST', 'rpc/lcc_record_sf_owner_evidence', {
+      p_map: ownerMap, p_source: 'sf_task', p_weight: 0.8,
+    }).catch((e) => ({ error: String(e?.message || e) }));
+
+    const reconcile = await opsQuery('POST', 'rpc/lcc_reconcile_owners_run', {
+      p_min_confidence: 0.55, p_write: true,
     }).catch((e) => ({ error: String(e?.message || e) }));
 
     return res.status(200).json({
       ok: true, sf_ids: sfIds.length,
       accounts: byObj.Account.length, opportunities: byObj.Opportunity.length,
-      owners_returned: ownerMap.length, applied: apply?.data ?? apply, errors,
+      owners_returned: ownerMap.length,
+      sf_evidence: sfEvidence?.data ?? sfEvidence,
+      reconcile: reconcile?.data ?? reconcile,
+      errors,
     });
   } catch (e) {
     return res.status(200).json({ ok: false, reason: 'sf_owner_sync_error', detail: String(e?.message || e).slice(0, 300) });
+  }
+}
+
+// Dedicated owner-reconciliation run (no Salesforce dependency) — folds in the pure-DB
+// feeders (outbound email today; more later) and reconciles every deal to a best-answer
+// owner. This is the route the background AI / LCC calls to "clean and connect" ownership.
+// Route: POST /api/owner-reconcile   (?dry=1 to score without writing)
+export async function handleOwnerReconcile(req, res) {
+  try {
+    const write = String(req.query?.dry || '') !== '1';
+    const minConf = req.query?.min_confidence ? Number(req.query.min_confidence) : 0.55;
+    const r = await opsQuery('POST', 'rpc/lcc_reconcile_owners_run', {
+      p_min_confidence: minConf, p_write: write,
+    }).catch((e) => ({ error: String(e?.message || e) }));
+    return res.status(200).json({ ok: true, write, result: r?.data ?? r });
+  } catch (e) {
+    return res.status(200).json({ ok: false, reason: 'owner_reconcile_error', detail: String(e?.message || e).slice(0, 300) });
   }
 }
