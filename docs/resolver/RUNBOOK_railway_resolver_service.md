@@ -60,7 +60,7 @@ All optional — the service has safe defaults. Set these on the service:
 | `RESOLVER_AUTO_LINK` | *(leave unset)* | Bands come from the trained model JSON; only set to override. |
 | `RESOLVER_AUTO_REJECT` | *(leave unset)* | ″ |
 | `SUPABASE_URL` | `https://xengecqvemvfknjvbvrq.supabase.co` | **Only for `/train`** — the Storage host holding the W4.1 corpus (LCC Opps). |
-| `RESOLVER_STORAGE_KEY` | `sb_publishable_R4uMbl-9vtCvPUDF5eDO8g_2BM5jJY_` | **Read-only, RESOLVED 2026-07-31 (session 32):** the LCC Opps *publishable* key + an RLS policy (`resolver_corpus_read`: anon SELECT on storage.objects where bucket_id='entity-resolution') grants download-only access to exactly this bucket. Verified: corpus downloads 200 with this key; anon has no write policy, so writes are impossible by construction. Do NOT swap in a service-role key. |
+| `RESOLVER_STORAGE_KEY` | *(the LCC Opps **legacy anon JWT** — Supabase dashboard → LCC Opps → Settings → API keys → "anon" legacy key, `eyJ…`)* | **Read-only, CORRECTED 2026-07-31 (session 33):** must be the legacy anon **JWT**, NOT the `sb_publishable_…` key — corpus.py sends only `Authorization: Bearer <key>`, and publishable keys are valid solely in an `apikey` header (Bearer + publishable → Storage 400). The anon JWT + the `resolver_corpus_read` RLS policy (anon SELECT on storage.objects where bucket_id='entity-resolution') grants download-only access to exactly this bucket; anon has no write policy, so writes are impossible by construction. Do NOT swap in a service-role key. |
 | `RESOLVER_CORPUS_BUCKET` | `entity-resolution` | (default) Storage bucket W4.1 writes to. |
 | `RESOLVER_CORPUS_PATH` | `w4_1/labeled_pairs.jsonl` | (default) object path. |
 

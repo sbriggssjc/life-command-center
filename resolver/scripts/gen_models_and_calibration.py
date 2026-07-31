@@ -23,13 +23,13 @@ for p in (_REPO, _RESOLVER):
 
 try:
     from app.calibration import calibration_report
-    from app.corpus import load_stub_pairs, split_of
+    from app.corpus import load_corpus, load_stub_pairs, split_of
     from app.features import MODELS
     from app.train import splink_available, train_model
     from app import __version__
 except ImportError:  # module-style import
     from resolver.app.calibration import calibration_report
-    from resolver.app.corpus import load_stub_pairs, split_of
+    from resolver.app.corpus import load_corpus, load_stub_pairs, split_of
     from resolver.app.features import MODELS
     from resolver.app.train import splink_available, train_model
     from resolver.app import __version__
@@ -49,7 +49,11 @@ def _fmt_curve(curve, keep=(0.0, 0.2, 0.5, 0.7, 0.8, 0.9, 0.92, 0.95, 0.99)):
 
 
 def main():
-    pairs = load_stub_pairs()
+    # Real corpus when SUPABASE_URL/RESOLVER_STORAGE_KEY are set (same path /train
+    # uses); the committed fixture stub otherwise. W4.1 landed 2026-07-31, so CI/dev
+    # without creds still regenerates from the stub, while the release artifacts are
+    # built from storage://entity-resolution/w4_1/labeled_pairs.jsonl.
+    pairs, corpus_label = load_corpus(prefer_storage=True)
     train_pairs = [p for p in pairs if split_of(p) in ("train", "valid")]
     test_pairs = [p for p in pairs if split_of(p) == "test"]
 
@@ -59,18 +63,23 @@ def main():
     lines.append("")
     lines.append(f"**Service version:** {__version__}  ")
     lines.append("**Audit unit:** W4.2 (LCC Audit Rollout Plan)  ")
-    lines.append(f"**Corpus:** `resolver/fixtures/pairs.jsonl` (STUB — W4.1 corpus not yet in Storage)  ")
+    lines.append(f"**Corpus:** `{corpus_label}`  ")
     lines.append(f"**splink installed in this build:** {splink_available()}  ")
     lines.append("")
-    lines.append(
-        "> ⚠️ **This report is computed on the committed fixture stub, not the live W4.1 "
-        "training set.** W4.1 (training-data export) is ⬜ not started, so the labeled "
-        "corpus is not in Supabase Storage yet. The numbers below prove the pipeline, band "
-        "selection, and precision target end-to-end. **Re-run `POST /train` (or this script) "
-        "once W4.1 lands** — see the runbook — to regenerate the models and this report "
-        "against real labels. The band-selection logic and the ≥0.995 auto-link precision "
-        "target are unchanged; only the m/u parameters and thresholds move."
-    )
+    if corpus_label == "fixtures":
+        lines.append(
+            "> ⚠️ **This report is computed on the committed fixture stub, not the live W4.1 "
+            "training set** (SUPABASE_URL/RESOLVER_STORAGE_KEY were unset when it was "
+            "generated). Set them and re-run to regenerate against the real corpus."
+        )
+    else:
+        lines.append(
+            "> ✅ **This report is computed on the live W4.1 corpus** (delivered "
+            "2026-07-31 — see docs/resolver/W4_1_CORPUS_REPORT.md for composition and "
+            "known gaps: sf_account/email are null in this corpus, so the owner_sf and "
+            "contact models are effectively name/address-calibrated until W4.3 feeds "
+            "back SF-linked pairs)."
+        )
     lines.append("")
     lines.append(f"- Train pairs: **{len(train_pairs)}**  ")
     lines.append(f"- Test pairs: **{len(test_pairs)}**  ")
@@ -82,7 +91,7 @@ def main():
         report = calibration_report(fs, test_pairs, target_precision=0.995)
         fs.auto_link = report["bands"]["auto_link"]
         fs.auto_reject = report["bands"]["auto_reject"]
-        fs.meta["corpus"] = "fixtures"
+        fs.meta["corpus"] = corpus_label
         out_path = os.path.join(FIXTURES, f"model_{model}.json")
         fs.save(out_path)
 
