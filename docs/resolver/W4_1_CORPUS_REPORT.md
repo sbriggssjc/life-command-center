@@ -86,3 +86,15 @@ export IS the W4.4 corpus-refresh step (pair it with the nightly `/train`).
    `storage://entity-resolution/w4_1/labeled_pairs.jsonl`.
 4. Regenerate `docs/resolver/CALIBRATION.md` against the real corpus; approve
    auto-link band (precision ≥ 0.995) → unlocks W4.3 (SF-link 30k backlog run).
+
+## Addendum — corpus v2 accrual (2026-07-31 evening)
+
+The corpus is no longer static. The W4.3 review lane writes an
+`entity_match_labels` row per human verdict (`seeder='sf_link_review'`,
+`same_party`/`distinct`); as of 2026-07-31 evening: **95 rows (52 same_party /
+43 distinct)** — the first REAL hard negatives (the generated negatives above
+were guarded-easy by design; the human `distinct` verdicts are the fix for the
+calibration-transfer gap measured in W4.3, where the 0.005 auto-link band proved
+non-transferable to the live backlog). Re-running `w41-corpus-export
+?action=export` ingests them automatically (verdict `same_party`→1, else→0).
+W4.4 makes that refresh nightly.
