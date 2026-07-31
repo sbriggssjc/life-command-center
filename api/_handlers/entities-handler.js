@@ -424,7 +424,19 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       const tryQuery = async (extraFilter) => {
         const path = `entities?${baseFilter}&${extraFilter}&select=${select}&limit=1`;
         const r = await opsQuery('GET', path);
-        return (r.data && r.data[0]) || null;
+        const hit = (r.data && r.data[0]) || null;
+        // Attach the reconciled PROPERTY owner (lcc_property_owner) so the detail panel
+        // can show the real owner entity instead of falling back to the operator/tenant.
+        // This is the property-owner truth (an entity), distinct from the point person.
+        // Best-effort; a miss just leaves property_owner unset (panel shows "Unresolved").
+        if (hit && hit.id) {
+          try {
+            const po = await opsQuery('GET',
+              `lcc_property_owner?entity_id=eq.${hit.id}&select=owner_entity_id,owner_name,confidence,source&limit=1`);
+            if (po.data && po.data[0] && po.data[0].owner_name) hit.property_owner = po.data[0];
+          } catch (_e) { /* best-effort */ }
+        }
+        return hit;
       };
 
       // 1) entity_id — caller already knows the row (e.g. immediately after save)
