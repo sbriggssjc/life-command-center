@@ -66,8 +66,11 @@ Team Queue is empty/restricted.
   the MV values stand only when the user isn't mapped. The Today **“View all N items”** on the My Work
   widget (`app.js`) now uses the scoped list total (`canonicalMyWork.pagination.total`) instead of the
   workspace-wide `open_actions`, so the badge, the “My Actions” metric, and the list all agree.
-- **Frontend Team Queue subtab** still renders for everyone; the backend gate protects the data, but
-  hide the subtab for non-leads (reuse `_teamQueueDisabledHTML()`) once the client knows `isLead`.
+- **Frontend Team Queue subtab — DONE (2026-07-31).** `/api/members?action=me` now returns `is_lead`
+  (lcc_users.role==='advisor', mapped by email) + `lcc_role`; `app.js` stores `LCC_USER.is_lead` and
+  `applyLeadGatedUI()` hides the `[data-mywork-tab="team"]` subtab + the Today “Team Open” metric for
+  non-leads, and `_renderPipelineSubview` forces a non-lead off the team tab. The backend gate remains
+  the real boundary; this is the cosmetic finish.
 - **Research rows**: `v_my_work_scoped` is actions-only (see caveat below).
 
 ## Original spec (queue.js) — for reference

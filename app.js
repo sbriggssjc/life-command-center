@@ -23,9 +23,19 @@ const LCC_USER = {
   workspace_id: null,
   workspace_name: null,
   role: null,
+  is_lead: false,   // lcc_users.role==='advisor' — gates lead-only surfaces (Team Queue)
   memberships: [],
   _loaded: false
 };
+
+// Hide lead-only UI (the Team Queue subtab) for non-leads. The backend Team Queue
+// gate is the real boundary; this just avoids showing a tab that returns empty.
+function applyLeadGatedUI() {
+  try {
+    if (LCC_USER.is_lead) return;
+    document.querySelectorAll('[data-mywork-tab="team"]').forEach(el => { el.style.display = 'none'; });
+  } catch (_e) { /* non-fatal */ }
+}
 
 // ============================================================
 // FEATURE FLAGS — loaded from /api/flags, gates rollout features
@@ -105,8 +115,10 @@ async function loadUserContext() {
         LCC_USER.workspace_id = data.workspace_id;
         LCC_USER.workspace_name = data.memberships?.[0]?.workspace_name;
         LCC_USER.role = data.role;
+        LCC_USER.is_lead = !!data.is_lead;
         LCC_USER.memberships = data.memberships || [];
         LCC_USER._loaded = true;
+        applyLeadGatedUI();
       }
     }
   } catch (e) {
@@ -1054,6 +1066,9 @@ function _renderPipelineSubview(tab) {
   if (tab === 'prospects') { if (typeof renderPipelineProspects === 'function') renderPipelineProspects(); return; }
   if (tab === 'deals') { if (typeof renderPipelineDeals === 'function') renderPipelineDeals(); return; }
   // My Work sub-view — render its active inner tab (mine / team)
+  // Lead-gate the Team Queue inner tab for non-leads (backend also gates the data).
+  applyLeadGatedUI();
+  if (!LCC_USER.is_lead && currentMyWorkTab === 'team') currentMyWorkTab = 'mine';
   if (currentMyWorkTab === 'team') {
     if (!checkFlag('team_queue_enabled')) {
       const el = document.getElementById('teamQueueContent');
@@ -7383,7 +7398,8 @@ function renderCategoryMetrics() {
 
     let html = '<div class="cat-metrics">';
     html += `<div class="cat-metric clickable" onclick="navTo('pageMyWork')"><div class="cat-metric-val" style="color:var(--accent)">${counts.my_actions || 0}</div><div class="cat-metric-lbl">My Actions</div></div>`;
-    html += `<div class="cat-metric clickable" onclick="navTo('pageTeamQueue')"><div class="cat-metric-val" style="color:var(--cyan)">${counts.open_actions || 0}</div><div class="cat-metric-lbl">Team Open</div></div>`;
+    // Team Open links into the Team Queue (lead-only). Hide for non-leads.
+    if (LCC_USER.is_lead) html += `<div class="cat-metric clickable" onclick="navTo('pageTeamQueue')"><div class="cat-metric-val" style="color:var(--cyan)">${counts.open_actions || 0}</div><div class="cat-metric-lbl">Team Open</div></div>`;
     html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--green)">${counts.completed_week || 0}</div><div class="cat-metric-lbl">Done This Week</div></div>`;
     html += `<div class="cat-metric${(counts.overdue || 0) > 0 ? ' overdue' : ''}"><div class="cat-metric-val" style="color:${(counts.overdue || 0) > 0 ? 'var(--red)' : 'var(--yellow)'}">${counts.overdue || 0}</div><div class="cat-metric-lbl">Overdue</div></div>`;
     html += '</div>';

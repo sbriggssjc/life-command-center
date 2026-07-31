@@ -4757,10 +4757,23 @@ async function handleMembers(req, res) {
   if (!myMembership) return res.status(403).json({ error: 'Not a member of this workspace' });
 
   if (req.method === 'GET' && req.query.action === 'me') {
+    // Resolve LCC identity's lead flag (lcc_users.role='advisor') so the client can gate
+    // lead-only surfaces (Team Queue). Mapped by email; defaults to non-lead. This mirrors
+    // resolveLccIdentity in queue.js — the backend Team Queue gate is the real boundary,
+    // this just hides the tab. See docs/architecture/access-scoping-and-my-work.md.
+    let isLead = false, lccRole = null;
+    try {
+      const lr = await opsQuery('GET',
+        `lcc_users?email=eq.${pgFilterVal((user.email || '').toLowerCase())}&active=is.true&select=role&limit=1`);
+      const row = Array.isArray(lr.data) ? lr.data[0] : null;
+      if (row) { lccRole = row.role; isLead = row.role === 'advisor'; }
+    } catch (_e) { /* default non-lead */ }
     return res.status(200).json({
       user: { id: user.id, email: user.email, display_name: user.display_name, avatar_url: user.avatar_url },
       workspace_id: workspaceId,
       role: myMembership.role,
+      lcc_role: lccRole,
+      is_lead: isLead,
       memberships: user.memberships
     });
   }
