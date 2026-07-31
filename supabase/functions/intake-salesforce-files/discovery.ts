@@ -189,3 +189,137 @@ export function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+// ============================================================================
+// W3.7c — PA-collector helpers (pure). The server-side Connected-App sweep
+// (getSfToken/sfQuery/handleDiscover/handleFetch) is RETIRED — the org cannot
+// provision a Connected App (SSO-gated, no admin; SALESFORCE_LCC_INGESTION_PLAN
+// §2). Power Automate is the ONLY Salesforce transport: a scheduled PA flow reads
+// the worklist, does the ContentDocumentLink/ContentVersion reads through its
+// interactive-SSO SF connection, and POSTs metadata + bytes back to the webhook
+// actions below. These helpers are the pure (Deno-free, DB-free) logic those
+// actions and the worklist wrap, so they unit-test under `node --test`.
+// ============================================================================
+
+// The three staged objects the worklist serves, with the sf_files traversal
+// column each stamps. Mirrors DISCOVERY_OBJECTS (same source of truth).
+export const WORKLIST_OBJECTS = DISCOVERY_OBJECTS;
+
+// Default "no discovery attempt in N days" lease window for the worklist.
+export const DEFAULT_WORKLIST_STALE_DAYS = 7;
+
+export function normalizeVertical(v: unknown): "dia" | "gov" | null {
+  const s = String(v ?? "").toLowerCase();
+  return s === "dia" || s === "gov" ? s : null;
+}
+
+// A single worklist row handed to Power Automate: enough for PA to (1) read the
+// record's ContentDocumentLinks via the SF connector and (2) echo the vertical +
+// object type back on ?action=discover-webhook so routing needs no re-derivation.
+export interface WorklistItem {
+  vertical: "dia" | "gov";
+  object_type: string;            // logical key: comp | listing | deal
+  sf_type: string;                // SObject API name: Comp__c | Listing__c | Opportunity
+  linked_entity_sf_id: string;    // the Comp/Listing/Deal SF id to inspect
+}
+
+export function makeWorklistItem(
+  vertical: "dia" | "gov", obj: DiscoveryObject, sfId: string,
+): WorklistItem {
+  return {
+    vertical, object_type: obj.key, sf_type: obj.sfType, linked_entity_sf_id: sfId,
+  };
+}
+
+// The ISO cutoff for "attempted more than N days ago" — the worklist selects
+// staging rows whose last_file_discovery_at is NULL or older than this. Pure:
+// the caller passes `now` (edge passes Date.now via isoNow) so tests are stable.
+export function staleCutoffIso(nowMs: number, staleDays: number): string {
+  const days = Number.isFinite(staleDays) && staleDays >= 0 ? staleDays : DEFAULT_WORKLIST_STALE_DAYS;
+  return new Date(nowMs - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+// ── ?action=discover-webhook payload → sf_files row ──────────────────────────
+// PA posts back the metadata it read from Salesforce. Shape (per file):
+//   { linked_entity_type, linked_entity_id, content_document_id,
+//     content_version_id, title, file_name, extension, version_number,
+//     size_bytes, vertical? }
+// Returns a discovered sf_files row, or null when the item is unusable (no
+// content_version_id / no valid linked id / non-document extension). Reuses the
+// SAME dedup contract (content_version_id) via filterNewVersions downstream.
+export interface DiscoverWebhookFile {
+  linked_entity_type?: string | null;
+  linked_entity_id?: string | null;
+  content_document_id?: string | null;
+  content_version_id?: string | null;
+  title?: string | null;
+  file_name?: string | null;
+  extension?: string | null;
+  version_number?: string | null;
+  size_bytes?: number | null;
+  vertical?: string | null;
+}
+
+export function mapDiscoveredFileToRow(args: {
+  file: DiscoverWebhookFile;
+  batchId: string;
+  nowIso: string;
+  apiVersion?: string;
+}): Record<string, unknown> | null {
+  const { file, batchId, nowIso, apiVersion } = args;
+  const cvid = sanitizeSfId(file.content_version_id);
+  const linkedId = sanitizeSfId(file.linked_entity_id);
+  if (!cvid || !linkedId) return null;
+  const ext = String(file.extension || "").toLowerCase().replace(/^\./, "") || null;
+  if (!isDiscoverableExtension(ext)) return null;
+
+  const linkedType = String(file.linked_entity_type || "");
+  const title = file.title ?? null;
+  const fileName = file.file_name || (title ? `${title}${ext ? "." + ext : ""}` : null);
+  const row: Record<string, unknown> = {
+    content_document_id: sanitizeSfId(file.content_document_id) ?? file.content_document_id ?? null,
+    content_version_id: cvid,
+    linked_entity_type: linkedType || null,
+    linked_entity_sf_id: linkedId,
+    title,
+    file_name: fileName,
+    extension: ext,
+    version_number: file.version_number ?? null,
+    size_bytes: typeof file.size_bytes === "number" ? file.size_bytes : null,
+    sf_download_url: versionDataPath(cvid, apiVersion),
+    source_system: "salesforce",
+    import_batch: batchId,
+    ingestion_status: "discovered",
+    extraction_status: "pending",
+    discovered_at: nowIso,
+    updated_at: nowIso,
+  };
+  const col = traversalColumnForType(linkedType);
+  if (col) row[col] = linkedId;
+  return row;
+}
+
+// ── ?action=file-content — size + sha decision (pure) ────────────────────────
+// PA posts one file's bytes (base64) keyed by content_version_id. The edge
+// function decodes + hashes; this pure function decides whether to accept. The
+// caller enforces the verdict (413 too_large / 422 sha_mismatch / ok).
+export type FileContentVerdict = "ok" | "too_large" | "sha_mismatch" | "empty";
+
+export function fileContentDecision(args: {
+  sizeBytes: number;
+  maxBytes: number;
+  providedSha?: string | null;
+  computedSha: string;
+}): { verdict: FileContentVerdict } {
+  const { sizeBytes, maxBytes, providedSha, computedSha } = args;
+  if (!sizeBytes || sizeBytes <= 0) return { verdict: "empty" };
+  if (sizeBytes > maxBytes) return { verdict: "too_large" };
+  // sha256 is optional on the wire, but when PA sends it a mismatch is a hard
+  // reject — corrupted/wrong bytes must never reach the extractor.
+  if (providedSha) {
+    const a = String(providedSha).trim().toLowerCase();
+    const b = String(computedSha).trim().toLowerCase();
+    if (a && a !== b) return { verdict: "sha_mismatch" };
+  }
+  return { verdict: "ok" };
+}
