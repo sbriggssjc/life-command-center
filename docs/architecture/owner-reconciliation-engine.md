@@ -27,10 +27,12 @@ carries `conf`, `margin`, and the per-candidate score+sources breakdown for prov
 | source | weight | meaning |
 |---|---|---|
 | `sf_opportunity` | 1.0 | explicit deal owner (Opportunity.OwnerId) — *feeder pending* |
-| `sf_task` | 0.8 | assignee of the SF Task on the account (WhatId) — **live** |
+| `deal_owner` | 0.9 | owner of record on an open `bd_opportunities` deal — **live** |
+| `sf_task` | 0.8 | assignee of the SF Task on the account (WhatId/AccountId) — **live** |
 | `email_outbound` | 0.7 | team member who sent mail on the deal — **live** |
 | `call_outbound` | 0.7 | team member who placed a call — *feeder pending* |
 | `sf_account_team` | 0.6 | Account Team member — *feeder pending* |
+| `cadence_owner` | 0.5 | owner on a `touchpoint_cadence` row — **live** (empty until cadence owner is populated) |
 | `sf_campaign` | 0.5 | rep whose prospect/campaign list the contact is on — *feeder pending* |
 | `research` | 0.4 | LCC research/other tools — *feeder pending* |
 | `manual` | — | human override; wins outright, never overwritten by the engine |
@@ -38,6 +40,8 @@ carries `conf`, `margin`, and the per-candidate score+sources breakdown for prov
 ## Functions (DB, live)
 - `lcc_record_owner_evidence(entity, candidate, source, weight, observed_at, detail)` — generic vote sink.
 - `lcc_ingest_email_owner_evidence()` — feeder: `outlook_sent.from` → lcc_user → deal.
+- `lcc_ingest_deal_owner_evidence()` — feeder: open `bd_opportunities.owner_user_id` → deal entity.
+- `lcc_ingest_cadence_owner_evidence()` — feeder: `touchpoint_cadence.owner_user_id` → entity.
 - `lcc_record_sf_owner_evidence(p_map, source, weight)` — feeder: SF-id→owner map → evidence.
 - `lcc_reconcile_owner(entity, min_conf, write)` — score one deal, optionally write.
 - `lcc_reconcile_all_owners(min_conf, write)` — reconcile every deal with evidence.
