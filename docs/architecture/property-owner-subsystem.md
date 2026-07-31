@@ -76,6 +76,24 @@ add `operation == 'opportunities_by_ids'` → SOQL `SELECT Id, AccountId, Accoun
 WHERE Id IN :ids` → Respond `{ok:true, opportunities:[{Id, AccountId, AccountName}]}`. Then
 `POST /api/sf-seller-owner` (worker) resolves our listings' owners.
 
+## SF-seller feeder RESULT (2026-07-31) — our own listings resolved
+After Scott added the `opportunities_by_ids` flow op, `POST /api/sf-seller-owner` (worker) resolved
+**32 of our 40 open listings** (31 via `sf_seller`, 1 via graph) — up from 0. 8 remain unresolved
+(the flow returned no Account for those opportunities). Owners are real seller/investor entities
+(MFLP Properties, Mohr Rurik Capital Group, Sound Growth Partners, Mountain Seed, RCG Ventures,
+ABG Holdings, Frontier Development, …).
+
+**Fix applied (migration `20260818300000`):** `lcc_reconcile_property_owner` had hardcoded
+`source='relationship_graph'`; it now records the winning candidate's actual evidence source(s)
+(e.g. `sf_seller`). Re-reconciled our open deals to relabel.
+
+**Data observation to confirm (not a bug):** the SF-seller owner is exactly the deal's Salesforce
+**Opportunity Account**. For several deals that Account is a real landlord/investor (good); for the
+DaVita listings it is `DaVita Healthcare Partners` — SF has the account set to the *operator/tenant*,
+not the landlord. Whether that's a genuine sale-leaseback or SF labeling the account by tenant is a
+Salesforce data-quality question. Per doctrine LCC reconciles around SF (never writes back); if those
+should be the landlord, the fix is upstream in SF or a higher-authority feeder (deed/county).
+
 ## Remaining wiring
 3. **Bulk + cadence.** Re-run the feeder as new `owns`/`purchases` land (e.g. from the correspondence/
    comps pipelines); consider a scheduled sweep like the deal-correspondence backfill.
