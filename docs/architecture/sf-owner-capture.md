@@ -1,6 +1,36 @@
 # Salesforce owner capture → owner-scoped My Day
 
-**Status: DB sink BUILT & verified live (2026-07-30). Needs one owner-data feed to activate.**
+**Status: LIVE end-to-end (2026-07-31). Owner source = the assignee of the Salesforce
+Task on the deal's account. Weekly refresh cron enabled.**
+
+## Owner source (important)
+The Salesforce **Account** owner is a generic integration user ("Salesforce User"),
+not the broker — so we do NOT use Account.OwnerId. The real deal owner is the assignee
+of the **Task** logged on the account. The PA flow's `owners_by_ids` op queries
+`SELECT WhatId, OwnerId, Owner.Name, LastModifiedDate FROM Task WHERE WhatId IN (<account ids>)
+AND OwnerId IN (<team user ids>) ORDER BY LastModifiedDate DESC`; LCC keeps the most recent
+task's owner per account and writes `lcc_entity_owner_override`.
+
+## First live run (2026-07-31)
+63 deal-linked accounts → 3 resolved to a team member (all Kelly Largent: Capri Development,
+Mike Spisak, Ryan Michaels), written to the override table and confirmed scoping into Kelly's
+My Day and out of Scott's. Coverage is thin because most team activity on these accounts is
+**not** logged as a Task with `WhatId` = the account (Scott resolved 0 — his activity is
+likely logged against contacts via `WhoId`, or as email in the LCC spine rather than SF Tasks).
+
+**Coverage-broadening option (not yet built):** also match Task by `WhoId` (the contact) and
+resolve the contact's account, so contact-logged activity counts. Requires passing the deals'
+contact ids and resolving `Who.AccountId`. Do this if too many of Kelly's (or Sarah's/Nate's)
+deals still leak into Scott's My Day.
+
+## Refresh
+`cron.job` **lcc-sf-owner-sync-weekly** — `30 6 * * 1` (Mon 06:30 UTC) →
+`lcc_cron_post('/api/sf-owner-sync','{}')`. Re-pulls owners weekly; manual LCC overrides
+(set_by not starting `sf_owner`) are never overwritten.
+
+---
+
+## Original design notes
 
 ## Why this exists
 
