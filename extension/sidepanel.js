@@ -1402,7 +1402,11 @@ async function loadPropertyTab(opts) {
     // Fire-and-forget, deduped by content_hash server-side, one at a time so we
     // don't hammer the CDN. Only runs once we have a resolved domain property_id.
     if (verifyPropertyId && (verifyDomain === 'dialysis' || verifyDomain === 'government')) {
-      const DEEP_PARSE_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov']);
+      const DEEP_PARSE_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov', 'marketing_brochure']);
+      // OM-class doctypes route through the OM intake pipeline (stage-om) via
+      // STAGE_OM_VIA_TAB instead of the property-documents pointer path — so the
+      // embedded For-Sale Marketing Brochure gets AI-extracted + staged to LCC.
+      const OM_CLASS_DOCTYPES = new Set(['om', 'marketing_brochure']);
       // SEC/IR/press artifacts the doc list sometimes carries — NOT property
       // document types. Checked FIRST so "Press Release" never falls through to
       // the lease branch (where the `release` substring used to match `lease`).
@@ -1414,6 +1418,8 @@ async function loadPropertyTab(opts) {
         if (/\bdeed\b/.test(l)) return 'deed';
         // word-boundary `lease` (so "release" no longer matches) + estoppel.
         if (/\blease\b/.test(l) || /\bestoppel\b/.test(l)) return 'lease';
+        // "Marketing Brochure" on the new For-Sale layout IS the OM.
+        if (l.includes('marketing brochure')) return 'marketing_brochure';
         if (/\bom\b/.test(l) || l.includes('offering') || l.includes('memorandum')) return 'om';
         if (l.includes('due diligence') || /\bdd\b/.test(l)) return 'dd';
         if (/\bmaster\b/.test(l)) return 'master';
@@ -1422,12 +1428,80 @@ async function loadPropertyTab(opts) {
       };
       const docLinks = Array.isArray(ctx?.document_links) ? ctx.document_links : [];
       const seenUrls = new Set();
+
+      // Once-per-property OM auto-stage guard (30-day TTL). The doc-capture block
+      // reruns on every property-tab render, and OM extraction (stage-om) costs
+      // AI tokens, so the embedded Marketing Brochure is staged at most once per
+      // property. Reversible: clearing chrome.storage.local 'omAutoStaged' re-arms.
+      const OM_AUTOSTAGE_KEY = 'omAutoStaged';
+      const OM_AUTOSTAGE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+      const omStageKey = `${verifyDomain}:${verifyPropertyId}`;
+      const shouldAutoStageOm = async () => {
+        try {
+          const store = (await chrome.storage.local.get(OM_AUTOSTAGE_KEY))[OM_AUTOSTAGE_KEY] || {};
+          const last = store[omStageKey];
+          return !(last && (Date.now() - last) < OM_AUTOSTAGE_TTL_MS);
+        } catch { return true; }
+      };
+      const markOmAutoStaged = async () => {
+        try {
+          const store = (await chrome.storage.local.get(OM_AUTOSTAGE_KEY))[OM_AUTOSTAGE_KEY] || {};
+          store[omStageKey] = Date.now();
+          const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+          for (const k of Object.keys(store)) { if (store[k] < cutoff) delete store[k]; }
+          await chrome.storage.local.set({ [OM_AUTOSTAGE_KEY]: store });
+        } catch { /* best-effort */ }
+      };
+
       (async () => {
         // UW#6 — observable: collect a per-doc outcome so a live capture shows
         // "N ok / M failed / K skipped" in the console instead of silently
         // skipping. A fetch failure is RECORDED (not swallowed) so a dead
         // CoStar token / SW-context miss is visible.
-        const results = { ok: 0, failed: 0, skipped: 0, failures: [] };
+        const results = { ok: 0, failed: 0, skipped: 0, om: 0, failures: [] };
+
+        // ── Part A: offering material (embedded Marketing Brochure / OM) ──
+        // Route through the OM intake pipeline (stage-om) via STAGE_OM_VIA_TAB —
+        // once per property. Mark every offering URL seen so the byte-capture
+        // loop below never double-processes it down the pointer path.
+        const offeringDocs = docLinks.filter((d) => d?.url
+          && (d.is_offering_material || d.type === 'om' || d.type === 'marketing_brochure'
+              || inferDocType(d?.label) === 'marketing_brochure'));
+        if (offeringDocs.length) {
+          for (const d of offeringDocs) seenUrls.add(d.url);
+          if (await shouldAutoStageOm()) {
+            const primary = offeringDocs[0];
+            try {
+              const resp = await chrome.runtime.sendMessage({
+                type: 'STAGE_OM_VIA_TAB',
+                sourceUrl: primary.url,
+                fileName: primary.label || 'Marketing Brochure.pdf',
+                hostname: 'costar.com',
+                seedData: {
+                  address: ctx.address || null,
+                  city: ctx.city || null,
+                  state: ctx.state || null,
+                  tenant_name: ctx.tenant_name || null,
+                  asking_price: ctx.asking_price || ctx.sale_price || null,
+                  cap_rate: ctx.cap_rate || null,
+                  lease_expiration: ctx.lease_expiration || null,
+                  domain: verifyDomain,
+                  domain_property_id: verifyPropertyId,
+                },
+              });
+              if (resp && resp.ok) { results.om++; await markOmAutoStaged(); }
+              else {
+                results.failed++;
+                results.failures.push({ url: primary.url, error: resp?.error || 'no_response', kind: 'om' });
+                console.warn('[UW6] OM brochure stage failed', { url: primary.url, error: resp?.error, detail: resp?.detail });
+              }
+            } catch (e) {
+              results.failed++;
+              results.failures.push({ url: primary.url, error: e?.message || String(e), kind: 'om' });
+            }
+          }
+        }
+
         for (const d of docLinks) {
           const url = d?.url;
           if (!url || seenUrls.has(url)) continue;
@@ -1436,6 +1510,8 @@ async function loadPropertyTab(opts) {
           // lease); re-derive from the label and let a non-doctype label veto.
           const labelType = inferDocType(d?.label);
           const doctype = (d?.type && DEEP_PARSE_DOCTYPES.has(d.type) && labelType !== 'other') ? d.type : labelType;
+          // OM-class handled above (stage-om); never send it down the pointer path.
+          if (OM_CLASS_DOCTYPES.has(doctype)) continue;
           if (!DEEP_PARSE_DOCTYPES.has(doctype)) { results.skipped++; continue; }  // brochure/comp/survey/other/press-release
           try {
             const resp = await chrome.runtime.sendMessage({
@@ -1459,8 +1535,8 @@ async function loadPropertyTab(opts) {
             console.warn('[UW6] doc byte-capture threw for', url, e?.message || e);
           }
         }
-        if (results.ok || results.failed || results.skipped) {
-          console.log(`[UW6] byte-capture: ${results.ok} ok / ${results.failed} failed / ${results.skipped} skipped`, results.failures.length ? results.failures : '');
+        if (results.ok || results.failed || results.skipped || results.om) {
+          console.log(`[UW6] byte-capture: ${results.ok} ok / ${results.om} OM / ${results.failed} failed / ${results.skipped} skipped`, results.failures.length ? results.failures : '');
         }
       })();
     }

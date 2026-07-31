@@ -26,7 +26,7 @@ import { authenticate } from '../_shared/auth.js';
 import { domainQuery } from '../_shared/domain-db.js';
 
 const DOMAIN_NORM = { dia: 'dialysis', dialysis: 'dialysis', gov: 'government', government: 'government' };
-const KNOWN_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov', 'brochure', 'comp', 'survey', 'other']);
+const KNOWN_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov', 'brochure', 'marketing_brochure', 'comp', 'survey', 'other']);
 
 // Pre-capture statuses safe to PROMOTE to 'bytes_captured' once bytes land. A
 // downstream status (text_extracted / needs_ocr / deed_parsed / deed_no_parties)

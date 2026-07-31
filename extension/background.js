@@ -495,6 +495,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         // Merge document_links (accumulated from comp pages + summary)
         const mergedDocLinks = mergeArrays(existing.document_links, incoming.document_links, d => d.url);
 
+        // Merge external listing-webpage URLs (Part B1) captured across sub-tabs.
+        const mergedExternalUrls = mergeArrays(existing.listing_external_urls, incoming.listing_external_urls, d => d.url);
+
         const cleanIncomingTenant = incoming.tenant_name &&
           !INVALID_TENANT.test(incoming.tenant_name)
           ? incoming.tenant_name : null;
@@ -514,7 +517,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const mergedScalars = {};
         for (const key of Object.keys({ ...existing, ...incoming })) {
           if (['tenants', 'contacts', 'sales_history', 'documents',
-               'document_links', 'tenant_name', 'primary_tenant'].includes(key)) continue;
+               'document_links', 'listing_external_urls', 'tenant_name', 'primary_tenant'].includes(key)) continue;
           const eVal = existing[key];
           const iVal = incoming[key];
           // Keep existing value if incoming is null/undefined/empty-array
@@ -532,6 +535,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           sales_history: mergedSales,
           documents: mergedDocs,
           document_links: mergedDocLinks,
+          listing_external_urls: mergedExternalUrls,
           tenant_name:    cleanIncomingTenant || cleanExistingTenant || null,
           primary_tenant: cleanIncomingPrimary || cleanExistingPrimary || null,
           // Preserve sale_notes_raw from whichever tab captured it
@@ -1365,6 +1369,90 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           error: err.message,
           body: { error: 'stage_pdf_bytes_threw', detail: err.message, trail },
         });
+      }
+    })();
+    return true; // async response
+  }
+
+  if (msg.type === 'STAGE_OM_VIA_TAB') {
+    // Part A (2026-07-31) — auto-capture the embedded For-Sale "Marketing
+    // Brochure" as an OM. CoStar's redesigned For-Sale page ships the offering
+    // material inline instead of as a Documents-card anchor, so it was never
+    // captured or extracted. Fetch the doc bytes IN the live CoStar tab (the
+    // ahprd*cdn signed URL is bound to the in-tab session — an SW fetch drops
+    // the SameSite cookies), then route through the SAME OM Path C as a manual
+    // upload (prepare-upload sidebar → PUT → stage-om{storage_path}) so the OM
+    // extractor runs and stages to LCC. Deduped once-per-property client-side
+    // (sidepanel.js) so browsing listings doesn't re-stage / re-bill extraction.
+    (async () => {
+      try {
+        const { sourceUrl, fileName, seedData } = msg;
+        if (!sourceUrl) { respond({ ok: false, error: 'missing_source_url' }); return; }
+
+        // 1. Fetch bytes via the live tab (page-context, session cookies intact).
+        const tabFetch = await fetchDocBytesViaTab(sourceUrl);
+        if (!tabFetch.ok) { respond({ ok: false, error: 'tab_fetch_failed', detail: tabFetch.error }); return; }
+        const binary = atob(tabFetch.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        const mimeType = tabFetch.mimeType || 'application/pdf';
+        if (!bytes.byteLength) { respond({ ok: false, error: 'empty_doc' }); return; }
+
+        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const host = String(syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app').replace(/\/+$/, '');
+        const apiHeaders = {
+          'X-LCC-Key': syncConfig.LCC_API_KEY || '',
+          ...(syncConfig.LCC_WORKSPACE ? { 'X-LCC-Workspace': syncConfig.LCC_WORKSPACE } : {}),
+        };
+        const safeName = (fileName && fileName.trim())
+          || (sourceUrl.split('/').pop() || '').split('?')[0]
+          || `om-${Date.now()}.pdf`;
+        const seedDataPayload = {
+          tags: ['sidebar_intake', 'forsale_brochure', 'auto_capture'],
+          doctype: 'om',
+          source_url: sourceUrl,
+          ...(seedData || {}),
+        };
+
+        // 2. OM Path C — prepare-upload (OM intake bucket) → PUT → stage-om.
+        const prepRes = await fetch(`${host}/api/intake/prepare-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({ file_name: safeName, mime_type: mimeType, intake_channel: 'sidebar' }),
+        });
+        const prepBody = await prepRes.json().catch(() => null);
+        if (!prepRes.ok || !prepBody?.ok || !prepBody.upload_url || !prepBody.storage_path) {
+          respond({ ok: false, error: 'prepare_upload_refused', status: prepRes.status, detail: prepBody?.error || prepBody?.detail });
+          return;
+        }
+        const putRes = await fetch(prepBody.upload_url, {
+          method: prepBody.upload_method || 'PUT',
+          headers: { 'Content-Type': mimeType, ...(prepBody.upload_headers || {}) },
+          body: new Blob([bytes], { type: mimeType }),
+        });
+        if (!putRes.ok) { respond({ ok: false, error: 'storage_put_failed', status: putRes.status }); return; }
+
+        const stageRes = await fetch(`${host}/api/intake/stage-om`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            intake_source: 'copilot',
+            intake_channel: 'sidebar',
+            intent: `Auto-captured For-Sale Marketing Brochure (OM) from ${msg.hostname || 'costar'}`,
+            artifacts: { primary_document: { storage_path: prepBody.storage_path, file_name: safeName, mime_type: mimeType } },
+            seed_data: seedDataPayload,
+          }),
+        });
+        const stageBody = await stageRes.json().catch(() => null);
+        respond({
+          ok: stageRes.ok && stageBody?.ok === true,
+          status: stageRes.status,
+          intake_id: stageBody?.intake_id,
+          extraction_status: stageBody?.extraction_status,
+          sizeBytes: bytes.byteLength,
+        });
+      } catch (e) {
+        respond({ ok: false, error: 'stage_om_via_tab_threw', detail: String(e?.message || e) });
       }
     })();
     return true; // async response
