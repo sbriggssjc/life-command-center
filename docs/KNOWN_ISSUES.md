@@ -5,6 +5,39 @@ the symptom, the root cause, the preferred fix, and (importantly) what NOT to do
 
 ---
 
+## Gov staging tables missed object-sync upserts 2026-07-21 → 2026-07-31 (watch: self-heal)
+
+**Surfaced:** 2026-07-31 (during W3.7c File-Discovery flow triage, session 31).
+
+**Symptom:** Gov `sf_listing_staging` / `sf_comp_staging` / `sf_property_staging`
+/ `sf_deal_staging` show no new rows or updates after ~2026-07-21, while the dia
+equivalents update on every object-sync run.
+
+**Root cause:** The `GOV_SUPABASE_URL` edge-function secret (Dialysis_DB) was
+changed ~2026-07-21 to a redirecting (`http://`) form. Supabase's 301 makes Deno
+`fetch` convert every POST into a body-less GET (fetch spec), so all gov-bound
+inserts/upserts — including the object-sync `?on_conflict=` upserts — silently
+no-oped while returning 200. GETs and PATCHes were unaffected, which masked the
+breakage. Fixed 2026-07-31 (secret corrected to
+`https://scknotsqkcheojiaewwh.supabase.co`); File-Discovery write path verified
+end-to-end the same day.
+
+**Remaining action (the reason this entry exists):** the missed staging upserts
+self-heal on the next object-sync run because the upserts are idempotent — but
+nobody has yet observed a post-fix sync. **Verify after the next object-sync run
+that gov staging `max(updated_at)` advances past 2026-07-31.** If it does, delete
+this entry.
+
+**What NOT to do:** do not backfill gov staging by hand — the sync flow owns
+those rows and will reconcile them. Do not "fix" by re-pointing any function at
+the gov DB directly; the env-var contract (`GOV_SUPABASE_URL/KEY`, project-wide
+secrets on Dialysis_DB) stands. Any future env URL edit must be the exact
+`https://<ref>.supabase.co` form — no http, no trailing slash — because a
+redirected POST fails silently (see FLOW_sf_file_discovery.md troubleshooting
+log).
+
+---
+
 ## `pending_moves` cosmetic inflation in the daily-briefing "Email cleanup (24h)" line
 
 **Surfaced:** 2026-07-20 (follow-up to PR #1435, which removed the shadowed
