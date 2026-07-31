@@ -45,7 +45,30 @@ resolved: adds `pointperson_user_id` (from `lcc_entity_owner_override` on `entit
 So with scoping, Scott's My Work drops from 31 → **13 (his own)**; Kelly gets her **17**; Innovative
 Renal Care leaves Scott's My Work and lives in the Team Queue (Scott-only).
 
-## To wire (queue.js) — exact spec, needs a per-user smoke test before trusting
+## IMPLEMENTED (2026-07-31, ships on redeploy) — smoke-test per user
+`queue.js` now scopes My Work by point person and gates Team Queue to the lead:
+- **`resolveLccIdentity(user)`** maps `user.email` -> `{ lccUserId, role, isLead }` (`role='advisor'`
+  = lead), cached on the request user.
+- **`myWorkScopedPath()`** builds `v_my_work_scoped?...&or=(pointperson_user_id.eq.<lcc>,and(pointperson_user_id.is.null,or(user_id.eq.<auth>,assigned_to.eq.<auth>)))`,
+  with a legacy `v_my_work` fallback when the user isn't mapped. Applied to **v1 `my_work`**,
+  **v2 `v2GetMyWork`**, and the **v1 `counts`** probe.
+- **Team Queue** (v1 `team`, v2 `v2GetTeamQueue`) returns `{ items:[], restricted:true }` for non-leads.
+- **DB-validated:** the scoped filter yields Scott ~14 (his own) and Kelly 17 (hers) — Kelly's deals
+  no longer appear in Scott's My Work; point-person match is independent of the auth id.
+
+**Smoke test before trusting (can't be done from the backend session):** log in as Scott — My Work
+shows only his deals, Team Queue shows all; log in as a `team` user (Kelly) — My Work shows only hers,
+Team Queue is empty/restricted.
+
+**Known follow-ups:**
+- **v2 `work_counts` badge** reads `mv_user_work_counts` keyed by auth `user_id`; it is NOT yet
+  point-person-scoped, so the Today badge may not match the scoped My Work list until that MV is made
+  point-person-aware (or the badge reads the scoped count). The v1 `counts` probe IS scoped.
+- **Frontend Team Queue subtab** still renders for everyone; the backend gate protects the data, but
+  hide the subtab for non-leads (reuse `_teamQueueDisabledHTML()`) once the client knows `isLead`.
+- **Research rows**: `v_my_work_scoped` is actions-only (see caveat below).
+
+## Original spec (queue.js) — for reference
 Security-sensitive (a wrong filter either leaks others' work or hides a user's own), and it can't be
 tested from the backend session (no per-user login), so implement + smoke-test as each user.
 

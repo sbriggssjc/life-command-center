@@ -27,6 +27,35 @@ import {
 import { writeTriageSignal, writePromotionSignal } from './_shared/signals.js';
 import { applyListingBdEntityNames, collectListingBdEntityIds } from './_shared/listing-bd.js';
 
+// Resolve the logged-in user's LCC identity (point-person id + team-lead flag) by email.
+// My Work is scoped to the DEAL's point person (lcc_entity_owner_override -> lcc_users), the
+// FK-safe ownership channel (auth users != the lcc reps); Team Queue is lead-only. Cached on
+// the request user object. See docs/architecture/access-scoping-and-my-work.md.
+async function resolveLccIdentity(user) {
+  if (user && user.__lcc) return user.__lcc;
+  let out = { lccUserId: null, role: null, isLead: false };
+  try {
+    const email = (user?.email || '').trim().toLowerCase();
+    if (email) {
+      const r = await opsQuery('GET',
+        `lcc_users?email=eq.${pgFilterVal(email)}&active=is.true&select=lcc_user_id,role&limit=1`);
+      const row = Array.isArray(r.data) ? r.data[0] : null;
+      if (row) out = { lccUserId: row.lcc_user_id, role: row.role, isLead: row.role === 'advisor' };
+    }
+  } catch (_e) { /* fall back to legacy scoping */ }
+  if (user) user.__lcc = out;
+  return out;
+}
+
+// Point-person-scoped My Work path: work I'm the point person on, plus personal (non-deal)
+// items owned/assigned to me. Legacy v_my_work fallback when the user isn't mapped to an lcc_user.
+function myWorkScopedPath(workspaceId, lccUserId, authId) {
+  return lccUserId
+    ? `v_my_work_scoped?workspace_id=eq.${workspaceId}` +
+        `&or=(pointperson_user_id.eq.${lccUserId},and(pointperson_user_id.is.null,or(user_id.eq.${authId},assigned_to.eq.${authId})))`
+    : `v_my_work?workspace_id=eq.${workspaceId}&item_type=neq.inbox&or=(user_id.eq.${authId},assigned_to.eq.${authId})`;
+}
+
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
 
@@ -71,7 +100,8 @@ export default withErrorHandler(async function handler(req, res) {
       // not My Work. item_type=neq.inbox covers every inbox source_type, so the
       // count here is the true action-item total everywhere (matches the
       // client-side QA-09 filter in ops.js renderMyWork). QA4.
-      let path = `v_my_work?workspace_id=eq.${workspaceId}&item_type=neq.inbox&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
+      const { lccUserId } = await resolveLccIdentity(user);
+      let path = myWorkScopedPath(workspaceId, lccUserId, user.id);
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'sort_date.asc.nullslast' });
 
@@ -85,6 +115,9 @@ export default withErrorHandler(async function handler(req, res) {
     }
 
     case 'team': {
+      // Team Queue = the whole team's work + per-deal context. Lead-only (Scott, role 'advisor').
+      const { isLead } = await resolveLccIdentity(user);
+      if (!isLead) return res.status(200).json({ items: [], count: 0, view: 'team', restricted: true, reason: 'team_queue_lead_only' });
       let path = `v_team_queue?workspace_id=eq.${workspaceId}`;
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
@@ -182,8 +215,11 @@ export default withErrorHandler(async function handler(req, res) {
       };
 
       // These two ARE pure count probes (select=id&limit=0) — keep count=exact.
+      const { lccUserId: _lccId } = await resolveLccIdentity(user);
       const myActions = await opsQuery('GET',
-        `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
+        _lccId
+          ? `${myWorkScopedPath(workspaceId, _lccId, user.id)}&select=id&limit=0`
+          : `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
       );
       const myInbox = await opsQuery('GET',
         `inbox_items?workspace_id=eq.${workspaceId}&or=(source_user_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(new,triaged)&select=id&limit=0`
@@ -285,7 +321,8 @@ async function v2GetMyWork(req, user, workspaceId) {
   // Exclude inbox rows — see the v1 my_work case above. Keeps the v2
   // pagination.total (the Today "View all N items" widget) honest: it now
   // counts action items only, not the ~8.4k inbox rows. QA4.
-  let path = `v_my_work?workspace_id=eq.${workspaceId}&item_type=neq.inbox&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
+  const { lccUserId } = await resolveLccIdentity(user);
+  let path = myWorkScopedPath(workspaceId, lccUserId, user.id);
 
   if (status) {
     if (status === 'overdue') {
@@ -312,6 +349,9 @@ async function v2GetMyWork(req, user, workspaceId) {
 
 async function v2GetTeamQueue(req, user, workspaceId) {
   const { page, perPage, offset } = v2PageParams(req.query);
+  // Lead-only (Scott, role 'advisor'). Non-leads get an empty, restricted result.
+  const { isLead } = await resolveLccIdentity(user);
+  if (!isLead) return { view: 'team_queue', items: [], pagination: v2PaginationMeta(page, perPage, 0), restricted: true };
   const { status, domain, assigned_to: assignee } = req.query;
   const order = v2SortParam(req.query, 'due_date.asc.nullslast,created_at.desc');
 
