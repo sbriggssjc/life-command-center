@@ -93,6 +93,29 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(200).json(c360);
     }
 
+    // Tab 3 "Relationships" (Scott ask #2) — working-relationship intelligence:
+    // the party's counterparties across shared assets (buyers sold-to, sellers
+    // bought-from, co-brokers, lenders), with a REIT/institution flag. Pure graph
+    // rollup via lcc_party_relationships(p_entity, p_limit). Best-effort.
+    // GET /api/entities?action=relationships&id=<uuid>[&limit=]
+    if (action === 'relationships' && id) {
+      const entRes = await opsQuery('GET',
+        `entities?id=eq.${id}&workspace_id=eq.${workspaceId}&select=id`);
+      if (!entRes.ok || !entRes.data?.length) return res.status(404).json({ error: 'Entity not found' });
+      const lim = Math.min(Math.max(1, Number(req.query.limit) || 60), 200);
+      const r = await opsQuery('POST', 'rpc/lcc_party_relationships',
+        { p_entity: id, p_limit: lim }).catch(() => null);
+      const rows = (r && r.ok && Array.isArray(r.data)) ? r.data : [];
+      // Group by relationship category so the UI can section buyers / sellers /
+      // brokers / lenders without re-deriving on the client.
+      const groups = {};
+      for (const row of rows) {
+        const g = row.relationship || 'co_party';
+        (groups[g] = groups[g] || []).push(row);
+      }
+      return res.status(200).json({ entity_id: id, count: rows.length, rows, groups });
+    }
+
     // UI Phase 5 — "Owners Missing a Contact" value-ranked BD worklist.
     // GET /api/entities?action=owner_worklist[&min_value=&limit=&offset=]
     //   rows ← v_owner_contact_worklist (contactless valued owners, value-ranked).
@@ -1761,7 +1784,7 @@ async function buildContact360(entityId, workspaceId) {
 
   const accountOwner = await resolveAccountOwner(entity, entityId, workspaceId);
 
-  const [portfolio, lccEvents, sfActs, mktRows, emailRel, sfOpenTasks] = await Promise.all([
+  const [portfolio, lccEvents, sfActs, mktRows, emailRel, sfOpenTasks, cadenceRow] = await Promise.all([
     fetchEntityPortfolio(entityId, workspaceId).catch(() => ({ rollup: null, properties: [] })),
     opsQuery('GET',
       `activity_events?entity_id=eq.${entityId}&workspace_id=eq.${workspaceId}` +
@@ -1801,7 +1824,44 @@ async function buildContact360(entityId, workspaceId) {
           `&order=activity_date.desc.nullslast&limit=15`)
           .then(r => (r.ok && Array.isArray(r.data)) ? r.data : []).catch(() => [])
       : Promise.resolve([]),
+    // Cadence / next-touch (Scott ask #3) — surface the NEXT scheduled touchpoint
+    // + the SUGGESTED touchpoint (phase/template) in the Activity cockpit, and
+    // feed the hero next-action resolver. touchpoint_cadence is keyed by
+    // entity_id; take the soonest-due active row. Best-effort → null on miss.
+    opsQuery('GET',
+      `touchpoint_cadence?entity_id=eq.${entityId}&workspace_id=eq.${workspaceId}` +
+      `&select=id,phase,priority_tier,next_touch_due,next_touch_type,next_touch_template,` +
+      `last_touch_at,last_touch_type,current_touch,emails_sent,emails_replied,calls_connected,` +
+      `unsubscribe_status&order=next_touch_due.asc.nullslast&limit=1`)
+      .then(r => (r.ok && Array.isArray(r.data)) ? (r.data[0] || null) : null).catch(() => null),
   ]);
+
+  // Normalize the cadence row into a compact `cadence` block with a derived
+  // overdue flag + days-until-due (the hero next-action + cockpit read these).
+  let cadence = null;
+  if (cadenceRow) {
+    const due = cadenceRow.next_touch_due ? new Date(cadenceRow.next_touch_due) : null;
+    const now = new Date();
+    const daysUntil = due ? Math.round((due.getTime() - now.getTime()) / 86400000) : null;
+    cadence = {
+      cadence_id: cadenceRow.id,
+      phase: cadenceRow.phase || null,
+      priority_tier: cadenceRow.priority_tier || null,
+      next_touch_due: cadenceRow.next_touch_due || null,
+      next_touch_type: cadenceRow.next_touch_type || null,
+      next_touch_template: cadenceRow.next_touch_template || null,
+      last_touch_at: cadenceRow.last_touch_at || null,
+      last_touch_type: cadenceRow.last_touch_type || null,
+      current_touch: cadenceRow.current_touch != null ? Number(cadenceRow.current_touch) : null,
+      emails_sent: cadenceRow.emails_sent != null ? Number(cadenceRow.emails_sent) : null,
+      emails_replied: cadenceRow.emails_replied != null ? Number(cadenceRow.emails_replied) : null,
+      calls_connected: cadenceRow.calls_connected != null ? Number(cadenceRow.calls_connected) : null,
+      unsubscribe_status: cadenceRow.unsubscribe_status || null,
+      days_until_due: daysUntil,
+      overdue: (daysUntil != null && daysUntil < 0),
+      on_cadence: true,
+    };
+  }
 
   const openTasks = (Array.isArray(sfOpenTasks) ? sfOpenTasks : []).map(t => ({
     subject: t.subject || '(task)',
@@ -1888,6 +1948,7 @@ async function buildContact360(entityId, workspaceId) {
     account_owner: accountOwner,
     roe,
     email_relationship: emailRel,
+    cadence,
   };
 }
 

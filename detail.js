@@ -12449,7 +12449,7 @@ async function _entityApiFetch(url) {
 // The union of every entity-detail tab (used only for the initial deep-link
 // validation before the role is known). The ACTUAL tab set is role-driven —
 // see _entityTabsForRole. Broker mode swaps Ownership→Deals and drops Contacts.
-const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'Activity', 'Engagement', 'ROE', 'Contacts'];
+const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'Relationships', 'Activity', 'Engagement', 'ROE', 'Contacts'];
 
 /**
  * Role-aware tab set. Owner/buyer get Ownership (their portfolio); a broker gets
@@ -12458,10 +12458,12 @@ const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'Activity', 'Engag
  * or broker, where it was the ~50 unrelated contacts (item #3).
  */
 function _entityTabsForRole(role, entityType) {
-  if (role === 'broker') return ['Overview', 'Deals', 'Activity', 'Engagement', 'ROE'];
+  // Relationships (Scott ask #2): working-relationship intelligence — relevant
+  // for any transacting party (owner/buyer/broker), so it rides in every role set.
+  if (role === 'broker') return ['Overview', 'Deals', 'Relationships', 'Activity', 'Engagement', 'ROE'];
   const tabs = ['Overview'];
   if (role === 'owner' || role === 'buyer') tabs.push('Ownership');
-  tabs.push('Activity', 'Engagement', 'ROE');
+  tabs.push('Relationships', 'Activity', 'Engagement', 'ROE');
   if (entityType === 'organization') tabs.push('Contacts');
   return tabs;
 }
@@ -12560,6 +12562,9 @@ async function openEntityDetail(entityId, initialTab) {
       accountOwner: (c360 && c360.account_owner) || null,
       roe: (c360 && c360.roe) || null,
       subject: (c360 && c360.subject) || null,
+      // Cadence / next-touch block (Scott ask #3) — drives the Activity cockpit
+      // (next + suggested touchpoint) and the hero next-action resolver.
+      cadence: (c360 && c360.cadence) || null,
       // Back-compat: some render paths read `activities`; the unified timeline
       // supersedes it (LCC events are the source-'lcc' items).
       activities: (c360 && c360.timeline) || [],
@@ -12854,6 +12859,7 @@ function _renderEntityTab(tab) {
     case 'Ownership': body = _entityTabPortfolio(); break;
     case 'Portfolio': body = _entityTabPortfolio(); break; // legacy alias
     case 'Deals': body = _entityTabBrokerDeals(); break;
+    case 'Relationships': body = _entityTabRelationships(); break;
     case 'Contacts': body = _entityTabContacts(); break;
     case 'Activity': body = _entityTabActivity(); break;
     case 'Engagement': body = _entityTabEngagement(); break;
@@ -13175,16 +13181,133 @@ function closeCompanion() {
 }
 window.closeCompanion = closeCompanion;
 
+// ── Entity Relationships Tab (Scott ask #2) ──
+// Working-relationship intelligence from lcc_party_relationships: the party's
+// counterparties across shared assets, grouped (buyers sold-to / sellers
+// bought-from / co-brokers / lenders), REIT/institution-flagged. Lazy-loaded
+// (heavy graph rollup) and cached on the panel cache after first open.
+const _ENTITY_REL_SECTIONS = [
+  { key: 'sold_to',        title: 'Buyers they’ve sold to',        note: 'principals this party sold assets to' },
+  { key: 'bought_from',    title: 'Sellers they’ve bought from',    note: 'principals this party acquired assets from' },
+  { key: 'co_broker',      title: 'Co-brokers',                         note: 'brokers on the same deals' },
+  { key: 'brokered_for',   title: 'Brokerage clients',                  note: 'principals this party brokered for' },
+  { key: 'broker_on_deal', title: 'Brokers on their deals',             note: 'brokers who worked this party’s assets' },
+  { key: 'financed_by',    title: 'Lenders',                            note: 'financed this party’s assets' },
+  { key: 'lent_to',        title: 'Borrowers',                          note: 'this party financed their assets' },
+  { key: 'co_owner',       title: 'Co-owners',                          note: 'shared ownership on the same assets' },
+];
+
+function _entityTabRelationships() {
+  const c = _entityDetailCache || {};
+  if (c.relationships) return _entityRenderRelationships(c.relationships);
+  const eid = c.entityId || (c.entity && c.entity.id) || '';
+  if (!eid) return '<div class="detail-empty">No entity for relationship lookup.</div>';
+  // Kick the async load; the sync return is a spinner host.
+  setTimeout(function(){ _entityLoadRelationships(eid); }, 0);
+  return '<div id="entityRelHost"><div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span><p style="margin-top:10px">Loading working relationships…</p></div></div>';
+}
+
+async function _entityLoadRelationships(eid) {
+  let data = null;
+  try {
+    data = await _entityApiFetch('/api/entities?action=relationships&id=' + encodeURIComponent(eid) + '&limit=60');
+  } catch (_e) { data = null; }
+  // Guard: the panel may have moved on to another entity while we loaded.
+  const c = _entityDetailCache || {};
+  const stillHere = (c.entityId || (c.entity && c.entity.id)) === eid;
+  if (stillHere) c.relationships = data || { rows: [], groups: {} };
+  const host = document.getElementById('entityRelHost');
+  if (host && stillHere) host.innerHTML = _entityRenderRelationships(c.relationships);
+}
+
+function _entityRenderRelationships(data) {
+  const groups = (data && data.groups) || {};
+  const total = (data && data.count) || 0;
+  if (!total) {
+    return '<div class="detail-empty">No working relationships found in the ownership/transaction graph for this party.</div>';
+  }
+  let html = '<div style="font-size:11px;color:var(--text3);margin:0 0 10px">' + total + ' counterpart' + (total === 1 ? 'y' : 'ies') + ' across shared assets · ranked by deals in common.</div>';
+  for (const sec of _ENTITY_REL_SECTIONS) {
+    const rows = groups[sec.key];
+    if (!rows || !rows.length) continue;
+    html += '<div class="detail-section"><div class="detail-section-title">' + esc(sec.title) + ' (' + rows.length + ')</div>';
+    html += '<div style="font-size:10px;color:var(--text3);margin:-2px 0 8px">' + esc(sec.note) + '</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px">';
+    for (const r of rows) {
+      const nm = r.counterparty_name || '(unknown)';
+      const inst = !!r.is_institution;
+      const onclick = r.counterparty_id ? 'openContact360(\'' + esc(String(r.counterparty_id)) + '\', {kind:\'entity\'})' : '';
+      html += '<div style="padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
+      html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">';
+      html += '<div style="font-weight:600;font-size:13px;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(nm);
+      if (inst) html += ' <span style="font-size:9px;padding:1px 6px;border-radius:9px;background:rgba(99,102,241,0.14);color:var(--purple,#6366f1);border:1px solid rgba(99,102,241,0.3);font-weight:700;margin-left:4px">REIT / INSTITUTION</span>';
+      html += '</div>';
+      html += '<div style="font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0">' + Number(r.shared_assets || 0) + ' deal' + (Number(r.shared_assets) === 1 ? '' : 's') + '</div>';
+      html += '</div>';
+      if (r.last_date) html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">last: ' + esc(_fmtDate(r.last_date)) + '</div>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+  return html;
+}
+
 // ── Entity Activity Tab ──
+// Cadence cockpit (Scott ask #3): the NEXT scheduled touchpoint + the SUGGESTED
+// touchpoint, above the call/email history, with a one-click Draft touchpoint
+// email that runs the existing draft_and_log closed loop (draft, log SF, advance
+// cadence). Renders only when the contact is on a cadence.
+function _entityCadenceCockpit(cad) {
+  if (!cad || !cad.on_cadence) return '';
+  const overdue = !!cad.overdue;
+  const dueTxt = cad.next_touch_due ? _fmtDate(cad.next_touch_due) : null;
+  const nType = (cad.next_touch_type || 'touch');
+  const dcolor = overdue ? 'var(--red,#ef4444)' : 'var(--accent)';
+  let whenTxt;
+  if (dueTxt == null) whenTxt = 'unscheduled';
+  else if (cad.days_until_due === 0) whenTxt = 'due today';
+  else if (overdue) whenTxt = Math.abs(cad.days_until_due) + 'd overdue · ' + dueTxt;
+  else whenTxt = 'in ' + cad.days_until_due + 'd · ' + dueTxt;
+
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">\u{1F4C5} Next touchpoint</div>';
+  html += '<div style="padding:12px 14px;background:var(--s2);border:1px solid var(--border);border-left:3px solid ' + dcolor + ';border-radius:8px">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">';
+  html += '<div style="font-weight:700;font-size:13px;color:var(--text);text-transform:capitalize">' + esc(nType) + '</div>';
+  html += '<div style="font-size:12px;font-weight:600;color:' + dcolor + '">' + esc(whenTxt) + '</div>';
+  html += '</div>';
+  const bits = [];
+  if (cad.phase) bits.push('Phase: ' + String(cad.phase).replace(/_/g, ' '));
+  if (cad.priority_tier) bits.push('Tier ' + cad.priority_tier);
+  if (cad.current_touch != null) bits.push('Touch #' + cad.current_touch);
+  if (cad.next_touch_template) bits.push('Suggested: ' + cad.next_touch_template);
+  if (bits.length) html += '<div style="font-size:11px;color:var(--text3);margin-top:6px;display:flex;gap:10px;flex-wrap:wrap">' + bits.map(function(b){return '<span>' + esc(b) + '</span>';}).join('') + '</div>';
+  const eng = [];
+  if (cad.emails_sent != null) eng.push(cad.emails_sent + ' sent');
+  if (cad.emails_replied != null) eng.push(cad.emails_replied + ' replied');
+  if (cad.calls_connected != null) eng.push(cad.calls_connected + ' calls');
+  if (eng.length) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(eng.join(' · ')) + '</div>';
+  const unsub = String(cad.unsubscribe_status || '').toLowerCase();
+  if (unsub && unsub !== 'subscribed' && unsub !== 'none' && unsub !== 'active') {
+    html += '<div style="font-size:11px;color:var(--red,#ef4444);margin-top:6px;font-weight:600">⚠️ ' + esc(cad.unsubscribe_status) + ' — do not email</div>';
+  } else {
+    html += '<button class="dns-cta" style="margin-top:10px" onclick="_entityDraftAndLog(this)">✍️ Draft touchpoint email →</button>';
+    html += '<div id="entityDraftHost" style="margin-top:10px"></div>';
+  }
+  html += '</div></div>';
+  return html;
+}
+
 function _entityTabActivity() {
   const cache = _entityDetailCache || {};
   const timeline = cache.timeline || cache.activities || [];
   const activities = timeline;
   const entityId = cache.entityId || (cache.entity && cache.entity.id) || '';
+  const _cockpit = _entityCadenceCockpit(cache.cadence);
 
   // Cortex W3 \u2014 unified relationship: email summary + recent thread sits ABOVE the
   // structured activity_events timeline (which carries calls/SF/meetings/etc.).
-  let html = _renderEmailRelationshipCard(cache.emailRel, entityId);
+  let html = _cockpit + _renderEmailRelationshipCard(cache.emailRel, entityId);
 
   // Open Tasks (non-completed SF tasks) \u2014 Contact 360 refinement. dia carries no
   // WhatId, so the account (company_name) is the link; the opportunity/deal shows
