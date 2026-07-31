@@ -972,3 +972,39 @@ export async function getSalesforceOwnerSignals(ids, ownerIn = null) {
   }
   return { ok: true, signals };
 }
+
+/**
+ * Map SF Opportunity ids -> their Account (the seller/client on our listings).
+ * Our bd_opportunities store sf_opp_id but not the Account, and the existing
+ * owners_by_ids op returns the owner REP, not the seller. So the property owner
+ * of a listing (= our client/seller) needs this opp->account bridge.
+ *
+ * Connector op 'opportunities_by_ids' (NEW -- add to the SF lookup flow, same
+ * signed-URL contract as find_account_by_id). Inert (ok:false) until it exists.
+ *   Body:    { operation:'opportunities_by_ids', ids:['006...', ...] }
+ *   Success: { ok:true, opportunities:[ { Id, AccountId, AccountName } ] }
+ * Returns { ok:true, accounts:[{ opp_id, account_id, account_name }] }.
+ */
+export async function getSalesforceOpportunityAccounts(oppIds) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const clean = Array.from(new Set(
+    (Array.isArray(oppIds) ? oppIds : [])
+      .map((s) => String(s || '').trim())
+      .filter((s) => /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(s))
+  ));
+  if (!clean.length) return { ok: true, accounts: [] };
+
+  const result = await callSfLookupFlow({ operation: 'opportunities_by_ids', ids: clean });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  const rows = Array.isArray(result.opportunities) ? result.opportunities
+    : Array.isArray(result.records) ? result.records
+    : Array.isArray(result.accounts) ? result.accounts : [];
+  const accounts = rows.map((r) => ({
+    opp_id:       r.Id || r.id || r.opp_id || r.OpportunityId || null,
+    account_id:   r.AccountId || r.accountId || (r.Account && (r.Account.Id || r.Account.id)) || r.account_id || null,
+    account_name: r.AccountName || r.accountName || (r.Account && (r.Account.Name || r.Account.name)) || r.account_name || null,
+  })).filter((a) => a.opp_id && a.account_id);
+  return { ok: true, accounts };
+}

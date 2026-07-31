@@ -51,12 +51,32 @@ resolved owners are surfaced at the point the panel resolves the LCC entity:
    the P0.1 guard, the panel now shows the **reconciled owner** where we have one and **"Unresolved"**
    where we don't — never the operator.
 
+## SF-seller feeder (our own listings) — BUILT ready-and-waiting (2026-07-31)
+Our 40 open listings have ~0 `owns`/`purchases` graph edges, so 0 resolved from the graph. Their owner
+= our client/seller = the deal's **SF Account**. `bd_opportunities` store `sf_opp_id` but NOT the
+account, and no existing flow returns an opportunity's Account (owners_by_ids returns the owner *rep*).
+So this is **connector-dependent**, the same posture as the correspondence flow. Built the LCC side
+reusing existing machinery (no new reconciler, no rebuilt account logic):
+- **`getSalesforceOpportunityAccounts(oppIds)`** (`salesforce.js`) — calls a NEW SF flow op
+  `opportunities_by_ids` → `[{opp_id, account_id, account_name}]`. Inert until the op exists.
+- **`POST /api/sf-seller-owner`** (`_handlers/sf-seller-owner.js`):
+  - **Receiver mode** — body `{mappings:[{deal_entity_id, account_id, account_name, observed_at?}]}`
+    → `ensureEntityLink` resolves the SF Account to an **org entity** (same choke point as
+    `relatePersonToSfAccount`) → `lcc_record_property_owner_evidence` (source `sf_seller`, weight 4.5)
+    → `lcc_reconcile_property_owner`. **Testable now**, no connector needed.
+  - **Worker mode** — sweeps open deals (have `sf_opp_id`, no property owner) → `opportunities_by_ids`
+    → resolve/record/reconcile. Inert until `SF_LOOKUP_WEBHOOK_URL` + the flow op exist.
+- Weight 4.5 > `rel_owns` (3) / `rel_purchase` (4) so the client/seller wins on an open listing, while
+  a later recorded purchase (recency-weighted) still transfers ownership after a close.
+- **DB path validated** on a real open deal (recorded `sf_seller` evidence → reconciled → wrote
+  `lcc_property_owner`, conf 1); synthetic test data removed.
+
+**Connector op to add (Scott, mirrors the correspondence/SF-owner flows):** in the SF lookup flow,
+add `operation == 'opportunities_by_ids'` → SOQL `SELECT Id, AccountId, Account.Name FROM Opportunity
+WHERE Id IN :ids` → Respond `{ok:true, opportunities:[{Id, AccountId, AccountName}]}`. Then
+`POST /api/sf-seller-owner` (worker) resolves our listings' owners.
+
 ## Remaining wiring
-1. **Our own deals: SF-seller feeder.** Our 40 open listings have almost no `owns`/`purchases` graph
-   linkage (only 2), so 0 resolved from the graph. Their owner = our client/seller, which lives in the
-   SF opportunity (Account) and the primary contact — a separate feeder
-   (`lcc_ingest_sf_seller_property_owner`) that records the SF Account/seller as the property owner for
-   our listings. Highest-value next step for *our* deals specifically.
 3. **Bulk + cadence.** Re-run the feeder as new `owns`/`purchases` land (e.g. from the correspondence/
    comps pipelines); consider a scheduled sweep like the deal-correspondence backfill.
 4. **Repo mirror — DONE.** Migration `20260818290000_property_owner_subsystem.sql` is applied live and
