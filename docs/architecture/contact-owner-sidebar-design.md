@@ -198,9 +198,14 @@ the "BD copilot" heart of what Scott wants, and it's ~80% wiring of machinery we
   badges; each asset chip → its entity panel. Complements the economics-rich Ownership tab (this is the
   all-roles timeline). Verified live on Boyd Watterson (254 owned · 273 bought · 16 sold · 1 brokered).
 
+- **Hero next-action (ask: "direct the user by design")** — `_nextActionForContact(c)` deterministic
+  ladder over the contact360 cache, first match wins: suppressed → *do not contact*; no email/phone →
+  *find a contact*; not SF-linked → *connect in Salesforce*; cadence overdue → *log the overdue touch*;
+  last inbound unanswered → *reply*; cadence due → *next touch*; else → *log a touchpoint*. Rendered as a
+  single "Next best action" hero atop Overview (tone-colored, one CTA reusing `_entityAcquireContact` /
+  `_entityDraftAndLog`). Pure function — **unit-tested (8/8 ladder cases pass)** against the live file.
+
 **Still open (next steps):**
-- **Hero next-action** `_nextActionForContact(c360)` — deterministic ladder using the new `cadence` block
-  (overdue → log due touch; unanswered inbound → follow up; not-in-SF → connect; else → log touchpoint).
 - **Closed-loop reconciliation** — make sent-capture (`handleOutlookSent`) the source of truth vs.
   `draft_and_log`'s optimistic pre-log; add the **SF task reschedule** op (draft_and_log advances the LCC
   cadence + logs a completed SF task, but does not yet reschedule the *next* SF task).

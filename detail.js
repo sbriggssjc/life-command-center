@@ -12904,6 +12904,65 @@ const _ENTITY_ROLE_META = {
 };
 function _entityRoleMeta(role) { return _ENTITY_ROLE_META[role] || _ENTITY_ROLE_META.contact; }
 
+// ── Hero next-action (the "direct the user by design" element) ──
+// Deterministic ladder over the contact360 payload: picks the SINGLE highest-
+// priority next move for this party, first match wins. Role-agnostic; renders as
+// one primary CTA at the top of Overview. Pure function of the cache — no fetch,
+// documented + testable. Returns {key,tone,label,sub,cta,onclick} | null.
+function _nextActionForContact(c) {
+  if (!c) return null;
+  const e = c.entity || {};
+  const cad = c.cadence || null;
+  const emailRel = c.emailRel || null;
+  const email = (c.subject && c.subject.email) || e.email || (emailRel && emailRel.email) || null;
+  const phone = e.phone || null;
+  const sfIds = (c.subject && Array.isArray(c.subject.sf_contact_ids)) ? c.subject.sf_contact_ids : [];
+  const sfLinked = sfIds.length > 0 || (Array.isArray(e.external_identities) && e.external_identities.some(function(x){
+    return String(x.source_system || '').toLowerCase() === 'salesforce' && String(x.source_type || '').toLowerCase() === 'contact';
+  }));
+  const unsub = cad && cad.unsubscribe_status ? String(cad.unsubscribe_status).toLowerCase() : '';
+  const suppressed = unsub && unsub !== 'subscribed' && unsub !== 'none' && unsub !== 'active';
+  const recent = (emailRel && Array.isArray(emailRel.recent)) ? emailRel.recent : [];
+  const lastInboundUnanswered = recent.length > 0 && recent[0].dir !== 'out';
+
+  // 1. Suppressed — hard stop, no outreach CTA.
+  if (suppressed) return { key: 'suppressed', tone: 'stop', label: 'Do not contact',
+    sub: 'Marked ' + cad.unsubscribe_status + ' — suppressed from outreach.', cta: null, onclick: null };
+  // 2. No contact method on file — acquire one first.
+  if (!email && !phone) return { key: 'find_contact', tone: 'warn', label: 'Find a contact',
+    sub: 'No email or phone on file — acquire a reachable contact before outreach.', cta: 'Select contact →', onclick: '_entityAcquireContact()' };
+  // 3. Not linked in Salesforce — connect to log activity + mark ROE territory.
+  if (!sfLinked) return { key: 'connect_sf', tone: 'accent', label: 'Connect in Salesforce',
+    sub: 'Not linked to a CRM contact — link to log activity and mark territory (ROE).', cta: 'Select contact →', onclick: '_entityAcquireContact()' };
+  // 4. Cadence touch overdue — the due move, now.
+  if (cad && cad.overdue) return { key: 'log_overdue', tone: 'stop', label: 'Log the overdue ' + (cad.next_touch_type || 'touch'),
+    sub: (cad.next_touch_type || 'Touch') + ' was due ' + _fmtDate(cad.next_touch_due) + ' (' + Math.abs(Number(cad.days_until_due)) + 'd overdue).', cta: 'Draft touchpoint →', onclick: '_entityDraftAndLog(this)' };
+  // 5. Unanswered inbound — they emailed us last; reply.
+  if (lastInboundUnanswered) return { key: 'reply', tone: 'warn', label: 'Reply — they emailed last',
+    sub: 'Last message was inbound' + (recent[0].received_at ? ' (' + _fmtDate(recent[0].received_at) + ')' : '') + ' and awaits your reply.', cta: 'Draft reply →', onclick: '_entityDraftAndLog(this)' };
+  // 6. Cadence due (not yet overdue) — the suggested next touch.
+  if (cad && cad.on_cadence && cad.next_touch_due) return { key: 'touch_due', tone: 'accent', label: 'Next touch: ' + (cad.next_touch_type || 'touch'),
+    sub: 'Due ' + _fmtDate(cad.next_touch_due) + (cad.next_touch_template ? ' · suggested: ' + cad.next_touch_template : '') + '.', cta: 'Draft touchpoint →', onclick: '_entityDraftAndLog(this)' };
+  // 7. Default — start/continue the relationship.
+  return { key: 'log_touch', tone: 'go', label: 'Log a touchpoint',
+    sub: 'Start or continue the relationship with a logged touch.', cta: 'Draft & Log →', onclick: '_entityDraftAndLog(this)' };
+}
+window._nextActionForContact = _nextActionForContact;
+
+function _entityHeroHTML(c) {
+  const a = _nextActionForContact(c);
+  if (!a) return '';
+  const tones = { stop: 'var(--red,#ef4444)', warn: 'var(--amber,#d98c00)', accent: 'var(--accent)', go: 'var(--green,#22c55e)' };
+  const col = tones[a.tone] || 'var(--accent)';
+  let h = '<div class="detail-section"><div style="padding:14px 16px;border-radius:10px;background:var(--s2);border:1px solid var(--border);border-left:4px solid ' + col + '">';
+  h += '<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:' + col + ';margin-bottom:4px">Next best action</div>';
+  h += '<div style="font-size:15px;font-weight:700;color:var(--text)">' + esc(a.label) + '</div>';
+  if (a.sub) h += '<div style="font-size:12px;color:var(--text2);margin-top:3px">' + esc(a.sub) + '</div>';
+  if (a.cta && a.onclick) h += '<button class="dns-cta" style="margin-top:10px" onclick="event.stopPropagation();' + a.onclick + '">' + esc(a.cta) + '</button>';
+  h += '</div></div>';
+  return h;
+}
+
 // ── Entity Overview Tab ──
 function _entityTabOverview() {
   const c = _entityDetailCache;
@@ -12927,6 +12986,10 @@ function _entityTabOverview() {
     html += '<span style="font-size:11px;color:var(--text2)">' + propCount + ' propert' + (propCount === 1 ? 'y' : 'ies') + ' in the BD portfolio</span>';
   }
   html += '</div>';
+
+  // Hero next-action (Scott: "direct the user by design") — the single highest-
+  // priority move, right below the role banner, above the reference detail.
+  html += _entityHeroHTML(c);
 
   // Entity info section
   html += '<div class="detail-section"><div class="detail-section-title">Entity Information</div><div class="detail-grid">';
