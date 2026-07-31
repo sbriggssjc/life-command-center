@@ -433,7 +433,20 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
           try {
             const po = await opsQuery('GET',
               `lcc_property_owner?entity_id=eq.${hit.id}&select=owner_entity_id,owner_name,confidence,source,resolved_at&limit=1`);
-            if (po.data && po.data[0] && po.data[0].owner_name) hit.property_owner = po.data[0];
+            if (po.data && po.data[0] && po.data[0].owner_name) {
+              hit.property_owner = po.data[0];
+              // Connect the property-owner to the prospecting layer: is our team working
+              // this owner, by whom, how recently? (touchpoint_cadence). Powers the P3.3
+              // Current Owner prospecting strip. Best-effort.
+              if (hit.property_owner.owner_entity_id) {
+                try {
+                  const ps = await opsQuery('POST', 'rpc/lcc_owner_prospecting_status',
+                    { p_owner_entity_id: hit.property_owner.owner_entity_id });
+                  const pv = Array.isArray(ps.data) ? ps.data[0] : ps.data;
+                  if (pv && typeof pv === 'object') hit.property_owner.prospecting = pv;
+                } catch (_e2) { /* best-effort */ }
+              }
+            }
           } catch (_e) { /* best-effort */ }
         }
         return hit;

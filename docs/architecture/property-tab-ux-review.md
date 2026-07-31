@@ -262,9 +262,32 @@ Pivoted here (32/40 deals + 1,768 portfolio have a reconciled owner — real dat
 “verified ‹date›”** (source labelled Salesforce seller / Verified (manual) / Ownership graph / County deed).
 Backed by `lcc_property_owner` — `entities?action=lookup_asset` now returns `resolved_at`; `detail.js`
 attaches the packet to `ownership.lcc_property_owner`. Domain-generic. Never shows the operator.
-**Remaining P3.3:** prospecting status/ranking on the owner (touchpoint_cadence + correspondence recency),
-developer→owner chain (blocked on the same 0-coverage `developed` data), and moving contact/call actions
-fully onto the contact sidebar (P1 sidebar dependency).
+### P3.3 prospecting strip (DONE, 2026-07-31)
+New connection: **property-owner ↔ prospecting layer.** RPC `lcc_owner_prospecting_status(owner_entity)`
+(migration `20260818320000`) aggregates `touchpoint_cadence` for the owner → status
+(active/unsubscribed/none), tier, rep, last/next touch, engagement counts. `lookup_asset` attaches it
+as `property_owner.prospecting`; the Current Owner card renders a **Prospecting strip** (or, when
+unworked, a **“Not yet prospected · research owner →”** suggestion — P3.3's suggestions ask). 156 owner
+entities have cadence; validated on Boyd Watterson (Active, Tier A, 13 emailed, dormant since 2023).
+
+**Design/connectivity re-eval + enhancement points (Scott's standing directive):**
+- **Gap — `cadence.owner_user_id` mostly empty** → the strip's *rep* is usually null. A backfill mapping
+  cadence rows to the deal point-person (or SF activity actor) would light up “who's prospecting.” Ties
+  to the point-person work (`lcc_entity_owner_override`). **Recommended next connectivity fix.**
+- **Next connection — owner card ↔ My Day / next-best-touchpoint:** when `next_touch_due` is past, make the
+  strip a one-click **Log Touchpoint** that advances the cadence (`advanceCadence`), so the owner card
+  feeds the same next-best-touch loop My Day drives. (Currently display-only.)
+- **Next connection — owner card ↔ correspondence:** we ingested 872 deal emails; surface the latest
+  owner correspondence subject/date on the card (reuse `activity_events` party/deal anchors).
+- **Local-LLM enhancement (P2/dossier home):** a per-owner *prospecting summary* generated locally —
+  synthesize cadence + correspondence content into “dormant tier-A landlord, 13 emails / 0 replies since
+  Feb 2023; try a fresh angle on ‹portfolio›.” Belongs in the Property Dossier where GaryBuilt/Ollama lands.
+- **Public-records enrichment:** for `status:'none'` owners with no contact, the “research owner” CTA
+  should route to the owner-contact enrichment (public-records chain) — currently PAUSED (SOS-direct
+  blocked from CI). When re-enabled it becomes a one-click enrich from the card.
+
+**Remaining P3.3:** the rep backfill (above), the developer→owner chain (blocked on 0-coverage `developed`
+data), and moving contact/call actions fully onto the contact sidebar (P1 sidebar dependency).
 
 **Domain note (Scott, 2026-07-31):** this whole property-tab design was reviewed on **dialysis** but
 applies to **government** and future net-lease subspecialties too — build the shared shell once; branch

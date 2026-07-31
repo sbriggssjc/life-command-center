@@ -6917,6 +6917,33 @@ function _udCurrentOwnerCard(own, db) {
   let h = '<div class="detail-section"><div class="detail-section-title">Current Owner</div>';
   h += `<div style="font-size:15px;font-weight:600;margin-bottom:4px">${chip}</div>`;
   h += `<div style="font-size:11px;color:var(--text3)">${esc(src)}${conf}${when}</div>`;
+  // Prospecting strip — is our team actively working this owner? (touchpoint_cadence).
+  const ps = po && po.prospecting;
+  if (ps && ps.prospecting) {
+    const bits = [];
+    if (ps.tier) bits.push(`Tier ${esc(String(ps.tier))}`);
+    if (ps.rep) bits.push(esc(ps.rep));
+    if (ps.last_touch_at) bits.push(`last ${esc(ps.last_touch_type || 'touch')} ${_fmtDate(ps.last_touch_at)}`);
+    if (ps.next_touch_due) bits.push(`next ${esc(ps.next_touch_type || 'touch')} due ${_fmtDate(ps.next_touch_due)}`);
+    const eng = [];
+    if (ps.emails_sent) eng.push(`${ps.emails_sent} emailed`);
+    if (ps.emails_replied) eng.push(`${ps.emails_replied} replied`);
+    if (ps.calls_connected) eng.push(`${ps.calls_connected} calls`);
+    if (ps.meetings) eng.push(`${ps.meetings} mtgs`);
+    const isUnsub = ps.status === 'unsubscribed';
+    const label = isUnsub ? 'Unsubscribed' : 'Prospecting';
+    const color = isUnsub ? 'var(--yellow)' : 'var(--green)';
+    h += `<div style="margin-top:8px;font-size:12px"><span style="color:${color};font-weight:600">${label}</span>`;
+    if (bits.length) h += ` <span style="color:var(--text2)">· ${bits.join(' · ')}</span>`;
+    h += '</div>';
+    if (eng.length) h += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${eng.join(' · ')}</div>`;
+  } else if (ps && ps.prospecting === false) {
+    // Not prospected — P3.3 suggestion (research the owner / connect in SF).
+    const safe = esc(name).replace(/'/g, "\\'");
+    h += `<div style="margin-top:8px;font-size:12px;color:var(--text2)">Not yet prospected · ` +
+      `<span style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" ` +
+      `onclick="openEntityDetailByName('${safe}')" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
+  }
   h += '</div>';
   return h;
 }
