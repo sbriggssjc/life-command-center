@@ -82,13 +82,22 @@ export async function handleDealCorrespondenceBackfill(req, res) {
         hint: 'Set OUTLOOK_SEARCH_WEBHOOK_URL and build the deal_thread_search flow. Receiver mode works now for testing.',
       });
     }
+    // Batched sweep: a full 40-deal serial flow-sweep exceeds the platform request
+    // timeout, and an un-paged worker always restarts from the top (never reaching the
+    // tail). `missing_only=1` pages through deals not yet marked correspondence_swept_at,
+    // so repeated small-`limit` calls converge to full coverage; each deal is stamped via
+    // lcc_mark_deal_swept once searched (even on 0 messages) so it drops out next batch.
+    // This is also the cadence hook (a future run re-sweeps by clearing/aging the marker).
     const limit = req.query?.limit ? Number(req.query.limit) : null;
-    const deals = await opsQuery('GET',
-      'bd_opportunities?select=entity_id&is_open=is.true&entity_id=not.is.null' + (limit ? ('&limit=' + limit) : ''))
-      .catch(() => null);
+    const missingOnly = req.query?.missing_only === '1' || req.query?.missing_only === 'true';
+    const q = 'bd_opportunities?select=entity_id&is_open=is.true&entity_id=not.is.null'
+      + (missingOnly ? '&metadata->>correspondence_swept_at=is.null' : '')
+      + '&order=entity_id.asc'
+      + (limit ? ('&limit=' + limit) : '');
+    const deals = await opsQuery('GET', q).catch(() => null);
     const ids = Array.from(new Set((deals?.data || []).map((d) => d.entity_id).filter(Boolean)));
 
-    let dealsSearched = 0, messagesLogged = 0, todosReconciled = 0; const errors = [];
+    let dealsSearched = 0, messagesLogged = 0, todosReconciled = 0, dealsSwept = 0; const errors = [];
     for (const eid of ids) {
       const seedR = await opsQuery('POST', 'rpc/lcc_deal_correspondents', { p_deal_entity_id: eid }).catch(() => null);
       const seed = seedR?.data;
@@ -102,8 +111,16 @@ export async function handleDealCorrespondenceBackfill(req, res) {
       const r = await logMessages(eid, s.messages, ws);
       messagesLogged += r.logged;
       todosReconciled += (r.reconciled || 0);
+      // Mark swept even when 0 messages (true negative) so missing_only paging advances.
+      try {
+        await opsQuery('POST', 'rpc/lcc_mark_deal_swept',
+          { p_entity_id: eid, p_count: (s.messages || []).length });
+        dealsSwept++;
+      } catch (_e) { /* best-effort; unswept deal simply retries next batch */ }
     }
-    return res.status(200).json({ ok: true, mode: 'worker', deals_searched: dealsSearched, messages_logged: messagesLogged, todos_reconciled: todosReconciled, errors });
+    return res.status(200).json({ ok: true, mode: 'worker', missing_only: missingOnly,
+      deals_searched: dealsSearched, messages_logged: messagesLogged,
+      todos_reconciled: todosReconciled, deals_swept: dealsSwept, errors });
   } catch (e) {
     return res.status(200).json({ ok: false, reason: 'deal_backfill_error', detail: String(e?.message || e).slice(0, 300) });
   }

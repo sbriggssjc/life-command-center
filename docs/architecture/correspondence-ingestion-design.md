@@ -149,6 +149,31 @@ That unblocks the *currently-deployed* LCC too; it becomes moot once the LCC fix
 5. **Ongoing-capture tightening** (design §A): ensure deal counterparties (buyer/broker emails on the
    SF opp) resolve to the deal so *new* live mail self-stamps without a re-backfill.
 
+## End-to-end proven + batched sweep (2026-07-31)
+**It works.** After the null-safe payload fix shipped and the flow trigger tolerated the null, the
+first live `?limit=3` returned **24 messages logged, 0 errors**, deal-stamped on the spine
+(`source_type='email_intake'`, `entity_id`=deal). The reconciler fired at volume across deals that
+have open `deal_next_step` to-dos: each now carries `last_correspondence_{at,dir,subject}`,
+`correspondence_count`, and `ball_in_court` (us on last-inbound = "your move", them on last-outbound).
+
+**Batched sweep (the full backfill can't run in one request).** A full ~40-deal serial flow-sweep
+exceeds the platform request window (observed **502 "Application failed to respond" at ~88s**), and an
+un-paged worker always restarts from the top so it never reaches the tail. Fix:
+- **`lcc_mark_deal_swept(entity_id, count)`** stamps `bd_opportunities.metadata.correspondence_swept_at`
+  (+`correspondence_last_count`) once a deal is searched — **even on 0 messages** (a true-negative
+  subject miss), so it drops out of the next batch. Migration `20260818270000`.
+- **Worker `?missing_only=1`** selects open deals where `correspondence_swept_at is null`,
+  `order=entity_id.asc`, capped by `?limit`. Repeated small-`limit` calls converge to full coverage
+  without ever hitting the timeout. This is also the **cadence hook**: a future run re-sweeps by aging
+  or clearing the marker.
+- Response now also returns `missing_only` + `deals_swept`.
+
+**Coverage checkpoint (2026-07-31):** 40 open deals; **21 swept / have mail**, **19 unswept**. Deals
+already carrying `email_intake` mail were pre-marked swept so the batched run targets only the tail.
+**Next (after this worker redeploys):** run `?missing_only=1&limit=8` ~3x to finish the 19, then verify
+deal staleness/last-touch across My Day. Some of the 19 will be **true negatives** (no deal-name-subject
+match) until the v2 **email-based search** lands — those get marked swept once and stop being retried.
+
 ## Reconciliation refinement (2026-07-31) — deal correspondence -> deal_next_step to-dos
 The existing self-updating engines (`lcc_advance_todos`, `lcc_autoresolve_todos`) only reconcile
 `offer_review` / `follow_up` / `seller_follow_up`. But the bulk of open work is `deal_next_step`
