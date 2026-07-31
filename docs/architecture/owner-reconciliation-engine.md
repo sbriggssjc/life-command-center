@@ -66,6 +66,19 @@ carries `conf`, `margin`, and the per-candidate score+sources breakdown for prov
 (all Kelly, 0 Scott); adding the email feeder captured Scott's 9. Coverage compounds with
 each feeder.
 
+## Root-cause note — stale rep SF ids (2026-07-31)
+`lcc_map_sf_owner` maps a Salesforce user id → lcc_user via `lcc_users.salesforce_owner_id`.
+If a rep's stored id is wrong, **every** SF-sourced signal silently fails for them (the SF-Task
+`owner_in` filter excludes them; deal/opportunity owner never maps) — they read as "unassigned"
+with no error. This happened to Scott: his stored id `0051I000001vHJbQAM` (old org, 0 deals) was
+corrected to `0058W00000FDlFWQA1` (337 deals/144 won), which self-healed SF-Task attribution
+(0→9) and deal attribution (0→14 open) at once. **Operational check:** a rep whose
+`salesforce_owner_id` prefix differs from the team's, or who resolves 0 SF signals, likely has a
+stale id — fix `lcc_users`, no code change needed (the `owner_in` filter reads it live). The
+`deal_owner` feeder also reads `bd_opportunities.metadata.owner_sf_user_id` directly (via
+`lcc_map_sf_owner`), so deal ownership self-populates from the SF Opportunity owner even when the
+sync hasn't written `owner_user_id`.
+
 ## Roadmap — more feeders (each is additive; the engine doesn't change)
 1. **Separated "SF owner signals" PA flow** (Scott leans this way): one richer flow op that
    returns, per account, *all* SF ownership signals in one call — Task owners (WhatId **and**

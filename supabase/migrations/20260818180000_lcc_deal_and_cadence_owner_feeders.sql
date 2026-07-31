@@ -8,12 +8,15 @@ create or replace function public.lcc_ingest_deal_owner_evidence()
 declare v_n int := 0;
 begin
   with src as (
-    select b.entity_id as ent, b.owner_user_id as cand, coalesce(b.updated_at, b.opened_at, now()) as obs
+    select b.entity_id as ent,
+           coalesce((select lu.lcc_user_id from lcc_users lu where lu.lcc_user_id = b.owner_user_id and lu.active is not false),
+                    lcc_map_sf_owner(b.metadata->>'owner_sf_user_id')) as cand,
+           coalesce(b.updated_at, b.opened_at, now()) as obs
     from bd_opportunities b
-    join lcc_users lu on lu.lcc_user_id = b.owner_user_id and lu.active is not false
     where b.is_open and b.entity_id is not null
-  ), agg as (select ent, cand, max(obs) last_at, count(*) deals from src group by ent, cand),
-  ins as (
+  ), agg as (
+    select ent, cand, max(obs) last_at, count(*) deals from src where cand is not null group by ent, cand
+  ), ins as (
     insert into lcc_owner_evidence(entity_id, candidate_owner, source, weight, observed_at, detail)
     select ent, cand, 'deal_owner', 0.9, last_at, jsonb_build_object('open_deals', deals) from agg
     on conflict (entity_id, source, candidate_owner) do update
