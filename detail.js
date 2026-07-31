@@ -6917,8 +6917,14 @@ function _udCurrentOwnerCard(own, db) {
   let h = '<div class="detail-section"><div class="detail-section-title">Current Owner</div>';
   h += `<div style="font-size:15px;font-weight:600;margin-bottom:4px">${chip}</div>`;
   h += `<div style="font-size:11px;color:var(--text3)">${esc(src)}${conf}${when}</div>`;
-  // Prospecting strip — is our team actively working this owner? (touchpoint_cadence).
   const ps = po && po.prospecting;
+  // Portfolio line — owner → properties (lcc_property_owner), incl. our active deals.
+  if (ps && ps.portfolio_count) {
+    const n = ps.portfolio_count;
+    const dealBit = ps.our_open_deals ? ` · <span style="color:var(--accent)">${ps.our_open_deals} active deal${ps.our_open_deals > 1 ? 's' : ''}</span>` : '';
+    h += `<div style="margin-top:6px;font-size:12px;color:var(--text2)">Owns ${n} propert${n > 1 ? 'ies' : 'y'}${dealBit}</div>`;
+  }
+  // Prospecting strip — is our team actively working this owner? (touchpoint_cadence).
   if (ps && ps.prospecting) {
     const bits = [];
     if (ps.tier) bits.push(`Tier ${esc(String(ps.tier))}`);

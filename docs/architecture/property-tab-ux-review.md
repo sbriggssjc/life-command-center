@@ -270,10 +270,21 @@ as `property_owner.prospecting`; the Current Owner card renders a **Prospecting 
 unworked, a **“Not yet prospected · research owner →”** suggestion — P3.3's suggestions ask). 156 owner
 entities have cadence; validated on Boyd Watterson (Active, Tier A, 13 emailed, dormant since 2023).
 
+### Owner→portfolio line + the rep-backfill dead-end (2026-07-31)
+**Reviewed the rep backfill — NOT built (data-starved, would fix ~0 rows).** Of 1,786 rep-less cadence
+rows: **0** have a `bd_opportunity_id`, **0** have SF-owner metadata, **23** have an entity override, and
+only **3** cadence-owners map to a deal point-person. The rep assignment isn't in the data and can't be
+reliably inferred. **The real gap is upstream:** cadence generation/advance never stamps `owner_user_id`
+— fix it there (stamp the point-person or SF activity owner at create/advance time), a producer fix, not
+a backfill. The strip already omits the rep gracefully when null.
+**Built instead (data-backed): owner→portfolio line.** `lcc_owner_prospecting_status` now also returns
+`portfolio_count` + `our_open_deals` (owner → `lcc_property_owner` → assets, migration `20260818330000`);
+the card shows “Owns N properties · M active deals.” Validated: Boyd Watterson owns **223** (0 our deals,
+actively prospected, tier A); Genesis owns **9 · 8 active deals**. A real owner→portfolio connection that
+makes the owner chip a gateway to their whole book.
+
 **Design/connectivity re-eval + enhancement points (Scott's standing directive):**
-- **Gap — `cadence.owner_user_id` mostly empty** → the strip's *rep* is usually null. A backfill mapping
-  cadence rows to the deal point-person (or SF activity actor) would light up “who's prospecting.” Ties
-  to the point-person work (`lcc_entity_owner_override`). **Recommended next connectivity fix.**
+- **Rep on cadence — fix upstream** (producer stamps `owner_user_id`); backfill is a dead end (above).
 - **Next connection — owner card ↔ My Day / next-best-touchpoint:** when `next_touch_due` is past, make the
   strip a one-click **Log Touchpoint** that advances the cadence (`advanceCadence`), so the owner card
   feeds the same next-best-touch loop My Day drives. (Currently display-only.)
