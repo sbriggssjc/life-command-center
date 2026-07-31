@@ -197,7 +197,58 @@ playbook was written; Cowork's integration review mapped GaryBuilt into them:
 5. **What stays deterministic:** W5.2 signal value-gates, resolver scoring bands,
    ORE merge decisions — no LLM in auditable gates.
 
-**Current cutover state (2026-07-31):** machine-side per §1–2; Railway env NOT yet
-set — `feature_flags_registry.OLLAMA_EXTRACTION = off`. First verification after
-the flip: one test intake showing `ai_final_provider: "ollama"` in per-artifact
-diagnostics, then kill the tunnel and confirm clean cloud fallback.
+## 7. Employment map — where the local model works across LCC (path forward)
+
+Doctrine first: GaryBuilt does **background** work only; **never** an auditable
+gate (resolver bands, ORE merges, W5.2 value thresholds) and never the
+interactive chat seat. Every new use ships with its own consumer + gate.
+
+**LIVE NOW (via the seam, since cutover):**
+- Intake OM extraction (`/api/intake/stage-om` pipeline — includes the whole
+  W3.7c Salesforce file stream as discovery drains gov 679 + dia 465 ids).
+- Content-aware next-step derivation (next-step engine).
+
+**BUILT, GATED (run when approved):**
+- W5.1 party extraction channel B — 100-sample sheet → Scott → `--apply`.
+
+**NEAR-TERM CANDIDATES (background batch, high fit, in rough value order):**
+1. **Junk-entity-name pre-screen** — the `junk_entity_name` lane has absorbed
+   ~2,000 human decisions; a nightly local pass can PROPOSE
+   dismiss/rename/parse_contact verdicts as annotations for one-click confirm
+   (verdicts stay human; mirrors the sf_link pre-screen pattern).
+- 2. **Review-lane pre-screen sort** + **hard-negative candidate proposals**
+   (§6 items 3–4) — accelerates the W4.4 drift-alert self-resolution.
+3. **Email-intake classification assist** — `email_intake_v2` review_reason
+   triage annotations (background, human disposition unchanged).
+4. **Daily-briefing narrative polish** — the briefing snapshot's prose section
+   generated locally each night instead of cloud.
+5. **Research synthesis** — owner-contact-websearch / research_task result
+   summarization into structured payloads.
+
+**MID-TERM (needs design):**
+- Draft generation grounded in `BRIGGS-WRITING-VOICE.md` (playbook phase 3):
+  outreach/follow-up drafts, BOV exhibit narrative FIRST DRAFTS for human edit.
+  Respect the offer-submission doctrine — strategy stays verbal, drafts only.
+- `match_disambiguation` card assist annotations (1,120 open, zero decided — an
+  LLM first-pass ranking might be what finally makes that lane workable).
+- LoRA fine-tune on the 10-yr sent corpus if few-shot voice isn't tight enough.
+
+**Measured note (2026-07-31 live test):** GLiNER channel A on real dia notes —
+sale 14787 extracted buyer/seller/price perfectly; sale 14808 got the broker
+right but returned the TENANT (DaVita) as seller — the exact miss class the
+channel-B adjudication + human sample gate exist to catch. First-call latency is
+high (model cold start; third call exceeded 120s) — the sample runner should
+warm both channels first and use generous per-call timeouts.
+
+**Cutover state: LIVE (2026-07-31 evening, session 33).** Permanent transport built
+and verified end-to-end: named Cloudflare tunnel `garybuilt.briggscrelccopps.com`
+(cloudflared as a Windows service, auto-start) + **Access Service Auth** policy with
+the `lcc-railway` service token. Verified: unauthenticated → 403 Access page (GPU
+not exposed); authenticated `/api/tags` → qwen2.5:14b present; `OLLAMA_URL`
+(**https**, no trailing slash — http would 301 and silently convert POSTs to GETs,
+the same hazard class as the GOV_SUPABASE_URL incident) + `OLLAMA_MODEL` +
+`AI_EXTRACTION_PROVIDER=ollama` + `CF_ACCESS_CLIENT_ID/SECRET` set on LCC Railway;
+ai.js patched to send the CF Access headers. `feature_flags_registry.OLLAMA_EXTRACTION
+= on`. Remaining niceties: observe `ai_final_provider: "ollama"` on the first real
+extraction, and an optional fallback drill (stop the Ollama service for a minute →
+confirm clean cloud degradation — the seam's fallback is also unit-covered).
