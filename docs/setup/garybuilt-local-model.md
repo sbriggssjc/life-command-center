@@ -156,3 +156,41 @@ same `invokeOllamaExtraction` path generalizes to every background job as you go
 
 Update the model tag (`OLLAMA_MODEL`) as better small open models ship — no LCC code
 change, just a `pull` + env bump.
+
+---
+
+## 6. Session-33 expansion map (2026-07-31 — post-Wave-4 integration review)
+
+Wave 4 (entity-resolution stack) and W3.7c (SF file discovery) shipped after this
+playbook was written; Cowork's integration review mapped GaryBuilt into them:
+
+1. **W5.1 party extraction — channel B (SPEC'D, prompt drafted).** The sale-notes
+   backlog (dia 1,315 missing buyers / gov 1,174; thousands of missing brokers)
+   runs GLiNER spans + a local-LLM structured pass through this seam, writing only
+   on field-level agreement. The bulk run is GATED on `ai_final_provider='ollama'`
+   so the ~8k-note sweep costs zero cloud. See
+   `audit/data-flow-2026-05-30/CLAUDECODE_PROMPT_w51_party_extraction_local_llm.md`.
+2. **OM extraction cost-avoidance (automatic once cut over).** W3.7c file discovery
+   now drains 679 gov + 465 dia staged ids' attachments through
+   `/api/intake/stage-om` — each OM is an AI extraction call. The moment
+   `OLLAMA_URL` is live, that whole growing stream rides the local GPU (cloud
+   stays fallback).
+3. **Review-lane pre-screen (OPTIONAL, not yet approved).** A nightly batch that
+   annotates the sf_link review queue (3,357 pending) with a non-binding local-LLM
+   same-party opinion + one-line reasoning, used only to SORT the lane (confident-
+   distinct cluster first for fast rejection sweeps). Labels remain 100% human —
+   the annotation never writes a verdict. Ships only with its own consumer + gate
+   (producer/consumer doctrine).
+4. **Hard-negative candidate proposals (OPTIONAL, not yet approved).** The W4.1
+   corpus generator refuses to auto-label shared-rare-token pairs (could be same
+   party). A local-LLM pass can PROPOSE the likely-distinct subset of those pairs
+   into the review lane, accelerating exactly the hard-negative accrual the W4.4
+   drift alerts are waiting on. Human adjudicates; corpus ingests via
+   entity_match_labels as usual.
+5. **What stays deterministic:** W5.2 signal value-gates, resolver scoring bands,
+   ORE merge decisions — no LLM in auditable gates.
+
+**Current cutover state (2026-07-31):** machine-side per §1–2; Railway env NOT yet
+set — `feature_flags_registry.OLLAMA_EXTRACTION = off`. First verification after
+the flip: one test intake showing `ai_final_provider: "ollama"` in per-artifact
+diagnostics, then kill the tunnel and confirm clean cloud fallback.
