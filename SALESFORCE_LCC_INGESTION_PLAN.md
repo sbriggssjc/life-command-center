@@ -270,6 +270,14 @@ Pulls the Salesforce object graph and hands it to the LCC for staging. This is t
 
 ### 8.2 Flow 2 — `SF -> LCC: File Discovery & Move`  (scheduled)
 
+> **STATUS 2026-07-31: LIVE & PRODUCTION-VERIFIED.** Built as `SF → LCC: File
+> Discovery` (weekly recurrence); first successful run 2026-07-31 04:59 UTC — 8
+> gov OMs + 20 dia files stored, extraction draining via the
+> `sf-files-stage-queued-15m` cron. Spec of record + troubleshooting log:
+> `docs/flows/FLOW_sf_file_discovery.md`. Note the env hazard found during
+> rollout: `GOV_SUPABASE_URL` must be the exact `https://<ref>.supabase.co` form
+> — a redirecting (http) value silently converts every gov POST to a GET.
+
 Walks the object graph to `ContentDocumentLink` / `ContentVersion` and moves the bytes for marketing flyers, OMs, and plans into Supabase Storage.
 
 **Trigger — Recurrence.** Name: `SF -> LCC: File Discovery & Move`. Run it **after** Flow 1 (e.g. same cadence, offset by a few hours) so the object graph is fresh.

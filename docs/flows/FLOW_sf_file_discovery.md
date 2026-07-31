@@ -8,7 +8,8 @@
 > flow.microsoft.com).
 > **Companion**: `flow-sf-file-discovery.json` (skeleton), `POWER_AUTOMATE_UPDATE_GUIDE.md`
 > (conventions), `SALESFORCE_LCC_INGESTION_PLAN.md` §2 + §8.2 (why PA, Flow-2 design).
-> **Last updated**: 2026-07-31.
+> **Last updated**: 2026-07-31 — **PRODUCTION-VERIFIED end-to-end** (first successful
+> run 2026-07-31 04:59 UTC; see "Production verification & troubleshooting log" below).
 
 ---
 
@@ -225,3 +226,48 @@ idempotent, so nothing is ever double-inserted or re-moved.
    it via the comp→listing traversal.
 3. **Idempotence:** re-run the flow — `discover-webhook` reports
    `skipped_existing` for the same files; `file-content` returns `idempotent:true`.
+
+---
+
+## Production verification & troubleshooting log (2026-07-31)
+
+**First successful production run: 2026-07-31 04:59 UTC** (batch
+`sf-files-2026-07-31T04:59:45Z`): 8 gov OMs discovered + stored (SSA Houston,
+SSA Wisconsin Rapids, MOB Fort Wayne/Cincinnati, TDCJ El Paso, SOT-TDCJ Horizon
+City, SSA Ahoskie, DFPS Wharton, USDVA Cincinnati) and queued for extraction;
+dia's 20 files from the earlier run were correctly `skipped_existing`. Extraction
+drains via the `sf-files-stage-queued-15m` pg_cron job (every 15 min — the doc's
+earlier "hourly" reference is superseded).
+
+### Failure mode seen during rollout — and how to recognize it
+
+**Symptom:** `Post_File_Content` fails `404 — No sf_files row for
+content_version_id …` for every **gov** file, while dia files store fine.
+`Post_Discovered` looks successful (HTTP 200, `discovered: N, errors: 0`).
+
+**Root cause (2026-07-31):** the `GOV_SUPABASE_URL` edge-function secret on
+Dialysis_DB was set to a redirecting form of the URL (`http://` instead of
+`https://`). Supabase answers with a 301; Deno `fetch` follows it but **converts
+POST to a body-less GET** (per fetch spec). `GET /rest/v1/sf_files` returns 200,
+so `dbFetch` saw `ok:true` and `discover-webhook` reported the gov inserts as
+`discovered` while inserting **nothing**. GETs and PATCHes survive redirects
+unchanged, so the worklist reads and lease stamps against gov kept working —
+which is what made the failure look selective and confusing.
+
+**Diagnostic signature:** in the gov project's API logs, the insert arrives as
+`GET /rest/v1/sf_files` (no query string) instead of `POST`. Any gov-bound
+`?on_conflict=` upsert from the object-sync flow logging as `GET` is the same
+disease.
+
+**Fix:** set `GOV_SUPABASE_URL` to exactly
+`https://scknotsqkcheojiaewwh.supabase.co` (https, no trailing slash) in
+Dialysis_DB → Edge Functions → Secrets. Secrets are project-wide, so the one fix
+covers all nine functions that read `GOV_SUPABASE_URL/KEY`. Then clear the burned
+worklist leases so the next run re-serves those ids:
+`update sf_listing_staging set last_file_discovery_at = null where …` (gov DB).
+
+**Collateral to check after any such fix:** gov staging tables
+(`sf_listing/comp/property/deal_staging`) receive their upserts from the
+object-sync flow through the same env — during the bad-URL window (~2026-07-21 →
+2026-07-31) those writes silently no-oped. They self-heal on the next object-sync
+run (idempotent upserts), but verify `max(updated_at)` moves afterward.

@@ -1,5 +1,6 @@
 {
   "name": "flow-sf-file-discovery",
+  "status": "LIVE — production-verified 2026-07-31 (first successful run 04:59 UTC: 8 gov OMs + dia dedup confirmed). Troubleshooting log: docs/flows/FLOW_sf_file_discovery.md.",
   "description": "SF -> LCC: File Discovery (PA-collector, W3.7c). Weekly scheduled flow that discovers Salesforce Files attached to staged Comp/Listing/Deal records and lands them in Supabase sf_files, then moves the bytes. Replaces the retired server-side Connected-App sweep (the org is SSO-gated, no Connected App). Power Automate is transport only; all dedup/routing/storage/extraction happen on the LCC edge side. See docs/flows/FLOW_sf_file_discovery.md.",
   "trigger": {
     "type": "Recurrence",
