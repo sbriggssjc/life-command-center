@@ -18,6 +18,7 @@ ownership graph. It normalizes names/addresses, blocks candidate pairs, and retu
 | POST | `/normalize` | libpostal address + company-name (legal-form-aware) normalization. |
 | POST | `/match` | Blocked, scored candidate pairs → `{probability, band, comparison_vector}`. `model` ∈ `owner_sf` \| `owner_owner` \| `contact`. |
 | POST | `/train` | Rebuild the FS m/u params from the labeled corpus (Supabase Storage, or the fixture stub) and recalibrate the decision bands. |
+| POST | `/extract-parties` | **Channel A of W5.1** — span-anchored party extraction from a sale-note narrative → `{buyer, seller, listing_broker, procuring_broker, lender, price, cap_rate, spans}`. GLiNER when baked in, else a deterministic cue-phrase heuristic (honest `backend`). Read-only, no writes; every name is anchored to a char span so a claim is groundable and never hallucinated. |
 
 ### `/match` example
 
@@ -72,6 +73,7 @@ the real path. When a dep is absent the service degrades, honestly reported at `
 | `postal` (libpostal) | full address expand+parse | regex address normalizer |
 | `sentence-transformers` bge-small | real embeddings for KNN blocking | deterministic char-n-gram hashing embedding |
 | `splink` + `duckdb` | importable, surfaced at `/health` (retired from training — W4.4 defect 2) | supervised count estimator (exact given labels) — the sole estimator in both builds |
+| `gliner` (`gliner_medium-v2.1`) | zero-shot NER for `/extract-parties` spans (W5.1) | deterministic cue-phrase heuristic (still span-anchored); `/health` reports `gliner:false` |
 
 ## Training corpus
 

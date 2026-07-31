@@ -71,6 +71,14 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 RUN python -c "from sentence_transformers import SentenceTransformer as S; S('BAAI/bge-small-en-v1.5')" || \
     echo "WARN: bge-small pre-download skipped; runtime will fetch or fall back."
 
+# Pre-download the GLiNER party-extraction model (W5.1 Channel A) so /extract-parties is
+# warm on first request. Best-effort: if unavailable at build time, app/parties.py falls
+# back to the cue-phrase heuristic at runtime (honestly reported at /health).
+ARG RESOLVER_GLINER_MODEL=urchade/gliner_medium-v2.1
+ENV RESOLVER_GLINER_MODEL=${RESOLVER_GLINER_MODEL}
+RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('${RESOLVER_GLINER_MODEL}')" || \
+    echo "WARN: GLiNER pre-download skipped; runtime will fetch or fall back to heuristic."
+
 COPY . .
 
 # Regenerate the default models against the committed fixtures so the image is

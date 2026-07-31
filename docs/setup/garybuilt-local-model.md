@@ -164,11 +164,15 @@ change, just a `pull` + env bump.
 Wave 4 (entity-resolution stack) and W3.7c (SF file discovery) shipped after this
 playbook was written; Cowork's integration review mapped GaryBuilt into them:
 
-1. **W5.1 party extraction — channel B (SPEC'D, prompt drafted).** The sale-notes
-   backlog (dia 1,315 missing buyers / gov 1,174; thousands of missing brokers)
-   runs GLiNER spans + a local-LLM structured pass through this seam, writing only
-   on field-level agreement. The bulk run is GATED on `ai_final_provider='ollama'`
-   so the ~8k-note sweep costs zero cloud. See
+1. **W5.1 party extraction — channel B (✅ MECHANISM SHIPPED 2026-07-31).** Channel B
+   runs through THIS seam (`invokeExtractionAI`) — no second Ollama client. The
+   adjudicator (`api/_handlers/party-extract.js`) writes only on field-level agreement
+   with the GLiNER span channel (`resolver POST /extract-parties`); the bulk run
+   (`scripts/party-extract-backlog.mjs --apply`) is GATED on `ai_final_provider='ollama'`
+   so the sweep costs zero cloud (override: `W51_ALLOW_CLOUD=1`). **Grounded correction:**
+   the addressable note backlog is smaller than the audit's raw missing counts —
+   `sale_notes_raw` covers ~281 dia / ~163 gov live sales; folding dia's `notes` column
+   lifts dia to ~2,242. Realizing value needs OLLAMA_URL live + the 100-sample gate. See
    `audit/data-flow-2026-05-30/CLAUDECODE_PROMPT_w51_party_extraction_local_llm.md`.
 2. **OM extraction cost-avoidance (automatic once cut over).** W3.7c file discovery
    now drains 679 gov + 465 dia staged ids' attachments through
