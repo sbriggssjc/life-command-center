@@ -93,3 +93,30 @@ class TrainResponse(BaseModel):
     auto_link_floored: bool           # True → the floor bound (drift signal: easy negatives)
     calibration: dict
     persisted_path: Optional[str]
+
+
+# --- Channel A: party extraction from sale notes (W5.1) --------------------
+class PartySpan(BaseModel):
+    field: str
+    text: str
+    start: int
+    end: int
+    score: Optional[float] = None     # None for heuristic/regex spans (no probability)
+    label: Optional[str] = None
+    value: Optional[float] = None     # numeric fields (price / cap_rate) carry a parsed value
+
+
+class ExtractPartiesRequest(BaseModel):
+    text: str = ""
+
+
+class ExtractPartiesResponse(BaseModel):
+    buyer: Optional[str] = None
+    seller: Optional[str] = None
+    listing_broker: Optional[str] = None
+    procuring_broker: Optional[str] = None
+    lender: Optional[str] = None
+    price: Optional[float] = None
+    cap_rate: Optional[float] = None
+    spans: List[PartySpan] = Field(default_factory=list)
+    backend: str                       # 'gliner' | 'heuristic'

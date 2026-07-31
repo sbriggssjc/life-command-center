@@ -28,8 +28,11 @@ from .normalize import (
     normalize_address,
     normalize_company,
 )
+from .parties import extract_parties, gliner_available
 from .registry import registry
 from .schemas import (
+    ExtractPartiesRequest,
+    ExtractPartiesResponse,
     MatchPair,
     MatchRequest,
     MatchResponse,
@@ -37,6 +40,7 @@ from .schemas import (
     NormalizeResponse,
     NormalizedAddress,
     NormalizedName,
+    PartySpan,
     TrainRequest,
     TrainResponse,
     MODELS,
@@ -59,6 +63,7 @@ def health():
             "libpostal": libpostal_available(),
             "embeddings": embed_backend(settings.embedding_model),
             "splink": splink_available(),
+            "gliner": gliner_available(),
         },
         "models_available": list(MODELS),
         "no_db_writes": True,
@@ -148,6 +153,28 @@ def match(req: MatchRequest):
         bands={"auto_link": fs.auto_link, "auto_reject": fs.auto_reject},
         pairs=scored,
         blocking=bstats,
+    )
+
+
+@app.post("/extract-parties", response_model=ExtractPartiesResponse)
+def extract_parties_route(req: ExtractPartiesRequest):
+    """Channel A of W5.1 — span-anchored party extraction from a sale-note narrative.
+
+    Read-only, no DB writes. Returns the deal parties + price/cap_rate, each name anchored
+    to a character span in the input so the JS adjudicator can ground it. GLiNER when the
+    model is baked in; a deterministic cue-phrase heuristic otherwise (honest `backend`).
+    """
+    res = extract_parties(req.text)
+    return ExtractPartiesResponse(
+        buyer=res["buyer"],
+        seller=res["seller"],
+        listing_broker=res["listing_broker"],
+        procuring_broker=res["procuring_broker"],
+        lender=res["lender"],
+        price=res["price"],
+        cap_rate=res["cap_rate"],
+        spans=[PartySpan(**s) for s in res["spans"]],
+        backend=res["backend"],
     )
 
 

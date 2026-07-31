@@ -30,5 +30,13 @@ postal>=1.1.10 ; sys_platform == "linux"
 sentence-transformers>=2.7,<4
 numpy>=1.26
 
+# --- Channel A party extraction (W5.1; installed in Docker) ---
+# GLiNER zero-shot NER for span-anchored party extraction from sale notes
+# (gliner_medium-v2.1, CPU-fine). Without it, app/parties.py falls back to the
+# deterministic cue-phrase heuristic (still span-anchored) — /health reports which.
+# Pulls torch + transformers, so it lifts the image past the 2GB floor: the resolver
+# Railway service may need a memory bump (measure at deploy; see the RUNBOOK note).
+gliner>=0.2.13 ; python_version >= "3.9"
+
 # --- Test / tooling ---
 pytest>=8.0
