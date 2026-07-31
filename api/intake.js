@@ -400,6 +400,16 @@ async function handleOutlookSent(req, res) {
     const rr = await opsQuery('POST', 'rpc/lcc_advance_todos',
       { p_entity_id: dealEntityId, p_activity_id: activityId, p_party_entity_id: partyEntityId, p_channel: 'email', p_direction: 'outbound' });
     autoResolved = Array.isArray(rr.data) ? rr.data[0] : rr.data;
+    // Deal-level reconciliation: stamp the deal's open deal_next_step to-dos with this
+    // outbound touch (ball_in_court='them', de-stale) — the layer lcc_advance_todos
+    // doesn't cover. Non-destructive; best-effort (never blocks the send log).
+    if (dealEntityId) {
+      try {
+        await opsQuery('POST', 'rpc/lcc_reconcile_deal_todo',
+          { p_deal_entity_id: dealEntityId, p_direction: 'outbound', p_activity_id: activityId,
+            p_subject: subject, p_occurred_at: sentAtIso });
+      } catch (_e) { /* best-effort */ }
+    }
   }
 
   return res.status(200).json({

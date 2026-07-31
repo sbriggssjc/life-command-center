@@ -80,3 +80,45 @@ Then set `OUTLOOK_SEARCH_WEBHOOK_URL` in Railway and call `POST /api/deal-corres
 Until the Outlook connector is engaged, this stays a design + a ready LCC receiver — the same
 posture we took with the SF-owner flow before its Power Automate op existed. The analytics/
 intelligence engines are complete and will light up the moment deal mail flows in.
+
+## Flow verification (2026-07-31) — "Outlook Deal Thread Search"
+Verified the exported flow definition (display "Outlook Deal Thread Search").
+**Contract is correct:** trigger schema carries `operation/subjects/emails/since/top`; `Get_Inbox` and
+`Get_Sent` both run `GetEmailsV3` with `searchQuery: @first(triggerBody()?['subjects'])` and
+`top: @triggerBody()?['top']`; `Get_Sent` runs after `Get_Inbox` on Succeeded/Failed/TimedOut;
+success `Response` returns `{ok:true, operation:'deal_thread_search', messages: @union(coalesce(Get_Inbox.value,[]), coalesce(Get_Sent.value,[]))}`.
+**Field casing confirmed** against Microsoft Learn: `GetEmailsV3` returns Graph camelCase
+(`internetMessageId`, `subject`, `bodyPreview`, `receivedDateTime`, `webLink`) — matches
+`outlook-search.js`'s mapper, so messages resolve an id and are NOT filtered.
+
+**Caveat found + fixed:** the exported flow had a second response `Response_1` (`{ok:false}`) wired
+`runAfter: Response [Succeeded]`, i.e. it fired a second HTTP response on every success -> every run
+marked Failed + failure-alert spam (LCC still got the valid first 200). Scott deleted `Response_1`.
+
+**Resilience gap (open):** with `Response_1` gone, if `Get_Sent` (or `Get_Inbox`) *fails*, no Response
+action's `runAfter` is satisfied, so Power Automate returns **502 BadGateway** (no response
+generated) -> LCC records `flow_http_error` and skips the deal. Recommended hardening: set the
+success `Response.runAfter` to `Get_Sent: [Succeeded, Failed, TimedOut]` (the `coalesce(...)` in the
+union already tolerates a null branch), so a Sent/Inbox hiccup still returns whatever was found.
+
+**First live worker run (limit=3):** `deals_searched:3, messages_logged:0`, all three
+`flow_http_error` — the flow is returning a non-2xx (most likely the 502-no-response path above:
+one of the `GetEmailsV3` actions is erroring and, post-`Response_1`-deletion, nothing answers).
+The backfill worker now echoes the flow's HTTP `status` + `detail` per error (was reason-only), so the
+next run surfaces the exact failure. Next: read the flow's run history to see which action fails,
+apply the `runAfter` hardening, and re-run.
+
+## Reconciliation refinement (2026-07-31) — deal correspondence -> deal_next_step to-dos
+The existing self-updating engines (`lcc_advance_todos`, `lcc_autoresolve_todos`) only reconcile
+`offer_review` / `follow_up` / `seller_follow_up`. But the bulk of open work is `deal_next_step`
+(stage-derived "next move" items from `lcc_generate_deal_next_steps`) — 33 of 37 open to-dos — and
+nothing linked deal mail to those. New RPC **`lcc_reconcile_deal_todo(deal, direction, activity, subject, at)`**
+closes the loop NON-DESTRUCTIVELY: per deal-stamped message it stamps every open `deal_next_step`
+for that deal with `last_correspondence_{at,dir,subject}`, increments `correspondence_count`, sets
+`ball_in_court` (`us` on inbound, `them` on outbound) + `awaiting_our_move`, and raises priority to
+`high` on an inbound reply. It never auto-completes a broad next-step on a single email (that would
+drop real work) — completion of the narrow, touch-satisfiable types stays with the existing engines.
+Wired at all three correspondence entry points (backfill `logMessages` with direction inferred from
+sender, live inbound dual-anchor, live `handleOutlookSent`). Tested live against a real deal
+(inbound -> ball=us/high/awaiting; outbound -> ball=them; count increments), synthetic evidence then
+cleared. Migration `20260818260000_lcc_reconcile_deal_todo.sql`.

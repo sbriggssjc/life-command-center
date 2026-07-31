@@ -21,8 +21,16 @@ import { getDealThreads, isOutlookSearchConfigured } from '../_shared/outlook-se
 const SYS = 'b0000000-0000-0000-0000-000000000001';
 const WS_FALLBACK = 'a0000000-0000-0000-0000-000000000001';
 
+// Direction from the sender: our own (northmarq) address = outbound, else inbound.
+// Drives lcc_reconcile_deal_todo's ball-in-court so My Day sorts "reply received —
+// your move" above "awaiting them."
+function inferDirection(m) {
+  const from = String(m?.from || '').toLowerCase();
+  return from.includes('northmarq') ? 'outbound' : 'inbound';
+}
+
 async function logMessages(dealEntityId, messages, ws) {
-  let logged = 0, skipped = 0;
+  let logged = 0, skipped = 0, reconciled = 0;
   for (const m of (Array.isArray(messages) ? messages : [])) {
     if (!m || !(m.internet_message_id || m.message_id)) { skipped++; continue; }
     try {
@@ -34,10 +42,26 @@ async function logMessages(dealEntityId, messages, ws) {
         actorId: SYS,
         intakeId: null,
       });
-      if (r?.inserted) logged++; else skipped++;
+      if (r?.inserted) {
+        logged++;
+        // Reconcile the deal's open deal_next_step to-dos with this correspondence
+        // (evidence stamp + ball-in-court + de-stale). Non-destructive; best-effort —
+        // a reconcile hiccup never un-logs the message.
+        try {
+          const rc = await opsQuery('POST', 'rpc/lcc_reconcile_deal_todo', {
+            p_deal_entity_id: dealEntityId,
+            p_direction: inferDirection(m),
+            p_activity_id: r.id || null,
+            p_subject: m.subject || null,
+            p_occurred_at: m.received_at || null,
+          });
+          const packet = Array.isArray(rc?.data) ? rc.data[0] : rc?.data;
+          if (packet?.todos_reconciled) reconciled += packet.todos_reconciled;
+        } catch (_e) { /* best-effort */ }
+      } else skipped++;
     } catch (_e) { skipped++; }
   }
-  return { logged, skipped };
+  return { logged, skipped, reconciled };
 }
 
 export async function handleDealCorrespondenceBackfill(req, res) {
@@ -64,7 +88,7 @@ export async function handleDealCorrespondenceBackfill(req, res) {
       .catch(() => null);
     const ids = Array.from(new Set((deals?.data || []).map((d) => d.entity_id).filter(Boolean)));
 
-    let dealsSearched = 0, messagesLogged = 0; const errors = [];
+    let dealsSearched = 0, messagesLogged = 0, todosReconciled = 0; const errors = [];
     for (const eid of ids) {
       const seedR = await opsQuery('POST', 'rpc/lcc_deal_correspondents', { p_deal_entity_id: eid }).catch(() => null);
       const seed = seedR?.data;
@@ -74,11 +98,12 @@ export async function handleDealCorrespondenceBackfill(req, res) {
         emails: seed.correspondent_emails || [],
       });
       dealsSearched++;
-      if (!s.ok) { errors.push({ entity_id: eid, reason: s.reason }); continue; }
+      if (!s.ok) { errors.push({ entity_id: eid, reason: s.reason, status: s.status, detail: s.detail }); continue; }
       const r = await logMessages(eid, s.messages, ws);
       messagesLogged += r.logged;
+      todosReconciled += (r.reconciled || 0);
     }
-    return res.status(200).json({ ok: true, mode: 'worker', deals_searched: dealsSearched, messages_logged: messagesLogged, errors });
+    return res.status(200).json({ ok: true, mode: 'worker', deals_searched: dealsSearched, messages_logged: messagesLogged, todos_reconciled: todosReconciled, errors });
   } catch (e) {
     return res.status(200).json({ ok: false, reason: 'deal_backfill_error', detail: String(e?.message || e).slice(0, 300) });
   }

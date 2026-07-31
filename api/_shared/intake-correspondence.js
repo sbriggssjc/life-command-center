@@ -220,6 +220,18 @@ export async function logInboundCorrespondenceDualAnchor({
         p_next_due_offset: ns?.due_offset ?? null,
       });
     } catch (_e) { /* best-effort */ }
+    // Deal-level reconciliation: stamp the deal's open deal_next_step to-dos with this
+    // inbound reply (ball_in_court='us', de-stale) — the layer lcc_advance_todos doesn't
+    // cover. Only when a deal is anchored; non-destructive; best-effort.
+    if (dealEntityId) {
+      try {
+        await query('POST', 'rpc/lcc_reconcile_deal_todo', {
+          p_deal_entity_id: dealEntityId, p_direction: 'inbound',
+          p_activity_id: res.id || null, p_subject: ctx.subject || null,
+          p_occurred_at: ctx.received_at || null,
+        });
+      } catch (_e) { /* best-effort */ }
+    }
   }
 
   return {
