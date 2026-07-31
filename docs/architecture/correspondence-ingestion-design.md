@@ -1,0 +1,82 @@
+# Deal-correspondence ingestion — design (2026-07-31)
+
+## Why this is the unlock
+Multiple intelligence features (real deal staleness, content-aware next-steps, the role-aware
+engine firing at volume) are gated on one thing: **deal email threads aren't in the activity
+spine.** Audits (`activity-coverage-audit.md`, `data-availability-map.md`) proved it's not a
+query/linkage bug — the correspondence was never ingested, and the deal↔contact linkage that
+would let us attribute existing contact touches isn't populated either (2 of 40 open deals carry
+a primary contact; none resolve). So the fix is upstream, in ingestion — and it's **connector-
+dependent** (needs Outlook/Graph via Power Automate, the same pattern as the SF-owner flow).
+
+## Architecture (mirrors the proven SF-owner flow pattern)
+Two flows, one shared LCC receiver. LCC tells the connector *what to fetch*; the connector
+returns messages; LCC logs them deal-stamped and idempotent.
+
+### A. Ongoing capture — mostly built, needs tightening
+`handleOutlookMessage` / `handleOutlookSent` → `logInboundCorrespondenceDualAnchor` already
+capture NEW mail and stamp `party_entity_id` / `deal_entity_id`. Two gaps:
+1. The Outlook connector must actually forward the folders/threads where deal mail lives.
+2. `lcc_resolve_contact` must map the counterparty → the **deal** (not just a contact). Today it
+   resolves a party + primary open deal; ensure deal counterparties (buyer/broker emails on the
+   SF opp) resolve to that deal so the stamp lands.
+
+### B. Historical backfill — new, the actual unlock
+A Power Automate + Outlook (or Graph) flow, invoked per open deal:
+1. LCC calls the connector with the deal's **search terms**: counterparty emails + property/deal
+   name (from `lcc_deal_correspondents(deal)` — to build; see below).
+2. The flow searches the mailbox, returns the matching messages (`{internet_message_id, subject,
+   from, to, received_at, body_preview, web_link}`), same JSON contract style as the SF flow.
+3. LCC's receiver logs each via the dual-anchor logger with `deal_entity_id` = the deal entity,
+   deduped on `internet_message_id` (the spine's unique key) → they attach to the deal.
+
+## LCC-side pieces to build (code — ready when the connector is available)
+1. **`lcc_deal_correspondents(p_deal_entity_id)`** (DB) — returns the emails/contact ids to search
+   for a deal's mail: from the SF opportunity's contacts, `metadata.primary_contact`, related
+   `deal_party`/`brokers`/`sells` parties, and the property name. This is the search seed and is
+   buildable now (even if sparse today, it's the structural connector deals→people).
+2. **`POST /api/intake-deal-backfill`** (route) — accepts `{deal_entity_id, messages[]}`, logs each
+   through `logEmailIntakeCorrespondence` / `logInboundCorrespondenceDualAnchor` with the deal
+   stamp; idempotent; returns counts. Reuses the existing dual-anchor loggers — no new spine logic.
+3. **Backfill worker** — iterate open deals, call the connector flow, post results to the receiver.
+   Can run once (backfill) and on a cadence (catch stragglers). Feature-gated on the connector URL.
+
+## Connector-side piece (Scott / Northmarq IT)
+The Power Automate + Outlook flow op `deal_thread_search` (mailbox search by from/subject),
+returning the message list. Same signed-webhook contract as `SF_LOOKUP_WEBHOOK_URL`; a new
+`OUTLOOK_SEARCH_WEBHOOK_URL` env var. This is the only piece that can't be built from the DB.
+
+## Sequencing
+1. Build `lcc_deal_correspondents` + the `/api/intake-deal-backfill` receiver (LCC-side, testable
+   with synthetic messages) — ready and waiting.
+2. Stand up the Outlook search flow (connector-side).
+3. Run the backfill; verify deal staleness/last-touch populate; the role-aware engine begins
+   firing on real deal mail.
+
+## Build status (2026-07-31)
+LCC side is **built and ready** (ships on next redeploy):
+- `lcc_deal_correspondents(deal_entity_id)` — search seed (40/40 deals by subject, 13 by email). ✅ live.
+- `api/_shared/outlook-search.js` `getDealThreads()` — flow proxy, gated on `OUTLOOK_SEARCH_WEBHOOK_URL`.
+- `POST /api/deal-correspondence-backfill` — **receiver mode** logs supplied messages now
+  (testable), **worker mode** sweeps deals → search → log once the flow exists.
+
+## Connector-side piece to build (you) — the `deal_thread_search` flow
+A Power Automate flow (HTTP trigger, same signed-URL contract as `SF_LOOKUP_WEBHOOK_URL`) whose
+URL goes in `OUTLOOK_SEARCH_WEBHOOK_URL`:
+1. Trigger schema: `{ operation, subjects:[string], emails:[string], since:string, top:int }`.
+2. On `operation == 'deal_thread_search'`: use the **Office 365 Outlook** connector's
+   "Search messages" (or "Get emails (V3)" with a `$search`/`$filter`) — match subject contains
+   any of `subjects` OR from/to in `emails`, newest first, top N.
+3. Map results and **Response** 200:
+   ```json
+   {"ok": true, "messages": "@outputs('...')?['body']?['value']"}
+   ```
+   Each message needs `internetMessageId, subject, from, toRecipients, receivedDateTime,
+   bodyPreview, webLink` (LCC normalizes these field names). Add a failed-run Response
+   `{"ok": false, "reason": "flow_error"}`, same as the SF flow.
+Then set `OUTLOOK_SEARCH_WEBHOOK_URL` in Railway and call `POST /api/deal-correspondence-backfill`.
+
+## Honest note
+Until the Outlook connector is engaged, this stays a design + a ready LCC receiver — the same
+posture we took with the SF-owner flow before its Power Automate op existed. The analytics/
+intelligence engines are complete and will light up the moment deal mail flows in.
