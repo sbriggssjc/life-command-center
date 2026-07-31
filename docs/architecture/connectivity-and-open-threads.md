@@ -107,7 +107,7 @@ Build domain-generic where possible; branch only on the domain-specific nuances.
 | P0.2/0.3 | Owner feeders (SF seller done; graph done; **deed/county OPEN**) | Partial |
 | P0.4/0.5 | Lease dedup + cap recompute at source | **OPEN** |
 | P0.6 | Portfolio owner audit | **DONE** (98% were unresolved; now 1,800+) |
-| P1 | Second contact/owner sidebar + party-link chips + move contact fns off property | **OPEN** |
+| P1 | Second contact/owner sidebar + party-link chips + move contact fns off property | **DESIGNED** (`contact-owner-sidebar-design.md`); build phased P1.0→P1.4 |
 | P2 | Property/Deal Dossier (format + local-AI gen + PDF; replace ChatGPT/Claude brief links) | **OPEN** |
 | P3.1 | Overview: **pipeline-name header default** (“Fresenius – Woodland Hills, CA”) | **DONE** (title). Actions-buttons audit = OPEN |
 | **P3.2** | Deal History: party rows CLICKABLE (Seller/Buyer/Listing+Procuring Broker) | **DONE** (chips). Developer/loan origin SKIPPED — 0 graph coverage; lives in OM/correspondence (P2 extraction) |

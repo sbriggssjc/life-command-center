@@ -359,6 +359,8 @@ looks identical to a healthy quiet pipeline* — this table is the single source
 - **Property-tab UX review + rollout plan:** `docs/architecture/property-tab-ux-review.md`.
 - **Connectivity map + open threads (email/phone/SF route status — START HERE for continuity):**
   `docs/architecture/connectivity-and-open-threads.md`.
+- **Contact/owner sidebar (P1) design — layout-as-funnel-to-next-action, reuses `buildContact360`:**
+  `docs/architecture/contact-owner-sidebar-design.md`.
 - **Full per-round worklog (verbatim archive of everything trimmed here):**
   [`docs/history/CLAUDE_full_2026-07.md`](docs/history/CLAUDE_full_2026-07.md). Round-specific implementation
   logs (R5→R64, R76* ingestion, ORE phases, CONNECTIVITY, OUTREACH, UI Phases, SF-reconcile, T9d, CM) live
