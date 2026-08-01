@@ -240,3 +240,17 @@ Worked values for 5247 Airways (property 23654 / CCN 442740): geocode 35.0054, -
 40,212, median HHI $42,354, 15.6% age 65+, 28.4% poverty, 16.2% uninsured; Shelby County payer mix
 27.9/45.4/26.7 with 49 clinics (TN 31.3/39.3/30.5, 192 clinics). The 1/3/5-mile radius rows are a live
 coverage gap for this record.
+
+## 9. Deal dossier gold-standard example (2026-08-01)
+
+The worked DEAL dossier (§4) is now locked against a real closed deal:
+`deal-dossier-fresenius-woodland-hills.html` — the just-closed Northmarq sell-side sale of
+20931 Burbank Blvd, Woodland Hills (property 35724): $15,729,896 at a recorded 6.46% cap, ~12.1 yr firm term
+to 2038 under a Fresenius Medical Care Holdings corporate guaranty. It demonstrates the deal-kind layout
+(hero close metrics → property → transaction → tenancy & guaranty → parties → trade area → deal spine →
+documents → analysis) and honestly surfaces the deal-side gaps: no LCC asset entity yet, so the deal spine
+(parties, correspondence, offers, cadence, ROE) is unavailable and buyer/seller/brokers are "Not on file."
+
+Authoring + storage are wired in `api/_shared/dossier-generator.js` (local Ollama via `invokeExtractionAI` →
+HTML → `lcc-om-uploads` → `lcc_dossiers`); the end-to-end architecture, storage/access decision, and the
+activation steps are in `dossier-generation-and-ollama-wiring.md`.
