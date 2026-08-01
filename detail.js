@@ -76,6 +76,9 @@ let _udIntakeState = {
  * @param {object} fallback - the raw record from the list (shown while loading)
  */
 async function openUnifiedDetail(db, ids, fallback, initialTab) {
+  // Track that a PROPERTY is now the primary panel, so entity chips clicked from
+  // here dock beside it (companion) instead of replacing it.
+  if (typeof _setPrimaryKind === 'function') _setPrimaryKind('property');
   // Normalize db aliases - callers may pass 'dialysis' or 'government'
   if (db === 'dialysis') db = 'dia';
   if (db === 'government') db = 'gov';
@@ -6984,7 +6987,7 @@ function _udCurrentOwnerCard(own, db) {
     const safe = esc(name).replace(/'/g, "\\'");
     h += `<div style="margin-top:8px;font-size:12px;color:var(--text2)">Not yet prospected · ` +
       `<span style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" ` +
-      `onclick="openEntityDetailByName('${safe}')" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
+      `onclick="_openEntityByNameSmart('${safe}')" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
   }
   h += '</div>';
   return h;
@@ -10476,8 +10479,8 @@ window.entityLink = function(text, type, id, db) {
       if (!id) return '<span style="' + style + '" onclick="openContactDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View contact">' + esc(text) + '</span>';
       return '<span style="' + style + '" onclick="openContactDetail(' + JSON.stringify(String(id)) + ')" title="View contact details">' + esc(text) + '</span>';
     case 'entity':
-      if (!id) return '<span style="' + style + '" onclick="openEntityDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
-      return '<span style="' + style + '" onclick="openEntityDetail(' + JSON.stringify(String(id)) + ')" title="View entity details">' + esc(text) + '</span>';
+      if (!id) return '<span style="' + style + '" onclick="_openEntityByNameSmart(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="_openEntitySmart(' + JSON.stringify(String(id)) + ')" title="View entity details">' + esc(text) + '</span>';
     case 'transaction':
       if (!id) return esc(text);
       return '<span style="' + style + '" onclick="navToTransaction(' + id + ')" title="View transaction details">' + esc(text) + '</span>';
@@ -10496,7 +10499,7 @@ window.entityLink = function(text, type, id, db) {
     case 'buyer':
     case 'seller':
     case 'investor':
-      return '<span style="' + style + '" onclick="openEntityDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="_openEntityByNameSmart(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
     case 'state':
       return '<span style="' + style + '" onclick="navToState(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View state properties">' + esc(text) + '</span>';
     default:
@@ -12470,6 +12473,7 @@ function _entityTabsForRole(role, entityType) {
 }
 
 async function openEntityDetail(entityId, initialTab) {
+  if (typeof _setPrimaryKind === 'function') _setPrimaryKind('entity');
   _entityDetailCache = null;
   // A fresh entity open resets any stale companion property dock (it's anchored
   // to the previously-open contact/owner).
@@ -13245,6 +13249,137 @@ function closeCompanion() {
   _companionState = null;
 }
 window.closeCompanion = closeCompanion;
+
+// ── Companion ENTITY (owner beside property) — Scott: clicking an owner from the
+// property tab should open it BESIDE the property (both visible), with close /
+// minimize / enlarge, not replace the property. Reuses the companion dock that
+// already docks a property inside an owner panel — same element, other direction.
+let _activePrimaryKind = null; // 'property' | 'entity' — which panel is primary
+window._activePrimaryKind = null;
+function _setPrimaryKind(k) { _activePrimaryKind = k; try { window._activePrimaryKind = k; } catch (_e) {} }
+
+// Router: an entity chip clicked FROM a property panel docks the entity as a
+// companion (when there's room); otherwise the normal full-panel open.
+function _openEntitySmart(id) {
+  if (!id) return;
+  if (_dualCapable() && _activePrimaryKind === 'property') { openCompanionEntity(String(id)); return; }
+  openEntityDetail(String(id));
+}
+window._openEntitySmart = _openEntitySmart;
+
+async function _openEntityByNameSmart(name) {
+  if (!name) return;
+  if (_dualCapable() && _activePrimaryKind === 'property') {
+    try {
+      const data = await _entityApiFetch('/api/entities?action=search&q=' + encodeURIComponent(name));
+      const hit = (data && Array.isArray(data.entities) && data.entities[0]) || null;
+      if (hit && hit.id) { openCompanionEntity(String(hit.id)); return; }
+    } catch (_e) { /* fall through */ }
+  }
+  openEntityDetailByName(name);
+}
+window._openEntityByNameSmart = _openEntityByNameSmart;
+
+// Open an owner/contact ENTITY in the companion dock beside the property.
+function openCompanionEntity(entityId) {
+  if (!entityId) return;
+  const panel = document.getElementById('companionPanel');
+  const header = document.getElementById('companionHeader');
+  const body = document.getElementById('companionBody');
+  const minTab = document.getElementById('companionMin');
+  // No dock element or not enough room → fall back to the full panel.
+  if (!panel || !header || !body || !_dualCapable()) { openEntityDetail(entityId); return; }
+  if (minTab) minTab.classList.remove('open');
+  panel.classList.add('open');
+  panel.style.display = 'block';
+  _companionState = { kind: 'entity', entityId };
+  header.innerHTML =
+    '<div class="detail-header-info" style="width:100%">'
+    + '<div style="flex:1;min-width:0"><div class="detail-title">Loading…</div></div>'
+    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
+    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
+    + '</div>';
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span></div>';
+  _entityApiFetch('/api/entities?action=contact360&id=' + encodeURIComponent(entityId))
+    .then(function(c360) {
+      if (!_companionState || _companionState.entityId !== entityId) return; // user moved on
+      _renderCompanionEntity(c360, entityId);
+    })
+    .catch(function() { if (body) body.innerHTML = '<div class="detail-empty">Could not load this contact.</div>'; });
+}
+window.openCompanionEntity = openCompanionEntity;
+
+function _companionEnlargeEntity() {
+  const s = _companionState;
+  if (!s || !s.entityId) return;
+  const id = s.entityId;
+  closeCompanion();
+  openEntityDetail(id);
+}
+window._companionEnlargeEntity = _companionEnlargeEntity;
+
+function _renderCompanionEntity(c360, entityId) {
+  const header = document.getElementById('companionHeader');
+  const body = document.getElementById('companionBody');
+  if (!header || !body) return;
+  const e = (c360 && c360.entity) || {};
+  const role = (c360 && c360.role) || 'contact';
+  const rm = (typeof _entityRoleMeta === 'function') ? _entityRoleMeta(role) : { label: role, color: 'var(--accent)' };
+  const nm = e.name || '(contact)';
+  const loc = (e.city || '') + (e.city && e.state ? ', ' : '') + (e.state || '');
+  header.innerHTML =
+    '<div class="detail-header-info" style="width:100%">'
+    + '<div style="flex:1;min-width:0"><div class="detail-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(nm) + '</div>'
+    + (loc ? '<div class="detail-subtitle">' + esc(loc) + '</div>' : '')
+    + '</div>'
+    + '<span class="detail-badge" style="background:' + rm.color + ';color:#fff">' + esc(rm.label) + '</span>'
+    + '<button class="detail-close" title="Enlarge to full panel" onclick="_companionEnlargeEntity()" style="margin:0 2px">&#8599;</button>'
+    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
+    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
+    + '</div>';
+
+  let html = '';
+  // Next best action (reuse the deterministic hero resolver on the c360 payload).
+  if (typeof _nextActionForContact === 'function') {
+    const cacheLike = { entity: e, cadence: c360.cadence || null, emailRel: c360.email_relationship || null, subject: c360.subject || null };
+    const a = _nextActionForContact(cacheLike);
+    if (a) {
+      const tones = { stop: 'var(--red,#ef4444)', warn: 'var(--amber,#d98c00)', accent: 'var(--accent)', go: 'var(--green,#22c55e)' };
+      const col = tones[a.tone] || 'var(--accent)';
+      html += '<div class="detail-section"><div style="padding:11px 13px;border-radius:9px;background:var(--s2);border:1px solid var(--border);border-left:4px solid ' + col + '">'
+        + '<div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:' + col + '">Next best action</div>'
+        + '<div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">' + esc(a.label) + '</div>'
+        + (a.sub ? '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc(a.sub) + '</div>' : '')
+        + '</div></div>';
+    }
+  }
+  // Standing: ROE + cadence next touch.
+  const roe = c360 && c360.roe;
+  const cad = c360 && c360.cadence;
+  if (roe || cad) {
+    html += '<div class="detail-section"><div class="detail-section-title">Standing</div>';
+    if (roe && roe.headline) html += '<div style="font-size:12px;color:var(--text);margin-bottom:4px">' + esc(roe.headline) + '</div>';
+    if (cad && cad.next_touch_due) html += '<div style="font-size:11px;color:var(--text3)">Next touch: ' + esc(cad.next_touch_type || 'touch') + ' · ' + esc(_fmtDate(cad.next_touch_due)) + (cad.overdue ? ' (overdue)' : '') + '</div>';
+    html += '</div>';
+  }
+  // Portfolio one-liner.
+  const roll = c360 && c360.portfolio && c360.portfolio.rollup;
+  if (roll && roll.total_property_count != null) {
+    html += '<div class="detail-section"><div style="font-size:12px;color:var(--text2)">Owns ' + Number(roll.total_property_count) + ' propert' + (Number(roll.total_property_count) === 1 ? 'y' : 'ies') + '</div></div>';
+  }
+  // Contact methods.
+  const email = (c360 && c360.subject && c360.subject.email) || e.email || null;
+  const phone = e.phone || null;
+  if (email || phone) {
+    html += '<div class="detail-section"><div class="detail-section-title">Contact</div>';
+    if (email) html += '<div style="font-size:12px"><a href="mailto:' + esc(email) + '" style="color:var(--accent)">' + esc(email) + '</a></div>';
+    if (phone) html += '<div style="font-size:12px;margin-top:3px"><a href="tel:' + esc(phone) + '" style="color:var(--accent)">' + esc(phone) + '</a></div>';
+    html += '</div>';
+  }
+  html += '<div class="detail-section"><button class="dns-cta" onclick="_companionEnlargeEntity()">Open full detail ↗</button>'
+    + '<div style="font-size:11px;color:var(--text3);margin-top:6px">Full contact panel with all tabs — replaces this dock.</div></div>';
+  body.innerHTML = html;
+}
 
 // ── Entity Relationships Tab (Scott ask #2) ──
 // Working-relationship intelligence from lcc_party_relationships: the party's
