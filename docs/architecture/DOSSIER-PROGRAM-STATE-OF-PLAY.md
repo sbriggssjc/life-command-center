@@ -251,3 +251,18 @@ Eight+ prompts returned done; almost the entire property-dossier backlog is comp
 Focus shifts from dossier content (largely done) to **connectivity + activation**: apply the pending migrations
 (16), fix the PA flow connectors (10), property/contact connectivity (13), data-integrity (17), then comps reach
 (11) + the health surface (12).
+
+---
+
+## Migrations applied live + connectivity spec (2026-08-01, session 2e)
+- **#710 field_source_priority (LCC Opps): APPLIED live** (via Supabase MCP) + verified — dead folder_feed
+  listing rules removed, live ask columns registered at priority 45, drift-guard trigger installed. Rerun Daily
+  DB Checks to confirm green.
+- **Relocation + market competition (Dialysis_DB): APPLIED live** + verified — lineage view (442740: cert
+  2017-10-27 / prior 2003-02-01 / 13 stations) and `dia_nearby_dialysis_competition` (8 nearby clinics; DaVita
+  comps at $19.63 + $15.00/SF vs subject $28.85 — the renewal-rent-pressure signal). `dia_haversine_miles`
+  already existed.
+- **CENSUS_API_KEY:** pending Scott (Census key -> Railway Variables + .env.local) to backfill radius demographics.
+- **Connectivity spec:** `property-contact-deal-connectivity.md` — the Property/Contact/Deal graph, the two
+  reverse read models (`lcc_contact_properties`/`lcc_contact_deals`) and the Contact-tab sections; backs prompt
+  13. Prerequisites (02/06/05/08) done, so 13 is a well-scoped build.

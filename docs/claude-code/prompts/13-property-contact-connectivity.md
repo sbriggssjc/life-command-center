@@ -26,3 +26,5 @@ only surface graph edges that exist; render "Not on file" where absent.
 ## Verify
 From a property you can reach its contacts + deal; from a contact you can reach their properties + deals; both
 resolve by identity and reconcile naming; nothing fabricated.
+
+> **Design spec:** `docs/architecture/property-contact-deal-connectivity.md` (the graph, the two reverse read models `lcc_contact_properties`/`lcc_contact_deals`, the Contact-tab sections). Prerequisites 02/06/05/08 are done; build the reverse reads + Contact-tab Properties/Deals/Next-action sections + cross-links.
