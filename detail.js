@@ -12856,7 +12856,7 @@ async function _entityApiFetch(url) {
 // The union of every entity-detail tab (used only for the initial deep-link
 // validation before the role is known). The ACTUAL tab set is role-driven —
 // see _entityTabsForRole. Broker mode swaps Ownership→Deals and drops Contacts.
-const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'History', 'Relationships', 'Activity', 'Engagement', 'ROE', 'Contacts'];
+const ENTITY_DETAIL_TABS = ['Overview', 'Property', 'Ownership', 'Deal', 'Deals', 'History', 'Relationships', 'Activity', 'Engagement', 'ROE', 'Contacts'];
 
 /**
  * Role-aware tab set. Owner/buyer get Ownership (their portfolio); a broker gets
@@ -12929,10 +12929,11 @@ async function openEntityDetail(entityId, initialTab) {
     // marketing signals, the SF-account owner, and the ROE verdict. The priority
     // band (Next-Step) + the contacts list load in the same parallel round (band
     // stays in its dedicated route; contacts drive the Contacts tab CTA).
-    const [c360, contactsData, band] = await Promise.all([
+    const [c360, contactsData, band, dealData] = await Promise.all([
       _entityApiFetch('/api/entities?action=contact360&id=' + encodeURIComponent(entityId)).catch(() => null),
       _entityApiFetch('/api/contacts?action=list&entity_id=' + encodeURIComponent(entityId) + '&limit=50').catch(() => null),
-      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null)
+      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null),
+      _entityApiFetch('/api/entities?action=deal_packet&id=' + encodeURIComponent(entityId)).catch(() => null)
     ]);
 
     const entity = c360?.entity || null;
@@ -12949,6 +12950,9 @@ async function openEntityDetail(entityId, initialTab) {
     // tabs render + whether the owner BD-queue chrome shows). From contact360.
     const role = (c360 && c360.role) || 'contact';
     const tabs = _entityTabsForRole(role, entity.entity_type);
+    const hasDealPacket = !!(dealData && dealData.ok && dealData.has_deal && dealData.packet);
+    if (hasDealPacket && !tabs.includes('Property')) tabs.splice(1, 0, 'Property');
+    if (hasDealPacket && !tabs.includes('Deal')) tabs.splice(Math.min(2, tabs.length), 0, 'Deal');
     // A person contact with direct/affiliated ownership gets an Ownership tab so
     // the person-level linked-properties section (Contact 360 refinement) is reachable.
     const _ownedP = (c360 && c360.owned_properties) || null;
@@ -12974,6 +12978,8 @@ async function openEntityDetail(entityId, initialTab) {
       // Cadence / next-touch block (Scott ask #3) — drives the Activity cockpit
       // (next + suggested touchpoint) and the hero next-action resolver.
       cadence: (c360 && c360.cadence) || null,
+      dealPacket: hasDealPacket ? dealData.packet : null,
+      dealSignals: hasDealPacket ? (dealData.deal_signals || null) : null,
       // Back-compat: some render paths read `activities`; the unified timeline
       // supersedes it (LCC events are the source-'lcc' items).
       activities: (c360 && c360.timeline) || [],
@@ -12998,6 +13004,11 @@ async function openEntityDetail(entityId, initialTab) {
             <span style="font-size:10px;padding:2px 8px;border-radius:10px;color:${statusColor};border:1px solid ${statusColor}">${esc(entity.status || 'active')}</span>
           </div>
         </div>
+        <button class="detail-action-btn" title="Generate or open a dossier"
+          onclick="_entityOpenDossierMenu(this)"
+          style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
+          Dossier
+        </button>
         <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
       </div>
       <button class="detail-close" onclick="closeDetail()">&times;</button>`;
@@ -13265,6 +13276,8 @@ function _renderEntityTab(tab) {
   let body;
   switch (tab) {
     case 'Overview': body = _entityTabOverview(); break;
+    case 'Property': body = _entityTabPropertyRef(); break;
+    case 'Deal': body = _entityTabDeal(); break;
     case 'Ownership': body = _entityTabPortfolio(); break;
     case 'Portfolio': body = _entityTabPortfolio(); break; // legacy alias
     case 'Deals': body = _entityTabBrokerDeals(); break;
@@ -14228,6 +14241,351 @@ async function _cortexPullHistory(entityId) {
   }
 }
 window._cortexPullHistory = _cortexPullHistory;
+
+// -- Entity Deal Tab (asset-level living transaction record) ------------------
+function _tagVal(x) {
+  if (x && typeof x === 'object' && Object.prototype.hasOwnProperty.call(x, 'v')) return x.v;
+  return x;
+}
+function _tagSource(x, fallback) {
+  if (x && typeof x === 'object') return x.source || x.derived || x.method || fallback || '';
+  return fallback || '';
+}
+function _dealText(x, fallback) {
+  const v = _tagVal(x);
+  if (v == null || v === '') return fallback || 'Not on file';
+  return String(v);
+}
+function _dealMoney(x) {
+  const v = _tagVal(x);
+  if (v == null || v === '') return 'Not on file';
+  const n = Number(v);
+  return Number.isFinite(n) ? _entityFmtMoney(n) : String(v);
+}
+function _dealPct(x) {
+  const v = _tagVal(x);
+  if (v == null || v === '') return 'Not on file';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return (Math.abs(n) <= 1 ? n * 100 : n).toFixed(2).replace(/\.00$/, '') + '%';
+}
+function _dealDate(x) {
+  const v = _tagVal(x);
+  return v ? _fmtDate(v) : 'Not on file';
+}
+function _dealSourceNote(x, fallback) {
+  const s = _tagSource(x, fallback);
+  return s ? '<span style="font-size:10px;color:var(--text3);font-weight:400"> · ' + esc(s) + '</span>' : '';
+}
+function _dealMetric(label, value, source, tone) {
+  const col = tone || 'var(--accent)';
+  return '<div style="min-width:118px;flex:1;padding:12px;background:var(--s2);border:1px solid var(--border);border-radius:8px">'
+    + '<div style="font-size:10px;text-transform:uppercase;font-weight:800;color:' + col + '">' + esc(label) + '</div>'
+    + '<div style="font-size:20px;font-weight:800;color:var(--text);margin-top:3px">' + esc(value || 'Not on file') + '</div>'
+    + (source ? '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc(source) + '</div>' : '')
+    + '</div>';
+}
+function _dealSourcePayload(ref, source, label) {
+  return encodeURIComponent(JSON.stringify({ ref: ref || null, source: source || null, label: label || null }));
+}
+function _dealLine(attrs, html) {
+  const ref = attrs && (attrs.detail_ref || attrs.source_url || attrs.web_url || attrs.url || attrs.id);
+  const src = attrs && (attrs.source || attrs.source_type || attrs.backend);
+  const label = attrs && (attrs.title || attrs.subject || attrs.name || attrs.summary || attrs.role || src);
+  return '<div ondblclick="_dealOpenSource(decodeURIComponent(\'' + _dealSourcePayload(ref, src, label) + '\'))"'
+    + ' title="Double-click to inspect the source"'
+    + ' style="padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:zoom-in">'
+    + html + '</div>';
+}
+function _dealSection(title, body, count) {
+  return '<div class="detail-section"><div class="detail-section-title">' + esc(title)
+    + (count != null ? ' <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:6px">' + Number(count) + '</span>' : '')
+    + '</div>' + body + '</div>';
+}
+function _dealPropertyRef(packet) {
+  const meta = packet?.meta || {};
+  const tenancy = packet?.tenancy_lease || {};
+  const ident = packet?.identity || {};
+  const bits = [
+    _dealText(tenancy.tenant, ''),
+    _dealText(tenancy.guarantor, ''),
+    _dealText(tenancy.term_remaining_years, ''),
+    _dealText(ident.building_sf, '') ? _dealText(ident.building_sf, '') + ' SF' : '',
+  ].filter(Boolean);
+  return bits.length ? bits.join(' · ') : (meta.property_label || 'Property intelligence lives on the Property tab.');
+}
+function _dealWhatNext(packet) {
+  const ms = packet?.deal?.milestones || [];
+  const next = ms.find(m => String(m.status || '').toLowerCase() === 'next') || ms.find(m => /next/i.test(String(m.name || m.summary || '')));
+  if (next) {
+    const title = next.name || next.summary || 'Next milestone';
+    return _dealLine(next, '<div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--green)">What is next</div>'
+      + '<div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">' + esc(title) + '</div>'
+      + (next.summary && next.summary !== title ? '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc(next.summary) + '</div>' : '')
+      + '<div style="font-size:10px;color:var(--text3);margin-top:3px">' + esc(_dealDate(next.date)) + _dealSourceNote(next) + '</div>');
+  }
+  const cad = packet?.deal?.cadence || {};
+  const due = _tagVal(cad.next_touch_due);
+  return _dealLine({ source: 'touchpoint_cadence', title: 'Next touch' },
+    '<div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--green)">What is next</div>'
+    + '<div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">'
+    + esc(_dealText(cad.next_touch_type, 'Confirm next transaction step')) + '</div>'
+    + '<div style="font-size:10px;color:var(--text3);margin-top:3px">' + esc(due ? _fmtDate(due) : 'No due date on file') + '</div>');
+}
+function _dealSourceStatusClass(status) {
+  const s = String(status || '').toLowerCase();
+  if (/linked|source|entity/.test(s)) return { bg: 'rgba(34,197,94,0.12)', fg: 'var(--green,#22c55e)', bd: 'rgba(34,197,94,0.35)' };
+  if (/no_|not|gap|none/.test(s)) return { bg: 'rgba(239,68,68,0.10)', fg: 'var(--red,#ef4444)', bd: 'rgba(239,68,68,0.28)' };
+  return { bg: 'var(--s3)', fg: 'var(--text2)', bd: 'var(--border)' };
+}
+function _dealConnectedSources(packet) {
+  const srcs = packet?.deal?.connected_sources || {};
+  const labels = [
+    ['costar', 'CoStar'],
+    ['salesforce', 'Salesforce'],
+    ['outlook', 'Outlook'],
+    ['sharefile', 'Sharefile'],
+    ['deal_spine', 'Deal spine'],
+  ];
+  let html = '<div style="display:flex;flex-wrap:wrap;gap:8px">';
+  for (const pair of labels) {
+    const key = pair[0], label = pair[1], status = srcs[key] || 'not_linked';
+    const col = _dealSourceStatusClass(status);
+    html += '<button onclick="_dealInspectSource(\'' + esc(key) + '\')"'
+      + ' style="border:1px solid ' + col.bd + ';background:' + col.bg + ';color:' + col.fg + ';border-radius:8px;padding:8px 10px;cursor:pointer;text-align:left;min-width:118px">'
+      + '<div style="font-size:10px;font-weight:800;text-transform:uppercase">' + esc(label) + '</div>'
+      + '<div style="font-size:11px;margin-top:2px">' + esc(String(status).replace(/_/g, ' ')) + '</div></button>';
+  }
+  html += '</div>';
+  return html;
+}
+function _entityTabPropertyRef() {
+  const c = _entityDetailCache || {};
+  const packet = c.dealPacket || null;
+  if (!packet) return _entityTabPortfolio();
+  const meta = packet.meta || {};
+  const ident = packet.identity || {};
+  const tenancy = packet.tenancy_lease || {};
+  const valuation = packet.valuation || {};
+  const loc = packet.location || {};
+  const propClick = meta.domain && meta.property_id != null
+    ? "openUnifiedDetail('" + esc(meta.domain) + "', {property_id:'" + esc(String(meta.property_id)) + "'})"
+    : '';
+  let html = '';
+  html += '<div class="detail-section"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">';
+  html += '<div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:800;color:var(--text)">' + esc(meta.property_label || meta.title || 'Property') + '</div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + esc([meta.domain && meta.domain.toUpperCase(), meta.property_id != null && ('property ' + meta.property_id), meta.subtitle].filter(Boolean).join(' · ')) + '</div></div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="dns-cta" onclick="switchEntityTab(\'Deal\')">See Deal</button>';
+  if (propClick) html += '<button class="dns-cta" onclick="' + propClick + '">Open full property</button>';
+  html += '</div></div></div>';
+
+  html += _dealSection('Property Snapshot',
+    '<div class="detail-grid">'
+    + _row('Address', _dealText(loc.address, meta.title || meta.property_label))
+    + _row('Tenant', _dealText(tenancy.tenant, 'Not on file'))
+    + _row('Guarantor', _dealText(tenancy.guarantor, 'Not on file'))
+    + _row('Building SF', _dealText(ident.building_sf, 'Not on file'))
+    + _row('Current rent', _dealMoney(tenancy.current_base_rent || tenancy.annual_base_rent))
+    + _row('Term remaining', _dealText(tenancy.term_remaining_years, 'Not on file'))
+    + _row('Estimated value', _dealMoney(valuation.estimated_value || valuation.value))
+    + '</div>');
+
+  const docs = Array.isArray(packet.documents) ? packet.documents : [];
+  if (docs.length) {
+    html += _dealSection('Property Documents',
+      '<div style="display:flex;flex-direction:column;gap:6px">' + docs.slice(0, 6).map(d => _dealLine(d,
+        '<div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(d.name || d.file_name || d.type || 'Document') + '</div>'
+        + '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc([d.type, d.source, d.date && _fmtDate(d.date), d.reconciled_status].filter(Boolean).join(' · ')) + '</div>')).join('') + '</div>', docs.length);
+  }
+  html += _dealSection('Dossiers',
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    + '<button class="dns-cta" onclick="_entityGenerateDossier(\'property\', this)">Property Dossier</button>'
+    + '<button class="dns-cta" onclick="_entityGenerateDossier(\'deal\', this)">Deal Dossier</button>'
+    + '</div>');
+  return html;
+}
+function _entityTabDeal() {
+  const c = _entityDetailCache || {};
+  const packet = c.dealPacket || null;
+  if (!packet) return '<div class="detail-empty">No deal packet is linked to this entity yet.</div>';
+  const deal = packet.deal || {};
+  const meta = packet.meta || {};
+  const txns = Array.isArray(packet.transactions) ? packet.transactions : [];
+  const latestTxn = txns.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0] || {};
+  const timeline = Array.isArray(packet.transaction_marketing_timeline) ? packet.transaction_marketing_timeline : [];
+  const latestListing = timeline.slice().reverse().find(x => x && x.kind === 'listing') || {};
+  const stage = _dealText(deal.stage, latestTxn.date ? 'Closed' : 'Deal');
+  const price = latestTxn.price != null ? latestTxn.price : latestListing.asking_price;
+  const cap = latestTxn.calculated_cap_rate || latestTxn.stated_cap_rate || latestListing.cap_rate || packet?.valuation?.cap_rate;
+  const fee = deal.commission && deal.commission.length ? (deal.commission[0].fee_on_transaction || deal.commission[0].fee || deal.commission[0].amount) : null;
+  const freshness = deal.correspondence_summary?.as_of || latestTxn.date || latestListing.date || meta.generated_at || null;
+  const propClick = meta.domain && meta.property_id != null
+    ? "openUnifiedDetail('" + esc(meta.domain) + "', {property_id:'" + esc(String(meta.property_id)) + "'})"
+    : '';
+
+  let html = '';
+  html += '<div class="detail-section"><div style="display:flex;gap:10px;flex-wrap:wrap">';
+  html += _dealMetric('Stage', stage, _tagSource(deal.stage, latestTxn.date ? 'sales_transactions' : ''), 'var(--green)');
+  html += _dealMetric('Price', _dealMoney(price), _tagSource(price, latestTxn.source || 'sales/listing'), 'var(--accent)');
+  html += _dealMetric('In-place cap', _dealPct(cap), _tagSource(cap, 'derived'), 'var(--purple)');
+  html += _dealMetric('Team Briggs fee', fee ? _dealMoney(fee) : 'Not on file', fee ? _tagSource(fee, 'commission') : 'from ELA/SF', 'var(--yellow,#d98c00)');
+  html += '</div><div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px">';
+  html += '<span style="font-size:11px;color:var(--text3);padding:3px 8px;border:1px solid var(--border);border-radius:12px;background:var(--s2)">freshness: ' + esc(freshness ? _fmtDate(freshness) : 'Not on file') + '</span>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="dns-cta" onclick="switchEntityTab(\'Property\')">See property</button>';
+  html += '<button class="dns-cta" onclick="_entityGenerateDossier(\'deal\', this)">Deal Dossier</button>';
+  html += '</div></div></div>';
+
+  html += _dealSection('Transaction Story & Milestones',
+    _dealWhatNext(packet)
+    + '<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">'
+    + (Array.isArray(deal.milestones) && deal.milestones.length
+      ? deal.milestones.map(m => _dealLine(m,
+          '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(m.name || m.summary || 'Milestone') + '</div>'
+          + '<div style="font-size:10px;color:var(--text3);white-space:nowrap">' + esc(_dealDate(m.date)) + '</div></div>'
+          + (m.summary && m.name !== m.summary ? '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc(m.summary) + '</div>' : '')
+          + '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc(m.status || '') + _dealSourceNote(m) + '</div>')).join('')
+      : timeline.slice(-4).reverse().map(m => _dealLine(m,
+          '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(m.event || m.kind || 'Transaction event') + '</div>'
+          + '<div style="font-size:10px;color:var(--text3);white-space:nowrap">' + esc(_dealDate(m.date)) + '</div></div>'
+          + '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc([_dealMoney(m.price || m.asking_price), _dealPct(m.calculated_cap_rate || m.stated_cap_rate || m.cap_rate), m.broker && _dealText(m.broker, '')].filter(Boolean).join(' · ')) + '</div>')).join(''))
+    + '</div>');
+
+  const comm = Array.isArray(deal.commission) ? deal.commission : [];
+  html += _dealSection('Commission',
+    comm.length ? '<div style="display:flex;flex-direction:column;gap:6px">' + comm.map(r => _dealLine(r,
+      '<div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(r.stage_basis || r.basis || r.name || 'Commission basis') + '</div>'
+      + '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc([r.direct_pct != null && 'Direct ' + _dealPct(r.direct_pct), r.co_broker_pct != null && 'Co-broker ' + _dealPct(r.co_broker_pct), r.split && 'Split ' + _dealText(r.split, '')].filter(Boolean).join(' · ') || 'Structure Not on file') + '</div>'
+      + '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc(r.source || 'commission spine') + '</div>')).join('') + '</div>'
+      : '<div class="detail-empty">Commission structure is Not on file until the ELA/Salesforce record is linked.</div>');
+
+  const parties = Array.isArray(deal.parties) ? deal.parties : [];
+  const bySide = {};
+  parties.forEach(p => { const k = p.side || 'other'; (bySide[k] = bySide[k] || []).push(p); });
+  html += _dealSection('Parties by Company',
+    parties.length ? Object.keys(bySide).map(side => '<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--text3);margin-bottom:5px">' + esc(side.replace(/_/g, ' ')) + '</div>'
+      + '<div style="display:flex;flex-direction:column;gap:6px">' + bySide[side].map(p => _dealLine(p,
+        '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(p.company?.v || p.company || p.name || 'Party') + '</div>'
+        + '<div style="font-size:10px;color:var(--text3);white-space:nowrap">' + esc(p.role || 'party') + '</div></div>'
+        + '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc([p.flag, p.effective_from && ('from ' + _fmtDate(p.effective_from)), p.source].filter(Boolean).join(' · ') || 'Role source Not on file') + '</div>')).join('') + '</div></div>').join('')
+      : '<div class="detail-empty">No parties sourced from Salesforce, Outlook, Sharefile, or the deal spine yet.</div>');
+
+  const diligence = Array.isArray(deal.diligence) ? deal.diligence : [];
+  html += _dealSection('Diligence & Vendors',
+    diligence.length ? '<div style="display:flex;flex-direction:column;gap:6px">' + diligence.map(d => _dealLine(d,
+      '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(d.vendor || d.type || 'Vendor') + '</div>'
+      + '<div style="font-size:10px;color:' + (d.lender_required ? 'var(--yellow,#d98c00)' : 'var(--text3)') + ';white-space:nowrap">' + esc(d.lender_required ? 'lender required' : (d.status || 'tracked')) + '</div></div>'
+      + '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc([d.type, d.ordered_date && ('ordered ' + _fmtDate(d.ordered_date)), d.site_visit_date && ('site ' + _fmtDate(d.site_visit_date)), d.report_eta && ('ETA ' + _fmtDate(d.report_eta)), d.completed_date && ('done ' + _fmtDate(d.completed_date))].filter(Boolean).join(' · ') || 'Dates Not on file') + '</div>')).join('') + '</div>'
+      : '<div class="detail-empty">Survey, PCA, Phase I, appraisal, and lender report tracking are Not on file.</div>');
+
+  const corr = Array.isArray(deal.correspondence) ? deal.correspondence : [];
+  const summary = deal.correspondence_summary && (_tagVal(deal.correspondence_summary.summary) || deal.correspondence_summary.summary || deal.correspondence_summary.v);
+  html += _dealSection('Correspondence Summary',
+    (summary ? _dealLine(deal.correspondence_summary, '<div style="font-size:12px;color:var(--text2);line-height:1.5">' + esc(summary) + '</div>') : '<div class="detail-empty">No living correspondence rollup is linked yet.</div>')
+    + (corr.length ? '<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">' + corr.slice(0, 8).map(m => _dealLine(m,
+      '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:12px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(m.subject || '(no subject)') + '</div>'
+      + '<div style="font-size:10px;color:var(--text3);white-space:nowrap">' + esc(_dealDate(m.date)) + '</div></div>'
+      + '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc([m.direction, m.source].filter(Boolean).join(' · ')) + '</div>')).join('') + '</div>' : ''));
+
+  html += _dealSection('Connected Sources', _dealConnectedSources(packet));
+
+  const docs = Array.isArray(deal.documents) ? deal.documents : [];
+  if (docs.length) html += _dealSection('Documents', '<div style="display:flex;flex-direction:column;gap:6px">' + docs.slice(0, 10).map(d => _dealLine(d,
+    '<div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(d.name || d.file_name || d.type || 'Document') + '</div>'
+    + '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc([d.type, d.source, d.date && _fmtDate(d.date), d.reconciled === true ? 'reconciled' : 'not reconciled'].filter(Boolean).join(' · ')) + '</div>')).join('') + '</div>', docs.length);
+
+  const issues = [];
+  if (Array.isArray(deal.conflicts)) issues.push(...deal.conflicts.map(x => ({ topic: x.field || 'Conflict', summary: x.summary || x.note || 'Source conflict is open', source: x.source || 'lcc_deal_conflict' })));
+  if (Array.isArray(packet?.valuation?._conflicts)) issues.push(...packet.valuation._conflicts.map(x => ({ topic: x.field || 'Valuation conflict', summary: 'Reconciled value differs across sources', source: 'valuation' })));
+  const srcs = deal.connected_sources || {};
+  Object.keys(srcs).forEach(k => { if (/no_|not_linked|none/.test(String(srcs[k]))) issues.push({ topic: k, summary: String(srcs[k]).replace(/_/g, ' '), source: 'connected_sources' }); });
+  html += _dealSection('Open Issues',
+    issues.length ? '<div style="display:flex;flex-direction:column;gap:6px">' + issues.map(i => _dealLine(i,
+      '<div style="font-size:12px;font-weight:700;color:var(--text)">' + esc(i.topic || 'Issue') + '</div>'
+      + '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc(i.summary || 'Open') + '</div>'
+      + '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc(i.owner || i.source || '') + '</div>')).join('') + '</div>'
+      : '<div class="detail-empty">No open deal issues on file.</div>');
+
+  html += _dealSection('Property Reference',
+    '<div style="font-size:12px;color:var(--text2);line-height:1.5">' + esc(_dealPropertyRef(packet)) + '</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="dns-cta" onclick="switchEntityTab(\'Property\')">Open Property tab</button>'
+    + (propClick ? '<button class="dns-cta" onclick="' + propClick + '">Open full property</button>' : '') + '</div>');
+  return html;
+}
+
+function _dealOpenSource(payloadJson) {
+  let p = {};
+  try { p = JSON.parse(payloadJson || '{}'); } catch (_e) { p = {}; }
+  const ref = p.ref || '';
+  if (/^https?:\/\//i.test(ref)) { window.open(ref, '_blank', 'noopener'); return; }
+  if (/^mailto:/i.test(ref)) { window.location.href = ref; return; }
+  const msg = [p.source || 'source', ref || p.label || 'No direct link on file'].filter(Boolean).join(': ');
+  if (typeof showToast === 'function') showToast(msg, 'info');
+}
+window._dealOpenSource = _dealOpenSource;
+
+function _dealInspectSource(key) {
+  const packet = _entityDetailCache && _entityDetailCache.dealPacket;
+  const status = packet && packet.deal && packet.deal.connected_sources ? packet.deal.connected_sources[key] : null;
+  if (key === 'salesforce') {
+    const sf = _tagVal(packet?.deal?.sf_opportunity_id);
+    if (sf) { window.open(_SF_BASE + '/lightning/r/Opportunity/' + encodeURIComponent(sf) + '/view', '_blank', 'noopener'); return; }
+  }
+  if (typeof showToast === 'function') showToast(key + ': ' + (status || 'not linked'), 'info');
+}
+window._dealInspectSource = _dealInspectSource;
+
+async function _entityGenerateDossier(kind, btn) {
+  const c = _entityDetailCache || {};
+  const eid = c.entityId || (c.entity && c.entity.id);
+  if (!eid) return;
+  const w = (typeof window !== 'undefined') ? window.open('', '_blank') : null;
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Building...'; }
+  try {
+    const d = await _udApiPost('/api/entities?action=generate_dossier', { entity_id: eid, kind: kind === 'deal' ? 'deal' : 'property' });
+    if (d && d.ok && d.signed_url) {
+      if (w) w.location.href = d.signed_url; else window.open(d.signed_url, '_blank');
+    } else {
+      if (w) w.close();
+      if (typeof showToast === 'function') showToast('Could not build ' + kind + ' dossier', 'error');
+    }
+  } catch (_e) {
+    if (w) w.close();
+    if (typeof showToast === 'function') showToast('Could not build ' + kind + ' dossier', 'error');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+window._entityGenerateDossier = _entityGenerateDossier;
+
+function _entityOpenDossierMenu(btn) {
+  const old = document.getElementById('entityDossierMenu');
+  if (old) { old.remove(); return; }
+  const c = _entityDetailCache || {};
+  const hasDeal = !!c.dealPacket;
+  const menu = document.createElement('div');
+  menu.id = 'entityDossierMenu';
+  menu.style.cssText = 'position:fixed;z-index:10000;background:var(--s1);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.22);padding:6px;min-width:170px';
+  const add = function(label, kind) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--text);padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px';
+    b.onclick = function() { menu.remove(); _entityGenerateDossier(kind, btn); };
+    menu.appendChild(b);
+  };
+  add('Property Dossier', 'property');
+  if (hasDeal) add('Deal Dossier', 'deal');
+  document.body.appendChild(menu);
+  const r = btn && btn.getBoundingClientRect ? btn.getBoundingClientRect() : { left: 20, bottom: 60 };
+  menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 190)) + 'px';
+  menu.style.top = (r.bottom + 6) + 'px';
+  setTimeout(function() {
+    const close = function(e) { if (!menu.contains(e.target) && e.target !== btn) { menu.remove(); document.removeEventListener('mousedown', close); } };
+    document.addEventListener('mousedown', close);
+  }, 0);
+}
+window._entityOpenDossierMenu = _entityOpenDossierMenu;
 
 // ── Entity Deals Tab (Broker mode) ──
 // Replaces owner-portfolio for a broker: how many deals brokered in our target

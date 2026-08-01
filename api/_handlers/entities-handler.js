@@ -1258,6 +1258,52 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(200).json(packet);
     }
 
+    // Deal tab packet — the same grounded buildDealPacket shape used by
+    // generate_dossier(kind='deal'), with an explicit eligibility flag so the
+    // entity panel only shows the singular Deal tab for real asset deals.
+    // GET /api/entities?action=deal_packet&id=<uuid>
+    if (action === 'deal_packet' && id) {
+      const entRes = await opsQuery('GET',
+        `entities?id=eq.${encodeURIComponent(id)}&workspace_id=eq.${workspaceId}&select=id`);
+      if (!entRes.ok || !entRes.data?.length) return res.status(404).json({ error: 'Entity not found' });
+
+      let packet;
+      try {
+        packet = await buildDealPacket(id, workspaceId);
+      } catch (err) {
+        return res.status(422).json({ error: 'deal_packet_unavailable', detail: err?.message || String(err) });
+      }
+
+      const domain = packet?.meta?.domain;
+      const propertyId = packet?.meta?.property_id;
+      const [bd, nmSale] = await Promise.all([
+        opsQuery('GET',
+          `bd_opportunities?entity_id=eq.${encodeURIComponent(id)}` +
+          `&select=id,is_open,closed_won,sf_opp_id,stage,updated_at&order=updated_at.desc&limit=5`).catch(() => null),
+        (domain && propertyId != null)
+          ? domainQuery(domain, 'GET',
+              `sales_transactions?property_id=eq.${encodeURIComponent(propertyId)}` +
+              `&is_northmarq=eq.true&transaction_state=eq.live&select=sale_id,is_northmarq,sale_date&limit=5`).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const bdRows = (bd && bd.ok && Array.isArray(bd.data)) ? bd.data : [];
+      const nmRows = (nmSale && nmSale.ok && Array.isArray(nmSale.data)) ? nmSale.data : [];
+      const hasDeal = bdRows.length > 0 || nmRows.length > 0 ||
+        (packet?.deal && packet.deal.connected_sources && packet.deal.connected_sources.salesforce === 'linked');
+
+      return res.status(200).json({
+        ok: true,
+        entity_id: id,
+        has_deal: hasDeal,
+        deal_signals: {
+          bd_opportunities: bdRows.length,
+          northmarq_sales: nmRows.length,
+          open_opportunity: bdRows.some(r => r && r.is_open === true),
+        },
+        packet,
+      });
+    }
+
     // Mint a short-lived signed URL for a stored document (by artifact id, so we
     // never sign an arbitrary object). GET /api/entities?action=document_url&artifact_id=<uuid>
     if (action === 'document_url') {
