@@ -143,7 +143,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // de-anonymization climax + prospecting feed) -> activity. Ownership & CRM moved
   // after Deal History so the user understands the economics before resolving who
   // owns it. Dispatch is a name-keyed switch (_udRenderTab), so order is display-only.
-  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership & CRM', 'Activity Log'];
+  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership & CRM', 'Documents', 'Activity Log'];
   const mappedInitialTab = initialTab ? _udMapLegacyTab(initialTab) : null;
   const activeTab = (mappedInitialTab && tabs.includes(mappedInitialTab)) ? mappedInitialTab : tabs[0];
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
@@ -611,6 +611,8 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       _udRenderOperationsAsync(bodyEl);
     } else if (activeTab === 'Deal History') {
       _udRenderDealHistoryAsync(bodyEl);
+    } else if (activeTab === 'Documents') {
+      _udRenderDocumentsAsync(bodyEl);
     } else if (activeTab === 'Activity Log') {
       _udRenderActivityLogAsync(bodyEl);
     } else {
@@ -894,6 +896,8 @@ function switchUnifiedTab(tabName) {
     _udRenderOperationsAsync(bodyEl);
   } else if (tabName === 'Deal History') {
     _udRenderDealHistoryAsync(bodyEl);
+  } else if (tabName === 'Documents') {
+    _udRenderDocumentsAsync(bodyEl);
   } else if (tabName === 'Activity Log') {
     _udRenderActivityLogAsync(bodyEl);
   } else {
@@ -8921,6 +8925,89 @@ function _reEsc(s) { return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 //   - v_ownership_chain         (ownership changes)
 //   - v_lease_extensions_summary (lease amendments)
 //   - (best-effort) CMS survey history via property_cms_link.last_survey_date
+
+// ── Documents tab — OMs / BOVs / leases / comps ingested for THIS property.
+// Sourced from staged_intake_artifacts via the asset entity (documents endpoint);
+// each opens in a new tab through a freshly-minted signed/sharing URL. Property
+// data — lives on the property page (per the separation-of-concerns split).
+const _UD_DOC_SECTIONS = [
+  { key: 'om',     title: 'Offering Memorandums', icon: '\u{1F4C4}' },
+  { key: 'bov',    title: 'BOVs',                 icon: '\u{1F4CA}' },
+  { key: 'lease',  title: 'Leases',               icon: '\u{1F4DD}' },
+  { key: 'psa_dd', title: 'PSA / Due Diligence',  icon: '\u{1F4CB}' },
+  { key: 'comp',   title: 'Comps',                icon: '\u{1F4C8}' },
+  { key: 'master', title: 'Master Sheets',        icon: '\u{1F5C2}️' },
+  { key: 'other',  title: 'Other Documents',      icon: '\u{1F4CE}' },
+];
+
+async function _udRenderDocumentsAsync(bodyEl) {
+  if (!bodyEl) return;
+  bodyEl.innerHTML = '<div style="text-align:center;padding:44px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading documents…</p></div>';
+  const eid = _udCache.lccEntityId
+    || (_udCache.entityMeta && (_udCache.entityMeta.entity_id || _udCache.entityMeta.id))
+    || (_udCache.ownership && _udCache.ownership.owner_entity_id)
+    || null;
+  if (!eid) {
+    bodyEl.innerHTML = '<div class="detail-empty">This property isn’t linked to an LCC entity yet, so its documents can’t be looked up. Documents are keyed to the property’s entity.</div>';
+    return;
+  }
+  let data = null;
+  try { data = await _entityApiFetch('/api/entities?action=documents&id=' + encodeURIComponent(eid)); }
+  catch (_e) { data = null; }
+  bodyEl.innerHTML = _udRenderDocuments(data);
+}
+
+function _udRenderDocuments(data) {
+  const groups = (data && data.groups) || {};
+  const total = (data && data.count) || 0;
+  let html = '<div class="detail-section"><div class="detail-section-title">Documents'
+    + (total ? ' <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">' + total + '</span>' : '') + '</div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin:-4px 0 8px">Offering memos, BOVs, leases &amp; comps we’ve ingested for this property. Opens in a new tab.</div>';
+  if (!total) {
+    html += '<div class="detail-empty">No documents ingested for this property yet. OMs pulled via the sidebar or emailed to intake will appear here.</div></div>';
+    return html;
+  }
+  for (const sec of _UD_DOC_SECTIONS) {
+    const rows = groups[sec.key];
+    if (!rows || !rows.length) continue;
+    html += '<div style="margin-top:10px"><div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px">' + sec.icon + ' ' + esc(sec.title) + ' (' + rows.length + ')</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px">';
+    for (const d of rows) {
+      const badge = d.backend === 'sharepoint_pa' ? 'SharePoint' : 'Supabase';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
+      html += '<div style="min-width:0"><div style="font-size:12.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.file_name || '(document)') + '</div>';
+      html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc(badge) + (d.created_at ? ' · ' + esc(_fmtDate(d.created_at)) : '') + '</div></div>';
+      html += '<button class="dns-cta" style="flex-shrink:0" onclick="_udOpenDocument(' + JSON.stringify(String(d.id)) + ', this)">Open ↗</button>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+// Mint a signed URL for the artifact and open it in a new tab. Opens the blank
+// tab synchronously first (before the await) so the browser doesn't block it.
+async function _udOpenDocument(artifactId, btn) {
+  if (!artifactId) return;
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+  const w = (typeof window !== 'undefined') ? window.open('', '_blank') : null;
+  try {
+    const d = await _entityApiFetch('/api/entities?action=document_url&artifact_id=' + encodeURIComponent(artifactId));
+    if (d && d.ok && d.signed_url) {
+      if (w) w.location.href = d.signed_url; else window.open(d.signed_url, '_blank');
+    } else {
+      if (w) w.close();
+      if (typeof showToast === 'function') showToast('Could not open document: ' + ((d && (d.detail || d.error)) || 'unavailable'), 'error');
+    }
+  } catch (_e) {
+    if (w) w.close();
+    if (typeof showToast === 'function') showToast('Could not open document', 'error');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+window._udOpenDocument = _udOpenDocument;
 
 async function _udRenderActivityLogAsync(bodyEl) {
   if (!bodyEl) return;
