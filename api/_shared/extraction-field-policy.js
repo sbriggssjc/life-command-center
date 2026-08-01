@@ -34,10 +34,14 @@ export const INTERNAL_ANALYTIC_TYPES = new Set([
 ]);
 
 // Reported market fields — the destinations advisory/internal values may NEVER
-// target. The price/cap a client SEES as the market number.
+// target without the confirmed-listing promotion gate. Include both historical
+// aliases and the live dia/gov available_listings columns so schema drift cannot
+// hide behind old field names.
 export const REPORTED_FIELDS = new Set([
   'listing_price', 'asking_price', 'asking_cap', 'original_price',
   'last_price', 'last_price_change', 'sold_price', 'sold_cap_rate',
+  'initial_price', 'initial_cap_rate', 'current_cap_rate', 'cap_rate',
+  'price_change_date', 'asking_cap_rate',
 ]);
 
 /**
@@ -99,7 +103,7 @@ export function guardValuationWrite({ valueType, targetField, listingConfirmed =
     return { ok: false, reason: 'internal_analytic_cannot_reach_reported', class: cls };
   }
   if (cls === 'advisory_promotable') {
-    // Promotion path: only ask → price-ish, recommended_cap → cap, AND only when
+    // Promotion path: only ask -> price-ish, recommended_cap -> cap, AND only when
     // the listing is confirmed (Unit 2 gate). Otherwise reject.
     const v = String(valueType).toLowerCase();
     const promotable = (v === 'ask' || v === 'recommended_value' || v === 'recommended_cap');

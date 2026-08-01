@@ -21,6 +21,9 @@ describe('Stage B field policy — classification', () => {
   });
   it('flags reported market fields', () => {
     assert.equal(isReportedField('asking_cap'), true);
+    assert.equal(isReportedField('initial_price'), true);
+    assert.equal(isReportedField('initial_cap_rate'), true);
+    assert.equal(isReportedField('asking_cap_rate'), true);
     assert.equal(isReportedField('sold_cap_rate'), true);
     assert.equal(isReportedField('annual_rent'), false);   // factual lease field
     assert.equal(isReportedField('amount'), false);        // advisory store field
@@ -55,6 +58,12 @@ describe('Stage B field policy — THE GUARD (no leak to reported)', () => {
     const r = guardValuationWrite({ valueType: 'recommended_cap', targetField: 'asking_cap', listingConfirmed: true });
     assert.equal(r.ok, true);
     assert.equal(r.reason, 'promoted_listing_confirmed');
+  });
+  it('allows gated promotion to live available_listings ask columns once confirmed', () => {
+    const ask = guardValuationWrite({ valueType: 'ask', targetField: 'initial_price', listingConfirmed: true });
+    const cap = guardValuationWrite({ valueType: 'recommended_cap', targetField: 'asking_cap_rate', listingConfirmed: true });
+    assert.equal(ask.ok, true);
+    assert.equal(cap.ok, true);
   });
   it('allows an advisory value into its OWN store (non-reported field) without a listing', () => {
     assert.equal(guardValuationWrite({ valueType: 'ask', targetField: 'amount' }).ok, true);
