@@ -54,12 +54,15 @@ footer{margin-top:32px;padding-top:14px;border-top:1px solid #eee;color:#999;fon
   <div class="cell"><div class="lbl">Cap rate</div><div class="big">6.00%</div><span class="src">asking = sold; on in-place rent $943,794</span></div>
   <div class="cell"><div class="lbl">Team Briggs fee</div><div class="big"><span class="na">Not on file</span></div><span class="src">from the executed ELA</span></div>
 </div>
-<div class="conflict"><b>Cap-rate reconciliation:</b> the correct deal cap is <b>6.00%</b> &mdash; our OM asking
-($15,729,896 @ 6.00%, listing 14879) sold at asking, on in-place NOI $943,794 ($943,794 &divide; $15,729,896 =
-6.000%). The system's <b>6.46%</b> (`calculated_cap_rate` 0.0646 / `rent_at_sale` $1,016,362.91) is wrong: it
-applied the &ldquo;2.5% annually&rdquo; escalation <b>ahead of the actual schedule</b>. Correct the record to
-in-place rent $943,794 / 6.00% everywhere (see the cap-rate fix prompt). Earlier price point: $15,346,240 @
-6.15% (listing 14156, superseded).</div>
+<div class="conflict"><b>Cap-rate reconciliation &mdash; RESOLVED 2026-08-01:</b> the deal cap is <b>6.00%</b>
+everywhere &mdash; our OM asking ($15,729,896 @ 6.00%, listing 14879) sold at asking, on in-place NOI $943,794
+($943,794 &divide; $15,729,896 = 6.000%). The prior <b>6.46%</b> (`calculated_cap_rate` 0.0646 /
+`rent_at_sale` $1,016,362.91) applied the &ldquo;2.5% annually&rdquo; escalation <b>ahead of the actual
+schedule</b>: property 35724's rent anchor was dated 2028-08-28 (a superseded lease's bogus start), so the cap
+engine rejected it and over-escalated from the 2022 commencement. Fixed by re-anchoring the in-place rent
+$943,794 to its 2025-08-18 effective date (`dia_compute_cap_rate` now returns 6.00% at close), and locking
+sale 14832 / listing 14879 to 6.00%. Guarded by `v_dia_closed_deal_cap_vs_asking`. Earlier price point:
+$15,346,240 @ 6.15% (listing 14156, superseded).</div>
 
 <h2>Transaction Story &amp; Milestones <span class="src">(newest first · older milestones compress as we pass them)</span></h2>
 <ul class="tl">
