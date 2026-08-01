@@ -10530,10 +10530,24 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
       // For OMs the rent-effective date is lease_commencement when known
       // (the rent figure is anchored to the documented start of the lease);
       // otherwise fall back to today (the OM as-of date).
-      const rawDate = anchorRecord.lease_start
+      let rawDate = anchorRecord.lease_start
         || parseDate(metadata.lease_commencement)
         || new Date().toISOString();
-      const anchorDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : null;
+      let anchorDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : null;
+      // Guard (property 35724): never anchor the current in-place rent to a date
+      // in the FUTURE. A superseded/placeholder lease can carry a bogus future
+      // lease_start (e.g. 2028-08-28); dia_compute_cap_rate rejects an anchor
+      // dated >12mo after the valuation event and then silently falls back to
+      // projecting from the live lease's commencement, over-escalating the cap.
+      // If the derived anchor date is in the future, use today (the OM as-of).
+      const todayIso = new Date().toISOString().split('T')[0];
+      if (anchorDate && anchorDate > todayIso) {
+        console.warn(
+          `[promotePropertyAnchorRent] property=${propertyId}: derived anchor_rent_date ` +
+          `${anchorDate} is in the future; clamping to OM as-of date ${todayIso}.`
+        );
+        anchorDate = todayIso;
+      }
       await promotePropertyAnchorRent(domain, propertyId, {
         anchor_rent:        Number(anchorRecord.annual_rent),
         anchor_rent_date:   anchorDate,
