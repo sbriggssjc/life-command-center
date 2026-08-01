@@ -60,8 +60,10 @@ export const CANONICAL_FIELDS = ['buyer', 'seller', 'listing_broker', 'procuring
 
 export const SOURCE_AGREE = 'party_extract_agree';
 export const SOURCE_GLINER = 'gliner_extract';
+export const SOURCE_NORTHMARQ_ROSTER = 'northmarq_sf_roster';
 export const CONF_AGREE = 0.60;
 export const CONF_GLINER = 0.55;
+export const CONF_NORTHMARQ_ROSTER = 0.95;
 
 // ---------------------------------------------------------------------------
 // Company-name core normalizer — mirrors resolver/app/normalize.py::normalize_company
@@ -248,6 +250,87 @@ export function adjudicate(channelA, channelB) {
     out[field] = dec;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Northmarq sell-side broker-of-record reconciliation
+// ---------------------------------------------------------------------------
+const NORTHMARQ_DEFAULT_LISTING_BROKER = 'Team Briggs / Northmarq';
+
+function cleanText(v) {
+  if (v == null) return null;
+  const s = String(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return s || null;
+}
+
+function pickFirstText(obj, keys) {
+  for (const key of keys) {
+    const v = cleanText(obj?.[key]);
+    if (v) return v;
+  }
+  return null;
+}
+
+export function isNorthmarqSellSide(row = {}) {
+  if (row.is_northmarq !== true) return false;
+  const side = cleanText(row.deal_side || row.side || row.sf_deal_side || row.role_side || '');
+  if (!side) return true;
+  return !/\b(buy|buyer|purchas|procur|acquisition)\b/i.test(side);
+}
+
+export function resolveNorthmarqListingBroker(row = {}, opts = {}) {
+  const explicit = pickFirstText(row, [
+    'authoritative_listing_broker',
+    'team_broker_name',
+    'sf_listing_broker_name',
+    'broker_name',
+    'lead_broker',
+    'listing_broker_roster',
+  ]);
+  if (explicit) return explicit;
+
+  const team = pickFirstText(row, ['sjc_team', 'broker_team', 'deal_team', '_lcc_deal_team']);
+  if (team && /team\s+briggs|briggs/i.test(team)) return opts.defaultBroker || NORTHMARQ_DEFAULT_LISTING_BROKER;
+  if (opts.allowDefaultBroker && opts.defaultBroker) return opts.defaultBroker;
+  return null;
+}
+
+/**
+ * Plan how to reconcile an is_northmarq sell-side sale where a third-party
+ * feed has occupied the canonical listing_broker field. The caller owns IO:
+ * domain PATCH, sale_brokers links, party_extract_disagreements, and deal conflict.
+ */
+export function planNorthmarqListingBrokerReconciliation(row = {}, opts = {}) {
+  if (!isNorthmarqSellSide(row)) return { action: 'skip', reason: 'not_northmarq_sell_side' };
+  const authoritative = resolveNorthmarqListingBroker(row, opts);
+  if (!authoritative) return { action: 'skip', reason: 'no_authoritative_broker' };
+
+  const current = pickFirstText(row, ['listing_broker', 'current_listing_broker']);
+  const currentCore = normalizeCore(current);
+  const authoritativeCore = normalizeCore(authoritative);
+  const alreadyAuthoritative = current && coresAgree(currentCore, authoritativeCore);
+
+  const asReported = alreadyAuthoritative ? null : current;
+  const asReportedSource = asReported
+    ? (row.as_reported_source || row.listing_broker_source || (/cbre|costar/i.test(asReported) ? 'costar_sidebar' : row.data_source || 'third_party_feed'))
+    : null;
+  return {
+    action: alreadyAuthoritative ? 'noop' : 'reconcile',
+    field: 'listing_broker',
+    source: SOURCE_NORTHMARQ_ROSTER,
+    confidence: CONF_NORTHMARQ_ROSTER,
+    authoritativeValue: authoritative,
+    asReportedValue: asReported,
+    asReportedSource,
+    authoritativeCore,
+    asReportedCore: normalizeCore(asReported),
+    patch: alreadyAuthoritative ? {} : { listing_broker: authoritative },
+    disagreementKind: asReported ? 'northmarq_authoritative_role_conflict' : null,
+    saleBrokerLinks: [
+      { broker_name: authoritative, role: 'listing', source: SOURCE_NORTHMARQ_ROSTER },
+      ...(asReported ? [{ broker_name: asReported, role: 'as_reported_listing', source: asReportedSource }] : []),
+    ],
+  };
 }
 
 // ---------------------------------------------------------------------------

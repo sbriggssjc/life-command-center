@@ -18,8 +18,13 @@ const {
   NOTE_COLUMNS,
   SOURCE_AGREE,
   SOURCE_GLINER,
+  SOURCE_NORTHMARQ_ROSTER,
   CONF_AGREE,
   CONF_GLINER,
+  CONF_NORTHMARQ_ROSTER,
+  isNorthmarqSellSide,
+  resolveNorthmarqListingBroker,
+  planNorthmarqListingBrokerReconciliation,
 } = await import('../api/_handlers/party-extract.js');
 
 describe('normalizeCore', () => {
@@ -180,5 +185,54 @@ describe('buildExtractionPrompt', () => {
     }
     assert.match(p, /NEVER guess/i);
     assert.ok(p.includes('note text'));
+  });
+});
+
+describe('Northmarq broker role reconciliation', () => {
+  it('treats Northmarq sell-side rows as authoritative unless explicitly buy-side', () => {
+    assert.equal(isNorthmarqSellSide({ is_northmarq: true, deal_side: 'Sell-side' }), true);
+    assert.equal(isNorthmarqSellSide({ is_northmarq: true, deal_side: 'Buyer representation' }), false);
+    assert.equal(isNorthmarqSellSide({ is_northmarq: false, deal_side: 'Sell-side' }), false);
+  });
+
+  it('resolves the Team Briggs broker from roster fields or team fallback', () => {
+    assert.equal(resolveNorthmarqListingBroker({ broker_name: 'Scott Briggs' }), 'Scott Briggs');
+    assert.equal(resolveNorthmarqListingBroker({ sjc_team: 'Team Briggs' }), 'Team Briggs / Northmarq');
+    assert.equal(resolveNorthmarqListingBroker({}, { defaultBroker: 'Team Briggs', allowDefaultBroker: true }), 'Team Briggs');
+    assert.equal(resolveNorthmarqListingBroker({}, { defaultBroker: 'Team Briggs' }), null);
+  });
+
+  it('plans the 35724-shaped reconciliation without losing the CoStar view', () => {
+    const plan = planNorthmarqListingBrokerReconciliation({
+      sale_id: 14832,
+      property_id: 35724,
+      is_northmarq: true,
+      deal_side: 'Sell-side',
+      listing_broker: 'Chris Bodnar / CBRE Inc.',
+      data_source: 'costar_sidebar',
+      sjc_team: 'Team Briggs',
+    });
+
+    assert.equal(plan.action, 'reconcile');
+    assert.equal(plan.source, SOURCE_NORTHMARQ_ROSTER);
+    assert.equal(plan.confidence, CONF_NORTHMARQ_ROSTER);
+    assert.deepEqual(plan.patch, { listing_broker: 'Team Briggs / Northmarq' });
+    assert.equal(plan.asReportedValue, 'Chris Bodnar / CBRE Inc.');
+    assert.equal(plan.disagreementKind, 'northmarq_authoritative_role_conflict');
+    assert.deepEqual(plan.saleBrokerLinks, [
+      { broker_name: 'Team Briggs / Northmarq', role: 'listing', source: SOURCE_NORTHMARQ_ROSTER },
+      { broker_name: 'Chris Bodnar / CBRE Inc.', role: 'as_reported_listing', source: 'costar_sidebar' },
+    ]);
+  });
+
+  it('noops when the current broker already matches our authoritative broker', () => {
+    const plan = planNorthmarqListingBrokerReconciliation({
+      is_northmarq: true,
+      listing_broker: 'Team Briggs / Northmarq',
+      sjc_team: 'Team Briggs',
+    });
+    assert.equal(plan.action, 'noop');
+    assert.deepEqual(plan.patch, {});
+    assert.equal(plan.asReportedValue, null);
   });
 });
