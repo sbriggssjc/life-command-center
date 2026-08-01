@@ -124,6 +124,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         <div class="detail-title">${esc(title)}</div>
         ${locForSubtitle ? `<div class="detail-subtitle">${esc(locForSubtitle)}</div>` : ''}
       </div>
+      <button class="detail-action-btn" title="Open a print-ready property dossier"
+        onclick="_udOpenPropertyDossier(this)"
+        style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
+        Dossier
+      </button>
       <button class="detail-action-btn" id="consolidateBtn"
         title="Find duplicate properties + same-tenant clusters"
         onclick="openConsolidateModal('${db}', ${ids.property_id || 'null'})"
@@ -9017,6 +9022,88 @@ async function _udOpenDocument(artifactId, btn) {
   if (btn) { btn.disabled = false; btn.textContent = orig; }
 }
 window._udOpenDocument = _udOpenDocument;
+
+// Property Dossier v1 (data-only) - a print-ready brief built from the already-
+// loaded property data (_udCache). Opens in a new tab. Uses the corrected owner
+// (recorded deed owner when the true owner is an operator). LLM prose + storage/
+// versioning (lcc_dossiers) are later phases.
+function _udBuildPropertyDossierHTML(c){
+  c = c || _udCache || {};
+  const p = c.property || {};
+  const own = c.ownership || {};
+  const db = c.db || 'dia';
+  const leases = Array.isArray(c.leases) ? c.leases : [];
+  const chain = Array.isArray(c.chain) ? c.chain : [];
+  const cms = (c.cms && (c.cms.facility || c.cms)) || null;
+  const addr = p.address || p.property_name || (c.fallback && c.fallback.address) || 'Property';
+  const loc = [p.city || (c.fallback && c.fallback.city), p.state || (c.fallback && c.fallback.state)].filter(Boolean).join(', ');
+  const domLabel = db === 'gov' ? 'Government' : 'Dialysis';
+  const trueIsOp = !!own.true_owner_is_operator;
+  const ownerName = (!trueIsOp && (own.true_owner_canonical || own.true_owner)) || own.recorded_owner_canonical || own.recorded_owner || 'Unresolved';
+  const recorded = own.recorded_owner_canonical || own.recorded_owner || null;
+  const lease = leases[0] || {};
+  const tenant = lease.tenant || own.operator_name || p.tenant || p.operator || null;
+  const rent = lease.annual_rent != null ? lease.annual_rent : (lease.rent != null ? lease.rent : (p.annual_rent != null ? p.annual_rent : null));
+  const gen = (new Date()).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const E = function(v){ return esc(v==null?'':String(v)); };
+  const money = function(v){ return (v==null||v==='')?'&mdash;':(typeof fmt==='function'?fmt(v):('$'+v)); };
+  const dt = function(v){ return v?(typeof _fmtDate==='function'?_fmtDate(v):String(v)):'&mdash;'; };
+  const row = function(k,v){ return `<tr><td class='k'>${E(k)}</td><td class='v'>${(v==null||v==='')?'&mdash;':v}</td></tr>`; };
+  let s = '';
+  s += `<h2>Snapshot</h2><table class='kv'>`;
+  s += row('Property', E(addr) + (loc?` &middot; ${E(loc)}`:''));
+  s += row('Type', `${domLabel} net-lease`);
+  if (p.estimated_value) s += row('Estimated value', money(p.estimated_value));
+  if (p.building_size || p.rba) s += row('Building size', `${E(p.building_size||p.rba)} SF`);
+  if (p.year_built) s += row('Year built', E(p.year_built));
+  s += `</table>`;
+  s += `<h2>Ownership</h2><table class='kv'>`;
+  s += row('Owner of record', E(ownerName));
+  if (recorded && recorded !== ownerName) s += row('Recorded deed owner', E(recorded));
+  if (trueIsOp && (own.true_owner_canonical||own.true_owner)) s += row('Operator / tenant', `${E(own.true_owner_canonical||own.true_owner)} (not the owner)`);
+  if (own.owner_type||own.true_owner_type) s += row('Owner type', E(own.owner_type||own.true_owner_type));
+  s += `</table>`;
+  s += `<h2>Tenancy &amp; Lease</h2><table class='kv'>`;
+  s += row('Tenant / Operator', E(tenant));
+  s += row('Annual rent', money(rent));
+  if (lease.lease_start||lease.lease_expiration) s += row('Lease term', `${dt(lease.lease_start)} &ndash; ${dt(lease.lease_expiration)}`);
+  if (lease.expense_structure) s += row('Expense structure', E(lease.expense_structure));
+  s += `</table>`;
+  if (db==='dia' && cms){
+    s += `<h2>Operations (CMS)</h2><table class='kv'>`;
+    if (cms.facility_name||cms.provider_name) s += row('Facility', E(cms.facility_name||cms.provider_name));
+    if (cms.medicare_id||cms.ccn) s += row('CCN / Medicare ID', E(cms.medicare_id||cms.ccn));
+    if (cms.stations||cms.number_of_stations) s += row('Stations', E(cms.stations||cms.number_of_stations));
+    if (cms.last_survey_date) s += row('Last CMS survey', dt(cms.last_survey_date));
+    s += `</table>`;
+  }
+  if (chain.length){
+    s += `<h2>Ownership &amp; Sales History</h2><table class='hist'><thead><tr><th>Date</th><th>Owner / Buyer</th><th>Price</th></tr></thead><tbody>`;
+    for (const h of chain.slice(0,25)){
+      const who = h.recorded_owner_name||h.true_owner_name||h.buyer||h.new_owner||h.owner_name||'';
+      s += `<tr><td>${dt(h.transfer_date)}</td><td>${E(who)}</td><td>${h.sale_price?money(h.sale_price):'&mdash;'}</td></tr>`;
+    }
+    s += `</tbody></table>`;
+  }
+  const css = `body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;margin:0;background:#f4f5f7} .doc{max-width:820px;margin:24px auto;background:#fff;padding:40px 48px;box-shadow:0 1px 6px rgba(0,0,0,.12)} header{border-bottom:3px solid #4f46e5;padding-bottom:16px;margin-bottom:8px} .brand{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#4f46e5} .type{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.1em;margin-top:2px} h1{font-size:24px;margin:10px 0 2px} .loc{color:#555;font-size:14px} .meta{color:#999;font-size:11px;margin-top:8px} h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#4f46e5;border-bottom:1px solid #eee;padding-bottom:5px;margin:26px 0 10px} table.kv{width:100%;border-collapse:collapse} table.kv td{padding:6px 0;vertical-align:top;border-bottom:1px solid #f0f0f0;font-size:13px} td.k{color:#777;width:200px} td.v{color:#1a1a1a;font-weight:500} table.hist{width:100%;border-collapse:collapse;font-size:12.5px} table.hist th{text-align:left;color:#777;font-weight:600;border-bottom:2px solid #eee;padding:6px 8px 6px 0} table.hist td{padding:6px 8px 6px 0;border-bottom:1px solid #f2f2f2} footer{margin-top:32px;padding-top:14px;border-top:1px solid #eee;color:#999;font-size:10.5px} @media print{body{background:#fff}.doc{box-shadow:none;margin:0;max-width:none}}`;
+  return `<!doctype html><html><head><meta charset='utf-8'><title>${E(addr)} - Property Dossier</title><style>${css}</style></head><body><div class='doc'><header><div class='brand'>Team Briggs &middot; Northmarq</div><div class='type'>Property Dossier</div><h1>${E(addr)}</h1>${loc?`<div class='loc'>${E(loc)}</div>`:''}<div class='meta'>${domLabel} &middot; Generated ${E(gen)} &middot; Life Command Center</div></header>${s}<footer>Generated by the Life Command Center from the LCC data spine. Verify against source documents before external distribution.</footer></div></body></html>`;
+}
+window._udBuildPropertyDossierHTML = _udBuildPropertyDossierHTML;
+
+function _udOpenPropertyDossier(btn){
+  try{
+    const html = _udBuildPropertyDossierHTML(_udCache);
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if(!w && typeof showToast==='function') showToast('Popup blocked - allow popups to view the dossier', 'error');
+    setTimeout(function(){ try{ URL.revokeObjectURL(url); }catch(_e){} }, 120000);
+  }catch(e){
+    if(typeof showToast==='function') showToast('Could not build dossier', 'error');
+    console.warn('dossier build failed', e);
+  }
+}
+window._udOpenPropertyDossier = _udOpenPropertyDossier;
 
 async function _udRenderActivityLogAsync(bodyEl) {
   if (!bodyEl) return;
