@@ -8929,8 +8929,8 @@ async function _udRenderActivityLogAsync(bodyEl) {
   const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
   const db = _udCache.db;
   const own = _udCache.ownership || {};
-  const sfAccountId = own.sf_account_id || own.sf_company_id || null;
-  const sfContactId = own.sf_contact_id || own.salesforce_id || null;
+  // (sf account/contact ids no longer read here — SF call/email/task activity moved
+  //  to the contact page; the property Activity Log is property-data history only.)
   const qFn = db === 'gov' ? govQuery : diaQuery;
 
   const events = [];
@@ -8989,38 +8989,12 @@ async function _udRenderActivityLogAsync(bodyEl) {
     });
   });
 
-  // 3. SF activity feed (tasks, events, emails, calls)
-  try {
-    let actRes = [];
-    if (sfAccountId) {
-      actRes = await qFn('v_sf_activity_feed', '*', { filter: 'sf_account_id=eq.' + encodeURIComponent(sfAccountId), order: 'activity_date.desc', limit: 200 });
-    } else if (sfContactId) {
-      actRes = await qFn('v_sf_activity_feed', '*', { filter: 'sf_contact_id=eq.' + encodeURIComponent(sfContactId), order: 'activity_date.desc', limit: 200 });
-    }
-    // Fallback: search by entity name if no SF IDs matched
-    if ((!sfAccountId && !sfContactId) || (Array.isArray(actRes) ? actRes : (actRes && actRes.data) || []).length === 0) {
-      const ownerName = own.recorded_owner_name || own.true_owner_name || own.owner_name || null;
-      if (ownerName) {
-        actRes = await qFn('v_sf_activity_feed', '*', { filter: 'account_name=ilike.*' + encodeURIComponent(ownerName) + '*', order: 'activity_date.desc', limit: 200 });
-      }
-    }
-    const sfAll = Array.isArray(actRes) ? actRes : (actRes && actRes.data) || [];
-    sfAll.forEach(a => {
-      const feedType = (a.feed_type || a.activity_type || '').toLowerCase();
-      let color = 'var(--accent)';
-      if (feedType.includes('call')) color = 'var(--green)';
-      else if (feedType.includes('email')) color = '#3b82f6';
-      else if (feedType.includes('task')) color = 'var(--yellow)';
-      events.push({
-        kind: 'sf_' + (feedType || 'activity'),
-        date: a.activity_date,
-        title: a.subject || a.activity_type || 'Activity',
-        detail: [a.feed_type, a.status, a.contact_name && 'Contact ' + a.contact_name, a.assigned_to && 'Owner ' + a.assigned_to].filter(Boolean).join(' · '),
-        notes: a.notes || null,
-        color
-      });
-    });
-  } catch (e) { console.warn('Activity Log: SF feed load failed', e); }
+  // 3. (Removed 2026-07-31, Scott) SF activity feed — calls / emails / tasks are
+  //    CONTACT activity and belong on the contact page (the entity panel's
+  //    Activity tab), NOT the property's data history. The property Activity Log
+  //    is now the history OF THE DATA about the property (transactions, ownership,
+  //    leases, CMS, ingestion), not call history with a contact.
+
 
   // 4. Lease amendments (v_lease_extensions_summary)
   try {
@@ -9087,6 +9061,9 @@ async function _udRenderActivityLogAsync(bodyEl) {
           // (same source_type='sale'/'listing' would double up).
           const srcType = (it.source_type || it.type || '').toLowerCase();
           if (srcType === 'sale' || srcType === 'listing') return;
+          // Contact activity (calls / emails / meetings) belongs on the CONTACT
+          // page, not the property's data history — drop it here (Scott, 2026-07-31).
+          if (/(call|email|meeting|voicemail|\bvm\b|text|sms|outreach|touch)/.test(srcType)) return;
 
           const colorMap = {
             intake_om:        'var(--accent)',
@@ -9149,9 +9126,10 @@ async function _udRenderActivityLogAsync(bodyEl) {
 function _udRenderActivityLog(events) {
   let html = '<div class="detail-section">';
   html += '<div class="detail-section-title">Activity Log <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">' + events.length + ' events</span></div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin:-4px 0 8px">History of the property’s data — transactions, ownership, leases, CMS &amp; ingestion. Calls &amp; contact activity live on the contact page.</div>';
 
   if (events.length === 0) {
-    html += '<div class="detail-empty">No activity on record. As you log calls, send emails, list the property, or record ownership changes, they will appear here.</div>';
+    html += '<div class="detail-empty">No property data history on record yet. Transactions, ownership transfers, lease amendments, CMS surveys, and OM intake will appear here as they are recorded.</div>';
     html += '</div>';
     return html;
   }
