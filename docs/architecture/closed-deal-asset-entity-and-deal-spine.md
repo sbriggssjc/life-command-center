@@ -93,3 +93,24 @@ record: dialysis property 35724 (20931 Burbank Blvd, Woodland Hills — the Fres
    superseded lease row (id 17096), not the live lease (id 25390) — carry it forward; and confirm the escalated
    rent-at-sale so the 6.46% recorded cap reconciles against the $943,794 base (base-implied 6.00%).
 ```
+
+---
+
+## CORRECTION (2026-08-01) — this record already HAS an entity
+
+Verification after Claude Code's feedback: property **35724 already has an asset entity**,
+`d118b3a1-ec3b-4e44-aca8-5f76c754ae7a` ("Woodland Hills"), **bridged** via `external_identities (dia, asset,
+35724)` (bridge_source intake_promoter). The earlier "no asset entity" premise was wrong — `get_property_context`
+returned null only because it resolves by **address** and the entity is named "Woodland Hills", not the street
+address (a **resolver gap**). The entity's spine already holds **4 `activity_events`** (correspondence); cadence
+is 0 (expected for a closed deal).
+
+`a0feab2e` ("Fresenius Woodland Hills") is a **different** property (29882, 19836 Ventura Blvd) — not a
+duplicate.
+
+So for 35724 the real gaps are: **(1)** the Salesforce deal link (`sales_transactions.sf_deal_id` is null),
+which also fills **(2)** the null parties (seller/buyer/brokers); **(3)** resolve assets by the
+`(dia, asset, property_id)` identity, not address alone; **(4)** carry the "2.5% annually" escalation from the
+superseded lease (17096) onto the live lease (25390). The reusable `ensureAssetEntityForProperty()` above is
+still the right pattern for **future** closes that genuinely lack an entity — it is a no-op (returns the
+existing entity) here. See `DOSSIER-PROGRAM-STATE-OF-PLAY.md` for the consolidated status.

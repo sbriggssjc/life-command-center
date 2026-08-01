@@ -36,7 +36,7 @@ footer{margin-top:32px;padding-top:14px;border-top:1px solid #eee;color:#999;fon
   <div class="type">Deal Dossier</div>
   <h1>Fresenius Kidney Care &mdash; Woodland Hills <span class="stage">Closed</span></h1>
   <div class="loc">20931 Burbank Blvd, Ste A, Woodland Hills, CA 91367 &middot; Los Angeles County &middot; Single-tenant dialysis (net lease)</div>
-  <div class="meta">Northmarq sell-side &middot; Point person: Scott Briggs &middot; Generated August 1, 2026 &middot; Life Command Center &middot; property 35724</div>
+  <div class="meta">Northmarq sell-side &middot; Point person: Scott Briggs &middot; Generated August 1, 2026 &middot; Life Command Center &middot; property 35724 &middot; asset entity d118b3a1</div>
 </header>
 
 <div class="hero">
@@ -71,7 +71,7 @@ footer{margin-top:32px;padding-top:14px;border-top:1px solid #eee;color:#999;fon
 <table class="kv">
   <tr><td class="k">Tenant</td><td class="v">Bio-Medical Applications of Delaware, Inc. <span class="src">dba Fresenius Kidney Care Woodland Hills &middot; lease id 25390</span></td></tr>
   <tr><td class="k">Guarantor</td><td class="v"><b>Fresenius Medical Care Holdings, Inc.</b> <span class="src">&middot; corporate guaranty</span></td></tr>
-  <tr><td class="k">Base rent</td><td class="v">$943,794 &nbsp;&middot;&nbsp; $44.77/SF <span class="src">&middot; documented</span></td></tr>
+  <tr><td class="k">Base rent</td><td class="v">$943,794 &nbsp;&middot;&nbsp; $44.77/SF <span class="src">&middot; documented; as-of lease start 2018 base</span></td></tr>
   <tr><td class="k">Lease term</td><td class="v">Aug 18, 2022 &ndash; Aug 31, 2038</td></tr>
   <tr><td class="k">Expense structure</td><td class="v">NN (double-net)</td></tr>
   <tr><td class="k">Escalations</td><td class="v">&ldquo;2.5% annually&rdquo; <span class="src">&middot; from prior lease record; <b>not carried onto the current lease row</b> &mdash; needs reconciliation</span></td></tr>
@@ -100,16 +100,23 @@ footer{margin-top:32px;padding-top:14px;border-top:1px solid #eee;color:#999;fon
 </table>
 
 <h2>Deal Spine (correspondence · offers · cadence · ROE)</h2>
-<div class="gap"><b>Not yet wired &mdash; the primary deal-side gap.</b> There is <b>no LCC asset entity</b> for this
-property yet (the property resolves only via the dialysis-domain fallback). Because the deal spine hangs off
-the asset entity, the <b>correspondence timeline, offers/LOIs, touchpoint cadence, and rules-of-engagement</b>
-are all unavailable for this record. Creating the asset entity and linking the Salesforce deal is the priority
-follow-up so future deal dossiers assemble the full spine automatically.</div>
+<table class="kv">
+  <tr><td class="k">Asset entity</td><td class="v">d118b3a1 (&ldquo;Woodland Hills&rdquo;) <span class="src">&middot; bridged via external_identities (dia, asset, 35724)</span></td></tr>
+  <tr><td class="k">Correspondence</td><td class="v">4 activity events on file <span class="src">&middot; activity_events for the entity</span></td></tr>
+  <tr><td class="k">Touchpoint cadence</td><td class="v">None <span class="src">&middot; expected for a closed deal (no forward cadence)</span></td></tr>
+  <tr><td class="k">Offers / LOIs</td><td class="v"><span class="na">Not on file</span> <span class="src">&middot; captured as activity_events; none recorded for this deal</span></td></tr>
+  <tr><td class="k">Rules of engagement</td><td class="v"><span class="na">Not on file</span> <span class="src">&middot; from the owner entity role/override</span></td></tr>
+</table>
+<div class="conflict"><b>Real gap = the Salesforce deal link, not the entity.</b> The asset entity exists and is
+bridged (correcting an earlier assumption). What is missing is the Salesforce deal linkage
+(`sales_transactions.sf_deal_id` is null) and the deal <b>parties</b> (seller, buyer, brokers) &mdash; linking the
+SF deal populates both. Note: the address resolver missed this entity because it is named &ldquo;Woodland
+Hills,&rdquo; not the street address &mdash; resolve assets by the property-id identity, not address alone.</div>
 
 <h2>Documents on File</h2>
 <table class="kv">
   <tr><td class="k">Salesforce comp record</td><td class="v">On file <span class="src">&middot; source of the close</span></td></tr>
-  <tr><td class="k">OM / PSA / closing docs</td><td class="v"><span class="na">Not linked</span> <span class="src">&middot; no asset entity to attach to; link via the documents-reconciliation workstream + SF file discovery</span></td></tr>
+  <tr><td class="k">OM / PSA / closing docs</td><td class="v"><span class="na">Not linked</span> <span class="src">&middot; attach to entity d118b3a1 via the documents-reconciliation workstream + SF file discovery</span></td></tr>
 </table>
 
 <div class="analysis">
@@ -125,6 +132,6 @@ follow-up so future deal dossiers assemble the full spine automatically.</div>
 (sales_transactions, leases, properties, census_zcta_demographics); figures are for internal BD use and must be
 verified against source documents before external distribution. &ldquo;Not on file&rdquo; = absent from the
 reconciled record; &ldquo;Derived&rdquo; = computed from stated facts with inputs shown; conflicts are surfaced,
-never silently resolved. This deal's spine (parties, correspondence, offers, ROE) is pending creation of its
-LCC asset entity.</footer>
+never silently resolved. This deal's asset entity (d118b3a1) exists and is bridged; its parties fill once the
+Salesforce deal is linked.</footer>
 </div></body></html>
