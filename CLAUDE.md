@@ -258,6 +258,16 @@ Feature-flagged (`OCR_CLOUD_*`, `OPENAI_API_KEY`); unset ⇒ honest `needs_ocr`.
   path — reconciles portfolio/identities/relationships/cadence), `lcc_normalize_entity_name`,
   `ensureEntityLink` (the R4-A choke point: junk/implausible/federal guards + email-resolution tier +
   SF-account-as-org-edge modeling).
+- **Deal spine (living deal dossier, prompt 02/06):** `bd_opportunities` is the deal container;
+  `entity_relationships` (effective_from/to + `metadata->>'role'`) is the party role-history store. Added
+  `lcc_deal_commission` / `lcc_deal_milestone` / `lcc_deal_diligence` / `lcc_deal_correspondence_summary` /
+  `lcc_deal_document` / `lcc_deal_conflict` (`20260820120000_lcc_deal_spine.sql`). Read via
+  `lcc_deal_spine(entity)` + `lcc_deal_parties(entity)`; assembled into the tagged deal packet by
+  `entities-handler.js::buildDealPacket` and rendered by `dossier-generator.js::renderDealSections`.
+  Discipline: SF/Outlook/Sharefile are authoritative for parties/commission/narrative; a CoStar-sourced
+  broker edge is `third_party`/"unverified role" until our systems confirm; conflicts go to
+  `lcc_deal_conflict` (surfaced, never auto-resolved); absent → "Not on file". SF Opportunity resolve/
+  `sf_deal_id` stamp + Outlook thread + Sharefile roster fill are gated on those live connectors.
 - **Ownership Resolution Engine (ORE):** multi-signal authority-weighted reconciliation
   (`lcc_reconcile_owner`, `lcc_signal_authority`, `lcc_reconcile_config.match_threshold`), owner-address
   observations store (append-only, never-collapse), SOS/deed/institution-registry enrichment. Full design:
