@@ -34,3 +34,9 @@ Read-only reconciliation of the v2 gold-standard dossier design for 5247 Airways
 - Dialysis migration added `v_clinic_relocation_lineage`, `dia_nearby_dialysis_competition(lat,lng,radius,limit,exclude_ccn)`, and an idempotent 442740 `clinic_history_unified` lineage marker. The marker records the known 2003-02-01 operator prior certification and 2017-10-27 facility certification while keeping prior address/chairs/distance null (`Not on file`).
 - LCC dossier packet now reads relocation lineage plus nearby dialysis competition within 5 miles of the property geocode, including operator, stations, patients, and rent/SF where a lease row supports it.
 - Dossier renderer now includes an Operations relocation row and a Market Competition table. Missing prior site or competitor rent renders `Not on file`; rent/SF derived from annual rent/building size is labeled by the SQL `rent_source`.
+
+## 2026-08-01 Prompt 07 Backlog Index Reconciliation
+- Objective: reconcile the P0-P3 follow-up index and tell Cowork which backlog items can close.
+- Close prompts 0-6. Prompt 5 is closed through prompt 04 loan propagation plus `DOSSIER_DEBT_GRAPH_FIX_WORKLOG.md`; prompt 6 wiring is closed because the documents endpoint now aggregates intake, CRE property documents, and Salesforce files with reconciled status.
+- Keep prompt 7 open only for live Dialysis_DB migration apply credentials.
+- Keep prompt 8 open only for Census radius-demographics backfill after `CENSUS_API_KEY` is configured; map cache, Places callouts, ZIP fallback, payer mix, and rendering are implemented.
