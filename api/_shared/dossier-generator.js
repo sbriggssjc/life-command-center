@@ -120,6 +120,11 @@ function fmtMoney(v) {
   if (!Number.isFinite(n)) return esc(v);
   return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
+function fmtMoney2(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return esc(v);
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 function fmtNum(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return esc(v);
@@ -171,6 +176,17 @@ function kvRow(label, tag, fmt) {
   return `<tr><td class="k">${esc(label)}</td><td class="v">${renderTag(tag, fmt)}</td></tr>`;
 }
 
+function kvRowHtml(label, html) {
+  return `<tr><td class="k">${esc(label)}</td><td class="v">${html || NA}</td></tr>`;
+}
+
+function renderRentAndPsf(rentTag, psfTag) {
+  const rent = renderTag(rentTag, fmtMoney);
+  const psf = renderTag(psfTag, (v) => fmtMoney2(v) + '/SF');
+  if (rent === NA && psf === NA) return NA;
+  return `${rent} <span class="src">&middot;</span> ${psf}`;
+}
+
 // A section is emitted only when it has a title; rows are always emitted (missing
 // fields become "Not on file" so the reader sees the gap, per §1.8).
 function kvSection(title, rows) {
@@ -215,15 +231,14 @@ function renderPropertySections(p) {
   out.push(kvSection('Tenancy & Lease', [
     kvRow('Tenant', lease.tenant),
     lease.guarantor ? kvRow('Guarantor', lease.guarantor) : '',
-    kvRow('Year-1 base rent', lease.annual_base_rent, fmtMoney),
-    lease.year1_rent_psf ? kvRow('Year-1 base rent / SF', lease.year1_rent_psf, (v) => fmtMoney(v) + '/SF') : '',
-    lease.current_base_rent ? kvRow('Current (escalated) base rent', lease.current_base_rent, fmtMoney) : '',
-    lease.current_rent_psf ? kvRow('Current base rent / SF', lease.current_rent_psf, (v) => fmtMoney(v) + '/SF') : '',
+    kvRowHtml('Year-1 rent + $/SF', renderRentAndPsf(lease.annual_base_rent, lease.year1_rent_psf)),
+    kvRowHtml('Current rent + $/SF', renderRentAndPsf(lease.current_base_rent, lease.current_rent_psf)),
     kvRow('Lease term', lease.lease_term || renderTermTag(lease)),
     lease.term_remaining_years ? kvRow('Term remaining (years)', lease.term_remaining_years) : '',
     kvRow('Expense structure', lease.expense_structure),
     kvRow('Escalations', lease.escalations_text),
     kvRow('Renewal options', lease.renewal_options),
+    kvRow('Bumps continue through options?', lease.option_bumps_continue),
   ].filter(Boolean)));
 
   // 5. Operations (CMS / agency)

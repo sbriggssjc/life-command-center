@@ -3477,7 +3477,9 @@ function _udPickCurrentRent(property, lease, em, targetDate) {
   const leaseStart   = l.lease_start || e.lease_commencement || p.lease_commencement || null;
   const leasedSF     = l.leased_area != null ? Number(l.leased_area)
                      : (e.sf_leased != null ? Number(e.sf_leased)
-                     : (p.rba != null ? Number(p.rba) : null));
+                     : (p.rba != null ? Number(p.rba)
+                     : (p.building_size != null ? Number(p.building_size)
+                     : (p.building_sf != null ? Number(p.building_sf) : null))));
 
   // Tier 1/2/5/6: property.anchor_rent triplet — canonical cross-sale anchor.
   if (p.anchor_rent != null && p.anchor_rent_date && bumpPct != null && bumpInterval) {
@@ -3874,6 +3876,59 @@ function _udLeaseRowH(label, valueHtml, isEst) {
   </div>`;
 }
 
+function _udLeaseBuildingSf(lease, em) {
+  const p = _udCache?.property || {};
+  const sf = lease?.leased_area ?? lease?.leased_sf ?? em?.sf_leased ??
+             p.building_size ?? p.building_sf ?? p.rba ?? _udCache?.fallback?.building_sf;
+  const n = Number(sf);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function _udRentPsfTagHtml(rent, sf, label) {
+  const r = Number(rent);
+  const s = Number(sf);
+  if (!Number.isFinite(r) || !Number.isFinite(s) || s <= 0) return null;
+  const psf = Math.round((r / s) * 100) / 100;
+  return esc('$' + psf.toFixed(2) + '/SF') +
+    ` <span style="color:var(--purple,#a78bfa);font-size:11px;font-style:italic">Derived: ${esc(label)} $${Math.round(r).toLocaleString()} ÷ ${Math.round(s).toLocaleString()} SF</span>`;
+}
+
+function _udPickCurrentRentFromSchedule(lease, storedRows, em) {
+  if (!Array.isArray(storedRows) || storedRows.length === 0) return null;
+  const rows = _udBuildRentSchedule(lease, storedRows, em);
+  if (!rows.length) return null;
+  const now = new Date();
+  const current = rows.find(r => {
+    const s = r.period_start ? new Date(r.period_start) : null;
+    const e = r.period_end ? new Date(r.period_end) : null;
+    return s && !isNaN(s) && s <= now && (!e || isNaN(e) || now <= e);
+  }) || rows.filter(r => {
+    const s = r.period_start ? new Date(r.period_start) : null;
+    return s && !isNaN(s) && s <= now;
+  }).pop() || rows[0];
+  if (!current || current.base_rent == null) return null;
+  return {
+    rent: current.base_rent,
+    rent_psf: current.rent_psf,
+    source: 'lease_rent_schedule',
+    derived: `Derived: lease_rent_schedule ${current.period_start || ('Y' + (current.year || '?'))} as of ${now.toISOString().slice(0, 10)}`,
+  };
+}
+
+function _udOptionBumpsContinueRow(lease) {
+  const text = String(lease?.option_bumps_continue_text || lease?.option_rent_escalations ||
+    lease?.renewal_option_text || lease?.renewal_options || '').trim();
+  if (!text) return { html: esc('Not on file'), est: false };
+  if (/\b(same|continue|continuing)\b.{0,80}\b(escalation|increase|rent bump|bump)\b/i.test(text) ||
+      /\b(escalation|increase|rent bump|bump)\b.{0,80}\b(same|continue|continuing)\b/i.test(text)) {
+    return { html: esc('Yes') + ` <span style="color:var(--text3);font-size:11px">(source: renewal terms)</span>`, est: false };
+  }
+  if (/\b(fmv|fair market|market rent|then market|negotiated)\b/i.test(text)) {
+    return { html: esc('No / reset to market') + ` <span style="color:var(--text3);font-size:11px">(source: renewal terms)</span>`, est: false };
+  }
+  return { html: esc('Not on file'), est: false };
+}
+
 function _udTabLease() {
   const leases = _udCache.leases || [];
   const em = _udCache.entityMeta || {};
@@ -3978,13 +4033,45 @@ function _udTabLease() {
       ? { html: esc(l.data_source), est: false }
       : (estimatesOnly ? { html: esc('costar_estimate'), est: true } : { html: null, est: false });
 
+    const buildingSf = _udLeaseBuildingSf(l, em);
+    const year1Rent = l.annual_rent != null ? Number(l.annual_rent)
+                    : (em.annual_rent != null ? Number(em.annual_rent) : null);
+    let year1PsfHtml = null;
+    const storedYear1Psf = l.rent_psf ?? l.rent_per_sf ?? em.rent_per_sf;
+    if (storedYear1Psf != null && storedYear1Psf !== '') {
+      const psf = Number(storedYear1Psf);
+      year1PsfHtml = Number.isFinite(psf) ? esc('$' + psf.toFixed(2) + '/SF') : esc(String(storedYear1Psf));
+    } else if (year1Rent != null && buildingSf) {
+      year1PsfHtml = _udRentPsfTagHtml(year1Rent, buildingSf, 'year-1 rent');
+    }
+    const year1RentRow = year1Rent != null
+      ? {
+          html: esc(fmt(year1Rent)) + (year1PsfHtml ? ` <span style="color:var(--text3)">·</span> ${year1PsfHtml}` : ''),
+          est: !(l.annual_rent != null),
+        }
+      : { html: esc('Not on file'), est: false };
+
+    const storedRows = schedMap?.get(l.lease_id) || null;
+    const scheduledCurrent = _udPickCurrentRentFromSchedule(l, storedRows, em);
+    const projectedCurrent = scheduledCurrent || _udPickCurrentRent(_udCache?.property || {}, l, em);
+    const currentRentRow = projectedCurrent && projectedCurrent.rent != null
+      ? {
+          html: esc(fmt(projectedCurrent.rent)) +
+            (projectedCurrent.rent_psf != null
+              ? ` <span style="color:var(--text3)">·</span> ${esc('$' + Number(projectedCurrent.rent_psf).toFixed(2) + '/SF')}`
+              : (buildingSf ? ` <span style="color:var(--text3)">·</span> ${_udRentPsfTagHtml(projectedCurrent.rent, buildingSf, 'current rent')}` : '')) +
+            ` <span style="color:var(--purple,#a78bfa);font-size:11px;font-style:italic">${esc(projectedCurrent.derived || `Derived: ${projectedCurrent.source || 'anchor rent'}; bumps applied ${projectedCurrent.bumps_applied ?? 0}`)}</span>`,
+          est: false,
+        }
+      : { html: esc('Not on file'), est: false };
+
     const leaseSections = [
       { label: 'Tenant',            row: pick(l.tenant, em.tenant_name) },
       { label: 'Commencement',      row: pick(l.lease_start, em.lease_commencement, dateFmt) },
       { label: 'Expiration',        row: pick(l.lease_expiration, em.lease_expiration, dateFmt) },
       { label: 'Term Remaining',    row: termRow },
-      { label: 'Annual Rent',       row: pick(l.annual_rent, em.annual_rent, moneyFmt) },
-      { label: 'Rent PSF',          row: pick(l.rent_psf, em.rent_per_sf, moneyFmt) },
+      { label: 'Year-1 rent + $/SF', row: year1RentRow },
+      { label: 'Current rent + $/SF', row: currentRentRow },
       { label: 'Expense Structure', row: (function() {
         const base = pick(l.expense_structure, em.expense_structure);
         if (!base.html) return base;
@@ -3997,6 +4084,7 @@ function _udTabLease() {
         return base;
       })() },
       { label: 'Renewal Options',   row: pick(l.renewal_options, em.renewal_options) },
+      { label: 'Bumps continue through options?', row: _udOptionBumpsContinueRow(l) },
       { label: 'Guarantor',         row: pick(l.guarantor, em.guarantor) },
       { label: 'Escalations',       row: esc_row },
       { label: 'Data Source',       row: dataSourceRow },

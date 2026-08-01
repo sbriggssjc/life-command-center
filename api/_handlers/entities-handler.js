@@ -21,6 +21,7 @@ import { opsQuery, paginationParams, requireOps, withErrorHandler, fetchWithTime
 import { resolveArtifactDownload, uploadDocToFolder } from '../_shared/storage-adapter.js';
 import { assemblePropertyPacket } from '../operations.js';
 import { generateDossier, recordDossier } from '../_shared/dossier-generator.js';
+import { projectRentAtDate } from '../_shared/rent-projection.js';
 import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain } from '../_shared/entity-link.js';
@@ -79,6 +80,105 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function moneyInput(v) {
+  const n = num(v);
+  return n == null ? 'null' : '$' + Math.round(n).toLocaleString('en-US');
+}
+
+function pctInput(v) {
+  const n = num(v);
+  if (n == null) return 'null';
+  return (n * 100).toFixed(n * 100 >= 10 ? 0 : 2).replace(/\.?0+$/, '') + '%';
+}
+
+function roundMoney(v) {
+  const n = num(v);
+  return n == null ? null : Math.round(n * 100) / 100;
+}
+
+function rentPsfTag(rent, buildingSf, label) {
+  const r = num(rent);
+  const sf = num(buildingSf);
+  if (r == null || !(sf > 0)) return undefined;
+  return { v: Math.round((r / sf) * 100) / 100, derived: `${label} ${moneyInput(r)} ÷ building ${sf.toLocaleString('en-US')} SF` };
+}
+
+function pickCurrentScheduleRow(rows, asOfDate) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const asOf = new Date(`${asOfDate}T00:00:00Z`);
+  if (Number.isNaN(asOf.getTime())) return null;
+  const sorted = rows.slice().sort((a, b) => String(a.period_start || '').localeCompare(String(b.period_start || '')));
+  const inPeriod = sorted.find(r => {
+    const s = r.period_start ? new Date(`${String(r.period_start).slice(0, 10)}T00:00:00Z`) : null;
+    const e = r.period_end ? new Date(`${String(r.period_end).slice(0, 10)}T00:00:00Z`) : null;
+    return s && !Number.isNaN(s.getTime()) && s <= asOf && (!e || Number.isNaN(e.getTime()) || asOf <= e);
+  });
+  if (inPeriod) return inPeriod;
+  let prior = null;
+  for (const r of sorted) {
+    const s = r.period_start ? new Date(`${String(r.period_start).slice(0, 10)}T00:00:00Z`) : null;
+    if (s && !Number.isNaN(s.getTime()) && s <= asOf) prior = r;
+  }
+  return prior || sorted[0] || null;
+}
+
+function deriveCurrentRent({ lease, prop, scheduleRows, buildingSf, asOfDate }) {
+  const asOf = asOfDate || new Date().toISOString().slice(0, 10);
+  const scheduleRow = pickCurrentScheduleRow(scheduleRows, asOf);
+  if (scheduleRow) {
+    const rent = roundMoney(scheduleRow.base_rent ?? scheduleRow.annual_rent ?? scheduleRow.rent_amount);
+    if (rent != null) {
+      return {
+        rent: { v: rent, derived: `lease_rent_schedule ${scheduleRow.period_start || `year ${scheduleRow.lease_year || '?'}`} as of ${asOf}` },
+        psf: rentPsfTag(rent, buildingSf, 'current scheduled rent'),
+      };
+    }
+  }
+
+  const anchorRent = num((prop && prop.anchor_rent) ?? (lease && (lease.annual_rent ?? lease.rent)));
+  const anchorDate = (prop && prop.anchor_rent_date) || (lease && lease.lease_start) || (prop && prop.lease_commencement);
+  const leaseStart = (lease && lease.lease_start) || (prop && prop.lease_commencement) || anchorDate;
+  const bumpPct = num((prop && prop.lease_bump_pct) ?? (lease && lease.lease_bump_pct));
+  const bumpInterval = num((prop && prop.lease_bump_interval_mo) ?? (lease && lease.lease_bump_interval_mo));
+  if (anchorRent == null || !anchorDate || bumpPct == null || !(bumpInterval > 0)) return null;
+
+  try {
+    const projected = projectRentAtDate({
+      anchorRent,
+      anchorDate,
+      targetDate: asOf,
+      bumpPct,
+      bumpIntervalMonths: bumpInterval,
+      leaseCommencement: leaseStart,
+    });
+    const rent = roundMoney(projected.projected_rent);
+    const bumps = projected.bumps_applied;
+    const intervalYears = Math.round((bumpInterval / 12) * 10) / 10;
+    const derived = `anchor rent ${moneyInput(anchorRent)} as of ${String(anchorDate).slice(0, 10)} × (1 + ${pctInput(bumpPct)})^${bumps}; ${bumpInterval} mo (${intervalYears} yr) interval; as-of ${asOf}`;
+    return {
+      rent: { v: rent, derived },
+      psf: rentPsfTag(rent, buildingSf, 'current rent'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function optionBumpsContinueTag(lease) {
+  const text = String(
+    (lease && (lease.option_bumps_continue_text || lease.option_rent_escalations || lease.renewal_option_text || lease.renewal_options)) || ''
+  ).trim();
+  if (!text) return undefined;
+  if (/\b(same|continue|continuing)\b.{0,80}\b(escalation|increase|rent bump|bump)\b/i.test(text) ||
+      /\b(escalation|increase|rent bump|bump)\b.{0,80}\b(same|continue|continuing)\b/i.test(text)) {
+    return { v: 'Yes', source: 'lease renewal terms', confidence: text.slice(0, 180) };
+  }
+  if (/\b(fmv|fair market|market rent|then market|negotiated)\b/i.test(text)) {
+    return { v: 'No / reset to market', source: 'lease renewal terms', confidence: text.slice(0, 180) };
+  }
+  return undefined;
+}
+
 // Resolve the linked domain (dia/gov) + external property id from an entity's
 // identities. Returns { domain, externalId } or nulls.
 function resolveDomainLink(identities) {
@@ -109,7 +209,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
 
   // Live lease (superseded_at NULL), primary CMS clinic, patient-count series,
   // demographics, ZIP census, payer mix — each degrades independently.
-  let lease = null, clinic = null, fpc = [], demos = [], zcta = null, payer = null;
+  let lease = null, clinic = null, fpc = [], demos = [], zcta = null, payer = null, leaseScheduleRows = [];
   let sales = [], listings = [];
   if (domain && pid) {
     const calls = [
@@ -132,6 +232,12 @@ async function buildPropertyPacket(entityId, workspaceId) {
       clinic = r[3]?.ok ? (r[3].data?.[0] || null) : null;
       fpc = r[4]?.ok ? (r[4].data || []) : [];
       demos = r[5]?.ok ? (r[5].data || []) : [];
+    }
+    if (lease?.lease_id) {
+      const sched = await domainQuery(domain, 'GET',
+        `lease_rent_schedule?lease_id=eq.${encodeURIComponent(lease.lease_id)}` +
+        `&order=lease_year.asc&limit=100`).catch(() => null);
+      leaseScheduleRows = sched?.ok && Array.isArray(sched.data) ? sched.data : [];
     }
   }
 
@@ -180,20 +286,30 @@ async function buildPropertyPacket(entityId, workspaceId) {
 
   // --- Tenancy & lease --------------------------------------------------------
   const annualRent = lease ? num(lease.annual_rent != null ? lease.annual_rent : lease.rent) : num(prop.anchor_rent);
-  const rentPsf = (annualRent != null && buildingSf)
-    ? { v: Math.round((annualRent / buildingSf) * 100) / 100, derived: `rent ${annualRent} ÷ ${buildingSf} SF` }
-    : (lease && lease.rent_per_sf != null ? tag(num(lease.rent_per_sf), 'leases') : undefined);
+  const year1RentPsf = (lease && lease.rent_per_sf != null)
+    ? tag(num(lease.rent_per_sf), 'leases')
+    : rentPsfTag(annualRent, buildingSf, 'year-1 rent');
+  const currentRent = deriveCurrentRent({
+    lease,
+    prop,
+    scheduleRows: leaseScheduleRows,
+    buildingSf,
+    asOfDate: new Date().toISOString().slice(0, 10),
+  });
   const tenancy_lease = {
     tenant: tag((lease && lease.tenant) || prop.tenant, lease ? 'leases' : 'properties'),
     guarantor: tag(lease && lease.guarantor, 'leases'),
     annual_base_rent: tag(annualRent, lease ? 'lease (documented)' : 'properties',
       lease && lease.lease_start ? { as_of: lease.lease_start } : {}),
-    year1_rent_psf: rentPsf,
+    year1_rent_psf: year1RentPsf,
+    current_base_rent: currentRent?.rent,
+    current_rent_psf: currentRent?.psf,
     lease_start: tag(lease && lease.lease_start, 'leases'),
     lease_expiration: tag(lease && lease.lease_expiration, 'leases'),
     expense_structure: tag(lease && (lease.expense_structure_canonical || lease.expense_structure), 'leases'),
     escalations_text: tag(lease && (lease.escalation_raw_text_current || lease.renewal_option_text), 'leases'),
     renewal_options: tag(lease && lease.renewal_options, 'leases'),
+    option_bumps_continue: optionBumpsContinueTag(lease),
   };
   // Derived term remaining (years) — every input present.
   if (lease && lease.lease_expiration) {

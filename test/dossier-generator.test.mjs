@@ -65,6 +65,10 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
     tenancy_lease: {
       tenant: { v: 'DaVita Dialysis', source: 'leases' },
       annual_base_rent: { v: 181959, source: 'lease (documented)', as_of: '2018-06-06' },
+      year1_rent_psf: { v: 28.85, derived: 'year-1 rent $181,959 ÷ building 6,308 SF' },
+      current_base_rent: { v: 200154.9, derived: 'anchor rent $181,959 as of 2018-06-06 × (1 + 10%)^1; 60 mo interval; as-of 2026-08-01' },
+      current_rent_psf: { v: 31.73, derived: 'current rent $200,155 ÷ building 6,308 SF' },
+      term_remaining_years: { v: '~6.8', derived: 'to 2033-06-06 from today (firm; excludes options)' },
     },
     operations: {
       stations: { v: 13, source: 'CMS (medicare_clinics)' },
@@ -78,6 +82,11 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
   assert.match(out.html, /<!doctype html>/i);
   assert.match(out.html, /Kingsbarn Realty/);
   assert.match(out.html, /the operator, not the owner/);      // owner ≠ operator
+  assert.match(out.html, /Year-1 rent \+ \$\/SF/);
+  assert.match(out.html, /Current rent \+ \$\/SF/);
+  assert.match(out.html, /200,155/);
+  assert.match(out.html, /31\.73/);
+  assert.match(out.html, /Term remaining \(years\)/);
   assert.match(out.html, /Not on file/);                       // land_acres omitted
   assert.match(out.html, /Conflict/);                          // stations conflict surfaced
   assert.match(out.html, /Derived: value 3137221/);            // price/SF labeled derived
