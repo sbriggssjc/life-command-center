@@ -15,7 +15,7 @@ Status best-known as of 2026-08-01 (confirm + tell Cowork which to close):
 - Prompt 4 — lease abstract (guarantor/responsibilities) for 23654: **open**
 - Prompt 5 — loan feeder + finances suppression: **superseded by prompt 04** (loan propagation)
 - Prompt 6 — documents reconciliation (SharePoint + Salesforce): **open**
-- Prompt 7 — relocation lineage + market competition: **open**
+- Prompt 7 — relocation lineage + market competition: **implemented; DB apply pending credentials**
 - Prompt 8 — Location & Trade Area (Google Static Maps + demographics backfill): **open**
 
 Cowork will migrate any still-open item into its own `prompts/NN-*.md` on request or as it becomes the active
@@ -41,3 +41,13 @@ piece of work.
   added leases.guaranty_scope; dossier renders Tenant + Guarantor distinct + guaranty scope + expense-structure
   prose. Response in `done/07-followup4-lease-abstract.response.docx`. NOTE: this updates the 5247 Airways
   dossier facts (guarantor + responsibilities were previously "Not on file").
+
+## Update 2026-08-01: followup prompt 7 implemented, live apply pending
+- Prompt 7 (relocation lineage + market competition): **implemented in LCC + dialysis migration** — added an
+  idempotent 442740 lineage backfill migration, `v_clinic_relocation_lineage`, and
+  `dia_nearby_dialysis_competition(lat,lng,radius,limit,exclude_ccn)` returning nearby CCNs with operator,
+  stations, patients, and lease-backed rent/SF. Dossier packet/render now shows relocation lineage and Market
+  Competition with missing fields as `Not on file`.
+- Live DB apply is pending: Supabase CLI has no access token in this environment, and the configured DIA key was
+  rejected for direct PostgREST writes. Apply `supabase/migrations/dialysis/20260801190000_dia_dossier_relocation_competition.sql`
+  with proper Supabase migration credentials to activate the SQL view/RPC and row backfill.

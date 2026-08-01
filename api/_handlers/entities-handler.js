@@ -413,6 +413,15 @@ function capTag(...vals) {
   return undefined;
 }
 
+function milesTag(v, source, extra = {}) {
+  const n = num(v);
+  return n == null ? undefined : { v: Math.round(n * 10) / 10, source, ...extra };
+}
+
+function dateTag(v, source, extra = {}) {
+  return v ? tag(String(v).slice(0, 10), source, extra) : undefined;
+}
+
 function listingDate(row) {
   return row?.on_market_date || row?.listing_date || row?.created_at || null;
 }
@@ -632,6 +641,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
   // demographics, ZIP census, payer mix — each degrades independently.
   let lease = null, clinic = null, fpc = [], demos = [], zcta = null, payer = null, leaseScheduleRows = [];
   let sales = [], listings = [];
+  let relocationLineage = null, marketCompetition = [];
   if (domain && pid) {
     const calls = [
       domainQuery(domain, 'GET', `leases?property_id=eq.${pid}&superseded_at=is.null&order=is_active.desc.nullslast,lease_start.desc&limit=1`).catch(() => null),
@@ -672,6 +682,28 @@ async function buildPropertyPacket(entityId, workspaceId) {
     ]);
     zcta = follow[0]?.ok ? (follow[0].data?.[0] || null) : null;
     payer = follow[1]?.ok ? (follow[1].data?.[0] || null) : null;
+
+    const lat = num(prop.latitude);
+    const lng = num(prop.longitude);
+    const lineageAndCompetition = await Promise.all([
+      ccn ? domainQuery(domain, 'GET',
+        `v_clinic_relocation_lineage?medicare_id=eq.${encodeURIComponent(ccn)}&limit=1`).catch(() => null)
+        : Promise.resolve(null),
+      (lat != null && lng != null) ? domainQuery(domain, 'POST',
+        'rpc/dia_nearby_dialysis_competition',
+        {
+          p_latitude: lat,
+          p_longitude: lng,
+          p_radius_miles: 5,
+          p_limit: 15,
+          p_exclude_medicare_id: ccn,
+        }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    relocationLineage = lineageAndCompetition[0]?.ok ? (lineageAndCompetition[0].data?.[0] || null) : null;
+    marketCompetition = lineageAndCompetition[1]?.ok && Array.isArray(lineageAndCompetition[1].data)
+      ? lineageAndCompetition[1].data
+      : [];
   }
 
   // --- Ownership reconciliation: owner is NEVER the operator (§1.6) ------------
@@ -758,6 +790,35 @@ async function buildPropertyPacket(entityId, workspaceId) {
       patient_trend_latest: tag(trendPatients, 'facility_patient_counts', latestFpc && latestFpc.snapshot_date ? { as_of: latestFpc.snapshot_date } : {}),
       ttm_treatments: tag(clinic && num(clinic.ttm_total_treatments != null ? clinic.ttm_total_treatments : clinic.estimated_annual_treatments), 'CMS (medicare_clinics)'),
       certification_date: tag(clinic && (clinic.certification_date || clinic.latest_certification_date), 'CMS (medicare_clinics)'),
+      relocation: relocationLineage ? {
+        facility_certification_date: dateTag(relocationLineage.facility_certification_date || (clinic && clinic.certification_date), 'CMS (medicare_clinics)'),
+        original_certification_date: dateTag(relocationLineage.original_certification_date || prop.certification_date, 'clinic relocation lineage'),
+        prior_address: tag(relocationLineage.prior_address, 'clinic_history_unified'),
+        prior_city_state: tag([relocationLineage.prior_city, relocationLineage.prior_state].filter(Boolean).join(', '), 'clinic_history_unified'),
+        prior_stations: tag(num(relocationLineage.prior_stations), 'clinic_history_unified'),
+        current_address: tag(relocationLineage.current_address || prop.address, relocationLineage.current_address ? 'clinic_history_unified' : 'properties'),
+        current_stations: tag(num(relocationLineage.current_stations || (clinic && clinic.stations)), relocationLineage.current_stations ? 'clinic_history_unified / CMS' : 'CMS (medicare_clinics)'),
+        distance_miles: milesTag(relocationLineage.distance_miles, 'clinic_history_unified'),
+        lineage_status: tag(relocationLineage.lineage_status, 'clinic_history_unified'),
+      } : {
+        facility_certification_date: dateTag(clinic && clinic.certification_date, 'CMS (medicare_clinics)'),
+        original_certification_date: dateTag(prop.certification_date, 'properties'),
+      },
+      market_competition: marketCompetition.map(r => ({
+        medicare_id: r.medicare_id,
+        facility_name: r.facility_name || null,
+        address: r.address || null,
+        city: r.city || null,
+        state: r.state || null,
+        distance_miles: num(r.distance_miles),
+        operator: r.operator || null,
+        stations: num(r.stations),
+        patients: num(r.patients),
+        annual_rent: num(r.annual_rent),
+        rent_per_sf: num(r.rent_per_sf),
+        rent_source: r.rent_source || null,
+        lease_expiration: r.lease_expiration || null,
+      })),
       _conflicts: [],
     };
     // Surface the audited property-denorm vs CMS divergence rather than trusting either.

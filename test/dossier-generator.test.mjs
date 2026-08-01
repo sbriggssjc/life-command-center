@@ -78,6 +78,42 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
     },
     operations: {
       stations: { v: 13, source: 'CMS (medicare_clinics)' },
+      patient_count: { v: 33, source: 'CMS (medicare_clinics.latest_estimated_patients)' },
+      relocation: {
+        original_certification_date: { v: '2003-02-01', source: 'clinic relocation lineage' },
+        facility_certification_date: { v: '2017-10-27', source: 'CMS (medicare_clinics)' },
+        prior_address: undefined,
+        prior_stations: undefined,
+        current_stations: { v: 13, source: 'clinic_history_unified / CMS' },
+        distance_miles: undefined,
+      },
+      market_competition: [
+        {
+          medicare_id: '442735',
+          facility_name: 'FMC South Airways',
+          address: 'Not stated address',
+          city: 'Memphis',
+          state: 'TN',
+          distance_miles: 0.597,
+          operator: 'Fresenius',
+          stations: 16,
+          patients: 48,
+          rent_per_sf: null,
+        },
+        {
+          medicare_id: '442999',
+          facility_name: 'DaVita Comparable',
+          address: 'Nearby',
+          city: 'Memphis',
+          state: 'TN',
+          distance_miles: 2.1,
+          operator: 'DaVita',
+          stations: 14,
+          patients: 35,
+          rent_per_sf: 32.5,
+          rent_source: 'Derived: leases.annual_rent / properties.building_size',
+        },
+      ],
       _conflicts: [{ field: 'stations', values: [{ v: 13, source: 'CMS' }, { v: 171, source: 'properties denorm' }], reconciled: 13 }],
     },
     valuation: { model_estimate: { v: 3137221, source: 'LCC valuation model', confidence: 'low' } },
@@ -135,6 +171,16 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
   assert.match(out.html, /Term remaining \(years\)/);
   assert.match(out.html, /Not on file/);                       // land_acres omitted
   assert.match(out.html, /Conflict/);                          // stations conflict surfaced
+  assert.match(out.html, /Relocation lineage/);
+  assert.match(out.html, /Operator prior certification/);
+  assert.match(out.html, /2003-02-01/);
+  assert.match(out.html, /Current facility certification/);
+  assert.match(out.html, /2017-10-27/);
+  assert.match(out.html, /Stations: <span class="na">Not on file<\/span> → 13/);
+  assert.match(out.html, /Market Competition/);
+  assert.match(out.html, /FMC South Airways/);
+  assert.match(out.html, /DaVita Comparable/);
+  assert.match(out.html, /\$32\.50\/SF/);
   assert.match(out.html, /Derived: value 3137221/);            // price/SF labeled derived
   assert.match(out.html, /Transaction &amp; Marketing Timeline/);
   assert.match(out.html, /5\.40% stated \/ 5\.78% calc/);

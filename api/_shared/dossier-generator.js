@@ -227,6 +227,47 @@ function kvSection(title, rows) {
 // ---------------------------------------------------------------------------
 // FACT sections — deterministic, packet-driven (no LLM)
 // ---------------------------------------------------------------------------
+function renderRelocation(reloc) {
+  if (!reloc) return NA;
+  const priorAddr = renderTag(reloc.prior_address);
+  const priorStations = renderTag(reloc.prior_stations, fmtNum);
+  const currentStations = renderTag(reloc.current_stations, fmtNum);
+  const distance = renderTag(reloc.distance_miles, (v) => Number(v).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' mi');
+  const originalCert = renderTag(reloc.original_certification_date, fmtDate);
+  const facilityCert = renderTag(reloc.facility_certification_date, fmtDate);
+  return [
+    `Operator prior certification: ${originalCert}`,
+    `Current facility certification: ${facilityCert}`,
+    `Prior site: ${priorAddr}`,
+    `Stations: ${priorStations} → ${currentStations}`,
+    `Distance moved: ${distance}`,
+  ].join('<br>');
+}
+
+function renderMarketCompetition(rows) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return `<h2>Market Competition</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`;
+  }
+  const body = rows.map(r => {
+    const place = [r.address, [r.city, r.state].filter(Boolean).join(', ')].filter(Boolean)
+      .map(x => esc(x))
+      .join('<br>');
+    const rent = r.rent_per_sf != null
+      ? `${fmtMoney2(r.rent_per_sf)}/SF${r.rent_source ? ` <span class="src">&middot; ${esc(r.rent_source)}</span>` : ''}`
+      : NA;
+    return `<tr>` +
+      `<td>${esc(r.medicare_id || '')}</td>` +
+      `<td>${esc(r.facility_name || '')}<br><span class="src">${place}</span></td>` +
+      `<td>${r.distance_miles != null ? esc(Number(r.distance_miles).toFixed(2) + ' mi') : NA}</td>` +
+      `<td>${esc(r.operator || '') || NA}</td>` +
+      `<td>${r.stations != null ? fmtNum(r.stations) : NA}</td>` +
+      `<td>${r.patients != null ? fmtNum(r.patients) : NA}</td>` +
+      `<td>${rent}</td>` +
+      `</tr>`;
+  }).join('');
+  return `<h2>Market Competition</h2><table class="hist"><thead><tr><th>CCN</th><th>Facility</th><th>Distance</th><th>Operator</th><th>Stations</th><th>Patients</th><th>Rent/SF</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function renderPropertySections(p) {
   const id = p.identity || {};
   const own = p.ownership || {};
@@ -284,12 +325,14 @@ function renderPropertySections(p) {
     rows.push(kvRow('Current patient count', ops.patient_count, fmtNum));
     rows.push(kvRow('Annual treatments (TTM)', ops.ttm_treatments, fmtNum));
     rows.push(kvRow('Certification date', ops.certification_date));
+    rows.push(kvRowHtml('Relocation lineage', renderRelocation(ops.relocation)));
     let block = `<h2>Operations</h2><table class="kv">${rows.filter(Boolean).join('')}</table>`;
     for (const c of (ops._conflicts || [])) {
       const vals = (c.values || []).map(x => `${esc(x.v)} (${esc(x.source)})`).join(' vs ');
       block += `<div class="conflict">Conflict — ${esc(c.field)}: ${vals}${c.reconciled != null ? ` — reconciled: ${esc(c.reconciled)}` : ' — not reconciled; shown as unverified, not asserted.'}</div>`;
     }
     out.push(block);
+    out.push(renderMarketCompetition(ops.market_competition));
   }
 
   // 6. Transaction & Marketing Timeline

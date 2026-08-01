@@ -28,3 +28,9 @@ Read-only reconciliation of the v2 gold-standard dossier design for 5247 Airways
 - LCC changes: dossier packet now reads current patients from `medicare_clinics.latest_estimated_patients`, keeps `facility_patient_counts` as trend context, and the Operations panel/export no longer falls back to `properties`/rankings revenue.
 - DialysisProject changes: `propagate_property_financials.py` no longer writes `properties.estimated_annual_revenue`; `property_cms_reconciliation.py` flags/backfills denorm drift and clears retired property revenue.
 - Verification target: property 23654 / CCN 442740 should display 13 stations, 33 patients, 4,283 TTM treatments, and revenue `Not on file` unless corrected clinic economics exist.
+
+## 2026-08-01 P3 Relocation + Market Competition
+- Objective: close the two remaining 5247 Airways dossier gaps without fabricating prior-site facts.
+- Dialysis migration added `v_clinic_relocation_lineage`, `dia_nearby_dialysis_competition(lat,lng,radius,limit,exclude_ccn)`, and an idempotent 442740 `clinic_history_unified` lineage marker. The marker records the known 2003-02-01 operator prior certification and 2017-10-27 facility certification while keeping prior address/chairs/distance null (`Not on file`).
+- LCC dossier packet now reads relocation lineage plus nearby dialysis competition within 5 miles of the property geocode, including operator, stations, patients, and rent/SF where a lease row supports it.
+- Dossier renderer now includes an Operations relocation row and a Market Competition table. Missing prior site or competitor rent renders `Not on file`; rent/SF derived from annual rent/building size is labeled by the SQL `rent_source`.
