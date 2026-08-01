@@ -558,13 +558,20 @@ async function buildPropertyPacket(entityId, workspaceId) {
 async function buildDealPacket(entityId, workspaceId) {
   const propertyPacket = await buildPropertyPacket(entityId, workspaceId);
 
-  const [actRes, cadRes, partyRes] = await Promise.all([
+  const [actRes, cadRes, partyRes, spineRes, dealPartiesRes, bdRes] = await Promise.all([
     opsQuery('GET',
       `activity_events?or=(entity_id.eq.${encodeURIComponent(entityId)},metadata->>deal_entity_id.eq.${encodeURIComponent(entityId)})` +
       `&order=occurred_at.desc&limit=60&select=category,title,direction,occurred_at,source_type,metadata`).catch(() => null),
     opsQuery('GET',
       `touchpoint_cadence?entity_id=eq.${encodeURIComponent(entityId)}&select=next_touch_date,next_touch_type,cadence_status&order=next_touch_date.asc&limit=1`).catch(() => null),
     opsQuery('POST', 'rpc/lcc_party_relationships', { p_entity: entityId, p_limit: 40 }).catch(() => null),
+    // Deal-spine read model (prompt 06): commission/milestones/diligence/documents/
+    // correspondence-summary/conflicts. Missing sections come back as [] / null so the
+    // renderer prints "Not on file" — nothing is fabricated.
+    opsQuery('POST', 'rpc/lcc_deal_spine', { p_entity: entityId }).catch(() => null),
+    opsQuery('POST', 'rpc/lcc_deal_parties', { p_entity: entityId, p_limit: 60 }).catch(() => null),
+    opsQuery('GET',
+      `bd_opportunities?entity_id=eq.${encodeURIComponent(entityId)}&select=sf_opp_id,stage,is_open,closed_won,amount,deal_name&order=updated_at.desc&limit=1`).catch(() => null),
   ]);
 
   const acts = (actRes?.ok && Array.isArray(actRes.data)) ? actRes.data : [];
@@ -577,16 +584,72 @@ async function buildDealPacket(entityId, workspaceId) {
     .slice(0, 15)
     .map(a => ({ date: a.occurred_at, buyer: (a.metadata && (a.metadata.buyer || a.metadata.buyer_name)) || '', price: (a.metadata && (a.metadata.price || a.metadata.offer_price)) || null, status: (a.metadata && a.metadata.status) || '' }));
 
-  const parties = (partyRes?.ok && Array.isArray(partyRes.data))
-    ? partyRes.data.slice(0, 25).map(r => ({ role: r.relationship || r.role || 'party', name: r.name || r.counterparty_name || '', flag: r.is_institution ? 'institution' : (r.is_reit ? 'REIT' : ''), source: 'lcc_party_relationships' }))
-    : [];
+  const spine = (spineRes?.ok && spineRes.data && typeof spineRes.data === 'object') ? spineRes.data : {};
+  const conflicts = Array.isArray(spine.conflicts) ? spine.conflicts : [];
+
+  // Parties by side/role from the graph. Reconciliation discipline: a `brokers`
+  // edge sourced from CoStar/costar_sidebar is a fallback view of the third-party
+  // broker — it must NOT stand as OUR verified role, so it is labelled `third_party`
+  // and any open listing_broker conflict is surfaced (never silently resolved).
+  const brokerConflictOpen = conflicts.some(c => c && c.field === 'listing_broker' && c.status === 'open');
+  const graphParties = (dealPartiesRes?.ok && Array.isArray(dealPartiesRes.data)) ? dealPartiesRes.data : [];
+  let parties = graphParties.map(r => {
+    const src = r.source || 'entity_relationships';
+    const isCostar = /costar|dia_contact/i.test(String(src));
+    let side = r.side || 'other';
+    let flag = '';
+    if (r.relationship === 'brokers') {
+      // CoStar-sourced broker stays third_party until our own systems confirm the role.
+      side = isCostar ? 'third_party' : side;
+      if (isCostar && brokerConflictOpen) flag = 'unverified role';
+    } else if (r.relationship === 'guaranteed_by') {
+      side = 'guarantor';
+    }
+    return {
+      role: r.role || r.relationship || 'party',
+      name: r.name || '',
+      side,
+      flag,
+      effective_from: r.effective_from || null,
+      source: src,
+    };
+  });
+  // Back-compat fallback to lcc_party_relationships if the deal-parties fn returned nothing.
+  if (!parties.length && partyRes?.ok && Array.isArray(partyRes.data)) {
+    parties = partyRes.data.slice(0, 25).map(r => ({
+      role: r.relationship || r.role || 'party', name: r.name || r.counterparty_name || '',
+      side: 'other', flag: r.is_institution ? 'institution' : (r.is_reit ? 'REIT' : ''),
+      source: 'lcc_party_relationships',
+    }));
+  }
+
+  // Correspondence: prefer the living rolling summary; keep the row-level thread list too.
+  const corrSummary = spine.correspondence_summary || null;
+
+  // Connected-sources panel: which systems actually feed this record, and where the gaps are.
+  const bd = (bdRes?.ok && Array.isArray(bdRes.data) && bdRes.data[0]) || null;
+  const connected_sources = {
+    costar: parties.some(p => /costar|dia_contact/i.test(String(p.source))) ? 'source' : 'none',
+    salesforce: (bd && bd.sf_opp_id) ? 'linked' : (bd ? 'container_no_opportunity' : 'no_opportunity'),
+    outlook: correspondence.length ? 'linked' : 'not_linked',
+    sharefile: (Array.isArray(spine.documents) && spine.documents.some(d => d && /sharefile|folder_feed/i.test(String(d.source)))) ? 'linked' : 'not_linked',
+    deal_spine: `entity ${String(entityId).slice(0, 8)}`,
+  };
 
   const cad = (cadRes?.ok && cadRes.data?.[0]) || null;
   const deal = {
-    stage: undefined,
+    stage: tag(bd && bd.stage, 'sf'),
+    sf_opportunity_id: tag(bd && bd.sf_opp_id, 'sf'),
     parties,
+    commission: Array.isArray(spine.commission) ? spine.commission : [],
+    milestones: Array.isArray(spine.milestones) ? spine.milestones : [],
+    diligence: Array.isArray(spine.diligence) ? spine.diligence : [],
+    documents: Array.isArray(spine.documents) ? spine.documents : [],
+    conflicts,
+    correspondence_summary: corrSummary,
     correspondence,
     offers,
+    connected_sources,
     cadence: {
       next_touch_due: tag(cad && cad.next_touch_date, 'touchpoint_cadence'),
       next_touch_type: tag(cad && cad.next_touch_type, 'touchpoint_cadence'),

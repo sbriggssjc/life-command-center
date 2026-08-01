@@ -152,3 +152,42 @@ test('source_hash is stable across generated_date changes (true staleness key)',
   const b = await generateDossier({ kind: 'property', packet: { ...base, meta: { ...base.meta, generated_date: '2026-12-31' } }, entityId: 'e' });
   assert.equal(a.source_hash, b.source_hash);
 });
+
+// --- Deal-spine sections (prompt 02/06) — buildDealPacket → renderDealSections ---------
+test('deal spine: milestones, commission, diligence, documents, conflicts, connected sources', () => {
+  const { renderDealSections } = __test__;
+  const packet = {
+    identity: {}, ownership: {}, tenancy_lease: {},
+    deal: {
+      milestones: [
+        { milestone_key: 'marketing', date: '2026-06-04', status: 'past', summary: 'OM received', source: 'intake_om' },
+        { milestone_key: 'close', date: '2026-07-24', status: 'past', summary: 'Closed 6.00%', source: 'dia_sale' },
+      ],
+      commission: [],                                  // no ELA → Not on file
+      diligence: [],                                   // none → Not on file
+      documents: [{ type: 'OM', name: 'Offering Memorandum', date: '2026-06-04', reconciled: true, source: 'intake' }],
+      parties: [
+        { side: 'third_party', role: 'listing_broker', name: 'Chris Bodnar', flag: 'unverified role', source: 'dia_contact' },
+        { side: 'guarantor', role: 'guarantor', name: 'Fresenius Medical Care', source: 'folder_feed_lease' },
+      ],
+      conflicts: [{ field: 'listing_broker', values: [{ v: 'Chris Bodnar (CBRE Inc.)', source: 'costar' }, { v: 'unverified', source: 'our_systems' }], note: 'must not stand as our role', status: 'open' }],
+      correspondence_summary: { summary: 'OM + close; no Outlook thread linked yet.', thread_count: 4, source: 'activity_events' },
+      correspondence: [],
+      connected_sources: { costar: 'source', salesforce: 'no_opportunity', outlook: 'not_linked', sharefile: 'not_linked', deal_spine: 'entity d118b3a1' },
+    },
+  };
+  const html = renderDealSections(packet);
+  assert.match(html, /Transaction Story/);
+  assert.match(html, /OM received/);
+  assert.match(html, /Closed 6\.00%/);
+  assert.match(html, /Commission<\/h2>[\s\S]*Not on file/);     // no ELA → Not on file
+  assert.match(html, /Diligence[\s\S]*Not on file/);
+  assert.match(html, /Chris Bodnar/);
+  assert.match(html, /unverified role/);                        // CoStar broker not our verified role
+  assert.match(html, /Conflicts to reconcile/);
+  assert.match(html, /must not stand as our role/);
+  assert.match(html, /Offering Memorandum/);
+  assert.match(html, /Correspondence Summary/);
+  assert.match(html, /Connected Sources/);
+  assert.match(html, /no_opportunity/);                         // SF gap visible
+});
