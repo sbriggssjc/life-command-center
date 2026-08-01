@@ -17,7 +17,8 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
-import { opsQuery, paginationParams, requireOps, withErrorHandler } from '../_shared/ops-db.js';
+import { opsQuery, paginationParams, requireOps, withErrorHandler, fetchWithTimeout } from '../_shared/ops-db.js';
+import { resolveArtifactDownload } from '../_shared/storage-adapter.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
@@ -38,6 +39,21 @@ function pageMeta(page, perPage, totalCount) {
     has_next: page < totalPages,
     has_prev: page > 1
   };
+}
+
+// Classify an ingested document into a BD-meaningful type from its file name +
+// the ingest's file_type tag. Order of surfacing: om > bov > lease > psa_dd >
+// comp > master > other.
+function classifyDocType(fileName, fileType) {
+  const n = String(fileName || '').toLowerCase();
+  const t = String(fileType || '').toLowerCase();
+  if (t === 'om' || /\bom\b|offering memorandum|marketing brochure|\bflyer\b|for sale/.test(n)) return 'om';
+  if (t === 'bov' || /\bbov\b|opinion of value|valuation/.test(n)) return 'bov';
+  if (t === 'lease' || /\blease\b|lease overview|abstract/.test(n)) return 'lease';
+  if (t === 'dd' || /\bpsa\b|purchase.{0,6}sale|\bdd\b|due diligence|\bagreement\b|\bestoppel\b|\bsnda\b/.test(n)) return 'psa_dd';
+  if (t === 'comp' || /\bcomp\b|comparable/.test(n)) return 'comp';
+  if (t === 'master' || /master sheet|\bmaster\b/.test(n)) return 'master';
+  return 'other';
 }
 
 export const entitiesHandler = withErrorHandler(async function handler(req, res) {
@@ -137,6 +153,70 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         if (totals[g] == null) totals[g] = row.role_total != null ? Number(row.role_total) : (groups[g].length);
       }
       return res.status(200).json({ entity_id: id, count: rows.length, rows, groups, totals });
+    }
+
+    // Documents viewer (Scott ask) — the OMs / BOVs / leases / comps ingested for
+    // this property. They live in Supabase Storage (lcc-om-uploads) or SharePoint,
+    // recorded in staged_intake_artifacts and tied to the asset entity via
+    // staged_intake_promotions.entity_id. GET /api/entities?action=documents&id=<uuid>
+    if (action === 'documents' && id) {
+      const entRes = await opsQuery('GET',
+        `entities?id=eq.${id}&workspace_id=eq.${workspaceId}&select=id`);
+      if (!entRes.ok || !entRes.data?.length) return res.status(404).json({ error: 'Entity not found' });
+      // 1. intakes promoted to this entity
+      const prom = await opsQuery('GET',
+        `staged_intake_promotions?entity_id=eq.${id}&select=intake_id`).catch(() => null);
+      const intakeIds = Array.from(new Set(((prom && prom.data) || []).map(r => r.intake_id).filter(Boolean)));
+      let docs = [];
+      if (intakeIds.length) {
+        const inList = intakeIds.map(v => encodeURIComponent(v)).join(',');
+        const art = await opsQuery('GET',
+          `staged_intake_artifacts?intake_id=in.(${inList})` +
+          `&select=id,file_name,file_type,mime_type,storage_backend,storage_ref,storage_path,created_at` +
+          `&order=created_at.desc&limit=300`).catch(() => null);
+        docs = ((art && art.data) || [])
+          .map(a => {
+            const ref = a.storage_ref || a.storage_path || null;
+            const name = a.file_name || '';
+            const ft = String(a.file_type || '').toLowerCase();
+            const isDoc = /^(pdf|doc|docx|xlsx|xls)$/.test(ft) || /\.(pdf|docx?|xlsx?)$/i.test(name);
+            return { id: a.id, file_name: name, doc_type: classifyDocType(name, ft),
+              backend: a.storage_backend || (ref && ref.startsWith('/') ? 'sharepoint_pa' : 'supabase'),
+              storage_ref: ref, created_at: a.created_at, _isDoc: isDoc };
+          })
+          .filter(d => d._isDoc && d.storage_ref);
+        // Dedupe re-staged copies of the same file (intake re-runs stack identical
+        // rows). Keep the newest (list is ordered created_at desc).
+        const seenDoc = new Set();
+        docs = docs.filter(d => {
+          const k = String(d.file_name || '').toLowerCase().trim() + '|' + d.doc_type;
+          if (seenDoc.has(k)) return false; seenDoc.add(k); return true;
+        }).map(({ _isDoc, ...d }) => d);
+      }
+      const groups = {};
+      for (const d of docs) (groups[d.doc_type] = groups[d.doc_type] || []).push(d);
+      return res.status(200).json({ entity_id: id, count: docs.length, docs, groups });
+    }
+
+    // Mint a short-lived signed URL for a stored document (by artifact id, so we
+    // never sign an arbitrary object). GET /api/entities?action=document_url&artifact_id=<uuid>
+    if (action === 'document_url') {
+      const artId = String(req.query.artifact_id || '').trim();
+      if (!artId) return res.status(400).json({ error: 'artifact_id required' });
+      const a = await opsQuery('GET',
+        `staged_intake_artifacts?id=eq.${encodeURIComponent(artId)}&select=storage_ref,storage_path,file_name&limit=1`).catch(() => null);
+      const row = (a && a.data && a.data[0]) || null;
+      const ref = row && (row.storage_ref || row.storage_path);
+      if (!ref) return res.status(404).json({ error: 'artifact_not_found' });
+      const resolved = await resolveArtifactDownload({
+        storageRef: ref,
+        opsUrl: process.env.OPS_SUPABASE_URL,
+        opsKey: process.env.OPS_SUPABASE_KEY,
+        fetchImpl: (u, opts) => fetchWithTimeout(u, opts, 8000),
+      });
+      if (!resolved.ok) return res.status(resolved.status || 500).json({ error: resolved.error || 'sign_failed', detail: resolved.detail || null });
+      return res.status(200).json({ ok: true, signed_url: resolved.signed_url,
+        file_name: row.file_name || resolved.file_name, expires_at: resolved.expires_at || null });
     }
 
     // UI Phase 5 — "Owners Missing a Contact" value-ranked BD worklist.
