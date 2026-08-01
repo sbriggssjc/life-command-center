@@ -150,6 +150,17 @@ function buildContacts(contacts) {
   return out;
 }
 
+function buildAssetEntityName(address, operator) {
+  const street = firstNonBlank(address);
+  if (!street) return null;
+  const op = firstNonBlank(operator);
+  if (!op) return String(street);
+  const streetText = String(street).trim();
+  const opText = String(op).trim();
+  if (streetText.toLowerCase().includes(opText.toLowerCase())) return streetText;
+  return `${streetText} - ${opText}`;
+}
+
 /**
  * Ensure the domain property has a well-formed LCC asset entity.
  *
@@ -253,11 +264,16 @@ async function enrichAssetEntity({
   const e = cur.data[0];
 
   const patch = {};
+  const tenants = buildTenants(packet.leases);
+  const displayName = buildAssetEntityName(
+    seedAddress,
+    prop ? firstNonBlank(prop.operator, prop.tenant, prop.chain_canonical, tenants[0]?.name) : tenants[0]?.name
+  );
   // Correct a STUB name (== city, or blank) to the street address. This is the
   // one case where we overwrite: a name that equals the city is a known stub,
   // not curated data.
   const nameIsStub = !e.name || (seedCity && e.name === seedCity && seedAddress && seedAddress !== seedCity);
-  if (nameIsStub && seedAddress) patch.name = seedAddress;
+  if (nameIsStub && displayName) patch.name = displayName;
 
   // A city-as-address is the same stub shape as a city-as-name (the hollow-bridge
   // bug): correct it to the real street address. Otherwise fill-blanks only.
@@ -275,7 +291,6 @@ async function enrichAssetEntity({
   // Metadata: merge the deal-fact arrays. Fill only when the entity doesn't
   // already carry a non-empty array (a richer capture source wins).
   const meta = e.metadata && typeof e.metadata === 'object' ? { ...e.metadata } : {};
-  const tenants = buildTenants(packet.leases);
   const salesHistory = buildSalesHistory(packet.sales);
   const contacts = buildContacts(packet.contacts);
   const loans = Array.isArray(packet.loans) ? packet.loans : [];

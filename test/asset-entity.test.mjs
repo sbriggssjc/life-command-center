@@ -93,13 +93,13 @@ describe('ensureAssetEntityForProperty (stubbed deps)', () => {
     return { deps: { opsQuery, domainQuery, ensureEntityLink }, entity, patches };
   }
 
-  it('corrects the stub name to the street address and fills metadata', async () => {
+  it('corrects the stub name to street plus operator and fills metadata', async () => {
     const { deps, entity } = makeDeps();
     const r = await ensureAssetEntityForProperty({ domain: 'dia', propertyId: 35724, deps });
     assert.equal(r.ok, true);
     assert.equal(r.entity_id, 'e-35724');
     assert.equal(r.enriched, true);
-    assert.equal(entity.name, '20931 Burbank Blvd, Ste A');   // stub name corrected
+    assert.equal(entity.name, '20931 Burbank Blvd, Ste A - Fresenius Medical Care'); // stub name corrected
     assert.equal(entity.address, '20931 Burbank Blvd, Ste A'); // filled from domain
     assert.equal(entity.asset_type, 'Healthcare');
     assert.equal(entity.metadata.tenants[0].name, 'Fresenius Medical Care');

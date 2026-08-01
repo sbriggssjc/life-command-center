@@ -99,6 +99,13 @@ function enc(v) {
   return encodeURIComponent(String(v));
 }
 
+function normPropertyDomain(v) {
+  const d = String(v || "").toLowerCase().trim();
+  if (d === "dia" || d === "dialysis") return "dia";
+  if (d === "gov" || d === "government") return "gov";
+  return null;
+}
+
 // ── DIA domain (optional — Unit 4 dia address fallback) ──────────────────────
 // The MCP server historically configured only OPS + GOV. The gov property
 // fallback (Unit 4) is the live-verified path; the dia leg engages only when a
@@ -239,6 +246,44 @@ async function findDomainProperty(q, raw, extraSelect = '') {
     r = await q('GET', `properties?address=ilike.*${enc(norm)}*&select=${sel}&limit=1`)
       .catch(() => ({ data: [] }));
     if (r.data && r.data[0]) return r.data[0];
+  }
+  return null;
+}
+
+async function resolveEntityByPropertyIdentity({ domain, propertyId }) {
+  if (propertyId === null || propertyId === undefined || String(propertyId).trim() === "") return null;
+  const domains = normPropertyDomain(domain) ? [normPropertyDomain(domain)] : ["dia", "gov"];
+  for (const dom of domains) {
+    const idRes = await opsQuery(
+      "GET",
+      `external_identities?source_system=eq.${enc(dom)}&source_type=eq.asset` +
+        `&external_id=eq.${enc(propertyId)}&select=entity_id&limit=1`
+    ).catch(() => ({ data: [] }));
+    const entityId = idRes.data?.[0]?.entity_id || null;
+    if (!entityId) continue;
+    const entRes = await opsQuery(
+      "GET",
+      `entities?id=eq.${enc(entityId)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
+    ).catch(() => ({ data: [] }));
+    if (entRes.data?.[0]) return entRes.data[0];
+  }
+  return null;
+}
+
+async function resolveEntityByAddressPropertyIdentity(address) {
+  if (DIA_SUPABASE_URL && DIA_SUPABASE_KEY) {
+    const hit = await findDomainProperty(diaQuery, address, 'tenant,operator,chain_canonical');
+    if (hit?.property_id != null) {
+      const entity = await resolveEntityByPropertyIdentity({ domain: "dia", propertyId: hit.property_id });
+      if (entity) return entity;
+    }
+  }
+  if (GOV_SUPABASE_URL && GOV_SUPABASE_KEY) {
+    const hit = await findDomainProperty(govQuery, address, 'agency');
+    if (hit?.property_id != null) {
+      const entity = await resolveEntityByPropertyIdentity({ domain: "gov", propertyId: hit.property_id });
+      if (entity) return entity;
+    }
   }
   return null;
 }
@@ -386,6 +431,8 @@ const TOOL_DEFINITIONS = {
       type: 'object',
       properties: {
         entity_id: { type: 'string', description: 'LCC entity UUID' },
+        property_id: { type: 'string', description: 'Domain properties.property_id; pair with domain when known' },
+        domain: { type: 'string', enum: ['dia', 'dialysis', 'gov', 'government'], description: 'Domain for property_id identity resolution' },
         address: { type: 'string', description: 'Property address (alternative to entity_id)' }
       }
     }
@@ -902,7 +949,7 @@ const TOOL_HANDLERS = {
     });
   },
 
-  get_property_context: async ({ entity_id, address }) => {
+  get_property_context: async ({ entity_id, address, property_id, domain }) => {
     return withTiming("get_property_context", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
@@ -916,7 +963,13 @@ const TOOL_HANDLERS = {
           `entities?id=eq.${enc(entity_id)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`
         );
         entity = res.data?.[0] || null;
-      } else if (address) {
+      } else if (property_id) {
+        entity = await resolveEntityByPropertyIdentity({ domain, propertyId: property_id });
+      }
+      if (!entity && address) {
+        entity = await resolveEntityByAddressPropertyIdentity(address);
+      }
+      if (!entity && address) {
         const res = await opsQuery(
           "GET",
           `entities?entity_type=eq.asset&or=(address.ilike.*${enc(address)}*,name.ilike.*${enc(address)}*)&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
@@ -932,7 +985,7 @@ const TOOL_HANDLERS = {
           const fb = await resolvePropertyByAddressFromDomains(address);
           if (fb) return textResult(fb);
         }
-        return textResult({ error: "Property not found", entity_id, address });
+        return textResult({ error: "Property not found", entity_id, property_id, domain, address });
       }
 
       const eid = entity.id;

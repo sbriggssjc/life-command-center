@@ -35,6 +35,72 @@ function enc(v) {
   return encodeURIComponent(String(v));
 }
 
+function normDomain(v) {
+  const d = String(v || '').toLowerCase().trim();
+  if (d === 'dia' || d === 'dialysis') return 'dia';
+  if (d === 'gov' || d === 'government') return 'gov';
+  return null;
+}
+
+const PROPERTY_ENTITY_SELECT = 'select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)';
+
+export async function resolveEntityByPropertyIdentity({ domain, propertyId, ops = opsQuery }) {
+  if (propertyId === null || propertyId === undefined || String(propertyId).trim() === '') return null;
+  const domains = normDomain(domain) ? [normDomain(domain)] : ['dia', 'gov'];
+  for (const dom of domains) {
+    const idRes = await ops(
+      'GET',
+      `external_identities?source_system=eq.${enc(dom)}&source_type=eq.asset` +
+        `&external_id=eq.${enc(propertyId)}&select=entity_id&limit=1`
+    );
+    const entityId = idRes.data?.[0]?.entity_id || null;
+    if (!entityId) continue;
+    const entRes = await ops(
+      'GET',
+      `entities?id=eq.${enc(entityId)}&entity_type=eq.asset&${PROPERTY_ENTITY_SELECT}&limit=1`
+    );
+    const entity = entRes.data?.[0] || null;
+    if (entity) return entity;
+  }
+  return null;
+}
+
+async function findDomainPropertyByAddress(domain, address) {
+  const longDomain = domain === 'gov' ? 'government' : 'dialysis';
+  if (!getDomainCredentials(longDomain)) return null;
+  const extra = domain === 'gov' ? ',agency' : ',tenant,operator,chain_canonical';
+  const variants = [...new Set([address, expandAddress(address), contractAddress(address)])];
+  for (const variant of variants) {
+    const r = await domainQuery(
+      longDomain,
+      'GET',
+      `properties?address=ilike.*${enc(variant)}*&select=property_id,address,city,state${extra}&limit=1`
+    ).catch(() => ({ data: [] }));
+    const hit = r.data?.[0] || null;
+    if (hit?.property_id != null) return { domain, property: hit };
+  }
+  return null;
+}
+
+export async function resolveEntityByAddressPropertyIdentity({
+  address,
+  ops = opsQuery,
+  findDomainProperty = findDomainPropertyByAddress,
+}) {
+  if (!address) return null;
+  for (const dom of ['dia', 'gov']) {
+    const hit = await findDomainProperty(dom, address);
+    if (!hit) continue;
+    const entity = await resolveEntityByPropertyIdentity({
+      domain: hit.domain,
+      propertyId: hit.property.property_id,
+      ops,
+    });
+    if (entity) return entity;
+  }
+  return null;
+}
+
 /**
  * Resolve the property context packet, assembling on a cache miss.
  *
@@ -155,13 +221,18 @@ export async function propertyHandler(req, res) {
     return;
   }
 
-  let { address, entity_id, q } = req.query;
+  let { address, entity_id, property_id, domain, q } = req.query;
 
-  // Resolve q → entity_id or address when the dedicated params are absent
+  // Resolve q -> property_id, entity_id, or address when dedicated params are absent.
   if (!address && !entity_id && q) {
     const trimmed = q.trim();
-    // UUIDs (8-4-4-4-12) or prefixed IDs like "gov:11136"
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)
+    const domainProperty = trimmed.match(/^(dia|dialysis|gov|government):(.+)$/i);
+    if (domainProperty) {
+      domain = domainProperty[1];
+      property_id = domainProperty[2];
+    } else if (/^\d+$/.test(trimmed)) {
+      property_id = trimmed;
+    } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)
         || /^[a-z]+:/i.test(trimmed)) {
       entity_id = trimmed;
     } else {
@@ -169,8 +240,8 @@ export async function propertyHandler(req, res) {
     }
   }
 
-  if (!address && !entity_id) {
-    res.status(400).json({ error: 'One of q, address, or entity_id query parameter is required' });
+  if (!address && !entity_id && !property_id) {
+    res.status(400).json({ error: 'One of q, address, entity_id, or property_id query parameter is required' });
     return;
   }
 
@@ -184,11 +255,19 @@ export async function propertyHandler(req, res) {
   if (entity_id) {
     const r = await opsQuery(
       'GET',
-      `entities?id=eq.${enc(entity_id)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`
+      `entities?id=eq.${enc(entity_id)}&entity_type=eq.asset&${PROPERTY_ENTITY_SELECT}`
     );
     entity = r.data?.[0] || null;
-  } else if (address) {
-    const selectClause = `select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`;
+  } else if (property_id) {
+    entity = await resolveEntityByPropertyIdentity({ domain, propertyId: property_id });
+  }
+
+  if (!entity && address) {
+    entity = await resolveEntityByAddressPropertyIdentity({ address });
+  }
+
+  if (!entity && address) {
+    const selectClause = PROPERTY_ENTITY_SELECT;
 
     const expanded = expandAddress(address);
 
@@ -219,7 +298,13 @@ export async function propertyHandler(req, res) {
   }
 
   if (!entity) {
-    res.status(404).json({ error: 'Property not found', entity_id: entity_id || null, address: address || null });
+    res.status(404).json({
+      error: 'Property not found',
+      entity_id: entity_id || null,
+      property_id: property_id || null,
+      domain: domain || null,
+      address: address || null,
+    });
     return;
   }
 
