@@ -26,3 +26,17 @@ The property-dossier data backlog lives in full in `docs/architecture/dossier-fo
 2. Configure `CENSUS_API_KEY`, then run/apply the radius-demographics backfill for property 23654 and audit the 994 dialysis properties that still lack `property_demographics` rows.
 
 Everything else in the P0-P3 property-dossier backlog can be closed.
+
+## Update 2026-08-01 (session 2d): backlog RECONCILED (Claude Code)
+Claude Code returned a reconciliation: **close prompts 0,1,2,3,4,5,6**; carry forward only 7 & 8 (credential/env).
+- P0 design-vs-prod reconciliation: artifact `docs/architecture/dossier-design-vs-production-23654.md`. DONE.
+- P1 CMS revenue bug: landed f4518ada. DONE.
+- P2 rent/SF, P3 timeline, P4 lease abstract: DONE (see done/07-followup2/3/4).
+- P5 loan feeder + finances suppression: DONE (asset-metadata-loan-feeder + quarantine; 8 M&M edges quarantined;
+  Radar Woodbridge/Clue Drive found zero attached). See done/07-followup5-debt-graph.
+- P6 documents reconciliation: DONE — shared gatherer (intake + lcc_cre_property_documents + SF files) with
+  per-doc reconciled status; 23654 shows 4 linked docs, CRE/SF report not_yet_reconciled (no matching rows).
+  See done/07-followup6-documents.
+- **Carry-forward (in prompt 16):** P7 relocation/competition — code done, live migration apply pending; P8
+  Location & Trade Area — map + Places callouts (Walmart/Walgreens/Dollar Tree) done, radius demographics pending
+  CENSUS_API_KEY.

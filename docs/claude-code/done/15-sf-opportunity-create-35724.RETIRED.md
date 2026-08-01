@@ -26,3 +26,6 @@ conflict is resolved against the real Opportunity data. Do not fabricate parties
 ## Verify
 35724 has a linked SF Opportunity (sf_deal_id stamped, bd_opportunities row), parties/commission fill from it,
 and the listing-broker conflict resolves — only from real SF data.
+
+## DECISION 2026-08-01: Option B chosen — RETIRED
+Scott chose Option B: leave 35724 comp-only; do NOT back-fill a Salesforce Opportunity. Future deals fill via the fixed SF Deal -> LCC Opportunity Sync flow (prompt 10). This prompt is retired/not to be sent.

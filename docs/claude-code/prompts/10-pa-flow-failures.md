@@ -29,3 +29,7 @@ The top flows (LCC Get Artifact, SF Deal -> LCC Opportunity Sync) run green; 357
 the sync; per-flow health is surfaced (not just a weekly digest).
 
 > **Review note (2026-08-01):** several failing flows are HTTP calls INTO the LCC app (LCC Get Artifact -> `api/_handlers/intake-artifact-download.js`; account/contact lookups -> entities). While the app was crash-looping on the duplicate-import boot failure (commit 766df77, fixed in 1aae4e20), those HTTP flows would all fail — so confirm how many failures postdate the crash; deploying 1aae4e20 likely clears a chunk. SF Deal -> LCC Opportunity Sync (sf-deal-closing.js / sf-owner-sync.js) and the Outlook/SharePoint flows need their own root-cause (auth/token/schema), independent of the boot.
+
+> **Option B (2026-08-01):** Scott chose to leave 35724 comp-only and let FUTURE deals fill via this flow. So
+> fixing **SF Deal -> LCC Opportunity Sync** (+ the sf_deal_id return-path stamp) is now the primary mechanism
+> by which live deals populate their parties/commission — prioritize it alongside LCC Get Artifact.

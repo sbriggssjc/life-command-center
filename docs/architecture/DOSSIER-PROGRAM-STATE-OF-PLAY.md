@@ -226,3 +226,28 @@ unregistered action in copilot_action_registry.json (noted in prompt 11).
   the #710 schema drift.
 - **Sequence now:** the deal spine is live, so **08 (Deal-tab UI)** is ready to render it; **10** connects the
   live systems to fill it; **15** (SF Opportunity back-fill) awaits Scott's go/no-go.
+
+---
+
+## Big completion wave (2026-08-01, session 2d)
+Eight+ prompts returned done; almost the entire property-dossier backlog is complete.
+- **03 broker role:** 35724 listing_broker -> Team Briggs/Northmarq; CBRE retained as `as_reported_listing`
+  conflict. (Surfaced: is_northmarq=false in the data though it's our deal; sale_brokers_role_check blocks the
+  as-reported role -> prompt 17.)
+- **04 loan propagation:** fleet-wide — **124 loans + 204 mortgage records** across 2535 asset entities from
+  entities.metadata.loans; 23654 shows the JPMCC 2019-COR4 $1.8M CMBS; brokerages suppressed as lenders; a
+  Debt/Financing dossier section now renders.
+- **05 resolver:** identity-first (dia|gov, asset, property_id) resolution in property-handler + mcp/server;
+  stub names normalized to street+operator.
+- **08 Deal-tab UI:** entities-handler `action=deal_packet` + detail.js Deal tab (renderer, property cross-link,
+  double-click-to-source, connected-source chips). Renders the live deal spine.
+- **09 #710:** code done (delete dead rules, register live columns, DB trigger guard, CI test) — **live migration
+  apply pending (prompt 16).**
+- **Followups 5/6/7/8:** debt-graph suppression + quarantine (8 M&M edges); documents shared gatherer (intake +
+  CRE + SF, per-doc reconciled status); relocation lineage + market-competition RPC (live apply pending); Location
+  & Trade Area map + Places callouts (radius demographics pending CENSUS_API_KEY).
+- **Decision: Option B** — 35724 stays comp-only; prompt 15 retired; future deals fill via the SF Opportunity
+  Sync flow (prompt 10).
+Focus shifts from dossier content (largely done) to **connectivity + activation**: apply the pending migrations
+(16), fix the PA flow connectors (10), property/contact connectivity (13), data-integrity (17), then comps reach
+(11) + the health surface (12).

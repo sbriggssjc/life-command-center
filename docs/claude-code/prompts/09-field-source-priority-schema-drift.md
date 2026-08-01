@@ -27,3 +27,6 @@ table. Coordinate with prompt 01 so our-OM-asking wins for our own listings.
 ## Verify
 Daily DB Checks / the field-source-priority audit passes; folder_feed_bov/master write asking price+cap to real
 columns; a CI guard prevents future column drift.
+
+## STATUS 2026-08-01: code DONE — live migration apply PENDING
+Migration 20260801210000_lcc_field_source_priority_schema_drift_710_listing_fix.sql + extraction-field-policy update + CI test shipped (14 tests pass). NOT applied live from Claude Code's shell. Remaining: apply the migration to LCC Opps + rerun Daily DB Checks (expect v_field_source_priority_invalid_columns = 0 rows). Tracked in prompt 16 (live-apply checklist).
