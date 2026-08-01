@@ -167,3 +167,47 @@ conflict is surfaced rather than guessed.
 - **Next:** wire the packet assembler (server-side, reusing the panel loaders), drop §1 into the prompt,
   and produce the same layout with LLM prose; then repeat §5 for a chosen open **deal** to lock the deal
   format.
+
+---
+
+## 7. v2 field additions (2026-08-01) — from the enhancement + audit pass
+
+The v2 gold-standard render is `dossier-example-5247-airways-v2.html`. It extends §3 with the fields below.
+Each field keeps the same grounding rules (§1): source-tagged, "Not on file" when absent, "Derived" (with
+inputs) when computed, "Conflict" surfaced not resolved.
+
+**Snapshot** — add **Stations (chairs)** (`medicare_clinics.stations`, with capacity), **price/SF** (value ÷
+`building_size`), and a one-line **value-estimate basis** inline ("current rent $X · Y.y yrs term · applied
+Z.ZZ% cap"); label "model estimate."
+
+**Ownership** — add **Original developer** row (graph `developed` edge / `properties.developer`; "Not on
+file" until a developer feeder populates it).
+
+**Tenancy & Lease** — split into distinct rows: **Tenant** (specific entity) and **Guarantor** (with
+"guaranty limited to Initial Term; excludes options" when the guaranty says so); **Year-1 base rent + $/SF**
+AND **Current (escalated) base rent + $/SF** (current is Derived from anchor × bump math or
+`lease_rent_schedule`); **Term remaining (years)** (Derived); **Renewal options** with a **bumps-continue-in-
+options?** flag; **Responsibilities (roof / structure / parking / HVAC)** — the dialysis differentiators
+(repair/maintenance/replacement split). Rent/SF is **computed on read** when `rent_per_sf` is null.
+
+**Operations (CMS)** — read the CMS tables as source of truth (NOT the property denorm): **Stations (13)**,
+**Current patient count + trend** (`facility_patient_counts` history), **Annual treatments (TTM)**, **Est.
+revenue + EBITDA + trend** (only when clinic economics are computed — else "Not asserted"; never surface the
+property-denorm revenue). **Drop the Medicare ID row.** Add a **relocation paragraph** (operator's earlier
+cert date vs this facility's cert date; prior site "Not on file" until lineage backfilled). Add a **Market
+Competition** block (nearby CCNs + rents/SF ⇒ renewal-rent pressure; "Not on file" until the query exists).
+
+**Transaction & Marketing Timeline** — one chronological table across prior listings (`available_listings`,
+off-market), the reconciled sale (`sales_transactions` live: price + **cap-at-close** + **firm-term-at-close**),
+and the current active listing (asking, $/SF, cap, brokers, days-on-market, **portfolio vs single-asset flag**).
+
+**BD Efforts** — owner-entity cadence / recent touches / correspondence / ROE (from the deal spine), joined
+property→owner.
+
+**Documents on File** — table of every source (Supabase `lcc-om-uploads`, `sharepoint_pa` intake,
+`lcc_cre_property_documents` SharePoint folder feed, Salesforce files) with **date** and a **reconciled?**
+status badge (linked / not yet reconciled). Document + research history is presented as the sources behind the
+facts.
+
+The paired audit/triage (what displays vs. what exists vs. where the pipeline is broken, with the P0–P3
+backlog) is `dossier-v2-audit-and-triage.md`.
