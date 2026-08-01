@@ -175,6 +175,8 @@ async function handleOpsHealth(req, res) {
     try { const r = await opsQuery('GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', undefined, { countMode: 'exact' }); return r.ok ? (r.count || 0) : null; }
     catch (_e) { return null; }
   };
+  const flowHealthWindowHours = Math.min(168, Math.max(1, parseInt(req.query.flow_window_hours || '24', 10)));
+  const flowHealthSince = new Date(Date.now() - flowHealthWindowHours * 60 * 60 * 1000).toISOString();
   // Cross-domain LLC worker health: queued vs in_progress (stuck) per domain.
   const domCount = async (dom, path) => {
     try { const r = await domainQuery(dom, 'GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', { 'Prefer': 'count=exact' }); return r.ok ? (r.count || 0) : null; }
@@ -183,12 +185,16 @@ async function handleOpsHealth(req, res) {
 
   const [
     openAlerts, openFlowFailures, cronSummary,
+    recentFlowFailures,
     writeFail24h, writeFailTop, writeFail7d,
     diaLlcQueued, diaLlcInProgress, govLlcQueued, govLlcInProgress,
   ] = await Promise.all([
     opsRead('v_lcc_health_alerts_open?select=alert_kind,source,severity,summary,detected_at,age_hours&order=detected_at.desc&limit=50'),
     opsRead('v_flow_run_failures_open?select=flow_name,failed_action,error_kind,error_detail_short,severity,detected_at&order=detected_at.desc&limit=50'),
     opsRead('v_cron_health_summary?select=alert_kind,source,severity,summary,detected_at,resolved_at&order=detected_at.desc&limit=50'),
+    opsRead('flow_run_failures?select=flow_name,flow_run_id,failed_action,error_kind,error_code,error_detail,detected_at,resolved_at,severity'
+      + '&detected_at=gte.' + encodeURIComponent(flowHealthSince)
+      + '&order=detected_at.desc&limit=500'),
     opsCount('v_ingest_write_failures_24h'),
     opsRead('v_ingest_write_failures_top_24h?select=domain,method,http_status,path_norm,failures_24h,sample_error&order=failures_24h.desc&limit=5'),
     opsCount('v_ingest_write_failures_recent'),  // 7d, kept as context only
@@ -208,7 +214,62 @@ async function handleOpsHealth(req, res) {
 
   const alerts = openAlerts || [];
   const flows = openFlowFailures || [];
+  const recentFlows = Array.isArray(recentFlowFailures) ? recentFlowFailures : [];
   const crons = (cronSummary || []).filter(r => !r.resolved_at);
+
+  const openFlowCounts = new Map();
+  for (const f of flows) {
+    const name = f.flow_name || 'unknown';
+    openFlowCounts.set(name, (openFlowCounts.get(name) || 0) + 1);
+  }
+  const byFlow = new Map();
+  for (const f of recentFlows) {
+    const name = f.flow_name || 'unknown';
+    const cur = byFlow.get(name) || {
+      flow_name: name,
+      failures: 0,
+      open_failures: 0,
+      latest_failure_at: null,
+      latest_action: null,
+      latest_error_kind: null,
+      latest_error_code: null,
+      latest_error_detail_short: null,
+      severity: 'warn',
+    };
+    cur.failures += 1;
+    if (!f.resolved_at) cur.open_failures += 1;
+    if (!cur.latest_failure_at || String(f.detected_at || '') > String(cur.latest_failure_at || '')) {
+      cur.latest_failure_at = f.detected_at || null;
+      cur.latest_action = f.failed_action || null;
+      cur.latest_error_kind = f.error_kind || null;
+      cur.latest_error_code = f.error_code || null;
+      cur.latest_error_detail_short = String(f.error_detail || '').slice(0, 240) || null;
+      cur.severity = f.severity || cur.severity;
+    }
+    byFlow.set(name, cur);
+  }
+  for (const [name, count] of openFlowCounts.entries()) {
+    const cur = byFlow.get(name) || {
+      flow_name: name,
+      failures: 0,
+      latest_failure_at: null,
+      latest_action: null,
+      latest_error_kind: null,
+      latest_error_code: null,
+      latest_error_detail_short: null,
+      severity: 'error',
+    };
+    cur.open_failures = Math.max(cur.open_failures || 0, count);
+    byFlow.set(name, cur);
+  }
+  const flowHealth = [...byFlow.values()]
+    .map((f) => ({
+      ...f,
+      status: f.open_failures > 0 ? 'failing' : (f.failures > 0 ? 'recovered_recently' : 'healthy'),
+    }))
+    .sort((a, b) => (b.open_failures - a.open_failures)
+      || (b.failures - a.failures)
+      || String(b.latest_failure_at || '').localeCompare(String(a.latest_failure_at || '')));
 
   const topFail = (Array.isArray(writeFailTop) && writeFailTop[0]) ? writeFailTop[0] : null;
   return res.status(200).json({
@@ -216,6 +277,8 @@ async function handleOpsHealth(req, res) {
     summary: {
       open_alerts: alerts.length,
       open_flow_failures: flows.length,
+      failing_flows: flowHealth.filter(f => f.status === 'failing').length,
+      flow_failures_window_hours: flowHealthWindowHours,
       open_cron_issues: crons.length,
       // Honest window (R7 Phase 2.3): 24h count + the single worst path, with
       // the 7d figure demoted to context. The old "write_failures_recent" was a
@@ -228,7 +291,7 @@ async function handleOpsHealth(req, res) {
       } : null,
       workers_stuck: workers.filter(w => w.status === 'stuck').length,
     },
-    alerts, flow_failures: flows, cron_issues: crons, workers,
+    alerts, flow_failures: flows, flow_health: flowHealth, cron_issues: crons, workers,
     write_failures_top_24h: Array.isArray(writeFailTop) ? writeFailTop : [],
   });
 }
@@ -5231,6 +5294,10 @@ async function handleDiag(req, res) {
       anthropic_key_set:  !!process.env.ANTHROPIC_API_KEY,
       teams_webhook_set:  !!process.env.TEAMS_INTAKE_WEBHOOK_URL,
       sf_webhook_set:     !!process.env.SF_LOOKUP_WEBHOOK_URL,
+      sharepoint_save_url_set:  !!process.env.SHAREPOINT_SAVE_URL,
+      sharepoint_fetch_url_set: !!process.env.SHAREPOINT_FETCH_URL,
+      sharepoint_link_url_set:  !!process.env.SHAREPOINT_LINK_URL,
+      storage_backend:          process.env.STORAGE_BACKEND || 'supabase',
       ms_graph_token_set: !!process.env.MS_GRAPH_TOKEN,
       vercel_env:         process.env.VERCEL_ENV || null,
       lcc_env:            process.env.LCC_ENV || null,

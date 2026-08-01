@@ -159,9 +159,11 @@ function verifyApiKey(key) {
 export function authReadiness(req) {
   const authHeader = (req.headers && req.headers['authorization']) || '';
   const apiKey = (req.headers && req.headers['x-lcc-key']) || '';
-  const hasJwt = authHeader.startsWith('Bearer ') && authHeader.slice(7).length > 0;
-  const hasApiKey = !!apiKey;
-  const apiKeyValid = hasApiKey && verifyApiKey(apiKey);
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const bearerApiKeyValid = !!bearer && verifyApiKey(bearer);
+  const hasJwt = !!bearer && !bearerApiKeyValid;
+  const hasApiKey = !!apiKey || bearerApiKeyValid;
+  const apiKeyValid = (!!apiKey && verifyApiKey(apiKey)) || bearerApiKeyValid;
   const isCopilotPath = !!(req.query && req.query._copilot_path);
   const lccEnv = LCC_ENV;
   const enforcing = lccEnv === 'production' || lccEnv === 'staging';
@@ -177,6 +179,36 @@ export function authReadiness(req) {
     // Under production/staging enforcement, only a valid API key, a Bearer JWT,
     // or a Copilot passthrough survives. The dev fallback is gone.
     would_pass_in_production: apiKeyValid || hasJwt || isCopilotPath,
+  };
+}
+
+async function resolveApiKeyUser(req) {
+  // Try to resolve user from identity headers (x-lcc-user-id / x-lcc-user-email)
+  const user = await resolveDevUser(req);
+  if (user) return user;
+  // No identity headers — fall back to first owner (typical for automation callers)
+  if (OPS_SUPABASE_URL) {
+    const owner = await resolveFirstOwner();
+    if (owner) {
+      owner._api_key_auth = true;
+      return owner;
+    }
+  }
+  // Last resort: synthetic automation user so the call doesn't fail
+  return {
+    id: 'api-key-user',
+    email: 'automation@lcc',
+    display_name: 'API Automation',
+    avatar_url: null,
+    auth_id: null,
+    _api_key_auth: true,
+    _transitional: true,
+    memberships: [{
+      workspace_id: 'default-workspace',
+      workspace_name: 'Default',
+      workspace_slug: 'default',
+      role: 'operator'
+    }]
   };
 }
 
@@ -304,13 +336,18 @@ export async function authenticate(req, res) {
   const authHeader = req.headers['authorization'] || '';
   const apiKey = req.headers['x-lcc-key'] || '';
 
-  // 1. Try Supabase JWT
+  // 1. Try Supabase JWT. Some Power Automate flows send the LCC API key as
+  // Authorization: Bearer <key>; if it is not a valid JWT but it matches the
+  // configured API key, accept it as internal integration auth.
   if (authHeader.startsWith('Bearer ')) {
-    const jwt = authHeader.slice(7);
+    const jwt = authHeader.slice(7).trim();
     const supabaseUser = await verifySupabaseJwt(jwt);
     if (supabaseUser) {
       const user = await resolveUser(supabaseUser);
       if (user) return user;
+    }
+    if (verifyApiKey(jwt)) {
+      return resolveApiKeyUser(req);
     }
     // JWT provided but invalid — don't fall through
     res.status(401).json({ error: 'Invalid or expired token' });
@@ -323,33 +360,7 @@ export async function authenticate(req, res) {
       res.status(401).json({ error: 'Invalid API key' });
       return null;
     }
-    // Try to resolve user from identity headers (x-lcc-user-id / x-lcc-user-email)
-    const user = await resolveDevUser(req);
-    if (user) return user;
-    // No identity headers — fall back to first owner (typical for automation callers)
-    if (OPS_SUPABASE_URL) {
-      const owner = await resolveFirstOwner();
-      if (owner) {
-        owner._api_key_auth = true;
-        return owner;
-      }
-    }
-    // Last resort: synthetic automation user so the call doesn't fail
-    return {
-      id: 'api-key-user',
-      email: 'automation@lcc',
-      display_name: 'API Automation',
-      avatar_url: null,
-      auth_id: null,
-      _api_key_auth: true,
-      _transitional: true,
-      memberships: [{
-        workspace_id: 'default-workspace',
-        workspace_name: 'Default',
-        workspace_slug: 'default',
-        role: 'operator'
-      }]
-    };
+    return resolveApiKeyUser(req);
   }
 
   // 3a. Copilot plugin passthrough — requests from M365 Copilot declarative agent

@@ -141,7 +141,30 @@ export function getConfiguredStorageBackend() {
  * caller (the ref is self-describing).
  */
 export function looksLikeSharepointRef(ref) {
-  return typeof ref === 'string' && ref.startsWith('/');
+  const s = String(ref || '').trim();
+  return !!normalizeSharepointStorageRef(s);
+}
+
+/**
+ * Normalize the SharePoint references that have appeared in flow payloads and
+ * DB rows over time into the server-relative URL expected by PA flows:
+ *   /sites/TeamBriggs20/Shared Documents/...
+ *
+ * Older runs sometimes stored library-relative paths ("Shared Documents/...")
+ * or omitted the leading slash ("sites/..."). Without this, those refs are
+ * misrouted into the Supabase signed-URL branch and fail as bad bucket/path.
+ */
+export function normalizeSharepointStorageRef(ref) {
+  const s = String(ref || '').trim();
+  if (!s) return null;
+  if (/^https?:\/\/[^/]+\/sites\//i.test(s)) {
+    const u = new URL(s);
+    return decodeURIComponent(u.pathname);
+  }
+  if (s.startsWith('/sites/')) return s;
+  if (/^sites\//i.test(s)) return `/${s}`;
+  if (/^Shared Documents\//i.test(s)) return `${SHAREPOINT_SITE_PATH}/${s}`;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -370,34 +393,35 @@ export async function resolveArtifactDownload({ storageRef, opsUrl, opsKey, fetc
   }
   const doFetch = fetchImpl || ((u, opts) => fetch(u, opts));
 
-  if (looksLikeSharepointRef(storageRef)) {
+  const sharepointRef = normalizeSharepointStorageRef(storageRef);
+  if (sharepointRef) {
     const linkUrl = process.env.SHAREPOINT_LINK_URL;
     if (!linkUrl) {
       return {
         ok: false, status: 501, error: 'sharepoint_link_not_configured',
         detail: 'SHAREPOINT_LINK_URL (PA sharing-link flow) is not set.',
-        storage_ref: storageRef,
+        storage_ref: sharepointRef,
       };
     }
     try {
       const res = await doFetch(linkUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ server_relative_url: storageRef }),
+        body: JSON.stringify({ server_relative_url: sharepointRef }),
       });
       const text = await res.text().catch(() => '');
       let json = null;
       try { json = text ? JSON.parse(text) : null; } catch { /* keep */ }
       if (!res.ok || !json?.ok || !json?.url) {
         return { ok: false, status: res.status || 502, error: 'sharepoint_link_failed',
-          detail: String(json?.error || text || '').slice(0, 200), storage_ref: storageRef };
+          detail: String(json?.error || text || '').slice(0, 200), storage_ref: sharepointRef };
       }
       return {
         ok: true, status: 200,
         signed_url: json.url,
         expires_at: json.expires_at || null,
-        file_name:  String(storageRef).split('/').pop() || 'document',
-        storage_ref: storageRef,
+        file_name:  String(sharepointRef).split('/').pop() || 'document',
+        storage_ref: sharepointRef,
       };
     } catch (err) {
       return { ok: false, status: 502, error: 'sharepoint_link_error', detail: err?.message?.slice(0, 200) };

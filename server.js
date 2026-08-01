@@ -18,6 +18,9 @@ import cors from 'cors';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
+import { authenticate } from './api/_shared/auth.js';
+import { opsQuery } from './api/_shared/ops-db.js';
+import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -58,6 +61,21 @@ import govEvidenceRouter from './api/gov-evidence.js';
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
+const PRIMARY_WORKSPACE_ID =
+  process.env.LCC_PRIMARY_WORKSPACE_ID
+  || process.env.LCC_DEFAULT_WORKSPACE_ID
+  || 'a0000000-0000-0000-0000-000000000001';
+const enc = (v) => encodeURIComponent(String(v));
+const opportunitySyncRoutes = makeOpportunitySyncRoute({
+  opsQuery,
+  enc,
+  WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
+});
+const requireLccAuth = (handler) => async (req, res) => {
+  const user = await authenticate(req, res);
+  if (!user) return;
+  return handler(req, res);
+};
 
 // ── Deploy-derived asset version (R4-D #4, 2026-06-05) ──────────────────────
 // index.html shipped hard-coded `?v=2026050802` cache-busters on every <script>.
@@ -269,6 +287,11 @@ app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 
 app.all('/api/contact-writeback-tick', (req, res) => { req.query._route = 'contact-writeback-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-lookup-tick', (req, res) => { req.query._route = 'sf-record-lookup-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-sync-tick', (req, res) => { req.query._route = 'sf-record-sync-tick'; operationsHandler(req, res); });
+// Deal-spine connector: Power Automate "SF Deal -> LCC Opportunity Sync"
+// posts standard Salesforce Opportunity records here. The implementation is
+// shared with the MCP engine so Railway and MCP stay behavior-identical.
+app.post('/api/pipeline/ingest-opportunity', requireLccAuth(opportunitySyncRoutes.ingest));
+app.post('/api/pipeline/ingest-opportunities', requireLccAuth(opportunitySyncRoutes.ingestBatch));
 // SPEC Part B2 — external listing/property webpage crawl worker (cron:
 // lcc-listing-page-crawl every 30m via lcc_cron_post).
 app.all('/api/listing-page-crawl', (req, res) => handleListingPageCrawl(req, res));
