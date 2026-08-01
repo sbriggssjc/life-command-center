@@ -6225,8 +6225,17 @@ function _udOwnershipLadder(own, db) {
     }
     if (own.true_owner_sec_cik) h += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px">SEC filings →</a>';
   } else if (trueIsOperator) {
-    h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + esc(trueDisplay) + '</div>';
-    h += '<div style="font-size:11px;color:var(--yellow)">Operator-owner — verify this is the real-estate owner, not the chain operator.</div>';
+    // The operator is the TENANT, never the owner. Elevate the recorded deed
+    // owner (accurate) into the owner-of-record slot; never print the operator
+    // name as the true owner (Scott, 2026-07-31).
+    if (recDisplay) {
+      h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(recDisplay, _ownerCtxFromCurrent(own, db, 'recorded')) + '</div>';
+      h += '<div style="font-size:11px;color:var(--text2)">Deed owner (recorded) — the real-estate owner.</div>';
+      h += '<div style="font-size:11px;color:var(--text3);margin-top:3px">' + esc(trueDisplay) + ' is the operator / tenant, not the owner.</div>';
+    } else {
+      h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— unresolved —</div>';
+      h += '<div class="t-meta3">' + esc(trueDisplay) + ' is the operator / tenant. Beneficial owner not yet identified — queue LLC / SoS research.</div>';
+    }
   } else {
     h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— unresolved —</div>';
     h += '<div class="t-meta3">Beneficial owner not yet identified. Queue LLC / SoS research.</div>';
@@ -9148,9 +9157,11 @@ async function _udRenderActivityLogAsync(bodyEl) {
           // (same source_type='sale'/'listing' would double up).
           const srcType = (it.source_type || it.type || '').toLowerCase();
           if (srcType === 'sale' || srcType === 'listing') return;
-          // Contact activity (calls / emails / meetings) belongs on the CONTACT
-          // page, not the property's data history — drop it here (Scott, 2026-07-31).
-          if (/(call|email|meeting|voicemail|\bvm\b|text|sms|outreach|touch)/.test(srcType)) return;
+          // Property Activity Log = property DATA history ONLY (Scott, 2026-07-31).
+          // STRICT ALLOWLIST: only property/data event types survive; ALL contact
+          // activity (calls, emails, meetings, notes, tasks, outreach, texts — and
+          // anything unlabeled) is dropped and lives on the contact page instead.
+          if (!/(intake|_om|\bom\b|pipeline|stage|listing|sale|ownership|transfer|deed|lease|cms|survey|reconcil|ingest|import|valuation|assess|price_|status_change)/.test(srcType)) return;
 
           const colorMap = {
             intake_om:        'var(--accent)',
@@ -15586,7 +15597,15 @@ document.addEventListener('click', function (e) {
   e.stopPropagation();
   try {
     const raw = decodeURIComponent(el.getAttribute('data-broker-ctx') || '');
-    if (raw) openBrokerDrawer(raw);
+    if (!raw) return;
+    // Dock the broker BESIDE the property (companion) when a property is primary,
+    // instead of replacing it (Scott, 2026-07-31). Falls back to the broker drawer.
+    if (typeof _dualCapable === 'function' && _dualCapable() && _activePrimaryKind === 'property') {
+      let nm = null;
+      try { nm = (JSON.parse(raw) || {}).name || null; } catch (_e2) {}
+      if (nm && typeof _openEntityByNameSmart === 'function') { _openEntityByNameSmart(nm); return; }
+    }
+    openBrokerDrawer(raw);
   } catch (err) { console.warn('broker-link click: bad payload', err); }
 });
 document.addEventListener('keydown', function (e) {
