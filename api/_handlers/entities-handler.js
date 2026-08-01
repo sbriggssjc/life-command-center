@@ -18,7 +18,9 @@
 
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler, fetchWithTimeout } from '../_shared/ops-db.js';
-import { resolveArtifactDownload } from '../_shared/storage-adapter.js';
+import { resolveArtifactDownload, uploadDocToFolder } from '../_shared/storage-adapter.js';
+import { assemblePropertyPacket } from '../operations.js';
+import { generateDossier, recordDossier } from '../_shared/dossier-generator.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
@@ -54,6 +56,293 @@ function classifyDocType(fileName, fileType) {
   if (t === 'comp' || /\bcomp\b|comparable/.test(n)) return 'comp';
   if (t === 'master' || /master sheet|\bmaster\b/.test(n)) return 'master';
   return 'other';
+}
+
+// ============================================================================
+// DOSSIER PACKET ASSEMBLERS (grounded, reconciled — see
+// docs/architecture/dossier-standard-and-llm-contract.md §2). Every leaf value
+// is a TAG {v, source, as_of?, confidence?} or is OMITTED (renders "Not on
+// file"). We never fabricate: a field the source doesn't state stays absent.
+// ============================================================================
+
+const _diaSystems = ['dia', 'dia_db', 'dia_supabase', 'dialysis'];
+const _govSystems = ['gov', 'gov_db', 'gov_supabase', 'government'];
+
+function tag(v, source, extra = {}) {
+  if (v == null || v === '') return undefined;
+  return { v, ...(source ? { source } : {}), ...extra };
+}
+
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Resolve the linked domain (dia/gov) + external property id from an entity's
+// identities. Returns { domain, externalId } or nulls.
+function resolveDomainLink(identities) {
+  const gov = (identities || []).find(i => _govSystems.includes(i.source_system) && i.source_type === 'asset');
+  const dia = (identities || []).find(i => _diaSystems.includes(i.source_system) && i.source_type === 'asset');
+  if (gov?.external_id) return { domain: 'gov', externalId: gov.external_id };
+  if (dia?.external_id) return { domain: 'dia', externalId: dia.external_id };
+  // Fall back to any domain identity (some assets carry source_type='property').
+  const anyGov = (identities || []).find(i => _govSystems.includes(i.source_system) && i.external_id);
+  const anyDia = (identities || []).find(i => _diaSystems.includes(i.source_system) && i.external_id);
+  if (anyGov) return { domain: 'gov', externalId: anyGov.external_id };
+  if (anyDia) return { domain: 'dia', externalId: anyDia.external_id };
+  return { domain: null, externalId: null };
+}
+
+/**
+ * Assemble the reconciled PROPERTY packet for an asset entity. Reuses
+ * assemblePropertyPacket for entity/domain resolution + owner names, then
+ * augments with the live lease, CMS operations, and demographics readers.
+ */
+async function buildPropertyPacket(entityId, workspaceId) {
+  const base = await assemblePropertyPacket(entityId, workspaceId);
+  const bp = base.payload || {};
+  const prop = bp.lease_data || {}; // NOTE: assemblePropertyPacket names the properties row "lease_data".
+  const { domain, externalId } = resolveDomainLink(bp.external_identities);
+  const pid = externalId != null ? encodeURIComponent(externalId) : null;
+  const domainLabel = domain === 'gov' ? 'Government' : (domain === 'dia' ? 'Dialysis' : 'CRE');
+
+  // Live lease (superseded_at NULL), primary CMS clinic, patient-count series,
+  // demographics, ZIP census, payer mix — each degrades independently.
+  let lease = null, clinic = null, fpc = [], demos = [], zcta = null, payer = null;
+  let sales = [], listings = [];
+  if (domain && pid) {
+    const calls = [
+      domainQuery(domain, 'GET', `leases?property_id=eq.${pid}&superseded_at=is.null&order=is_active.desc.nullslast,lease_start.desc&limit=1`).catch(() => null),
+      domainQuery(domain, 'GET', `sales_transactions?property_id=eq.${pid}&transaction_state=eq.live&order=sale_date.desc&limit=8`).catch(() => null),
+      domainQuery(domain, 'GET', `available_listings?property_id=eq.${pid}&order=listing_date.desc&limit=5`).catch(() => null),
+    ];
+    if (domain === 'dia') {
+      calls.push(
+        domainQuery(domain, 'GET', `medicare_clinics?property_id=eq.${pid}&order=is_primary_ccn.desc.nullslast&limit=1`).catch(() => null),
+        domainQuery(domain, 'GET', `facility_patient_counts?property_id=eq.${pid}&order=snapshot_date.desc&limit=6`).catch(() => null),
+        domainQuery(domain, 'GET', `property_demographics?property_id=eq.${pid}&order=radius_miles.asc&limit=5`).catch(() => null),
+      );
+    }
+    const r = await Promise.all(calls);
+    lease = r[0]?.ok ? (r[0].data?.[0] || null) : null;
+    sales = r[1]?.ok ? (r[1].data || []) : [];
+    listings = r[2]?.ok ? (r[2].data || []) : [];
+    if (domain === 'dia') {
+      clinic = r[3]?.ok ? (r[3].data?.[0] || null) : null;
+      fpc = r[4]?.ok ? (r[4].data || []) : [];
+      demos = r[5]?.ok ? (r[5].data || []) : [];
+    }
+  }
+
+  // ZIP census + payer mix (dia) — cheap follow-ups keyed off the property/clinic.
+  if (domain === 'dia') {
+    const zip = prop.zip_code || null;
+    const ccn = prop.medicare_id || (clinic && clinic.medicare_id) || null;
+    const follow = await Promise.all([
+      zip ? domainQuery(domain, 'GET', `census_zcta_demographics?zip_code=eq.${encodeURIComponent(zip)}&limit=1`).catch(() => null) : Promise.resolve(null),
+      ccn ? domainQuery(domain, 'GET', `v_payer_mix_geo_averages?medicare_id=eq.${encodeURIComponent(ccn)}&limit=1`).catch(() => null) : Promise.resolve(null),
+    ]);
+    zcta = follow[0]?.ok ? (follow[0].data?.[0] || null) : null;
+    payer = follow[1]?.ok ? (follow[1].data?.[0] || null) : null;
+  }
+
+  // --- Ownership reconciliation: owner is NEVER the operator (§1.6) ------------
+  const recordedName = bp.ownership?.recorded_owner_name || prop.recorded_owner_name || null;
+  const trueName = bp.ownership?.true_owner_name || prop.true_owner_name || null;
+  let trueIsOperator = false;
+  if (prop.true_owner_id != null && domain) {
+    const to = await domainQuery(domain, 'GET',
+      `true_owners?true_owner_id=eq.${encodeURIComponent(prop.true_owner_id)}&select=is_operator_not_owner&limit=1`).catch(() => null);
+    trueIsOperator = !!(to?.ok && to.data?.[0]?.is_operator_not_owner);
+  }
+  const ownerOfRecord = (trueName && !trueIsOperator) ? trueName : recordedName;
+  const operatorName = prop.operator || (lease && lease.operator) || (trueIsOperator ? trueName : null) || prop.tenant;
+
+  // --- Snapshot / identity ----------------------------------------------------
+  const buildingSf = num(prop.building_size);
+  const valueEst = num(prop.current_value_estimate);
+  const identity = {
+    property_type: tag(prop.property_type, 'properties'),
+    building_sf: tag(buildingSf, 'properties'),
+    land_acres: tag(num(prop.land_area), 'properties'),
+    year_built: tag(prop.year_built, 'properties'),
+    ownership_type: tag(prop.property_ownership_type, 'properties'),
+    ownership: tag(prop.property_ownership_type, 'properties'),
+  };
+  if (clinic && clinic.stations != null) {
+    identity.stations = tag(num(clinic.stations), 'CMS (medicare_clinics)',
+      clinic.max_patient_capacity ? { confidence: `max capacity ${clinic.max_patient_capacity}` } : {});
+  }
+  if (valueEst != null && buildingSf) {
+    identity.price_per_sf = { v: Math.round(valueEst / buildingSf), derived: `value ${valueEst} ÷ building ${buildingSf} SF` };
+  }
+
+  // --- Tenancy & lease --------------------------------------------------------
+  const annualRent = lease ? num(lease.annual_rent != null ? lease.annual_rent : lease.rent) : num(prop.anchor_rent);
+  const rentPsf = (annualRent != null && buildingSf)
+    ? { v: Math.round((annualRent / buildingSf) * 100) / 100, derived: `rent ${annualRent} ÷ ${buildingSf} SF` }
+    : (lease && lease.rent_per_sf != null ? tag(num(lease.rent_per_sf), 'leases') : undefined);
+  const tenancy_lease = {
+    tenant: tag((lease && lease.tenant) || prop.tenant, lease ? 'leases' : 'properties'),
+    guarantor: tag(lease && lease.guarantor, 'leases'),
+    annual_base_rent: tag(annualRent, lease ? 'lease (documented)' : 'properties',
+      lease && lease.lease_start ? { as_of: lease.lease_start } : {}),
+    year1_rent_psf: rentPsf,
+    lease_start: tag(lease && lease.lease_start, 'leases'),
+    lease_expiration: tag(lease && lease.lease_expiration, 'leases'),
+    expense_structure: tag(lease && (lease.expense_structure_canonical || lease.expense_structure), 'leases'),
+    escalations_text: tag(lease && (lease.escalation_raw_text_current || lease.renewal_option_text), 'leases'),
+    renewal_options: tag(lease && lease.renewal_options, 'leases'),
+  };
+  // Derived term remaining (years) — every input present.
+  if (lease && lease.lease_expiration) {
+    const exp = new Date(lease.lease_expiration);
+    if (!Number.isNaN(exp.getTime())) {
+      const yrs = Math.round(((exp.getTime() - Date.now()) / (365.25 * 24 * 3600 * 1000)) * 10) / 10;
+      if (yrs > 0) tenancy_lease.term_remaining_years = { v: `~${yrs}`, derived: `to ${String(lease.lease_expiration).slice(0, 10)} from today (firm; excludes options)` };
+    }
+  }
+
+  // --- Operations (CMS) with conflict surfacing (§1.5) ------------------------
+  let operations = null;
+  if (domain === 'dia' && (clinic || fpc.length || prop.total_chairs != null)) {
+    const latestFpc = fpc.find(r => !r.data_quality_flag) || fpc[0] || null;
+    operations = {
+      stations: tag(clinic && num(clinic.stations), 'CMS (medicare_clinics)'),
+      patient_count: tag(latestFpc && num(latestFpc.corrected_total_patients != null ? latestFpc.corrected_total_patients : latestFpc.total_patients),
+        'facility_patient_counts', latestFpc && latestFpc.snapshot_date ? { as_of: latestFpc.snapshot_date } : {}),
+      ttm_treatments: tag(clinic && num(clinic.ttm_total_treatments != null ? clinic.ttm_total_treatments : clinic.estimated_annual_treatments), 'CMS (medicare_clinics)'),
+      certification_date: tag(clinic && (clinic.certification_date || clinic.latest_certification_date), 'CMS (medicare_clinics)'),
+      _conflicts: [],
+    };
+    // Surface the audited property-denorm vs CMS divergence rather than trusting either.
+    const denormChairs = num(prop.total_chairs), cmsStations = clinic && num(clinic.stations);
+    if (denormChairs != null && cmsStations != null && Math.abs(denormChairs - cmsStations) > 2) {
+      operations._conflicts.push({ field: 'stations', values: [{ v: cmsStations, source: 'CMS' }, { v: denormChairs, source: 'properties denorm' }], reconciled: cmsStations });
+    }
+    const denormPatients = num(prop.total_patients);
+    const cmsPatients = latestFpc && num(latestFpc.corrected_total_patients != null ? latestFpc.corrected_total_patients : latestFpc.total_patients);
+    if (denormPatients != null && cmsPatients != null && Math.abs(denormPatients - cmsPatients) > Math.max(20, cmsPatients)) {
+      operations._conflicts.push({ field: 'patient count', values: [{ v: cmsPatients, source: 'CMS' }, { v: denormPatients, source: 'properties denorm' }], reconciled: cmsPatients });
+    }
+  } else if (domain === 'gov') {
+    operations = {
+      agency: tag(prop.agency || (bp.gov_data && bp.gov_data.agency), 'gov'),
+    };
+  }
+
+  // --- Transactions (live only) ----------------------------------------------
+  const transactions = (sales || []).map(s => ({
+    date: s.sale_date,
+    grantor: s.seller_name || s.seller || null,
+    grantee: s.buyer_name || s.buyer || null,
+    price: num(s.sold_price),
+    cap_rate: s.cap_rate_final != null ? s.cap_rate_final : (s.calculated_cap_rate != null ? s.calculated_cap_rate : s.cap_rate),
+    source: s.data_source || 'sales_transactions',
+  }));
+
+  // --- Documents --------------------------------------------------------------
+  const documents = (bp.documents || []).map(d => ({
+    type: d.doc_type || d.type || 'document',
+    file_name: d.file_name || d.title || null,
+    source: d.storage_backend || d.source || d.backend || null,
+    date: d.created_at || null,
+  }));
+
+  // --- Valuation --------------------------------------------------------------
+  const valuation = {
+    model_estimate: valueEst != null
+      ? { v: valueEst, source: 'LCC valuation model', confidence: 'low (model estimate — not an appraisal)' }
+      : undefined,
+    last_sale_price: tag(num(prop.latest_sale_price), 'properties'),
+  };
+
+  // --- Ownership block --------------------------------------------------------
+  const ownership = {
+    owner_of_record: tag(ownerOfRecord, 'reconciled property owner',
+      trueName && !trueIsOperator ? { confidence: 'true owner' } : { confidence: 'recorded deed owner' }),
+    recorded_deed_owner: (recordedName && recordedName !== ownerOfRecord) ? tag(recordedName, 'recorded deed') : undefined,
+    operator_tenant: tag(operatorName, operatorName === trueName ? 'operator (not the owner)' : 'lease/properties'),
+    owner_is_spe: prop.owner_is_spe != null ? tag(prop.owner_is_spe ? 'Yes' : 'No', 'properties') : undefined,
+    developer: tag(prop.developer, 'properties'),
+  };
+
+  // --- Meta / header ----------------------------------------------------------
+  const addr = prop.address || bp.entity?.name || 'Property';
+  const cityState = [prop.city, prop.state].filter(Boolean).join(', ');
+  const footerIds = [
+    externalId != null ? `property ${externalId}` : null,
+    prop.medicare_id ? `CCN ${prop.medicare_id}` : null,
+  ].filter(Boolean).join(' · ');
+  const meta = {
+    title: addr + (cityState ? `, ${cityState}` : ''),
+    subtitle: [prop.county ? `${prop.county} County` : null, prop.property_type].filter(Boolean).join(' · '),
+    domain_label: domainLabel,
+    footer_ids: footerIds,
+    property_label: addr,
+    domain,
+    property_id: externalId,
+  };
+
+  return {
+    meta, identity, ownership, tenancy_lease, operations, valuation, transactions, documents,
+    location: (domain === 'dia') ? {
+      geocode: (prop.latitude && prop.longitude) ? tag(`${prop.latitude}, ${prop.longitude}`, 'properties') : undefined,
+      radius_demographics: demos,
+      zip_census: zcta,
+      payer_mix: payer,
+    } : undefined,
+    listings,
+  };
+}
+
+/**
+ * Assemble the reconciled DEAL packet — the property block + the deal spine
+ * (parties, correspondence, offers, cadence, ROE). Correspondence/offers mirror
+ * mcp/deal-dossier-tools.js (activity_events on the entity + deal anchor).
+ */
+async function buildDealPacket(entityId, workspaceId) {
+  const propertyPacket = await buildPropertyPacket(entityId, workspaceId);
+
+  const [actRes, cadRes, partyRes] = await Promise.all([
+    opsQuery('GET',
+      `activity_events?or=(entity_id.eq.${encodeURIComponent(entityId)},metadata->>deal_entity_id.eq.${encodeURIComponent(entityId)})` +
+      `&order=occurred_at.desc&limit=60&select=category,title,direction,occurred_at,source_type,metadata`).catch(() => null),
+    opsQuery('GET',
+      `touchpoint_cadence?entity_id=eq.${encodeURIComponent(entityId)}&select=next_touch_date,next_touch_type,cadence_status&order=next_touch_date.asc&limit=1`).catch(() => null),
+    opsQuery('POST', 'rpc/lcc_party_relationships', { p_entity: entityId, p_limit: 40 }).catch(() => null),
+  ]);
+
+  const acts = (actRes?.ok && Array.isArray(actRes.data)) ? actRes.data : [];
+  const correspondence = acts
+    .filter(a => ['email', 'call', 'meeting', 'note'].includes(String(a.category || '').toLowerCase()))
+    .slice(0, 25)
+    .map(a => ({ date: a.occurred_at, direction: a.direction || (a.metadata && a.metadata.direction) || '', subject: a.title || '', source: a.source_type || 'activity_events' }));
+  const offers = acts
+    .filter(a => /offer|loi|bid/i.test(String(a.category || '') + ' ' + String(a.title || '')))
+    .slice(0, 15)
+    .map(a => ({ date: a.occurred_at, buyer: (a.metadata && (a.metadata.buyer || a.metadata.buyer_name)) || '', price: (a.metadata && (a.metadata.price || a.metadata.offer_price)) || null, status: (a.metadata && a.metadata.status) || '' }));
+
+  const parties = (partyRes?.ok && Array.isArray(partyRes.data))
+    ? partyRes.data.slice(0, 25).map(r => ({ role: r.relationship || r.role || 'party', name: r.name || r.counterparty_name || '', flag: r.is_institution ? 'institution' : (r.is_reit ? 'REIT' : ''), source: 'lcc_party_relationships' }))
+    : [];
+
+  const cad = (cadRes?.ok && cadRes.data?.[0]) || null;
+  const deal = {
+    stage: undefined,
+    parties,
+    correspondence,
+    offers,
+    cadence: {
+      next_touch_due: tag(cad && cad.next_touch_date, 'touchpoint_cadence'),
+      next_touch_type: tag(cad && cad.next_touch_type, 'touchpoint_cadence'),
+    },
+    roe: {},
+  };
+
+  const meta = { ...propertyPacket.meta };
+  meta.title = `${propertyPacket.meta.property_label} — Deal`;
+  return { ...propertyPacket, deal, meta };
 }
 
 export const entitiesHandler = withErrorHandler(async function handler(req, res) {
@@ -217,6 +506,45 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       if (!resolved.ok) return res.status(resolved.status || 500).json({ error: resolved.error || 'sign_failed', detail: resolved.detail || null });
       return res.status(200).json({ ok: true, signed_url: resolved.signed_url,
         file_name: row.file_name || resolved.file_name, expires_at: resolved.expires_at || null });
+    }
+
+    // Dossiers list — stored property/deal dossiers for this entity, newest per
+    // type first, with all versions. Surfaced in the property panel Documents tab.
+    // GET /api/entities?action=dossiers&id=<uuid>
+    if (action === 'dossiers' && id) {
+      const entRes = await opsQuery('GET',
+        `entities?id=eq.${id}&workspace_id=eq.${workspaceId}&select=id`);
+      if (!entRes.ok || !entRes.data?.length) return res.status(404).json({ error: 'Entity not found' });
+      const d = await opsQuery('GET',
+        `lcc_dossiers?entity_id=eq.${encodeURIComponent(id)}` +
+        `&select=id,dossier_type,storage_ref,format,version,title,generated_at,source_hash,metadata` +
+        `&order=generated_at.desc&limit=50`).catch(() => null);
+      const rows = (d && d.ok && Array.isArray(d.data)) ? d.data : [];
+      const current = {};
+      for (const r of rows) if (!current[r.dossier_type]) current[r.dossier_type] = r;
+      return res.status(200).json({ entity_id: id, count: rows.length, dossiers: rows, current });
+    }
+
+    // Mint a signed URL for a stored dossier (by dossier id, routing on ref shape
+    // — Supabase signed URL or SharePoint sharing link).
+    // GET /api/entities?action=dossier_url&dossier_id=<uuid>
+    if (action === 'dossier_url') {
+      const dId = String(req.query.dossier_id || '').trim();
+      if (!dId) return res.status(400).json({ error: 'dossier_id required' });
+      const d = await opsQuery('GET',
+        `lcc_dossiers?id=eq.${encodeURIComponent(dId)}&select=storage_ref,title,metadata&limit=1`).catch(() => null);
+      const row = (d && d.data && d.data[0]) || null;
+      if (!row || !row.storage_ref) return res.status(404).json({ error: 'dossier_not_found' });
+      const resolved = await resolveArtifactDownload({
+        storageRef: row.storage_ref,
+        opsUrl: process.env.OPS_SUPABASE_URL,
+        opsKey: process.env.OPS_SUPABASE_KEY,
+        fetchImpl: (u, opts) => fetchWithTimeout(u, opts, 8000),
+      });
+      if (!resolved.ok) return res.status(resolved.status || 500).json({ error: resolved.error || 'sign_failed', detail: resolved.detail || null });
+      return res.status(200).json({ ok: true, signed_url: resolved.signed_url,
+        title: row.title || null, sharepoint_url: row.metadata?.sharepoint_url || null,
+        expires_at: resolved.expires_at || null });
     }
 
     // UI Phase 5 — "Owners Missing a Contact" value-ranked BD worklist.
@@ -769,6 +1097,96 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
   if (req.method === 'POST') {
     if (!requireRole(user, 'operator', workspaceId)) {
       return res.status(403).json({ error: 'Operator role required' });
+    }
+
+    // Generate (or reuse) a grounded property/deal dossier.
+    // POST /api/entities?action=generate_dossier  body: { entity_id, kind?, force? }
+    //   - assembles the reconciled DATA PACKET (buildPropertyPacket/buildDealPacket)
+    //   - generateDossier() → HTML (facts rendered in code; Ollama authors Analysis)
+    //   - if the packet hash matches the latest stored dossier and !force, REUSE it
+    //   - else recordDossier() stores the HTML + inserts a versioned lcc_dossiers row
+    //   - pushes the HTML to SharePoint (Team Briggs - Documents/PROPERTIES/<property>)
+    //     best-effort and saves the web URL to metadata.sharepoint_url
+    //   - returns { storage_ref, signed_url, sharepoint_url }
+    if (req.query.action === 'generate_dossier') {
+      const { entity_id, force } = req.body || {};
+      const kind = (req.body?.kind === 'deal') ? 'deal' : 'property';
+      if (!entity_id) return res.status(400).json({ error: 'entity_id is required' });
+
+      const entRes = await opsQuery('GET',
+        `entities?id=eq.${encodeURIComponent(entity_id)}&workspace_id=eq.${workspaceId}&select=id,name`);
+      if (!entRes.ok || !entRes.data?.length) return res.status(404).json({ error: 'Entity not found' });
+
+      const opsUrl = process.env.OPS_SUPABASE_URL;
+      const opsKey = process.env.OPS_SUPABASE_KEY;
+      const fetchImpl = (u, opts) => fetchWithTimeout(u, opts, 45000);
+
+      let packet;
+      try {
+        packet = kind === 'deal'
+          ? await buildDealPacket(entity_id, workspaceId)
+          : await buildPropertyPacket(entity_id, workspaceId);
+      } catch (err) {
+        return res.status(500).json({ error: 'packet_assembly_failed', detail: err?.message });
+      }
+
+      const built = await generateDossier({ kind, packet, entityId: entity_id, title: packet.meta?.title });
+
+      // Freshness: reuse the latest stored dossier when the fact-packet hash is
+      // unchanged (source_hash excludes generated_date, so it's a true staleness key).
+      if (!force) {
+        const prev = await opsQuery('GET',
+          `lcc_dossiers?entity_id=eq.${encodeURIComponent(entity_id)}&dossier_type=eq.${kind}` +
+          `&select=id,storage_ref,version,source_hash,metadata&order=version.desc&limit=1`).catch(() => null);
+        const row = (prev && prev.ok && prev.data?.[0]) || null;
+        if (row && row.source_hash && row.source_hash === built.source_hash && row.storage_ref) {
+          const resolved = await resolveArtifactDownload({ storageRef: row.storage_ref, opsUrl, opsKey, fetchImpl });
+          return res.status(200).json({
+            ok: true, reused: true, id: row.id, kind, storage_ref: row.storage_ref, version: row.version,
+            signed_url: resolved.ok ? resolved.signed_url : null,
+            sharepoint_url: row.metadata?.sharepoint_url || null,
+            analysis: built.analysis,
+          });
+        }
+      }
+
+      // Store + version.
+      const stored = await recordDossier({
+        kind, entityId: entity_id, workspaceId, title: built.title, html: built.html,
+        sourceHash: built.source_hash, generatedBy: user.id,
+        metadata: { generated_via: 'panel', analysis_ok: built.analysis?.ok || false, ai_model: built.analysis?.model || null },
+        opsQuery, opsUrl, opsKey, fetchImpl,
+      });
+      if (!stored.ok) return res.status(502).json({ error: 'record_failed', detail: stored.insert_error || stored.error });
+
+      const resolved = await resolveArtifactDownload({ storageRef: stored.storage_ref, opsUrl, opsKey, fetchImpl });
+
+      // Best-effort SharePoint push (HTML) — never blocks the dossier response.
+      let sharepointUrl = null;
+      try {
+        const label = String(packet.meta?.property_label || 'Property').replace(/[\\/]+/g, '-').slice(0, 120);
+        const root = process.env.SHAREPOINT_DOSSIER_ROOT || 'Team Briggs - Documents/PROPERTIES';
+        const sp = await uploadDocToFolder({
+          folderPath: `${root}/${label}`,
+          fileName: `${kind}-dossier-v${stored.version}.html`,
+          bytes: Buffer.from(built.html, 'utf8'),
+          fetchImpl: (u, opts) => fetchWithTimeout(u, opts, 30000),
+        });
+        if (sp.ok && sp.server_relative_url) {
+          sharepointUrl = sp.server_relative_url;
+          await opsQuery('PATCH', `lcc_dossiers?id=eq.${encodeURIComponent(stored.id)}`,
+            { metadata: { generated_via: 'panel', analysis_ok: built.analysis?.ok || false, ai_model: built.analysis?.model || null, sharepoint_url: sharepointUrl } })
+            .catch(() => null);
+        }
+      } catch (_e) { /* SharePoint push is best-effort */ }
+
+      return res.status(200).json({
+        ok: true, reused: false, id: stored.id, kind, version: stored.version,
+        storage_ref: stored.storage_ref,
+        signed_url: resolved.ok ? resolved.signed_url : null,
+        sharepoint_url: sharepointUrl,
+        analysis: built.analysis,
+      });
     }
 
     // On-demand sidebar extraction processing

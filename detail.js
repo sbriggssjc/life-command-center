@@ -8965,11 +8965,58 @@ async function _udRenderDocumentsAsync(bodyEl) {
     bodyEl.innerHTML = '<div class="detail-empty">This property isn’t linked to an LCC entity yet, so its documents can’t be looked up. Documents are keyed to the property’s entity.</div>';
     return;
   }
-  let data = null;
-  try { data = await _entityApiFetch('/api/entities?action=documents&id=' + encodeURIComponent(eid)); }
-  catch (_e) { data = null; }
-  bodyEl.innerHTML = _udRenderDocuments(data);
+  let data = null, dossiers = null;
+  try {
+    [data, dossiers] = await Promise.all([
+      _entityApiFetch('/api/entities?action=documents&id=' + encodeURIComponent(eid)),
+      _entityApiFetch('/api/entities?action=dossiers&id=' + encodeURIComponent(eid)).catch(() => null),
+    ]);
+  } catch (_e) { data = null; }
+  bodyEl.innerHTML = _udRenderDossiers(dossiers) + _udRenderDocuments(data);
 }
+
+// Stored, generated dossiers (property/deal) for this property — newest first.
+function _udRenderDossiers(data) {
+  const rows = (data && Array.isArray(data.dossiers)) ? data.dossiers : [];
+  if (!rows.length) return '';
+  let html = '<div class="detail-section"><div class="detail-section-title">Dossiers'
+    + ' <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">' + rows.length + '</span></div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin:-4px 0 8px">Generated property/deal briefs. Opens in a new tab.</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:6px">';
+  for (const d of rows) {
+    const label = (d.dossier_type === 'deal' ? 'Deal Dossier' : 'Property Dossier') + ' · v' + (d.version || 1);
+    const sp = d.metadata && d.metadata.sharepoint_url ? ' · SharePoint' : '';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
+    html += '<div style="min-width:0"><div style="font-size:12.5px;font-weight:600;color:var(--text)">' + esc(label) + '</div>';
+    html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + (d.generated_at ? esc(_fmtDate(d.generated_at)) : '') + esc(sp) + '</div></div>';
+    html += '<button class="dns-cta" style="flex-shrink:0" onclick="_udOpenDossier(' + JSON.stringify(String(d.id)) + ', this)">Open ↗</button>';
+    html += '</div>';
+  }
+  html += '</div></div>';
+  return html;
+}
+
+// Mint a signed/sharing URL for a stored dossier and open it in a new tab.
+async function _udOpenDossier(dossierId, btn) {
+  if (!dossierId) return;
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+  const w = (typeof window !== 'undefined') ? window.open('', '_blank') : null;
+  try {
+    const d = await _entityApiFetch('/api/entities?action=dossier_url&dossier_id=' + encodeURIComponent(dossierId));
+    if (d && d.ok && d.signed_url) {
+      if (w) w.location.href = d.signed_url; else window.open(d.signed_url, '_blank');
+    } else {
+      if (w) w.close();
+      if (typeof showToast === 'function') showToast('Could not open dossier', 'error');
+    }
+  } catch (_e) {
+    if (w) w.close();
+    if (typeof showToast === 'function') showToast('Could not open dossier', 'error');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+window._udOpenDossier = _udOpenDossier;
 
 function _udRenderDocuments(data) {
   const groups = (data && data.groups) || {};
@@ -9090,18 +9137,55 @@ function _udBuildPropertyDossierHTML(c){
 }
 window._udBuildPropertyDossierHTML = _udBuildPropertyDossierHTML;
 
-function _udOpenPropertyDossier(btn){
+// Open the client-built, data-only dossier in the given (or a new) tab. This is
+// the offline fallback used when the server generator is unreachable or the
+// property isn't linked to an LCC entity.
+function _udOpenClientDossier(w){
   try{
     const html = _udBuildPropertyDossierHTML(_udCache);
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
-    const w = window.open(url, '_blank');
+    if (w) { w.location.href = url; } else { w = window.open(url, '_blank'); }
     if(!w && typeof showToast==='function') showToast('Popup blocked - allow popups to view the dossier', 'error');
     setTimeout(function(){ try{ URL.revokeObjectURL(url); }catch(_e){} }, 120000);
   }catch(e){
     if(typeof showToast==='function') showToast('Could not build dossier', 'error');
     console.warn('dossier build failed', e);
   }
+}
+
+// Header "Dossier" button — generate (or reuse a fresh) grounded, stored dossier
+// via the server (LLM-authored Analysis + provenance + SharePoint push), open it
+// in a new tab. Falls back to the client-built data-only dossier if the server
+// call fails or the property isn't linked to an LCC entity.
+async function _udOpenPropertyDossier(btn){
+  const eid = _udCache.lccEntityId
+    || (_udCache.entityMeta && (_udCache.entityMeta.entity_id || _udCache.entityMeta.id))
+    || (_udCache.ownership && _udCache.ownership.owner_entity_id)
+    || null;
+  // Open the tab synchronously (before any await) so the browser doesn't block it.
+  const w = (typeof window !== 'undefined') ? window.open('', '_blank') : null;
+  if (!eid) { _udOpenClientDossier(w); return; }
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+  try{
+    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+    const res = await fetchFn('/api/entities?action=generate_dossier', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, (typeof _entityApiHeaders==='function' ? _entityApiHeaders() : {})),
+      body: JSON.stringify({ entity_id: eid, kind: 'property' }),
+    });
+    const data = res && res.ok ? await res.json() : null;
+    if (data && data.ok && data.signed_url) {
+      if (w) w.location.href = data.signed_url; else window.open(data.signed_url, '_blank');
+    } else {
+      _udOpenClientDossier(w); // graceful fallback
+    }
+  }catch(e){
+    console.warn('server dossier failed, using client fallback', e);
+    _udOpenClientDossier(w);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
 }
 window._udOpenPropertyDossier = _udOpenPropertyDossier;
 
