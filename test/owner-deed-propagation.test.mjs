@@ -15,6 +15,8 @@ import {
   resolveDeedRecordedOwner,
   writeLoanFromDeed,
   writeDeedPartyContact,
+  lenderNameForGraphFinance,
+  saleHistoryBelongsToAsset,
 } from '../api/_handlers/sidebar-pipeline.js';
 
 // ── A fake domain DB keyed by a tiny in-memory store ──
@@ -474,6 +476,30 @@ describe('writeLoanFromDeed (mortgage/DoT grantee → lender side)', () => {
     assert.equal(out.ok, true);
     assert.equal(out.skipped, 'already_recorded');
     assert.equal(calls.posts.filter(p => p.path === 'loans').length, 0);
+  });
+});
+
+describe('sidebar sales-history graph guards', () => {
+  it('suppresses brokerages as finance-edge lenders but keeps real lending arms', () => {
+    assert.equal(lenderNameForGraphFinance('Marcus & Millichap'), null);
+    assert.equal(lenderNameForGraphFinance('M&M'), null);
+    assert.equal(
+      lenderNameForGraphFinance('Marcus & Millichap Capital Corporation'),
+      'Marcus & Millichap Capital Corporation',
+    );
+    assert.equal(lenderNameForGraphFinance('Marcus & Millichap Capstar Bank'), 'Capstar Bank');
+  });
+
+  it('allows same-asset sale rows and rows with no row-level address', () => {
+    const entity = { address: '5247 Airways Blvd' };
+    assert.equal(saleHistoryBelongsToAsset(entity, { property_address: '5247 Airways Boulevard, Memphis, TN 38116' }), true);
+    assert.equal(saleHistoryBelongsToAsset(entity, { buyer: 'Kingsbarn Realty' }), true);
+  });
+
+  it('rejects same-batch cross-asset sale rows with a different property address', () => {
+    const entity = { address: '5247 Airways Blvd' };
+    assert.equal(saleHistoryBelongsToAsset(entity, { property_address: '14001 Crown Ct, Woodbridge, VA' }), false);
+    assert.equal(saleHistoryBelongsToAsset(entity, { comp_address: '123 Clue Dr, Somewhere, TX' }), false);
   });
 });
 

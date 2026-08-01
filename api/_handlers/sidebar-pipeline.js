@@ -503,6 +503,42 @@ const ROLE_TO_RELATIONSHIP = {
   true_seller_contact: 'associated_with',
 };
 
+function canonicalGraphAddress(value) {
+  const s = normalizeAddress(value || '');
+  return s
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
+function saleHistoryRowAddress(sale) {
+  return sale?.property_address
+    || sale?.address
+    || sale?.street_address
+    || sale?.asset_address
+    || sale?.listing_address
+    || sale?.comp_address
+    || sale?.sale_address
+    || null;
+}
+
+export function saleHistoryBelongsToAsset(entity, sale) {
+  const rowAddress = saleHistoryRowAddress(sale);
+  if (!rowAddress) return true;
+  const entityAddress = entity?.address || entity?.street_address || entity?.name || null;
+  if (!entityAddress) return false;
+  const rowCanon = canonicalGraphAddress(rowAddress);
+  const entityCanon = canonicalGraphAddress(entityAddress);
+  if (!rowCanon || !entityCanon) return false;
+  return rowCanon === entityCanon || rowCanon.includes(entityCanon) || entityCanon.includes(rowCanon);
+}
+
+export function lenderNameForGraphFinance(rawName) {
+  const cleaned = cleanLenderName(rawName);
+  if (cleaned.skip) return null;
+  if (cleaned.reason === 'lender_arm') return cleaned.clean;
+  return lenderNamePasses(cleaned.clean);
+}
+
 // ── Domain classification keywords ──────────────────────────────────────────
 // Word-boundary regexes prevent false positives (e.g. 'ice' matching 'office').
 // Short acronyms use \b boundaries; multi-word phrases use plain includes via
@@ -2061,8 +2097,18 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
 
     if (eventResult.ok) recorded++;
 
+    const graphRowMatchesAsset = saleHistoryBelongsToAsset(entity, sale);
+    if (!graphRowMatchesAsset) {
+      console.warn('[unpackSalesHistory] skipped cross-asset graph edges', {
+        asset_entity_id: propertyEntityId,
+        asset_address: entity?.address || entity?.name || null,
+        row_address: saleHistoryRowAddress(sale),
+        source,
+      });
+    }
+
     // Create buyer entity if present (and not already handled by contacts)
-    if (sale.buyer) {
+    if (graphRowMatchesAsset && sale.buyer) {
       const buyerType = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP)\b/i.test(sale.buyer)
         ? 'organization' : 'person';
       const buyerSeed = { name: sale.buyer };
@@ -2105,7 +2151,7 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
     }
 
     // Create seller entity if present
-    if (sale.seller) {
+    if (graphRowMatchesAsset && sale.seller) {
       const sellerType = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP)\b/i.test(sale.seller)
         ? 'organization' : 'person';
 
@@ -2132,15 +2178,23 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
     }
 
     // Create lender entity if present
-    if (sale.lender) {
+    const graphLender = lenderNameForGraphFinance(sale.lender);
+    if (graphRowMatchesAsset && sale.lender && !graphLender) {
+      console.warn('[unpackSalesHistory] skipped non-lender finance edge', {
+        asset_entity_id: propertyEntityId,
+        raw_lender: sale.lender,
+        source,
+      });
+    }
+    if (graphRowMatchesAsset && graphLender) {
       const lenderLink = await ensureEntityLink({
         workspaceId,
         userId,
         sourceSystem: source,
         sourceType: 'company',
-        externalId: normalizeCanonicalName(sale.lender),
+        externalId: normalizeCanonicalName(graphLender),
         domain,
-        seedFields: { name: sale.lender, org_type: 'lender' },
+        seedFields: { name: graphLender, org_type: 'lender' },
       });
 
       if (lenderLink.ok) {
@@ -9076,7 +9130,11 @@ export async function writeLoanFromDeed(args, deps) {
     const { domain, propertyId, lenderName, borrowerName = null,
             loanAmount = null, originationDate = null, documentId = null, sourceUrl = null } = args || {};
     if (!domain || propertyId == null || !lenderName) { out.skipped = 'missing_input'; return out; }
-    const lender = lenderNamePasses(lenderName);
+    const cleanedLender = cleanLenderName(lenderName);
+    if (cleanedLender.skip) { out.skipped = 'lender_failed_guards'; return out; }
+    const lender = cleanedLender.reason === 'lender_arm'
+      ? cleanedLender.clean
+      : lenderNamePasses(cleanedLender.clean);
     if (!lender) { out.skipped = 'lender_failed_guards'; return out; }
 
     // Normalize the lender into the `lenders` entity table (dedup across loans) and
