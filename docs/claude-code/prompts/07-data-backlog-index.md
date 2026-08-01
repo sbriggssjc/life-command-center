@@ -20,3 +20,16 @@ Status best-known as of 2026-08-01 (confirm + tell Cowork which to close):
 
 Cowork will migrate any still-open item into its own `prompts/NN-*.md` on request or as it becomes the active
 piece of work.
+
+
+## Update 2026-08-01 (session 2): followup prompts 2 & 3 RETURNED + DONE
+- Prompt 2 (rent/SF + current-escalated-rent): **done** — detail.js + entities-handler + dossier-generator render Year-1 & current rent + $/SF; lease 16307 backfilled ($28.85 -> $200,155 / $31.73). Response in `done/07-followup2-rent-per-sf.response.docx`.
+- Prompt 3 (transactions/listings timeline): **done** — Transaction & Marketing Timeline wired from sales_transactions (live) + available_listings; verified on 23654. Response in `done/07-followup3-transactions-timeline.response.docx`. (Source note: active listing cap stored 0.0524, not 5.25
+## Update 2026-08-01 (session 2): followup prompts 2 & 3 RETURNED + DONE
+- Prompt 2 (rent/SF + current-escalated-rent): **done** — detail.js + entities-handler + dossier-generator
+  render Year-1 & current rent + per-SF; lease 16307 backfilled (28.85/SF -> ~200,155 current / 31.73 SF).
+  Response in `done/07-followup2-rent-per-sf.response.docx`.
+- Prompt 3 (transactions/listings timeline): **done** — Transaction & Marketing Timeline wired from
+  sales_transactions (live) + available_listings; verified on 23654. Response in
+  `done/07-followup3-transactions-timeline.response.docx`. (Source note: active listing cap stored 0.0524, not
+  5.25% — left grounded.)

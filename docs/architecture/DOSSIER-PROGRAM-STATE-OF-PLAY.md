@@ -190,3 +190,20 @@ flows), **11** (comps connector), **08** (Deal-tab UI). Corrected sequence: 09+0
 Architecture implication: field-source-priority is a foundation (drift lets the wrong source win); the deal
 spine is a set of PA flows that must be fixed before it can fill; and we need an "LCC health" surface so
 failures don't hide in a weekly digest.
+
+---
+
+## Responses processed + queue update (2026-08-01, session 2b)
+Three Claude Code responses returned and were reconciled (moved to `docs/claude-code/done/`):
+- **Cap-rate (prompt 01): DONE** (PR #1551 merged; Dialysis #7355 pending merge). Root cause: the $943,794
+  anchor was mis-dated to the superseded lease's 2028-08-28, so the engine projected 3 escalations -> 6.46%.
+  Re-anchored to 2025-08-18; sale/listing set to 6.00%; **rebuilt the stale `v_sales_comps` matview (fixed 412
+  rows)**; added guard `v_dia_closed_deal_cap_vs_asking` + tests; writer guard in sidebar-pipeline. The wrong
+  #7354 migration was superseded.
+- **rent/SF + current-escalated-rent (followup 2): DONE** — paired Year-1/current rent + $/SF; lease 16307
+  backfilled.
+- **transactions/listings timeline (followup 3): DONE** — wired from sales_transactions (live) + available_listings.
+New prompts queued: **12** (LCC Health surface — observability so failures don't hide a week), **13** (Property
+& Contact tab cross-DB connectivity). Flow review: several failing PA flows are HTTP calls into the LCC app, so
+deploying 1aae4e20 likely clears a chunk (noted in prompt 10); the comps ConnectorOperationNotFound is likely an
+unregistered action in copilot_action_registry.json (noted in prompt 11).

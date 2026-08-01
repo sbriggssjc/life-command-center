@@ -1,35 +1,33 @@
-# Claude Code queue — STATUS  (updated 2026-08-01, session 2)
+# Claude Code queue — STATUS  (updated 2026-08-01, session 2b)
 
-## Open (in `prompts/`) — recommended order reflects the error triage
-| # | Prompt | Priority | State | Note |
-|---|--------|----------|-------|------|
-| 09 | field_source_priority schema drift (#710) | P0 | open | fails Daily DB Checks; upstream of cap/pricing |
-| 10 | PA flow failures triage/fix | P0 | open | SF Opp Sync + LCC Get Artifact = the deal-spine connectors |
-| 01 | Cap-rate reconciliation (35724 -> 6.00%) | P0 | open | do with/after 09 |
-| 06 | Deal-spine data model (schema) | P0 | open | targets buildDealPacket |
-| 02 | Connect the deal spine (SF/Outlook/Sharefile) | P0 | open | sits on top of 10 (flows are the mechanism) |
-| 11 | Comps: connector reach + bounded output | P1 | open | engine OK; agents can't reach + dump too big |
-| 03 | Broker/role attribution | P1 | open | |
-| 04 | Loan propagation | P1 | open | |
-| 05 | Resolver by property-id | P1 | open | |
-| 08 | Deal-tab UI | P1 | open | after 02/06 populate data |
-| 07 | Data-backlog index (property-dossier P0-P3) | mixed | index | |
+## Open (in `prompts/`) — order reflects the error triage
+| # | Prompt | Priority | State |
+|---|--------|----------|-------|
+| 09 | field_source_priority schema drift (#710) | P0 | open |
+| 10 | PA flow failures triage/fix (SF Opp Sync, LCC Get Artifact) | P0 | open |
+| 06 | Deal-spine data model (schema) | P0 | open |
+| 02 | Connect the deal spine (SF/Outlook/Sharefile) | P0 | open (sits on 10) |
+| 11 | Comps: connector reach + bounded output | P1 | open |
+| 12 | LCC Health surface (observability) | P1 | open |
+| 13 | Property & Contact tab connectivity | P1 | open |
+| 03 | Broker/role attribution | P1 | open |
+| 04 | Loan propagation | P1 | open |
+| 05 | Resolver by property-id | P1 | open |
+| 08 | Deal-tab UI | P1 | open |
+| 07 | Data-backlog index (property-dossier P0-P3) | mixed | index |
+
+## Done (in `done/`)
+| # | Prompt | Resolved by |
+|---|--------|-------------|
+| 01 | Cap-rate reconciliation (35724 -> 6.00%) | PRs lcc #1551 (merged) + Dialysis #7355 (merge pending); rebuilt v_sales_comps (412 rows), added guard view + tests |
+| 07/f2 | rent/SF + current-escalated-rent | detail.js + entities-handler + dossier-generator + backfill |
+| 07/f3 | transactions/listings timeline | entities-handler + dossier-generator + detail.js |
 
 ## Recommended sequence
-1) **09** (unblock pricing writes) + **01** (correct 35724 cap) — the cap/pricing truth.
-2) **10** (fix the broken PA flows) — restores the SF/Outlook/Sharefile connectors.
-3) **06** (schema) + **02** (connect) — populate the deal spine onto the packet.
-4) **08** (Deal-tab UI) — render it. Then 03/04/05/11/07 as capacity allows.
+1) **09 + verify 01** (pricing truth; 01 merged, confirm live). 2) **10** (fix broken PA flows — note many HTTP
+flows may recover once 1aae4e20 deploys). 3) **06 + 02** (populate the deal spine). 4) **08** (Deal-tab UI) +
+**13** (property/contact connectivity). Then **11** (comps reach), **12** (health surface), 03/04/05/07.
 
 ## Recently completed (context)
-| Work | Resolved by |
-|------|-------------|
-| Dossier generator production wiring | PR #1549 (merged) |
-| Duplicate-file build fix (Boot Check / Railway) | commit 1aae4e20 (verify deploy boots) |
-| Closed-deal asset entity + deal-spine wiring | PR #1550 |
-| 35724 lease escalation + rent_at_sale | Dialysis #7354 (note: set the WRONG 6.46%; see prompt 01) |
-| P0 CMS clinic-economics correction | commit f4518ada |
-
-## Process
-See `README.md`. Cowork checks `responses/` each chat, verifies, updates docs, moves finished prompts to
-`done/`, and keeps this table current.
+Dossier generator wiring PR #1549; Boot Check fix 1aae4e20; closed-deal entity PR #1550; CMS economics f4518ada;
+cap-rate PR #1551 (+ Dialysis #7355). Process: see `README.md`.

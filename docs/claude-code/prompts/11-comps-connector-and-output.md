@@ -25,3 +25,5 @@ connectors.
 ## Verify
 The comps action is reachable from the field agents (no ConnectorOperationNotFound), returns a bounded
 market-targeted set, and maps into the Team Briggs comp templates.
+
+> **Review note (2026-08-01):** the comps/artifact actions do not appear registered in `docs/architecture/copilot_action_registry.json` — a likely direct cause of `ConnectorOperationNotFound`. Register the comps action(s) in the registry + the connector manifest so the field agents can discover/call them.
