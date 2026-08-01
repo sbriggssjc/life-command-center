@@ -211,3 +211,32 @@ facts.
 
 The paired audit/triage (what displays vs. what exists vs. where the pipeline is broken, with the P0–P3
 backlog) is `dossier-v2-audit-and-triage.md`.
+
+## 8. Location & Trade Area section (2026-08-01) — new dossier section + data sources
+
+Placed right after Snapshot so the reader orients geographically before the detail. Grounded sources
+(dialysis DB) and grounding rules from §1 apply — absent data renders "Not on file", ZIP-level figures are
+labeled as an interim proxy, and the trade-area read is fenced as Analysis.
+
+- **Map thumbnail** — geocode from `properties.latitude/longitude`. Production renders a **Google Static
+  Maps** image (server-side key) centered on the site with the marker, labeled arterials, and 1/3/5-mile
+  radius rings. The example render uses a keyless OSM static image to show the concept; a graceful fallback
+  panel shows address + coordinates if the tile service is unavailable.
+- **Frontage / arterials** — grounded from the address; adjacent arterials labeled from the static map.
+- **Nearby national tenants** — callouts from a **Places API** pass (follow-up); "Not on file" until
+  populated. Never fabricate tenant names.
+- **Trade-area demographics (1 / 3 / 5-mile)** — from `property_demographics` (radius_miles, population,
+  num_households, population_growth_pct, avg_hhi). Populated for 85 properties; a missing row is a **coverage
+  gap** (render "Not on file" + the gap note), not a blank to fill.
+- **ZIP interim proxy** — `census_zcta_demographics` (population, median HHI, population_65_plus %, uninsured,
+  poverty; ACS5). Clearly labeled ZIP-level, shown pending radius rings. The 65+ / uninsured / poverty
+  fields are ESRD-relevant.
+- **Dialysis market context** — `v_payer_mix_geo_averages` (county + state Medicare/Medicaid/private mix and
+  clinic counts, by CCN). Gives competitive supply + reimbursement-mix color for the trade area.
+- **Trade-area read** — Analysis block (Derived only): demographic markers vs. ESRD prevalence, payer-mix
+  skew, competitive supply. No new facts.
+
+Worked values for 5247 Airways (property 23654 / CCN 442740): geocode 35.0054, -89.9900; ZIP 38116 pop
+40,212, median HHI $42,354, 15.6% age 65+, 28.4% poverty, 16.2% uninsured; Shelby County payer mix
+27.9/45.4/26.7 with 49 clinics (TN 31.3/39.3/30.5, 192 clinics). The 1/3/5-mile radius rows are a live
+coverage gap for this record.

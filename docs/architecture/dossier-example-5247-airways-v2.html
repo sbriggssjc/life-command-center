@@ -52,6 +52,59 @@ footer{margin-top:32px;padding-top:14px;border-top:1px solid #eee;color:#999;fon
       <span class="derived">Basis: current rent ~$200,155 &divide; ~6.4% applied cap &asymp; est.; equivalently Year-1 rent $181,959 at a ~5.80% cap. Model estimate &mdash; not an appraisal (LCC valuation model, low confidence).</span></td></tr>
 </table>
 
+<h2>Location &amp; Trade Area</h2>
+<div style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:8px">
+  <img src="https://staticmap.openstreetmap.de/staticmap.php?center=35.005382,-89.989957&amp;zoom=15&amp;size=780x300&amp;markers=35.005382,-89.989957,lightblue1"
+       alt="Map of 5247 Airways Blvd, Memphis, TN 38116 (35.0054, -89.9900)"
+       style="width:100%;display:block;height:auto"
+       onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+  <div style="display:none;padding:34px 16px;background:#eef2ff;color:#4f46e5;font-size:12.5px;text-align:center;line-height:1.5">
+    <b>5247 Airways Blvd, Memphis, TN 38116</b> &middot; 35.0054, -89.9900<br>
+    (Map preview loads live; production renders a Google Static Maps thumbnail with labeled arterials + 1/3/5-mi rings.)
+  </div>
+</div>
+<table class="kv">
+  <tr><td class="k">Coordinates</td><td class="v">35.0054, -89.9900 <span class="src">&middot; source: geocode (properties.latitude/longitude)</span></td></tr>
+  <tr><td class="k">Frontage</td><td class="v">Airways Blvd (arterial) <span class="src">&middot; from address; production labels adjacent arterials from the static map</span></td></tr>
+  <tr><td class="k">Nearby national tenants</td><td class="v"><span class="na">Not on file</span> <span class="src">&middot; callouts to be populated from a Places API pass (follow-up)</span></td></tr>
+</table>
+
+<div style="font-size:12px;font-weight:700;color:#777;margin:14px 0 4px">Trade-area demographics (1 / 3 / 5-mile radius)</div>
+<table class="hist">
+  <thead><tr><th>Metric</th><th>1-mile</th><th>3-mile</th><th>5-mile</th></tr></thead>
+  <tbody>
+    <tr><td>Population</td><td class="na">Not on file</td><td class="na">Not on file</td><td class="na">Not on file</td></tr>
+    <tr><td>Households</td><td class="na">Not on file</td><td class="na">Not on file</td><td class="na">Not on file</td></tr>
+    <tr><td>Population growth %</td><td class="na">Not on file</td><td class="na">Not on file</td><td class="na">Not on file</td></tr>
+    <tr><td>Avg. household income</td><td class="na">Not on file</td><td class="na">Not on file</td><td class="na">Not on file</td></tr>
+  </tbody>
+</table>
+<div class="conflict"><b>Coverage gap:</b> the 1/3/5-mile pipeline (`property_demographics`) is populated for 85 properties but has <b>no row for this one</b>. Backfill this record (geocode &rarr; radius rings) to fill these cells. ZIP-level figures below are shown as an interim proxy.</div>
+
+<div style="font-size:12px;font-weight:700;color:#777;margin:14px 0 4px">ZIP 38116 &mdash; interim proxy <span style="font-weight:400;color:#999">(Census ACS5 2022; ZIP, not radius rings)</span></div>
+<table class="kv">
+  <tr><td class="k">Population</td><td class="v">40,212 <span class="src">&middot; census_zcta_demographics (ACS5 2022)</span></td></tr>
+  <tr><td class="k">Median household income</td><td class="v">$42,354</td></tr>
+  <tr><td class="k">Population 65+</td><td class="v">6,260 &nbsp;(15.6%) <span class="src">&middot; ESRD-relevant age cohort</span></td></tr>
+  <tr><td class="k">Uninsured rate</td><td class="v">16.2%</td></tr>
+  <tr><td class="k">Poverty rate</td><td class="v">28.4%</td></tr>
+</table>
+
+<div style="font-size:12px;font-weight:700;color:#777;margin:14px 0 4px">Dialysis market context</div>
+<table class="kv">
+  <tr><td class="k">Payer mix &mdash; Shelby County</td><td class="v">Medicare 27.9% &middot; Medicaid 45.4% &middot; Private 26.7% <span class="src">&middot; v_payer_mix_geo_averages (CMS)</span></td></tr>
+  <tr><td class="k">Payer mix &mdash; Tennessee</td><td class="v">Medicare 31.3% &middot; Medicaid 39.3% &middot; Private 30.5%</td></tr>
+  <tr><td class="k">Dialysis clinics (competitive supply)</td><td class="v">49 in Shelby County &middot; 192 in Tennessee <span class="src">&middot; CMS</span></td></tr>
+</table>
+<div class="analysis">
+  <div class="lbl">Trade-area read (not a stated fact)</div>
+  <ul>
+    <li>The 38116 area is <b>lower-income</b> ($42,354 median HHI) with an <b>elevated 65+ share</b> (15.6%) and high poverty (28.4%) / uninsured (16.2%) &mdash; <i>demographic markers that typically correlate with higher ESRD prevalence.</i></li>
+    <li>Shelby County dialysis skews <b>Medicaid-heavy</b> (45.4% vs 39.3% statewide), a payer-mix signal relevant to clinic reimbursement in this trade area.</li>
+    <li><b>49 dialysis clinics</b> operate in the county &mdash; a well-supplied market; the renewal-rent-pressure read needs the nearby-CCN rent comparison (Market Competition, below).</li>
+  </ul>
+</div>
+
 <h2>Ownership</h2>
 <table class="kv">
   <tr><td class="k">Owner of record</td><td class="v"><b>Kingsbarn Realty</b> <span class="src">&middot; reconciled property owner, confidence 1.00 &middot; recorded deed grantee (2018)</span></td></tr>
@@ -92,7 +145,7 @@ for this CCN).</p>
 <h2>Market Competition</h2>
 <p class="note"><span class="na">Not on file.</span> Nearby dialysis CCNs and their operations / rents-per-SF
 (the renewal-rent pressure signal) are not yet assembled &mdash; requires a market-competition query over
-adjacent clinics. Flagged as a follow-up.</p>
+adjacent clinics. Shelby County has 49 dialysis clinics on file (see Location &amp; Trade Area). Flagged as a follow-up.</p>
 
 <h2>Transaction &amp; Marketing Timeline</h2>
 <table class="hist">
@@ -140,8 +193,9 @@ per-doc reconciled flag) is queued.</p>
 </div>
 
 <footer>Generated by the Life Command Center from the reconciled LCC data spine. Facts trace to LCC sources
-(CMS medicare_clinics, leases, sales_transactions, available_listings, deed/RCA, intake documents); figures
-are for internal BD use and must be verified against source documents before external distribution.
-&ldquo;Not on file&rdquo; = absent from the reconciled record; &ldquo;Derived&rdquo; = computed from stated
-facts with inputs shown; conflicts are surfaced, never silently resolved.</footer>
+(CMS medicare_clinics, leases, sales_transactions, available_listings, deed/RCA, census_zcta_demographics,
+v_payer_mix_geo_averages, intake documents); figures are for internal BD use and must be verified against
+source documents before external distribution. &ldquo;Not on file&rdquo; = absent from the reconciled record;
+&ldquo;Derived&rdquo; = computed from stated facts with inputs shown; conflicts are surfaced, never silently
+resolved.</footer>
 </div></body></html>
