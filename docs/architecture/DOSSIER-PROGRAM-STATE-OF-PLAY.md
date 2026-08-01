@@ -110,3 +110,50 @@ origination, term, LTV, current-balance estimate), keyed by the property via ext
 Verify property 23654 shows the JPMCC loan in its dossier. Then generalize across all asset entities that
 carry metadata.loans.
 ```
+
+---
+
+## UPDATE — 2026-08-01 (session 2): living deal dossier, cap-rate fix, connection audit
+
+**Railway build fixed.** The PR #1549 merge had concatenated two whole copies of
+`api/_shared/dossier-generator.js` (redeclared `invokeExtractionAI` -> SyntaxError -> startup crash /
+healthcheck fail). Truncated to the production version (lines 1-551); `node --check` passes. Commit `1aae4e20`.
+**(Push required for Railway to rebuild.)**
+
+**Claude Code shipped** PR #1550 (`ensureAssetEntityForProperty` + deal-spine wiring; enriched entity
+d118b3a1; captured broker party; recorded the deal dossier) and Dialysis #7354 (lease escalation carry-forward
++ rent_at_sale). The post-close reconcile sweep is exported but not yet mounted on pg_cron.
+
+**Cap-rate reconciliation (IMPORTANT correction).** The deal cap is **6.00%**, not 6.46%. Our OM asking was
+$15,729,896 @ 6.00% (listing 14879, initial/current_cap_rate 0.0600) and it **sold at asking**; in-place NOI
+$943,794 / $15,729,896 = 6.000%. The stored `calculated_cap_rate` 0.0646 / `rent_at_sale` $1,016,362.91
+(Dialysis #7354) applied the "2.5% annually" escalation **ahead of the actual schedule** — the wrong direction.
+**Fix = in-place rent $943,794 / 6.00% everywhere + correct the lease rent-schedule anchor (Prompt A in
+`living-deal-dossier-and-systems-connection.md`).**
+
+**Deal dossier redesigned** as a living, transaction-centric record: `deal-dossier-fresenius-woodland-hills-v2.html`
+(new gold standard; the v1 file is superseded). Hero + stage-aware commission, compressing milestone/
+transaction-story timeline, parties-by-company (decision-maker vs transaction-manager, attorneys, title, lender),
+diligence/vendor tracker, correspondence summary, and a Connected-Sources panel.
+
+**Connection audit (why parties are empty).** The only contact on 35724 is Chris Bodnar/CBRE (role
+listing_broker, source costar_sidebar, sf_contact_id null, crm_opportunity_count 0). Every fact is from CoStar +
+an SF comp; there is **no Salesforce Opportunity**, and **Outlook/Sharefile are not linked** to the entity — so
+seller/buyer/attorneys/title/lender/ELA-commission/narrative have no source. Our own Team Briggs sell-side role
+isn't sourced from our own systems (the CBRE attribution is CoStar's third-party view). Full design + fix in
+`living-deal-dossier-and-systems-connection.md`.
+
+**New docs this session:** `living-deal-dossier-and-systems-connection.md` (design + audit + Prompts A/B/C +
+LCC-layout improvements + Ollama opportunity scan), `deal-dossier-fresenius-woodland-hills-v2.html`.
+
+**Open Claude Code prompts (send + save responses next to each):**
+- **A — cap-rate reconciliation** (do first; live data wrong): fix rent_at_sale/cap to $943,794/6.00% + lease
+  schedule anchor.
+- **B — connect the deal spine**: SF Opportunity + Outlook + Sharefile -> entity d118b3a1 (parties, commission,
+  correspondence, diligence).
+- **C — broker/role attribution**: make our Northmarq sell-side role authoritative over the CoStar/CBRE feed.
+- (queued) loan propagation (entity.metadata.loans -> structured loans); resolver-by-property-id;
+  Ollama correspondence-summarization/milestone-extraction once B lands.
+
+**Next recommended:** (1) push to redeploy Railway; (2) run Prompt A (cap fix); (3) run Prompt B (deal-spine
+connection) — the highest-leverage step toward the living record.
