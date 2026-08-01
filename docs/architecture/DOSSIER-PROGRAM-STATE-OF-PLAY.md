@@ -176,3 +176,17 @@ data model, 07 data-backlog index.
 reconciliation rule) mapped to the v2 layout; and **(2)** the deal-surface app layout (a Deal tab distinct from
 the Property tab, double-click-to-source, connected-sources indicator, real-time freshness). It targets
 prompts 06 (schema) and 02 (connect), and tees up a future prompt 08 (Deal-tab UI) once those land.
+
+---
+
+## Error wave triaged (2026-08-01, session 2) — see `error-triage-2026-08-01.md`
+Five connected signals: **Boot Check** fail = the duplicate import (fixed `1aae4e20`); **Daily DB Checks** fail =
+field_source_priority schema drift (#710) writing OM/BOV pricing to non-existent `available_listings` columns
+(an upstream cause of the 6.46%-vs-6.00% cap error); **20 failing PA flows** incl. **SF Deal -> LCC Opportunity
+Sync (74)** and **LCC Get Artifact (685)** — the deal-spine connectors are actively down (why parties/
+correspondence/documents are empty); **comps** engine works but is unreachable from the field agents
+(`ConnectorOperationNotFound`) and returns unbounded output. New prompts **09** (schema drift), **10** (PA
+flows), **11** (comps connector), **08** (Deal-tab UI). Corrected sequence: 09+01 -> 10 -> 06+02 -> 08.
+Architecture implication: field-source-priority is a foundation (drift lets the wrong source win); the deal
+spine is a set of PA flows that must be fixed before it can fill; and we need an "LCC health" surface so
+failures don't hide in a weekly digest.
