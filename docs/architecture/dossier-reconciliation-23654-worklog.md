@@ -17,3 +17,8 @@ Read-only reconciliation of the v2 gold-standard dossier design for 5247 Airways
 ## Findings So Far
 - The production property-panel dossier button is the client-side v1 builder in `detail.js`; it does not call the newer server-side dossier packet/generator.
 - The property panel loads core rows from `v_property_detail`, `v_lease_detail`, `v_ownership_current`, `v_ownership_chain`, `v_property_rankings`, supplemental `properties`, and lazy Operations/Deal/Documents calls.
+
+## Final Read-Only Findings
+- Wrote the reconciliation artifact to `docs/architecture/dossier-design-vs-production-23654.md`.
+- Production has many v2 ingredients in tab loaders, but the Dossier button omits them because it renders a v1 client HTML from `_udCache`.
+- Highest BD-impact deltas: document endpoint pollution, Deal History source priority, incomplete active-listing economics, operations value conflicts, and the v2 packet/generator not being wired to the property panel.
