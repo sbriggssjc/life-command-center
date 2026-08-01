@@ -630,7 +630,7 @@ function resolveDomainLink(identities) {
  * assemblePropertyPacket for entity/domain resolution + owner names, then
  * augments with the live lease, CMS operations, and demographics readers.
  */
-async function buildPropertyPacket(entityId, workspaceId) {
+export async function buildPropertyPacket(entityId, workspaceId) {
   const base = await assemblePropertyPacket(entityId, workspaceId);
   const bp = base.payload || {};
   const prop = bp.lease_data || {}; // NOTE: assemblePropertyPacket names the properties row "lease_data".
@@ -642,6 +642,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
   // demographics, ZIP census, payer mix — each degrades independently.
   let lease = null, clinic = null, fpc = [], demos = [], zcta = null, payer = null, leaseScheduleRows = [];
   let sales = [], listings = [];
+  let loans = [];
   let relocationLineage = null, marketCompetition = [];
   let staticMap = null, nearbyNationalTenants = [];
   if (domain && pid) {
@@ -649,6 +650,12 @@ async function buildPropertyPacket(entityId, workspaceId) {
       domainQuery(domain, 'GET', `leases?property_id=eq.${pid}&superseded_at=is.null&order=is_active.desc.nullslast,lease_start.desc&limit=1`).catch(() => null),
       domainQuery(domain, 'GET', `sales_transactions?property_id=eq.${pid}&transaction_state=eq.live&order=sale_date.desc&limit=8`).catch(() => null),
       domainQuery(domain, 'GET', `available_listings?property_id=eq.${pid}&order=listing_date.desc.nullslast&limit=50`).catch(() => null),
+      domainQuery(domain, 'GET',
+        `loans?property_id=eq.${pid}` +
+        `&select=${domain === 'gov'
+          ? 'loan_id,originator,loan_amount,interest_rate,term_years,origination_date,maturity_date,ltv,loan_type,status,cmbs_deal_name,servicer,special_servicer,notes,data_source'
+          : 'loan_id,lender_name,originator,loan_amount,current_balance,interest_rate_percent,loan_term,origination_date,maturity_date,loan_to_value,loan_type,is_active,cmbs_deal_name,servicer,special_servicer,notes,data_source'}` +
+        `&order=maturity_date.desc.nullslast,origination_date.desc.nullslast&limit=8`).catch(() => null),
     ];
     if (domain === 'dia') {
       calls.push(
@@ -661,10 +668,11 @@ async function buildPropertyPacket(entityId, workspaceId) {
     lease = r[0]?.ok ? (r[0].data?.[0] || null) : null;
     sales = r[1]?.ok ? (r[1].data || []) : [];
     listings = r[2]?.ok ? (r[2].data || []) : [];
+    loans = r[3]?.ok ? (r[3].data || []) : [];
     if (domain === 'dia') {
-      clinic = r[3]?.ok ? (r[3].data?.[0] || null) : null;
-      fpc = r[4]?.ok ? (r[4].data || []) : [];
-      demos = r[5]?.ok ? (r[5].data || []) : [];
+      clinic = r[4]?.ok ? (r[4].data?.[0] || null) : null;
+      fpc = r[5]?.ok ? (r[5].data || []) : [];
+      demos = r[6]?.ok ? (r[6].data || []) : [];
     }
     if (lease?.lease_id) {
       const sched = await domainQuery(domain, 'GET',
@@ -908,6 +916,37 @@ async function buildPropertyPacket(entityId, workspaceId) {
     last_sale_price: tag(num(prop.latest_sale_price), 'properties'),
   };
 
+  const debt_financing = (loans || []).map(l => {
+    let notes = {};
+    if (l.notes) {
+      try { notes = typeof l.notes === 'string' ? JSON.parse(l.notes) : l.notes; } catch { notes = {}; }
+    }
+    const rate = num(l.interest_rate_percent ?? l.interest_rate);
+    const termMonths = num(l.loan_term);
+    const termYears = num(l.term_years != null ? l.term_years : (termMonths != null ? termMonths / 12 : null));
+    const currentBalance = num(l.current_balance ?? notes.current_balance_estimate);
+    const currentBasis = notes.current_balance_estimate_basis || null;
+    return {
+      loan_id: l.loan_id,
+      lender: tag(l.lender_name || l.originator || l.cmbs_deal_name, l.data_source || 'loans'),
+      cmbs_deal_name: tag(l.cmbs_deal_name, l.data_source || 'loans'),
+      initial_balance: tag(num(l.loan_amount), l.data_source || 'loans'),
+      current_balance_estimate: currentBalance != null
+        ? { v: currentBalance, derived: currentBasis || 'current balance estimate from loans/metadata notes' }
+        : undefined,
+      rate: tag(rate, l.data_source || 'loans'),
+      rate_type: notes.amortization_type ? tag(notes.amortization_type, 'loans.notes') : undefined,
+      origination_date: dateTag(l.origination_date, l.data_source || 'loans'),
+      maturity_date: dateTag(l.maturity_date, l.data_source || 'loans'),
+      term_years: termYears != null ? tag(termYears, l.data_source || 'loans') : undefined,
+      ltv: tag(num(l.loan_to_value ?? l.ltv), l.data_source || 'loans'),
+      loan_type: tag(l.loan_type, l.data_source || 'loans'),
+      servicer: tag(l.servicer, l.data_source || 'loans'),
+      special_servicer: tag(l.special_servicer, l.data_source || 'loans'),
+      status: l.is_active != null ? tag(l.is_active ? 'Active' : 'Inactive', 'loans') : undefined,
+    };
+  });
+
   // --- Ownership block --------------------------------------------------------
   const ownership = {
     owner_of_record: tag(ownerOfRecord, 'reconciled property owner',
@@ -936,7 +975,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
   };
 
   return {
-    meta, identity, ownership, tenancy_lease, operations, valuation, transactions, transaction_marketing_timeline, documents,
+    meta, identity, ownership, tenancy_lease, operations, valuation, debt_financing, transactions, transaction_marketing_timeline, documents,
     document_sources: docsPacket?.ok ? { sources: docsPacket.sources, cre_property_id: docsPacket.cre_property_id } : undefined,
     location: (domain === 'dia') ? {
       address: tag([prop.address, prop.city, prop.state, prop.zip_code].filter(Boolean).join(', '), 'properties'),

@@ -375,6 +375,31 @@ function renderMarketCompetition(rows) {
   return `<h2>Market Competition</h2><table class="hist"><thead><tr><th>CCN</th><th>Facility</th><th>Distance</th><th>Operator</th><th>Stations</th><th>Patients</th><th>Rent/SF</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function renderDebtFinancing(rows) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return `<h2>Debt / Financing</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`;
+  }
+  const body = rows.map(l => {
+    const lender = renderTag(l.lender);
+    const deal = l.cmbs_deal_name ? `<br><span class="src">CMBS deal: ${renderTag(l.cmbs_deal_name).replace(/ <span class="src">[\s\S]*?<\/span>/, '')}</span>` : '';
+    const rate = renderTag(l.rate, fmtPct);
+    const ltv = renderTag(l.ltv, fmtPct);
+    const term = l.term_years
+      ? renderTag(l.term_years, (v) => Number(v).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' yrs')
+      : NA;
+    const dates = `${renderTag(l.origination_date, fmtDate)} → ${renderTag(l.maturity_date, fmtDate)}`;
+    const servicerBits = [renderTag(l.servicer), renderTag(l.special_servicer)].filter(x => x !== NA);
+    return `<tr>` +
+      `<td>${lender}${deal}</td>` +
+      `<td>${renderTag(l.initial_balance, fmtMoney)}<br><span class="src">Current est.: ${renderTag(l.current_balance_estimate, fmtMoney)}</span></td>` +
+      `<td>${rate}<br><span class="src">LTV ${ltv}</span></td>` +
+      `<td>${dates}<br><span class="src">Term ${term}</span></td>` +
+      `<td>${renderTag(l.loan_type)}<br><span class="src">${servicerBits.join(' · ') || 'Servicer Not on file'}</span></td>` +
+      `</tr>`;
+  }).join('');
+  return `<h2>Debt / Financing</h2><table class="hist"><thead><tr><th>Lender / Deal</th><th>Balance</th><th>Rate / LTV</th><th>Origination → Maturity</th><th>Type / Servicer</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function renderPropertySections(p) {
   const id = p.identity || {};
   const own = p.ownership || {};
@@ -446,9 +471,12 @@ function renderPropertySections(p) {
   }
 
   // 6. Transaction & Marketing Timeline
+  out.push(renderDebtFinancing(p.debt_financing));
+
+  // 7. Transaction & Marketing Timeline
   out.push(renderTransactionMarketingTimeline(p.transaction_marketing_timeline, p.transactions));
 
-  // 7. Documents
+  // 8. Documents
   out.push(renderDocuments(p.documents));
 
   return out.join('\n');

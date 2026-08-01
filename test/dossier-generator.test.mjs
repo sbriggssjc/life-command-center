@@ -117,6 +117,21 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
       _conflicts: [{ field: 'stations', values: [{ v: 13, source: 'CMS' }, { v: 171, source: 'properties denorm' }], reconciled: 13 }],
     },
     valuation: { model_estimate: { v: 3137221, source: 'LCC valuation model', confidence: 'low' } },
+    debt_financing: [
+      {
+        lender: { v: 'JPMCC 2019-COR4', source: 'ops_asset_metadata_loan' },
+        cmbs_deal_name: { v: 'JPMCC 2019-COR4', source: 'ops_asset_metadata_loan' },
+        initial_balance: { v: 1800000, source: 'ops_asset_metadata_loan' },
+        current_balance_estimate: { v: 1800000, derived: 'Upper-bound estimate: no amortization schedule or servicer balance on file, so current balance is carried at initial balance.' },
+        rate: { v: 4.7, source: 'ops_asset_metadata_loan' },
+        maturity_date: { v: '2028-07-06', source: 'ops_asset_metadata_loan' },
+        origination_date: { v: '2018-06-08', source: 'ops_asset_metadata_loan' },
+        term_years: { v: 10, source: 'ops_asset_metadata_loan' },
+        ltv: { v: 57.4, source: 'ops_asset_metadata_loan' },
+        loan_type: { v: 'Acquisition', source: 'ops_asset_metadata_loan' },
+        special_servicer: { v: 'Midland Loan Services', source: 'ops_asset_metadata_loan' },
+      },
+    ],
     location: {
       address: { v: '5247 Airways Blvd, Memphis, TN 38116', source: 'properties' },
       geocode: { v: '35.005382, -89.989957', source: 'properties' },
@@ -218,6 +233,12 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
   assert.match(out.html, /FMC South Airways/);
   assert.match(out.html, /DaVita Comparable/);
   assert.match(out.html, /\$32\.50\/SF/);
+  assert.match(out.html, /Debt \/ Financing/);
+  assert.match(out.html, /JPMCC 2019-COR4/);
+  assert.match(out.html, /\$1,800,000/);
+  assert.match(out.html, /4\.70%/);
+  assert.match(out.html, /2028-07-06/);
+  assert.match(out.html, /Midland Loan Services/);
   assert.match(out.html, /Derived: value 3137221/);            // price/SF labeled derived
   assert.match(out.html, /Location &amp; Trade Area/);
   assert.match(out.html, /Map thumbnail is Not on file/);
