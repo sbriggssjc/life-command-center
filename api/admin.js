@@ -186,6 +186,8 @@ async function handleOpsHealth(req, res) {
   const [
     openAlerts, openFlowFailures, cronSummary,
     recentFlowFailures,
+    healthSurface,
+    invalidPriorityColumns,
     writeFail24h, writeFailTop, writeFail7d,
     diaLlcQueued, diaLlcInProgress, govLlcQueued, govLlcInProgress,
   ] = await Promise.all([
@@ -195,6 +197,8 @@ async function handleOpsHealth(req, res) {
     opsRead('flow_run_failures?select=flow_name,flow_run_id,failed_action,error_kind,error_code,error_detail,detected_at,resolved_at,severity'
       + '&detected_at=gte.' + encodeURIComponent(flowHealthSince)
       + '&order=detected_at.desc&limit=500'),
+    opsRead('v_lcc_health_surface?select=subsystem,check_name,status,count,first_seen,ts,last_error,external_url,details&order=status.desc,ts.desc&limit=200'),
+    opsRead('v_field_source_priority_invalid_columns?select=target_table,field_name,source,nearby_columns&limit=50'),
     opsCount('v_ingest_write_failures_24h'),
     opsRead('v_ingest_write_failures_top_24h?select=domain,method,http_status,path_norm,failures_24h,sample_error&order=failures_24h.desc&limit=5'),
     opsCount('v_ingest_write_failures_recent'),  // 7d, kept as context only
@@ -271,6 +275,26 @@ async function handleOpsHealth(req, res) {
       || (b.failures - a.failures)
       || String(b.latest_failure_at || '').localeCompare(String(a.latest_failure_at || '')));
 
+  const surfaceRows = Array.isArray(healthSurface) ? healthSurface : [];
+  const invalidPriorityRows = Array.isArray(invalidPriorityColumns) ? invalidPriorityColumns : [];
+  const lccHealth = buildLccHealthSurface({
+    surfaceRows,
+    flowHealth,
+    invalidPriorityRows,
+    crons,
+    alerts,
+    deployProbe: buildDeployProbe(),
+    generatedAt: new Date().toISOString(),
+  });
+  const includeDigest = req.query.digest === '1' || req.query.digest === 'true';
+  const digest = includeDigest
+    ? await buildLccHealthDigest(lccHealth).catch((err) => ({
+        summarizer: 'deterministic',
+        error: err?.message || String(err),
+        text: deterministicHealthDigest(lccHealth),
+      }))
+    : { summarizer: 'deterministic', text: deterministicHealthDigest(lccHealth) };
+
   const topFail = (Array.isArray(writeFailTop) && writeFailTop[0]) ? writeFailTop[0] : null;
   return res.status(200).json({
     generated_at: new Date().toISOString(),
@@ -290,10 +314,248 @@ async function handleOpsHealth(req, res) {
         path: topFail.path_norm, count_24h: topFail.failures_24h, sample_error: topFail.sample_error,
       } : null,
       workers_stuck: workers.filter(w => w.status === 'stuck').length,
+      lcc_health_status: lccHealth.overall_status,
+      lcc_health_red: lccHealth.counts.red,
+      lcc_health_amber: lccHealth.counts.amber,
     },
     alerts, flow_failures: flows, flow_health: flowHealth, cron_issues: crons, workers,
+    lcc_health: lccHealth,
+    health_digest: digest,
     write_failures_top_24h: Array.isArray(writeFailTop) ? writeFailTop : [],
   });
+}
+
+function healthSeverityRank(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'red' || s === 'critical' || s === 'error' || s === 'failing') return 3;
+  if (s === 'amber' || s === 'warning' || s === 'warn' || s === 'degraded') return 2;
+  if (s === 'unknown') return 1;
+  return 0;
+}
+
+function healthStatusFromRank(rank) {
+  if (rank >= 3) return 'red';
+  if (rank === 2) return 'amber';
+  if (rank === 1) return 'unknown';
+  return 'green';
+}
+
+function buildDeployProbe() {
+  const source =
+    process.env.RAILWAY_GIT_COMMIT_SHA ? 'railway_git_commit_sha'
+    : process.env.RAILWAY_DEPLOYMENT_ID ? 'railway_deployment_id'
+    : process.env.RENDER_GIT_COMMIT ? 'render_git_commit'
+    : process.env.SOURCE_VERSION ? 'source_version'
+    : 'boot_timestamp';
+  const raw = process.env.RAILWAY_GIT_COMMIT_SHA
+    || process.env.RAILWAY_DEPLOYMENT_ID
+    || process.env.RENDER_GIT_COMMIT
+    || process.env.SOURCE_VERSION
+    || '';
+  return {
+    subsystem: 'deploy',
+    check_name: 'railway_version',
+    status: source === 'boot_timestamp' ? 'amber' : 'green',
+    count: 1,
+    first_seen: null,
+    ts: new Date().toISOString(),
+    last_error: source === 'boot_timestamp'
+      ? 'Deploy version is falling back to boot timestamp; Railway git/deployment env was not visible to the API process.'
+      : null,
+    external_url: null,
+    details: {
+      version: raw ? String(raw).slice(0, 12) : null,
+      source,
+      git_pinned: source !== 'boot_timestamp',
+    },
+  };
+}
+
+function buildLccHealthSurface({ surfaceRows, flowHealth, invalidPriorityRows, crons, alerts, deployProbe, generatedAt }) {
+  const rows = [...surfaceRows, deployProbe].filter(Boolean).map((row) => ({
+    subsystem: row.subsystem || row.source || 'unknown',
+    check_name: row.check_name || row.check || 'unknown',
+    status: String(row.status || 'unknown').toLowerCase(),
+    count: Number(row.count || 0),
+    first_seen: row.first_seen || row.detected_at || null,
+    ts: row.ts || row.detected_at || generatedAt,
+    last_error: row.last_error || row.summary || null,
+    external_url: row.external_url || null,
+    details: row.details || {},
+  }));
+
+  const bySubsystemMap = new Map();
+  for (const row of rows) {
+    const sub = row.subsystem;
+    const cur = bySubsystemMap.get(sub) || { subsystem: sub, status_rank: 0, red: 0, amber: 0, green: 0, unknown: 0, checks: [] };
+    const rank = healthSeverityRank(row.status);
+    cur.status_rank = Math.max(cur.status_rank, rank);
+    if (row.status === 'red') cur.red += 1;
+    else if (row.status === 'amber') cur.amber += 1;
+    else if (row.status === 'green') cur.green += 1;
+    else cur.unknown += 1;
+    cur.checks.push(row);
+    bySubsystemMap.set(sub, cur);
+  }
+
+  const bySubsystem = [...bySubsystemMap.values()].map((sub) => ({
+    subsystem: sub.subsystem,
+    status: healthStatusFromRank(sub.status_rank),
+    counts: { red: sub.red, amber: sub.amber, green: sub.green, unknown: sub.unknown },
+    checks: sub.checks.sort((a, b) => healthSeverityRank(b.status) - healthSeverityRank(a.status)
+      || String(b.ts || '').localeCompare(String(a.ts || ''))).slice(0, 12),
+  })).sort((a, b) => healthSeverityRank(b.status) - healthSeverityRank(a.status)
+    || a.subsystem.localeCompare(b.subsystem));
+
+  const counts = rows.reduce((acc, row) => {
+    const s = row.status === 'red' || row.status === 'amber' || row.status === 'green' ? row.status : 'unknown';
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, { red: 0, amber: 0, green: 0, unknown: 0 });
+
+  const findFlow = (namePart) => flowHealth.find((f) =>
+    String(f.flow_name || '').toLowerCase().includes(namePart.toLowerCase()));
+  const sfSync = findFlow('SF Deal -> LCC Opportunity Sync') || findFlow('opportunity sync');
+  const artifact = findFlow('LCC Get Artifact') || findFlow('get artifact');
+  const issue710 = invalidPriorityRows.length > 0;
+  const boot = rows.find((r) => r.subsystem === 'boot_check' || /boot/i.test(r.check_name))
+    || (alerts || []).find((a) => /boot/i.test(String(a.summary || a.source || a.alert_kind || '')));
+
+  const replay_2026_08_01 = [
+    {
+      incident: 'SF Deal -> LCC Opportunity Sync',
+      would_flag_same_day: !!(sfSync && (sfSync.open_failures > 0 || sfSync.failures > 0)),
+      evidence: sfSync ? `${sfSync.failures} failure(s), latest ${sfSync.latest_failure_at || 'unknown'}` : 'No matching flow_run_failures row in current window.',
+    },
+    {
+      incident: 'LCC Get Artifact',
+      would_flag_same_day: !!(artifact && (artifact.open_failures > 0 || artifact.failures > 0)),
+      evidence: artifact ? `${artifact.failures} failure(s), latest ${artifact.latest_failure_at || 'unknown'}` : 'No matching flow_run_failures row in current window.',
+    },
+    {
+      incident: 'Issue #710 field_source_priority schema drift',
+      would_flag_same_day: issue710,
+      evidence: issue710
+        ? `${invalidPriorityRows.length} invalid field_source_priority row(s) visible in v_field_source_priority_invalid_columns.`
+        : 'v_field_source_priority_invalid_columns is empty or unavailable.',
+    },
+    {
+      incident: 'Boot Check crash',
+      would_flag_same_day: !!boot,
+      evidence: boot ? (boot.summary || boot.last_error || boot.source || 'Boot-related health alert/event present.') : 'No boot_check event present; Boot Check should POST lcc_record_health_event.',
+    },
+  ];
+
+  return {
+    generated_at: generatedAt,
+    overall_status: counts.red > 0 ? 'red' : counts.amber > 0 ? 'amber' : counts.unknown > 0 ? 'unknown' : 'green',
+    counts,
+    by_subsystem: bySubsystem,
+    top_failures: rows
+      .filter((r) => healthSeverityRank(r.status) >= 2)
+      .sort((a, b) => healthSeverityRank(b.status) - healthSeverityRank(a.status)
+        || (Number(b.count || 0) - Number(a.count || 0))
+        || String(b.ts || '').localeCompare(String(a.ts || '')))
+      .slice(0, 12),
+    replay_2026_08_01,
+    thresholds: {
+      flow_failure_threshold: 5,
+      db_check_red: true,
+      deploy_red_on_failed_probe: true,
+    },
+  };
+}
+
+function likelyFixForHealthRow(row) {
+  const sub = String(row.subsystem || '').toLowerCase();
+  const check = String(row.check_name || '').toLowerCase();
+  const err = String(row.last_error || '').toLowerCase();
+  if (sub === 'power_automate' || check.includes('flow')) {
+    return 'Open the failing Power Automate run, fix the failed action or connector auth, then confirm its fault branch records recovery.';
+  }
+  if (check.includes('field_source_priority')) {
+    return 'Map or remove field_source_priority rows that point at non-existent target columns, then rerun Daily DB Checks.';
+  }
+  if (sub === 'deploy' || check.includes('railway')) {
+    return 'Confirm Railway deployed the intended main SHA and run npm run verify:deploy after redeploy.';
+  }
+  if (sub === 'connectors' || err.includes('auth')) {
+    return 'Re-authorize the connector at the source system and run a reachability probe.';
+  }
+  if (check.includes('boot')) {
+    return 'Run npm run check:boot and inspect the boot-check stack trace from the failing commit.';
+  }
+  return 'Inspect the collected last_error/details for this check; do not infer beyond the logged signal.';
+}
+
+function deterministicHealthDigest(lccHealth) {
+  const bad = lccHealth.top_failures || [];
+  if (!bad.length) return 'LCC Health is green. No red or amber checks are currently collected.';
+  const lines = [`LCC Health is ${String(lccHealth.overall_status || 'unknown').toUpperCase()}: ${lccHealth.counts.red} red, ${lccHealth.counts.amber} amber.`];
+  for (const row of bad.slice(0, 8)) {
+    const since = row.first_seen ? ` since ${row.first_seen}` : '';
+    const err = row.last_error ? ` Last error: ${String(row.last_error).slice(0, 180)}` : '';
+    lines.push(`- ${row.subsystem}/${row.check_name}: ${String(row.status).toUpperCase()} (${row.count || 0})${since}.${err} Likely fix: ${likelyFixForHealthRow(row)}`);
+  }
+  return lines.join('\n');
+}
+
+async function buildLccHealthDigest(lccHealth) {
+  if (!process.env.OLLAMA_URL) {
+    return { summarizer: 'deterministic', text: deterministicHealthDigest(lccHealth) };
+  }
+  const evidence = (lccHealth.top_failures || []).slice(0, 12).map((row) => ({
+    subsystem: row.subsystem,
+    check: row.check_name,
+    status: row.status,
+    count: row.count,
+    first_seen: row.first_seen,
+    ts: row.ts,
+    last_error: row.last_error,
+    likely_fix: likelyFixForHealthRow(row),
+  }));
+  const prompt = [
+    'Summarize this LCC Health evidence for a daily operator digest.',
+    'Rules: use only the JSON evidence, do not fabricate causes, include what is failing, since when, and likely fix.',
+    JSON.stringify({ overall_status: lccHealth.overall_status, counts: lccHealth.counts, evidence }, null, 2),
+  ].join('\n\n');
+  const base = String(process.env.OLLAMA_URL || '').trim().replace(/\/+$/, '');
+  const model = String(process.env.OLLAMA_MODEL || 'qwen2.5:14b').trim();
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 45000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+        ...(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+          ? {
+              'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID,
+              'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET,
+            }
+          : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    const data = await r.json().catch(() => ({}));
+    const text = data?.choices?.[0]?.message?.content;
+    if (!r.ok || !text) {
+      return { summarizer: 'deterministic', ollama_error: data?.error || `ollama status ${r.status}`, text: deterministicHealthDigest(lccHealth) };
+    }
+    return { summarizer: 'ollama', model: data?.model || model, text };
+  } catch (err) {
+    return { summarizer: 'deterministic', ollama_error: err?.message || String(err), text: deterministicHealthDigest(lccHealth) };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ============================================================================

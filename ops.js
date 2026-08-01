@@ -1691,16 +1691,31 @@ async function renderOpsHealthPage() {
   }
   const d = res.data || {};
   const s = d.summary || {};
+  const lccHealth = d.lcc_health || {};
+  const healthDigest = d.health_digest || {};
   const sevClass = (sev) => {
     const v = String(sev || '').toLowerCase();
     return v === 'critical' || v === 'error' ? 'red' : v === 'warning' || v === 'warn' ? 'yellow' : '';
   };
+  const healthTone = (status) => {
+    const v = String(status || '').toLowerCase();
+    return v === 'red' ? 'red' : v === 'amber' ? 'yellow' : v === 'green' ? 'green' : '';
+  };
+  const healthBadge = (status) => {
+    const v = String(status || 'unknown').toUpperCase();
+    const cls = healthTone(status) === 'red' ? 'pri-high' : '';
+    const style = healthTone(status) === 'green' ? ' style="background:var(--okbg);color:var(--green)"' : '';
+    return '<span class="q-badge ' + cls + '"' + style + '>' + esc(v) + '</span>';
+  };
 
-  let html = '<div class="ops-header"><h2>Ops Health</h2></div>';
-  html += '<div class="oh-intro">System self-monitoring: failing jobs, stalled workers, open alerts. If this page is all-clear, the pipelines are healthy.</div>';
+  let html = '<div class="ops-header"><h2>LCC Health</h2></div>';
+  html += '<div class="oh-intro">Connector, flow, DB-check, deploy, and worker health in one place. Red means same-day triage, amber means degraded or incomplete observability.</div>';
 
   // Summary KPI row.
   html += '<div class="metrics-grid">';
+  html += metricCardHTML('Overall', (lccHealth.overall_status || 'unknown').toUpperCase(), 'LCC Health', healthTone(lccHealth.overall_status));
+  html += metricCardHTML('Red Checks', lccHealth.counts ? lccHealth.counts.red : (s.lcc_health_red || 0), 'same-day triage', (s.lcc_health_red > 0 || lccHealth?.counts?.red > 0) ? 'red' : 'green');
+  html += metricCardHTML('Amber Checks', lccHealth.counts ? lccHealth.counts.amber : (s.lcc_health_amber || 0), 'degraded', (s.lcc_health_amber > 0 || lccHealth?.counts?.amber > 0) ? 'yellow' : 'green');
   html += metricCardHTML('Open Alerts', s.open_alerts == null ? '—' : s.open_alerts, 'health alerts', (s.open_alerts > 0) ? 'red' : 'green');
   html += metricCardHTML('Workers Stuck', s.workers_stuck == null ? '—' : s.workers_stuck, 'queues degrading', (s.workers_stuck > 0) ? 'red' : 'green');
   html += metricCardHTML('Flow Failures', s.open_flow_failures == null ? '—' : s.open_flow_failures, 'Power Automate', (s.open_flow_failures > 0) ? 'yellow' : 'green');
@@ -1708,6 +1723,47 @@ async function renderOpsHealthPage() {
   const wf24 = s.write_failures_24h;
   const wfSub = (s.write_failures_7d != null) ? ('last 24h · ' + Number(s.write_failures_7d).toLocaleString() + ' in 7d') : 'last 24h';
   html += metricCardHTML('Write Failures', wf24 == null ? '—' : Number(wf24).toLocaleString(), wfSub, (wf24 > 0) ? 'yellow' : 'green');
+  html += '</div>';
+
+  if (healthDigest.text) {
+    html += '<div class="widget"><div class="widget-title">Daily Health Digest'
+      + (healthDigest.summarizer ? ' <span class="q-badge">' + esc(healthDigest.summarizer) + '</span>' : '')
+      + '</div><pre style="white-space:pre-wrap;margin:0;color:var(--text2);font:12px/1.5 var(--font-mono,monospace)">'
+      + esc(healthDigest.text) + '</pre></div>';
+  }
+
+  html += '<div class="widget"><div class="widget-title">Subsystems</div>';
+  if (!(lccHealth.by_subsystem || []).length) {
+    html += '<div class="ops-empty">No LCC Health rows collected yet. Apply the migration and wire probes to lcc_record_health_event.</div>';
+  } else {
+    (lccHealth.by_subsystem || []).forEach(function (sub) {
+      const counts = sub.counts || {};
+      html += '<div class="q-item oh-' + healthTone(sub.status) + '"><div class="q-item-header"><span class="q-item-title">'
+        + esc(sub.subsystem || 'subsystem') + '</span><div class="q-item-badges">' + healthBadge(sub.status) + '</div></div>'
+        + '<div class="q-item-meta">red: ' + (counts.red || 0) + ' · amber: ' + (counts.amber || 0)
+        + ' · green: ' + (counts.green || 0) + ' · unknown: ' + (counts.unknown || 0) + '</div>';
+      (sub.checks || []).slice(0, 4).forEach(function (chk) {
+        html += '<div class="q-item-meta" style="margin-top:4px"><strong>' + esc(chk.check_name || 'check') + '</strong> '
+          + healthBadge(chk.status)
+          + ' <span>' + (chk.count == null ? '' : esc(String(chk.count)) + ' event(s)') + '</span>'
+          + (chk.first_seen ? ' · since ' + freshnessHTML(chk.first_seen) : '')
+          + (chk.last_error ? '<br><span style="color:var(--red)">' + esc(String(chk.last_error).slice(0, 220)) + '</span>' : '')
+          + (chk.external_url ? ' · <a href="' + esc(chk.external_url) + '" target="_blank" rel="noopener">run</a>' : '')
+          + '</div>';
+      });
+      html += '</div>';
+    });
+  }
+  html += '</div>';
+
+  html += '<div class="widget"><div class="widget-title">2026-08-01 Replay Verification</div>';
+  (lccHealth.replay_2026_08_01 || []).forEach(function (r) {
+    html += '<div class="q-item ' + (r.would_flag_same_day ? '' : 'overdue') + '"><div class="q-item-header"><span class="q-item-title">'
+      + esc(r.incident || 'incident') + '</span><div class="q-item-badges">'
+      + (r.would_flag_same_day ? '<span class="q-badge" style="background:var(--okbg);color:var(--green)">same-day</span>' : '<span class="q-badge pri-high">missing</span>')
+      + '</div></div><div class="q-item-meta">' + esc(r.evidence || '') + '</div></div>';
+  });
+  if (!(lccHealth.replay_2026_08_01 || []).length) html += '<div class="ops-empty">Replay checks unavailable.</div>';
   html += '</div>';
 
   // Top write-failure offender (24h) — names the single worst path so a storm

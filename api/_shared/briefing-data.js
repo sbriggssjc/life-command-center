@@ -443,6 +443,44 @@ export async function fetchSyncHealthSnapshot(workspaceId) {
   };
 }
 
+export async function fetchLccHealthSnapshot() {
+  const result = await opsQuery('GET',
+    'v_lcc_health_surface?select=subsystem,check_name,status,count,first_seen,ts,last_error,external_url,details&order=ts.desc&limit=200',
+    undefined, { countMode: 'none' }
+  );
+  if (!result.ok) {
+    return {
+      overall_status: 'unknown',
+      counts: { red: 0, amber: 0, green: 0, unknown: 1 },
+      top: [{
+        subsystem: 'lcc_health',
+        check_name: 'v_lcc_health_surface',
+        status: 'unknown',
+        count: 1,
+        last_error: result.data?.message || result.data?.error || 'LCC Health view unavailable',
+      }],
+    };
+  }
+  const rows = Array.isArray(result.data) ? result.data : [];
+  const counts = rows.reduce((acc, row) => {
+    const status = ['red', 'amber', 'green'].includes(row.status) ? row.status : 'unknown';
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, { red: 0, amber: 0, green: 0, unknown: 0 });
+  const rank = (status) => status === 'red' ? 3 : status === 'amber' ? 2 : status === 'unknown' ? 1 : 0;
+  const top = rows
+    .filter((row) => rank(row.status) >= 2)
+    .sort((a, b) => rank(b.status) - rank(a.status)
+      || (Number(b.count || 0) - Number(a.count || 0))
+      || String(b.ts || '').localeCompare(String(a.ts || '')))
+    .slice(0, 8);
+  return {
+    overall_status: counts.red > 0 ? 'red' : counts.amber > 0 ? 'amber' : counts.unknown > 0 ? 'unknown' : 'green',
+    counts,
+    top,
+  };
+}
+
 export async function fetchRecentSfActivity(workspaceId, limit = 30) {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   const result = await opsQuery('GET',
