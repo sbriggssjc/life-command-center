@@ -384,25 +384,96 @@ function renderDealSections(p) {
     kvRow('Lease term', renderTermTag(lease)),
   ].filter(Boolean)));
 
-  // 3. Parties
+  // 2b. Commission (stage-aware). Absent → "Not on file" (no ELA linked).
+  if (Array.isArray(d.commission) && d.commission.length) {
+    const rows = d.commission.map(c => {
+      const parts = [];
+      if (c.direct_pct != null) parts.push(`direct ${fmtPct(c.direct_pct)}`);
+      if (c.co_broker_pct != null) parts.push(`co-broker ${fmtPct(c.co_broker_pct)}`);
+      if (c.co_broker_split != null) parts.push(`split ${fmtPct(c.co_broker_split)}`);
+      const fee = c.fee_amount != null ? fmtMoney(c.fee_amount) : '&mdash;';
+      return `<tr><td>${esc(c.stage_basis || '')}</td><td>${esc(parts.join(', ') || c.structure || '')}</td><td>${fee}</td><td class="src">${esc(c.source || '')}</td></tr>`;
+    }).join('');
+    out.push(`<h2>Commission</h2><table class="hist"><thead><tr><th>Stage</th><th>Structure</th><th>Fee</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
+  } else {
+    out.push(`<h2>Commission</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);
+  }
+
+  // 2c. Transaction story & milestones (compress older, expand recent).
+  if (Array.isArray(d.milestones) && d.milestones.length) {
+    const rows = d.milestones.map(mi =>
+      `<tr><td>${esc(fmtDate(mi.date))}</td><td>${esc(mi.milestone_key || '')}</td><td>${esc(mi.status || '')}</td><td>${esc(mi.summary || '')}</td><td class="src">${esc(mi.source || '')}</td></tr>`
+    ).join('');
+    out.push(`<h2>Transaction Story &amp; Milestones</h2><table class="hist"><thead><tr><th>Date</th><th>Milestone</th><th>Status</th><th>Summary</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
+  } else {
+    out.push(`<h2>Transaction Story &amp; Milestones</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);
+  }
+
+  // 3. Parties (by side/role; CoStar-sourced broker flagged unverified until our own systems confirm).
   if (Array.isArray(d.parties) && d.parties.length) {
     const rows = d.parties.map(pt => {
       const flag = pt.flag ? ` <span class="badge b-off">${esc(pt.flag)}</span>` : '';
-      return `<tr><td>${esc(pt.role || '')}</td><td>${esc(pt.name || '')}${flag}</td><td class="src">${esc(pt.source || '')}</td></tr>`;
+      return `<tr><td>${esc(pt.side || '')}</td><td>${esc(pt.role || '')}</td><td>${esc(pt.name || '')}${flag}</td><td class="src">${esc(pt.source || '')}</td></tr>`;
     }).join('');
-    out.push(`<h2>Parties</h2><table class="hist"><thead><tr><th>Role</th><th>Party</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
+    out.push(`<h2>Parties</h2><table class="hist"><thead><tr><th>Side</th><th>Role</th><th>Party</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
   } else {
     out.push(`<h2>Parties</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);
   }
 
-  // 4. Correspondence
+  // 3b. Conflicts (surfaced, never auto-resolved).
+  if (Array.isArray(d.conflicts) && d.conflicts.length) {
+    const rows = d.conflicts.map(cf => {
+      const vals = Array.isArray(cf.values) ? cf.values.map(x => `${esc(x.v || '')} <span class="src">(${esc(x.source || '')})</span>`).join('<br>') : '';
+      return `<tr><td>${esc(cf.field || '')}</td><td>${vals}</td><td>${esc(cf.note || '')}</td></tr>`;
+    }).join('');
+    out.push(`<h2>Conflicts to reconcile</h2><table class="hist"><thead><tr><th>Field</th><th>Values</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>`);
+  }
+
+  // 3c. Diligence & vendors.
+  if (Array.isArray(d.diligence) && d.diligence.length) {
+    const rows = d.diligence.map(v =>
+      `<tr><td>${esc(v.vendor || '')}</td><td>${esc(v.type || '')}</td><td>${esc(fmtDate(v.ordered_date))}</td><td>${esc(fmtDate(v.report_eta))}</td><td>${v.lender_required ? 'Yes' : ''}</td></tr>`
+    ).join('');
+    out.push(`<h2>Diligence &amp; Vendors</h2><table class="hist"><thead><tr><th>Vendor</th><th>Type</th><th>Ordered</th><th>Report ETA</th><th>Lender req.</th></tr></thead><tbody>${rows}</tbody></table>`);
+  } else {
+    out.push(`<h2>Diligence &amp; Vendors</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);
+  }
+
+  // 4. Correspondence — living rollup summary + the thread list.
+  if (d.correspondence_summary && d.correspondence_summary.summary) {
+    const cs = d.correspondence_summary;
+    out.push(`<h2>Correspondence Summary</h2><table class="kv"><tr><td class="v">${esc(cs.summary)}</td></tr>` +
+      `<tr><td class="src">${cs.thread_count != null ? esc(cs.thread_count + ' thread(s)') : ''} · source ${esc(cs.source || '')}</td></tr></table>`);
+  }
   if (Array.isArray(d.correspondence) && d.correspondence.length) {
     const rows = d.correspondence.map(c =>
       `<tr><td>${esc(fmtDate(c.date))}</td><td>${esc(c.direction || '')}</td><td>${esc(c.subject || '')}</td><td class="src">${esc(c.source || '')}</td></tr>`
     ).join('');
     out.push(`<h2>Correspondence</h2><table class="hist"><thead><tr><th>Date</th><th>Direction</th><th>Subject</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
-  } else {
+  } else if (!(d.correspondence_summary && d.correspondence_summary.summary)) {
     out.push(`<h2>Correspondence</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);
+  }
+
+  // 4b. Documents (deal room / SF / Sharefile, reconciled status).
+  if (Array.isArray(d.documents) && d.documents.length) {
+    const rows = d.documents.map(doc =>
+      `<tr><td>${esc(doc.type || '')}</td><td>${esc(doc.name || '')}</td><td>${esc(fmtDate(doc.date))}</td><td>${doc.reconciled ? 'reconciled' : 'unreconciled'}</td><td class="src">${esc(doc.source || '')}</td></tr>`
+    ).join('');
+    out.push(`<h2>Documents</h2><table class="hist"><thead><tr><th>Type</th><th>Name</th><th>Date</th><th>Status</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
+  } else {
+    out.push(`<h2>Documents</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);
+  }
+
+  // 4c. Connected sources (which systems feed this record + gaps).
+  const csx = d.connected_sources || {};
+  if (Object.keys(csx).length) {
+    out.push(kvSection('Connected Sources', [
+      kvRow('CoStar', csx.costar ? { v: csx.costar } : undefined),
+      kvRow('Salesforce', csx.salesforce ? { v: csx.salesforce } : undefined),
+      kvRow('Outlook', csx.outlook ? { v: csx.outlook } : undefined),
+      kvRow('Sharefile', csx.sharefile ? { v: csx.sharefile } : undefined),
+      kvRow('Deal spine', csx.deal_spine ? { v: csx.deal_spine } : undefined),
+    ].filter(Boolean)));
   }
 
   // 5. Offers / LOIs
