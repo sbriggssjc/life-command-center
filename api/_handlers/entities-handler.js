@@ -17,7 +17,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
-import { opsQuery, paginationParams, requireOps, withErrorHandler, fetchWithTimeout } from '../_shared/ops-db.js';
+import { opsQuery, paginationParams, requireOps, withErrorHandler, fetchWithTimeout, pgFilterVal } from '../_shared/ops-db.js';
 import { resolveArtifactDownload, uploadDocToFolder } from '../_shared/storage-adapter.js';
 import { assemblePropertyPacket } from '../operations.js';
 import { generateDossier, recordDossier } from '../_shared/dossier-generator.js';
@@ -58,6 +58,306 @@ function classifyDocType(fileName, fileType) {
   if (t === 'comp' || /\bcomp\b|comparable/.test(n)) return 'comp';
   if (t === 'master' || /master sheet|\bmaster\b/.test(n)) return 'master';
   return 'other';
+}
+
+function normalizeDocDate(...vals) {
+  for (const v of vals) {
+    if (v == null || v === '') continue;
+    return String(v);
+  }
+  return null;
+}
+
+function docNameKey(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function toDocumentRow(row) {
+  const name = row.file_name || row.title || row.name || 'Document';
+  const type = row.doc_type || row.document_type || row.type || classifyDocType(name, row.file_type || row.extension);
+  const source = row.source || row.storage_backend || row.backend || null;
+  const date = normalizeDocDate(row.date, row.created_at, row.last_modified_at, row.system_modstamp, row.sf_last_modified);
+  const reconciled = row.reconciled === true || row.reconciled_status === 'linked_to_record';
+  return {
+    ...row,
+    file_name: name,
+    name,
+    doc_type: type,
+    type,
+    source,
+    backend: row.backend || row.storage_backend || source,
+    date,
+    created_at: row.created_at || date,
+    reconciled,
+    reconciled_status: reconciled ? 'linked_to_record' : 'not_yet_reconciled',
+  };
+}
+
+function dedupeDocuments(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const row of rows || []) {
+    const d = toDocumentRow(row);
+    const k = [
+      d.source || d.backend || '',
+      d.storage_ref || d.storage_path || d.source_url || d.sf_file_id || d.id || '',
+      docNameKey(d.file_name),
+      d.doc_type || '',
+    ].join('|');
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(d);
+  }
+  return out.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+function docSourcesSummary(docs) {
+  const counts = {};
+  for (const d of docs || []) {
+    const k = d.source || d.backend || 'unknown';
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  return counts;
+}
+
+async function resolveEntityAssetLink(entityId, workspaceId) {
+  const entRes = await opsQuery('GET',
+    `entities?id=eq.${pgFilterVal(entityId)}&workspace_id=eq.${pgFilterVal(workspaceId)}` +
+    `&select=id,name,address,city,state,zip,metadata&limit=1`);
+  if (!entRes.ok || !entRes.data?.length) return { ok: false, status: 404, error: 'Entity not found' };
+  const entity = entRes.data[0];
+
+  const idRes = await opsQuery('GET',
+    `external_identities?entity_id=eq.${pgFilterVal(entityId)}` +
+    `&source_type=eq.asset&source_system=in.(dia,gov,dialysis,government,dia_db,dia_supabase,gov_db,gov_supabase)` +
+    `&select=source_system,source_type,external_id,last_synced_at&limit=20`).catch(() => null);
+  const identities = (idRes && idRes.ok && Array.isArray(idRes.data)) ? idRes.data : [];
+  const link = resolveDomainLink(identities);
+  const domain = link.domain;
+  const propertyId = link.externalId;
+
+  let property = null;
+  if (domain && propertyId != null) {
+    const pr = await domainQuery(domain, 'GET',
+      `properties?property_id=eq.${pgFilterVal(propertyId)}` +
+      `&select=property_id,address,city,state,zip_code,latitude,longitude,medicare_id,updated_at&limit=1`).catch(() => null);
+    property = pr?.ok && Array.isArray(pr.data) ? (pr.data[0] || null) : null;
+  }
+
+  return { ok: true, entity, identities, domain, property_id: propertyId, property };
+}
+
+async function findMappedCreProperty(asset) {
+  const address = asset.property?.address || asset.entity?.address || asset.entity?.name || null;
+  const state = asset.property?.state || asset.entity?.state || null;
+  const normalized = normalizeAddress(address);
+  if (!normalized || !state) return null;
+  const r = await opsQuery('GET',
+    `lcc_cre_properties?normalized_address=eq.${pgFilterVal(normalized)}` +
+    `&state=ilike.${pgFilterVal(state)}` +
+    `&select=id,normalized_address,address,city,state,tenant_brand,source_path,metadata,updated_at&limit=5`).catch(() => null);
+  if (!r?.ok || !Array.isArray(r.data) || !r.data.length) return null;
+  const city = String(asset.property?.city || asset.entity?.city || '').toLowerCase();
+  return r.data.find(p => city && String(p.city || '').toLowerCase() === city) || r.data[0];
+}
+
+async function fetchIntakeDocuments(entityId) {
+  const prom = await opsQuery('GET',
+    `staged_intake_promotions?entity_id=eq.${pgFilterVal(entityId)}&select=intake_id`).catch(() => null);
+  const intakeIds = Array.from(new Set(((prom && prom.data) || []).map(r => r.intake_id).filter(Boolean)));
+  if (!intakeIds.length) return [];
+  const inList = intakeIds.map(pgFilterVal).join(',');
+  const art = await opsQuery('GET',
+    `staged_intake_artifacts?intake_id=in.(${inList})` +
+    `&select=id,intake_id,file_name,file_type,mime_type,storage_backend,storage_ref,storage_path,created_at` +
+    `&order=created_at.desc&limit=300`).catch(() => null);
+  return ((art && art.data) || [])
+    .map(a => {
+      const ref = a.storage_ref || a.storage_path || null;
+      const name = a.file_name || '';
+      const ft = String(a.file_type || '').toLowerCase();
+      const isDoc = /^(pdf|doc|docx|xlsx|xls)$/.test(ft) || /\.(pdf|docx?|xlsx?)$/i.test(name);
+      if (!isDoc || !ref) return null;
+      return toDocumentRow({
+        id: a.id,
+        intake_id: a.intake_id,
+        file_name: name,
+        doc_type: classifyDocType(name, ft),
+        source: a.storage_backend || (ref && ref.startsWith('/') ? 'sharepoint_pa' : 'lcc-om-uploads'),
+        backend: a.storage_backend || (ref && ref.startsWith('/') ? 'sharepoint_pa' : 'supabase'),
+        storage_ref: ref,
+        mime_type: a.mime_type || null,
+        date: a.created_at,
+        created_at: a.created_at,
+        reconciled: true,
+        source_history: [{ source: 'staged_intake_promotions', status: 'entity_id linked', date: a.created_at }],
+      });
+    })
+    .filter(Boolean);
+}
+
+async function fetchCreDocuments(asset) {
+  const cre = await findMappedCreProperty(asset);
+  if (!cre?.id) return { cre_property: null, docs: [] };
+  const r = await opsQuery('GET',
+    `lcc_cre_property_documents?cre_property_id=eq.${pgFilterVal(cre.id)}` +
+    `&select=id,cre_property_id,file_name,document_type,source_url,source,created_at` +
+    `&order=created_at.desc&limit=300`).catch(() => null);
+  const docs = ((r && r.ok && Array.isArray(r.data)) ? r.data : []).map(d => toDocumentRow({
+    id: `cre:${d.id}`,
+    cre_document_id: d.id,
+    cre_property_id: d.cre_property_id,
+    file_name: d.file_name,
+    doc_type: d.document_type || classifyDocType(d.file_name, null),
+    source: d.source || 'folder_feed_cre',
+    backend: 'lcc_cre_property_documents',
+    source_url: d.source_url || null,
+    storage_ref: d.source_url || null,
+    date: d.created_at,
+    created_at: d.created_at,
+    reconciled: true,
+    source_history: [
+      { source: 'lcc_cre_properties', status: `matched cre_property_id ${cre.id} by normalized address/state`, date: cre.updated_at || null },
+      { source: 'lcc_cre_property_documents', status: 'linked to CRE property record', date: d.created_at },
+    ],
+  }));
+  return { cre_property: cre, docs };
+}
+
+async function fetchSfFilesForProperty(domain, propertyId) {
+  if (!domain || propertyId == null) return [];
+  const pid = pgFilterVal(propertyId);
+
+  const selectCols = 'file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,sf_comp_id,sf_listing_id,sf_deal_id,title,file_name,extension,source_system,ingestion_status,extraction_status,storage_path,process_notes,created_at';
+  const fallbackSelectCols = 'file_id,content_document_id,content_version_id,linked_entity_type,linked_entity_sf_id,sf_comp_id,sf_listing_id,sf_deal_id,title,file_name,extension,source_system,ingestion_status,extraction_status,storage_path,process_notes';
+  let direct = await domainQuery(domain, 'GET',
+    `sf_files?linked_property_id=eq.${pid}` +
+    `&select=${selectCols},linked_property_id&order=created_at.desc&limit=300`).catch(() => null);
+  if (!direct?.ok) {
+    direct = await domainQuery(domain, 'GET',
+      `sf_files?linked_property_id=eq.${pid}` +
+      `&select=${fallbackSelectCols},linked_property_id&limit=300`).catch(() => null);
+  }
+  if (direct?.ok && Array.isArray(direct.data) && direct.data.length) {
+    return direct.data.map(f => toSfDocumentRow({ domain, propertyId, file: f, linkSource: 'sf_files.linked_property_id' }));
+  }
+
+  const [compRes, listingRes, dealRes] = await Promise.all([
+    domainQuery(domain, 'GET', `sf_comp_staging?linked_property_id=eq.${pid}&select=sf_comp_id,sf_listing_id,sf_deal_id&limit=1000`).catch(() => null),
+    domainQuery(domain, 'GET', `sf_listing_staging?linked_property_id=eq.${pid}&select=sf_listing_id,sf_deal_id&limit=1000`).catch(() => null),
+    domainQuery(domain, 'GET', `sf_deal_staging?linked_property_id=eq.${pid}&select=sf_deal_id&limit=1000`).catch(() => null),
+  ]);
+  const compIds = new Set();
+  const listingIds = new Set();
+  const dealIds = new Set();
+  for (const row of compRes?.ok && Array.isArray(compRes.data) ? compRes.data : []) {
+    if (row.sf_comp_id) compIds.add(row.sf_comp_id);
+    if (row.sf_listing_id) listingIds.add(row.sf_listing_id);
+    if (row.sf_deal_id) dealIds.add(row.sf_deal_id);
+  }
+  for (const row of listingRes?.ok && Array.isArray(listingRes.data) ? listingRes.data : []) {
+    if (row.sf_listing_id) listingIds.add(row.sf_listing_id);
+    if (row.sf_deal_id) dealIds.add(row.sf_deal_id);
+  }
+  for (const row of dealRes?.ok && Array.isArray(dealRes.data) ? dealRes.data : []) {
+    if (row.sf_deal_id) dealIds.add(row.sf_deal_id);
+  }
+
+  const orParts = [];
+  if (compIds.size) orParts.push(`sf_comp_id.in.(${Array.from(compIds).map(pgFilterVal).join(',')})`);
+  if (listingIds.size) orParts.push(`sf_listing_id.in.(${Array.from(listingIds).map(pgFilterVal).join(',')})`);
+  if (dealIds.size) orParts.push(`sf_deal_id.in.(${Array.from(dealIds).map(pgFilterVal).join(',')})`);
+  if (!orParts.length) return [];
+
+  let r = await domainQuery(domain, 'GET',
+    `sf_files?or=(${orParts.join(',')})` +
+    `&select=${selectCols}` +
+    `&order=created_at.desc&limit=300`).catch(() => null);
+  if (!r?.ok) {
+    r = await domainQuery(domain, 'GET',
+      `sf_files?or=(${orParts.join(',')})` +
+      `&select=${fallbackSelectCols}` +
+      `&limit=300`).catch(() => null);
+  }
+  const rows = r?.ok && Array.isArray(r.data) ? r.data : [];
+  return rows.map(f => toSfDocumentRow({ domain, propertyId, file: f, linkSource: 'sf_*_staging.linked_property_id' }));
+}
+
+function toSfDocumentRow({ domain, propertyId, file: f, linkSource }) {
+  return toDocumentRow({
+    id: `sf:${domain}:${f.file_id}`,
+    sf_file_id: f.file_id,
+    content_document_id: f.content_document_id || null,
+    content_version_id: f.content_version_id || null,
+    file_name: f.file_name || f.title || (f.title && f.extension ? `${f.title}.${f.extension}` : null),
+    doc_type: classifyDocType(f.file_name || f.title, f.extension),
+    source: 'salesforce_files',
+    backend: 'salesforce-files',
+    storage_ref: f.storage_path || null,
+    storage_path: f.storage_path || null,
+    linked_entity_type: f.linked_entity_type || null,
+    linked_entity_sf_id: f.linked_entity_sf_id || null,
+    sf_comp_id: f.sf_comp_id || null,
+    sf_listing_id: f.sf_listing_id || null,
+    sf_deal_id: f.sf_deal_id || null,
+    ingestion_status: f.ingestion_status || null,
+    extraction_status: f.extraction_status || null,
+    process_notes: f.process_notes || null,
+    date: f.created_at || f.system_modstamp || null,
+    reconciled: true,
+    source_history: [
+      { source: 'intake-salesforce-files', status: f.ingestion_status || 'discovered', date: f.created_at || null },
+      { source: linkSource, status: `linked to ${domain} property ${propertyId}`, date: null },
+    ],
+  });
+}
+
+export async function fetchEntityDocuments(entityId, workspaceId) {
+  const asset = await resolveEntityAssetLink(entityId, workspaceId);
+  if (!asset.ok) return asset;
+  const [intakeDocs, creResult, sfDocs] = await Promise.all([
+    fetchIntakeDocuments(entityId),
+    fetchCreDocuments(asset),
+    fetchSfFilesForProperty(asset.domain, asset.property_id),
+  ]);
+  const docs = dedupeDocuments([
+    ...intakeDocs,
+    ...(creResult.docs || []),
+    ...sfDocs,
+  ]);
+  const groups = {};
+  for (const d of docs) (groups[d.doc_type] = groups[d.doc_type] || []).push(d);
+  return {
+    ok: true,
+    entity_id: entityId,
+    domain: asset.domain,
+    property_id: asset.property_id,
+    cre_property_id: creResult.cre_property?.id || null,
+    count: docs.length,
+    docs,
+    documents: docs,
+    groups,
+    sources: docSourcesSummary(docs),
+    source_status: {
+      intake_artifacts: {
+        count: intakeDocs.length,
+        reconciled_status: intakeDocs.length ? 'linked_to_record' : 'not_yet_reconciled',
+      },
+      cre_property_documents: {
+        count: creResult.docs?.length || 0,
+        cre_property_id: creResult.cre_property?.id || null,
+        reconciled_status: creResult.docs?.length ? 'linked_to_record' : 'not_yet_reconciled',
+      },
+      salesforce_files: {
+        count: sfDocs.length,
+        reconciled_status: sfDocs.length ? 'linked_to_record' : 'not_yet_reconciled',
+      },
+    },
+  };
 }
 
 // ============================================================================
@@ -496,11 +796,25 @@ async function buildPropertyPacket(entityId, workspaceId) {
   });
 
   // --- Documents --------------------------------------------------------------
-  const documents = (bp.documents || []).map(d => ({
+  const docsPacket = await fetchEntityDocuments(entityId, workspaceId).catch(() => null);
+  const documents = (docsPacket && docsPacket.ok && Array.isArray(docsPacket.docs) && docsPacket.docs.length
+    ? docsPacket.docs
+    : (bp.documents || []).map(d => toDocumentRow({
+      type: d.doc_type || d.type || 'document',
+      file_name: d.file_name || d.title || null,
+      source: d.storage_backend || d.source || d.backend || null,
+      date: d.created_at || null,
+      reconciled: !!(d.property_id || d.document_id),
+    }))
+  ).map(d => ({
     type: d.doc_type || d.type || 'document',
-    file_name: d.file_name || d.title || null,
-    source: d.storage_backend || d.source || d.backend || null,
-    date: d.created_at || null,
+    name: d.file_name || d.name || d.title || null,
+    file_name: d.file_name || d.name || d.title || null,
+    source: d.source || d.storage_backend || d.backend || null,
+    date: d.date || d.created_at || null,
+    reconciled: d.reconciled === true,
+    reconciled_status: d.reconciled_status || (d.reconciled ? 'linked_to_record' : 'not_yet_reconciled'),
+    source_history: Array.isArray(d.source_history) ? d.source_history : undefined,
   }));
 
   // --- Valuation --------------------------------------------------------------
@@ -540,6 +854,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
 
   return {
     meta, identity, ownership, tenancy_lease, operations, valuation, transactions, transaction_marketing_timeline, documents,
+    document_sources: docsPacket?.ok ? { sources: docsPacket.sources, cre_property_id: docsPacket.cre_property_id } : undefined,
     location: (domain === 'dia') ? {
       geocode: (prop.latitude && prop.longitude) ? tag(`${prop.latitude}, ${prop.longitude}`, 'properties') : undefined,
       radius_demographics: demos,
@@ -761,47 +1076,15 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(200).json({ entity_id: id, count: rows.length, rows, groups, totals });
     }
 
-    // Documents viewer (Scott ask) — the OMs / BOVs / leases / comps ingested for
-    // this property. They live in Supabase Storage (lcc-om-uploads) or SharePoint,
-    // recorded in staged_intake_artifacts and tied to the asset entity via
-    // staged_intake_promotions.entity_id. GET /api/entities?action=documents&id=<uuid>
+    // Documents viewer — the OMs / BOVs / leases / comps ingested for this
+    // property across intake artifacts, the CRE folder-feed registry, and
+    // Salesforce file discovery. Every row carries a date and reconciliation
+    // status for dossier v2 grounding.
+    // GET /api/entities?action=documents&id=<uuid>
     if (action === 'documents' && id) {
-      const entRes = await opsQuery('GET',
-        `entities?id=eq.${id}&workspace_id=eq.${workspaceId}&select=id`);
-      if (!entRes.ok || !entRes.data?.length) return res.status(404).json({ error: 'Entity not found' });
-      // 1. intakes promoted to this entity
-      const prom = await opsQuery('GET',
-        `staged_intake_promotions?entity_id=eq.${id}&select=intake_id`).catch(() => null);
-      const intakeIds = Array.from(new Set(((prom && prom.data) || []).map(r => r.intake_id).filter(Boolean)));
-      let docs = [];
-      if (intakeIds.length) {
-        const inList = intakeIds.map(v => encodeURIComponent(v)).join(',');
-        const art = await opsQuery('GET',
-          `staged_intake_artifacts?intake_id=in.(${inList})` +
-          `&select=id,file_name,file_type,mime_type,storage_backend,storage_ref,storage_path,created_at` +
-          `&order=created_at.desc&limit=300`).catch(() => null);
-        docs = ((art && art.data) || [])
-          .map(a => {
-            const ref = a.storage_ref || a.storage_path || null;
-            const name = a.file_name || '';
-            const ft = String(a.file_type || '').toLowerCase();
-            const isDoc = /^(pdf|doc|docx|xlsx|xls)$/.test(ft) || /\.(pdf|docx?|xlsx?)$/i.test(name);
-            return { id: a.id, file_name: name, doc_type: classifyDocType(name, ft),
-              backend: a.storage_backend || (ref && ref.startsWith('/') ? 'sharepoint_pa' : 'supabase'),
-              storage_ref: ref, created_at: a.created_at, _isDoc: isDoc };
-          })
-          .filter(d => d._isDoc && d.storage_ref);
-        // Dedupe re-staged copies of the same file (intake re-runs stack identical
-        // rows). Keep the newest (list is ordered created_at desc).
-        const seenDoc = new Set();
-        docs = docs.filter(d => {
-          const k = String(d.file_name || '').toLowerCase().trim() + '|' + d.doc_type;
-          if (seenDoc.has(k)) return false; seenDoc.add(k); return true;
-        }).map(({ _isDoc, ...d }) => d);
-      }
-      const groups = {};
-      for (const d of docs) (groups[d.doc_type] = groups[d.doc_type] || []).push(d);
-      return res.status(200).json({ entity_id: id, count: docs.length, docs, groups });
+      const packet = await fetchEntityDocuments(id, workspaceId);
+      if (!packet.ok) return res.status(packet.status || 500).json({ error: packet.error || 'documents_unavailable' });
+      return res.status(200).json(packet);
     }
 
     // Mint a short-lived signed URL for a stored document (by artifact id, so we
