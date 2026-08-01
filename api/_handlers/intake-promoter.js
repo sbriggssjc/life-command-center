@@ -39,6 +39,7 @@ import { domainQuery } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { emitMatchDisambiguation } from './intake-matcher.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIdentitySystem } from '../_shared/entity-link.js';
+import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
@@ -2274,47 +2275,30 @@ async function promoteLccEntity(workspaceId, actorId, snapshot, match) {
     return { ok: true, skipped: 'lcc_entity_not_needed_for_domain', domain: match.domain };
   }
 
-  // R4-A: canonical domain source_system ('dia' | 'gov') + source_type 'asset'.
-  // ensureEntityLink canonicalizes anyway, but pass the canonical values so the
-  // intent is explicit and matches the sidebar/log_activity writers.
-  const sourceSystem = canonicalIdentitySystem(match.domain);
-  const externalId   = String(match.property_id);
-
-  const result = await ensureEntityLink({
+  // R-asset-linking: delegate to the single reusable path so the OM promoter,
+  // the post-close hook, the property panel, and generate_dossier all mint the
+  // SAME well-formed asset entity (name = street address, metadata populated
+  // from the domain DB) instead of each writing its own stub. ensureAssetEntity-
+  // ForProperty reads the domain property + its leases/sales/contacts/loans and
+  // enriches the entity fill-blanks; passing the OM snapshot as a seed hint
+  // keeps the address available even before the domain read returns.
+  const result = await ensureAssetEntityForProperty({
+    domain:      match.domain,
+    propertyId:  match.property_id,
     workspaceId,
-    userId:       actorId,
-    sourceSystem,
-    sourceType:   'asset',
-    externalId,
-    domain:       match.domain,
-    seedFields: {
-      address:  snapshot.address || null,
-      city:     snapshot.city || null,
-      state:    normalizeState(snapshot.state) || null,
-      zip:      snapshot.zip_code || null,
-      asset_type: snapshot.property_type || null,
-      description: firstOf(snapshot.tenant_name)
-        ? `${firstOf(snapshot.tenant_name)}${joinedOf(snapshot.listing_firm) ? ` — listed by ${joinedOf(snapshot.listing_firm)}` : ''}`
-        : null,
-      domain: match.domain,
-    },
-    metadata: {
-      // Preserve the back-reference to the domain property so downstream
-      // lookups can bridge LCC entity → domain-DB property. Matches the
-      // sidebar-pipeline convention for CoStar-sourced entities.
-      domain_property_id: match.property_id,
-      bridge_source:      'intake_promoter',
-    },
+    userId:      actorId,
+    deps:        { bridgeSource: 'intake_promoter' },
   });
 
   if (!result.ok) {
-    return { ok: false, skipped: 'ensure_link_failed', detail: result };
+    return { ok: false, skipped: result.skipped || 'ensure_link_failed', detail: result };
   }
   return {
     ok:           true,
-    entity_id:    result.entity?.id || result.entityId || null,
-    created:      !!result.createdEntity,
-    identity_created: !!result.createdIdentity,
+    entity_id:    result.entity_id || null,
+    created:      !!result.created,
+    identity_created: !!result.identity_created,
+    enriched:     !!result.enriched,
   };
 }
 
