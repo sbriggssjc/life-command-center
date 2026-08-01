@@ -207,10 +207,12 @@ async function buildPropertyPacket(entityId, workspaceId) {
   let operations = null;
   if (domain === 'dia' && (clinic || fpc.length || prop.total_chairs != null)) {
     const latestFpc = fpc.find(r => !r.data_quality_flag) || fpc[0] || null;
+    const clinicPatients = clinic && num(clinic.latest_estimated_patients);
+    const trendPatients = latestFpc && num(latestFpc.corrected_total_patients != null ? latestFpc.corrected_total_patients : latestFpc.total_patients);
     operations = {
       stations: tag(clinic && num(clinic.stations), 'CMS (medicare_clinics)'),
-      patient_count: tag(latestFpc && num(latestFpc.corrected_total_patients != null ? latestFpc.corrected_total_patients : latestFpc.total_patients),
-        'facility_patient_counts', latestFpc && latestFpc.snapshot_date ? { as_of: latestFpc.snapshot_date } : {}),
+      patient_count: tag(clinicPatients, 'CMS (medicare_clinics.latest_estimated_patients)'),
+      patient_trend_latest: tag(trendPatients, 'facility_patient_counts', latestFpc && latestFpc.snapshot_date ? { as_of: latestFpc.snapshot_date } : {}),
       ttm_treatments: tag(clinic && num(clinic.ttm_total_treatments != null ? clinic.ttm_total_treatments : clinic.estimated_annual_treatments), 'CMS (medicare_clinics)'),
       certification_date: tag(clinic && (clinic.certification_date || clinic.latest_certification_date), 'CMS (medicare_clinics)'),
       _conflicts: [],
@@ -221,7 +223,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
       operations._conflicts.push({ field: 'stations', values: [{ v: cmsStations, source: 'CMS' }, { v: denormChairs, source: 'properties denorm' }], reconciled: cmsStations });
     }
     const denormPatients = num(prop.total_patients);
-    const cmsPatients = latestFpc && num(latestFpc.corrected_total_patients != null ? latestFpc.corrected_total_patients : latestFpc.total_patients);
+    const cmsPatients = clinicPatients;
     if (denormPatients != null && cmsPatients != null && Math.abs(denormPatients - cmsPatients) > Math.max(20, cmsPatients)) {
       operations._conflicts.push({ field: 'patient count', values: [{ v: cmsPatients, source: 'CMS' }, { v: denormPatients, source: 'properties denorm' }], reconciled: cmsPatients });
     }

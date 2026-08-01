@@ -1337,6 +1337,7 @@ async function _udRenderOperationsAsync(bodyEl) {
       promises.push(diaQuery('clinic_trends', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('clinic_quality_metrics', '*', { filter: mFilter, order: 'snapshot_date.desc', limit: 1 }).catch(() => []));
       promises.push(diaQuery('clinic_financial_estimates', '*', { filter: mFilter, filter2: 'is_primary=eq.true', limit: 1 }).catch(() => []));
+      promises.push(diaQuery('facility_economics', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('facility_cost_reports', '*', { filter: mFilter, order: 'fiscal_year_end.desc', limit: 1 }).catch(() => []));
       promises.push(diaQuery('v_clinic_payer_mix', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('v_payer_mix_geo_averages', '*', { filter: mFilter, limit: 1 }).catch(() => []));
@@ -1348,7 +1349,7 @@ async function _udRenderOperationsAsync(bodyEl) {
         promises.push(Promise.resolve([]));
       }
       // Hours of operation from medicare_clinics
-      promises.push(diaQuery('medicare_clinics', 'medicare_id,weekly_operating_hours,late_shift,hours_json,hours_summary_text,hours_source,hours_confidence,hours_last_checked_at', { filter: mFilter, limit: 1 }).catch(() => []));
+      promises.push(diaQuery('medicare_clinics', 'medicare_id,stations,number_of_chairs,latest_estimated_patients,ttm_total_treatments,estimated_annual_treatments,weekly_operating_hours,late_shift,hours_json,hours_summary_text,hours_source,hours_confidence,hours_last_checked_at', { filter: mFilter, limit: 1 }).catch(() => []));
       // Competitors: same-county clinics (need county from rankings)
       const county = (_udCache.rankings && _udCache.rankings.county) || null;
       const countyState = (_udCache.rankings && _udCache.rankings.state) || null;
@@ -1366,9 +1367,9 @@ async function _udRenderOperationsAsync(bodyEl) {
         promises.push(Promise.resolve([]));
       }
     }
-    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData, demographicData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, facilityEconomics, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData, demographicData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], [], [], [], [], [], []];
 
     // R50 — geographic BD bundle (nearby owners / sales / distance competitors).
     // Heavy haversine scan stays in the dia DB; soft-fails to null.
@@ -1397,6 +1398,7 @@ async function _udRenderOperationsAsync(bodyEl) {
       trends: (trends || [])[0] || null,
       quality: (quality || [])[0] || null,
       financialDetail: (financialDetail || [])[0] || null,
+      facilityEconomics: (facilityEconomics || [])[0] || null,
       costReports: (costReports || [])[0] || null,
       payerMix: (payerMixData || [])[0] || null,
       geoPayerMix: (geoPayerData || [])[0] || null,
@@ -1408,7 +1410,7 @@ async function _udRenderOperationsAsync(bodyEl) {
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], demographics: null, geo: null };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, facilityEconomics: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], demographics: null, geo: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -4303,7 +4305,8 @@ function _udTabOperations() {
     const pt = cmsLink.patient || {};
     effectiveRankings = {
       medicare_id:                cmsLink.medicare_id,
-      latest_estimated_patients:  pt.total_patients || pt.patient_count || null,
+      latest_estimated_patients:  f.latest_estimated_patients || pt.total_patients || pt.patient_count || null,
+      ttm_total_treatments:       f.ttm_total_treatments || f.estimated_annual_treatments || null,
       number_of_chairs:           f.number_of_chairs || f.stations || null,
       stations:                   f.stations || f.number_of_chairs || null,
       star_rating:                q.star_rating != null ? q.star_rating : null,
@@ -4331,11 +4334,13 @@ function _udTabOperations() {
   const trends = ext.trends || (cmsLink && cmsLink.trends) || {};
   const quality = ext.quality || (cmsLink && cmsLink.quality) || {};
   const finDetail = ext.financialDetail || {};
+  const facilityEconomics = ext.facilityEconomics || {};
   const costRpt = ext.costReports || (cmsLink && cmsLink.cost) || {};
   const payerMixHcris = ext.payerMix || (cmsLink && cmsLink.payer) || null;
   const geoPayerMix = ext.geoPayerMix || null;
   const lease = ext.lease || {};
-  const hoursInfo = ext.hours || null;
+  const clinicProfile = ext.hours || (cmsLink && cmsLink.facility) || {};
+  const hoursInfo = clinicProfile || null;
   const patientHistory = ext.patientHistory || [];
   const operator = (cmsLink && cmsLink.operator) || _udDetectOperator(r);
   let html = '';
@@ -4359,24 +4364,25 @@ function _udTabOperations() {
     html += '</div>';
   }
 
-  // ── Reconcile patient census: prefer latest snapshot over rankings aggregate ──
+  // ── Reconcile patient census: CMS clinic value is current; history is trend context ──
+  const clinicPatientCount = clinicProfile.latest_estimated_patients != null
+    ? Number(clinicProfile.latest_estimated_patients)
+    : (r.latest_estimated_patients != null ? Number(r.latest_estimated_patients) : null);
   const latestSnapshotPt = patientHistory.length > 0
     ? Number(patientHistory[patientHistory.length - 1].total_patients || patientHistory[patientHistory.length - 1].patient_count || 0)
     : 0;
-  const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
+  const bestPatientCount = clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null);
 
   // ── Reconcile operating margin ──
   // Always prefer computing margin from profit / revenue for consistency,
   // since ttm_operating_margin may be stored as a raw ratio (0.008) instead of a percentage (0.8)
-  const bestProfit = finDetail.estimated_operating_profit || r.ttm_operating_profit;
-  const bestRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
+  const correctedRevenue = facilityEconomics.estimated_annual_revenue || facilityEconomics.ttm_revenue || null;
+  const correctedProfit = facilityEconomics.estimated_annual_profit || facilityEconomics.estimated_operating_profit || facilityEconomics.ttm_operating_profit || null;
+  const bestProfit = correctedProfit;
+  const bestRevenue = correctedRevenue;
   let margin = null;
   if (bestProfit && bestRevenue && Number(bestRevenue) > 0) {
     margin = (Number(bestProfit) / Number(bestRevenue)) * 100;
-  } else if (r.ttm_operating_margin != null) {
-    // Fallback: use stored value, converting ratio to percentage if needed
-    margin = Number(r.ttm_operating_margin);
-    if (Math.abs(margin) > 0 && Math.abs(margin) < 1) margin = margin * 100;
   }
 
   // ── Export Toolbar ──
@@ -4398,14 +4404,14 @@ function _udTabOperations() {
   const cmsLinked = !!(r && (r.medicare_id || r.linked_medicare_facility_id || r.ccn));
 
   // Revenue KPI
-  const estRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
+  const estRevenue = correctedRevenue;
   kpis.push({
     label: 'Est. Annual Revenue',
-    value: estRevenue ? '$' + _fmtCompact(estRevenue) : 'N/A',
+    value: estRevenue ? '$' + _fmtCompact(estRevenue) : 'Not on file',
     color: estRevenue ? '' : 'var(--text3)',
     info: estRevenue
-      ? 'Revenue estimated using 4-payer treatment model'
-      : (cmsLinked ? 'No payer mix / patient counts on file yet' : 'No CMS link — match the property to a Medicare facility to populate')
+      ? 'Revenue from corrected clinic economics'
+      : (cmsLinked ? 'Corrected clinic economics not on file; property-denorm revenue is retired' : 'No CMS link — match the property to a Medicare facility to populate')
   });
 
   // Operating Margin KPI
@@ -4426,7 +4432,7 @@ function _udTabOperations() {
     color: '',
     trend: _trendArrow(r.patient_yoy_pct, 'YoY'),
     info: bestPatientCount
-      ? (latestSnapshotPt > 0 ? 'From latest CMS snapshot' : 'From rankings aggregate')
+      ? (clinicPatientCount ? 'From medicare_clinics.latest_estimated_patients' : 'From latest facility_patient_counts trend snapshot')
       : (cmsLinked ? 'No CMS snapshot on file yet' : 'No CMS link — match facility to populate')
   });
 
@@ -4499,7 +4505,7 @@ function _udTabOperations() {
   // 1b. CMS FACILITY PROFILE — operator, CCN, QIP, last survey, staffing, treatment count
   // ════════════════════════════════════════════════════════════════════════════
 
-  const facility = (cmsLink && cmsLink.facility) || {};
+  const facility = clinicProfile;
   const latestPt = (cmsLink && cmsLink.patient) || {};
   const qipScore = quality.quality_incentive_program_score
                 ?? quality.qip_total_score
@@ -4519,7 +4525,8 @@ function _udTabOperations() {
                   || costRpt.staff_total
                   || r.total_employees
                   || null;
-  const latestTreatments = (costRpt.total_medicare_treatments != null ? costRpt.total_medicare_treatments : null)
+  const latestTreatments = facility.ttm_total_treatments
+                        || (costRpt.total_medicare_treatments != null ? costRpt.total_medicare_treatments : null)
                         || r.ttm_total_treatments
                         || r.estimated_annual_treatments
                         || null;
@@ -4527,7 +4534,7 @@ function _udTabOperations() {
                         : (r.patient_yoy_pct != null ? Number(r.patient_yoy_pct) : null);
   const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || facility.medicare_id || '';
   const npi = facility.npi || r.npi || '';
-  const stationsVal = r.number_of_chairs || r.stations || facility.number_of_chairs || facility.stations || null;
+  const stationsVal = facility.stations || facility.number_of_chairs || r.stations || r.number_of_chairs || null;
 
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title" style="display:flex;align-items:center;gap:8px">';
@@ -4565,11 +4572,11 @@ function _udTabOperations() {
   html += '<div class="detail-section-title">Financial Summary</div>';
 
   // Source badge
-  const revSource = finDetail.estimate_source || r.revenue_calc_method || 'CMS Patient Count';
+  const revSource = estRevenue ? (facilityEconomics.estimate_source || facilityEconomics.revenue_calc_method || 'Corrected clinic economics') : 'Not on file';
   html += '<div style="margin-bottom:10px"><span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;background:var(--purple);color:#fff;font-weight:600;letter-spacing:0.3px">' + esc(revSource) + '</span></div>';
 
   html += '<div class="detail-grid">';
-  html += _rowMoney('Est. Annual Revenue', finDetail.estimated_annual_revenue || r.estimated_annual_revenue);
+  html += estRevenue ? _rowMoney('Est. Annual Revenue', estRevenue) : _row('Est. Annual Revenue', 'Not on file');
 
   // ── Reconcile Operating Costs ──
   // Priority: 1) HCRIS cost report (facility-level actual)
@@ -4585,9 +4592,6 @@ function _udTabOperations() {
   if (hcrisCost > 0 && !hcrisCostEqualsRev) {
     bestCosts = hcrisCost;
     costSource = 'HCRIS';
-  } else if (finDetail.estimated_annual_revenue && finDetail.estimated_operating_profit) {
-    bestCosts = Number(finDetail.estimated_annual_revenue) - Number(finDetail.estimated_operating_profit);
-    costSource = 'derived';
   } else if (estRevenue && bestProfit) {
     bestCosts = Number(estRevenue) - Number(bestProfit);
     costSource = 'derived';
@@ -4612,7 +4616,7 @@ function _udTabOperations() {
     html += _row('Total Operating Costs', null);
   }
 
-  html += _rowMoney('Operating Profit', finDetail.estimated_operating_profit || r.ttm_operating_profit);
+  html += bestProfit ? _rowMoney('Operating Profit', bestProfit) : _row('Operating Profit', 'Not on file');
   html += _rowHtml('Operating Margin', margin != null ? _marginBadge(margin) : null);
 
   // ── Reconcile Treatments / Year ──
@@ -4622,7 +4626,7 @@ function _udTabOperations() {
   //           4) Model from patient count (patients × 156) — last resort, often inflated
   const hcrisTx = costRpt && costRpt.total_treatments ? Number(costRpt.total_treatments) : null;
   const finTx = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
-  const rawTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  const rawTx = facility.ttm_total_treatments || r.ttm_total_treatments || facility.estimated_annual_treatments || r.estimated_annual_treatments;
   const modelTx = bestPatientCount ? bestPatientCount * 156 : null; // 3 tx/week × 52 weeks
   let annualTx = null;
   let txLabel = '';
