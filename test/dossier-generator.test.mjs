@@ -64,11 +64,17 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
     },
     tenancy_lease: {
       tenant: { v: 'DaVita Dialysis', source: 'leases' },
+      guarantor: { v: 'Total Renal Care, Inc.', source: 'leases' },
+      guaranty_scope: { v: 'Limited to Initial Term; excludes option periods.', source: 'leases' },
       annual_base_rent: { v: 181959, source: 'lease (documented)', as_of: '2018-06-06' },
       year1_rent_psf: { v: 28.85, derived: 'year-1 rent $181,959 ÷ building 6,308 SF' },
       current_base_rent: { v: 200154.9, derived: 'anchor rent $181,959 as of 2018-06-06 × (1 + 10%)^1; 60 mo interval; as-of 2026-08-01' },
       current_rent_psf: { v: 31.73, derived: 'current rent $200,155 ÷ building 6,308 SF' },
       term_remaining_years: { v: '~6.8', derived: 'to 2033-06-06 from today (firm; excludes options)' },
+      roof_responsibility: { v: 'landlord', source: 'leases' },
+      structure_responsibility: { v: 'landlord', source: 'leases' },
+      parking_responsibility: { v: 'tenant', source: 'leases' },
+      hvac_responsibility: { v: 'shared', source: 'leases' },
     },
     operations: {
       stations: { v: 13, source: 'CMS (medicare_clinics)' },
@@ -118,6 +124,11 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
   assert.match(out.html, /Kingsbarn Realty/);
   assert.match(out.html, /the operator, not the owner/);      // owner ≠ operator
   assert.match(out.html, /Year-1 rent \+ \$\/SF/);
+  assert.match(out.html, /Guaranty scope/);
+  assert.match(out.html, /Limited to Initial Term; excludes option periods/);
+  assert.match(out.html, /Expense-structure prose/);
+  assert.match(out.html, /Responsibilities \(roof \/ structure \/ parking \/ HVAC\)/);
+  assert.match(out.html, /Roof: landlord/);
   assert.match(out.html, /Current rent \+ \$\/SF/);
   assert.match(out.html, /200,155/);
   assert.match(out.html, /31\.73/);

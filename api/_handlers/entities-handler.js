@@ -420,6 +420,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
   const tenancy_lease = {
     tenant: tag((lease && lease.tenant) || prop.tenant, lease ? 'leases' : 'properties'),
     guarantor: tag(lease && lease.guarantor, 'leases'),
+    guaranty_scope: tag(lease && lease.guaranty_scope, 'leases'),
     annual_base_rent: tag(annualRent, lease ? 'lease (documented)' : 'properties',
       lease && lease.lease_start ? { as_of: lease.lease_start } : {}),
     year1_rent_psf: year1RentPsf,
@@ -428,6 +429,10 @@ async function buildPropertyPacket(entityId, workspaceId) {
     lease_start: tag(lease && lease.lease_start, 'leases'),
     lease_expiration: tag(lease && lease.lease_expiration, 'leases'),
     expense_structure: tag(lease && (lease.expense_structure_canonical || lease.expense_structure), 'leases'),
+    roof_responsibility: tag(lease && lease.roof_responsibility, 'leases'),
+    structure_responsibility: tag(lease && lease.structure_responsibility, 'leases'),
+    parking_responsibility: tag(lease && lease.parking_responsibility, 'leases'),
+    hvac_responsibility: tag(lease && lease.hvac_responsibility, 'leases'),
     escalations_text: tag(lease && (lease.escalation_raw_text_current || lease.renewal_option_text), 'leases'),
     renewal_options: tag(lease && lease.renewal_options, 'leases'),
     option_bumps_continue: optionBumpsContinueTag(lease),

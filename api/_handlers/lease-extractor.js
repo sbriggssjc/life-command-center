@@ -60,6 +60,11 @@ export const LEASE_FIELD_MAP = {
       lease_structure: 'expense_structure', expense_structure: 'expense_structure',
       commencement_date: 'lease_start', expiration_date: 'lease_expiration',
       renewal_options: 'renewal_options',
+      guaranty_scope: 'guaranty_scope',
+      roof_responsibility: 'roof_responsibility',
+      structure_responsibility: 'structure_responsibility',
+      parking_responsibility: 'parking_responsibility',
+      hvac_responsibility: 'hvac_responsibility',
     },
   },
 };
@@ -79,6 +84,15 @@ function iso(v) {
 function str(v) {
   const s = (v === null || v === undefined) ? '' : String(v).trim();
   return s || null;
+}
+function responsibilityValue(v) {
+  const s = str(v);
+  if (!s) return null;
+  const n = s.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  if (/\b(?:tenant|lessee)\b/.test(n) && !/\b(?:landlord|lessor)\b/.test(n)) return 'tenant';
+  if (/\b(?:landlord|lessor)\b/.test(n) && !/\b(?:tenant|lessee)\b/.test(n)) return 'landlord';
+  if (/\b(?:shared|both|split|joint|landlord tenant|tenant landlord)\b/.test(n)) return 'shared';
+  return null;
 }
 
 // True when two field values are the SAME for fill-blanks purposes. Numeric
@@ -252,7 +266,12 @@ export function buildLeaseExtractionPrompt() {
     '    "lease_structure": "NNN"|"NN"|"gross"|"modified_gross"|"full_service"|null,',
     '    "expense_structure": str|null, "firm_term_years": number|null,',
     '    "total_term_years": number|null, "commencement_date": "YYYY-MM-DD"|null,',
-    '    "expiration_date": "YYYY-MM-DD"|null, "renewal_options": str|null',
+    '    "expiration_date": "YYYY-MM-DD"|null, "renewal_options": str|null,',
+    '    "guaranty_scope": str|null,',
+    '    "roof_responsibility": "tenant"|"landlord"|"shared"|null,',
+    '    "structure_responsibility": "tenant"|"landlord"|"shared"|null,',
+    '    "parking_responsibility": "tenant"|"landlord"|"shared"|null,',
+    '    "hvac_responsibility": "tenant"|"landlord"|"shared"|null',
     '  },',
     '  "ti_schedule": [ { "schedule_year": int|null, "period_start": "YYYY-MM-DD"|null,',
     '    "period_end": "YYYY-MM-DD"|null, "ti_excess_amount": number|null,',
@@ -264,6 +283,8 @@ export function buildLeaseExtractionPrompt() {
     '  }',
     '}',
     'The "guarantor" is the credit parent (e.g. "Total Renal Care, Inc." guarantees a DaVita lease).',
+    'The "guaranty_scope" is the lease/guaranty text describing whether the guaranty covers the Initial Term only, option periods, or another stated scope. If the guaranty is limited to the Initial Term or excludes renewal/extension options, say that explicitly. If silent, use null.',
+    'Responsibility fields are the party responsible for repair, maintenance, and replacement of roof, structure, parking, and HVAC. Use only "tenant", "landlord", or "shared" when the lease states the split. If the lease splits repair/maintenance/replacement differently, use "shared" and put the detailed split in expense_structure. Use null when silent.',
     'The "notices" block is the lease\'s NOTICE / boilerplate contact info ("Notices to <party> ' +
       'shall be sent to … at <address>", or a signature/contact block): the GUARANTOR\'s and the ' +
       'TENANT\'s own mailing/notice address + phone + email. The notice address is the PARTY\'s ' +
@@ -297,7 +318,11 @@ export function normalizeLeaseExtraction(raw) {
     tenant: str, guarantor: str, annual_rent: num, rent_psf: num, leased_sf: num,
     lease_structure: str, expense_structure: str, firm_term_years: num,
     total_term_years: num, commencement_date: iso, expiration_date: iso,
-    renewal_options: str,
+    renewal_options: str, guaranty_scope: str,
+    roof_responsibility: responsibilityValue,
+    structure_responsibility: responsibilityValue,
+    parking_responsibility: responsibilityValue,
+    hvac_responsibility: responsibilityValue,
   };
   for (const [k, coerce] of Object.entries(factualSpec)) {
     const v = coerce(f[k]);

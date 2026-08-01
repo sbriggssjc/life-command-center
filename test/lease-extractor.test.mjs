@@ -30,6 +30,11 @@ const RAW = {
     tenant: 'DaVita Inc', guarantor: 'Total Renal Care, Inc.', annual_rent: '$1,250,000',
     rent_psf: '25.00', leased_sf: '50,000', lease_structure: 'NNN', firm_term_years: '10',
     commencement_date: '2021-06-01', expiration_date: '2036-05-31', renewal_options: '4x5yr',
+    guaranty_scope: 'Limited to Initial Term; excludes option periods.',
+    roof_responsibility: 'Landlord',
+    structure_responsibility: 'Landlord',
+    parking_responsibility: 'Tenant',
+    hvac_responsibility: 'Shared',
   },
   ti_schedule: [
     { schedule_year: 1, period_start: '2021-06-01', period_end: '2022-05-31', ti_excess_amount: '$100,000', cumulative_ti: '$100,000', burn_off_date: '2031-05-31' },
@@ -44,6 +49,8 @@ describe('lease extractor — prompt + normalize', () => {
     assert.match(p, /property_identity/);
     assert.match(p, /ti_schedule/);
     assert.match(p, /guarantor/);
+    assert.match(p, /guaranty_scope/);
+    assert.match(p, /roof_responsibility/);
     assert.match(p, /Do NOT invent a sale price or cap rate/);
   });
 
@@ -54,6 +61,11 @@ describe('lease extractor — prompt + normalize', () => {
     assert.equal(n.factual.rent_psf, 25);
     assert.equal(n.factual.leased_sf, 50000);
     assert.equal(n.factual.guarantor, 'Total Renal Care, Inc.');
+    assert.equal(n.factual.guaranty_scope, 'Limited to Initial Term; excludes option periods.');
+    assert.equal(n.factual.roof_responsibility, 'landlord');
+    assert.equal(n.factual.structure_responsibility, 'landlord');
+    assert.equal(n.factual.parking_responsibility, 'tenant');
+    assert.equal(n.factual.hvac_responsibility, 'shared');
     assert.equal(n.factual.commencement_date, '2021-06-01');
     assert.equal(n.ti_schedule.length, 1);          // the all-null row dropped
     assert.equal(n.ti_schedule[0].ti_excess_amount, 100000);
@@ -86,6 +98,11 @@ describe('lease extractor — domain write plan', () => {
     assert.equal(plan.leaseFields.rent_per_sf, 25);
     assert.equal(plan.leaseFields.leased_area, 50000);
     assert.equal(plan.leaseFields.expense_structure, 'NNN');  // lease_structure → expense_structure
+    assert.equal(plan.leaseFields.guaranty_scope, 'Limited to Initial Term; excludes option periods.');
+    assert.equal(plan.leaseFields.roof_responsibility, 'landlord');
+    assert.equal(plan.leaseFields.structure_responsibility, 'landlord');
+    assert.equal(plan.leaseFields.parking_responsibility, 'tenant');
+    assert.equal(plan.leaseFields.hvac_responsibility, 'shared');
     assert.ok(!('rent_psf' in plan.leaseFields));
   });
 });
@@ -818,7 +835,7 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
     // proves the supplied text was used directly. Either AI failure is acceptable.
     await assert.rejects(
       runLeaseExtraction({ ocrText: 'COMMENCEMENT DATE 2024-01-01 ANNUAL RENT $250,000 GUARANTOR DaVita Inc', ocrConfidence: 72 }),
-      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+      (e) => /AI provider error|no_json_in_ai_response|fetch failed/.test(e.message),
     );
   });
 
@@ -860,7 +877,7 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
         textFromBytesImpl: async () => 'STAMP 12345',   // sub-floor junk
         ocrTieredImpl: async () => { ocrCalled = true; return { ok: true, text: 'COMMENCEMENT DATE 2024-01-01 ANNUAL RENT $250,000', tier: 'cloud_cheap', engine: 'google_docai', pages: 2, confidence: 95 }; },
       }),
-      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+      (e) => /AI provider error|no_json_in_ai_response|fetch failed/.test(e.message),
     );
     assert.equal(ocrCalled, true);
   });
@@ -873,7 +890,7 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
         textFromBytesImpl: async () => 'COMMENCEMENT DATE 2024-01-01 ANNUAL RENT $250,000 GUARANTOR DaVita Inc '.repeat(8),  // > 200 chars
         ocrTieredImpl: async () => { ocrCalled = true; return { ok: false }; },
       }),
-      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+      (e) => /AI provider error|no_json_in_ai_response|fetch failed/.test(e.message),
     );
     assert.equal(ocrCalled, false);   // real text → straight to the prompt, no OCR
   });
@@ -887,7 +904,7 @@ describe('lease extractor — folder-feed channel (attachLeaseDoc: in-domain enr
         textFromBytesImpl: async () => 'Short lease note.',   // < 200 chars but NOT a PDF
         ocrTieredImpl: async () => { ocrCalled = true; return { ok: false }; },
       }),
-      (e) => /AI provider error|no_json_in_ai_response/.test(e.message),
+      (e) => /AI provider error|no_json_in_ai_response|fetch failed/.test(e.message),
     );
     assert.equal(ocrCalled, false);   // non-PDF short text used directly, never discarded
   });

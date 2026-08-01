@@ -194,6 +194,30 @@ function renderRentAndPsf(rentTag, psfTag) {
   return `${rent} <span class="src">&middot;</span> ${psf}`;
 }
 
+function renderResponsibilitySplit(lease) {
+  const rows = [
+    ['Roof', lease.roof_responsibility],
+    ['Structure', lease.structure_responsibility],
+    ['Parking', lease.parking_responsibility],
+    ['HVAC', lease.hvac_responsibility],
+  ].map(([label, tag]) => `${esc(label)}: ${renderTag(tag)}`);
+  return rows.join('<br>');
+}
+
+function renderExpenseStructureProse(lease) {
+  const bits = [];
+  const structure = renderTag(lease.expense_structure);
+  if (structure !== NA) bits.push(`Lease structure: ${structure}`);
+  const responsibilities = [
+    ['roof', lease.roof_responsibility],
+    ['structure', lease.structure_responsibility],
+    ['parking', lease.parking_responsibility],
+    ['HVAC', lease.hvac_responsibility],
+  ].map(([label, tag]) => `${label} ${renderTag(tag)}`);
+  bits.push(`Responsibilities: ${responsibilities.join(' · ')}`);
+  return bits.join('<br>');
+}
+
 // A section is emitted only when it has a title; rows are always emitted (missing
 // fields become "Not on file" so the reader sees the gap, per §1.8).
 function kvSection(title, rows) {
@@ -237,12 +261,15 @@ function renderPropertySections(p) {
   // 4. Tenancy & Lease
   out.push(kvSection('Tenancy & Lease', [
     kvRow('Tenant', lease.tenant),
-    lease.guarantor ? kvRow('Guarantor', lease.guarantor) : '',
+    kvRow('Guarantor', lease.guarantor),
+    kvRow('Guaranty scope', lease.guaranty_scope),
     kvRowHtml('Year-1 rent + $/SF', renderRentAndPsf(lease.annual_base_rent, lease.year1_rent_psf)),
     kvRowHtml('Current rent + $/SF', renderRentAndPsf(lease.current_base_rent, lease.current_rent_psf)),
     kvRow('Lease term', lease.lease_term || renderTermTag(lease)),
     lease.term_remaining_years ? kvRow('Term remaining (years)', lease.term_remaining_years) : '',
     kvRow('Expense structure', lease.expense_structure),
+    kvRowHtml('Expense-structure prose', renderExpenseStructureProse(lease)),
+    kvRowHtml('Responsibilities (roof / structure / parking / HVAC)', renderResponsibilitySplit(lease)),
     kvRow('Escalations', lease.escalations_text),
     kvRow('Renewal options', lease.renewal_options),
     kvRow('Bumps continue through options?', lease.option_bumps_continue),
