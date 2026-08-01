@@ -32,6 +32,7 @@ import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { enrichReviewQueueContext } from '../_shared/provenance-row-context.js';
 import { computeRoe, mergeTimeline } from '../_shared/roe.js';
 import { sf15, toSf18 } from '../_shared/sf-id.js';
+import { loadOrCreateStaticMap, loadOrCreateNearbyNationalTenants } from '../_shared/location-trade-area.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -642,6 +643,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
   let lease = null, clinic = null, fpc = [], demos = [], zcta = null, payer = null, leaseScheduleRows = [];
   let sales = [], listings = [];
   let relocationLineage = null, marketCompetition = [];
+  let staticMap = null, nearbyNationalTenants = [];
   if (domain && pid) {
     const calls = [
       domainQuery(domain, 'GET', `leases?property_id=eq.${pid}&superseded_at=is.null&order=is_active.desc.nullslast,lease_start.desc&limit=1`).catch(() => null),
@@ -704,6 +706,26 @@ async function buildPropertyPacket(entityId, workspaceId) {
     marketCompetition = lineageAndCompetition[1]?.ok && Array.isArray(lineageAndCompetition[1].data)
       ? lineageAndCompetition[1].data
       : [];
+
+    if (lat != null && lng != null && externalId != null) {
+      const locationAssets = await Promise.all([
+        loadOrCreateStaticMap({
+          domain,
+          propertyId: externalId,
+          lat,
+          lng,
+          address: [prop.address, prop.city, prop.state, prop.zip_code].filter(Boolean).join(', '),
+        }).catch(() => null),
+        loadOrCreateNearbyNationalTenants({
+          domain,
+          propertyId: externalId,
+          lat,
+          lng,
+        }).catch(() => []),
+      ]);
+      staticMap = locationAssets[0] || null;
+      nearbyNationalTenants = Array.isArray(locationAssets[1]) ? locationAssets[1] : [];
+    }
   }
 
   // --- Ownership reconciliation: owner is NEVER the operator (§1.6) ------------
@@ -917,10 +939,59 @@ async function buildPropertyPacket(entityId, workspaceId) {
     meta, identity, ownership, tenancy_lease, operations, valuation, transactions, transaction_marketing_timeline, documents,
     document_sources: docsPacket?.ok ? { sources: docsPacket.sources, cre_property_id: docsPacket.cre_property_id } : undefined,
     location: (domain === 'dia') ? {
+      address: tag([prop.address, prop.city, prop.state, prop.zip_code].filter(Boolean).join(', '), 'properties'),
+      latitude: tag(num(prop.latitude), 'properties'),
+      longitude: tag(num(prop.longitude), 'properties'),
       geocode: (prop.latitude && prop.longitude) ? tag(`${prop.latitude}, ${prop.longitude}`, 'properties') : undefined,
-      radius_demographics: demos,
-      zip_census: zcta,
-      payer_mix: payer,
+      frontage: prop.address ? tag(prop.address, 'properties') : undefined,
+      static_map: staticMap ? {
+        image_data_uri: staticMap.image_data_uri,
+        provider: staticMap.provider,
+        cache_key: staticMap.cache_key,
+        cached: staticMap.cached,
+        rings_miles: [1, 3, 5],
+      } : undefined,
+      nearby_national_tenants: nearbyNationalTenants.map(t => ({
+        tenant_name: tag(t.tenant_name, t.source || 'google_places_nearbysearch'),
+        vicinity: tag(t.vicinity, t.source || 'google_places_nearbysearch'),
+        distance_miles: milesTag(t.distance_miles, t.source || 'google_places_nearbysearch'),
+        place_types: Array.isArray(t.place_types) ? t.place_types : [],
+        rating: tag(num(t.rating), t.source || 'google_places_nearbysearch'),
+      })),
+      radius_demographics: (demos || []).map(d => ({
+        radius_miles: num(d.radius_miles),
+        population: tag(num(d.population), d.data_source || 'property_demographics', d.data_year ? { as_of: d.data_year } : {}),
+        num_households: tag(num(d.num_households), d.data_source || 'property_demographics', d.data_year ? { as_of: d.data_year } : {}),
+        population_growth_pct: tag(num(d.population_growth_pct), d.data_source || 'property_demographics', d.data_year ? { as_of: d.data_year } : {}),
+        avg_hhi: tag(num(d.avg_hhi), d.data_source || 'property_demographics', d.data_year ? { as_of: d.data_year } : {}),
+        median_hhi: tag(num(d.median_hhi), d.data_source || 'property_demographics', d.data_year ? { as_of: d.data_year } : {}),
+      })),
+      radius_demographics_gap: (!demos || !demos.length) ? {
+        v: `No property_demographics rows are on file for property ${externalId}.`,
+        source: 'property_demographics coverage audit',
+      } : undefined,
+      zip_census: zcta ? {
+        zip_code: tag(zcta.zip_code, 'census_zcta_demographics'),
+        total_population: tag(num(zcta.total_population ?? zcta.population), 'census_zcta_demographics', zcta.data_year ? { as_of: zcta.data_year } : {}),
+        median_household_income: tag(num(zcta.median_household_income ?? zcta.median_hhi), 'census_zcta_demographics', zcta.data_year ? { as_of: zcta.data_year } : {}),
+        population_65_plus: tag(num(zcta.population_65_plus), 'census_zcta_demographics', zcta.data_year ? { as_of: zcta.data_year } : {}),
+        population_65_plus_pct: tag(num(zcta.population_65_plus_pct), 'census_zcta_demographics', zcta.data_year ? { as_of: zcta.data_year } : {}),
+        uninsured_rate: tag(num(zcta.uninsured_rate), 'census_zcta_demographics', zcta.data_year ? { as_of: zcta.data_year } : {}),
+        poverty_rate: tag(num(zcta.poverty_rate), 'census_zcta_demographics', zcta.data_year ? { as_of: zcta.data_year } : {}),
+        data_year: zcta.data_year || null,
+      } : undefined,
+      payer_mix: payer ? {
+        county: tag(payer.county || payer.county_name, 'v_payer_mix_geo_averages'),
+        state: tag(payer.state || payer.state_name, 'v_payer_mix_geo_averages'),
+        county_medicare_pct: tag(num(payer.county_medicare_pct ?? payer.medicare_pct), 'v_payer_mix_geo_averages'),
+        county_medicaid_pct: tag(num(payer.county_medicaid_pct ?? payer.medicaid_pct), 'v_payer_mix_geo_averages'),
+        county_private_pct: tag(num(payer.county_private_pct ?? payer.private_pct), 'v_payer_mix_geo_averages'),
+        county_clinic_count: tag(num(payer.county_clinic_count ?? payer.clinic_count), 'v_payer_mix_geo_averages'),
+        state_medicare_pct: tag(num(payer.state_medicare_pct), 'v_payer_mix_geo_averages'),
+        state_medicaid_pct: tag(num(payer.state_medicaid_pct), 'v_payer_mix_geo_averages'),
+        state_private_pct: tag(num(payer.state_private_pct), 'v_payer_mix_geo_averages'),
+        state_clinic_count: tag(num(payer.state_clinic_count), 'v_payer_mix_geo_averages'),
+      } : undefined,
     } : undefined,
     listings,
   };

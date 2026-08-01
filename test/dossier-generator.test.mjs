@@ -117,6 +117,43 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
       _conflicts: [{ field: 'stations', values: [{ v: 13, source: 'CMS' }, { v: 171, source: 'properties denorm' }], reconciled: 13 }],
     },
     valuation: { model_estimate: { v: 3137221, source: 'LCC valuation model', confidence: 'low' } },
+    location: {
+      address: { v: '5247 Airways Blvd, Memphis, TN 38116', source: 'properties' },
+      geocode: { v: '35.005382, -89.989957', source: 'properties' },
+      frontage: { v: '5247 Airways Blvd', source: 'properties' },
+      nearby_national_tenants: [],
+      radius_demographics: [
+        {
+          radius_miles: 1,
+          population: { v: 11234, source: 'property_demographics', as_of: '2026' },
+          num_households: { v: 4321, source: 'property_demographics', as_of: '2026' },
+          population_growth_pct: { v: 0.012, source: 'property_demographics', as_of: '2026' },
+          avg_hhi: { v: 51234, source: 'property_demographics', as_of: '2026' },
+        },
+      ],
+      zip_census: {
+        zip_code: { v: '38116', source: 'census_zcta_demographics' },
+        total_population: { v: 40212, source: 'census_zcta_demographics', as_of: '2022' },
+        median_household_income: { v: 42354, source: 'census_zcta_demographics', as_of: '2022' },
+        population_65_plus: { v: 6260, source: 'census_zcta_demographics', as_of: '2022' },
+        population_65_plus_pct: { v: 15.6, source: 'census_zcta_demographics', as_of: '2022' },
+        uninsured_rate: { v: 16.2, source: 'census_zcta_demographics', as_of: '2022' },
+        poverty_rate: { v: 28.4, source: 'census_zcta_demographics', as_of: '2022' },
+        data_year: 2022,
+      },
+      payer_mix: {
+        county: { v: 'Shelby County', source: 'v_payer_mix_geo_averages' },
+        state: { v: 'Tennessee', source: 'v_payer_mix_geo_averages' },
+        county_medicare_pct: { v: 27.9, source: 'v_payer_mix_geo_averages' },
+        county_medicaid_pct: { v: 45.4, source: 'v_payer_mix_geo_averages' },
+        county_private_pct: { v: 26.7, source: 'v_payer_mix_geo_averages' },
+        county_clinic_count: { v: 49, source: 'v_payer_mix_geo_averages' },
+        state_medicare_pct: { v: 31.3, source: 'v_payer_mix_geo_averages' },
+        state_medicaid_pct: { v: 39.3, source: 'v_payer_mix_geo_averages' },
+        state_private_pct: { v: 30.5, source: 'v_payer_mix_geo_averages' },
+        state_clinic_count: { v: 192, source: 'v_payer_mix_geo_averages' },
+      },
+    },
     transactions: [{ date: '2018-06-01', grantor: 'DaVita HealthCare Partners', grantee: 'Kingsbarn Realty', price: 3150000, source: 'deed' }],
     transaction_marketing_timeline: [
       {
@@ -182,6 +219,15 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
   assert.match(out.html, /DaVita Comparable/);
   assert.match(out.html, /\$32\.50\/SF/);
   assert.match(out.html, /Derived: value 3137221/);            // price/SF labeled derived
+  assert.match(out.html, /Location &amp; Trade Area/);
+  assert.match(out.html, /Map thumbnail is Not on file/);
+  assert.match(out.html, /Nearby national tenants[\s\S]*Not on file/);
+  assert.match(out.html, /Trade-area demographics \(1 \/ 3 \/ 5-mile radius\)/);
+  assert.match(out.html, /11,234/);
+  assert.match(out.html, /ZIP 38116 — interim proxy/);
+  assert.match(out.html, /40,212/);
+  assert.match(out.html, /Shelby County/);
+  assert.match(out.html, /Medicare 27\.90%/);
   assert.match(out.html, /Transaction &amp; Marketing Timeline/);
   assert.match(out.html, /5\.40% stated \/ 5\.78% calc/);
   assert.match(out.html, /15\.0 yr firm at close/);

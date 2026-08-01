@@ -227,6 +227,113 @@ function kvSection(title, rows) {
 // ---------------------------------------------------------------------------
 // FACT sections — deterministic, packet-driven (no LLM)
 // ---------------------------------------------------------------------------
+function renderLocationMap(loc) {
+  const img = loc?.static_map?.image_data_uri;
+  if (img) {
+    return `<div style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:8px">` +
+      `<img src="${esc(img)}" alt="Map thumbnail centered on ${esc(unwrap(loc.address) || 'property')}" style="width:100%;display:block;height:auto">` +
+      `</div>`;
+  }
+  const address = renderTag(loc?.address);
+  const geocode = renderTag(loc?.geocode);
+  return `<div style="padding:34px 16px;background:#eef2ff;color:#4f46e5;font-size:12.5px;text-align:center;line-height:1.5;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px">` +
+    `<b>${address}</b><br>${geocode}<br>` +
+    `<span class="src">Map thumbnail is Not on file; Google Static Maps cache was unavailable.</span>` +
+    `</div>`;
+}
+
+function renderNearbyNationalTenants(rows) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return `${NA} <span class="src">&middot; no stored Places API tenant callouts</span>`;
+  }
+  return rows.slice(0, 8).map(t => {
+    const name = renderTag(t.tenant_name);
+    const dist = t.distance_miles ? renderTag(t.distance_miles, (v) => Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' mi') : '';
+    const vic = t.vicinity ? ` <span class="src">&middot; ${renderTag(t.vicinity).replace(/ <span class="src">[\s\S]*?<\/span>/, '')}</span>` : '';
+    return `${name}${dist ? ` <span class="src">(${dist.replace(/ <span class="src">[\s\S]*?<\/span>/, '')})</span>` : ''}${vic}`;
+  }).join('<br>');
+}
+
+function demoByRadius(rows, radius) {
+  return (rows || []).find(r => Number(r.radius_miles) === Number(radius)) || {};
+}
+
+function demoCell(row, field, fmt) {
+  const tag = row ? row[field] : null;
+  if (tag) return renderTag(tag, fmt);
+  return NA;
+}
+
+function renderRadiusDemographics(rows) {
+  const one = demoByRadius(rows, 1);
+  const three = demoByRadius(rows, 3);
+  const five = demoByRadius(rows, 5);
+  const metric = (label, field, fmt) =>
+    `<tr><td>${esc(label)}</td><td>${demoCell(one, field, fmt)}</td><td>${demoCell(three, field, fmt)}</td><td>${demoCell(five, field, fmt)}</td></tr>`;
+  return `<div style="font-size:12px;font-weight:700;color:#777;margin:14px 0 4px">Trade-area demographics (1 / 3 / 5-mile radius)</div>` +
+    `<table class="hist"><thead><tr><th>Metric</th><th>1-mile</th><th>3-mile</th><th>5-mile</th></tr></thead><tbody>` +
+    metric('Population', 'population', fmtNum) +
+    metric('Households', 'num_households', fmtNum) +
+    metric('Population growth %', 'population_growth_pct', fmtPct) +
+    metric('Avg. household income', 'avg_hhi', fmtMoney) +
+    `</tbody></table>`;
+}
+
+function renderZipProxy(z) {
+  const pctAndCount = (countTag, pctTag) => {
+    const count = renderTag(countTag, fmtNum);
+    const pct = renderTag(pctTag, fmtPct);
+    if (count === NA && pct === NA) return NA;
+    if (count !== NA && pct !== NA) return `${count} (${pct.replace(/ <span class="src">[\s\S]*?<\/span>/, '')})`;
+    return count !== NA ? count : pct;
+  };
+  const zip = z?.zip_code?.v || unwrap(z?.zip_code) || 'ZIP';
+  const year = z?.data_year ? ` <span style="font-weight:400;color:#999">(Census ACS5 ${esc(z.data_year)}; ZIP, not radius rings)</span>` : ` <span style="font-weight:400;color:#999">(ZIP, not radius rings)</span>`;
+  return `<div style="font-size:12px;font-weight:700;color:#777;margin:14px 0 4px">ZIP ${esc(zip)} — interim proxy${year}</div>` +
+    `<table class="kv">` +
+    kvRow('Population', z?.total_population, fmtNum) +
+    kvRow('Median household income', z?.median_household_income, fmtMoney) +
+    kvRowHtml('Population 65+', pctAndCount(z?.population_65_plus, z?.population_65_plus_pct)) +
+    kvRow('Uninsured rate', z?.uninsured_rate, fmtPct) +
+    kvRow('Poverty rate', z?.poverty_rate, fmtPct) +
+    `</table>`;
+}
+
+function renderPayerMix(p) {
+  if (!p) {
+    return `<div style="font-size:12px;font-weight:700;color:#777;margin:14px 0 4px">Dialysis market context</div>` +
+      `<table class="kv"><tr><td class="v">${NA}</td></tr></table>`;
+  }
+  const pct = (tag) => renderTag(tag, fmtPct).replace(/ <span class="src">[\s\S]*?<\/span>/, '');
+  const county = unwrap(p.county) || 'County';
+  const state = unwrap(p.state) || 'State';
+  return `<div style="font-size:12px;font-weight:700;color:#777;margin:14px 0 4px">Dialysis market context</div>` +
+    `<table class="kv">` +
+    kvRowHtml(`Payer mix — ${county}`, `Medicare ${pct(p.county_medicare_pct)} &middot; Medicaid ${pct(p.county_medicaid_pct)} &middot; Private ${pct(p.county_private_pct)} <span class="src">&middot; source: v_payer_mix_geo_averages</span>`) +
+    kvRowHtml(`Payer mix — ${state}`, `Medicare ${pct(p.state_medicare_pct)} &middot; Medicaid ${pct(p.state_medicaid_pct)} &middot; Private ${pct(p.state_private_pct)}`) +
+    kvRowHtml('Dialysis clinics (competitive supply)', `${renderTag(p.county_clinic_count, fmtNum)} in ${esc(county)} &middot; ${renderTag(p.state_clinic_count, fmtNum)} in ${esc(state)} <span class="src">&middot; CMS</span>`) +
+    `</table>`;
+}
+
+function renderLocationTradeArea(loc) {
+  if (!loc) return '';
+  const rows = [
+    kvRow('Coordinates', loc.geocode),
+    kvRow('Frontage / arterials', loc.frontage),
+    kvRowHtml('Nearby national tenants', renderNearbyNationalTenants(loc.nearby_national_tenants)),
+  ];
+  const gap = loc.radius_demographics_gap
+    ? `<div class="conflict"><b>Coverage gap:</b> ${renderTag(loc.radius_demographics_gap)}</div>`
+    : '';
+  return `<h2>Location &amp; Trade Area</h2>` +
+    renderLocationMap(loc) +
+    `<table class="kv">${rows.join('')}</table>` +
+    renderRadiusDemographics(loc.radius_demographics || []) +
+    gap +
+    renderZipProxy(loc.zip_census || {}) +
+    renderPayerMix(loc.payer_mix || null);
+}
+
 function renderRelocation(reloc) {
   if (!reloc) return NA;
   const priorAddr = renderTag(reloc.prior_address);
@@ -287,6 +394,9 @@ function renderPropertySections(p) {
     id.price_per_sf ? kvRow('Price / SF', id.price_per_sf, (v) => fmtMoney(v) + '/SF') : '',
     kvRow('LCC value estimate', val.model_estimate, fmtMoney),
   ].filter(Boolean)));
+
+  // 2b. Location & Trade Area
+  out.push(renderLocationTradeArea(p.location));
 
   // 3. Ownership — Owner is never the operator (§1.6).
   out.push(kvSection('Ownership', [
