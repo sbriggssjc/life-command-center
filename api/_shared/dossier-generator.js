@@ -45,6 +45,7 @@
 //                    _conflicts:[{field, values:[{v,source}], reconciled}] },
 //     valuation:   { model_estimate, last_sale_price },
 //     transactions:[ { date, grantor, grantee, price, cap_rate, source } ],
+//     transaction_marketing_timeline:[ { kind:'listing'|'sale', date, ... } ],
 //     documents:   [ { type, file_name, source, reconciled?, date? } ],
 //     // deal only:
 //     deal:        { stage, point_person, parties:[{role,name,flag,source}],
@@ -129,6 +130,12 @@ function fmtNum(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return esc(v);
   return n.toLocaleString('en-US');
+}
+function fmtPct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return esc(v);
+  const pct = Math.abs(n) <= 1 ? n * 100 : n;
+  return pct.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/\.00$/, '') + '%';
 }
 function fmtDate(v) {
   if (!v) return '';
@@ -258,8 +265,8 @@ function renderPropertySections(p) {
     out.push(block);
   }
 
-  // 6. Transaction History
-  out.push(renderTransactions(p.transactions));
+  // 6. Transaction & Marketing Timeline
+  out.push(renderTransactionMarketingTimeline(p.transaction_marketing_timeline, p.transactions));
 
   // 7. Documents
   out.push(renderDocuments(p.documents));
@@ -274,6 +281,55 @@ function renderTermTag(lease) {
   const ev = e ? renderTag(e, fmtDate) : NA;
   // Build a synthetic display tag (no provenance chip — the endpoints carry theirs)
   return { v: `${(s && s.v) ? fmtDate(s.v) : 'Not on file'} → ${(e && e.v) ? fmtDate(e.v) : 'Not on file'}` };
+}
+
+function unwrap(v) {
+  return v && typeof v === 'object' && v.v !== undefined ? v.v : v;
+}
+
+function renderTimelineBadge(status, kind) {
+  const s = String(status || '').toLowerCase();
+  if (kind === 'sale' || s === 'live' || s === 'active') return '<span class="badge b-live">' + esc(status || (kind === 'sale' ? 'live' : 'active')) + '</span>';
+  return '<span class="badge b-off">' + esc(status || 'off-market') + '</span>';
+}
+
+function renderTransactionMarketingTimeline(timeline, txns) {
+  const events = Array.isArray(timeline) && timeline.length ? timeline : null;
+  if (!events) return renderTransactions(txns);
+
+  const rows = events.map(ev => {
+    const date = ev.date ? fmtDate(unwrap(ev.date)) : '';
+    if (ev.kind === 'sale') {
+      const capBits = [];
+      if (ev.stated_cap_rate) capBits.push(`${renderTag(ev.stated_cap_rate, fmtPct).replace(/ <span class="src">[\s\S]*?<\/span>/, '')} stated`);
+      if (ev.calculated_cap_rate) capBits.push(`${renderTag(ev.calculated_cap_rate, fmtPct).replace(/ <span class="src">[\s\S]*?<\/span>/, '')} calc`);
+      const term = ev.firm_term_years_at_sale ? `${renderTag(ev.firm_term_years_at_sale, (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' yr').replace(/ <span class="src">[\s\S]*?<\/span>/, '')} firm at close` : '';
+      return `<tr><td>${esc(date) || '&mdash;'}</td>` +
+        `<td>${esc(ev.event || 'Sale')} ${renderTimelineBadge(ev.status || 'live', 'sale')}</td>` +
+        `<td>${renderTag(ev.party)}</td>` +
+        `<td>${renderTag(ev.price, fmtMoney)}</td>` +
+        `<td>${[capBits.join(' / '), term].filter(Boolean).join(' &middot; ') || '<span class="src">&mdash;</span>'}</td></tr>`;
+    }
+
+    const price = renderTag(ev.asking_price, fmtMoney);
+    const psf = ev.price_per_sf ? renderTag(ev.price_per_sf, (v) => fmtMoney2(v) + '/SF') : '';
+    const cap = ev.cap_rate ? renderTag(ev.cap_rate, fmtPct).replace(/ <span class="src">[\s\S]*?<\/span>/, '') : '';
+    const dom = ev.days_on_market ? renderTag(ev.days_on_market, (v) => fmtNum(v) + ' days').replace(/<br><span class="derived">[\s\S]*?<\/span>/, '') : '';
+    const priceHtml = [price, psf].filter(Boolean).join('<br>');
+    const metricHtml = [cap, dom, renderTag(ev.portfolio_flag)].filter(Boolean).join('<br>');
+    return `<tr><td>${esc(date) || '&mdash;'}</td>` +
+      `<td>${esc(ev.event || 'Listed for sale')} ${renderTimelineBadge(ev.status, 'listing')}</td>` +
+      `<td>${renderTag(ev.broker)}</td>` +
+      `<td>${priceHtml}</td>` +
+      `<td>${metricHtml}</td></tr>`;
+  }).join('');
+
+  const notes = events
+    .filter(ev => ev.portfolio_note)
+    .map(ev => `<div class="conflict"><b>Portfolio listing:</b> ${renderTag(ev.portfolio_note)}</div>`)
+    .join('');
+
+  return `<h2>Transaction &amp; Marketing Timeline</h2><table class="hist"><thead><tr><th>Date</th><th>Event</th><th>Party / Broker</th><th>Price / Ask</th><th>Cap / Term / Market</th></tr></thead><tbody>${rows}</tbody></table>${notes}`;
 }
 
 function renderTransactions(txns) {

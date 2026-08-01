@@ -76,6 +76,41 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
     },
     valuation: { model_estimate: { v: 3137221, source: 'LCC valuation model', confidence: 'low' } },
     transactions: [{ date: '2018-06-01', grantor: 'DaVita HealthCare Partners', grantee: 'Kingsbarn Realty', price: 3150000, source: 'deed' }],
+    transaction_marketing_timeline: [
+      {
+        kind: 'listing',
+        date: '2017-07-17',
+        status: 'off-market',
+        event: 'Prior listing',
+        broker: { v: 'Marcus & Millichap · Cook', source: 'available_listings' },
+        asking_price: { v: 3137221, source: 'available_listings' },
+        portfolio_flag: { v: 'Single-asset listing', source: 'available_listings' },
+      },
+      {
+        kind: 'sale',
+        date: '2018-06-01',
+        status: 'live',
+        event: 'Sale',
+        party: { v: 'DaVita HealthCare Partners -> Kingsbarn Realty', source: 'sales_transactions' },
+        price: { v: 3150000, source: 'sales_transactions' },
+        stated_cap_rate: { v: 5.4, source: 'sales_transactions' },
+        calculated_cap_rate: { v: 5.78, source: 'sales_transactions' },
+        firm_term_years_at_sale: { v: 15.0, source: 'sales_transactions' },
+      },
+      {
+        kind: 'listing',
+        date: '2024-07-02',
+        status: 'active',
+        event: 'Listed for sale',
+        broker: { v: 'SRS · Mousavi, Luther, Sullivan', source: 'available_listings' },
+        asking_price: { v: 27136000, source: 'available_listings' },
+        price_per_sf: { v: 550, source: 'available_listings' },
+        cap_rate: { v: 5.25, source: 'available_listings' },
+        days_on_market: { v: 760, derived: 'from 2024-07-02 to 2026-08-01' },
+        portfolio_flag: { v: 'Portfolio listing', source: 'available_listings' },
+        portfolio_note: { v: 'Portfolio ask; do not present $27,136,000 as this property asking.', derived: '$550 per SF × 6,308 SF = $3,469,400 implied for this asset' },
+      },
+    ],
     documents: [],
   };
   const out = await generateDossier({ kind: 'property', packet, entityId: 'test-entity' });
@@ -90,6 +125,11 @@ test('generateDossier renders facts from packet and omits missing (LLM unavailab
   assert.match(out.html, /Not on file/);                       // land_acres omitted
   assert.match(out.html, /Conflict/);                          // stations conflict surfaced
   assert.match(out.html, /Derived: value 3137221/);            // price/SF labeled derived
+  assert.match(out.html, /Transaction &amp; Marketing Timeline/);
+  assert.match(out.html, /5\.40% stated \/ 5\.78% calc/);
+  assert.match(out.html, /15\.0 yr firm at close/);
+  assert.match(out.html, /Portfolio listing/);
+  assert.match(out.html, /do not present \$27,136,000/);
   assert.match(out.html, /must be verified against source documents/); // footer
   assert.ok(typeof out.source_hash === 'string' && out.source_hash.length === 64);
   assert.equal(out.analysis.ok, false); // no LLM configured in test → analysis omitted, dossier still valid

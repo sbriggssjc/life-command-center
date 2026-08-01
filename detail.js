@@ -7906,12 +7906,9 @@ function _udTabIntel() {
 
 // ─── SALES TAB ──────────────────────────────────────────────────────────────
 //
-// Canonical data source: property_sale_events
-//   - Sales tab, Ownership History, and Intel → Prior Sale summary all read
-//     from this table. sales_transactions remains as a legacy compat source
-//     that the backfill migration has already mirrored into
-//     property_sale_events. Going forward new writes land in the canonical
-//     table and a DB trigger marks any concurrent active listings Sold.
+// Canonical display source for transaction economics: sales_transactions live
+// rows plus available_listings. property_sale_events can omit cap-at-close and
+// firm-term-at-close, so the dossier/panel timeline reads the richer source.
 
 let _salesCache = null; // { property_id, db, transactions: [], listings: [] }
 let _salesFilter = 'all'; // 'all' | 'listings' | 'sales'
@@ -7936,33 +7933,17 @@ async function _udRenderSalesAsync(bodyEl) {
   if (propertyId) {
     try {
       const propId = encodeURIComponent(propertyId);
-      // Prefer the canonical property_sale_events table. If it isn't yet
-      // reachable (older environments), fall back to sales_transactions so
-      // the tab never goes empty during rollout.
-      const saleRes = await qFn('property_sale_events', '*', {
-        filter: `property_id=eq.${propId}`,
-        order: 'sale_date.desc.nullslast',
-        limit: 100
-      }).catch(() => null);
-      // diaQuery/govQuery swallow errors and return [], so .catch() above
-      // never fires and a nominally-present-but-empty response would suppress
-      // the sales_transactions fallback entirely. Gate the fallback on actual
-      // row presence, not just non-null.
-      const saleRows = Array.isArray(saleRes) ? saleRes : (saleRes?.data || null);
-      const hasSaleRows = Array.isArray(saleRows) && saleRows.length > 0;
       const [listRes, txnRes] = await Promise.all([
         qFn('available_listings', '*', {
           filter: `property_id=eq.${propId}`,
           order: 'listing_date.desc.nullslast',
           limit: 50
         }).catch(() => []),
-        hasSaleRows
-          ? Promise.resolve(saleRows)
-          : qFn('sales_transactions', '*', {
-              filter: `property_id=eq.${propId}`,
-              order: 'sale_date.desc',
-              limit: 100
-            }).catch(() => [])
+        qFn('sales_transactions', '*', {
+          filter: `property_id=eq.${propId}&transaction_state=eq.live`,
+          order: 'sale_date.desc.nullslast',
+          limit: 100
+        }).catch(() => [])
       ]);
       const rawListings = Array.isArray(listRes) ? listRes : (listRes?.data || []);
       // Round 76eg: drop rows the consolidation function has retired so
@@ -7997,6 +7978,9 @@ function _salesNormalizeSaleRow(r) {
     buyer_name: r.buyer_name || r.buyer || null,
     seller_name: r.seller_name || r.seller || null,
     broker_name: r.broker_name || r.listing_broker || null,
+    stated_cap_rate: r.stated_cap_rate != null ? r.stated_cap_rate : r.sold_cap_rate,
+    calculated_cap_rate: r.calculated_cap_rate != null ? r.calculated_cap_rate : (r.cap_rate_final != null ? r.cap_rate_final : r.cap_rate),
+    firm_term_years_at_sale: r.firm_term_years_at_sale != null ? r.firm_term_years_at_sale : r.firm_term_years,
   });
 }
 
@@ -8125,8 +8109,39 @@ function _salesParseDate(d) {
 function _salesListingIsActive(l) {
   if (l.is_active === true) return true;
   if (l.is_active === false) return false;
+  const status = String(l.listing_status || l.status || '').toLowerCase();
+  if (['active', 'available', 'for sale', 'for_sale'].includes(status)) return true;
+  if (['sold', 'withdrawn', 'expired', 'inactive', 'off_market', 'off-market', 'superseded'].includes(status)) return false;
   // Fallback: active if no off_market_date
   return !l.off_market_date;
+}
+
+function _salesListingDate(l) {
+  return l && (l.on_market_date || l.listing_date || l.created_at || null);
+}
+
+function _salesListingAsk(l) {
+  return l && (l.asking_price != null ? l.asking_price : (l.initial_price != null ? l.initial_price : (l.ask_price != null ? l.ask_price : l.last_price)));
+}
+
+function _salesListingPsf(l) {
+  const stored = l && (l.asking_price_psf != null ? l.asking_price_psf : (l.price_per_sf != null ? l.price_per_sf : l.last_price_psf));
+  if (stored != null) return Number(stored);
+  const ask = Number(_salesListingAsk(l));
+  const sf = Number(_udCache?.property?.building_size || _udCache?.lease_data?.building_size || 0);
+  return Number.isFinite(ask) && ask > 0 && Number.isFinite(sf) && sf > 0 ? Math.round((ask / sf) * 100) / 100 : null;
+}
+
+function _salesListingIsPortfolio(l) {
+  if (!l) return false;
+  if (l.is_portfolio_listing === true || l.portfolio_listing === true || l.is_portfolio === true) return true;
+  const hay = [l.listing_type, l.deal_type, l.marketing_type, l.portfolio_name, l.portfolio_id, l.notes, l.source_notes].filter(Boolean).join(' ').toLowerCase();
+  if (/\bportfolio\b/.test(hay)) return true;
+  const ask = Number(_salesListingAsk(l));
+  const psf = Number(_salesListingPsf(l));
+  const sf = Number(_udCache?.property?.building_size || _udCache?.lease_data?.building_size || 0);
+  const implied = Number.isFinite(psf) && psf > 0 && Number.isFinite(sf) && sf > 0 ? psf * sf : null;
+  return Number.isFinite(ask) && implied != null && ask > implied * 2;
 }
 
 // Tier 6: notes-dedup state for the Deal History timeline. WeakMap keyed by
@@ -8180,7 +8195,7 @@ function _salesListingAutoClosedAgainstPriorSale(l) {
 }
 
 function _salesListingStatus(l, matchedSale) {
-  const raw = (l && l.status ? String(l.status) : '').toLowerCase();
+  const raw = (l && (l.listing_status || l.status) ? String(l.listing_status || l.status) : '').toLowerCase();
   if (matchedSale || raw === 'sold') return { label: 'Sold',      color: 'var(--green)' };
   if (raw === 'withdrawn')           return { label: 'Withdrawn', color: 'var(--yellow)' };
   if (raw === 'expired')             return { label: 'Expired',   color: 'var(--text3)' };
@@ -8201,6 +8216,8 @@ function _salesBuildTimeline(listings, txns) {
   // Mark excluded/duplicate sales so they are skipped during pairing
   saleArr.forEach((sale, i) => {
     if (sale.exclude_from_market_metrics === true) excludedSaleIdx.add(i);
+    const state = String(sale.transaction_state || '').toLowerCase();
+    if (state && state !== 'live') excludedSaleIdx.add(i);
   });
 
   listingArr.forEach(listing => {
@@ -8248,7 +8265,7 @@ function _salesBuildTimeline(listings, txns) {
       events.push({
         listing,
         sale: null,
-        sortKey: offMs || _salesParseDate(listing.listing_date) || 0
+        sortKey: offMs || _salesParseDate(_salesListingDate(listing)) || 0
       });
     }
   });
@@ -8338,7 +8355,8 @@ function _salesRenderListing(l) {
   // (date inversion), so label that field explicitly as the matched-sale date
   // rather than the listing's own off-market event.
   const dateBits = [];
-  if (l.listing_date) dateBits.push(`<span class="t-muted3">On Market:</span> <span class="t-body">${esc(_fmtDate(l.listing_date))}</span>`);
+  const marketDate = _salesListingDate(l);
+  if (marketDate) dateBits.push(`<span class="t-muted3">On Market:</span> <span class="t-body">${esc(_fmtDate(marketDate))}</span>`);
   if (l.off_market_date) {
     if (autoClosed) {
       dateBits.push(`<span class="t-muted3">Matched sale on:</span> <span class="t-body">${esc(_fmtDate(l.off_market_date))}</span>`);
@@ -8353,6 +8371,8 @@ function _salesRenderListing(l) {
   // Asking prices
   const initial = l.initial_price != null ? l.initial_price : l.asking_price;
   const last = l.last_price != null ? l.last_price : null;
+  const pricePsf = _salesListingPsf(l);
+  const listingCap = l.asking_cap_rate != null ? l.asking_cap_rate : (l.current_cap_rate != null ? l.current_cap_rate : l.cap_rate);
   if (initial != null || last != null) {
     html += '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">';
     if (initial != null) {
@@ -8361,11 +8381,31 @@ function _salesRenderListing(l) {
     if (last != null && Number(last) !== Number(initial)) {
       html += `<div><div class="t-cap">Last Price</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(last)}</div></div>`;
     }
+    if (pricePsf != null) {
+      html += `<div><div class="t-cap">Price / SF</div><div style="font-size:14px;font-weight:600;color:var(--text)">$${Number(pricePsf).toFixed(0)}/SF</div></div>`;
+    }
+    if (listingCap != null && _fmtCapRate(listingCap)) {
+      html += `<div><div class="t-cap">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(listingCap)}</div></div>`;
+    }
+    if (_salesListingIsActive(l) && marketDate) {
+      const dom = Math.max(0, Math.round((Date.now() - new Date(marketDate).getTime()) / 86400000));
+      if (Number.isFinite(dom)) html += `<div><div class="t-cap">Days on Market</div><div style="font-size:14px;font-weight:600;color:var(--text)">${dom.toLocaleString()} days</div></div>`;
+    }
     html += '</div>';
   }
 
   if (l.listing_broker) {
     html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Broker:</span> <span class="t-body">${esc(l.listing_broker)}</span></div>`;
+  }
+  if (l.listing_firm || l.broker_firm || l.listing_broker_firm) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Firm:</span> <span class="t-body">${esc(l.listing_firm || l.broker_firm || l.listing_broker_firm)}</span></div>`;
+  }
+
+  if (_salesListingIsPortfolio(l)) {
+    const ask = _salesListingAsk(l);
+    const sf = Number(_udCache?.property?.building_size || _udCache?.lease_data?.building_size || 0);
+    const implied = pricePsf != null && Number.isFinite(sf) && sf > 0 ? Number(pricePsf) * sf : null;
+    html += `<div style="font-size:11px;color:var(--yellow);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;font-weight:600">Portfolio listing: ${ask != null ? esc(fmt(ask)) + " is the portfolio ask, not this property's asking." : "portfolio ask, not this property's asking."}${implied != null ? ' Derived single-asset implication: $' + Math.round(implied).toLocaleString() + ' from $/SF × building SF.' : ''}</div>`;
   }
 
   // OM artifact icon — surface the staged OM PDF on the property detail
@@ -8420,6 +8460,13 @@ function _salesRenderSale(s) {
   if (s.price_psf != null) metrics.push(`$${Number(s.price_psf).toFixed(0)}/SF`);
   if (metrics.length) {
     html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
+  }
+  const closeBits = [];
+  if (s.stated_cap_rate != null && _fmtCapRate(s.stated_cap_rate)) closeBits.push(`Stated cap ${_fmtCapRate(s.stated_cap_rate)}`);
+  if (s.calculated_cap_rate != null && _fmtCapRate(s.calculated_cap_rate)) closeBits.push(`Calculated cap ${_fmtCapRate(s.calculated_cap_rate)}`);
+  if (s.firm_term_years_at_sale != null) closeBits.push(`${Number(s.firm_term_years_at_sale).toFixed(1)} yr firm term at close`);
+  if (closeBits.length) {
+    html += `<div style="font-size:12px;color:var(--text2);margin-bottom:8px">${esc(closeBits.join(' · '))}</div>`;
   }
 
   const buyer = s.buyer_name || s.buyer;
@@ -8525,6 +8572,12 @@ function _salesRenderCombined(l, s) {
   if (_bestCap2 != null) {
     const _capSrc2 = s.stated_cap_rate ? ' (stated)' : (s.calculated_cap_rate ? ' (calc)' : '');
     html += `<div><div class="t-cap">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(_bestCap2)}${_capSrc2 ? '<span style="font-size:9px;color:var(--text3)">' + _capSrc2 + '</span>' : ''}</div></div>`;
+  }
+  if (s.calculated_cap_rate != null && s.stated_cap_rate != null && Number(s.calculated_cap_rate) !== Number(s.stated_cap_rate)) {
+    html += `<div><div class="t-cap">Calculated Cap</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(s.calculated_cap_rate)}</div></div>`;
+  }
+  if (s.firm_term_years_at_sale != null) {
+    html += `<div><div class="t-cap">Firm Term at Close</div><div style="font-size:14px;font-weight:600;color:var(--text)">${Number(s.firm_term_years_at_sale).toFixed(1)} yrs</div></div>`;
   }
   html += '</div>';
 
@@ -8675,18 +8728,13 @@ async function _udRenderDealHistoryAsync(bodyEl) {
       // Fetch by mimicking _udRenderSalesAsync's data calls, but without rendering Sales.
       const qFn = db === 'gov' ? govQuery : diaQuery;
       const propId = encodeURIComponent(propertyId || '');
-      const saleRes = propertyId ? await qFn('property_sale_events', '*', {
-        filter: `property_id=eq.${propId}`,
-        order: 'sale_date.desc.nullslast',
-        limit: 100
-      }).catch(() => null) : null;
       const [listRes, txnRes] = propertyId ? await Promise.all([
         qFn('available_listings', '*', { filter: `property_id=eq.${propId}`, order: 'listing_date.desc.nullslast', limit: 50 }).catch(() => []),
-        (Array.isArray(saleRes) && saleRes.length > 0) ? Promise.resolve(saleRes) : qFn('sales_transactions', '*', { filter: `property_id=eq.${propId}`, order: 'sale_date.desc.nullslast', limit: 50 }).catch(() => [])
+        qFn('sales_transactions', '*', { filter: `property_id=eq.${propId}&transaction_state=eq.live`, order: 'sale_date.desc.nullslast', limit: 50 }).catch(() => [])
       ]) : [[], []];
       const txnArr = Array.isArray(txnRes) ? txnRes : (txnRes && txnRes.data) || [];
       const listArr = Array.isArray(listRes) ? listRes : (listRes && listRes.data) || [];
-      _salesCache = { property_id: propertyId, db, transactions: txnArr, listings: listArr };
+      _salesCache = { property_id: propertyId, db, transactions: txnArr.map(_salesNormalizeSaleRow), listings: listArr };
     } catch (e) {
       console.warn('Deal History: sales fetch failed', e);
       _salesCache = { property_id: propertyId, db, transactions: [], listings: [] };

@@ -103,6 +103,127 @@ function rentPsfTag(rent, buildingSf, label) {
   return { v: Math.round((r / sf) * 100) / 100, derived: `${label} ${moneyInput(r)} ÷ building ${sf.toLocaleString('en-US')} SF` };
 }
 
+function capTag(...vals) {
+  for (const v of vals) {
+    const n = num(v);
+    if (n == null) continue;
+    const pct = Math.abs(n) <= 1 ? n * 100 : n;
+    return { v: Math.round(pct * 100) / 100, source: 'source table' };
+  }
+  return undefined;
+}
+
+function listingDate(row) {
+  return row?.on_market_date || row?.listing_date || row?.created_at || null;
+}
+
+function listingStatus(row) {
+  return String(row?.listing_status || row?.status || (row?.is_active ? 'active' : '') || '').toLowerCase();
+}
+
+function isActiveListing(row) {
+  const s = listingStatus(row);
+  return row?.is_active === true || ['active', 'available', 'for sale', 'for_sale'].includes(s);
+}
+
+function isPortfolioListing(row) {
+  const explicit = row?.is_portfolio_listing ?? row?.portfolio_listing ?? row?.is_portfolio ?? null;
+  if (explicit === true) return true;
+  const hay = [
+    row?.listing_type,
+    row?.deal_type,
+    row?.marketing_type,
+    row?.portfolio_name,
+    row?.portfolio_id,
+    row?.notes,
+    row?.source_notes,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /\bportfolio\b/.test(hay);
+}
+
+function daysBetween(startDate, endDate) {
+  if (!startDate) return null;
+  const s = new Date(`${String(startDate).slice(0, 10)}T00:00:00Z`);
+  const e = new Date(`${String(endDate || new Date().toISOString().slice(0, 10)).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return null;
+  return Math.max(0, Math.round((e.getTime() - s.getTime()) / (24 * 3600 * 1000)));
+}
+
+function listingAsk(row) {
+  return num(row?.asking_price ?? row?.initial_price ?? row?.ask_price ?? row?.last_price ?? row?.price);
+}
+
+function listingPricePerSf(row, buildingSf, ask) {
+  const stored = num(row?.asking_price_psf ?? row?.price_per_sf ?? row?.last_price_psf);
+  if (stored != null) return tag(stored, 'available_listings');
+  const sf = num(buildingSf);
+  if (ask != null && sf > 0) {
+    return { v: Math.round((ask / sf) * 100) / 100, derived: `asking ${moneyInput(ask)} ÷ building ${sf.toLocaleString('en-US')} SF` };
+  }
+  return undefined;
+}
+
+function buildTransactionMarketingTimeline({ sales = [], listings = [], buildingSf, asOfDate }) {
+  const events = [];
+
+  for (const l of listings || []) {
+    if (!l) continue;
+    if (l.exclude_from_market_metrics === true) continue;
+    const status = listingStatus(l);
+    if (status === 'superseded') continue;
+    const active = isActiveListing(l);
+    const ask = listingAsk(l);
+    const marketDate = listingDate(l);
+    const psf = listingPricePerSf(l, buildingSf, ask);
+    const impliedSingleAssetAsk = psf?.v != null && buildingSf ? Number(psf.v) * Number(buildingSf) : null;
+    const isPortfolio = isPortfolioListing(l) || (ask != null && impliedSingleAssetAsk != null && ask > impliedSingleAssetAsk * 2);
+    const broker = [
+      l.listing_firm || l.broker_firm || l.listing_broker_firm || null,
+      l.listing_broker || l.listing_broker_name || l.broker_name || l.broker || null,
+    ].filter(Boolean).join(' · ') || null;
+    events.push({
+      kind: 'listing',
+      date: marketDate,
+      status: active ? 'active' : (status || 'off-market'),
+      event: active ? 'Listed for sale' : 'Prior listing',
+      broker: tag(broker, 'available_listings'),
+      asking_price: tag(ask, 'available_listings'),
+      price_per_sf: psf,
+      cap_rate: capTag(l.asking_cap_rate, l.current_cap_rate, l.cap_rate),
+      days_on_market: active
+        ? { v: daysBetween(marketDate, asOfDate), derived: `from ${String(marketDate || 'Not on file').slice(0, 10)} to ${asOfDate}` }
+        : undefined,
+      portfolio_flag: { v: isPortfolio ? 'Portfolio listing' : 'Single-asset listing', source: 'available_listings' },
+      portfolio_note: isPortfolio && ask != null && psf?.v != null && buildingSf
+        ? { v: `Portfolio ask; do not present ${moneyInput(ask)} as this property's asking.`, derived: `${moneyInput(psf.v)} per SF × ${Number(buildingSf).toLocaleString('en-US')} SF = ${moneyInput(Number(psf.v) * Number(buildingSf))} implied for this asset` }
+        : (isPortfolio ? { v: `Portfolio ask; do not present ${moneyInput(ask)} as this property's asking.`, source: 'available_listings' } : undefined),
+      source: 'available_listings',
+      sort_date: marketDate || l.created_at || '',
+    });
+  }
+
+  for (const s of sales || []) {
+    if (!s) continue;
+    const state = String(s.transaction_state || '').toLowerCase();
+    if (state && state !== 'live') continue;
+    events.push({
+      kind: 'sale',
+      date: s.sale_date,
+      status: state || 'live',
+      event: 'Sale',
+      party: tag([s.seller_name || s.seller || null, s.buyer_name || s.buyer || null].filter(Boolean).join(' -> '), 'sales_transactions'),
+      price: tag(num(s.sold_price ?? s.price ?? s.sale_price), 'sales_transactions'),
+      stated_cap_rate: capTag(s.stated_cap_rate, s.sold_cap_rate),
+      calculated_cap_rate: capTag(s.calculated_cap_rate, s.cap_rate_final, s.cap_rate),
+      firm_term_years_at_sale: tag(num(s.firm_term_years_at_sale ?? s.firm_term_years), 'sales_transactions'),
+      source: s.data_source || 'sales_transactions',
+      sort_date: s.sale_date || '',
+    });
+  }
+
+  return events.sort((a, b) => String(a.sort_date || '').localeCompare(String(b.sort_date || '')));
+}
+
 function pickCurrentScheduleRow(rows, asOfDate) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   const asOf = new Date(`${asOfDate}T00:00:00Z`);
@@ -215,7 +336,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
     const calls = [
       domainQuery(domain, 'GET', `leases?property_id=eq.${pid}&superseded_at=is.null&order=is_active.desc.nullslast,lease_start.desc&limit=1`).catch(() => null),
       domainQuery(domain, 'GET', `sales_transactions?property_id=eq.${pid}&transaction_state=eq.live&order=sale_date.desc&limit=8`).catch(() => null),
-      domainQuery(domain, 'GET', `available_listings?property_id=eq.${pid}&order=listing_date.desc&limit=5`).catch(() => null),
+      domainQuery(domain, 'GET', `available_listings?property_id=eq.${pid}&order=listing_date.desc.nullslast&limit=50`).catch(() => null),
     ];
     if (domain === 'dia') {
       calls.push(
@@ -356,9 +477,18 @@ async function buildPropertyPacket(entityId, workspaceId) {
     grantor: s.seller_name || s.seller || null,
     grantee: s.buyer_name || s.buyer || null,
     price: num(s.sold_price),
+    stated_cap_rate: num(s.stated_cap_rate ?? s.sold_cap_rate),
+    calculated_cap_rate: num(s.calculated_cap_rate ?? s.cap_rate_final ?? s.cap_rate),
     cap_rate: s.cap_rate_final != null ? s.cap_rate_final : (s.calculated_cap_rate != null ? s.calculated_cap_rate : s.cap_rate),
+    firm_term_years_at_sale: num(s.firm_term_years_at_sale ?? s.firm_term_years),
     source: s.data_source || 'sales_transactions',
   }));
+  const transaction_marketing_timeline = buildTransactionMarketingTimeline({
+    sales,
+    listings,
+    buildingSf,
+    asOfDate: new Date().toISOString().slice(0, 10),
+  });
 
   // --- Documents --------------------------------------------------------------
   const documents = (bp.documents || []).map(d => ({
@@ -404,7 +534,7 @@ async function buildPropertyPacket(entityId, workspaceId) {
   };
 
   return {
-    meta, identity, ownership, tenancy_lease, operations, valuation, transactions, documents,
+    meta, identity, ownership, tenancy_lease, operations, valuation, transactions, transaction_marketing_timeline, documents,
     location: (domain === 'dia') ? {
       geocode: (prop.latitude && prop.longitude) ? tag(`${prop.latitude}, ${prop.longitude}`, 'properties') : undefined,
       radius_demographics: demos,
