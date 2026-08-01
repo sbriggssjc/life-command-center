@@ -259,6 +259,50 @@ Each action entry includes:
 
 ---
 
+## Comps
+
+### query_comps
+- `action_name`: `query_comps`
+- `user_goal`: Pull bounded, market-targeted sales comps with explicit filters.
+- `category`: `read/query`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/query-comps`
+- `microsoft_surface`: `Teams`, `Copilot Chat`, `LCC Deal Agent`, `Claude Northmarq`
+- `inputs`: optional `request`, `tenant`, `states`, `metros`, `property_types`, `date_from`, `date_to`, `limit`
+- `outputs`: `{ comps, template_comps, markdown, meta }`
+- `risk_tier`: `0`
+- `confirmation_required`: `none`
+- `idempotency_notes`: Read-only query through the shared LCC comps engine.
+- `listing_driven_production_support`: Gives field agents real Team Briggs comps from the engine instead of web/general-knowledge substitutes.
+
+### synthesize_comps
+- `action_name`: `synthesize_comps`
+- `user_goal`: Parse a plain-language market request and return a bounded template-ready comp set.
+- `category`: `read/query`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/synthesize-comps`
+- `microsoft_surface`: `Teams`, `Copilot Chat`, `LCC Deal Agent`, `Claude Northmarq`
+- `inputs`: required `request`; optional overrides `tenant`, `states`, `metros`, `property_types`, `include_on_market`, `include_unreliable_noi`, `limit`
+- `outputs`: `{ interpreted_query, comps, template_comps, markdown, meta }`
+- `risk_tier`: `0`
+- `confirmation_required`: `none`
+- `idempotency_notes`: Read-only synthesis through the shared LCC comps engine.
+- `listing_driven_production_support`: Lets agents answer requests like DaVita, The Villages, FL from engine data with bounded output.
+
+### generate_comps
+- `action_name`: `generate_comps`
+- `user_goal`: Generate a Team Briggs comps workbook from bounded template-ready comp rows.
+- `category`: `export/generate`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/comps`
+- `microsoft_surface`: `Teams`, `Copilot Chat`, `LCC Deal Agent`, `Claude Northmarq`
+- `inputs`: required `comp_type` (`sales` or `lease`); sales rows in `on_market`/`sold`, lease rows in `comps`, optional `name` and `client`
+- `outputs`: `{ status, filename, download_url, comp_type, rows_by_sheet }`
+- `risk_tier`: `1`
+- `confirmation_required`: `lightweight`
+- `idempotency_notes`: Creates a new generated workbook artifact; source comp rows are not mutated.
+- `listing_driven_production_support`: Exports the same bounded engine comps into the Team Briggs workbook template.
+
 ## Ops / Visibility
 
 ### 16) get_daily_briefing_snapshot

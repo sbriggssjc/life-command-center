@@ -4,7 +4,7 @@
     "name_for_human": "Life Command Center",
     "namespace": "LifeCommandCenter",
     "description_for_human": "Access LCC deal intelligence, daily priorities, property context, and queue management.",
-    "description_for_model": "Use Life Command Center to get real CRE data. Call get_daily_briefing_snapshot for daily priorities. Call get_hot_business_contacts for prospecting targets. Call search_entity_targets to find properties or contacts. Call get_pipeline_intelligence for deal pipeline status. Call get_work_counts for task counts.",
+    "description_for_model": "Use Life Command Center to get real CRE data. Call get_daily_briefing_snapshot for daily priorities. Call get_hot_business_contacts for prospecting targets. Call search_entity_targets to find properties or contacts. Call get_pipeline_intelligence for deal pipeline status. Call get_work_counts for task counts. For comps, call QueryComps or SynthesizeComps and present the engine markdown/template rows; never substitute web or general-knowledge comps. Use GenerateComps only after bounded comp rows exist.",
     "functions": [
         {
             "name": "get_daily_briefing_snapshot",
@@ -25,13 +25,26 @@
         {
             "name": "get_work_counts",
             "description": "Get aggregate work counts including open actions, inbox items, and overdue tasks. Call this when user asks about workload, task counts, or what is overdue."
+        },
+        {
+            "name": "QueryComps",
+            "description": "Pull bounded, market-targeted comps from the shared LCC comps engine using explicit filters."
+        },
+        {
+            "name": "SynthesizeComps",
+            "description": "Parse a plain-language comp request and return bounded, Team Briggs template-ready engine comps."
+        },
+        {
+            "name": "GenerateComps",
+            "description": "Generate a Team Briggs comps workbook from bounded sales or lease comp rows."
         }
     ],
     "runtimes": [
         {
             "type": "OpenApi",
             "auth": {
-                "type": "None"
+                "type": "ApiKeyPluginVault",
+                "reference_id": "lccApiKey"
             },
             "spec": {
                 "url": "openapi.json"
@@ -41,7 +54,10 @@
                 "get_hot_business_contacts",
                 "search_entity_targets",
                 "get_pipeline_intelligence",
-                "get_work_counts"
+                "get_work_counts",
+                "QueryComps",
+                "SynthesizeComps",
+                "GenerateComps"
             ]
         }
     ]

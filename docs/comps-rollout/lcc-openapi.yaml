@@ -147,7 +147,9 @@ paths:
         Returns comps matching the given filters, de-duplicated across dialysis, government, and
         Salesforce sources. By default only comps with a RELIABLE NOI/cap are returned; set
         include_unreliable_noi to also include modeled/estimated ones. Closed sales are gated to live
-        transactions.
+        transactions. Output is bounded by default (40 rows, max 100), locally re-filtered by
+        tenant/state/metro after dedupe, and includes `template_comps` mapped for the Team Briggs
+        comps template.
       requestBody:
         required: true
         content:
@@ -163,7 +165,9 @@ paths:
       description: >
         Parses a natural-language request into structured filters, routes government-only intent away
         from the dialysis DB, scores by relevance, and returns the ranked set. Pass the raw text as
-        `request`; any explicit field overrides the parsed value.
+        `request`; any explicit field overrides the parsed value. Output is bounded by default
+        (25 rows, max 50), locally re-filtered by tenant/state/metro after dedupe, and includes
+        `template_comps` mapped for the Team Briggs comps template.
       requestBody:
         required: true
         content:
@@ -173,9 +177,23 @@ paths:
         '200': { description: 'Ranked, relevance-scored comp set.', content: { application/json: { schema: { $ref: '#/components/schemas/CompsResponse' } } } }
         '401': { description: Missing or invalid Bearer token. }
 
-  # NOTE: generateComps (/generate-comps) and generateBov (/generate-bov) — the
-  # workbook-generation operations — are appended here by the companion prompt
-  # CCP_generate_comps_action_chatgpt_copilot.md, under this same server + bearerAuth.
+  /api/comps:
+    post:
+      operationId: generateComps
+      summary: Generate a Team Briggs comps workbook from bounded comp rows.
+      description: >
+        Proxies the workbook generator without exposing its service key. Use this only after
+        queryComps/synthesizeComps has returned bounded `template_comps` or otherwise curated rows.
+        The response omits the heavy base64 workbook payload and returns the generated download URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GenerateCompsRequest' }
+      responses:
+        '200': { description: Generated workbook metadata., content: { application/json: { schema: { $ref: '#/components/schemas/GenerateCompsResponse' } } } }
+        '400': { description: Missing comp type or rows. }
+        '401': { description: Missing or invalid API key. }
 
   /api/deal/dossier:
     post:
@@ -338,7 +356,8 @@ components:
         include_on_market: { type: boolean, default: false }
         include_unreliable_noi: { type: boolean, default: false, description: Include modeled/estimated NOI/cap comps (default excludes). }
         tenant: { type: string, description: 'Scope to an operator/tenant (e.g. DaVita, Fresenius, US Renal).' }
-        limit: { type: number, default: 200 }
+        request: { type: string, description: 'Optional natural-language request parsed server-side before explicit fields are applied.' }
+        limit: { type: number, default: 40, maximum: 100 }
     SynthesizeCompsRequest:
       type: object
       required: [request]
@@ -355,11 +374,31 @@ components:
         government_only: { type: boolean }
         include_on_market: { type: boolean }
         include_unreliable_noi: { type: boolean }
-        limit: { type: number }
+        tenant: { type: string, description: 'Scope to an operator/tenant (e.g. DaVita, Fresenius, US Renal).' }
+        limit: { type: number, default: 25, maximum: 50 }
+    GenerateCompsRequest:
+      type: object
+      required: [comp_type]
+      properties:
+        comp_type: { type: string, enum: [sales, lease] }
+        on_market: { type: array, items: { type: object, additionalProperties: true }, description: Sales workbook on-market rows. }
+        sold: { type: array, items: { type: object, additionalProperties: true }, description: Sales workbook sold rows. }
+        comps: { type: array, items: { type: object, additionalProperties: true }, description: Lease workbook rows. }
+        name: { type: string }
+        client: { type: string }
+    GenerateCompsResponse:
+      type: object
+      properties:
+        status: { type: string }
+        filename: { type: string }
+        download_url: { type: string }
+        comp_type: { type: string }
+        rows_by_sheet: { type: object, additionalProperties: true }
     CompsResponse:
       type: object
       properties:
         comps: { type: array, items: { $ref: '#/components/schemas/Comp' } }
+        template_comps: { type: array, items: { $ref: '#/components/schemas/TemplateComp' }, description: Team Briggs template-ready projection. }
         meta:
           type: object
           properties:
@@ -399,6 +438,29 @@ components:
           type: array
           items: { type: string }
           description: e.g. cap_mismatch, rent_disagreement, price_over_ask (present only when flagged).
+    TemplateComp:
+      type: object
+      description: Team Briggs comps-template projection. Tenant-first; chairs/patients sit after RBA for dialysis rows.
+      properties:
+        property_name: { type: string }
+        tenant: { type: string }
+        address: { type: string }
+        city: { type: string }
+        state: { type: string }
+        rba_sf: { type: number }
+        chairs: { type: number }
+        patients: { type: number }
+        sale_price: { type: number }
+        cap_rate: { type: number }
+        price_per_sf: { type: number }
+        annual_noi: { type: number }
+        annual_rent: { type: number }
+        rent_per_sf: { type: number }
+        sale_date: { type: string, format: date }
+        buyer: { type: string }
+        seller: { type: string }
+        source: { type: string }
+        comp_id: { type: string }
     DealDossierRequest:
       type: object
       required: [deal]

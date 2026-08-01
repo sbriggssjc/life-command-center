@@ -24,14 +24,25 @@ import { handleCors } from './_shared/auth.js';
 const BOV_SERVICE_URL = (process.env.BOV_SERVICE_URL || 'https://pacific-love-production-f6b9.up.railway.app').replace(/\/+$/, '');
 const BOV_API_KEY = process.env.BOV_API_KEY || '';
 const BOV_BRIDGE_TOKEN = process.env.BOV_BRIDGE_TOKEN || '';
+const LCC_API_KEY = process.env.LCC_API_KEY || '';
+
+function providedBridgeKey(req) {
+  return req.headers['x-lcc-key']
+    || req.headers['x-api-key']
+    || (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+    || (req.query && (req.query.k || req.query.key))
+    || (req.body && (req.body._k || req.body.api_key || req.body.lcc_api_key))
+    || '';
+}
 
 export default async function compsHandler(req, res) {
   if (handleCors(req, res)) return;
 
   // Optional shared-secret gate (only enforced when configured).
-  if (BOV_BRIDGE_TOKEN) {
-    const provided = req.headers['x-lcc-key'] || req.query.k || (req.body && req.body._k) || '';
-    if (provided !== BOV_BRIDGE_TOKEN) {
+  const allowedBridgeTokens = [BOV_BRIDGE_TOKEN, LCC_API_KEY].filter(Boolean);
+  if (allowedBridgeTokens.length) {
+    const provided = providedBridgeKey(req);
+    if (!allowedBridgeTokens.includes(provided)) {
       res.status(401).json({ error: 'Unauthorized — invalid or missing bridge token.' });
       return;
     }
@@ -62,7 +73,7 @@ export default async function compsHandler(req, res) {
   }
 
   // Drop our own gate field before forwarding to the comps service.
-  const { _k, ...comps } = payload;
+  const { _k, api_key, lcc_api_key, ...comps } = payload;
 
   let upstream, text;
   try {

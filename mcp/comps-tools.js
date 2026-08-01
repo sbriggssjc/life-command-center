@@ -19,6 +19,11 @@
 
 import { enforceHttpResponseSize } from "./http-response-bound.js";
 
+const DEFAULT_QUERY_LIMIT = 40;
+const DEFAULT_SYNTHESIZE_LIMIT = 25;
+const MAX_QUERY_LIMIT = 100;
+const MAX_SYNTHESIZE_LIMIT = 50;
+
 // ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
   medical: ['Health', 'Medical', 'MOB', 'Clinic', 'Dialysis', 'Behavioral'],
@@ -99,6 +104,8 @@ function routeIntent(a) {
 function scoreComp(c, a) {
   let s = 0;
   if (a.states?.includes(c.state)) s += 3;
+  if (a.metros?.some(m => sameMarket(c, m))) s += 4;
+  if (a.tenant && tenantMatches(c, a.tenant)) s += 4;
   // Credit the normalized `use` too, so an agency's asset-class doubling (VA -> Medical Office)
   // ranks consistently rather than depending on the raw building_type value.
   if (a.property_types?.some(t => ((c.property_type || '') + ' ' + (c.use || '')).toLowerCase().includes(String(t).toLowerCase()))) s += 3;
@@ -178,6 +185,88 @@ function noiIsReliable(c) {
   return (c.cap_rate != null) || (c.noi != null);
 }
 
+function clampLimit(v, def, max) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(1, Math.min(max, n));
+}
+
+function normText(v) {
+  return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function tenantMatches(c, tenant) {
+  const needle = normText(tenant);
+  if (!needle) return true;
+  const hay = normText([
+    c.tenant, c.agency, c.operator, c.anchor_tenant,
+    c.raw?.tenant, c.raw?.agency, c.raw?.operator, c.raw?.Tenant__c, c.raw?.Primary_Tenant__c,
+  ].filter(Boolean).join(' '));
+  return !!hay && (hay.includes(needle) || needle.includes(hay));
+}
+
+function sameMarket(c, market) {
+  const m = normText(market);
+  if (!m) return true;
+  const city = normText(c.city);
+  const metro = normText(c.metro || c.market || c.submarket || c.raw?.metro || c.raw?.market || c.raw?.submarket);
+  return city === m || metro === m || city.includes(m) || metro.includes(m);
+}
+
+function applyLocalScope(rows, args) {
+  let out = rows;
+  if (args.tenant) out = out.filter(c => tenantMatches(c, args.tenant));
+  if (Array.isArray(args.states) && args.states.length) {
+    const states = new Set(args.states.map(s => String(s).toUpperCase()));
+    out = out.filter(c => !c.state || states.has(String(c.state).toUpperCase()));
+  }
+  if (Array.isArray(args.metros) && args.metros.length) {
+    out = out.filter(c => args.metros.some(m => sameMarket(c, m)));
+  }
+  return out;
+}
+
+function templateRow(c) {
+  const salePrice = c.price_withheld ? null : (c.sale_price ?? c.sold_price ?? null);
+  const rba = c.building_sf ?? c.rba ?? c.building_size ?? null;
+  const pricePerSf = c.price_per_sf ?? (salePrice && rba ? +(salePrice / rba).toFixed(2) : null);
+  const annualNoi = c.noi ?? c.engine_income ?? c.annual_rent ?? null;
+  return {
+    property_name: c.property_name || c.raw?.property_name || c.tenant || c.agency || null,
+    tenant: c.tenant || c.agency || null,
+    address: c.address || null,
+    city: c.city || null,
+    state: c.state || null,
+    rba_sf: rba,
+    chairs: c.chairs ?? null,
+    patients: c.patient_count ?? c.patients ?? null,
+    sale_price: salePrice,
+    cap_rate: c.cap_rate ?? null,
+    price_per_sf: pricePerSf,
+    annual_noi: annualNoi,
+    annual_rent: c.annual_rent ?? null,
+    rent_per_sf: c.rent_per_sf ?? (c.annual_rent && rba ? +(c.annual_rent / rba).toFixed(2) : null),
+    sale_date: c.sale_date || null,
+    buyer: c.buyer || c.raw?.buyer || null,
+    seller: c.seller || c.raw?.seller || null,
+    source: c.source || null,
+    comp_id: c.comp_id || null,
+    review_flags: c.review_flags || undefined,
+  };
+}
+
+function compactComp(c) {
+  const {
+    raw, _merged_with, review_detail,
+    ...rest
+  } = c || {};
+  return {
+    ...rest,
+    template: templateRow(c || {}),
+    review_detail,
+  };
+}
+
 function argsToParams(args) {
   return {
     p_comp_type: args.comp_type || 'sale',
@@ -191,7 +280,7 @@ function argsToParams(args) {
     p_government_only: !!args.government_only,
     p_include_sf: args.include_salesforce !== false,
     p_include_onmkt: !!args.include_on_market,
-    p_limit: Math.min(args.limit || 200, 500),
+    p_limit: clampLimit(args.limit, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT),
     p_tenant: args.tenant || null,
   };
 }
@@ -216,6 +305,12 @@ export function parseRequest(text) {
   for (const a of (raw.match(/\b[A-Z]{2}\b/g) || [])) if (STATE_ABBRS.has(a) && a !== 'VA') states.add(a);
   if (/\bnationwide\b|\bnational\b|across the (?:us|country)|\bu\.?s\.?a?\b/.test(t)) states.clear();
   if (states.size) out.states = [...states];
+  const statePattern = [...states].join('|');
+  let loc;
+  if (statePattern && (loc = raw.match(new RegExp(`\\b([A-Z][A-Za-z.' -]{2,60}?),\\s*(${statePattern})\\b`)))) {
+    const city = loc[1].trim();
+    if (!US_STATES[city.toLowerCase()] && !/davita|fresenius|renal|dialysis|medical/i.test(city)) out.metros = [city];
+  }
   const pt = new Set();
   if (/\b(medical|health|healthcare|mob|clinic|hospital)\b/.test(t)) pt.add('medical');
   if (/\b(dialysis|davita|fresenius)\b/.test(t)) pt.add('dialysis');
@@ -591,6 +686,17 @@ export function formatCompReviewsMarkdown(result) {
 // ── THE SHARED CORE — every surface calls this ──────────────────────────────
 // deps = { govQuery, diaQuery } (the server's PostgREST fetch helpers).
 export async function runComps(args, deps) {
+  const parsed = args.request ? parseRequest(args.request) : {};
+  args = {
+    ...args,
+    states: (args.states && args.states.length) ? args.states : parsed.states,
+    metros: (args.metros && args.metros.length) ? args.metros : parsed.metros,
+    property_types: (args.property_types && args.property_types.length) ? args.property_types : parsed.property_types,
+    tenant: args.tenant || parsed.tenant,
+    government_only: (args.government_only != null) ? args.government_only : parsed.government_only,
+    include_on_market: (args.include_on_market != null) ? args.include_on_market : parsed.include_on_market,
+    include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : parsed.include_unreliable_noi,
+  };
   const QUERY = { government: deps.govQuery, dialysis: deps.diaQuery };
   const params = argsToParams(args);
   const targets = args.verticals || ['government', 'dialysis'];
@@ -616,6 +722,7 @@ export async function runComps(args, deps) {
   // Government post-filter: when government_only, drop any non-government comp that slipped
   // through from a co-queried vertical (belt-and-suspenders to the vertical restriction).
   let kept = params.p_government_only ? merged.filter(c => c.is_government !== false) : merged;
+  kept = applyLocalScope(kept, args);
   // Reliability gate (Team Briggs policy): by default include only comps whose NOI/cap is
   // reliable; exclude pure benchmark-modeled NOI, implausible caps, and no-NOI/no-cap comps.
   const before = kept.length;
@@ -637,7 +744,9 @@ export async function runComps(args, deps) {
     if (sig) { c.review_flags = sig.review_flags; c.review_detail = sig.review_detail; flagged.push(c); }
   }
   if (flagged.length) { try { await enqueueReviewQueue(flagged, deps); } catch { /* best-effort */ } }
-  return { comps,
+  const outComps = comps.map(compactComp);
+  return { comps: outComps,
+    template_comps: outComps.map(c => c.template),
     meta: { returned: comps.length, total_before_cap: kept.length,
             truncated: kept.length > cap, excluded_unreliable_noi: before - kept.length,
             by_source: comps.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
@@ -646,7 +755,7 @@ export async function runComps(args, deps) {
               comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
               tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags,
               ...c.review_detail })),
-            warnings, interpreted_params: params } };
+            warnings, interpreted_params: { ...params, p_metros: args.metros || null } } };
 }
 
 export async function runSynthesize(args, deps) {
@@ -663,21 +772,24 @@ export async function runSynthesize(args, deps) {
     tenant:            args.tenant || p.tenant,
   };
   const route = routeIntent(eff);
-  const { comps, meta } = await runComps({ ...eff, verticals: route.verticals,
-    government_only: route.government_only, limit: 500 }, deps);
+  const requestedLimit = clampLimit(eff.limit, DEFAULT_SYNTHESIZE_LIMIT, MAX_SYNTHESIZE_LIMIT);
+  const { comps, meta, template_comps } = await runComps({ ...eff, verticals: route.verticals,
+    government_only: route.government_only, limit: requestedLimit }, deps);
   const scored = comps.map(c => ({ ...c, _score: scoreComp(c, eff) }))
-    .sort((x, y) => y._score - x._score).slice(0, Math.min(eff.limit || 100, 300));
+    .sort((x, y) => y._score - x._score).slice(0, requestedLimit);
   return { interpreted_query: {
       comp_type: eff.comp_type || 'sale', property_types: eff.property_types || null,
       states: eff.states || null, date_from: eff.date_from || null, tenant: eff.tenant || null,
       government_only: route.government_only, verticals: route.verticals },
     comps: scored,
+    template_comps: scored.map(c => c.template || templateRow(c)),
     meta: { returned: scored.length,
       by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
       flagged_for_review: scored.filter(c => c.review_flags && c.review_flags.length).length,
       review_flags: scored.filter(c => c.review_flags && c.review_flags.length).map(c => ({
         comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
         tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags, ...c.review_detail })),
+      truncated: meta.truncated || comps.length > scored.length,
       warnings: meta.warnings } };
 }
 
@@ -712,6 +824,7 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
       name: 'query_comps',
       description: "Pull sales comps on demand across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and de-duplicated. Canonical closed sales are gated to transaction_state='live'; Salesforce comps come from sf_comp_staging. property_types accepts plain terms (medical, office, retail, industrial, dialysis, government) expanded to source synonyms. Cap rates returned as decimals; confidential $0 sales flagged price_withheld. By default only comps with a reliable NOI/cap are returned (human-sourced, or a NOI rolled from a prior NOI with captured escalations); pass include_unreliable_noi:true to also include modeled-NOI / no-NOI comps.",
       inputSchema: { type: 'object', properties: {
+        request: { type: 'string', description: 'Optional natural-language request parsed server-side before explicit fields are applied.' },
         comp_type: { type: 'string', enum: ['sale', 'lease', 'both'] },
         verticals: { type: 'array', items: { type: 'string', enum: ['government', 'dialysis'] } },
         property_types: { type: 'array', items: { type: 'string' } },
@@ -723,7 +836,8 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
         include_salesforce: { type: 'boolean' },
         include_on_market: { type: 'boolean' },
         include_unreliable_noi: { type: 'boolean' },
-        limit: { type: 'number' },
+        tenant: { type: 'string', description: 'Operator/tenant scope, e.g. DaVita, Fresenius, US Renal.' },
+        limit: { type: 'number', description: 'Default 40, max 100.' },
       } },
     },
     synthesize_comps: {
@@ -738,7 +852,8 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
         date_from: { type: 'string' }, date_to: { type: 'string' },
         size_min_sf: { type: 'number' }, size_max_sf: { type: 'number' },
         government_only: { type: 'boolean' }, include_on_market: { type: 'boolean' }, include_unreliable_noi: { type: 'boolean' },
-        limit: { type: 'number' },
+        tenant: { type: 'string', description: 'Operator/tenant scope, e.g. DaVita, Fresenius, US Renal.' },
+        limit: { type: 'number', description: 'Default 25, max 50.' },
       } },
     },
     list_comp_reviews: {

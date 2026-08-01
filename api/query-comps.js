@@ -21,14 +21,21 @@ import { handleCors } from './_shared/auth.js';
 const MCP_BASE = (process.env.GOV_API_URL || 'https://life-command-center-production.up.railway.app').replace(/\/+$/, '');
 const LCC_API_KEY = process.env.LCC_API_KEY || '';
 
+function providedKey(req) {
+  return req.headers['x-lcc-key']
+    || req.headers['x-api-key']
+    || (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+    || (req.query && (req.query.k || req.query.key))
+    || (req.body && (req.body._k || req.body.api_key || req.body.lcc_api_key))
+    || '';
+}
+
 export default async function queryCompsHandler(req, res) {
   if (handleCors(req, res)) return;
 
   // Gate with the same X-LCC-Key the connector already sends (matches securityDefinitions).
   if (LCC_API_KEY) {
-    const provided = req.headers['x-lcc-key']
-      || (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
-      || (req.body && req.body._k) || '';
+    const provided = providedKey(req);
     if (provided !== LCC_API_KEY) {
       res.status(401).json({ error: 'Unauthorized — invalid or missing X-LCC-Key.' });
       return;
@@ -45,7 +52,7 @@ export default async function queryCompsHandler(req, res) {
     ? '/api/synthesize-comps'
     : '/api/query-comps';
 
-  const { _k, ...body } = req.body || {};
+  const { _k, api_key, lcc_api_key, ...body } = req.body || {};
 
   let upstream, text;
   try {

@@ -773,6 +773,102 @@
       "idempotent": false,
       "wave": 2,
       "listing_driven_production_support": "Surfaces blockers to leadership so deals don't stall."
+    },
+    {
+      "action_name": "query_comps",
+      "user_goal": "Pull bounded, market-targeted sales comps with explicit filters",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/query-comps",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Copilot Chat", "LCC Deal Agent", "Claude Northmarq"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "request", "location": "body", "type": "string" },
+          { "name": "tenant", "location": "body", "type": "string" },
+          { "name": "states", "location": "body", "type": "array" },
+          { "name": "metros", "location": "body", "type": "array" },
+          { "name": "property_types", "location": "body", "type": "array" },
+          { "name": "date_from", "location": "body", "type": "string", "format": "date" },
+          { "name": "date_to", "location": "body", "type": "string", "format": "date" },
+          { "name": "limit", "location": "body", "type": "integer", "default": 40, "maximum": 100 }
+        ]
+      },
+      "outputs": {
+        "fields": ["comps", "template_comps", "markdown", "meta"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query through the shared LCC comps engine.",
+      "wave": 2,
+      "handler": "query_comps",
+      "listing_driven_production_support": "Gives field agents real Team Briggs comps from the engine instead of web/general-knowledge substitutes."
+    },
+    {
+      "action_name": "synthesize_comps",
+      "user_goal": "Parse a plain-language market request and return a bounded template-ready comp set",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/synthesize-comps",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Copilot Chat", "LCC Deal Agent", "Claude Northmarq"],
+      "inputs": {
+        "required": [
+          { "name": "request", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "tenant", "location": "body", "type": "string" },
+          { "name": "states", "location": "body", "type": "array" },
+          { "name": "metros", "location": "body", "type": "array" },
+          { "name": "property_types", "location": "body", "type": "array" },
+          { "name": "include_on_market", "location": "body", "type": "boolean" },
+          { "name": "include_unreliable_noi", "location": "body", "type": "boolean" },
+          { "name": "limit", "location": "body", "type": "integer", "default": 25, "maximum": 50 }
+        ]
+      },
+      "outputs": {
+        "fields": ["interpreted_query", "comps", "template_comps", "markdown", "meta"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only synthesis through the shared LCC comps engine.",
+      "wave": 2,
+      "handler": "synthesize_comps",
+      "listing_driven_production_support": "Lets agents answer requests like DaVita, The Villages, FL from engine data with bounded output."
+    },
+    {
+      "action_name": "generate_comps",
+      "user_goal": "Generate a Team Briggs comps workbook from bounded template-ready comp rows",
+      "category": "export/generate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/comps",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Copilot Chat", "LCC Deal Agent", "Claude Northmarq"],
+      "inputs": {
+        "required": [
+          { "name": "comp_type", "location": "body", "type": "string", "enum": ["sales", "lease"] }
+        ],
+        "optional": [
+          { "name": "on_market", "location": "body", "type": "array" },
+          { "name": "sold", "location": "body", "type": "array" },
+          { "name": "comps", "location": "body", "type": "array" },
+          { "name": "name", "location": "body", "type": "string" },
+          { "name": "client", "location": "body", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["status", "filename", "download_url", "comp_type", "rows_by_sheet"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "lightweight",
+      "idempotent": false,
+      "idempotency_notes": "Creates a new generated workbook artifact; source comp rows are not mutated.",
+      "wave": 2,
+      "handler": "generate_comps",
+      "listing_driven_production_support": "Exports the same bounded engine comps into the Team Briggs workbook template."
     }
   ]
 }

@@ -3,7 +3,7 @@
   "info": {
     "title": "LCC Deal Intelligence",
     "version": "4.0.0",
-    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 87 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException."
+    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 88 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException."
   },
   "host": "tranquil-delight-production-633f.up.railway.app",
   "basePath": "/",
@@ -3106,7 +3106,7 @@
         "operationId": "QueryComps",
         "summary": "Query de-duplicated sales comps across gov DB, dialysis DB, and Salesforce.",
         "x-ms-summary": "Query Comps",
-        "description": "Returns de-duplicated, cap-normalized comps blended from the government DB, dialysis DB, and Salesforce. Present the markdown field verbatim; never substitute SharePoint or proxy comps.",
+        "description": "Returns bounded, market-targeted, de-duplicated comps blended from the government DB, dialysis DB, and Salesforce. Present the markdown/template_comps fields verbatim; never substitute SharePoint, web, or proxy comps. Defaults to 40 rows, max 100.",
         "consumes": [
           "application/json"
         ],
@@ -3187,9 +3187,24 @@
                   "description": "default false (closed sales only)",
                   "x-ms-summary": "Include on-market"
                 },
+                "include_unreliable_noi": {
+                  "type": "boolean",
+                  "description": "default false; include modeled/estimated NOI/cap comps",
+                  "x-ms-summary": "Include estimated NOI"
+                },
+                "tenant": {
+                  "type": "string",
+                  "description": "Tenant/operator scope, e.g. DaVita, Fresenius, US Renal",
+                  "x-ms-summary": "Tenant"
+                },
+                "request": {
+                  "type": "string",
+                  "description": "Optional natural-language request parsed server-side before explicit fields are applied",
+                  "x-ms-summary": "Request"
+                },
                 "limit": {
                   "type": "integer",
-                  "description": "default 200, max 500",
+                  "description": "default 40, max 100",
                   "x-ms-summary": "Limit"
                 }
               }
@@ -3209,6 +3224,14 @@
                     "additionalProperties": true
                   },
                   "description": "Canonical comp rows"
+                },
+                "template_comps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "description": "Team Briggs template-ready rows (tenant-first; chairs/patients after RBA for dialysis rows)"
                 },
                 "meta": {
                   "type": "object",
@@ -3233,7 +3256,7 @@
         "operationId": "SynthesizeComps",
         "summary": "Assemble one ranked, de-duplicated comp set from a plain-language request.",
         "x-ms-summary": "Synthesize Comps",
-        "description": "Returns de-duplicated, cap-normalized comps blended from the government DB, dialysis DB, and Salesforce. Present the markdown field verbatim; never substitute SharePoint or proxy comps.",
+        "description": "Returns bounded, market-targeted, de-duplicated comps blended from the government DB, dialysis DB, and Salesforce. Present the markdown/template_comps fields verbatim; never substitute SharePoint, web, or proxy comps. Defaults to 25 rows, max 50.",
         "consumes": [
           "application/json"
         ],
@@ -3319,9 +3342,19 @@
                   "description": "default false (closed sales only)",
                   "x-ms-summary": "Include on-market"
                 },
+                "include_unreliable_noi": {
+                  "type": "boolean",
+                  "description": "default false; include modeled/estimated NOI/cap comps",
+                  "x-ms-summary": "Include estimated NOI"
+                },
+                "tenant": {
+                  "type": "string",
+                  "description": "Tenant/operator scope, e.g. DaVita, Fresenius, US Renal",
+                  "x-ms-summary": "Tenant"
+                },
                 "limit": {
                   "type": "integer",
-                  "description": "default 200, max 500",
+                  "description": "default 25, max 50",
                   "x-ms-summary": "Limit"
                 }
               }
@@ -3342,6 +3375,14 @@
                   },
                   "description": "Canonical comp rows"
                 },
+                "template_comps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "description": "Team Briggs template-ready rows (tenant-first; chairs/patients after RBA for dialysis rows)"
+                },
                 "meta": {
                   "type": "object",
                   "description": "returned/by_source/warnings",
@@ -3356,6 +3397,110 @@
           },
           "401": {
             "description": "Unauthorized \u2014 invalid or missing X-LCC-Key"
+          }
+        }
+      }
+    },
+    "/api/comps": {
+      "post": {
+        "operationId": "GenerateComps",
+        "summary": "Generate a Team Briggs comps workbook from bounded comp rows.",
+        "x-ms-summary": "Generate Comps",
+        "description": "Creates a Team Briggs comps workbook from bounded queryComps/synthesizeComps rows. Use only after engine comps exist. The response omits the heavy base64 workbook and returns generated metadata/download URL.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "comp_type"
+              ],
+              "properties": {
+                "comp_type": {
+                  "type": "string",
+                  "enum": [
+                    "sales",
+                    "lease"
+                  ],
+                  "x-ms-summary": "Comp type"
+                },
+                "on_market": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "description": "Sales workbook on-market rows",
+                  "x-ms-summary": "On-market rows"
+                },
+                "sold": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "description": "Sales workbook sold rows",
+                  "x-ms-summary": "Sold rows"
+                },
+                "comps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "description": "Lease workbook rows",
+                  "x-ms-summary": "Lease rows"
+                },
+                "name": {
+                  "type": "string",
+                  "x-ms-summary": "Name"
+                },
+                "client": {
+                  "type": "string",
+                  "x-ms-summary": "Client"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated workbook metadata",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "filename": {
+                  "type": "string"
+                },
+                "download_url": {
+                  "type": "string"
+                },
+                "comp_type": {
+                  "type": "string"
+                },
+                "rows_by_sheet": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing comp type or rows"
+          },
+          "401": {
+            "description": "Unauthorized — invalid or missing X-LCC-Key"
           }
         }
       }
