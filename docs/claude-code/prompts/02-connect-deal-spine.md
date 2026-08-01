@@ -32,3 +32,5 @@ from live sources instead of "Not on file."
 ## Verify
 35724 shows a linked SF Opportunity (sf_deal_id stamped), parties beyond the CBRE feed, dated Outlook activity,
 linked deal-room docs, and the dossier's Parties/Commission/Correspondence/Diligence sections populated.
+
+> **Packet target:** populate the `buildDealPacket` shape in `docs/architecture/deal-surface-packet-and-layout.md` (Part 1), honoring the source-authority + cap-reconciliation rules.

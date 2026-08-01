@@ -31,3 +31,5 @@ discipline (absent -> Not on file). Verify the schema supports rendering the dea
 ## Verify
 Migrations applied; buildDealPacket can read commission/milestones/diligence/party-roles/correspondence-summary;
 the deal-dossier-v2 sections have real backing tables to populate from.
+
+> **Packet target:** build to the `buildDealPacket` shape in `docs/architecture/deal-surface-packet-and-layout.md` (Part 1).

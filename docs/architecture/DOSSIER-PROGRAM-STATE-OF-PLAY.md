@@ -167,3 +167,12 @@ index, `prompts/` = open, `responses/` = Scott pastes replies, `done/` = archive
 topic docs, moves the finished prompt to `done/`, and re-drafts downstream prompts. Open now: 01 cap-rate,
 02 connect-deal-spine, 03 broker-attribution, 04 loan-propagation, 05 resolver-by-property-id, 06 deal-spine
 data model, 07 data-backlog index.
+
+---
+
+## Deal surface — packet contract + app layout (2026-08-01)
+`deal-surface-packet-and-layout.md` adds the two design pieces that make the living deal dossier buildable:
+**(1)** the `buildDealPacket` tagged-JSON contract (field-by-field, with sources and the cap = in-place-NOI/price
+reconciliation rule) mapped to the v2 layout; and **(2)** the deal-surface app layout (a Deal tab distinct from
+the Property tab, double-click-to-source, connected-sources indicator, real-time freshness). It targets
+prompts 06 (schema) and 02 (connect), and tees up a future prompt 08 (Deal-tab UI) once those land.
