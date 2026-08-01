@@ -416,6 +416,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
           if (!domainHasRealOwner) {
             ownership.true_owner = ent.property_owner.owner_name;
             ownership.true_owner_name = ent.property_owner.owner_name;
+            // CRITICAL: the ownership ladder displays true_owner_canonical || true_owner.
+            // Without overriding the canonical, the STALE domain operator name (e.g.
+            // "DaVita Inc.") kept showing even though we adopted the real owner
+            // (e.g. "Radar Woodbridge LLC") — the systematic "true owner is the
+            // operator" bug. Force the canonical to the adopted owner too.
+            ownership.true_owner_canonical = ent.property_owner.owner_name;
             ownership.true_owner_is_operator = false;
             ownership.owner_entity_id = ent.property_owner.owner_entity_id || ownership.owner_entity_id || ent.id;
             ownership.owner_source = 'lcc_property_owner';
@@ -6197,7 +6203,12 @@ function _udOwnershipLadder(own, db) {
   if (trueResolved) {
     h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(trueDisplay, _ownerCtxFromCurrent(own, db, 'true')) + '</div>';
     if (own.true_owner_type) h += '<div style="font-size:11px;color:var(--text2)">' + esc(own.true_owner_type) + '</div>';
-    if (conf && conf.value != null) {
+    const _lccSrc = own.owner_source === 'lcc_property_owner' && own.lcc_property_owner;
+    if (_lccSrc) {
+      const _lc = own.lcc_property_owner;
+      const _lp = _lc.confidence != null ? Math.round(Number(_lc.confidence) * 100) : null;
+      h += '<div style="margin-top:6px;font-size:11px;font-weight:600;color:var(--text2)">Resolved from ownership graph' + (_lp != null ? ' · ' + _lp + '%' : '') + '</div>';
+    } else if (conf && conf.value != null) {
       const pct = Math.round(conf.value * 100);
       const band = conf.value >= 0.8 ? 'var(--green)' : conf.value >= 0.5 ? 'var(--yellow)' : 'var(--red)';
       h += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px;font-weight:600;color:var(--text2)">Confidence'
@@ -14462,7 +14473,16 @@ document.addEventListener('click', function (e) {
   e.stopPropagation();
   try {
     const raw = decodeURIComponent(el.getAttribute('data-owner-ctx') || '');
-    if (raw) openOwnerDrawer(raw);
+    if (!raw) return;
+    // When a PROPERTY is primary and there's room, dock the owner BESIDE the
+    // property (companion) instead of replacing the property panel (Scott: keep
+    // both open). Falls back to the full owner drawer otherwise.
+    if (typeof _dualCapable === 'function' && _dualCapable() && _activePrimaryKind === 'property') {
+      let nm = null;
+      try { nm = (JSON.parse(raw) || {}).name || null; } catch (_e2) {}
+      if (nm && typeof _openEntityByNameSmart === 'function') { _openEntityByNameSmart(nm); return; }
+    }
+    openOwnerDrawer(raw);
   } catch (err) {
     console.warn('owner-link click: bad payload', err);
   }
