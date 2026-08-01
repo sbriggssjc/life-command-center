@@ -21,6 +21,7 @@ import { opsQuery, paginationParams, requireOps, withErrorHandler, fetchWithTime
 import { resolveArtifactDownload, uploadDocToFolder } from '../_shared/storage-adapter.js';
 import { assemblePropertyPacket } from '../operations.js';
 import { generateDossier, recordDossier } from '../_shared/dossier-generator.js';
+import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
@@ -1109,9 +1110,26 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     //     best-effort and saves the web URL to metadata.sharepoint_url
     //   - returns { storage_ref, signed_url, sharepoint_url }
     if (req.query.action === 'generate_dossier') {
-      const { entity_id, force } = req.body || {};
+      let { entity_id } = req.body || {};
+      const { force, domain, property_id } = req.body || {};
       const kind = (req.body?.kind === 'deal') ? 'deal' : 'property';
-      if (!entity_id) return res.status(400).json({ error: 'entity_id is required' });
+
+      // R-asset-linking: on-demand entity materialization. A property panel can
+      // call generate_dossier with { domain, property_id } for a closed deal that
+      // has no asset entity yet — ensure it (and enrich it from the domain DB)
+      // so the dossier's Deal Spine / Parties sections fill from live data
+      // instead of "Not on file". Idempotent: an existing entity is reused.
+      if (!entity_id && domain && property_id != null) {
+        const ensured = await ensureAssetEntityForProperty({
+          domain, propertyId: property_id, workspaceId, userId: user.id,
+          deps: { bridgeSource: 'generate_dossier' },
+        });
+        if (!ensured.ok || !ensured.entity_id) {
+          return res.status(422).json({ error: 'asset_entity_unresolved', detail: ensured.skipped || ensured });
+        }
+        entity_id = ensured.entity_id;
+      }
+      if (!entity_id) return res.status(400).json({ error: 'entity_id (or domain + property_id) is required' });
 
       const entRes = await opsQuery('GET',
         `entities?id=eq.${encodeURIComponent(entity_id)}&workspace_id=eq.${workspaceId}&select=id,name`);
