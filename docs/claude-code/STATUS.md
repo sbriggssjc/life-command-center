@@ -1,33 +1,41 @@
-# Claude Code queue — STATUS  (updated 2026-08-01, session 2b)
+# Claude Code queue — STATUS  (updated 2026-08-01, session 2c)
 
-## Open (in `prompts/`) — order reflects the error triage
+## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
 | 09 | field_source_priority schema drift (#710) | P0 | open |
-| 10 | PA flow failures triage/fix (SF Opp Sync, LCC Get Artifact) | P0 | open |
-| 06 | Deal-spine data model (schema) | P0 | open |
-| 02 | Connect the deal spine (SF/Outlook/Sharefile) | P0 | open (sits on 10) |
+| 10 | PA flow failures (SF Opp Sync, LCC Get Artifact) | P0 | open |
+| 08 | Deal-tab UI (render the live deal spine) | P1 | open — spine is now live, ready to render |
+| 13 | Property & Contact tab connectivity | P1 | open |
+| 14 | government-lease CI Test & Lint (68b293a) | P1 | open |
 | 11 | Comps: connector reach + bounded output | P1 | open |
 | 12 | LCC Health surface (observability) | P1 | open |
-| 13 | Property & Contact tab connectivity | P1 | open |
-| 03 | Broker/role attribution | P1 | open |
+| 03 | Broker/role attribution | P1 | open (partly covered by the 02 conflict surfacing) |
 | 04 | Loan propagation | P1 | open |
 | 05 | Resolver by property-id | P1 | open |
-| 08 | Deal-tab UI | P1 | open |
-| 07 | Data-backlog index (property-dossier P0-P3) | mixed | index |
+| 07 | Data-backlog index (property-dossier) | mixed | index |
+| 15 | Create SF Opportunity for 35724 | P1 | **HOLD — needs Scott's go-ahead (outward write)** |
 
 ## Done (in `done/`)
 | # | Prompt | Resolved by |
 |---|--------|-------------|
-| 01 | Cap-rate reconciliation (35724 -> 6.00%) | PRs lcc #1551 (merged) + Dialysis #7355 (merge pending); rebuilt v_sales_comps (412 rows), added guard view + tests |
-| 07/f2 | rent/SF + current-escalated-rent | detail.js + entities-handler + dossier-generator + backfill |
+| 01 | Cap-rate reconciliation (35724 -> 6.00%) | PR #1551 (+ Dialysis #7355); rebuilt v_sales_comps (412 rows) + guard |
+| 02 | Connect the deal spine | PR #1552 — packet assembly + reconciliation discipline; SF/Outlook fill gated |
+| 06 | Deal-spine data model (schema) | PR #1552 — lcc_deal_* tables + lcc_deal_spine read model (built with 02) |
+| 07/f2 | rent/SF + escalated rent | detail.js + entities-handler + dossier-generator |
 | 07/f3 | transactions/listings timeline | entities-handler + dossier-generator + detail.js |
+| 07/f4 | lease abstract (guarantor + responsibilities) | lease-extractor + leases.guaranty_scope + dossier |
 
 ## Recommended sequence
-1) **09 + verify 01** (pricing truth; 01 merged, confirm live). 2) **10** (fix broken PA flows — note many HTTP
-flows may recover once 1aae4e20 deploys). 3) **06 + 02** (populate the deal spine). 4) **08** (Deal-tab UI) +
-**13** (property/contact connectivity). Then **11** (comps reach), **12** (health surface), 03/04/05/07.
+1) **09 + 14** (schema drift dia+gov; get CI green) + confirm **01** live. 2) **10** (fix PA flows; many HTTP
+flows may recover post-deploy of 1aae4e20). 3) **08** (Deal-tab UI — the spine is live, render it) + **13**
+(property/contact connectivity). 4) **11/12** (comps reach; health surface), then 03/04/05. **15 only on
+Scott's approval.**
 
-## Recently completed (context)
-Dossier generator wiring PR #1549; Boot Check fix 1aae4e20; closed-deal entity PR #1550; CMS economics f4518ada;
-cap-rate PR #1551 (+ Dialysis #7355). Process: see `README.md`.
+## Decision needed from Scott
+**15 — create a back-fill SF Opportunity for the closed 35724 deal?** The deal spine is built, but this closed
+deal has no SF Opportunity, so parties/commission stay "Not on file." Creating one is an outward write to
+Salesforce (held pending your go-ahead). Option B is to leave 35724 comp-only and let future deals fill via the
+fixed sync flow (prompt 10).
+
+## Process: see `README.md`.

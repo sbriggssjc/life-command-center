@@ -33,3 +33,11 @@ piece of work.
   sales_transactions (live) + available_listings; verified on 23654. Response in
   `done/07-followup3-transactions-timeline.response.docx`. (Source note: active listing cap stored 0.0524, not
   5.25% — left grounded.)
+
+## Update 2026-08-01 (session 2c): followup prompt 4 RETURNED + DONE
+- Prompt 4 (lease abstract — guarantor + responsibilities): **done** — lease 16307/property 23654 now has
+  guarantor "DaVita Incorporated"; roof=shared, structure=landlord, parking=shared, HVAC=shared;
+  guaranty_scope null (PDF silent on the Initial-Term limit -> Not on file). Extended invokeExtractionAI seam,
+  added leases.guaranty_scope; dossier renders Tenant + Guarantor distinct + guaranty scope + expense-structure
+  prose. Response in `done/07-followup4-lease-abstract.response.docx`. NOTE: this updates the 5247 Airways
+  dossier facts (guarantor + responsibilities were previously "Not on file").

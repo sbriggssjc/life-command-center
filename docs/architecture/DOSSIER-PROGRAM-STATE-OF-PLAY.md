@@ -207,3 +207,22 @@ New prompts queued: **12** (LCC Health surface — observability so failures don
 & Contact tab cross-DB connectivity). Flow review: several failing PA flows are HTTP calls into the LCC app, so
 deploying 1aae4e20 likely clears a chunk (noted in prompt 10); the comps ConnectorOperationNotFound is likely an
 unregistered action in copilot_action_registry.json (noted in prompt 11).
+
+---
+
+## Deal spine LIVE + more responses (2026-08-01, session 2c)
+- **Prompts 02 + 06 DONE (PR #1552).** The deal-spine schema is live: `lcc_deal_commission/_milestone/
+  _diligence/_correspondence_summary/_document/_conflict` + `lcc_deal_parties(entity)` (role history via
+  entity_relationships) + `lcc_deal_spine(entity)` read model. `buildDealPacket` now emits the tagged packet with
+  the reconciliation discipline enforced in code (CoStar/dia_contact broker = third_party "unverified role"; a
+  listing_broker conflict stays open). 35724 returns real milestones (OM 6/4, listing 6/8, close 7/24 @ 6.00%),
+  the OM doc, a correspondence summary, and an open listing-broker conflict — commission/diligence "Not on file"
+  (nothing sourced). **The infra is done; the SF/Outlook/Sharefile FILL is gated on connecting those systems
+  (prompt 10) + a decision on back-filling the SF Opportunity (prompt 15, HOLD).**
+- **Followup 4 DONE:** lease 16307 now carries guarantor "DaVita Incorporated" + responsibility split
+  (roof shared / structure landlord / parking shared / HVAC shared); guaranty_scope null. Updates the 5247
+  Airways dossier facts (were "Not on file").
+- **New CI failure:** government-lease repo CI "Test & Lint" red on 68b293a (prompt 14) — possibly gov-side of
+  the #710 schema drift.
+- **Sequence now:** the deal spine is live, so **08 (Deal-tab UI)** is ready to render it; **10** connects the
+  live systems to fill it; **15** (SF Opportunity back-fill) awaits Scott's go/no-go.
