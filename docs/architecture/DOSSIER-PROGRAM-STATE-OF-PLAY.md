@@ -157,3 +157,13 @@ LCC-layout improvements + Ollama opportunity scan), `deal-dossier-fresenius-wood
 
 **Next recommended:** (1) push to redeploy Railway; (2) run Prompt A (cap fix); (3) run Prompt B (deal-spine
 connection) — the highest-leverage step toward the living record.
+
+---
+
+## Claude Code work queue (2026-08-01)
+Open prompts + responses now live in **`docs/claude-code/`** (`README.md` = the process, `STATUS.md` = the
+index, `prompts/` = open, `responses/` = Scott pastes replies, `done/` = archived). **Every future chat checks
+`docs/claude-code/responses/` at the start of the turn**, verifies each new response, updates this trail + the
+topic docs, moves the finished prompt to `done/`, and re-drafts downstream prompts. Open now: 01 cap-rate,
+02 connect-deal-spine, 03 broker-attribution, 04 loan-propagation, 05 resolver-by-property-id, 06 deal-spine
+data model, 07 data-backlog index.

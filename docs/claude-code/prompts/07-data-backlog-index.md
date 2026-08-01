@@ -1,0 +1,22 @@
+# Prompt 07 — Data-backlog index (property-dossier P0-P3)
+- Priority: mixed (P0-P3)
+- Status: index — individual items open unless noted
+- Related: `docs/architecture/dossier-followup-prompts-for-claude-code.md` (full text of each), `dossier-v2-audit-and-triage.md`
+- Response files: paste per-item responses as `../responses/07-<item>.response.md`
+
+The property-dossier data backlog lives in full in `dossier-followup-prompts-for-claude-code.md` (Prompts 0-8).
+Status best-known as of 2026-08-01 (confirm + tell Cowork which to close):
+- Prompt 0 — design-vs-production reconciliation (23654): **open**
+- Prompt 1 — P0 CMS reconciliation + $104.6M revenue bug: **landed** (commit f4518ada "Correct operations export
+  to use corrected CMS clinic economics") — verify + close
+- Prompt 2 — rent/SF + current-escalated-rent: **partial** (escalation carry-forward done in Dialysis #7354, but
+  it drove the wrong 6.46% cap — superseded by prompt 01; rent/SF compute-on-read: verify)
+- Prompt 3 — transactions/listings wiring: **open**
+- Prompt 4 — lease abstract (guarantor/responsibilities) for 23654: **open**
+- Prompt 5 — loan feeder + finances suppression: **superseded by prompt 04** (loan propagation)
+- Prompt 6 — documents reconciliation (SharePoint + Salesforce): **open**
+- Prompt 7 — relocation lineage + market competition: **open**
+- Prompt 8 — Location & Trade Area (Google Static Maps + demographics backfill): **open**
+
+Cowork will migrate any still-open item into its own `prompts/NN-*.md` on request or as it becomes the active
+piece of work.
