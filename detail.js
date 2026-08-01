@@ -5158,11 +5158,13 @@ function _udExportOperations() {
   const ext = _opsExtraCache || {};
   const r = rankings || {};
   const finDetail = ext.financialDetail || {};
+  const facilityEconomics = ext.facilityEconomics || {};
   const costRpt = ext.costReports || {};
   const quality = ext.quality || {};
   const trends = ext.trends || {};
   const lease = ext.lease || {};
-  const hoursInfo = ext.hours || null;
+  const clinicProfile = ext.hours || (cmsLink && cmsLink.facility) || {};
+  const hoursInfo = clinicProfile || null;
   const patientHistory = ext.patientHistory || [];
   const payerMix = ext.payerMix || {};
   const competitors = ext.competitors || [];
@@ -5176,29 +5178,26 @@ function _udExportOperations() {
   // nonsensical margin (e.g. $7.6M est. revenue ÷ $522k HCRIS profit = 6.9%, and
   // $1,156/treatment). Prefer HCRIS actuals (reflect real treatment volume); else
   // the estimated model kept internally consistent (its own revenue + profit).
-  const _ttmMargin = (r.ttm_operating_margin != null) ? (Math.abs(Number(r.ttm_operating_margin)) < 1 ? Number(r.ttm_operating_margin) : Number(r.ttm_operating_margin) / 100) : null;
-  const _ttmProfit = (r.ttm_operating_profit != null) ? Number(r.ttm_operating_profit) : null;
-  const _estRev = (finDetail.estimated_annual_revenue != null) ? Number(finDetail.estimated_annual_revenue) : (r.estimated_annual_revenue != null ? Number(r.estimated_annual_revenue) : null);
-  const _estProfit = (finDetail.estimated_operating_profit != null) ? Number(finDetail.estimated_operating_profit)
-        : (finDetail.estimated_annual_profit != null) ? Number(finDetail.estimated_annual_profit)
-        : (r.estimated_annual_profit != null) ? Number(r.estimated_annual_profit) : null;
+  const _estRev = (facilityEconomics.estimated_annual_revenue != null) ? Number(facilityEconomics.estimated_annual_revenue)
+        : (facilityEconomics.ttm_revenue != null) ? Number(facilityEconomics.ttm_revenue) : null;
+  const _estProfit = (facilityEconomics.estimated_operating_profit != null) ? Number(facilityEconomics.estimated_operating_profit)
+        : (facilityEconomics.estimated_annual_profit != null) ? Number(facilityEconomics.estimated_annual_profit)
+        : (facilityEconomics.ttm_operating_profit != null) ? Number(facilityEconomics.ttm_operating_profit) : null;
   let finBasis, estRevenue, bestProfit, margin;
-  if (_ttmProfit != null && _ttmMargin != null && _ttmMargin > 0) {
-    finBasis = 'hcris';
-    estRevenue = _ttmProfit / _ttmMargin;   // the revenue base the HCRIS margin is computed against
-    bestProfit = _ttmProfit;
-    margin = _ttmMargin * 100;
-  } else if (_estRev != null && _estProfit != null && _estRev > 0) {
+  if (_estRev != null && _estProfit != null && _estRev > 0) {
     finBasis = 'estimated';
     estRevenue = _estRev; bestProfit = _estProfit; margin = (_estProfit / _estRev) * 100;
   } else {
-    finBasis = 'partial';
-    estRevenue = (_estRev != null) ? _estRev : (r.ttm_revenue != null ? Number(r.ttm_revenue) : null);
-    bestProfit = (_ttmProfit != null) ? _ttmProfit : _estProfit;
-    margin = (bestProfit != null && estRevenue) ? (Number(bestProfit) / Number(estRevenue)) * 100 : (_ttmMargin != null ? _ttmMargin * 100 : null);
+    finBasis = 'not_on_file';
+    estRevenue = null;
+    bestProfit = null;
+    margin = null;
   }
   const latestSnapshotPt = patientHistory.length > 0 ? Number(patientHistory[patientHistory.length - 1].total_patients || 0) : 0;
-  const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
+  const clinicPatientCount = clinicProfile.latest_estimated_patients != null
+    ? Number(clinicProfile.latest_estimated_patients)
+    : (r.latest_estimated_patients != null ? Number(r.latest_estimated_patients) : null);
+  const bestPatientCount = clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null);
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
   const ccn = r.medicare_id
     || (cmsLink && cmsLink.medicare_id)
@@ -5217,7 +5216,7 @@ function _udExportOperations() {
   const zipVal   = property.zip_code || property.zip || fb.zip_code || fb.zip || '';
   const propertyId = property.property_id || _udCache.ids?.property_id || '';
   const address = _esc([addrLine, cityVal, stateVal, zipVal].filter(Boolean).join(', ') || '');
-  const stationsVal = r.number_of_chairs || property.number_of_chairs || r.stations || null;
+  const stationsVal = clinicProfile.stations || clinicProfile.number_of_chairs || r.stations || r.number_of_chairs || property.number_of_chairs || null;
   const buildingSize = property.building_size || null;
   const yearBuilt    = property.year_built || null;
   const yearReno     = property.year_renovated || null;
@@ -5234,10 +5233,16 @@ function _udExportOperations() {
   const finTxExp = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
   let annualTx;
   if (finBasis === 'estimated') {
-    annualTx = (r.estimated_annual_treatments != null) ? Number(r.estimated_annual_treatments) : (finTxExp || hcrisTx || (bestPatientCount ? bestPatientCount * 156 : null));
+    annualTx = (clinicProfile.ttm_total_treatments != null) ? Number(clinicProfile.ttm_total_treatments)
+      : (r.ttm_total_treatments != null) ? Number(r.ttm_total_treatments)
+      : (clinicProfile.estimated_annual_treatments != null) ? Number(clinicProfile.estimated_annual_treatments)
+      : (r.estimated_annual_treatments != null) ? Number(r.estimated_annual_treatments)
+      : (finTxExp || hcrisTx || (bestPatientCount ? bestPatientCount * 156 : null));
   } else {
     // hcris / partial basis → actual reported treatment volume
-    annualTx = (r.ttm_total_treatments != null) ? Number(r.ttm_total_treatments) : (hcrisTx || finTxExp || (bestPatientCount ? bestPatientCount * 156 : null));
+    annualTx = (clinicProfile.ttm_total_treatments != null) ? Number(clinicProfile.ttm_total_treatments)
+      : (r.ttm_total_treatments != null) ? Number(r.ttm_total_treatments)
+      : (hcrisTx || finTxExp || (bestPatientCount ? bestPatientCount * 156 : null));
   }
   const revPerTx = (estRevenue && annualTx) ? (Number(estRevenue) / annualTx) : null;
 
@@ -5246,7 +5251,8 @@ function _udExportOperations() {
   // chairs / utilization / treatments. The CMS annual snapshot count is a
   // cumulative facility figure kept separate to avoid the 158-vs-31 contradiction
   // the prior export shipped.
-  const concurrentCensus = (r.latest_estimated_patients != null) ? Number(r.latest_estimated_patients)
+  const concurrentCensus = (clinicProfile.latest_estimated_patients != null) ? Number(clinicProfile.latest_estimated_patients)
+        : (r.latest_estimated_patients != null) ? Number(r.latest_estimated_patients)
         : (finDetail.patient_count != null ? Number(finDetail.patient_count) : null);
   const cmsAnnualPatients = latestSnapshotPt > 0 ? latestSnapshotPt : null;
   const censusHeadline = concurrentCensus != null ? concurrentCensus : bestPatientCount;
@@ -5480,7 +5486,7 @@ function _udExportOperations() {
   <div class="sk"><div class="l">Census Trend</div><div class="v">${trendDirDisp}</div></div>
 </div>
 
-<div class="callout"><b>At a glance &mdash;</b> A ${stationsVal ? stationsVal + '-station ' : ''}${operatorName && operatorName !== 'N/A' ? operatorName + ' ' : ''}in-center hemodialysis facility${utilPct != null ? ' running at <b>' + utilPct.toFixed(1) + '% of modeled operating capacity</b>' : ''}${(competitors.length === 0 && r.county) ? ', and the <b>only CMS-certified dialysis provider in ' + _esc(r.county) + ' County' + (stateVal ? ', ' + _esc(stateVal) : '') + '</b>' : ''}. Estimated facility revenue is <b>${fmtDollar(estRevenue)}</b>${annualTx ? ' on ~' + annualTx.toLocaleString() + ' annual treatments' : ''}${(payerMix.private_pct != null || r.payer_mix_private_pct != null) ? ', with a commercial/private payer share of <b>' + Number(payerMix.private_pct != null ? payerMix.private_pct : r.payer_mix_private_pct).toFixed(1) + '%</b>' : ''}.</div>
+<div class="callout"><b>At a glance &mdash;</b> A ${stationsVal ? stationsVal + '-station ' : ''}${operatorName && operatorName !== 'N/A' ? operatorName + ' ' : ''}in-center hemodialysis facility${utilPct != null ? ' running at <b>' + utilPct.toFixed(1) + '% of modeled operating capacity</b>' : ''}${(competitors.length === 0 && r.county) ? ', and the <b>only CMS-certified dialysis provider in ' + _esc(r.county) + ' County' + (stateVal ? ', ' + _esc(stateVal) : '') + '</b>' : ''}. Corrected facility revenue is <b>${estRevenue ? fmtDollar(estRevenue) : 'Not on file'}</b>${annualTx ? ' with ' + annualTx.toLocaleString() + ' CMS annual treatments' : ''}${(payerMix.private_pct != null || r.payer_mix_private_pct != null) ? ', with a commercial/private payer share of <b>' + Number(payerMix.private_pct != null ? payerMix.private_pct : r.payer_mix_private_pct).toFixed(1) + '%</b>' : ''}.</div>
 
 <!-- Tenant & Operator -->
 <h2>Tenant &amp; Operator <span class="note">Source: CMS &middot; operator SEC filings</span></h2>
@@ -5493,11 +5499,11 @@ function _udExportOperations() {
 <!-- Facility Financial Performance -->
 <h2>Facility Financial Performance <span class="note">Source: CMS/HCRIS &middot; operator filings</span></h2>
 <table class="data-table">
-  <tr><td>Est. Facility Revenue (annual)</td><td>${fmtDollar(estRevenue)}<span class="ctx">${finBasis === 'hcris' ? 'Derived from CMS/HCRIS reported actuals (treatment volume &times; net revenue).' : finBasis === 'estimated' ? 'Estimated (chair-capacity model).' : 'Estimated.'}</span></td></tr>
+  <tr><td>Est. Facility Revenue (annual)</td><td>${estRevenue ? fmtDollar(estRevenue) : 'Not on file'}<span class="ctx">${finBasis === 'estimated' ? 'Corrected clinic economics.' : 'Property-denorm revenue retired; corrected clinic economics not on file.'}</span></td></tr>
   <tr><td>Revenue / Treatment (blended)</td><td>${revPerTx ? '$' + revPerTx.toFixed(0) : 'N/A'}<span class="ctx">Weighted by this facility's payer mix.</span></td></tr>
   <tr><td>Est. Operating Profit</td><td>${fmtDollar(bestProfit)}</td></tr>
-  <tr><td>Operating Margin</td><td>${fmtPct(margin)}${finBasis === 'estimated' ? (r.ttm_operating_margin != null ? '<span class="ctx">Estimated model; CMS/HCRIS TTM margin ' + (Number(r.ttm_operating_margin) * (Math.abs(Number(r.ttm_operating_margin)) < 1 ? 100 : 1)).toFixed(1) + '%.</span>' : '') : '<span class="ctx">CMS/HCRIS reported actuals (operating profit &divide; net patient revenue).</span>'}</td></tr>
-  <tr><td>Annual Treatments</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}<span class="ctx">${finBasis === 'estimated' ? 'Modeled at chair capacity.' : 'CMS/HCRIS reported.'}</span></td></tr>
+  <tr><td>Operating Margin</td><td>${fmtPct(margin)}<span class="ctx">${margin != null ? 'Derived from corrected clinic economics.' : 'Not on file.'}</span></td></tr>
+  <tr><td>Annual Treatments</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}<span class="ctx">CMS medicare_clinics TTM treatments.</span></td></tr>
 </table>
 
 <!-- Demand & Capacity -->

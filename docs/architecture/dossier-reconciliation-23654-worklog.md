@@ -22,3 +22,9 @@ Read-only reconciliation of the v2 gold-standard dossier design for 5247 Airways
 - Wrote the reconciliation artifact to `docs/architecture/dossier-design-vs-production-23654.md`.
 - Production has many v2 ingredients in tab loaders, but the Dossier button omits them because it renders a v1 client HTML from `_udCache`.
 - Highest BD-impact deltas: document endpoint pollution, Deal History source priority, incomplete active-listing economics, operations value conflicts, and the v2 packet/generator not being wired to the property panel.
+
+## 2026-08-01 P0 CMS Denorm Fix
+- Objective: stop 23654-style operations/revenue drift by reading CMS tables as source of truth and retiring bad `properties` revenue denorms.
+- LCC changes: dossier packet now reads current patients from `medicare_clinics.latest_estimated_patients`, keeps `facility_patient_counts` as trend context, and the Operations panel/export no longer falls back to `properties`/rankings revenue.
+- DialysisProject changes: `propagate_property_financials.py` no longer writes `properties.estimated_annual_revenue`; `property_cms_reconciliation.py` flags/backfills denorm drift and clears retired property revenue.
+- Verification target: property 23654 / CCN 442740 should display 13 stations, 33 patients, 4,283 TTM treatments, and revenue `Not on file` unless corrected clinic economics exist.
