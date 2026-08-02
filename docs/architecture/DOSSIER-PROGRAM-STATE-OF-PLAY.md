@@ -266,3 +266,23 @@ Focus shifts from dossier content (largely done) to **connectivity + activation*
 - **Connectivity spec:** `property-contact-deal-connectivity.md` — the Property/Contact/Deal graph, the two
   reverse read models (`lcc_contact_properties`/`lcc_contact_deals`) and the Contact-tab sections; backs prompt
   13. Prerequisites (02/06/05/08) done, so 13 is a well-scoped build.
+
+---
+
+## Near-complete: 7 more prompts done + 2 migrations applied live (2026-08-01, session 2f)
+- **10 PA flows:** root causes fixed app-side — SF Opportunity Sync endpoint wasn't mounted on Railway (404) +
+  auth accepted only X-LCC-Key not Bearer; SharePoint artifact refs misrouted to the Supabase signer. Deploy +
+  PA retry pending to confirm green.
+- **11 comps:** query/synthesize/generate_comps registered in the Copilot registry + connector specs + package;
+  output bounded (query_comps 40/100, synthesize 25/50, market filtering). Connector import is the live step.
+- **12 LCC Health surface:** APPLIED LIVE (via Supabase MCP; needed a `connector_type::text` cast the repo file
+  still lacks — prompt 18). `v_lcc_health_surface` reports **#710 green, connectors green**, and surfaces new
+  amber flows (Unflag Completed Email Tasks 253, To Do Sync 63, ...).
+- **13 property/contact connectivity:** APPLIED LIVE — `lcc_contact_properties` + `lcc_contact_deals` reverse
+  reads; contact360 + detail.js now cross-link contacts <-> properties <-> deals.
+- **14 gov CI:** green — a bad import (`ownership_research_queue_enabled` moved to `src.feature_gates`), not #710.
+- **17 data-integrity:** LIVE — 35724 `is_northmarq=true`; `sale_brokers` widened for `as_reported_listing`;
+  Team Briggs listing + CBRE as-reported both held; reconciliation runs without `--force`.
+Nearly the entire program is built + much of it live. Remaining: **CENSUS_API_KEY** (Scott), an **app redeploy**
+(activates 10) + **connector import** (activates 11), and **prompt 18** (new amber flows + repo migration-file
+hygiene).

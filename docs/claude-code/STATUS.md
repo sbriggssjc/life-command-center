@@ -1,33 +1,27 @@
-# Claude Code queue — STATUS  (updated 2026-08-01, session 2d)
+# Claude Code queue — STATUS  (updated 2026-08-01, session 2f)
 
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
-| 16 | Live-apply & config (migrations + CENSUS_API_KEY) | P0/P1 | open — several fixes code-done, not live |
-| 10 | PA flow failures (SF Opp Sync = the Option-B fill path; LCC Get Artifact) | P0 | open |
-| 09 | field_source_priority #710 | P0 | **code done; live apply in 16** |
-| 13 | Property & Contact tab connectivity | P1 | open |
-| 14 | government-lease CI Test & Lint (68b293a) | P1 | open |
-| 17 | Data-integrity (is_northmarq flag + sale_brokers constraint) | P1 | open |
-| 11 | Comps: connector reach + bounded output | P1 | open |
-| 12 | LCC Health surface (observability) | P1 | open |
-| 07 | Data-backlog index (0-6 closed; 7-8 in prompt 16) | mixed | index |
+| 18 | New PA flow failures (Health surface) + migration hygiene | P1 | open |
+| 16 | Live-apply & config | — | only **CENSUS_API_KEY** remains (items 1-2 + 12/13 applied live) |
+| 07 | Data-backlog index (0-6 closed; 7-8: relocation live, census pending) | index | — |
+
+## Needs Scott / a deploy (not code)
+- **CENSUS_API_KEY** -> Railway Variables + .env.local (radius demographics; 994 properties uncovered).
+- **App redeploy** so prompt 10's PA-endpoint + auth fixes go live, then let PA retry (SF Opp Sync / LCC Get Artifact).
+- **Copilot / Claude Northmarq connector import** of the updated Swagger/package + LCC API key (prompt 11 live step).
+- Merge any still-open branch PRs (e.g. Dialysis #7355 cap-rate).
 
 ## Done (in `done/`)
-01 cap-rate (#1551) · 02 connect deal spine + 06 schema (#1552) · 03 broker role · 04 loan propagation (fleet:
-124 loans + 204 mortgage rows) · 05 resolver-by-property-id · 08 Deal-tab UI · followups 2/3/4/5/6 · trade-area
-map+Places (f8 partial). 15 RETIRED (Option B).
+01 cap-rate · 02 deal spine + 06 schema · 03 broker role · 04 loan propagation · 05 resolver · 08 Deal-tab UI ·
+09 #710 (applied live, audit green) · 10 PA flows (app-side; deploy pending) · 11 comps (code; connector import
+pending) · 12 LCC Health surface (**applied live** — reports #710 green + new amber flows) · 13 property/contact
+connectivity (**applied live**) · 14 gov CI (green) · 16 items 1-2 (live) · 17 data-integrity (live: 35724
+is_northmarq=true) · followups 2/3/4/5/6/7/8. 15 RETIRED.
 
-## Recommended sequence
-1) **16** (apply the code-done migrations + CENSUS key; get #710 audit green + relocation/demographics live).
-2) **10** (fix PA flows — SF Opportunity Sync is now the fill path; many HTTP flows may already have recovered
-   post-deploy of 1aae4e20). 3) **13** (property/contact connectivity) + **17** (data-integrity). 4) **14** (gov
-   CI), **11** (comps reach), **12** (health surface).
-
-## Notes / needs Scott or creds
-- **Env keys:** CENSUS_API_KEY (radius demographics); SUPABASE_ACCESS_TOKEN / migration creds (apply #710 +
-  relocation migrations live).
-- **35724 is a Northmarq deal but is_northmarq=false in the data** — prompt 17 traces + fixes the flag.
-- Deal-tab UI + deal spine are live in code; confirm on a redeploy with Supabase env.
+## Migrations applied live by Cowork (Supabase MCP)
+#710 field_source_priority (LCC Opps) · relocation+competition (Dialysis) · lcc_health_surface (LCC Opps, w/
+connector_type::text fix) · lcc_contact_property_deal_reverse_reads (LCC Opps).
 
 ## Process: see `README.md`.

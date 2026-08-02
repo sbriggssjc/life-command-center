@@ -34,3 +34,10 @@ Report each apply result + the audit/verify output.
   Memphis South $15.00/SF. (Note: its dependency `dia_haversine_miles` already existed — no change needed.)
 - **Item 3 (CENSUS_API_KEY):** PENDING Scott — free key from api.census.gov/data/key_signup.html, set in
   Railway Variables (+ .env.local), then run scripts/backfill-dia-location-trade-area-23654.mjs.
+
+## STATUS 2026-08-01 (session 2f): items 1-2 DONE live; only CENSUS remains
+- Items 1 (#710) + 2 (relocation/competition): applied + re-verified live (audit 0 rows; competition RPC 9
+  clinics). ALSO now applied live: **12 health surface** + **13 connectivity reverse reads** (via Supabase MCP).
+- **Only remaining: item 3 CENSUS_API_KEY** — Scott to obtain the key + set it in Railway Variables + .env.local,
+  then run scripts/backfill-dia-location-trade-area-23654.mjs (994 dialysis properties currently lack radius
+  demographics).
