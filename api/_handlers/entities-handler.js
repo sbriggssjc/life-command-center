@@ -1092,6 +1092,7 @@ async function buildDealPacket(entityId, workspaceId) {
       side = 'guarantor';
     }
     return {
+      party_entity_id: r.party_entity_id || null,
       role: r.role || r.relationship || 'party',
       name: r.name || '',
       side,
@@ -1103,6 +1104,7 @@ async function buildDealPacket(entityId, workspaceId) {
   // Back-compat fallback to lcc_party_relationships if the deal-parties fn returned nothing.
   if (!parties.length && partyRes?.ok && Array.isArray(partyRes.data)) {
     parties = partyRes.data.slice(0, 25).map(r => ({
+      party_entity_id: r.counterparty_id || null,
       role: r.relationship || r.role || 'party', name: r.name || r.counterparty_name || '',
       side: 'other', flag: r.is_institution ? 'institution' : (r.is_reit ? 'REIT' : ''),
       source: 'lcc_party_relationships',
@@ -3092,6 +3094,174 @@ export async function buildBrokerDealIntel(entity, entityId, queryFn = opsQuery)
   };
 }
 
+function contactRoleLabel(role) {
+  const r = String(role || '').toLowerCase();
+  if (r === 'owns' || r === 'owner') return 'Owner';
+  if (r === 'operator' || r === 'operates' || r === 'managed_by') return 'Operator';
+  if (r === 'listing_broker') return 'Listing broker';
+  if (r === 'procuring_broker' || r === 'buyer_broker') return 'Procuring broker';
+  if (r === 'broker' || r === 'brokers') return 'Broker';
+  if (r === 'attorney') return 'Attorney';
+  if (r === 'title') return 'Title';
+  if (r === 'lender' || r === 'finances') return 'Lender';
+  if (r === 'buyer' || r === 'purchases') return 'Buyer';
+  if (r === 'seller' || r === 'sells') return 'Seller';
+  if (r === 'developer' || r === 'developed') return 'Developer';
+  if (r === 'guarantor' || r === 'guaranteed_by') return 'Guarantor';
+  if (r === 'deal_party') return 'Deal party';
+  return r ? r.replace(/_/g, ' ').replace(/\b\w/g, m => m.toUpperCase()) : 'Other';
+}
+
+function groupByRole(rows) {
+  const grouped = {};
+  for (const row of rows || []) {
+    const label = contactRoleLabel(row.role || row.sub_role || row.relationship);
+    (grouped[label] = grouped[label] || []).push(row);
+  }
+  return grouped;
+}
+
+function normalizeContactProperties(rows) {
+  return (Array.isArray(rows) ? rows : []).map(r => ({
+    subject_entity_id: r.subject_entity_id || null,
+    subject_name: r.subject_name || null,
+    subject_type: r.subject_type || null,
+    via_relationship: r.via_relationship || 'direct',
+    role: r.role || r.sub_role || 'party',
+    role_label: contactRoleLabel(r.role || r.sub_role),
+    sub_role: r.sub_role || null,
+    asset_entity_id: r.asset_entity_id || null,
+    asset_name: r.asset_name || null,
+    domain: r.domain === 'government' ? 'gov' : r.domain === 'dialysis' ? 'dia' : (r.domain || null),
+    property_id: r.property_id != null ? String(r.property_id) : null,
+    address: r.address || null,
+    city: r.city || null,
+    state: r.state || null,
+    tenant: r.tenant || null,
+    effective_from: r.effective_from || null,
+    effective_to: r.effective_to || null,
+    is_current: r.is_current !== false,
+    source: r.source || 'entity_relationships',
+  }));
+}
+
+function normalizeContactDeals(rows) {
+  return (Array.isArray(rows) ? rows : []).map(r => ({
+    subject_entity_id: r.subject_entity_id || null,
+    subject_name: r.subject_name || null,
+    subject_type: r.subject_type || null,
+    via_relationship: r.via_relationship || 'direct',
+    role: r.role || r.sub_role || 'party',
+    role_label: contactRoleLabel(r.role || r.sub_role),
+    sub_role: r.sub_role || null,
+    asset_entity_id: r.asset_entity_id || null,
+    asset_name: r.asset_name || null,
+    domain: r.domain === 'government' ? 'gov' : r.domain === 'dialysis' ? 'dia' : (r.domain || null),
+    property_id: r.property_id != null ? String(r.property_id) : null,
+    address: r.address || null,
+    deal_id: r.deal_id || null,
+    sale_id: r.sale_id || null,
+    deal_name: r.deal_name || r.asset_name || r.address || 'Deal',
+    stage: r.stage || (r.is_open === false ? 'Closed' : null),
+    is_open: r.is_open === true,
+    closed_won: r.closed_won === true,
+    amount: r.amount != null ? Number(r.amount) : null,
+    opened_at: r.opened_at || null,
+    closed_at: r.closed_at || r.sale_date || null,
+    sale_date: r.sale_date || null,
+    next_action: r.next_action || null,
+    source: r.source || 'bd_opportunities',
+  }));
+}
+
+async function fetchNorthmarqSalesForContactProperties(properties) {
+  const byDomain = {};
+  for (const p of properties || []) {
+    if (!p.domain || p.property_id == null) continue;
+    (byDomain[p.domain] = byDomain[p.domain] || new Set()).add(String(p.property_id));
+  }
+  const sales = [];
+  await Promise.all(Object.entries(byDomain).map(async ([domain, ids]) => {
+    const arr = Array.from(ids);
+    for (let i = 0; i < arr.length; i += 150) {
+      const chunk = arr.slice(i, i + 150).map(v => encodeURIComponent(v)).join(',');
+      const sr = await domainQuery(domain, 'GET',
+        `sales_transactions?property_id=in.(${chunk})&is_northmarq=eq.true&transaction_state=eq.live` +
+        `&select=sale_id,property_id,is_northmarq,sale_date,sold_price,transaction_state` +
+        `&order=sale_date.desc.nullslast&limit=200`).catch(() => null);
+      if (sr?.ok && Array.isArray(sr.data)) {
+        for (const s of sr.data) sales.push({ ...s, domain });
+      }
+    }
+  }));
+  return sales;
+}
+
+async function buildContactConnectivity(entityId, propertiesRes, dealsRes) {
+  const properties = normalizeContactProperties(propertiesRes?.ok ? propertiesRes.data : []);
+  const dealRows = normalizeContactDeals(dealsRes?.ok ? dealsRes.data : []);
+
+  const propByKey = {};
+  for (const p of properties) {
+    if (p.domain && p.property_id != null) propByKey[p.domain + ':' + String(p.property_id)] = p;
+  }
+
+  const salesRows = await fetchNorthmarqSalesForContactProperties(properties).catch(() => []);
+  for (const s of salesRows) {
+    const p = propByKey[s.domain + ':' + String(s.property_id)] || {};
+    dealRows.push({
+      subject_entity_id: p.subject_entity_id || null,
+      subject_name: p.subject_name || null,
+      subject_type: p.subject_type || null,
+      via_relationship: p.via_relationship || 'direct',
+      role: p.role || 'party',
+      role_label: p.role_label || contactRoleLabel(p.role),
+      sub_role: p.sub_role || null,
+      asset_entity_id: p.asset_entity_id || null,
+      asset_name: p.asset_name || null,
+      domain: s.domain,
+      property_id: s.property_id != null ? String(s.property_id) : null,
+      address: p.address || null,
+      deal_id: null,
+      sale_id: s.sale_id != null ? String(s.sale_id) : null,
+      deal_name: p.asset_name || p.address || ('Property ' + s.property_id),
+      stage: 'Closed',
+      is_open: false,
+      closed_won: true,
+      amount: s.sold_price != null ? Number(s.sold_price) : null,
+      opened_at: null,
+      closed_at: s.sale_date || null,
+      sale_date: s.sale_date || null,
+      next_action: null,
+      source: 'sales_transactions',
+    });
+  }
+
+  const seenDeals = new Set();
+  const deals = [];
+  for (const d of dealRows) {
+    const key = [d.source, d.deal_id || d.sale_id || d.asset_entity_id || '', d.role || '', d.subject_entity_id || ''].join('|');
+    if (seenDeals.has(key)) continue;
+    seenDeals.add(key);
+    deals.push(d);
+  }
+  deals.sort((a, b) => {
+    if (a.is_open !== b.is_open) return a.is_open ? -1 : 1;
+    return String(b.closed_at || b.opened_at || '').localeCompare(String(a.closed_at || a.opened_at || ''));
+  });
+
+  return {
+    properties,
+    properties_by_role: groupByRole(properties),
+    deals,
+    deals_by_status: {
+      active: deals.filter(d => d.is_open),
+      closed: deals.filter(d => !d.is_open),
+    },
+    deals_by_role: groupByRole(deals),
+  };
+}
+
 /**
  * Compose the full Contact 360 payload for an entity. Returns null when the
  * entity is missing / not in this workspace. Every sub-fetch is best-effort so a
@@ -3139,7 +3309,7 @@ async function buildContact360(entityId, workspaceId) {
 
   const accountOwner = await resolveAccountOwner(entity, entityId, workspaceId);
 
-  const [portfolio, lccEvents, sfActs, mktRows, emailRel, sfOpenTasks, cadenceRow] = await Promise.all([
+  const [portfolio, lccEvents, sfActs, mktRows, emailRel, sfOpenTasks, cadenceRow, contactPropsRes, contactDealsRes] = await Promise.all([
     fetchEntityPortfolio(entityId, workspaceId).catch(() => ({ rollup: null, properties: [] })),
     opsQuery('GET',
       `activity_events?entity_id=eq.${entityId}&workspace_id=eq.${workspaceId}` +
@@ -3189,6 +3359,8 @@ async function buildContact360(entityId, workspaceId) {
       `last_touch_at,last_touch_type,current_touch,emails_sent,emails_replied,calls_connected,` +
       `unsubscribe_status&order=next_touch_due.asc.nullslast&limit=1`)
       .then(r => (r.ok && Array.isArray(r.data)) ? (r.data[0] || null) : null).catch(() => null),
+    opsQuery('POST', 'rpc/lcc_contact_properties', { p_entity: entityId, p_limit: 200 }).catch(() => null),
+    opsQuery('POST', 'rpc/lcc_contact_deals', { p_entity: entityId, p_limit: 200 }).catch(() => null),
   ]);
 
   // Normalize the cadence row into a compact `cadence` block with a derived
@@ -3271,6 +3443,7 @@ async function buildContact360(entityId, workspaceId) {
   const roe = computeRoe({ accountOwnerName: accountOwner?.name || null, dealAssignees });
   const engagement = buildEngagement(ucRows);
   const timeline = mergeTimeline(lccEvents, sfActs, { limit: 40 });
+  const connectivity = await buildContactConnectivity(entityId, contactPropsRes, contactDealsRes);
 
   // Role drives the layout. Broker mode replaces owner-portfolio with the
   // deal-intelligence block (deals brokered + buyer/seller representation).
@@ -3304,6 +3477,11 @@ async function buildContact360(entityId, workspaceId) {
     roe,
     email_relationship: emailRel,
     cadence,
+    contact_properties: connectivity.properties,
+    contact_properties_by_role: connectivity.properties_by_role,
+    contact_deals: connectivity.deals,
+    contact_deals_by_status: connectivity.deals_by_status,
+    contact_deals_by_role: connectivity.deals_by_role,
   };
 }
 
