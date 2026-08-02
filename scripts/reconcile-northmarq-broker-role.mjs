@@ -69,7 +69,7 @@ async function fetchSales() {
 }
 
 async function fetchRoster(row) {
-  const select = 'sf_deal_id,sf_listing_id,matched_sale_id,linked_property_id,deal_side,sjc_team,broker_name,lead_broker,listing_broker_sf_id';
+  const select = 'sf_deal_id,sf_listing_id,matched_sale_id,linked_property_id,deal_side,sjc_team,broker_name,listing_broker_sf_id';
   const paths = [];
   if (row.sale_id) paths.push(`v_sjc_deal_book?matched_sale_id=eq.${enc(row.sale_id)}&select=${select}&limit=1`);
   if (row.sf_deal_id) paths.push(`v_sjc_deal_book?sf_deal_id=eq.${enc(row.sf_deal_id)}&select=${select}&limit=1`);
@@ -84,7 +84,7 @@ async function fetchRoster(row) {
 
 async function fetchListingSignal(row) {
   if (!row.property_id && !LISTING_ID) return null;
-  const select = 'listing_id,property_id,is_northmarq,listing_broker,listing_status,status';
+  const select = 'listing_id,property_id,is_northmarq,listing_broker,status';
   if (LISTING_ID) {
     const byId = await domainQuery(DOMAIN, 'GET',
       `available_listings?listing_id=eq.${enc(LISTING_ID)}&select=${select}&limit=1`).catch(() => null);
