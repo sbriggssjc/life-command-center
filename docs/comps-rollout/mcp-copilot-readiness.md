@@ -173,3 +173,23 @@ Copilot Studio → LCC Deal Agent → Add a tool → Model Context Protocol:
 (retire those duplicate actions after MCP is verified). ChatGPT is unaffected — it has no MCP client and keeps
 the already-re-imported `lcc-openapi.yaml`; the unification redeploy alone clears its "Unknown API route" (re-test
 only, no instructions change).
+
+## CORRECTION (2026-08-03): DIA Supabase env is REQUIRED on tranquil-delight
+The go-live env list above omitted the **dialysis** database (mcp/.env.example marked it "optional" — but the
+comps engine defaults to querying BOTH verticals `['government','dialysis']`, so a dialysis comps pull errors
+without it). Live `/health` post-deploy showed `ops_configured:true, gov_configured:true` and NO dialysis leg;
+ChatGPT + Copilot then hit an **internal error** on the comps handler (not a 404 — the route is mounted).
+
+Add on the `tranquil-delight` Railway service, then redeploy:
+- `DIA_SUPABASE_URL` = `https://zqzrriwuavgrquhisnoa.supabase.co`  (Dialysis_DB)
+- `DIA_SUPABASE_KEY` = the Dialysis_DB **service_role LEGACY JWT** (`eyJ…`, two dots, >=100 chars) — NOT the new
+  `sb_…` publishable/secret format. INFRASTRUCTURE.md §"Dialysis runtime crash on Supabase key validation"
+  documents that the new-format key crashes; use the same legacy JWT that's on the standalone MCP service.
+
+Verify: `/health` reflects the dialysis leg; ChatGPT "DaVita comps in The Villages, FL" returns a comp set.
+
+## Observation for ChatGPT workbook export (follow-up, not the current blocker)
+`/health.http_comps_routes` = `[/api/query-comps, /api/synthesize-comps]` only — `generateComps` (`/api/comps`,
+the workbook builder) is NOT mounted as an HTTP route, so ChatGPT can get the comp SET but not the exported
+workbook file over HTTP. Copilot is unaffected (it calls the `generate_comps` MCP tool, which IS in the 19-tool
+list). If ChatGPT needs the workbook file too, mount `/api/comps` alongside the other two comps routes.
