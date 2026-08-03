@@ -70,11 +70,13 @@ Instruction/canon changes do NOT need a deploy — they're paste/upload.
   instruction fix.)
 
 ## 4. DEPLOY-PENDING (the single most important "what's left")
-**Prompts 23, 25, 26 are DEPLOYED (2026-08-03)** — appraisal mode confirmed live: the Villages request now
-returns 100 candidates → top ~25 ranked (17 FL), sold + listings, flags retained. **Open blocker: the WORKBOOK
-handoff** — 25 rows are too big to round-trip through the model, so `generate_comps` gets no rows (ChatGPT: 45k
-bound truncates; Copilot: SystemError). Fix = **prompt 27** (one-shot server-side workbook → return only a
-download link). Still pending: rotate `LCC_API_KEY`; re-upload/paste v1.2.0 instruction files per §1; Census key
+**Prompts 23, 25, 26 DEPLOYED + working** (appraisal mode: 100 candidates → top ~25 ranked, 17 FL, sold +
+listings, flags retained). **Prompt 27 (one-shot server-side workbook) = CODE DONE, committed `9ac94bfb`, canon
+v1.2.1 — DEPLOY-PENDING.** To land the workbook download: (1) redeploy **tranquil-delight + the standalone MCP**;
+(2) confirm the BOV service (`pacific-love`) is up and `BOV_API_KEY` is set on tranquil-delight (the generator
+proxies it); (3) **ChatGPT: re-import `docs/comps-rollout/lcc-openapi.yaml`** — `generate_comps` now takes a
+`request` param; Copilot-on-MCP picks up the new tool after redeploy (OpenAPI-connector Copilot = re-import the
+package); (4) **re-paste the v1.2.1 instruction bundles** per §1. Still pending: rotate `LCC_API_KEY`; Census key
 (invalid) for prompt 19.
 
 ## 5. The bigger architecture (pointers)

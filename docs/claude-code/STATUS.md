@@ -3,9 +3,10 @@
 > **START HERE (durable map):** `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — the surfaces/comps/deploy
 > understanding, so a new chat isn't rebuilt from scratch.
 >
-> **23/25/26 DEPLOYED — appraisal mode works.** Open blocker: the WORKBOOK handoff — 25 rows too big to
-> round-trip through the model (ChatGPT truncates; Copilot SystemError) → **prompt 27** (one-shot server-side
-> workbook, return a link). Also: rotate `LCC_API_KEY`; re-upload/paste v1.2.0 instruction files per SURFACE-SYNC §1.
+> **23/25/26 live; prompt 27 (one-shot workbook) CODE DONE `9ac94bfb`, canon v1.2.1 — DEPLOY-PENDING.**
+> Land the workbook: redeploy **tranquil-delight + standalone MCP**; confirm BOV service up + `BOV_API_KEY` set;
+> **ChatGPT re-import `lcc-openapi.yaml`** (generate_comps now takes `request`); re-paste v1.2.1 bundles per §1.
+> Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
 ## Open (in `prompts/`)
