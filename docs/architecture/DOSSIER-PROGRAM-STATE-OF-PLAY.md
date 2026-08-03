@@ -347,3 +347,41 @@ stays on hold until Scott's Census key works.
 **Written this turn:** `docs/comps-rollout/ms-surface-triage-and-mcp-pivot.md`,
 `docs/claude-code/prompts/20-chatgpt-openapi-description-trim.md`,
 `docs/claude-code/prompts/21-copilot-studio-mcp-pivot.md`, STATUS.md refreshed to session 2g.
+
+---
+
+## 2026-08-03 — Claude Code batch returned; reconciled (session 2h)
+
+Seven prompt responses came back (07, 16, 18, 19, 20, 21). All committed by Claude Code on top of the session-2g
+docs; git history is clean/linear. Reconciliation:
+
+**Done.** 07 (data-backlog index reconciled: 0-6 closed, 7/8 carry-forward). 16 (live-apply items 1-2 verified;
+census blocked). 18 repo migration hygiene (`connector_type::text` cast + regression test, `node --test` passes).
+20 ChatGPT description trim (queryComps 224 / synthesizeComps 200 chars, structure unchanged — ready to re-import).
+
+**Two real blockers surfaced:**
+
+1. **Copilot MCP pivot is blocked by a pre-existing 2-server split (prompt 21 -> new prompt 22).** The probe found
+   `POST tranquil-delight-.../mcp` = 404. Cause is already documented in
+   `docs/os/architecture/mcp-server-unification.md`: `tranquil-delight` is the root web app; the MCP server
+   (`mcp/server.js`) is a *separate, undocumented Railway service* that the working Claude connector uses. The
+   decided fix is **unification** — mount `/mcp` + OAuth + bounded read routes onto the root app for one canonical
+   URL. That unification is exactly what unblocks Copilot Studio, and also fixes the old "fixes land on the server
+   ChatGPT never calls" drift. Wrote **prompt 22** (execute the existing unification changeset + bump
+   `initialize` protocolVersion 2024-11-05 -> 2025-03-26 for Copilot's streamable-HTTP + bounded-output smoke
+   test). Prompt 21 Part 2 (Scott connects + publishes) waits on 22. The readiness detail (transport, auth,
+   19-tool list, bounded-output audit) is in `docs/comps-rollout/mcp-copilot-readiness.md`.
+
+2. **Census key is INVALID, not just unset (prompts 16 & 19).** Claude Code ran the backfill; Census returns
+   "Invalid Key" for the configured `CENSUS_API_KEY` (and "Missing Key" with none) — so the key Scott set doesn't
+   authenticate. 0 `property_demographics` rows written; coverage still 85 (23654 empty). Needs a valid key from
+   api.census.gov, then re-run prompt 19.
+
+**Tenant-side (Scott, not code):** Claude Code cannot edit Power Automate (no PA connector in its session). The
+amber flows on the Health surface are mostly **stale/retired**, not actively failing — the two biggest (Unflag
+Completed Email Tasks 253, To Do Sync 63) last ran Jul 29 and match retired flows. Scott to confirm those are
+Off, verify SF Daily Bulk File Backfill's latest run, and repoint RCM + LoopNet if they still reference stale
+Vercel hosts.
+
+**Housekeeping:** 07/16/20 prompts + all 7 returned response files moved to `done/`. Open queue now: 22 (P0),
+21 (blocked on 22), 18 (code done; tenant checks remain), 19 (blocked on valid census key).
