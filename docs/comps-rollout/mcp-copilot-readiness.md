@@ -156,3 +156,20 @@ Minimum:
   Dev/Sandbox Power Platform environment per Microsoft troubleshooting guidance.
 - Prompt 20 still ships for ChatGPT because ChatGPT still needs the OpenAPI schema. This MCP pivot removes the
   OpenAPI/Swagger dependency only for Microsoft surfaces after the MCP endpoint is live.
+
+## Go-live connect values (2026-08-03, env set + redeploy live)
+
+Copilot Studio → LCC Deal Agent → Add a tool → Model Context Protocol:
+- **Server name:** `LCC Deal Intelligence`
+- **Server description:** "Life Command Center deal tools: dialysis & government CRE sales comps (query,
+  synthesize, generate workbook), property/contact/deal context, pipeline health, daily briefing, BOV & deal
+  dossiers." (intent-clear so the generative orchestrator knows when to call it)
+- **Server URL (streamable):** `https://tranquil-delight-production-633f.up.railway.app/mcp`
+- **Authentication:** API key → Header, parameter name `Authorization`, value `Bearer <LCC_API_KEY>`.
+- Prereq: **Generative Orchestration ON** (Settings → Orchestration → Generative) or the tools won't be invoked.
+- After Create → review the ~19-tool list → Save → Publish → verify Teams & M365 Copilot channel.
+
+**No reload needed elsewhere:** the MCP tool supersedes the old LCC OpenAPI/Swagger custom connector for Copilot
+(retire those duplicate actions after MCP is verified). ChatGPT is unaffected — it has no MCP client and keeps
+the already-re-imported `lcc-openapi.yaml`; the unification redeploy alone clears its "Unknown API route" (re-test
+only, no instructions change).
