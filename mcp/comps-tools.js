@@ -104,6 +104,29 @@ function routeIntent(a) {
   return { verticals, government_only };
 }
 const SOUTHEAST_STATES = new Set(['FL', 'GA', 'AL', 'SC', 'NC', 'TN', 'MS']);
+const REGION_STATES = {
+  Southeast: ['FL', 'GA', 'AL', 'SC', 'NC', 'TN', 'MS'],
+  South: ['TX', 'OK', 'AR', 'LA'],
+  West: ['CA', 'OR', 'WA', 'NV', 'AZ', 'UT', 'CO', 'ID'],
+  Midwest: ['IL', 'IN', 'IA', 'KS', 'MI', 'MN', 'MO', 'NE', 'ND', 'OH', 'SD', 'WI'],
+  Northeast: ['CT', 'DE', 'DC', 'MA', 'MD', 'ME', 'NH', 'NJ', 'NY', 'PA', 'RI', 'VT', 'VA', 'WV'],
+};
+
+function uniqueList(vals) {
+  return [...new Set((vals || []).filter(Boolean))];
+}
+
+function appraisalSubjectAnchor(args) {
+  return !!(args?.appraisal_mode && args.subject && (args.subject.state || args.subject.metro || args.subject.name));
+}
+
+function appraisalCandidateStates(subject) {
+  const states = [];
+  if (subject?.state) states.push(String(subject.state).toUpperCase());
+  const regional = REGION_STATES[subject?.region] || [];
+  states.push(...regional);
+  return uniqueList(states);
+}
 
 function scoreComp(c, a) {
   let s = 0;
@@ -250,6 +273,37 @@ function sameMarket(c, market) {
     || (!!metro && (metro.includes(m) || m.includes(metro)));
 }
 
+function sameAddress(c, address) {
+  const a = normStreet(address);
+  if (!a) return false;
+  const row = normStreet(c.address || c.raw?.address || c.raw?.Property_Address__c || c.raw?.Street_Address__c);
+  return !!row && (row === a || row.includes(a) || a.includes(row));
+}
+
+function sameSubjectId(c, subject) {
+  const ids = uniqueList([
+    subject?.property_id, subject?.asset_id, subject?.source_id, subject?.comp_id,
+    subject?.raw?.property_id, subject?.raw?.asset_id, subject?.raw?.source_id,
+  ].map(v => v == null ? null : String(v)));
+  if (!ids.length) return false;
+  const rowIds = uniqueList([
+    c.property_id, c.asset_id, c.source_id, c.source_sf_id, c.comp_id,
+    c.raw?.property_id, c.raw?.Property_ID__c, c.raw?.Id, c.raw?.source_id,
+  ].map(v => v == null ? null : String(v)));
+  return rowIds.some(id => ids.includes(id));
+}
+
+function isSubjectComp(c, args) {
+  const subject = args?.subject;
+  if (!appraisalSubjectAnchor(args) || !subject) return false;
+  if (sameSubjectId(c, subject)) return true;
+  if (subject.address && sameAddress(c, subject.address)) {
+    const subjectState = String(subject.state || '').toUpperCase();
+    return !subjectState || String(c.state || '').toUpperCase() === subjectState;
+  }
+  return false;
+}
+
 function applyLocalScope(rows, args) {
   let out = rows;
   if (Array.isArray(args.tenants) && args.tenants.length) out = out.filter(c => tenantListMatches(c, args.tenants));
@@ -263,6 +317,17 @@ function applyLocalScope(rows, args) {
     out = out.filter(c => args.metros.some(m => sameMarket(c, m)));
   }
   return out;
+}
+
+function localScopeArgs(args) {
+  if (!appraisalSubjectAnchor(args)) return args;
+  return { ...args, states: null, metros: null };
+}
+
+function queryScopeArgs(args) {
+  if (!appraisalSubjectAnchor(args)) return args;
+  const states = appraisalCandidateStates(args.subject);
+  return { ...args, states: states.length ? states : null, metros: null };
 }
 
 function templateRow(c) {
@@ -396,6 +461,10 @@ function parseOperators(t) {
 
 function detectAppraisalIntent(t, out) {
   if (/\bappraiser\b|\bappraisal\b|\bvaluation\b|\bvaluing\b|\bunder contract\b|\bom\b|\bbov\b|\bcomp package\b|\bpackage\b/.test(t)) return true;
+  if (out.subject?.name) {
+    const name = String(out.subject.name).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\bin\\s+(?:the\\s+)?${name}\\b`).test(t)) return false;
+  }
   return !!(out.property_types?.includes('dialysis') && out.subject?.state && !out.tenant && !out.date_from);
 }
 
@@ -825,18 +894,32 @@ export async function runComps(args, deps) {
     include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : parsed.include_unreliable_noi,
   };
   const QUERY = { government: deps.govQuery, dialysis: deps.diaQuery };
-  const params = argsToParams(args);
+  const queryArgs = queryScopeArgs(args);
+  const params = argsToParams(queryArgs);
   const targets = args.verticals || ['government', 'dialysis'];
-  const settled = await Promise.allSettled(targets.map(async v => {
-    const q = QUERY[v]; if (!q) throw new Error(`unknown vertical ${v}`);
-    const res = await q('POST', 'rpc/rpc_query_comps', params);
-    if (!res.ok) throw new Error(`${v}: HTTP ${res.status}`);
-    return Array.isArray(res.data) ? res.data : [];
-  }));
+  const fetchBatch = async (batchParams, label) => {
+    const settled = await Promise.allSettled(targets.map(async v => {
+      const q = QUERY[v]; if (!q) throw new Error(`unknown vertical ${v}`);
+      const res = await q('POST', 'rpc/rpc_query_comps', batchParams);
+      if (!res.ok) throw new Error(`${v}: HTTP ${res.status}`);
+      return Array.isArray(res.data) ? res.data : [];
+    }));
+    return { label, settled };
+  };
+  const batches = [await fetchBatch(params, 'primary')];
   const rows = [], warnings = [];
-  settled.forEach((s, i) => s.status === 'fulfilled'
-    ? rows.push(...s.value)
-    : warnings.push({ vertical: targets[i], error: String(s.reason?.message || s.reason) }));
+  for (const batch of batches) {
+    batch.settled.forEach((s, i) => s.status === 'fulfilled'
+      ? rows.push(...s.value)
+      : warnings.push({ vertical: targets[i], scope: batch.label, error: String(s.reason?.message || s.reason) }));
+  }
+  if (appraisalSubjectAnchor(args) && dedupe(rows).length < params.p_limit && (params.p_states || params.p_metros)) {
+    const fallbackParams = argsToParams({ ...queryArgs, states: null, metros: null, limit: params.p_limit });
+    const fallback = await fetchBatch(fallbackParams, 'national_fallback');
+    fallback.settled.forEach((s, i) => s.status === 'fulfilled'
+      ? rows.push(...s.value)
+      : warnings.push({ vertical: targets[i], scope: fallback.label, error: String(s.reason?.message || s.reason) }));
+  }
   const merged = dedupe(rows);
   // Normalize the `use` tag + apply the multi-tenant display name on every comp,
   // and standardize renewal-options text so every surface emits "(N) M-yr".
@@ -849,7 +932,9 @@ export async function runComps(args, deps) {
   // Government post-filter: when government_only, drop any non-government comp that slipped
   // through from a co-queried vertical (belt-and-suspenders to the vertical restriction).
   let kept = params.p_government_only ? merged.filter(c => c.is_government !== false) : merged;
-  kept = applyLocalScope(kept, args);
+  const subjectExcluded = kept.filter(c => isSubjectComp(c, args)).length;
+  if (subjectExcluded) kept = kept.filter(c => !isSubjectComp(c, args));
+  kept = applyLocalScope(kept, localScopeArgs(args));
   // Reliability gate (Team Briggs policy): by default include only comps whose NOI/cap is
   // reliable; exclude pure benchmark-modeled NOI, implausible caps, and no-NOI/no-cap comps.
   const before = kept.length;
@@ -876,13 +961,15 @@ export async function runComps(args, deps) {
     template_comps: outComps.map(c => c.template),
     meta: { returned: comps.length, total_before_cap: kept.length,
             truncated: kept.length > cap, excluded_unreliable_noi: before - kept.length,
+            excluded_subject: subjectExcluded,
             by_source: comps.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
             flagged_for_review: flagged.length,
             review_flags: flagged.map(c => ({
               comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
               tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags,
               ...c.review_detail })),
-            warnings, interpreted_params: { ...params, p_metros: args.metros || null,
+            warnings, interpreted_params: { ...params,
+              p_candidate_scope: appraisalSubjectAnchor(args) ? 'subject_state_region_then_national_fallback' : 'hard_filters',
               tenants: args.tenants || args.tenant_list || null, appraisal_mode: !!args.appraisal_mode } } };
 }
 

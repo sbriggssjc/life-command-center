@@ -71,6 +71,66 @@ function makeQuery(domain) {
   };
 }
 
+function makeAppraisalQuery(domain, calls) {
+  const regionalRows = [
+    {
+      comp_id: 'subject-row',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: 'DaVita',
+      address: '1050 Old Camp Rd',
+      city: 'The Villages',
+      state: 'FL',
+      building_sf: 9500,
+      sale_price: 4300000,
+      cap_rate: 0.071,
+      annual_rent: 305300,
+      sale_date: '2026-01-01',
+      confidence: 0.9,
+    },
+    ...Array.from({ length: 14 }, (_, i) => ({
+      comp_id: `fl-${i + 1}`,
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: i % 2 ? 'DaVita' : 'Fresenius',
+      address: `${100 + i} Florida Ave`,
+      city: i % 2 ? 'Orlando' : 'Tampa',
+      state: 'FL',
+      building_sf: 9000 + i,
+      sale_price: 4000000 + i,
+      cap_rate: 0.068 + i / 10000,
+      annual_rent: 275000 + i,
+      sale_date: `2025-${String((i % 9) + 1).padStart(2, '0')}-01`,
+      confidence: 0.85,
+    })),
+  ];
+  const nationalRows = Array.from({ length: 18 }, (_, i) => ({
+    comp_id: `nat-${i + 1}`,
+    source: 'dialysis_db',
+    vertical: 'dialysis',
+    tenant: i % 2 ? 'US Renal' : 'DaVita',
+    address: `${200 + i} National Rd`,
+    city: i % 2 ? 'Atlanta' : 'Phoenix',
+    state: i % 2 ? 'GA' : 'AZ',
+    building_sf: 8500 + i,
+    sale_price: 3500000 + i,
+    cap_rate: 0.07 + i / 10000,
+    annual_rent: 250000 + i,
+    sale_date: `2024-${String((i % 9) + 1).padStart(2, '0')}-01`,
+    confidence: 0.8,
+  }));
+  return async (method, path, body) => {
+    if (method === 'POST' && path === 'rpc/rpc_query_comps') {
+      calls.push([domain, body]);
+      if (domain !== 'dialysis') return { ok: true, status: 200, data: [] };
+      return { ok: true, status: 200, data: body.p_states ? regionalRows : nationalRows };
+    }
+    if (method === 'POST' && /_engine_noi_batch$/.test(path)) return { ok: true, status: 200, data: [] };
+    if (method === 'POST' && /_comp_review_queue/.test(path)) return { ok: true, status: 200, data: [] };
+    return { ok: true, status: 200, data: [] };
+  };
+}
+
 describe('comps engine bounded output', () => {
   it('parses DaVita/The Villages FL and returns bounded template-ready rows', async () => {
     const parsed = parseRequest('DaVita, The Villages, FL comps');
@@ -110,6 +170,66 @@ describe('comps engine bounded output', () => {
     assert.equal(parsed.include_on_market, true);
     assert.equal(parsed.comp_type, 'both');
     assert.equal(parsed.tenant, null);
+  });
+
+  it('uses appraisal subject geography as ranking anchors, not hard filters', async () => {
+    const calls = [];
+    const result = await runSynthesize(
+      {
+        request: 'dialysis comps for The Villages, FL for an appraiser, 20-25 comps',
+        subject: {
+          name: 'The Villages',
+          state: 'FL',
+          metro: 'Wildwood-The Villages',
+          region: 'Southeast',
+          kind: 'subject_candidate',
+          address: '1050 Old Camp Rd',
+        },
+        limit: 25,
+      },
+      { govQuery: makeAppraisalQuery('government', calls), diaQuery: makeAppraisalQuery('dialysis', calls) }
+    );
+
+    const primaryDialysis = calls.find(([domain, body]) => domain === 'dialysis' && body.p_states);
+    const fallbackDialysis = calls.find(([domain, body]) => domain === 'dialysis' && !body.p_states);
+    assert.ok(primaryDialysis);
+    assert.ok(fallbackDialysis);
+    assert.equal(primaryDialysis[1].p_metros, null);
+    assert.deepEqual(primaryDialysis[1].p_states, ['FL', 'GA', 'AL', 'SC', 'NC', 'TN', 'MS']);
+    assert.equal(fallbackDialysis[1].p_states, null);
+    assert.equal(fallbackDialysis[1].p_metros, null);
+    assert.equal(result.comps.length, 25);
+    assert.equal(result.comps.some(c => c.comp_id === 'subject-row'), false);
+    assert.equal(result.meta.excluded_subject, 1);
+    assert.ok(result.comps.some(c => c.state === 'FL'));
+    assert.ok(result.comps.some(c => c.state !== 'FL'));
+    assert.match(result.transparency, /returned 25 of \d+/);
+  });
+
+  it('keeps a user-named metro as a hard filter outside appraisal mode', async () => {
+    const calls = [];
+    const tampaRows = [
+      { ...rows[0], comp_id: 'tampa-1', city: 'Tampa', metro: 'Tampa-St. Petersburg', address: '1 Tampa St' },
+      { ...rows[1], comp_id: 'orlando-1', city: 'Orlando', metro: 'Orlando', address: '1 Orlando St' },
+    ];
+    const q = async (method, path, body) => {
+      if (method === 'POST' && path === 'rpc/rpc_query_comps') {
+        calls.push(body);
+        return { ok: true, status: 200, data: tampaRows };
+      }
+      if (method === 'POST' && /_engine_noi_batch$/.test(path)) return { ok: true, status: 200, data: [] };
+      if (method === 'POST' && /_comp_review_queue/.test(path)) return { ok: true, status: 200, data: [] };
+      return { ok: true, status: 200, data: [] };
+    };
+    const result = await runSynthesize(
+      { request: 'dialysis comps in Tampa', limit: 10 },
+      { govQuery: q, diaQuery: q }
+    );
+
+    assert.equal(result.interpreted_query.appraisal_mode, false);
+    assert.deepEqual(result.interpreted_query.metros, ['Tampa-St. Petersburg']);
+    assert.ok(calls.every(c => c.p_metros?.[0] === 'Tampa-St. Petersburg'));
+    assert.deepEqual(result.comps.map(c => c.comp_id), ['tampa-1']);
   });
 
   it('parses operator lists without creating one tenant blob', () => {
