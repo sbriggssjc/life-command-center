@@ -508,3 +508,23 @@ no-self-narrow + resolution/ambiguity rules at v1.2.0. Reverted the redundant ha
 — a real repo contradiction to reconcile (delete or convert to binding artifacts). Also: only the Copilot artifact
 is a `--write-live` target; Northmarq/ChatGPT/Personal/Cowork are "external" (manual paste of the rendered bundle)
 — a future improvement is giving each a managed region so one `render --write-live` updates them all.
+
+---
+
+## 2026-08-03 — Instruction fix confirmed working; appraisal-mode over-filter bug found (session 2q)
+
+Updated ChatGPT test: the GPT now passes the request VERBATIM in appraisal mode with no self-narrowing — the
+instruction fix (v1.2.0 canon) works. Engine confirmed DEPLOYED with prompts 23+25 (live `synthesize_comps` shows
+`appraisal_mode:true`, resolved `subject` block, gazetteer "The Villages"→"Wildwood-The Villages"/FL/Southeast,
+score tiers, transparency). BUT it returned 1 comp: appraisal mode set the resolved subject **metro** as a HARD
+filter (`p_metros:["Wildwood-The Villages"]`) so `applyLocalScope` collapsed FL's ~14 comps to the subject's own
+metro listing. Fix = **prompt 26**: in appraisal mode the subject metro/state must RANK (scoreComp already weights
+metro>state>region>national), not hard-filter; pull a state/region pool, rank, cap 30, exclude the subject itself.
+
+Instruction consolidation: re-rendered canon v1.2.0 already updated the in-repo surface bundles + Copilot live
+file. Updated the Northmarq master paste-file `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md` (v1.9→1.10) in place with the
+comps no-self-narrow/appraisal + resolution doctrine (targeted section edit per its own maintenance protocol).
+Confirmed the per-surface master paste-files are: Copilot `docs/copilot/agent-instructions.md` (render --write-live),
+ChatGPT `docs/os/surfaces/chatgpt.canon.md` Knowledge upload, Northmarq `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md`
+(rich hand-file, section-synced), Personal/Cowork = skills. True one-command-updates-all still needs each master to
+carry a managed CANON region + portable render config (follow-up).
