@@ -431,3 +431,20 @@ matched ~nothing (the "1 record"). Immediate no-code workaround: pull with inclu
 filter, limit 100, geo-tiered (FL→Southeast→national) + date_from 2010. Design fix queued as **prompt 23**
 (appraisal/full-set mode, rank-before-truncate, tenant list, surface the excluded count). Full analysis:
 `docs/comps-rollout/comps-query-shaping-triage-2026-08-03.md`.
+
+---
+
+## 2026-08-03 — Prompt 23 landed; generalized the intent gap (session 2m)
+
+Prompt 23 implemented + committed `39a76315` (scoreComp similarity upgrade, place/subject + operator-list +
+appraisal-intent parsing, appraisal-mode synthesis pulling a larger pool + rank-before-cap, skill mirror, tests
+pass). DEPLOY-PENDING to tranquil-delight + standalone MCP. Response reconciled → done/.
+
+Scott then asked the right architectural question: is the plain-language gap comps-specific or system-wide? **It's
+system-wide.** Wrote `docs/architecture/request-understanding-and-consistency-layer.md`: the three comps failure
+modes (subject/entity resolution, intent→mode, Team-Briggs quality contract) recur in generate_bov (highest
+exposure), property/contact/deal context, offer-submission, and cms-npi-analysis. Root cause: **no shared request-
+understanding layer** — intent parsing, entity resolution, and the no-fabrication/reconciliation contract are
+per-tool, so robustness is re-solved each time and the cross-cutting rules can drift. Proposed four shared modules
+(Subject/Entity Resolver, Intent Interpreter, Data-Consistency Contract, Reference/Gazetteer) + interpretation
+logging, built in phases. **Prompt 24** = the Phase-1 audit (understand-first) before any extraction.

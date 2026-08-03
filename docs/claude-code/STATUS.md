@@ -3,6 +3,7 @@
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
+| 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |
 | 21 | Copilot Studio -> /mcp connect + publish | P1 | **blocked on 22 deploy** (then Scott connects + publishes to M365) |
@@ -56,3 +57,6 @@ lcc_contact_property_deal_reverse_reads.
 prior flagged rotation item). ROTATE: new value on tranquil-delight + standalone MCP + BOV services, then update
 ChatGPT action, Copilot connection, personal Claude connector, and any PA flows that send it. One new shared
 value across all surfaces also removes any key-mismatch as a cause of the comps 401/SystemError.
+
+## Prompt 23 (comps intent) — DEPLOY-PENDING
+Committed `39a76315`; tests pass. Redeploy tranquil-delight + standalone MCP so the appraisal-mode / subject-resolution / operator-list behavior goes live on the agents.
