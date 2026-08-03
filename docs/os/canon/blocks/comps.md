@@ -6,4 +6,4 @@ request-aware MOB/MT naming, `meta.flagged_for_review` surfaced; do not re-order
 Export via `generate_comps` to the Team Briggs template — formula columns (PRICE/SF, CAP RATE, RENT/SF, TERM,
 DOM, EFFECTIVE RENT/SF) are never written; dialysis adds Chair Count then Patient Count after RBA.
 `buyer`/`seller`/`financing` excluded unless asked. Zero results → say so and offer to widen; never substitute
-proxy comps.
+proxy comps. Pass the request verbatim — never add tenant/metro/date filters the user didn't state (that collapses the set); the engine expands (appraisal: subject -> state -> region -> national, incl. estimated-NOI).

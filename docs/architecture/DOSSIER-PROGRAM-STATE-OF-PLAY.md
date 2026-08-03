@@ -470,3 +470,21 @@ ambiguity. Extraction order: Subject Resolver first, adopted BOV → property �
    it. Fix = update client instructions (ChatGPT custom instructions, Copilot agent, OpenAPI action guidance) to
    route every comp request through `synthesizeComps` with the raw request and no self-narrowing. Recorded as the
    client-routing addendum in `request-understanding-and-consistency-layer.md`.
+
+---
+
+## 2026-08-03 — Prompt 25 landed; agent instructions updated for routing + ambiguity (session 2o)
+
+**Prompt 25** implemented + committed: shared `mcp/subject-resolver.js`; `get_property_context`/`get_contact_context`
+(MCP + HTTP) now return a `{status, entity, confidence, resolved_via, candidates[]}` envelope — ambiguous matches
+surface candidates instead of a silent `limit=1`/`chooseBestEntity` pick; BOV wrapped (keeps 409); interpretation-
+logging migration added; tests pass. DEPLOY + migration apply pending. Response → done/.
+
+**Agent instructions updated on all four surfaces** (Scott to paste): added (1) the comps **no-self-narrow** rule —
+pass the request verbatim, never invent tenant/metro/date filters, the engine resolves the subject + expands
+(appraisal: subject→state→region→national, incl. estimated-NOI) — the exact miss behind ChatGPT's 1-comp result;
+and (2) the **resolution/ambiguity** rule from prompt 25 — on `status='ambiguous'` present candidates and ask which
+(Woodland Hills 35724 vs 29882), on `not_on_file` say so, never fabricate. Files: `docs/copilot/agent-instructions.md`
+(unified/Copilot), `docs/claude/northmarq-claude-instructions.md`, `docs/claude/personal-claude-instructions.md`,
+`docs/setup/gpt-actions-system-prompt.txt`; canon source `docs/os/canon/comps.md` (v1.1.0) + new
+`docs/os/canon/resolution.md` (+ blocks). ChatGPT also needs its LCC-CANON knowledge file updated to match.

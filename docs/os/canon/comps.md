@@ -1,5 +1,5 @@
 # Comps Canon
-Canon: v1.0.0
+Canon: v1.1.0
 
 ## Purpose
 Return sales/lease comps that are identical in substance and format on every surface.
@@ -15,7 +15,7 @@ and Salesforce-staged comps) — never from SharePoint, knowledge files, or gene
 ## Procedure
 1. **Default to `SynthesizeComps`** with a single param `request` = Scott's text verbatim. The engine parses
    state, property type, government intent, and date window server-side. Use `QueryComps` only when Scott
-   gives explicit structured filters to pass exactly.
+   gives explicit structured filters to pass exactly. **Never add filters the user didn't state** — pass the whole request verbatim; do not invent tenant/operator/metro/state/date filters. The engine resolves the subject and EXPANDS the set (appraisal: subject -> state -> region -> national, incl. estimated-NOI). Pre-narrowing collapses the set.
 2. Render the returned `markdown` field **verbatim** — already filtered, de-duplicated, cap-rate-normalized
    (decimals), reconciled. Do not add, remove, re-order, re-filter, or append analysis.
 3. To produce a workbook, call `generate_comps` with rows mapped to Briggs column keys; `comp_type:'sales'`.
@@ -31,6 +31,7 @@ excluded unless asked.
 ## Never
 - Never pull or merge comps from SharePoint, knowledge, or general knowledge.
 - Never substitute proxy/urgent-care comps. If zero returned, say so and offer to widen (national, longer window).
+- Never pre-narrow with filters the user didn't state (no invented tenant/metro/state/date) — pass verbatim; the engine expands.
 - Never overwrite formula columns; never re-curate the returned rows.
 
 ## Surface bindings

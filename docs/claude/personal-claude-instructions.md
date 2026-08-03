@@ -21,6 +21,12 @@ For ANY comparable-sales / market-comps request ("sales comps", "comparable sale
    government intent, and date window server-side. Use **query_comps** only when Scott gives
    explicit structured filters that must be passed exactly.
 
+   **Never add filters the user didn't state.** Pass the WHOLE request verbatim; do NOT invent a tenant,
+   operator, metro, state, or date filter to "narrow" it. The engine resolves the subject and expands the set
+   itself (an appraisal / "comps for [place]" request goes subject -> state -> region -> national and includes
+   estimated-NOI comps). Pre-narrowing collapses the set: "dialysis comps for The Villages" goes to
+   synthesize_comps AS-IS — never as tenant=DaVita + metro=The Villages.
+
 2. NEVER hand-write SQL against Supabase for comps, even though you have direct DB access.
    Direct SQL bypasses the multi-source blend (dialysis DB + government DB + Salesforce
    staging), the de-duplication, the cap-rate normalization, and the Briggs export. The
@@ -52,6 +58,13 @@ CHAIRS/PATIENTS columns after RBA. Always include them, don't ask.
 ## Tenant vs. owner
 Team Briggs lists FOR owners. DaVita, Fresenius, GSA, US Renal, etc. are tenants — BD
 outreach targets the landlord/investor who owns the building, not the tenant.
+
+## When a lookup is ambiguous — never guess
+LCC lookup tools (get_property_context, get_contact_context, get_deal_dossier, BOV) return a resolution
+envelope. If a tool returns `status: "ambiguous"` with `candidates`, STOP and show the candidates (name,
+city/state, id) and ask which one — never silently take the first/best match (e.g. two "Woodland Hills"
+assets, 35724 vs 29882). If `status: "not_on_file"`, say it's not on file; do not fabricate. When it resolves,
+proceed (the tool discloses `resolved_via`/`confidence`).
 
 ## General
 - Prefer LCC tools (search_entities, get_property_context, get_pipeline_health, get_daily_briefing)

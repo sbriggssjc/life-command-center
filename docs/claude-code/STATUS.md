@@ -3,7 +3,6 @@
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
-| 25 | Phase 2: shared Subject/Entity Resolver + fix silent-guess paths (BOV→property→contact) | P2 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |
@@ -61,3 +60,14 @@ value across all surfaces also removes any key-mismatch as a cause of the comps 
 
 ## Prompt 23 (comps intent) — DEPLOY-PENDING
 Committed `39a76315`; tests pass. Redeploy tranquil-delight + standalone MCP so the appraisal-mode / subject-resolution / operator-list behavior goes live on the agents.
+
+## Agent instruction files — UPDATED 2026-08-03 (Scott: paste into each surface)
+Added the **comps no-self-narrow** rule (pass request verbatim; engine expands) + the **resolution/ambiguity**
+rule (present candidates on `status='ambiguous'`, never guess; `not_on_file`→say so) to: `docs/copilot/agent-
+instructions.md` (unified/Copilot Studio), `docs/claude/northmarq-claude-instructions.md`, `docs/claude/personal-
+claude-instructions.md`, `docs/setup/gpt-actions-system-prompt.txt` (+ its LCC-CANON knowledge file), and canon
+source `docs/os/canon/comps.md` + new `docs/os/canon/resolution.md`. ChatGPT GPT: also update the LCC-CANON
+knowledge file, not just the system prompt.
+## Prompt 25 (subject resolver) — DEPLOY + MIGRATION pending
+Code committed; redeploy tranquil-delight + standalone MCP; apply `supabase/migrations/20260820130000_lcc_
+interpretation_logs.sql` (LCC Opps) for the interpretation-logging table (resolver logs best-effort without it).
