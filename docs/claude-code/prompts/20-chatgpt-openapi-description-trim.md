@@ -36,3 +36,9 @@ Scott re-imports the schema into the ChatGPT GPT (Configure -> Actions -> replac
 ## Note
 This is a stopgap. Prompt 21 (Copilot Studio -> /mcp direct) removes the per-surface OpenAPI maintenance for the
 Microsoft side entirely; ChatGPT still needs the OpenAPI schema, so this trim stays useful for ChatGPT.
+
+## Codex Worklog — 2026-08-03
+- Objective: trim only the `queryComps` and `synthesizeComps` operation descriptions in `docs/comps-rollout/lcc-openapi.yaml` so ChatGPT Actions accepts the schema.
+- Plan: preserve operation IDs, paths, methods, parameters, responses, `generateComps`, and all read operations; update only the two YAML description strings.
+- Change: replaced the long comps descriptions with bounded <=300-character text covering the required query/synthesis semantics.
+- Verification: passed with Python/PyYAML using the local Python 3.13 install. `queryComps` is 224 chars, `synthesizeComps` is 200 chars, and structural comparison against `HEAD` confirmed operation IDs, paths, methods, request bodies, and responses are unchanged except for `description`.

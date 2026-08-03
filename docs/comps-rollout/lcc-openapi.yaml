@@ -144,12 +144,9 @@ paths:
       operationId: queryComps
       summary: Pull sales comps with explicit structured filters.
       description: >
-        Returns comps matching the given filters, de-duplicated across dialysis, government, and
-        Salesforce sources. By default only comps with a RELIABLE NOI/cap are returned; set
-        include_unreliable_noi to also include modeled/estimated ones. Closed sales are gated to live
-        transactions. Output is bounded by default (40 rows, max 100), locally re-filtered by
-        tenant/state/metro after dedupe, and includes `template_comps` mapped for the Team Briggs
-        comps template.
+        Pulls candidate dialysis/government sale comps from the LCC engine for a market or asset.
+        Filters by geography, product type, date window, cap rate, and price, then returns a
+        bounded, ranked comp set, not the full universe.
       requestBody:
         required: true
         content:
@@ -163,11 +160,9 @@ paths:
       operationId: synthesizeComps
       summary: Assemble a ranked comp set from a plain-language request.
       description: >
-        Parses a natural-language request into structured filters, routes government-only intent away
-        from the dialysis DB, scores by relevance, and returns the ranked set. Pass the raw text as
-        `request`; any explicit field overrides the parsed value. Output is bounded by default
-        (25 rows, max 50), locally re-filtered by tenant/state/metro after dedupe, and includes
-        `template_comps` mapped for the Team Briggs comps template.
+        Takes a comp set or plain-language query and produces the narrative/adjusted comp synthesis
+        plus summary stats used in a BOV or OM. Returns bounded results from the LCC comps engine for
+        presentation.
       requestBody:
         required: true
         content:
