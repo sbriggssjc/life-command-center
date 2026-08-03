@@ -193,3 +193,14 @@ Verify: `/health` reflects the dialysis leg; ChatGPT "DaVita comps in The Villag
 the workbook builder) is NOT mounted as an HTTP route, so ChatGPT can get the comp SET but not the exported
 workbook file over HTTP. Copilot is unaffected (it calls the `generate_comps` MCP tool, which IS in the 19-tool
 list). If ChatGPT needs the workbook file too, mount `/api/comps` alongside the other two comps routes.
+
+## VERIFIED 2026-08-03: tranquil-delight comps route is healthy end-to-end
+Direct `curl.exe` (Bearer key) `POST /api/query-comps {verticals:[dialysis],states:[FL]}` → **HTTP 200**, identical
+payload to the MCP tool (0 reliable-NOI comps, 5 excluded_unreliable_noi, warnings:[]). So server + deploy + DIA
+data + auth are all good. The ChatGPT/Copilot failures are **connector-side**, not the server:
+- **Copilot:** finish the connection authorization ("Open connection manager") with the (rotated) key + Generative
+  Orchestration ON — the `/mcp` server is ready.
+- **ChatGPT:** ensure the action sends the rotated key; the comp-SET pull (query/synthesize) will work. If the
+  *workbook export* still fails, that's the `generateComps` gap below.
+- **Data note for the appraiser workbook:** plain FL dialysis sales = 0 reliable-NOI comps; use
+  `include_unreliable_noi:true` and widen geography (Southeast, then national) to populate the set.
