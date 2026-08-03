@@ -448,3 +448,25 @@ understanding layer** — intent parsing, entity resolution, and the no-fabricat
 per-tool, so robustness is re-solved each time and the cross-cutting rules can drift. Proposed four shared modules
 (Subject/Entity Resolver, Intent Interpreter, Data-Consistency Contract, Reference/Gazetteer) + interpretation
 logging, built in phases. **Prompt 24** = the Phase-1 audit (understand-first) before any extraction.
+
+---
+
+## 2026-08-03 — Prompt 24 audit reconciled; ChatGPT comps still 1 (deploy + client-routing) (session 2n)
+
+**Prompt 24 audit complete** (`docs/architecture/intent-resolution-audit-2026-08-03.md`): corrected the exposure
+table (BOV already refuses ambiguous matches via a 409 candidate list — its gap is intent/template + quality-
+contract adoption, not resolution); **highest silent-guess risk = `get_property_context` + `get_contact_context`**
+(`limit=1`/`chooseBestEntity` without alternatives — the 35724/29882 collision class); dossier already refuses
+ambiguity. Extraction order: Subject Resolver first, adopted BOV → property → contact → offer → CMS. Queued as
+**prompt 25** (Phase 2: build the resolver + retire silent guesses + interpretation logging). Response → done/.
+
+**ChatGPT comps re-test still returned 1 comp — two causes, both actionable:**
+1. **Prompt 23 is committed (`39a76315`) but NOT deployed.** The live tranquil-delight + standalone MCP still run
+   the old engine. DEPLOY is the first fix.
+2. **The GPT over-narrowed** — it parsed "The Villages + DaVita" and sent a narrow structured query, which the
+   engine honored → 1. Appraisal-mode only fires when the caller passes the VERBATIM request (so `parseRequest`/
+   `detectAppraisalIntent` run) and doesn't pre-narrow. Canon already says "SynthesizeComps first with Scott's
+   verbatim request" (`docs/os/canon/comps.md`); the ChatGPT GPT + Copilot agent instructions weren't following
+   it. Fix = update client instructions (ChatGPT custom instructions, Copilot agent, OpenAPI action guidance) to
+   route every comp request through `synthesizeComps` with the raw request and no self-narrowing. Recorded as the
+   client-routing addendum in `request-understanding-and-consistency-layer.md`.

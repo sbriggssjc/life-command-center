@@ -3,6 +3,7 @@
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
+| 25 | Phase 2: shared Subject/Entity Resolver + fix silent-guess paths (BOV→property→contact) | P2 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |

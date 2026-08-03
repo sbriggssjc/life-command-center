@@ -62,3 +62,18 @@ are caught proactively, and a uniform **clarify-or-assume-and-disclose** behavio
   Health surface) so this never regresses silently.
 
 Net: prompt 23 made comps robust; this makes robustness a PROPERTY OF THE PLATFORM instead of a per-tool retrofit.
+
+## Addendum (2026-08-03) — clients must ROUTE TO the understanding layer, not around it
+The ChatGPT re-test (post prompt-23-commit, pre-deploy) still returned 1 comp: the GPT parsed "The Villages, FL"
++ DaVita and sent a NARROW structured query (tenant=DaVita, metro=The Villages, FL). The engine honored it →
+1 comp. Two lessons:
+1. **Prompt 23 must be DEPLOYED** (tranquil-delight + standalone MCP) — the live engine is still the old one.
+2. **Server-side understanding only works if the client defers to it.** Appraisal-mode fires in the engine only
+   when the caller passes the user's VERBATIM natural-language request (so `parseRequest`/`detectAppraisalIntent`
+   run) and does NOT pre-narrow with tenant/metro. If a client over-parses and sends narrow params, it bypasses
+   the whole layer. This is codified in canon (`docs/os/canon/comps.md`: SynthesizeComps first with Scott's
+   verbatim request, then generate_comps), but the ChatGPT GPT + Copilot agent instructions weren't following it.
+   **Fix the client instructions** (ChatGPT custom instructions, Copilot agent, OpenAPI action descriptions) to
+   route every comp/appraisal request through `synthesizeComps` with the verbatim `request` and no self-narrowing.
+This generalizes: the shared resolver/intent layer (Phase 2+) is only effective if every surface passes raw intent
+to it. Client-routing discipline is part of the architecture, not an afterthought.
