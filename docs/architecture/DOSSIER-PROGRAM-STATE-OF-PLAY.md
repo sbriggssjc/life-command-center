@@ -311,3 +311,39 @@ connector.v4.swagger.json` (or `lcc-openapi.yaml`) into the Power Platform custo
 
 **Remaining for Scott:** rotate LCC_API_KEY + re-import the connector (§2/§3 of the walkthrough); run the census
 backfill (prompt 19). **Remaining build:** prompt 18 (new amber flows + migration hygiene), prompt 19 (census).
+
+---
+
+## 2026-08-03 — Microsoft-surface triage + the MCP pivot (session 2g)
+
+Scott updated the LCC Intelligence connector + Copilot LCC Deal Agent and sent the post-update test chat, hit a
+ChatGPT 300-char error updating the custom GPT, flagged that Northmarq Claude can't add a custom connector, and
+asked whether Copilot's new "Cowork" (plugins/skills) changes our strategy. Triaged all four; full analysis in
+`docs/comps-rollout/ms-surface-triage-and-mcp-pivot.md`.
+
+**Findings.**
+- **Copilot LCC Deal Agent:** query_comps + synthesize_comps now work (the earlier ConnectorOperationNotFound is
+  fixed). Only the **workbook export** still fails — because **GenerateComps** (`POST /api/comps`) is in the v4
+  connector but was never added to the agent's action list. Fix is no-code: add the GenerateComps action.
+- **ChatGPT 300-char error:** confirmed `queryComps` desc = 459 chars and `synthesizeComps` = 421 in
+  `lcc-openapi.yaml`, both over ChatGPT's ~300 limit. The v4 swagger already carries short versions (247/246).
+  -> **prompt 20** (trim the two yaml descriptions, re-import).
+- **Northmarq Claude:** can't add a custom connector (admin-locked). Keep routing live comps through the Copilot
+  Deal Agent; admin can add the org MCP connector later for native tools.
+- **Copilot Cowork / M365 Copilot:** reaches our tools through the **published Copilot Studio agent** — no
+  separate wiring. Give the LCC Deal Agent the tools and publish to the Teams & M365 Copilot channel.
+
+**Strategic (the pivot).** Verified on Microsoft Learn that **Copilot Studio can connect directly to an MCP
+server as an agent tool** (streamable HTTP transport, `x-ms-agentic-protocol: mcp-streamable-1.0`). Pointing the
+LCC Deal Agent at our `/mcp` endpoint would expose **all** LCC tools natively (same contract Claude uses),
+eliminating the per-surface OpenAPI/Swagger maintenance and the whole missing-operation / 300-char / schema-drift
+class of problems for the Microsoft side. -> **prompt 21** (verify `/mcp` streamable-HTTP + auth, then connect +
+publish). ChatGPT still needs the OpenAPI schema, so prompt 20's trim stays useful there.
+
+**Recommended sequence:** (1) now, no code — add GenerateComps to the LCC Deal Agent; (2) prompt 20 — trim the two
+descriptions so ChatGPT imports; (3) prompt 21 — the MCP pivot for the Microsoft surfaces. Census (prompt 19)
+stays on hold until Scott's Census key works.
+
+**Written this turn:** `docs/comps-rollout/ms-surface-triage-and-mcp-pivot.md`,
+`docs/claude-code/prompts/20-chatgpt-openapi-description-trim.md`,
+`docs/claude-code/prompts/21-copilot-studio-mcp-pivot.md`, STATUS.md refreshed to session 2g.
