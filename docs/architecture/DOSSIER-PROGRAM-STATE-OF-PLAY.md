@@ -286,3 +286,28 @@ Focus shifts from dossier content (largely done) to **connectivity + activation*
 Nearly the entire program is built + much of it live. Remaining: **CENSUS_API_KEY** (Scott), an **app redeploy**
 (activates 10) + **connector import** (activates 11), and **prompt 18** (new amber flows + repo migration-file
 hygiene).
+
+---
+
+## End-to-end verification + connector walkthrough (2026-08-02, redeploy live)
+Verified live against production after the merge + redeploy:
+- **Deal spine (35724 / d118b3a1):** LIVE — 3 milestones, 1 conflict (listing-broker), 1 document.
+- **Contact connectivity (13):** LIVE — `lcc_contact_properties` returns real broker->property links (e.g.
+  Cawley CRE -> 450 E Roosevelt Rd, property 25334, listing_broker).
+- **Health surface (12):** LIVE — #710 green, connectors (Outlook/Copilot/Salesforce) green.
+- **PA flows:** RECOVERING — the critical deal-spine flows (SF Deal->LCC Opportunity Sync, LCC Get Artifact) have
+  dropped off the failure list; remaining amber = `Unflag Completed Email Tasks` (253->197), `To Do - LCC Sync`
+  (63->49), HTTP-Switch (14), RCM (6), SF Daily Bulk File Backfill (4), LoopNet (3) — all trending down; covered
+  by prompt 18.
+- **#710 schema drift:** GREEN (`field_source_priority_invalid_columns` = 0).
+- **Census demographics:** NOT yet backfilled — CENSUS_API_KEY is set but the script must run (prompt 19);
+  property_demographics still covers 85 props / 0 for 23654.
+
+**Connector packages:** walkthrough delivered (`docs/comps-rollout/connector-upload-walkthrough-2026-08-02.md`).
+The Copilot "LCC Deal Agent" `ConnectorOperationNotFound` fix = re-import `copilot/lcc-deal-intelligence.
+connector.v4.swagger.json` (or `lcc-openapi.yaml`) into the Power Platform custom connector with the rotated
+`LCC_API_KEY` (Bearer), then add/refresh the comps actions. MCP base URL:
+`https://tranquil-delight-production-633f.up.railway.app`.
+
+**Remaining for Scott:** rotate LCC_API_KEY + re-import the connector (§2/§3 of the walkthrough); run the census
+backfill (prompt 19). **Remaining build:** prompt 18 (new amber flows + migration hygiene), prompt 19 (census).
