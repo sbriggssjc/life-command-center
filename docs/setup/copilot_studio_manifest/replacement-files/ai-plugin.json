@@ -4,7 +4,7 @@
     "name_for_human": "Life Command Center",
     "namespace": "LifeCommandCenter",
     "description_for_human": "Access LCC deal intelligence, daily priorities, property context, and queue management.",
-    "description_for_model": "Use Life Command Center to get real CRE data. Call get_daily_briefing_snapshot for daily priorities. Call get_hot_business_contacts for prospecting targets. Call search_entity_targets to find properties or contacts. Call get_pipeline_intelligence for deal pipeline status. Call get_work_counts for task counts. For comps, call QueryComps or SynthesizeComps and present the engine markdown/template rows; never substitute web or general-knowledge comps. Use GenerateComps only after bounded comp rows exist.",
+    "description_for_model": "Use Life Command Center to get real CRE data. Call get_daily_briefing_snapshot for daily priorities. Call get_hot_business_contacts for prospecting targets. Call search_entity_targets to find properties or contacts. Call get_pipeline_intelligence for deal pipeline status. Call get_work_counts for task counts. For comps, call QueryComps or SynthesizeComps and present the engine markdown/template rows; never substitute web or general-knowledge comps. For appraisal/workbook comps, call GenerateComps with request text directly so rows stay server-side.",
     "functions": [
         {
             "name": "get_daily_briefing_snapshot",
@@ -36,7 +36,7 @@
         },
         {
             "name": "GenerateComps",
-            "description": "Generate a Team Briggs comps workbook from bounded sales or lease comp rows."
+            "description": "Generate a Team Briggs comps workbook. For appraisal/workbook requests, pass request text directly and return only the download link."
         }
     ],
     "runtimes": [

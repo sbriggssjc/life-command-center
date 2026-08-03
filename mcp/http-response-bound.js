@@ -100,6 +100,29 @@ function capArrays(value, n) {
 export function enforceHttpResponseSize(result, { max = MAX_HTTP_RESPONSE_CHARS } = {}) {
   if (jsonLen(result) <= max) return result;
 
+  // Comps HTTP responses have two row projections:
+  //   comps           = richer display/debug objects
+  //   template_comps  = compact workbook rows the next step needs
+  // When the full response is too large, preserve every template row and the
+  // download affordance before falling back to generic tail trimming.
+  if (result && typeof result === "object" && Array.isArray(result.template_comps)) {
+    const { comps, ...rest } = result;
+    const preserved = {
+      ...deepTrim(rest, { arrayCap: 50, stringCap: HTTP_STRING_CAP, dropHeavy: true }),
+      template_comps: result.template_comps,
+      comps: Array.isArray(comps) ? comps.slice(0, 3).map(c => deepTrim(c, { arrayCap: 3, stringCap: 500, dropHeavy: true })) : comps,
+      truncated: true,
+      truncation_note:
+        `Response exceeded the Action size limit (~${max} chars); preserved all template_comps ` +
+        `for workbook handoff and reduced full-detail comps. For appraisal workbooks, call ` +
+        `generate_comps with request directly so rows stay server-side.`,
+    };
+    if (jsonLen(preserved) <= max) return preserved;
+    const noFullComps = { ...preserved };
+    delete noFullComps.comps;
+    if (jsonLen(noFullComps) <= max) return noFullComps;
+  }
+
   // Escalate: drop heavy blobs + truncate long strings, with progressively
   // smaller array caps, re-checking after each step. Recomputed from the
   // ORIGINAL each pass so it is deterministic.

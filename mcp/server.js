@@ -12,7 +12,7 @@ import {
   assemblePropertyPacketViaApi,
   resolveContextPacket,
 } from "./context-assemble.js";
-import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
+import { makeCompsTools, makeCompsHttpRoutes, runGenerateCompsFromRequest } from "./comps-tools.js";
 import { makeDealDossierTools, makeDealDossierHttpRoutes } from "./deal-dossier-tools.js";
 import { makeSfWritebackRoutes } from "./sf-writeback.js";
 import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
@@ -595,11 +595,14 @@ const TOOL_DEFINITIONS = {
   },
   generate_comps: {
     name: 'generate_comps',
-    description: "Populate a Briggs CRE comps workbook (sales or lease) from structured comp rows and return a short-lived download link. You map the raw CoStar/Salesforce export → rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate — so the output is identical no matter which team member prepared the rows. Row keys are the Briggs column names lowercased with underscores. SALES: address, city, state (alias st), rba (alias rba_sf), tenant, lease_type, exp (lease expiration), annual_noi, initial_price (alias init_price), cur_price, on_market (list/on-market date), last_price, sale_price, sale_date, bumps, options (renewal_options; emitted canonical as \"(N) M-yr\"), built (alias yr_built), notes. LEASE: property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated. DIALYSIS comps: set vertical:'dialysis' — selects the dialysis sales template which adds CHAIRS and PATIENTS input columns immediately after RBA; pass most-recent counts as row keys `chairs` and `patients`. buyer / seller / financing are OPT-IN only — omit them unless the user explicitly asks for buyer/seller/financing in the comps (they are not part of the default column set and are otherwise left out). Omit any field you don't have — never guess. Dates 'YYYY-MM-DD'; rents/NOI annual.",
+    description: "Generate a Briggs CRE comps workbook and return only a short-lived download link plus compact counts. DEFAULT for appraisal/workbook requests: pass `request` with Scott's original text; the server runs synthesize_comps and builds the Team Briggs workbook server-side, so comp rows never round-trip through the model or connector. Legacy small-pull mode remains: pass structured rows with comp_type:'sales' or 'lease'. The shared engine writes template INPUT columns and leaves formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate. DIALYSIS row mode: set vertical:'dialysis' and include `chairs` and `patients`. buyer / seller / financing are OPT-IN only. Omit fields you don't have.",
     inputSchema: {
       type: 'object',
-      required: ['comp_type'],
       properties: {
+        request: { type: 'string', description: 'One-shot workbook mode. Pass the comp/appraisal request verbatim; the server synthesizes rows and returns only the workbook link.' },
+        limit: { type: 'number', description: 'One-shot mode row target. Default 25, max 50.' },
+        include_unreliable_noi: { type: 'boolean', description: 'One-shot mode: include modeled/estimated NOI rows. Appraisal mode defaults true.' },
+        include_on_market: { type: 'boolean', description: 'One-shot mode: include active listings. Appraisal mode defaults true.' },
         comp_type: { type: 'string', enum: ['sales', 'lease'], description: 'sales = On Market + Sold sheets | lease = Lease Comps sheet' },
         vertical: { type: 'string', description: "Set to 'dialysis' for dialysis comps — selects the dialysis sales template with CHAIRS + PATIENTS columns after RBA. Omit otherwise." },
         on_market: { type: 'array', description: 'Sales: active listings (each an object keyed by Briggs column name; dialysis: include chairs, patients).', items: { type: 'object', additionalProperties: true } },
@@ -612,49 +615,68 @@ const TOOL_DEFINITIONS = {
   },
 };
 
+async function postCompsWorkbook(payload) {
+  if (!BOV_SERVICE_URL || !BOV_API_KEY) {
+    throw new Error("Comps service not configured — set BOV_SERVICE_URL and BOV_API_KEY on the MCP service.");
+  }
+  const url = BOV_SERVICE_URL + "/generate-comps";
+  let resp, text;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": BOV_API_KEY },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(180000),
+    });
+    text = await resp.text();
+  } catch (e) {
+    throw new Error("Could not reach comps service: " + e.message);
+  }
+  if (!resp.ok) {
+    throw new Error("Comps service returned HTTP " + resp.status + ": " + text.slice(0, 500));
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Comps service returned non-JSON: " + text.slice(0, 300));
+  }
+  const { file_base64, ...rest } = data;
+  return rest;
+}
+
+function compactCompsWorkbookResult(data) {
+  const recalc = data.recalc_result || {};
+  const mins = Math.round((data.expires_in_seconds || 3600) / 60);
+  return {
+    status: data.status,
+    filename: data.filename,
+    download_url: data.download_url,
+    comp_type: data.comp_type,
+    rows_by_sheet: data.rows_by_sheet,
+    skipped_formula_keys: data.skipped_formula_keys,
+    unknown_keys: data.unknown_keys,
+    recalc_errors: recalc.total_errors || 0,
+    message: "Comps workbook generated: " + data.filename + ". Download it here (link expires in " + mins + " min): " + data.download_url,
+  };
+}
+
 // ── Tool handlers ─────────────────────────────────────────────────────────
 // These are the exact same async functions from the former s.tool() calls.
 const TOOL_HANDLERS = {
   generate_comps: async (args) => {
     return withTiming("generate_comps", async () => {
-      if (!BOV_SERVICE_URL || !BOV_API_KEY) {
-        return textResult({ error: "Comps service not configured — set BOV_SERVICE_URL and BOV_API_KEY on the MCP service." });
+      const payload = args || {};
+      if (String(payload.request || '').trim()) {
+        const result = await runGenerateCompsFromRequest(payload, { govQuery, diaQuery }, postCompsWorkbook);
+        return textResult(result);
       }
-      const ct = args && String(args.comp_type || '').toLowerCase();
+      const ct = String(payload.comp_type || '').toLowerCase();
       if (ct !== 'sales' && ct !== 'lease') {
-        return textResult({ error: "generate_comps requires comp_type 'sales' or 'lease', plus rows (sales: on_market/sold; lease: comps)." });
+        return textResult({ error: "generate_comps requires either `request` for one-shot workbook mode, or comp_type 'sales'/'lease' plus rows." });
       }
-      const url = BOV_SERVICE_URL + "/generate-comps";
-      let resp, text;
-      try {
-        resp = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-API-Key": BOV_API_KEY },
-          body: JSON.stringify(args),
-          signal: AbortSignal.timeout(180000),
-        });
-        text = await resp.text();
-      } catch (e) {
-        return textResult({ error: "Could not reach comps service: " + e.message });
-      }
-      if (!resp.ok) {
-        return textResult({ error: "Comps service returned HTTP " + resp.status, detail: text.slice(0, 500) });
-      }
-      let data;
-      try { data = JSON.parse(text); } catch (e) { return textResult({ error: "Comps service returned non-JSON", raw: text.slice(0, 300) }); }
-      const recalc = data.recalc_result || {};
-      const mins = Math.round((data.expires_in_seconds || 3600) / 60);
-      return textResult({
-        status: data.status,
-        filename: data.filename,
-        download_url: data.download_url,
-        comp_type: data.comp_type,
-        rows_by_sheet: data.rows_by_sheet,
-        skipped_formula_keys: data.skipped_formula_keys,
-        unknown_keys: data.unknown_keys,
-        recalc_errors: recalc.total_errors || 0,
-        message: "Comps workbook generated: " + data.filename + ". Download it here (link expires in " + mins + " min): " + data.download_url,
-      });
+      const data = await postCompsWorkbook(payload);
+      return textResult(compactCompsWorkbookResult(data));
     });
   },
   generate_bov: async (args) => {
@@ -1922,7 +1944,7 @@ app.get("/health", (_req, res) => {
     // are Object.assign'd onto TOOL_DEFINITIONS at startup).
     tools: Object.keys(TOOL_DEFINITIONS),
     http_read_routes: Object.keys(READ_HTTP_ROUTES),
-    http_comps_routes: ["/api/query-comps", "/api/synthesize-comps"],
+    http_comps_routes: ["/api/query-comps", "/api/synthesize-comps", "/api/comps"],
     ops_configured: !!(OPS_SUPABASE_URL && OPS_SUPABASE_KEY),
     gov_configured: !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY),
   });
@@ -1953,12 +1975,26 @@ app.get("/", (_req, res) => {
   const __compsRoutes = makeCompsHttpRoutes({ govQuery, diaQuery });
   app.post(prefixed("/api/query-comps"), authenticate, __compsRoutes.queryComps);
   app.post(prefixed("/api/synthesize-comps"), authenticate, __compsRoutes.synthesizeComps);
+  app.post(prefixed("/api/comps"), authenticate, async (req, res) => {
+    try {
+      const payload = req.body || {};
+      if (String(payload.request || '').trim()) {
+        const result = await runGenerateCompsFromRequest(payload, { govQuery, diaQuery }, postCompsWorkbook);
+        res.status(result.error ? 400 : 200).json(enforceHttpResponseSize(result));
+        return;
+      }
+      const data = await postCompsWorkbook(payload);
+      res.json(enforceHttpResponseSize(compactCompsWorkbookResult(data)));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
   // W3.4: the comp-review DRAIN — list + resolve the flagged-comp queues. GET
   // lists open reviews across dia+gov; POST records a disposition. Same engine
   // the Decision-Center comp-review lane (ops.js) proxies to via /api/comp-reviews.
   app.get(prefixed("/api/comp-reviews"), authenticate, __compsRoutes.listCompReviews);
   app.post(prefixed("/api/comp-reviews/resolve"), authenticate, __compsRoutes.resolveCompReview);
-  console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps, /api/comp-reviews[, /resolve]");
+  console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps, /api/comps, /api/comp-reviews[, /resolve]");
 }
 
 // ── Property metadata-backfill worklist (W3.4, audit 3.4 item 4) ─────────────

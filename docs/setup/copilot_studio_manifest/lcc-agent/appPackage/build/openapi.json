@@ -2651,23 +2651,39 @@
       "post": {
         "operationId": "GenerateComps",
         "summary": "Generate a Team Briggs comps workbook.",
-        "description": "Generate a workbook only after bounded engine comp rows exist. The heavy base64 payload is omitted from the response.",
+        "description": "For appraisal/workbook requests, pass request with the user's original text. The server synthesizes comps and generates the workbook in one pass, returning only the download URL plus compact counts. Small interactive exports may still pass template_comps/curated rows directly.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "comp_type"
-                ],
                 "properties": {
+                  "request": {
+                    "type": "string",
+                    "description": "One-shot workbook mode. Pass the appraisal/comp workbook request verbatim; server returns link only."
+                  },
+                  "limit": {
+                    "type": "number",
+                    "description": "One-shot mode row target. Default 25, max 50."
+                  },
+                  "include_on_market": {
+                    "type": "boolean"
+                  },
+                  "include_unreliable_noi": {
+                    "type": "boolean"
+                  },
                   "comp_type": {
                     "type": "string",
                     "enum": [
                       "sales",
                       "lease"
-                    ]
+                    ],
+                    "description": "Row-driven export mode only."
+                  },
+                  "vertical": {
+                    "type": "string",
+                    "description": "Row-driven mode: set to dialysis for chairs/patients template."
                   },
                   "on_market": {
                     "type": "array",
@@ -2694,7 +2710,15 @@
                     "type": "string"
                   },
                   "client": {
-                    "type": "string"
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    ]
                   }
                 }
               }
@@ -2724,6 +2748,43 @@
                     "rows_by_sheet": {
                       "type": "object",
                       "additionalProperties": true
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "sold": {
+                          "type": "integer"
+                        },
+                        "on_market": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "cap_rate_range": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "tiers": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer"
+                      }
+                    },
+                    "flagged_count": {
+                      "type": "integer"
+                    },
+                    "subject": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "transparency": {
+                      "type": "string"
                     }
                   }
                 }

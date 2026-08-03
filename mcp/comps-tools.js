@@ -1061,6 +1061,151 @@ export async function runSynthesize(args, deps) {
       warnings: meta.warnings } };
 }
 
+function appendNotes(...parts) {
+  return parts.map(v => String(v || '').trim()).filter(Boolean).join(' | ') || undefined;
+}
+
+function workbookRowFromSynthComp(c) {
+  const t = c.template || templateRow(c || {});
+  const rba = t.rba_sf ?? c.building_sf ?? c.rba ?? c.building_size ?? null;
+  const base = {
+    address: t.address,
+    city: t.city,
+    state: t.state,
+    rba,
+    tenant: t.tenant,
+    annual_noi: t.annual_noi,
+    annual_rent: t.annual_rent,
+    chairs: t.chairs,
+    patients: t.patients,
+    source: t.source,
+    notes: appendNotes(
+      c.score_tier ? `Score tier ${c.score_tier}` : null,
+      Array.isArray(c.review_flags) && c.review_flags.length ? `Review: ${c.review_flags.join(', ')}` : null,
+      c.notes || c.raw?.notes
+    ),
+  };
+  for (const [k, v] of Object.entries(base)) {
+    if (v === null || v === undefined || v === '') delete base[k];
+  }
+  return base;
+}
+
+function isOnMarketComp(c) {
+  if (c?.on_market === true) return true;
+  const type = String(c?.comp_type || c?.status || c?.transaction_status || '').toLowerCase();
+  if (/listing|active|on.?market|available/.test(type)) return true;
+  const t = c?.template || {};
+  return !t.sale_date && !c?.sale_date && !!(c?.ask_price || c?.list_price || c?.current_price || c?.cur_price);
+}
+
+function workbookRowsFromSynthResult(result) {
+  const sold = [];
+  const onMarket = [];
+  for (const c of result?.comps || []) {
+    const row = workbookRowFromSynthComp(c);
+    if (isOnMarketComp(c)) {
+      const price = c.ask_price ?? c.list_price ?? c.current_price ?? c.cur_price ?? c.sale_price ?? c.sold_price ?? null;
+      const listed = c.on_market_date || c.listing_date || c.date_listed || null;
+      if (price != null) row.cur_price = price;
+      if (price != null) row.initial_price = c.initial_price ?? c.init_price ?? price;
+      if (listed) row.on_market = listed;
+      onMarket.push(row);
+    } else {
+      const t = c.template || templateRow(c || {});
+      row.sale_price = t.sale_price;
+      row.sale_date = t.sale_date;
+      row.last_price = c.last_price ?? c.ask_price ?? c.list_price ?? undefined;
+      if (t.sale_price == null) delete row.sale_price;
+      if (!t.sale_date) delete row.sale_date;
+      if (row.last_price == null) delete row.last_price;
+      sold.push(row);
+    }
+  }
+  return { sold, on_market: onMarket };
+}
+
+function capRateRange(rows) {
+  const caps = rows.map(r => Number(r.cap_rate)).filter(n => Number.isFinite(n) && n > 0);
+  if (!caps.length) return null;
+  return {
+    min: Math.min(...caps),
+    max: Math.max(...caps),
+    median: caps.slice().sort((a, b) => a - b)[Math.floor(caps.length / 2)],
+  };
+}
+
+function tierCounts(rows) {
+  return rows.reduce((m, r) => {
+    const tier = r.score_tier || 'C';
+    m[tier] = (m[tier] || 0) + 1;
+    return m;
+  }, { A: 0, B: 0, C: 0 });
+}
+
+export async function runGenerateCompsFromRequest(args, deps, generateWorkbook) {
+  const request = String(args?.request || '').trim();
+  if (!request) return { error: 'generate_comps request mode requires `request`.' };
+  if (typeof generateWorkbook !== 'function') return { error: 'generate_comps request mode is not configured.' };
+
+  const rawSynthType = String(args?.synthesize_comp_type || '').toLowerCase();
+  const rawCompType = rawSynthType || (String(args?.comp_type || '').toLowerCase() === 'lease' ? 'lease' : '');
+  const synthCompType = rawCompType === 'lease' ? 'lease'
+    : rawCompType === 'both' ? 'both'
+    : rawCompType === 'sale' || rawCompType === 'sales' ? 'sale'
+    : undefined;
+  const synthArgs = {
+    ...args,
+    request,
+    comp_type: synthCompType,
+    limit: clampLimit(args?.limit, DEFAULT_SYNTHESIZE_LIMIT, MAX_SYNTHESIZE_LIMIT),
+  };
+  const synthesized = await runSynthesize(synthArgs, deps);
+  const { sold, on_market } = workbookRowsFromSynthResult(synthesized);
+  if (!sold.length && !on_market.length) {
+    return {
+      error: 'No comp rows synthesized for workbook.',
+      counts: { sold: 0, on_market: 0, total: 0 },
+      subject: synthesized.subject || null,
+      transparency: synthesized.transparency,
+    };
+  }
+
+  const verticals = synthesized.interpreted_query?.verticals || [];
+  const isDialysis = verticals.includes('dialysis') || synthesized.interpreted_query?.property_types?.includes('dialysis');
+  const payload = {
+    comp_type: 'sales',
+    vertical: isDialysis ? 'dialysis' : undefined,
+    on_market,
+    sold,
+    name: args?.name || synthesized.subject?.name || request,
+    client: args?.client,
+  };
+  for (const [k, v] of Object.entries(payload)) {
+    if (v === undefined || v === null || (Array.isArray(v) && !v.length)) delete payload[k];
+  }
+
+  const data = await generateWorkbook(payload);
+  const rowsForSummary = synthesized.comps || [];
+  return {
+    status: data.status,
+    filename: data.filename,
+    download_url: data.download_url,
+    counts: {
+      sold: sold.length,
+      on_market: on_market.length,
+      total: sold.length + on_market.length,
+    },
+    cap_rate_range: capRateRange(synthesized.template_comps || []),
+    tiers: tierCounts(rowsForSummary),
+    flagged_count: synthesized.meta?.flagged_for_review || 0,
+    subject: synthesized.subject || null,
+    summary: synthesized.summary,
+    transparency: synthesized.transparency,
+    expires_in_seconds: data.expires_in_seconds,
+  };
+}
+
 // ── Shared renderer — the ONE table format every surface shows ──────────────
 export function formatCompsMarkdown(result) {
   const rows = result.comps || [];

@@ -175,11 +175,12 @@ paths:
   /api/comps:
     post:
       operationId: generateComps
-      summary: Generate a Team Briggs comps workbook from bounded comp rows.
+      summary: Generate a Team Briggs comps workbook.
       description: >
-        Proxies the workbook generator without exposing its service key. Use this only after
-        queryComps/synthesizeComps has returned bounded `template_comps` or otherwise curated rows.
-        The response omits the heavy base64 workbook payload and returns the generated download URL.
+        For appraisal/workbook requests, pass `request` with Scott's original text. The server runs
+        synthesizeComps and workbook generation in one pass and returns only the generated download URL
+        plus compact counts, so 20-25 comp rows never round-trip through the model or connector.
+        Small interactive exports may still pass `template_comps`/curated rows directly.
       requestBody:
         required: true
         content:
@@ -373,14 +374,21 @@ components:
         limit: { type: number, default: 25, maximum: 50 }
     GenerateCompsRequest:
       type: object
-      required: [comp_type]
       properties:
-        comp_type: { type: string, enum: [sales, lease] }
-        on_market: { type: array, items: { type: object, additionalProperties: true }, description: Sales workbook on-market rows. }
-        sold: { type: array, items: { type: object, additionalProperties: true }, description: Sales workbook sold rows. }
+        request: { type: string, description: "One-shot workbook mode. Pass the appraisal/comp workbook request verbatim; server returns link only." }
+        limit: { type: number, default: 25, maximum: 50, description: One-shot mode row target. }
+        include_on_market: { type: boolean, description: One-shot mode active listings flag. Appraisal defaults true. }
+        include_unreliable_noi: { type: boolean, description: One-shot mode estimated/model NOI flag. Appraisal defaults true. }
+        comp_type: { type: string, enum: [sales, lease], description: Row-driven export mode only. }
+        vertical: { type: string, description: "Row-driven mode: set to dialysis for chairs/patients template." }
+        on_market: { type: array, items: { type: object, additionalProperties: true }, description: Row-driven sales workbook on-market rows. }
+        sold: { type: array, items: { type: object, additionalProperties: true }, description: Row-driven sales workbook sold rows. }
         comps: { type: array, items: { type: object, additionalProperties: true }, description: Lease workbook rows. }
         name: { type: string }
-        client: { type: string }
+        client:
+          oneOf:
+            - { type: string }
+            - { type: object, additionalProperties: true }
     GenerateCompsResponse:
       type: object
       properties:
@@ -389,6 +397,29 @@ components:
         download_url: { type: string }
         comp_type: { type: string }
         rows_by_sheet: { type: object, additionalProperties: true }
+        counts:
+          type: object
+          properties:
+            sold: { type: integer }
+            on_market: { type: integer }
+            total: { type: integer }
+        cap_rate_range:
+          type: object
+          nullable: true
+          properties:
+            min: { type: number }
+            max: { type: number }
+            median: { type: number }
+        tiers:
+          type: object
+          properties:
+            A: { type: integer }
+            B: { type: integer }
+            C: { type: integer }
+        flagged_count: { type: integer }
+        subject: { type: object, additionalProperties: true, nullable: true }
+        summary: { type: string }
+        transparency: { type: string }
     CompsResponse:
       type: object
       properties:

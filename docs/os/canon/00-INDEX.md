@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.2.0** — 2026-08-03. Bump this on any rule change; record it in the changelog below and
+**CANON_VERSION: 1.2.1** — 2026-08-03. Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 
 ## Global invariants (apply to every topic, every surface)
@@ -51,6 +51,9 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.2.1** (2026-08-03) — Comps workbook/appraisal handoff now uses one-shot `generate_comps.request`
+  (request in, link out) so 20-25-row curated sets stay server-side; small row-driven exports use compact
+  `template_comps`, never full comp objects.
 - **1.1.0** (2026-07-30) — Added the `offer-submission` block (inbound LOI → seller submission: context-assemble → draft-to-Drafts with BCC Sarah + LOI attached → file-back via property-doc-writeback → `log_offer` with LCC full detail + a GENERIC Salesforce Task). Rendered to all 5 surfaces. Engine: `mcp/offer-context.js` (offer-context/offer-log routes + `get_offer_context`/`log_offer` MCP tools), `outlook-draft.js` Bcc.
 - **1.0.0** (2026-07-24) — Initial canon: comps, filing, email-and-routing, logging-and-touchpoints,
   writing-voice, bov, intake-triage, personal. Distilled from `docs/copilot/agent-instructions.md`,

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { parseRequest, runSynthesize } from '../mcp/comps-tools.js';
+import { enforceHttpResponseSize } from '../mcp/http-response-bound.js';
+import { parseRequest, runGenerateCompsFromRequest, runSynthesize } from '../mcp/comps-tools.js';
 
 const rows = [
   {
@@ -204,6 +205,73 @@ describe('comps engine bounded output', () => {
     assert.ok(result.comps.some(c => c.state === 'FL'));
     assert.ok(result.comps.some(c => c.state !== 'FL'));
     assert.match(result.transparency, /returned 25 of \d+/);
+  });
+
+  it('builds appraisal workbook server-side from request and returns only compact link metadata', async () => {
+    const calls = [];
+    let workbookPayload = null;
+    const result = await runGenerateCompsFromRequest(
+      {
+        request: 'dialysis comps for The Villages, FL for an appraisal workbook',
+        comp_type: 'sales',
+        subject: {
+          name: 'The Villages',
+          state: 'FL',
+          metro: 'Wildwood-The Villages',
+          region: 'Southeast',
+          address: '1050 Old Camp Rd',
+        },
+        limit: 25,
+      },
+      { govQuery: makeAppraisalQuery('government', calls), diaQuery: makeAppraisalQuery('dialysis', calls) },
+      async (payload) => {
+        workbookPayload = payload;
+        return {
+          status: 'ok',
+          filename: 'The Villages comps.xlsx',
+          download_url: 'https://example.test/download/the-villages.xlsx',
+          expires_in_seconds: 3600,
+        };
+      }
+    );
+
+    assert.equal(result.download_url, 'https://example.test/download/the-villages.xlsx');
+    assert.equal(result.counts.total, 25);
+    assert.equal(result.counts.sold, 25);
+    assert.equal(result.counts.on_market, 0);
+    assert.equal(result.flagged_count, 0);
+    assert.equal(result.tiers.A + result.tiers.B + result.tiers.C, 25);
+    assert.equal(result.comps, undefined);
+    assert.equal(result.template_comps, undefined);
+    assert.equal(workbookPayload.comp_type, 'sales');
+    assert.equal(workbookPayload.vertical, 'dialysis');
+    assert.equal(workbookPayload.sold.length, 25);
+    assert.equal(workbookPayload.sold.some(r => r.address === '1050 Old Camp Rd'), false);
+    assert.ok(workbookPayload.sold.some(r => r.chairs === undefined));
+    assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'both'));
+  });
+
+  it('preserves template_comps when the HTTP guard shrinks an oversized comps response', () => {
+    const templateComps = Array.from({ length: 25 }, (_, i) => ({
+      comp_id: `row-${i}`,
+      address: `${i} Main St`,
+      city: 'Testville',
+      state: 'FL',
+      sale_price: 1000000 + i,
+      cap_rate: 0.07,
+    }));
+    const fullComps = templateComps.map(r => ({ ...r, review_detail: { blob: 'x'.repeat(5000) } }));
+    const bounded = enforceHttpResponseSize({
+      comps: fullComps,
+      template_comps: templateComps,
+      markdown: 'table',
+      meta: { returned: 25 },
+    }, { max: 4500 });
+
+    assert.equal(bounded.template_comps.length, 25);
+    assert.equal(bounded.comps, undefined);
+    assert.equal(bounded.truncated, true);
+    assert.match(bounded.truncation_note, /preserved all template_comps/);
   });
 
   it('keeps a user-named metro as a hard filter outside appraisal mode', async () => {

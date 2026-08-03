@@ -1,5 +1,5 @@
 # Comps Canon
-Canon: v1.1.0
+Canon: v1.2.1
 
 ## Purpose
 Return sales/lease comps that are identical in substance and format on every surface.
@@ -18,20 +18,22 @@ and Salesforce-staged comps) — never from SharePoint, knowledge files, or gene
    gives explicit structured filters to pass exactly. **Never add filters the user didn't state** — pass the whole request verbatim; do not invent tenant/operator/metro/state/date filters. The engine resolves the subject and EXPANDS the set (appraisal: subject -> state -> region -> national, incl. estimated-NOI). Pre-narrowing collapses the set.
 2. Render the returned `markdown` field **verbatim** — already filtered, de-duplicated, cap-rate-normalized
    (decimals), reconciled. Do not add, remove, re-order, re-filter, or append analysis.
-3. To produce a workbook, call `generate_comps` with rows mapped to Briggs column keys; `comp_type:'sales'`.
-   For dialysis also pass `vertical:'dialysis'` with `chairs`+`patients` (Chair Count after RBA, then Patient
-   Count).
+3. To produce an appraisal/comp workbook, call `generate_comps` with `request` = Scott's request text verbatim.
+   The server runs synthesis and workbook generation in one pass and returns only `download_url` plus compact
+   counts/summary, so 20-25 rows never round-trip through the model or connector. For small interactive exports
+   only, pass `template_comps` rows to `generate_comps`; never pass full comp objects.
 
 ## Output contract
 Team Briggs Sales/Lease Comps template. Formula-protected columns (PRICE/SF, CAP RATE, RENT/SF, TERM, DOM,
 EFFECTIVE RENT/SF) are never written — they calculate. Reliable-or-exclude NOI/rent; request-aware
 multi-tenant naming (MOB/MT + anchor); surface `meta.flagged_for_review`. `buyer`/`seller`/`financing`
-excluded unless asked.
+excluded unless asked. Workbook/appraisal responses return a link and compact counts, not row arrays.
 
 ## Never
 - Never pull or merge comps from SharePoint, knowledge, or general knowledge.
 - Never substitute proxy/urgent-care comps. If zero returned, say so and offer to widen (national, longer window).
 - Never pre-narrow with filters the user didn't state (no invented tenant/metro/state/date) — pass verbatim; the engine expands.
+- Never round-trip appraisal workbook rows through the model; use `generate_comps.request`.
 - Never overwrite formula columns; never re-curate the returned rows.
 
 ## Surface bindings
