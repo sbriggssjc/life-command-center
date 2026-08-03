@@ -28,6 +28,7 @@
 
 import { opsQuery } from '../_shared/ops-db.js';
 import { verifyApiKey } from './property-handler.js';
+import { resolveSubject, resolutionHttpStatus } from '../../mcp/subject-resolver.js';
 
 function enc(v) {
   return encodeURIComponent(String(v));
@@ -82,36 +83,24 @@ export async function contactHandler(req, res) {
   }
 
   // ── Resolve entity ────────────────────────────────────────────────────────
-  let entity = null;
-  if (entity_id) {
-    const r = await opsQuery(
-      'GET',
-      `entities?id=eq.${enc(entity_id)}&entity_type=eq.person&select=*,external_identities(*)`
-    );
-    entity = r.data?.[0] || null;
-  } else if (email) {
-    const r = await opsQuery(
-      'GET',
-      `entities?entity_type=eq.person&email=eq.${enc(email)}&select=*,external_identities(*)&limit=1`
-    );
-    entity = r.data?.[0] || null;
-  } else if (name) {
-    const r = await opsQuery(
-      'GET',
-      `entities?entity_type=eq.person&or=(name.ilike.*${enc(name)}*,canonical_name.ilike.*${enc(name.toLowerCase())}*)&select=*,external_identities(*)&limit=1`
-    );
-    entity = r.data?.[0] || null;
-  }
+  const resolution = await resolveSubject(
+    { entity_id, email, name },
+    { type: 'contact', tool: 'get_contact_context', surface: 'http', opsQuery }
+  );
 
-  if (!entity) {
-    res.status(404).json({
-      error: 'Contact not found',
+  if (resolution.status !== 'resolved' || !resolution.entity) {
+    res.status(resolutionHttpStatus(resolution)).json({
+      ...resolution,
+      error: resolution.error || 'Contact not found',
       entity_id: entity_id || null,
       name: name || null,
       email: email || null,
     });
     return;
   }
+
+  const entity = resolution.entity;
+  if (entity.metadata) delete entity.metadata;
 
   const eid = entity.id;
 
@@ -163,6 +152,16 @@ export async function contactHandler(req, res) {
 
   res.status(200).json({
     entity,
+    resolution: {
+      status: resolution.status,
+      type: resolution.type,
+      confidence: resolution.confidence,
+      resolved_via: resolution.resolved_via,
+      candidates: resolution.candidates,
+    },
+    canonical_resolution: resolution.resolved_via === 'canonical_buyer_parent'
+      ? { resolved_to_parent: resolution.candidates?.[0]?.canonical_parent_name || entity.name }
+      : null,
     salesforce_id: sfIdentity?.external_id || null,
     last_touch_date: lastTouch,
     touchpoint_count: touchpoints,

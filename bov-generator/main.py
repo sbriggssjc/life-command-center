@@ -276,7 +276,8 @@ async def generate_bov(req: BOVRequest, request: Request):
         try:
             req.cre_property_id = resolve_property_id(req.property_lookup)
         except BovRecordError as e:
-            raise HTTPException(status_code=getattr(e, "status", 502), detail=str(e))
+            detail = {"error": str(e), "resolution": e.envelope} if getattr(e, "envelope", None) else str(e)
+            raise HTTPException(status_code=getattr(e, "status", 502), detail=detail)
 
     # R58 Unit 4 (2C) — {cre_property_id} input: load the reviewed extraction
     # record and merge any explicitly-posted overrides on top. Hand-authored

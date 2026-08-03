@@ -22,6 +22,7 @@ import { makeEntityReconcileRoute } from "./entity-reconcile.js";
 import { makeOfferContextRoute, makeOfferLogRoute } from "./offer-context.js";
 import { makeDealEmailMatcherRoute } from "./deal-email-matcher.js";
 import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
+import { resolveSubject } from "./subject-resolver.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
@@ -239,14 +240,17 @@ async function chooseBestEntity(rows) {
 // gov/dia get_property_context fallback when no LCC asset entity exists yet.
 async function findDomainProperty(q, raw, extraSelect = '') {
   const sel = `property_id,address,city,state${extraSelect ? ',' + extraSelect : ''}`;
-  let r = await q('GET', `properties?address=ilike.*${enc(raw)}*&select=${sel}&limit=1`)
+  let r = await q('GET', `properties?address=ilike.*${enc(raw)}*&select=${sel}&limit=25`)
     .catch(() => ({ data: [] }));
-  if (r.data && r.data[0]) return r.data[0];
+  let hits = [...new Map((r.data || []).filter((p) => p?.property_id != null).map((p) => [p.property_id, p])).values()];
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) return null;
   const norm = normalizeAddressLite(raw);
   if (norm && norm !== String(raw).toLowerCase()) {
-    r = await q('GET', `properties?address=ilike.*${enc(norm)}*&select=${sel}&limit=1`)
+    r = await q('GET', `properties?address=ilike.*${enc(norm)}*&select=${sel}&limit=25`)
       .catch(() => ({ data: [] }));
-    if (r.data && r.data[0]) return r.data[0];
+    hits = [...new Map((r.data || []).filter((p) => p?.property_id != null).map((p) => [p.property_id, p])).values()];
+    if (hits.length === 1) return hits[0];
   }
   return null;
 }
@@ -254,39 +258,44 @@ async function findDomainProperty(q, raw, extraSelect = '') {
 async function resolveEntityByPropertyIdentity({ domain, propertyId }) {
   if (propertyId === null || propertyId === undefined || String(propertyId).trim() === "") return null;
   const domains = normPropertyDomain(domain) ? [normPropertyDomain(domain)] : ["dia", "gov"];
+  const matches = [];
   for (const dom of domains) {
     const idRes = await opsQuery(
       "GET",
       `external_identities?source_system=eq.${enc(dom)}&source_type=eq.asset` +
-        `&external_id=eq.${enc(propertyId)}&select=entity_id&limit=1`
+        `&external_id=eq.${enc(propertyId)}&select=entity_id`
     ).catch(() => ({ data: [] }));
-    const entityId = idRes.data?.[0]?.entity_id || null;
-    if (!entityId) continue;
-    const entRes = await opsQuery(
-      "GET",
-      `entities?id=eq.${enc(entityId)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
-    ).catch(() => ({ data: [] }));
-    if (entRes.data?.[0]) return entRes.data[0];
+    const entityIds = [...new Set((idRes.data || []).map((r) => r.entity_id).filter(Boolean))];
+    for (const entityId of entityIds) {
+      const entRes = await opsQuery(
+        "GET",
+        `entities?id=eq.${enc(entityId)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
+      ).catch(() => ({ data: [] }));
+      if (entRes.data?.[0]) matches.push(entRes.data[0]);
+    }
   }
-  return null;
+  const unique = [...new Map(matches.map((e) => [e.id, e])).values()];
+  return unique.length === 1 ? unique[0] : null;
 }
 
 async function resolveEntityByAddressPropertyIdentity(address) {
+  const matches = [];
   if (DIA_SUPABASE_URL && DIA_SUPABASE_KEY) {
     const hit = await findDomainProperty(diaQuery, address, 'tenant,operator,chain_canonical');
     if (hit?.property_id != null) {
       const entity = await resolveEntityByPropertyIdentity({ domain: "dia", propertyId: hit.property_id });
-      if (entity) return entity;
+      if (entity) matches.push(entity);
     }
   }
   if (GOV_SUPABASE_URL && GOV_SUPABASE_KEY) {
     const hit = await findDomainProperty(govQuery, address, 'agency');
     if (hit?.property_id != null) {
       const entity = await resolveEntityByPropertyIdentity({ domain: "gov", propertyId: hit.property_id });
-      if (entity) return entity;
+      if (entity) matches.push(entity);
     }
   }
-  return null;
+  const unique = [...new Map(matches.map((e) => [e.id, e])).values()];
+  return unique.length === 1 ? unique[0] : null;
 }
 
 // Unit 4: resolve a property by address straight from the domain DBs when no
@@ -956,38 +965,32 @@ const TOOL_HANDLERS = {
         return textResult({ error: "OPS database not configured" });
       }
 
-      // Resolve entity
-      let entity = null;
-      if (entity_id) {
-        const res = await opsQuery(
-          "GET",
-          `entities?id=eq.${enc(entity_id)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`
-        );
-        entity = res.data?.[0] || null;
-      } else if (property_id) {
-        entity = await resolveEntityByPropertyIdentity({ domain, propertyId: property_id });
+      const resolution = await resolveSubject(
+        { entity_id, address, property_id, domain },
+        {
+          type: 'property',
+          tool: 'get_property_context',
+          surface: 'mcp',
+          opsQuery,
+          diaQuery,
+          govQuery,
+          domainAvailable: (dom) => dom === 'dia'
+            ? !!(DIA_SUPABASE_URL && DIA_SUPABASE_KEY)
+            : !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY),
+        }
+      );
+
+      if (resolution.status === 'ambiguous') return textResult(resolution);
+      if (resolution.status === 'not_on_file') {
+        return textResult({ ...resolution, error: "Property not found", entity_id, property_id, domain, address });
       }
-      if (!entity && address) {
-        entity = await resolveEntityByAddressPropertyIdentity(address);
-      }
-      if (!entity && address) {
-        const res = await opsQuery(
-          "GET",
-          `entities?entity_type=eq.asset&or=(address.ilike.*${enc(address)}*,name.ilike.*${enc(address)}*)&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
-        );
-        entity = res.data?.[0] || null;
+      if (!resolution.entity && resolution.domain_property) {
+        const fb = await assembleDomainPropertyFallback(resolution.domain_property);
+        if (fb) return textResult({ ...fb, resolution });
       }
 
-      if (!entity) {
-        // Unit 4: no LCC asset entity — fall back to resolving the address
-        // directly against the gov (and dia, if configured) domain DBs, the way
-        // the operator console surfaces gov properties that have no entity yet.
-        if (address) {
-          const fb = await resolvePropertyByAddressFromDomains(address);
-          if (fb) return textResult(fb);
-        }
-        return textResult({ error: "Property not found", entity_id, property_id, domain, address });
-      }
+      const entity = resolution.entity;
+      if (!entity) return textResult({ ...resolution, error: "Property not found", entity_id, property_id, domain, address });
 
       const eid = entity.id;
 
@@ -1084,6 +1087,13 @@ const TOOL_HANDLERS = {
       });
 
       const result = {
+        resolution: {
+          status: resolution.status,
+          type: resolution.type,
+          confidence: resolution.confidence,
+          resolved_via: resolution.resolved_via,
+          candidates: resolution.candidates,
+        },
         entity,
         active_tasks: actionsRes.data || [],
         context_packet,
@@ -1109,57 +1119,15 @@ const TOOL_HANDLERS = {
         return textResult({ error: "OPS database not configured" });
       }
 
-      // Resolve entity. R30: stop landing on junk/fragment stubs — exclude
-      // junk-flagged rows, prefer the registered canonical buyer-parent, and
-      // among remaining candidates pick the highest-value real entity.
-      let entity = null;
-      let canonicalResolution = null;
-      if (entity_id) {
-        // An id is an id — don't force entity_type=person (a buyer parent is an
-        // organization).
-        const res = await opsQuery(
-          "GET",
-          `entities?id=eq.${enc(entity_id)}&select=*,metadata,external_identities(*)`
-        );
-        entity = res.data?.[0] || null;
-      } else if (email) {
-        const res = await opsQuery(
-          "GET",
-          `entities?entity_type=eq.person&email=eq.${enc(email)}&select=*,metadata,external_identities(*)&limit=10`
-        );
-        entity = await chooseBestEntity(res.data);
-      } else if (name) {
-        // 1) Canonical buyer-parent (R5/R6): "Boyd Watterson" → Boyd Watterson
-        //    Global, never "boyd watterson by cbre".
-        const canonical = await resolveCanonicalParentId(name);
-        if (canonical && canonical.id) {
-          const cr = await opsQuery(
-            "GET",
-            `entities?id=eq.${enc(canonical.id)}&select=*,metadata,external_identities(*)`
-          ).catch(() => ({ data: [] }));
-          if (cr.data && cr.data[0]) {
-            entity = cr.data[0];
-            canonicalResolution = { resolved_to_parent: canonical.name || entity.name };
-          }
-        }
-        // 2) Otherwise, the best non-junk candidate by value (person OR org).
-        if (!entity) {
-          const res = await opsQuery(
-            "GET",
-            `entities?or=(name.ilike.*${enc(name)}*,canonical_name.ilike.*${enc(name.toLowerCase())}*)&select=*,metadata,external_identities(*)&limit=25`
-          );
-          entity = await chooseBestEntity(res.data);
-        }
+      const resolution = await resolveSubject(
+        { entity_id, name, email },
+        { type: 'contact', tool: 'get_contact_context', surface: 'mcp', opsQuery }
+      );
+      if (resolution.status === 'ambiguous') return textResult(resolution);
+      if (resolution.status === 'not_on_file' || !resolution.entity) {
+        return textResult({ ...resolution, error: "Contact not found", entity_id, name, email });
       }
-
-      if (!entity) {
-        return textResult({
-          error: "Contact not found",
-          entity_id,
-          name,
-          email,
-        });
-      }
+      const entity = resolution.entity;
       if (entity.metadata) delete entity.metadata;
 
       const eid = entity.id;
@@ -1215,7 +1183,16 @@ const TOOL_HANDLERS = {
 
       return textResult({
         entity,
-        canonical_resolution: canonicalResolution,
+        resolution: {
+          status: resolution.status,
+          type: resolution.type,
+          confidence: resolution.confidence,
+          resolved_via: resolution.resolved_via,
+          candidates: resolution.candidates,
+        },
+        canonical_resolution: resolution.resolved_via === 'canonical_buyer_parent'
+          ? { resolved_to_parent: resolution.candidates?.[0]?.canonical_parent_name || entity.name }
+          : null,
         salesforce_id: sfIdentity?.external_id || null,
         last_touch_date: lastTouch,
         touchpoint_count: touchpoints,
@@ -1439,6 +1416,44 @@ function summarizePipelineRuns(res, recommendations, label) {
 export function negotiateProtocolVersion(requestedVersion) {
   const requested = String(requestedVersion || "");
   return requested >= MCP_MIN_PROTOCOL_VERSION ? requested : MCP_MIN_PROTOCOL_VERSION;
+}
+
+async function assembleDomainPropertyFallback(domainProperty) {
+  const dom = normPropertyDomain(domainProperty?.domain);
+  if (!dom || !domainProperty?.property_id) return null;
+  if (dom === 'gov') {
+    const pid = domainProperty.property_id;
+    const [leases, owners, lead] = await Promise.all([
+      govQuery('GET', `gsa_leases?property_id=eq.${enc(pid)}&select=*&limit=5`).catch(() => ({ data: [] })),
+      govQuery('GET', `ownership_history?property_id=eq.${enc(pid)}&select=*&order=transfer_date.desc&limit=10`).catch(() => ({ data: [] })),
+      govQuery('GET', `prospect_leads?property_id=eq.${enc(pid)}&select=*&limit=1`).catch(() => ({ data: [] })),
+    ]);
+    return {
+      resolved_via: 'gov_property_fallback',
+      note: 'No LCC asset entity for this property yet — resolved directly from the government domain by address.',
+      property: { ...domainProperty, domain: 'gov' },
+      entity: null,
+      context_packet: null,
+      gov_data: {
+        gsa_leases: leases.data || [],
+        ownership_history: owners.data || [],
+        prospect_lead: (lead.data && lead.data[0]) || null,
+      },
+    };
+  }
+  if (dom === 'dia') {
+    const leases = await diaQuery('GET', `leases?property_id=eq.${enc(domainProperty.property_id)}&select=*&limit=5`)
+      .catch(() => ({ data: [] }));
+    return {
+      resolved_via: 'dia_property_fallback',
+      note: 'No LCC asset entity for this property yet — resolved directly from the dialysis domain by address.',
+      property: { ...domainProperty, domain: 'dia' },
+      entity: null,
+      context_packet: null,
+      dia_data: { leases: leases.data || [] },
+    };
+  }
+  return null;
 }
 
 export function mountLccMcp(app, { installMiddleware = false, apiPrefix = "" } = {}) {
