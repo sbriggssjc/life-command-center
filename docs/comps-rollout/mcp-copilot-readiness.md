@@ -204,3 +204,12 @@ data + auth are all good. The ChatGPT/Copilot failures are **connector-side**, n
   *workbook export* still fails, that's the `generateComps` gap below.
 - **Data note for the appraiser workbook:** plain FL dialysis sales = 0 reliable-NOI comps; use
   `include_unreliable_noi:true` and widen geography (Southeast, then national) to populate the set.
+
+## BOV service env for the workbook EXPORT step (2026-08-03)
+The comp-SET pull (query/synthesize) needs no BOV config. The workbook EXPORT (`generate_comps` MCP tool /
+`/api/comps` route → proxies pacific-love `/generate-comps`) needs, on tranquil-delight:
+- `BOV_SERVICE_URL` = `https://pacific-love-production-f6b9.up.railway.app` (has a code default = same value, so
+  optional — `api/comps.js:24`).
+- `BOV_API_KEY` = **required, no default** — the pacific-love BOV service's API key (sent as `X-API-Key`), a
+  DISTINCT value from `LCC_API_KEY`. Copy from the pacific-love service / standalone MCP service. Missing → the
+  `/api/comps` route returns `500 "Comps service not configured — set BOV_API_KEY"` (`api/comps.js:51-52`).
