@@ -7,6 +7,14 @@
 > copy of the original handoff lives at `Team Briggs – Documents/_WORKFLOW/ARCHITECTURE_HANDOFF_MCP_SERVER_UNIFICATION.md`.
 > Findings verified live against production 2026-07-24.
 
+> **Phase 2 UPDATE (2026-08-03, commit `ddd9d49e`):** the unification code has LANDED — `mcp/server.js`
+> now exports `mountLccMcp(app)` and root `server.js` mounts `/mcp` + OAuth + the bounded `/api/*` read/comps
+> routes (line 162, before the SPA/`/api` 404 fallthrough at 559); `initialize` now negotiates protocol
+> `>= 2025-03-26` for Copilot streamable-HTTP. Local verify: rich `/health` (19 tools), `/mcp` 401 unauth /
+> authed initialize echoes 2025-06-18, `tools/list`=19, all 9 `/api/*` routes 401 without bearer; `check:boot`
+> passes. **Remaining: Scott sets env vars on `tranquil-delight` + redeploys, then live-verify.** Once deployed,
+> `tranquil-delight/mcp` is live and the "two servers" assertions in the docs below become TRUE (one URL).
+
 ## Why this is an OS-level issue
 The consistency contract says single-source every capability. Today there are **two deployments** from the
 `life-command-center` repo and the docs treat them as one — that is drift at the *infrastructure* layer, and

@@ -1,35 +1,48 @@
-# Claude Code queue — STATUS  (updated 2026-08-03, session 2h)
+# Claude Code queue — STATUS  (updated 2026-08-03, session 2i)
 
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
-| 22 | MCP server unification (one URL) + protocol bump for Copilot | P0 | **open — unblocks Copilot MCP + fixes 2-server drift** |
-| 21 | Copilot Studio -> /mcp connect + publish | P1 | readiness DONE; Part 2 **blocked on 22** (/mcp 404s at canonical URL) |
-| 18 | Recurring PA flow failures + migration hygiene | P1 | **code DONE** (cast + test); tenant-side PA checks remain for Scott |
-| 19 | Run census demographics backfill | P1 | **blocked — CENSUS_API_KEY set but returns "Invalid Key"** |
+| 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |
+| 21 | Copilot Studio -> /mcp connect + publish | P1 | **blocked on 22 deploy** (then Scott connects + publishes to M365) |
+| 19 | Run census demographics backfill | P1 | **PAUSED per Scott** — awaiting a working key from census.gov |
+| 18 | Recurring PA flow failures | P1 | code DONE; tenant PA flows now handled (see below) |
 
-## This session's returned responses (reconciled 2026-08-03)
-- **07** data-backlog index — reconciled: prompts 0-6 closed, 7/8 carry-forward (7 applied live earlier; 8 = census). -> done.
-- **16** live-apply — items 1-2 live+verified; item 3 (census) blocked. Claude Code found the loaded CENSUS_API_KEY is effectively blank/invalid. -> done (census tracked in 19).
-- **18** PA flows — repo migration hygiene fixed (`connector_type::text`) + regression test; `node --test` passes.
-  Claude Code **cannot edit Power Automate** (no PA connector). Finding: the amber flows are mostly **stale/retired**,
-  not actively failing — the two biggest (Unflag Completed Email Tasks 253, To Do Sync 63) last ran Jul 29 (retired).
-- **19** census — ran the backfill; **Census returns "Invalid Key"** for the configured key. 0 rows written; coverage still 85. Needs a valid key.
-- **20** ChatGPT trim — DONE: queryComps 224 / synthesizeComps 200 chars; YAML parses; structure unchanged. Ready to re-import. -> done.
-- **21** Copilot MCP readiness — DONE: **`/mcp` 404s at tranquil-delight** (that host is the root app; MCP is a *separate* deployed service). Server code is close to streamable-HTTP but advertises `protocolVersion 2024-11-05`. -> spawned **prompt 22**.
+## THE ONE THING THAT UNBLOCKS EVERYTHING: deploy `ddd9d49e` to tranquil-delight
+Prompt 22 mounted `/mcp` + OAuth + the 9 bounded `/api/*` read/comps routes onto the root app (`server.js:162`,
+before the `/api/*` 404 handler at `server.js:559`), and bumped `initialize` to negotiate `>= 2025-03-26`.
+Locally verified (19 tools, 401/echo, check:boot passes). **Not deployed.** Deploying it fixes, in one step:
+- **ChatGPT** "Unknown API route" on comps (the GPT's comps call falls through to the 559 handler today —
+  confirmed in this session's re-import test chat). Import itself succeeded (prompt 20 trim worked).
+- **Copilot Studio** MCP (`/mcp` becomes live at the canonical URL) → prompt 21 Part 2.
+- **The 2-server drift** ("fixes land on the server ChatGPT never calls").
+
+**Scott's deploy checklist:** set on the `tranquil-delight` Railway service —
+`OPS_SUPABASE_URL/KEY`, `GOV_SUPABASE_URL/KEY`, `PRIMARY_WORKSPACE_ID`, `LCC_API_KEY`, `MCP_BASE_URL` + OAuth —
+then redeploy. Live-verify: `POST /mcp` initialize → 200 w/ Bearer (not 404); the 9 `/api/*` → 200; ChatGPT
+"Government comps in Texas, last 12 months" returns real comps; then connect Copilot.
+
+## Power Automate (tenant) — RESOLVED by Scott
+Retired flows (Unflag Completed Email Tasks, To Do Sync) are **Off**. The sole remaining active To Do flow is
+**LCCToDoCompletionPoll** (30-min recurrence): GET/POST `tranquil-delight/api/webhooks/todo-completion-poll`
+(route live at `server.js:266` → `api/sync.js`; design in `docs/architecture/flows/todo-completion-poll.md`),
+reads staged worklist, reconciles MS To Do + Outlook (resolve msg id → move → flag), reports completion.
+Reviewed this session — well-formed and consistent with the documented design; healthy. Health surface should
+green out as the retired rows age off.
+
+## This session (2i) processed
+- **Prompt 22 response** — code landed + committed `ddd9d49e`; deploy-pending. Response -> done/.
+- **ChatGPT re-import test** — GPT correctly refuses to fabricate; blocked only by "Unknown API route" = the
+  un-deployed unification (same fix as 22). Not a new issue.
+- **LCCToDoCompletionPoll flow** — reviewed; healthy; it's the consolidation of the two retired flows.
 
 ## Needs Scott (not code)
-- **Census:** obtain a VALID key at api.census.gov/data/key_signup.html (current one authenticates as Invalid),
-  set in Railway Variables + .env.local, then re-run prompt 19.
-- **Power Automate (tenant):** confirm retired flows **Unflag Completed Email Tasks** + **To Do Sync** are turned
-  **Off** (so they stop showing amber); verify **SF Daily Bulk File Backfill** latest run; repoint **RCM** +
-  **LoopNet** flows if they still point at stale Vercel hosts.
-- **ChatGPT:** re-import the trimmed `lcc-openapi.yaml` into the "Briggs CRE Analyst" GPT (prompt 20 done).
-- **After prompt 22 deploys:** connect the LCC Deal Agent to `/mcp` + publish to M365 channel (prompt 21 Part 2).
+- **Deploy `ddd9d49e`** to tranquil-delight (env vars + redeploy) — unblocks ChatGPT + Copilot. ← top priority.
+- **Copilot Studio** connect + publish (prompt 21 Part 2) — after the deploy.
+- **Census:** paused; obtain a working key from census.gov, then resume prompt 19.
 
 ## Done (in `done/`)
-01-14 (see prior), 16 (items 1-2 live; census->19), 17 data-integrity, 20 ChatGPT trim, 07 index. 15 RETIRED.
-Session 2h added: 07, 16, 20 prompts -> done; all 7 returned responses -> done.
+01-14, 16, 17, 20, 07; session 2i: prompt-22 response. 15 RETIRED.
 
 ## Migrations applied live by Cowork (Supabase MCP)
 #710 field_source_priority · relocation+competition (Dialysis) · lcc_health_surface (connector_type::text) ·

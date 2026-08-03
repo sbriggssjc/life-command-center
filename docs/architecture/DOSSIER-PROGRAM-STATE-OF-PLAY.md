@@ -385,3 +385,33 @@ Vercel hosts.
 
 **Housekeeping:** 07/16/20 prompts + all 7 returned response files moved to `done/`. Open queue now: 22 (P0),
 21 (blocked on 22), 18 (code done; tenant checks remain), 19 (blocked on valid census key).
+
+---
+
+## 2026-08-03 — Prompt 22 landed; ChatGPT + flow reviewed (session 2i)
+
+**Prompt 22 (MCP unification) implemented + committed `ddd9d49e`.** `mcp/server.js` now exports
+`mountLccMcp(app)`; root `server.js` mounts `/mcp` + OAuth + the 9 bounded `/api/*` read/comps routes at line
+162 (before the `/api/*` 404 fallthrough at 559); `initialize` negotiates protocol `>= 2025-03-26` for Copilot
+streamable-HTTP. Local verify: rich `/health` = 19 tools, `/mcp` 401 unauth / authed initialize echoes
+2025-06-18, `tools/list` = 19, all 9 routes 401 without bearer, `check:boot` passes. **Deploy-pending** — Scott
+sets env vars on `tranquil-delight` + redeploys, then live-verify. Unification doc status flipped to "Phase 2
+code landed."
+
+**This is the single unblock for both remaining AI surfaces.** Scott re-imported the trimmed `lcc-openapi.yaml`
+into the ChatGPT GPT (prompt 20 worked — import succeeded, GPT correctly refuses to fabricate comps), but the
+comps call still returns **"Unknown API route"** — which is precisely the root app's `/api/*` 404 handler
+(`server.js:559`). The GPT's comps routes aren't on `tranquil-delight` *yet* — prompt 22's mount puts them there.
+So the same redeploy fixes ChatGPT comps **and** brings `/mcp` live for Copilot (prompt 21 Part 2). One deploy,
+three problems solved (ChatGPT, Copilot, 2-server drift).
+
+**Power Automate resolved.** The two retired flows are Off. The sole active To Do flow, **LCCToDoCompletionPoll**
+(30-min recurrence), was reviewed: GET/POST `tranquil-delight/api/webhooks/todo-completion-poll` (route live at
+`server.js:266` → `api/sync.js`; documented in `docs/architecture/flows/todo-completion-poll.md`) → read staged
+worklist, reconcile MS To Do + Outlook (resolve message id → move → flag), report completion. Well-formed,
+matches the documented design, healthy. It consolidates the two retired flows into one poll.
+
+**Census** paused per Scott until a working key comes back from census.gov (prompt 19 parked).
+
+**Next:** deploy `ddd9d49e` (env + redeploy) → live-verify → ChatGPT comps works + connect Copilot to `/mcp`
+and publish to the M365 channel.
