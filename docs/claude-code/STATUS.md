@@ -49,3 +49,9 @@ green out as the retired rows age off.
 lcc_contact_property_deal_reverse_reads.
 
 ## Process: see `README.md`.
+
+## SECURITY (2026-08-03) — P0
+`LCC_API_KEY` was pasted in plaintext during a curl diagnostic (2e04…b64c) → treat as compromised (also the
+prior flagged rotation item). ROTATE: new value on tranquil-delight + standalone MCP + BOV services, then update
+ChatGPT action, Copilot connection, personal Claude connector, and any PA flows that send it. One new shared
+value across all surfaces also removes any key-mismatch as a cause of the comps 401/SystemError.
