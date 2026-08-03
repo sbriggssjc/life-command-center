@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.1.0** — 2026-07-30. Bump this on any rule change; record it in the changelog below and
+**CANON_VERSION: 1.2.0** — 2026-08-03. Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 
 ## Global invariants (apply to every topic, every surface)

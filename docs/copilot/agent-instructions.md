@@ -18,7 +18,7 @@ Team Briggs lists commercial real estate for sale (primarily single-tenant NNN).
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.1.0 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.2.0 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine — `SynthesizeComps` (default; pass the request text verbatim) or
