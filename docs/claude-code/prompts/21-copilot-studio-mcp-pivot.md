@@ -42,3 +42,18 @@ workbook."
 ## Interaction with prompt 20
 Prompt 20 (ChatGPT description trim) still ships — ChatGPT needs the OpenAPI schema. This prompt removes the
 OpenAPI/Swagger dependency for the MICROSOFT surfaces only.
+
+## Prerequisites confirmed on Microsoft Learn (2026-08-03) — account for these
+1. **Generative Orchestration must be ON** for the LCC Deal Agent, or MCP tools are unavailable. Part 2 must have
+   Scott enable it (agent Settings -> Orchestration -> Generative) before adding the MCP tool.
+2. **Bounded outputs are mandatory, not optional.** Copilot Studio throws `TooMuchDataToHandle` when a tool's
+   output exceeds the model request size — this is exactly the earlier 1.1M-char comps dump. Part 1 must verify
+   every tool `/mcp` advertises returns a bounded/scoped result; if any comps/read tool can still return the
+   universe, that's a server-side bug to fix before the pivot (scope to the requested market, cap row count).
+3. **`dialogId` authoring error** (`"Expected 'dialogId' to be defined"`) when adding an action in the classic
+   action/canvas path: this is a Copilot Studio authoring-UI issue, typically cleared by saving+publishing the
+   agent, refreshing/reopening it, and ensuring Generative Orchestration is on. Note it in the readiness doc so
+   Scott doesn't fight the per-action add — the MCP tool add path (Add tool -> Model Context Protocol) sidesteps
+   the per-operation action wiring entirely, which is another reason to prefer it over adding GenerateComps by hand.
+4. **DLP note:** tenant Data Loss Prevention can block custom-connector creation. If hit, create the MCP custom
+   connector in a Dev/Sandbox Power Platform environment (per Microsoft's troubleshooting guidance).
