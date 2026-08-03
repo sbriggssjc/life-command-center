@@ -137,7 +137,7 @@ db_drift AS (
 ),
 connectors AS (
   SELECT 'connectors'::text AS subsystem,
-         connector_type AS check_name,
+         connector_type::text AS check_name,
          CASE
            WHEN bool_or(status IN ('error', 'disconnected')) THEN 'red'
            WHEN bool_or(status IN ('degraded', 'pending_setup')) THEN 'amber'

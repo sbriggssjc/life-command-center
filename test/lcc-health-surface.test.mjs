@@ -20,6 +20,7 @@ describe('Prompt 12 LCC Health surface migration', () => {
     assert.match(sql, /FROM public\.flow_run_failures/i);
     assert.match(sql, /FROM public\.v_field_source_priority_invalid_columns/i);
     assert.match(sql, /FROM public\.connector_accounts/i);
+    assert.match(sql, /connector_type::text\s+AS check_name/i);
   });
 
   it('opens same-day health alerts through the existing alert table', () => {
