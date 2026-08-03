@@ -26,6 +26,7 @@ import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
 // ── Environment ──────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || "3100", 10);
+const MCP_MIN_PROTOCOL_VERSION = "2025-03-26";
 const LCC_API_KEY = process.env.LCC_API_KEY || "";
 
 // Base URL of the main Express app (the tranquil-delight service). Used to
@@ -1435,18 +1436,25 @@ function summarizePipelineRuns(res, recommendations, label) {
 
 // ── Express HTTP Transport ──────────────────────────────────────────────────
 
-const app = express();
+export function negotiateProtocolVersion(requestedVersion) {
+  const requested = String(requestedVersion || "");
+  return requested >= MCP_MIN_PROTOCOL_VERSION ? requested : MCP_MIN_PROTOCOL_VERSION;
+}
 
-app.use(
-  cors({
-    origin: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
-    credentials: true,
-  })
-);
-app.use(express.json({ limit: '30mb' }));   // batch opportunity sync posts the whole SF Get-records array
-app.use(express.urlencoded({ extended: true }));
+export function mountLccMcp(app, { installMiddleware = false, apiPrefix = "" } = {}) {
+  const prefixed = (path) => `${apiPrefix}${path}`;
+  if (installMiddleware) {
+    app.use(
+      cors({
+        origin: true,
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+        credentials: true,
+      })
+    );
+    app.use(express.json({ limit: '30mb' }));   // batch opportunity sync posts the whole SF Get-records array
+    app.use(express.urlencoded({ extended: true }));
+  }
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
 function authenticate(req, res, next) {
@@ -1563,7 +1571,7 @@ app.post('/mcp', async (req, res) => {
         return res.json({
           jsonrpc: '2.0', id,
           result: {
-            protocolVersion: '2024-11-05',
+            protocolVersion: negotiateProtocolVersion(params?.protocolVersion),
             capabilities: { tools: {} },
             serverInfo: { name: 'LCC MCP Server', version: '1.0.0' }
           }
@@ -1928,13 +1936,13 @@ app.get("/", (_req, res) => {
   // Shared REST surface — same engine as the MCP tools above, for Copilot Studio
   // custom connector + ChatGPT GPT Actions. Bearer-authenticated via `authenticate`.
   const __compsRoutes = makeCompsHttpRoutes({ govQuery, diaQuery });
-  app.post("/api/query-comps", authenticate, __compsRoutes.queryComps);
-  app.post("/api/synthesize-comps", authenticate, __compsRoutes.synthesizeComps);
+  app.post(prefixed("/api/query-comps"), authenticate, __compsRoutes.queryComps);
+  app.post(prefixed("/api/synthesize-comps"), authenticate, __compsRoutes.synthesizeComps);
   // W3.4: the comp-review DRAIN — list + resolve the flagged-comp queues. GET
   // lists open reviews across dia+gov; POST records a disposition. Same engine
   // the Decision-Center comp-review lane (ops.js) proxies to via /api/comp-reviews.
-  app.get("/api/comp-reviews", authenticate, __compsRoutes.listCompReviews);
-  app.post("/api/comp-reviews/resolve", authenticate, __compsRoutes.resolveCompReview);
+  app.get(prefixed("/api/comp-reviews"), authenticate, __compsRoutes.listCompReviews);
+  app.post(prefixed("/api/comp-reviews/resolve"), authenticate, __compsRoutes.resolveCompReview);
   console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps, /api/comp-reviews[, /resolve]");
 }
 
@@ -1946,7 +1954,7 @@ app.get("/", (_req, res) => {
 {
   const MB_SELECT_GOV = 'queue_id,property_id,missing_fields,priority,status,attempts,last_attempt_at,address,city,state,agency_full,most_recent_sale_date,most_recent_sold_price,costar_search_url';
   const MB_SELECT_DIA = 'queue_id,property_id,missing_fields,priority,status,attempts,last_attempt_at,address,city,state,tenant,parcel_number,most_recent_sale_date,most_recent_sold_price,costar_search_url';
-  app.get("/api/metadata-backfill", authenticate, async (req, res) => {
+  app.get(prefixed("/api/metadata-backfill"), authenticate, async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
     const only = String(req.query.domain || '').toLowerCase();
     const wantGov = !only || only === 'gov' || only === 'government';
@@ -1989,47 +1997,47 @@ app.get("/", (_req, res) => {
 
   // REST surface (POST + JSON body) — the root proxy forwards POST, so these are POST.
   const __ddRoutes = makeDealDossierHttpRoutes({ opsQuery, enc });
-  app.post("/api/deal/dossier",     authenticate, __ddRoutes.getDossier);
-  app.post("/api/deal/checkpoints", authenticate, __ddRoutes.listCheckpoints);
+  app.post(prefixed("/api/deal/dossier"),     authenticate, __ddRoutes.getDossier);
+  app.post(prefixed("/api/deal/checkpoints"), authenticate, __ddRoutes.listCheckpoints);
 
   // Salesforce write-back — enqueue into sf_sync_queue (confirmation-gated in the module).
   const __sfRoutes = makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/sf/log-activity",       authenticate, __sfRoutes.logActivity);
-  app.post("/api/sf/create-task",        authenticate, __sfRoutes.createTask);
-  app.post("/api/sf/update-opportunity", authenticate, __sfRoutes.updateOpportunity);
+  app.post(prefixed("/api/sf/log-activity"),       authenticate, __sfRoutes.logActivity);
+  app.post(prefixed("/api/sf/create-task"),        authenticate, __sfRoutes.createTask);
+  app.post(prefixed("/api/sf/update-opportunity"), authenticate, __sfRoutes.updateOpportunity);
 
   // Inbound SF Opportunity -> LCC deal backbone (BUILD 01) — idempotent on (workspace_id, sf_opp_id).
   const __oppSync = makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/ingest-opportunity",   authenticate, __oppSync.ingest);       // single deal
-  app.post("/api/pipeline/ingest-opportunities", authenticate, __oppSync.ingestBatch);  // batch (PA sends whole array)
+  app.post(prefixed("/api/pipeline/ingest-opportunity"),   authenticate, __oppSync.ingest);       // single deal
+  app.post(prefixed("/api/pipeline/ingest-opportunities"), authenticate, __oppSync.ingestBatch);  // batch (PA sends whole array)
 
   // Deal Roster (BUILD 02, Slice A) — Team Briggs deal-team edges for owned/partnership scope.
   const __roster = makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/ingest-deal-parties",  authenticate, __roster.ingestParties);       // team members
-  app.post("/api/pipeline/ingest-deal-contacts", authenticate, __roster.ingestContactRoles);   // external contact roles
+  app.post(prefixed("/api/pipeline/ingest-deal-parties"),  authenticate, __roster.ingestParties);       // team members
+  app.post(prefixed("/api/pipeline/ingest-deal-contacts"), authenticate, __roster.ingestContactRoles);   // external contact roles
 
   // Cadence Engine (BUILD 03) — read-only "what needs a touch" scan over in-scope open deals.
   const __cadence = makeCadenceScanRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.get("/api/pipeline/cadence-scan",  authenticate, __cadence.scan);
-  app.post("/api/pipeline/cadence-scan", authenticate, __cadence.scan);
-  app.get("/api/pipeline/weekly-digest",  authenticate, __cadence.weeklyDigest);   // engine-composed email
-  app.post("/api/pipeline/weekly-digest", authenticate, __cadence.weeklyDigest);
+  app.get(prefixed("/api/pipeline/cadence-scan"),  authenticate, __cadence.scan);
+  app.post(prefixed("/api/pipeline/cadence-scan"), authenticate, __cadence.scan);
+  app.get(prefixed("/api/pipeline/weekly-digest"),  authenticate, __cadence.weeklyDigest);   // engine-composed email
+  app.post(prefixed("/api/pipeline/weekly-digest"), authenticate, __cadence.weeklyDigest);
   // A1 entity reconciliation — review flagged deals + merge a placeholder onto a canonical asset.
   const __reconcile = makeEntityReconcileRoute({ opsQuery });
-  app.get("/api/pipeline/flagged-deals",     authenticate, __reconcile.list);
-  app.post("/api/pipeline/flagged-deals",    authenticate, __reconcile.list);
-  app.post("/api/pipeline/reconcile-entity", authenticate, __reconcile.reconcile);
+  app.get(prefixed("/api/pipeline/flagged-deals"),     authenticate, __reconcile.list);
+  app.post(prefixed("/api/pipeline/flagged-deals"),    authenticate, __reconcile.list);
+  app.post(prefixed("/api/pipeline/reconcile-entity"), authenticate, __reconcile.reconcile);
 
   // Offer-submission (BUILD 05) — assemble context + log an inbound offer (LCC + generic SF).
   const __offerCtx = makeOfferContextRoute({ opsQuery });
   const __offerLog = makeOfferLogRoute({ opsQuery });
-  app.get ("/api/pipeline/offer-context", authenticate, __offerCtx.get);
-  app.post("/api/pipeline/offer-context", authenticate, __offerCtx.get);
-  app.post("/api/pipeline/offer-log",     authenticate, __offerLog.post);
+  app.get (prefixed("/api/pipeline/offer-context"), authenticate, __offerCtx.get);
+  app.post(prefixed("/api/pipeline/offer-context"), authenticate, __offerCtx.get);
+  app.post(prefixed("/api/pipeline/offer-log"),     authenticate, __offerLog.post);
 
   // Deal-Email Matcher (BUILD 04) — attribute Outlook emails to deals by tenant+city; self-builds roster.
   const __matcher = makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/match-deal-emails", authenticate, __matcher.match);
+  app.post(prefixed("/api/pipeline/match-deal-emails"), authenticate, __matcher.match);
   console.log("[MCP] Registered deal-dossier + SF write-back + opportunity-sync HTTP routes");
 }
 
@@ -2047,18 +2055,24 @@ const READ_HTTP_ROUTES = {
   "/api/recall-memory": "recall_memory",
 };
 for (const [routePath, toolName] of Object.entries(READ_HTTP_ROUTES)) {
-  app.post(routePath, authenticate, makeReadHttpRoute(toolName));
+  app.post(prefixed(routePath), authenticate, makeReadHttpRoute(toolName));
 }
 console.log("[MCP] Registered read HTTP routes:", Object.keys(READ_HTTP_ROUTES).join(", "));
+}
 
 // ── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`[MCP] Life Command Center MCP server running on port ${PORT}`);
-  console.log(`[MCP] MCP endpoint: http://localhost:${PORT}/mcp`);
-  console.log(`[MCP] Health check: http://localhost:${PORT}/health`);
-  console.log(`[MCP] Auth: ${LCC_API_KEY ? "ENABLED" : "DISABLED (dev mode)"}`);
-  console.log(`[MCP] OPS DB: ${OPS_SUPABASE_URL ? "configured" : "NOT configured"}`);
-  console.log(`[MCP] GOV DB: ${GOV_SUPABASE_URL ? "configured" : "NOT configured"}`);
-  console.log(`[MCP] Assemble-on-miss: ${LCC_API_BASE ? `via ${LCC_API_BASE}` : "DISABLED (LCC_API_BASE not set — cache-only)"}`);
-});
+const isStandalone = process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href;
+if (isStandalone) {
+  const app = express();
+  mountLccMcp(app, { installMiddleware: true });
+  app.listen(PORT, () => {
+    console.log(`[MCP] Life Command Center MCP server running on port ${PORT}`);
+    console.log(`[MCP] MCP endpoint: http://localhost:${PORT}/mcp`);
+    console.log(`[MCP] Health check: http://localhost:${PORT}/health`);
+    console.log(`[MCP] Auth: ${LCC_API_KEY ? "ENABLED" : "DISABLED (dev mode)"}`);
+    console.log(`[MCP] OPS DB: ${OPS_SUPABASE_URL ? "configured" : "NOT configured"}`);
+    console.log(`[MCP] GOV DB: ${GOV_SUPABASE_URL ? "configured" : "NOT configured"}`);
+    console.log(`[MCP] Assemble-on-miss: ${LCC_API_BASE ? `via ${LCC_API_BASE}` : "DISABLED (LCC_API_BASE not set — cache-only)"}`);
+  });
+}

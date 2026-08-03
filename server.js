@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
 import { authenticate } from './api/_shared/auth.js';
 import { opsQuery } from './api/_shared/ops-db.js';
+import { mountLccMcp } from './mcp/server.js';
 import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
@@ -128,6 +129,7 @@ app.get(['/', '/index.html'], (req, res) => sendIndex(res));
 // of post-bytes JSON envelope. NorthMarq OMs from SF average 5-15 MB; the largest
 // observed (Pizza Hut Fairview OM, ingested via Flow 7 backfill) was 27 MB.
 app.use(express.json({ limit: '30mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -153,6 +155,12 @@ app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   next();
 });
+
+// ── Unified MCP surface: /mcp + OAuth + bounded read/comps HTTP routes ──────
+// Mounted before legacy /api aliases so /api/daily-briefing is owned by the
+// bounded MCP read handler, not the full admin edge-brief snapshot.
+mountLccMcp(app);
+console.log('[LCC] MCP surface mounted (/mcp + bounded /api/* read/comps routes)');
 
 // ── Sub-route aliases (friendly /api/<name> → handler + `?_route=<name>`) ────
 // These ARE the routing table (vercel.json is retired). Each alias sets the
