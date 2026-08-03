@@ -528,3 +528,17 @@ Confirmed the per-surface master paste-files are: Copilot `docs/copilot/agent-in
 ChatGPT `docs/os/surfaces/chatgpt.canon.md` Knowledge upload, Northmarq `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md`
 (rich hand-file, section-synced), Personal/Cowork = skills. True one-command-updates-all still needs each master to
 carry a managed CANON region + portable render config (follow-up).
+
+---
+
+## 2026-08-03 — Consolidated the session's understanding into a durable reference (session 2r)
+
+Prompt 26 implemented + committed `b821a908` (appraisal geography ranks not filters; subject excluded via
+`meta.excluded_subject`; Tampa non-appraisal still hard-filters; tests pass). Response → done/. DEPLOY-PENDING with 23/25.
+
+Per Scott's ask ("update our files so we find this next time, not from scratch"): wrote
+`docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — the durable map of (1) the instruction canon/render single-source
+system + the per-surface master paste-file table + legacy-file warning, (2) the two-server deploy architecture +
+env, (3) the comps engine operational reference (3,022-comp inventory, appraisal mode, tenant-ILIKE + reliability
+gate, prompts 23/25/26), (4) the DEPLOY-PENDING bundle, (5) pointers to the request-understanding design/audit.
+Linked from `docs/os/README.md` (architecture start) and the STATUS.md banner. This is the "read first" doc.

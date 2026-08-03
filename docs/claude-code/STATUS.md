@@ -1,9 +1,16 @@
-# Claude Code queue — STATUS  (updated 2026-08-03, session 2i)
+# Claude Code queue — STATUS
+
+> **START HERE (durable map):** `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — the surfaces/comps/deploy
+> understanding, so a new chat isn't rebuilt from scratch.
+>
+> **DEPLOY-PENDING:** prompts **23, 25, 26** (comps appraisal mode + subject resolver + appraisal geo-ranking)
+> are committed but NOT live — redeploy **tranquil-delight + the standalone MCP**, then re-verify the Villages
+> appraisal pull. Also: rotate `LCC_API_KEY`; re-upload/paste v1.2.0 instruction files per SURFACE-SYNC §1.
+
 
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
-| 26 | Appraisal-mode metro/state OVER-FILTER fix (subject location must rank, not filter) | P1 | open — the live 1-comp cause |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |

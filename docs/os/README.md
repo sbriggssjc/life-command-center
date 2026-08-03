@@ -1,3 +1,5 @@
+> **Operational reference (surfaces, comps engine, deploy, maintenance doctrine):** [`AI-SURFACES-OPERATIONAL-REFERENCE.md`](AI-SURFACES-OPERATIONAL-REFERENCE.md) — read before touching instructions, the comps engine, or a deploy.
+
 # LCC Operating System — START HERE
 
 > **This is the home base for the whole architecture.** Any future chat (Claude, Cowork, Copilot build,
