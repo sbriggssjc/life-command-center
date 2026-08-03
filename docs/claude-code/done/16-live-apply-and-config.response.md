@@ -76,3 +76,21 @@ Remaining work:
 ## Command Notes
 - Initial script/network attempts from the sandbox failed with `connect EACCES`; reruns used approved network access.
 - No secrets were printed.
+
+## 2026-08-03 Codex rerun
+
+Live read-only verification:
+- `v_field_source_priority_invalid_columns` returned `0` rows.
+- `field_source_priority` still has the expected folder-feed listing rows:
+  - `dia.available_listings`: `initial_price`, `last_price`, `initial_cap_rate`, `current_cap_rate`, `cap_rate`, `price_change_date` at priority `45`, `warn`, for both `folder_feed_bov` and `folder_feed_master`.
+  - `gov.available_listings`: `asking_price`, `asking_cap_rate` at priority `45`, `warn`, for both `folder_feed_bov` and `folder_feed_master`.
+  - Sentinel quarantine rows remain intentional at priority `9999`, `strict`: `dia.available_listings.sold_price`; `gov.available_listings.last_price`, `last_price_change`, `original_price`.
+- `v_clinic_relocation_lineage` for CCN `442740` returned property `23654`, facility cert `2017-10-27`, original cert `2003-02-01`, `13` current stations, `prior_site_not_on_file`, current address `5247 Airways Blvd`.
+- `dia_nearby_dialysis_competition(35.005382,-89.989957,5,25,'442740')` returned `9` clinics. Rent-bearing examples: DaVita State Line Dialysis (`1.116` mi, `$19.63/SF`), DaVita Memphis South Dialysis (`2.73` mi, `$15.00/SF`), DaVita Whitehaven Renal Center (`3.978` mi, `$32.81/SF`).
+
+Item 3 rerun:
+- Command: `node scripts\backfill-dia-location-trade-area-23654.mjs --commit --gaps-file=DIA_DEMOGRAPHICS_COVERAGE_GAPS_2026-08-03.md`
+- Result: Supabase read/map/tenant portions ran, but demographics were not written: `CENSUS_API_KEY is required for ACS block-group demographics.`
+- `.env.local` contains a `CENSUS_API_KEY=` entry, but the loaded value is effectively blank (`""`).
+- Live `property_demographics` query for property `23654` returned `[]`.
+- Refreshed coverage gap file: `DIA_DEMOGRAPHICS_COVERAGE_GAPS_2026-08-03.md`, still `994` rows.

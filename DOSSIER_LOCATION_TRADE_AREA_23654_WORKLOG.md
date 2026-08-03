@@ -28,6 +28,9 @@ Implement the dossier v2 "Location & Trade Area" section end to end for 5247 Air
 - 2026-08-01: Applied the additive migration live to Dialysis_DB via `supabase db query --linked --file supabase\migrations\dialysis\20260801203000_dia_location_trade_area_assets.sql`.
 - 2026-08-01: Ran the live map/Places pass. Verified `property_static_map_cache` has a Google Static Maps row for property 23654. Verified stored Places callouts within 5 miles: Walmart Supercenter (2.13 mi), Walgreens (2.33 mi), Walgreens (2.83 mi), Dollar Tree (3.03 mi), Walmart Supercenter (3.14 mi), Walgreens (3.18 mi).
 - 2026-08-01: Radius demographics were not written because no `CENSUS_API_KEY` is configured. The script reported 994 dialysis properties still lacking any `property_demographics` rows, so the gap is systemic rather than isolated to 23654.
+- 2026-08-03: Resumed Prompt 16 live-apply checklist. Items 1 (#710 field-source priority) and 2 (relocation + market competition) were already applied and re-verified live in `docs/claude-code/done/16-live-apply-and-config.response.md`; item 3 is the remaining Census-radius demographics write. Confirmed `.env.local` contains a `CENSUS_API_KEY` entry and `scripts/backfill-dia-location-trade-area-23654.mjs` still passes syntax check before commit run.
+- 2026-08-03: Reran `node scripts\backfill-dia-location-trade-area-23654.mjs --commit --gaps-file=DIA_DEMOGRAPHICS_COVERAGE_GAPS_2026-08-03.md`. The script reached DIA Supabase, found cached map + 6 nearby tenants, but did not write demographics because the loaded Census key is blank (`CENSUS_API_KEY=""`). Live `property_demographics` for 23654 still has no rows. Refreshed gap file still reports 994 dialysis properties lacking demographics.
+- 2026-08-03: Live read-only verifier reconfirmed Prompt 16 items 1 and 2: field-source invalid-column audit is 0; folder-feed ask/cap priority rows are live; 442740 relocation lineage is live; market competition RPC returns 9 nearby clinics with rent examples.
 
 ## Verification
 - `node --test test\dossier-generator.test.mjs` passes.
@@ -35,3 +38,4 @@ Implement the dossier v2 "Location & Trade Area" section end to end for 5247 Air
 - `node --check api\_shared\location-trade-area.js` passes.
 - `node --check api\_handlers\entities-handler.js` passes.
 - `node --check scripts\backfill-dia-location-trade-area-23654.mjs` passes.
+- `node .tmp_prompt16_live_verify.mjs` passed on 2026-08-03 before the temporary verifier was removed.
