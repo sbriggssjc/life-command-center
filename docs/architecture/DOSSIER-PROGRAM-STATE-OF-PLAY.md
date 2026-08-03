@@ -555,3 +555,16 @@ workbook (extend `generate_comps` to take the `request`, synthesize + build serv
 link — mirror the BOV generator). Copilot SystemError should also be checked against connection-authorization +
 Generative Orchestration in the Test pane, but the payload one-shot fix removes the size cause. Subject still
 resolves as the place "The Villages" (fields Not on file) — resolve the live deal record after the handoff works.
+
+---
+
+## 2026-08-03 — Prompt 27 (one-shot workbook) implemented; deploy-pending (session 2t)
+
+Prompt 27 committed `9ac94bfb`: `generate_comps` now accepts a `request` param → runs synthesize + builds the
+Team Briggs workbook SERVER-SIDE → returns a compact `{download_url, counts, cap_rate_range, tiers, flagged_count,
+subject}` (rows never round-trip the model); the bounded-output guard preserves `template_comps` before dropping
+full comps for the 2-step path; canon bumped v1.2.0→v1.2.1 and all surfaces + the OpenAPI schemas re-rendered.
+Tests pass; NOT live-tested (needs redeploy + live BOV). To finish: redeploy tranquil-delight + standalone MCP;
+confirm BOV service (`pacific-love`) + `BOV_API_KEY`; ChatGPT re-import `lcc-openapi.yaml`; re-paste v1.2.1 bundles.
+Then the Villages appraisal request should return a working Team Briggs workbook download link on both surfaces.
+Response → done/.
