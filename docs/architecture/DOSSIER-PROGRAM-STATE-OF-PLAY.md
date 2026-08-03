@@ -415,3 +415,19 @@ matches the documented design, healthy. It consolidates the two retired flows in
 
 **Next:** deploy `ddd9d49e` (env + redeploy) → live-verify → ChatGPT comps works + connect Copilot to `/mcp`
 and publish to the M365 channel.
+
+---
+
+## 2026-08-03 — Comps connected; triaged the "too few comps" issue (session 2k)
+
+After the deploy + BOV env, ChatGPT's comps connect works, but it could only reach ~9 dialysis comps (one query
+returned 1) and concluded the backend hid the historical universe. Investigated directly against Dialysis_DB:
+**the universe is fully present and served** — 3,022 live sold dialysis comps (1985–2026, 48 states, 100+ FL);
+`rpc_query_comps` returns 100 at limit 100. The engine returned 14 FL comps at states=[FL]+include_unreliable+
+limit15. So no data/deploy bug. The agents saw 3–9 due to three compounding request-shaping causes: (1) the
+reliability gate is ON by default (excludes imputed-cap comps = most dialysis); (2) small default limits (40/25)
+combined with the RPC being most-recent-first; (3) `p_tenant` is a single ILIKE, so a multi-operator string
+matched ~nothing (the "1 record"). Immediate no-code workaround: pull with include_unreliable_noi=true, no tenant
+filter, limit 100, geo-tiered (FL→Southeast→national) + date_from 2010. Design fix queued as **prompt 23**
+(appraisal/full-set mode, rank-before-truncate, tenant list, surface the excluded count). Full analysis:
+`docs/comps-rollout/comps-query-shaping-triage-2026-08-03.md`.
