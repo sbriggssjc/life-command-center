@@ -488,3 +488,23 @@ and (2) the **resolution/ambiguity** rule from prompt 25 — on `status='ambiguo
 (unified/Copilot), `docs/claude/northmarq-claude-instructions.md`, `docs/claude/personal-claude-instructions.md`,
 `docs/setup/gpt-actions-system-prompt.txt`; canon source `docs/os/canon/comps.md` (v1.1.0) + new
 `docs/os/canon/resolution.md` (+ blocks). ChatGPT also needs its LCC-CANON knowledge file updated to match.
+
+---
+
+## 2026-08-03 — Instruction canon re-rendered properly (v1.2.0); corrected binding-artifact map (session 2p)
+
+Scott's attached live ChatGPT canon revealed the instruction files were out of sync: the canon is a real
+single-source system (`docs/os/canon/blocks/*.md` → `docs/os/tools/render-surfaces.mjs` → per-surface bundles in
+`docs/os/surfaces/*.canon.md`, config in `docs/os/render.manifest.json`, version in `canon/00-INDEX.md`), but my
+prior-session changes were hand-patched instead of rendered, and the new `resolution` block wasn't registered.
+Fixed IN-SYSTEM: registered `resolution` in the manifest for all 5 surfaces, bumped CANON_VERSION 1.1.0→1.2.0,
+ran `render-surfaces.mjs --write-live`. All 5 bundles + the Copilot live artifact now carry the comps
+no-self-narrow + resolution/ambiguity rules at v1.2.0. Reverted the redundant hand-edit to the ChatGPT persona
+(canon rides in the `chatgpt.canon.md` Knowledge file). Commit `0480e4a`.
+
+**Correction to session 2o:** the two `docs/claude/*.md` files edited then are NOT the binding artifacts
+(SURFACE-SYNC-PROTOCOL §1): Northmarq binds to `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md`, Personal Claude to the
+`~/.claude/skills/*`. Those `docs/claude/*.md` files are legacy duplicates that still self-label "AUTHORITATIVE"
+— a real repo contradiction to reconcile (delete or convert to binding artifacts). Also: only the Copilot artifact
+is a `--write-live` target; Northmarq/ChatGPT/Personal/Cowork are "external" (manual paste of the rendered bundle)
+— a future improvement is giving each a managed region so one `render --write-live` updates them all.
