@@ -70,10 +70,12 @@ Instruction/canon changes do NOT need a deploy — they're paste/upload.
   instruction fix.)
 
 ## 4. DEPLOY-PENDING (the single most important "what's left")
-Committed to `main` but NOT yet on the live Railway services: **prompts 23, 25, 26** (comps appraisal mode,
-subject resolver, appraisal geo-ranking fix). Redeploy **tranquil-delight + the standalone MCP** to make them live,
-then re-verify the Villages appraisal request returns ~20–30 ranked comps. Also pending: rotate `LCC_API_KEY`;
-re-upload/paste the v1.2.0 instruction files per §1; Census key (invalid) for the demographics backfill (prompt 19).
+**Prompts 23, 25, 26 are DEPLOYED (2026-08-03)** — appraisal mode confirmed live: the Villages request now
+returns 100 candidates → top ~25 ranked (17 FL), sold + listings, flags retained. **Open blocker: the WORKBOOK
+handoff** — 25 rows are too big to round-trip through the model, so `generate_comps` gets no rows (ChatGPT: 45k
+bound truncates; Copilot: SystemError). Fix = **prompt 27** (one-shot server-side workbook → return only a
+download link). Still pending: rotate `LCC_API_KEY`; re-upload/paste v1.2.0 instruction files per §1; Census key
+(invalid) for prompt 19.
 
 ## 5. The bigger architecture (pointers)
 - Request-understanding layer (why plain-language handling is a cross-tool gap): `docs/architecture/request-

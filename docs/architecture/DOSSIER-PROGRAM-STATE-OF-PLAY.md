@@ -542,3 +542,16 @@ system + the per-surface master paste-file table + legacy-file warning, (2) the 
 env, (3) the comps engine operational reference (3,022-comp inventory, appraisal mode, tenant-ILIKE + reliability
 gate, prompts 23/25/26), (4) the DEPLOY-PENDING bundle, (5) pointers to the request-understanding design/audit.
 Linked from `docs/os/README.md` (architecture start) and the STATUS.md banner. This is the "read first" doc.
+
+---
+
+## 2026-08-03 — Appraisal mode DEPLOYED + working; new blocker = workbook row round-trip (session 2s)
+
+Prompts 23/25/26 are live. ChatGPT's Villages appraisal test now returns 100 candidates → top ~25 ranked (17 FL),
+sold + active listings, 16 flagged retained — the comp expansion is fixed. New blocker on BOTH surfaces: the
+curated 25-row set is too big to pass back through the model to `generate_comps` — ChatGPT hits the 45k
+bounded-output truncation, Copilot returns SystemError on the payload. Fix = **prompt 27**: one-shot server-side
+workbook (extend `generate_comps` to take the `request`, synthesize + build server-side, return only a download
+link — mirror the BOV generator). Copilot SystemError should also be checked against connection-authorization +
+Generative Orchestration in the Test pane, but the payload one-shot fix removes the size cause. Subject still
+resolves as the place "The Villages" (fields Not on file) — resolve the live deal record after the handoff works.

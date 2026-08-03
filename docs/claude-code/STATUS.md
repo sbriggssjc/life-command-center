@@ -3,9 +3,9 @@
 > **START HERE (durable map):** `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — the surfaces/comps/deploy
 > understanding, so a new chat isn't rebuilt from scratch.
 >
-> **DEPLOY-PENDING:** prompts **23, 25, 26** (comps appraisal mode + subject resolver + appraisal geo-ranking)
-> are committed but NOT live — redeploy **tranquil-delight + the standalone MCP**, then re-verify the Villages
-> appraisal pull. Also: rotate `LCC_API_KEY`; re-upload/paste v1.2.0 instruction files per SURFACE-SYNC §1.
+> **23/25/26 DEPLOYED — appraisal mode works.** Open blocker: the WORKBOOK handoff — 25 rows too big to
+> round-trip through the model (ChatGPT truncates; Copilot SystemError) → **prompt 27** (one-shot server-side
+> workbook, return a link). Also: rotate `LCC_API_KEY`; re-upload/paste v1.2.0 instruction files per SURFACE-SYNC §1.
 
 
 ## Open (in `prompts/`)
