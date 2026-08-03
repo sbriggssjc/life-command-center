@@ -21,8 +21,10 @@ import { enforceHttpResponseSize } from "./http-response-bound.js";
 
 const DEFAULT_QUERY_LIMIT = 40;
 const DEFAULT_SYNTHESIZE_LIMIT = 25;
+const DEFAULT_APPRAISAL_LIMIT = 30;
 const MAX_QUERY_LIMIT = 100;
 const MAX_SYNTHESIZE_LIMIT = 50;
+const APPRAISAL_CANDIDATE_LIMIT = 100;
 
 // ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
@@ -94,25 +96,54 @@ export function dedupe(rows) {
 function routeIntent(a) {
   const types = (a.property_types || []).map(t => String(t).toLowerCase());
   const govWords = /\bva\b|gsa|federal|government|agency|municipal/i.test(a.request || '');
-  const isMedical = types.some(t => /medic|health|mob|dialysis|clinic/.test(t));
-  const government_only = (govWords && !isMedical) ? true : !!a.government_only;
+  const isDialysis = types.some(t => /dialysis/.test(t)) || !!a.tenant || !!(a.tenants && a.tenants.length);
+  const government_only = govWords ? true : !!a.government_only;
   // Government-only requests must NOT query the dialysis DB, or private DaVita/US Renal
   // comps bleed into a government set. Restrict to the gov vertical in that case.
-  const verticals = a.verticals || (government_only ? ['government'] : ['government', 'dialysis']);
+  const verticals = a.verticals || (government_only ? ['government'] : (isDialysis ? ['dialysis'] : ['government', 'dialysis']));
   return { verticals, government_only };
 }
+const SOUTHEAST_STATES = new Set(['FL', 'GA', 'AL', 'SC', 'NC', 'TN', 'MS']);
+
 function scoreComp(c, a) {
   let s = 0;
-  if (a.states?.includes(c.state)) s += 3;
-  if (a.metros?.some(m => sameMarket(c, m))) s += 4;
-  if (a.tenant && tenantMatches(c, a.tenant)) s += 4;
+  const subject = a.subject || {};
+  const cState = String(c.state || '').toUpperCase();
+  const subjectState = String(subject.state || '').toUpperCase();
+  if (subject.metro && sameMarket(c, subject.metro)) s += 8;
+  else if (a.metros?.some(m => sameMarket(c, m))) s += 6;
+  if (subjectState && cState === subjectState) s += 6;
+  else if (subjectState === 'FL' && SOUTHEAST_STATES.has(cState)) s += 3;
+  else if (a.states?.includes(cState)) s += 3;
+  const tenantList = a.tenants || a.tenant_list;
+  if (Array.isArray(tenantList) && tenantList.length && tenantListMatches(c, tenantList)) s += 4;
+  else if (a.tenant && tenantMatches(c, a.tenant)) s += 4;
   // Credit the normalized `use` too, so an agency's asset-class doubling (VA -> Medical Office)
   // ranks consistently rather than depending on the raw building_type value.
   if (a.property_types?.some(t => ((c.property_type || '') + ' ' + (c.use || '')).toLowerCase().includes(String(t).toLowerCase()))) s += 3;
-  if (c.sale_date) { const age = (Date.now() - Date.parse(c.sale_date)) / 3.15e10; s += Math.max(0, 3 - age); }
+  if (subject.building_sf && (c.building_sf || c.rba)) {
+    const ratio = Math.min(Number(c.building_sf || c.rba), Number(subject.building_sf))
+      / Math.max(Number(c.building_sf || c.rba), Number(subject.building_sf));
+    if (Number.isFinite(ratio)) s += ratio * 3;
+  }
+  if (subject.chairs && c.chairs) {
+    const ratio = Math.min(Number(c.chairs), Number(subject.chairs)) / Math.max(Number(c.chairs), Number(subject.chairs));
+    if (Number.isFinite(ratio)) s += ratio * 2;
+  }
+  if (subject.cap_rate && c.cap_rate) {
+    const spreadBps = Math.abs(Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
+    s += Math.max(0, 3 - (spreadBps / 75));
+  }
+  if (c.sale_date) { const age = (Date.now() - Date.parse(c.sale_date)) / 3.15e10; s += Math.max(0, 2 - age / 2); }
   if (c.sale_price) s += 1;
   if (c.confidence) s += c.confidence;
   return +s.toFixed(2);
+}
+
+function scoreTier(score) {
+  if (score >= 14) return 'A';
+  if (score >= 9) return 'B';
+  return 'C';
 }
 
 // ── Use normalization + multi-tenant labeling + NOI reliability (synthesis rules) ──
@@ -205,17 +236,25 @@ function tenantMatches(c, tenant) {
   return !!hay && (hay.includes(needle) || needle.includes(hay));
 }
 
+function tenantListMatches(c, tenants) {
+  if (!Array.isArray(tenants) || !tenants.length) return true;
+  return tenants.some(t => tenantMatches(c, t));
+}
+
 function sameMarket(c, market) {
   const m = normText(market);
   if (!m) return true;
   const city = normText(c.city);
   const metro = normText(c.metro || c.market || c.submarket || c.raw?.metro || c.raw?.market || c.raw?.submarket);
-  return city === m || metro === m || city.includes(m) || metro.includes(m);
+  return city === m || metro === m || (!!city && (city.includes(m) || m.includes(city)))
+    || (!!metro && (metro.includes(m) || m.includes(metro)));
 }
 
 function applyLocalScope(rows, args) {
   let out = rows;
-  if (args.tenant) out = out.filter(c => tenantMatches(c, args.tenant));
+  if (Array.isArray(args.tenants) && args.tenants.length) out = out.filter(c => tenantListMatches(c, args.tenants));
+  else if (Array.isArray(args.tenant_list) && args.tenant_list.length) out = out.filter(c => tenantListMatches(c, args.tenant_list));
+  else if (args.tenant) out = out.filter(c => tenantMatches(c, args.tenant));
   if (Array.isArray(args.states) && args.states.length) {
     const states = new Set(args.states.map(s => String(s).toUpperCase()));
     out = out.filter(c => !c.state || states.has(String(c.state).toUpperCase()));
@@ -252,6 +291,7 @@ function templateRow(c) {
     source: c.source || null,
     comp_id: c.comp_id || null,
     review_flags: c.review_flags || undefined,
+    score_tier: c.score_tier || undefined,
   };
 }
 
@@ -281,7 +321,11 @@ function argsToParams(args) {
     p_include_sf: args.include_salesforce !== false,
     p_include_onmkt: !!args.include_on_market,
     p_limit: clampLimit(args.limit, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT),
-    p_tenant: args.tenant || null,
+    p_tenant: (Array.isArray(args.tenants) && args.tenants.length > 1) ? null
+      : (Array.isArray(args.tenant_list) && args.tenant_list.length > 1) ? null
+      : (Array.isArray(args.tenants) && args.tenants.length === 1) ? args.tenants[0]
+      : (Array.isArray(args.tenant_list) && args.tenant_list.length === 1) ? args.tenant_list[0]
+      : (args.tenant || null),
   };
 }
 
@@ -297,29 +341,102 @@ const US_STATES = { alabama:'AL', alaska:'AK', arizona:'AZ', arkansas:'AR', cali
   'south dakota':'SD', tennessee:'TN', texas:'TX', utah:'UT', vermont:'VT', virginia:'VA',
   washington:'WA', 'west virginia':'WV', wisconsin:'WI', wyoming:'WY', 'district of columbia':'DC' };
 const STATE_ABBRS = new Set(Object.values(US_STATES));
+const PLACE_GAZETTEER = [
+  { re: /\bthe villages\b/i, name: 'The Villages', state: 'FL', metro: 'Wildwood-The Villages', region: 'Southeast' },
+  { re: /\bwildwood\b/i, name: 'Wildwood', state: 'FL', metro: 'Wildwood-The Villages', region: 'Southeast' },
+  { re: /\bwoodland hills\b/i, name: 'Woodland Hills', state: 'CA', metro: 'Los Angeles', region: 'West' },
+  { re: /\borlando\b/i, name: 'Orlando', state: 'FL', metro: 'Orlando', region: 'Southeast' },
+  { re: /\btampa\b/i, name: 'Tampa', state: 'FL', metro: 'Tampa-St. Petersburg', region: 'Southeast' },
+  { re: /\bmiami\b/i, name: 'Miami', state: 'FL', metro: 'Miami-Fort Lauderdale', region: 'Southeast' },
+  { re: /\bdallas\b/i, name: 'Dallas', state: 'TX', metro: 'Dallas-Fort Worth', region: 'South' },
+  { re: /\bfort worth\b/i, name: 'Fort Worth', state: 'TX', metro: 'Dallas-Fort Worth', region: 'South' },
+  { re: /\bhouston\b/i, name: 'Houston', state: 'TX', metro: 'Houston', region: 'South' },
+  { re: /\baustin\b/i, name: 'Austin', state: 'TX', metro: 'Austin', region: 'South' },
+  { re: /\bsan antonio\b/i, name: 'San Antonio', state: 'TX', metro: 'San Antonio', region: 'South' },
+];
+const SUBJECT_UNKNOWN_FIELDS = ['tenant', 'credit', 'remaining_term', 'building_sf', 'chairs', 'cap_rate', 'lease_structure'];
+const OPERATOR_PATTERNS = [
+  [/\bu\.?\s*s\.?\s*renal\b|\busrc\b/g, 'US Renal'], [/\bdavita\b/g, 'DaVita'],
+  [/\bfresenius\b|\bfmc\b/g, 'Fresenius'], [/\bamerican renal\b/g, 'American Renal'],
+  [/\bsatellite (?:health|dialysis)\b/g, 'Satellite'], [/\binnovative renal\b/g, 'Innovative Renal'],
+  [/\bdialysis clinic\b|\bdci\b/g, 'Dialysis Clinic'], [/\bdsi\b/g, 'DSI Renal'],
+  [/\brenal ventures\b/g, 'Renal Ventures'],
+];
+
+function resolvePlace(raw, t) {
+  for (const p of PLACE_GAZETTEER) {
+    if (p.re.test(raw)) return {
+      name: p.name, state: p.state, metro: p.metro, region: p.region,
+      kind: /deal|asset|property|under contract|our\b/i.test(raw) ? 'subject_candidate' : 'place',
+      fields: Object.fromEntries(SUBJECT_UNKNOWN_FIELDS.map(f => [f, 'Not on file'])),
+    };
+  }
+  const cityState = raw.match(/\b([A-Z][A-Za-z.' -]{2,60}?),\s*([A-Z]{2}|[A-Za-z ]{4,30})\b/);
+  if (cityState) {
+    const state = STATE_ABBRS.has(cityState[2].toUpperCase())
+      ? cityState[2].toUpperCase()
+      : US_STATES[cityState[2].toLowerCase()];
+    if (state) return {
+      name: cityState[1].trim(), state, metro: cityState[1].trim(), kind: 'place',
+      fields: Object.fromEntries(SUBJECT_UNKNOWN_FIELDS.map(f => [f, 'Not on file'])),
+    };
+  }
+  return null;
+}
+
+function parseOperators(t) {
+  if (/\ball operators\b|\bany operator\b|\ball tenants\b|\bany tenant\b|\bnames none\b/.test(t)) return [];
+  const found = [];
+  for (const [re, name] of OPERATOR_PATTERNS) {
+    re.lastIndex = 0;
+    if (re.test(t) && !found.includes(name)) found.push(name);
+  }
+  return found;
+}
+
+function detectAppraisalIntent(t, out) {
+  if (/\bappraiser\b|\bappraisal\b|\bvaluation\b|\bvaluing\b|\bunder contract\b|\bom\b|\bbov\b|\bcomp package\b|\bpackage\b/.test(t)) return true;
+  return !!(out.property_types?.includes('dialysis') && out.subject?.state && !out.tenant && !out.date_from);
+}
+
 export function parseRequest(text) {
   const raw = String(text || ''); const t = raw.toLowerCase(); const out = {};
   const states = new Set();
   for (const [name, ab] of Object.entries(US_STATES)) if (new RegExp(`\\b${name}\\b`).test(t)) states.add(ab);
   // Standalone 2-letter codes, but NOT 'VA' — in this domain "VA" means Veterans Affairs, not Virginia.
   for (const a of (raw.match(/\b[A-Z]{2}\b/g) || [])) if (STATE_ABBRS.has(a) && a !== 'VA') states.add(a);
-  if (/\bnationwide\b|\bnational\b|across the (?:us|country)|\bu\.?s\.?a?\b/.test(t)) states.clear();
+  if (/\bnationwide\b|\bnational\b|across the (?:us|country)|\bu\.?s\.?a\b/.test(t)) states.clear();
   if (states.size) out.states = [...states];
+  const subject = resolvePlace(raw, t);
+  if (subject) {
+    out.subject = subject;
+    states.add(subject.state);
+    out.states = [...states];
+    out.metros = [subject.metro || subject.name];
+  }
   const statePattern = [...states].join('|');
   let loc;
   if (statePattern && (loc = raw.match(new RegExp(`\\b([A-Z][A-Za-z.' -]{2,60}?),\\s*(${statePattern})\\b`)))) {
     const city = loc[1].trim();
-    if (!US_STATES[city.toLowerCase()] && !/davita|fresenius|renal|dialysis|medical/i.test(city)) out.metros = [city];
+    if (!out.metros && !US_STATES[city.toLowerCase()] && !/davita|fresenius|renal|dialysis|medical/i.test(city)) out.metros = [city];
   }
   const pt = new Set();
   if (/\b(medical|health|healthcare|mob|clinic|hospital)\b/.test(t)) pt.add('medical');
-  if (/\b(dialysis|davita|fresenius)\b/.test(t)) pt.add('dialysis');
+  if (/\b(dialysis|davita|fresenius|renal|fmc|dci|usrc)\b/.test(t)) pt.add('dialysis');
   if (/\boffice\b/.test(t)) pt.add('office');
   if (/\bretail\b/.test(t)) pt.add('retail');
   if (/\b(industrial|warehouse|flex)\b/.test(t)) pt.add('industrial');
   if (pt.size) out.property_types = [...pt];
   if (/\bva\b|veterans|gsa|federal|government|\bgov\b|\bagency\b|\bssa\b|social security|municipal|\birs\b|\bfbi\b|\bdea\b|uscis|\bhhs\b|\bihs\b/.test(t)) out.government_only = true;
-  if (/on.?market|active listing|\bavailable\b|for sale/.test(t)) out.include_on_market = true;
+  if (/on.?market|active listing|\bavailable\b|for sale|\blistings?\b/.test(t)) out.include_on_market = true;
+  if (/\bboth\b|sold (?:and|&) (?:active|listing)|sales? (?:and|&) listings?|on.?market (?:and|&) sold/.test(t)) {
+    out.comp_type = 'both';
+    out.include_on_market = true;
+  } else if (/on.?market|active listing|\bavailable\b|for sale|\blistings?\b/.test(t) && !/\bsales?\b|\bsold\b/.test(t)) {
+    out.comp_type = 'lease';
+  } else if (/\bsales?\b|\bsold\b|\bclosed\b/.test(t)) {
+    out.comp_type = 'sale';
+  }
   // Opt-in to include comps whose NOI/cap isn't reliable (default excludes them).
   if (/without noi|no noi|missing noi|estimated noi|modeled noi|imputed rent|estimated rent|include estimate|regardless of noi|all comps/.test(t)) out.include_unreliable_noi = true;
   const WN = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11, twelve:12 };
@@ -331,14 +448,20 @@ export function parseRequest(text) {
   else if (/last\s+quarter|past\s+quarter/.test(t)) months = 3;
   if (months) { const d = new Date(Date.now()); d.setMonth(d.getMonth() - months); out.date_from = d.toISOString().slice(0, 10); }
   if ((m = t.match(/since\s+(\d{4})/))) out.date_from = `${m[1]}-01-01`;
-  // Operator/tenant scoping — matched period-insensitively against tenant+operator in the RPC.
-  const OPS = [
-    [/\bu\.?\s*s\.?\s*renal\b|\busrc\b/, 'US Renal'], [/\bdavita\b/, 'DaVita'],
-    [/\bfresenius\b|\bfmc\b/, 'Fresenius'], [/\bamerican renal\b/, 'American Renal'],
-    [/\bsatellite (?:health|dialysis)\b/, 'Satellite'], [/\binnovative renal\b/, 'Innovative Renal'],
-    [/\bdialysis clinic\b|\bdci\b/, 'Dialysis Clinic'], [/\bdsi\b/, 'DSI Renal'],
-  ];
-  for (const [re, name] of OPS) if (re.test(t)) { out.tenant = name; break; }
+  const operators = parseOperators(t);
+  if (operators.length === 1) out.tenant = operators[0];
+  if (operators.length > 1) out.tenants = operators;
+  if (operators.length || /\bdialysis\b|\brenal\b|\bfmc\b|\busrc\b/.test(t)) {
+    pt.add('dialysis');
+    out.property_types = [...pt];
+  }
+  out.appraisal_mode = detectAppraisalIntent(t, out);
+  if (out.appraisal_mode && out.property_types?.includes('dialysis')) {
+    out.include_unreliable_noi = true;
+    out.include_on_market = true;
+    out.comp_type = out.comp_type || 'both';
+    if (!operators.length) out.tenant = null;
+  }
   return out;
 }
 
@@ -689,10 +812,14 @@ export async function runComps(args, deps) {
   const parsed = args.request ? parseRequest(args.request) : {};
   args = {
     ...args,
+    comp_type: args.comp_type || parsed.comp_type,
     states: (args.states && args.states.length) ? args.states : parsed.states,
     metros: (args.metros && args.metros.length) ? args.metros : parsed.metros,
     property_types: (args.property_types && args.property_types.length) ? args.property_types : parsed.property_types,
-    tenant: args.tenant || parsed.tenant,
+    tenant: (args.tenant !== undefined) ? args.tenant : parsed.tenant,
+    tenants: (args.tenants && args.tenants.length) ? args.tenants : parsed.tenants,
+    subject: args.subject || parsed.subject,
+    appraisal_mode: (args.appraisal_mode != null) ? args.appraisal_mode : parsed.appraisal_mode,
     government_only: (args.government_only != null) ? args.government_only : parsed.government_only,
     include_on_market: (args.include_on_market != null) ? args.include_on_market : parsed.include_on_market,
     include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : parsed.include_unreliable_noi,
@@ -755,7 +882,38 @@ export async function runComps(args, deps) {
               comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
               tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags,
               ...c.review_detail })),
-            warnings, interpreted_params: { ...params, p_metros: args.metros || null } } };
+            warnings, interpreted_params: { ...params, p_metros: args.metros || null,
+              tenants: args.tenants || args.tenant_list || null, appraisal_mode: !!args.appraisal_mode } } };
+}
+
+function summarizeComps(scored, eff, meta) {
+  const rows = scored || [];
+  const caps = rows.map(c => Number(c.cap_rate)).filter(n => Number.isFinite(n) && n > 0);
+  const medianCap = caps.length ? caps.slice().sort((a, b) => a - b)[Math.floor(caps.length / 2)] : null;
+  const weighted = rows.reduce((acc, c) => {
+    const cap = Number(c.cap_rate), price = Number(c.sale_price);
+    if (Number.isFinite(cap) && Number.isFinite(price) && price > 0) {
+      acc.num += cap * price; acc.den += price;
+    }
+    return acc;
+  }, { num: 0, den: 0 });
+  const fl = rows.filter(c => c.state === 'FL').length;
+  const tiers = rows.reduce((m, r) => (m[r.score_tier || 'C'] = (m[r.score_tier || 'C'] || 0) + 1, m), {});
+  const capText = caps.length
+    ? `${(Math.min(...caps) * 100).toFixed(2)}%-${(Math.max(...caps) * 100).toFixed(2)}% cap range; median ${(medianCap * 100).toFixed(2)}%${weighted.den ? `; weighted average ${(weighted.num / weighted.den * 100).toFixed(2)}%` : ''}`
+    : 'cap-rate range not on file';
+  const subjectName = eff.subject?.name || 'the subject';
+  return `Methodology: ${rows.length} ${eff.property_types?.includes('dialysis') ? 'dialysis ' : ''}comps ranked by subject similarity for ${subjectName}, weighting same metro/state first, then regional/national support, tenant credit, size/chair scale, cap proximity, and recency. The set shows ${capText}. ${fl ? `${fl} Florida comps are included; ` : ''}score tiers: A=${tiers.A || 0}, B=${tiers.B || 0}, C=${tiers.C || 0}. Review flags are retained from the cap/rent reconciliation engine; missing subject fields remain "Not on file."`;
+}
+
+function transparencyLine(meta) {
+  const returned = meta?.returned ?? 0;
+  const total = meta?.candidate_total ?? meta?.total_before_cap ?? returned;
+  const excluded = meta?.excluded_unreliable_noi || 0;
+  const parts = [`returned ${returned} of ${total}`];
+  if (excluded) parts.push(`${excluded} excluded as estimated-NOI (say "include estimated NOI" to include)`);
+  if (meta?.truncated) parts.push('truncated after similarity ranking');
+  return parts.join('; ');
 }
 
 export async function runSynthesize(args, deps) {
@@ -763,33 +921,56 @@ export async function runSynthesize(args, deps) {
   const p = args.request ? parseRequest(args.request) : {};
   const eff = {
     ...args,
+    comp_type:         args.comp_type || p.comp_type,
     states:            (args.states && args.states.length) ? args.states : p.states,
+    metros:            (args.metros && args.metros.length) ? args.metros : p.metros,
     property_types:    (args.property_types && args.property_types.length) ? args.property_types : p.property_types,
     government_only:   (args.government_only != null) ? args.government_only : p.government_only,
     date_from:         args.date_from || p.date_from,
     include_on_market: (args.include_on_market != null) ? args.include_on_market : p.include_on_market,
     include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : p.include_unreliable_noi,
-    tenant:            args.tenant || p.tenant,
+    tenant:            (args.tenant !== undefined) ? args.tenant : p.tenant,
+    tenants:           (args.tenants && args.tenants.length) ? args.tenants : p.tenants,
+    subject:           args.subject || p.subject,
+    appraisal_mode:    (args.appraisal_mode != null) ? args.appraisal_mode : p.appraisal_mode,
   };
   const route = routeIntent(eff);
-  const requestedLimit = clampLimit(eff.limit, DEFAULT_SYNTHESIZE_LIMIT, MAX_SYNTHESIZE_LIMIT);
+  if (eff.appraisal_mode) {
+    eff.include_unreliable_noi = eff.include_unreliable_noi !== false;
+    eff.include_on_market = eff.include_on_market !== false;
+    eff.comp_type = eff.comp_type || 'both';
+    if (!eff.tenants?.length && !eff.tenant) eff.tenant = null;
+  }
+  const requestedLimit = clampLimit(eff.limit, eff.appraisal_mode ? DEFAULT_APPRAISAL_LIMIT : DEFAULT_SYNTHESIZE_LIMIT, MAX_SYNTHESIZE_LIMIT);
+  const candidateLimit = eff.appraisal_mode ? APPRAISAL_CANDIDATE_LIMIT : requestedLimit;
   const { comps, meta, template_comps } = await runComps({ ...eff, verticals: route.verticals,
-    government_only: route.government_only, limit: requestedLimit }, deps);
+    government_only: route.government_only, limit: candidateLimit }, deps);
+  const tierRank = { A: 3, B: 2, C: 1 };
   const scored = comps.map(c => ({ ...c, _score: scoreComp(c, eff) }))
-    .sort((x, y) => y._score - x._score).slice(0, requestedLimit);
+    .sort((x, y) => ((tierRank[scoreTier(y._score)] || 0) - (tierRank[scoreTier(x._score)] || 0) || y._score - x._score
+      || String(x.sale_date || '').localeCompare(String(y.sale_date || '')) || String(x.comp_id || '').localeCompare(String(y.comp_id || ''))))
+    .map(c => ({ ...c, score_tier: scoreTier(c._score),
+      template: { ...(c.template || templateRow(c)), score_tier: scoreTier(c._score) } }))
+    .slice(0, requestedLimit);
+  const synthMeta = { ...meta, returned: scored.length, candidate_total: comps.length,
+    truncated: meta.truncated || comps.length > scored.length };
   return { interpreted_query: {
       comp_type: eff.comp_type || 'sale', property_types: eff.property_types || null,
-      states: eff.states || null, date_from: eff.date_from || null, tenant: eff.tenant || null,
+      states: eff.states || null, metros: eff.metros || null, date_from: eff.date_from || null,
+      tenant: eff.tenant || null, tenants: eff.tenants || null, appraisal_mode: !!eff.appraisal_mode,
+      include_unreliable_noi: !!eff.include_unreliable_noi, include_on_market: !!eff.include_on_market,
       government_only: route.government_only, verticals: route.verticals },
+    subject: eff.subject || null,
+    summary: summarizeComps(scored, eff, synthMeta),
+    transparency: transparencyLine(synthMeta),
     comps: scored,
     template_comps: scored.map(c => c.template || templateRow(c)),
-    meta: { returned: scored.length,
+    meta: { ...synthMeta,
       by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
       flagged_for_review: scored.filter(c => c.review_flags && c.review_flags.length).length,
       review_flags: scored.filter(c => c.review_flags && c.review_flags.length).map(c => ({
         comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
         tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags, ...c.review_detail })),
-      truncated: meta.truncated || comps.length > scored.length,
       warnings: meta.warnings } };
 }
 
@@ -836,7 +1017,8 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
         include_salesforce: { type: 'boolean' },
         include_on_market: { type: 'boolean' },
         include_unreliable_noi: { type: 'boolean' },
-        tenant: { type: 'string', description: 'Operator/tenant scope, e.g. DaVita, Fresenius, US Renal.' },
+        tenant: { type: 'string', description: 'Single operator/tenant scope, e.g. DaVita, Fresenius, US Renal.' },
+        tenants: { type: 'array', items: { type: 'string' }, description: 'Multiple operators/tenants; avoids one comma-separated tenant blob.' },
         limit: { type: 'number', description: 'Default 40, max 100.' },
       } },
     },
@@ -852,7 +1034,8 @@ export function makeCompsTools({ govQuery, diaQuery, textResult, withTiming }) {
         date_from: { type: 'string' }, date_to: { type: 'string' },
         size_min_sf: { type: 'number' }, size_max_sf: { type: 'number' },
         government_only: { type: 'boolean' }, include_on_market: { type: 'boolean' }, include_unreliable_noi: { type: 'boolean' },
-        tenant: { type: 'string', description: 'Operator/tenant scope, e.g. DaVita, Fresenius, US Renal.' },
+        tenant: { type: 'string', description: 'Single operator/tenant scope, e.g. DaVita, Fresenius, US Renal.' },
+        tenants: { type: 'array', items: { type: 'string' }, description: 'Multiple operators/tenants; avoids one comma-separated tenant blob.' },
         limit: { type: 'number', description: 'Default 25, max 50.' },
       } },
     },

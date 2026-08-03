@@ -17,24 +17,33 @@ through three MCP tools. Every surface (Claude, Copilot, ChatGPT) inherits the s
 
 ## Which tool
 - **synthesize_comps** — DEFAULT for a plain-language request. Pass the raw text as `request`; it parses
-  states, property types, tenant, date window, and government intent, routes, scores by relevance, returns the
-  ranked set. Add explicit fields only to override the parse.
+  states, property/place anchors, property types, operator lists, date window, appraisal/full-set intent, and
+  government intent, routes, scores by subject similarity, and returns the ranked set. Add explicit fields only
+  to override the parse.
 - **query_comps** — when you already have structured filters (states, property_types, verticals, tenant, dates,
   size, limit). Same output shape, no relevance scoring.
 - **generate_comps** — build the populated Briggs Excel workbook from comp rows (see Export below).
 
 ## Non-negotiable policies (already enforced by the engine — don't fight them)
-- **Reliable-or-exclude.** By default only comps with a reliable NOI/cap are returned: human-sourced, or an NOI
-  rolled forward from a prior actual NOI with captured (or CPI-modeled) escalations. Pure benchmark-modeled NOI,
-  implausible caps, and imputed-rent comps are excluded. Only pass `include_unreliable_noi: true` if Scott
-  explicitly asks for comps "including estimated/modeled NOI," "without NOI," or "all comps." Never add an
-  "(est.)" qualifier — policy is reliable-or-exclude, not flag-and-show.
+- **Appraisal/full-set mode.** Requests like "I need dialysis comps for The Villages," "for the appraiser,"
+  "valuation," "under contract," "OM/BOV support," or "comp package" trigger appraisal mode. For dialysis this
+  means all operators (`tenant` null), sold + active listings, estimated-NOI comps included with review flags,
+  a larger candidate pull, and final ranking by similarity before truncation to roughly 20-30 comps.
+- **Reliable-or-exclude for quick lookups.** Non-appraisal quick lookups still return only comps with a reliable
+  NOI/cap by default: human-sourced, or an NOI rolled forward from a prior actual NOI with captured (or
+  CPI-modeled) escalations. Pure benchmark-modeled NOI, implausible caps, and imputed-rent comps are excluded
+  unless the request says "including estimated/modeled NOI," "without NOI," or "all comps," or appraisal mode
+  applies.
+- **Operators are lists.** If the user names multiple operators (DaVita and Fresenius, US Renal + DCI, etc.),
+  preserve them as an operator list; never pass a comma-separated blob as one tenant. "All operators" means no
+  tenant filter.
 - **NOI/rent basis is the same for dialysis and government.** Cap rates are decimals (0.0745 = 7.45%).
 - **Multi-tenant naming is request-aware.** Single-tenant → the tenant/agency name. Multi-tenant → asset
   abbreviation + anchor tenant: a medical/dialysis request → `MOB (VA)` / `MOB (DaVita)`; a government request →
   `MT (SSA)`, or `MT Office (SSA)` when a use is specified; a real property name wins (`Park Place MOB (Concentra)`).
   The engine sets this on `tenant`/`agency` — use it as returned.
 - **Government-only requests never hit the dialysis DB** (keeps private DaVita/US Renal comps out of a gov set).
+  Dialysis/operator requests route to dialysis. Bare medical requests can remain multi-vertical.
 
 ## Reconciliation flags — surface them
 Each pull returns `meta.flagged_for_review` + `meta.review_flags`. A flagged comp still appears, but its cap/rent
@@ -45,9 +54,11 @@ correction, so an outlier in the set is a known-and-tracked item, not a silent e
 
 ## Reading the output
 `comps[]` (normalized, cap rates decimal, `price_withheld` for confidential $0 sales, dialysis carries
-`chairs`/`patient_count`), `meta` (returned, total_before_cap, flagged_for_review, review_flags,
-excluded_unreliable_noi, by_source, warnings, interpreted_params), and `markdown` (the ready-to-show table —
-prefer rendering this).
+`chairs`/`patient_count`, each row carries `score_tier` A/B/C when synthesized), `template_comps[]` in the
+Team Briggs export shape, `subject` (resolved fields or "Not on file"), `summary` (one-paragraph methodology and
+cap-rate observations), `transparency` (`returned N of M...` with estimated-NOI/truncation notes when relevant),
+`meta` (returned, total_before_cap/candidate_total, flagged_for_review, review_flags, excluded_unreliable_noi,
+by_source, warnings, interpreted_params), and `markdown` (the ready-to-show table — prefer rendering this).
 
 ## Export to the Briggs workbook (generate_comps)
 Map each comp to a row and call generate_comps (`comp_type: "sales"`; `vertical: "dialysis"` selects the
