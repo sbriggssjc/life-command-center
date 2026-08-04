@@ -13,6 +13,9 @@
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
+| 31 | P2 dedup: property consolidation + multi-source reconcile (keep repeat sales) | P1 | open (Scott sent) |
+| 32 | Ollama cleaning-assist agent (P4 review-lane triage + unstructured reconcile) | P1 | open |
+| 33 | Mount MCP OAuth on the root app (fixes Cowork/Copilot connector registration) | P1 | open |
 | 31 | Data-integrity P2: property-record consolidation + multi-source sale reconciliation | P2 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |

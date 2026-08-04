@@ -85,3 +85,11 @@ assist layer on top of the resolver: triage ambiguous review-lane candidates usi
 link unstructured references to the right property or sale, and narrate field conflicts for human or
 priority-confirmed decisions. This should reuse the existing `invokeExtractionAI` seam across dia, gov, and ops
 and surface on the Health surface.
+
+## Update 2026-08-04 — dedup reframe + Ollama decision + connector-OAuth finding
+Dedup reframe: 497/610 groups are genuine repeat sales (KEEP); real dups = 93 property-record dups + subset of 214
+multi-source. P2 (prompt 31) = property consolidation + multi-source reconciliation, not deletion. Ollama cleaning
+agent (prompt 32) = ASSIST layer only (review-lane triage + unstructured reconciliation; LLM proposes, resolver/
+priority/human confirms; continuous P4 via invokeExtractionAI; all DBs). Connector-OAuth: the OAuth routes are
+defined outside `mountLccMcp`, so they aren't on tranquil-delight → Cowork/Copilot MCP OAuth registration fails
+(prompt 33 mounts them + sets MCP_BASE_URL).
