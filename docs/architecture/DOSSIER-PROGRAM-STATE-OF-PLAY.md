@@ -568,3 +568,20 @@ Tests pass; NOT live-tested (needs redeploy + live BOV). To finish: redeploy tra
 confirm BOV service (`pacific-love`) + `BOV_API_KEY`; ChatGPT re-import `lcc-openapi.yaml`; re-paste v1.2.1 bundles.
 Then the Villages appraisal request should return a working Team Briggs workbook download link on both surfaces.
 Response → done/.
+
+---
+
+## 2026-08-03/04 — First real workbook produced; quality gaps found (session 2u)
+
+Copilot produced a real Team Briggs workbook (Cover/Index/On Market/Sold; 16 sold + 9 on-market). ChatGPT failed
+with a 500: `enforceHttpResponseSize is not defined` — confirmed a missing import in `mcp/server.js:24` (the
+one-shot `/api/comps` route at 1983/1987 uses it) → **prompt 28 §1 P0 hotfix**. Reviewing the actual xlsx surfaced
+appraisal-grade quality gaps: (2) 20-25 was applied to the COMBINED set (16 sold + 9 on-market = 25) instead of
+20-25 SOLD + a separate full on-market set; (3) LAND/BUILT/EXP/TERM/EXPENSES/BUMPS/RENEWAL + most CHAIRS/PATIENTS
+blank though the RPC returns them (one-shot row mapping drops fields); (4) broken records included (Birmingham
+$76,500 = ~192% cap; Coral Springs $18.3M multi-property = ~0.95% cap; duplicate Pembroke Pines rows); (5) cap
+stats impossible (wavg 3.98% < range min 4.22%); (6) **appraisal cap discipline** — median 8.75% on a ~6% subject
+argues for a LOWER value (Scott: never show a higher cap / lower value than what we're appraising) → weight cap
+proximity, lead with at/below-subject comps, push high-cap outliers to a labeled secondary section; (7) subject
+all "Not on file" → resolve the under-contract Villages deal record to anchor cap-proximity. All in **prompt 28**.
+Deploy-pending items still open (redeploy both servers + BOV_API_KEY; rotate LCC_API_KEY).
