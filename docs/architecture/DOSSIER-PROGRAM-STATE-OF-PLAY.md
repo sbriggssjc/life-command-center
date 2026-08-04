@@ -619,3 +619,20 @@ reuse existing pipelines/resolver/field_source_priority/backfill fns/Health surf
 continuous-scrub). Two tracks queued: **prompt 29** (export/pull polish — near-term, existing data) and
 **prompt 30** (Phase-1 AUDIT of sources×field coverage, precedence, linkage → phased plan). Prompts 22-28 comps
 code is deployed + validated; this is the next, bigger workstream.
+
+---
+
+## 2026-08-04 — Prompts 29/30 reconciled; Cowork future-proofing (session 2x)
+
+Prompt 29 (export polish) CODE DONE, 36/36 tests, DEPLOY-PENDING. Prompt 30 AUDIT delivered
+(`docs/architecture/data-integrity-audit-2026-08.md`): dia 610 dup properties / 967 excess rows (370
+multi-source); LCC provenance 2,055 priority rules / 1,155 conflicts / 33 unranked triples; gov v_sales_comps
+4,806 (sold cap 2,780). Phased plan P1(export≈29) → P2 dedup+SF overlap (next data phase) → P3 backfill w/
+precedence → P4 continuous scrub + Health dashboard.
+
+Scott asked how to future-proof the recurring bridge drops + folder/orientation loss. Wrote
+`docs/os/COWORK-SETUP-AND-FUTUREPROOFING.md`: (1) run new Cowork tasks ON THE COMPUTER (no cloud bridge to drop);
+(2) a paste-ready Global Instructions block that orients every session to the repo + read-first reference +
+workflow; (3) repo-as-memory (CLAUDE.md + AI-SURFACES-OPERATIONAL-REFERENCE + STATUS, now linked from CLAUDE.md
+START-HERE); (4) account-level connectors/MCP + an optional bundled Cowork plugin; (5) the canonical connected-
+folder set. Linked from CLAUDE.md.
