@@ -48,6 +48,18 @@ through three MCP tools. Every surface (Claude, Copilot, ChatGPT) inherits the s
 - **Government-only requests never hit the dialysis DB** (keeps private DaVita/US Renal comps out of a gov set).
   Dialysis/operator requests route to dialysis. Bare medical requests can remain multi-vertical.
 
+## Deliverable naming + save location
+Every finished deal artifact uses `{Property}_{DocType}_{Client}_{YYYYMM}` before the extension. `{Property}` is
+street-anchored and `_`-joined with no commas or double spaces, e.g. `7912_Cameron_Rd_Austin_TX`. `{DocType}` uses
+PascalCase with no spaces; current vocabulary is `VAM`, `MasterSheet`, `SalesComps`, `LeaseComps`, `BOV`, `OM`,
+`LOI`. `{Client}` is the client last name or short org. `{YYYYMM}` is the file/deal month.
+
+For comps workbooks, save as `..._SalesComps_<Client>_<YYYYMM>.xlsx` or
+`..._LeaseComps_<Client>_<YYYYMM>.xlsx`. Finished deliverables for a deal land together in
+`Team Briggs - Documents/Deals/{Client}/{Property}/`; when the shared drive is unavailable, use
+`outputs/deals/{Client}_{Property}/`. If the surface cannot save to disk, state that limitation and name the
+attachment to the same convention.
+
 ## Reconciliation flags — surface them
 Each pull returns `meta.flagged_for_review` + `meta.review_flags`. A flagged comp still appears, but its cap/rent
 didn't reconcile (`cap_mismatch` = computed cap vs reliable cap >75 bps; `rent_disagreement` = rent sources

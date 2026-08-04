@@ -1,6 +1,6 @@
 {
   "name": "generate_bov_workbook",
-  "description": "Generate a Briggs CRE BOV Excel workbook from structured deal inputs. Builds the full 10-tab workbook (Cover, Executive Summary, Real Estate, Lease Abstract, Rent Schedule, Credit, Pro Forma, Assumptions & Flags, Sensitivity Analysis, Amortization), populates all input cells, recalculates all formulas via LibreOffice, and returns the completed file as a base64-encoded payload. Decode the file_base64 field and save as the filename field to deliver the workbook to the user. Also generates Briggs comps workbooks (sales/lease) via /generate-comps.",
+  "description": "Generate a Briggs CRE BOV Excel workbook from structured deal inputs. Builds the full 10-tab workbook (Cover, Executive Summary, Real Estate, Lease Abstract, Rent Schedule, Credit, Pro Forma, Assumptions & Flags, Sensitivity Analysis, Amortization), populates all input cells, recalculates all formulas via LibreOffice, and returns the completed file as a base64-encoded payload. Decode the file_base64 field and save as the filename field to deliver the workbook to the user. Finished deal artifacts use {Property}_{DocType}_{Client}_{YYYYMM}. Also generates Briggs comps workbooks (sales/lease) via /generate-comps.",
   "type": "openapi",
   "openapi": {
     "info": {
@@ -54,7 +54,7 @@
                       "properties": {
                         "name": {
                           "type": "string",
-                          "description": "Property/deal name for filename (e.g. 'Valley MOB'); defaults to tenant name or address"
+                          "description": "Street-anchored property for filename, which follows {Property}_{DocType}_{Client}_{YYYYMM}"
                         },
                         "address": {
                           "type": "string",
@@ -218,7 +218,7 @@
                       "properties": {
                         "last_name": {
                           "type": "string",
-                          "description": "Client last name for filename"
+                          "description": "Client last name for filename, which follows {Property}_{DocType}_{Client}_{YYYYMM}"
                         },
                         "file_month": {
                           "type": "string",
@@ -269,7 +269,7 @@
         "post": {
           "operationId": "generate_comps",
           "summary": "Generate a Briggs CRE comps workbook (sales or lease) from structured comp rows",
-          "description": "Populate the Briggs comps template from structured rows and return a download link + base64. You map the raw CoStar/Salesforce export -> rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate. Row keys are the Briggs column names lowercased with underscores (e.g. property_name, address, city, st, rba_sf, tenant, lease_type, lease_exp, annual_noi, init_price, cur_price, list_date, last_price, sale_price, sale_date, buyer, seller, financing, bumps, options, yr_built, submarket, notes; lease adds property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated). Omit any field you don't have; never guess. Dates YYYY-MM-DD; rents/NOI annual. Decode file_base64 and save as filename, or share download_url.",
+          "description": "Populate the Briggs comps template from structured rows and return a download link + base64. Finished deal artifacts use {Property}_{DocType}_{Client}_{YYYYMM}. You map the raw CoStar/Salesforce export -> rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate. Row keys are the Briggs column names lowercased with underscores (e.g. property_name, address, city, st, rba_sf, tenant, lease_type, lease_exp, annual_noi, init_price, cur_price, list_date, last_price, sale_price, sale_date, buyer, seller, financing, bumps, options, yr_built, submarket, notes; lease adds property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated). Omit any field you don't have; never guess. Dates YYYY-MM-DD; rents/NOI annual. Decode file_base64 and save as filename, or share download_url.",
           "requestBody": {
             "required": true,
             "content": {

@@ -71,6 +71,15 @@ bridged to this session). Add one line near the top of the workflow:
 > `property_lookup: "<address>"` (or `cre_property_id`). This yields the identical
 > workbook every access point produces. Only hand-author the full payload for a
 > brand-new property not yet ingested into LCC.
+>
+> **Deliverable naming + save location:** Every finished deal artifact uses
+> `{Property}_{DocType}_{Client}_{YYYYMM}` before the extension. `{Property}` is
+> street-anchored and `_`-joined (for example `7912_Cameron_Rd_Austin_TX`).
+> DocType vocabulary: `VAM`, `MasterSheet`, `SalesComps`, `LeaseComps`, `BOV`,
+> `OM`, `LOI`. Save the full set to
+> `Team Briggs - Documents/Deals/{Client}/{Property}/` when disk/SharePoint access
+> is available, or `outputs/deals/{Client}_{Property}/` as the repo-local fallback.
+> If the surface cannot save, state that and name attachments to the same convention.
 
 Net: personal Claude, the Northmarq team Project, and any direct caller now resolve
 "BOV 207 Fob James Dr" to the same reviewed record and produce the same deliverable —

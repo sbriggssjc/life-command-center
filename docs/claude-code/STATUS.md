@@ -17,7 +17,7 @@
 | 32 | Ollama cleaning-assist agent (P4 review-lane triage + unstructured reconcile) | P1 | open |
 | 33 | Mount MCP OAuth on the root app (fixes Cowork/Copilot connector registration) | P1 | open |
 | 34 | Regenerate blank BOV master template from bov-generator (kills the DSCR drift at source) | P1 | open |
-| 35 | Deliverable naming + save-location doctrine (Northmarq prompt + comps/BOV skills) | P1 | open |
+| 35 | Deliverable naming + save-location doctrine (Northmarq prompt + comps/BOV skills) | P1 | code/docs done; external Claude BOV skills not present in workspace |
 | 31 | Data-integrity P2: property-record consolidation + multi-source sale reconciliation | P2 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
