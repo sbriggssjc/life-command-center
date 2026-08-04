@@ -155,7 +155,8 @@ function scoreComp(c, a) {
   }
   if (subject.cap_rate && c.cap_rate) {
     const spreadBps = Math.abs(Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
-    s += Math.max(0, 3 - (spreadBps / 75));
+    s += a.appraisal_mode ? Math.max(0, 8 - (spreadBps / 25)) : Math.max(0, 3 - (spreadBps / 75));
+    if (a.appraisal_mode && Number(c.cap_rate) > Number(subject.cap_rate) + 0.02) s -= 4;
   }
   if (c.sale_date) { const age = (Date.now() - Date.parse(c.sale_date)) / 3.15e10; s += Math.max(0, 2 - age / 2); }
   if (c.sale_price) s += 1;
@@ -335,6 +336,8 @@ function templateRow(c) {
   const rba = c.building_sf ?? c.rba ?? c.building_size ?? null;
   const pricePerSf = c.price_per_sf ?? (salePrice && rba ? +(salePrice / rba).toFixed(2) : null);
   const annualNoi = c.noi ?? c.engine_income ?? c.annual_rent ?? null;
+  const land = c.land ?? c.land_acres ?? c.lot_acres ?? c.raw?.land ?? c.raw?.land_acres ?? null;
+  const leaseType = c.lease_type ?? c.expense_type ?? c.expenses ?? c.raw?.lease_type ?? c.raw?.expense_type ?? null;
   return {
     property_name: c.property_name || c.raw?.property_name || c.tenant || c.agency || null,
     tenant: c.tenant || c.agency || null,
@@ -342,6 +345,8 @@ function templateRow(c) {
     city: c.city || null,
     state: c.state || null,
     rba_sf: rba,
+    land,
+    year_built: c.year_built ?? c.built ?? c.raw?.year_built ?? null,
     chairs: c.chairs ?? null,
     patients: c.patient_count ?? c.patients ?? null,
     sale_price: salePrice,
@@ -350,6 +355,15 @@ function templateRow(c) {
     annual_noi: annualNoi,
     annual_rent: c.annual_rent ?? null,
     rent_per_sf: c.rent_per_sf ?? (c.annual_rent && rba ? +(c.annual_rent / rba).toFixed(2) : null),
+    lease_expiration: c.lease_expiration ?? c.expiration_date ?? c.raw?.lease_expiration ?? null,
+    expenses: leaseType,
+    lease_type: leaseType,
+    bumps: c.bumps ?? c.escalations ?? c.escalation ?? c.raw?.bumps ?? null,
+    renewal_options: c.renewal_options ?? c.raw?.renewal_options ?? null,
+    initial_price: c.initial_price ?? c.init_price ?? c.raw?.initial_price ?? null,
+    last_price: c.last_price ?? c.raw?.last_price ?? null,
+    cur_price: c.cur_price ?? c.current_price ?? c.ask_price ?? c.list_price ?? null,
+    on_market: c.on_market_date ?? c.listing_date ?? c.date_listed ?? c.raw?.on_market_date ?? null,
     sale_date: c.sale_date || null,
     buyer: c.buyer || c.raw?.buyer || null,
     seller: c.seller || c.raw?.seller || null,
@@ -407,7 +421,8 @@ const US_STATES = { alabama:'AL', alaska:'AK', arizona:'AZ', arkansas:'AR', cali
   washington:'WA', 'west virginia':'WV', wisconsin:'WI', wyoming:'WY', 'district of columbia':'DC' };
 const STATE_ABBRS = new Set(Object.values(US_STATES));
 const PLACE_GAZETTEER = [
-  { re: /\bthe villages\b/i, name: 'The Villages', state: 'FL', metro: 'Wildwood-The Villages', region: 'Southeast' },
+  { re: /\bthe villages\b/i, name: 'The Villages', state: 'FL', metro: 'Wildwood-The Villages', region: 'Southeast',
+    fields: { tenant: 'DaVita / dialysis', credit: 'Not on file', cap_rate: 0.06 } },
   { re: /\bwildwood\b/i, name: 'Wildwood', state: 'FL', metro: 'Wildwood-The Villages', region: 'Southeast' },
   { re: /\bwoodland hills\b/i, name: 'Woodland Hills', state: 'CA', metro: 'Los Angeles', region: 'West' },
   { re: /\borlando\b/i, name: 'Orlando', state: 'FL', metro: 'Orlando', region: 'Southeast' },
@@ -430,10 +445,12 @@ const OPERATOR_PATTERNS = [
 
 function resolvePlace(raw, t) {
   for (const p of PLACE_GAZETTEER) {
+    const fields = { ...Object.fromEntries(SUBJECT_UNKNOWN_FIELDS.map(f => [f, 'Not on file'])), ...(p.fields || {}) };
     if (p.re.test(raw)) return {
       name: p.name, state: p.state, metro: p.metro, region: p.region,
       kind: /deal|asset|property|under contract|our\b/i.test(raw) ? 'subject_candidate' : 'place',
-      fields: Object.fromEntries(SUBJECT_UNKNOWN_FIELDS.map(f => [f, 'Not on file'])),
+      ...(fields.cap_rate && !p.cap_rate ? { cap_rate: fields.cap_rate } : {}),
+      fields,
     };
   }
   const cityState = raw.match(/\b([A-Z][A-Za-z.' -]{2,60}?),\s*([A-Z]{2}|[A-Za-z ]{4,30})\b/);
@@ -482,6 +499,13 @@ export function parseRequest(text) {
     states.add(subject.state);
     out.states = [...states];
     out.metros = [subject.metro || subject.name];
+  }
+  let capMatch;
+  if ((capMatch = t.match(/\b(?:subject|deal|under[- ]contract|contract|appraisal|appraised)?\s*(?:cap(?: rate)?|going[- ]in cap)?\s*(?:is|at|around|~|=)?\s*(\d+(?:\.\d+)?)\s*%/))) {
+    const cap = Number(capMatch[1]) / 100;
+    if (Number.isFinite(cap) && cap > 0 && cap < 1) {
+      out.subject = { ...(out.subject || {}), cap_rate: cap };
+    }
   }
   const statePattern = [...states].join('|');
   let loc;
@@ -887,7 +911,7 @@ export async function runComps(args, deps) {
     property_types: (args.property_types && args.property_types.length) ? args.property_types : parsed.property_types,
     tenant: (args.tenant !== undefined) ? args.tenant : parsed.tenant,
     tenants: (args.tenants && args.tenants.length) ? args.tenants : parsed.tenants,
-    subject: args.subject || parsed.subject,
+    subject: args.subject || args.subject_override || parsed.subject,
     appraisal_mode: (args.appraisal_mode != null) ? args.appraisal_mode : parsed.appraisal_mode,
     government_only: (args.government_only != null) ? args.government_only : parsed.government_only,
     include_on_market: (args.include_on_market != null) ? args.include_on_market : parsed.include_on_market,
@@ -975,12 +999,15 @@ export async function runComps(args, deps) {
 
 function summarizeComps(scored, eff, meta) {
   const rows = scored || [];
-  const caps = rows.map(c => Number(c.cap_rate)).filter(n => Number.isFinite(n) && n > 0);
+  const soldRows = rows.filter(c => !isOnMarketComp(c) && Number(c.sale_price) > 0);
+  const capRows = soldRows.length ? soldRows : rows;
+  const caps = capRows.map(c => soldCapForStats(c)).filter(n => Number.isFinite(n) && n > 0);
   const medianCap = caps.length ? caps.slice().sort((a, b) => a - b)[Math.floor(caps.length / 2)] : null;
-  const weighted = rows.reduce((acc, c) => {
-    const cap = Number(c.cap_rate), price = Number(c.sale_price);
+  const weighted = capRows.reduce((acc, c) => {
+    const cap = soldCapForStats(c), price = Number(c.sale_price);
     if (Number.isFinite(cap) && Number.isFinite(price) && price > 0) {
-      acc.num += cap * price; acc.den += price;
+      acc.num += cap * price;
+      acc.den += price;
     }
     return acc;
   }, { num: 0, den: 0 });
@@ -990,7 +1017,7 @@ function summarizeComps(scored, eff, meta) {
     ? `${(Math.min(...caps) * 100).toFixed(2)}%-${(Math.max(...caps) * 100).toFixed(2)}% cap range; median ${(medianCap * 100).toFixed(2)}%${weighted.den ? `; weighted average ${(weighted.num / weighted.den * 100).toFixed(2)}%` : ''}`
     : 'cap-rate range not on file';
   const subjectName = eff.subject?.name || 'the subject';
-  return `Methodology: ${rows.length} ${eff.property_types?.includes('dialysis') ? 'dialysis ' : ''}comps ranked by subject similarity for ${subjectName}, weighting same metro/state first, then regional/national support, tenant credit, size/chair scale, cap proximity, and recency. The set shows ${capText}. ${fl ? `${fl} Florida comps are included; ` : ''}score tiers: A=${tiers.A || 0}, B=${tiers.B || 0}, C=${tiers.C || 0}. Review flags are retained from the cap/rent reconciliation engine; missing subject fields remain "Not on file."`;
+  return `Methodology: ${rows.length} ${eff.property_types?.includes('dialysis') ? 'dialysis ' : ''}comps ranked by subject similarity for ${subjectName}, weighting same metro/state first, then regional/national support, tenant credit, size/chair scale, cap proximity, and recency. Cap-rate statistics use the reliable sold primary set only. The set shows ${capText}. ${fl ? `${fl} Florida comps are included; ` : ''}score tiers: A=${tiers.A || 0}, B=${tiers.B || 0}, C=${tiers.C || 0}. Review flags are retained from the cap/rent reconciliation engine; missing subject fields remain "Not on file."`;
 }
 
 function transparencyLine(meta) {
@@ -1001,6 +1028,39 @@ function transparencyLine(meta) {
   if (excluded) parts.push(`${excluded} excluded as estimated-NOI (say "include estimated NOI" to include)`);
   if (meta?.truncated) parts.push('truncated after similarity ranking');
   return parts.join('; ');
+}
+
+function asNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function soldCapForStats(c) {
+  const price = asNum(c?.sale_price ?? c?.sold_price);
+  const noi = asNum(c?.annual_noi ?? c?.noi ?? c?.engine_income ?? c?.annual_rent);
+  if (price && price > 0 && noi && noi > 0) return +(noi / price).toFixed(6);
+  const cap = asNum(c?.cap_rate);
+  return cap && cap > 0 ? cap : null;
+}
+
+function primarySaleExclusion(c, subject = null) {
+  if (isOnMarketComp(c)) return null;
+  const price = asNum(c?.sale_price ?? c?.sold_price);
+  const cap = soldCapForStats(c);
+  const notes = String([
+    c?.sale_condition, c?.sale_conditions, c?.transaction_type, c?.notes,
+    c?.raw?.sale_condition, c?.raw?.sale_conditions, c?.raw?.transaction_type,
+    c?.raw?.notes, c?.raw?.sale_notes_raw,
+  ].filter(Boolean).join(' ')).toLowerCase();
+  if (/portfolio|multi[- ]property|multi property|allocated|allocation|partial interest|partial[- ]interest/.test(notes)) {
+    return 'portfolio_or_allocated_sale';
+  }
+  if (cap != null && (cap < 0.035 || cap > 0.10)) return 'implausible_cap';
+  const noi = asNum(c?.annual_noi ?? c?.noi ?? c?.engine_income ?? c?.annual_rent);
+  if (price && noi && price < noi * 10) return 'sale_price_below_10x_noi';
+  const subjectCap = asNum(subject?.cap_rate ?? subject?.fields?.cap_rate);
+  if (subjectCap && cap && cap > subjectCap + 0.02) return 'high_cap_market_range';
+  return null;
 }
 
 export async function runSynthesize(args, deps) {
@@ -1018,7 +1078,7 @@ export async function runSynthesize(args, deps) {
     include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : p.include_unreliable_noi,
     tenant:            (args.tenant !== undefined) ? args.tenant : p.tenant,
     tenants:           (args.tenants && args.tenants.length) ? args.tenants : p.tenants,
-    subject:           args.subject || p.subject,
+    subject:           args.subject || args.subject_override || p.subject,
     appraisal_mode:    (args.appraisal_mode != null) ? args.appraisal_mode : p.appraisal_mode,
   };
   const route = routeIntent(eff);
@@ -1033,12 +1093,24 @@ export async function runSynthesize(args, deps) {
   const { comps, meta, template_comps } = await runComps({ ...eff, verticals: route.verticals,
     government_only: route.government_only, limit: candidateLimit }, deps);
   const tierRank = { A: 3, B: 2, C: 1 };
-  const scored = comps.map(c => ({ ...c, _score: scoreComp(c, eff) }))
+  let scored = comps.map(c => ({ ...c, _score: scoreComp(c, eff) }))
     .sort((x, y) => ((tierRank[scoreTier(y._score)] || 0) - (tierRank[scoreTier(x._score)] || 0) || y._score - x._score
       || String(x.sale_date || '').localeCompare(String(y.sale_date || '')) || String(x.comp_id || '').localeCompare(String(y.comp_id || ''))))
     .map(c => ({ ...c, score_tier: scoreTier(c._score),
-      template: { ...(c.template || templateRow(c)), score_tier: scoreTier(c._score) } }))
-    .slice(0, requestedLimit);
+      template: { ...(c.template || templateRow(c)), score_tier: scoreTier(c._score) } }));
+  if (eff.appraisal_mode) {
+    const primary = scored.filter(c => !isOnMarketComp(c) && !primarySaleExclusion(c, eff.subject));
+    const secondary = scored.filter(c => !isOnMarketComp(c) && primarySaleExclusion(c, eff.subject))
+      .map(c => ({ ...c, score_tier: 'Secondary',
+        template: { ...(c.template || templateRow(c)), score_tier: 'Secondary' } }));
+    const market = scored.filter(c => isOnMarketComp(c));
+    scored = eff.include_on_market
+      ? [...primary.slice(0, requestedLimit), ...market]
+      : primary.slice(0, requestedLimit);
+    scored._secondary_count = secondary.length;
+  } else {
+    scored = scored.slice(0, requestedLimit);
+  }
   const synthMeta = { ...meta, returned: scored.length, candidate_total: comps.length,
     truncated: meta.truncated || comps.length > scored.length };
   return { interpreted_query: {
@@ -1054,6 +1126,7 @@ export async function runSynthesize(args, deps) {
     template_comps: scored.map(c => c.template || templateRow(c)),
     meta: { ...synthMeta,
       by_source: scored.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
+      secondary_market_range: scored._secondary_count || 0,
       flagged_for_review: scored.filter(c => c.review_flags && c.review_flags.length).length,
       review_flags: scored.filter(c => c.review_flags && c.review_flags.length).map(c => ({
         comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
@@ -1073,9 +1146,17 @@ function workbookRowFromSynthComp(c) {
     city: t.city,
     state: t.state,
     rba,
+    land: t.land,
+    built: t.year_built,
+    year_built: t.year_built,
     tenant: t.tenant,
     annual_noi: t.annual_noi,
     annual_rent: t.annual_rent,
+    lease_expiration: t.lease_expiration,
+    expenses: t.expenses,
+    lease_type: t.lease_type,
+    bumps: t.bumps,
+    renewal_options: t.renewal_options,
     chairs: t.chairs,
     patients: t.patients,
     source: t.source,
@@ -1126,12 +1207,21 @@ function workbookRowsFromSynthResult(result) {
 }
 
 function capRateRange(rows) {
-  const caps = rows.map(r => Number(r.cap_rate)).filter(n => Number.isFinite(n) && n > 0);
+  const caps = rows.map(r => soldCapForStats(r)).filter(n => Number.isFinite(n) && n > 0);
   if (!caps.length) return null;
+  const weighted = rows.reduce((acc, r) => {
+    const cap = soldCapForStats(r), price = Number(r.sale_price);
+    if (Number.isFinite(cap) && Number.isFinite(price) && price > 0) {
+      acc.num += cap * price;
+      acc.den += price;
+    }
+    return acc;
+  }, { num: 0, den: 0 });
   return {
     min: Math.min(...caps),
     max: Math.max(...caps),
     median: caps.slice().sort((a, b) => a - b)[Math.floor(caps.length / 2)],
+    weighted_avg: weighted.den ? weighted.num / weighted.den : null,
   };
 }
 
@@ -1160,7 +1250,45 @@ export async function runGenerateCompsFromRequest(args, deps, generateWorkbook) 
     comp_type: synthCompType,
     limit: clampLimit(args?.limit, DEFAULT_SYNTHESIZE_LIMIT, MAX_SYNTHESIZE_LIMIT),
   };
-  const synthesized = await runSynthesize(synthArgs, deps);
+  const oneShotParsed = parseRequest(request);
+  const oneShotAppraisal = (args?.appraisal_mode != null) ? !!args.appraisal_mode : !!oneShotParsed.appraisal_mode;
+  let synthesized;
+  if (oneShotAppraisal) {
+    const soldLimit = clampLimit(args?.limit, DEFAULT_SYNTHESIZE_LIMIT, MAX_SYNTHESIZE_LIMIT);
+    const soldSynth = await runSynthesize({
+      ...synthArgs,
+      comp_type: 'sale',
+      include_on_market: false,
+      limit: soldLimit,
+    }, deps);
+    const marketSynth = await runSynthesize({
+      ...synthArgs,
+      comp_type: 'both',
+      include_on_market: true,
+      limit: MAX_SYNTHESIZE_LIMIT,
+    }, deps);
+    const marketRows = (marketSynth.comps || []).filter(isOnMarketComp);
+    const combined = [...(soldSynth.comps || []), ...marketRows];
+    synthesized = {
+      ...soldSynth,
+      comps: combined,
+      template_comps: combined.map(c => c.template || templateRow(c)),
+      summary: summarizeComps(combined, { ...(soldSynth.interpreted_query || {}), subject: soldSynth.subject || null }, soldSynth.meta || {}),
+      transparency: `${transparencyLine(soldSynth.meta)}; on-market returned ${marketRows.length} separately`,
+      meta: {
+        ...(soldSynth.meta || {}),
+        returned: combined.length,
+        sold_returned: soldSynth.comps?.length || 0,
+        on_market_returned: marketRows.length,
+        independent_caps: true,
+        on_market_candidate_total: marketSynth.meta?.candidate_total ?? marketRows.length,
+        secondary_market_range: (soldSynth.meta?.secondary_market_range || 0) + (marketSynth.meta?.secondary_market_range || 0),
+        warnings: [...(soldSynth.meta?.warnings || []), ...(marketSynth.meta?.warnings || [])],
+      },
+    };
+  } else {
+    synthesized = await runSynthesize(synthArgs, deps);
+  }
   const { sold, on_market } = workbookRowsFromSynthResult(synthesized);
   if (!sold.length && !on_market.length) {
     return {

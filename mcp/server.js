@@ -21,7 +21,7 @@ import { makeCadenceScanRoute } from "./cadence-scan.js";
 import { makeEntityReconcileRoute } from "./entity-reconcile.js";
 import { makeOfferContextRoute, makeOfferLogRoute } from "./offer-context.js";
 import { makeDealEmailMatcherRoute } from "./deal-email-matcher.js";
-import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
+import { boundHttpToolResult, enforceHttpResponseSize, jsonLen } from "./http-response-bound.js";
 import { resolveSubject } from "./subject-resolver.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────

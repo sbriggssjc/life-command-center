@@ -132,6 +132,132 @@ function makeAppraisalQuery(domain, calls) {
   };
 }
 
+function makeQualityQuery(domain, calls) {
+  const goodSold = Array.from({ length: 25 }, (_, i) => ({
+    comp_id: `good-${i + 1}`,
+    source: 'dialysis_db',
+    vertical: 'dialysis',
+    tenant: i % 2 ? 'DaVita' : 'Fresenius',
+    address: `${1000 + i} Clinic Blvd`,
+    city: i % 2 ? 'Orlando' : 'Tampa',
+    state: 'FL',
+    building_sf: 9000 + i,
+    land_acres: 1.2 + i / 100,
+    year_built: 2000 + (i % 10),
+    chairs: 16 + (i % 4),
+    patient_count: 90 + i,
+    sale_price: 5000000 + i * 10000,
+    cap_rate: 0.058 + (i % 5) / 1000,
+    annual_rent: (5000000 + i * 10000) * (0.058 + (i % 5) / 1000),
+    lease_expiration: '2036-12-31',
+    lease_type: 'NNN',
+    bumps: '2% annual',
+    renewal_options: '2, 5 yr',
+    sale_date: `2025-${String((i % 9) + 1).padStart(2, '0')}-15`,
+    confidence: 0.9,
+  }));
+  const badSold = [
+    {
+      comp_id: 'birmingham-bad',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: 'DaVita',
+      address: '1 Broken Economics Rd',
+      city: 'Birmingham',
+      state: 'AL',
+      building_sf: 8500,
+      sale_price: 76500,
+      cap_rate: 1.921,
+      annual_rent: 146976,
+      sale_date: '2025-01-01',
+      confidence: 0.9,
+    },
+    {
+      comp_id: 'coral-portfolio',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: 'Fresenius',
+      address: '2 Portfolio Way',
+      city: 'Coral Springs',
+      state: 'FL',
+      building_sf: 12000,
+      sale_price: 18300000,
+      cap_rate: 0.0095,
+      annual_rent: 173850,
+      sale_date: '2025-02-01',
+      notes: 'Multi-Property Sale',
+      confidence: 0.9,
+    },
+    {
+      comp_id: 'dup-a',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: 'DaVita',
+      address: '8100 Johnson St',
+      city: 'Pembroke Pines',
+      state: 'FL',
+      building_sf: 9000,
+      sale_price: 6000000,
+      cap_rate: 0.06,
+      annual_rent: 360000,
+      sale_date: '2025-03-01',
+      confidence: 0.6,
+    },
+    {
+      comp_id: 'dup-b',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: 'DaVita',
+      address: '8100 Johnson Street',
+      city: 'Pembroke Pines',
+      state: 'FL',
+      building_sf: 9000,
+      sale_price: 6000000,
+      cap_rate: 0.06,
+      annual_rent: 360000,
+      sale_date: '2025-03-01',
+      confidence: 0.5,
+    },
+  ];
+  const onMarket = Array.from({ length: 9 }, (_, i) => ({
+    comp_id: `market-${i + 1}`,
+    source: 'dialysis_db',
+    vertical: 'dialysis',
+    comp_type: 'listing',
+    on_market: true,
+    tenant: 'DaVita',
+    address: `${2000 + i} Listing Ln`,
+    city: 'Orlando',
+    state: 'FL',
+    building_sf: 8800 + i,
+    land_acres: 1.5,
+    year_built: 2010 + i,
+    chairs: 18,
+    patient_count: 100 + i,
+    ask_price: 5200000 + i * 10000,
+    current_price: 5200000 + i * 10000,
+    initial_price: 5300000 + i * 10000,
+    cap_rate: 0.059,
+    annual_rent: 306800,
+    lease_expiration: '2037-06-30',
+    lease_type: 'NNN',
+    bumps: '2% annual',
+    renewal_options: '2, 5 yr',
+    listing_date: '2026-01-15',
+    confidence: 0.85,
+  }));
+  return async (method, path, body) => {
+    if (method === 'POST' && path === 'rpc/rpc_query_comps') {
+      calls.push([domain, body]);
+      if (domain !== 'dialysis') return { ok: true, status: 200, data: [] };
+      return { ok: true, status: 200, data: body.p_include_onmkt ? [...goodSold, ...badSold, ...onMarket] : [...goodSold, ...badSold] };
+    }
+    if (method === 'POST' && /_engine_noi_batch$/.test(path)) return { ok: true, status: 200, data: [] };
+    if (method === 'POST' && /_comp_review_queue/.test(path)) return { ok: true, status: 200, data: [] };
+    return { ok: true, status: 200, data: [] };
+  };
+}
+
 describe('comps engine bounded output', () => {
   it('parses DaVita/The Villages FL and returns bounded template-ready rows', async () => {
     const parsed = parseRequest('DaVita, The Villages, FL comps');
@@ -249,6 +375,48 @@ describe('comps engine bounded output', () => {
     assert.equal(workbookPayload.sold.some(r => r.address === '1050 Old Camp Rd'), false);
     assert.ok(workbookPayload.sold.some(r => r.chairs === undefined));
     assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'both'));
+  });
+
+  it('uses independent sold/on-market caps, preserves fields, excludes broken sold rows, and reconciles cap stats', async () => {
+    const calls = [];
+    let workbookPayload = null;
+    const result = await runGenerateCompsFromRequest(
+      {
+        request: 'dialysis comps for The Villages, FL for an appraisal workbook at 6.00% cap',
+        limit: 25,
+      },
+      { govQuery: makeQualityQuery('government', calls), diaQuery: makeQualityQuery('dialysis', calls) },
+      async (payload) => {
+        workbookPayload = payload;
+        return {
+          status: 'ok',
+          filename: 'The Villages comps.xlsx',
+          download_url: 'https://example.test/download/the-villages.xlsx',
+          expires_in_seconds: 3600,
+        };
+      }
+    );
+
+    assert.equal(result.counts.sold, 25);
+    assert.equal(result.counts.on_market, 9);
+    assert.equal(workbookPayload.sold.length, 25);
+    assert.equal(workbookPayload.on_market.length, 9);
+    assert.equal(workbookPayload.sold.some(r => /Broken Economics|Portfolio/.test(r.address)), false);
+    assert.equal(workbookPayload.sold.filter(r => r.address === '8100 Johnson St' || r.address === '8100 Johnson Street').length, 1);
+    const first = workbookPayload.sold.find(r => r.address === '1000 Clinic Blvd');
+    assert.equal(first.land, 1.2);
+    assert.equal(first.built, 2000);
+    assert.equal(first.lease_expiration, '2036-12-31');
+    assert.equal(first.expenses, 'NNN');
+    assert.equal(first.bumps, '2% annual');
+    assert.equal(first.renewal_options, '(2) 5-yr');
+    assert.equal(first.chairs, 16);
+    assert.equal(first.patients, 90);
+    assert.ok(result.cap_rate_range.weighted_avg >= result.cap_rate_range.min);
+    assert.ok(result.cap_rate_range.weighted_avg <= result.cap_rate_range.max);
+    assert.equal(result.subject.cap_rate, 0.06);
+    assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'sale' && body.p_include_onmkt === false));
+    assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'both' && body.p_include_onmkt === true));
   });
 
   it('preserves template_comps when the HTTP guard shrinks an oversized comps response', () => {
