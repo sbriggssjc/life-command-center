@@ -18,7 +18,7 @@ Team Briggs lists commercial real estate for sale (primarily single-tenant NNN).
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.2.1 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.2.2 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine — `SynthesizeComps` (default; pass the request text verbatim) or
@@ -49,6 +49,7 @@ Resolve the folder from the convention — Correspondence/COs/signed docs →
 target path + name). Never delete, rename, move, share, or change columns unless explicitly asked and
 confirmed. Never egress tenant files through a personal flow. Reasoning-plane surfaces hand files to Copilot
 or use manual upload/download.
+Finished deal artifacts are named `{Property}_{DocType}_{Client}_{YYYYMM}` before the extension (`{DocType}` PascalCase from `VAM, MasterSheet, SalesComps, LeaseComps, BOV, OM, LOI`) and land in the deal's convention folder.
 <!-- /CANON:filing -->
 
 <!-- CANON:email-and-routing -->
@@ -107,6 +108,7 @@ rule): pull and cite the lease's actual rent steps/options before entering any g
 flat/no-growth — clearly flagged — only when the lease is explicitly silent; never default to a "market"
 escalation guess. Formula-protected columns are never overwritten. Workbook cell edits over 5 MB run via the
 Document Assembly Agent (Excel Online + Office Scripts), applying only what the record/lease states.
+Deliverable naming is binding: every finished deal artifact is named `{Property}_{DocType}_{Client}_{YYYYMM}` before the extension — `{Property}` street-anchored and `_`-joined (e.g. `7912_Cameron_Rd_Austin_TX`), `{DocType}` PascalCase from `VAM, MasterSheet, SalesComps, LeaseComps, BOV, OM, LOI`, `{Client}` the client short name, `{YYYYMM}` the deal month. The full set saves to `Team Briggs - Documents/Deals/{Client}/{Property}/` (repo-local `outputs/deals/{Client}_{Property}/` as fallback); a surface that cannot save says so and still names attachments to the convention.
 <!-- /CANON:bov -->
 
 <!-- CANON:intake-triage -->

@@ -10,15 +10,29 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## This session — reconcile 2026-08-04 (prompts 31–35 processed)
+Responses reviewed from `responses/`; prompts + responses moved to `done/`. Canon re-rendered to **v1.2.2**
+(0 drift) — the 35 naming doctrine had been written to the non-render `canon/*.md`; ported into `canon/blocks/`
+and re-rendered so all 5 surfaces + the Copilot live artifact now carry it.
+
+| # | Outcome | State |
+|---|---------|-------|
+| 33 | Mount MCP OAuth on root app | ✅ **DONE + DEPLOYED** — pushed `ef8cc6a6`; live `/version` advanced; `/.well-known/oauth-authorization-server`→JSON, `/register`→201. **Connector now registers.** Re-add the LCC connector (account-level or in the plugin) and it should auth. |
+| 31 | Property-record consolidation + same-event sale reconcile | ✅ code landed (dia+gov migrations, sidebar ingest guard; dry-run default, backups, review lanes, repeat sales preserved). ⏳ **migrations NOT applied live** — apply dry-run first, review, then apply. |
+| 32 | Ollama cleaning-assist agent (P4, proposal-only) | ✅ code landed (LCC Opps migration, `/api/ollama-clean-assist-tick`, Decision Center hints, `OLLAMA_CLEAN_ASSIST` flag default OFF). ⏳ **migration NOT applied live**; runtime off until flag flipped. |
+| 34 | Regenerate blank BOV templates (DSCR fix) | ✅ delivered `BOV_Master_NNN_Briggs_BLANK_2026-08-04.xlsx` + `BOV_Master_MOB_MT_Briggs_BLANK_2026-08-04.xlsx` (DSCR correct; **1,214 / 1,147 cell drift** vs stale copies, CSV in `outputs/prompt_34_bov_templates/`). ⏳ **Scott swaps these into the Northmarq/Copilot project knowledge + `Templates/`.** |
+| 35 | Deliverable naming + save doctrine | ✅ canon (v1.2.2), setup doc, comps skill, `NORTHMARQ_PROJECT_PROMPT.md` v1.12, `bov-generator/main.py`. ⚠️ external `~/.claude/skills/bov-underwriting|bov-government` couldn't be edited from repo — paste-ready block in `SPEC_Capability_Parity.md`; apply via SURFACE-SYNC. |
+
+### Needs Scott (from this batch)
+- **Re-add the LCC connector** (plugin or account-level) now that OAuth is deployed — verify it registers cleanly.
+- **Apply the 31 + 32 migrations** (dia/gov + LCC Opps): dry-run → review → apply; then optionally flip `OLLAMA_CLEAN_ASSIST` on.
+- **Swap the regenerated blank BOV templates** (prompt 34) into the Northmarq/Copilot project knowledge + `Templates/`.
+- **Sync the two external BOV skills** with the naming block (SURFACE-SYNC-PROTOCOL); re-paste `NORTHMARQ_PROJECT_PROMPT.md` v1.12 into the Project.
+- **Rotate `LCC_API_KEY`** (still outstanding; it was exposed in chat).
+
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
-| 31 | P2 dedup: property consolidation + multi-source reconcile (keep repeat sales) | P1 | open (Scott sent) |
-| 32 | Ollama cleaning-assist agent (P4 review-lane triage + unstructured reconcile) | P1 | open |
-| 33 | Mount MCP OAuth on the root app (fixes Cowork/Copilot connector registration) | P1 | open |
-| 34 | Regenerate blank BOV master template from bov-generator (kills the DSCR drift at source) | P1 | open |
-| 35 | Deliverable naming + save-location doctrine (Northmarq prompt + comps/BOV skills) | P1 | code/docs done; external Claude BOV skills not present in workspace |
-| 31 | Data-integrity P2: property-record consolidation + multi-source sale reconciliation | P2 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |

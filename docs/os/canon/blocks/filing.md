@@ -6,3 +6,4 @@ Resolve the folder from the convention — Correspondence/COs/signed docs →
 target path + name). Never delete, rename, move, share, or change columns unless explicitly asked and
 confirmed. Never egress tenant files through a personal flow. Reasoning-plane surfaces hand files to Copilot
 or use manual upload/download.
+Finished deal artifacts are named `{Property}_{DocType}_{Client}_{YYYYMM}` before the extension (`{DocType}` PascalCase from `VAM, MasterSheet, SalesComps, LeaseComps, BOV, OM, LOI`) and land in the deal's convention folder.

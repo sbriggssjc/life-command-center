@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.2.1** — 2026-08-03. Bump this on any rule change; record it in the changelog below and
+**CANON_VERSION: 1.2.2** — 2026-08-04. Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 
 ## Global invariants (apply to every topic, every surface)
@@ -51,6 +51,7 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.2.2** (2026-08-04) — Deliverable naming + save-location doctrine added to the `bov` and `filing` blocks: every finished deal artifact is named `{Property}_{DocType}_{Client}_{YYYYMM}` and the set saves to `Team Briggs - Documents/Deals/{Client}/{Property}/` (repo-local `outputs/deals/{Client}_{Property}/` fallback). Fixes the Northmarq test-chat miss (Master Sheet off-convention, artifacts not saved to disk). Note: prompt 35 first edited the top-level `canon/bov.md`/`canon/filing.md` (non-render copies); the rule was ported into `blocks/` here so it reaches every surface.
 - **1.2.1** (2026-08-03) — Comps workbook/appraisal handoff now uses one-shot `generate_comps.request`
   (request in, link out) so 20-25-row curated sets stay server-side; small row-driven exports use compact
   `template_comps`, never full comp objects.

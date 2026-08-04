@@ -636,3 +636,17 @@ Scott asked how to future-proof the recurring bridge drops + folder/orientation 
 workflow; (3) repo-as-memory (CLAUDE.md + AI-SURFACES-OPERATIONAL-REFERENCE + STATUS, now linked from CLAUDE.md
 START-HERE); (4) account-level connectors/MCP + an optional bundled Cowork plugin; (5) the canonical connected-
 folder set. Linked from CLAUDE.md.
+
+---
+
+## Session 2y — reconcile prompts 31–35 + Northmarq triage (2026-08-04)
+Reviewed all six response docs from `responses/`; moved prompts + responses to `done/`.
+- **33 (MCP OAuth root-mount): DONE + DEPLOYED** — `ef8cc6a6`, live-verified (`/.well-known/oauth-authorization-server`→JSON, `/register`→201). The Cowork/Copilot connector "couldn't register" error is fixed. Delivered a **skill-only** plugin rebuild (v0.1.1, no `.mcp.json`) as the interim; connector can now be re-added at account level.
+- **31 (property consolidation + same-event sale reconcile): code landed** — dia+gov migrations + sidebar ingest guard, dry-run default, backups, review lanes, **repeat sales preserved, no hard-deletes**. Migrations not yet applied live.
+- **32 (Ollama clean-assist, P4 proposal-only): code landed** — LCC-Opps migration, `/api/ollama-clean-assist-tick`, Decision-Center hints, `OLLAMA_CLEAN_ASSIST` flag OFF. Not applied live.
+- **34 (blank BOV templates): delivered** — regenerated NNN + MOB/MT blanks from the generator (DSCR correct); **1,214 / 1,147-cell drift** vs the stale uploaded copies (drift CSV in `outputs/prompt_34_bov_templates/`). Scott swaps them into project knowledge + `Templates/`.
+- **35 (deliverable naming + save doctrine):** `{Property}_{DocType}_{Client}_{YYYYMM}` + deal-folder save. **Caught a drift:** prompt 35 had edited the non-render top-level `canon/bov.md`/`canon/filing.md`; ported the rule into `canon/blocks/`, bumped **CANON_VERSION → 1.2.2**, re-rendered all 5 surfaces (**0 drift**), Copilot live artifact updated. External BOV skills + Northmarq Project prompt (v1.12) still need SURFACE-SYNC re-paste.
+
+**Northmarq DaVita/Austin test-chat triage:** output quality strong (lease > client-recollection hierarchy; caught 3 real discrepancies; no fabricated comps). Gaps were plumbing — comps not pulled (project has no live connector by design; native tools land once an admin adds the connector post-33), no disk save + off-convention Master Sheet (→35), stale-template DSCR bug (→34).
+
+**Open for Scott:** re-add the LCC connector; apply the 31+32 migrations (dry-run→review→apply); swap the 34 templates; SURFACE-SYNC the external BOV skills + re-paste NORTHMARQ_PROJECT_PROMPT v1.12; **rotate `LCC_API_KEY`**.

@@ -6,7 +6,7 @@ working session so future chats don't re-derive it. Chronology lives in
 
 ## 1. Instructions are a managed single-source system — never hand-write per surface
 - **Source of truth:** `docs/os/canon/blocks/*.md` (one file per rule block). Version:
-  `docs/os/canon/00-INDEX.md` `CANON_VERSION` (currently **1.2.0**).
+  `docs/os/canon/00-INDEX.md` `CANON_VERSION` (currently **1.2.2**).
 - **Renderer:** `docs/os/tools/render-surfaces.mjs` (config `docs/os/render.manifest.json`). Run:
   `node docs/os/tools/render-surfaces.mjs --root=docs/os --write-live`. It writes per-surface bundles to
   `docs/os/surfaces/*.canon.md` and, for surfaces with a `liveArtifact`, splices the `CANON:BEGIN…END` region
@@ -70,14 +70,28 @@ Instruction/canon changes do NOT need a deploy — they're paste/upload.
   instruction fix.)
 
 ## 4. DEPLOY-PENDING (the single most important "what's left")
-**Prompts 23, 25, 26 DEPLOYED + working** (appraisal mode: 100 candidates → top ~25 ranked, 17 FL, sold +
-listings, flags retained). **Prompt 27 (one-shot server-side workbook) = CODE DONE, committed `9ac94bfb`, canon
-v1.2.1 — DEPLOY-PENDING.** To land the workbook download: (1) redeploy **tranquil-delight + the standalone MCP**;
-(2) confirm the BOV service (`pacific-love`) is up and `BOV_API_KEY` is set on tranquil-delight (the generator
-proxies it); (3) **ChatGPT: re-import `docs/comps-rollout/lcc-openapi.yaml`** — `generate_comps` now takes a
-`request` param; Copilot-on-MCP picks up the new tool after redeploy (OpenAPI-connector Copilot = re-import the
-package); (4) **re-paste the v1.2.1 instruction bundles** per §1. Still pending: rotate `LCC_API_KEY`; Census key
-(invalid) for prompt 19.
+**Updated 2026-08-04 (reconcile of prompts 31–35).**
+
+- ✅ **MCP OAuth mounted + DEPLOYED (prompt 33, `ef8cc6a6`).** `/mcp` + OAuth discovery + `/register`/`/authorize`/
+  `/oauth/token` now serve on tranquil-delight (live `/version` advanced; `/.well-known/oauth-authorization-server`
+  → JSON, `/register` → 201). **The Cowork/Copilot connector registration error is fixed** — re-add the LCC
+  connector (plugin or account-level) and it should auth.
+- ⏳ **Prompts 31 + 32 code landed, migrations NOT applied live.** dia/gov property-consolidation +
+  same-event-sale reconcile (31) and the LCC-Opps Ollama clean-assist (32, `OLLAMA_CLEAN_ASSIST` flag OFF) are
+  committed with dry-run defaults + backups + review lanes. Apply dry-run → review → apply; runtime stays off
+  until the flag is flipped. No hard-deletes; repeat sales preserved.
+- ⏳ **Prompt 34 blank BOV templates delivered, awaiting swap.** Regenerated NNN + MOB/MT blanks (DSCR correct;
+  1,214/1,147-cell drift vs the stale copies) live in `outputs/prompt_34_bov_templates/`. Scott replaces the
+  Northmarq/Copilot project-knowledge + `Templates/` copies.
+- ✅ **Prompt 35 naming/save doctrine, canon v1.2.2.** `{Property}_{DocType}_{Client}_{YYYYMM}` + deal-folder save
+  is in the `bov`/`filing` blocks and rendered to all 5 surfaces (0 drift). External BOV skills + the Northmarq
+  Project prompt (v1.12) still need the SURFACE-SYNC re-paste.
+
+**Earlier comps arc (still true):** prompts 22–29 comps engine is deployed + validated (The Villages appraisal
+PASS). A "deploy" of engine changes = redeploy **tranquil-delight + the standalone MCP** (both build from `main`);
+confirm `BOV_API_KEY` + the `pacific-love` BOV service for one-shot workbooks; ChatGPT re-imports
+`lcc-openapi.yaml` on tool-shape changes. Still pending: **rotate `LCC_API_KEY`**; Census key (invalid) for
+prompt 19.
 
 ## 5. The bigger architecture (pointers)
 - Request-understanding layer (why plain-language handling is a cross-tool gap): `docs/architecture/request-
