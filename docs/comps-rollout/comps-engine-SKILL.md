@@ -19,10 +19,13 @@ through three MCP tools. Every surface (Claude, Copilot, ChatGPT) inherits the s
 - **synthesize_comps** — DEFAULT for a plain-language request. Pass the raw text as `request`; it parses
   states, property/place anchors, property types, operator lists, date window, appraisal/full-set intent, and
   government intent, routes, scores by subject similarity, and returns the ranked set. Add explicit fields only
-  to override the parse.
+  to override the parse. **Never invent a tenant/metro/state/date filter the user didn't state** — pre-narrowing collapses the set; the engine expands from the subject.
 - **query_comps** — when you already have structured filters (states, property_types, verticals, tenant, dates,
   size, limit). Same output shape, no relevance scoring.
-- **generate_comps** — build the populated Briggs Excel workbook from comp rows (see Export below).
+- **generate_comps** — build the populated Briggs Excel workbook. **For an appraisal / full-set / workbook
+  request, call it with `request` = the raw text** — the server runs synthesize + build in one pass and returns
+  only a download link + counts (the 20-30 rows never round-trip the model/connector). For a small curated set
+  you can instead pass the rows (see Export).
 
 ## Non-negotiable policies (already enforced by the engine — don't fight them)
 - **Appraisal/full-set mode.** Requests like "I need dialysis comps for The Villages," "for the appraiser,"
@@ -61,7 +64,12 @@ cap-rate observations), `transparency` (`returned N of M...` with estimated-NOI/
 by_source, warnings, interpreted_params), and `markdown` (the ready-to-show table — prefer rendering this).
 
 ## Export to the Briggs workbook (generate_comps)
-Map each comp to a row and call generate_comps (`comp_type: "sales"`; `vertical: "dialysis"` selects the
+**One-shot — the default for an appraisal or ANY workbook of ~20+ comps:** call `generate_comps` with
+`request` = Scott's text (plus `comp_type`/`vertical`). The server synthesizes + builds server-side and returns
+`{ download_url, counts, cap_rate_range, tiers, flagged_count, subject }` — deliver the link. Do NOT pass 20-30
+rows back through the model; they truncate on ChatGPT (45k) and overflow Copilot (SystemError).
+
+**Two-step — small curated sets only:** map each comp to a row and call generate_comps (`comp_type: "sales"`; `vertical: "dialysis"` selects the
 CHAIRS/PATIENTS template; government comps route to the government template automatically). **Use the engine's
 own field names** — they map straight through: `state`, `building_sf`→RBA, `sale_price`→SOLD PRICE,
 `sale_date`→DATE, `year_built`→BUILT, `initial_price`, `last_price`, `annual_rent`/`noi`→RENT/NOI,
