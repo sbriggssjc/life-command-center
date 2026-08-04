@@ -3945,6 +3945,37 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     }
   }
 
+  // Prompt 31 recurrence guard: if all PostgREST equality/fallback lookups
+  // missed, ask the domain DB to compare with its own canonical address
+  // normalizer before INSERTing a new property. This catches cases where JS
+  // normalization and dia/gov SQL normalization drift. If the DB sees multiple
+  // candidates, stop here instead of creating another duplicate property_id.
+  if (!lookup.data?.length) {
+    try {
+      const p31Lookup = await domainQuery(domain, 'POST',
+        'rpc/p31_find_existing_property_by_address',
+        { p_address: address, p_state: entity.state || null, p_city: entity.city || null }
+      );
+      const p31Data = Array.isArray(p31Lookup?.data) ? p31Lookup.data[0] : p31Lookup?.data;
+      if (p31Lookup.ok && p31Data?.status === 'matched' && p31Data.property_id) {
+        console.log(`[upsertDomainProperty] Prompt31 DB-normalized fallback matched property_id=${p31Data.property_id} (${domain})`);
+        lookup = { ok: true, data: [{ property_id: p31Data.property_id, [sizeCol]: null }] };
+      } else if (p31Lookup.ok && p31Data?.status === 'ambiguous') {
+        _lastDomainPropertyError = {
+          status: 'ambiguous_property_match',
+          message: `Prompt31 DB-normalized lookup found ${p31Data.candidate_count || 'multiple'} candidates; refusing to create a duplicate property.`,
+          domain,
+          address,
+          candidates: p31Data.candidates || [],
+        };
+        console.warn(`[upsertDomainProperty] Prompt31 DB-normalized lookup ambiguous for "${address}" (${domain}); refusing create.`);
+        return null;
+      }
+    } catch (err) {
+      console.warn('[upsertDomainProperty] Prompt31 DB-normalized fallback unavailable:', err?.message || err);
+    }
+  }
+
   // Anchored ^...$ regex of values that are CoStar UI text or section
   // labels we never want as a property tenant. Audit 2026-04-29 added
   // "my data" (8 conflicts/7d), "show" (4), "more", "less" — all

@@ -16,6 +16,8 @@
 | 31 | P2 dedup: property consolidation + multi-source reconcile (keep repeat sales) | P1 | open (Scott sent) |
 | 32 | Ollama cleaning-assist agent (P4 review-lane triage + unstructured reconcile) | P1 | open |
 | 33 | Mount MCP OAuth on the root app (fixes Cowork/Copilot connector registration) | P1 | open |
+| 34 | Regenerate blank BOV master template from bov-generator (kills the DSCR drift at source) | P1 | open |
+| 35 | Deliverable naming + save-location doctrine (Northmarq prompt + comps/BOV skills) | P1 | open |
 | 31 | Data-integrity P2: property-record consolidation + multi-source sale reconciliation | P2 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
@@ -56,6 +58,18 @@ green out as the retired rows age off.
 - **Deploy `ddd9d49e`** to tranquil-delight (env vars + redeploy) — unblocks ChatGPT + Copilot. ← top priority.
 - **Copilot Studio** connect + publish (prompt 21 Part 2) — after the deploy.
 - **Census:** paused; obtain a working key from census.gov, then resume prompt 19.
+
+## Northmarq DaVita/Austin test chat — triage (2026-08-04)
+Output quality was strong (data-hierarchy discipline: executed lease > client recollection; caught 3 real
+discrepancies — Sep-2034→Apr-30-2035 expiry, 7,835→8,024 SF, NN vs Absolute-NNN; no fabricated comps). Gaps were
+all plumbing, now queued:
+- **Comps not pulled/generated** — the Northmarq project has no live LCC connector (managed Claude, admin needed;
+  compose-and-hand-off is the by-design fallback and it worked — it emitted a /comps payload). Native tools land
+  when an admin adds the connector at `{MCP_BASE_URL}/mcp` **after prompt 33** mounts OAuth. Not a code prompt →
+  Scott/IT action.
+- **Deliverables didn't save to disk + inconsistent naming** (Master Sheet off-convention) → **prompt 35**.
+- **DSCR bug in the stale blank BOV template** (generator source is correct; uploaded template drifted) →
+  **prompt 34**.
 
 ## Done (in `done/`)
 01-14, 16, 17, 20, 07; session 2i: prompt-22 response. 15 RETIRED.
