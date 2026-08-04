@@ -25,6 +25,7 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { invokeExtractionAI } from './_shared/ai.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
@@ -46,6 +47,7 @@ import {
 } from './_shared/intake-classify.js';
 import { normalizeState, parseContactFromJunk } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
+import { createHash, randomUUID } from 'node:crypto';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -141,6 +143,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
+    case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -186,7 +189,7 @@ async function handleOpsHealth(req, res) {
   const [
     openAlerts, openFlowFailures, cronSummary,
     recentFlowFailures,
-    healthSurface,
+    healthSurface, cleanAssistHealth,
     invalidPriorityColumns,
     writeFail24h, writeFailTop, writeFail7d,
     diaLlcQueued, diaLlcInProgress, govLlcQueued, govLlcInProgress,
@@ -198,6 +201,7 @@ async function handleOpsHealth(req, res) {
       + '&detected_at=gte.' + encodeURIComponent(flowHealthSince)
       + '&order=detected_at.desc&limit=500'),
     opsRead('v_lcc_health_surface?select=subsystem,check_name,status,count,first_seen,ts,last_error,external_url,details&order=status.desc,ts.desc&limit=200'),
+    opsRead('v_lcc_clean_assist_health?select=subsystem,check_name,status,count,first_seen,ts,last_error,external_url,details&limit=1'),
     opsRead('v_field_source_priority_invalid_columns?select=target_table,field_name,source,nearby_columns&limit=50'),
     opsCount('v_ingest_write_failures_24h'),
     opsRead('v_ingest_write_failures_top_24h?select=domain,method,http_status,path_norm,failures_24h,sample_error&order=failures_24h.desc&limit=5'),
@@ -275,7 +279,8 @@ async function handleOpsHealth(req, res) {
       || (b.failures - a.failures)
       || String(b.latest_failure_at || '').localeCompare(String(a.latest_failure_at || '')));
 
-  const surfaceRows = Array.isArray(healthSurface) ? healthSurface : [];
+  const surfaceRows = (Array.isArray(healthSurface) ? healthSurface : [])
+    .concat(Array.isArray(cleanAssistHealth) ? cleanAssistHealth : []);
   const invalidPriorityRows = Array.isArray(invalidPriorityColumns) ? invalidPriorityColumns : [];
   const lccHealth = buildLccHealthSurface({
     surfaceRows,
@@ -317,6 +322,7 @@ async function handleOpsHealth(req, res) {
       lcc_health_status: lccHealth.overall_status,
       lcc_health_red: lccHealth.counts.red,
       lcc_health_amber: lccHealth.counts.amber,
+      clean_assist: Array.isArray(cleanAssistHealth) && cleanAssistHealth[0] ? cleanAssistHealth[0].details : null,
     },
     alerts, flow_failures: flows, flow_health: flowHealth, cron_issues: crons, workers,
     lcc_health: lccHealth,
@@ -744,6 +750,220 @@ async function handleReviewCounts(req, res) {
     degraded: lanes.some((l) => l.status === 'partial'),
     lanes,
   });
+}
+
+// ============================================================================
+// PROMPT 32 — OLLAMA CLEANING-ASSIST TICK
+// ============================================================================
+// P4 assist layer only. This worker reads existing Decision Center subjects and
+// writes lcc_clean_assist_proposals. It never calls merge/apply/change RPCs and
+// never writes domain canonical tables. The human/resolver/priority ladder keeps
+// ownership of truth.
+// ============================================================================
+const CLEAN_ASSIST_SOURCE = 'ollama_clean_assist';
+const CLEAN_ASSIST_TYPES = [
+  'property_merge',
+  'owner_reconcile',
+  'sf_link_candidate',
+  'provenance_conflict',
+  'intake_disposition',
+];
+
+function cleanAssistEnabled(flagRow) {
+  const env = String(process.env.OLLAMA_CLEAN_ASSIST || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+function cleanAssistKind(type) {
+  if (type === 'provenance_conflict') return 'conflict_narration';
+  if (type === 'intake_disposition') return 'unstructured_reconciliation';
+  return 'review_triage';
+}
+
+function cleanAssistAllowedVerdicts(kind) {
+  if (kind === 'conflict_narration') return new Set(['keep_current', 'accept_attempted', 'research', 'uncertain']);
+  if (kind === 'unstructured_reconciliation') return new Set(['link', 'no_link', 'research', 'uncertain']);
+  return new Set(['merge', 'not', 'research', 'uncertain']);
+}
+
+function cleanAssistNormalizeProposal(raw, kind) {
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const allowed = cleanAssistAllowedVerdicts(kind);
+  let verdict = String(obj.verdict || '').toLowerCase().trim();
+  if (!allowed.has(verdict)) verdict = 'uncertain';
+  const n = Number(obj.confidence || 0);
+  const confidence = Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
+  const reason = String(obj.reason || obj.conflict_summary || 'No grounded reason supplied.').replace(/\s+/g, ' ').trim().slice(0, 500);
+  return {
+    verdict,
+    confidence,
+    reason: reason || 'No grounded reason supplied.',
+    proposed_link: obj.proposed_link && typeof obj.proposed_link === 'object' ? obj.proposed_link : {},
+    conflict_summary: obj.conflict_summary ? String(obj.conflict_summary).replace(/\s+/g, ' ').trim().slice(0, 1000) : null,
+  };
+}
+
+function parseCleanAssistJson(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1].trim() : raw;
+  try { return JSON.parse(candidate); } catch (_e) { /* fall through */ }
+  const first = candidate.indexOf('{');
+  const last = candidate.lastIndexOf('}');
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(candidate.slice(first, last + 1)); } catch (_e) { /* fall through */ }
+  }
+  return null;
+}
+
+function buildCleanAssistPrompt(item, kind) {
+  const payload = {
+    decision_type: item.decision_type,
+    subject_ref: item.subject_ref,
+    subject_domain: item.subject_domain,
+    subject_property_id: item.subject_property_id,
+    rank_value: item.rank_value,
+    context: item.context || {},
+  };
+  const task =
+    kind === 'conflict_narration'
+      ? 'Narrate the field conflict and recommend which source should win per the visible precedence/current-source evidence.'
+      : kind === 'unstructured_reconciliation'
+        ? 'Extract property, sale, or contact mentions from the available unstructured context and propose whether they link to an existing record.'
+        : 'Triage this ambiguous resolver/review item as same/merge, not same, or uncertain.';
+  return [
+    'You are the LCC Ollama cleaning-assist agent.',
+    'You only propose. You never decide truth, never merge, never write canonical data, and never fabricate missing facts.',
+    'Use only the JSON evidence below. If evidence is thin or ambiguous, return verdict "uncertain".',
+    task,
+    'Return ONLY strict JSON with keys: verdict, reason, confidence, proposed_link, conflict_summary.',
+    'Allowed verdicts by task:',
+    '- review_triage: merge | not | research | uncertain',
+    '- unstructured_reconciliation: link | no_link | research | uncertain',
+    '- conflict_narration: keep_current | accept_attempted | research | uncertain',
+    JSON.stringify({ proposal_kind: kind, item: payload }, null, 2),
+  ].join('\n');
+}
+
+async function fetchCleanAssistFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.OLLAMA_CLEAN_ASSIST&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+async function recordCleanAssistHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'clean_assist',
+      p_check_name: 'ollama_clean_assist',
+      p_status: status,
+      p_count: count || 0,
+      p_last_error: lastError || null,
+      p_external_url: null,
+      p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function upsertCleanAssistProposal(item, proposal, meta) {
+  const body = {
+    source: CLEAN_ASSIST_SOURCE,
+    source_run_id: meta.sourceRunId,
+    decision_id: item.id || null,
+    decision_type: item.decision_type,
+    subject_ref: item.subject_ref,
+    subject_domain: item.subject_domain || null,
+    subject_property_id: item.subject_property_id != null ? String(item.subject_property_id) : null,
+    subject_entity_id: item.subject_entity_id || null,
+    proposal_kind: meta.kind,
+    verdict: proposal.verdict,
+    reason: proposal.reason,
+    confidence: proposal.confidence,
+    proposed_link: proposal.proposed_link || {},
+    conflict_summary: proposal.conflict_summary || null,
+    model_provider: meta.provider || null,
+    model_name: meta.model || null,
+    ai_tried: Array.isArray(meta.tried) ? meta.tried : [],
+    prompt_hash: meta.promptHash,
+    status: 'proposed',
+  };
+  return opsQuery('POST',
+    'lcc_clean_assist_proposals?on_conflict=decision_type,subject_ref,proposal_kind,source',
+    body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function handleOllamaCleanAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchCleanAssistFlag();
+  const enabled = cleanAssistEnabled(flag);
+  const limit = Math.min(30, Math.max(1, parseInt(req.query.limit || req.body?.limit || '12', 10)));
+  if (req.method === 'GET') {
+    return res.status(200).json({ ok: true, enabled, limit, source: CLEAN_ASSIST_SOURCE, types: CLEAN_ASSIST_TYPES });
+  }
+  if (!enabled) {
+    await recordCleanAssistHealth({ status: 'amber', count: 0, lastError: 'OLLAMA_CLEAN_ASSIST feature flag is off',
+      details: { enabled: false, flag_state: flag?.state || 'missing' } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+  }
+
+  const sourceRunId = 'p32_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  const perType = Math.max(1, Math.ceil(limit / CLEAN_ASSIST_TYPES.length));
+  const candidates = [];
+  for (const type of CLEAN_ASSIST_TYPES) {
+    try {
+      const lane = await listFederatedLane(type, perType, 0, type === 'intake_disposition' ? { intakeView: 'all' } : undefined);
+      for (const item of lane.items || []) candidates.push(item);
+    } catch (e) {
+      console.warn('[ollama-clean-assist] lane read failed', type, e?.message || e);
+    }
+  }
+
+  const selected = candidates.slice(0, limit);
+  const summary = { source_run_id: sourceRunId, candidates: selected.length, proposed: 0, failed: 0, skipped: 0, by_type: {} };
+  for (const item of selected) {
+    const kind = cleanAssistKind(item.decision_type);
+    const prompt = buildCleanAssistPrompt(item, kind);
+    const promptHash = createHash('sha256').update(prompt).digest('hex');
+    try {
+      const ai = await invokeExtractionAI({ prompt });
+      const parsed = parseCleanAssistJson(ai?.data?.response || '');
+      const proposal = cleanAssistNormalizeProposal(parsed, kind);
+      if (!parsed) {
+        proposal.verdict = 'uncertain';
+        proposal.confidence = 0;
+        proposal.reason = 'AI response was not valid JSON; queued as uncertain for human review.';
+      }
+      const wr = await upsertCleanAssistProposal(item, proposal, {
+        sourceRunId, kind, promptHash,
+        provider: ai?.provider || null,
+        model: ai?.data?.model || null,
+        tried: ai?.tried || [],
+      });
+      if (wr.ok) {
+        summary.proposed += 1;
+        summary.by_type[item.decision_type] = (summary.by_type[item.decision_type] || 0) + 1;
+      } else {
+        summary.failed += 1;
+      }
+    } catch (e) {
+      summary.failed += 1;
+      console.warn('[ollama-clean-assist] proposal failed', item.decision_type, item.subject_ref, e?.message || e);
+    }
+  }
+  await recordCleanAssistHealth({
+    status: summary.failed ? 'amber' : 'green',
+    count: summary.proposed,
+    lastError: summary.failed ? `${summary.failed} proposal(s) failed in ${sourceRunId}` : null,
+    details: summary,
+  });
+  return res.status(200).json({ ok: true, ...summary });
 }
 
 // ============================================================================
@@ -2091,6 +2311,28 @@ async function fetchFederatedSource(type, cap, opts) {
   return out;
 }
 
+function cleanAssistInList(refs) {
+  return '("' + refs.map((r) => String(r).replace(/"/g, '\\"')).join('","') + '")';
+}
+
+async function attachCleanAssistProposals(items) {
+  const refs = [...new Set((items || []).map((it) => it.subject_ref).filter(Boolean))].slice(0, 100);
+  if (!refs.length) return items;
+  try {
+    const r = await opsQuery('GET', 'v_lcc_clean_assist_latest?select=decision_type,subject_ref,proposal_kind,verdict,reason,confidence,proposed_link,conflict_summary,source_run_id,model_provider,model_name,created_at'
+      + '&subject_ref=in.' + encodeURIComponent(cleanAssistInList(refs)), undefined, { countMode: 'none' });
+    if (!r.ok || !Array.isArray(r.data)) return items;
+    const byKey = new Map();
+    for (const row of r.data) byKey.set(row.decision_type + '|' + row.subject_ref, row);
+    return items.map((it) => {
+      const prop = byKey.get(it.decision_type + '|' + it.subject_ref);
+      return prop ? { ...it, clean_assist: prop } : it;
+    });
+  } catch (_e) {
+    return items;
+  }
+}
+
 // List a federated lane: source top-N minus already-decided subjects.
 async function listFederatedLane(type, limit, offset, opts) {
   const cap = Math.min(400, (limit + offset) * 3 + 60);
@@ -2106,7 +2348,7 @@ async function listFederatedLane(type, limit, offset, opts) {
     subject_property_id: it.subject_property_id, subject_ref: it.subject_ref,
     context: it.context, rank_value: it.rank_value,
   }));
-  return { type, mode: 'federated', total, items };
+  return { type, mode: 'federated', total, items: await attachCleanAssistProposals(items) };
 }
 
 async function handleDecisionsList(req, res) {
@@ -2193,7 +2435,7 @@ async function handleDecisionsList(req, res) {
   return res.status(200).json({
     type, mode: 'seeded',
     total: (countR.ok && typeof countR.count === 'number') ? countR.count : null,
-    items: Array.isArray(itemsR.data) ? itemsR.data : [],
+    items: await attachCleanAssistProposals(Array.isArray(itemsR.data) ? itemsR.data : []),
   });
 }
 

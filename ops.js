@@ -2159,6 +2159,19 @@ window.resolveOwnerLink = resolveOwnerLink;
 // /api/decision-verdict; the surface is a router + recorder.
 let _dcItems = {};
 
+function _cleanAssistHTML(it) {
+  var a = it && it.clean_assist;
+  if (!a) return '';
+  var conf = a.confidence == null ? '' : ' · conf ' + Math.round(Number(a.confidence || 0) * 100) + '%';
+  var model = a.model_name ? ' · ' + a.model_name : '';
+  var verdict = a.verdict ? String(a.verdict).replace(/_/g, ' ') : 'proposal';
+  var detail = a.conflict_summary || a.reason || '';
+  return '<div class="q-item-meta clean-assist">'
+    + '<span class="q-badge type">Ollama assist: ' + esc(verdict) + conf + model + '</span> '
+    + esc(detail)
+    + '</div>';
+}
+
 function _dcCardHTML(it, isNext) {
   const c = it.context || {};
   const id = it.id;
@@ -2272,6 +2285,7 @@ function _dcCardHTML(it, isNext) {
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'dismiss\')">Dismiss</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
+    + _cleanAssistHTML(it)
     + '<div class="q-actions">' + actions + '</div></div>';
 }
 // A3 (2026-06-06): styled, validating modal (lccPrompt) instead of native
@@ -2955,6 +2969,7 @@ function _fedCardHTML(it, i, isNext) {
     }
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
+    + _cleanAssistHTML(it)
     + '<div class="q-actions">' + actions + '</div></div>';
 }
 
