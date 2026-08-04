@@ -585,3 +585,19 @@ argues for a LOWER value (Scott: never show a higher cap / lower value than what
 proximity, lead with at/below-subject comps, push high-cap outliers to a labeled secondary section; (7) subject
 all "Not on file" → resolve the under-contract Villages deal record to anchor cap-proximity. All in **prompt 28**.
 Deploy-pending items still open (redeploy both servers + BOV_API_KEY; rotate LCC_API_KEY).
+
+---
+
+## 2026-08-04 — Prompt 28 deployed; workbook validated server-side (session 2v) — PASS
+
+Redeploy live. Ran the one-shot `generate_comps` (Villages appraisal) through the live engine and downloaded the
+xlsx. All prompt-28 fixes confirmed: **counts split** (25 sold + 53 on-market SEPARATE, not 25 combined);
+**cap stats reconcile** (range 4.65-7.80%, median 6.50%, wavg 6.43% — inside the range, was impossibly 3.98%);
+**appraisal cap discipline** works (median 6.50% clustered at the ~6% subject vs the old 8.75% that undercut
+value); **outliers gone** (no 192%/0.95% cap rows; cap max now 7.80%); **fields populated** in the workbook
+(LAND 24/25, BUILT 24/25, EXP 19/25, EXPENSES 18/25, BUMPS 14/25, RENEWAL 16/25, CHAIRS 18/25, PATIENTS 19/25 —
+were all blank); tiers A=14/B=20/C=44. **Subject:** cap anchored at 6.00%, tenant "DaVita/dialysis" resolved;
+credit/term/SF/chairs still "Not on file" (deal record not fully linked). Remaining refinements: (a) resolve the
+full under-contract Villages deal record to sharpen ranking; (b) add a "Secondary/market-range" sheet so excluded
+high-cap comps are shown, not just dropped (prompt 29 if wanted). ChatGPT import fix is in the same deploy —
+re-import the yaml + knowledge file and test.
