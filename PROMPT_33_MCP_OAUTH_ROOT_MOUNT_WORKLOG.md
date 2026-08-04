@@ -44,6 +44,10 @@ Make the MCP OAuth discovery, dynamic client registration, authorization, and to
   - The secret value was intentionally not printed in verification output.
 - `GET https://tranquil-delight-production-633f.up.railway.app/version`
   - Still returned `2a623aa2ba6f` after two polls, so Railway had not yet advanced to commit `ef8cc6a6` from this workspace.
+- Follow-up version check advanced to `ef8cc6a6d0a0`, confirming the code-fix commit was deployed.
+- Re-ran the OAuth discovery and DCR probes after `/version` advanced:
+  - Discovery still returned `200` JSON with all endpoints rooted at tranquil-delight.
+  - DCR still returned `201` with a client id, non-empty client secret, no secret expiry, and `client_secret_post`.
 
 ## Deployment Notes
 - Confirm Railway env on tranquil-delight includes:
