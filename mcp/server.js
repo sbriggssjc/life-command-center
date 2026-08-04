@@ -1480,6 +1480,8 @@ async function assembleDomainPropertyFallback(domainProperty) {
 
 export function mountLccMcp(app, { installMiddleware = false, apiPrefix = "" } = {}) {
   const prefixed = (path) => `${apiPrefix}${path}`;
+  const publicBase = (req) => process.env.MCP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+  const publicUrl = (req, path) => `${publicBase(req)}${prefixed(path)}`;
   if (installMiddleware) {
     app.use(
       cors({
@@ -1577,12 +1579,12 @@ function makeReadHttpRoute(toolName) {
 }
 
 // ── Auth middleware for /mcp ─────────────────────────────────────────────
-app.use('/mcp', authenticate);
+app.use(prefixed('/mcp'), authenticate);
 
 // ── MCP JSON-RPC endpoint ────────────────────────────────────────────────
 // Implements the MCP protocol directly over HTTP JSON-RPC.
 // No SDK transport layer — maximum compatibility with Claude.ai.
-app.post('/mcp', async (req, res) => {
+app.post(prefixed('/mcp'), async (req, res) => {
   const body = req.body;
 
   console.log('[MCP] Request method:', body?.method, 'id:', body?.id);
@@ -1684,10 +1686,10 @@ app.post('/mcp', async (req, res) => {
 });
 
 // DELETE /mcp — session cleanup (Streamable HTTP spec requirement)
-app.delete('/mcp', (req, res) => res.status(200).end());
+app.delete(prefixed('/mcp'), (req, res) => res.status(200).end());
 
 // GET /mcp — not supported (no server-push needed for these tools)
-app.get('/mcp', (req, res) => {
+app.get(prefixed('/mcp'), (req, res) => {
   res.status(405).json({ error: 'Use POST for MCP requests' });
 });
 
@@ -1722,24 +1724,20 @@ const crypto = globalThis.crypto;
 // ── OAuth Protected Resource Metadata (RFC 9396 / MCP OAuth June 2025) ──
 // Required by Claude.ai to discover the authorization server for /mcp.
 // Without this, Claude.ai cannot find OAuth endpoints and reports auth failure.
-app.get('/.well-known/oauth-protected-resource', (req, res) => {
-  const base = process.env.MCP_BASE_URL ||
-    `${req.protocol}://${req.get('host')}`;
+app.get(prefixed('/.well-known/oauth-protected-resource'), (req, res) => {
   res.json({
-    resource: `${base}/mcp`,
-    authorization_servers: [base],
+    resource: publicUrl(req, '/mcp'),
+    authorization_servers: [publicBase(req)],
   });
 });
 
 // ── OAuth discovery metadata ──────────────────────────────────────────────
-app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  const base = process.env.MCP_BASE_URL ||
-    `${req.protocol}://${req.get('host')}`;
+app.get(prefixed('/.well-known/oauth-authorization-server'), (req, res) => {
   res.json({
-    issuer: base,
-    authorization_endpoint: `${base}/authorize`,
-    token_endpoint: `${base}/oauth/token`,
-    registration_endpoint: `${base}/register`,
+    issuer: publicBase(req),
+    authorization_endpoint: publicUrl(req, '/authorize'),
+    token_endpoint: publicUrl(req, '/oauth/token'),
+    registration_endpoint: publicUrl(req, '/register'),
     grant_types_supported: ['authorization_code'],
     response_types_supported: ['code'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
@@ -1751,7 +1749,7 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
 // ── Dynamic Client Registration (RFC 7591) ────────────────────────────────
 // Claude.ai may attempt to register before the OAuth flow.
 // We accept any registration and return LCC_API_KEY as the client_secret.
-app.post('/register', (req, res) => {
+app.post(prefixed('/register'), (req, res) => {
   const apiKey = LCC_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: 'server_error' });
@@ -1772,7 +1770,7 @@ app.post('/register', (req, res) => {
 // ── Step 1: Authorization endpoint ───────────────────────────────────────
 // Claude.ai redirects the user here. We auto-approve and redirect back
 // immediately — no login page needed for an internal personal tool.
-app.get('/authorize', (req, res) => {
+app.get(prefixed('/authorize'), (req, res) => {
   const {
     response_type, client_id, redirect_uri, state,
     code_challenge, code_challenge_method,
@@ -1819,7 +1817,7 @@ app.get('/authorize', (req, res) => {
 // ── Step 2: Token endpoint ────────────────────────────────────────────────
 // Claude.ai exchanges the authorization code for an access token.
 // Handles both application/x-www-form-urlencoded and application/json.
-app.post('/oauth/token', async (req, res) => {
+app.post(prefixed('/oauth/token'), async (req, res) => {
   const {
     grant_type,
     code,
