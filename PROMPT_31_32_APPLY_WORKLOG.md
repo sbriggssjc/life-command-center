@@ -19,3 +19,12 @@ Applied directly via Supabase MCP. **Machinery only — no destructive consolida
 The `*_apply(p_dry_run := false)` calls were NOT executed. The full plan views exceed the 60s MCP timeout;
 run the dry-run + apply from the Supabase SQL editor (no cap). Repeat sales stay distinct; apply only soft-tags
 (duplicate_superseded / merged with reversible backup ledgers). Rollback: p31_*_log tables.
+
+## Destructive apply RUN + verified (2026-08-04, per Scott go-ahead)
+Added functional indexes (dia + gov) so the plan views compute in-window. Live results:
+- **dia**: 12 property merges + 3 same-event supersessions. dup-address groups 78 -> 66; repeat sales kept 968.
+- **gov**: 20 property merges + 8 same-event supersessions. dup groups 409 -> 389; repeat sales kept 1642.
+  Two run-time fixes captured in 20260804b_gov_prompt31_apply_fixes.sql: (a) property_id is bigint ->
+  cast to integer for gov_merge_property; (b) added p_limit so heavy gov merges apply in sub-60s batches
+  (dropped the old 2-arg overload). All merges/supersessions logged + reversible (p31_*_log). Review lanes
+  (dia 70+1, gov 6980+0) intentionally NOT auto-applied.
