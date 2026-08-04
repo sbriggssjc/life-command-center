@@ -6,6 +6,11 @@
 --   select * from public.v_p31_same_event_sale_plan;
 -- and only then call the apply RPCs with p_dry_run := false.
 
+-- Naming-parity shim (added 2026-08-04 apply): gov lacked gov_normalize_address;
+-- delegate to gov's existing match normalizer so this migration is self-contained.
+CREATE OR REPLACE FUNCTION public.gov_normalize_address(text)
+RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT public.gov_normalize_for_match($1) $$;
+
 CREATE TABLE IF NOT EXISTS public.p31_property_consolidation_log (
   id bigserial PRIMARY KEY,
   batch_tag text NOT NULL,
