@@ -13,6 +13,7 @@
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
+| 31 | Data-integrity P2: property-record consolidation + multi-source sale reconciliation | P2 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |
@@ -85,4 +86,5 @@ interpretation_logs.sql` (LCC Opps) for the interpretation-logging table (resolv
 ## Comps data-integrity program (post-audit)
 - **Prompt 29** (export polish: dedup/cap-band/field-map/format) — CODE DONE (36/36 tests), **DEPLOY-PENDING** (redeploy tranquil-delight + standalone MCP).
 - **Prompt 30** AUDIT delivered: `docs/architecture/data-integrity-audit-2026-08.md`. Findings: dia 610 dup properties / 967 excess rows (370 multi-source); LCC provenance 2,055 rules / 1,155 conflicts / 33 unranked. Phased plan P1(export, ~done via 29) → **P2 sale-event dedup + SF overlap (next)** → P3 backfill w/ precedence → P4 continuous scrub + Health dashboard.
+- **Prompt 31** drafted into `prompts/`: P2 reframe says do not delete repeat sales; consolidate 93 same-address/different-`property_id` buildings, reconcile only conservative multi-source same-event sales, keep repeat sales distinct, and use Ollama only as review-lane/unstructured assist.
 - **Cowork future-proofing:** `docs/os/COWORK-SETUP-AND-FUTUREPROOFING.md` (run-on-computer default, Global Instructions block, account-level connectors/plugin, canonical folder set).

@@ -56,3 +56,32 @@ program is mostly *completing + connecting + continuously running* these, not gr
 
 Subject-resolution for comps (pin the actual under-contract deal record) is a P2/P3 beneficiary — once the
 property graph is clean, "The Villages" resolves to the real asset with tenant/term/SF/chairs/cap.
+
+## Update 2026-08-04 — dedup reframe + Ollama decision
+Prompt 30's follow-up investigation reframes the duplicate-property symptom: the 610 live-sold duplicate groups
+are not one bucket of bad duplicate sales. Of the 967 excess rows, **497 groups (81%) are genuine repeat sales**
+more than two years apart and must remain distinct. The existing sale natural key (`normalized address|state|
+sale_date`) is correctly preserving those repeat sales.
+
+The actual P2 cleaning gap is narrower and more structural:
+- **93 buildings have multiple `property_id` records** for the same normalized address. These should be handled
+  by the calibrated record-linkage resolver (`gracious-radiance`) plus a reversible property-merge path that
+  mirrors `lcc_merge_entity`: move related sales, leases, listings, and identities to a canonical winner; preserve
+  a backup table and `batch_tag`; auto-merge only high-confidence matches; send ambiguous cases to review.
+- **214 groups span multiple `data_source` values.** A subset are same sale events ingested from CoStar,
+  Salesforce, CMS, or other sources with slightly different dates/prices. Reconcile these as same-event sale
+  records only when property, buyer, price, and date-window evidence is strong; keep genuine repeat sales
+  distinct. Canonical sale fields should follow `field_source_priority`; non-winning source rows are tagged
+  `superseded`, never hard-deleted.
+- **Comp-pull behavior remains one-row-per-property for appraisal.** Prompt 29's most-recent-per-property
+  selection should remain in place; a sale-history view can expose older legitimate repeat sales when requested.
+- **Prevent recurrence at ingest time.** New sales/listings for an existing building must attach to the existing
+  `property_id` instead of creating the next duplicate property record.
+- **Apply the same pattern to gov.** The audit found analogous government-side duplicate and coverage issues.
+
+Ollama is intentionally not the primary dedup engine. Bulk dedup/linkage remains entity resolution
+(Splink/Fellegi-Sunter + embeddings): fast, calibrated, auditable, and high-volume. Ollama belongs in P4 as an
+assist layer on top of the resolver: triage ambiguous review-lane candidates using address/notes/OM/email text,
+link unstructured references to the right property or sale, and narrate field conflicts for human or
+priority-confirmed decisions. This should reuse the existing `invokeExtractionAI` seam across dia, gov, and ops
+and surface on the Health surface.
