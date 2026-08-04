@@ -3,16 +3,16 @@
 > **START HERE (durable map):** `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — the surfaces/comps/deploy
 > understanding, so a new chat isn't rebuilt from scratch.
 >
-> **23/25/26 live; prompt 27 (one-shot workbook) CODE DONE `9ac94bfb`, canon v1.2.1 — DEPLOY-PENDING.**
-> Land the workbook: redeploy **tranquil-delight + standalone MCP**; confirm BOV service up + `BOV_API_KEY` set;
-> **ChatGPT re-import `lcc-openapi.yaml`** (generate_comps now takes `request`); re-paste v1.2.1 bundles per §1.
-> Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
+> **ALL comps code (prompts 22-28) committed to `main` @ `f6adddf0` (in sync with origin).** The gate is a
+> **REDEPLOY of both Railway services** (tranquil-delight + standalone MCP) + `BOV_API_KEY` on tranquil-delight,
+> then re-import `lcc-openapi.yaml` into ChatGPT + re-paste v1.2.1 bundles, and test the Villages appraisal on
+> both surfaces. Follow-up: workbook lacks a 'Secondary/market-range' sheet (high-cap comps excluded, not shown
+> — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
-| 28 | Comps workbook: P0 hotfix (enforceHttpResponseSize import) + appraisal-grade quality | P0/P1 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |
