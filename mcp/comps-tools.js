@@ -25,6 +25,10 @@ const DEFAULT_APPRAISAL_LIMIT = 30;
 const MAX_QUERY_LIMIT = 100;
 const MAX_SYNTHESIZE_LIMIT = 50;
 const APPRAISAL_CANDIDATE_LIMIT = 100;
+const APPRAISAL_ERROR_CAP_LOW = 0.04;
+const APPRAISAL_ERROR_CAP_HIGH = 0.12;
+const APPRAISAL_DEFAULT_BAND_LOWER_BPS = 50;
+const APPRAISAL_DEFAULT_BAND_UPPER_BPS = 75;
 
 // ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
@@ -56,6 +60,44 @@ function normKey(c) {
   const yr = String(c.sale_date || '').slice(0, 4);
   return `${normStreet(c.address)}|${String(c.city || '').toLowerCase().replace(/[^a-z0-9]/g, '')}|${(c.state || '').toLowerCase()}|${yr}`;
 }
+function propertyId(c) {
+  const raw = c?.raw || {};
+  const v = c?.property_id ?? c?.asset_id ?? raw.property_id ?? raw.Property_ID__c ?? raw.propertyId;
+  return v == null || v === '' ? null : String(v);
+}
+function normParty(v) {
+  return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function saleMonth(c) {
+  const d = String(c?.sale_date || c?.sold_date || c?.date || '').slice(0, 7);
+  return /^\d{4}-\d{2}$/.test(d) ? d : String(c?.sale_date || '').slice(0, 4);
+}
+function roundedPrice(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return String(Math.round(n / 1000) * 1000);
+}
+function saleNotes(c) {
+  return String([
+    c?.sale_condition, c?.sale_conditions, c?.transaction_type, c?.notes,
+    c?.raw?.sale_condition, c?.raw?.sale_conditions, c?.raw?.transaction_type,
+    c?.raw?.notes, c?.raw?.sale_notes_raw,
+  ].filter(Boolean).join(' ')).toLowerCase();
+}
+function portfolioAllocatedSale(c) {
+  return /portfolio|multi[- ]property|multi property|allocated|allocation|partial interest|partial[- ]interest/.test(saleNotes(c));
+}
+function dedupeKeys(c) {
+  const keys = [normKey(c)];
+  const pid = propertyId(c);
+  if (!pid) return keys;
+  const month = saleMonth(c);
+  const buyer = normParty(c?.buyer || c?.buyer_name || c?.raw?.buyer || c?.raw?.buyer_name);
+  const price = roundedPrice(c?.sale_price ?? c?.sold_price);
+  if (month && (buyer || price)) keys.push(`pid-event|${pid}|${month}|${buyer || ''}|${price || ''}`);
+  if (month && portfolioAllocatedSale(c)) keys.push(`pid-portfolio|${pid}|${month}`);
+  return keys;
+}
 // Trustworthiness of a comp's sold_price, from the same cap-rate provenance the
 // sales-lane dedup ranks on (implausible LAST; master_curated / validated best).
 // Used ONLY as a tiebreaker when confidence ties — e.g. dia_db comps all carry a
@@ -78,17 +120,23 @@ export function dedupe(rows) {
   const seen = new Map(); const out = [];
   for (const r of rows) {
     if (r.source === 'salesforce' && byId.has(r.source_sf_id) && byId.get(r.source_sf_id).source !== 'salesforce') continue;
-    const k = normKey(r);
-    if (seen.has(k)) {
-      const prev = seen.get(k);
+    const keys = dedupeKeys(r);
+    const matchKey = keys.find(k => seen.has(k));
+    if (matchKey) {
+      const prev = seen.get(matchKey);
       const better = (r.sale_price && !prev.sale_price)
         || (r.confidence > prev.confidence)
         || (r.confidence === prev.confidence && priceQuality(r) > priceQuality(prev));
-      if (better) { out[out.indexOf(prev)] = r; seen.set(k, r); r._merged_with = (r._merged_with || []).concat(prev.comp_id); }
+      if (better) {
+        out[out.indexOf(prev)] = r;
+        for (const k of uniqueList([...keys, ...dedupeKeys(prev)])) seen.set(k, r);
+        r._merged_with = (r._merged_with || []).concat(prev.comp_id);
+      }
       else { prev._merged_with = (prev._merged_with || []).concat(r.comp_id); }
       continue;
     }
-    seen.set(k, r); out.push(r);
+    for (const k of keys) seen.set(k, r);
+    out.push(r);
   }
   return out;
 }
@@ -338,6 +386,10 @@ function templateRow(c) {
   const annualNoi = c.noi ?? c.engine_income ?? c.annual_rent ?? null;
   const land = c.land ?? c.land_acres ?? c.lot_acres ?? c.raw?.land ?? c.raw?.land_acres ?? null;
   const leaseType = c.lease_type ?? c.expense_type ?? c.expenses ?? c.raw?.lease_type ?? c.raw?.expense_type ?? null;
+  const initialPrice = c.initial_price ?? c.init_price ?? c.raw?.initial_price ?? null;
+  const lastPrice = c.last_price ?? c.raw?.last_price ?? null;
+  const currentPrice = c.cur_price ?? c.current_price ?? c.ask_price ?? c.list_price ?? null;
+  const currentCap = c.current_cap_rate ?? c.cur_cap_rate ?? c.ask_cap_rate ?? c.list_cap_rate ?? c.cap_rate ?? c.raw?.current_cap_rate ?? null;
   return {
     property_name: c.property_name || c.raw?.property_name || c.tenant || c.agency || null,
     tenant: c.tenant || c.agency || null,
@@ -358,11 +410,14 @@ function templateRow(c) {
     lease_expiration: c.lease_expiration ?? c.expiration_date ?? c.raw?.lease_expiration ?? null,
     expenses: leaseType,
     lease_type: leaseType,
-    bumps: c.bumps ?? c.escalations ?? c.escalation ?? c.raw?.bumps ?? null,
+    bumps: normalizeBumps(c.bumps ?? c.escalations ?? c.escalation ?? c.raw?.bumps ?? null),
     renewal_options: c.renewal_options ?? c.raw?.renewal_options ?? null,
-    initial_price: c.initial_price ?? c.init_price ?? c.raw?.initial_price ?? null,
-    last_price: c.last_price ?? c.raw?.last_price ?? null,
-    cur_price: c.cur_price ?? c.current_price ?? c.ask_price ?? c.list_price ?? null,
+    initial_price: initialPrice,
+    initial_cap_rate: c.initial_cap_rate ?? c.init_cap_rate ?? c.raw?.initial_cap_rate ?? null,
+    last_price: lastPrice,
+    last_cap_rate: c.last_cap_rate ?? c.raw?.last_cap_rate ?? null,
+    cur_price: currentPrice,
+    current_cap_rate: currentCap,
     on_market: c.on_market_date ?? c.listing_date ?? c.date_listed ?? c.raw?.on_market_date ?? null,
     sale_date: c.sale_date || null,
     buyer: c.buyer || c.raw?.buyer || null,
@@ -381,6 +436,7 @@ function compactComp(c) {
   } = c || {};
   return {
     ...rest,
+    property_id: rest.property_id ?? raw?.property_id ?? raw?.Property_ID__c ?? undefined,
     template: templateRow(c || {}),
     review_detail,
   };
@@ -695,6 +751,28 @@ export function normalizeRenewalOptions(value) {
   return value;
 }
 
+export function normalizeBumps(value) {
+  if (value == null) return value;
+  const s = String(value).trim();
+  if (!s) return value;
+  if (/^none$/i.test(s)) return 'None';
+  if (/^\d+(?:\.\d+)?%\/yr$/i.test(s)) return s.replace(/%\/yr$/i, '%/yr');
+  if (/^\d+(?:\.\d+)?%\s+every\s+\d+\s+yrs?$/i.test(s)) return s.replace(/\s+yrs?$/i, m => m.toLowerCase());
+  const pct = s.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (!pct) return value;
+  const n = Number(pct[1]);
+  if (!Number.isFinite(n)) return value;
+  const pctText = Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
+  if (/\bannual(?:ly)?\b|\bper\s+year\b|\b\/\s*yr\b|\byearly\b/i.test(s)) return `${pctText}%/yr`;
+  const every = s.match(/\bevery\s+(\d+)\s*(?:yr|year)s?\b/i)
+    || s.match(/\b(\d+)\s*(?:yr|year)s?\s*(?:steps?|bumps?|increases?)\b/i);
+  if (every) {
+    const yrs = parseInt(every[1], 10);
+    if (Number.isFinite(yrs) && yrs > 0) return `${pctText}% every ${yrs} ${yrs === 1 ? 'yr' : 'yrs'}`;
+  }
+  return value;
+}
+
 // ── W3.6b — attach the cap ENGINE's income to sold comps ────────────────────
 // The review producer used to divide PRICE into the stale properties value
 // (gov: properties.noi @ estimated_comp_ratio; dia: annual_rent), flagging
@@ -952,6 +1030,7 @@ export async function runComps(args, deps) {
     const dn = displayName(c, { property_types: args.property_types, government_only: params.p_government_only });
     if (dn) { c.tenant = dn; if (c.agency != null) c.agency = dn; }
     if (c.renewal_options != null) c.renewal_options = normalizeRenewalOptions(c.renewal_options);
+    if (c.bumps != null) c.bumps = normalizeBumps(c.bumps);
   }
   // Government post-filter: when government_only, drop any non-government comp that slipped
   // through from a co-queried vertical (belt-and-suspenders to the vertical restriction).
@@ -1039,28 +1118,69 @@ function soldCapForStats(c) {
   const price = asNum(c?.sale_price ?? c?.sold_price);
   const noi = asNum(c?.annual_noi ?? c?.noi ?? c?.engine_income ?? c?.annual_rent);
   if (price && price > 0 && noi && noi > 0) return +(noi / price).toFixed(6);
-  const cap = asNum(c?.cap_rate);
+  const cap = asNum(c?.cap_rate ?? c?.current_cap_rate ?? c?.initial_cap_rate ?? c?.last_cap_rate);
   return cap && cap > 0 ? cap : null;
 }
 
-function primarySaleExclusion(c, subject = null) {
-  if (isOnMarketComp(c)) return null;
+function appraisalCapBand(subject = null, args = {}) {
+  const subjectCap = asNum(subject?.cap_rate ?? subject?.fields?.cap_rate);
+  if (!subjectCap) return null;
+  const lowerBps = asNum(args?.appraisal_cap_band_lower_bps ?? args?.cap_band_lower_bps) ?? APPRAISAL_DEFAULT_BAND_LOWER_BPS;
+  const upperBps = asNum(args?.appraisal_cap_band_upper_bps ?? args?.cap_band_upper_bps) ?? APPRAISAL_DEFAULT_BAND_UPPER_BPS;
+  return {
+    subject_cap: subjectCap,
+    min: subjectCap - lowerBps / 10000,
+    max: subjectCap + upperBps / 10000,
+    lower_bps: lowerBps,
+    upper_bps: upperBps,
+  };
+}
+
+function appraisalPrimaryClassification(c, subject = null, args = {}) {
   const price = asNum(c?.sale_price ?? c?.sold_price);
   const cap = soldCapForStats(c);
-  const notes = String([
-    c?.sale_condition, c?.sale_conditions, c?.transaction_type, c?.notes,
-    c?.raw?.sale_condition, c?.raw?.sale_conditions, c?.raw?.transaction_type,
-    c?.raw?.notes, c?.raw?.sale_notes_raw,
-  ].filter(Boolean).join(' ')).toLowerCase();
-  if (/portfolio|multi[- ]property|multi property|allocated|allocation|partial interest|partial[- ]interest/.test(notes)) {
-    return 'portfolio_or_allocated_sale';
+  if (cap != null && cap < APPRAISAL_ERROR_CAP_LOW) return { bucket: 'error', reason: 'implausibly_low_cap' };
+  if (cap != null && cap > APPRAISAL_ERROR_CAP_HIGH) return { bucket: 'error', reason: 'implausibly_high_cap' };
+  if (!isOnMarketComp(c) && portfolioAllocatedSale(c)) {
+    return { bucket: 'error', reason: 'portfolio_or_allocated_sale' };
   }
-  if (cap != null && (cap < 0.035 || cap > 0.10)) return 'implausible_cap';
   const noi = asNum(c?.annual_noi ?? c?.noi ?? c?.engine_income ?? c?.annual_rent);
-  if (price && noi && price < noi * 10) return 'sale_price_below_10x_noi';
-  const subjectCap = asNum(subject?.cap_rate ?? subject?.fields?.cap_rate);
-  if (subjectCap && cap && cap > subjectCap + 0.02) return 'high_cap_market_range';
-  return null;
+  if (!isOnMarketComp(c) && price && noi && price < noi * 10) return { bucket: 'error', reason: 'sale_price_below_10x_noi' };
+  const band = appraisalCapBand(subject, args);
+  if (band && cap != null && (cap < band.min || cap > band.max)) {
+    return { bucket: 'secondary', reason: 'outside_subject_cap_band', band };
+  }
+  return { bucket: 'primary', reason: null, band };
+}
+
+function primarySaleExclusion(c, subject = null, args = {}) {
+  if (isOnMarketComp(c)) return null;
+  const cls = appraisalPrimaryClassification(c, subject, args);
+  return cls.bucket === 'primary' ? null : cls.reason;
+}
+
+function mostRelevantPerProperty(rows) {
+  const out = [];
+  const byProperty = new Map();
+  for (const row of rows) {
+    const pid = propertyId(row);
+    if (!pid) { out.push(row); continue; }
+    const prev = byProperty.get(pid);
+    if (!prev) {
+      byProperty.set(pid, row);
+      out.push(row);
+      continue;
+    }
+    const better = String(row.sale_date || '').localeCompare(String(prev.sale_date || '')) > 0
+      || (String(row.sale_date || '') === String(prev.sale_date || '') && Number(row._score || 0) > Number(prev._score || 0))
+      || (String(row.sale_date || '') === String(prev.sale_date || '') && Number(row._score || 0) === Number(prev._score || 0) && priceQuality(row) > priceQuality(prev));
+    if (better) {
+      const idx = out.indexOf(prev);
+      if (idx >= 0) out[idx] = row;
+      byProperty.set(pid, row);
+    }
+  }
+  return out;
 }
 
 export async function runSynthesize(args, deps) {
@@ -1095,25 +1215,30 @@ export async function runSynthesize(args, deps) {
   const tierRank = { A: 3, B: 2, C: 1 };
   let scored = comps.map(c => ({ ...c, _score: scoreComp(c, eff) }))
     .sort((x, y) => ((tierRank[scoreTier(y._score)] || 0) - (tierRank[scoreTier(x._score)] || 0) || y._score - x._score
-      || String(x.sale_date || '').localeCompare(String(y.sale_date || '')) || String(x.comp_id || '').localeCompare(String(y.comp_id || ''))))
+      || String(y.sale_date || '').localeCompare(String(x.sale_date || '')) || String(x.comp_id || '').localeCompare(String(y.comp_id || ''))))
     .map(c => ({ ...c, score_tier: scoreTier(c._score),
       template: { ...(c.template || templateRow(c)), score_tier: scoreTier(c._score) } }));
   if (eff.appraisal_mode) {
-    const primary = scored.filter(c => !isOnMarketComp(c) && !primarySaleExclusion(c, eff.subject));
-    const secondary = scored.filter(c => !isOnMarketComp(c) && primarySaleExclusion(c, eff.subject))
+    const classified = scored.map(c => ({ c, cls: appraisalPrimaryClassification(c, eff.subject, eff) }));
+    const primary = mostRelevantPerProperty(classified.filter(x => !isOnMarketComp(x.c) && x.cls.bucket === 'primary').map(x => x.c));
+    const secondary = classified.filter(x => !isOnMarketComp(x.c) && x.cls.bucket === 'secondary')
+      .map(x => x.c)
       .map(c => ({ ...c, score_tier: 'Secondary',
         template: { ...(c.template || templateRow(c)), score_tier: 'Secondary' } }));
-    const market = scored.filter(c => isOnMarketComp(c));
+    const market = classified.filter(x => isOnMarketComp(x.c) && x.cls.bucket !== 'error').map(x => x.c);
+    const errorCount = classified.filter(x => x.cls.bucket === 'error').length;
     scored = eff.include_on_market
       ? [...primary.slice(0, requestedLimit), ...market]
       : primary.slice(0, requestedLimit);
     scored._secondary_count = secondary.length;
+    scored._appraisal_error_count = errorCount;
+    scored._appraisal_cap_band = appraisalCapBand(eff.subject, eff);
   } else {
     scored = scored.slice(0, requestedLimit);
   }
   const synthMeta = { ...meta, returned: scored.length, candidate_total: comps.length,
     truncated: meta.truncated || comps.length > scored.length };
-  return { interpreted_query: {
+  const result = { interpreted_query: {
       comp_type: eff.comp_type || 'sale', property_types: eff.property_types || null,
       states: eff.states || null, metros: eff.metros || null, date_from: eff.date_from || null,
       tenant: eff.tenant || null, tenants: eff.tenants || null, appraisal_mode: !!eff.appraisal_mode,
@@ -1132,6 +1257,9 @@ export async function runSynthesize(args, deps) {
         comp_id: c.comp_id, address: c.address, city: c.city, state: c.state,
         tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags, ...c.review_detail })),
       warnings: meta.warnings } };
+  if (scored._appraisal_error_count) result.meta = { ...result.meta, appraisal_errors_excluded: scored._appraisal_error_count };
+  if (scored._appraisal_cap_band) result.meta = { ...result.meta, appraisal_cap_band: scored._appraisal_cap_band };
+  return result;
 }
 
 function appendNotes(...parts) {
@@ -1157,6 +1285,16 @@ function workbookRowFromSynthComp(c) {
     lease_type: t.lease_type,
     bumps: t.bumps,
     renewal_options: t.renewal_options,
+    initial_price: t.initial_price,
+    initial_cap_rate: t.initial_cap_rate,
+    initial_cap: t.initial_cap_rate,
+    last_price: t.last_price,
+    last_cap_rate: t.last_cap_rate,
+    last_cap: t.last_cap_rate,
+    cur_price: t.cur_price,
+    current_cap_rate: t.current_cap_rate,
+    current_cap: t.current_cap_rate,
+    on_market: t.on_market,
     chairs: t.chairs,
     patients: t.patients,
     source: t.source,
@@ -1184,19 +1322,34 @@ function workbookRowsFromSynthResult(result) {
   const sold = [];
   const onMarket = [];
   for (const c of result?.comps || []) {
+    const t = c.template || templateRow(c || {});
     const row = workbookRowFromSynthComp(c);
     if (isOnMarketComp(c)) {
-      const price = c.ask_price ?? c.list_price ?? c.current_price ?? c.cur_price ?? c.sale_price ?? c.sold_price ?? null;
-      const listed = c.on_market_date || c.listing_date || c.date_listed || null;
+      const price = t.cur_price ?? c.ask_price ?? c.list_price ?? c.current_price ?? c.cur_price ?? c.sale_price ?? c.sold_price ?? null;
+      const listed = t.on_market || c.on_market_date || c.listing_date || c.date_listed || null;
       if (price != null) row.cur_price = price;
-      if (price != null) row.initial_price = c.initial_price ?? c.init_price ?? price;
+      if (price != null) row.initial_price = t.initial_price ?? c.initial_price ?? c.init_price ?? price;
+      row.initial_cap_rate = t.initial_cap_rate ?? row.initial_cap_rate;
+      row.initial_cap = row.initial_cap_rate;
+      row.current_cap_rate = t.current_cap_rate ?? row.current_cap_rate;
+      row.current_cap = row.current_cap_rate;
+      row.last_price = t.last_price ?? row.last_price;
+      row.last_cap_rate = t.last_cap_rate ?? row.last_cap_rate;
+      row.last_cap = row.last_cap_rate;
       if (listed) row.on_market = listed;
       onMarket.push(row);
     } else {
-      const t = c.template || templateRow(c || {});
       row.sale_price = t.sale_price;
       row.sale_date = t.sale_date;
-      row.last_price = c.last_price ?? c.ask_price ?? c.list_price ?? undefined;
+      row.initial_price = t.initial_price ?? row.initial_price;
+      row.initial_cap_rate = t.initial_cap_rate ?? row.initial_cap_rate;
+      row.initial_cap = row.initial_cap_rate;
+      row.last_price = t.last_price ?? c.last_price ?? c.ask_price ?? c.list_price ?? undefined;
+      row.last_cap_rate = t.last_cap_rate ?? row.last_cap_rate;
+      row.last_cap = row.last_cap_rate;
+      row.current_cap_rate = t.current_cap_rate ?? row.current_cap_rate;
+      row.current_cap = row.current_cap_rate;
+      row.on_market = t.on_market ?? row.on_market;
       if (t.sale_price == null) delete row.sale_price;
       if (!t.sale_date) delete row.sale_date;
       if (row.last_price == null) delete row.last_price;

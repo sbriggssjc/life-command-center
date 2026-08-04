@@ -142,6 +142,9 @@ _ALIASES = {
     "land_acres": "land", "land_area": "land",
     "list_date": "on_market", "on_market_date": "on_market", "listing_date": "on_market",
     "cur_price": "last_price",   # on-market current ask = LAST PRICE column
+    "init_cap": "initial_cap", "initial_cap_rate": "initial_cap",
+    "cur_cap": "last_cap", "current_cap": "last_cap", "current_cap_rate": "last_cap",
+    "last_cap_rate": "last_cap",
     "sold_sf": "sold_sf", "price_per_sf": "sold_sf",
 }
 
@@ -182,7 +185,7 @@ _DATE_KEYS = {"exp", "date", "on_market", "lease_exp", "list_date", "sale_date",
               "expir", "termin", "sold_date"}
 _NUM_KEYS = {
     "land", "built", "rba", "chairs", "patients", "rent",
-    "sold_price", "initial_price", "last_price",
+    "sold_price", "initial_price", "last_price", "initial_cap", "last_cap",
     "annual_noi", "init_price", "cur_price", "sale_price", "rba_sf",
     "sf_leased", "annual_rent", "ti_sf", "free_rent_mos", "yr_built", "renovated",
     # government sales tokens (GOV SF LEASED, GOV OCCP %, GROSS RENT, NOI, ASK history)

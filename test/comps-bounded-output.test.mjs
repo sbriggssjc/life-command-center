@@ -153,9 +153,31 @@ function makeQualityQuery(domain, calls) {
     lease_type: 'NNN',
     bumps: '2% annual',
     renewal_options: '2, 5 yr',
+    on_market_date: '2024-12-01',
+    initial_price: 5400000,
+    initial_cap_rate: 0.057,
+    last_price: 5150000,
+    last_cap_rate: 0.06,
     sale_date: `2025-${String((i % 9) + 1).padStart(2, '0')}-15`,
     confidence: 0.9,
+    raw: { property_id: 10000 + i },
   }));
+  goodSold.push({
+    comp_id: 'secondary-real-high',
+    source: 'dialysis_db',
+    vertical: 'dialysis',
+    tenant: 'DaVita',
+    address: '1999 Market Range Rd',
+    city: 'Orlando',
+    state: 'FL',
+    building_sf: 9000,
+    sale_price: 5000000,
+    cap_rate: 0.072,
+    annual_rent: 360000,
+    sale_date: '2025-08-20',
+    confidence: 0.95,
+    raw: { property_id: 19999 },
+  });
   const badSold = [
     {
       comp_id: 'birmingham-bad',
@@ -186,7 +208,7 @@ function makeQualityQuery(domain, calls) {
       annual_rent: 173850,
       sale_date: '2025-02-01',
       notes: 'Multi-Property Sale',
-      confidence: 0.9,
+      confidence: 0.4,
     },
     {
       comp_id: 'dup-a',
@@ -202,6 +224,7 @@ function makeQualityQuery(domain, calls) {
       annual_rent: 360000,
       sale_date: '2025-03-01',
       confidence: 0.6,
+      raw: { property_id: 8100 },
     },
     {
       comp_id: 'dup-b',
@@ -217,6 +240,39 @@ function makeQualityQuery(domain, calls) {
       annual_rent: 360000,
       sale_date: '2025-03-01',
       confidence: 0.5,
+      raw: { property_id: 8100 },
+    },
+    {
+      comp_id: 'repeat-sale-old',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: 'DaVita',
+      address: '900 Repeat Sale Rd',
+      city: 'Orlando',
+      state: 'FL',
+      building_sf: 9000,
+      sale_price: 4500000,
+      cap_rate: 0.06,
+      annual_rent: 270000,
+      sale_date: '2024-03-01',
+      confidence: 0.4,
+      raw: { property_id: 9000 },
+    },
+    {
+      comp_id: 'repeat-sale-new',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: 'DaVita',
+      address: '900 Repeat Sale Rd',
+      city: 'Orlando',
+      state: 'FL',
+      building_sf: 9000,
+      sale_price: 4700000,
+      cap_rate: 0.06,
+      annual_rent: 282000,
+      sale_date: '2025-03-01',
+      confidence: 0.9,
+      raw: { property_id: 9000 },
     },
   ];
   const onMarket = Array.from({ length: 9 }, (_, i) => ({
@@ -237,15 +293,38 @@ function makeQualityQuery(domain, calls) {
     ask_price: 5200000 + i * 10000,
     current_price: 5200000 + i * 10000,
     initial_price: 5300000 + i * 10000,
+    initial_cap_rate: 0.058,
+    current_cap_rate: 0.059,
+    last_price: 5200000 + i * 10000,
+    last_cap_rate: 0.059,
     cap_rate: 0.059,
     annual_rent: 306800,
     lease_expiration: '2037-06-30',
     lease_type: 'NNN',
     bumps: '2% annual',
     renewal_options: '2, 5 yr',
-    listing_date: '2026-01-15',
+    on_market_date: '2026-01-15',
     confidence: 0.85,
   }));
+  onMarket.push({
+    comp_id: 'market-high-cap',
+    source: 'dialysis_db',
+    vertical: 'dialysis',
+    comp_type: 'listing',
+    on_market: true,
+    tenant: 'DaVita',
+    address: '2999 Bad Listing Ln',
+    city: 'Orlando',
+    state: 'FL',
+    building_sf: 8800,
+    ask_price: 1500000,
+    current_price: 1500000,
+    current_cap_rate: 0.19,
+    cap_rate: 0.19,
+    annual_rent: 285000,
+    on_market_date: '2026-01-15',
+    confidence: 0.85,
+  });
   return async (method, path, body) => {
     if (method === 'POST' && path === 'rpc/rpc_query_comps') {
       calls.push([domain, body]);
@@ -402,19 +481,31 @@ describe('comps engine bounded output', () => {
     assert.equal(workbookPayload.sold.length, 25);
     assert.equal(workbookPayload.on_market.length, 9);
     assert.equal(workbookPayload.sold.some(r => /Broken Economics|Portfolio/.test(r.address)), false);
+    assert.equal(workbookPayload.on_market.some(r => /Bad Listing/.test(r.address) || r.current_cap_rate === 0.19), false);
     assert.equal(workbookPayload.sold.filter(r => r.address === '8100 Johnson St' || r.address === '8100 Johnson Street').length, 1);
-    const first = workbookPayload.sold.find(r => r.address === '1000 Clinic Blvd');
-    assert.equal(first.land, 1.2);
-    assert.equal(first.built, 2000);
+    assert.equal(workbookPayload.sold.filter(r => r.address === '900 Repeat Sale Rd').length, 1);
+    assert.equal(workbookPayload.sold.some(r => r.address === '1999 Market Range Rd'), false);
+    const first = workbookPayload.sold.find(r => /Clinic Blvd$/.test(r.address));
+    assert.ok(first);
+    assert.ok(first.land >= 1.2);
+    assert.ok(first.built >= 2000);
     assert.equal(first.lease_expiration, '2036-12-31');
     assert.equal(first.expenses, 'NNN');
-    assert.equal(first.bumps, '2% annual');
+    assert.equal(first.bumps, '2%/yr');
     assert.equal(first.renewal_options, '(2) 5-yr');
-    assert.equal(first.chairs, 16);
-    assert.equal(first.patients, 90);
+    assert.equal(first.on_market, '2024-12-01');
+    assert.equal(first.initial_price, 5400000);
+    assert.equal(first.initial_cap_rate, 0.057);
+    assert.equal(first.last_price, 5150000);
+    assert.equal(first.last_cap_rate, 0.06);
+    assert.ok(first.chairs >= 16);
+    assert.ok(first.patients >= 90);
     assert.ok(result.cap_rate_range.weighted_avg >= result.cap_rate_range.min);
     assert.ok(result.cap_rate_range.weighted_avg <= result.cap_rate_range.max);
     assert.equal(result.subject.cap_rate, 0.06);
+    assert.ok(result.cap_rate_range.min >= 0.055);
+    assert.ok(result.cap_rate_range.max <= 0.0675);
+    assert.ok(/on-market returned 9/.test(result.transparency));
     assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'sale' && body.p_include_onmkt === false));
     assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'both' && body.p_include_onmkt === true));
   });

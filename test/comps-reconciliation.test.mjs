@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  computeReviewSignals, normalizeRenewalOptions, enqueueReviewQueue,
+  computeReviewSignals, normalizeRenewalOptions, normalizeBumps, enqueueReviewQueue,
 } from '../mcp/comps-tools.js';
 
 // Pearland — the canonical outlier (dia sale_id 7980, property 35837).
@@ -132,6 +132,23 @@ describe('normalizeRenewalOptions', () => {
   it('null / empty pass through', () => {
     assert.equal(normalizeRenewalOptions(null), null);
     assert.equal(normalizeRenewalOptions(''), '');
+  });
+});
+
+describe('normalizeBumps', () => {
+  const cases = [
+    ['2% annual', '2%/yr'],
+    ['2.5% annually', '2.5%/yr'],
+    ['10% every 5 years', '10% every 5 yrs'],
+    ['None', 'None'],
+  ];
+  for (const [inp, exp] of cases) {
+    it(`${JSON.stringify(inp)} -> ${exp}`, () => {
+      assert.equal(normalizeBumps(inp), exp);
+    });
+  }
+  it('unrecognized shapes pass through unchanged', () => {
+    assert.equal(normalizeBumps('see lease'), 'see lease');
   });
 });
 
