@@ -1,0 +1,144 @@
+{
+  "NNN": {
+    "sheets": [
+      "Cover",
+      "Executive Summary",
+      "Real Estate",
+      "Lease Abstract",
+      "Rent Schedule",
+      "Credit",
+      "Pro Forma",
+      "Assumptions & Flags",
+      "Sensitivity Analysis",
+      "Amortization"
+    ],
+    "keyFormulaInspect": "{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I8\",\"formula\":\"=IFERROR(IF(OR(I6=\\\"\\\",I7=\\\"\\\"),\\\"\\\",-I6*I7),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I9\",\"formula\":\"=IFERROR(IF(OR(I6=\\\"\\\",I7=\\\"\\\"),\\\"\\\",I6*(1-I7)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I14\",\"formula\":\"=IFERROR(IF(OR(I8=\\\"\\\",I10=\\\"\\\",I11=\\\"\\\"),\\\"\\\",ABS(I8)*(I10/12)*(1+I10/12)^(I11*12)/((1+I10/12)^(I11*12)-1)*12),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I15\",\"formula\":\"=IFERROR(IF(I14=\\\"\\\",\\\"\\\",I14/12),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I16\",\"formula\":\"=IFERROR(IF(OR(C33=\\\"\\\",I14=\\\"\\\",I14=0),\\\"\\\",C33/I14),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I17\",\"formula\":\"=IFERROR(IF(I14=\\\"\\\",\\\"\\\",I14*1.20),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C19\",\"formula\":\"=IFERROR(IF(OR(C33=\\\"\\\",C16=\\\"\\\",C16=0),\\\"\\\",C33/C16),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I21\",\"formula\":\"=IFERROR(IF(OR(C24=\\\"\\\",C25=\\\"\\\"),\\\"\\\",C24*(1+C25)^(I13-1)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I22\",\"formula\":\"=IFERROR(IF(OR(I21=\\\"\\\",I20=\\\"\\\",I20=0),\\\"\\\",I21/I20),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I23\",\"formula\":\"=IFERROR(IF(I22=\\\"\\\",\\\"\\\",-I22*0.05),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I24\",\"formula\":\"=IFERROR(IF(I22=\\\"\\\",\\\"\\\",-I22*0.01),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I25\",\"formula\":\"=IFERROR(IF(I22=\\\"\\\",\\\"\\\",I22+I23+I24),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I26\",\"formula\":\"=IFERROR(IF(OR(I8=\\\"\\\",I10=\\\"\\\",I11=\\\"\\\",I13=\\\"\\\"),\\\"\\\",ABS(I8)*(1+I10/12)^(I13*12)-(ABS(I8)*(I10/12)*(1+I10/12)^(I11*12)/((1+I10/12)^(I11*12)-1))*(((1+I10/12)^(I13*12)-1)/(I10/12))),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C27\",\"formula\":\"=IFERROR(IF(C24=\\\"\\\",\\\"\\\",C24+IFERROR(C26,0)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I27\",\"formula\":\"=IFERROR(IF(OR(I25=\\\"\\\",I26=\\\"\\\"),\\\"\\\",I25-I26),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I30\",\"formula\":\"=IFERROR('Pro Forma'!C29,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I31\",\"formula\":\"=IFERROR('Pro Forma'!G29,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C32\",\"formula\":\"=IFERROR(IF(C24=\\\"\\\",\\\"\\\",C24*IFERROR(C30,0)+IFERROR(C31,0)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I32\",\"formula\":\"=IFERROR('Pro Forma'!K29,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C33\",\"formula\":\"=IFERROR(IF(C27=\\\"\\\",\\\"\\\",C27-C32),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I33\",\"formula\":\"=IFERROR('Pro Forma'!C43,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I34\",\"formula\":\"=IFERROR('Pro Forma'!G43,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I35\",\"formula\":\"=IFERROR('Pro Forma'!K43,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C37\",\"formula\":\"=IFERROR(IF(OR(C33=\\\"\\\",C36=\\\"\\\",C36=0),\\\"\\\",C33/C36),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C38\",\"formula\":\"=IFERROR(IF(OR(C36=\\\"\\\",C9=\\\"\\\",C9=0),\\\"\\\",C36/C9),\\\"\\\")\"}",
+    "errorScan": "{\"kind\":\"notice\",\"message\":\"Cell search matched 0 entries.\"}",
+    "renders": [
+      {
+        "sheetName": "Cover",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Cover.png",
+        "bytes": 138834
+      },
+      {
+        "sheetName": "Executive Summary",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Executive_Summary.png",
+        "bytes": 104987
+      },
+      {
+        "sheetName": "Real Estate",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Real_Estate.png",
+        "bytes": 194046
+      },
+      {
+        "sheetName": "Lease Abstract",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Lease_Abstract.png",
+        "bytes": 236206
+      },
+      {
+        "sheetName": "Rent Schedule",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Rent_Schedule.png",
+        "bytes": 83910
+      },
+      {
+        "sheetName": "Credit",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Credit.png",
+        "bytes": 216798
+      },
+      {
+        "sheetName": "Pro Forma",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Pro_Forma.png",
+        "bytes": 168080
+      },
+      {
+        "sheetName": "Assumptions & Flags",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Assumptions_Flags.png",
+        "bytes": 202058
+      },
+      {
+        "sheetName": "Sensitivity Analysis",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Sensitivity_Analysis.png",
+        "bytes": 90081
+      },
+      {
+        "sheetName": "Amortization",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\NNN_Amortization.png",
+        "bytes": 79881
+      }
+    ]
+  },
+  "MOB": {
+    "sheets": [
+      "Cover",
+      "Executive Summary",
+      "Real Estate",
+      "Rent Roll",
+      "Lease Abstract",
+      "Rent Schedule",
+      "Credit",
+      "Pro Forma",
+      "Assumptions & Flags",
+      "Sensitivity Analysis",
+      "Amortization"
+    ],
+    "keyFormulaInspect": "{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I8\",\"formula\":\"=IFERROR(IF(OR(I6=\\\"\\\",I7=\\\"\\\"),\\\"\\\",I6*I7),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I9\",\"formula\":\"=IFERROR(IF(OR(I6=\\\"\\\",I7=\\\"\\\"),\\\"\\\",I6*(1-I7)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I14\",\"formula\":\"=IFERROR(IF(OR(I8=\\\"\\\",I10=\\\"\\\",I11=\\\"\\\"),\\\"\\\",ABS(I8)*(I10/12)*(1+I10/12)^(I11*12)/((1+I10/12)^(I11*12)-1)*12),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I15\",\"formula\":\"=IFERROR(IF(I14=\\\"\\\",\\\"\\\",I14/12),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I16\",\"formula\":\"=IFERROR(IF(OR(C85=\\\"\\\",I14=\\\"\\\",I14=0),\\\"\\\",C85/I14),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I17\",\"formula\":\"=IFERROR(IF(I14=\\\"\\\",\\\"\\\",I14*1.20),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I21\",\"formula\":\"=IFERROR(IF(OR(C85=\\\"\\\",C64=\\\"\\\"),\\\"\\\",C85*(1+C64)^(I13-1)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I22\",\"formula\":\"=IFERROR(IF(OR(I21=\\\"\\\",I20=\\\"\\\",I20=0),\\\"\\\",I21/I20),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I23\",\"formula\":\"=IFERROR(IF(I22=\\\"\\\",\\\"\\\",-I22*0.05),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I24\",\"formula\":\"=IFERROR(IF(I22=\\\"\\\",\\\"\\\",-I22*0.01),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I25\",\"formula\":\"=IFERROR(IF(I22=\\\"\\\",\\\"\\\",I22+I23+I24),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I26\",\"formula\":\"=IFERROR(IF(OR(I8=\\\"\\\",I10=\\\"\\\",I11=\\\"\\\",I13=\\\"\\\"),\\\"\\\",ABS(I8)*(1+I10/12)^(I13*12)-(ABS(I8)*(I10/12)*(1+I10/12)^(I11*12)/((1+I10/12)^(I11*12)-1))*(((1+I10/12)^(I13*12)-1)/(I10/12))),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I27\",\"formula\":\"=IFERROR(IF(OR(I25=\\\"\\\",I26=\\\"\\\"),\\\"\\\",I25-I26),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I30\",\"formula\":\"=IFERROR('Pro Forma'!C44,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I31\",\"formula\":\"=IFERROR('Pro Forma'!G44,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I32\",\"formula\":\"=IFERROR('Pro Forma'!K44,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I33\",\"formula\":\"=IFERROR('Pro Forma'!C59,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I34\",\"formula\":\"=IFERROR('Pro Forma'!G59,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"I35\",\"formula\":\"=IFERROR('Pro Forma'!K59,\\\"N/A\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C65\",\"formula\":\"=IFERROR(IFERROR(C20,0)+IFERROR(C29,0)+IFERROR(C38,0)+IFERROR(C47,0)+IFERROR(C56,0),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C66\",\"formula\":\"=IFERROR(IF(OR(C9=\\\"\\\",C9=0),\\\"\\\",C65/C9),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C79\",\"formula\":\"=IFERROR(IFERROR(C21,0)+IFERROR(C30,0)+IFERROR(C39,0)+IFERROR(C48,0)+IFERROR(C57,0),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C80\",\"formula\":\"=IFERROR(IF(OR(C79=\\\"\\\",C63=\\\"\\\"),\\\"\\\",-C79*C63),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C81\",\"formula\":\"=IFERROR(IF(C79=\\\"\\\",\\\"\\\",C79+IFERROR(C80,0)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C82\",\"formula\":\"=IFERROR(IFERROR(C24,0)+IFERROR(C33,0)+IFERROR(C42,0)+IFERROR(C51,0)+IFERROR(C60,0),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C83\",\"formula\":\"=IFERROR(IF(C81=\\\"\\\",\\\"\\\",C81+IFERROR(C82,0)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C84\",\"formula\":\"=IFERROR(IFERROR(C69,0)+IFERROR(C70,0)+IFERROR(C71,0)+IFERROR(C83,0)*IFERROR(C72,0)+IFERROR(C73,0)+IFERROR(C74,0)+IFERROR(C75,0)+IFERROR(C76,0),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C85\",\"formula\":\"=IFERROR(IF(C83=\\\"\\\",\\\"\\\",C83-IFERROR(C84,0)),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C91\",\"formula\":\"=IFERROR(IF(OR(C85=\\\"\\\",C88=\\\"\\\",C88=0),\\\"\\\",C85/C88),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C95\",\"formula\":\"=IFERROR(IF(OR(C85=\\\"\\\",C94=\\\"\\\",C94=0),\\\"\\\",C85/C94),\\\"\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Assumptions & Flags\",\"address\":\"C96\",\"formula\":\"=IFERROR(IF(OR(C94=\\\"\\\",C9=\\\"\\\",C9=0),\\\"\\\",C94/C9),\\\"\\\")\"}",
+    "errorScan": "{\"kind\":\"notice\",\"message\":\"Cell search matched 0 entries.\"}",
+    "renders": [
+      {
+        "sheetName": "Cover",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Cover.png",
+        "bytes": 199227
+      },
+      {
+        "sheetName": "Executive Summary",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Executive_Summary.png",
+        "bytes": 115722
+      },
+      {
+        "sheetName": "Real Estate",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Real_Estate.png",
+        "bytes": 194862
+      },
+      {
+        "sheetName": "Rent Roll",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Rent_Roll.png",
+        "bytes": 84773
+      },
+      {
+        "sheetName": "Lease Abstract",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Lease_Abstract.png",
+        "bytes": 677733
+      },
+      {
+        "sheetName": "Rent Schedule",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Rent_Schedule.png",
+        "bytes": 207151
+      },
+      {
+        "sheetName": "Credit",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Credit.png",
+        "bytes": 657250
+      },
+      {
+        "sheetName": "Pro Forma",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Pro_Forma.png",
+        "bytes": 191771
+      },
+      {
+        "sheetName": "Assumptions & Flags",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Assumptions_Flags.png",
+        "bytes": 413857
+      },
+      {
+        "sheetName": "Sensitivity Analysis",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Sensitivity_Analysis.png",
+        "bytes": 98032
+      },
+      {
+        "sheetName": "Amortization",
+        "pngPath": "C:\\Users\\scott\\life-command-center\\outputs\\prompt_34_bov_templates\\MOB_Amortization.png",
+        "bytes": 79881
+      }
+    ]
+  }
+}
