@@ -601,3 +601,21 @@ credit/term/SF/chairs still "Not on file" (deal record not fully linked). Remain
 full under-contract Villages deal record to sharpen ranking; (b) add a "Secondary/market-range" sheet so excluded
 high-cap comps are shown, not just dropped (prompt 29 if wanted). ChatGPT import fix is in the same deploy —
 re-import the yaml + knowledge file and test.
+
+---
+
+## 2026-08-04 — Comps quality → the canonical-record data-integrity program (session 2w)
+
+Scott reviewed the (much-improved) workbook and gave 10 comps-quality issues + the strategic ask: constant
+cleaning so there's ONE accurate representation everywhere, best value per field from every source. Diagnosed
+against Dialysis_DB and split the 10 into EXPORT-mapping vs SOURCE-coverage vs RECONCILE:
+- EXPORT (data exists, isn't flowing): #4 bumps/options display, #7 on-market date for sold (100% present in DB!),
+  #10 on-market sheet fields (active listings carry the data).
+- RECONCILE/band: #1 dedup (610 properties have >1 live sold row), #9 appraisal cap band (905 comps in 5.5-6.75%).
+- SOURCE-coverage gaps (the real problem): #2 chairs 73%/patients 74%, #3 lease 84%, #5 initial price 38%/cap 39%,
+  #6 last ask 64%, #8 derived from 5/6. Active listings: cap 63%, on-market-date 89%, only 3 caps >12% (the 19%).
+Wrote `docs/architecture/comps-data-integrity-and-canonical-record.md` (diagnosis + canonical-record program:
+reuse existing pipelines/resolver/field_source_priority/backfill fns/Health surface; phased audit→dedup→backfill→
+continuous-scrub). Two tracks queued: **prompt 29** (export/pull polish — near-term, existing data) and
+**prompt 30** (Phase-1 AUDIT of sources×field coverage, precedence, linkage → phased plan). Prompts 22-28 comps
+code is deployed + validated; this is the next, bigger workstream.

@@ -13,6 +13,8 @@
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
+| 29 | Comps export/pull polish (dedup, cap band, field mapping, bumps/options format) | P1 | open |
+| 30 | Data-integrity Phase-1 AUDIT (canonical-record: sources, coverage, precedence, linkage) | P1 | open |
 | 24 | Cross-tool intent/resolution AUDIT (Phase 1 of the understanding layer) | P2 | open |
 | 23 | Comps appraisal-scale query shaping (engine fine; defaults under-serve) | P1 | open |
 | 22 | MCP server unification + protocol bump | P0 | **code DONE + committed `ddd9d49e`; DEPLOY-PENDING (Scott: env vars on tranquil-delight + redeploy)** |
