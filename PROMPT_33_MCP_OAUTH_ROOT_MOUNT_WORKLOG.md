@@ -30,6 +30,21 @@ Make the MCP OAuth discovery, dynamic client registration, authorization, and to
 - `node --test test/mcp-oauth-root-mount.test.mjs`
 - `node --test test/mcp-comps-http-route.test.mjs`
 
+## Commit / Push
+- Committed to `main`: `ef8cc6a6` (`Round 33: Mount MCP OAuth on root app`).
+- Pushed `main` to `origin`.
+
+## Live Verification
+- `GET https://tranquil-delight-production-633f.up.railway.app/.well-known/oauth-authorization-server`
+  - Returned `200` JSON.
+  - `issuer`, `authorization_endpoint`, `token_endpoint`, and `registration_endpoint` all advertised the tranquil-delight base.
+- `POST https://tranquil-delight-production-633f.up.railway.app/register`
+  - Returned `201` JSON.
+  - Returned a `client_id`, a non-empty `client_secret`, `client_secret_expires_at = 0`, and `token_endpoint_auth_method = client_secret_post`.
+  - The secret value was intentionally not printed in verification output.
+- `GET https://tranquil-delight-production-633f.up.railway.app/version`
+  - Still returned `2a623aa2ba6f` after two polls, so Railway had not yet advanced to commit `ef8cc6a6` from this workspace.
+
 ## Deployment Notes
 - Confirm Railway env on tranquil-delight includes:
   - `MCP_BASE_URL=https://tranquil-delight-production-633f.up.railway.app`
