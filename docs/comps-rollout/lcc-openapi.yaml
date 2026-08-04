@@ -177,10 +177,9 @@ paths:
       operationId: generateComps
       summary: Generate a Team Briggs comps workbook.
       description: >
-        For appraisal/workbook requests, pass `request` with Scott's original text. The server runs
-        synthesizeComps and workbook generation in one pass and returns only the generated download URL
-        plus compact counts, so 20-25 comp rows never round-trip through the model or connector.
-        Small interactive exports may still pass `template_comps`/curated rows directly.
+        Pass `request` (Scott's text) for an appraisal/workbook: the server runs synthesize + workbook in
+        one pass and returns only the download URL + compact counts, so the 20-25 rows never round-trip the
+        model/connector. Small interactive exports may still pass `template_comps` rows directly.
       requestBody:
         required: true
         content:
