@@ -1,5 +1,5 @@
 # Comps Canon
-Canon: v1.2.1
+Canon: v1.2.3
 
 ## Purpose
 Return sales/lease comps that are identical in substance and format on every surface.
@@ -22,6 +22,21 @@ and Salesforce-staged comps) — never from SharePoint, knowledge files, or gene
    The server runs synthesis and workbook generation in one pass and returns only `download_url` plus compact
    counts/summary, so 20-25 rows never round-trip through the model or connector. For small interactive exports
    only, pass `template_comps` rows to `generate_comps`; never pass full comp objects.
+4. **ONE renderer, always.** The only correct comps workbook is the one `generate_comps` / `populate_comps`
+   produces into the canonical template (`bov-generator/templates/Comps Blank Template - Briggs - *.xlsx`) —
+   header-driven, writes only input cells, protects formula columns, sorts (Sold by DATE desc, On Market by cap
+   asc), flags estimated NOI, trims blank rows to the AVG/TOTALS bar. Never hand-author a workbook, invent
+   sheets/columns/a summary or methodology tab/a different sort, or leave the 100-row grid untrimmed.
+   CHAIRS/PATIENTS come from the record, never blank.
+5. **Connector-down fallback (documented + reproducible).** When `generate_comps` (BOV service / MCP) is
+   unreachable, do NOT build by hand — run the same renderer locally:
+   `from comps_generator import populate_comps; populate_comps(payload, out, template_dir='bov-generator/templates')`
+   with `payload={comp_type:'sales', vertical:'dialysis', sold:[...], on_market:[...]}` using query_comps field
+   names (they alias straight through; a correct payload yields `unknown_keys: []`). Then LibreOffice-recalc.
+   Every surface/agent follows this identical path.
+6. **On-market rent basis (standard, identical across surfaces).** An on-market listing with a known asking cap
+   but no in-place NOI carries `rent = round(asking_price * asking_cap)` (implied NOI, exact) with
+   `initial_price = last_price = ask` so the template's INITIAL/LAST CAP reproduce the asking cap.
 
 ## Output contract
 Team Briggs Sales/Lease Comps template. Formula-protected columns (PRICE/SF, CAP RATE, RENT/SF, TERM, DOM,
@@ -35,6 +50,9 @@ excluded unless asked. Workbook/appraisal responses return a link and compact co
 - Never pre-narrow with filters the user didn't state (no invented tenant/metro/state/date) — pass verbatim; the engine expands.
 - Never round-trip appraisal workbook rows through the model; use `generate_comps.request`.
 - Never overwrite formula columns; never re-curate the returned rows.
+- **Never hand-author a comps workbook.** When the connector is down, run `populate_comps` locally against the
+  canonical template — never hand-roll a layout, invent sheets/columns/a summary tab/a different sort, or leave
+  the grid untrimmed. There is exactly ONE renderer.
 
 ## Surface bindings
 Copilot: `agent-instructions.md` Comps Flow → `QueryComps`/`SynthesizeComps`/`generate_comps`.

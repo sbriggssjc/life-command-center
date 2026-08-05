@@ -18,7 +18,7 @@ Team Briggs lists commercial real estate for sale (primarily single-tenant NNN).
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.2.2 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.2.3 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine — `SynthesizeComps` (default; pass the request text verbatim) or
@@ -31,6 +31,18 @@ exports only, use returned `template_comps` as the row payload. Formula columns 
 TERM, DOM, EFFECTIVE RENT/SF) are never written; dialysis adds Chair Count then Patient Count after RBA.
 `buyer`/`seller`/`financing` excluded unless asked. Zero results → say so and offer to widen; never substitute
 proxy comps. Pass the request verbatim — never add tenant/metro/date filters the user didn't state (that collapses the set); the engine expands (appraisal: subject -> state -> region -> national, incl. estimated-NOI).
+
+**ONE renderer — never hand-author a workbook.** The only acceptable comps workbook is the one
+`generate_comps`/`populate_comps` produces into the canonical Briggs template
+(`bov-generator/templates/Comps Blank Template - Briggs - *.xlsx`). Never invent sheets, columns, a
+summary/methodology tab, or a different sort; never leave the 100-row grid untrimmed (the renderer trims to the
+AVG/TOTALS bar); CHAIRS/PATIENTS come from the record, never left blank. **Connector-down fallback is NOT to
+build by hand** — run the SAME renderer locally: `from comps_generator import populate_comps; populate_comps(payload,
+out, template_dir='bov-generator/templates')` with `payload={comp_type:'sales', vertical:'dialysis', sold:[...],
+on_market:[...]}` using query_comps field names (they alias straight through — a correct payload yields
+`unknown_keys: []`), then LibreOffice-recalc. **On-market rent basis:** an on-market listing with a known asking
+cap but no in-place NOI carries `rent = round(asking_price * asking_cap)` (implied NOI, exact) with
+`initial_price = last_price = ask` so INITIAL/LAST CAP reproduce the asking cap. Identical on every surface.
 <!-- /CANON:comps -->
 
 <!-- CANON:resolution -->

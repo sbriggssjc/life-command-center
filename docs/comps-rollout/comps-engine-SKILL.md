@@ -91,6 +91,42 @@ the standard `(N) M-yr` form. Never write the formula-protected columns (RENT/SF
 the template computes them. `buyer`, `seller`, and `financing` stay OUT unless Scott explicitly asks for them.
 Check the response: `unknown_keys` should be empty and `recalc_errors` 0; then deliver the .xlsx.
 
+## ONE renderer — the hard rule (never hand-author a workbook)
+There is exactly ONE correct comps renderer: `bov-generator/comps_generator.py::populate_comps`, which loads the
+canonical template (`bov-generator/templates/Comps Blank Template - Briggs - *.xlsx`), is header-driven, writes
+only input cells, protects the formula columns, sorts (Sold by DATE desc, On Market by cap asc), flags estimated
+NOI, and trims blank rows to the AVG/TOTALS bar (`_trim_to_totals`). `generate_comps` is the service wrapper
+around it. **Never hand-author a comps workbook. Never invent sheets, columns, a summary/methodology tab, or a
+different sort. Never leave the 100-row grid untrimmed. CHAIRS/PATIENTS come from the record, not blank.** Every
+divergent workbook this project has ever seen came from a surface/agent that could NOT reach `generate_comps` and
+hand-rolled a layout instead — that is the one thing to never do.
+
+## Connector-down fallback — run the SAME renderer locally
+When `generate_comps` (BOV service / MCP) is unreachable, the fallback is NOT to build by hand — it is to run the
+identical renderer locally, so the output is byte-for-byte the same shape every surface produces:
+
+```python
+from comps_generator import populate_comps  # from bov-generator/
+payload = {
+    "comp_type": "sales", "vertical": "dialysis",
+    "sold": [ { ...query_comps field names... } ],
+    "on_market": [ { ...query_comps field names... } ],
+}
+summary = populate_comps(payload, out_path, template_dir="bov-generator/templates")
+assert summary["unknown_keys"] == []   # a correct payload aliases straight through
+# then LibreOffice-recalc the workbook (same as the BOV flow) before delivering.
+```
+
+query_comps field names alias straight through the renderer (`state`, `building_sf`, `sale_price`, `sale_date`,
+`year_built`, `initial_price`, `last_price`, `annual_rent`/`noi`, `lease_expiration`, `bumps`, `list_date`,
+`chairs`/`patients`, `land`), so a correct payload yields `unknown_keys: []`. Government payloads
+(`vertical: "government"`) route to the government template automatically.
+
+## On-market rent basis (standard — identical across surfaces)
+An on-market listing with a known asking cap but no in-place NOI carries `rent = round(asking_price * asking_cap)`
+(implied NOI, exact) with `initial_price = last_price = ask` so the template's INITIAL/LAST CAP reproduce the
+asking cap. Keep this identical on every surface — do not improvise a different implied-NOI or leave rent blank.
+
 ## Endpoints (for reference)
 MCP: `{MCP_BASE_URL}/mcp` (Bearer LCC_API_KEY). HTTP mirrors for non-Claude surfaces:
 `{MCP_BASE_URL}/api/query-comps`, `/api/synthesize-comps`. generate_comps builds on the BOV service.
