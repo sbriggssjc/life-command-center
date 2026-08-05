@@ -83,6 +83,33 @@ describe('MCP OAuth routes on a root-mounted app', () => {
     assert.deepEqual(res.json.authorization_servers, ['https://tranquil-delight-production-633f.up.railway.app']);
   });
 
+  it('serves protected-resource metadata at the RFC 9728 path-suffixed URL (not the SPA)', async () => {
+    // Spec-compliant MCP clients request the path-suffixed well-known URL for a
+    // resource mounted at /mcp. Prompt 38 root cause: this fell through to the
+    // SPA (200 text/html) so the connector failed to parse it as JSON.
+    const res = await localRequest(port, 'GET', '/.well-known/oauth-protected-resource/mcp');
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'] || '', /application\/json/);
+    assert.equal(res.json.resource, 'https://tranquil-delight-production-633f.up.railway.app/mcp');
+    assert.doesNotMatch(res.text, /<!doctype html>/i);
+  });
+
+  it('serves auth-server metadata at the path-suffixed URL too', async () => {
+    const res = await localRequest(port, 'GET', '/.well-known/oauth-authorization-server/mcp');
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'] || '', /application\/json/);
+    assert.equal(res.json.issuer, 'https://tranquil-delight-production-633f.up.railway.app');
+  });
+
+  it('advertises resource_metadata via WWW-Authenticate on an unauthenticated /mcp request', async () => {
+    const res = await localRequest(port, 'POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+    assert.equal(res.status, 401);
+    assert.match(
+      res.headers['www-authenticate'] || '',
+      /Bearer resource_metadata="https:\/\/tranquil-delight-production-633f\.up\.railway\.app\/\.well-known\/oauth-protected-resource"/,
+    );
+  });
+
   it('accepts dynamic client registration and returns LCC_API_KEY as client_secret', async () => {
     const res = await localRequest(port, 'POST', '/register', {
       client_name: 'Cowork LCC Deal Intelligence',
