@@ -3647,6 +3647,38 @@ async function handleDecisionVerdict(req, res) {
       return res.status(400).json({ error: 'unknown verdict for agency_risk_action: ' + verdict });
     }
 
+    // ---- milestone_confirm (W7.2) -------------------------------------------
+    // An LLM-surfaced milestone candidate from the deal-comms propagation tick
+    // with NO deterministic cue. The LLM never writes a milestone directly — a
+    // human confirms here. approve/confirm → the DETERMINISTIC idempotent writer
+    // lcc_deal_record_milestone (source='comms_tick_confirmed'); reject/dismiss →
+    // record only (stops asking). Effect-first: a failed write keeps it open.
+    if (decision.decision_type === 'milestone_confirm') {
+      const mc = decision.context || {};
+      const entId = mc.entity_id || decision.subject_entity_id || null;
+      if (!entId || !mc.milestone_key) {
+        return res.status(400).json({ error: 'entity_id / milestone_key missing from decision context' });
+      }
+      if (verdict === 'reject' || verdict === 'dismiss' || verdict === 'not_a_milestone') {
+        await record(verdict, 'decided', payload, { wrote_milestone: false });
+        return res.status(200).json({ ok: true, verdict, milestone_key: mc.milestone_key });
+      }
+      if (verdict === 'approve' || verdict === 'confirm' || verdict === 'log') {
+        const wr = await opsQuery('POST', 'rpc/lcc_deal_record_milestone', {
+          p_entity: entId, p_key: mc.milestone_key,
+          p_on: mc.occurred_on || null, p_status: mc.status || 'past',
+          p_summary: mc.label || mc.milestone_key, p_source: 'comms_tick_confirmed',
+          p_detail_ref: mc.detail_ref || (decisionId != null ? String(decisionId) : null),
+        });
+        if (!wr.ok) { await recordEffectFailure({ wrote_milestone: false, error: wr.data });
+          return res.status(502).json({ error: 'milestone_write_failed', detail: wr.data }); }
+        const inserted = wr.data === true || (Array.isArray(wr.data) && wr.data[0] === true);
+        await record(verdict, 'decided', payload, { wrote_milestone: true, inserted: !!inserted });
+        return res.status(200).json({ ok: true, verdict, milestone_key: mc.milestone_key, inserted: !!inserted });
+      }
+      return res.status(400).json({ error: 'unknown verdict for milestone_confirm: ' + verdict });
+    }
+
     // ---- npi_dedup_review / npi_dedup_autoapprove (W5.2) --------------------
     // A duplicate-NPI cluster. NEVER auto-collapses here (fill-blanks/never-guess
     // for destructive dedup): a confirm/approve verdict spawns a reconcile/apply

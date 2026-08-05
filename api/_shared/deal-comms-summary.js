@@ -1,0 +1,115 @@
+// api/_shared/deal-comms-summary.js
+// W7.2 — correspondence-summary prompt builder + response parser for the
+// deal-comms propagation tick. The LLM SUMMARIZES and PROPOSES only; nothing
+// here writes. The no-fabrication contract (the dossier standard) is baked into
+// the prompt: absent info is omitted, never guessed ("presumably"/"likely" are
+// banned), and every claim must be grounded in the supplied comm rows.
+//
+// Pure + testable: buildSummaryPrompt(deal, comms) -> string;
+// parseSummaryResponse(raw) -> { summary, topics[], milestone_candidates[] } | null.
+
+// Compress the corpus for the prompt: the newest KEEP_DETAIL keep their body;
+// older threads collapse to a subject/sender/date one-liner (older topics decay).
+const KEEP_DETAIL = 10;
+const BODY_CAP = 1200;
+
+function fmtDate(d) {
+  if (!d) return '';
+  try { return new Date(d).toISOString().slice(0, 10); } catch { return String(d).slice(0, 10); }
+}
+
+function oneLiner(c) {
+  const dir = c.direction === 'outbound' ? 'SENT' : c.direction === 'inbound' ? 'RECV' : '—';
+  const who = c.sender ? ` ${String(c.sender).slice(0, 60)}` : '';
+  return `- [${fmtDate(c.occurred_at)}] (${dir}${who}) ${String(c.subject || '(no subject)').slice(0, 140)}`;
+}
+
+function detailBlock(c) {
+  const dir = c.direction === 'outbound' ? 'SENT by Team Briggs' : c.direction === 'inbound' ? 'RECEIVED' : 'direction unknown';
+  const who = c.sender ? ` — ${String(c.sender).slice(0, 80)}` : '';
+  const body = String(c.body || '').replace(/\s+/g, ' ').trim().slice(0, BODY_CAP);
+  return [
+    `### [${fmtDate(c.occurred_at)}] ${dir}${who}`,
+    `Subject: ${String(c.subject || '(no subject)').slice(0, 200)}`,
+    body ? `Message: ${body}` : 'Message: (no body captured)',
+  ].join('\n');
+}
+
+/**
+ * Build the summarization prompt from a deal's comm corpus.
+ * @param {object} deal   { entity_id, deal_name }
+ * @param {Array}  comms  the deal's stamped comm rows (any order; both inbound + sent)
+ * @returns {string}
+ */
+export function buildSummaryPrompt(deal, comms) {
+  const rows = (Array.isArray(comms) ? comms : [])
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => new Date(b.occurred_at || 0) - new Date(a.occurred_at || 0)); // newest first
+
+  const recent = rows.slice(0, KEEP_DETAIL);
+  const older = rows.slice(KEEP_DETAIL);
+
+  const parts = [
+    'You are the deal desk analyst for Team Briggs, a commercial real estate brokerage.',
+    'Summarize the correspondence on ONE deal for a living deal dossier. Team Briggs is the BROKER; both inbound mail and mail SENT by Team Briggs are first-class signal.',
+    deal?.deal_name ? `Deal: ${deal.deal_name}` : null,
+    '',
+    'STRICT no-fabrication contract:',
+    '- Use ONLY the messages below. Do not invent parties, prices, dates, or outcomes.',
+    '- If something is not stated, OMIT it. Never write "presumably", "likely", "probably", or guess.',
+    '- Prefer specifics that appear verbatim (who, what stage, what is owed next).',
+    '',
+    `MOST RECENT MESSAGES (keep detail — up to ${KEEP_DETAIL}):`,
+    recent.map(detailBlock).join('\n\n') || '(none)',
+  ];
+  if (older.length) {
+    parts.push('', `OLDER THREAD (compressed to one-liners — ${older.length} message(s)):`, older.map(oneLiner).join('\n'));
+  }
+  parts.push(
+    '',
+    'Respond with ONLY a compact JSON object, no prose, no code fence:',
+    '{',
+    '  "summary": "<2-5 sentence rolling summary; newest state first; older topics compressed>",',
+    '  "topics": ["<short topic tag>", ...],',
+    '  "milestone_candidates": [',
+    '     {"key":"<loi|psa|escrow|diligence|financing|marketing|close>","label":"<what happened>","date":"<YYYY-MM-DD or empty>","confidence":<0..1>}',
+    '  ]',
+    '}',
+    'milestone_candidates: include ONLY transaction milestones the messages clearly evidence; [] if none. These are PROPOSALS for human confirmation, never facts.',
+  );
+  return parts.filter((p) => p !== null).join('\n');
+}
+
+// Defensive JSON extraction (string or already-parsed object).
+export function parseSummaryResponse(raw) {
+  if (raw == null) return null;
+  let obj = null;
+  if (typeof raw === 'object') obj = raw;
+  else {
+    const s = String(raw);
+    const m = s.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    try { obj = JSON.parse(m[0]); } catch { return null; }
+  }
+  if (!obj || typeof obj !== 'object') return null;
+  const summary = typeof obj.summary === 'string' ? obj.summary.trim() : '';
+  if (!summary) return null; // an empty summary is a skip, not a write
+  const topics = Array.isArray(obj.topics)
+    ? obj.topics.map((t) => String(t || '').trim()).filter(Boolean).slice(0, 20)
+    : [];
+  const cands = Array.isArray(obj.milestone_candidates)
+    ? obj.milestone_candidates
+        .filter((c) => c && typeof c === 'object' && c.key)
+        .map((c) => ({
+          key: String(c.key).trim().toLowerCase(),
+          label: String(c.label || '').trim().slice(0, 200),
+          date: /^\d{4}-\d{2}-\d{2}$/.test(String(c.date || '')) ? String(c.date) : null,
+          confidence: Number.isFinite(Number(c.confidence)) ? Number(c.confidence) : null,
+        }))
+        .slice(0, 12)
+    : [];
+  return { summary: summary.slice(0, 4000), topics, milestone_candidates: cands };
+}
+
+export const __test__ = { KEEP_DETAIL, oneLiner, detailBlock };

@@ -11,7 +11,7 @@ Plan: `docs/architecture/WAVE7_COMMS_CONTEXT_PROPAGATION_PLAN.md`
 | Unit | State | Summary |
 |---|---|---|
 | **W7.1** Correspondence attribution goes LIVE | **BUILT — awaiting flag flip** | Matcher on an hourly cron (flag-gated), deal-mapping at ingest via the authoritative roster, historical backfill plumbing drop-in. |
-| W7.2 The propagation tick | not started | Consumer on deal-stamped correspondence → summary / milestone / next-step / dossier refresh. |
+| **W7.2** The propagation tick | **BUILT — awaiting flag flip** | Hourly consumer on deal-stamped correspondence → summary / milestone / next-step / dossier + packet refresh. Own ledger seam; LLM summarizes/proposes only. |
 | W7.3 Call notes as first-class comms | not started | |
 | W7.4 Role evolution + open-issues | not started | |
 
@@ -55,3 +55,54 @@ Branch `claude/deal-correspondence-attribution-live-s8ta63`.
 **Doctrine held:** matcher precision unchanged (city required, word-boundary, digest excluded);
 no LLM in attribution; idempotent by `(entity_id, external_id)` / `internet_message_id`; all DB
 work additive + reversible.
+
+### W7.2 — session log (2026-08-06)
+Branch `claude/deal-comms-propagation-tick-eiaaxn`. Migration
+`20260806140000_lcc_w7_2_deal_comms_propagate.sql` (applied live to LCC Opps
+`xengecqvemvfknjvbvrq`). One tick, four propagations over the deal-stamped comm backlog.
+
+**The tick** — `GET|POST /api/deal-comms-propagate-tick`
+(`api/_handlers/deal-comms-propagate-tick.js`), mounted in `server.js` (X-LCC-Key). pg_cron
+`lcc-deal-comms-propagate` (`32 * * * *`, ~15min after the W7.1 matcher at `:17`) → `lcc_cron_post`.
+**Inert** until `DEAL_COMMS_PROPAGATE_ENABLED` (flag `DEAL_COMMS_PROPAGATE_CRON`); `?force=1` runs one
+live tick, `?dry_run=1` reports only. Bounded to `DEAL_COMMS_PROPAGATE_MAX_DEALS` (default 10),
+oldest-backlog first — the ledger makes catch-up automatic.
+
+- **Seam = its own ledger** `lcc_deal_comm_propagated (activity_event_id pk)` — a consumed comm never
+  reprocesses; re-runs no-op. Batch read: `lcc_deal_comms_unpropagated()` returns the deals with new
+  (un-ledgered) comms, each carrying its full comm corpus + per-comm `is_new`/`is_inbound`/`is_recent`,
+  reconciling direction/sender/subject/body across both stamp shapes (`lcc:deal_match` join to
+  `email_bodies`, ingest dual-anchor via `metadata`). Run-log `lcc_deal_comms_propagation_run_log`
+  (mirrors W7.1).
+- **1. Correspondence summary** — regenerated via `invokeExtractionAI` (Ollama/GaryBuilt primary) from
+  the deal's full comm corpus (inbound AND Team Briggs sent), no-fabrication contract, older threads
+  compressed. **is_current versioned** (demote prior, insert new; never update-in-place). AI down/empty
+  ⇒ keep the prior row, count `summary_skipped`, move on.
+- **2. Milestones** — DETERMINISTIC cues (`api/_shared/deal-milestone-cues.js`, word-boundary LOI/PSA/
+  escrow/EMD/DD/financing/marketing/close) write `lcc_deal_milestone` directly via idempotent
+  `lcc_deal_record_milestone` (`source='comms_tick'`, `detail_ref`=activity id). An LLM-only candidate
+  with **no** cue opens a `milestone_confirm` Decision-Center lane (subject_ref `mstone:<entity>:<key>:<date>`);
+  approve writes the milestone (`source='comms_tick_confirmed'`). **No LLM verdict writes a milestone directly.**
+- **3. Next-step to-dos** — reuses the Phase-1 `deriveNextStep` → `lcc_advance_todos` path (NOT forked)
+  for recent (≤7d) INBOUND matcher-backfill comms only; ingest dual-anchor rows already ran it. The
+  existence-guard dedupes (counted).
+- **4. Dossier + packets** — `buildDealPacket` already includes the correspondence summary, so the
+  refreshed summary changes `source_hash`; for deals with a stored deal dossier the tick regenerates
+  on-changed-hash (reuse-if-fresh makes it cheap). `context_packets` for the deal are invalidated (TTL
+  generate-on-demand — the existing context-broker path rebuilds on next fetch; no new generator).
+
+- **Operator switch:** set `DEAL_COMMS_PROPAGATE_ENABLED=1` in Railway, flip
+  `feature_flags_registry.DEAL_COMMS_PROPAGATE_CRON` to `on`. Verify: dry-run first, then a live tick
+  over the 312-comm backlog (15 deals get is_current summaries citing real activity ids; Woodland Hills
+  is the gold standard); a fresh test email → next tick refreshes that deal's summary + Phase-1 to-do +
+  dossier regen on the changed hash.
+- **Grounded live:** batch reader returns 20+ deals oldest-first with correct is_new/inbound/recent
+  flags; `lcc_deal_record_milestone` verified idempotent (first insert `t`, re-emit `f`); the
+  `milestone_confirm` lane opens as a seeded decision — all via a self-rolled-back synthetic gate (0 residue).
+- **Tests:** `test/deal-milestone-cues.test.mjs` (19), `test/deal-comms-summary.test.mjs` (7),
+  `test/deal-comms-propagate-tick.test.mjs` (10, fetch-level mocks per the W7.1 posture) — idempotency,
+  summary versioning flip, deterministic cue write w/ detail_ref, LLM-candidate → confirm lane (no write),
+  recent-inbound-only to-dos + dedupe, AI-failure keeps prior summary + counts skip, dry-run/flag-off.
+
+**Doctrine held:** LLM summarizes/proposes only — every auditable write (milestones from cues, to-dos via
+the Phase-1 guard, ledger rows) is deterministic; own seam only; additive + reversible + idempotent + dry-run.

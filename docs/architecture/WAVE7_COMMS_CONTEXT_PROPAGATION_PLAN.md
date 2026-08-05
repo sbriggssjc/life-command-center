@@ -27,7 +27,7 @@ until a human or a manual generation touches them.
 | Unit | State |
 |---|---|
 | **W7.1** correspondence attribution LIVE | **BUILT — awaiting flag flip** (`DEAL_EMAIL_MATCH_ENABLED`). Matcher hourly cron (flag-gated) + run-log + loud-failure alert; deal mapping at ingest via the authoritative `deal_party` roster + conversation-thread continuity; `/api/intake-deal-backfill` alias. Dry-run report: `W7_1_deal_email_match_dryrun_2026-08-06.md`. Ledger: `ROLLOUT_STATUS.md`. |
-| W7.2 propagation tick | not started (W7.1 is its producer) |
+| W7.2 propagation tick | **BUILT — awaiting flag flip** (`DEAL_COMMS_PROPAGATE_ENABLED`). Hourly tick `/api/deal-comms-propagate-tick` (pg_cron `lcc-deal-comms-propagate` `:32`, ~15min after the matcher) over deal-stamped comms → (1) is_current-versioned correspondence summary (Ollama, no-fabrication), (2) deterministic milestone cues → `lcc_deal_milestone` + LLM-only candidates → `milestone_confirm` lane, (3) Phase-1 `deriveNextStep`→`lcc_advance_todos` for recent inbound, (4) dossier regen-on-hash + `context_packets` invalidation. Own ledger seam `lcc_deal_comm_propagated`; run-log `lcc_deal_comms_propagation_run_log`. Migration `20260806140000`. Session log: `ROLLOUT_STATUS.md` (W7.2). |
 | W7.3 call notes | not started |
 | W7.4 role evolution | not started |
 
