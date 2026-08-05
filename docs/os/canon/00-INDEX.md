@@ -1,6 +1,7 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.4.1** — 2026-08-05. Bump this on any rule change; record it in the changelog below and
+**CANON_VERSION: 1.4.2** — 2026-08-06. (1.4.2: logging-and-touchpoints gains the W7.3 deal-spine capture
+actions `log_call_note` + `tag_comm_to_deal` via dispatchCopilotAction — pick-list on ambiguity, never guess.) Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 
 ## Global invariants (apply to every topic, every surface)

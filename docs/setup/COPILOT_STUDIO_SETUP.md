@@ -8,6 +8,17 @@
 > registration (`api/operations.js` ACTION_REGISTRY/ACTION_SCHEMAS) and this spec must
 > move TOGETHER — an action missing from the enum is invisible to Copilot (this gap
 > happened with the W7.3 actions, caught 2026-08-06; spec now v4.1.0).
+>
+> **THREE surfaces move together for a dispatch-routed action** (learned twice, 2026-08-06):
+> 1. Server: `api/operations.js` ACTION_REGISTRY + ACTION_SCHEMAS.
+> 2. Connector: the v4 spec's `copilot_action` enum → re-import the existing connector.
+> 3. **Agent instructions**: dispatch-routed actions NEVER appear as separate tools in the
+>    Copilot Studio tool list — the agent only uses them if its Instructions say so. Edit the
+>    relevant canon block (`docs/os/canon/blocks/`), bump CANON_VERSION, re-render
+>    (`node docs/os/tools/render-surfaces.mjs --write-live`), paste the rendered
+>    `docs/copilot/agent-instructions.md` into Copilot Studio → LCC Deal Agent → Instructions
+>    → Publish. `tools/check-parity.mjs` guards render drift; `test/copilot-connector-drift.test.mjs`
+>    guards spec drift.
 
 # Copilot Studio Setup Guide — LCC Assistant
 
