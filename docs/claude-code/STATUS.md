@@ -274,3 +274,26 @@ When the street address isn't extracted from the request text, resolution falls 
 
 ### Deferred decision for Scott
 Appraisal-mode cap filtering: the working 166-comp set includes caps ABOVE the subject's 6.75%. The standing appraisal rule is never to show a higher cap / lower value than the subject. Whether appraisal mode should *withhold* higher-cap comps (vs. show the full market) is a deliberate scope change — noted in prompt 49's tail, not encoded unilaterally.
+
+
+## Reconcile 2026-08-05 (prompts 48–53 — merged, live) — COMPS ARC COMPLETE
+Full comps pipeline (36–53) is now merged and **live end-to-end via the connector**. `generate_comps` verified
+2026-08-05: `status: success`, real download, 25 sold + 20 on-market, **no conformance 500**, subject resolved
+(property_id 31964, 6,453 SF, 12 chairs, cap 6.75% at top-level AND `fields`, `_hydrated: true`), all operators,
+national ranking (25 of 146 sold; on-market 171 curated to 20). Hand-building is retired — the connector produces it.
+Canon → **v1.4.0** (appraisal cap discipline + selection policy block; 0 drift, re-rendered to all 5 surfaces).
+
+| # | Outcome | State |
+|---|---------|-------|
+| 48 | Shared-width contract re-applied AFTER LibreOffice recalc (`comps_width_postpass.py`, surgical `<cols>` rewrite, cached values preserved) | ✅ merged **PR #1570** (`1ba82cb`), live. PATIENTS 10↔13 desync gone; conformance passes. |
+| 49 | Address-first, phrasing-independent subject resolution + hydrated cap in `subject.fields` | ✅ merged **PR #1571** (`804c3fb`), live. Resolves on every phrasing; cap 6.75% top+fields. (Cosmetic residual: `subject.kind` still reads "place" — all functional signals correct.) |
+| 50 | Propagate closed sales `available_listings` → master comp workbook | ✅ **dia migration applied live** (`dia_propagate_closed_sales_to_workbook`, PR #7360). Workbook 18-mo sold **145 → 284 (+139 distinct)**. Woodland Hills now a comp ($15.73M/6.00%/12.1yr/DOM 46). Reversible (batch `p50_apply_20260805`). **Correction:** sold from `sales_transactions` (Woodland Hills already live there, sale_id 14832); the real gap was the staged workbook. "274" = 139 distinct after listing-dup collapse. |
+| 51 | Consolidate same-address duplicate property records (review-lane, reversible) | ✅ **dia migration applied live** (detector + soft-merge + reversal + review lane, PR #7361). Consolidated **Snellville** (45519→44179), **9341 East 21 St** (37547→37594, Wichita KS), **5715 N Venoy** (26506→35566). Reversible via `dia_reverse_property_consolidation`. |
+| 52 | Engine: operator=similarity anchor (not filter), drop bare dupes, rank on displayed cap | ✅ merged **PR #1578** (`c66f2305`), live. Mixed-operator appraisal sets; bare dups excluded; cap = rent/price. |
+| 53 | Confirm/land 48 & 49 | ✅ Confirmed 48/49 already on main (PR #1570/#1571); earlier "not on main" was a shallow-clone artifact. Live acceptance test PASSED both phrasings. No redeploy needed. |
+
+### Needs Scott (open items, non-blocking)
+- **269 E Caroline St** consolidation is parked in `dia_property_consolidation_review` (2 rows): decide whether 35820 "Bldg C" (15,860 SF) is a distinct building and which building the 37379 clinic suite occupies.
+- **Prompt-50 review lane** (57 rows): 27 cap-disagreements (>25 bps stored-vs-rent/price), 29 out-of-band caps, 1 ambiguous multi-blank — work when convenient.
+- Cosmetic: `subject.kind` still labels "place" though the property is fully resolved — cheap polish if wanted.
+- Still outstanding from earlier: rotate `LCC_API_KEY`; Census key (prompt 19 parked).

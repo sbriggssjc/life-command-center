@@ -1,5 +1,15 @@
 # Comps Pipeline — Gap Audit (2026-08-05)
 
+> **STATUS 2026-08-05 — CLOSED.** Every gap mapped below is fixed and live end-to-end. Fixes landed across prompts
+> 36–53: single renderer + conformance (36/37/48), OAuth connector (33/38), national subject-anchored selection
+> (39/49), on-market enrichment (40), recency/field-standardization + operator-as-similarity (41/52), data-quality
+> gates (42), template OPTIONS/auto-fit + post-recalc width contract (43/48), 25-best/rescore/bumps (44), price-
+> adjustment recovery (45), closed-sale propagation from `available_listings` (50), same-address duplicate-record
+> consolidation (51). `generate_comps` verified live: no conformance 500, subject 31964 hydrated + excluded on
+> every phrasing, all operators, displayed-cap ranking with cap discipline. Canon v1.4.0 documents the policy.
+> Open (non-blocking): 269 E Caroline review-lane decision; prompt-50 review lane (57 rows); cosmetic `subject.kind`.
+
+
 Why: the same request ("comps for The Villages") produced different, wrong outputs across attempts — Florida-only
 selection, threadbare on-market rows, and format drift. This maps the whole pipeline and root-causes each gap in
 the CODE (not just agent behavior), so fixes land at the source. Anchor subject: **DaVita — The Villages, FL**,
