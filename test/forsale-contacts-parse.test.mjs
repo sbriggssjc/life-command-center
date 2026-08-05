@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 await import('../extension/content/_forsale-contacts-parse.js');
 const {
   parseForSaleContacts,
+  mapForSaleFigures,
   trailingRoleFor,
   looksLikeContactName,
   looksLikePerson,
@@ -94,6 +95,74 @@ describe('parseForSaleContacts — trailing-label layout', () => {
     assert.equal(isForSaleContactsUrl('https://product.costar.com/comps/detail/abc'), false);
   });
 
+  it('returns nothing when no trailing-label block is present', () => {
+    const out = parseForSaleContacts([
+      'Listing Broker', 'Jane Doe', '(555) 123-4567', 'jane@brokerage.com',
+    ]);
+    assert.equal(out.length, 0);
+  });
+});
+
+// The structured DOM path is the preferred one. These records mirror exactly
+// what the costar.js DOM adapter reads from the real 3710 FM 1889 Contacts
+// panel (three <figure> elements: broker person, sales-company firm, true owner).
+describe('mapForSaleFigures — structured Contacts panel', () => {
+  const FIGURES = [
+    { name: 'Leighton Hopkins', jobTitle: 'Associate', designation: '', company: 'Newmark',
+      email: 'Leighton.hopkins@nmrk.com', phones: ['(918) 845-5375', '(918) 845-5375'],
+      addressLines: [] },
+    { name: 'Newmark', jobTitle: '', designation: 'Sales Company', company: '',
+      email: '', phones: ['(469) 467-2000'],
+      addressLines: ['2601 Olive St, Suite 1600', 'Dallas, TX 75201', 'United States', ''] },
+    { name: 'Bradley Veo Timmons', jobTitle: '', designation: 'True Owner', company: '',
+      email: '', phones: ['(541) 980-2057'],
+      addressLines: ['The Dalles, OR 97058', 'United States', '', ''] },
+  ];
+
+  it('maps the broker agent, the sales-company firm, and the true owner', () => {
+    const out = mapForSaleFigures(FIGURES);
+    assert.equal(out.length, 3);
+
+    const agent = out.find(c => c.name === 'Leighton Hopkins');
+    assert.equal(agent.role, 'listing_broker');
+    assert.equal(agent.type, 'person');
+    assert.equal(agent.email, 'Leighton.hopkins@nmrk.com');
+    assert.deepEqual(agent.phones, ['(918) 845-5375']); // deduped
+
+    const firm = out.find(c => c.name === 'Newmark');
+    assert.equal(firm.role, 'listing_broker');
+    assert.equal(firm.type, 'organization');
+    assert.equal(firm.address, '2601 Olive St, Suite 1600');
+    assert.equal(firm.city, 'Dallas');
+    assert.equal(firm.state, 'TX');
+    assert.equal(firm.phone, '(469) 467-2000');
+
+    const owner = out.find(c => c.name === 'Bradley Veo Timmons');
+    assert.equal(owner.role, 'owner', 'True Owner designation → owner, not broker');
+    assert.equal(owner.type, 'person');
+    assert.equal(owner.city, 'The Dalles');
+    assert.equal(owner.state, 'OR');
+    assert.equal(owner.phone, '(541) 980-2057');
+    assert.equal(owner.email, undefined, 'owner has no email — broker email never bleeds in');
+  });
+
+  it('skips a figure with an unmapped designation rather than guessing', () => {
+    const out = mapForSaleFigures([
+      { name: 'Some Firm', designation: 'Appraiser', phones: [], addressLines: [] },
+    ]);
+    assert.equal(out.length, 0);
+  });
+
+  it('ignores empty/garbage figure names', () => {
+    const out = mapForSaleFigures([
+      { name: '', designation: 'True Owner' },
+      { name: 'United States', designation: 'True Owner' },
+    ]);
+    assert.equal(out.length, 0);
+  });
+});
+
+describe('parseForSaleContacts — no-op guard', () => {
   it('returns nothing when no trailing-label block is present', () => {
     const out = parseForSaleContacts([
       'Listing Broker', 'Jane Doe', '(555) 123-4567', 'jane@brokerage.com',

@@ -159,9 +159,81 @@
     return /\/(for-sale|for-lease)\//i.test(url || '');
   }
 
+  // ── Structured figure mapper (preferred path) ────────────────────────────
+  // CoStar's redesigned Contacts panel is a clean, data-testid-labelled DOM
+  // (a <figure> per contact). The DOM adapter in costar.js extracts one raw
+  // record per figure; this PURE mapper turns those records into roled
+  // contacts. Keeping the mapping pure makes the role/type/address logic
+  // Node-testable without a DOM.
+  //
+  // Raw figure record shape:
+  //   { name, jobTitle, designation, company, email, phones:[], addressLines:[] }
+  //   `designation` is the company card's type line ("Sales Company",
+  //   "True Owner", "Recorded Owner", "Property Manager"); a PERSON card
+  //   (broker agent) has a jobTitle ("Associate") and no designation.
+  function mapForSaleFigures(figures) {
+    const out = [];
+    if (!Array.isArray(figures)) return out;
+    for (const f of figures) {
+      if (!f || !f.name || typeof f.name !== 'string') continue;
+      const name = f.name.trim();
+      if (!looksLikeContactName(name)) continue;
+
+      // Role: a designation line maps directly; a designation-less person card
+      // is the listing agent (sell-side broker). An unmapped designation is
+      // skipped (never guess a role).
+      let role = null;
+      if (f.designation && String(f.designation).trim()) {
+        role = trailingRoleFor(f.designation);
+        if (!role) continue;
+      } else {
+        role = 'listing_broker';
+      }
+
+      const contact = {
+        role,
+        name,
+        type: looksLikePerson(name) ? 'person' : 'organization',
+        address: null, city: null, state: null, zip: null,
+        phone: null, email: null, company: null,
+      };
+      if (f.company && String(f.company).trim()) contact.company = String(f.company).trim();
+
+      // Address lines → street + city/state/zip (skip "United States"/blanks).
+      const addrLines = Array.isArray(f.addressLines) ? f.addressLines : [];
+      for (const raw of addrLines) {
+        const line = String(raw == null ? '' : raw).trim();
+        if (!line || /^united\s+states$/i.test(line)) continue;
+        if (isCityState(line)) {
+          const m = line.match(/^(.+),\s*([A-Z]{2})\s+(\d{5})/);
+          if (m) { contact.city = m[1].trim(); contact.state = m[2]; contact.zip = m[3]; }
+        } else if (isStreet(line) && !contact.address) {
+          contact.address = line;
+        }
+      }
+
+      // Phones: first valid → phone; keep the full de-duped list on phones[].
+      const rawPhones = Array.isArray(f.phones) ? f.phones : (f.phone ? [f.phone] : []);
+      const phones = [];
+      for (const p of rawPhones) {
+        const s = String(p == null ? '' : p).replace(/\s*\([pPfFmMwW]\)\s*$/, '').trim();
+        if (isPhone(s) && !phones.includes(s)) phones.push(s);
+      }
+      if (phones.length) { contact.phone = phones[0]; contact.phones = phones; }
+
+      const email = (typeof f.email === 'string' ? f.email.trim() : '');
+      if (email && isEmail(email)) contact.email = email;
+
+      for (const key of Object.keys(contact)) if (contact[key] == null) delete contact[key];
+      out.push(contact);
+    }
+    return out;
+  }
+
   const api = {
     parseForSaleContacts,
     parseTrailingLabelBlock,
+    mapForSaleFigures,
     trailingRoleFor,
     looksLikeContactName,
     looksLikePerson,
