@@ -48,7 +48,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadEnvForScripts } from './_env-file.mjs';
 
 // Load env BEFORE importing modules that read process.env at call time.
@@ -379,7 +379,11 @@ async function main() {
 }
 
 // Only run when invoked directly (keeps the module importable for tests).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Windows-safe: argv[1] is a backslash path (C:\...), never equal to the file:// URL
+// string directly — normalize through pathToFileURL before comparing.
+const invokedDirectly = process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (invokedDirectly) {
   main().catch((err) => { console.error('[w51] fatal:', err); process.exit(1); });
 }
 
