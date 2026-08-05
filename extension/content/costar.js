@@ -503,6 +503,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
       return true;
     });
+    // ── Broker→owner mis-attribution guard (2026-08-05) ──────────────────────
+    // CoStar renders the listing-broker contact card adjacent to the owner
+    // panel (and the redesigned Contacts tab prints the role label AFTER the
+    // name), so the extractors above can slot the listing broker's email/phone —
+    // and sometimes the broker person itself — into the "Current/True Owner"
+    // rows. Drop owner rows that ARE the captured broker (broker email) and
+    // strip broker reach from any surviving owner. Loaded before this script as
+    // globalThis.__lccBrokerOwnerReconcile (pure + Node-testable).
+    if (globalThis.__lccBrokerOwnerReconcile) {
+      accumulated.contacts = globalThis.__lccBrokerOwnerReconcile
+        .reconcileBrokerOwnerAttribution(accumulated.contacts);
+    }
     mergeTenants(accumulated.tenants, tenants);
     if (location.city) accumulated.city = location.city;
     if (location.state) accumulated.state = location.state;
