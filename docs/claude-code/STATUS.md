@@ -297,3 +297,40 @@ Canon → **v1.4.0** (appraisal cap discipline + selection policy block; 0 drift
 - **Prompt-50 review lane** (57 rows): 27 cap-disagreements (>25 bps stored-vs-rent/price), 29 out-of-band caps, 1 ambiguous multi-blank — work when convenient.
 - Cosmetic: `subject.kind` still labels "place" though the property is fully resolved — cheap polish if wanted.
 - Still outstanding from earlier: rotate `LCC_API_KEY`; Census key (prompt 19 parked).
+
+
+## Reconcile 2026-08-06 (prompts 54 & 55 — merged, live) + queue 56 + canon re-render
+
+**54 & 55 landed and moved to `done/`.** Re-ran `generate_comps` for The Villages and — per prompt 54's
+"confirm against the sheet" — **downloaded and inspected the actual workbook**, not just the JSON.
+
+| # | Outcome | State |
+|---|---------|-------|
+| 54 | Cap band as HARD filter on displayed rows + reliability-or-exclude + sold on-market-date join | ✅ **merged (PR #1582), live.** Verified in the downloaded sheet: every cap ≤7.10% (Sold 5.21–7.08%, On Market 5.25–7.01%), RENT/SF all 13.8–55.0 (none <12/>60), tenants canonical (DaVita / Fresenius Medical Care / US Renal Care / American Renal), DOM all plausible (no <0/>1000). **Scope narrowed by the response** — 3 original items still open → **prompt 56**. |
+| 55 | Chairs/patients propagation hardening + listing price-history ingestion (dia DB) | ✅ **migrations applied live** (dia `zqzrriwuavgrquhisnoa`, PR #7362). Chairs recovered on 145 workbook rows (Swamy Dr→13, MLK→canonical 35120→10); `listing_price_history` 1→175 rows; active price-change 33→45. Genuine gaps stay "Not on file" (7 chairs blanks in the live sheet are the real data-acquisition backlog). Reversible + backups. |
+
+### Live acceptance test (2026-08-06) — connector produces an appraiser-clean workbook
+`generate_comps` for "1050 Old Camp Rd": `status: success`, 23 sold + 14 on-market, no 500. Subject fully
+hydrated — cap **6.75% at top-level AND `fields.cap_rate`** (prompt-49 fix holding), chairs 12, bumps "10% / 5 yrs",
+`resolved_from_record: true`. Sold median 6.74% / weighted-avg 6.71%, both **below** the 6.75% subject; cap max
+7.08% within the +35bps ceiling. Delivered the downloaded workbook to Scott. (Cosmetic: `subject.kind` still
+labels "place" though fully resolved — unchanged since 49/53.)
+
+### CANON drift FIXED (recurring pattern)
+Prompt 54 bumped `CANON_VERSION` 1.4.0→**1.4.1** and edited the `comps` block but did **not** re-render — parity
+showed **11 drift** (all 5 surface bundles stale + missing the updated comps block + stale live managed region).
+Re-ran `render-surfaces.mjs --root=docs/os --write-live` → 5 bundles regenerated + Copilot live region rewritten →
+**0 drift**. (External surfaces — chatgpt/northmarq/claude skills — still need the SURFACE-SYNC paste, per usual.)
+
+### Residual from 54's original scope → prompt 56 (queued in `prompts/`)
+The 54 response narrowed the 7-item prompt to cap-band/reliability/on-market-date and dropped three items that are
+verifiably still open in the shipped sheet:
+1. **On Market STATUS blank** on every row (should default "Available").
+2. **BUMPS not fully normalized** — Sold shows bare `1.75`, `10% every 5`, `5% after 5 years`; blanks left empty (should be "Flat"); On Market has `Fixed` (should unify to "Flat"). Same bumps issue Scott has flagged repeatedly.
+3. **`summary` cap range (6.41–7.08%) ≠ the sheet** (Sold displays down to 5.21%) — stat set and shipped rows must match.
+Prompt 56 addresses all three; keeps 52/54 intact.
+
+### Still open (non-blocking, carried forward)
+- Prompt-50 review lane (57 rows) and 269 E Caroline St consolidation (2 rows) — data review when convenient.
+- "Always-include-our-deals" rule (Woodland Hills at 21,080 SF doesn't rank into a 6,453-SF subject's top-25) — separate opt-in if wanted.
+- Rotate `LCC_API_KEY`; Census key (prompt 19 parked).
