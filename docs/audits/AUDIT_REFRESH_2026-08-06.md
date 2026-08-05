@@ -40,12 +40,18 @@ planned build surface** — five structural units, none started, none blocking.
 
 ## 3. Gap assessment (before the next build)
 
-**A. Open alerts needing triage (19 open, several fresh Aug 5):**
-`sidebar_promote_pipeline_failed` ×9 (latest 2026-08-05 — ACTIVE, highest count; triage first),
-`lcc_health_red` ×3 (Aug 5), `cron_failure` ×1 (Aug 5), `flow_failure` ×1 (Aug 5),
-`feed_stale` ×1 (Jul 24), `owner_reconcile_queue_depth` ×1, `resolver_calibration_drift` ×3
-(known/by-design — clears as review-lane hard negatives accrue). → **Recommended next
-session: alert triage sweep** (may be one root cause across the Aug-5 cluster).
+**A. Open alerts — TRIAGE SWEEP COMPLETE (2026-08-06): 19 → 7 open, all dispositioned.**
+Resolved (12) with root causes in `resolved_note`:
+- `cron_failure` field-provenance-prune — **FIXED live** (migration `lcc_prune_skip_resolution_referenced_provenance`): prune deleted provenance rows still referenced by `field_provenance_resolutions.current_provenance_id` (same never-delete-referenced hazard class as the TFC contacts bug — 3rd instance). Verified clean run: 8,551 pruned, 0 errors.
+- `flow_failure` + `lcc_health_red` (SF → LCC Retry & Dead-letter, Aug 5) — the flow re-picked the single ancient `status='failed'` sf_sync_queue row (Apr-2026 acknowledged SOQL-apostrophe bug, "Nor'wood Development") every run and failed its Apply-to-each. Row closed failed→done with terminal note; flow should green next cycle.
+- `feed_stale` gov loans — self-healed (latest loan 2026-08-03).
+- `sidebar_promote_pipeline_failed` ×8 (no_domain) — reviewed: thin CoStar contact-page captures (56–97 chars, no tenant/sale signal); classifier CORRECTLY declined; per-capture alert is noise → downgrade to digest counter (fix unit below).
+
+Still open (7), each with an owner:
+- **`sidebar_promote` #983 (unknown_domain, domain='dia') → REAL BUG FOUND:** `entities.domain` stores SHORT codes exclusively (gov 23,622 / dia 14,167 / lcc / cre — zero long-form rows), but `propagateToDomainDb` accepts only 'dialysis'/'government' — so any RE-capture of an existing dia/gov entity silently skips domain-DB propagation. Fix = accept/normalize short codes in the dispatcher (+ regression test). → Claude Code prompt `CLAUDECODE_PROMPT_triage_fixes_domain_codes_and_alert_noise.md`.
+- **`owner_reconcile_queue_depth` (now 2,064 queued / 15 done EVER) → NOT capacity — the W4.4 operator step never completed:** `ORE_USE_RESOLVER` flag is `off` (registry), so the hourly engine idles while the daily seed accrues. Operator fix: set `ORE_USE_RESOLVER=1` + confirm `RESOLVER_URL` on the LCC Railway app, flip the registry flag — the resolver gate is fail-closed to needs_review by design, and the resolver is trained + band-floored, so this is safe to enable now.
+- `lcc_health_red` RCM_Power_Automate (×5, Aug 4) + HTTP-Switch AMBER (×14, Aug 2) — PA-side; Scott to open the flow run histories (LCC has no visibility into PA action errors).
+- `resolver_calibration_drift` ×3 — by design; clears as review-lane hard negatives accrue.
 
 **B. Known data-quality gaps (documented, non-blocking):**
 - `v_field_provenance_unranked` 33 rows (costar_sidebar 18, om_extraction 10, rca 3, +2) — registry-coverage gap widening slowly in NON-model sources; W6.6 watches; fix = register priorities for those sources (small unit, §4.9).
