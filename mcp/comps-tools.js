@@ -24,7 +24,10 @@ const DEFAULT_SYNTHESIZE_LIMIT = 25;
 const DEFAULT_APPRAISAL_LIMIT = 30;
 const MAX_QUERY_LIMIT = 100;
 const MAX_SYNTHESIZE_LIMIT = 50;
-const APPRAISAL_CANDIDATE_LIMIT = 100;
+// Appraisal mode pulls a NATIONAL candidate universe, so the per-vertical RPC limit must be
+// large enough to cover a national dialysis candidate set (not just a state/region slice).
+const APPRAISAL_CANDIDATE_LIMIT = 300;
+const MAX_APPRAISAL_CANDIDATE_LIMIT = 500;
 const APPRAISAL_ERROR_CAP_LOW = 0.04;
 const APPRAISAL_ERROR_CAP_HIGH = 0.12;
 const APPRAISAL_DEFAULT_BAND_LOWER_BPS = 50;
@@ -168,30 +171,80 @@ function appraisalSubjectAnchor(args) {
   return !!(args?.appraisal_mode && args.subject && (args.subject.state || args.subject.metro || args.subject.name));
 }
 
-function appraisalCandidateStates(subject) {
-  const states = [];
-  if (subject?.state) states.push(String(subject.state).toUpperCase());
-  const regional = REGION_STATES[subject?.region] || [];
-  states.push(...regional);
-  return uniqueList(states);
+// state -> region reverse lookup (geography scoring: metro > region > national)
+const STATE_TO_REGION = (() => {
+  const m = {};
+  for (const [region, states] of Object.entries(REGION_STATES)) for (const s of states) m[s] = region;
+  return m;
+})();
+
+// Operator / credit tier for dialysis: national-credit operators vs independents.
+const _MAJOR_OPERATORS = ['davita', 'fresenius', 'fmc', 'us renal', 'usrc', 'american renal'];
+function operatorTier(name) {
+  const n = normText(name);
+  if (!n) return null;
+  return _MAJOR_OPERATORS.some(o => n.includes(o)) ? 'major' : 'independent';
+}
+function compTenantText(c) {
+  return normText([c.tenant, c.agency, c.operator, c.anchor_tenant,
+    c.raw?.tenant, c.raw?.operator].filter(Boolean).join(' '));
+}
+function subjectTenantName(subject) {
+  const t = subject?.tenant || subject?.operator || subject?.fields?.tenant;
+  return (t && !/not on file/i.test(String(t))) ? String(t) : null;
+}
+// Years of lease term remaining at close for a comp (expiration - sale date).
+function termRemainingAtClose(c) {
+  const exp = Date.parse(c.lease_expiration || c.expiration_date || c.raw?.lease_expiration || '');
+  if (!Number.isFinite(exp)) return null;
+  const close = Date.parse(c.sale_date || '');
+  const base = Number.isFinite(close) ? close : Date.now();
+  const yrs = (exp - base) / 3.15576e10;
+  return yrs > 0 ? yrs : null;
+}
+function subjectRemainingTerm(subject) {
+  const t = asNum(subject?.remaining_term ?? subject?.term_remaining ?? subject?.firm_term_remaining
+    ?? subject?.fields?.remaining_term);
+  return (t && t > 0) ? t : null;
 }
 
 function scoreComp(c, a) {
   let s = 0;
   const subject = a.subject || {};
+  const appraisal = !!a.appraisal_mode;
   const cState = String(c.state || '').toUpperCase();
   const subjectState = String(subject.state || '').toUpperCase();
-  if (subject.metro && sameMarket(c, subject.metro)) s += 8;
+  const subjectRegion = subject.region || STATE_TO_REGION[subjectState] || null;
+
+  // ── Aligned market: metro > region > national. Geography is a SCORE weight ONLY — in appraisal
+  // mode the candidate universe is national, so a national comp still earns a small baseline and
+  // an out-of-region same-operator/same-term comp can out-rank a weak in-state one. ──
+  if (subject.metro && sameMarket(c, subject.metro)) s += appraisal ? 10 : 8;
   else if (a.metros?.some(m => sameMarket(c, m))) s += 6;
-  if (subjectState && cState === subjectState) s += 6;
+  if (subjectState && cState === subjectState) s += appraisal ? 7 : 6;
+  else if (subjectRegion && cState && STATE_TO_REGION[cState] === subjectRegion) s += appraisal ? 4 : 3;
   else if (subjectState === 'FL' && SOUTHEAST_STATES.has(cState)) s += 3;
   else if (a.states?.includes(cState)) s += 3;
+  else if (appraisal) s += 1; // national baseline so out-of-region comps stay viable
+
+  // ── Operator / credit: same operator highest, then same credit tier (major vs independent) ──
   const tenantList = a.tenants || a.tenant_list;
   if (Array.isArray(tenantList) && tenantList.length && tenantListMatches(c, tenantList)) s += 4;
   else if (a.tenant && tenantMatches(c, a.tenant)) s += 4;
+  const subjectTenant = subjectTenantName(subject);
+  if (appraisal && subjectTenant) {
+    if (tenantMatches(c, subjectTenant)) s += 6; // same operator = strongest credit alignment
+    else {
+      const st = operatorTier(subjectTenant), ct = operatorTier(compTenantText(c));
+      if (st && ct && st === ct) s += 3; // same credit tier
+    }
+  }
+
   // Credit the normalized `use` too, so an agency's asset-class doubling (VA -> Medical Office)
   // ranks consistently rather than depending on the raw building_type value.
   if (a.property_types?.some(t => ((c.property_type || '') + ' ' + (c.use || '')).toLowerCase().includes(String(t).toLowerCase()))) s += 3;
+
+  // ── Size (RBA) + chairs proximity ──
   if (subject.building_sf && (c.building_sf || c.rba)) {
     const ratio = Math.min(Number(c.building_sf || c.rba), Number(subject.building_sf))
       / Math.max(Number(c.building_sf || c.rba), Number(subject.building_sf));
@@ -201,10 +254,30 @@ function scoreComp(c, a) {
     const ratio = Math.min(Number(c.chairs), Number(subject.chairs)) / Math.max(Number(c.chairs), Number(subject.chairs));
     if (Number.isFinite(ratio)) s += ratio * 2;
   }
+
+  // ── Building age proximity ──
+  const subjYear = asNum(subject.year_built ?? subject.built);
+  const compYear = asNum(c.year_built ?? c.built ?? c.raw?.year_built);
+  if (subjYear && compYear) s += Math.max(0, 3 - Math.abs(subjYear - compYear) / 5);
+
+  // ── Lease term remaining at close proximity ──
+  const subjTerm = subjectRemainingTerm(subject), compTerm = termRemainingAtClose(c);
+  if (subjTerm && compTerm) s += Math.max(0, 4 - Math.abs(subjTerm - compTerm));
+
+  // ── Bump / escalation structure similarity ──
+  if (subject.bumps && c.bumps) {
+    const sb = normalizeBumps(subject.bumps), cb = normalizeBumps(c.bumps);
+    if (sb && cb && normText(sb) === normText(cb)) s += 2;
+  }
+
+  // ── Cap support (keep + strengthen): reward proximity; penalize caps materially above subject ──
   if (subject.cap_rate && c.cap_rate) {
     const spreadBps = Math.abs(Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
-    s += a.appraisal_mode ? Math.max(0, 8 - (spreadBps / 25)) : Math.max(0, 3 - (spreadBps / 75));
-    if (a.appraisal_mode && Number(c.cap_rate) > Number(subject.cap_rate) + 0.02) s -= 4;
+    s += appraisal ? Math.max(0, 8 - (spreadBps / 25)) : Math.max(0, 3 - (spreadBps / 75));
+    if (appraisal) {
+      const overBps = (Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
+      if (overBps > 200) s -= 4 + (overBps - 200) / 50; // >~200 bps above subject: escalating penalty
+    }
   }
   if (c.sale_date) { const age = (Date.now() - Date.parse(c.sale_date)) / 3.15e10; s += Math.max(0, 2 - age / 2); }
   if (c.sale_price) s += 1;
@@ -375,8 +448,11 @@ function localScopeArgs(args) {
 
 function queryScopeArgs(args) {
   if (!appraisalSubjectAnchor(args)) return args;
-  const states = appraisalCandidateStates(args.subject);
-  return { ...args, states: states.length ? states : null, metros: null };
+  // Appraisal mode is NATIONAL, subject-anchored — the candidate PULL is not bounded by the
+  // subject's state/region. Geography is a SCORE weight only (scoreComp), never a hard pull or
+  // local filter, so strong out-of-region same-operator / same-term / same-age comps surface and
+  // are ranked against in-region ones. `p_states = null` => national.
+  return { ...args, states: null, metros: null };
 }
 
 function templateRow(c) {
@@ -455,7 +531,8 @@ function argsToParams(args) {
     p_government_only: !!args.government_only,
     p_include_sf: args.include_salesforce !== false,
     p_include_onmkt: !!args.include_on_market,
-    p_limit: clampLimit(args.limit, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT),
+    p_limit: clampLimit(args.limit, DEFAULT_QUERY_LIMIT,
+      args.appraisal_mode ? MAX_APPRAISAL_CANDIDATE_LIMIT : MAX_QUERY_LIMIT),
     p_tenant: (Array.isArray(args.tenants) && args.tenants.length > 1) ? null
       : (Array.isArray(args.tenant_list) && args.tenant_list.length > 1) ? null
       : (Array.isArray(args.tenants) && args.tenants.length === 1) ? args.tenants[0]
@@ -1072,7 +1149,7 @@ export async function runComps(args, deps) {
               tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags,
               ...c.review_detail })),
             warnings, interpreted_params: { ...params,
-              p_candidate_scope: appraisalSubjectAnchor(args) ? 'subject_state_region_then_national_fallback' : 'hard_filters',
+              p_candidate_scope: appraisalSubjectAnchor(args) ? 'national_subject_anchored' : 'hard_filters',
               tenants: args.tenants || args.tenant_list || null, appraisal_mode: !!args.appraisal_mode } } };
 }
 
@@ -1240,7 +1317,11 @@ export async function runSynthesize(args, deps) {
     truncated: meta.truncated || comps.length > scored.length };
   const result = { interpreted_query: {
       comp_type: eff.comp_type || 'sale', property_types: eff.property_types || null,
-      states: eff.states || null, metros: eff.metros || null, date_from: eff.date_from || null,
+      // Appraisal mode pulls a national candidate universe — surface that the behavior is national,
+      // not the subject's state, so the national scoping is visible to every consumer.
+      states: appraisalSubjectAnchor(eff) ? 'national' : (eff.states || null),
+      metros: appraisalSubjectAnchor(eff) ? null : (eff.metros || null),
+      date_from: eff.date_from || null,
       tenant: eff.tenant || null, tenants: eff.tenants || null, appraisal_mode: !!eff.appraisal_mode,
       include_unreliable_noi: !!eff.include_unreliable_noi, include_on_market: !!eff.include_on_market,
       government_only: route.government_only, verticals: route.verticals },

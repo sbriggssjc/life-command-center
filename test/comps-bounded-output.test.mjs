@@ -124,7 +124,9 @@ function makeAppraisalQuery(domain, calls) {
     if (method === 'POST' && path === 'rpc/rpc_query_comps') {
       calls.push([domain, body]);
       if (domain !== 'dialysis') return { ok: true, status: 200, data: [] };
-      return { ok: true, status: 200, data: body.p_states ? regionalRows : nationalRows };
+      // Appraisal mode pulls NATIONAL (p_states null): return the combined FL + out-of-region set.
+      // A legacy state/region-scoped pull (if it ever occurred) would see only the FL rows.
+      return { ok: true, status: 200, data: body.p_states ? regionalRows : [...regionalRows, ...nationalRows] };
     }
     if (method === 'POST' && /_engine_noi_batch$/.test(path)) return { ok: true, status: 200, data: [] };
     if (method === 'POST' && /_comp_review_queue/.test(path)) return { ok: true, status: 200, data: [] };
@@ -378,7 +380,7 @@ describe('comps engine bounded output', () => {
     assert.equal(parsed.tenant, null);
   });
 
-  it('uses appraisal subject geography as ranking anchors, not hard filters', async () => {
+  it('pulls a NATIONAL candidate universe in appraisal mode, geography as ranking weight only', async () => {
     const calls = [];
     const result = await runSynthesize(
       {
@@ -396,19 +398,21 @@ describe('comps engine bounded output', () => {
       { govQuery: makeAppraisalQuery('government', calls), diaQuery: makeAppraisalQuery('dialysis', calls) }
     );
 
-    const primaryDialysis = calls.find(([domain, body]) => domain === 'dialysis' && body.p_states);
-    const fallbackDialysis = calls.find(([domain, body]) => domain === 'dialysis' && !body.p_states);
-    assert.ok(primaryDialysis);
-    assert.ok(fallbackDialysis);
-    assert.equal(primaryDialysis[1].p_metros, null);
-    assert.deepEqual(primaryDialysis[1].p_states, ['FL', 'GA', 'AL', 'SC', 'NC', 'TN', 'MS']);
-    assert.equal(fallbackDialysis[1].p_states, null);
-    assert.equal(fallbackDialysis[1].p_metros, null);
+    const dialysisCalls = calls.filter(([domain]) => domain === 'dialysis');
+    // No hard state filter remains in appraisal mode — the pull is national (p_states null) from the
+    // start, so there is no separate region-scoped primary + national fallback.
+    assert.ok(dialysisCalls.length >= 1);
+    for (const [, body] of dialysisCalls) {
+      assert.equal(body.p_states, null);
+      assert.equal(body.p_metros, null);
+    }
+    // interpreted_query must show the national scoping so the behavior is visible.
+    assert.equal(result.interpreted_query.states, 'national');
     assert.equal(result.comps.length, 25);
     assert.equal(result.comps.some(c => c.comp_id === 'subject-row'), false);
     assert.equal(result.meta.excluded_subject, 1);
     assert.ok(result.comps.some(c => c.state === 'FL'));
-    assert.ok(result.comps.some(c => c.state !== 'FL'));
+    assert.ok(result.comps.some(c => c.state !== 'FL')); // strong out-of-region comps surface
     assert.match(result.transparency, /returned 25 of \d+/);
   });
 
