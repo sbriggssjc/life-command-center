@@ -66,8 +66,14 @@ an export.
   `Modified Gross`. Maps Double Net → NN; Triple Net / Modified Triple Net → NNN; Full Service → Gross; Bondable →
   Absolute NNN. Unrecognized values pass through unchanged.
 - **Renewal OPTIONS → `(N) M-yr`** (e.g. `(3) 5-yr`) — count parsed from words/digits, never the term length.
-- **Bumps → `X% / yr` or `X% / N yrs`.** An uninterpretable source value (a bare number with no `%`, e.g. `0.1`,
-  `1.75`) is left UNTOUCHED and routed to the review lane as bad data (`bad_bumps` flag).
+- **Bumps → `X% / yr` or `X% / N yrs`** (one shared normalizer for both tabs). `10% every 5[ years]` →
+  `10% / 5 yrs`; `5% after 5 years` → `5% / 5 yrs`; `X% annually` / `X%/Yr` → `X% / yr`. A bare number: `0<d≤1`
+  is the dialysis 5-yr-step convention (`0.1` → `10% / 5 yrs`); `d>1` is a literal annual percent (`1.75` →
+  `1.75% / yr`). Every no-escalation spelling (`None`/`Fixed`/`Flat`/`0%`/blank) unifies to one token **`Flat`**,
+  and a genuinely-empty bumps renders `Flat` on the workbook — never blank. A meaningful non-percent escalation
+  (`CPI annually`) is preserved verbatim. Only a bare NEGATIVE number remains bad data (`bad_bumps`, review lane).
+- **On Market STATUS is never blank.** Active/blank source status → `Available`; a real status (Under Contract,
+  Pending, Contingent) is preserved. Sold has no STATUS column.
 
 Applied identically to sold + on-market, dialysis + gov.
 

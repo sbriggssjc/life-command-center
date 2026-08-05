@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeReviewSignals, normalizeRenewalOptions, normalizeBumps, enqueueReviewQueue,
-  standardizeOperator, standardizeExpenseStructure, bumpsAreBadData,
+  standardizeOperator, standardizeExpenseStructure, bumpsAreBadData, bumpsForWorkbook,
 } from '../mcp/comps-tools.js';
 
 // Pearland — the canonical outlier (dia sale_id 7980, property 35837).
@@ -144,32 +144,59 @@ describe('normalizeBumps', () => {
     ['3% every 1 year', '3% / yr'],       // N==1 collapses to /yr
     ['2%/yr', '2% / yr'],                  // legacy canonical → new canonical
     ['10% / 5 yrs', '10% / 5 yrs'],        // already canonical passthrough
-    ['None', 'None'],
+    // Prompt 56 — every no-escalation spelling unifies to one token: Flat.
+    ['None', 'Flat'],
+    ['Fixed', 'Flat'],
+    ['Flat', 'Flat'],
+    ['0%', 'Flat'],
+    ['0', 'Flat'],
     // Prompt 44 — bare decimal 0<d≤1 = "10% every 5 years" (dialysis 5-yr step).
     ['0.1', '10% / 5 yrs'],
     ['0.125', '12.5% / 5 yrs'],
     ['1', '100% / 5 yrs'],
+    // Prompt 56 — bare number >1 is a literal annual percent.
+    ['1.75', '1.75% / yr'],
+    ['5', '5% / yr'],
+    // Prompt 56 — step-interval spellings that used to pass through unchanged.
+    ['10% every 5', '10% / 5 yrs'],
+    ['10% every 5 years', '10% / 5 yrs'],
+    ['5% after 5 years', '5% / 5 yrs'],
+    // Prompt 56 — a meaningful non-percent escalation is preserved verbatim.
+    ['CPI annually', 'CPI annually'],
   ];
   for (const [inp, exp] of cases) {
     it(`${JSON.stringify(inp)} -> ${exp}`, () => {
       assert.equal(normalizeBumps(inp), exp);
     });
   }
-  it('unrecognized / ambiguous shapes pass through unchanged', () => {
+  it('unrecognized shapes pass through unchanged', () => {
     assert.equal(normalizeBumps('see lease'), 'see lease');
-    assert.equal(normalizeBumps('1.75'), '1.75');   // >1, no % — ambiguous, routed to review
-    assert.equal(normalizeBumps('5'), '5');         // >1, no % — ambiguous
+    assert.equal(normalizeBumps('-5'), '-5');       // negative bare — nonsense, routed to review
+  });
+});
+
+describe('bumpsForWorkbook', () => {
+  it('defaults empty/absent bumps to Flat and unifies no-escalation tokens', () => {
+    for (const flat of [null, undefined, '', '   ', 'None', 'Fixed', 'Flat', '0%', '0']) {
+      assert.equal(bumpsForWorkbook(flat), 'Flat');
+    }
+  });
+  it('normalizes real escalations like normalizeBumps', () => {
+    assert.equal(bumpsForWorkbook('1.75'), '1.75% / yr');
+    assert.equal(bumpsForWorkbook('10% every 5'), '10% / 5 yrs');
+    assert.equal(bumpsForWorkbook('2% annual'), '2% / yr');
+    assert.equal(bumpsForWorkbook('CPI annually'), 'CPI annually');
   });
 });
 
 describe('bumpsAreBadData', () => {
-  it('flags ambiguous bare numbers (>1, no %) as bad data', () => {
-    assert.equal(bumpsAreBadData('1.75'), true);
-    assert.equal(bumpsAreBadData('5'), true);
+  it('flags only negative bare numbers as bad data', () => {
+    assert.equal(bumpsAreBadData('-5'), true);
+    assert.equal(bumpsAreBadData('-1.75'), true);
   });
   it('does not flag interpretable / empty / none values', () => {
-    // Prompt 44 — a bare decimal 0<d≤1 is now interpretable, not bad data.
-    for (const ok of ['2% / yr', '10% / 5 yrs', '0.1', '0.125', 'None', 'see lease', null, '', undefined]) {
+    // Prompt 56 — bare numbers (0<d≤1, d>1, 0) are all interpretable now.
+    for (const ok of ['2% / yr', '10% / 5 yrs', '0.1', '0.125', '1.75', '5', 'None', 'Fixed', 'see lease', null, '', undefined]) {
       assert.equal(bumpsAreBadData(ok), false);
     }
   });

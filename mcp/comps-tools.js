@@ -1185,31 +1185,46 @@ export function normalizeRenewalOptions(value) {
 // which could be a decimal rate, a per-year fraction, or noise) is left UNTOUCHED
 // and routed to the review lane as bad data (see bumpsAreBadData + the bad_bumps
 // review flag). We never guess what a bare number means.
+// Canonical no-escalation token (prompt 56): every "no rent increases" spelling —
+// None / Fixed / Flat / Level / Static / N/A / No bumps / 0% — collapses to one
+// display token so Sold and On Market never diverge (Fixed here, blank there).
+const _FLAT = 'Flat';
+function _isFlatBumps(s) {
+  return /^(?:none|flat|fixed|level|static|no\s*(?:bumps?|escalations?|increases?|steps?)|n\/?a)$/i.test(s);
+}
 export function normalizeBumps(value) {
   if (value == null) return value;
   const s = String(value).trim();
-  if (!s) return value;
-  if (/^none$/i.test(s)) return 'None';
+  if (!s) return value;                                     // empty → left to the workbook layer (→ Flat)
+  // Unify every no-escalation spelling to one token (prompt 56).
+  if (_isFlatBumps(s)) return _FLAT;
   // already canonical ("X% / yr" / "X% / N yrs" in any spacing)
   if (/^\d+(?:\.\d+)?%\s*\/\s*yr$/i.test(s)) return s.replace(/^(\d+(?:\.\d+)?)%.*$/i, '$1% / yr');
   const canonEvery = s.match(/^(\d+(?:\.\d+)?)%\s*\/\s*(\d+)\s*yrs?$/i);
   if (canonEvery) { const yrs = parseInt(canonEvery[2], 10); return yrs === 1 ? `${canonEvery[1]}% / yr` : `${canonEvery[1]}% / ${yrs} yrs`; }
-  // Bare decimal with no % (prompt 44): Scott's convention is that `0.1` means
-  // "10% every 5 years" (the dialysis 5-yr step). A bare decimal `d` with 0<d≤1
-  // maps to "{d*100:g}% / 5 yrs" (0.1 → "10% / 5 yrs", 0.125 → "12.5% / 5 yrs").
-  // A bare number >1 (or ≤0) stays uninterpretable → review lane (bumpsAreBadData).
+  // Bare number with no % sign:
+  //   • 0<d≤1  → Scott's dialysis 5-yr-step convention ("0.1" → "10% / 5 yrs").
+  //   • d>1    → a literal annual percent (prompt 56: "1.75" → "1.75% / yr").
+  //   • d==0   → no escalation → Flat.
+  //   • d<0    → nonsense → pass through (bad-data lane).
   const bare = s.match(/^-?\d+(?:\.\d+)?$/) ? Number(s) : NaN;
-  if (Number.isFinite(bare) && bare > 0 && bare <= 1) {
-    const pctText = String(+(bare * 100).toFixed(4));
-    return `${pctText}% / 5 yrs`;
+  if (Number.isFinite(bare)) {
+    if (bare === 0) return _FLAT;
+    if (bare > 0 && bare <= 1) return `${String(+(bare * 100).toFixed(4))}% / 5 yrs`;
+    if (bare > 1) return `${String(+bare.toFixed(4))}% / yr`;
+    return value;                                           // negative → uninterpretable
   }
   const pct = s.match(/(\d+(?:\.\d+)?)\s*%/);
-  if (!pct) return value;                                   // no % → uninterpretable, pass through (bad-data lane)
+  if (!pct) return value;                                   // no % (e.g. "CPI annually") → pass through unchanged
   const n = Number(pct[1]);
   if (!Number.isFinite(n)) return value;
+  if (n === 0) return _FLAT;                                // "0% annually" → no escalation
   const pctText = Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
-  const every = s.match(/\bevery\s+(\d+)\s*(?:yr|year)s?\b/i)
-    || s.match(/\b(\d+)\s*(?:yr|year)s?\s*(?:steps?|bumps?|increases?)\b/i);
+  // Step interval: "every N (years)", "after N years", "N-yr steps", or "/ N yrs".
+  const every = s.match(/\bevery\s+(\d+)(?:\s*(?:yr|year)s?)?\b/i)
+    || s.match(/\bafter\s+(\d+)\s*(?:yr|year)s?\b/i)
+    || s.match(/\b(\d+)\s*(?:yr|year)s?\s*(?:steps?|bumps?|increases?)\b/i)
+    || s.match(/\/\s*(\d+)\s*(?:yr|year)s?\b/i);
   if (every) {
     const yrs = parseInt(every[1], 10);
     if (Number.isFinite(yrs) && yrs > 0) return yrs === 1 ? `${pctText}% / yr` : `${pctText}% / ${yrs} yrs`;
@@ -1218,19 +1233,26 @@ export function normalizeBumps(value) {
   return value;
 }
 
-// True when a bumps source value is present but uninterpretable bad data — a bare
-// number with no % sign and no recognizable escalation structure. Prompt 44: a
-// bare decimal 0<d≤1 is now INTERPRETABLE as the "10% / 5 yrs" convention (see
-// normalizeBumps), so it is no longer bad data; a bare number >1 (e.g. `1.75`) or
-// ≤0 remains ambiguous and is LEFT UNTOUCHED + routed to the review lane.
+// Workbook-display bumps (prompt 56): the ONE normalizer both the Sold and On Market
+// tabs render through, so they read identically. Runs normalizeBumps, then defaults a
+// genuinely-empty/absent value to the canonical no-escalation token `Flat` — never blank.
+export function bumpsForWorkbook(value) {
+  const n = normalizeBumps(value);
+  if (n == null || String(n).trim() === '') return _FLAT;
+  return n;
+}
+
+// True when a bumps source value is present but uninterpretable bad data. Prompt 56:
+// bare numbers are now all interpretable (0<d≤1 → 5-yr step; d>1 → annual %; 0 → Flat),
+// so only a bare NEGATIVE number (nonsense) remains bad data and is routed to review.
 export function bumpsAreBadData(value) {
   if (value == null) return false;
   const s = String(value).trim();
-  if (!s || /^none$/i.test(s)) return false;
+  if (!s || _isFlatBumps(s)) return false;
   if (/%/.test(s)) return false;                            // has a percent → interpretable enough
   if (!/^-?\d+(?:\.\d+)?$/.test(s)) return false;            // not a bare number
   const n = Number(s);
-  return !(Number.isFinite(n) && n > 0 && n <= 1);           // 0<d≤1 is interpretable; else bad data
+  return !(Number.isFinite(n) && n >= 0);                    // ≥0 interpretable; negative → bad data
 }
 
 // ── Operator standardization (prompt 41) ────────────────────────────────────
@@ -1611,14 +1633,17 @@ function summarizeComps(scored, eff, meta) {
   const rows = scored || [];
   const soldRows = rows.filter(c => !isOnMarketComp(c) && Number(c.sale_price) > 0);
   const capRows = soldRows.length ? soldRows : rows;
-  const caps = capRows.map(c => soldCapForStats(c)).filter(n => Number.isFinite(n) && n > 0);
+  // Prompt 56 — the cap-rate stat MUST describe the same set the sheet displays, so it is
+  // computed from displayedCompCap (rent÷price, the exact value each SOLD row shows), not the
+  // stored cap_rate field. Rows that show a blank cap on the sheet carry no displayed cap and
+  // are excluded from the range — a reader never sees a range that omits a visible row.
+  const capPairs = capRows
+    .map(c => ({ cap: displayedCompCap(c), price: Number(c.sale_price ?? c.sold_price) }))
+    .filter(p => Number.isFinite(p.cap) && p.cap > 0);
+  const caps = capPairs.map(p => p.cap);
   const medianCap = caps.length ? caps.slice().sort((a, b) => a - b)[Math.floor(caps.length / 2)] : null;
-  const weighted = capRows.reduce((acc, c) => {
-    const cap = soldCapForStats(c), price = Number(c.sale_price);
-    if (Number.isFinite(cap) && Number.isFinite(price) && price > 0) {
-      acc.num += cap * price;
-      acc.den += price;
-    }
+  const weighted = capPairs.reduce((acc, p) => {
+    if (Number.isFinite(p.price) && p.price > 0) { acc.num += p.cap * p.price; acc.den += p.price; }
     return acc;
   }, { num: 0, den: 0 });
   const fl = rows.filter(c => c.state === 'FL').length;
@@ -1627,7 +1652,7 @@ function summarizeComps(scored, eff, meta) {
     ? `${(Math.min(...caps) * 100).toFixed(2)}%-${(Math.max(...caps) * 100).toFixed(2)}% cap range; median ${(medianCap * 100).toFixed(2)}%${weighted.den ? `; weighted average ${(weighted.num / weighted.den * 100).toFixed(2)}%` : ''}`
     : 'cap-rate range not on file';
   const subjectName = eff.subject?.name || 'the subject';
-  return `Methodology: ${rows.length} ${eff.property_types?.includes('dialysis') ? 'dialysis ' : ''}comps ranked by subject similarity for ${subjectName}, weighting same metro/state first, then regional/national support, tenant credit, size/chair scale, cap proximity, and recency. Cap-rate statistics use the reliable sold primary set only. The set shows ${capText}. ${fl ? `${fl} Florida comps are included; ` : ''}score tiers: A=${tiers.A || 0}, B=${tiers.B || 0}, C=${tiers.C || 0}. Review flags are retained from the cap/rent reconciliation engine; missing subject fields remain "Not on file."`;
+  return `Methodology: ${rows.length} ${eff.property_types?.includes('dialysis') ? 'dialysis ' : ''}comps ranked by subject similarity for ${subjectName}, weighting same metro/state first, then regional/national support, tenant credit, size/chair scale, cap proximity, and recency. Cap-rate statistics use the displayed sold set (n=${caps.length}) — the same cap (rent÷price) each shipped row shows. The set shows ${capText}. ${fl ? `${fl} Florida comps are included; ` : ''}score tiers: A=${tiers.A || 0}, B=${tiers.B || 0}, C=${tiers.C || 0}. Review flags are retained from the cap/rent reconciliation engine; missing subject fields remain "Not on file."`;
 }
 
 function transparencyLine(meta) {
@@ -1996,7 +2021,7 @@ function workbookRowFromSynthComp(c) {
     lease_expiration: t.lease_expiration,
     expenses: t.expenses,
     lease_type: t.lease_type,
-    bumps: t.bumps,
+    bumps: bumpsForWorkbook(t.bumps),
     renewal_options: t.renewal_options,
     initial_price: t.initial_price,
     initial_cap_rate: t.initial_cap_rate,
@@ -2021,6 +2046,25 @@ function workbookRowFromSynthComp(c) {
     if (v === null || v === undefined || v === '') delete base[k];
   }
   return base;
+}
+
+// Prompt 56 — the On Market tab's STATUS column must never render blank. Default an
+// Active/blank source status to "Available"; otherwise surface the real listing status
+// (Under Contract, Pending, etc.) in a canonical Title-Case form. Sold has no STATUS column.
+function normalizeListingStatus(value) {
+  const s = String(value == null ? '' : value).trim();
+  if (!s || /^(?:active|available|for\s*sale|on\s*market|live|new)$/i.test(s)) return 'Available';
+  if (/under\s*contract|uc\b/i.test(s)) return 'Under Contract';
+  if (/pending|in\s*escrow|escrow/i.test(s)) return 'Pending';
+  if (/contingent/i.test(s)) return 'Contingent';
+  // Unknown but non-blank → Title-Case it so a genuine status still shows (never blank).
+  return s.replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+function listingStatusFromComp(c) {
+  const t = c?.template || {};
+  return normalizeListingStatus(
+    c?.listing_status ?? t.status ?? c?.status ?? c?.transaction_status
+    ?? c?.raw?.status ?? c?.raw?.listing_status ?? null);
 }
 
 function isOnMarketComp(c) {
@@ -2122,6 +2166,8 @@ function workbookRowsFromSynthResult(result) {
       row.last_cap_rate = t.last_cap_rate ?? row.last_cap_rate;
       row.last_cap = row.last_cap_rate;
       if (listed) row.on_market = listed;
+      // Prompt 56 — STATUS never blank on the On Market tab (Active/blank → "Available").
+      row.status = listingStatusFromComp(c);
       applyOnMarketPriceChange(row);
       onMarket.push(row);
     } else {
@@ -2146,15 +2192,23 @@ function workbookRowsFromSynthResult(result) {
   return { sold, on_market: onMarket };
 }
 
+// Prompt 56 — the displayed cap for a TEMPLATE row (rent÷price), the exact value the sheet
+// shows: RENT = annual_rent (preferred) else annual_noi; PRICE = sale_price (sold) else the
+// current ask. Keeps cap_rate_range on the same basis as the summary and the shipped rows.
+function templateDisplayedCap(t) {
+  const rent = displayedRentValue(t);
+  const price = asNum(t?.sale_price) ?? asNum(t?.last_price) ?? asNum(t?.cur_price);
+  if (rent && rent > 0 && price && price > 0) return +(rent / price).toFixed(6);
+  return null;
+}
 function capRateRange(rows) {
-  const caps = rows.map(r => soldCapForStats(r)).filter(n => Number.isFinite(n) && n > 0);
+  const pairs = rows
+    .map(r => ({ cap: templateDisplayedCap(r), price: asNum(r.sale_price) ?? asNum(r.last_price) ?? asNum(r.cur_price) }))
+    .filter(p => Number.isFinite(p.cap) && p.cap > 0);
+  const caps = pairs.map(p => p.cap);
   if (!caps.length) return null;
-  const weighted = rows.reduce((acc, r) => {
-    const cap = soldCapForStats(r), price = Number(r.sale_price);
-    if (Number.isFinite(cap) && Number.isFinite(price) && price > 0) {
-      acc.num += cap * price;
-      acc.den += price;
-    }
+  const weighted = pairs.reduce((acc, p) => {
+    if (Number.isFinite(p.price) && p.price > 0) { acc.num += p.cap * p.price; acc.den += p.price; }
     return acc;
   }, { num: 0, den: 0 });
   return {
