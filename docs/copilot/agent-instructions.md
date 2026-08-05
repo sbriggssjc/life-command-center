@@ -18,7 +18,7 @@ Team Briggs lists commercial real estate for sale (primarily single-tenant NNN).
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.3.0 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.4.0 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine — `SynthesizeComps` (default; pass the request text verbatim) or
@@ -55,6 +55,24 @@ cap but no in-place NOI carries `rent = round(asking_price * asking_cap)` (impli
 copies are DERIVED (refresh via `bov-generator/sync_comps_templates.py`, never hand-edit). Every produced workbook is
 run through `bov-generator/validate_comps_output.py` (sheets, canonical headers, formula-protected columns, trimmed
 AVG bar, 0 recalc errors) before delivery — a non-conforming workbook is an error, not a delivered file.
+
+**Appraisal cap discipline + selection policy (prompts 48–52).** For an appraisal comp set the engine ranks by
+similarity to the resolved subject and applies Team Briggs cap discipline: include comps within **35 bps of the
+subject cap**, keep the **set average cap below the subject**, and never present a comp with a higher cap / lower
+value than the subject beyond that band. Default window is the last 18 months; it may reach back to ~24 months to
+make the count but keeps **a handful of trailing ~7–9-month sales** (recency is not sacrificed to the band). The cap
+used for ranking, the cap-discipline check, and any band is the **DISPLAYED cap = rent ÷ price** (what the workbook
+computes), never the stored `cap_rate` field — that is mislabeled on some records, and >25 bps disagreements are
+parked for review. The subject's operator **anchors similarity; it does not filter the universe** — an appraisal
+pull spans all dialysis operators (a Fresenius/US Renal of like size/term/cap can outrank a same-brand comp);
+an explicit "DaVita comps" request still filters by operator. When several property records share an address the
+engine uses the **enriched/complete record and drops bare duplicates** (consolidated via the review-lane, never
+hard-deleted — prompt 51). Sold comps read from `sales_transactions` (the live sold source); recent closes propagate
+in from `available_listings` with `sold_cap = rent ÷ price` verified (prompt 50) so recent — and our own — closings
+appear. Subject resolution is **address-first and phrasing-independent** (prompt 49): a street address that resolves
+to a property hydrates the subject (SF, chairs, term, bumps, actual cap) at both the top level and `fields`, and
+excludes it from the set, on every phrasing. The shared-column width contract is re-applied **after** the LibreOffice
+recalc (prompt 48, `comps_width_postpass.py`) so the conformance gate passes and formula values stay cached.
 <!-- /CANON:comps -->
 
 <!-- CANON:resolution -->
