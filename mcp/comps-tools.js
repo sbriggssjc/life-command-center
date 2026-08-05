@@ -35,8 +35,17 @@ const MAX_APPRAISAL_CANDIDATE_LIMIT = 500;
 const APPRAISAL_ON_MARKET_CAP = 20;
 const APPRAISAL_ERROR_CAP_LOW = 0.04;
 const APPRAISAL_ERROR_CAP_HIGH = 0.12;
-const APPRAISAL_DEFAULT_BAND_LOWER_BPS = 50;
-const APPRAISAL_DEFAULT_BAND_UPPER_BPS = 75;
+// Prompt 52 — appraisal cap policy (per Scott): comps within ~35 bps of the subject
+// target cap, and the SET AVERAGE cap held below the subject. The band is the ±35 bps
+// window; the average-below-subject discipline is enforced separately (enforceAvgBelowSubject).
+const APPRAISAL_DEFAULT_BAND_LOWER_BPS = 35;
+const APPRAISAL_DEFAULT_BAND_UPPER_BPS = 35;
+// Trailing-recency coverage target: allow reaching back ~24 months, but a credible
+// appraisal set needs a handful of very recent sales (trailing ~9 months).
+const APPRAISAL_RECENT_MONTHS = 9;
+const APPRAISAL_RECENT_MIN = 3;
+// Minimum primary comps to retain when trimming the set to hold the average below subject.
+const APPRAISAL_AVG_TRIM_MIN_KEEP = 5;
 
 // ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
@@ -122,6 +131,61 @@ function priceQuality(c) {
   if (q) return 2;
   return 1;
 }
+// ── Enrichment / bare-record detection (Prompt 51/52 runtime guard) ─────────
+// A "bare" property record carries NO financial signal at all — no sale price, no
+// cap, no rent/NOI, no ask price — so it surfaces as an empty comp or drops fields.
+// Until the Prompt-51 consolidation lands, prefer the enriched record for an address
+// and drop the bare duplicate from the comp set.
+function _num(v) { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; }
+function isBareRecord(c) {
+  if (!c) return true;
+  const t = c.raw || {};
+  const financial = _num(c.sale_price) ?? _num(c.sold_price) ?? _num(c.cap_rate)
+    ?? _num(c.noi) ?? _num(c.annual_rent) ?? _num(c.engine_income)
+    ?? _num(c.cur_price) ?? _num(c.current_price) ?? _num(c.ask_price) ?? _num(c.list_price)
+    ?? _num(t.sale_price) ?? _num(t.asking_price) ?? _num(t.cap_rate);
+  return financial == null;
+}
+// Count populated, comp-meaningful fields — higher = more complete/enriched. Used as a
+// dedup tiebreaker so the enriched record wins when confidence/price-quality tie.
+function compCompleteness(c) {
+  if (!c) return 0;
+  const t = c.template || {};
+  const vals = [
+    c.sale_price ?? c.sold_price ?? t.sale_price, c.cap_rate ?? t.cap_rate,
+    c.noi ?? c.annual_rent ?? c.engine_income ?? t.annual_noi ?? t.annual_rent,
+    c.building_sf ?? c.rba ?? c.building_size ?? t.rba_sf, c.year_built ?? t.year_built,
+    c.lease_expiration ?? t.lease_expiration, c.bumps ?? t.bumps, c.buyer, c.seller,
+    c.chairs ?? t.chairs, c.cur_price ?? c.list_price ?? c.ask_price ?? t.cur_price,
+    c.on_market_date ?? t.on_market, c.tenant ?? c.agency,
+  ];
+  return vals.reduce((n, v) => n + ((v != null && v !== '') ? 1 : 0), 0);
+}
+// Normalized street+city+state key for same-address grouping (no sale-year — distinct
+// sales at one address are separated by dedupeKeys, not collapsed here).
+function addressGroupKey(c) {
+  const street = normStreet(c.address);
+  if (!street) return null;
+  return `${street}|${String(c.city || '').toLowerCase().replace(/[^a-z0-9]/g, '')}|${String(c.state || '').toLowerCase()}`;
+}
+// Drop bare duplicate records: when several records share a normalized address and at
+// least one is enriched (non-bare), remove the bare ones (Prompt 52 item 2).
+export function dropBareAddressDuplicates(rows) {
+  const groups = new Map();
+  for (const c of rows) {
+    const key = addressGroupKey(c);
+    if (!key) continue;                                  // no address → can't group; always kept
+    (groups.get(key) || groups.set(key, []).get(key)).push(c);
+  }
+  const drop = new Set();
+  for (const grp of groups.values()) {
+    if (grp.length < 2) continue;
+    if (!grp.some(c => !isBareRecord(c))) continue;      // no enriched sibling → keep as-is
+    for (const c of grp) if (isBareRecord(c)) drop.add(c);
+  }
+  return drop.size ? rows.filter(c => !drop.has(c)) : rows;
+}
+
 export function dedupe(rows) {
   const byId = new Map();
   for (const r of rows) if (r.source_sf_id) byId.set(r.source_sf_id, r);
@@ -134,7 +198,10 @@ export function dedupe(rows) {
       const prev = seen.get(matchKey);
       const better = (r.sale_price && !prev.sale_price)
         || (r.confidence > prev.confidence)
-        || (r.confidence === prev.confidence && priceQuality(r) > priceQuality(prev));
+        || (r.confidence === prev.confidence && priceQuality(r) > priceQuality(prev))
+        // Prompt 52 — on a full tie, prefer the more-complete/enriched record.
+        || (r.confidence === prev.confidence && priceQuality(r) === priceQuality(prev)
+            && compCompleteness(r) > compCompleteness(prev));
       if (better) {
         out[out.indexOf(prev)] = r;
         for (const k of uniqueList([...keys, ...dedupeKeys(prev)])) seen.set(k, r);
@@ -302,12 +369,17 @@ function scoreComp(c, a) {
   }
 
   // ── Cap support (keep + strengthen): reward proximity; penalize caps materially above subject ──
-  if (subject.cap_rate && c.cap_rate) {
-    const spreadBps = Math.abs(Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
+  // Prompt 52 — rank on the DISPLAYED cap (rent ÷ price), the same value the workbook shows,
+  // not the stored cap_rate field (which is mislabeled on some records, e.g. Woodland Hills
+  // 6.62% stored vs 6.00% rent÷price). soldCapForStats derives rent÷price, falling back to
+  // the stored cap only when no rent+price is available.
+  const displayedCap = soldCapForStats(c);
+  if (subject.cap_rate && displayedCap) {
+    const spreadBps = Math.abs(Number(displayedCap) - Number(subject.cap_rate)) * 10000;
     // Prompt 44: cap alignment weighted UP (10 pts full match in appraisal mode).
     s += appraisal ? Math.max(0, 10 - (spreadBps / 25)) : Math.max(0, 3 - (spreadBps / 75));
     if (appraisal) {
-      const overBps = (Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
+      const overBps = (Number(displayedCap) - Number(subject.cap_rate)) * 10000;
       if (overBps > 200) s -= 4 + (overBps - 200) / 50; // >~200 bps above subject: escalating penalty
     }
   }
@@ -641,6 +713,18 @@ function localScopeArgs(args) {
   return { ...args, states: null, metros: null };
 }
 
+// Prompt 52 — central operator-filter guard. In a subject-anchored (appraisal /
+// similarity) pull the subject's operator anchors SIMILARITY only; it must never hard-
+// filter the comp universe. Clear tenant/tenants unless the user EXPLICITLY asked for an
+// operator-scoped set (_operator_filter_explicit). Phrasing-independent: covers both the
+// appraisal-mode path and a subject resolved to a concrete property (prompt 49).
+function operatorScopeArgs(args) {
+  if (!nationalSubjectAnchor(args) || args._operator_filter_explicit) return args;
+  const hasFilter = !!(args.tenant || (args.tenants && args.tenants.length) || (args.tenant_list && args.tenant_list.length));
+  if (!hasFilter) return args;
+  return { ...args, tenant: null, tenants: null, tenant_list: null };
+}
+
 function queryScopeArgs(args) {
   if (!nationalSubjectAnchor(args)) return args;
   // Appraisal mode is NATIONAL, subject-anchored — the candidate PULL is not bounded by the
@@ -806,6 +890,25 @@ function parseOperators(t) {
   return found;
 }
 
+// Prompt 52 — distinguish an EXPLICIT operator-scoped comp request ("DaVita comps",
+// "pull Fresenius sales", "US Renal only") from a request that merely NAMES the
+// subject's operator ("appraise our The Villages DaVita deal"). In appraisal /
+// similarity mode the subject's operator anchors SIMILARITY only — it must NOT filter
+// the comp universe (the best comp may be a different operator of like size/term/cap).
+// The hard operator filter is kept ONLY when the user explicitly asks for it.
+const _OP_WORDS = 'davita|fresenius|fmc|bma|bio[\\s-]?medical|u\\.?\\s*s\\.?\\s*renal(?:\\s*care)?|usrc|american renal|satellite (?:health(?:care)?|dialysis)|dialysis clinic|dci|dsi\\s*renal|renal ventures|innovative renal';
+function operatorScopeRequested(t) {
+  const s = String(t || '').toLowerCase();
+  // "<operator> comps/sales/deals/portfolio/leases/listings/transactions"
+  if (new RegExp(`\\b(?:${_OP_WORDS})\\b[\\s\\w-]{0,12}?\\b(comps?|sales?|deals?|portfolio|leases?|listings?|transactions?)\\b`).test(s)) return true;
+  // "comps/sales for <operator>"
+  if (new RegExp(`\\b(comps?|sales?|deals?|leases?|listings?|transactions?)\\b[\\s\\w-]{0,12}?\\bfor\\b[\\s\\w-]{0,12}?\\b(?:${_OP_WORDS})\\b`).test(s)) return true;
+  // "only/just/exclusively <operator>" or "<operator> only/exclusively"
+  if (new RegExp(`\\b(only|just|exclusively)\\b[\\s\\w-]{0,12}?\\b(?:${_OP_WORDS})\\b`).test(s)) return true;
+  if (new RegExp(`\\b(?:${_OP_WORDS})\\b[\\s-]*(?:care|medical|health)?\\s+(only|exclusively)\\b`).test(s)) return true;
+  return false;
+}
+
 function detectAppraisalIntent(t, out) {
   // Prompt 49 — a subject STREET ADDRESS is a subject-anchored (appraisal-style)
   // comp pull: national scope, subject excluded, sold + curated on-market. This
@@ -901,11 +1004,16 @@ export function parseRequest(text) {
     out.property_types = [...pt];
   }
   out.appraisal_mode = detectAppraisalIntent(t, out);
+  // Prompt 52 — an operator hard-filter is honored only when the user EXPLICITLY asked
+  // for an operator-scoped set; a subject's own operator is a similarity anchor, not a filter.
+  out._operator_filter_explicit = operators.length > 0 && operatorScopeRequested(raw);
   if (out.appraisal_mode && out.property_types?.includes('dialysis')) {
     out.include_unreliable_noi = true;
     out.include_on_market = true;
     out.comp_type = out.comp_type || 'both';
-    if (!operators.length) out.tenant = null;
+    // Clear the operator hard-filter unless it was explicitly requested (keeps
+    // "DaVita comps" scoped, but lets "appraise The Villages DaVita" pull all operators).
+    if (!out._operator_filter_explicit) { out.tenant = null; out.tenants = null; }
   }
   return out;
 }
@@ -923,6 +1031,7 @@ export function parseRequest(text) {
 //
 // Thresholds are constants so Scott can tune them in one place.
 const CAP_MISMATCH_BPS    = 0.0075;  // |implied_cap - reliable_cap| tolerance (75 bps)
+const CAP_DISPLAY_DISAGREE_BPS = 0.0025;  // Prompt 52: stored cap_rate vs rent÷price tolerance (25 bps)
 const RENT_DISAGREE_RATIO = 1.10;    // rent sources disagree beyond 10% (max/min)
 const PRICE_OVER_ASK_RATIO  = 1.10;  // sold > 110% of last/initial ask
 const PRICE_UNDER_ASK_RATIO = 0.85;  // sold < 85% of last/initial ask
@@ -983,6 +1092,13 @@ export function computeReviewSignals(c) {
   if (sold && ask && (sold > PRICE_OVER_ASK_RATIO * ask || sold < PRICE_UNDER_ASK_RATIO * ask))
     flags.push('price_over_ask');
   if (reliableCap == null) flags.push('no_reliable_cap');
+  // Prompt 52 — the DISPLAYED cap (rent ÷ price = impliedCap) is authoritative for
+  // selection/appraisal discipline; when the stored cap_rate field disagrees with it by
+  // >25 bps the stored value is mislabeled (Woodland Hills 6.62% stored vs 6.00% displayed)
+  // → flag it so nothing keys off the stored cap.
+  const storedCap = _reviewNum(c.cap_rate);
+  if (impliedCap != null && storedCap != null && Math.abs(storedCap - impliedCap) > CAP_DISPLAY_DISAGREE_BPS)
+    flags.push('stored_cap_disagrees_display');
   // Uninterpretable bumps (bare number, no %) → route to the review lane as bad
   // data (the value itself is left untouched by normalizeBumps).
   if (bumpsAreBadData(c.bumps)) flags.push('bad_bumps');
@@ -1370,11 +1486,15 @@ export async function runComps(args, deps) {
     government_only: (args.government_only != null) ? args.government_only : parsed.government_only,
     include_on_market: (args.include_on_market != null) ? args.include_on_market : parsed.include_on_market,
     include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : parsed.include_unreliable_noi,
+    _operator_filter_explicit: (args._operator_filter_explicit != null) ? args._operator_filter_explicit : parsed._operator_filter_explicit,
   };
   // Prompt 47 — hydrate the subject anchor from its resolved property record so
   // scoring can weight size/chairs/term/cap and the subject can be excluded from
   // the set. Idempotent (guarded by subject._hydration_attempted); fail-soft.
   if (args.subject) { try { args.subject = await hydrateSubjectFromRecord(args, deps); } catch { /* leave subject as-is */ } }
+  // Prompt 52 — after hydration (subject may now be resolved to a property), drop the
+  // operator hard-filter for subject-anchored pulls unless it was explicitly requested.
+  args = operatorScopeArgs(args);
   const QUERY = { government: deps.govQuery, dialysis: deps.diaQuery };
   const queryArgs = queryScopeArgs(args);
   const params = argsToParams(queryArgs);
@@ -1402,7 +1522,12 @@ export async function runComps(args, deps) {
       ? rows.push(...s.value)
       : warnings.push({ vertical: targets[i], scope: fallback.label, error: String(s.reason?.message || s.reason) }));
   }
-  const merged = dedupe(rows);
+  const deduped = dedupe(rows);
+  // Prompt 52 — drop bare duplicate records: when several records share a normalized
+  // address and one is enriched, the bare (financial-signal-less) sibling is dropped so
+  // it never surfaces as an empty comp. Runtime guard until Prompt-51 consolidation lands.
+  const merged = dropBareAddressDuplicates(deduped);
+  const bareDuplicatesDropped = deduped.length - merged.length;
   // Normalize the `use` tag + apply the multi-tenant display name on every comp,
   // and standardize renewal-options text so every surface emits "(N) M-yr".
   for (const c of merged) {
@@ -1459,6 +1584,7 @@ export async function runComps(args, deps) {
     meta: { returned: comps.length, total_before_cap: kept.length,
             truncated: kept.length > cap, excluded_unreliable_noi: before - kept.length,
             excluded_subject: subjectExcluded,
+            bare_duplicates_dropped: bareDuplicatesDropped,
             by_source: comps.reduce((m, r) => (m[r.source] = (m[r.source] || 0) + 1, m), {}),
             flagged_for_review: flagged.length,
             review_flags: flagged.map(c => ({
@@ -1535,6 +1661,40 @@ function appraisalCapBand(subject = null, args = {}) {
     lower_bps: lowerBps,
     upper_bps: upperBps,
   };
+}
+
+// Prompt 52 — appraisal cap discipline: hold the SET AVERAGE cap below the subject's
+// target. Sold comps are trimmed highest-cap-first (the trimmed ones become secondary)
+// until the mean of the displayed caps falls below the subject cap, never below a floor
+// count. Returns { kept, demoted } — behavior-neutral when no subject cap is known.
+function _meanDisplayedCap(rows) {
+  const caps = rows.map(soldCapForStats).filter(n => Number.isFinite(n) && n > 0);
+  return caps.length ? caps.reduce((a, b) => a + b, 0) / caps.length : null;
+}
+function enforceAvgBelowSubject(primary, subject = null, minKeep = APPRAISAL_AVG_TRIM_MIN_KEEP) {
+  const subjCap = asNum(subject?.cap_rate ?? subject?.fields?.cap_rate);
+  if (!subjCap || primary.length <= minKeep) return { kept: primary, demoted: [] };
+  const kept = primary.slice();
+  const demoted = [];
+  while (kept.length > minKeep) {
+    const mean = _meanDisplayedCap(kept);
+    if (mean == null || mean < subjCap) break;
+    let hiIdx = -1, hiCap = -Infinity;
+    kept.forEach((c, i) => { const cap = soldCapForStats(c); if (Number.isFinite(cap) && cap > hiCap) { hiCap = cap; hiIdx = i; } });
+    if (hiIdx < 0) break;
+    demoted.push(kept.splice(hiIdx, 1)[0]);
+  }
+  return { kept, demoted };
+}
+// Count sold comps that closed within the trailing N months (recency-coverage signal).
+function recentSoldCount(rows, months = APPRAISAL_RECENT_MONTHS) {
+  const cutoff = Date.parse(monthsAgoISO(months));
+  if (!Number.isFinite(cutoff)) return 0;
+  return rows.filter(c => {
+    if (isOnMarketComp(c)) return false;
+    const d = Date.parse(c.sale_date || (c.template && c.template.sale_date) || '');
+    return Number.isFinite(d) && d >= cutoff;
+  }).length;
 }
 
 function appraisalPrimaryClassification(c, subject = null, args = {}) {
@@ -1663,19 +1823,25 @@ export async function runSynthesize(args, deps) {
       template: { ...(c.template || templateRow(c)), score_tier: scoreTier(c._score) } }));
   if (eff.appraisal_mode) {
     const classified = scored.map(c => ({ c, cls: appraisalPrimaryClassification(c, eff.subject, eff) }));
-    const primary = mostRelevantPerProperty(classified.filter(x => !isOnMarketComp(x.c) && x.cls.bucket === 'primary').map(x => x.c));
-    const secondary = classified.filter(x => !isOnMarketComp(x.c) && x.cls.bucket === 'secondary')
-      .map(x => x.c)
-      .map(c => ({ ...c, score_tier: 'Secondary',
-        template: { ...(c.template || templateRow(c)), score_tier: 'Secondary' } }));
+    const primaryAll = mostRelevantPerProperty(classified.filter(x => !isOnMarketComp(x.c) && x.cls.bucket === 'primary').map(x => x.c));
+    // Prompt 52 — hold the SET AVERAGE cap below the subject: trim highest-cap primaries
+    // (they drop to secondary) until the mean displayed cap is below the subject target.
+    const { kept: primary, demoted: avgDemoted } = enforceAvgBelowSubject(primaryAll, eff.subject);
+    const secondary = [
+      ...classified.filter(x => !isOnMarketComp(x.c) && x.cls.bucket === 'secondary').map(x => x.c),
+      ...avgDemoted,
+    ].map(c => ({ ...c, score_tier: 'Secondary',
+      template: { ...(c.template || templateRow(c)), score_tier: 'Secondary' } }));
     const market = classified.filter(x => isOnMarketComp(x.c) && x.cls.bucket !== 'error').map(x => x.c);
     const errorCount = classified.filter(x => x.cls.bucket === 'error').length;
-    scored = eff.include_on_market
-      ? [...primary.slice(0, requestedLimit), ...market]
-      : primary.slice(0, requestedLimit);
+    const primaryFinal = primary.slice(0, requestedLimit);
+    scored = eff.include_on_market ? [...primaryFinal, ...market] : primaryFinal;
     scored._secondary_count = secondary.length;
     scored._appraisal_error_count = errorCount;
     scored._appraisal_cap_band = appraisalCapBand(eff.subject, eff);
+    scored._appraisal_avg_demoted = avgDemoted.length;
+    scored._appraisal_primary_avg_cap = _meanDisplayedCap(primaryFinal);
+    scored._appraisal_recent_sales = recentSoldCount(primaryFinal);
   } else {
     scored = scored.slice(0, requestedLimit);
   }
@@ -1706,6 +1872,17 @@ export async function runSynthesize(args, deps) {
       warnings: meta.warnings } };
   if (scored._appraisal_error_count) result.meta = { ...result.meta, appraisal_errors_excluded: scored._appraisal_error_count };
   if (scored._appraisal_cap_band) result.meta = { ...result.meta, appraisal_cap_band: scored._appraisal_cap_band };
+  if (eff.appraisal_mode) {
+    result.meta = { ...result.meta,
+      appraisal_primary_avg_cap: scored._appraisal_primary_avg_cap ?? null,
+      appraisal_avg_below_subject_demoted: scored._appraisal_avg_demoted || 0,
+      appraisal_recent_sales_9mo: scored._appraisal_recent_sales || 0 };
+    // Surface (never silently pad) when the set lacks a handful of very recent sales.
+    if ((scored._appraisal_recent_sales || 0) < APPRAISAL_RECENT_MIN) {
+      result.meta.warnings = [...(result.meta.warnings || []),
+        { scope: 'appraisal_recency', note: `only ${scored._appraisal_recent_sales || 0} sold comp(s) in the trailing ${APPRAISAL_RECENT_MONTHS} months (target ${APPRAISAL_RECENT_MIN}); reaching back up to 24 months` }];
+    }
+  }
   return result;
 }
 
