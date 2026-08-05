@@ -1,5 +1,5 @@
 # Comps Canon
-Canon: v1.2.3
+Canon: v1.2.4
 
 ## Purpose
 Return sales/lease comps that are identical in substance and format on every surface.
@@ -28,6 +28,15 @@ and Salesforce-staged comps) — never from SharePoint, knowledge files, or gene
    asc), flags estimated NOI, trims blank rows to the AVG/TOTALS bar. Never hand-author a workbook, invent
    sheets/columns/a summary or methodology tab/a different sort, or leave the 100-row grid untrimmed.
    CHAIRS/PATIENTS come from the record, never blank.
+   - **`bov-generator/templates/` is the SINGLE SOURCE OF TRUTH** for every blank comps template. Project-knowledge
+     and `Templates/`-folder copies are DERIVED — refreshed from there via `python bov-generator/sync_comps_templates.py
+     --dest <folder>`, never hand-edited (same discipline as the canon/render surface sync). See
+     `bov-generator/templates/README.md`.
+   - **Conformance gate.** `generate_comps` and the local `populate_comps` fallback run
+     `bov-generator/validate_comps_output.py` before returning: sheet set == {Cover, Index, On Market, Sold},
+     canonical row-5 headers per vertical, formula-protected columns still hold formulas, AVG bar directly beneath
+     the trimmed data with matching ranges, 0 recalc errors. A non-conforming workbook is an ERROR, never a
+     delivered file.
 5. **Connector-down fallback (documented + reproducible).** When `generate_comps` (BOV service / MCP) is
    unreachable, do NOT build by hand — run the same renderer locally:
    `from comps_generator import populate_comps; populate_comps(payload, out, template_dir='bov-generator/templates')`

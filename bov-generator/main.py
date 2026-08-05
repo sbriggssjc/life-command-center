@@ -67,6 +67,14 @@ except Exception:  # noqa: BLE001
         def __init__(self, message, status=422):
             super().__init__(message); self.status = status
 
+# Comps conformance validator — the produced workbook is checked (including the
+# recalc-error scan) after LibreOffice recalc; a non-conforming file is an error.
+try:
+    from validate_comps_output import validate_comps_file
+    _COMPS_VALIDATOR = True
+except Exception:  # noqa: BLE001
+    _COMPS_VALIDATOR = False
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("bov-generator")
@@ -446,6 +454,21 @@ async def generate_comps(payload: dict, request: Request):
             log.error("Comps recalc failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Recalc failed: {e}")
 
+        # Conformance gate — the produced workbook must match the Briggs comps
+        # standard (sheets/headers/formula-protected columns/trim + AVG ranges +
+        # 0 recalc errors). A non-conforming workbook is an error, not a delivered
+        # file. Sales verticals only (the lease template has a different shape).
+        conformance = None
+        if _COMPS_VALIDATOR and comp_type == "sales":
+            res = validate_comps_file(output_path, check_recalc_errors=True)
+            conformance = res.as_dict()
+            if not res.ok:
+                log.error("Comps conformance failed: %s", res.violations)
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "produced comps workbook failed conformance",
+                            "violations": res.violations})
+
         try:
             raw_bytes = Path(output_path).read_bytes()
             file_b64 = base64.b64encode(raw_bytes).decode("ascii")
@@ -470,6 +493,7 @@ async def generate_comps(payload: dict, request: Request):
         "skipped_formula_keys": summary["skipped_formula_keys"],
         "unknown_keys": summary["unknown_keys"],
         "recalc_result": recalc_result,
+        "conformance": conformance,
     }
 
 

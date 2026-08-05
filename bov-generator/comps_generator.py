@@ -51,6 +51,19 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
+# Conformance validator — the independent CHECK that a produced workbook matches
+# the Briggs comps standard. populate_comps runs the STRUCTURAL checks (sheets,
+# headers, formula-protected columns, trim/AVG ranges) before returning so a
+# non-conforming workbook is an error, not a delivered file — even on the local
+# `populate_comps` fallback path. The recalc-error check runs post-recalc in the
+# caller (main.py::generate_comps). Guarded so the engine still boots if the
+# validator module is somehow absent.
+try:
+    from validate_comps_output import validate_comps_file, CompsConformanceError
+    _VALIDATOR = True
+except Exception:  # noqa: BLE001
+    _VALIDATOR = False
+
 DATA_START_ROW = 6
 
 # --- Estimated-value rendering -------------------------------------------------
@@ -331,13 +344,17 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
     Does NOT recalc — the caller runs LibreOffice recalc (same as the BOV flow)."""
     tdir = Path(template_dir or TEMPLATE_DIR)
     comp_type = str(payload.get("comp_type", "")).lower()
+    vertical = None  # sales sub-vertical for the conformance validator
     if comp_type == "sales":
         if _is_government(payload):
             tpl = tdir / GOV_SALES_TEMPLATE
+            vertical = "government"
         elif _is_dialysis(payload):
             tpl = tdir / DIALYSIS_SALES_TEMPLATE
+            vertical = "dialysis"
         else:
             tpl = tdir / SALES_TEMPLATE
+            vertical = "sales"
     elif comp_type == "lease":
         tpl = tdir / LEASE_TEMPLATE
     else:
@@ -370,6 +387,19 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
 
     wb.save(out_path)
     wb.close()
+
+    # Conformance gate — structural checks (sheets/headers/formula-protected
+    # columns/trim + AVG ranges) on the produced sales workbook BEFORE it is
+    # returned. Recalc-error conformance runs in the caller after LibreOffice
+    # recalc. A non-conforming workbook is an error, never a delivered file.
+    if _VALIDATOR and vertical is not None:
+        res = validate_comps_file(out_path, vertical=vertical, check_recalc_errors=False)
+        summary["conformance"] = res.as_dict()
+        if not res.ok:
+            raise CompsError(
+                "produced comps workbook failed conformance: " + "; ".join(res.violations),
+                status=500)
+
     summary["skipped_formula_keys"] = sorted(skipped_all)
     summary["unknown_keys"] = sorted(unknown_all)
     summary["out_path"] = out_path
