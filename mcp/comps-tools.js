@@ -436,13 +436,164 @@ function sameSubjectId(c, subject) {
 
 function isSubjectComp(c, args) {
   const subject = args?.subject;
-  if (!appraisalSubjectAnchor(args) || !subject) return false;
+  if (!subject) return false;
+  // Fire when there is an appraisal subject anchor OR the subject has been resolved to a
+  // concrete property_id / record (prompt 47) — the subject's own row (incl. its active
+  // listing) must NEVER ship as a comp, in any mode.
+  const anchored = appraisalSubjectAnchor(args) || subject.property_id != null || subject.resolved_from_record === true;
+  if (!anchored) return false;
   if (sameSubjectId(c, subject)) return true;
   if (subject.address && sameAddress(c, subject.address)) {
     const subjectState = String(subject.state || '').toUpperCase();
     return !subjectState || String(c.state || '').toUpperCase() === subjectState;
   }
   return false;
+}
+
+// ── Subject hydration from the resolved property record (prompt 47) ──────────
+// The request parser only knows what the TEXT said, so subject SF/chairs/term/
+// bumps/cap came back "Not on file" and cap fell back to a gazetteer default.
+// When the request names/addresses a subject that resolves UNAMBIGUOUSLY to a
+// domain property, hydrate the anchor from that record so (a) similarity scoring
+// (prompt 41/44) can weight size/chairs/term/cap and (b) the subject can be
+// excluded from the comp set by property_id/address. Fill-blanks only, never
+// clobber an explicit user value; conservative/unambiguous — resolve only when
+// exactly one property matches, else leave "Not on file" (never guess).
+const _STREET_KW = 'st|street|ave|avenue|rd|road|dr|drive|blvd|boulevard|ln|lane|ct|court|cir|circle|pkwy|parkway|hwy|highway|pl|place|ter|terrace|trl|trail|way|route|rte|sq|square';
+function extractSubjectAddress(text) {
+  const s = String(text || '');
+  const re = new RegExp(`\\b(\\d{1,6}\\s+[A-Za-z0-9.'-]+(?:\\s+[A-Za-z0-9.'-]+){0,4}?\\s+(?:${_STREET_KW}))\\b\\.?`, 'i');
+  const m = s.match(re);
+  return m ? m[1].replace(/\s+/g, ' ').trim() : null;
+}
+function _yearsFromNow(dateStr) {
+  const t = Date.parse(dateStr || '');
+  if (!Number.isFinite(t)) return null;
+  const yrs = (t - Date.now()) / 3.15576e10;
+  return yrs > 0 ? +yrs.toFixed(2) : null;
+}
+// Canonical "X% / N yrs" bumps from a stored pct (0.10 = 10%) + interval months.
+function bumpsFromPctInterval(pct, intervalMo) {
+  const p = Number(pct);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  const pctVal = p <= 1 ? p * 100 : p;             // 0.10 -> 10; tolerate an already-% value
+  const pctText = String(+pctVal.toFixed(4));
+  const mo = Number(intervalMo);
+  const yrs = Number.isFinite(mo) && mo > 0 ? Math.round(mo / 12) : null;
+  if (!yrs || yrs === 1) return `${pctText}% / yr`;
+  return `${pctText}% / ${yrs} yrs`;
+}
+function _blankSubjectVal(v) {
+  return v == null || v === '' || /not on file/i.test(String(v));
+}
+async function _subjectPropertyLookup(q, address, select) {
+  const enc = v => encodeURIComponent(String(v));
+  const variants = [...new Set([address, normStreet(address) ? address : null].filter(Boolean))];
+  const found = new Map();
+  for (const variant of variants) {
+    const r = await q('GET', `properties?address=ilike.*${enc(variant)}*&select=${select}&limit=25`)
+      .catch(() => ({ data: [] }));
+    for (const p of (r && r.data) || []) if (p && p.property_id != null) found.set(String(p.property_id), p);
+  }
+  return [...found.values()];
+}
+function applyHydratedSubject(subject, rec) {
+  subject._hydrated = true;
+  subject.resolved_from_record = true;
+  subject.property_id = subject.property_id ?? rec.property_id;
+  subject.resolved_property_id = rec.property_id;
+  subject.domain = subject.domain || rec.domain;
+  if (_blankSubjectVal(subject.address)) subject.address = rec.address;
+  if (_blankSubjectVal(subject.city)) subject.city = rec.city;
+  if (_blankSubjectVal(subject.state)) subject.state = rec.state;
+  const fields = subject.fields = subject.fields || {};
+  const setNum = (key, val, fieldKey) => {
+    if (val == null || !Number.isFinite(Number(val))) return;
+    if (_blankSubjectVal(subject[key])) subject[key] = Number(val);
+    if (fieldKey && _blankSubjectVal(fields[fieldKey])) fields[fieldKey] = Number(val);
+  };
+  setNum('building_sf', rec.building_sf, 'building_sf');
+  setNum('chairs', rec.chairs, 'chairs');
+  setNum('year_built', rec.year_built, null);
+  setNum('remaining_term', rec.remaining_term, 'remaining_term');
+  if (rec.lease_expiration && _blankSubjectVal(subject.lease_expiration)) subject.lease_expiration = rec.lease_expiration;
+  if (rec.bumps && _blankSubjectVal(subject.bumps)) subject.bumps = rec.bumps;
+  if (rec.tenant) {
+    if (_blankSubjectVal(subject.tenant)) subject.tenant = rec.tenant;
+    if (_blankSubjectVal(fields.tenant)) fields.tenant = rec.tenant;
+  }
+  // Cap: the record's actual cap replaces a gazetteer DEFAULT, but never an
+  // explicit user-typed cap (_cap_user) nor a real value already present.
+  if (rec.cap_rate != null && Number.isFinite(Number(rec.cap_rate))) {
+    if (!subject._cap_user && (subject.cap_rate == null || subject._cap_default)) {
+      subject.cap_rate = Number(rec.cap_rate);
+      subject._cap_default = false;
+    }
+    if (_blankSubjectVal(fields.cap_rate)) fields.cap_rate = Number(rec.cap_rate);
+  }
+}
+export async function hydrateSubjectFromRecord(args, deps) {
+  const subject = args && args.subject;
+  if (!subject || subject._hydration_attempted) return subject;
+  if (!(appraisalSubjectAnchor(args) || subject.address)) return subject;
+  subject._hydration_attempted = true;
+  const address = subject.address
+    || extractSubjectAddress(args.request)
+    || extractSubjectAddress(subject.name);
+  if (!address) return subject;
+  const enc = v => encodeURIComponent(String(v));
+  const domains = [
+    { dom: 'dia', q: deps && deps.diaQuery,
+      select: 'property_id,address,city,state,tenant,operator,chain_canonical,building_size,total_chairs,year_built,lease_commencement,wavg_lease_expiration,lease_bump_pct,lease_bump_interval_mo' },
+    { dom: 'gov', q: deps && deps.govQuery,
+      select: 'property_id,address,city,state,agency,rba,sf_leased,year_built,lease_commencement,lease_expiration,wavg_lease_expiration' },
+  ];
+  const hits = [];
+  for (const d of domains) {
+    if (typeof d.q !== 'function') continue;
+    try {
+      const found = await _subjectPropertyLookup(d.q, address, d.select);
+      for (const p of found) hits.push({ dom: d.dom, q: d.q, p });
+    } catch { /* fail-soft: leave subject as-is */ }
+  }
+  // Unambiguous only: exactly one property across BOTH domains, else never guess.
+  const uniq = [];
+  const seen = new Set();
+  for (const h of hits) { const k = `${h.dom}:${h.p.property_id}`; if (!seen.has(k)) { seen.add(k); uniq.push(h); } }
+  if (uniq.length !== 1) return subject;
+  const { dom, q, p } = uniq[0];
+  const rec = {
+    property_id: p.property_id, domain: dom,
+    address: p.address || address, city: p.city || null, state: p.state || null,
+    year_built: _reviewNum(p.year_built),
+  };
+  if (dom === 'dia') {
+    rec.building_sf = _reviewNum(p.building_size);
+    rec.chairs = _reviewNum(p.total_chairs);
+    rec.tenant = p.tenant || p.operator || p.chain_canonical || null;
+    rec.bumps = bumpsFromPctInterval(p.lease_bump_pct, p.lease_bump_interval_mo);
+  } else {
+    rec.building_sf = _reviewNum(p.rba) || _reviewNum(p.sf_leased);
+    rec.tenant = p.agency || null;
+  }
+  // Remaining term (yrs) from the property's weighted expiration, else the latest lease row.
+  let expiration = p.wavg_lease_expiration || (dom === 'gov' ? p.lease_expiration : null);
+  if (!expiration && dom === 'dia') {
+    const lr = await q('GET', `leases?property_id=eq.${enc(p.property_id)}&select=lease_expiration&order=lease_expiration.desc&limit=1`)
+      .catch(() => ({ data: [] }));
+    expiration = (lr && lr.data && lr.data[0] && lr.data[0].lease_expiration) || null;
+  }
+  if (expiration) { rec.lease_expiration = expiration; rec.remaining_term = _yearsFromNow(expiration); }
+  // Cap from the subject's OWN active listing (broker-underwritten ask cap).
+  try {
+    const listRes = await q('GET', `available_listings?property_id=eq.${enc(p.property_id)}&select=cap_rate,current_cap_rate,initial_cap_rate,status&limit=5`)
+      .catch(() => ({ data: [] }));
+    const listings = (listRes && Array.isArray(listRes.data)) ? listRes.data : [];
+    const active = listings.find(l => /active/i.test(String(l && l.status || ''))) || listings[0];
+    if (active) rec.cap_rate = _reviewNum(active.cap_rate) ?? _reviewNum(active.current_cap_rate) ?? _reviewNum(active.initial_cap_rate);
+  } catch { /* no listing cap → leave subject cap as-is */ }
+  applyHydratedSubject(subject, rec);
+  return subject;
 }
 
 function applyLocalScope(rows, args) {
@@ -601,7 +752,9 @@ function resolvePlace(raw, t) {
     if (p.re.test(raw)) return {
       name: p.name, state: p.state, metro: p.metro, region: p.region,
       kind: /deal|asset|property|under contract|our\b/i.test(raw) ? 'subject_candidate' : 'place',
-      ...(fields.cap_rate && !p.cap_rate ? { cap_rate: fields.cap_rate } : {}),
+      // A gazetteer cap is only a placeholder DEFAULT — flag it so record-hydration
+      // (prompt 47) can replace it with the subject's actual cap.
+      ...(fields.cap_rate && !p.cap_rate ? { cap_rate: fields.cap_rate, _cap_default: true } : {}),
       fields,
     };
   }
@@ -656,7 +809,9 @@ export function parseRequest(text) {
   if ((capMatch = t.match(/\b(?:subject|deal|under[- ]contract|contract|appraisal|appraised)?\s*(?:cap(?: rate)?|going[- ]in cap)?\s*(?:is|at|around|~|=)?\s*(\d+(?:\.\d+)?)\s*%/))) {
     const cap = Number(capMatch[1]) / 100;
     if (Number.isFinite(cap) && cap > 0 && cap < 1) {
-      out.subject = { ...(out.subject || {}), cap_rate: cap };
+      // User TYPED a cap — authoritative. Flag it so record-hydration (prompt 47)
+      // never overrides an explicit user cap (it only overrides a gazetteer default).
+      out.subject = { ...(out.subject || {}), cap_rate: cap, _cap_user: true, _cap_default: false };
     }
   }
   const statePattern = [...states].join('|');
@@ -1171,6 +1326,10 @@ export async function runComps(args, deps) {
     include_on_market: (args.include_on_market != null) ? args.include_on_market : parsed.include_on_market,
     include_unreliable_noi: (args.include_unreliable_noi != null) ? args.include_unreliable_noi : parsed.include_unreliable_noi,
   };
+  // Prompt 47 — hydrate the subject anchor from its resolved property record so
+  // scoring can weight size/chairs/term/cap and the subject can be excluded from
+  // the set. Idempotent (guarded by subject._hydration_attempted); fail-soft.
+  if (args.subject) { try { args.subject = await hydrateSubjectFromRecord(args, deps); } catch { /* leave subject as-is */ } }
   const QUERY = { government: deps.govQuery, dialysis: deps.diaQuery };
   const queryArgs = queryScopeArgs(args);
   const params = argsToParams(queryArgs);
@@ -1756,6 +1915,7 @@ export async function runGenerateCompsFromRequest(args, deps, generateWorkbook) 
         on_market_returned: marketRows.length,
         on_market_found: marketAll.length,
         on_market_curated_cap: APPRAISAL_ON_MARKET_CAP,
+        excluded_subject: (soldSynth.meta?.excluded_subject || 0) + (marketSynth.meta?.excluded_subject || 0),
         independent_caps: true,
         on_market_candidate_total: marketSynth.meta?.candidate_total ?? marketAll.length,
         secondary_market_range: (soldSynth.meta?.secondary_market_range || 0) + (marketSynth.meta?.secondary_market_range || 0),
