@@ -28,6 +28,11 @@ const MAX_SYNTHESIZE_LIMIT = 50;
 // large enough to cover a national dialysis candidate set (not just a state/region slice).
 const APPRAISAL_CANDIDATE_LIMIT = 300;
 const MAX_APPRAISAL_CANDIDATE_LIMIT = 500;
+// Appraisal mode pulls a national on-market universe (can be 150+ listings) but the
+// workbook On Market grid is a curated ~20 most-aligned set, ranked the same way as
+// Sold — never the whole universe (a 174-row dump overflows the 100-row template and
+// reads as noise, not a curated comp set). Prompt 46 item 3.
+const APPRAISAL_ON_MARKET_CAP = 20;
 const APPRAISAL_ERROR_CAP_LOW = 0.04;
 const APPRAISAL_ERROR_CAP_HIGH = 0.12;
 const APPRAISAL_DEFAULT_BAND_LOWER_BPS = 50;
@@ -1732,21 +1737,27 @@ export async function runGenerateCompsFromRequest(args, deps, generateWorkbook) 
       include_on_market: true,
       limit: MAX_SYNTHESIZE_LIMIT,
     }, deps);
-    const marketRows = (marketSynth.comps || []).filter(isOnMarketComp);
+    // On-market candidates arrive ranked (same similarity scoring as sold); curate
+    // to the most-aligned APPRAISAL_ON_MARKET_CAP so the workbook On Market grid is a
+    // template-fitting, readable set rather than the full national universe (Prompt 46).
+    const marketAll = (marketSynth.comps || []).filter(isOnMarketComp);
+    const marketRows = marketAll.slice(0, APPRAISAL_ON_MARKET_CAP);
     const combined = [...(soldSynth.comps || []), ...marketRows];
     synthesized = {
       ...soldSynth,
       comps: combined,
       template_comps: combined.map(c => c.template || templateRow(c)),
       summary: summarizeComps(combined, { ...(soldSynth.interpreted_query || {}), subject: soldSynth.subject || null }, soldSynth.meta || {}),
-      transparency: `${transparencyLine(soldSynth.meta)}; on-market returned ${marketRows.length} separately`,
+      transparency: `${transparencyLine(soldSynth.meta)}; on-market ${marketAll.length} found, curated to ${marketRows.length} most-aligned`,
       meta: {
         ...(soldSynth.meta || {}),
         returned: combined.length,
         sold_returned: soldSynth.comps?.length || 0,
         on_market_returned: marketRows.length,
+        on_market_found: marketAll.length,
+        on_market_curated_cap: APPRAISAL_ON_MARKET_CAP,
         independent_caps: true,
-        on_market_candidate_total: marketSynth.meta?.candidate_total ?? marketRows.length,
+        on_market_candidate_total: marketSynth.meta?.candidate_total ?? marketAll.length,
         secondary_market_range: (soldSynth.meta?.secondary_market_range || 0) + (marketSynth.meta?.secondary_market_range || 0),
         warnings: [...(soldSynth.meta?.warnings || []), ...(marketSynth.meta?.warnings || [])],
       },

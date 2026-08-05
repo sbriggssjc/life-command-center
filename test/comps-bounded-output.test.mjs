@@ -509,7 +509,7 @@ describe('comps engine bounded output', () => {
     assert.equal(result.subject.cap_rate, 0.06);
     assert.ok(result.cap_rate_range.min >= 0.055);
     assert.ok(result.cap_rate_range.max <= 0.0675);
-    assert.ok(/on-market returned 9/.test(result.transparency));
+    assert.ok(/on-market 9 found, curated to 9 most-aligned/.test(result.transparency));
     assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'sale' && body.p_include_onmkt === false));
     assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'both' && body.p_include_onmkt === true));
   });

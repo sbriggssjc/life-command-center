@@ -29,7 +29,14 @@ Two ways to feed the pipe; they compose:
   drop it in the state folder, run `python -m src.run_pipeline --steps 44 --state-source tx_tfc
   --state-dir "<…/state/Texas>"` (GovernmentProject repo; idempotent). ~monthly. Everything
   downstream — events, leads, suspected-sale lane, the new W5.2 consumer — flows automatically.
-- **(b) Phase 2 automation (gov plan §10):** ✅ **RECON DONE (Cowork, 2026-08-06).** TFC's
+- **(b) Phase 2 automation (gov plan §10):** ✅ **BUILT (Claude Code, GovernmentProject
+  `claude/tfc-contacts-sync-fk-fix-sotsw6`, 2026-08-06).** Registry-driven `run_auto_fetch`
+  (`src/state_inventory_sync.py`) + step-44 `--state-auto-fetch` + monthly workflow
+  `.github/workflows/state-lease-ingest.yml`: downloads each active source's `dataset_urls[0]`,
+  SHA-256 skip-if-unchanged (`state_lease_sources.last_content_sha`), else stages a dated file and
+  runs snapshot→diff→events→leads. Also shipped in the same branch: the non-destructive TFC
+  contacts reconcile (run-#552 FK fix) + the filename-date fallback chain (undated fresh downloads
+  no longer silently skipped). Original recon note: TFC's
   stable machine URL is `https://web.tfc.texas.gov/home/showpublisheddocument/12` — the
   versionless document endpoint serves the CURRENT Active Lease Summary xls directly (no
   auth, no JS; the versioned `/12/<stamp>` form changes per upload). Registered in

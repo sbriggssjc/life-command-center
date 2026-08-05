@@ -60,10 +60,15 @@ from openpyxl.utils import get_column_letter
 # caller (main.py::generate_comps). Guarded so the engine still boots if the
 # validator module is somehow absent.
 try:
-    from validate_comps_output import validate_comps_file, CompsConformanceError
+    from validate_comps_output import (
+        validate_comps_file, CompsConformanceError,
+        disp_len as _shared_disp_len, min_content_width as _shared_min_width,
+        target_column_width as _shared_target_width,
+    )
     _VALIDATOR = True
 except Exception:  # noqa: BLE001
     _VALIDATOR = False
+    _shared_disp_len = _shared_min_width = _shared_target_width = None
 
 DATA_START_ROW = 6
 
@@ -314,19 +319,35 @@ def _sort_rows(rows, sheet):
     return rows
 
 
+def _avg_bar_row(ws):
+    """Row index of the AVG/TOTALS bar (col A == 'AVG'), or None."""
+    for r in range(DATA_START_ROW, ws.max_row + 1):
+        if str(ws.cell(r, 1).value).strip().upper() == "AVG":
+            return r
+    return None
+
+
+def _row_capacity(ws):
+    """How many data rows the template holds between DATA_START_ROW and the AVG bar
+    (e.g. 100 for a bar at row 106). None when there is no bar."""
+    tot = _avg_bar_row(ws)
+    return None if tot is None else (tot - DATA_START_ROW)
+
+
 def _trim_to_totals(ws, n):
     """Delete the unused blank rows between the last written comp and the template's
     AVG/TOTALS bar so the bar sits directly beneath the data, and rewrite the bar's
-    AVERAGE/COUNT ranges to the trimmed row count (Workflow step 5)."""
-    tot = None
-    for r in range(DATA_START_ROW, ws.max_row + 1):
-        if str(ws.cell(r, 1).value).strip().upper() == "AVG":
-            tot = r
-            break
+    AVERAGE/COUNT ranges to the trimmed row count (Workflow step 5). `n` is the number
+    of comp rows actually written; callers cap `n` to `_row_capacity(ws)` BEFORE
+    writing so the grid never overflows the bar (Prompt 46)."""
+    tot = _avg_bar_row(ws)
     if tot is None:
         return
     old_last = tot - 1                       # last pre-filled data row (e.g. 105)
     capacity = old_last - DATA_START_ROW + 1
+    # n == capacity: data fills every slot, bar already sits directly below — no
+    # deletion needed. n > capacity should never happen (rows are capped upstream),
+    # but guard so a stray overflow can't leave blank/duplicate rows above the bar.
     if n <= 0 or n >= capacity:
         return
     del_start = DATA_START_ROW + n
@@ -339,70 +360,57 @@ def _trim_to_totals(ws, n):
             ws.cell(tot, c).value = v.replace(str(old_last), str(new_last))
 
 
-# --- Auto-fit + no-wrap (Prompt 43) -------------------------------------------
+# --- Auto-fit + no-wrap (Prompt 43, reconciled with the validator in Prompt 46) --
 # Scott's export standard: every column is sized to its longest cell/header (no
 # wrapping), and a shared column shares ONE width across the On Market and Sold
-# sheets so the two tabs line up. Kept inside the renderer so the conformance
-# validator (Prompt 37) can assert "no wrapped cells / widths fit contents".
-_AUTOFIT_PAD = 2          # small breathing room past the longest content
-_AUTOFIT_MIN = 4          # never collapse a column narrower than this
-_AUTOFIT_MAX = 50         # sane ceiling so one long cell can't blow the layout out
+# sheets so the two tabs line up. The width math (padding, clamp, computed-column
+# floor) + the rendered-length measurement now live in ONE place —
+# validate_comps_output — so the renderer that SETS widths and the conformance
+# validator (Prompt 37) that CHECKS them can never disagree.
 _HEADER_ROW = 5
 
+# The measurement + width contract, imported from the validator (the authority).
+# A tiny local fallback keeps the engine bootable if the validator module is absent
+# (mirrors the pre-Prompt-46 behavior); when present, the shared helpers win.
+if _VALIDATOR:
+    _display_len = _shared_disp_len
+    _min_content_width = _shared_min_width
+    _target_width = _shared_target_width
+else:  # pragma: no cover — validator always ships alongside the renderer
+    def _display_len(cell) -> int:
+        v = cell.value
+        if v is None or v == "":
+            return 0
+        if isinstance(v, str) and v.startswith("="):
+            return 0
+        if isinstance(v, (datetime, date)):
+            return 10
+        if isinstance(v, (int, float)):
+            return len(("{:,.0f}".format(v)) if float(v).is_integer() else ("{:,.2f}".format(v)))
+        return len(str(v))
 
-def _display_len(cell) -> int:
-    """Approximate the on-screen character width of a cell's rendered value.
-    Dates are measured at their DISPLAY width (the formatted string), not the
-    underlying datetime repr; formulas contribute nothing (their result width is
-    unknown pre-recalc — the header/other rows drive those columns)."""
-    v = cell.value
-    if v is None or v == "":
+    def _min_content_width(key: str) -> int:
         return 0
-    if isinstance(v, str) and v.startswith("="):
-        return 0                       # formula cell — result width unknown here
-    if isinstance(v, (datetime, date)):
-        fmt = str(cell.number_format or "").lower()
-        # count the y/m/d/h/s placeholders + separators actually shown
-        if "yyyy" in fmt:
-            return 10                  # mm/dd/yyyy
-        if any(t in fmt for t in ("yy", "mm", "dd", "mmm")):
-            return len(re.sub(r"[^a-z0-9/\-]", "", fmt)) or 8
-        return 10
-    if isinstance(v, (int, float)):
-        return len(("{:,.0f}".format(v)) if float(v).is_integer() else ("{:,.2f}".format(v)))
-    return len(str(v))
 
-
-def _min_content_width(key: str) -> int:
-    """Floor width for COMPUTED (formula/date) columns (prompt 44). Their values are
-    written post-autofit by the LibreOffice recalc, so `_display_len` only sees the
-    header (formulas contribute 0), sizing TERM/DOM/caps/$-SF/dates too narrow and
-    clipping the value. Give each a floor wide enough for its formatted result. Folded
-    into the SHARED width so On Market and Sold line up on these columns too."""
-    k = key or ""
-    if "term" in k or k.endswith("_rem") or k in ("t_rem", "f_rem"):  # TERM / T-Rem / F-Rem
-        return 7
-    if k == "dom":                                      # DOM (days on market)
-        return 6
-    if k in ("date", "com", "exp", "termn", "on_market",
-             "lease_comm", "lease_exp", "commence", "expire"):   # mm/dd/yyyy dates
-        return 11
-    if "price" in k:                                    # SOLD/INITIAL/LAST PRICE ($)
-        return 11
-    if "cap" in k or k.endswith("_sf") or "psf" in k or "rent" in k:  # %/cap and $-per-SF
-        return 7
-    return 0
+    def _target_width(longest, key: str) -> float:
+        return float(max(4, min(50, int(longest or 0) + 2)))
 
 
 def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
-    """Size every column to its longest header/cell (with padding, sane min/max),
-    turn OFF wrap on every cell, and share ONE width per header across all the
-    given sheets so shared columns line up. `sheets` is a list of worksheets."""
+    """Size every column to its longest header/cell (via the shared width contract),
+    turn OFF wrap on every cell, and share ONE width per header across all the given
+    sheets so shared columns line up. `sheets` is a list of worksheets.
+
+    Content is measured over the DATA region only (header row through the AVG bar) —
+    the same span the validator measures — so rows below the bar (disclaimers/notes)
+    can't inflate a column on one sheet and desync the shared width."""
     # Pass 1 — per-sheet longest content per column index, keyed for sharing by
     # the (normalized) header text so the same column lines up across sheets.
-    shared = {}                       # normalized header -> max width seen anywhere
-    per_sheet = []                    # [(ws, {col_idx: (norm_header, local_max)})]
+    shared = {}                       # normalized header -> max content length anywhere
+    per_sheet = []                    # [(ws, {col_idx: norm_header})]
     for ws in sheets:
+        avg = _avg_bar_row(ws)
+        measure_last = (avg or ws.max_row)   # header..AVG bar (matches the validator)
         cols = {}
         for c in range(1, ws.max_column + 1):
             hdr = ws.cell(header_row, c).value
@@ -410,6 +418,8 @@ def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
                 continue
             key = _norm(hdr)
             longest = _display_len(ws.cell(header_row, c))
+            # Kill wrap on EVERY cell in the column (full sheet), but only MEASURE
+            # the header..AVG data region for width.
             for r in range(header_row, ws.max_row + 1):
                 cell = ws.cell(r, c)
                 if cell.alignment is not None and cell.alignment.wrap_text:
@@ -417,17 +427,17 @@ def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
                         horizontal=cell.alignment.horizontal,
                         vertical=cell.alignment.vertical,
                         wrap_text=False)
-                longest = max(longest, _display_len(cell))
+                if r <= measure_last:
+                    longest = max(longest, _display_len(cell))
             # Floor for computed columns whose formula result isn't measurable here.
             longest = max(longest, _min_content_width(key))
-            cols[c] = (key, longest)
+            cols[c] = key
             shared[key] = max(shared.get(key, 0), longest)
         per_sheet.append((ws, cols))
-    # Pass 2 — apply the SHARED width (padded, clamped) to each column.
+    # Pass 2 — apply the SHARED width (via the one contract) to each column.
     for ws, cols in per_sheet:
-        for c, (key, _local) in cols.items():
-            width = max(_AUTOFIT_MIN, min(_AUTOFIT_MAX, shared[key] + _AUTOFIT_PAD))
-            ws.column_dimensions[get_column_letter(c)].width = width
+        for c, key in cols.items():
+            ws.column_dimensions[get_column_letter(c)].width = _target_width(shared[key], key)
 
 
 def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> dict:
@@ -461,16 +471,28 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
     if comp_type == "sales":
         for sheet, key in (("On Market", "on_market"), ("Sold", "sold")):
             if sheet in wb.sheetnames and payload.get(key):
+                ws = wb[sheet]
+                # Cap to the template's data capacity so the grid never overflows the
+                # AVG bar (an overflow corrupts the sheet and blocks the trim — the
+                # Prompt-46 174-row failure). Rows arrive pre-ranked, so the cap keeps
+                # the most-aligned comps. The trim then seats the bar on both sheets.
                 rows = _sort_rows(payload[key], sheet)
-                n, sk, un = _write_rows(wb[sheet], rows)
-                _trim_to_totals(wb[sheet], n)
+                cap = _row_capacity(ws)
+                if cap is not None and len(rows) > cap:
+                    rows = rows[:cap]
+                n, sk, un = _write_rows(ws, rows)
+                _trim_to_totals(ws, n)
                 summary["sheets"][sheet] = n
                 skipped_all.update(sk); unknown_all.update(un)
     else:  # lease
         rows = _sort_rows(payload.get("comps") or payload.get("lease_comps") or [], "Lease Comps")
         if "Lease Comps" in wb.sheetnames and rows:
-            n, sk, un = _write_rows(wb["Lease Comps"], rows)
-            _trim_to_totals(wb["Lease Comps"], n)
+            ws = wb["Lease Comps"]
+            cap = _row_capacity(ws)
+            if cap is not None and len(rows) > cap:
+                rows = rows[:cap]
+            n, sk, un = _write_rows(ws, rows)
+            _trim_to_totals(ws, n)
             summary["sheets"]["Lease Comps"] = n
             skipped_all.update(sk); unknown_all.update(un)
 
