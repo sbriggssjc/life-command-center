@@ -1041,7 +1041,7 @@ export async function buildPropertyPacket(entityId, workspaceId) {
  * (parties, correspondence, offers, cadence, ROE). Correspondence/offers mirror
  * mcp/deal-dossier-tools.js (activity_events on the entity + deal anchor).
  */
-async function buildDealPacket(entityId, workspaceId) {
+export async function buildDealPacket(entityId, workspaceId) {
   const propertyPacket = await buildPropertyPacket(entityId, workspaceId);
 
   const [actRes, cadRes, partyRes, spineRes, dealPartiesRes, bdRes] = await Promise.all([

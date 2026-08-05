@@ -23,6 +23,7 @@ import { opsQuery } from './api/_shared/ops-db.js';
 import { mountLccMcp } from './mcp/server.js';
 import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
+import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -309,6 +310,8 @@ app.all('/api/sf-record-sync-tick', (req, res) => { req.query._route = 'sf-recor
 // shared with the MCP engine so Railway and MCP stay behavior-identical.
 // W7.1 — recurring deal-email-matcher cron (X-LCC-Key auth; scheduled by pg_cron lcc-deal-email-match).
 app.all('/api/pipeline/match-deal-emails-cron', requireLccAuth(handleDealEmailMatchCron));
+// W7.2 — deal-comms propagation tick (X-LCC-Key auth; scheduled by pg_cron lcc-deal-comms-propagate).
+app.all('/api/deal-comms-propagate-tick', requireLccAuth(handleDealCommsPropagateTick));
 app.post('/api/pipeline/ingest-opportunity', requireLccAuth(opportunitySyncRoutes.ingest));
 app.post('/api/pipeline/ingest-opportunities', requireLccAuth(opportunitySyncRoutes.ingestBatch));
 // SPEC Part B2 — external listing/property webpage crawl worker (cron:
