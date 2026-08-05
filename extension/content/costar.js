@@ -254,12 +254,24 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // path leaves gaps — a title rejected by one extractor can still
     // slip through the other — so we merge first, then let the
     // title/garbage filter below run once on the unified set.
-    const domContacts  = extractContactsFromDOM();
-    const textContacts = extractContacts(lines);
+    // Preferred: CoStar's redesigned For-Sale/For-Lease "Contacts" panel is a
+    // clean, data-testid-labelled DOM (one <figure> per contact, with an
+    // explicit "Sales Company" / "True Owner" designation). When present it is
+    // AUTHORITATIVE — parsing it structurally avoids the innerText line-guessing
+    // that mis-slotted the broker's email onto the owner and mislabeled the True
+    // Owner as the broker. Falls back to the DOM-mailto + text extractors when
+    // the structured panel isn't found (older layouts / comp pages).
+    const structuredContacts = extractStructuredForSaleContacts();
     let contacts = [];
-    mergeContacts(contacts, domContacts);
-    mergeContacts(contacts, textContacts);
-    enrichContactsFromDOM(contacts);
+    if (structuredContacts && structuredContacts.length) {
+      mergeContacts(contacts, structuredContacts);
+    } else {
+      const domContacts  = extractContactsFromDOM();
+      const textContacts = extractContacts(lines);
+      mergeContacts(contacts, domContacts);
+      mergeContacts(contacts, textContacts);
+      enrichContactsFromDOM(contacts);
+    }
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
 
@@ -3520,6 +3532,75 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // getOwnText (not textContent) to avoid matching parents that happen to
   // contain the label deep in their subtree.
   const SECTION_END_SENTINEL_RE = /^(my\s+notes|sources(\s+&\s+research)?|verification|documents?|assessment(\s+at\s+sale)?|public\s+record|tenants?\s+at|sale\s+comp\s+id|income\s+&\s+expenses|transaction\s+details|building(\s+summary|\s+information)?|land\b|market|investment\s+highlights|help\s+with\s+features|request\s+training|share\s+feedback|help\s+center|terms\s+of\s+use|privacy\s+policy|all\s+rights\s+reserved)/i;
+
+  // ── Structured Contacts-panel extractor (preferred, 2026-08-05) ───────────
+  // CoStar's redesigned For-Sale/For-Lease summary renders the "Contacts" panel
+  // as a data-testid-labelled DOM: a <figure> per contact carrying an explicit
+  // designation ("Sales Company" / "True Owner" / "Recorded Owner" / "Property
+  // Manager"). This reads each figure's fields directly and hands them to the
+  // pure mapper (_forsale-contacts-parse.js) — no innerText line-guessing, so
+  // the broker's email can't bleed onto the owner and the True Owner can't be
+  // mislabeled a broker. Returns [] when the structured panel isn't on the page.
+  function extractStructuredForSaleContacts() {
+    try {
+      if (!globalThis.__lccForSaleContacts) return [];
+      const figureEls = document.querySelectorAll(
+        'figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]'
+      );
+      if (!figureEls.length) return [];
+
+      const txt = (el) => (el && (el.textContent || '')).replace(/\s+/g, ' ').trim();
+      const figures = [];
+      for (const fig of figureEls) {
+        // Only figures inside a "Contacts" section — guards against a stray
+        // companyIC card elsewhere on the page.
+        const section = fig.closest('section');
+        if (section && !/(^|\s)contacts(\s|$)/i.test(
+              txt(section.querySelector('[data-testid$="heading-link-heading"],header h2')) || '')) {
+          // If we can't confirm the section header, still accept the figure —
+          // the companyIC/contactsIC testids are Contacts-panel specific.
+        }
+        const nameEl = fig.querySelector('[data-testid="contact-name"] a[data-testid="name-link"]')
+          || fig.querySelector('[data-testid="contact-name"] a')
+          || fig.querySelector('[data-testid="contact-name"]');
+        const name = txt(nameEl);
+        if (!name) continue;
+
+        const designation = txt(fig.querySelector('[data-testid="company-designation-company-type"]'));
+        const jobTitle    = txt(fig.querySelector('[data-testid="contact-job-title"]'));
+        const company     = txt(fig.querySelector('[data-testid="company-name-link"]'));
+
+        const phones = [];
+        fig.querySelectorAll('[data-testid^="phone-number-"]').forEach((el) => {
+          // Skip the wrapper/icon-label spans; keep the value spans.
+          const tid = el.getAttribute('data-testid') || '';
+          if (/(-wrapper|-icon-label)$/.test(tid)) return;
+          const v = txt(el);
+          if (v && /\d{3}[^\d]*\d{3}[^\d]*\d{4}/.test(v)) phones.push(v);
+        });
+
+        let email = '';
+        const emailEl = fig.querySelector('a[data-testid="email"]');
+        if (emailEl) {
+          const href = emailEl.getAttribute('href') || '';
+          email = href.replace(/^mailto:/i, '').split('?')[0].trim() || txt(emailEl);
+        }
+
+        const addressLines = [];
+        fig.querySelectorAll('[data-testid="address-address"] [automation-id^="address-line-"]').forEach((el) => {
+          const v = txt(el);
+          if (v) addressLines.push(v);
+        });
+
+        figures.push({ name, designation, jobTitle, company, email, phones, addressLines });
+      }
+
+      return globalThis.__lccForSaleContacts.mapForSaleFigures(figures);
+    } catch (err) {
+      try { console.warn('[costar] extractStructuredForSaleContacts failed:', err && err.message); } catch (_) {}
+      return [];
+    }
+  }
 
   // `a.compareDocumentPosition(b) & FOLLOWING` is true when b follows a in
   // document order (or is a descendant of a). We use this to bucket each
