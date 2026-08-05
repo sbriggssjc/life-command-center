@@ -223,6 +223,10 @@ app.all('/api/artifact-offload',           (req, res) => { req.query._route = 'a
 app.all('/api/merge-log-reconcile',        (req, res) => { req.query._route = 'merge-log-reconcile';        adminHandler(req, res); });
 app.all('/api/sf-link-tick',               (req, res) => { req.query._route = 'sf-link-tick';               adminHandler(req, res); });
 app.all('/api/gov-buyer-sync',             (req, res) => { req.query._route = 'gov-buyer-sync';             adminHandler(req, res); });
+// W5.2 signal->task automation consumer ticks (GET dry-run / POST apply).
+app.all('/api/state-lease-consume',        (req, res) => { req.query._route = 'state-lease-consume';        adminHandler(req, res); });
+app.all('/api/agency-risk-consume',        (req, res) => { req.query._route = 'agency-risk-consume';        adminHandler(req, res); });
+app.all('/api/npi-consume',                (req, res) => { req.query._route = 'npi-consume';                adminHandler(req, res); });
 
 // edge-data rewrites (formerly data-proxy)
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
