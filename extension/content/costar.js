@@ -503,6 +503,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
       return true;
     });
+    // ── Broker→owner mis-attribution guard (2026-08-05) ──────────────────────
+    // CoStar renders the listing-broker contact card adjacent to the owner
+    // panel (and the redesigned Contacts tab prints the role label AFTER the
+    // name), so the extractors above can slot the listing broker's email/phone —
+    // and sometimes the broker person itself — into the "Current/True Owner"
+    // rows. Drop owner rows that ARE the captured broker (broker email) and
+    // strip broker reach from any surviving owner. Loaded before this script as
+    // globalThis.__lccBrokerOwnerReconcile (pure + Node-testable).
+    if (globalThis.__lccBrokerOwnerReconcile) {
+      accumulated.contacts = globalThis.__lccBrokerOwnerReconcile
+        .reconcileBrokerOwnerAttribution(accumulated.contacts);
+    }
     mergeTenants(accumulated.tenants, tenants);
     if (location.city) accumulated.city = location.city;
     if (location.state) accumulated.state = location.state;
@@ -3042,11 +3054,35 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     let currentGroupBuyer  = null;
     let currentGroupSeller = null;
 
+    // CoStar's redesigned For-Sale/For-Lease "Contacts" panel prints the role
+    // label AFTER the name/firm (trailing-label layout), not as a leading
+    // header. On those pages the leading-header handlers below would sweep a
+    // firm's address/phone forward and capture the NEXT name (the True Owner)
+    // as a broker (observed: "Bradley Veo Timmons" mislabeled listing_broker on
+    // 3710 FM 1889). Parse the trailing-label block from the preceding name
+    // instead. Pure helpers live in _forsale-contacts-parse.js (loaded first).
+    const forSaleLayout = !!(globalThis.__lccForSaleContacts
+      && globalThis.__lccForSaleContacts.isForSaleContactsUrl(
+        (typeof window !== 'undefined' && window.location && window.location.href) || ''));
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
       // ── STOP at end-of-content sections ───────────────────────
       if (/^(my\s+notes|sources|verification|sale\s+comp\s+id|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
+
+      // ── Trailing-label contact block (For-Sale/For-Lease Contacts panel) ──
+      if (forSaleLayout && i > 0) {
+        const trailRole = globalThis.__lccForSaleContacts.trailingRoleFor(line);
+        if (trailRole && globalThis.__lccForSaleContacts.looksLikeContactName(lines[i - 1])) {
+          const parsed = globalThis.__lccForSaleContacts.parseTrailingLabelBlock(lines, i, trailRole);
+          if (parsed && parsed.contact && parsed.contact.name) {
+            contacts.push(parsed.contact);
+            i = parsed.endIdx;   // skip the block's detail lines
+            continue;
+          }
+        }
+      }
 
       // ── Current Owner marks a new transaction group ──────────
       if (/^current\s+owner$/i.test(line)) {
