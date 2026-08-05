@@ -3111,6 +3111,7 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
 export function collectOwnerAddressObservations(metadata) {
   const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
   const sales    = Array.isArray(metadata?.sales_history) ? metadata.sales_history : [];
+  const brokerInfo = collectBrokerContactInfo(metadata);
   const obs = [];
   const push = (name, address, surface, kind) => {
     const nm = (typeof name === 'string' ? name.trim() : '');
@@ -3121,6 +3122,7 @@ export function collectOwnerAddressObservations(metadata) {
   };
   for (const c of contacts) {
     if (!c || !c.address) continue;
+    if (isCapturedBrokerContact(c, brokerInfo)) continue; // broker card bled into the owner panel — not an owner address
     if (c.role === 'owner')       push(c.name, c.address, 'costar_owner_panel', 'notice');
     else if (c.role === 'true_buyer' || c.role === 'true_seller')
                                   push(c.name, c.address, 'costar_contacts', 'notice');
@@ -7818,12 +7820,79 @@ export function isFederalOwnerAntiPattern(name) {
 // a malformed phone (no real digits) and a generic/role inbox (info@/sales@ — a
 // firm mailbox, not the owner decision-maker) are NOT carried. The owner NAME is
 // already federal/junk-guarded upstream.
-function ownerReachableDetails(contact) {
+// Broker-email-attribution guard (2026-08-05): CoStar's for-sale detail page
+// renders the listing-broker contact card immediately adjacent to the owner
+// panel, so the DOM's nearest-mailto/nearest-tel enrichment can splatter the
+// listing broker's reachable details across the "Current Owner" rows. Observed
+// live: a Newmark broker's `…@nmrk.com` email attributed to three separate
+// Current-Owner contacts (and re-stamped onto the listing-broker row itself).
+// An owner is NEVER reachable at a brokerage inbox — so we (a) drop a broker's
+// email/phone off any owner reachable detail and (b) never write a captured
+// broker person as a recorded/true owner. Two nets: a cross-reference against
+// the page's own captured listing/buyer-broker contacts (the general case), and
+// a national-brokerage inbox-domain fallback (catches a leak whose matching
+// broker contact carried no email of its own).
+const BROKERAGE_EMAIL_DOMAIN_RE =
+  /@(?:nmrk|newmark|cbre|jll|colliers|cushwake|cushmanwakefield|marcusmillichap|matthews|avisonyoung|kellerwilliams|kw|svn|naiop)\.[a-z.]{2,}$/i;
+
+// Collect the normalized emails + last-10-digit phones of every listing/buyer
+// broker contact captured in this metadata payload.
+function collectBrokerContactInfo(metadata) {
+  const emails = new Set();
+  const phones = new Set();
+  const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
+  for (const c of contacts) {
+    if (!c) continue;
+    const roles = Array.isArray(c.roles) ? c.roles : (c.role ? [c.role] : []);
+    if (!roles.some(r => /^(?:listing_broker|buyer_broker)$/.test(r))) continue;
+    const e = normalizeEmail(c.email);
+    if (e) emails.add(e);
+    const ps = Array.isArray(c.phones) ? c.phones : (c.phone ? [c.phone] : []);
+    for (const p of ps) {
+      const d = String(p || '').replace(/\D/g, '');
+      if (d.length >= 7) phones.add(d.slice(-10));
+    }
+  }
+  return { emails, phones };
+}
+
+function isBrokerLeakEmail(email, brokerInfo) {
+  if (!email) return false;
+  if (brokerInfo && brokerInfo.emails.has(email)) return true;
+  return BROKERAGE_EMAIL_DOMAIN_RE.test(email);
+}
+
+function isBrokerLeakPhone(phone, brokerInfo) {
+  if (!phone || !brokerInfo) return false;
+  const d = String(phone).replace(/\D/g, '');
+  return d.length >= 7 && brokerInfo.phones.has(d.slice(-10));
+}
+
+// True when an owner-role contact is really one of the captured listing/buyer
+// broker contacts (CoStar re-lists the broker under the owner panel). Keyed on
+// the broker's email — the strongest identity signal — so a real owner who
+// merely shares a name with the broker is never suppressed.
+function isCapturedBrokerContact(contact, brokerInfo) {
+  if (!contact || !brokerInfo) return false;
+  const e = normalizeEmail(contact.email);
+  return !!(e && brokerInfo.emails.has(e));
+}
+
+function ownerReachableDetails(contact, brokerInfo = null) {
   if (!contact || typeof contact !== 'object') return { phone: null, email: null, address: null };
   const phones = Array.isArray(contact.phones) ? contact.phones : (contact.phone ? [contact.phone] : []);
-  const phone = phones.map(p => (typeof p === 'string' ? p.trim() : '')).find(p => looksLikeContactPhone(p)) || null;
+  let phone = phones.map(p => (typeof p === 'string' ? p.trim() : '')).find(p => looksLikeContactPhone(p)) || null;
   const normEmail = normalizeEmail(contact.email);
-  const email = (normEmail && !isGenericInboxEmail(normEmail)) ? normEmail : null;
+  let email = (normEmail && !isGenericInboxEmail(normEmail)) ? normEmail : null;
+  // Never attribute a listing/buyer broker's email or phone to an owner record.
+  if (email && isBrokerLeakEmail(email, brokerInfo)) {
+    console.warn(`[ownerReachableDetails] dropped broker-attributed email "${email}" from owner "${contact.name || '?'}"`);
+    email = null;
+  }
+  if (phone && isBrokerLeakPhone(phone, brokerInfo)) {
+    console.warn(`[ownerReachableDetails] dropped broker-attributed phone from owner "${contact.name || '?'}"`);
+    phone = null;
+  }
   const address = (typeof contact.address === 'string' && contact.address.trim()) ? contact.address.trim() : null;
   return { phone, email, address };
 }
@@ -7831,16 +7900,20 @@ function ownerReachableDetails(contact) {
 // Decorate the chosen owner contact with normalized reachable details so every
 // downstream consumer (recorded_owners write, owner-entity link) gets a uniform
 // `{ phone, email, address }` regardless of the raw capture shape.
-function withOwnerDetails(contact) {
+function withOwnerDetails(contact, brokerInfo = null) {
   if (!contact) return contact;
-  return { ...contact, ...ownerReachableDetails(contact) };
+  return { ...contact, ...ownerReachableDetails(contact, brokerInfo) };
 }
 
 export function selectAuthoritativeOwner(metadata) {
   const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
-  const owners = contacts.filter(c => c && c.role === 'owner' && c.name);
+  const brokerInfo = collectBrokerContactInfo(metadata);
+  // Drop owner rows that are actually the captured broker before ranking, so a
+  // broker mislabeled "owner" can never win the authoritative-owner slot.
+  const owners = contacts.filter(c => c && c.role === 'owner' && c.name
+    && !isCapturedBrokerContact(c, brokerInfo));
   const privateOwner = owners.find(c => !isFederalOwnerAntiPattern(c.name));
-  if (privateOwner) return withOwnerDetails(privateOwner);
+  if (privateOwner) return withOwnerDetails(privateOwner, brokerInfo);
 
   // No private owner contact — try sales_history buyers (most recent first).
   // A sale buyer carries no reachable contact details (name only).
@@ -7866,7 +7939,7 @@ export function selectAuthoritativeOwner(metadata) {
         `Verify this property is actually federally-owned (USPS / GSA-titled).`
       );
     }
-    return withOwnerDetails(owners[0]);
+    return withOwnerDetails(owners[0], brokerInfo);
   }
   return null;
 }
@@ -8551,7 +8624,17 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
   // Round 76ek.i: skip federal-government anti-pattern names (USA, U S A,
   // Government, etc.) when there's a private alternative — those almost
   // always come from CoStar's personal-property record bleed-through.
-  const allOwnerContacts = (metadata.contacts || []).filter(c => c.role === 'owner');
+  // Broker-attribution guard (2026-08-05): drop owner rows that are actually
+  // the captured listing/buyer broker (matched by the broker's email) before any
+  // federal-anti-pattern ranking, so a broker mislabeled "Current Owner" is never
+  // written as a recorded owner.
+  const brokerInfo = collectBrokerContactInfo(metadata);
+  const captureOwnerContacts = (metadata.contacts || []).filter(c => c.role === 'owner');
+  const allOwnerContacts = captureOwnerContacts.filter(c => !isCapturedBrokerContact(c, brokerInfo));
+  if (allOwnerContacts.length < captureOwnerContacts.length) {
+    const dropped = captureOwnerContacts.filter(c => isCapturedBrokerContact(c, brokerInfo)).map(c => c.name);
+    console.warn(`[upsertDomainOwners] property=${propertyId} dropped broker-attributed owner contacts: ${dropped.join(', ')}`);
+  }
   const hasPrivateOwner = allOwnerContacts.some(c => c.name && !isFederalOwnerAntiPattern(c.name));
   const ownerContacts = hasPrivateOwner
     ? allOwnerContacts.filter(c => c.name && !isFederalOwnerAntiPattern(c.name))
@@ -8563,7 +8646,8 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
   for (const contact of ownerContacts) {
     // ORE Phase 1 Unit D: carry the owner's reachable phone/email onto the
     // recorded_owner (gov contact_info) — fill-blanks, guarded inside the helper.
-    await ensureRecordedOwner(contact.name, contact.address, ownerReachableDetails(contact));
+    // brokerInfo strips a broker's email/phone that CoStar bled onto the owner.
+    await ensureRecordedOwner(contact.name, contact.address, ownerReachableDetails(contact, brokerInfo));
   }
 
   // Process buyers and sellers from sales history to build ownership chain
