@@ -334,3 +334,26 @@ Prompt 56 addresses all three; keeps 52/54 intact.
 - Prompt-50 review lane (57 rows) and 269 E Caroline St consolidation (2 rows) — data review when convenient.
 - "Always-include-our-deals" rule (Woodland Hills at 21,080 SF doesn't rank into a 6,453-SF subject's top-25) — separate opt-in if wanted.
 - Rotate `LCC_API_KEY`; Census key (prompt 19 parked).
+
+
+## Reconcile 2026-08-06 (prompt 56 — merged, live) + queue 57
+
+**56 landed and moved to `done/`.** Re-ran `generate_comps` for The Villages and **downloaded + inspected the sheet**.
+
+| # | Outcome | State |
+|---|---------|-------|
+| 56 | STATUS default "Available" + full BUMPS normalization + summary-matches-sheet | ✅ **merged (PR #1585), live & verified in the sheet.** On Market STATUS = "Available" on all 14 rows; BUMPS both tabs normalized ("Flat", "10% / 5 yrs", "2% / yr", "12.5% / 5 yrs", "CPI annually" — no bare decimals / "10% every 5" / blanks); summary now reads "displayed sold set (n=22), 5.21%–7.08%" matching the sheet. |
+
+### Live verify (2026-08-06, post-56) — 3 items FIXED, 4 residuals found
+Scott's report (status empty, bumps errors) was from the **pre-56 file** — those are now fixed in the live sheet.
+Downloaded-sheet inspection surfaced four genuine residuals, none previously scoped → **prompt 57**:
+1. **OPTIONS not normalized** (both tabs) — `(3) 5-yr`, `3`, `Two (2) Five (5) Year`, `three five-year options`, `One, Five-Year Period`, `Two (2), Five (5) Year` all coexist. BUMPS got a normalizer in 56; OPTIONS never did.
+2. **Lease-term discipline** — Sold ships comps with **no lease expiration** (2520 B F Terry Blvd, 582 Pole Line Rd, 2500 Commercial Dr) and **<3 yr at close** (320 Gideon Creek Way 0.24 yr, 6020 Enterprise Pkwy 1.72 yr, 311 140th St 2.84 yr). TERM math is correct (term-at-sale, verified: 614 S Cannon 9.96 yr from its 2025 sale) — it's a **selection** gap: no-term / short-term comps ranking into a 12-yr-subject appraisal set. Scott's "wrong lease at sale" = stale lease predating the sale where the property re-leased at close.
+3. **On Market no price** — 1550 Goodman Ave (just-listed, no ask) → no cap → not usable.
+4. **On Market no lease details** — 1775 NW 80th Blvd (EXP/TERM blank).
+
+### Prompt 57 (queued in `prompts/`)
+OPTIONS normalizer `(N) M-yr` (shared, both tabs, like BUMPS); lease-term discipline (use lease-at-close; exclude/route-to-review any comp with no lease expiration or <3-yr term-at-close — 3-yr floor a named constant; stale-lease-suspect → review, never fabricate); exclude On Market listings with no price. Keeps 52/54/56 intact; reports review-lane moves for auditability.
+
+### Carried forward (non-blocking)
+- Prompt-50 review lane (57 rows) + 269 E Caroline St (2 rows); "always-include-our-deals" opt-in; rotate `LCC_API_KEY`; Census key (19 parked). Cosmetic: `subject.kind` still "place" though fully resolved.
