@@ -156,9 +156,9 @@ function makeQualityQuery(domain, calls) {
     bumps: '2% annual',
     renewal_options: '2, 5 yr',
     on_market_date: '2024-12-01',
-    initial_price: 5400000,
+    initial_price: 5700000,
     initial_cap_rate: 0.057,
-    last_price: 5150000,
+    last_price: 5500000,
     last_cap_rate: 0.06,
     sale_date: `2025-${String((i % 9) + 1).padStart(2, '0')}-15`,
     confidence: 0.9,
@@ -498,9 +498,9 @@ describe('comps engine bounded output', () => {
     assert.equal(first.bumps, '2% / yr');
     assert.equal(first.renewal_options, '(2) 5-yr');
     assert.equal(first.on_market, '2024-12-01');
-    assert.equal(first.initial_price, 5400000);
+    assert.equal(first.initial_price, 5700000);
     assert.equal(first.initial_cap_rate, 0.057);
-    assert.equal(first.last_price, 5150000);
+    assert.equal(first.last_price, 5500000);
     assert.equal(first.last_cap_rate, 0.06);
     assert.ok(first.chairs >= 16);
     assert.ok(first.patients >= 90);
