@@ -23,6 +23,14 @@
 deal state forward — summaries, milestones, next steps, dossier, and packets all sit static
 until a human or a manual generation touches them.
 
+### State (2026-08-06 — updated as units land)
+| Unit | State |
+|---|---|
+| **W7.1** correspondence attribution LIVE | **BUILT — awaiting flag flip** (`DEAL_EMAIL_MATCH_ENABLED`). Matcher hourly cron (flag-gated) + run-log + loud-failure alert; deal mapping at ingest via the authoritative `deal_party` roster + conversation-thread continuity; `/api/intake-deal-backfill` alias. Dry-run report: `W7_1_deal_email_match_dryrun_2026-08-06.md`. Ledger: `ROLLOUT_STATUS.md`. |
+| W7.2 propagation tick | not started (W7.1 is its producer) |
+| W7.3 call notes | not started |
+| W7.4 role evolution | not started |
+
 ## 1. Doctrine for this wave (unchanged, applied)
 - LLM may EXTRACT/SUMMARIZE/PROPOSE (correspondence summaries, milestone candidates, action-item
   drafts, dossier Analysis) — it may NEVER be the value gate for an auditable write. Structured

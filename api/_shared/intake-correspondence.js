@@ -29,6 +29,21 @@ import { invokeExtractionAI } from './ai.js';
 // activity_events.domain carries the canonical short form 'dia' | 'gov'.
 // The matcher hands us 'dialysis' | 'government' (or null for an lcc-direct
 // match). Normalize; unknown → null (the column is nullable).
+// W7.1 — conversation-thread continuity. Return the deal (entity_id) that a
+// PRIOR message in the same Outlook conversation was stamped to, if any. We key
+// on metadata.conversation_id across the dual-anchor sources and require a
+// non-null entity_id (a deal-stamped row). Best-effort; null on any miss.
+async function dealForConversation(query, workspaceId, conversationId) {
+  if (!conversationId) return null;
+  try {
+    const r = await query('GET',
+      `activity_events?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
+      `&metadata->>conversation_id=eq.${encodeURIComponent(conversationId)}` +
+      `&entity_id=not.is.null&select=entity_id&order=occurred_at.desc&limit=1`);
+    return r.data?.[0]?.entity_id || null;
+  } catch (_e) { return null; }
+}
+
 function normalizeActivityDomain(domain) {
   if (!domain) return null;
   const s = String(domain).toLowerCase();
@@ -165,6 +180,15 @@ export async function logInboundCorrespondenceDualAnchor({
     if (packet?.primary_deal)    dealEntityId  = packet.primary_deal;
   } catch (_e) { /* best-effort */ }
 
+  // W7.1 conversation-thread continuity: if the resolver yielded no deal but a
+  // PRIOR message in the same Outlook conversation is already deal-stamped, this
+  // reply belongs to that same deal — cheap and precise (same thread). Fills the
+  // gap for a party we can't yet resolve to a roster/deal.
+  const conversationId = ctx.conversation_id || ctx.conversationId || null;
+  if (!dealEntityId && conversationId) {
+    dealEntityId = await dealForConversation(query, workspaceId, conversationId);
+  }
+
   const res = await append({
     workspaceId,
     actorId,
@@ -181,6 +205,7 @@ export async function logInboundCorrespondenceDualAnchor({
       from,
       to:              ctx.to || null,
       via:             'outlook_inbound',
+      conversation_id: conversationId,
       party_entity_id: partyEntityId,
       deal_entity_id:  dealEntityId,
     },
