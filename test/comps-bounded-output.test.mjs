@@ -514,6 +514,99 @@ describe('comps engine bounded output', () => {
     assert.ok(calls.some(([domain, body]) => domain === 'dialysis' && body.p_comp_type === 'both' && body.p_include_onmkt === true));
   });
 
+  it('hydrates the subject anchor from its property record and excludes it from the set (prompt 47)', async () => {
+    const subjectListing = {
+      comp_id: 'subject-listing',
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      comp_type: 'listing',
+      on_market: true,
+      tenant: 'DaVita',
+      address: '1050 Old Camp Rd',
+      city: 'The Villages',
+      state: 'FL',
+      building_sf: 6453,
+      cap_rate: 0.0675,
+      current_cap_rate: 0.0675,
+      ask_price: 3053464,
+      current_price: 3053464,
+      annual_rent: 206109,
+      on_market_date: '2024-04-04',
+      confidence: 0.85,
+      raw: { property_id: 31964 },
+    };
+    const otherComps = Array.from({ length: 12 }, (_, i) => ({
+      comp_id: `cmp-${i + 1}`,
+      source: 'dialysis_db',
+      vertical: 'dialysis',
+      tenant: i % 2 ? 'DaVita' : 'Fresenius',
+      address: `${100 + i} Comp Rd`,
+      city: i % 2 ? 'Orlando' : 'Tampa',
+      state: 'FL',
+      building_sf: 6000 + i * 100,
+      chairs: 10 + (i % 5),
+      year_built: 2015 + (i % 6),
+      sale_price: 4000000 + i * 10000,
+      cap_rate: 0.066 + i / 10000,
+      annual_rent: 270000 + i * 1000,
+      lease_expiration: '2037-06-30',
+      sale_date: `2025-${String((i % 9) + 1).padStart(2, '0')}-01`,
+      confidence: 0.9,
+      raw: { property_id: 40000 + i },
+    }));
+    const diaQuery = async (method, path, body) => {
+      if (method === 'POST' && path === 'rpc/rpc_query_comps') {
+        return { ok: true, status: 200, data: body.p_include_onmkt ? [subjectListing, ...otherComps] : [...otherComps] };
+      }
+      if (method === 'GET' && /^properties\?address=ilike/.test(path)) {
+        return { ok: true, status: 200, data: [{
+          property_id: 31964, address: '1050 Old Camp Rd', city: 'The Villages', state: 'FL',
+          tenant: 'DaVita Kidney Care', operator: 'DaVita', chain_canonical: 'DaVita',
+          building_size: '6453.00', total_chairs: 12, year_built: 2022,
+          lease_commencement: '2023-08-06', wavg_lease_expiration: null,
+          lease_bump_pct: '0.1000', lease_bump_interval_mo: 60,
+        }] };
+      }
+      if (method === 'GET' && /^leases\?property_id=eq\.31964/.test(path)) {
+        return { ok: true, status: 200, data: [{ lease_expiration: '2038-08-05' }] };
+      }
+      if (method === 'GET' && /^available_listings\?property_id=eq\.31964/.test(path)) {
+        return { ok: true, status: 200, data: [{ cap_rate: '0.0675', current_cap_rate: '0.0675', initial_cap_rate: '0.0675', status: 'active' }] };
+      }
+      if (method === 'POST' && /_engine_noi_batch$/.test(path)) return { ok: true, status: 200, data: [] };
+      if (method === 'POST' && /_comp_review_queue/.test(path)) return { ok: true, status: 200, data: [] };
+      return { ok: true, status: 200, data: [] };
+    };
+    const govQuery = async () => ({ ok: true, status: 200, data: [] });
+
+    const result = await runSynthesize(
+      {
+        request: 'dialysis comps for The Villages DaVita at 1050 Old Camp Rd for an appraiser',
+        subject: { name: 'The Villages', state: 'FL', metro: 'Wildwood-The Villages', region: 'Southeast', kind: 'subject_candidate' },
+        appraisal_mode: true,
+        include_on_market: true,
+        comp_type: 'both',
+        limit: 25,
+      },
+      { govQuery, diaQuery }
+    );
+
+    // Subject anchor hydrated from the record — not "Not on file", not a 6.00% default.
+    assert.equal(result.subject.building_sf, 6453);
+    assert.equal(result.subject.chairs, 12);
+    assert.equal(result.subject.year_built, 2022);
+    assert.equal(result.subject.cap_rate, 0.0675);
+    assert.equal(result.subject.property_id, 31964);
+    assert.equal(result.subject.bumps, '10% / 5 yrs');
+    assert.ok(result.subject.remaining_term > 10 && result.subject.remaining_term < 14); // term to ~2038
+    assert.equal(result.subject.lease_expiration, '2038-08-05');
+
+    // Subject excluded from the comp set (its own active listing never ships as a comp).
+    assert.ok(result.meta.excluded_subject >= 1);
+    assert.equal(result.comps.some(c => c.address === '1050 Old Camp Rd'), false);
+    assert.equal(result.comps.some(c => String(c.property_id) === '31964'), false);
+  });
+
   it('preserves template_comps when the HTTP guard shrinks an oversized comps response', () => {
     const templateComps = Array.from({ length: 25 }, (_, i) => ({
       comp_id: `row-${i}`,
