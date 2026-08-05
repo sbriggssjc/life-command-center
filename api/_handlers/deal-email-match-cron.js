@@ -27,6 +27,36 @@ import { opsQuery } from '../_shared/ops-db.js';
 import { makeDealEmailMatcherRoute } from '../../mcp/deal-email-matcher.js';
 
 const enc = (v) => encodeURIComponent(String(v));
+
+// ── opsQuery compat shim for the matcher engine ──────────────────────────────
+// makeDealEmailMatcherRoute was written against mcp/server.js's supabaseQuery:
+//   opsQuery(method, path, body, prefer)  — 4th arg is a Prefer STRING.
+// api/_shared/ops-db.js's opsQuery is:
+//   opsQuery(method, path, body, opts)    — 4th arg is an opts OBJECT.
+// The shim bridges the contract exactly (so we don't fork the matcher) AND fixes
+// the live crash:
+//   • Root cause — ops-db's GET default is `Prefer: count=exact`, forcing an
+//     exact COUNT over activity_events (22k+ rows) on every per-deal candidate
+//     query. That count now hits the statement timeout and PostgREST returns a
+//     5xx error OBJECT (non-array) as `.data`. The matcher does
+//     `for (const m of (cand.data || []))`, and `for…of` over a truthy non-array
+//     throws "object is not iterable" — killing the whole run. The matcher never
+//     reads `.count`, so we request `countMode:'none'` and the exact count (and
+//     its timeout) disappears.
+//   • Defense in depth — if any GET still returns a non-array `.data`, coerce it
+//     to [] so one failed read degrades to "no candidates" instead of crashing.
+async function engineOpsQuery(method, path, body, prefer) {
+  const opts = { countMode: 'none' };
+  if (prefer) opts.headers = { Prefer: prefer };
+  const r = await opsQuery(method, path, body, opts);
+  if (method === 'GET' && r && r.data != null && !Array.isArray(r.data)) {
+    console.warn('[deal-email-match-cron] non-array GET data coerced to []', {
+      path: String(path).slice(0, 80), status: r.status, ok: r.ok,
+    });
+    return { ...r, data: [], _nonArrayData: r.data };
+  }
+  return r;
+}
 const WORKSPACE_ID =
   process.env.LCC_PRIMARY_WORKSPACE_ID
   || process.env.LCC_DEFAULT_WORKSPACE_ID
@@ -70,7 +100,8 @@ async function maybeOpenAlert(summary) {
     await opsQuery('POST', 'lcc_health_alerts', {
       alert_kind: 'cron_failure', source: 'deal_email_matcher', severity: 'warning',
       summary: 'Deal-email matcher failed on two consecutive runs',
-      details: { errors: (summary.errors || []).slice(0, 10), error_count: (summary.errors || []).length },
+      details: { error: summary.error ?? null, errors: (summary.errors || []).slice(0, 10),
+                 error_count: (summary.errors || []).length || (summary.error ? 1 : 0) },
     });
     return true;
   } catch (_e) { return false; }
@@ -91,12 +122,21 @@ export async function handleDealEmailMatchCron(req, res) {
   }
 
   try {
-    const matcher = makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID });
+    const matcher = makeDealEmailMatcherRoute({ opsQuery: engineOpsQuery, enc, WORKSPACE_ID });
     const { res: mockRes, out } = captureRes();
     await matcher.match({ query: { dry_run: dryRun ? 1 : 0 }, body: {} }, mockRes);
     const s = out.body || {};
-    const errorCount = Array.isArray(s.errors) ? s.errors.length : 0;
+    // The matcher's own outer catch returns { ok:false, error } WITHOUT any
+    // summary/stats, and a non-200 status is itself a failure. Treat either as
+    // not-ok, and always persist the error + HTTP status into detail so a
+    // setup-phase crash (no stats yet) is visible in the run log — the exact gap
+    // that made the count=exact crash invisible.
+    const errorCount = Array.isArray(s.errors) ? s.errors.length : (s.error ? 1 : 0);
     const ok = out.status === 200 && s.ok !== false && errorCount === 0;
+
+    const detail = dryRun
+      ? { status: out.status, deals: (s.deals || []).slice(0, 40) }
+      : { status: out.status, error: s.error ?? null, errors: (s.errors || []).slice(0, 20) };
 
     const runId = await writeRunLog({
       trigger_source: triggerSource, dry_run: !!dryRun,
@@ -104,7 +144,7 @@ export async function handleDealEmailMatchCron(req, res) {
       emails_attributed: s.emails_attributed ?? null, already_attributed: s.already_attributed ?? null,
       roster_edges: s.roster_edges ?? null, digest_excluded: s.digest_excluded ?? null,
       skipped_thin: s.skipped_thin_tokens ?? null, error_count: errorCount, ok,
-      detail: dryRun ? { deals: (s.deals || []).slice(0, 40) } : { errors: (s.errors || []).slice(0, 20) },
+      detail,
     });
 
     console.log(`[deal-email-match-cron] ok=${ok} dry_run=${!!dryRun} scanned=${s.deals_scanned ?? '-'} ` +
