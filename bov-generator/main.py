@@ -75,6 +75,17 @@ try:
 except Exception:  # noqa: BLE001
     _COMPS_VALIDATOR = False
 
+# Post-recalc shared-width re-apply (Prompt 48). LibreOffice re-optimizes column
+# widths when it stores the recalc'd file, desyncing a shared column that is blank
+# on one sheet but populated on the other (e.g. PATIENTS). This re-applies the
+# shared-width contract as the LAST mutation before conformance, WITHOUT dropping
+# the cached formula values recalc just computed (surgical <cols> XML rewrite).
+try:
+    from comps_width_postpass import reapply_shared_widths
+    _COMPS_WIDTH_POSTPASS = True
+except Exception:  # noqa: BLE001
+    _COMPS_WIDTH_POSTPASS = False
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("bov-generator")
@@ -453,6 +464,18 @@ async def generate_comps(payload: dict, request: Request):
         except RecalcError as e:
             log.error("Comps recalc failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Recalc failed: {e}")
+
+        # Re-apply the shared column-width contract AFTER recalc, as the LAST write
+        # before conformance. LibreOffice re-optimizes widths on store (desyncing a
+        # shared column blank on one sheet / populated on the other — the PATIENTS
+        # 10.0-vs-13.0 conformance 500). This surgically rewrites only the <cols>
+        # XML, preserving every cached formula value recalc computed. Sales only —
+        # the two-sheet shared-width requirement is where the desync happens.
+        if _COMPS_WIDTH_POSTPASS and comp_type == "sales":
+            try:
+                reapply_shared_widths(output_path)
+            except Exception as e:  # noqa: BLE001 — never fail the whole export on the width pass
+                log.warning("Post-recalc shared-width re-apply failed (continuing): %s", e)
 
         # Conformance gate — the produced workbook must match the Briggs comps
         # standard (sheets/headers/formula-protected columns/trim + AVG ranges +
