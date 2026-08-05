@@ -18,7 +18,7 @@ Team Briggs lists commercial real estate for sale (primarily single-tenant NNN).
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.4.0 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.4.1 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine — `SynthesizeComps` (default; pass the request text verbatim) or
@@ -57,9 +57,15 @@ run through `bov-generator/validate_comps_output.py` (sheets, canonical headers,
 AVG bar, 0 recalc errors) before delivery — a non-conforming workbook is an error, not a delivered file.
 
 **Appraisal cap discipline + selection policy (prompts 48–52).** For an appraisal comp set the engine ranks by
-similarity to the resolved subject and applies Team Briggs cap discipline: include comps within **35 bps of the
-subject cap**, keep the **set average cap below the subject**, and never present a comp with a higher cap / lower
-value than the subject beyond that band. Default window is the last 18 months; it may reach back to ~24 months to
+similarity to the resolved subject and applies Team Briggs cap discipline **as a hard filter on the DISPLAYED
+rows that ship** (prompt 54), not merely on the summary stat: include comps within **35 bps of the subject cap**,
+keep the **set average cap below the subject**, and never present a comp with a higher cap / lower value than the
+subject beyond that band. The ceiling (displayed cap ≤ subject cap + 35 bps) and a **reliability-or-exclude**
+floor — a displayed cap **< 4.5%** or a dialysis **RENT/SF outside ~12–60** signals a rent/SF/price error — are
+enforced on the same displayed basis the sheet shows, so the shipped rows and the response `summary` cap range
+match; bad-data rows are **routed to the review lane, never displayed**, and above-ceiling / average-trim rows are
+context-only (kept for stats, not shown). Sold comps also carry the **real market-entry date** (`list_date` from the
+rpc, gated < sale) so the Sold tab shows ON MARKET + DOM where a genuine list date exists (never synthetic). Default window is the last 18 months; it may reach back to ~24 months to
 make the count but keeps **a handful of trailing ~7–9-month sales** (recency is not sacrificed to the band). The cap
 used for ranking, the cap-discipline check, and any band is the **DISPLAYED cap = rent ÷ price** (what the workbook
 computes), never the stored `cap_rate` field — that is mislabeled on some records, and >25 bps disagreements are
