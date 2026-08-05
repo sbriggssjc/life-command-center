@@ -155,3 +155,49 @@ describe('Prompt 54 — generate_comps ships an appraiser-clean displayed set', 
     assert.ok(sold.some(r => r.on_market), 'expected list_date to flow onto a sold ON MARKET cell');
   });
 });
+
+describe('Prompt 56 — STATUS never blank, BUMPS normalized to Flat, summary matches the sheet', () => {
+  it('every On Market row has a non-blank STATUS and Sold/On Market bumps default to Flat', async () => {
+    // Give some rows a raw status + messy bumps; leave others blank to prove the defaults.
+    const rows = universe().map((c, i) => ({
+      ...c,
+      bumps: i === 0 ? '10% every 5' : i === 1 ? '1.75' : i === 2 ? 'Fixed' : undefined,
+      status: c.on_market ? (c.comp_id === 'mktHigh' ? 'Under Contract' : 'Active') : undefined,
+    }));
+    const deps = depsFrom(rows);
+    let payload = null;
+    const generateWorkbook = async p => { payload = p; return { status: 'ok', filename: 'x.xlsx', download_url: 'u', expires_in_seconds: 60 }; };
+    await runGenerateCompsFromRequest({
+      request: 'Appraisal comps for our The Villages DaVita deal at a 6.75% cap',
+      subject: SUBJECT, appraisal_mode: true,
+    }, deps, generateWorkbook);
+    // On Market STATUS: never blank; Active/blank → Available; a real status is preserved.
+    for (const r of (payload.on_market || [])) {
+      assert.ok(r.status && String(r.status).trim(), `on-market row ${r.address} has blank STATUS`);
+    }
+    // Every shipped row (both tabs) carries a non-blank BUMPS (empty → Flat).
+    for (const r of [...(payload.sold || []), ...(payload.on_market || [])]) {
+      assert.ok(r.bumps && String(r.bumps).trim(), `row ${r.address} has blank BUMPS`);
+      assert.ok(!/^-?\d+(?:\.\d+)?$/.test(String(r.bumps)), `row ${r.address} bumps still a bare number`);
+      assert.ok(!/every\s+\d/i.test(String(r.bumps)), `row ${r.address} bumps still "X every N"`);
+    }
+  });
+
+  it('summary cap range matches the min-max of the displayed sold rows', async () => {
+    const deps = depsFrom(universe());
+    let payload = null;
+    const generateWorkbook = async p => { payload = p; return { status: 'ok', filename: 'x.xlsx', download_url: 'u', expires_in_seconds: 60 }; };
+    const res = await runGenerateCompsFromRequest({
+      request: 'Appraisal comps for our The Villages DaVita deal at a 6.75% cap',
+      subject: SUBJECT, appraisal_mode: true,
+    }, deps, generateWorkbook);
+    const soldCaps = (payload.sold || [])
+      .map(r => Number(r.annual_rent ?? r.annual_noi) / Number(r.sale_price))
+      .filter(Number.isFinite);
+    const lo = Math.min(...soldCaps) * 100, hi = Math.max(...soldCaps) * 100;
+    const m = res.summary.match(/(\d+\.\d+)%-(\d+\.\d+)% cap range/);
+    assert.ok(m, `summary has no cap range: ${res.summary}`);
+    assert.ok(Math.abs(Number(m[1]) - lo) < 0.02, `summary min ${m[1]} != sheet min ${lo.toFixed(2)}`);
+    assert.ok(Math.abs(Number(m[2]) - hi) < 0.02, `summary max ${m[2]} != sheet max ${hi.toFixed(2)}`);
+  });
+});
