@@ -106,3 +106,46 @@ oldest-backlog first — the ledger makes catch-up automatic.
 
 **Doctrine held:** LLM summarizes/proposes only — every auditable write (milestones from cues, to-dos via
 the Phase-1 guard, ledger rows) is deterministic; own seam only; additive + reversible + idempotent + dry-run.
+
+### W7.2c — propagation refinements (2026-08-06)
+Migration `20260806150000_lcc_w7_2c_propagation_refinements.sql` (applied live to LCC Opps
+`xengecqvemvfknjvbvrq`). Four refinements from W7.2's first live batch; all backward-safe against the running
+tick (`DEAL_COMMS_PROPAGATE_CRON` on) — ledger/run-log changes are additive, the collapse is per-deal
+advisory-locked with the live writer.
+
+1. **Milestone same-key collapse (the Banning finding).** `lcc_deal_record_milestone` now returns
+   `{outcome:inserted|rolled_up|new_round|noop,id}`. Per `(entity_id, milestone_key)` the FIRST occurrence is
+   THE row; a re-occurrence rolls up into `metadata.{occurrence_count,first_on,last_seen_on,last_detail_ref,
+   occurrences[≤20]}` — no new row — UNLESS the prior same-key row is >90d stale AND the deal stage regressed
+   (deal's max `lcc_milestone_stage_rank` > this key's rank), which opens a genuinely new round. Same-evidence
+   re-feed = noop (idempotent). The rule is the canonical spec in `api/_shared/deal-milestone-collapse.js`; the
+   SQL writer + the one-shot collapse mirror it. **Collapse ran live: `lcc_deal_milestone` 41→21 rows, 20 backed
+   up to `_lcc_milestone_collapse_20260806_backup` (reversible), 6 rows now carry an occurrence roll-up.**
+   Banning's 6+ `loi` rows became 3 genuine LOI rounds (first 2024-12-13 ×9 last 2025-02-20; a new round
+   2025-09-30 ×4; a new round 2026-03-31 ×1) — the repetition IS the signal. The dossier milestones panel now
+   renders "LOI — first …, discussed ×N, last …" (`dossier-generator.js`; `lcc_deal_spine` surfaces the
+   occurrence metadata).
+2. **Briefing "what changed on your deals" delta.** New deterministic (NO LLM) section — `fetchDealPropagationDelta(24)`
+   (`briefing-data.js`) aggregates the propagation ledger (`lcc_deal_comm_propagated.actions`) + the two
+   deal-level writes it drove (comms_tick summary refresh, w7.2_tick dossier regen) into one deep-linked line
+   per deal touched in 24h (new comms / summary refreshed / milestones written+rolled-up by key / to-dos /
+   dossier). Rendered HTML+text (`renderDealPropagationDelta`), omitted entirely when empty.
+3. **Incremental summary compression.** The summary row's `metadata` now persists `compressed_block` +
+   `compressed_through_at`/`compressed_through_activity_id`. Next regeneration feeds the compressed history +
+   only comms newer than the watermark (`buildIncrementalSummaryPrompt`), producing the new summary AND an
+   updated compressed_block — no-fabrication extended to the compression (restate prior only). First run per
+   deal (no watermark) = full-corpus as before. Input sizes logged (`slice=N/corpus`).
+4. **Reply-SLA to-dos (deterministic, highest-ROI).** `lcc_deal_reply_sla_candidates(days,limit)` returns open
+   in-scope deals (open bd_opportunity, not paused/on_hold) whose latest deal-stamped comm is INBOUND with
+   >`DEAL_COMMS_REPLY_SLA_DAYS` (default 3) business days elapsed and no outbound since. The tick generates one
+   guarded `reply_overdue` to-do per deal via a new `reply_sla` branch on `lcc_advance_todos` (existence-guard =
+   one open per deal; an outbound reply auto-clears it). **Live dry-count: 1 deal currently trips the SLA**
+   (Scott sanity-checks before enabling more broadly).
+
+- Run-log: additive `milestones_rolled_up`, `reply_overdue_generated`.
+- **Tests:** `deal-milestone-collapse.test.mjs` (8 — rank order, insert/roll-up/new-round incl. stale+regressed,
+  idempotent noop, boundary cases), `deal-comms-incremental-summary.test.mjs` (3 — prompt slice + compressed_block
+  round-trip), `deal-propagation-briefing-delta.test.mjs` (2 — ledger aggregation + empty-omit), and the extended
+  `deal-comms-propagate-tick.test.mjs` (reply-SLA generate/dedupe/dry-count, rolled_up counting).
+- **Reversal:** runbook in the migration header (`_lcc_milestone_collapse_20260806_backup` restore + revert the
+  three functions).

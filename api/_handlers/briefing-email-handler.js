@@ -59,6 +59,7 @@ import {
   fetchPipelineRollup,
   fetchMarketStats,
   fetchResearchProgress,
+  fetchDealPropagationDelta,
   fetchDormantCapabilities,
   fetchLccHealthSnapshot,
   normalizePersonalContext,
@@ -1111,6 +1112,52 @@ function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, p
 // per env-gated capability that is off (or partial) and has been so for more
 // than 30 days. "Half the automation found in this audit was silently off;
 // make 'off' visible."
+// W7.2c — "What changed on your deals" (last 24h propagation delta). One
+// deep-linked line per deal the tick touched. Deterministic; omitted when empty.
+function renderDealPropagationDelta({ dealPropagationDelta }) {
+  const items = dealPropagationDelta?.items || [];
+  if (!items.length) return '';
+  const base = process.env.LCC_BASE_URL || '';
+
+  const rows = items.slice(0, 20).map((it) => {
+    const name = escapeHtml(truncate(it.deal_name || 'Unnamed deal', 60));
+    const link = base ? `${base}/#/pipeline?d=entity:${encodeURIComponent(it.entity_id)}` : '';
+    const nameHtml = link
+      ? `<a href="${escapeHtml(link)}" style="color:${BRAND.navy};text-decoration:none;font-weight:600;">${name}</a>`
+      : `<span style="color:${BRAND.navy};font-weight:600;">${name}</span>`;
+
+    const bits = [];
+    bits.push(`${it.new_comms} new comm${it.new_comms === 1 ? '' : 's'}`);
+    if (it.summary_refreshed) bits.push('summary refreshed');
+    const ms = (it.milestones || []).filter((m) => (m.written || 0) + (m.rolled_up || 0) > 0);
+    if (ms.length) {
+      const parts = ms.map((m) => {
+        const w = m.written || 0, r = m.rolled_up || 0;
+        const tag = w && r ? `${w} new +${r} repeat` : w ? `${w} new` : `×${r} repeat`;
+        return `${escapeHtml(String(m.key).toUpperCase())} (${tag})`;
+      });
+      bits.push(`milestones: ${parts.join(', ')}`);
+    }
+    if (it.todos_generated) bits.push(`${it.todos_generated} to-do${it.todos_generated === 1 ? '' : 's'}`);
+    if (it.dossier_regenerated) bits.push('dossier regenerated');
+
+    return (
+      `<tr><td style="${FONT}padding:6px 10px;vertical-align:top;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:13px;white-space:nowrap;">${nameHtml}</td>` +
+      `<td style="${FONT}padding:6px 10px;vertical-align:top;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:12px;color:${BRAND.textMuted};">${escapeHtml(bits.join(' · '))}</td></tr>`
+    );
+  }).join('');
+
+  const n = items.length;
+  const subtitle = `${n} deal${n === 1 ? '' : 's'} moved in the last ${dealPropagationDelta.window_hours || 24}h — comms, summaries, milestones, to-dos`;
+  return sectionHeader('What Changed on Your Deals', subtitle) +
+    bodyCell(
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
+      `style="margin:12px 0;border:1px solid ${BRAND.bgAlt};background:#fafbfc;">${rows}</table>`,
+    );
+}
+
 function renderDormantCapabilities({ dormantCapabilities }) {
   const items = dormantCapabilities?.items || [];
   if (!items.length) return '';
@@ -1187,6 +1234,7 @@ function renderHtml(ctx) {
     renderCapitalMarkets(ctx) +
     renderMarketStats(ctx) +
     renderWeeklyChanges(ctx) +
+    renderDealPropagationDelta(ctx) +
     renderResearchProgress(ctx) +
     renderSectorWatch(ctx) +
     renderReadingList(ctx) +
@@ -1255,6 +1303,24 @@ function renderText(ctx) {
     });
   }
   lines.push('');
+
+  const delta = ctx.dealPropagationDelta?.items || [];
+  if (delta.length) {
+    lines.push(`WHAT CHANGED ON YOUR DEALS (last ${ctx.dealPropagationDelta.window_hours || 24}h)`);
+    delta.slice(0, 20).forEach((it) => {
+      const bits = [`${it.new_comms} new comm${it.new_comms === 1 ? '' : 's'}`];
+      if (it.summary_refreshed) bits.push('summary refreshed');
+      const ms = (it.milestones || []).filter((m) => (m.written || 0) + (m.rolled_up || 0) > 0);
+      if (ms.length) bits.push('milestones: ' + ms.map((m) => {
+        const w = m.written || 0, r = m.rolled_up || 0;
+        return `${String(m.key).toUpperCase()} (${w && r ? `${w} new +${r} repeat` : w ? `${w} new` : `×${r} repeat`})`;
+      }).join(', '));
+      if (it.todos_generated) bits.push(`${it.todos_generated} to-do${it.todos_generated === 1 ? '' : 's'}`);
+      if (it.dossier_regenerated) bits.push('dossier regenerated');
+      lines.push(`  - ${it.deal_name}: ${bits.join(' · ')}`);
+    });
+    lines.push('');
+  }
 
   const today = ctx.priorities?.today_priorities || [];
   const strategic = today.filter((i) => (i.tier || i._tier) === 'strategic');
@@ -1478,7 +1544,7 @@ export async function briefingEmailHandler(req, res) {
     sfActivity, hotContacts, diaPipeline, newIntakes,
     intelSnapshot, salesComps, expirations, newListings, pipelineRollup,
     marketStats, researchProgress, processingSummary, dormantCapabilities,
-    lccHealth,
+    lccHealth, dealPropagationDelta,
   ] = await Promise.all([
     safe(() => fetchWorkCounts(workspaceId, userId), defaultWorkCounts, 'fetchWorkCounts'),
     safe(() => fetchMyWork(workspaceId, userId, 15), [], 'fetchMyWork'),
@@ -1509,6 +1575,8 @@ export async function briefingEmailHandler(req, res) {
     safe(() => fetchDormantCapabilities(30),
       { min_days_off: 30, count: 0, items: [] }, 'fetchDormantCapabilities'),
     safe(fetchLccHealthSnapshot, defaultLccHealth, 'fetchLccHealthSnapshot'),
+    safe(() => fetchDealPropagationDelta(24),
+      { window_hours: 24, count: 0, items: [] }, 'fetchDealPropagationDelta'),
   ]);
 
   let priorities;
@@ -1566,7 +1634,7 @@ export async function briefingEmailHandler(req, res) {
     priorities, syncHealth, workCounts, inboxSummary, newIntakes,
     salesComps, expirations, newListings, pipelineRollup,
     marketStats, researchProgress, processingSummary, dormantCapabilities,
-    lccHealth,
+    lccHealth, dealPropagationDelta,
     weather: personalContext.weather,
   };
 

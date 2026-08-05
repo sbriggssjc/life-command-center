@@ -3672,7 +3672,11 @@ async function handleDecisionVerdict(req, res) {
         });
         if (!wr.ok) { await recordEffectFailure({ wrote_milestone: false, error: wr.data });
           return res.status(502).json({ error: 'milestone_write_failed', detail: wr.data }); }
-        const inserted = wr.data === true || (Array.isArray(wr.data) && wr.data[0] === true);
+        // W7.2c: lcc_deal_record_milestone now returns { outcome, id }
+        // (inserted|rolled_up|new_round|noop). Tolerate the legacy boolean too.
+        const _res = Array.isArray(wr.data) ? wr.data[0] : wr.data;
+        const _outcome = (_res && typeof _res === 'object') ? _res.outcome : (_res === true ? 'inserted' : 'noop');
+        const inserted = _outcome === 'inserted' || _outcome === 'new_round';
         await record(verdict, 'decided', payload, { wrote_milestone: true, inserted: !!inserted });
         return res.status(200).json({ ok: true, verdict, milestone_key: mc.milestone_key, inserted: !!inserted });
       }

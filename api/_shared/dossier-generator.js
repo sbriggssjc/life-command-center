@@ -609,9 +609,20 @@ function renderDealSections(p) {
 
   // 2c. Transaction story & milestones (compress older, expand recent).
   if (Array.isArray(d.milestones) && d.milestones.length) {
-    const rows = d.milestones.map(mi =>
-      `<tr><td>${esc(fmtDate(mi.date))}</td><td>${esc(mi.milestone_key || '')}</td><td>${esc(mi.status || '')}</td><td>${esc(mi.summary || '')}</td><td class="src">${esc(mi.source || '')}</td></tr>`
-    ).join('');
+    const rows = d.milestones.map(mi => {
+      // W7.2c: a same-key milestone rolls up repeat occurrences into one row.
+      // Surface that repetition — it IS signal ("LOI — first …, discussed ×6, last …").
+      const n = Number(mi.occurrence_count) || 1;
+      let summary = mi.summary || '';
+      if (n > 1) {
+        const first = fmtDate(mi.first_on || mi.date);
+        const last = fmtDate(mi.last_seen_on || mi.date);
+        const note = `first ${first}, discussed ×${n}${last && last !== first ? `, last ${last}` : ''}`;
+        summary = summary ? `${summary} <span class="src">(${esc(note)})</span>` : `<span class="src">${esc(note)}</span>`;
+        return `<tr><td>${esc(fmtDate(mi.date))}</td><td>${esc(mi.milestone_key || '')}</td><td>${esc(mi.status || '')}</td><td>${summary}</td><td class="src">${esc(mi.source || '')}</td></tr>`;
+      }
+      return `<tr><td>${esc(fmtDate(mi.date))}</td><td>${esc(mi.milestone_key || '')}</td><td>${esc(mi.status || '')}</td><td>${esc(summary)}</td><td class="src">${esc(mi.source || '')}</td></tr>`;
+    }).join('');
     out.push(`<h2>Transaction Story &amp; Milestones</h2><table class="hist"><thead><tr><th>Date</th><th>Milestone</th><th>Status</th><th>Summary</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
   } else {
     out.push(`<h2>Transaction Story &amp; Milestones</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);

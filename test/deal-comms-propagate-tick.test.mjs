@@ -18,7 +18,7 @@ delete process.env.NEXT_STEP_AI;                     // deterministic next-step 
 const DEAL = 'c3bc3125-c9b9-4c7b-801d-b1d4bf715f59';
 
 // A programmable PostgREST + Ollama fetch mock that records every call.
-function installFetch({ deals, summaryJson, todoCreated }) {
+function installFetch({ deals, summaryJson, todoCreated, replySlaCandidates, replySlaCreated }) {
   const calls = [];
   const list = (arr) => ({ ok: true, status: 200, text: async () => JSON.stringify(arr),
     headers: { get: (h) => (h === 'content-range' ? `0-${Math.max(0, arr.length - 1)}/${arr.length}` : null) } });
@@ -35,10 +35,15 @@ function installFetch({ deals, summaryJson, todoCreated }) {
         json: async () => payload, text: async () => JSON.stringify(payload) };
     }
     if (u.includes('rpc/lcc_deal_comms_unpropagated')) return scalar(deals);
-    if (u.includes('rpc/lcc_deal_record_milestone')) return scalar(true);
+    if (u.includes('rpc/lcc_deal_reply_sla_candidates')) return list(replySlaCandidates ?? []);
+    if (u.includes('rpc/lcc_deal_record_milestone')) return scalar({ outcome: 'inserted', id: 'm1' });
     if (u.includes('rpc/lcc_open_decision')) return scalar(1234);
     if (u.includes('rpc/lcc_party_role')) return scalar(null);
-    if (u.includes('rpc/lcc_advance_todos')) return scalar({ ok: true, created: todoCreated ?? [{ id: 't1' }] });
+    if (u.includes('rpc/lcc_advance_todos')) {
+      const isReplySla = body && body.p_direction === 'reply_sla';
+      const created = isReplySla ? (replySlaCreated ?? [{ id: 'r1' }]) : (todoCreated ?? [{ id: 't1' }]);
+      return scalar({ ok: true, created });
+    }
     if (u.includes('lcc_deal_correspondence_summary')) return list([{ id: 's1' }]);
     if (u.includes('lcc_dossiers')) return list([]); // no stored dossier → dossier step skipped
     if (u.includes('context_packets')) return list([]);
@@ -171,6 +176,64 @@ test('dry_run reports without writing or ledgering', async () => {
   assert.equal(out.body.deals[0].deterministic_cues, 1);
   assert.ok(!calls.some((c) => c.u.includes('rpc/lcc_deal_record_milestone')), 'dry run writes nothing');
   assert.ok(!calls.some((c) => c.u.includes('lcc_deal_comm_propagated')), 'dry run ledgers nothing');
+});
+
+test('reply-SLA generates a reply_overdue to-do per tripping deal (dedupe left to the guard)', async () => {
+  const deals = [{ entity_id: DEAL, deal_name: 'Test Deal', comms: [mkComm('a1')] }];
+  const calls = installFetch({
+    deals, summaryJson: validSummary,
+    replySlaCandidates: [{ entity_id: DEAL, deal_name: 'Test Deal', last_inbound_at: '2026-08-01T00:00:00Z', last_sender: 'buyer@x.com', business_days: 4 }],
+    replySlaCreated: [{ id: 'r1' }],
+  });
+  const out = await runTick();
+  assert.equal(out.body.reply_overdue_generated, 1);
+  const sla = calls.find((c) => c.u.includes('rpc/lcc_advance_todos') && c.body?.p_direction === 'reply_sla');
+  assert.ok(sla, 'reply_sla advance_todos called');
+  assert.equal(sla.body.p_next_type, 'reply_overdue');
+  assert.ok(String(sla.body.p_next_action).startsWith('Reply overdue — Test Deal:'), 'title shape');
+  assert.equal(sla.body.p_next_due_offset, 3, 'threshold constant passed');
+});
+
+test('reply-SLA guard-deduped (no created rows) → 0 generated', async () => {
+  const deals = [{ entity_id: DEAL, deal_name: 'Test Deal', comms: [mkComm('a1')] }];
+  installFetch({
+    deals, summaryJson: validSummary,
+    replySlaCandidates: [{ entity_id: DEAL, deal_name: 'Test Deal', last_inbound_at: '2026-08-01T00:00:00Z', last_sender: 'b@x', business_days: 5 }],
+    replySlaCreated: [],   // existence-guard already had an open reply_overdue
+  });
+  const out = await runTick();
+  assert.equal(out.body.reply_overdue_generated, 0);
+});
+
+test('reply-SLA dry-count reported, nothing written', async () => {
+  const deals = [{ entity_id: DEAL, deal_name: 'Test Deal', comms: [mkComm('a1')] }];
+  const calls = installFetch({
+    deals, summaryJson: validSummary,
+    replySlaCandidates: [{ entity_id: DEAL, deal_name: 'Test Deal', last_inbound_at: '2026-08-01T00:00:00Z', last_sender: 'b@x', business_days: 6 }],
+  });
+  const out = await runTick({ dry_run: '1' });
+  assert.equal(out.body.reply_sla_candidates, 1);
+  assert.ok(!calls.some((c) => c.u.includes('rpc/lcc_advance_todos')), 'dry run generates no reply_overdue to-do');
+});
+
+test('milestone rolled_up outcome is counted separately from written', async () => {
+  const deals = [{ entity_id: DEAL, deal_name: 'Test Deal',
+    comms: [mkComm('a1', { subject: 'LOI', body: 'sending you the LOI' })] }];
+  global.__ROLLUP = true;
+  const calls = installFetch({ deals, summaryJson: validSummary });
+  // override the milestone RPC to report a roll-up
+  const base = global.fetch;
+  global.fetch = async (url, opts) => {
+    if (String(url).includes('rpc/lcc_deal_record_milestone')) {
+      return { ok: true, status: 200, headers: { get: () => null },
+        text: async () => JSON.stringify({ outcome: 'rolled_up', id: 'm1' }) };
+    }
+    return base(url, opts);
+  };
+  const out = await runTick();
+  assert.equal(out.body.milestones_written, 0);
+  assert.equal(out.body.milestones_rolled_up, 1);
+  void calls;
 });
 
 test('flag off (no force/dry_run) → skipped', async () => {
