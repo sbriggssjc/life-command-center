@@ -248,3 +248,29 @@ interpretation_logs.sql` (LCC Opps) for the interpretation-logging table (resolv
 - **Prompt 30** AUDIT delivered: `docs/architecture/data-integrity-audit-2026-08.md`. Findings: dia 610 dup properties / 967 excess rows (370 multi-source); LCC provenance 2,055 rules / 1,155 conflicts / 33 unranked. Phased plan P1(export, ~done via 29) → **P2 sale-event dedup + SF overlap (next)** → P3 backfill w/ precedence → P4 continuous scrub + Health dashboard.
 - **Prompt 31** drafted into `prompts/`: P2 reframe says do not delete repeat sales; consolidate 93 same-address/different-`property_id` buildings, reconcile only conservative multi-source same-event sales, keep repeat sales distinct, and use Ollama only as review-lane/unstructured assist.
 - **Cowork future-proofing:** `docs/os/COWORK-SETUP-AND-FUTUREPROOFING.md` (run-on-computer default, Global Instructions block, account-level connectors/plugin, canonical folder set).
+
+
+## Reconcile 2026-08-05 (prompts 46 & 47 — merged, live) + queue 48/49
+
+**46 & 47 landed and moved to `done/`.** Live-connector acceptance re-run (The Villages
+DaVita, 1050 Old Camp Rd, property_id 31964) — verified what now works, and isolated the
+two residual blockers with root cause + reproduction. Queued **48** and **49**.
+
+| # | Outcome | State |
+|---|---------|-------|
+| 46 | Builder conformance: overflow cap, trim-both-paths, curated on-market, shared-width contract | ✅ **merged (#1565), live.** Overflow cap + trim + on-market truncation confirmed. Shared-width contract (`validate_comps_output`) correct. **Residual:** contract set pre-recalc; LibreOffice `store()` re-optimizes widths → **prompt 48**. |
+| 47 | Subject hydration from property record + exclude subject from set | ✅ **merged (#1567), live.** `synthesize_comps` (appraisal wording) hydrates subject fully (31964: 6,453 SF / 12 chairs / 2022 / exp 2038-08-05 / bumps "10% / 5 yrs" / cap 6.75%), `excluded_subject=1`, 166 national ranked comps. **Residual:** resolution is phrasing-dependent (place-fallback → near-empty) + nested `fields.cap_rate` still 6.00% → **prompt 49**. |
+
+### Live acceptance test findings (2026-08-05)
+- `synthesize_comps("Appraisal comps for … 1050 Old Camp Rd …")` → **correct**: subject hydrated (`resolved_from_record:true`, cap 0.0675), `excluded_subject:1`, 166 of 215 national ranked. 47's engine logic works.
+- `generate_comps` (fuller/appraisal wording) → **500 conformance**: `shared column widths differ … [('PATIENTS', 10.0, 13.0)]`.
+- `generate_comps` (non-appraisal wording) → subject resolved as **place** (`_cap_default:true`, "Not on file"), collapsed to 0 sold / 1 on-market (the subject's own listing).
+
+### Root cause — conformance 500 (→ prompt 48), REPRODUCED end-to-end
+`_autofit_no_wrap` sets ONE shared width per header across On Market/Sold **before** save (correct — repro: PATIENTS 10.0/10.0, passes). Then the export path runs LibreOffice `calculateAll()`+`store()` (`recalc_runner.py`), and **LibreOffice re-optimizes column widths on store even with `customWidth="1"`** — a shared column populated on one sheet but blank on the other desyncs (PATIENTS: On Market blank→10.0, Sold has counts→13.0). The conformance gate runs AFTER recalc, so it sees the desync. Verified by running the real recalc macro locally: Sold PATIENTS 10.0→13.0 post-store. Fix = re-apply the shared-width contract as the LAST write before validation, preserving cached values (surgical `<cols>` rewrite).
+
+### Root cause — subject place-fallback (→ prompt 49)
+When the street address isn't extracted from the request text, resolution falls to the metro ("The Villages"), so hydration/exclusion never fire and scope collapses to the subject's own metro. Fix = extract the street address and resolve to property FIRST (same path `get_property_context` uses), keep national scope on resolve, and propagate the hydrated cap into `subject.fields` (nested `fields.cap_rate` still shows 6.00%).
+
+### Deferred decision for Scott
+Appraisal-mode cap filtering: the working 166-comp set includes caps ABOVE the subject's 6.75%. The standing appraisal rule is never to show a higher cap / lower value than the subject. Whether appraisal mode should *withhold* higher-cap comps (vs. show the full market) is a deliberate scope change — noted in prompt 49's tail, not encoded unilaterally.
