@@ -2,8 +2,8 @@
   "swagger": "2.0",
   "info": {
     "title": "LCC Deal Intelligence",
-    "version": "4.0.0",
-    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 88 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException."
+    "version": "4.1.0",
+    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 88 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException. | v4.1.0 (2026-08-06): added W7.3 capture actions log_call_note + tag_comm_to_deal to the dispatchCopilotAction copilot_action enum (params via the existing free-form params object; see docs/architecture/copilot_action_registry.md for input shapes)."
   },
   "host": "tranquil-delight-production-633f.up.railway.app",
   "basePath": "/",
@@ -102,7 +102,9 @@
                     "retry_sync_error_record",
                     "research_followup",
                     "reassign_work_item",
-                    "escalate_action"
+                    "escalate_action",
+                    "log_call_note",
+                    "tag_comm_to_deal"
                   ]
                 },
                 "params": {
@@ -3500,7 +3502,7 @@
             "description": "Missing comp type or rows"
           },
           "401": {
-            "description": "Unauthorized — invalid or missing X-LCC-Key"
+            "description": "Unauthorized \u2014 invalid or missing X-LCC-Key"
           }
         }
       }

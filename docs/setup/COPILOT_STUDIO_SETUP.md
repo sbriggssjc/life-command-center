@@ -1,3 +1,14 @@
+> **CANONICAL CONNECTOR SPEC (single source of truth — read before editing anything):**
+> `copilot/lcc-deal-intelligence.connector.v4.swagger.json` is THE spec for the ONE
+> "LCC Deal Intelligence" custom connector in Power Platform. Update actions THERE
+> (the `dispatchCopilotAction` → `copilot_action` enum + the registry docs), bump
+> `info.version`, then re-import via the swagger editor into the EXISTING connector —
+> never create a second connector. v2/v3 and all other specs live in
+> `docs/archive/openapi-legacy/` and must NOT be imported. Server-side action
+> registration (`api/operations.js` ACTION_REGISTRY/ACTION_SCHEMAS) and this spec must
+> move TOGETHER — an action missing from the enum is invisible to Copilot (this gap
+> happened with the W7.3 actions, caught 2026-08-06; spec now v4.1.0).
+
 # Copilot Studio Setup Guide — LCC Assistant
 
 > **No M365 admin access required.** Any licensed M365 user can create and publish a personal Copilot agent through Copilot Studio (copilotstudio.microsoft.com).
