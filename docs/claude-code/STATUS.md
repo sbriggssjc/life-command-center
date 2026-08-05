@@ -361,3 +361,26 @@ Downloaded-sheet inspection surfaced four genuine residuals, none previously sco
 
 ### Carried forward (non-blocking)
 - Prompt-50 review lane (57 rows) + 269 E Caroline St (2 rows); "always-include-our-deals" opt-in; rotate `LCC_API_KEY`; Census key (19 parked). Cosmetic: `subject.kind` still "place" though fully resolved.
+
+
+## Reconcile 2026-08-06 (prompt 57 — merged, live) + canon re-render (40→0 drift)
+
+**57 landed** (Claude Code moved the prompt to `done/`; PR #1587). Re-ran `generate_comps` for The Villages and
+**downloaded + inspected the sheet** — all four residuals fixed. The connector now produces the fully appraiser-clean workbook.
+
+| # | Outcome | State |
+|---|---------|-------|
+| 57 | OPTIONS normalizer `(N) M-yr` (both tabs) + lease-term discipline (exclude no-term / <3yr-at-close / no-price; route to review) | ✅ **merged (PR #1587), live & sheet-verified.** OPTIONS now only `(N) M-yr` / `(N)` (count, term-unknown, NOT faked to 5-yr) / `None` — all raw spellings ("Two (2) Five (5) Year", "three five-year options", "One, Five-Year Period", bare "3") gone. No row with blank lease expiration; none <3yr; no On Market row without a price; STATUS + bumps still clean. `excluded_for_review: {no_lease_term 5, short_lease_term 4, no_price 1, total 10}`; `APPRAISAL_MIN_REMAINING_TERM_YEARS=3` (named/tunable). 116 comps tests green. |
+
+### Live verify (2026-08-06, post-57) — sheet-level
+`generate_comps` → 17 sold + 12 on-market (down from 23/14; 10 comps routed to review lane, auditable). Sold caps 5.29–7.08%, median 6.13%, weighted-avg 6.12% (below the 6.75% subject). Subject fully hydrated (6.75% top+fields, chairs 12, bumps "10% / 5 yrs"). Delivered the verified workbook to Scott AND wrote it directly to `outputs/deals/The_Villages_FL/` via the folder bridge (bypasses the desktop download cache — the earlier "still broken" reports traced to stale cached downloads of look-alike filenames, not the data).
+
+### Comps arc — COMPLETE end-to-end (36–57)
+Single plain-language request → connector `generate_comps` → conforming, appraiser-clean dialysis workbook: subject resolved+hydrated+excluded, national 25-best similarity ranking, cap band ≤ subject+35bps (avg below subject), reliability + lease-term + price discipline, canonical tenants/STATUS/BUMPS/OPTIONS, on-market-date/DOM, summary-matches-sheet. Hand-building retired.
+
+### CANON re-render (recurring drift)
+Parity showed **40 drift** — every block EXCEPT comps went stale across all 5 surfaces (the 54/56/57 branches forked before the prior re-render and carried older surface bundles back on merge). Re-ran `render-surfaces.mjs --write-live` → **0 drift**. External surfaces (chatgpt/northmarq/claude skills) still need the SURFACE-SYNC paste.
+
+### Carried forward (non-blocking)
+- Review lanes: prompt-50 (57 rows) + 269 E Caroline (2) + NEW prompt-57 exclusions (10: no/short-term + no-price) — data-acquisition/verification backlog, all reversible/auditable.
+- "Always-include-our-deals" opt-in (Woodland Hills size-rank); rotate `LCC_API_KEY`; Census key (19 parked). Cosmetic: `subject.kind` still "place".
