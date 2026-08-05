@@ -49,7 +49,8 @@ import re
 from datetime import datetime, date
 from pathlib import Path
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 # Conformance validator — the independent CHECK that a produced workbook matches
 # the Briggs comps standard. populate_comps runs the STRUCTURAL checks (sheets,
@@ -138,7 +139,7 @@ def _norm(h) -> str:
 
 # Row-key aliases → canonical Briggs header token. Lets a caller pass the comps-engine /
 # query_comps field names straight through to the master-order template columns
-# (TENANT, LAND, BUILT, RBA, CHAIRS, PATIENTS, RENT, EXP, EXPENSES, RENEWAL OPTIONS,
+# (TENANT, LAND, BUILT, RBA, CHAIRS, PATIENTS, RENT, EXP, EXPENSES, OPTIONS,
 #  SOLD PRICE, DATE, INITIAL/LAST PRICE, ON MARKET, DOM ...).
 _ALIASES = {
     "chair_count": "chairs", "chair_ct": "chairs",
@@ -338,6 +339,74 @@ def _trim_to_totals(ws, n):
             ws.cell(tot, c).value = v.replace(str(old_last), str(new_last))
 
 
+# --- Auto-fit + no-wrap (Prompt 43) -------------------------------------------
+# Scott's export standard: every column is sized to its longest cell/header (no
+# wrapping), and a shared column shares ONE width across the On Market and Sold
+# sheets so the two tabs line up. Kept inside the renderer so the conformance
+# validator (Prompt 37) can assert "no wrapped cells / widths fit contents".
+_AUTOFIT_PAD = 2          # small breathing room past the longest content
+_AUTOFIT_MIN = 4          # never collapse a column narrower than this
+_AUTOFIT_MAX = 50         # sane ceiling so one long cell can't blow the layout out
+_HEADER_ROW = 5
+
+
+def _display_len(cell) -> int:
+    """Approximate the on-screen character width of a cell's rendered value.
+    Dates are measured at their DISPLAY width (the formatted string), not the
+    underlying datetime repr; formulas contribute nothing (their result width is
+    unknown pre-recalc — the header/other rows drive those columns)."""
+    v = cell.value
+    if v is None or v == "":
+        return 0
+    if isinstance(v, str) and v.startswith("="):
+        return 0                       # formula cell — result width unknown here
+    if isinstance(v, (datetime, date)):
+        fmt = str(cell.number_format or "").lower()
+        # count the y/m/d/h/s placeholders + separators actually shown
+        if "yyyy" in fmt:
+            return 10                  # mm/dd/yyyy
+        if any(t in fmt for t in ("yy", "mm", "dd", "mmm")):
+            return len(re.sub(r"[^a-z0-9/\-]", "", fmt)) or 8
+        return 10
+    if isinstance(v, (int, float)):
+        return len(("{:,.0f}".format(v)) if float(v).is_integer() else ("{:,.2f}".format(v)))
+    return len(str(v))
+
+
+def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
+    """Size every column to its longest header/cell (with padding, sane min/max),
+    turn OFF wrap on every cell, and share ONE width per header across all the
+    given sheets so shared columns line up. `sheets` is a list of worksheets."""
+    # Pass 1 — per-sheet longest content per column index, keyed for sharing by
+    # the (normalized) header text so the same column lines up across sheets.
+    shared = {}                       # normalized header -> max width seen anywhere
+    per_sheet = []                    # [(ws, {col_idx: (norm_header, local_max)})]
+    for ws in sheets:
+        cols = {}
+        for c in range(1, ws.max_column + 1):
+            hdr = ws.cell(header_row, c).value
+            if hdr in (None, ""):
+                continue
+            longest = _display_len(ws.cell(header_row, c))
+            for r in range(header_row, ws.max_row + 1):
+                cell = ws.cell(r, c)
+                if cell.alignment is not None and cell.alignment.wrap_text:
+                    cell.alignment = Alignment(
+                        horizontal=cell.alignment.horizontal,
+                        vertical=cell.alignment.vertical,
+                        wrap_text=False)
+                longest = max(longest, _display_len(cell))
+            key = _norm(hdr)
+            cols[c] = (key, longest)
+            shared[key] = max(shared.get(key, 0), longest)
+        per_sheet.append((ws, cols))
+    # Pass 2 — apply the SHARED width (padded, clamped) to each column.
+    for ws, cols in per_sheet:
+        for c, (key, _local) in cols.items():
+            width = max(_AUTOFIT_MIN, min(_AUTOFIT_MAX, shared[key] + _AUTOFIT_PAD))
+            ws.column_dimensions[get_column_letter(c)].width = width
+
+
 def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> dict:
     """Fill the Briggs comps template from a structured payload. Returns a summary
     { comp_type, sheets:{name:count}, skipped_formula_keys, unknown_keys, out_path }.
@@ -384,6 +453,14 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
 
     if not summary["sheets"]:
         raise CompsError("no comp rows supplied (sales: on_market/sold; lease: comps)")
+
+    # Auto-fit every written column to its contents + kill wrapping. For sales the
+    # On Market and Sold tabs SHARE one width per header so the two line up; the
+    # lease workbook has a single data sheet. (Prompt 43.)
+    if comp_type == "sales":
+        _autofit_no_wrap([wb[s] for s in ("On Market", "Sold") if s in wb.sheetnames])
+    elif "Lease Comps" in wb.sheetnames:
+        _autofit_no_wrap([wb["Lease Comps"]])
 
     wb.save(out_path)
     wb.close()

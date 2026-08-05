@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 HEADER_ROW = 5
 DATA_START_ROW = 6
@@ -72,13 +73,13 @@ def _n(h) -> str:
 
 _SALES_ONMARKET = [
     "#", "TENANT", "ADDRESS", "CITY", "STATE", "LAND", "BUILT", "RBA",
-    "RENT", "RENT/SF", "EXP", "TERM", "EXPENSES", "BUMPS", "RENEWAL OPTIONS",
+    "RENT", "RENT/SF", "EXP", "TERM", "EXPENSES", "BUMPS", "OPTIONS",
     "INITIAL PRICE", "INITIAL CAP", "LAST PRICE", "LAST CAP", "PRICE CHG",
     "ON MARKET", "DOM", "STATUS",
 ]
 _SALES_SOLD = [
     "#", "TENANT", "ADDRESS", "CITY", "STATE", "LAND", "BUILT", "RBA",
-    "RENT", "RENT/SF", "EXP", "TERM", "EXPENSES", "BUMPS", "RENEWAL OPTIONS",
+    "RENT", "RENT/SF", "EXP", "TERM", "EXPENSES", "BUMPS", "OPTIONS",
     "SOLD PRICE", "SOLD/SF", "SOLD CAP", "DATE", "INITIAL PRICE", "INITIAL CAP",
     "LAST PRICE", "LAST CAP", "BID-ASK SPREAD", "PRICE CHG", "ON MARKET", "DOM",
 ]
@@ -202,6 +203,22 @@ def _range_ends(formula: str) -> List[int]:
     return [int(m) for m in re.findall(r"[A-Z]+\d+:[A-Z]+(\d+)", str(formula or ""))]
 
 
+def _disp_len(cell) -> int:
+    """Rendered character width of a cell (mirror of comps_generator._display_len):
+    dates at display width, formulas contribute nothing, numbers comma-formatted."""
+    from datetime import datetime, date
+    v = cell.value
+    if v is None or v == "":
+        return 0
+    if isinstance(v, str) and v.startswith("="):
+        return 0
+    if isinstance(v, (datetime, date)):
+        return 10
+    if isinstance(v, (int, float)):
+        return len(("{:,.0f}".format(v)) if float(v).is_integer() else ("{:,.2f}".format(v)))
+    return len(str(v))
+
+
 def validate_comps_workbook(wb, vertical: Optional[str] = None) -> ValidationResult:
     """Validate an already-open workbook. `vertical` forces the spec; otherwise it
     is auto-detected from the headers."""
@@ -230,6 +247,7 @@ def validate_comps_workbook(wb, vertical: Optional[str] = None) -> ValidationRes
     else:
         res.checks.append("sheet_set")
 
+    sheet_widths = {}   # sheet -> {normalized header: column width} for the shared-width check
     for sheet in ("On Market", "Sold"):
         if sheet not in wb.sheetnames:
             continue  # already reported by the sheet-set check
@@ -307,6 +325,53 @@ def validate_comps_workbook(wb, vertical: Optional[str] = None) -> ValidationRes
                  f"({last_data_row}): {bad_ranges[:8]}{'…' if len(bad_ranges) > 8 else ''}")
         else:
             res.checks.append(f"{sheet}:avg_ranges")
+
+        # 6 — no wrapped cells anywhere in the header/data/AVG span (Prompt 43).
+        wrapped = []
+        for r in range(HEADER_ROW, avg_row + 1):
+            for c in range(1, ws.max_column + 1):
+                al = ws.cell(r, c).alignment
+                if al is not None and al.wrap_text:
+                    wrapped.append(ws.cell(r, c).coordinate)
+        if wrapped:
+            fail(f"[{sheet}] wrapped cell(s) present (wrap_text must be off): "
+                 f"{wrapped[:8]}{'…' if len(wrapped) > 8 else ''}")
+        else:
+            res.checks.append(f"{sheet}:no_wrap")
+
+        # 7 — every column is wide enough for its longest content (auto-fit),
+        #     and record widths for the cross-sheet shared-width check.
+        widths, too_narrow = {}, []
+        for c in range(1, ws.max_column + 1):
+            hdr = ws.cell(HEADER_ROW, c).value
+            if hdr in (None, ""):
+                continue
+            longest = 0
+            for r in range(HEADER_ROW, avg_row + 1):
+                longest = max(longest, _disp_len(ws.cell(r, c)))
+            w = ws.column_dimensions[get_column_letter(c)].width
+            widths[_n(hdr)] = w
+            # width must cover the content (capped at the renderer's 50-char ceiling)
+            if w is None or w + 0.51 < min(longest, 50):
+                too_narrow.append((_n(hdr), round(w or 0, 1), longest))
+        if too_narrow:
+            fail(f"[{sheet}] column(s) narrower than their content (not auto-fit): "
+                 f"{too_narrow[:8]}{'…' if len(too_narrow) > 8 else ''}")
+        else:
+            res.checks.append(f"{sheet}:widths_fit")
+        sheet_widths[sheet] = widths
+
+    # 8 — shared columns share ONE width across On Market and Sold (tabs line up).
+    if "On Market" in sheet_widths and "Sold" in sheet_widths:
+        om, sold = sheet_widths["On Market"], sheet_widths["Sold"]
+        mism = [(h, round(om[h] or 0, 1), round(sold[h] or 0, 1))
+                for h in (set(om) & set(sold))
+                if abs((om[h] or 0) - (sold[h] or 0)) > 0.51]
+        if mism:
+            fail(f"shared column widths differ between On Market and Sold: "
+                 f"{sorted(mism)[:8]}{'…' if len(mism) > 8 else ''}")
+        else:
+            res.checks.append("shared_widths_match")
 
     return res
 
