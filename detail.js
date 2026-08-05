@@ -13013,6 +13013,11 @@ async function openEntityDetail(entityId, initialTab) {
             <span style="font-size:10px;padding:2px 8px;border-radius:10px;color:${statusColor};border:1px solid ${statusColor}">${esc(entity.status || 'active')}</span>
           </div>
         </div>
+        <button class="detail-action-btn" title="Log a call on this deal (flows into the summary + next steps)"
+          onclick="openCallNote('${esc(entityId)}', decodeURIComponent('${encodeURIComponent(entity.name || '')}'))"
+          style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
+          &#x260E; Log call
+        </button>
         <button class="detail-action-btn" title="Generate or open a dossier"
           onclick="_entityOpenDossierMenu(this)"
           style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
@@ -13042,6 +13047,104 @@ async function openEntityDetail(entityId, initialTab) {
   }
 }
 window.openEntityDetail = openEntityDetail;
+
+// ============================================================================
+// W7.3 path A — deal-scoped "Log call" quick-log
+// ----------------------------------------------------------------------------
+// The deal-surface "Log call" button. Writes a deal-stamped `call` activity via
+// POST /api/intake-log-call (→ logManualCallNote), so the note flows into the
+// deal summary + next steps through the LIVE W7.2 tick. Self-contained: builds
+// its own lightweight modal (no index.html edit) so it can't collide with the
+// separate Salesforce-task "Log Call" modal (openLogCall) elsewhere.
+// ============================================================================
+var _callNoteCtx = {};
+function _ensureCallNoteModal() {
+  let m = document.getElementById('dealCallNoteModal');
+  if (m) return m;
+  m = document.createElement('div');
+  m.id = 'dealCallNoteModal';
+  m.className = 'modal';
+  m.innerHTML =
+    '<div class="modal-content" style="max-width:480px">' +
+    '  <div class="modal-header"><h3 style="margin:0">Log call</h3>' +
+    '    <button class="modal-close" onclick="closeCallNote()">&times;</button></div>' +
+    '  <div class="modal-body">' +
+    '    <div id="dealCallNoteCtx" style="font-size:12px;color:var(--text2);margin-bottom:10px"></div>' +
+    '    <label style="font-size:12px;color:var(--text2)">Direction' +
+    '      <select id="dealCallNoteDir" style="width:100%;margin-top:4px;margin-bottom:10px;padding:6px">' +
+    '        <option value="made">Call made</option>' +
+    '        <option value="received">Call received</option></select></label>' +
+    '    <label style="font-size:12px;color:var(--text2)">When' +
+    '      <input id="dealCallNoteDate" type="date" style="width:100%;margin-top:4px;margin-bottom:10px;padding:6px"></label>' +
+    '    <label style="font-size:12px;color:var(--text2)">Notes' +
+    '      <textarea id="dealCallNoteNotes" rows="5" placeholder="What was discussed / committed…" style="width:100%;margin-top:4px;padding:6px"></textarea></label>' +
+    '  </div>' +
+    '  <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">' +
+    '    <button class="act-btn" onclick="closeCallNote()">Cancel</button>' +
+    '    <button class="act-btn primary" id="dealCallNoteSubmit" onclick="submitCallNote()">Log call</button>' +
+    '  </div></div>';
+  document.body.appendChild(m);
+  return m;
+}
+
+function openCallNote(entityId, name) {
+  _callNoteCtx = { entityId: entityId || null, name: name || '' };
+  const m = _ensureCallNoteModal();
+  const ctx = document.getElementById('dealCallNoteCtx');
+  const dateEl = document.getElementById('dealCallNoteDate');
+  const notesEl = document.getElementById('dealCallNoteNotes');
+  const btn = document.getElementById('dealCallNoteSubmit');
+  if (ctx) ctx.textContent = 'Logging a call on: ' + (name || 'this deal');
+  if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
+  if (notesEl) notesEl.value = '';
+  if (btn) { btn.disabled = false; btn.textContent = 'Log call'; }
+  m.classList.add('open');
+  m.style.display = 'flex';
+}
+function closeCallNote() {
+  const m = document.getElementById('dealCallNoteModal');
+  if (m) { m.classList.remove('open'); m.style.display = 'none'; }
+}
+async function submitCallNote() {
+  const btn = document.getElementById('dealCallNoteSubmit');
+  const dirEl = document.getElementById('dealCallNoteDir');
+  const dateEl = document.getElementById('dealCallNoteDate');
+  const notesEl = document.getElementById('dealCallNoteNotes');
+  const notes = notesEl ? notesEl.value.trim() : '';
+  if (!notes) { if (typeof showToast === 'function') showToast('Add a note first.', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Logging…'; }
+  const payload = {
+    deal_entity_id: _callNoteCtx.entityId || undefined,
+    direction: dirEl ? dirEl.value : undefined,
+    contact_name: _callNoteCtx.name || undefined,
+    occurred_at: dateEl && dateEl.value ? new Date(dateEl.value + 'T12:00:00Z').toISOString() : undefined,
+    notes,
+  };
+  try {
+    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+    const res = await fetchFn('/api/intake-log-call', {
+      method: 'POST', headers: _entityApiHeaders(), body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      if (typeof showToast === 'function') showToast(data.note || 'Call logged.', 'success');
+      closeCallNote();
+      // Refresh the open entity so the just-logged call shows in Activity.
+      if (typeof openEntityDetail === 'function' && _callNoteCtx.entityId) {
+        try { openEntityDetail(_callNoteCtx.entityId, 'Activity'); } catch (_e) {}
+      }
+    } else {
+      if (typeof showToast === 'function') showToast('Error: ' + (data.error || res.status), 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Log call'; }
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Network error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Log call'; }
+  }
+}
+window.openCallNote = openCallNote;
+window.closeCallNote = closeCallNote;
+window.submitCallNote = submitCallNote;
 
 // ── Contact 360 — the ONE reusable trigger (Deals cards, Contacts view, the
 // coming Marketing tab). Takes a contact/entity id and opens the canonical

@@ -80,6 +80,9 @@ import {
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
 } from './_shared/lifecycle.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
+import { logManualCallNote } from './_shared/intake-correspondence.js';
+import { resolveDealByQuery, decideCommTagOutcome } from './_shared/deal-resolve.js';
+import { appendActivityEvent } from './_shared/activity-events.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -3176,6 +3179,10 @@ const ACTION_REGISTRY = {
   // Tier 2: Microsoft To Do task creation (Wave 2)
   create_todo_task:            { tier: 2, handler: 'create_todo_task', confirm: 'explicit' },
 
+  // Tier 1: W7.3 — capture calls + tag comms "from Microsoft as we send/work"
+  log_call_note:               { tier: 1, handler: 'log_call_note', confirm: 'lightweight' },
+  tag_comm_to_deal:            { tier: 1, handler: 'tag_comm_to_deal', confirm: 'lightweight' },
+
   // Tier 0: Template engine (Wave 2)
   list_email_templates:          { method: 'GET', path: 'draft', tier: 0, alias: 'operations?_route=draft' },
   get_email_template:            { method: 'GET', path: 'draft&template_id=', tier: 0, alias: 'operations?_route=draft&template_id=' },
@@ -3321,6 +3328,8 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
       case 'draft_reply_from_inbox': result = await handleDraftReplyFromInbox(params, user, workspaceId); break;
       case 'create_todo_task':        result = await createTodoTask(params, user, workspaceId); break;
+      case 'log_call_note':           result = await handleLogCallNote(params, user, workspaceId); break;
+      case 'tag_comm_to_deal':        result = await handleTagCommToDeal(params, user, workspaceId); break;
       case 'listing_pursuit_dossier': result = await handleListingPursuitDossier(params, user, workspaceId); break;
       case 'teams_card':              result = await generateTeamsCard(params); break;
       case 'relationship_context':    result = await handleRelationshipContext(params, user, workspaceId); break;
@@ -3815,6 +3824,151 @@ async function handleSearchDeals(params) {
     count: results.length,
     results,
     query: { q, status: statusFilter, entity_id: entityId }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// W7.3 — Copilot: log a call note (path B action 1)
+// "from Copilot as we send/work" — inputs: deal_or_contact_query, direction,
+// notes, occurred_at?. Resolution NEVER guesses: ambiguous → return the top
+// candidates for the user to pick and WRITE NOTHING; unique/exact → log the
+// same call_note activity as the in-app quick-log via logManualCallNote, so it
+// flows through W7.2. risk_tier 1.
+// ---------------------------------------------------------------------------
+async function handleLogCallNote(params, user, workspaceId) {
+  const p = params || {};
+  const notes = String(p.notes || p.body || '').trim();
+  const query = String(p.deal_or_contact_query || p.query || p.deal || p.contact || '').trim();
+  if (!notes) return { ok: false, error: 'notes (the call notes) is required.' };
+
+  const ws = workspaceId || user?.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
+
+  // Resolve the deal — conservatively. No query → log on the relationship only.
+  let dealEntityId = null, dealName = null;
+  if (query) {
+    const r = await resolveDealByQuery(query, { opsQuery }).catch(() => null);
+    if (r && r.matched === 'ambiguous') {
+      return {
+        ok: true, requires_pick: true, wrote: false,
+        message: `More than one open deal matches "${query}". Pick one and resend log_call_note with that deal name.`,
+        candidates: r.candidates,
+      };
+    }
+    if (r && (r.matched === 'exact' || r.matched === 'unique')) {
+      dealEntityId = r.deal_entity_id; dealName = r.deal_name;
+    } else {
+      return {
+        ok: true, requires_pick: true, wrote: false,
+        message: `No open deal matched "${query}". Search the deal name and resend, or log without a deal to attach it to the relationship.`,
+        candidates: [],
+      };
+    }
+  }
+
+  const r = await logManualCallNote({
+    workspaceId: ws,
+    actorId:      user?.id || user?.user_id,
+    dealEntityId,
+    direction:    p.direction || null,
+    notes,
+    contactName:  p.contact_name || p.name || null,
+    occurredAt:   p.occurred_at || p.occurredAt || null,
+    source:       'copilot',
+    structure:    p.structure !== false,
+  });
+  if (!r.ok) return { ok: false, error: r.skipped || 'log_failed' };
+
+  return {
+    ok: true, wrote: !!r.inserted, duplicate: r.ok && !r.inserted,
+    activity_id: r.id, deal_entity_id: dealEntityId, deal_name: dealName,
+    message: dealEntityId
+      ? `Logged the call on ${dealName || 'the deal'} — its summary and next steps update within the hour.`
+      : 'Logged the call on the relationship (no deal specified).',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// W7.3 — Copilot: tag an existing comm to a deal (path B action 2)
+// The manual override lane. Inputs: deal_or_contact_query + a message hint
+// (subject/sender/approx time) OR internet_message_id. Finds the matching
+// activity row and stamps deal_entity_id — IDEMPOTENT; REFUSES if already
+// stamped to a DIFFERENT deal (surfaces the conflict). risk_tier 1.
+// ---------------------------------------------------------------------------
+async function handleTagCommToDeal(params, user, workspaceId) {
+  const p = params || {};
+  const query = String(p.deal_or_contact_query || p.query || p.deal || '').trim();
+  if (!query) return { ok: false, error: 'deal_or_contact_query is required.' };
+
+  const ws = workspaceId || user?.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!ws) return { ok: false, error: 'No workspace context.' };
+
+  // Resolve the target deal (conservative — never guess).
+  const rd = await resolveDealByQuery(query, { opsQuery }).catch(() => null);
+  if (!rd || rd.matched === 'none') {
+    return { ok: true, requires_pick: true, wrote: false, message: `No open deal matched "${query}".`, candidates: [] };
+  }
+  if (rd.matched === 'ambiguous') {
+    return { ok: true, requires_pick: true, wrote: false, message: `More than one deal matches "${query}". Pick one.`, candidates: rd.candidates };
+  }
+  const dealEntityId = rd.deal_entity_id, dealName = rd.deal_name;
+
+  // Find the matching comm row — by internet_message_id, else a subject/sender/time hint.
+  const internetMsgId = String(p.internet_message_id || p.message_id || '').trim();
+  let row = null;
+  if (internetMsgId) {
+    const r = await opsQuery('GET',
+      `activity_events?workspace_id=eq.${pgFilterVal(ws)}&external_id=eq.${encodeURIComponent(internetMsgId)}` +
+      `&select=id,entity_id,external_id,title,metadata&limit=1`);
+    row = r?.data?.[0] || null;
+  }
+  if (!row) {
+    const subj = String(p.subject || p.message_hint || '').trim();
+    const sender = String(p.sender || p.from || '').trim();
+    const clauses = [];
+    if (subj)   clauses.push(`title.ilike.*${encodeURIComponent(subj.replace(/[*()]/g, ''))}*`);
+    if (sender) clauses.push(`metadata->>from.ilike.*${encodeURIComponent(sender.replace(/[*()]/g, ''))}*`);
+    if (clauses.length) {
+      const r = await opsQuery('GET',
+        `activity_events?workspace_id=eq.${pgFilterVal(ws)}&category=in.(email,call)&or=(${clauses.join(',')})` +
+        `&select=id,entity_id,external_id,title,metadata&order=occurred_at.desc&limit=5`);
+      const rows = r?.data || [];
+      if (rows.length > 1) {
+        return {
+          ok: true, requires_pick: true, wrote: false,
+          message: 'Multiple messages match that hint — provide the internet_message_id to disambiguate.',
+          matches: rows.map((x) => ({ activity_id: x.id, title: x.title, from: x.metadata?.from || null })),
+        };
+      }
+      row = rows[0] || null;
+    }
+  }
+  if (!row) return { ok: false, error: 'No matching message found. Provide the internet_message_id or a clearer subject/sender hint.' };
+
+  // Idempotency + cross-deal conflict guard (decision extracted for testability).
+  const current = row.entity_id || row.metadata?.deal_entity_id || null;
+  const outcome = decideCommTagOutcome(current, dealEntityId);
+  if (outcome === 'already') {
+    return { ok: true, wrote: false, already: true, activity_id: row.id, deal_entity_id: dealEntityId,
+      message: `Already tagged to ${dealName || 'that deal'} — nothing to do.` };
+  }
+  if (outcome === 'conflict') {
+    return { ok: false, conflict: true, activity_id: row.id,
+      current_deal_entity_id: current, requested_deal_entity_id: dealEntityId,
+      message: 'That message is already stamped to a DIFFERENT deal. Refusing to re-stamp — resolve the conflict first.' };
+  }
+
+  // Stamp the deal (fill-blank only, per the conflict guard above).
+  const newMeta = { ...(row.metadata || {}), deal_entity_id: dealEntityId, tagged_via: 'copilot_tag_comm', tagged_by: user?.id || null };
+  const upd = await opsQuery('PATCH',
+    `activity_events?id=eq.${encodeURIComponent(row.id)}`,
+    { entity_id: dealEntityId, metadata: newMeta },
+    { headers: { Prefer: 'return=representation' } });
+  const ok = upd?.ok && Array.isArray(upd.data) && upd.data.length > 0;
+  if (!ok) return { ok: false, error: 'Failed to stamp the deal on the message.' };
+
+  return {
+    ok: true, wrote: true, activity_id: row.id, deal_entity_id: dealEntityId, deal_name: dealName,
+    message: `Tagged to ${dealName || 'the deal'} — its summary and next steps update within the hour.`,
   };
 }
 

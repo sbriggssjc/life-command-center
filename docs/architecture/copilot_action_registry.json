@@ -869,6 +869,65 @@
       "wave": 2,
       "handler": "generate_comps",
       "listing_driven_production_support": "Exports the same bounded engine comps into the Team Briggs workbook template."
+    },
+    {
+      "action_name": "log_call_note",
+      "user_goal": "Log a phone/Teams call as a first-class call note on a deal from Copilot (Outlook/Teams)",
+      "category": "schedule/task",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Outlook", "Copilot Chat", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "notes", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "deal_or_contact_query", "location": "body", "type": "string" },
+          { "name": "direction", "location": "body", "type": "string", "enum": ["made", "received", "outbound", "inbound"] },
+          { "name": "contact_name", "location": "body", "type": "string" },
+          { "name": "occurred_at", "location": "body", "type": "string", "format": "date-time" }
+        ]
+      },
+      "outputs": {
+        "fields": ["ok", "wrote", "requires_pick", "candidates", "activity_id", "deal_entity_id", "message"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "lightweight",
+      "idempotent": true,
+      "idempotency_notes": "Dedup on (workspace, source_type='manual_call', external_id) — external_id is a deterministic hash of (actor, occurred_at, notes), so the same note re-submitted is a no-op. Deal resolution NEVER guesses: an ambiguous query returns candidates and writes nothing (requires_pick).",
+      "wave": 3,
+      "handler": "log_call_note",
+      "listing_driven_production_support": "Makes calls first-class comms — a logged call updates the deal summary and next steps exactly like an email (W7.3 → W7.2)."
+    },
+    {
+      "action_name": "tag_comm_to_deal",
+      "user_goal": "Manually attach an existing email/call to a deal (override lane for matcher misses)",
+      "category": "review/resolve",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Outlook", "Copilot Chat", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "deal_or_contact_query", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "internet_message_id", "location": "body", "type": "string" },
+          { "name": "subject", "location": "body", "type": "string" },
+          { "name": "sender", "location": "body", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["ok", "wrote", "already", "conflict", "activity_id", "deal_entity_id", "message"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "lightweight",
+      "idempotent": true,
+      "idempotency_notes": "Stamps deal_entity_id on the matched activity row. Re-stamping the SAME deal is a no-op (already); REFUSES to re-stamp a message already tied to a DIFFERENT deal (conflict is surfaced, never overwritten).",
+      "wave": 3,
+      "handler": "tag_comm_to_deal",
+      "listing_driven_production_support": "The manual override for zero-match deals and matcher misses — attaches the message so it propagates into the deal context (W7.3 → W7.2)."
     }
   ]
 }

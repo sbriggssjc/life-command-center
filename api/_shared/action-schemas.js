@@ -691,6 +691,61 @@ export const ACTION_SCHEMAS = {
     }
   },
 
+  log_call_note: {
+    description: 'Log a phone/Teams call as a first-class call note on a deal (W7.3). Resolves the deal from a free-text query; if more than one open deal matches it returns candidates and writes nothing (never guesses). The logged note flows into the deal summary and next steps automatically.',
+    category: 'workflow',
+    inputs: {
+      type: 'object',
+      properties: {
+        deal_or_contact_query: { type: 'string', description: 'Free-text deal name, tenant, or "tenant city" to attach the call to. Omit to log on the relationship only.' },
+        notes: { type: 'string', description: 'Free-text call notes (what was discussed / committed).' },
+        direction: { type: 'string', enum: ['made', 'received', 'outbound', 'inbound'], description: 'Whether the call was made or received.' },
+        contact_name: { type: 'string', description: 'Who was on the call (display only).' },
+        occurred_at: { type: 'string', format: 'date-time', description: 'When the call happened (ISO). Defaults to now.' }
+      },
+      required: ['notes']
+    },
+    outputs: {
+      type: 'object',
+      properties: {
+        ok: { type: 'boolean' },
+        wrote: { type: 'boolean' },
+        requires_pick: { type: 'boolean', description: 'True when the deal was ambiguous — candidates are returned and nothing was written.' },
+        candidates: { type: 'array', description: 'Deal candidates to pick from when ambiguous.' },
+        activity_id: { type: 'string' },
+        deal_entity_id: { type: 'string' },
+        message: { type: 'string' }
+      }
+    }
+  },
+
+  tag_comm_to_deal: {
+    description: 'Tag an existing email/call to a deal (W7.3 manual-override lane). Finds the message by internet_message_id or a subject/sender hint and stamps the deal. Idempotent; REFUSES to re-stamp a message already tied to a different deal (returns the conflict).',
+    category: 'workflow',
+    inputs: {
+      type: 'object',
+      properties: {
+        deal_or_contact_query: { type: 'string', description: 'Deal name / tenant to tag the message to.' },
+        internet_message_id: { type: 'string', description: 'Exact Outlook internet message id (preferred, unambiguous).' },
+        subject: { type: 'string', description: 'Subject hint when the internet_message_id is unavailable.' },
+        sender: { type: 'string', description: 'Sender email hint when the internet_message_id is unavailable.' }
+      },
+      required: ['deal_or_contact_query']
+    },
+    outputs: {
+      type: 'object',
+      properties: {
+        ok: { type: 'boolean' },
+        wrote: { type: 'boolean' },
+        already: { type: 'boolean' },
+        conflict: { type: 'boolean' },
+        activity_id: { type: 'string' },
+        deal_entity_id: { type: 'string' },
+        message: { type: 'string' }
+      }
+    }
+  },
+
   ingest_outlook_flagged_emails: {
     description: 'Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all currently flagged emails from Outlook via Power Automate and creates LCC inbox items for each.',
     category: 'workflow',

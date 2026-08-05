@@ -24,7 +24,7 @@ import { createRequire } from 'module';
 const nodeRequire = createRequire(import.meta.url);
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
-import { logInboundCorrespondenceDualAnchor } from './_shared/intake-correspondence.js';
+import { logInboundCorrespondenceDualAnchor, logManualCallNote } from './_shared/intake-correspondence.js';
 import { getAiConfig } from './_shared/ai.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -180,6 +180,14 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleMobileShare } = await import('./_handlers/mobile-share.js');
       return handleMobileShare(req, res);
     }
+    case 'log-call':
+      // W7.3 path A — in-app "Log call" quick-log → deal-stamped call activity.
+      return handleLogCall(req, res);
+    case 'tagged-comm': {
+      // W7.3 path C — Outlook category-tagging receiver (Power Automate).
+      const { handleTaggedComm } = await import('./_handlers/intake-tagged-comm.js');
+      return handleTaggedComm(req, res);
+    }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
       return handleIntakeFeedback(req, res);
@@ -190,7 +198,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, log-call, tagged-comm, feedback, accuracy'
       });
   }
 });
@@ -429,6 +437,56 @@ async function handleOutlookSent(req, res) {
     recipients: recips, auto_resolved: autoResolved, backfill,
     note: dealEntityId ? 'logged outbound touch on deal; cadence advances via trigger'
                        : 'logged unattached (no matching deal correspondent)',
+  });
+}
+
+// ============================================================================
+// POST /api/intake?_route=log-call  (W7.3 path A — in-app quick-log)
+// ----------------------------------------------------------------------------
+// The deal surface / My Work "Log call" action. The operator has already chosen
+// the deal/party from context, so we stamp exactly that (never guess) and log a
+// `call` activity via the shared logManualCallNote — which reuses the spine
+// writer + Phase-1 to-do path, so the note flows through W7.2 automatically.
+// Body: { deal_entity_id?, party_entity_id?, direction?, notes, contact_name?,
+//         occurred_at?, structure? }
+// ============================================================================
+async function handleLogCall(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+  if (!requireRole(user, 'operator', workspaceId)) return res.status(403).json({ error: 'Operator role required' });
+
+  const p = req.body || {};
+  const notes = String(p.notes || p.body || '').trim();
+  if (!notes) return res.status(400).json({ error: 'notes (call notes) is required' });
+
+  const r = await logManualCallNote({
+    workspaceId,
+    actorId:      user.id || user.user_id,
+    dealEntityId: p.deal_entity_id || p.entity_id || null,
+    partyEntityId: p.party_entity_id || null,
+    direction:    p.direction || null,
+    notes,
+    contactName:  p.contact_name || p.name || null,
+    occurredAt:   p.occurred_at || p.occurredAt || null,
+    source:       'quick_log',
+    // Structuring is proposal-only + gated on OLLAMA_URL inside the logger.
+    structure:    p.structure !== false,
+  });
+
+  if (!r.ok) return res.status(400).json({ ok: false, error: r.skipped || 'log_failed' });
+  return res.status(200).json({
+    ok: true,
+    logged: !!r.inserted,
+    duplicate: r.ok && !r.inserted,
+    activity_id: r.id,
+    deal_entity_id: r.deal_entity_id,
+    structured: r.structured || null,
+    note: r.deal_entity_id
+      ? 'Logged — the deal summary and next steps update within the hour.'
+      : 'Logged on the relationship (no deal anchor supplied).',
   });
 }
 
