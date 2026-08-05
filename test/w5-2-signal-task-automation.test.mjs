@@ -51,23 +51,36 @@ describe('W5.2 signal -> task automation', () => {
     for (const k of ENV_KEYS) { if (originalEnv[k] === undefined) delete process.env[k]; else process.env[k] = originalEnv[k]; }
   });
 
-  it('state-lease: distress-only gate; structured payload (ids+deep_link, no prose); marks the gov seam; 409 still marks it', async () => {
-    const calls = [];
-    let taskPostCount = 0;
+  it('state-lease: distress-only gate WITHOUT relocated; structured payload; consumption is independent of gov processed_at; NEVER writes the gov seam', async () => {
+    let taskPostCount = 0; let govWrite = false;
     global.fetch = async (url, opts = {}) => {
       const t = String(url); const method = opts.method || 'GET';
-      calls.push({ t, method, body: opts.body });
+      // Any non-GET to the gov state_lease_events table is a seam-contention bug.
+      if (t.startsWith('https://gov.example.com/rest/v1/state_lease_events') && method !== 'GET') govWrite = true;
       if (t.includes('/rest/v1/users?')) return jsonResponse(DEV_USER);
       // producer staleness read — fresh (today) so no alarm.
       if (t.includes('/rest/v1/state_lease_events?select=created_at')) return jsonResponse([{ created_at: new Date().toISOString() }]);
-      // digest counts (renewed/new_lease/lessor_change) — return empty.
-      if (t.includes('/rest/v1/state_lease_events?select=id&processed_at=is.null&event_type=eq.')) return jsonResponse([]);
-      // the distress fetch — the ONLY event-type filter must be the distress set.
+      // digest counts — keyed on created_at now, NOT processed_at; relocated joins.
+      if (t.includes('/rest/v1/state_lease_events?select=id&created_at=gte.') && t.includes('event_type=eq.')) {
+        assert.ok(!t.includes('processed_at'), 'digest must not key on gov processed_at');
+        return jsonResponse([]);
+      }
+      // the distress fetch — the ONLY event-type filter must be the distress set
+      // (relocated dropped), and it must NOT filter on processed_at.
       if (t.includes('/rest/v1/state_lease_events?select=id,source_code')) {
-        assert.ok(t.includes('event_type=in.(removed,footprint_reduction,relocated,agency_change)'), 'distress-only gate: ' + t);
+        assert.ok(t.includes('event_type=in.(removed,footprint_reduction,agency_change)'), 'distress-only gate: ' + t);
+        assert.ok(!t.includes('relocated'), 'relocated must move to the digest, not the task set');
         assert.ok(!t.includes('renewed') && !t.includes('lessor_change'), 'informational types must not be tasked');
+        assert.ok(!t.includes('processed_at'), 'candidate fetch must not read gov processed_at');
+        assert.ok(t.includes('created_at=gte.2026-08-01'), 'floor excludes the June backfill');
+        // event carries processed_at already (stamped by gov lead-gen) — must still task.
         return jsonResponse([{ id: 501, source_code: 'tx_tfc', state_lease_id: '09210', event_type: 'agency_change',
           event_date: '2026-08-01', from_snapshot_date: '2026-05-01', to_snapshot_date: '2026-06-23', annual_rent: null }]);
+      }
+      // LCC ledger read (research_tasks) — nothing consumed yet.
+      if (t.includes('/rest/v1/research_tasks?select=source_record_id') && method === 'GET') {
+        assert.ok(t.includes('source_table=eq.state_lease_events'), 'ledger keyed on the source table');
+        return jsonResponse([]);
       }
       if (t.includes('/rest/v1/state_lease_snapshots?select=source_code')) {
         return jsonResponse([{ source_code: 'tx_tfc', state_lease_id: '09210', snapshot_date: '2026-06-23',
@@ -82,14 +95,7 @@ describe('W5.2 signal -> task automation', () => {
         assert.ok(b.metadata && b.metadata.deep_link, 'payload carries a deep_link');
         assert.equal(b.metadata.event_id, 501);
         assert.equal(b.metadata.address, '6330 Hwy 290 East');
-        // first insert ok; a second (idempotency test) would 409 — but here 1 event.
         return jsonResponse([{ id: 'task-1' }], true, 201);
-      }
-      if (t.startsWith('https://gov.example.com/rest/v1/state_lease_events?id=eq.501') && method === 'PATCH') {
-        const b = JSON.parse(opts.body);
-        assert.ok(b.processed_at, 'seam marked');
-        assert.equal(b.processed_reason, 'distress_task_created');
-        return jsonResponse([{ id: 501 }]);
       }
       throw new Error('Unexpected fetch: ' + method + ' ' + t);
     };
@@ -99,24 +105,24 @@ describe('W5.2 signal -> task automation', () => {
     await handler(req, res);
     assert.equal(res._status, 200, JSON.stringify(res._json));
     assert.equal(res._json.tasks_created, 1);
-    assert.equal(res._json.marked_processed, 1);
     assert.equal(taskPostCount, 1);
+    assert.equal(res._json.marked_processed, undefined, 'no gov-seam marking counter anymore');
+    assert.equal(govWrite, false, 'the tick NEVER writes gov state_lease_events (processed_at is lead-gen\'s seam)');
     assert.equal(res._json.producer.stale, false);
   });
 
-  it('state-lease: a 409 (task already open) still marks the seam (zero-duplicate idempotency)', async () => {
-    let patched = false;
+  it('state-lease: idempotent re-run — an event already in the LCC research_tasks ledger creates ZERO duplicates', async () => {
+    let taskPostCount = 0; let govWrite = false;
     global.fetch = async (url, opts = {}) => {
       const t = String(url); const method = opts.method || 'GET';
+      if (t.startsWith('https://gov.example.com/rest/v1/state_lease_events') && method !== 'GET') govWrite = true;
       if (t.includes('/rest/v1/users?')) return jsonResponse(DEV_USER);
       if (t.includes('/rest/v1/state_lease_events?select=created_at')) return jsonResponse([{ created_at: new Date().toISOString() }]);
-      if (t.includes('/rest/v1/state_lease_events?select=id&processed_at=is.null&event_type=eq.')) return jsonResponse([]);
+      if (t.includes('/rest/v1/state_lease_events?select=id&created_at=gte.') && t.includes('event_type=eq.')) return jsonResponse([]);
       if (t.includes('/rest/v1/state_lease_events?select=id,source_code')) return jsonResponse([{ id: 777, source_code: 'tx_tfc', state_lease_id: '1', event_type: 'removed', event_date: '2026-08-01', from_snapshot_date: '2026-05-01', to_snapshot_date: '2026-06-23' }]);
-      if (t.includes('/rest/v1/state_lease_snapshots?select=source_code')) return jsonResponse([]);
-      if (t.includes('/rest/v1/research_tasks') && method === 'POST') return jsonResponse({ code: '23505' }, false, 409);
-      if (t.startsWith('https://gov.example.com/rest/v1/state_lease_events?id=eq.777') && method === 'PATCH') {
-        patched = true; const b = JSON.parse(opts.body); assert.equal(b.processed_reason, 'distress_task_exists'); return jsonResponse([{ id: 777 }]);
-      }
+      // ledger already carries event 777 -> it must be skipped, no task, no snapshot read.
+      if (t.includes('/rest/v1/research_tasks?select=source_record_id') && method === 'GET') return jsonResponse([{ source_record_id: '777' }]);
+      if (t.includes('/rest/v1/research_tasks') && method === 'POST') { taskPostCount += 1; return jsonResponse([{ id: 'x' }], true, 201); }
       throw new Error('Unexpected fetch: ' + method + ' ' + t);
     };
     const handler = await loadHandler();
@@ -124,8 +130,9 @@ describe('W5.2 signal -> task automation', () => {
     await handler({ method: 'POST', query: { _route: 'state-lease-consume' }, headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._json));
     assert.equal(res._json.tasks_created, 0);
-    assert.equal(res._json.deduped, 1);
-    assert.ok(patched, 'a duplicate task still advances the seam so the row is not re-scanned');
+    assert.equal(res._json.deduped, 1, 'the already-tasked event is skipped via the LCC ledger');
+    assert.equal(taskPostCount, 0, 'zero duplicate research_tasks');
+    assert.equal(govWrite, false, 'no gov seam write');
   });
 
   it('npi: missing/new -> research_task + ledger; consumed hash is skipped; payload has ids+deep_link, no prose', async () => {

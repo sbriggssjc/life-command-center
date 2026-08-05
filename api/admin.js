@@ -209,20 +209,37 @@ async function w52ResolveWorkspace(user) {
   return ws;
 }
 
-// ---- state_lease distress -> research_tasks (gov processed_at seam) ----------
+// ---- state_lease distress -> research_tasks (LCC OWN consumption ledger) ------
+// SEAM-CONTENTION FIX (W5.2b, 2026-08-06): gov lead-gen (pipeline step 44
+// `state_events_to_leads`) stamps `state_lease_events.processed_at` on EVERY
+// event it dispositions — including the `no_lead_event_type` distress rows that
+// create NO prospect_lead. `processed_at` is gov lead-gen's seam and was never
+// LCC's to share; filtering on it made this tick scan 0 forever while the
+// no-lead distress events (removed/agency_change/footprint_reduction) died
+// silently between the two consumers. LCC now tracks its OWN consumption
+// ops-side: research_tasks (source_table='state_lease_events', source_record_id
+// =<event id>) IS the per-event ledger. We NEVER read or write gov processed_at.
+// Type partition with lead-gen (no double-surfacing): LCC tasks only the types
+// lead-gen dispositions as no_lead_event (removed/footprint_reduction/
+// agency_change); `relocated` already becomes a prospect_lead in lead-gen
+// (lead_event:relocated) so it drops to the digest. `created_at` floor excludes
+// the 2026-06-23 backfill (dispositioned in the June session — never resurrect).
+const STATE_LEASE_LCC_FLOOR = '2026-08-01';
 async function handleStateLeaseConsume(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET (dry-run) or POST only' });
   const user = await authenticate(req, res);
   if (!user) return;
   const dryRun = req.method === 'GET';
   const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
-  // Fixed value gate: distress/movement types always task; renewed/new_lease/
-  // lessor_change are informational (digest count only). lessor_change would gate
-  // on a tracked-entity link, but state_lease_events.property_id is 100% NULL
-  // (grounded 2026-08-05) so no reliable link exists -> digest only (never guess).
-  const DISTRESS = ['removed', 'footprint_reduction', 'relocated', 'agency_change'];
+  // Fixed value gate: distress types lead-gen leaves as no_lead_event always
+  // task; renewed/new_lease/lessor_change/relocated are informational (digest
+  // count only). lessor_change would gate on a tracked-entity link, but
+  // state_lease_events.property_id is 100% NULL (grounded 2026-08-05) so no
+  // reliable link exists -> digest only (never guess); relocated already gets a
+  // prospect_lead in gov lead-gen so LCC does not re-surface it as a task.
+  const DISTRESS = ['removed', 'footprint_reduction', 'agency_change'];
   const result = { mode: dryRun ? 'dry_run' : 'apply', distress_types: DISTRESS,
-    scanned: 0, tasks_created: 0, deduped: 0, marked_processed: 0, errors: [], digest: {}, producer: null };
+    scanned: 0, tasks_created: 0, deduped: 0, errors: [], digest: {}, producer: null };
 
   const stale = await w52ProducerStaleness('government', 'state_lease_events', 45);
   result.producer = stale;
@@ -232,17 +249,38 @@ async function handleStateLeaseConsume(req, res) {
       { max_created_at: stale.max_created_at, age_days: stale.age_days });
   }
 
-  for (const et of ['renewed', 'new_lease', 'lessor_change']) {
-    const c = await domainQuery('government', 'GET', 'state_lease_events?select=id&processed_at=is.null&event_type=eq.' + et + '&limit=1',
-      undefined, { 'Prefer': 'count=exact' });
+  // Digest counts (informational, cheap): recent-window created_at, NOT
+  // processed_at — that column belongs to gov lead-gen now. `relocated` joins
+  // the digest since lead-gen tasks it.
+  const digestSince = new Date(Date.now() - 30 * 86400000).toISOString();
+  for (const et of ['renewed', 'new_lease', 'lessor_change', 'relocated']) {
+    const c = await domainQuery('government', 'GET', 'state_lease_events?select=id&created_at=gte.'
+      + digestSince + '&event_type=eq.' + et + '&limit=1', undefined, { 'Prefer': 'count=exact' });
     result.digest[et] = (c.ok && typeof c.count === 'number') ? c.count : null;
   }
 
+  // Candidate events: distress types created since the LCC floor (excludes the
+  // June backfill). Consumption is decided against the LCC research_tasks ledger
+  // below — NOT gov processed_at.
   const evR = await domainQuery('government', 'GET', 'state_lease_events'
     + '?select=id,source_code,state_lease_id,event_type,event_date,from_snapshot_date,to_snapshot_date,annual_rent'
-    + '&processed_at=is.null&event_type=in.(' + DISTRESS.join(',') + ')&order=event_date.desc&limit=' + limit);
+    + '&created_at=gte.' + STATE_LEASE_LCC_FLOOR + '&event_type=in.(' + DISTRESS.join(',') + ')&order=event_date.desc&limit=' + limit);
   if (!evR.ok) return res.status(502).json({ error: 'state_lease_events read failed', detail: evR.data });
-  const events = Array.isArray(evR.data) ? evR.data : [];
+  const allEvents = Array.isArray(evR.data) ? evR.data : [];
+
+  // LCC OWN ledger: which of these events already have a research_task (any
+  // status). Re-runs create ZERO duplicates; the open-dedupe unique index
+  // (uq_research_tasks_open_source) backstops races. Batched — never N+1.
+  const consumedIds = new Set();
+  const evIds = allEvents.map((e) => e.id).filter((x) => x != null);
+  if (evIds.length) {
+    const inIds = evIds.map((id) => '"' + String(id).replace(/"/g, '') + '"').join(',');
+    const lr = await opsQuery('GET', 'research_tasks?select=source_record_id&source_table=eq.state_lease_events'
+      + '&source_record_id=in.(' + encodeURIComponent(inIds) + ')&limit=1000', undefined, { countMode: 'none' });
+    for (const x of ((lr.ok && Array.isArray(lr.data)) ? lr.data : [])) consumedIds.add(String(x.source_record_id));
+  }
+  const events = allEvents.filter((e) => !consumedIds.has(String(e.id)));
+  result.deduped = allEvents.length - events.length;
   result.scanned = events.length;
 
   // Batch snapshot enrichment (address/agency/lessor) — never N+1.
@@ -276,20 +314,18 @@ async function handleStateLeaseConsume(req, res) {
       event_date: e.event_date, address: s.address || null, city: s.city || null, state: s.state || null,
       agency: s.agency || null, lessor: s.lessor || null, annual_rent: s.annual_rent || e.annual_rent || null,
       deep_link: '#/gov' };
+    // LCC consumption is recorded by the research_task row itself (the ledger).
+    // We do NOT write gov state_lease_events.processed_at — that seam belongs to
+    // gov lead-gen; touching it could hide events from lead-gen or double-stamp.
     const ins = await opsQuery('POST', 'research_tasks', {
       workspace_id: ws, created_by: user.id || null, research_type: 'state_lease_distress_review',
       title, instructions: null, domain: 'gov', status: 'queued', priority: 40,
       source_record_id: String(e.id), source_table: 'state_lease_events', metadata: meta });
     if (ins.ok) {
       result.tasks_created += 1;
-      const mp = await domainQuery('government', 'PATCH', 'state_lease_events?id=eq.' + e.id,
-        { processed_at: new Date().toISOString(), processed_reason: 'distress_task_created' });
-      if (mp.ok) result.marked_processed += 1;
-      else result.errors.push('mark ' + e.id + ': ' + JSON.stringify(mp.data).slice(0, 120));
     } else if (ins.status === 409) {
+      // Race: an open task already exists (open-dedupe index). Already ledgered.
       result.deduped += 1;
-      await domainQuery('government', 'PATCH', 'state_lease_events?id=eq.' + e.id,
-        { processed_at: new Date().toISOString(), processed_reason: 'distress_task_exists' });
     } else {
       result.errors.push('insert ' + e.id + ': ' + JSON.stringify(ins.data).slice(0, 120));
     }
