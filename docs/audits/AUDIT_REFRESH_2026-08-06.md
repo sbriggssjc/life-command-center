@@ -89,10 +89,11 @@ chat with "Pick up backlog item N from AUDIT_REFRESH_2026-08-06".
 | 16 | **W1.5 CMS dispatch confirm** | S | W1.5 row | Confirm dispatch path; close row |
 | 17 | **OpenCorporates re-price decision** | S | parked ~Aug 28 | Calendar-gated |
 | 18 | **CF token rotation** (at build completion) | XS | §3C | Zero Trust → Service Auth → rotate → Railway vars |
+| 19 | **WAVE 7 — Comms-driven context propagation** (email/call → dossier/tasks/next-steps auto-update; Scott-directed 2026-08-06, PRIORITIZED over more states) | L (4 units) | `docs/architecture/WAVE7_COMMS_CONTEXT_PROPAGATION_PLAN.md` (+ DOSSIER-PROGRAM-STATE-OF-PLAY, correspondence-ingestion-design, living-deal-dossier docs) | W7.1 correspondence attribution live → W7.2 propagation tick → W7.3 call notes → W7.4 role/issue surfacing |
 
-**Recommended sequencing from here:** #1 (alert triage — health first) → #2 (LA — proven
-recipe, biggest unfed footprint) → #4 (W5.3 — closes Wave 5) → #5 (W6.5 — the big
-structural de-risk), interleaving #9/#16/#18 as small session-openers.
+**Recommended sequencing (REVISED 2026-08-06 per Scott):** #1 alert triage ✅ DONE (session 36g)
+→ **#19 Wave 7 comms-context propagation (W7.1 first)** — states (#2/#3) pushed to later chats
+→ #4 (W5.3) and #5 (W6.5) behind it, interleaving #9/#16/#18 as small session-openers.
 
 ---
 *Refresh convention: re-run this catalog at each wave close or monthly alongside the
