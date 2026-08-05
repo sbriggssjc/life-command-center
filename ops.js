@@ -1851,6 +1851,13 @@ var _DC_FEDERATED = new Set([
   // gov + dia). Rendered via renderFederatedLane; count read live from
   // /api/review-counts. Keep in sync with admin.js FEDERATED_DECISION_TYPES.
   'sf_link_candidate',
+  // W5.2 (signal -> task automation): two DECISION lanes for orphaned signal
+  // streams. Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs). agency_risk_action = gov agency
+  // risk composite with tracked exposure; npi_dedup_review / npi_dedup_autoapprove
+  // = dia duplicate-NPI clusters (review the data_error / approve the
+  // auto_resolvable survivor — never a silent auto-collapse).
+  'agency_risk_action', 'npi_dedup_review', 'npi_dedup_autoapprove',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1927,6 +1934,9 @@ async function renderReviewConsolePage() {
     { dt: 'resolve_ownership', label: 'Resolve ownership & control', open: "renderFederatedLane('resolve_ownership')" },
     { dt: 'loan_maturity', label: 'Loan maturities → refi or sell', open: "renderFederatedLane('loan_maturity')" },
     { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
+    { dt: 'agency_risk_action', label: 'Agency risk → disposition', open: "renderFederatedLane('agency_risk_action')" },
+    { dt: 'npi_dedup_review', label: 'NPI duplicates → review', open: "renderFederatedLane('npi_dedup_review')" },
+    { dt: 'npi_dedup_autoapprove', label: 'NPI duplicates → approve', open: "renderFederatedLane('npi_dedup_autoapprove')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
     { dt: 'sf_link_candidate', label: 'Salesforce link — confirm candidate', open: "renderFederatedLane('sf_link_candidate')" },
@@ -2862,6 +2872,41 @@ function _fedCardHTML(it, i, isNext) {
       + '<button class="q-action" onclick="dcFed(' + i + ',\'pursue_disposition\')">Pursue disposition</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_relevant\')">Not relevant</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'agency_risk_action') {
+    // W5.2: a gov agency risk composite with tracked portfolio exposure.
+    const score = (c.risk_score != null) ? Number(c.risk_score).toFixed(1) : '';
+    const pc = (c.tracked_property_count != null) ? Number(c.tracked_property_count) : null;
+    const sig = c.signals || {};
+    const spend = sig.spending ? sig.spending.spending_signal : null;
+    const trendPct = sig.spending ? sig.spending.spending_trend_pct : null;
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.agency || 'Agency') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">gov</span>'
+      + '<span class="q-badge ' + (c.risk_level === 'high' ? 'pri-high' : 'type') + '">' + esc(c.risk_level || 'risk') + (score ? ' · ' + score : '') + '</span>'
+      + (pc != null ? '<span class="q-badge">' + pc + ' tracked propert' + (pc === 1 ? 'y' : 'ies') + '</span>' : '') + '</div></div>'
+      + (spend ? '<div class="q-item-meta">Spending: <b>' + esc(spend) + '</b>' + (trendPct != null ? ' (' + esc(String(trendPct)) + '%)' : '') + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.7">Agency risk = a disposition signal on the tracked portfolio. Reach the owners.</div>';
+    actions = (pc ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'pursue_disposition\')">Pursue disposition →</button>' : '')
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'monitor\')">Monitor</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>';
+  } else if (_dcFedType === 'npi_dedup_review' || _dcFedType === 'npi_dedup_autoapprove') {
+    // W5.2: a dia duplicate-NPI cluster. review = human picks; autoapprove =
+    // human APPROVES the deterministic survivor. NEVER a silent auto-collapse.
+    const cs = (c.cluster_size != null) ? Number(c.cluster_size) : null;
+    const winner = c.cluster_winner_medicare_id || null;
+    const isApprove = (_dcFedType === 'npi_dedup_autoapprove');
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.facility_name || ('Clinic ' + c.clinic_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">dia</span>'
+      + '<span class="q-badge ' + (isApprove ? 'type' : 'pri-high') + '">' + esc(c.severity || 'duplicate') + '</span>'
+      + (cs != null ? '<span class="q-badge">cluster ' + cs + '</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + (c.operator_name ? ' · ' + esc(c.operator_name) : '') + '</div>'
+      + (c.npi ? '<div class="q-item-meta">NPI: <b>' + esc(String(c.npi)) + '</b></div>' : '')
+      + (winner ? '<div class="q-item-meta">Proposed survivor: <b>' + esc(String(winner)) + '</b></div>' : '')
+      + (c.signal_reason ? '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.signal_reason)) + '</div>' : '');
+    actions = isApprove
+      ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">Approve survivor →</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject</button>'
+      : '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_duplicate\')">Confirm duplicate →</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'not_duplicate\')">Not a duplicate</button>';
   } else if (_dcFedType === 'contact_company_link') {
     const cands = Array.isArray(c.candidates) ? c.candidates : [];
     const isFuzzy = c.match_class === 'fuzzy';

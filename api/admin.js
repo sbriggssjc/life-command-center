@@ -152,10 +152,284 @@ export default withErrorHandler(async function handler(req, res) {
     case 'owner-deed-autofix':         return handleOwnerDeedAutofix(req, res);
     case 'junk-bucket':                return handleJunkBucket(req, res);
     case 'exact-merge':                return handleExactMerge(req, res);
+    case 'state-lease-consume':        return handleStateLeaseConsume(req, res);
+    case 'agency-risk-consume':        return handleAgencyRiskConsume(req, res);
+    case 'npi-consume':                return handleNpiConsume(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
 });
+
+// ============================================================================
+// W5.2 — signal -> task automation (state lease / agency risk / NPI)
+// Three deterministic consumer ticks (NO LLM in the value gate — auditable).
+// Each: (a) fixed-threshold value gate, (b) create the work item (research_task
+// for research-work; the DECISION lanes are pull-based via fetchFederatedSource
+// and are drained by verdicts), (c) mark consumed (gov processed_at seam / ops
+// ledger), (d) producer-staleness alarm. GET = dry-run, POST = apply. See
+// audit §3.4.1 + docs/audits/ROLLOUT_STATUS.md (W5.2). Grounding note: state_lease
+// events are all backfill-stamped processed (0 unconsumed today) — the mechanism
+// is durable and fires when the producer resumes; do NOT re-process the backfill.
+// ============================================================================
+
+// Open a health alert once (dedup on alert_kind + source, unresolved). Mirrors
+// the resolve-side PATCH key used elsewhere in admin.js; the OPEN side is done in
+// JS here because the producer freshness lives cross-DB (gov), not in a pg fn.
+async function openHealthAlertOnce(alertKind, source, severity, summary, details) {
+  const existing = await opsQuery('GET', 'lcc_health_alerts?select=alert_id'
+    + '&alert_kind=eq.' + pgFilterVal(alertKind) + '&source=eq.' + pgFilterVal(source)
+    + '&resolved_at=is.null&limit=1', undefined, { countMode: 'none' });
+  if (existing.ok && Array.isArray(existing.data) && existing.data[0]) {
+    return { opened: false, alert_id: existing.data[0].alert_id };
+  }
+  const ins = await opsQuery('POST', 'lcc_health_alerts', {
+    detected_at: new Date().toISOString(),
+    alert_kind: alertKind, source, severity, summary, details: details || null,
+  });
+  const aid = (ins.ok && Array.isArray(ins.data) && ins.data[0]) ? ins.data[0].alert_id : null;
+  return { opened: ins.ok, alert_id: aid, error: ins.ok ? null : ins.data };
+}
+
+// Producer freshness: max(created_at) age in days for a cross-DB signal table.
+async function w52ProducerStaleness(domain, table, maxAgeDays) {
+  const r = await domainQuery(domain, 'GET', table + '?select=created_at&order=created_at.desc&limit=1');
+  const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  if (!rows.length || !rows[0].created_at) return { checked: r.ok, stale: false, max_created_at: null };
+  const ageDays = (Date.now() - new Date(rows[0].created_at).getTime()) / 86400000;
+  return { checked: true, stale: ageDays > maxAgeDays, age_days: Math.round(ageDays), max_created_at: rows[0].created_at };
+}
+
+async function w52ResolveWorkspace(user) {
+  let ws = null;
+  try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
+  if (!ws) {
+    const wr = await opsQuery('GET', 'workspaces?select=id&order=created_at.asc&limit=1');
+    if (wr.ok && Array.isArray(wr.data) && wr.data[0]) ws = wr.data[0].id;
+  }
+  return ws;
+}
+
+// ---- state_lease distress -> research_tasks (gov processed_at seam) ----------
+async function handleStateLeaseConsume(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
+  // Fixed value gate: distress/movement types always task; renewed/new_lease/
+  // lessor_change are informational (digest count only). lessor_change would gate
+  // on a tracked-entity link, but state_lease_events.property_id is 100% NULL
+  // (grounded 2026-08-05) so no reliable link exists -> digest only (never guess).
+  const DISTRESS = ['removed', 'footprint_reduction', 'relocated', 'agency_change'];
+  const result = { mode: dryRun ? 'dry_run' : 'apply', distress_types: DISTRESS,
+    scanned: 0, tasks_created: 0, deduped: 0, marked_processed: 0, errors: [], digest: {}, producer: null };
+
+  const stale = await w52ProducerStaleness('government', 'state_lease_events', 45);
+  result.producer = stale;
+  if (!dryRun && stale.stale) {
+    result.producer_alarm = await openHealthAlertOnce('state_lease_producer_stale', 'state_lease_events', 'warning',
+      'state_lease_events producer silent for ' + stale.age_days + 'd (>45d): the state-lease snapshot diff has stopped emitting; the consumer would run over a dead producer.',
+      { max_created_at: stale.max_created_at, age_days: stale.age_days });
+  }
+
+  for (const et of ['renewed', 'new_lease', 'lessor_change']) {
+    const c = await domainQuery('government', 'GET', 'state_lease_events?select=id&processed_at=is.null&event_type=eq.' + et + '&limit=1',
+      undefined, { 'Prefer': 'count=exact' });
+    result.digest[et] = (c.ok && typeof c.count === 'number') ? c.count : null;
+  }
+
+  const evR = await domainQuery('government', 'GET', 'state_lease_events'
+    + '?select=id,source_code,state_lease_id,event_type,event_date,from_snapshot_date,to_snapshot_date,annual_rent'
+    + '&processed_at=is.null&event_type=in.(' + DISTRESS.join(',') + ')&order=event_date.desc&limit=' + limit);
+  if (!evR.ok) return res.status(502).json({ error: 'state_lease_events read failed', detail: evR.data });
+  const events = Array.isArray(evR.data) ? evR.data : [];
+  result.scanned = events.length;
+
+  // Batch snapshot enrichment (address/agency/lessor) — never N+1.
+  const leaseIds = [...new Set(events.map((e) => e.state_lease_id).filter(Boolean))];
+  const snapMap = new Map();
+  if (leaseIds.length) {
+    const inList = leaseIds.map((x) => '"' + String(x).replace(/"/g, '') + '"').join(',');
+    const sr = await domainQuery('government', 'GET', 'state_lease_snapshots'
+      + '?select=source_code,state_lease_id,snapshot_date,address,city,state,agency,lessor,annual_rent'
+      + '&state_lease_id=in.(' + encodeURIComponent(inList) + ')&limit=1000');
+    for (const s of ((sr.ok && Array.isArray(sr.data)) ? sr.data : [])) {
+      snapMap.set(s.source_code + '|' + s.state_lease_id + '|' + s.snapshot_date, s);
+    }
+  }
+  const snapFor = (e) => snapMap.get(e.source_code + '|' + e.state_lease_id + '|' + (e.to_snapshot_date || e.from_snapshot_date))
+    || snapMap.get(e.source_code + '|' + e.state_lease_id + '|' + e.from_snapshot_date) || {};
+
+  if (dryRun) {
+    result.sample = events.slice(0, 5).map((e) => { const s = snapFor(e); return {
+      id: e.id, event_type: e.event_type, address: s.address || null, agency: s.agency || null, lessor: s.lessor || null }; });
+    return res.status(200).json(result);
+  }
+
+  const ws = await w52ResolveWorkspace(user);
+  for (const e of events) {
+    const s = snapFor(e);
+    const title = 'State lease ' + String(e.event_type).replace(/_/g, ' ') + ': '
+      + (s.address || ('lease ' + e.state_lease_id)) + (s.state ? ' (' + s.state + ')' : '');
+    const meta = { signal: 'state_lease_event', event_id: e.id, domain: 'gov',
+      source_code: e.source_code, state_lease_id: e.state_lease_id, event_type: e.event_type,
+      event_date: e.event_date, address: s.address || null, city: s.city || null, state: s.state || null,
+      agency: s.agency || null, lessor: s.lessor || null, annual_rent: s.annual_rent || e.annual_rent || null,
+      deep_link: '#/gov' };
+    const ins = await opsQuery('POST', 'research_tasks', {
+      workspace_id: ws, created_by: user.id || null, research_type: 'state_lease_distress_review',
+      title, instructions: null, domain: 'gov', status: 'queued', priority: 40,
+      source_record_id: String(e.id), source_table: 'state_lease_events', metadata: meta });
+    if (ins.ok) {
+      result.tasks_created += 1;
+      const mp = await domainQuery('government', 'PATCH', 'state_lease_events?id=eq.' + e.id,
+        { processed_at: new Date().toISOString(), processed_reason: 'distress_task_created' });
+      if (mp.ok) result.marked_processed += 1;
+      else result.errors.push('mark ' + e.id + ': ' + JSON.stringify(mp.data).slice(0, 120));
+    } else if (ins.status === 409) {
+      result.deduped += 1;
+      await domainQuery('government', 'PATCH', 'state_lease_events?id=eq.' + e.id,
+        { processed_at: new Date().toISOString(), processed_reason: 'distress_task_exists' });
+    } else {
+      result.errors.push('insert ' + e.id + ': ' + JSON.stringify(ins.data).slice(0, 120));
+    }
+  }
+  return res.status(200).json(result);
+}
+
+// ---- agency risk: staleness + auto-dismiss safety valve (pull lane drains) ---
+async function handleAgencyRiskConsume(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit || '1000', 10)));
+  const result = { mode: dryRun ? 'dry_run' : 'apply', producer: null,
+    actionable_high: null, auto_dismissed: 0, elevated_scanned: 0, elevated_linked: 0, digest: {}, errors: [] };
+
+  const stale = await w52ProducerStaleness('government', 'agency_risk_signals', 45);
+  result.producer = stale;
+  if (!dryRun && stale.stale) {
+    result.producer_alarm = await openHealthAlertOnce('agency_risk_producer_stale', 'agency_risk_signals', 'warning',
+      'agency_risk_signals producer silent for ' + stale.age_days + 'd (>45d).',
+      { max_created_at: stale.max_created_at, age_days: stale.age_days });
+  }
+
+  const hc = await domainQuery('government', 'GET', 'agency_risk_signals?select=signal_id&processed_at=is.null&risk_level=eq.high&limit=1',
+    undefined, { 'Prefer': 'count=exact' });
+  result.actionable_high = (hc.ok && typeof hc.count === 'number') ? hc.count : null;
+  for (const lvl of ['elevated', 'moderate', 'low']) {
+    const c = await domainQuery('government', 'GET', 'agency_risk_signals?select=signal_id&processed_at=is.null&risk_level=eq.' + lvl + '&limit=1',
+      undefined, { 'Prefer': 'count=exact' });
+    result.digest[lvl] = (c.ok && typeof c.count === 'number') ? c.count : null;
+  }
+
+  if (dryRun) return res.status(200).json(result);
+
+  // low + moderate are below the action floor and never surface -> auto-dismiss
+  // (reversible: clear processed_at). Capped per run.
+  const lm = await domainQuery('government', 'PATCH',
+    'agency_risk_signals?processed_at=is.null&risk_level=in.(low,moderate)&limit=' + limit,
+    { processed_at: new Date().toISOString(), processed_reason: 'low_moderate_below_floor' },
+    { 'Prefer': 'return=representation' });
+  if (lm.ok && Array.isArray(lm.data)) result.auto_dismissed += lm.data.length;
+  else if (!lm.ok) result.errors.push('low_moderate dismiss: ' + JSON.stringify(lm.data).slice(0, 120));
+
+  // elevated with NO tracked property exposure is not actionable -> auto-dismiss.
+  // High is NEVER auto-dismissed (always a card).
+  const er = await domainQuery('government', 'GET',
+    'agency_risk_signals?select=signal_id,agency&processed_at=is.null&risk_level=eq.elevated&order=created_at.desc&limit=' + limit);
+  const erows = (er.ok && Array.isArray(er.data)) ? er.data : [];
+  result.elevated_scanned = erows.length;
+  const agencies = [...new Set(erows.map((x) => x.agency).filter(Boolean))];
+  const linked = new Set();
+  if (agencies.length) {
+    const inList = agencies.map((a) => '"' + String(a).replace(/"/g, '') + '"').join(',');
+    const pr = await domainQuery('government', 'GET', 'properties?select=agency&agency=in.(' + encodeURIComponent(inList) + ')&limit=1000');
+    for (const p of ((pr.ok && Array.isArray(pr.data)) ? pr.data : [])) linked.add(String(p.agency || '').toLowerCase());
+  }
+  const unlinkedIds = erows.filter((x) => !x.agency || !linked.has(String(x.agency).toLowerCase())).map((x) => x.signal_id);
+  result.elevated_linked = erows.length - unlinkedIds.length;
+  for (let i = 0; i < unlinkedIds.length; i += 100) {
+    const inIds = unlinkedIds.slice(i, i + 100).map((id) => '"' + String(id) + '"').join(',');
+    const mp = await domainQuery('government', 'PATCH', 'agency_risk_signals?signal_id=in.(' + encodeURIComponent(inIds) + ')',
+      { processed_at: new Date().toISOString(), processed_reason: 'elevated_no_tracked_exposure' },
+      { 'Prefer': 'return=representation' });
+    if (mp.ok && Array.isArray(mp.data)) result.auto_dismissed += mp.data.length;
+    else if (!mp.ok) result.errors.push('elevated dismiss: ' + JSON.stringify(mp.data).slice(0, 120));
+  }
+  return res.status(200).json(result);
+}
+
+// ---- NPI: missing/new -> research_tasks (ops ledger); dup lanes = digest ------
+async function handleNpiConsume(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit || '200', 10)));
+  const result = { mode: dryRun ? 'dry_run' : 'apply', scanned: 0, tasks_created: 0, deduped: 0, ledgered: 0, errors: [], digest: {} };
+
+  // Digest counts for the DECISION lanes (worked in the Decision Center, not here).
+  for (const [k, q] of [
+    ['dup_data_error', 'signal_type=eq.duplicate_inventory_npi&severity=eq.data_error'],
+    ['dup_auto_resolvable', 'signal_type=eq.duplicate_inventory_npi&severity=eq.auto_resolvable'],
+    ['dup_data_quality', 'signal_type=eq.duplicate_inventory_npi&severity=eq.data_quality'],
+  ]) {
+    const c = await domainQuery('dialysis', 'GET', 'mv_npi_inventory_signals?select=clinic_id&' + q + '&limit=1',
+      undefined, { 'Prefer': 'count=exact' });
+    result.digest[k] = (c.ok && typeof c.count === 'number') ? c.count : null;
+  }
+
+  // consumed hashes for the research signal types (matview has no seam).
+  const consumed = new Set();
+  const cr = await opsQuery('GET', 'lcc_npi_signal_consumed?select=signal_hash&signal_type=in.(missing_inventory_npi,new_npi)&limit=1000',
+    undefined, { countMode: 'none' });
+  for (const x of ((cr.ok && Array.isArray(cr.data)) ? cr.data : [])) consumed.add(x.signal_hash);
+
+  const ws = await w52ResolveWorkspace(user);
+  const preview = [];
+  const RESEARCH = [
+    { signal_type: 'missing_inventory_npi', research_type: 'npi_missing_inventory' },
+    { signal_type: 'new_npi', research_type: 'npi_new_registration' },
+  ];
+  for (const spec of RESEARCH) {
+    const r = await domainQuery('dialysis', 'GET', 'mv_npi_inventory_signals'
+      + '?select=signal_type,clinic_id,npi,facility_name,address,city,state,operator_name,cluster_winner_medicare_id,severity,signal_priority,signal_reason,latest_total_patients'
+      + '&signal_type=eq.' + spec.signal_type + '&order=latest_total_patients.desc.nullslast&limit=' + limit);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    for (const row of rows) {
+      const hash = npiSignalHash(row);
+      if (consumed.has(hash)) { result.deduped += 1; continue; }
+      result.scanned += 1;
+      const title = (spec.signal_type === 'missing_inventory_npi' ? 'NPI missing: ' : 'New NPI: ')
+        + (row.facility_name || ('clinic ' + row.clinic_id)) + (row.state ? ' (' + row.state + ')' : '');
+      const meta = { signal: 'npi_inventory', signal_hash: hash, signal_type: row.signal_type, domain: 'dia',
+        clinic_id: row.clinic_id, npi: row.npi || null, facility_name: row.facility_name || null,
+        operator_name: row.operator_name || null, address: row.address || null, city: row.city || null, state: row.state || null,
+        latest_total_patients: row.latest_total_patients || null, signal_reason: row.signal_reason || null,
+        deep_link: w52PropDeepLink('dia', row.clinic_id) };
+      if (dryRun) { preview.push({ hash, title, clinic_id: row.clinic_id }); continue; }
+      const ins = await opsQuery('POST', 'research_tasks', {
+        workspace_id: ws, created_by: user.id || null, research_type: spec.research_type,
+        title, instructions: null, domain: 'dia', status: 'queued', priority: 45,
+        source_record_id: hash, source_table: 'mv_npi_inventory_signals', metadata: meta });
+      let taskId = null;
+      if (ins.ok) { result.tasks_created += 1; taskId = Array.isArray(ins.data) ? (ins.data[0] && ins.data[0].id) : (ins.data && ins.data.id); }
+      else if (ins.status === 409) { result.deduped += 1; }
+      else { result.errors.push('insert ' + hash.slice(0, 8) + ': ' + JSON.stringify(ins.data).slice(0, 120)); continue; }
+      const lg = await opsQuery('POST', 'lcc_npi_signal_consumed', {
+        signal_hash: hash, signal_type: row.signal_type, severity: row.severity || null,
+        clinic_id: row.clinic_id != null ? String(row.clinic_id) : null, npi: row.npi || null,
+        cluster_winner_medicare_id: row.cluster_winner_medicare_id || null,
+        consumed_via: 'research_task', consumed_reason: spec.research_type, research_task_id: taskId, decision_id: null });
+      if (lg.ok || lg.status === 409) result.ledgered += 1;
+      else result.errors.push('ledger ' + hash.slice(0, 8) + ': ' + JSON.stringify(lg.data).slice(0, 120));
+    }
+  }
+  if (dryRun) result.sample = preview.slice(0, 5);
+  return res.status(200).json(result);
+}
 
 // ============================================================================
 // OPS HEALTH (2026-05-31)
@@ -1453,6 +1727,20 @@ const FEDERATED_DECISION_TYPES = new Set([
   // hard-negative training data). Mint-at-verdict (no 3,452-row lcc_decisions
   // pre-mint); the sublane badge reads the live view count via /api/review-counts.
   'sf_link_candidate',
+  // W5.2 (signal -> task automation, audit 3.4.1): three orphaned signal streams
+  // get deterministic, value-gated consumers (NO LLM in the gate). Two route to
+  // DECISION lanes here (a human picks between options); the research-work
+  // streams (state-lease distress, npi missing/new) are pushed straight to
+  // research_tasks by their ticks, not surfaced as lanes.
+  //   agency_risk_action  — a gov agency with elevated/high risk composite AND
+  //                         tracked portfolio exposure. pursue_disposition,
+  //                         monitor, or dismiss. Seam = gov processed_at.
+  //   npi_dedup_review    — a data_error duplicate-NPI cluster; the human picks
+  //                         (confirm/not) — never an auto-collapse (never-guess).
+  //   npi_dedup_autoapprove — the auto_resolvable duplicate slice: the tick
+  //                         proposes the deterministic survivor, a human APPROVES
+  //                         (never a silent auto-resolve). Ledgered ops-side.
+  'agency_risk_action', 'npi_dedup_review', 'npi_dedup_autoapprove',
 ]);
 
 // Decision types posted as (type + subject) from the PROPERTY-DETAIL signal
@@ -1485,6 +1773,13 @@ function federatedSubjectRef(type, s) {
     case 'bad_rent_lease':     return (s.domain && s.review_id != null) ? 'badrent:' + s.domain + ':' + s.review_id : null;
     case 'resolve_owner_parent': return (s.domain && s.cluster_token) ? 'ownerparent:' + s.domain + ':' + s.cluster_token : null;
     case 'listing_event_action': return s.event_id ? 'listevt:' + s.event_id : null;
+    // W5.2: gov agency_risk_signals keyed by its signal_id (uuid).
+    case 'agency_risk_action': return s.signal_id ? 'arisk:' + s.signal_id : null;
+    // W5.2: dia NPI signals keyed by the stable identity hash (the matview has no
+    // pk); both dedup lanes share the npi: namespace — exclusion is per
+    // decision_type so the two lanes never collide.
+    case 'npi_dedup_review':
+    case 'npi_dedup_autoapprove': return s.signal_hash ? 'npi:' + s.signal_hash : null;
     case 'owner_source_conflict': return (s.domain && s.property_id != null) ? 'osrc:' + s.domain + ':' + s.property_id : null;
     case 'suspected_sale': return (s.domain && s.property_id != null && s.signal_source)
                                   ? 'susp:' + s.domain + ':' + s.property_id + ':' + s.signal_source : null;
@@ -1669,6 +1964,25 @@ async function fetchExcludedRefs(type) {
   return set;
 }
 
+// W5.2: stable identity hash for a dia.mv_npi_inventory_signals row. The matview
+// has no pk, so consumption is ledgered (lcc_npi_signal_consumed) by this hash.
+// `npi` is NULL for the 504 missing_inventory rows, so clinic_id MUST be in the
+// key (validated live: 1,452/1,452 distinct across the mv). The consumer is the
+// sole hasher; SQL never recomputes it.
+function npiSignalHash(r) {
+  r = r || {};
+  const parts = [r.signal_type || '', r.clinic_id || '', r.npi || '', r.cluster_winner_medicare_id || ''];
+  return createHash('md5').update(parts.join('|')).digest('hex');
+}
+
+// W5.2: the deep-link the app understands (client hash routing — see CLAUDE.md
+// "Client routing"). property/clinic detail = #/<slug>?d=prop:<db>:<id>:Overview;
+// with no resolvable id we fall back to the domain page (#/gov | #/dia). NEVER a
+// prose instruction — a structured, clickable target only.
+function w52PropDeepLink(db, id) {
+  return (id != null && id !== '') ? '#/' + db + '?d=prop:' + db + ':' + id + ':Overview' : '#/' + db;
+}
+
 // Per-lane source fetch. Returns { items, total } where each item carries the
 // subject_ref + display context + rank_value. `cap` bounds the source pull
 // (top-of-funnel; exclusion + paging happen in JS).
@@ -1713,6 +2027,111 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = await opsCnt('v_lcc_listing_event_queue?processed_at=is.null');
+    return out;
+  }
+
+  if (type === 'agency_risk_action') {
+    // W5.2: gov agency_risk_signals, unconsumed (processed_at NULL), value-gated:
+    //   high      -> always a card (15 ever — cheap, always actionable)
+    //   elevated  -> a card ONLY when the agency links to >=1 tracked gov
+    //               property (by agency name); unlinked elevated is auto-dismissed
+    //               by the tick, so it normally never reaches here.
+    //   low/moderate never surface (excluded at the query).
+    // Ranked by risk_score desc. Cross-DB read via domainQuery('government').
+    const r = await domainQuery('government', 'GET', 'agency_risk_signals'
+      + '?select=signal_id,agency,agency_code,risk_level,risk_score,signal_date,severity,details,created_at'
+      + '&processed_at=is.null&risk_level=in.(high,elevated)'
+      + '&order=risk_score.desc.nullslast,created_at.desc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // One batched properties read (never N+1): which candidate agencies have
+    // tracked gov properties, and a few property_ids each for the deep link.
+    const agencies = [...new Set(rows.map((x) => x.agency).filter(Boolean))];
+    const propByAgency = new Map();
+    if (agencies.length) {
+      const inList = agencies.map((a) => '"' + String(a).replace(/"/g, '') + '"').join(',');
+      const pr = await domainQuery('government', 'GET', 'properties'
+        + '?select=property_id,agency&agency=in.(' + encodeURIComponent(inList) + ')&limit=1000');
+      const prows = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+      for (const p of prows) {
+        const k = String(p.agency || '').toLowerCase();
+        if (!propByAgency.has(k)) propByAgency.set(k, []);
+        const arr = propByAgency.get(k);
+        if (arr.length < 25) arr.push(p.property_id);
+      }
+    }
+    out.items = rows.map((row) => {
+      const pids = propByAgency.get(String(row.agency || '').toLowerCase()) || [];
+      return {
+        row, _pids: pids,
+        subject_ref: row.signal_id ? 'arisk:' + row.signal_id : null,
+        subject_domain: 'gov',
+        subject_property_id: pids.length ? String(pids[0]) : null,
+        subject_entity_id: null,
+        rank_value: Number(row.risk_score) || 0,
+        context: {
+          signal_id: row.signal_id, domain: 'gov', agency: row.agency,
+          agency_code: row.agency_code, risk_level: row.risk_level,
+          risk_score: row.risk_score, signal_date: row.signal_date,
+          severity: row.severity, signals: row.details || null,
+          tracked_property_count: pids.length,
+          property_ids: pids.slice(0, 10),
+          deep_link: w52PropDeepLink('gov', pids.length ? pids[0] : null),
+        },
+      };
+    // elevated with no tracked exposure is not actionable BD work — drop it from
+    // the lane (the tick auto-dismisses it so it never accretes).
+    }).filter((it) => it.subject_ref && (it.row.risk_level === 'high' || it._pids.length > 0))
+      .map(({ row, _pids, ...it }) => it);
+    out.total = out.items.length;
+    return out;
+  }
+
+  if (type === 'npi_dedup_review' || type === 'npi_dedup_autoapprove') {
+    // W5.2: dia.mv_npi_inventory_signals duplicate-NPI clusters. data_error ->
+    // review (human picks the survivor); auto_resolvable -> autoapprove (human
+    // APPROVES the deterministic proposed survivor). NEVER an auto-collapse here
+    // (never-guess / fill-blanks doctrine for destructive dedup). The matview has
+    // no seam, so exclusion is the ops ledger (consumed hashes) + fetchExcludedRefs.
+    const sev = type === 'npi_dedup_review' ? 'data_error' : 'auto_resolvable';
+    const r = await domainQuery('dialysis', 'GET', 'mv_npi_inventory_signals'
+      + '?select=signal_type,clinic_id,npi,facility_name,address,city,state,operator_name,'
+      + 'cluster_size,cluster_winner_medicare_id,severity,signal_priority,signal_reason,latest_total_patients'
+      + '&signal_type=eq.duplicate_inventory_npi&severity=eq.' + sev
+      + '&order=signal_priority.asc,cluster_size.desc.nullslast&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // Ledger exclusion (consumed hashes for this signal_type).
+    const consumed = new Set();
+    for (let off = 0; ; off += 1000) {
+      const cr = await opsQuery('GET', 'lcc_npi_signal_consumed?select=signal_hash'
+        + '&signal_type=eq.duplicate_inventory_npi&order=signal_hash.asc&limit=1000&offset=' + off,
+        undefined, { countMode: 'none' });
+      const crows = (cr.ok && Array.isArray(cr.data)) ? cr.data : [];
+      for (const x of crows) consumed.add(x.signal_hash);
+      if (crows.length < 1000) break;
+    }
+    out.items = rows.map((row) => {
+      const hash = npiSignalHash(row);
+      return {
+        _hash: hash,
+        subject_ref: 'npi:' + hash,
+        subject_domain: 'dia',
+        subject_property_id: row.clinic_id != null ? String(row.clinic_id) : null,
+        subject_entity_id: null,
+        rank_value: Number(row.latest_total_patients) || 0,
+        context: {
+          signal_hash: hash, signal_type: row.signal_type, severity: row.severity,
+          domain: 'dia', clinic_id: row.clinic_id, npi: row.npi,
+          facility_name: row.facility_name, operator_name: row.operator_name,
+          address: row.address, city: row.city, state: row.state,
+          cluster_size: row.cluster_size,
+          cluster_winner_medicare_id: row.cluster_winner_medicare_id,
+          signal_priority: row.signal_priority, signal_reason: row.signal_reason,
+          latest_total_patients: row.latest_total_patients,
+          deep_link: w52PropDeepLink('dia', row.clinic_id),
+        },
+      };
+    }).filter((it) => !consumed.has(it._hash)).map(({ _hash, ...it }) => it);
+    out.total = out.items.length;
     return out;
   }
 
@@ -3153,6 +3572,97 @@ async function handleDecisionVerdict(req, res) {
       await record(verdict, 'decided', payload, { research_task: true, marked_processed: true });
       const taskId = Array.isArray(rt.data) ? (rt.data[0] && rt.data[0].id) : (rt.data && rt.data.id);
       return res.status(200).json({ ok: true, verdict, event_id: eventId, research_task_id: taskId || true });
+    }
+
+    // ---- agency_risk_action (W5.2) ------------------------------------------
+    // A gov agency's risk composite is a BD signal, never a fact. Effect-FIRST
+    // (spawn the disposition research_task), then mark the gov signal processed
+    // so the lane drains; a failed effect keeps the decision open and does NOT
+    // mark processed. Human-gated — never auto-blasts.
+    if (decision.decision_type === 'agency_risk_action') {
+      const ac = decision.context || {};
+      const sid = ac.signal_id || null;
+      if (!sid) return res.status(400).json({ error: 'signal_id missing from decision context' });
+      const markProcessed = async (reason) =>
+        domainQuery('government', 'PATCH', 'agency_risk_signals?signal_id=eq.' + encodeURIComponent(sid),
+          { processed_at: new Date().toISOString(), processed_reason: reason });
+      if (verdict === 'monitor' || verdict === 'dismiss') {
+        const mp = await markProcessed(verdict);
+        if (!mp.ok) { await recordEffectFailure({ marked_processed: false, error: mp.data });
+          return res.status(502).json({ error: 'mark_processed_failed', detail: mp.data }); }
+        await record(verdict, 'decided', payload, { marked_processed: true });
+        return res.status(200).json({ ok: true, verdict, signal_id: sid });
+      }
+      if (verdict === 'pursue_disposition') {
+        const rt = await createResearchTask({
+          research_type: 'agency_risk_disposition',
+          title: 'Agency risk — pursue disposition: ' + (ac.agency || 'agency')
+            + ' (' + (ac.risk_level || '') + ', ' + (ac.tracked_property_count || 0) + ' tracked)',
+          instructions: null });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const mp = await markProcessed(verdict);
+        if (!mp.ok) { await recordEffectFailure({ research_task: true, marked_processed: false, error: mp.data });
+          return res.status(502).json({ error: 'mark_processed_failed', detail: mp.data }); }
+        await record(verdict, 'decided', payload, { research_task: true, marked_processed: true });
+        const taskId = Array.isArray(rt.data) ? (rt.data[0] && rt.data[0].id) : (rt.data && rt.data.id);
+        return res.status(200).json({ ok: true, verdict, signal_id: sid, research_task_id: taskId || true });
+      }
+      return res.status(400).json({ error: 'unknown verdict for agency_risk_action: ' + verdict });
+    }
+
+    // ---- npi_dedup_review / npi_dedup_autoapprove (W5.2) --------------------
+    // A duplicate-NPI cluster. NEVER auto-collapses here (fill-blanks/never-guess
+    // for destructive dedup): a confirm/approve verdict spawns a reconcile/apply
+    // research_task and LEDGERS the signal consumed (the matview has no seam);
+    // a not_duplicate/reject records + ledgers only. Effect-first; a failed
+    // effect keeps the decision open.
+    if (decision.decision_type === 'npi_dedup_review' || decision.decision_type === 'npi_dedup_autoapprove') {
+      const nc = decision.context || {};
+      if (!nc.signal_hash) return res.status(400).json({ error: 'signal_hash missing from decision context' });
+      const ledger = async (reason, taskId) => {
+        const lr = await opsQuery('POST', 'lcc_npi_signal_consumed', {
+          signal_hash: nc.signal_hash, signal_type: nc.signal_type || 'duplicate_inventory_npi',
+          severity: nc.severity || null,
+          clinic_id: nc.clinic_id != null ? String(nc.clinic_id) : null, npi: nc.npi || null,
+          cluster_winner_medicare_id: nc.cluster_winner_medicare_id || null,
+          consumed_via: 'decision', consumed_reason: reason,
+          research_task_id: taskId || null, decision_id: decisionId,
+        });
+        // PK is signal_hash — a re-consume 409s, which is idempotent success.
+        return (lr.ok || lr.status === 409) ? { ok: true } : lr;
+      };
+      const clinicLabel = nc.facility_name || ('clinic ' + nc.clinic_id);
+      if (verdict === 'not_duplicate' || verdict === 'reject') {
+        const lg = await ledger(verdict, null);
+        if (!lg.ok) { await recordEffectFailure({ ledgered: false, error: lg.data });
+          return res.status(502).json({ error: 'ledger_failed', detail: lg.data }); }
+        await record(verdict, 'decided', payload, { ledgered: true });
+        return res.status(200).json({ ok: true, verdict, signal_hash: nc.signal_hash });
+      }
+      let taskSpec = null;
+      if (decision.decision_type === 'npi_dedup_review' && verdict === 'confirm_duplicate') {
+        taskSpec = { research_type: 'npi_dedup_reconcile',
+          title: 'NPI dedup — reconcile confirmed duplicate: ' + clinicLabel
+            + (nc.cluster_winner_medicare_id ? ' (keep ' + nc.cluster_winner_medicare_id + ')' : ''),
+          instructions: null };
+      } else if (decision.decision_type === 'npi_dedup_autoapprove' && verdict === 'approve') {
+        taskSpec = { research_type: 'npi_dedup_apply',
+          title: 'NPI dedup — apply approved survivor: ' + clinicLabel
+            + (nc.cluster_winner_medicare_id ? ' -> ' + nc.cluster_winner_medicare_id : ''),
+          instructions: null };
+      } else {
+        return res.status(400).json({ error: 'unknown verdict for ' + decision.decision_type + ': ' + verdict });
+      }
+      const rt = await createResearchTask(taskSpec);
+      if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data });
+        return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+      const taskId = Array.isArray(rt.data) ? (rt.data[0] && rt.data[0].id) : (rt.data && rt.data.id);
+      const lg = await ledger(verdict, taskId || null);
+      if (!lg.ok) { await recordEffectFailure({ research_task: true, ledgered: false, error: lg.data });
+        return res.status(502).json({ error: 'ledger_failed', detail: lg.data }); }
+      await record(verdict, 'decided', payload, { research_task: true, ledgered: true });
+      return res.status(200).json({ ok: true, verdict, signal_hash: nc.signal_hash, research_task_id: taskId || true });
     }
 
     // ---- confirm_true_owner -------------------------------------------------
