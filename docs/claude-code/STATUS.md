@@ -39,6 +39,18 @@ implied-NOI cap reconciliation exact (0 mismatch). So ALL of 36–40 are complet
 **Still to validate end-to-end:** that a real `generate_comps` workbook now renders POPULATED on-market rows
 (i.e. the enriched view/RPC actually feeds the on-market sheet) — check after the connector/redeploy is up.
 
+## Acceptance run 2026-08-05 (post-redeploy) — 41/42/43 validated end-to-end
+Regenerated the Villages workbook through the DEPLOYED renderer/template (43) on the live gated data (42),
+41-standardized fields. PASS: OPTIONS header (real template), auto-fit/no-wrap (real renderer), national 18-mo
+DaVita+Fresenius set (14 states), standardized operator/expenses/OPTIONS/bumps, clean DOM + 0 negative bid-ask,
+0 recalc errors, unknown_keys=[]. Price-change: verified live (11 of 180 on-market rows repriced) but the 14
+closest comps to this subject weren't among them (correct — quality assets clear near ask), so PRICE CHG blank here.
+**Small residual (candidate 43 follow-up):** renderer's shared-width matching left 4 columns (PATIENTS, EXP, TERM,
+LAST PRICE) slightly different between the On Market and Sold tabs — the shared-width pass isn't covering formula/
+date columns. Minor.
+NOTE: container mount served a STALE cache of the renderer/template on first stage; verified device working tree +
+HEAD are correct (OPTIONS header, autofit present) and rebuilt against fresh copies.
+
 ## Comps prompts 41-43 — reconcile 2026-08-05 (all merged/live)
 Canon re-rendered to **v1.3.0**, 0 drift (41 bumped the block but not the version/surfaces — fixed here).
 | # | Merged | State |
