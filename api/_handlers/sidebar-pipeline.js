@@ -2291,6 +2291,30 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
 // data into the correct domain-specific Supabase backend (dialysis or gov).
 
 /**
+ * Normalize a domain value to the LONG form the propagation router
+ * (getDomainCredentials / propagateToDomainDbDirect) requires.
+ *
+ * Fix (2026-08-06 alert triage §3A, alert 983): `entities.domain` holds the
+ * SHORT canonical codes EXCLUSIVELY (gov/dia/lcc/cre) — the CHECK constraint
+ * `chk_entities_domain` enforces short form, and `canonicalEntityDomain()`
+ * (api/_shared/entity-link.js) normalizes every write down to short form, which
+ * is why zero rows carry the long names. But `classifyAndUpdateDomain`'s
+ * preserve-existing branch returns the STORED short code (`entity.domain`),
+ * which then reached this dispatcher and only accepted 'dialysis'/'government'
+ * → every sidebar RE-capture of an existing dia/gov entity silently skipped
+ * domain-DB propagation with reason 'unknown_domain'. Accept both forms here so
+ * the short code the data actually uses routes correctly. `lcc`/`cre`/anything
+ * else stays on the unknown_domain path (they have no domain DB). Pure —
+ * unit-tested.
+ */
+export function normalizePropagationDomain(domain) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (d === 'dialysis' || d === 'dia') return 'dialysis';
+  if (d === 'government' || d === 'gov') return 'government';
+  return null;
+}
+
+/**
  * Main domain propagation dispatcher.
  * Routes to the correct domain backend based on classified domain.
  */
@@ -2298,9 +2322,10 @@ async function propagateToDomainDb(entity, metadata, domain, opts = {}) {
   if (!domain) return { propagated: false, reason: 'no_domain' };
 
   try {
-    if (domain === 'dialysis' || domain === 'government') {
-      if (!getDomainCredentials(domain)) return { propagated: false, reason: 'domain_db_not_configured' };
-      return await propagateToDomainDbDirect(domain, entity, metadata, opts);
+    const routeDomain = normalizePropagationDomain(domain);
+    if (routeDomain) {
+      if (!getDomainCredentials(routeDomain)) return { propagated: false, reason: 'domain_db_not_configured' };
+      return await propagateToDomainDbDirect(routeDomain, entity, metadata, opts);
     }
     return { propagated: false, reason: 'unknown_domain' };
   } catch (err) {
@@ -11466,6 +11491,32 @@ export function pipelinePromoteOutcome({ propagated, domain, reason } = {}) {
 }
 
 /**
+ * Fix (2026-08-06 alert triage §3A): decide whether a pipeline-failed promote
+ * warrants a per-capture lcc_health_alerts row.
+ *
+ * A `no_domain` failure on a THIN capture — a CoStar contact-page fragment with
+ * almost no text, no sale notes, no PDFs — is a page the classifier declined
+ * CORRECTLY (legitimately out of domain scope). A warn alert per such capture is
+ * noise that buries real signal (8 of 9 open `sidebar_promote_pipeline_failed`
+ * alerts were exactly this: searchTextLen 56–97, no sale notes, no PDFs).
+ *
+ * So: suppress the alert for a thin `no_domain` (count it instead). A SUBSTANTIVE
+ * capture (rich text ≥150 chars, OR sale notes, OR PDFs) that still lands
+ * `no_domain` KEEPS its alert — those are potential classifier gaps worth a look.
+ * `unknown_domain` and every other failure reason ALWAYS alert. Pure —
+ * unit-tested.
+ */
+export function shouldAlertPipelineFailure({ reason, classifierDiag } = {}) {
+  if (reason !== 'no_domain') return true;
+  const d = classifierDiag || {};
+  const thin =
+    (Number(d.searchTextLen) || 0) < 150 &&
+    !d.hasSaleNotes &&
+    !d.hasPdfTexts;
+  return !thin;
+}
+
+/**
  * W1.4-L3b: emit a lcc_health_alerts row on a pipeline-failed promote so
  * repeated silent failures become visible in Ops Health. Fire-and-forget —
  * never throws, never blocks the promote. Deduped on the unresolved
@@ -11670,13 +11721,22 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     domain,
     reason: propagation.reason,
   });
+  let thinNoDomainSuppressed = false;
   if (promoteOutcome.pipeline_failed) {
-    recordSidebarPipelineFailure({
-      entityId, workspaceId, domain,
-      reason: promoteOutcome.pipeline_reason,
-      classifierDiag: _lastClassifierDiag,
-      propagation,
-    }).catch((e) => console.warn('[sidebar-pipeline] alert record failed (suppressed):', e?.message || e));
+    if (shouldAlertPipelineFailure({ reason: propagation.reason, classifierDiag: _lastClassifierDiag })) {
+      recordSidebarPipelineFailure({
+        entityId, workspaceId, domain,
+        reason: promoteOutcome.pipeline_reason,
+        classifierDiag: _lastClassifierDiag,
+        propagation,
+      }).catch((e) => console.warn('[sidebar-pipeline] alert record failed (suppressed):', e?.message || e));
+    } else {
+      // Thin no_domain capture — the classifier declined a legitimately
+      // out-of-scope page. Count it (surfaced in the response diagnostics)
+      // instead of opening a per-capture warn alert that would bury real signal.
+      thinNoDomainSuppressed = true;
+      console.log(`[Sidebar pipeline] thin no_domain capture — alert suppressed (entity=${entityId}, searchTextLen=${_lastClassifierDiag?.searchTextLen ?? 'n/a'})`);
+    }
   }
 
   console.log(`[Sidebar pipeline] Done: entity=${entityId}, domain=${domain}, contacts=${totalContacts}, sales=${salesCount}, propagated=${propagation.propagated}`);
@@ -11699,6 +11759,11 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     // W1.4-L3b: explicit promote status so the sidebar can render a failure
     // inline instead of a false "success" toast on a no-domain / no-write run.
     ...promoteOutcome,
+    // Fix (2026-08-06 alert triage §3A): true when this failed promote was a
+    // thin no_domain capture whose per-capture health alert was suppressed as
+    // noise (counted here instead). Substantive no_domain / unknown_domain /
+    // other failures still open an alert and leave this false.
+    thin_no_domain_suppressed: thinNoDomainSuppressed,
     processed_at: new Date().toISOString(),
   };
 }
