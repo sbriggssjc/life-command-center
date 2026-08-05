@@ -1530,6 +1530,78 @@ function isOnMarketComp(c) {
   return !t.sale_date && !c?.sale_date && !!(c?.ask_price || c?.list_price || c?.current_price || c?.cur_price);
 }
 
+// ── Comp DATA-QUALITY gates (Prompt 42, 2026-08-05) ─────────────────────────
+// Impossible/blank values were reaching the export: negative or multi-thousand-day
+// DOM (bad/after-sale list dates), negative bid-ask (sold recorded above ask). These
+// gates run at the single workbook choke point so they cover ALL comp arms uniformly
+// (dia-db, gov-db, salesforce). Mirrored SQL-side in the rpc_query_comps sold arm of
+// each DB (dia/gov comp_data_quality_gates migrations) as defense-in-depth.
+//   * DOM gate  — a sold list (ON MARKET) date is valid ONLY if it is strictly BEFORE
+//     the sale date and within a sane window (<= MAX_SOLD_DOM_DAYS). Otherwise the list
+//     date is blanked so DOM stays blank — never negative / never multi-thousand-day.
+//   * Bid-ask gate — an INITIAL/LAST ask is trusted ONLY when it is >= the sale price
+//     (normal down-negotiation). When sold > ask the ask is unreliable => blank it (no
+//     negative bid-ask), and the comp is flagged for review.
+// Blanks are never fabricated: a missing field stays missing.
+const MAX_SOLD_DOM_DAYS = 1500;
+
+function _compDate(v) {
+  if (v == null || v === '') return null;
+  const d = (v instanceof Date) ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function _compNum(v) {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+function _pushReviewFlag(row, flag) {
+  if (!Array.isArray(row.review_flags)) row.review_flags = [];
+  if (!row.review_flags.includes(flag)) row.review_flags.push(flag);
+  row.notes = appendNotes(row.notes, `Review: ${flag}`);
+}
+
+// Gate a SOLD comp's derived DOM + bid-ask inputs in place. Returns the row.
+export function applySoldCompGates(row) {
+  const sale = _compDate(row.sale_date);
+  const listed = _compDate(row.on_market);
+  if (listed != null) {
+    const days = sale != null ? Math.round((sale.getTime() - listed.getTime()) / 86400000) : null;
+    const valid = sale != null && listed < sale && days != null && days <= MAX_SOLD_DOM_DAYS;
+    if (!valid) {
+      // Blank the list date so the workbook's DOM formula yields blank, never a
+      // negative or absurd DOM. Flag only when the date is actually implausible.
+      delete row.on_market;
+      _pushReviewFlag(row, 'list_date_out_of_range');
+    }
+  }
+  const sold = _compNum(row.sale_price);
+  if (sold != null) {
+    for (const k of ['initial_price', 'last_price']) {
+      const ask = _compNum(row[k]);
+      if (ask != null && ask < sold) {
+        delete row[k];
+        if (k === 'initial_price') delete row.initial_cap, delete row.initial_cap_rate;
+        if (k === 'last_price') delete row.last_cap, delete row.last_cap_rate;
+        _pushReviewFlag(row, 'ask_below_sale');
+      }
+    }
+  }
+  return row;
+}
+
+// Populate the PRICE CHG signal for an on-market row: the original ask differs from the
+// current ask. initial_price is the ORIGINAL ask, cur/last the CURRENT ask (Prompt 42 item 3).
+export function applyOnMarketPriceChange(row) {
+  const initial = _compNum(row.initial_price);
+  const current = _compNum(row.cur_price ?? row.last_price);
+  const changed = initial != null && current != null && Math.abs(initial - current) >= 1;
+  row.had_price_change = changed;
+  row.price_changes = changed ? 1 : 0;
+  if (changed && current > 0) row.pct_of_initial = +(current / initial).toFixed(4);
+  return row;
+}
+
 function workbookRowsFromSynthResult(result) {
   const sold = [];
   const onMarket = [];
@@ -1549,6 +1621,7 @@ function workbookRowsFromSynthResult(result) {
       row.last_cap_rate = t.last_cap_rate ?? row.last_cap_rate;
       row.last_cap = row.last_cap_rate;
       if (listed) row.on_market = listed;
+      applyOnMarketPriceChange(row);
       onMarket.push(row);
     } else {
       row.sale_price = t.sale_price;
@@ -1565,6 +1638,7 @@ function workbookRowsFromSynthResult(result) {
       if (t.sale_price == null) delete row.sale_price;
       if (!t.sale_date) delete row.sale_date;
       if (row.last_price == null) delete row.last_price;
+      applySoldCompGates(row);
       sold.push(row);
     }
   }
