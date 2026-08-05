@@ -360,6 +360,42 @@ Each action entry includes:
 | Improve execution reliability | Covered | `get_my_execution_queue`, `update_execution_task_status` |
 | Increase operational visibility and resilience | Covered | `get_daily_briefing_snapshot` (aggregator), `get_sync_run_health`, `retry_sync_error_record`, review queue surfacing actions |
 
+## Wave 3 — Call notes + Microsoft-side capture (W7.3)
+
+Capture calls + operator-tagged comms "from Microsoft as we send/work" so they
+become first-class inputs to the LIVE W7.2 propagation tick. Both land as
+deal-stamped `activity_events` through the existing dual-anchor spine.
+
+### 41) log_call_note
+- `action_name`: `log_call_note`
+- `user_goal`: Log a phone/Teams call as a first-class call note on a deal, from Copilot (Outlook/Teams).
+- `category`: `schedule/task`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/chat (copilot_action dispatch)` → `operations.js::handleLogCallNote` → `logManualCallNote`
+- `microsoft_surface`: `Teams`, `Outlook`, `Copilot Chat`, `LCC`
+- `inputs`: required `notes`; optional `deal_or_contact_query`, `direction` (made/received), `contact_name`, `occurred_at`
+- `outputs`: `{ ok, wrote, requires_pick, candidates[], activity_id, deal_entity_id, message }`
+- `risk_tier`: `1`
+- `confirmation_required`: `lightweight`
+- `idempotency_notes`: Dedup on (workspace, `manual_call`, external_id) where external_id hashes (actor, occurred_at, notes) — a re-submit is a no-op. Deal resolution NEVER guesses: an ambiguous query returns candidates and writes nothing (`requires_pick`).
+- `listing_driven_production_support`: A logged call updates the deal summary + next steps exactly like an email (W7.3 → W7.2).
+
+### 42) tag_comm_to_deal
+- `action_name`: `tag_comm_to_deal`
+- `user_goal`: Manually attach an existing email/call to a deal — the override lane for zero-match deals and matcher misses.
+- `category`: `review/resolve`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/chat (copilot_action dispatch)` → `operations.js::handleTagCommToDeal`
+- `microsoft_surface`: `Teams`, `Outlook`, `Copilot Chat`, `LCC`
+- `inputs`: required `deal_or_contact_query`; optional `internet_message_id` (preferred), `subject`, `sender`
+- `outputs`: `{ ok, wrote, already, conflict, activity_id, deal_entity_id, message }`
+- `risk_tier`: `1`
+- `confirmation_required`: `lightweight`
+- `idempotency_notes`: Stamps `deal_entity_id` on the matched activity. Re-stamping the SAME deal is a no-op (`already`); REFUSES to re-stamp a message already tied to a DIFFERENT deal (`conflict` surfaced, never overwritten).
+- `listing_driven_production_support`: Attaches the message so it propagates into the deal context (W7.3 → W7.2).
+
+> Companion capture (no Copilot action): the **Outlook category-tagging** flow (`POST /api/intake-tagged-comm`, PA-webhook-secret auth, flag `TAGGED_COMM_INTAKE`) and the in-app deal-surface **Log call** quick-log (`POST /api/intake-log-call`). See `docs/setup/OUTLOOK_CATEGORY_TAGGING_FLOW.md`.
+
 ## Notes
 - This registry intentionally excludes Wave 2+ workflows and high-autonomy domain-write actions.
 - Any new Wave 1 action should be added only if it maps to the Wave 1 focus scope and uses existing endpoints or explicitly marked `to_be_implemented` orchestration wrappers.

@@ -12,7 +12,7 @@ Plan: `docs/architecture/WAVE7_COMMS_CONTEXT_PROPAGATION_PLAN.md`
 |---|---|---|
 | **W7.1** Correspondence attribution goes LIVE | **BUILT — awaiting flag flip** | Matcher on an hourly cron (flag-gated), deal-mapping at ingest via the authoritative roster, historical backfill plumbing drop-in. |
 | **W7.2** The propagation tick | **BUILT — awaiting flag flip** | Hourly consumer on deal-stamped correspondence → summary / milestone / next-step / dossier + packet refresh. Own ledger seam; LLM summarizes/proposes only. |
-| W7.3 Call notes as first-class comms | not started | |
+| **W7.3** Call notes + Microsoft-side capture | **BUILT — awaiting flag flip / connector** | Three capture paths, one spine shape: in-app quick-log (`/api/intake-log-call`), Copilot actions (`log_call_note` + `tag_comm_to_deal`), Outlook category tagging (`/api/intake-tagged-comm`, flag `TAGGED_COMM_INTAKE`). All land as deal-stamped `activity_events` → W7.2 propagates them with zero new propagation code. |
 | W7.4 Role evolution + open-issues | not started | |
 
 ### W7.1 — session log (2026-08-06)
@@ -149,3 +149,39 @@ advisory-locked with the live writer.
   `deal-comms-propagate-tick.test.mjs` (reply-SLA generate/dedupe/dry-count, rolled_up counting).
 - **Reversal:** runbook in the migration header (`_lcc_milestone_collapse_20260806_backup` restore + revert the
   three functions).
+
+### W7.3 — session log (call notes + Microsoft-side capture)
+Branch `claude/call-notes-microsoft-capture-0eg1yp`. Migration
+`20260821120000_lcc_w7_3_call_notes_capture.sql` (additive — feature_flags_registry row only; no new tables).
+
+Three capture paths, ONE spine shape. Everything lands as `activity_events` (category `call`/`email`)
+deal-stamped where known, through the EXISTING dual-anchor spine (`appendActivityEvent`) — so the LIVE
+W7.2 tick propagates it with **zero new propagation code** (the tick keys on `metadata.deal_entity_id`).
+The W7.2 tick was NOT touched.
+
+- **A. Quick-log call (in-app).** New shared logger `logManualCallNote` (`api/_shared/intake-correspondence.js`)
+  reuses the spine writer + Phase-1 `deriveNextStep`→`lcc_advance_todos` (a note that states a commitment
+  produces that to-do). Route `POST /api/intake-log-call` (`intake.js::handleLogCall`). Frontend: a deal-surface
+  **Log call** button in the entity slide-over header (`detail.js`, self-contained modal → `openCallNote`/
+  `submitCallNote`), distinct from the existing Salesforce-task `openLogCall`. Ollama structuring
+  (`structureCallNotes`) is PROPOSAL-ONLY + gated on `OLLAMA_URL`; any AI failure logs the raw notes unchanged.
+- **B. Copilot actions.** `log_call_note` + `tag_comm_to_deal` (`operations.js`, registered in
+  `ACTION_REGISTRY` + `ACTION_SCHEMAS` + both registry docs). Deal resolution NEVER guesses — ambiguous →
+  candidates + writes nothing (`resolveDealByQuery`, no LLM in the gate). `tag_comm_to_deal` is the manual
+  override for the 21 zero-match deals / matcher misses; idempotent, REFUSES a cross-deal re-stamp
+  (`decideCommTagOutcome` → conflict surfaced).
+- **C. Outlook category tagging (zero-UI, works at send time).** Receiver `POST /api/intake-tagged-comm`
+  (`api/_handlers/intake-tagged-comm.js`, X-PA-Webhook-Secret auth, flag `TAGGED_COMM_INTAKE`). Resolves the
+  deal by `LCC:<hint>` → sender (`lcc_resolve_contact`) → conversation continuity → else PARKS a
+  `research_tasks` `tag_unresolved` row (idempotent) rather than guessing. Logs deal-stamped, idempotent on
+  `internet_message_id`. PA flow spec: `docs/setup/OUTLOOK_CATEGORY_TAGGING_FLOW.md`.
+
+- **Tests:** `test/manual-call-note.test.mjs` (14 — dual-anchor stamp, empty-notes skip, deterministic dedup,
+  AI-fail→raw-text, no-anchor no-todo, structuring gated on OLLAMA_URL, resolver ambiguity/exact/none, tag
+  outcome, category-hint parse) + `test/tagged-comm-receiver.test.mjs` (5 — hint/sender/conversation/unresolved
+  resolution + idempotent parking). All pass; boot check + subroute-dispatch guard green.
+- **Awaiting (env/connector, not code):** flip `TAGGED_COMM_INTAKE_ENABLED` + set `PA_WEBHOOK_SECRET` and build
+  the PA flow (path C); `OLLAMA_URL` already live (Aug 4) so structuring is active. Paths A + B are live on
+  redeploy. **Verify (Scott):** (1) quick-log a call on an open deal → next tick updates its summary + any
+  commitment to-do; (2) from Copilot run `log_call_note` + `tag_comm_to_deal` on a real email; (3) categorize a
+  sent email `LCC:<deal>` → receiver logs it deal-stamped. All three visible in the deal's next summary regen.

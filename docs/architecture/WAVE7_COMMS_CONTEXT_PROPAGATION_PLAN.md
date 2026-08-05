@@ -28,7 +28,7 @@ until a human or a manual generation touches them.
 |---|---|
 | **W7.1** correspondence attribution LIVE | **BUILT — awaiting flag flip** (`DEAL_EMAIL_MATCH_ENABLED`). Matcher hourly cron (flag-gated) + run-log + loud-failure alert; deal mapping at ingest via the authoritative `deal_party` roster + conversation-thread continuity; `/api/intake-deal-backfill` alias. Dry-run report: `W7_1_deal_email_match_dryrun_2026-08-06.md`. Ledger: `ROLLOUT_STATUS.md`. |
 | W7.2 propagation tick | **BUILT — awaiting flag flip** (`DEAL_COMMS_PROPAGATE_ENABLED`). Hourly tick `/api/deal-comms-propagate-tick` (pg_cron `lcc-deal-comms-propagate` `:32`, ~15min after the matcher) over deal-stamped comms → (1) is_current-versioned correspondence summary (Ollama, no-fabrication), (2) deterministic milestone cues → `lcc_deal_milestone` + LLM-only candidates → `milestone_confirm` lane, (3) Phase-1 `deriveNextStep`→`lcc_advance_todos` for recent inbound, (4) dossier regen-on-hash + `context_packets` invalidation. Own ledger seam `lcc_deal_comm_propagated`; run-log `lcc_deal_comms_propagation_run_log`. Migration `20260806140000`. Session log: `ROLLOUT_STATUS.md` (W7.2). |
-| W7.3 call notes | not started |
+| W7.3 call notes | **BUILT — awaiting flag flip / PA connector** (migration `20260821120000`). Three capture paths, one spine shape (all deal-stamped `activity_events` → the W7.2 tick, zero new propagation code): (A) in-app quick-log `POST /api/intake-log-call` + deal-surface "Log call" button (`logManualCallNote`, Ollama structuring proposal-only/gated); (B) Copilot actions `log_call_note` + `tag_comm_to_deal` (ambiguity→pick-list, never guess; cross-deal restamp refused); (C) Outlook category tagging `POST /api/intake-tagged-comm` (flag `TAGGED_COMM_INTAKE`, X-PA-Webhook-Secret) — unresolved→`tag_unresolved` My Work lane. PA spec: `docs/setup/OUTLOOK_CATEGORY_TAGGING_FLOW.md`. Ledger: `ROLLOUT_STATUS.md` (W7.3). |
 | W7.4 role evolution | not started |
 
 ## 1. Doctrine for this wave (unchanged, applied)
@@ -91,14 +91,22 @@ ledger keyed on activity_event id): for each NEW deal-stamped comm since last ti
 Exit: send/receive a deal email → within one tick the summary, next steps, and dossier
 reflect it. Verify live on the Woodland Hills gold-standard deal + one active deal.
 
-### W7.3 — Call notes + voice as first-class comms
-Today calls have NO capture surface. Options to decide at unit start (recommend a+b):
-(a) **Quick-log**: a My Work / sidebar "Log call" action (deal/contact, direction, free
-notes) writing the same activity spine shape (`call_note` kind) → flows through W7.2
-automatically; (b) **Teams/Outlook path**: PA flow ingesting call/meeting notes (Teams
-recap or a designated Outlook folder/subject convention) through the same dual-anchor
-logger; (c) voice-memo transcription (GaryBuilt Whisper?) as a later enhancement.
-Exit: a logged call adjusts next steps/dossier exactly like an email.
+### W7.3 — Call notes + voice as first-class comms — ✅ BUILT 2026 (a+b+ Outlook tagging)
+Today calls have NO capture surface. SHIPPED all three, one spine shape (deal-stamped
+`activity_events` → the LIVE W7.2 tick, zero new propagation code):
+(a) **Quick-log**: deal-surface + route "Log call" action (deal/direction/free notes) via
+`logManualCallNote` — reuses the spine writer + Phase-1 `deriveNextStep`→`lcc_advance_todos`
+(a "send them the OM" note produces that to-do). Ollama structuring is PROPOSAL-ONLY + gated
+(`OLLAMA_URL`); AI-fail logs the raw text.
+(b) **Copilot actions**: `log_call_note` + `tag_comm_to_deal` (the manual override for the 21
+zero-match deals). Deal resolution NEVER guesses — ambiguous → candidate pick-list, write
+nothing; cross-deal re-stamp refused (conflict surfaced). Registered in both registry docs.
+(c) **Outlook category tagging** (zero-UI, works at send time): a PA flow posts `LCC` /
+`LCC:<hint>`-categorized mail (sent OR received) to `POST /api/intake-tagged-comm` (flag
+`TAGGED_COMM_INTAKE`, X-PA-Webhook-Secret); unresolved → the `tag_unresolved` My Work lane
+rather than guessing. Spec: `docs/setup/OUTLOOK_CATEGORY_TAGGING_FLOW.md`.
+(voice-memo transcription — GaryBuilt Whisper — remains the later enhancement.)
+Exit MET: a logged call adjusts next steps/dossier exactly like an email.
 
 ### W7.4 — Role evolution + open-issues surfacing (living-dossier §1 completeness)
 From the attributed thread corpus: party role inference (decision-maker vs transaction
