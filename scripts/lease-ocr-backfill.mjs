@@ -73,7 +73,8 @@
 // ============================================================================
 
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
@@ -530,7 +531,10 @@ async function main() {
 
 // Only drive the drain when invoked directly (`node scripts/lease-ocr-backfill.mjs`);
 // importing for unit tests must NOT run main() (it calls process.exit).
-const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+// Windows-safe: argv[1] is a backslash path (C:\...), never equal to the file:// URL
+// string directly — normalize through pathToFileURL before comparing.
+const invokedDirectly = process.argv[1] &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 if (invokedDirectly) {
   main().catch((e) => { console.error('fatal:', e?.message || e); process.exit(1); });
 }
