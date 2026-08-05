@@ -49,6 +49,52 @@ from openpyxl.utils import get_column_letter
 HEADER_ROW = 5
 DATA_START_ROW = 6
 
+# ── Shared column-width contract (the ONE source of truth) ────────────────────
+# Both the renderer (`comps_generator._autofit_no_wrap`) and this validator size /
+# check column widths through THESE helpers so a correctly-built workbook always
+# passes: same padding, same min/max clamp, same computed-column floor, same
+# rendered-length measurement (Prompt 46 — reconcile auto-fit ↔ validator).
+AUTOFIT_PAD = 2          # small breathing room past the longest content
+AUTOFIT_MIN = 4          # never collapse a column narrower than this
+AUTOFIT_MAX = 50         # sane ceiling so one long cell can't blow the layout out
+WIDTH_TOL = 0.51         # float slack when comparing widths (recalc/round trip)
+
+
+def _tok(key) -> str:
+    """Normalize any header spelling (UPPER 'RENT/SF' or lower 'rent_sf') to a
+    single lowercase-underscore token so the width floor is identical no matter
+    which side (renderer uses _norm, validator uses _n) supplies the key."""
+    return re.sub(r"[^a-z0-9]+", "_", str(key or "").lower()).strip("_")
+
+
+def min_content_width(key: str) -> int:
+    """Floor width for COMPUTED (formula/date) columns. Their values are written
+    post-autofit by the LibreOffice recalc, so a pre-recalc measurement only sees
+    the header (formulas contribute 0), sizing TERM/DOM/caps/$-SF/dates too narrow
+    and clipping the value. Give each a floor wide enough for its formatted result.
+    Consulted identically by the renderer and the validator so both agree."""
+    k = _tok(key)
+    if "term" in k or k.endswith("_rem") or k in ("t_rem", "f_rem"):   # TERM / T-Rem / F-Rem
+        return 7
+    if k == "dom":                                        # DOM (days on market)
+        return 6
+    if k in ("date", "com", "exp", "termn", "termin", "expir", "on_market",
+             "sold_date", "lease_comm", "lease_exp", "commence", "expire"):  # mm/dd/yyyy dates
+        return 11
+    if "price" in k or "ask" in k:                        # SOLD/INITIAL/LAST PRICE / ASK ($)
+        return 11
+    if "cap" in k or k.endswith("_sf") or "psf" in k or "rent" in k:  # %/cap and $-per-SF
+        return 7
+    return 0
+
+
+def target_column_width(longest_content, key: str) -> float:
+    """The ONE width formula: floor the measured content for computed columns, add
+    padding, clamp. Renderer sets this; validator recomputes the same to check."""
+    longest = max(int(longest_content or 0), min_content_width(key))
+    return float(max(AUTOFIT_MIN, min(AUTOFIT_MAX, longest + AUTOFIT_PAD)))
+
+
 # Sheet set for a SALES comps workbook (all three sales verticals share it).
 SALES_SHEETS = ["Cover", "Index", "On Market", "Sold"]
 
@@ -219,6 +265,11 @@ def _disp_len(cell) -> int:
     return len(str(v))
 
 
+# Public alias — the renderer imports this so both sides measure rendered width
+# the exact same way (dates at display width, formulas → 0, numbers comma-formatted).
+disp_len = _disp_len
+
+
 def validate_comps_workbook(wb, vertical: Optional[str] = None) -> ValidationResult:
     """Validate an already-open workbook. `vertical` forces the spec; otherwise it
     is auto-detected from the headers."""
@@ -349,10 +400,14 @@ def validate_comps_workbook(wb, vertical: Optional[str] = None) -> ValidationRes
             longest = 0
             for r in range(HEADER_ROW, avg_row + 1):
                 longest = max(longest, _disp_len(ws.cell(r, c)))
+            # Apply the SAME computed-column floor the renderer sizes to (formula
+            # cells measure 0 pre-recalc), so a formula-protected column the
+            # renderer can only floor-size is checked consistently on both sides.
+            longest = max(longest, min_content_width(hdr))
             w = ws.column_dimensions[get_column_letter(c)].width
             widths[_n(hdr)] = w
             # width must cover the content (capped at the renderer's 50-char ceiling)
-            if w is None or w + 0.51 < min(longest, 50):
+            if w is None or w + WIDTH_TOL < min(longest, AUTOFIT_MAX):
                 too_narrow.append((_n(hdr), round(w or 0, 1), longest))
         if too_narrow:
             fail(f"[{sheet}] column(s) narrower than their content (not auto-fit): "
@@ -366,7 +421,7 @@ def validate_comps_workbook(wb, vertical: Optional[str] = None) -> ValidationRes
         om, sold = sheet_widths["On Market"], sheet_widths["Sold"]
         mism = [(h, round(om[h] or 0, 1), round(sold[h] or 0, 1))
                 for h in (set(om) & set(sold))
-                if abs((om[h] or 0) - (sold[h] or 0)) > 0.51]
+                if abs((om[h] or 0) - (sold[h] or 0)) > WIDTH_TOL]
         if mism:
             fail(f"shared column widths differ between On Market and Sold: "
                  f"{sorted(mism)[:8]}{'…' if len(mism) > 8 else ''}")

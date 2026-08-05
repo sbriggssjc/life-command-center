@@ -124,6 +124,52 @@ def test_wrapped_cell_fails(tmp_path):
 
 # ── FAIL cases (hand-rolled / corrupted) ──────────────────────────────────────
 
+def test_overflow_on_market_is_capped_and_conforms(tmp_path):
+    """Prompt 46: 174 on-market rows into a 100-row template must NOT overflow the
+    AVG bar — the renderer caps to capacity, trims, and the workbook conforms."""
+    om = [{"tenant": f"Tenant {i}", "address": f"{100+i} Market St", "city": "Houston",
+           "state": "TX", "rba": 7000 + i, "rent": 210000, "initial_price": 3000000,
+           "last_price": 2900000, "on_market": "2026-05-01"} for i in range(174)]
+    sold = [{"tenant": f"Seller {i}", "address": f"{i} Oak Rd", "city": "Dallas",
+             "state": "TX", "rba": 8000, "rent": 250000, "sold_price": 3500000,
+             "date": "2026-03-15"} for i in range(120)]
+    out = _gen(tmp_path, {"comp_type": "sales", "vertical": "dialysis",
+                          "on_market": om, "sold": sold})
+    res = validate_comps_file(out, check_recalc_errors=False)
+    assert res.ok, res.violations
+    # both grids capped to the 100-row template capacity, trimmed to the bar
+    wb = load_workbook(out)
+    for sh in ("On Market", "Sold"):
+        ws = wb[sh]
+        avg = next(r for r in range(6, ws.max_row + 1)
+                   if str(ws.cell(r, 1).value).strip().upper() == "AVG")
+        assert avg == 106, f"{sh} not capped to capacity (bar at {avg})"
+    wb.close()
+
+
+def test_shared_width_contract_matches_validator(tmp_path):
+    """Prompt 46: the renderer sizes columns via the SAME contract the validator
+    checks, so a fresh build passes both the fit and shared-width checks even with
+    long, asymmetric content across On Market and Sold."""
+    payload = {
+        "comp_type": "sales", "vertical": "dialysis",
+        "sold": [{"tenant": "DaVita Dialysis Center of Somewhereville",
+                  "address": "12345 Very Long Boulevard Suite 2200", "city": "Austin",
+                  "state": "TX", "rba": 8000, "chairs": 20, "patients": 1200,
+                  "rent": 250000, "sold_price": 3500000, "date": "2026-03-15"}],
+        "on_market": [{"tenant": "US Renal", "address": "3 Elm", "city": "Houston",
+                       "state": "TX", "rba": 7000, "chairs": 18, "patients": 100,
+                       "rent": 210000, "initial_price": 3000000, "last_price": 2900000,
+                       "on_market": "2026-05-01"}],
+    }
+    out = _gen(tmp_path, payload)
+    res = validate_comps_file(out, check_recalc_errors=False)
+    assert res.ok, res.violations
+    assert "On Market:widths_fit" in res.checks
+    assert "Sold:widths_fit" in res.checks
+    assert "shared_widths_match" in res.checks
+
+
 def test_wrong_sheets_fail(tmp_path):
     out = _gen(tmp_path, _dialysis_payload())
     wb = load_workbook(out)
