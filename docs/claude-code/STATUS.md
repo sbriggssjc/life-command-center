@@ -30,6 +30,21 @@ and re-rendered so all 5 surfaces + the Copilot live artifact now carry it.
 - **Sync the two external BOV skills** with the naming block (SURFACE-SYNC-PROTOCOL); re-paste `NORTHMARQ_PROJECT_PROMPT.md` v1.12 into the Project.
 - **Rotate `LCC_API_KEY`** (still outstanding; it was exposed in chat).
 
+## Comps prompts 36-40 — reconcile 2026-08-05
+Landed as MERGED PRs on `main` (not docx responses). Canon re-synced to **v1.2.3**, parity **0 drift**.
+| # | What merged | State |
+|---|---|---|
+| 39 | National subject-anchored selection in appraisal mode (mcp/comps-tools.js: national pull, geography=score weight, +term-at-close/operator-tier/age/size/chairs/bumps scoring, cap-support) — PR #1553 `abce1163` | ✅ merged — **redeploy MCP/tranquil-delight** |
+| 36 | Single renderer + connector-down `populate_comps` fallback into comps skill + canon (v1.2.3, blocks/comps.md, re-rendered) — PR #1554 `63a6f3b8` | ✅ merged — re-paste surface bundles |
+| 37 | `bov-generator/validate_comps_output.py` + `sync_comps_templates.py` + tests, wired into main.py; templates single-sourced — PR #1555 `72112144` | ✅ merged — **redeploy BOV svc (pacific-love)** |
+| 38 | MCP OAuth well-known at RFC 9728 path-suffixed URL + 401 WWW-Authenticate (real connector root cause) — PR #1556 `5f159945` | ✅ merged — **redeploy tranquil-delight; then re-test connector** |
+| 40 | On-market full-record enrichment (join listings→property+lease so LAND/BUILT/EXP/TERM/EXPENSES/BUMPS/RENEWAL/CHAIRS/PATIENTS populate) | ❌ **NOT DONE** — still open in prompts/; on-market rows stay thin until this lands |
+
+**Deploy-pending (the gate to validating any of this):** redeploy tranquil-delight (38 OAuth + 39 comps) and the
+BOV service (37 validator); then re-add the LCC connector (38 is the likely real fix) and re-run a Villages
+appraisal pull to confirm national selection (39) — noting on-market will still be thin until **40** is sent.
+36-39 moved to done/; 40 remains open.
+
 ## Comps pipeline GAP AUDIT (2026-08-05) — do F1/F2 before the format prompts
 Full trace in `docs/architecture/comps-pipeline-gap-audit-2026-08.md`. The same request diverged because gaps
 live in the ENGINE, not just agent behavior. Prioritized fix set (send in this order):

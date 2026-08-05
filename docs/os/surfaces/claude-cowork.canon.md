@@ -25,6 +25,10 @@ on_market:[...]}` using query_comps field names (they alias straight through —
 `unknown_keys: []`), then LibreOffice-recalc. **On-market rent basis:** an on-market listing with a known asking
 cap but no in-place NOI carries `rent = round(asking_price * asking_cap)` (implied NOI, exact) with
 `initial_price = last_price = ask` so INITIAL/LAST CAP reproduce the asking cap. Identical on every surface.
+**`bov-generator/templates/` is the single source of truth** for the blank templates; project-knowledge/`Templates/`
+copies are DERIVED (refresh via `bov-generator/sync_comps_templates.py`, never hand-edit). Every produced workbook is
+run through `bov-generator/validate_comps_output.py` (sheets, canonical headers, formula-protected columns, trimmed
+AVG bar, 0 recalc errors) before delivery — a non-conforming workbook is an error, not a delivered file.
 <!-- /CANON:comps -->
 
 <!-- CANON:resolution -->
