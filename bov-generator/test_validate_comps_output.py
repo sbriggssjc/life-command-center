@@ -86,6 +86,42 @@ def test_populate_comps_embeds_conformance(tmp_path):
     assert summary["conformance"]["ok"] is True
 
 
+def test_options_header_no_renewal_prefix(tmp_path):
+    """Prompt 43: the column header is OPTIONS (not RENEWAL OPTIONS) on both tabs."""
+    out = _gen(tmp_path, _dialysis_payload())
+    wb = load_workbook(out)
+    for sh in ("On Market", "Sold"):
+        ws = wb[sh]
+        hdrs = {str(ws.cell(5, c).value or "").strip().upper()
+                for c in range(1, ws.max_column + 1)}
+        assert "OPTIONS" in hdrs
+        assert "RENEWAL OPTIONS" not in hdrs
+    wb.close()
+
+
+def test_autofit_nowrap_and_shared_widths(tmp_path):
+    """Prompt 43: no wrapped cells, columns fit contents, shared widths line up."""
+    out = _gen(tmp_path, _dialysis_payload())
+    res = validate_comps_file(out, check_recalc_errors=False)
+    assert res.ok, res.violations
+    assert "On Market:no_wrap" in res.checks
+    assert "Sold:no_wrap" in res.checks
+    assert "On Market:widths_fit" in res.checks
+    assert "Sold:widths_fit" in res.checks
+    assert "shared_widths_match" in res.checks
+
+
+def test_wrapped_cell_fails(tmp_path):
+    from openpyxl.styles import Alignment
+    out = _gen(tmp_path, _dialysis_payload())
+    wb = load_workbook(out)
+    wb["Sold"].cell(6, 3).alignment = Alignment(wrap_text=True)
+    wb.save(out); wb.close()
+    res = validate_comps_file(out, check_recalc_errors=False)
+    assert not res.ok
+    assert any("wrapped cell" in v for v in res.violations)
+
+
 # ── FAIL cases (hand-rolled / corrupted) ──────────────────────────────────────
 
 def test_wrong_sheets_fail(tmp_path):
