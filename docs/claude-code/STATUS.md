@@ -39,6 +39,17 @@ implied-NOI cap reconciliation exact (0 mismatch). So ALL of 36–40 are complet
 **Still to validate end-to-end:** that a real `generate_comps` workbook now renders POPULATED on-market rows
 (i.e. the enriched view/RPC actually feeds the on-market sheet) — check after the connector/redeploy is up.
 
+## Comps exporter v-final notes (2026-08-05) — queued 44/45
+Scott's notes on the acceptance workbook. Queued:
+- **44 (exporter)** — return the **25 best/most-like** comps every request; **rescore similarity OVER operator**
+  (a similar-market/size/term/cap Fresenius beats a different-market/+4yr-term DaVita); bumps `0.1`→`10% / 5 yrs`;
+  fix TERM column width (hidden) + the shared-width residual (PATIENTS/EXP/TERM/LAST PRICE).
+- **45 (price-adjustment recovery)** — YES recoverable. gov: wire native `available_listings.original_price`/
+  `price_change_count`. dia: backfill `initial_price` from `listing_verification_history.prior_asking_price` (7,097),
+  `listing_snapshots` (1,310), `v_property_ask_history` (2,987). Re-point enriched views so PRICE CHG populates
+  broadly; fix `listing_sync` to capture future reprices natively.
+Plan: send 44+45, then test the live `generate_comps` via the reconnected connector. Prompts drafted, not sent.
+
 ## Acceptance run 2026-08-05 (post-redeploy) — 41/42/43 validated end-to-end
 Regenerated the Villages workbook through the DEPLOYED renderer/template (43) on the live gated data (42),
 41-standardized fields. PASS: OPTIONS header (real template), auto-fit/no-wrap (real renderer), national 18-mo
