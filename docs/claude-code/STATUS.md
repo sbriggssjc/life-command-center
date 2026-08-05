@@ -39,6 +39,22 @@ implied-NOI cap reconciliation exact (0 mismatch). So ALL of 36–40 are complet
 **Still to validate end-to-end:** that a real `generate_comps` workbook now renders POPULATED on-market rows
 (i.e. the enriched view/RPC actually feeds the on-market sheet) — check after the connector/redeploy is up.
 
+## Live connector acceptance test (2026-08-05) — connector WORKS; builder bugs found → queued 46/47
+Connector is live (prompt 38 OAuth fixed — LCC MCP tools reachable). But `generate_comps` fails end-to-end:
+- **Every build 500s on the prompt-37 conformance validator** — it rejects what the prompt-43 renderer produces:
+  one-shot "[On Market] grid not trimmed to AVG bar"; two-step "shared widths differ PATIENTS 10 vs 13";
+  standard "EXPENSES narrower than content" + RENT/SF (formula col). Auto-fit ↔ validator not one contract.
+- **On-market returned 174 rows** into a 100-row template (overflow; not curated).
+- **Subject not resolved into the anchor**: `get_property_context` resolves 1050 Old Camp Rd fully (31964: 6,453 SF/
+  12 chairs/2022/term→2038/6.75%), but the comps engine's subject came back "Not on file" + cap defaulted 6.00%,
+  and the subject appeared as a comp (`excluded_subject=0`).
+Queued:
+- **46** — reconcile auto-fit ↔ conformance validator (one width contract, recalc-then-measure), trim both sheets all
+  paths, truncate appraisal on-market to ~20–25 curated. Unblocks generate_comps.
+- **47** — hydrate the subject anchor from the resolved property record (SF/chairs/term/bumps/operator/cap 6.75%) +
+  exclude the subject from the set. Makes 41/44 similarity actually work.
+Stopgap delivered: local-renderer workbook (subject excluded, 22 sold + 14 on-market) so the appraiser isn't blocked.
+
 ## Comps prompts 44-45 — reconcile 2026-08-05 (merged/live)
 | # | Merged | State |
 |---|---|---|
