@@ -46,6 +46,14 @@ const APPRAISAL_RECENT_MONTHS = 9;
 const APPRAISAL_RECENT_MIN = 3;
 // Minimum primary comps to retain when trimming the set to hold the average below subject.
 const APPRAISAL_AVG_TRIM_MIN_KEEP = 5;
+// Prompt 54 — reliability-or-exclude floor on the DISPLAYED comp: a displayed cap (rent÷price)
+// below this, or a dialysis RENT/SF outside the plausible band, indicates a rent/SF/price data
+// error and is filtered OUT of the workbook (routed to the review lane), never shown to an
+// appraiser. The cap CEILING (subject cap + upper band) is enforced separately, on the same
+// displayed basis, so the rows that ship match the summary and the sheet.
+const APPRAISAL_MIN_RELIABLE_CAP = 0.045;
+const DIALYSIS_RENT_PSF_MIN = 12;
+const DIALYSIS_RENT_PSF_MAX = 60;
 
 // ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
@@ -773,7 +781,10 @@ function templateRow(c) {
     last_cap_rate: c.last_cap_rate ?? c.raw?.last_cap_rate ?? null,
     cur_price: currentPrice,
     current_cap_rate: currentCap,
-    on_market: c.on_market_date ?? c.listing_date ?? c.date_listed ?? c.raw?.on_market_date ?? null,
+    // Prompt 54 — the live rpc_query_comps sold arm joins the real market-entry date and emits it
+    // as `list_date` (already gated < sale_date); read it so the Sold tab shows ON MARKET + DOM
+    // where a genuine list date exists. Never synthetic — a missing list date stays blank.
+    on_market: c.on_market_date ?? c.listing_date ?? c.list_date ?? c.date_listed ?? c.raw?.on_market_date ?? c.raw?.on_market ?? null,
     sale_date: c.sale_date || null,
     buyer: c.buyer || c.raw?.buyer || null,
     seller: c.seller || c.raw?.seller || null,
@@ -1697,6 +1708,84 @@ function recentSoldCount(rows, months = APPRAISAL_RECENT_MONTHS) {
   }).length;
 }
 
+// Prompt 54 — the exact cap the WORKBOOK will DISPLAY for a comp, computed from the same
+// template fields the sheet writes into the RENT and PRICE cells so a filter on this value is
+// a filter on the shipped row (never a JS-vs-sheet divergence). The RENT cell = annual_rent
+// (preferred) else annual_noi — mirrors the template alias where BOTH annual_noi and annual_rent
+// map to the RENT column with annual_rent last-wins. PRICE = sale_price (sold) / last_price
+// (on-market, current ask), matching the sheet's cap formula (rent÷sold_price / rent÷last_price).
+function displayedRentValue(t) {
+  return asNum(t?.annual_rent) ?? asNum(t?.annual_noi);
+}
+export function displayedCompCap(c) {
+  const t = c?.template || templateRow(c || {});
+  const rent = displayedRentValue(t);
+  const price = isOnMarketComp(c)
+    ? (asNum(t?.last_price) ?? asNum(t?.cur_price))
+    : asNum(t?.sale_price);
+  if (rent && rent > 0 && price && price > 0) return +(rent / price).toFixed(6);
+  return null;
+}
+function displayedCompRentPsf(c) {
+  const t = c?.template || templateRow(c || {});
+  const rent = displayedRentValue(t);
+  const rba = asNum(t?.rba_sf);
+  if (rent && rent > 0 && rba && rba > 0) return +(rent / rba).toFixed(2);
+  return null;
+}
+
+// Prompt 54 — enforce the cap-discipline band + reliability filter on the DISPLAYED set. The
+// rows that ship in the Sold / On-Market tabs must obey, on the displayed (rent÷price) basis:
+//   • displayed cap <= subject cap + upper band (35 bps)  — hard ceiling, both arms
+//   • displayed cap >= APPRAISAL_MIN_RELIABLE_CAP          — a lower cap is a data error
+//   • (dialysis) RENT/SF within [MIN,MAX]                  — outside is a rent/SF/price error
+//   • the SOLD set average holds below the subject cap     — trim highest-cap sold first
+// Returns { kept, excludedContext, excludedBadData }:
+//   • excludedBadData  → reliability failures (implausible cap / RENT-SF)  → routed to review lane
+//   • excludedContext  → above the ceiling OR average-trimmed valid comps → not shown (context/stats)
+export function applyDisplayedCapDiscipline(comps, { subjectCap = null, upperBps = APPRAISAL_DEFAULT_BAND_UPPER_BPS, isDialysis = false } = {}) {
+  const ceiling = (subjectCap != null && Number.isFinite(subjectCap)) ? subjectCap + upperBps / 10000 : null;
+  const kept = [], excludedContext = [], excludedBadData = [];
+  for (const c of comps || []) {
+    const cap = displayedCompCap(c);
+    const rentPsf = displayedCompRentPsf(c);
+    const badCap  = cap != null && cap < APPRAISAL_MIN_RELIABLE_CAP;
+    const badRent = isDialysis && rentPsf != null && (rentPsf < DIALYSIS_RENT_PSF_MIN || rentPsf > DIALYSIS_RENT_PSF_MAX);
+    if (badCap || badRent) {
+      const reasons = [];
+      if (badCap)  reasons.push('displayed_cap_below_reliable_floor');
+      if (badRent) reasons.push('displayed_rent_psf_out_of_range');
+      excludedBadData.push({ comp: c, reasons, displayed_cap: cap, displayed_rent_psf: rentPsf });
+      continue;
+    }
+    if (ceiling != null && cap != null && cap > ceiling + 1e-9) {
+      excludedContext.push({ comp: c, reason: 'above_subject_cap_ceiling', displayed_cap: cap });
+      continue;
+    }
+    kept.push(c);
+  }
+  // Hold the SOLD-set average below the subject cap on the displayed basis.
+  if (ceiling != null) {
+    const sold = kept.filter(c => !isOnMarketComp(c));
+    const onMkt = kept.filter(c => isOnMarketComp(c));
+    const meanCap = rows => {
+      const caps = rows.map(displayedCompCap).filter(n => Number.isFinite(n) && n > 0);
+      return caps.length ? caps.reduce((a, b) => a + b, 0) / caps.length : null;
+    };
+    const working = sold.slice();
+    while (working.length > APPRAISAL_AVG_TRIM_MIN_KEEP) {
+      const m = meanCap(working);
+      if (m == null || m < subjectCap) break;
+      let hiIdx = -1, hiCap = -Infinity;
+      working.forEach((c, i) => { const cp = displayedCompCap(c); if (Number.isFinite(cp) && cp > hiCap) { hiCap = cp; hiIdx = i; } });
+      if (hiIdx < 0) break;
+      excludedContext.push({ comp: working.splice(hiIdx, 1)[0], reason: 'trimmed_to_hold_avg_below_subject' });
+    }
+    return { kept: [...working, ...onMkt], excludedContext, excludedBadData };
+  }
+  return { kept, excludedContext, excludedBadData };
+}
+
 function appraisalPrimaryClassification(c, subject = null, args = {}) {
   const price = asNum(c?.sale_price ?? c?.sold_price);
   const cap = soldCapForStats(c);
@@ -2147,6 +2236,50 @@ export async function runGenerateCompsFromRequest(args, deps, generateWorkbook) 
   } else {
     synthesized = await runSynthesize(synthArgs, deps);
   }
+
+  // Prompt 54 — enforce the cap-discipline band + reliability filter on the DISPLAYED set so
+  // the rows that SHIP to the workbook obey the ceiling / reliability / average-below rules on
+  // the same rent÷price basis the sheet shows. Bad-data rows (implausible cap / RENT-SF) route
+  // to the review lane; above-ceiling and average-trim rows are context-only (kept for stats,
+  // not shown). The response summary + cap range are recomputed from the kept set so they MATCH
+  // the sheet, not a wider pre-filter set. Only active when a subject cap is known.
+  {
+    const dialysisForDiscipline = (synthesized.interpreted_query?.verticals || []).includes('dialysis')
+      || !!synthesized.interpreted_query?.property_types?.includes?.('dialysis');
+    const subjCap = asNum(synthesized.subject?.cap_rate ?? synthesized.subject?.fields?.cap_rate);
+    const upperBps = asNum(args?.appraisal_cap_band_upper_bps ?? args?.cap_band_upper_bps) ?? APPRAISAL_DEFAULT_BAND_UPPER_BPS;
+    const disc = applyDisplayedCapDiscipline(synthesized.comps || [], {
+      subjectCap: subjCap, upperBps, isDialysis: dialysisForDiscipline,
+    });
+    if (disc.excludedBadData.length || disc.excludedContext.length) {
+      const kept = disc.kept;
+      synthesized = {
+        ...synthesized,
+        comps: kept,
+        template_comps: kept.map(c => c.template || templateRow(c)),
+        summary: summarizeComps(kept, { ...(synthesized.interpreted_query || {}), subject: synthesized.subject || null }, synthesized.meta || {}),
+        meta: {
+          ...(synthesized.meta || {}),
+          returned: kept.length,
+          displayed_cap_ceiling: subjCap != null ? +(subjCap + upperBps / 10000).toFixed(6) : null,
+          displayed_excluded_above_ceiling: disc.excludedContext.filter(x => x.reason === 'above_subject_cap_ceiling').length,
+          displayed_excluded_avg_trim: disc.excludedContext.filter(x => x.reason === 'trimmed_to_hold_avg_below_subject').length,
+          displayed_excluded_bad_data: disc.excludedBadData.length,
+        },
+      };
+      // Route reliability failures to the existing domain review lane — never ship them.
+      if (disc.excludedBadData.length) {
+        const flagged = disc.excludedBadData.map(({ comp, reasons, displayed_cap, displayed_rent_psf }) => ({
+          ...comp,
+          review_flags: [...new Set([...(comp.review_flags || []), ...reasons])].sort(),
+          review_detail: { ...(comp.review_detail || {}), displayed_cap, displayed_rent_psf, reliability_exclusion: true },
+        }));
+        try { await enqueueReviewQueue(flagged, deps); }
+        catch (e) { console.warn(`[comps:prompt54] review enqueue failed: ${String(e && e.message || e)}`); }
+      }
+    }
+  }
+
   const { sold, on_market } = workbookRowsFromSynthResult(synthesized);
   if (!sold.length && !on_market.length) {
     return {

@@ -46,6 +46,10 @@ as $$
       'price_per_sf', round((nullif(s.sold_price,0)/nullif(p.building_size,0))::numeric,2),
       'cap_rate', coalesce(s.cap_rate_final, s.cap_rate),      -- decimal
       'noi', null, 'sale_date', s.sale_date,
+      -- Prompt 54 — join the REAL market-entry date (never synthetic) onto the sold comp so the
+      -- Sold tab shows ON MARKET + DOM where a genuine list date exists; blank otherwise. Matched
+      -- by property, preferring the listing whose sold_date equals the sale, on/before the sale.
+      'on_market_date', lm.on_market_date,
       'rent_per_sf', null, 'occupancy', p.occupancy_percent,
       'validation_status', null, 'confidence', 0.85,
       'source_sf_id', null, 'data_source', s.data_source,
@@ -57,6 +61,15 @@ as $$
     s.sale_date as sort_date
     from sales_transactions s
     left join properties p on p.property_id = s.property_id
+    left join lateral (
+      select al.on_market_date
+      from available_listings al
+      where al.property_id = s.property_id
+        and al.on_market_date is not null
+        and al.on_market_date <= s.sale_date
+      order by (al.sold_date = s.sale_date) desc nulls last, al.on_market_date desc
+      limit 1
+    ) lm on true
     where s.transaction_state = 'live' and s.sold_price > 0
       and s.exclude_from_market_metrics is not true
       and (p_government_only is false)   -- dialysis canonical is never government-tenanted
