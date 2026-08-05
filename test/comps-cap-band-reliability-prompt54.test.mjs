@@ -55,6 +55,11 @@ function universe() {
     comp_type: 'sale', on_market: true, tenant: 'DaVita', address: '8 Junk Ave', city: 'Tampa',
     state: 'FL', last_price: 5_000_000, annual_rent: 33_500, building_sf: 4200,
     current_cap_rate: 0.0650, confidence: 0.75, property_id: 701, raw: { listing_id: 701, property_id: 701 } });
+  // Prompt 57 — every comp carries a real long-dated lease so the lease-term discipline
+  // (≥3 yr remaining, expiration present) is a no-op here and the cap-band/status/bumps
+  // behavior these suites verify stays exactly as before.
+  const FAR_EXP = new Date(Date.now() + 11 * 365 * DAY).toISOString().slice(0, 10);
+  for (const r of rows) if (r.lease_expiration == null) r.lease_expiration = FAR_EXP;
   return rows;
 }
 

@@ -352,8 +352,12 @@ Downloaded-sheet inspection surfaced four genuine residuals, none previously sco
 3. **On Market no price** — 1550 Goodman Ave (just-listed, no ask) → no cap → not usable.
 4. **On Market no lease details** — 1775 NW 80th Blvd (EXP/TERM blank).
 
-### Prompt 57 (queued in `prompts/`)
-OPTIONS normalizer `(N) M-yr` (shared, both tabs, like BUMPS); lease-term discipline (use lease-at-close; exclude/route-to-review any comp with no lease expiration or <3-yr term-at-close — 3-yr floor a named constant; stale-lease-suspect → review, never fabricate); exclude On Market listings with no price. Keeps 52/54/56 intact; reports review-lane moves for auditability.
+### Prompt 57 — ✅ landed (moved to `done/`)
+- **OPTIONS normalizer** (`normalizeRenewalOptions` hardened + new `renewalOptionsForWorkbook`, `mcp/comps-tools.js`): every raw spelling → canonical `(N) M-yr` (`Two (2) Five (5) Year` / `Two (2), Five (5) Year` → `(2) 5-yr`; `three five-year options` → `(3) 5-yr`; `One, Five-Year Period` → `(1) 5-yr`; bare `3` → `(3)` unknown-term, **never assumes 5-yr**; none/blank → `None`). Applied at the workbook-row layer so **Sold and On Market render identically** (parallels BUMPS `bumpsForWorkbook`; fixes the raw `t.raw.renewal_options` fallback that bypassed the old normalizer).
+- **Lease-term + price discipline** (`applyLeaseTermPriceDiscipline`, named floor `APPRAISAL_MIN_REMAINING_TERM_YEARS = 3`, tunable via `min_remaining_term_years`): in appraisal mode the DISPLAYED set now excludes comps with **no lease expiration**, **remaining term at close < 3 yr**, or (On Market) **no price**. A lease that expired at/before the sale reads as no-usable-term (`termRemainingAtClose` returns null) → routed to review, never shipped as a sub-year stub, never fabricated. Runs before the cap-band filter so summary/ceiling are computed on the clean set. Excluded comps route to the domain review lane (sold rows land; on-market counted in meta) — never deleted.
+- **Auditable counts** surfaced on `generate_comps` result: `excluded_for_review { no_lease_term, short_lease_term, no_price, total, min_remaining_term_years }`.
+- Keeps 52/54/56 intact. Tests: new `test/comps-options-lease-term-prompt57.test.mjs` (7) + prompt-54/56 & bounded-output fixtures given real lease terms; **full comps suite 116/116 green**.
+- ⏳ **Gate:** Railway redeploy of merged `main` → re-run `generate_comps` for The Villages, download + inspect the sheet (OPTIONS one format both tabs; no no-term / <3-yr / no-price rows; the six named leak rows gone; STATUS/BUMPS/cap-band unchanged).
 
 ### Carried forward (non-blocking)
 - Prompt-50 review lane (57 rows) + 269 E Caroline St (2 rows); "always-include-our-deals" opt-in; rotate `LCC_API_KEY`; Census key (19 parked). Cosmetic: `subject.kind` still "place" though fully resolved.
