@@ -265,12 +265,15 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     let contacts = [];
     if (structuredContacts && structuredContacts.length) {
       mergeContacts(contacts, structuredContacts);
+      console.log('[costar] using structured Contacts:',
+        structuredContacts.map(c => `${c.name} (${c.role})`).join('; '));
     } else {
       const domContacts  = extractContactsFromDOM();
       const textContacts = extractContacts(lines);
       mergeContacts(contacts, domContacts);
       mergeContacts(contacts, textContacts);
       enrichContactsFromDOM(contacts);
+      console.log(`[costar] fallback Contacts: dom=${domContacts.length} text=${textContacts.length}`);
     }
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
@@ -3533,6 +3536,34 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // contain the label deep in their subtree.
   const SECTION_END_SENTINEL_RE = /^(my\s+notes|sources(\s+&\s+research)?|verification|documents?|assessment(\s+at\s+sale)?|public\s+record|tenants?\s+at|sale\s+comp\s+id|income\s+&\s+expenses|transaction\s+details|building(\s+summary|\s+information)?|land\b|market|investment\s+highlights|help\s+with\s+features|request\s+training|share\s+feedback|help\s+center|terms\s+of\s+use|privacy\s+policy|all\s+rights\s+reserved)/i;
 
+  // Shadow-DOM-piercing querySelectorAll. CoStar's listing page lives inside
+  // web components with (open) shadow roots; document.querySelectorAll stops at
+  // each shadow boundary. This walks every open shadowRoot so contact figures
+  // rendered inside a component are actually found. Bounded + try/guarded so a
+  // hostile/huge tree can't hang or throw.
+  function deepQuerySelectorAll(selector, root) {
+    const start = root || document;
+    const out = [];
+    const seen = new Set();
+    const stack = [start];
+    let budget = 20000; // node-visit cap (safety)
+    while (stack.length && budget-- > 0) {
+      const node = stack.pop();
+      if (!node || !node.querySelectorAll) continue;
+      try {
+        node.querySelectorAll(selector).forEach((el) => {
+          if (!seen.has(el)) { seen.add(el); out.push(el); }
+        });
+      } catch (_) { /* invalid context — skip */ }
+      let all = [];
+      try { all = node.querySelectorAll('*'); } catch (_) { all = []; }
+      for (const el of all) {
+        if (el && el.shadowRoot) stack.push(el.shadowRoot);
+      }
+    }
+    return out;
+  }
+
   // ── Structured Contacts-panel extractor (preferred, 2026-08-05) ───────────
   // CoStar's redesigned For-Sale/For-Lease summary renders the "Contacts" panel
   // as a data-testid-labelled DOM: a <figure> per contact carrying an explicit
@@ -3544,10 +3575,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   function extractStructuredForSaleContacts() {
     try {
       if (!globalThis.__lccForSaleContacts) return [];
-      const figureEls = document.querySelectorAll(
-        'figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]'
-      );
-      if (!figureEls.length) return [];
+      // CoStar renders the listing page inside web components (cs-mount-component
+      // / costar-listings), which use shadow DOM — document.querySelectorAll does
+      // NOT pierce shadow roots. Use a shadow-piercing query so the Contacts
+      // figures are actually found (a plain querySelector returns 0 here).
+      const figureSel =
+        'figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]';
+      const figureEls = deepQuerySelectorAll(figureSel);
+      if (!figureEls.length) {
+        console.log('[costar] structured Contacts: 0 figures found (deep query)');
+        return [];
+      }
+      console.log(`[costar] structured Contacts: ${figureEls.length} figure(s) found`);
 
       const txt = (el) => (el && (el.textContent || '')).replace(/\s+/g, ' ').trim();
       const figures = [];
