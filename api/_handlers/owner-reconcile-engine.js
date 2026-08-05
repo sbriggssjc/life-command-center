@@ -196,7 +196,17 @@ export async function handleOwnerReconcileEngineTick(req, res) {
     catch (_e) { summary.failed += 1; continue; }
     if (!rr.ok) { summary.failed += 1; continue; }
     const pairs = Array.isArray(rr.data) ? rr.data : [];
-    if (!pairs.length) { summary.owners_processed += 1; continue; }
+    if (!pairs.length) {
+      // No duplicate candidates (the common case) — still DEQUEUE the queue row,
+      // else this no-duplicate owner is re-picked every hour forever. Same
+      // dequeue PATCH as the evidence path below.
+      if (source === 'queue' && !dryRun) {
+        await opsQuery('PATCH', 'lcc_owner_reconcile_queue?entity_id=eq.' + pgFilterVal(tgt.entity_id),
+          { status: 'done', processed_at: new Date().toISOString(), attempts: 1 });
+      }
+      summary.owners_processed += 1;
+      continue;
+    }
 
     const mergePairs = [];
     const evidence = [];
