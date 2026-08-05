@@ -1398,3 +1398,84 @@ export async function fetchDormantCapabilities(minDaysOff = 30) {
   });
   return { min_days_off: minDaysOff, count: items.length, items };
 }
+
+// ---------------------------------------------------------------------------
+// W7.2c — "what changed on your deals" delta. Deterministic query over the
+// propagation ledger (lcc_deal_comm_propagated.actions) + the two versioned
+// writes it drove (correspondence summary, deal dossier) in the last N hours.
+// One entry per deal touched. NO LLM. Empty ⇒ caller omits the section entirely.
+// ---------------------------------------------------------------------------
+export async function fetchDealPropagationDelta(hours = 24) {
+  const cutoffIso = new Date(Date.now() - hours * 3_600_000).toISOString();
+  const enc = encodeURIComponent;
+
+  const ledgerRes = await opsQuery('GET',
+    'lcc_deal_comm_propagated' +
+    `?propagated_at=gte.${enc(cutoffIso)}` +
+    '&select=entity_id,actions,propagated_at' +
+    '&order=propagated_at.desc&limit=2000', undefined, { countMode: 'none' })
+    .catch(() => ({ ok: false, data: null }));
+  const ledger = ledgerRes.ok && Array.isArray(ledgerRes.data) ? ledgerRes.data : [];
+  if (!ledger.length) return { window_hours: hours, count: 0, items: [] };
+
+  // Aggregate per deal from the ledger.
+  const byDeal = new Map();
+  for (const row of ledger) {
+    const id = row.entity_id;
+    if (!id) continue;
+    let agg = byDeal.get(id);
+    if (!agg) {
+      agg = { entity_id: id, new_comms: 0, milestones: new Map(), todos_generated: 0 };
+      byDeal.set(id, agg);
+    }
+    agg.new_comms += 1;
+    const acts = row.actions || {};
+    for (const m of (Array.isArray(acts.milestones) ? acts.milestones : [])) {
+      if (!m || !m.key) continue;
+      const cur = agg.milestones.get(m.key) || { written: 0, rolled_up: 0 };
+      if (m.outcome === 'inserted' || m.outcome === 'new_round' || m.inserted === true) cur.written += 1;
+      else if (m.outcome === 'rolled_up') cur.rolled_up += 1;
+      agg.milestones.set(m.key, cur);
+    }
+    if (acts.todo === 'generated') agg.todos_generated += 1;
+  }
+
+  const ids = [...byDeal.keys()];
+  const inList = ids.map((i) => `"${i}"`).join(',');
+
+  // Deal names + the two deal-level writes that don't live in the ledger.
+  const [namesRes, sumRes, dosRes] = await Promise.all([
+    opsQuery('GET', `entities?id=in.(${inList})&select=id,name`, undefined, { countMode: 'none' })
+      .catch(() => ({ ok: false, data: null })),
+    opsQuery('GET',
+      'lcc_deal_correspondence_summary' +
+      `?is_current=eq.true&source=eq.comms_tick&generated_at=gte.${enc(cutoffIso)}` +
+      `&entity_id=in.(${inList})&select=entity_id`, undefined, { countMode: 'none' })
+      .catch(() => ({ ok: false, data: null })),
+    opsQuery('GET',
+      'lcc_dossiers' +
+      `?dossier_type=eq.deal&generated_at=gte.${enc(cutoffIso)}` +
+      `&entity_id=in.(${inList})&select=entity_id,metadata`, undefined, { countMode: 'none' })
+      .catch(() => ({ ok: false, data: null })),
+  ]);
+  const names = new Map((namesRes.ok && Array.isArray(namesRes.data) ? namesRes.data : []).map((r) => [r.id, r.name]));
+  const summaryRefreshed = new Set((sumRes.ok && Array.isArray(sumRes.data) ? sumRes.data : []).map((r) => r.entity_id));
+  const dossierRegen = new Set(
+    (dosRes.ok && Array.isArray(dosRes.data) ? dosRes.data : [])
+      .filter((r) => (r.metadata?.generated_via || '') === 'w7.2_tick')
+      .map((r) => r.entity_id));
+
+  const items = [...byDeal.values()]
+    .map((agg) => ({
+      entity_id: agg.entity_id,
+      deal_name: names.get(agg.entity_id) || 'Unnamed deal',
+      new_comms: agg.new_comms,
+      summary_refreshed: summaryRefreshed.has(agg.entity_id),
+      dossier_regenerated: dossierRegen.has(agg.entity_id),
+      todos_generated: agg.todos_generated,
+      milestones: [...agg.milestones.entries()].map(([key, v]) => ({ key, ...v })),
+    }))
+    .sort((a, b) => b.new_comms - a.new_comms || a.deal_name.localeCompare(b.deal_name));
+
+  return { window_hours: hours, count: items.length, items };
+}

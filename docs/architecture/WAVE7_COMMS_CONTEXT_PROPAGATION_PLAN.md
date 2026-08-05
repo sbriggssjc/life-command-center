@@ -59,11 +59,22 @@ source_activity_ids — spot-checks factual: IRA Capital OM receipt on Pops Mart
 Barnwell; Sal Cammarata inquiry on 519 N Main), 24 evidence-linked milestones
 (detail_ref = source email), 0 to-do spam from the backlog (7-day window held).
 Registry flag DEAL_COMMS_PROPAGATE_CRON → on; hourly cron (:32) finishes catch-up.
-**Refinement queued (W7.2b, from the first live batch):** repeat same-key cues create
-one milestone PER occurrence date (Banning: 6+ 'loi' rows across months of LOI
-negotiation). Collapse policy needed: keep FIRST occurrence per (entity, key) as the
-milestone + latest re-occurrence in metadata (count + last_seen), demote intermediates.
-Small, reversible (all rows carry detail_ref).
+**Refinements SHIPPED (W7.2c, 2026-08-06 — migration `20260806150000`):**
+1. **Milestone same-key collapse (the Banning finding).** FIRST occurrence per (entity, key) is THE row;
+   re-occurrences roll up into `metadata.{occurrence_count,first_on,last_seen_on,last_detail_ref,occurrences}`.
+   A >90d-stale AND stage-regressed re-occurrence opens a genuinely new round (a 2nd LOI after a fell-through
+   deal). Rule = `api/_shared/deal-milestone-collapse.js`; `lcc_deal_record_milestone` (now returns
+   `{outcome,id}`) + the one-shot collapse mirror it, per-deal advisory-locked. Collapse ran live: 41→21
+   milestone rows (20 backed up, reversible); Banning's 6+ loi rows → 3 genuine rounds (×9/×4/×1). Dossier
+   panel shows "LOI — first …, discussed ×N, last …".
+2. **Briefing delta** — deterministic "What Changed on Your Deals" (last 24h) from the ledger + summary/dossier
+   writes, one deep-linked line per deal; omitted when empty (`fetchDealPropagationDelta`).
+3. **Incremental summaries** — persist `compressed_block` + watermark in the summary metadata; next tick feeds
+   compressed history + only the newer slice (`buildIncrementalSummaryPrompt`), no-fabrication extended to the
+   compression; full-corpus fallback on first run.
+4. **Reply-SLA to-dos** — `lcc_deal_reply_sla_candidates` → guarded `reply_overdue` to-do (new `reply_sla`
+   branch on `lcc_advance_todos`) for open deals whose latest comm is inbound with >3 business days no outbound.
+   Live dry-count: 1 deal trips today.
 A consumer on deal-attributed correspondence (cron tick, W5.2 shape; seam = its own ops-side
 ledger keyed on activity_event id): for each NEW deal-stamped comm since last tick →
 1. **Correspondence summary refresh** (`lcc_deal_correspondence_summary`, is_current

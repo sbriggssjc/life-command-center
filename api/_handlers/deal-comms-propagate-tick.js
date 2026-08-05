@@ -34,7 +34,7 @@ import { opsQuery } from '../_shared/ops-db.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { deriveNextStep } from '../_shared/next-step-ai.js';
 import { detectMilestoneCues } from '../_shared/deal-milestone-cues.js';
-import { buildSummaryPrompt, parseSummaryResponse } from '../_shared/deal-comms-summary.js';
+import { buildSummaryPrompt, buildIncrementalSummaryPrompt, parseSummaryResponse } from '../_shared/deal-comms-summary.js';
 import { buildDealPacket } from './entities-handler.js';
 import { generateDossier, recordDossier } from '../_shared/dossier-generator.js';
 
@@ -45,6 +45,13 @@ const dateOnly = (v) => { if (!v) return null; try { return new Date(v).toISOStr
 function maxDealsFromEnv() {
   const n = parseInt(process.env.DEAL_COMMS_PROPAGATE_MAX_DEALS || '10', 10);
   return Math.min(25, Math.max(1, Number.isFinite(n) ? n : 10));
+}
+
+// W7.2c — reply-SLA threshold in ONE constant (business days of no outbound on
+// an open deal whose latest comm is inbound → a reply_overdue to-do).
+function replySlaBusinessDays() {
+  const n = parseInt(process.env.DEAL_COMMS_REPLY_SLA_DAYS || '3', 10);
+  return Math.max(1, Number.isFinite(n) ? n : 3);
 }
 
 // invokeExtractionAI returns { data:{ response } }; tolerate other shapes.
@@ -61,13 +68,57 @@ async function writeRunLog(row) {
   } catch (_e) { return null; }
 }
 
-// ── Summary refresh (LLM; is_current versioned) ─────────────────────────────
-// Returns 'written' | 'skipped'. Never throws.
+// Read the prior is_current summary's compression watermark (W7.2c). Absent ⇒
+// first run for this deal ⇒ full-corpus path.
+async function priorSummaryMeta(entityId) {
+  try {
+    const r = await opsQuery('GET',
+      `lcc_deal_correspondence_summary?entity_id=eq.${enc(entityId)}&is_current=eq.true` +
+      `&select=metadata&order=generated_at.desc&limit=1`);
+    const row = (r.ok && r.data?.[0]) || null;
+    const m = row?.metadata || null;
+    if (m && m.compressed_block && m.compressed_through_at) {
+      return {
+        compressed_block: String(m.compressed_block),
+        compressed_through_at: m.compressed_through_at,
+        compressed_through_activity_id: m.compressed_through_activity_id || null,
+      };
+    }
+  } catch (_e) { /* fall through to full-corpus */ }
+  return null;
+}
+
+// ── Summary refresh (LLM; is_current versioned; INCREMENTAL compression) ─────
+// Returns 'written' | 'skipped'. Never throws. When a prior compressed_block +
+// watermark exist, only the messages newer than the watermark are fed (plus the
+// compressed history) — latency/token control as threads grow.
 async function refreshSummary(deal, comms) {
+  const prior = await priorSummaryMeta(deal.entity_id);
+  let promptComms = comms;
+  let incremental = false;
+  if (prior) {
+    const wm = new Date(prior.compressed_through_at).getTime();
+    const slice = comms.filter((c) => c.occurred_at && new Date(c.occurred_at).getTime() > wm);
+    // Nothing genuinely newer than the watermark → keep the prior summary as-is
+    // (the tick fired for a re-ledger/backfill; no summary work to do).
+    if (!slice.length) {
+      console.log(`[deal-comms-propagate-tick] summary incr entity=${deal.entity_id} slice=0/${comms.length} → keep prior`);
+      return { outcome: 'skipped', candidates: [] };
+    }
+    promptComms = slice;
+    incremental = true;
+    console.log(`[deal-comms-propagate-tick] summary incr entity=${deal.entity_id} slice=${slice.length}/${comms.length}`);
+  } else {
+    console.log(`[deal-comms-propagate-tick] summary full entity=${deal.entity_id} corpus=${comms.length}`);
+  }
+
   let parsed = null;
   let provider = null;
   try {
-    const resp = await invokeExtractionAI({ prompt: buildSummaryPrompt(deal, comms) });
+    const prompt = incremental
+      ? buildIncrementalSummaryPrompt(deal, promptComms, prior.compressed_block)
+      : buildSummaryPrompt(deal, comms);
+    const resp = await invokeExtractionAI({ prompt });
     parsed = parseSummaryResponse(aiText(resp));
     provider = resp?.provider || null;
   } catch (_e) { parsed = null; }
@@ -75,11 +126,18 @@ async function refreshSummary(deal, comms) {
   // is_current row untouched (the tick must not stall or blank a good summary).
   if (!parsed || !parsed.summary) return { outcome: 'skipped', candidates: [] };
 
-  const latestAt = comms.reduce((mx, c) => {
+  // Watermark = the newest comm in the FULL corpus (the incremental slice folds
+  // into the compressed history, which now covers up to here).
+  let latestAt = 0;
+  let latestId = null;
+  for (const c of comms) {
     const t = c.occurred_at ? new Date(c.occurred_at).getTime() : 0;
-    return t > mx ? t : mx;
-  }, 0);
+    if (t >= latestAt) { latestAt = t; latestId = c.activity_id || latestId; }
+  }
   const srcIds = comms.map((c) => c.activity_id).filter(Boolean).slice(0, 200);
+  // The updated compressed history: the model's block if it returned one,
+  // otherwise fall back to the prior block (never fabricate one from nothing).
+  const compressedBlock = parsed.compressed_block || (prior && prior.compressed_block) || parsed.summary;
 
   // Version flip: demote prior current rows, then insert the new current row.
   await opsQuery('PATCH', `lcc_deal_correspondence_summary?entity_id=eq.${enc(deal.entity_id)}&is_current=eq.true`,
@@ -93,7 +151,13 @@ async function refreshSummary(deal, comms) {
     source: 'comms_tick',
     source_activity_ids: srcIds,
     is_current: true,
-    metadata: { generated_by: 'w7.2_tick', ai_provider: provider },
+    metadata: {
+      generated_by: 'w7.2_tick', ai_provider: provider,
+      incremental, input_comms: promptComms.length, corpus_comms: comms.length,
+      compressed_block: compressedBlock,
+      compressed_through_at: latestAt ? new Date(latestAt).toISOString() : (prior?.compressed_through_at || null),
+      compressed_through_activity_id: latestId || (prior?.compressed_through_activity_id || null),
+    },
   }).catch((e) => ({ ok: false, error: e?.message }));
 
   return { outcome: ins?.ok ? 'written' : 'skipped', candidates: parsed.milestone_candidates || [] };
@@ -102,7 +166,7 @@ async function refreshSummary(deal, comms) {
 // ── Deterministic milestones + LLM-candidate confirm-lane ───────────────────
 async function propagateMilestones(deal, newComms, llmCandidates, perActivity) {
   const detKeys = new Set();
-  let written = 0, candidates = 0;
+  let written = 0, rolledUp = 0, candidates = 0;
   for (const c of newComms) {
     const cues = detectMilestoneCues(c.subject, c.body);
     for (const cue of cues) {
@@ -112,10 +176,15 @@ async function propagateMilestones(deal, newComms, llmCandidates, perActivity) {
         p_status: cue.status, p_summary: cue.label, p_source: 'comms_tick',
         p_detail_ref: c.activity_id,
       }).catch(() => null);
-      const inserted = r && (r.data === true || (Array.isArray(r.data) && r.data[0] === true));
-      if (inserted) written += 1;
+      // W7.2c: the writer now returns { outcome, id }. A new/new_round row counts
+      // as written; a re-occurrence rolled into an existing row counts separately.
+      const res = Array.isArray(r?.data) ? r.data[0] : r?.data;
+      const outcome = (res && typeof res === 'object') ? res.outcome
+        : (res === true ? 'inserted' : 'noop'); // tolerate the old boolean shape
+      if (outcome === 'inserted' || outcome === 'new_round') written += 1;
+      else if (outcome === 'rolled_up') rolledUp += 1;
       const a = perActivity.get(c.activity_id) || {};
-      a.milestones = (a.milestones || []).concat([{ key: cue.key, inserted: !!inserted }]);
+      a.milestones = (a.milestones || []).concat([{ key: cue.key, outcome }]);
       perActivity.set(c.activity_id, a);
     }
   }
@@ -142,7 +211,38 @@ async function propagateMilestones(deal, newComms, llmCandidates, perActivity) {
     }).catch(() => null);
     candidates += 1;
   }
-  return { written, candidates };
+  return { written, rolledUp, candidates };
+}
+
+// ── Reply-SLA to-dos (deterministic; the highest-ROI generator) ─────────────
+// Open in-scope deals whose latest deal-stamped comm is INBOUND and > N business
+// days with no outbound since → one guarded reply_overdue to-do per deal.
+// Returns { generated, candidates }. Never throws. In dry mode, counts only.
+async function propagateReplySla({ dry } = {}) {
+  const days = replySlaBusinessDays();
+  let cand = [];
+  try {
+    const r = await opsQuery('POST', 'rpc/lcc_deal_reply_sla_candidates',
+      { p_threshold_days: days, p_limit: 200 });
+    cand = Array.isArray(r.data) ? r.data : [];
+  } catch (_e) { cand = []; }
+  if (dry) return { generated: 0, candidates: cand.length };
+
+  let generated = 0;
+  for (const d of cand) {
+    if (!d?.entity_id) continue;
+    const when = dateOnly(d.last_inbound_at) || 'recently';
+    const who = d.last_sender ? String(d.last_sender).slice(0, 80) : 'contact';
+    const title = `Reply overdue — ${d.deal_name || 'deal'}: last inbound ${when} from ${who}`;
+    const r = await opsQuery('POST', 'rpc/lcc_advance_todos', {
+      p_entity_id: d.entity_id, p_channel: 'email', p_direction: 'reply_sla',
+      p_context: `Last inbound ${when} from ${who}; no outbound reply in ${d.business_days} business days.`,
+      p_next_action: title, p_next_type: 'reply_overdue', p_next_due_offset: days,
+    }).catch(() => null);
+    const created = (r && r.data && Array.isArray(r.data.created)) ? r.data.created : [];
+    if (created.length) generated += 1;
+  }
+  return { generated, candidates: cand.length };
 }
 
 // ── Next-step to-dos (reuse Phase 1) ────────────────────────────────────────
@@ -248,8 +348,8 @@ export async function handleDealCommsPropagateTick(req, res) {
   const c = {
     deals_scanned: 0, deals_processed: 0, comms_consumed: 0,
     summaries_written: 0, summary_skipped: 0,
-    milestones_written: 0, milestone_candidates: 0,
-    todos_generated: 0, todos_deduped: 0,
+    milestones_written: 0, milestones_rolled_up: 0, milestone_candidates: 0,
+    todos_generated: 0, todos_deduped: 0, reply_overdue_generated: 0,
     dossiers_regenerated: 0, packets_refreshed: 0,
   };
   const errors = [];
@@ -278,13 +378,19 @@ export async function handleDealCommsPropagateTick(req, res) {
           deterministic_cues: cueCount, todo_eligible: todoEligible,
         };
       });
+      // Reply-SLA dry-count — how many open deals currently trip the SLA (Scott
+      // sanity-checks this before the first live generation).
+      const replySla = await propagateReplySla({ dry: true });
       const runId = await writeRunLog({
         trigger_source: triggerSource, dry_run: true,
         deals_scanned: deals.length, deals_processed: 0,
         comms_consumed: preview.reduce((s, p) => s + p.new_comms, 0),
-        ok: true, detail: { deals: preview.slice(0, 40) },
+        ok: true, detail: { deals: preview.slice(0, 40), reply_sla_candidates: replySla.candidates },
       });
-      return res.status(200).json({ ok: true, dry_run: true, run_id: runId, deals_scanned: deals.length, deals: preview });
+      return res.status(200).json({
+        ok: true, dry_run: true, run_id: runId, deals_scanned: deals.length,
+        reply_sla_candidates: replySla.candidates, deals: preview,
+      });
     }
 
     // ── LIVE ────────────────────────────────────────────────────────────────
@@ -300,7 +406,8 @@ export async function handleDealCommsPropagateTick(req, res) {
         if (sum.outcome === 'written') c.summaries_written += 1; else c.summary_skipped += 1;
         // 2. milestones (new comms drive cues; summary surfaced llm candidates)
         const ms = await propagateMilestones(deal, newComms, sum.candidates, perActivity);
-        c.milestones_written += ms.written; c.milestone_candidates += ms.candidates;
+        c.milestones_written += ms.written; c.milestones_rolled_up += ms.rolledUp;
+        c.milestone_candidates += ms.candidates;
         // 3. to-dos (recent inbound matcher-backfill only)
         const td = await propagateTodos(deal, newComms, perActivity);
         c.todos_generated += td.generated; c.todos_deduped += td.deduped;
@@ -315,20 +422,32 @@ export async function handleDealCommsPropagateTick(req, res) {
       }
     }
 
+    // Reply-SLA runs ONCE per tick over all open in-scope deals (not just the
+    // new-comm batch) — a cheap query over the ledgered comms.
+    try {
+      const rs = await propagateReplySla({ dry: false });
+      c.reply_overdue_generated += rs.generated;
+    } catch (e) {
+      errors.push({ stage: 'reply_sla', error: String(e?.message || e).slice(0, 200) });
+    }
+
     const ok = errors.length === 0;
     const runId = await writeRunLog({
       trigger_source: triggerSource, dry_run: false,
       deals_scanned: c.deals_scanned, deals_processed: c.deals_processed, comms_consumed: c.comms_consumed,
       summaries_written: c.summaries_written, summary_skipped: c.summary_skipped,
-      milestones_written: c.milestones_written, milestone_candidates: c.milestone_candidates,
+      milestones_written: c.milestones_written, milestones_rolled_up: c.milestones_rolled_up,
+      milestone_candidates: c.milestone_candidates,
       todos_generated: c.todos_generated, todos_deduped: c.todos_deduped,
+      reply_overdue_generated: c.reply_overdue_generated,
       dossiers_regenerated: c.dossiers_regenerated, packets_refreshed: c.packets_refreshed,
       error_count: errors.length, ok, detail: errors.length ? { errors: errors.slice(0, 20) } : null,
     });
 
     console.log(`[deal-comms-propagate-tick] ok=${ok} scanned=${c.deals_scanned} processed=${c.deals_processed} ` +
       `consumed=${c.comms_consumed} summ=${c.summaries_written}/${c.summary_skipped} ` +
-      `mstone=${c.milestones_written}(+${c.milestone_candidates}cand) todos=${c.todos_generated}/${c.todos_deduped} ` +
+      `mstone=${c.milestones_written}(+${c.milestones_rolled_up}roll,+${c.milestone_candidates}cand) ` +
+      `todos=${c.todos_generated}/${c.todos_deduped} replySLA=${c.reply_overdue_generated} ` +
       `dossier=${c.dossiers_regenerated} packets=${c.packets_refreshed} errors=${errors.length}`);
 
     return res.status(200).json({ ok, run_id: runId, ...c, errors: errors.slice(0, 20) });
