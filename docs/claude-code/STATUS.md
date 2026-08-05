@@ -39,6 +39,18 @@ implied-NOI cap reconciliation exact (0 mismatch). So ALL of 36–40 are complet
 **Still to validate end-to-end:** that a real `generate_comps` workbook now renders POPULATED on-market rows
 (i.e. the enriched view/RPC actually feeds the on-market sheet) — check after the connector/redeploy is up.
 
+## Comps export notes v3 (2026-08-05) — queued 41/42/43
+Scott reviewed the national workbook (much better) and flagged remaining export errors. Split: what I fixed in the
+regenerate (18-mo default, DaVita+Fresenius, standardized tenant/expenses, OPTIONS rename+normalize, bumps
+normalize, cleaned bad DOM + negative bid-ask, auto-fit/no-wrap matched widths) vs what must live in the engine:
+- **41** — recency default (18 mo) + operator-expansion order + field standardization (operator/expenses/OPTIONS/
+  bumps) in the ENGINE so every surface matches.
+- **42** — data-quality gates (DOM validity, ask≥sold bid-ask, on-market original-vs-current ask for PRICE CHG) +
+  enrich SOLD renewal options / patients / land / expenses to sold-parity.
+- **43** — template rename RENEWAL OPTIONS→OPTIONS + bake auto-fit/no-wrap matched widths into populate_comps.
+Known data gaps still visible pending 42: sold renewal options blank, on-market price-change (view stores one ask),
+two corrupt bump values (0.1, 1.75). All prompts drafted, NOT sent.
+
 ## Comps prompts 36-40 — reconcile 2026-08-05
 Landed as MERGED PRs on `main` (not docx responses). Canon re-synced to **v1.2.3**, parity **0 drift**.
 | # | What merged | State |
