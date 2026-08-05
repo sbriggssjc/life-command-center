@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeReviewSignals, normalizeRenewalOptions, normalizeBumps, enqueueReviewQueue,
+  standardizeOperator, standardizeExpenseStructure, bumpsAreBadData,
 } from '../mcp/comps-tools.js';
 
 // Pearland — the canonical outlier (dia sale_id 7980, property 35837).
@@ -137,9 +138,12 @@ describe('normalizeRenewalOptions', () => {
 
 describe('normalizeBumps', () => {
   const cases = [
-    ['2% annual', '2%/yr'],
-    ['2.5% annually', '2.5%/yr'],
-    ['10% every 5 years', '10% every 5 yrs'],
+    ['2% annual', '2% / yr'],
+    ['2.5% annually', '2.5% / yr'],
+    ['10% every 5 years', '10% / 5 yrs'],
+    ['3% every 1 year', '3% / yr'],       // N==1 collapses to /yr
+    ['2%/yr', '2% / yr'],                  // legacy canonical → new canonical
+    ['10% / 5 yrs', '10% / 5 yrs'],        // already canonical passthrough
     ['None', 'None'],
   ];
   for (const [inp, exp] of cases) {
@@ -147,8 +151,69 @@ describe('normalizeBumps', () => {
       assert.equal(normalizeBumps(inp), exp);
     });
   }
-  it('unrecognized shapes pass through unchanged', () => {
+  it('unrecognized / bad-data shapes pass through unchanged', () => {
     assert.equal(normalizeBumps('see lease'), 'see lease');
+    assert.equal(normalizeBumps('0.1'), '0.1');     // bare number — left untouched, routed to review
+    assert.equal(normalizeBumps('1.75'), '1.75');
+  });
+});
+
+describe('bumpsAreBadData', () => {
+  it('flags bare numbers as bad data', () => {
+    assert.equal(bumpsAreBadData('0.1'), true);
+    assert.equal(bumpsAreBadData('1.75'), true);
+  });
+  it('does not flag interpretable / empty / none values', () => {
+    for (const ok of ['2% / yr', '10% / 5 yrs', 'None', 'see lease', null, '', undefined]) {
+      assert.equal(bumpsAreBadData(ok), false);
+    }
+  });
+});
+
+describe('standardizeOperator', () => {
+  const cases = [
+    ['DAVITA DIALYSIS', 'DaVita'],
+    ['Fresenius Medical Care', 'Fresenius Medical Care'],
+    ['FMC', 'Fresenius Medical Care'],
+    ['Bio-Medical Applications of Texas', 'Fresenius Medical Care'],
+    ['BMA', 'Fresenius Medical Care'],
+    ['U.S. Renal Care', 'US Renal Care'],
+    ['USRC', 'US Renal Care'],
+    ['American Renal Associates', 'American Renal'],
+    ['Innovative Renal Care', 'Innovative Renal Care'],
+    ['DCI', 'Dialysis Clinic Inc'],
+  ];
+  for (const [inp, exp] of cases) {
+    it(`${JSON.stringify(inp)} → ${exp}`, () => assert.equal(standardizeOperator(inp), exp));
+  }
+  it('returns null for agencies / property names / empty', () => {
+    for (const n of ['VA', 'Social Security Administration', 'Park Place Medical', '', null]) {
+      assert.equal(standardizeOperator(n), null);
+    }
+  });
+});
+
+describe('standardizeExpenseStructure', () => {
+  const cases = [
+    ['Absolute Net', 'Absolute NNN'],
+    ['Absolute NNN', 'Absolute NNN'],
+    ['Triple Net', 'NNN'],
+    ['NNN', 'NNN'],
+    ['Modified Triple Net', 'NNN'],
+    ['Double Net', 'NN'],
+    ['NN', 'NN'],
+    ['Full Service', 'Gross'],
+    ['Gross', 'Gross'],
+    ['Modified Gross', 'Modified Gross'],
+    ['Ground Lease', 'Ground Lease'],
+  ];
+  for (const [inp, exp] of cases) {
+    it(`${JSON.stringify(inp)} → ${exp}`, () => assert.equal(standardizeExpenseStructure(inp), exp));
+  }
+  it('passes through unrecognized / empty values', () => {
+    assert.equal(standardizeExpenseStructure('see lease'), 'see lease');
+    assert.equal(standardizeExpenseStructure(''), '');
+    assert.equal(standardizeExpenseStructure(null), null);
   });
 });
 

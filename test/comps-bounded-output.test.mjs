@@ -495,7 +495,7 @@ describe('comps engine bounded output', () => {
     assert.ok(first.built >= 2000);
     assert.equal(first.lease_expiration, '2036-12-31');
     assert.equal(first.expenses, 'NNN');
-    assert.equal(first.bumps, '2%/yr');
+    assert.equal(first.bumps, '2% / yr');
     assert.equal(first.renewal_options, '(2) 5-yr');
     assert.equal(first.on_market, '2024-12-01');
     assert.equal(first.initial_price, 5400000);
