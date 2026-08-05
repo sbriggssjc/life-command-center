@@ -1,5 +1,5 @@
 # Comps Canon
-Canon: v1.2.4
+Canon: v1.3.0
 
 ## Purpose
 Return sales/lease comps that are identical in substance and format on every surface.
@@ -46,6 +46,30 @@ and Salesforce-staged comps) — never from SharePoint, knowledge files, or gene
 6. **On-market rent basis (standard, identical across surfaces).** An on-market listing with a known asking cap
    but no in-place NOI carries `rent = round(asking_price * asking_cap)` (implied NOI, exact) with
    `initial_price = last_price = ask` so the template's INITIAL/LAST CAP reproduce the asking cap.
+
+## Selection defaults + field vocabularies (engine, all surfaces — prompt 41)
+These live in the engine (`mcp/comps-tools.js`), so every surface returns identical, clean text — never hand-fix
+an export.
+
+- **Recency default.** With NO window given, `synthesize_comps` / appraisal default sold comps to the **last 18
+  months** ("older is a different capital-markets condition"). If fewer than the target count qualify, the engine
+  WIDENS in order — **add operators** (drop a single-operator filter: DaVita → +Fresenius → +US Renal → +others)
+  → **loosen geography** (already national in appraisal) → **extend the window** (24mo → 36mo) — never silently
+  keeping stale comps to hit the count. Each step is logged to `meta.widened`; the window used is in
+  `meta.recency_window_default`.
+- **Operator (TENANT column) — canonical brand, not the raw clinic name:** DaVita · Fresenius Medical Care ·
+  US Renal Care · American Renal · Innovative Renal Care · Satellite Healthcare · Dialysis Clinic Inc · DSI Renal ·
+  Renal Ventures. Maps FMC / BMA / Bio-Medical → Fresenius Medical Care; USRC / U.S. Renal → US Renal Care;
+  DCI → Dialysis Clinic Inc. Government agencies and genuine property names are left untouched (multi-tenant keeps
+  its request-aware `MOB (VA)` / `MT (SSA)` label with the brand as anchor).
+- **Expense structure — fixed vocabulary:** `Absolute NNN` · `NNN` · `NN` · `Gross` · `Ground Lease` ·
+  `Modified Gross`. Maps Double Net → NN; Triple Net / Modified Triple Net → NNN; Full Service → Gross; Bondable →
+  Absolute NNN. Unrecognized values pass through unchanged.
+- **Renewal OPTIONS → `(N) M-yr`** (e.g. `(3) 5-yr`) — count parsed from words/digits, never the term length.
+- **Bumps → `X% / yr` or `X% / N yrs`.** An uninterpretable source value (a bare number with no `%`, e.g. `0.1`,
+  `1.75`) is left UNTOUCHED and routed to the review lane as bad data (`bad_bumps` flag).
+
+Applied identically to sold + on-market, dialysis + gov.
 
 ## Output contract
 Team Briggs Sales/Lease Comps template. Formula-protected columns (PRICE/SF, CAP RATE, RENT/SF, TERM, DOM,

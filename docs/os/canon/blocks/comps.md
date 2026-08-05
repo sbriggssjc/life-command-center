@@ -10,6 +10,14 @@ TERM, DOM, EFFECTIVE RENT/SF) are never written; dialysis adds Chair Count then 
 `buyer`/`seller`/`financing` excluded unless asked. Zero results → say so and offer to widen; never substitute
 proxy comps. Pass the request verbatim — never add tenant/metro/date filters the user didn't state (that collapses the set); the engine expands (appraisal: subject -> state -> region -> national, incl. estimated-NOI).
 
+**Selection defaults + field vocabularies live in the engine (prompt 41) — identical on every surface.** No-window
+sold pulls default to the **last 18 months**; too few → the engine widens (add operators → loosen geography →
+extend window, logged in `meta.widened`), never keeping stale comps to hit a count. The TENANT column shows the
+**canonical operator brand** (DaVita, Fresenius Medical Care, US Renal Care, American Renal, Innovative Renal Care…;
+FMC/BMA/Bio-Medical→Fresenius, USRC→US Renal Care), not the raw clinic name. EXPENSES use a fixed set
+(`Absolute NNN`/`NNN`/`NN`/`Gross`/`Ground Lease`/`Modified Gross`); OPTIONS are `(N) M-yr`; bumps are `X% / yr`
+or `X% / N yrs` (uninterpretable bare numbers routed to review as bad data). Never hand-fix these per export.
+
 **ONE renderer — never hand-author a workbook.** The only acceptable comps workbook is the one
 `generate_comps`/`populate_comps` produces into the canonical Briggs template
 (`bov-generator/templates/Comps Blank Template - Briggs - *.xlsx`). Never invent sheets, columns, a

@@ -764,6 +764,9 @@ export function computeReviewSignals(c) {
   if (sold && ask && (sold > PRICE_OVER_ASK_RATIO * ask || sold < PRICE_UNDER_ASK_RATIO * ask))
     flags.push('price_over_ask');
   if (reliableCap == null) flags.push('no_reliable_cap');
+  // Uninterpretable bumps (bare number, no %) → route to the review lane as bad
+  // data (the value itself is left untouched by normalizeBumps).
+  if (bumpsAreBadData(c.bumps)) flags.push('bad_bumps');
 
   if (!flags.length) return null;
   // W3.6 — record the INPUTS behind each cap so the reviewer can see WHICH number
@@ -828,26 +831,91 @@ export function normalizeRenewalOptions(value) {
   return value;
 }
 
+// Bumps / escalation normalizer (prompt 41). Canonical shapes:
+//   annual:        "X% / yr"
+//   every N years: "X% / N yrs"   (N==1 collapses to "X% / yr")
+//   none:          "None"
+// An UNINTERPRETABLE source value (a bare number with no % — e.g. `0.1`, `1.75`,
+// which could be a decimal rate, a per-year fraction, or noise) is left UNTOUCHED
+// and routed to the review lane as bad data (see bumpsAreBadData + the bad_bumps
+// review flag). We never guess what a bare number means.
 export function normalizeBumps(value) {
   if (value == null) return value;
   const s = String(value).trim();
   if (!s) return value;
   if (/^none$/i.test(s)) return 'None';
-  if (/^\d+(?:\.\d+)?%\/yr$/i.test(s)) return s.replace(/%\/yr$/i, '%/yr');
-  if (/^\d+(?:\.\d+)?%\s+every\s+\d+\s+yrs?$/i.test(s)) return s.replace(/\s+yrs?$/i, m => m.toLowerCase());
+  // already canonical ("X% / yr" / "X% / N yrs" in any spacing)
+  if (/^\d+(?:\.\d+)?%\s*\/\s*yr$/i.test(s)) return s.replace(/^(\d+(?:\.\d+)?)%.*$/i, '$1% / yr');
+  const canonEvery = s.match(/^(\d+(?:\.\d+)?)%\s*\/\s*(\d+)\s*yrs?$/i);
+  if (canonEvery) { const yrs = parseInt(canonEvery[2], 10); return yrs === 1 ? `${canonEvery[1]}% / yr` : `${canonEvery[1]}% / ${yrs} yrs`; }
   const pct = s.match(/(\d+(?:\.\d+)?)\s*%/);
-  if (!pct) return value;
+  if (!pct) return value;                                   // no % → uninterpretable, pass through (bad-data lane)
   const n = Number(pct[1]);
   if (!Number.isFinite(n)) return value;
   const pctText = Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
-  if (/\bannual(?:ly)?\b|\bper\s+year\b|\b\/\s*yr\b|\byearly\b/i.test(s)) return `${pctText}%/yr`;
   const every = s.match(/\bevery\s+(\d+)\s*(?:yr|year)s?\b/i)
     || s.match(/\b(\d+)\s*(?:yr|year)s?\s*(?:steps?|bumps?|increases?)\b/i);
   if (every) {
     const yrs = parseInt(every[1], 10);
-    if (Number.isFinite(yrs) && yrs > 0) return `${pctText}% every ${yrs} ${yrs === 1 ? 'yr' : 'yrs'}`;
+    if (Number.isFinite(yrs) && yrs > 0) return yrs === 1 ? `${pctText}% / yr` : `${pctText}% / ${yrs} yrs`;
   }
+  if (/\bannual(?:ly)?\b|\bper\s+year\b|\b\/\s*yr\b|\byearly\b/i.test(s)) return `${pctText}% / yr`;
   return value;
+}
+
+// True when a bumps source value is present but uninterpretable bad data — a bare
+// number with no % sign and no recognizable escalation structure (e.g. `0.1`,
+// `1.75`). These are LEFT UNTOUCHED by normalizeBumps and routed to the review
+// lane (bad_bumps flag) rather than guessed at.
+export function bumpsAreBadData(value) {
+  if (value == null) return false;
+  const s = String(value).trim();
+  if (!s || /^none$/i.test(s)) return false;
+  if (/%/.test(s)) return false;                            // has a percent → interpretable enough
+  return /^-?\d+(?:\.\d+)?$/.test(s);                        // bare number → bad data
+}
+
+// ── Operator standardization (prompt 41) ────────────────────────────────────
+// The TENANT column must show the canonical operator BRAND, not the raw clinic
+// name. Maps raw operator/clinic text → the canonical brand; returns null when no
+// dialysis operator is recognized (so government agencies + genuine property names
+// are left untouched). Vocabulary is documented once in docs/os/canon/comps.md.
+const OPERATOR_CANON = [
+  [/\bu\.?\s*s\.?\s*renal(?:\s*care)?\b|\busrc\b/i, 'US Renal Care'],
+  [/\bdavita\b/i, 'DaVita'],
+  [/\bfresenius\b|\bfmc\b|\bbma\b|\bbio[\s-]?medical\b/i, 'Fresenius Medical Care'],
+  [/\bamerican renal\b/i, 'American Renal'],
+  [/\binnovative renal(?:\s*care)?\b|\birc\b/i, 'Innovative Renal Care'],
+  [/\bsatellite (?:health(?:care)?|dialysis)\b/i, 'Satellite Healthcare'],
+  [/\bdialysis clinic(?:\s*inc)?\b|\bdci\b/i, 'Dialysis Clinic Inc'],
+  [/\bdsi\s*renal\b|\bdsi\b/i, 'DSI Renal'],
+  [/\brenal ventures\b/i, 'Renal Ventures'],
+];
+export function standardizeOperator(name) {
+  const s = String(name || '');
+  if (!s.trim()) return null;
+  for (const [re, canon] of OPERATOR_CANON) if (re.test(s)) return canon;
+  return null;
+}
+
+// ── Expense-structure vocabulary (prompt 41) ────────────────────────────────
+// Standardize free-text lease/expense structure to a fixed vocabulary:
+//   Absolute NNN · NNN · NN · Gross · Ground Lease · Modified Gross
+// Uninterpretable values pass through unchanged. Order matters (most-specific
+// first). Documented once in docs/os/canon/comps.md.
+export function standardizeExpenseStructure(value) {
+  if (value == null) return value;
+  const s = String(value).trim();
+  if (!s) return value;
+  const t = s.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/absolute\s*(?:net|nnn|triple\s*net)|bondable/.test(t)) return 'Absolute NNN';
+  if (/ground\s*lease/.test(t)) return 'Ground Lease';
+  if (/modified\s*gross|mod\s*gross/.test(t)) return 'Modified Gross';
+  if (/modified\s*(?:triple\s*net|nnn)/.test(t)) return 'NNN';         // "Modified Triple Net" → NNN
+  if (/triple\s*net|\bnnn\b|\bn{3}\b/.test(t)) return 'NNN';
+  if (/double\s*net|\bnn\b/.test(t)) return 'NN';
+  if (/full\s*service|\bfsg\b|\bgross\b|\bmg\b(?!.*net)/.test(t)) return 'Gross';
+  return value;                                                        // uninterpretable → pass through
 }
 
 // ── W3.6b — attach the cap ENGINE's income to sold comps ────────────────────
@@ -1104,8 +1172,22 @@ export async function runComps(args, deps) {
   // and standardize renewal-options text so every surface emits "(N) M-yr".
   for (const c of merged) {
     c.use = normalizeUse(c);
+    // Operator standardization — canonical brand for the TENANT column. Applied
+    // to the raw operator/anchor BEFORE displayName so a single-tenant dialysis
+    // comp shows the brand (DaVita / Fresenius Medical Care / US Renal Care …)
+    // and a multi-tenant comp's anchor uses the brand inside its MOB/MT label.
+    // A government agency / genuine property name is left untouched (no match).
+    const canonOp = standardizeOperator(compTenantText(c));
+    if (canonOp) {
+      c.operator = canonOp;
+      if (c.anchor_tenant && standardizeOperator(c.anchor_tenant)) c.anchor_tenant = canonOp;
+      if (!isMultiTenant(c)) c.tenant = canonOp;
+    }
     const dn = displayName(c, { property_types: args.property_types, government_only: params.p_government_only });
     if (dn) { c.tenant = dn; if (c.agency != null) c.agency = dn; }
+    // Expense-structure vocabulary → fixed set (both fields templateRow reads).
+    const stdExp = standardizeExpenseStructure(c.lease_type ?? c.expense_type ?? c.expenses ?? c.raw?.lease_type ?? c.raw?.expense_type);
+    if (stdExp != null) { c.lease_type = stdExp; c.expenses = stdExp; }
     if (c.renewal_options != null) c.renewal_options = normalizeRenewalOptions(c.renewal_options);
     if (c.bumps != null) c.bumps = normalizeBumps(c.bumps);
   }
@@ -1189,6 +1271,13 @@ function transparencyLine(meta) {
 function asNum(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+// ISO (YYYY-MM-DD) date n months before today — the recency-window default.
+function monthsAgoISO(n) {
+  const d = new Date();
+  d.setMonth(d.getMonth() - n);
+  return d.toISOString().slice(0, 10);
 }
 
 function soldCapForStats(c) {
@@ -1287,8 +1376,50 @@ export async function runSynthesize(args, deps) {
   }
   const requestedLimit = clampLimit(eff.limit, eff.appraisal_mode ? DEFAULT_APPRAISAL_LIMIT : DEFAULT_SYNTHESIZE_LIMIT, MAX_SYNTHESIZE_LIMIT);
   const candidateLimit = eff.appraisal_mode ? APPRAISAL_CANDIDATE_LIMIT : requestedLimit;
-  const { comps, meta, template_comps } = await runComps({ ...eff, verticals: route.verticals,
-    government_only: route.government_only, limit: candidateLimit }, deps);
+
+  // ── Recency default + widening (prompt 41) ───────────────────────────────
+  // Default sold comps to the last 18 months when the user gave NO window
+  // ("older is a different capital-markets condition"). If too few qualify,
+  // widen in order — add operators, then loosen geography, then extend the
+  // window — never silently keeping stale comps to hit the count. Every step
+  // is logged to meta.widened; the final window is surfaced in interpreted_query.
+  const wantsSales = !eff.comp_type || eff.comp_type === 'sale' || eff.comp_type === 'both';
+  const userGaveWindow = !!(eff.date_from || args.date_from || args.date_to);
+  const baseArgs = { ...eff, verticals: route.verticals, government_only: route.government_only, limit: candidateLimit };
+  let recencyDefaultApplied = null;
+  if (wantsSales && !userGaveWindow) {
+    recencyDefaultApplied = monthsAgoISO(18);
+    baseArgs.date_from = recencyDefaultApplied;
+  }
+  let pulled = await runComps(baseArgs, deps);
+  let finalWindow = baseArgs.date_from || null;
+  const widened = [];
+  if (recencyDefaultApplied && pulled.comps.length < requestedLimit) {
+    const steps = [
+      { key: 'operators',   when: () => !!(eff.tenant || (eff.tenants && eff.tenants.length)),                          apply: a => ({ ...a, tenant: null, tenants: null }) },
+      { key: 'geography',   when: () => !appraisalSubjectAnchor(eff) && !!((eff.states && eff.states.length) || (eff.metros && eff.metros.length)), apply: a => ({ ...a, states: null, metros: null }) },
+      { key: 'window_24mo', when: () => true, apply: a => ({ ...a, date_from: monthsAgoISO(24) }) },
+      { key: 'window_36mo', when: () => true, apply: a => ({ ...a, date_from: monthsAgoISO(36) }) },
+    ];
+    let curArgs = baseArgs;
+    for (const step of steps) {
+      if (pulled.comps.length >= requestedLimit) break;
+      if (!step.when()) continue;
+      curArgs = step.apply(curArgs);
+      const before = pulled.comps.length;
+      const re = await runComps(curArgs, deps);
+      widened.push({ step: step.key, before, after: re.comps.length, date_from: curArgs.date_from || null });
+      pulled = re;
+      finalWindow = curArgs.date_from || null;
+    }
+  }
+  const { comps, meta } = pulled;
+  if (recencyDefaultApplied) {
+    meta.recency_window_default = recencyDefaultApplied;
+    meta.widened = widened;
+    eff.date_from = finalWindow;                           // surface the actual window used
+    if (widened.length) console.warn(`[comps:widen] target ${requestedLimit}, applied ${JSON.stringify(widened)}`);
+  }
   const tierRank = { A: 3, B: 2, C: 1 };
   let scored = comps.map(c => ({ ...c, _score: scoreComp(c, eff) }))
     .sort((x, y) => ((tierRank[scoreTier(y._score)] || 0) - (tierRank[scoreTier(x._score)] || 0) || y._score - x._score
