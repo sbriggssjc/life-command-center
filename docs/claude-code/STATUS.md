@@ -30,6 +30,21 @@ and re-rendered so all 5 surfaces + the Copilot live artifact now carry it.
 - **Sync the two external BOV skills** with the naming block (SURFACE-SYNC-PROTOCOL); re-paste `NORTHMARQ_PROJECT_PROMPT.md` v1.12 into the Project.
 - **Rotate `LCC_API_KEY`** (still outstanding; it was exposed in chat).
 
+## Comps pipeline GAP AUDIT (2026-08-05) — do F1/F2 before the format prompts
+Full trace in `docs/architecture/comps-pipeline-gap-audit-2026-08.md`. The same request diverged because gaps
+live in the ENGINE, not just agent behavior. Prioritized fix set (send in this order):
+- **39 (F1, SELECTION)** — appraisal pull is region-bounded (`queryScopeArgs`→`appraisalCandidateStates`→p_states
+  = subject state+region); `scoreComp` ranks nationally but is starved. Fix: pull national, geography = score
+  weight only, add underwriting dims (term-at-close, operator/credit, age, size/chairs, bumps, cap-support). ← FIRST
+- **40 (F2, ON-MARKET DATA)** — on-market rows come from the thin listings path, not enriched to property+lease;
+  LAND/BUILT/EXP/TERM/EXPENSES/BUMPS/RENEWAL/CHAIRS/PATIENTS blank. Fix: enrich to sold-parity depth. ← SECOND
+- **36** single renderer + local `populate_comps` fallback (format).
+- **37** single-source templates + conformance validator.
+- **38** connector still errors after MCP_BASE_URL set — deep-diagnose the failing hop.
+Verified this session: `populate_comps` run directly = correct FORMAT (unknown_keys:[], trimmed, chairs/patients),
+but SELECTION (national) and ON-MARKET DATA remain engine gaps → 39/40. Prompts drafted, NOT yet sent, pending
+Scott's go on order.
+
 ## Comps output unification — queued 2026-08-04
 Root cause of "many formats for the same request": ONE correct renderer exists —
 `bov-generator/comps_generator.py::populate_comps` (loads the canonical dialysis template, header-driven,
