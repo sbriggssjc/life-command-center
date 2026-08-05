@@ -145,26 +145,31 @@ describe('normalizeBumps', () => {
     ['2%/yr', '2% / yr'],                  // legacy canonical → new canonical
     ['10% / 5 yrs', '10% / 5 yrs'],        // already canonical passthrough
     ['None', 'None'],
+    // Prompt 44 — bare decimal 0<d≤1 = "10% every 5 years" (dialysis 5-yr step).
+    ['0.1', '10% / 5 yrs'],
+    ['0.125', '12.5% / 5 yrs'],
+    ['1', '100% / 5 yrs'],
   ];
   for (const [inp, exp] of cases) {
     it(`${JSON.stringify(inp)} -> ${exp}`, () => {
       assert.equal(normalizeBumps(inp), exp);
     });
   }
-  it('unrecognized / bad-data shapes pass through unchanged', () => {
+  it('unrecognized / ambiguous shapes pass through unchanged', () => {
     assert.equal(normalizeBumps('see lease'), 'see lease');
-    assert.equal(normalizeBumps('0.1'), '0.1');     // bare number — left untouched, routed to review
-    assert.equal(normalizeBumps('1.75'), '1.75');
+    assert.equal(normalizeBumps('1.75'), '1.75');   // >1, no % — ambiguous, routed to review
+    assert.equal(normalizeBumps('5'), '5');         // >1, no % — ambiguous
   });
 });
 
 describe('bumpsAreBadData', () => {
-  it('flags bare numbers as bad data', () => {
-    assert.equal(bumpsAreBadData('0.1'), true);
+  it('flags ambiguous bare numbers (>1, no %) as bad data', () => {
     assert.equal(bumpsAreBadData('1.75'), true);
+    assert.equal(bumpsAreBadData('5'), true);
   });
   it('does not flag interpretable / empty / none values', () => {
-    for (const ok of ['2% / yr', '10% / 5 yrs', 'None', 'see lease', null, '', undefined]) {
+    // Prompt 44 — a bare decimal 0<d≤1 is now interpretable, not bad data.
+    for (const ok of ['2% / yr', '10% / 5 yrs', '0.1', '0.125', 'None', 'see lease', null, '', undefined]) {
       assert.equal(bumpsAreBadData(ok), false);
     }
   });

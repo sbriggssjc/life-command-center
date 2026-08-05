@@ -21,7 +21,7 @@ import { enforceHttpResponseSize } from "./http-response-bound.js";
 
 const DEFAULT_QUERY_LIMIT = 40;
 const DEFAULT_SYNTHESIZE_LIMIT = 25;
-const DEFAULT_APPRAISAL_LIMIT = 30;
+const DEFAULT_APPRAISAL_LIMIT = 25;
 const MAX_QUERY_LIMIT = 100;
 const MAX_SYNTHESIZE_LIMIT = 50;
 // Appraisal mode pulls a NATIONAL candidate universe, so the per-vertical RPC limit must be
@@ -219,24 +219,32 @@ function scoreComp(c, a) {
   // ── Aligned market: metro > region > national. Geography is a SCORE weight ONLY — in appraisal
   // mode the candidate universe is national, so a national comp still earns a small baseline and
   // an out-of-region same-operator/same-term comp can out-rank a weak in-state one. ──
-  if (subject.metro && sameMarket(c, subject.metro)) s += appraisal ? 10 : 8;
+  // Prompt 44 doctrine: SIMILARITY OVER OPERATOR IDENTITY. A same-size / same-market /
+  // same-term / same-cap comp of a DIFFERENT operator is a better comp than a same-operator
+  // comp in a different market or ~4 yrs off on term. So market proximity (metro>region),
+  // term-at-close, cap alignment and size are the dominant weights; operator is a minor
+  // tiebreaker bonus (below). A metro→region drop (12→6 = 6 pts) alone outweighs the whole
+  // same-operator bonus (2 pts).
+  if (subject.metro && sameMarket(c, subject.metro)) s += appraisal ? 12 : 8;
   else if (a.metros?.some(m => sameMarket(c, m))) s += 6;
   if (subjectState && cState === subjectState) s += appraisal ? 7 : 6;
-  else if (subjectRegion && cState && STATE_TO_REGION[cState] === subjectRegion) s += appraisal ? 4 : 3;
+  else if (subjectRegion && cState && STATE_TO_REGION[cState] === subjectRegion) s += appraisal ? 6 : 3;
   else if (subjectState === 'FL' && SOUTHEAST_STATES.has(cState)) s += 3;
   else if (a.states?.includes(cState)) s += 3;
   else if (appraisal) s += 1; // national baseline so out-of-region comps stay viable
 
-  // ── Operator / credit: same operator highest, then same credit tier (major vs independent) ──
+  // ── Operator / credit: an EXPLICITLY-REQUESTED tenant filter still earns weight (the user
+  // asked for it); but the SUBJECT's own operator identity is demoted to a minor tiebreaker
+  // in appraisal mode so it can't outrank a clearly-more-similar different-operator comp. ──
   const tenantList = a.tenants || a.tenant_list;
   if (Array.isArray(tenantList) && tenantList.length && tenantListMatches(c, tenantList)) s += 4;
   else if (a.tenant && tenantMatches(c, a.tenant)) s += 4;
   const subjectTenant = subjectTenantName(subject);
   if (appraisal && subjectTenant) {
-    if (tenantMatches(c, subjectTenant)) s += 6; // same operator = strongest credit alignment
+    if (tenantMatches(c, subjectTenant)) s += 2; // same operator = small tiebreaker bonus only
     else {
       const st = operatorTier(subjectTenant), ct = operatorTier(compTenantText(c));
-      if (st && ct && st === ct) s += 3; // same credit tier
+      if (st && ct && st === ct) s += 1; // same credit tier = smaller nudge
     }
   }
 
@@ -244,15 +252,16 @@ function scoreComp(c, a) {
   // ranks consistently rather than depending on the raw building_type value.
   if (a.property_types?.some(t => ((c.property_type || '') + ' ' + (c.use || '')).toLowerCase().includes(String(t).toLowerCase()))) s += 3;
 
-  // ── Size (RBA) + chairs proximity ──
+  // ── Size (RBA) + chairs proximity — weighted UP (prompt 44): size similarity is a core
+  // comp driver, not a minor nudge. A perfect size match now earns 5 pts (was 3). ──
   if (subject.building_sf && (c.building_sf || c.rba)) {
     const ratio = Math.min(Number(c.building_sf || c.rba), Number(subject.building_sf))
       / Math.max(Number(c.building_sf || c.rba), Number(subject.building_sf));
-    if (Number.isFinite(ratio)) s += ratio * 3;
+    if (Number.isFinite(ratio)) s += ratio * (appraisal ? 5 : 3);
   }
   if (subject.chairs && c.chairs) {
     const ratio = Math.min(Number(c.chairs), Number(subject.chairs)) / Math.max(Number(c.chairs), Number(subject.chairs));
-    if (Number.isFinite(ratio)) s += ratio * 2;
+    if (Number.isFinite(ratio)) s += ratio * (appraisal ? 3 : 2);
   }
 
   // ── Building age proximity ──
@@ -260,9 +269,13 @@ function scoreComp(c, a) {
   const compYear = asNum(c.year_built ?? c.built ?? c.raw?.year_built);
   if (subjYear && compYear) s += Math.max(0, 3 - Math.abs(subjYear - compYear) / 5);
 
-  // ── Lease term remaining at close proximity ──
+  // ── Lease term remaining at close proximity — weighted UP (prompt 44). In appraisal mode a
+  // full match earns 8 pts and each year of gap costs 1.5 pts, so a ~4 yr term gap costs ~6 pts
+  // — materially MORE than the 2 pt same-operator bonus, per Scott's doctrine. ──
   const subjTerm = subjectRemainingTerm(subject), compTerm = termRemainingAtClose(c);
-  if (subjTerm && compTerm) s += Math.max(0, 4 - Math.abs(subjTerm - compTerm));
+  if (subjTerm && compTerm) s += appraisal
+    ? Math.max(0, 8 - 1.5 * Math.abs(subjTerm - compTerm))
+    : Math.max(0, 4 - Math.abs(subjTerm - compTerm));
 
   // ── Bump / escalation structure similarity ──
   if (subject.bumps && c.bumps) {
@@ -273,7 +286,8 @@ function scoreComp(c, a) {
   // ── Cap support (keep + strengthen): reward proximity; penalize caps materially above subject ──
   if (subject.cap_rate && c.cap_rate) {
     const spreadBps = Math.abs(Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
-    s += appraisal ? Math.max(0, 8 - (spreadBps / 25)) : Math.max(0, 3 - (spreadBps / 75));
+    // Prompt 44: cap alignment weighted UP (10 pts full match in appraisal mode).
+    s += appraisal ? Math.max(0, 10 - (spreadBps / 25)) : Math.max(0, 3 - (spreadBps / 75));
     if (appraisal) {
       const overBps = (Number(c.cap_rate) - Number(subject.cap_rate)) * 10000;
       if (overBps > 200) s -= 4 + (overBps - 200) / 50; // >~200 bps above subject: escalating penalty
@@ -848,6 +862,15 @@ export function normalizeBumps(value) {
   if (/^\d+(?:\.\d+)?%\s*\/\s*yr$/i.test(s)) return s.replace(/^(\d+(?:\.\d+)?)%.*$/i, '$1% / yr');
   const canonEvery = s.match(/^(\d+(?:\.\d+)?)%\s*\/\s*(\d+)\s*yrs?$/i);
   if (canonEvery) { const yrs = parseInt(canonEvery[2], 10); return yrs === 1 ? `${canonEvery[1]}% / yr` : `${canonEvery[1]}% / ${yrs} yrs`; }
+  // Bare decimal with no % (prompt 44): Scott's convention is that `0.1` means
+  // "10% every 5 years" (the dialysis 5-yr step). A bare decimal `d` with 0<d≤1
+  // maps to "{d*100:g}% / 5 yrs" (0.1 → "10% / 5 yrs", 0.125 → "12.5% / 5 yrs").
+  // A bare number >1 (or ≤0) stays uninterpretable → review lane (bumpsAreBadData).
+  const bare = s.match(/^-?\d+(?:\.\d+)?$/) ? Number(s) : NaN;
+  if (Number.isFinite(bare) && bare > 0 && bare <= 1) {
+    const pctText = String(+(bare * 100).toFixed(4));
+    return `${pctText}% / 5 yrs`;
+  }
   const pct = s.match(/(\d+(?:\.\d+)?)\s*%/);
   if (!pct) return value;                                   // no % → uninterpretable, pass through (bad-data lane)
   const n = Number(pct[1]);
@@ -864,15 +887,18 @@ export function normalizeBumps(value) {
 }
 
 // True when a bumps source value is present but uninterpretable bad data — a bare
-// number with no % sign and no recognizable escalation structure (e.g. `0.1`,
-// `1.75`). These are LEFT UNTOUCHED by normalizeBumps and routed to the review
-// lane (bad_bumps flag) rather than guessed at.
+// number with no % sign and no recognizable escalation structure. Prompt 44: a
+// bare decimal 0<d≤1 is now INTERPRETABLE as the "10% / 5 yrs" convention (see
+// normalizeBumps), so it is no longer bad data; a bare number >1 (e.g. `1.75`) or
+// ≤0 remains ambiguous and is LEFT UNTOUCHED + routed to the review lane.
 export function bumpsAreBadData(value) {
   if (value == null) return false;
   const s = String(value).trim();
   if (!s || /^none$/i.test(s)) return false;
   if (/%/.test(s)) return false;                            // has a percent → interpretable enough
-  return /^-?\d+(?:\.\d+)?$/.test(s);                        // bare number → bad data
+  if (!/^-?\d+(?:\.\d+)?$/.test(s)) return false;            // not a bare number
+  const n = Number(s);
+  return !(Number.isFinite(n) && n > 0 && n <= 1);           // 0<d≤1 is interpretable; else bad data
 }
 
 // ── Operator standardization (prompt 41) ────────────────────────────────────
