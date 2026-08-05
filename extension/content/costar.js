@@ -261,11 +261,17 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // that mis-slotted the broker's email onto the owner and mislabeled the True
     // Owner as the broker. Falls back to the DOM-mailto + text extractors when
     // the structured panel isn't found (older layouts / comp pages).
+    try {
+      const _figAll  = deepQuerySelectorAll('figure[data-testid]').length;
+      const _figC    = deepQuerySelectorAll('figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]').length;
+      const _mailC   = deepQuerySelectorAll('a[href^="mailto:"]').length;
+      console.warn(`[LCC costar v27] capture: figures(any)=${_figAll} figures(contact)=${_figC} mailto=${_mailC} lines=${lines.length}`);
+    } catch (_) {}
     const structuredContacts = extractStructuredForSaleContacts();
     let contacts = [];
     if (structuredContacts && structuredContacts.length) {
       mergeContacts(contacts, structuredContacts);
-      console.log('[costar] using structured Contacts:',
+      console.warn('[LCC costar] using structured Contacts:',
         structuredContacts.map(c => `${c.name} (${c.role})`).join('; '));
     } else {
       const domContacts  = extractContactsFromDOM();
@@ -273,7 +279,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       mergeContacts(contacts, domContacts);
       mergeContacts(contacts, textContacts);
       enrichContactsFromDOM(contacts);
-      console.log(`[costar] fallback Contacts: dom=${domContacts.length} text=${textContacts.length}`);
+      console.warn(`[LCC costar] fallback Contacts: dom=${domContacts.length} text=${textContacts.length}`);
     }
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
@@ -583,7 +589,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 26,
+        _version: 27,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
@@ -3583,10 +3589,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         'figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]';
       const figureEls = deepQuerySelectorAll(figureSel);
       if (!figureEls.length) {
-        console.log('[costar] structured Contacts: 0 figures found (deep query)');
+        console.warn('[LCC costar] structured Contacts: 0 figures found (deep query)');
         return [];
       }
-      console.log(`[costar] structured Contacts: ${figureEls.length} figure(s) found`);
+      console.warn(`[LCC costar] structured Contacts: ${figureEls.length} figure(s) found`);
 
       const txt = (el) => (el && (el.textContent || '')).replace(/\s+/g, ' ').trim();
       const figures = [];
