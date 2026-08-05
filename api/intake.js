@@ -368,6 +368,16 @@ async function handleOutlookSent(req, res) {
       `&select=entity_id&order=occurred_at.desc&limit=1`);
     dealEntityId = match.data?.[0]?.entity_id || null;
   }
+  // W7.1 conversation-thread continuity: a sent reply inherits its thread's deal
+  // stamp when the resolver + correspondent fallback found none (cheap, precise).
+  const conversationId = firstNonEmpty(payload.conversation_id, payload.conversationId, null);
+  if (!dealEntityId && conversationId) {
+    const prior = await opsQuery('GET',
+      `activity_events?workspace_id=eq.${pgFilterVal(workspaceId)}` +
+      `&metadata->>conversation_id=eq.${encodeURIComponent(conversationId)}` +
+      `&entity_id=not.is.null&select=entity_id&order=occurred_at.desc&limit=1`).catch(() => null);
+    dealEntityId = prior?.data?.[0]?.entity_id || null;
+  }
 
   const row = {
     workspace_id: workspaceId,
@@ -382,6 +392,7 @@ async function handleOutlookSent(req, res) {
     external_url: webLink,
     visibility: 'shared',
     metadata: { direction: 'outbound', from: fromAddr, to: recips, via: 'outlook_sent',
+                conversation_id: conversationId,
                 party_entity_id: partyEntityId, deal_entity_id: dealEntityId },
   };
   const ins = await opsQuery('POST', 'activity_events?on_conflict=workspace_id,source_type,external_id',
@@ -537,6 +548,9 @@ async function handleOutlookMessage(req, res) {
     received_at_raw: receivedAtRaw,
     from: sender?.email || null,
     to: firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null),
+    // W7.1 — carry the Outlook conversation id so the dual-anchor logger can
+    // apply thread continuity (a reply inherits its thread's deal stamp).
+    conversation_id: firstNonEmpty(payload.conversation_id, payload.conversationId, null),
   };
 
   // ── Live inbound dual-anchor stamp (relationship-primary, deal-subfilter) ──

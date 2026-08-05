@@ -22,6 +22,7 @@ import { authenticate } from './api/_shared/auth.js';
 import { opsQuery } from './api/_shared/ops-db.js';
 import { mountLccMcp } from './mcp/server.js';
 import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
+import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -178,6 +179,9 @@ app.all('/api/sf-sync-queue', (req, res) => { req.query._route = 'sf-sync-queue'
 app.all('/api/sf-owner-sync', (req, res) => { req.query._route = 'sf-owner-sync'; adminHandler(req, res); });
 app.all('/api/owner-reconcile', (req, res) => { req.query._route = 'owner-reconcile'; adminHandler(req, res); });
 app.all('/api/deal-correspondence-backfill', (req, res) => { req.query._route = 'deal-correspondence-backfill'; adminHandler(req, res); });
+// W7.1 alias — the correspondence-ingestion design names this receiver /api/intake-deal-backfill.
+// Same handler, same {deal_entity_id, messages[]} contract; kept so the connector work is drop-in.
+app.all('/api/intake-deal-backfill', (req, res) => { req.query._route = 'deal-correspondence-backfill'; adminHandler(req, res); });
 app.all('/api/sf-seller-owner', (req, res) => { req.query._route = 'sf-seller-owner'; adminHandler(req, res); });
 app.all('/api/storage-cleanup', (req, res) => { req.query._route = 'storage-cleanup'; adminHandler(req, res); });
 app.all('/api/consolidate-property', (req, res) => { req.query._route = 'consolidate-property'; adminHandler(req, res); });
@@ -303,6 +307,8 @@ app.all('/api/sf-record-sync-tick', (req, res) => { req.query._route = 'sf-recor
 // Deal-spine connector: Power Automate "SF Deal -> LCC Opportunity Sync"
 // posts standard Salesforce Opportunity records here. The implementation is
 // shared with the MCP engine so Railway and MCP stay behavior-identical.
+// W7.1 — recurring deal-email-matcher cron (X-LCC-Key auth; scheduled by pg_cron lcc-deal-email-match).
+app.all('/api/pipeline/match-deal-emails-cron', requireLccAuth(handleDealEmailMatchCron));
 app.post('/api/pipeline/ingest-opportunity', requireLccAuth(opportunitySyncRoutes.ingest));
 app.post('/api/pipeline/ingest-opportunities', requireLccAuth(opportunitySyncRoutes.ingestBatch));
 // SPEC Part B2 — external listing/property webpage crawl worker (cron:
