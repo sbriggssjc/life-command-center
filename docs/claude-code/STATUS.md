@@ -30,6 +30,15 @@ and re-rendered so all 5 surfaces + the Copilot live artifact now carry it.
 - **Sync the two external BOV skills** with the naming block (SURFACE-SYNC-PROTOCOL); re-paste `NORTHMARQ_PROJECT_PROMPT.md` v1.12 into the Project.
 - **Rotate `LCC_API_KEY`** (still outstanding; it was exposed in chat).
 
+
+## Correction 2026-08-05 — prompt 40 WAS done (found it)
+Earlier flagged 40 as not-done because I searched only `life-command-center`; the on-market enrichment lives
+in the separate **dia** and **gov** database repos (Dialysis PR #7356, gov PR #360) and is applied live as
+`v_dia_on_market_full` / `v_gov_on_market_full`. Verified on Dialysis_DB: 205 on-market rows enriched,
+implied-NOI cap reconciliation exact (0 mismatch). So ALL of 36–40 are complete.
+**Still to validate end-to-end:** that a real `generate_comps` workbook now renders POPULATED on-market rows
+(i.e. the enriched view/RPC actually feeds the on-market sheet) — check after the connector/redeploy is up.
+
 ## Comps prompts 36-40 — reconcile 2026-08-05
 Landed as MERGED PRs on `main` (not docx responses). Canon re-synced to **v1.2.3**, parity **0 drift**.
 | # | What merged | State |
@@ -38,11 +47,11 @@ Landed as MERGED PRs on `main` (not docx responses). Canon re-synced to **v1.2.3
 | 36 | Single renderer + connector-down `populate_comps` fallback into comps skill + canon (v1.2.3, blocks/comps.md, re-rendered) — PR #1554 `63a6f3b8` | ✅ merged — re-paste surface bundles |
 | 37 | `bov-generator/validate_comps_output.py` + `sync_comps_templates.py` + tests, wired into main.py; templates single-sourced — PR #1555 `72112144` | ✅ merged — **redeploy BOV svc (pacific-love)** |
 | 38 | MCP OAuth well-known at RFC 9728 path-suffixed URL + 401 WWW-Authenticate (real connector root cause) — PR #1556 `5f159945` | ✅ merged — **redeploy tranquil-delight; then re-test connector** |
-| 40 | On-market full-record enrichment (join listings→property+lease so LAND/BUILT/EXP/TERM/EXPENSES/BUMPS/RENEWAL/CHAIRS/PATIENTS populate) | ❌ **NOT DONE** — still open in prompts/; on-market rows stay thin until this lands |
+| 40 | On-market enrichment — `v_dia_on_market_full` / `v_gov_on_market_full` (join listings→property+lease) + rpc on-market NOI basis. Lives in the **dia/gov DB repos** (Dialysis PR #7356 `4c73b95`, gov PR #360 `289caee`), NOT life-command-center | ✅ **DONE + LIVE** (views read per-request, no deploy). Verified: dia 205 rows populated, cap_mismatch=0, NOI flagged implied |
 
 **Deploy-pending (the gate to validating any of this):** redeploy tranquil-delight (38 OAuth + 39 comps) and the
 BOV service (37 validator); then re-add the LCC connector (38 is the likely real fix) and re-run a Villages
-appraisal pull to confirm national selection (39) — noting on-market will still be thin until **40** is sent.
+appraisal pull to confirm national selection (39) — on-market enrichment (40) is already LIVE via the DB views.
 36-39 moved to done/; 40 remains open.
 
 ## Comps pipeline GAP AUDIT (2026-08-05) — do F1/F2 before the format prompts
