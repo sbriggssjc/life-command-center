@@ -51,7 +51,19 @@ The correspondence-ingestion design, executed: (a) run the deal-email-matcher ag
 backfill per open deal. Exit: every open deal shows its email thread trail in the spine,
 new mail auto-attributes within minutes.
 
-### W7.2 — The propagation tick (the heart of Scott's ask)
+### W7.2 — The propagation tick (the heart of Scott's ask) — ✅ LIVE 2026-08-06
+
+**Verified live (session 36m):** dry-run → Scott-approved → live tick over the first
+10-deal batch: 239 comms ledgered, 11 is_current summaries (grounded, citing
+source_activity_ids — spot-checks factual: IRA Capital OM receipt on Pops Mart
+Barnwell; Sal Cammarata inquiry on 519 N Main), 24 evidence-linked milestones
+(detail_ref = source email), 0 to-do spam from the backlog (7-day window held).
+Registry flag DEAL_COMMS_PROPAGATE_CRON → on; hourly cron (:32) finishes catch-up.
+**Refinement queued (W7.2b, from the first live batch):** repeat same-key cues create
+one milestone PER occurrence date (Banning: 6+ 'loi' rows across months of LOI
+negotiation). Collapse policy needed: keep FIRST occurrence per (entity, key) as the
+milestone + latest re-occurrence in metadata (count + last_seen), demote intermediates.
+Small, reversible (all rows carry detail_ref).
 A consumer on deal-attributed correspondence (cron tick, W5.2 shape; seam = its own ops-side
 ledger keyed on activity_event id): for each NEW deal-stamped comm since last tick →
 1. **Correspondence summary refresh** (`lcc_deal_correspondence_summary`, is_current
