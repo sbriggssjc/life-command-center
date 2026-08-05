@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.2.3** — 2026-08-05. Bump this on any rule change; record it in the changelog below and
+**CANON_VERSION: 1.3.0** — 2026-08-05. Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 
 ## Global invariants (apply to every topic, every surface)
@@ -51,6 +51,7 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.3.0** (2026-08-05) — Comps field-standardization + recency doctrine (prompt 41): 18-month default sold window with operator-first widening; canonical operator brands, expense vocabulary (Absolute NNN/NNN/NN/Gross/Ground Lease/Modified Gross), OPTIONS `(N) M-yr`, bumps `X% / N yrs`. Documented in the `comps` block. (Data-quality gates + OPTIONS-header/auto-fit shipped in code/templates, prompts 42/43.)
 - **1.2.3** (2026-08-05) — Comps block gains the **single-renderer hard rule**: the only acceptable comps workbook is the one `generate_comps`/`populate_comps` produces into the canonical Briggs template — never hand-author a workbook, invent sheets/columns/a summary or methodology tab/a different sort, or leave the 100-row grid untrimmed; CHAIRS/PATIENTS come from the record. Documents the **connector-down fallback** (run the same `populate_comps` renderer locally with a query_comps-named payload → `unknown_keys: []` → LibreOffice-recalc) and the **on-market implied-rent rule** (`rent = round(asking_price * asking_cap)`, `initial_price = last_price = ask`). Fixes the "many formats" divergence caused by hand-rolled layouts when the connector was unreachable (found 2026-08-04). Mirrored into the `comps-engine` skill + module `canon/comps.md`.
 - **1.2.2** (2026-08-04) — Deliverable naming + save-location doctrine added to the `bov` and `filing` blocks: every finished deal artifact is named `{Property}_{DocType}_{Client}_{YYYYMM}` and the set saves to `Team Briggs - Documents/Deals/{Client}/{Property}/` (repo-local `outputs/deals/{Client}_{Property}/` fallback). Fixes the Northmarq test-chat miss (Master Sheet off-convention, artifacts not saved to disk). Note: prompt 35 first edited the top-level `canon/bov.md`/`canon/filing.md` (non-render copies); the rule was ported into `blocks/` here so it reaches every surface.
 - **1.2.1** (2026-08-03) — Comps workbook/appraisal handoff now uses one-shot `generate_comps.request`

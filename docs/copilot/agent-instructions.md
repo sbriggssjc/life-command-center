@@ -18,7 +18,7 @@ Team Briggs lists commercial real estate for sale (primarily single-tenant NNN).
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.2.3 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.3.0 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine — `SynthesizeComps` (default; pass the request text verbatim) or
@@ -31,6 +31,14 @@ exports only, use returned `template_comps` as the row payload. Formula columns 
 TERM, DOM, EFFECTIVE RENT/SF) are never written; dialysis adds Chair Count then Patient Count after RBA.
 `buyer`/`seller`/`financing` excluded unless asked. Zero results → say so and offer to widen; never substitute
 proxy comps. Pass the request verbatim — never add tenant/metro/date filters the user didn't state (that collapses the set); the engine expands (appraisal: subject -> state -> region -> national, incl. estimated-NOI).
+
+**Selection defaults + field vocabularies live in the engine (prompt 41) — identical on every surface.** No-window
+sold pulls default to the **last 18 months**; too few → the engine widens (add operators → loosen geography →
+extend window, logged in `meta.widened`), never keeping stale comps to hit a count. The TENANT column shows the
+**canonical operator brand** (DaVita, Fresenius Medical Care, US Renal Care, American Renal, Innovative Renal Care…;
+FMC/BMA/Bio-Medical→Fresenius, USRC→US Renal Care), not the raw clinic name. EXPENSES use a fixed set
+(`Absolute NNN`/`NNN`/`NN`/`Gross`/`Ground Lease`/`Modified Gross`); OPTIONS are `(N) M-yr`; bumps are `X% / yr`
+or `X% / N yrs` (uninterpretable bare numbers routed to review as bad data). Never hand-fix these per export.
 
 **ONE renderer — never hand-author a workbook.** The only acceptable comps workbook is the one
 `generate_comps`/`populate_comps` produces into the canonical Briggs template

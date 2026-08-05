@@ -39,6 +39,25 @@ implied-NOI cap reconciliation exact (0 mismatch). So ALL of 36–40 are complet
 **Still to validate end-to-end:** that a real `generate_comps` workbook now renders POPULATED on-market rows
 (i.e. the enriched view/RPC actually feeds the on-market sheet) — check after the connector/redeploy is up.
 
+## Comps prompts 41-43 — reconcile 2026-08-05 (all merged/live)
+Canon re-rendered to **v1.3.0**, 0 drift (41 bumped the block but not the version/surfaces — fixed here).
+| # | Merged | State |
+|---|---|---|
+| 41 | Recency 18-mo default + operator-first widening + operator/expense/OPTIONS/bumps standardization (mcp/comps-tools.js, canon v1.3.0) — PR #1558 `518fcb64` | ✅ merged — **redeploy MCP/tranquil-delight**; re-paste surface bundles |
+| 42 | Data-quality gates (DOM validity, ask≥sold bid-ask) + on-market price-change (original vs current ask) — engine `f36943b1` (#1560) + **dia migration (Dialysis #7357) & gov migration (gov #361) APPLIED LIVE** | ✅ merged + live. Verified: gov 0 bad DOM/bid-ask, 13 repriced; dia 386 on-market carry price_changes |
+| 43 | RENEWAL OPTIONS→OPTIONS in Briggs+Dialysis templates (gov already OPTIONS) + auto-fit/no-wrap matched widths in populate_comps + validator asserts it — PR #1561 `96119b03` | ✅ merged — **redeploy BOV svc**; run `sync_comps_templates.py --dest <Templates>` to refresh distributed copies |
+
+**Two honest gaps still open (candidate future prompts):**
+- **listing_price_history is EMPTY** in both DBs — PRICE CHG currently derives from original-vs-current ask only;
+  full per-reprice history needs the `listing_sync` ingestion to write that table.
+- **SOLD renewal options** rely on the on-market-enrichment join being present on the sold arm too — 42 says it's
+  covered by the prior enrichment PR; confirm on a live sold pull once the connector's back.
+- Pre-existing unrelated test failures: `test/w3-6-display-name-resolution.test.mjs` (_cleanAssistHTML) — not comps.
+
+**Deploy-pending to activate 41+42(engine)+43:** redeploy tranquil-delight (41/42 engine) + BOV service (43),
+re-add connector, then run a live Villages appraisal pull to confirm 18-mo default, standardized fields,
+clean DOM/bid-ask, price-change, OPTIONS header + auto-fit.
+
 ## Comps export notes v3 (2026-08-05) — queued 41/42/43
 Scott reviewed the national workbook (much better) and flagged remaining export errors. Split: what I fixed in the
 regenerate (18-mo default, DaVita+Fresenius, standardized tenant/expenses, OPTIONS rename+normalize, bumps
