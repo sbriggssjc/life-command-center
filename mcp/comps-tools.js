@@ -54,6 +54,13 @@ const APPRAISAL_AVG_TRIM_MIN_KEEP = 5;
 const APPRAISAL_MIN_RELIABLE_CAP = 0.045;
 const DIALYSIS_RENT_PSF_MIN = 12;
 const DIALYSIS_RENT_PSF_MAX = 60;
+// Prompt 57 — lease-term discipline floor. A comp supporting a long-term subject must
+// carry a real lease term of at least this many years remaining AT THE SALE (sold) / as
+// of today (on-market). A comp with NO lease expiration, or a remaining term below this
+// floor, is a poor comparable for a ~12-yr-term subject and is excluded from the DISPLAYED
+// appraisal set (routed to review / kept for context stats, never deleted). Tunable via
+// the `min_remaining_term_years` arg. Scott's stated floor is 3 years.
+const APPRAISAL_MIN_REMAINING_TERM_YEARS = 3;
 
 // ── Property-type synonyms (plain term -> source values, loose ILIKE match) ──
 const TYPE_SYNONYMS = {
@@ -1148,33 +1155,61 @@ export function computeReviewSignals(c) {
       implied_basis: impliedBasis, reliable_basis: reliableBasis } };
 }
 
-// Renewal-options normalizer — options come through as free text ("2, 5 yr",
-// "Three, 5-Year Options", "2, 5yr", "Two, 5-Year Options"). Parse count + term
-// length → canonical "(N) M-yr". Unrecognized shapes pass through unchanged + log.
+// Renewal-options normalizer (prompt 41, hardened prompt 57) — options come through
+// as free text in every spelling: "2, 5 yr", "Three, 5-Year Options", "(3) 5-yr",
+// "Two (2) Five (5) Year", "Two (2), Five (5) Year", "three five-year options",
+// "One, Five-Year Period", or a bare count "3". Parse N renewal options of M years each
+// → the single canonical form "(N) M-yr". When the count is known but the term isn't,
+// emit "(N)" (never assume 5-yr). Genuine none → "None". Unrecognized shapes pass
+// through unchanged + log, so we never fabricate a term.
 const _RENEWAL_WORDNUM = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7,
   eight:8, nine:9, ten:10, eleven:11, twelve:12 };
+const _RENEWAL_NUMTOK = '\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve';
 function _renewalWordNum(s) {
   if (s == null) return null;
   const t = String(s).trim().toLowerCase();
   if (/^\d+$/.test(t)) return parseInt(t, 10);
   return _RENEWAL_WORDNUM[t] || null;
 }
+// Every "no renewal options" spelling collapses to one display token (parallel to
+// bumps `Flat`), so Sold and On Market never diverge (None here, blank there).
+function _isNoRenewalOptions(s) {
+  return /^(?:none|no\s+(?:renewal\s+)?options?|no|n\/?a|na|0|zero)$/i.test(s);
+}
 export function normalizeRenewalOptions(value) {
   if (value == null) return value;
-  const s = String(value).trim();
-  if (!s) return value;
-  if (/^\(\d+\)\s*\d+-yr$/.test(s)) return s;   // already canonical
-  // count + term: "Three, 5-Year Options" / "2, 5yr" / "(2) 5 year" / "2 x 5 yr" / "two 5-year options"
-  const m = s.match(/\(?\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*\)?\s*[,x×\-\s]+\s*(\d+)\s*-?\s*(?:yr|year)s?\b/i);
+  const s0 = String(value).trim();
+  if (!s0) return value;
+  if (/^\(\d+\)\s*\d+-yr$/.test(s0)) return s0;   // already canonical "(N) M-yr"
+  if (/^\(\d+\)$/.test(s0)) return s0;            // already canonical count-only "(N)"
+  if (_isNoRenewalOptions(s0)) return 'None';
+  // Collapse a redundant "word (digit)" pair to the digit ("Two (2)" → "2",
+  // "Five (5)" → "5") so "Two (2) Five (5) Year" reduces to "2 5 Year".
+  const s = s0.replace(new RegExp(`\\b(${Object.keys(_RENEWAL_WORDNUM).join('|')})\\s*\\((\\d+)\\)`, 'gi'), '$2');
+  // count + term (word or digit for either), term carrying a year marker:
+  //   "2, 5 Year" / "three five-year options" / "One, Five-Year Period" / "2 x 5 yr"
+  const m = s.match(new RegExp(`\\(?\\s*(${_RENEWAL_NUMTOK})\\s*\\)?\\s*[,x×/\\-\\s]+\\s*(${_RENEWAL_NUMTOK})\\s*-?\\s*(?:yr|year)s?\\b`, 'i'));
   if (m) {
-    const n = _renewalWordNum(m[1]), term = parseInt(m[2], 10);
+    const n = _renewalWordNum(m[1]), term = _renewalWordNum(m[2]);
     if (n && term) return `(${n}) ${term}-yr`;
   }
-  // single option, no explicit count: "5-year option" → (1) 5-yr
-  const m2 = s.match(/^\s*(?:a\s+|one\s+)?(\d+)\s*-?\s*(?:yr|year)s?\b[^,]*\boption/i);
-  if (m2) { const term = parseInt(m2[1], 10); if (term) return `(1) ${term}-yr`; }
-  console.warn(`[comps:renewal-options] unrecognized shape, passed through: ${JSON.stringify(s)}`);
+  // single option, no explicit count: "5-year option" / "five-year option" → (1) 5-yr
+  const m2 = s.match(new RegExp(`^\\s*(?:a\\s+|one\\s+)?(${_RENEWAL_NUMTOK})\\s*-?\\s*(?:yr|year)s?\\b[^,]*\\boption`, 'i'));
+  if (m2) { const term = _renewalWordNum(m2[1]); if (term) return `(1) ${term}-yr`; }
+  // bare count with no term ("3" / "(3) options" / "three options") → keep the count,
+  // mark the term unknown as "(N)" — never assume a 5-yr term.
+  const m3 = s.match(new RegExp(`^\\(?\\s*(${_RENEWAL_NUMTOK})\\s*\\)?\\s*(?:options?|periods?|renewals?)?\\s*$`, 'i'));
+  if (m3) { const n = _renewalWordNum(m3[1]); if (n) return `(${n})`; }
+  console.warn(`[comps:renewal-options] unrecognized shape, passed through: ${JSON.stringify(s0)}`);
   return value;
+}
+// Workbook-display renewal options (prompt 57): the ONE normalizer both the Sold and
+// On Market tabs render through, so they read identically. Runs normalizeRenewalOptions,
+// then defaults a genuinely-empty/absent value to the canonical "None" — never blank.
+export function renewalOptionsForWorkbook(value) {
+  const n = normalizeRenewalOptions(value);
+  if (n == null || String(n).trim() === '') return 'None';
+  return n;
 }
 
 // Bumps / escalation normalizer (prompt 41). Canonical shapes:
@@ -1811,6 +1846,49 @@ export function applyDisplayedCapDiscipline(comps, { subjectCap = null, upperBps
   return { kept, excludedContext, excludedBadData };
 }
 
+// Prompt 57 — remaining lease term (years) for a comp on the discipline basis: at the
+// sale for a sold comp, as of today for an on-market comp (termRemainingAtClose already
+// bases on the sale date, falling back to now). Falls back to the comp's stored
+// remaining_term when no lease expiration is present. Returns null when neither is known
+// (a genuinely no-term comp) — we never fabricate a term.
+export function compRemainingTermYears(c) {
+  const t = termRemainingAtClose(c);
+  if (t != null) return t;
+  const stored = asNum(c?.remaining_term ?? c?.term_remaining ?? c?.firm_term_remaining
+    ?? c?.raw?.remaining_term ?? c?.raw?.term_remaining);
+  return (stored != null && stored > 0) ? stored : null;
+}
+// Prompt 57 — true when an on-market comp carries no usable price (no initial/last/current
+// ask), so it yields no cap and is not a usable comp.
+export function compHasNoUsablePrice(c) {
+  const p = asNum(c?.last_price) ?? asNum(c?.initial_price) ?? asNum(c?.cur_price)
+    ?? asNum(c?.ask_price) ?? asNum(c?.list_price) ?? asNum(c?.current_price)
+    ?? asNum(c?.asking_price) ?? asNum(c?.sale_price) ?? asNum(c?.sold_price)
+    ?? asNum(c?.raw?.last_price) ?? asNum(c?.raw?.asking_price) ?? asNum(c?.raw?.initial_price)
+    ?? asNum(c?.raw?.original_price) ?? asNum(c?.raw?.list_price);
+  return !(p != null && p > 0);
+}
+// Prompt 57 — lease-term + price discipline on the DISPLAYED appraisal set. A long-term
+// subject appraisal must not show a comp with NO lease term, a remaining term below the
+// floor, or (on-market) no price. Returns { kept, excluded } where each excluded row
+// carries its reason(s) — 'no_lease_term' / 'short_lease_term' / 'no_price'. The set is
+// reduced non-destructively: excluded comps are routed to review / counted for context,
+// never deleted and never merely flagged-and-shipped.
+export function applyLeaseTermPriceDiscipline(comps, { minTermYears = APPRAISAL_MIN_REMAINING_TERM_YEARS } = {}) {
+  const floor = Number.isFinite(minTermYears) ? minTermYears : APPRAISAL_MIN_REMAINING_TERM_YEARS;
+  const kept = [], excluded = [];
+  for (const c of comps || []) {
+    const reasons = [];
+    if (isOnMarketComp(c) && compHasNoUsablePrice(c)) reasons.push('no_price');
+    const term = compRemainingTermYears(c);
+    if (term == null) reasons.push('no_lease_term');
+    else if (term < floor) reasons.push('short_lease_term');
+    if (reasons.length) excluded.push({ comp: c, reasons, remaining_term: term });
+    else kept.push(c);
+  }
+  return { kept, excluded };
+}
+
 function appraisalPrimaryClassification(c, subject = null, args = {}) {
   const price = asNum(c?.sale_price ?? c?.sold_price);
   const cap = soldCapForStats(c);
@@ -2022,7 +2100,7 @@ function workbookRowFromSynthComp(c) {
     expenses: t.expenses,
     lease_type: t.lease_type,
     bumps: bumpsForWorkbook(t.bumps),
-    renewal_options: t.renewal_options,
+    renewal_options: renewalOptionsForWorkbook(t.renewal_options),
     initial_price: t.initial_price,
     initial_cap_rate: t.initial_cap_rate,
     initial_cap: t.initial_cap_rate,
@@ -2291,6 +2369,47 @@ export async function runGenerateCompsFromRequest(args, deps, generateWorkbook) 
     synthesized = await runSynthesize(synthArgs, deps);
   }
 
+  // Prompt 57 — lease-term + price discipline on the DISPLAYED appraisal set (runs BEFORE the
+  // cap-band filter so the cap stats/ceiling are computed on a set that already excludes
+  // no-term / short-term / no-price comps). A long-term subject appraisal must not show a comp
+  // with no lease expiration, a remaining term at close below the floor, or (on-market) no
+  // price. Excluded comps route to the review lane (sold rows land; on-market are counted in
+  // meta for audit) and are kept for context stats — never deleted, never flag-and-shipped.
+  // Active only in appraisal mode (the curated displayed set); quick pulls are untouched.
+  if (oneShotAppraisal) {
+    const minTerm = asNum(args?.min_remaining_term_years) ?? APPRAISAL_MIN_REMAINING_TERM_YEARS;
+    const td = applyLeaseTermPriceDiscipline(synthesized.comps || [], { minTermYears: minTerm });
+    if (td.excluded.length) {
+      const kept = td.kept;
+      const countReason = r => td.excluded.filter(x => x.reasons.includes(r)).length;
+      synthesized = {
+        ...synthesized,
+        comps: kept,
+        template_comps: kept.map(c => c.template || templateRow(c)),
+        summary: summarizeComps(kept, { ...(synthesized.interpreted_query || {}), subject: synthesized.subject || null }, synthesized.meta || {}),
+        meta: {
+          ...(synthesized.meta || {}),
+          returned: kept.length,
+          displayed_min_remaining_term_years: minTerm,
+          displayed_excluded_no_lease_term: countReason('no_lease_term'),
+          displayed_excluded_short_lease_term: countReason('short_lease_term'),
+          displayed_excluded_no_price: countReason('no_price'),
+          displayed_excluded_term_or_price: td.excluded.length,
+        },
+      };
+      // Route excluded comps to the existing domain review lane (never ship them). The
+      // review producer keys on a source sale_id, so sold rows land; on-market rows (keyed
+      // by listing_id) are captured in the meta counts above for audit.
+      const flagged = td.excluded.map(({ comp, reasons, remaining_term }) => ({
+        ...comp,
+        review_flags: [...new Set([...(comp.review_flags || []), ...reasons.map(r => `excluded_${r}`)])].sort(),
+        review_detail: { ...(comp.review_detail || {}), remaining_term_years: remaining_term, term_price_exclusion: true },
+      }));
+      try { await enqueueReviewQueue(flagged, deps); }
+      catch (e) { console.warn(`[comps:prompt57] review enqueue failed: ${String(e && e.message || e)}`); }
+    }
+  }
+
   // Prompt 54 — enforce the cap-discipline band + reliability filter on the DISPLAYED set so
   // the rows that SHIP to the workbook obey the ceiling / reliability / average-below rules on
   // the same rent÷price basis the sheet shows. Bad-data rows (implausible cap / RENT-SF) route
@@ -2372,6 +2491,15 @@ export async function runGenerateCompsFromRequest(args, deps, generateWorkbook) 
     cap_rate_range: capRateRange(synthesized.template_comps || []),
     tiers: tierCounts(rowsForSummary),
     flagged_count: synthesized.meta?.flagged_for_review || 0,
+    // Prompt 57 — auditable exclusion counts for the review lane (no-term / short-term / no-price).
+    excluded_for_review: {
+      no_lease_term: synthesized.meta?.displayed_excluded_no_lease_term || 0,
+      short_lease_term: synthesized.meta?.displayed_excluded_short_lease_term || 0,
+      no_price: synthesized.meta?.displayed_excluded_no_price || 0,
+      total: synthesized.meta?.displayed_excluded_term_or_price || 0,
+      min_remaining_term_years: synthesized.meta?.displayed_min_remaining_term_years
+        ?? APPRAISAL_MIN_REMAINING_TERM_YEARS,
+    },
     subject: synthesized.subject || null,
     summary: synthesized.summary,
     transparency: synthesized.transparency,

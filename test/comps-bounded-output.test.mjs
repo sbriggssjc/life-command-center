@@ -102,6 +102,7 @@ function makeAppraisalQuery(domain, calls) {
       cap_rate: 0.068 + i / 10000,
       annual_rent: 275000 + i,
       sale_date: `2025-${String((i % 9) + 1).padStart(2, '0')}-01`,
+      lease_expiration: '2037-12-31',
       confidence: 0.85,
     })),
   ];
@@ -118,6 +119,7 @@ function makeAppraisalQuery(domain, calls) {
     cap_rate: 0.07 + i / 10000,
     annual_rent: 250000 + i,
     sale_date: `2024-${String((i % 9) + 1).padStart(2, '0')}-01`,
+    lease_expiration: '2037-12-31',
     confidence: 0.8,
   }));
   return async (method, path, body) => {
@@ -177,6 +179,7 @@ function makeQualityQuery(domain, calls) {
     cap_rate: 0.072,
     annual_rent: 360000,
     sale_date: '2025-08-20',
+    lease_expiration: '2036-12-31',
     confidence: 0.95,
     raw: { property_id: 19999 },
   });
@@ -194,6 +197,7 @@ function makeQualityQuery(domain, calls) {
       cap_rate: 1.921,
       annual_rent: 146976,
       sale_date: '2025-01-01',
+      lease_expiration: '2036-12-31',
       confidence: 0.9,
     },
     {
@@ -209,6 +213,7 @@ function makeQualityQuery(domain, calls) {
       cap_rate: 0.0095,
       annual_rent: 173850,
       sale_date: '2025-02-01',
+      lease_expiration: '2036-12-31',
       notes: 'Multi-Property Sale',
       confidence: 0.4,
     },
@@ -225,6 +230,7 @@ function makeQualityQuery(domain, calls) {
       cap_rate: 0.06,
       annual_rent: 360000,
       sale_date: '2025-03-01',
+      lease_expiration: '2036-12-31',
       confidence: 0.6,
       raw: { property_id: 8100 },
     },
@@ -241,6 +247,7 @@ function makeQualityQuery(domain, calls) {
       cap_rate: 0.06,
       annual_rent: 360000,
       sale_date: '2025-03-01',
+      lease_expiration: '2036-12-31',
       confidence: 0.5,
       raw: { property_id: 8100 },
     },
@@ -257,6 +264,7 @@ function makeQualityQuery(domain, calls) {
       cap_rate: 0.06,
       annual_rent: 270000,
       sale_date: '2024-03-01',
+      lease_expiration: '2036-12-31',
       confidence: 0.4,
       raw: { property_id: 9000 },
     },
@@ -273,6 +281,7 @@ function makeQualityQuery(domain, calls) {
       cap_rate: 0.06,
       annual_rent: 282000,
       sale_date: '2025-03-01',
+      lease_expiration: '2036-12-31',
       confidence: 0.9,
       raw: { property_id: 9000 },
     },
