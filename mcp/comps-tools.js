@@ -173,7 +173,20 @@ function uniqueList(vals) {
 }
 
 function appraisalSubjectAnchor(args) {
-  return !!(args?.appraisal_mode && args.subject && (args.subject.state || args.subject.metro || args.subject.name));
+  return !!(args?.appraisal_mode && args.subject
+    && (args.subject.state || args.subject.metro || args.subject.name || args.subject.address));
+}
+
+// Prompt 49 — a subject that has RESOLVED to a concrete domain property is a
+// national, similarity-ranked appraisal anchor even if the appraisal-mode phrase
+// wasn't present: the recognized property wins over the metro it sits in, so the
+// candidate pull must NOT be narrowed to the subject's own state/metro.
+function subjectResolvedToProperty(args) {
+  const s = args && args.subject;
+  return !!(s && (s.property_id != null || s.resolved_from_record === true));
+}
+function nationalSubjectAnchor(args) {
+  return appraisalSubjectAnchor(args) || subjectResolvedToProperty(args);
 }
 
 // state -> region reverse lookup (geography scoring: metro > region > national)
@@ -517,7 +530,11 @@ function applyHydratedSubject(subject, rec) {
   setNum('year_built', rec.year_built, null);
   setNum('remaining_term', rec.remaining_term, 'remaining_term');
   if (rec.lease_expiration && _blankSubjectVal(subject.lease_expiration)) subject.lease_expiration = rec.lease_expiration;
-  if (rec.bumps && _blankSubjectVal(subject.bumps)) subject.bumps = rec.bumps;
+  if (rec.bumps) {
+    if (_blankSubjectVal(subject.bumps)) subject.bumps = rec.bumps;
+    // Prompt 49 — mirror into the nested fields block the cover/subject summary renders.
+    if (_blankSubjectVal(fields.bumps)) fields.bumps = rec.bumps;
+  }
   if (rec.tenant) {
     if (_blankSubjectVal(subject.tenant)) subject.tenant = rec.tenant;
     if (_blankSubjectVal(fields.tenant)) fields.tenant = rec.tenant;
@@ -525,11 +542,19 @@ function applyHydratedSubject(subject, rec) {
   // Cap: the record's actual cap replaces a gazetteer DEFAULT, but never an
   // explicit user-typed cap (_cap_user) nor a real value already present.
   if (rec.cap_rate != null && Number.isFinite(Number(rec.cap_rate))) {
-    if (!subject._cap_user && (subject.cap_rate == null || subject._cap_default)) {
+    // A gazetteer default is flagged _cap_default at the SUBJECT level, but the
+    // nested fields.cap_rate carries the raw default NUMBER (0.06) with no flag —
+    // so _blankSubjectVal(fields.cap_rate) is false and the nested field kept the
+    // 6.00% default even after the top-level cap hydrated to 6.75% (prompt 49 bug).
+    // Override the nested field whenever we override the top-level one.
+    const capOverridable = !subject._cap_user && (subject.cap_rate == null || subject._cap_default);
+    if (capOverridable) {
       subject.cap_rate = Number(rec.cap_rate);
       subject._cap_default = false;
     }
-    if (_blankSubjectVal(fields.cap_rate)) fields.cap_rate = Number(rec.cap_rate);
+    if (!subject._cap_user && (capOverridable || _blankSubjectVal(fields.cap_rate))) {
+      fields.cap_rate = Number(rec.cap_rate);
+    }
   }
 }
 export async function hydrateSubjectFromRecord(args, deps) {
@@ -612,12 +637,12 @@ function applyLocalScope(rows, args) {
 }
 
 function localScopeArgs(args) {
-  if (!appraisalSubjectAnchor(args)) return args;
+  if (!nationalSubjectAnchor(args)) return args;
   return { ...args, states: null, metros: null };
 }
 
 function queryScopeArgs(args) {
-  if (!appraisalSubjectAnchor(args)) return args;
+  if (!nationalSubjectAnchor(args)) return args;
   // Appraisal mode is NATIONAL, subject-anchored — the candidate PULL is not bounded by the
   // subject's state/region. Geography is a SCORE weight only (scoreComp), never a hard pull or
   // local filter, so strong out-of-region same-operator / same-term / same-age comps surface and
@@ -782,6 +807,11 @@ function parseOperators(t) {
 }
 
 function detectAppraisalIntent(t, out) {
+  // Prompt 49 — a subject STREET ADDRESS is a subject-anchored (appraisal-style)
+  // comp pull: national scope, subject excluded, sold + curated on-market. This
+  // makes resolution phrasing-INDEPENDENT — the same subject worded with or without
+  // "appraisal"/"comps for" behaves identically once its address is present.
+  if (out.subject && out.subject.address) return true;
   if (/\bappraiser\b|\bappraisal\b|\bvaluation\b|\bvaluing\b|\bunder contract\b|\bom\b|\bbov\b|\bcomp package\b|\bpackage\b/.test(t)) return true;
   if (out.subject?.name) {
     const name = String(out.subject.name).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -805,13 +835,28 @@ export function parseRequest(text) {
     out.states = [...states];
     out.metros = [subject.metro || subject.name];
   }
+  // Prompt 49 — a subject STREET ADDRESS resolves the subject to its property
+  // (in runComps via hydrateSubjectFromRecord) phrasing-independently. Capture it
+  // HERE so hydration fires regardless of wording (not only when an "appraisal"/
+  // "comps for" phrase happens to be present), and so the pull is treated as a
+  // subject-anchored NATIONAL appraisal pull. A recognized subject property must
+  // win over the metro it sits in — prefer the street address over the city/metro
+  // token. detectAppraisalIntent below reads out.subject.address.
+  const subjectAddress = extractSubjectAddress(raw);
+  if (subjectAddress) {
+    out.subject = { ...(out.subject || {}), address: subjectAddress };
+  }
   let capMatch;
   if ((capMatch = t.match(/\b(?:subject|deal|under[- ]contract|contract|appraisal|appraised)?\s*(?:cap(?: rate)?|going[- ]in cap)?\s*(?:is|at|around|~|=)?\s*(\d+(?:\.\d+)?)\s*%/))) {
     const cap = Number(capMatch[1]) / 100;
     if (Number.isFinite(cap) && cap > 0 && cap < 1) {
       // User TYPED a cap — authoritative. Flag it so record-hydration (prompt 47)
       // never overrides an explicit user cap (it only overrides a gazetteer default).
-      out.subject = { ...(out.subject || {}), cap_rate: cap, _cap_user: true, _cap_default: false };
+      // Prompt 49 — also stamp the nested fields block so the cover/subject summary
+      // renders the user cap, not the gazetteer default it replaced.
+      const prevFields = (out.subject && out.subject.fields) || {};
+      out.subject = { ...(out.subject || {}), cap_rate: cap, _cap_user: true, _cap_default: false,
+        fields: { ...prevFields, cap_rate: cap } };
     }
   }
   const statePattern = [...states].join('|');
@@ -1350,7 +1395,7 @@ export async function runComps(args, deps) {
       ? rows.push(...s.value)
       : warnings.push({ vertical: targets[i], scope: batch.label, error: String(s.reason?.message || s.reason) }));
   }
-  if (appraisalSubjectAnchor(args) && dedupe(rows).length < params.p_limit && (params.p_states || params.p_metros)) {
+  if (nationalSubjectAnchor(args) && dedupe(rows).length < params.p_limit && (params.p_states || params.p_metros)) {
     const fallbackParams = argsToParams({ ...queryArgs, states: null, metros: null, limit: params.p_limit });
     const fallback = await fetchBatch(fallbackParams, 'national_fallback');
     fallback.settled.forEach((s, i) => s.status === 'fulfilled'
@@ -1421,7 +1466,7 @@ export async function runComps(args, deps) {
               tenant: c.tenant, sale_date: c.sale_date, flags: c.review_flags,
               ...c.review_detail })),
             warnings, interpreted_params: { ...params,
-              p_candidate_scope: appraisalSubjectAnchor(args) ? 'national_subject_anchored' : 'hard_filters',
+              p_candidate_scope: nationalSubjectAnchor(args) ? 'national_subject_anchored' : 'hard_filters',
               tenants: args.tenants || args.tenant_list || null, appraisal_mode: !!args.appraisal_mode } } };
 }
 
@@ -1587,7 +1632,7 @@ export async function runSynthesize(args, deps) {
   if (recencyDefaultApplied && pulled.comps.length < requestedLimit) {
     const steps = [
       { key: 'operators',   when: () => !!(eff.tenant || (eff.tenants && eff.tenants.length)),                          apply: a => ({ ...a, tenant: null, tenants: null }) },
-      { key: 'geography',   when: () => !appraisalSubjectAnchor(eff) && !!((eff.states && eff.states.length) || (eff.metros && eff.metros.length)), apply: a => ({ ...a, states: null, metros: null }) },
+      { key: 'geography',   when: () => !nationalSubjectAnchor(eff) && !!((eff.states && eff.states.length) || (eff.metros && eff.metros.length)), apply: a => ({ ...a, states: null, metros: null }) },
       { key: 'window_24mo', when: () => true, apply: a => ({ ...a, date_from: monthsAgoISO(24) }) },
       { key: 'window_36mo', when: () => true, apply: a => ({ ...a, date_from: monthsAgoISO(36) }) },
     ];
@@ -1640,8 +1685,8 @@ export async function runSynthesize(args, deps) {
       comp_type: eff.comp_type || 'sale', property_types: eff.property_types || null,
       // Appraisal mode pulls a national candidate universe — surface that the behavior is national,
       // not the subject's state, so the national scoping is visible to every consumer.
-      states: appraisalSubjectAnchor(eff) ? 'national' : (eff.states || null),
-      metros: appraisalSubjectAnchor(eff) ? null : (eff.metros || null),
+      states: nationalSubjectAnchor(eff) ? 'national' : (eff.states || null),
+      metros: nationalSubjectAnchor(eff) ? null : (eff.metros || null),
       date_from: eff.date_from || null,
       tenant: eff.tenant || null, tenants: eff.tenants || null, appraisal_mode: !!eff.appraisal_mode,
       include_unreliable_noi: !!eff.include_unreliable_noi, include_on_market: !!eff.include_on_market,
