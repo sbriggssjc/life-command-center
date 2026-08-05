@@ -1508,6 +1508,17 @@ function authenticate(req, res, next) {
     : "";
 
   if (!token || token !== LCC_API_KEY) {
+    // RFC 9728 §5.1 / MCP Authorization spec: an unauthenticated request to the
+    // resource MUST advertise where to begin OAuth via a WWW-Authenticate header
+    // pointing at the protected-resource metadata. MCP clients (Claude/Cowork)
+    // read `resource_metadata` here to bootstrap discovery; without it a strict
+    // client cannot start the OAuth flow and reports "error connecting".
+    const base = process.env.MCP_BASE_URL
+      || `${req.protocol}://${req.get('host')}`;
+    res.set(
+      'WWW-Authenticate',
+      `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
+    );
     return res.status(401).json({ error: "Unauthorized — invalid or missing Bearer token" });
   }
 
@@ -1724,7 +1735,17 @@ const crypto = globalThis.crypto;
 // ── OAuth Protected Resource Metadata (RFC 9396 / MCP OAuth June 2025) ──
 // Required by Claude.ai to discover the authorization server for /mcp.
 // Without this, Claude.ai cannot find OAuth endpoints and reports auth failure.
-app.get(prefixed('/.well-known/oauth-protected-resource'), (req, res) => {
+// RFC 9728 §3.1: for a protected resource whose id has a path component
+// (`/mcp`), the metadata lives at the PATH-SUFFIXED well-known URL
+// (`/.well-known/oauth-protected-resource/mcp`). Spec-compliant MCP clients
+// (Claude/Cowork, 2025-06-18) request that suffixed URL — without this route it
+// falls through to the SPA catch-all and returns index.html (200 text/html),
+// which the connector fails to parse as JSON → "error connecting to the server".
+// Serve BOTH the suffixed and the bare path so every client generation resolves.
+app.get([
+  prefixed('/.well-known/oauth-protected-resource'),
+  prefixed('/.well-known/oauth-protected-resource/mcp'),
+], (req, res) => {
   res.json({
     resource: publicUrl(req, '/mcp'),
     authorization_servers: [publicBase(req)],
@@ -1732,7 +1753,13 @@ app.get(prefixed('/.well-known/oauth-protected-resource'), (req, res) => {
 });
 
 // ── OAuth discovery metadata ──────────────────────────────────────────────
-app.get(prefixed('/.well-known/oauth-authorization-server'), (req, res) => {
+// Serve the auth-server metadata at the bare path (issuer has no path
+// component) AND at the `/mcp`-suffixed path that some clients derive from the
+// resource id — same JSON, same SPA-fallthrough guard as above.
+app.get([
+  prefixed('/.well-known/oauth-authorization-server'),
+  prefixed('/.well-known/oauth-authorization-server/mcp'),
+], (req, res) => {
   res.json({
     issuer: publicBase(req),
     authorization_endpoint: publicUrl(req, '/authorize'),
