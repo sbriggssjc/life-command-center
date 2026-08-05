@@ -373,6 +373,27 @@ def _display_len(cell) -> int:
     return len(str(v))
 
 
+def _min_content_width(key: str) -> int:
+    """Floor width for COMPUTED (formula/date) columns (prompt 44). Their values are
+    written post-autofit by the LibreOffice recalc, so `_display_len` only sees the
+    header (formulas contribute 0), sizing TERM/DOM/caps/$-SF/dates too narrow and
+    clipping the value. Give each a floor wide enough for its formatted result. Folded
+    into the SHARED width so On Market and Sold line up on these columns too."""
+    k = key or ""
+    if "term" in k or k.endswith("_rem") or k in ("t_rem", "f_rem"):  # TERM / T-Rem / F-Rem
+        return 7
+    if k == "dom":                                      # DOM (days on market)
+        return 6
+    if k in ("date", "com", "exp", "termn", "on_market",
+             "lease_comm", "lease_exp", "commence", "expire"):   # mm/dd/yyyy dates
+        return 11
+    if "price" in k:                                    # SOLD/INITIAL/LAST PRICE ($)
+        return 11
+    if "cap" in k or k.endswith("_sf") or "psf" in k or "rent" in k:  # %/cap and $-per-SF
+        return 7
+    return 0
+
+
 def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
     """Size every column to its longest header/cell (with padding, sane min/max),
     turn OFF wrap on every cell, and share ONE width per header across all the
@@ -387,6 +408,7 @@ def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
             hdr = ws.cell(header_row, c).value
             if hdr in (None, ""):
                 continue
+            key = _norm(hdr)
             longest = _display_len(ws.cell(header_row, c))
             for r in range(header_row, ws.max_row + 1):
                 cell = ws.cell(r, c)
@@ -396,7 +418,8 @@ def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
                         vertical=cell.alignment.vertical,
                         wrap_text=False)
                 longest = max(longest, _display_len(cell))
-            key = _norm(hdr)
+            # Floor for computed columns whose formula result isn't measurable here.
+            longest = max(longest, _min_content_width(key))
             cols[c] = (key, longest)
             shared[key] = max(shared.get(key, 0), longest)
         per_sheet.append((ws, cols))

@@ -39,6 +39,27 @@ implied-NOI cap reconciliation exact (0 mismatch). So ALL of 36–40 are complet
 **Still to validate end-to-end:** that a real `generate_comps` workbook now renders POPULATED on-market rows
 (i.e. the enriched view/RPC actually feeds the on-market sheet) — check after the connector/redeploy is up.
 
+## Comps prompts 44-45 — reconcile 2026-08-05 (merged/live)
+| # | Merged | State |
+|---|---|---|
+| 44 | Exporter: DEFAULT_APPRAISAL_LIMIT 30→25 (most-similar), scoreComp rescored (market 10→12/region 4→6, size ×5, chairs ×3, term-at-close 8pts +1.5/yr penalty, cap →10; **operator 6→2, credit 3→1** — minor tiebreaker), bumps bare-decimal→`X% / 5 yrs` (0.1→10%), computed-column min widths (TERM/DOM/caps/$ ≥ floors) + shared width — PR #1563 `341b4b64` | ✅ merged — **redeploy MCP/tranquil-delight** |
+| 45 | Price-adjustment recovery: **dia** (Dialysis #7359) recovered earliest dated ask into `initial_price` (59 fills+33 corrections) + `had_price_change` + recurrence triggers → on-market PRICE CHG **10→22 (verified live: 22, 1,842 rows provenance-tagged)**; **gov** (#363) recovered 522 `original_price` from `listing_verification_history` → **13→19**. Reversible, provenance, caps reconcile. Applied LIVE in both DB repos | ✅ merged + live (views read per-request, no deploy) |
+
+**Deploy-pending to activate 44:** redeploy tranquil-delight (MCP/comps engine) + BOV service (renderer widths).
+45 is already effective (DB). Then the **live connector acceptance test**: run a Villages `generate_comps` and confirm
+25 most-similar (Fresenius-over-DaVita where more alike), bumps `10% / 5 yrs`, TERM visible, PRICE CHG populated.
+
+## Comps exporter v-final notes (2026-08-05) — queued 44/45
+Scott's notes on the acceptance workbook. Queued:
+- **44 (exporter)** — return the **25 best/most-like** comps every request; **rescore similarity OVER operator**
+  (a similar-market/size/term/cap Fresenius beats a different-market/+4yr-term DaVita); bumps `0.1`→`10% / 5 yrs`;
+  fix TERM column width (hidden) + the shared-width residual (PATIENTS/EXP/TERM/LAST PRICE).
+- **45 (price-adjustment recovery)** — YES recoverable. gov: wire native `available_listings.original_price`/
+  `price_change_count`. dia: backfill `initial_price` from `listing_verification_history.prior_asking_price` (7,097),
+  `listing_snapshots` (1,310), `v_property_ask_history` (2,987). Re-point enriched views so PRICE CHG populates
+  broadly; fix `listing_sync` to capture future reprices natively.
+Plan: send 44+45, then test the live `generate_comps` via the reconnected connector. Prompts drafted, not sent.
+
 ## Acceptance run 2026-08-05 (post-redeploy) — 41/42/43 validated end-to-end
 Regenerated the Villages workbook through the DEPLOYED renderer/template (43) on the live gated data (42),
 41-standardized fields. PASS: OPTIONS header (real template), auto-fit/no-wrap (real renderer), national 18-mo
