@@ -91,12 +91,25 @@ describe('adjudicateField', () => {
     assert.equal(d.confidence, CONF_AGREE);
     assert.equal(d.value, 'Colliers International');
   });
-  it('A-only (B abstained) → gliner_extract 0.55', () => {
+  it('A-only (B abstained) → log-only skip + a_only (W5.1b: demoted, never writes)', () => {
     const d = adjudicateField('buyer', 'Ridgeline Capital Partners', null);
+    assert.equal(d.decision, 'skip');
+    assert.equal(d.disagreementKind, 'a_only');
+    assert.equal(d.aValue, 'Ridgeline Capital Partners');
+    assert.equal(d.bValue, null);
+  });
+  it('the a_only branch NEVER returns a write decision (regression guard)', () => {
+    for (const a of ['Ridgeline Capital Partners', 'DaVita Inc', 'CBRE', 'Some Tenant LLC']) {
+      const d = adjudicateField('seller', a, null);
+      assert.notEqual(d.decision, 'write');
+      assert.equal(d.disagreementKind, 'a_only');
+    }
+  });
+  it('AGREE prefers channel B surface (avoids A span address-bleed)', () => {
+    const d = adjudicateField('seller', 'Philip Blvd. American Realty Capital Healthcare', 'American Realty Capital Healthcare');
     assert.equal(d.decision, 'write');
-    assert.equal(d.source, SOURCE_GLINER);
-    assert.equal(d.confidence, CONF_GLINER);
-    assert.equal(d.value, 'Ridgeline Capital Partners');
+    assert.equal(d.source, SOURCE_AGREE);
+    assert.equal(d.value, 'American Realty Capital Healthcare');
   });
   it('value CONFLICT → skip + value_conflict', () => {
     const d = adjudicateField('seller', 'DaVita Inc', 'Fresenius Medical Care');
@@ -127,8 +140,9 @@ describe('adjudicate', () => {
     };
     const channelB = { buyer: null, seller: null, listing_broker: 'CBRE Group', procuring_broker: null, lender: null };
     const dec = adjudicate(channelA, channelB);
-    // buyer: A-only → gliner write, span attached
-    assert.equal(dec.buyer.source, SOURCE_GLINER);
+    // buyer: A-only → log-only skip (W5.1b demotion), span still attached for the log
+    assert.equal(dec.buyer.decision, 'skip');
+    assert.equal(dec.buyer.disagreementKind, 'a_only');
     assert.deepEqual(dec.buyer.span, { text: 'Ridgeline Capital Partners', start: 20, end: 46 });
     // listing_broker: agree (CBRE ⊂ CBRE Group) → agree write
     assert.equal(dec.listing_broker.source, SOURCE_AGREE);

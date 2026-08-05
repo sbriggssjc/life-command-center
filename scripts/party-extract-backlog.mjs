@@ -33,10 +33,17 @@
 //   W51_ALLOW_CLOUD=1                       allow the bulk run to use the cloud chain
 //
 // USAGE:
-//   node scripts/party-extract-backlog.mjs --sample 100                 # review sheet, no writes
-//   node scripts/party-extract-backlog.mjs --domain dia                 # dry-run backlog
-//   node scripts/party-extract-backlog.mjs --domain gov --apply         # bulk write (ollama-gated)
+//   node scripts/party-extract-backlog.mjs --sample 30 --domain gov      # review sheet, no writes
+//   node scripts/party-extract-backlog.mjs --domain gov                  # dry-run backlog
+//   node scripts/party-extract-backlog.mjs --domain gov --apply          # bulk write (ollama-gated)
 //   node scripts/party-extract-backlog.mjs --domain both --apply --allow-cloud
+//
+// W5.1b: gov is the DEFAULT --apply target. Under the agreement-only write path (A-only lane
+// demoted to log), the 100-row sample yielded ZERO dia writes in 60 rows (dia's `notes` is
+// mostly bookkeeping) vs 26 gov write-rows in 40. dia remains runnable but is expected
+// near-empty until a richer dia note source exists. A note-quality prefilter skips bookkeeping
+// stubs before either channel runs, and portfolio notes are deduped by hash (one extraction
+// per unique note, fanned out to all member rows) to contain error blast-radius + cut cost.
 // ============================================================================
 
 import fs from 'node:fs';
@@ -87,12 +94,42 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DOMAIN_TABLE = (d) => `${d}.sales_transactions`;
 const DOMAIN_DB_TAG = (d) => (d === 'dia' ? 'dia_db' : 'gov_db');
 
+// Bookkeeping / non-narrative note stubs that carry no deal-party signal — skipped before
+// either channel runs (54/60 dia sample notes were these; each wasted ~35s of GLiNER).
+// Keyed by a label so the runner can report skips per pattern.
+const NOTE_PREFILTERS = [
+  ['master_xlsx_backfill', /^master_xlsx_backfill/i],
+  ['historical_csv_import', /^historical_csv_import/i],
+  ['office_sub_tenant_stub', /^Office - Sub/i],
+];
+
+// Classify a note: null when there is no usable note; otherwise { text, source, skip? , skipReason? }.
+// `skip` marks a note that exists but matches a bookkeeping pattern or is under MIN_NOTE_LEN.
 function noteText(row, domain) {
   for (const col of NOTE_COLUMNS[domain]) {
-    const v = row[col];
-    if (v && String(v).trim().length >= MIN_NOTE_LEN) return { text: String(v), source: col };
+    const raw = row[col];
+    if (raw == null) continue;
+    const s = String(raw).trim();
+    if (!s) continue;
+    if (s.length < MIN_NOTE_LEN) return { text: String(raw), source: col, skip: true, skipReason: 'under_min_len' };
+    for (const [label, re] of NOTE_PREFILTERS) {
+      if (re.test(s)) return { text: String(raw), source: col, skip: true, skipReason: label };
+    }
+    return { text: String(raw), source: col };
   }
   return null;
+}
+
+// FNV-1a hash of the trimmed note text — cheap, stable, no crypto import. Portfolio sales share
+// a byte-identical note; we extract ONCE per unique hash and fan the result to all member rows.
+function noteHash(text) {
+  let h = 0x811c9dc5;
+  const s = String(text || '').trim();
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16);
 }
 
 function missingMappedFields(row, domain) {
@@ -115,7 +152,8 @@ function selectCols(domain) {
 }
 
 // Page live candidate sales (has a note AND ≥1 blank mapped party field), cursor by sale_id.
-async function* candidates(domain) {
+// `prefilterSkips` (optional) accumulates a per-pattern count of bookkeeping notes skipped.
+async function* candidates(domain, prefilterSkips) {
   let cursor = null;
   const sel = selectCols(domain);
   while (true) {
@@ -129,6 +167,10 @@ async function* candidates(domain) {
       cursor = row.sale_id;
       const nt = noteText(row, domain);
       if (!nt) continue;
+      if (nt.skip) {
+        if (prefilterSkips) prefilterSkips[nt.skipReason] = (prefilterSkips[nt.skipReason] || 0) + 1;
+        continue;
+      }
       const missing = missingMappedFields(row, domain);
       if (!Object.keys(missing).length) continue;
       yield { row, note: nt, missing };
@@ -169,10 +211,12 @@ async function missingCounts(domain) {
 // ---------------------------------------------------------------------------
 async function processDomain(domain, { batchTag, sampleCollector }) {
   const stats = { scanned: 0, ai_calls: 0, writes: 0, dry_writes: 0, disagreements: 0,
-    skipped_ledgered: 0, cloud_stop: false, provider_hist: {} };
+    skipped_ledgered: 0, dedup_hits: 0, prefilter_skips: {}, cloud_stop: false, provider_hist: {} };
   let processed = 0;
+  // Portfolio-note dedup: adjudicated result (+ provider) per unique note hash.
+  const noteCache = new Map();
 
-  for await (const cand of candidates(domain)) {
+  for await (const cand of candidates(domain, stats.prefilter_skips)) {
     if (processed >= LIMIT) break;
     const { row, note, missing } = cand;
     const saleId = row.sale_id;
@@ -180,13 +224,22 @@ async function processDomain(domain, { batchTag, sampleCollector }) {
     if (!SAMPLE && await alreadyLedgered(domain, saleId, batchTag)) { stats.skipped_ledgered++; continue; }
 
     let result;
-    try {
-      result = await extractParties(note.text, { resolverUrl: RESOLVER_URL, invokeExtractionAIImpl: invokeExtractionAI });
-    } catch (err) {
-      console.warn(`[w51] ${domain} sale=${saleId} extract failed: ${err.message}`);
-      continue;
+    let fromCache = false;
+    const hash = noteHash(note.text);
+    if (noteCache.has(hash)) {
+      result = noteCache.get(hash);
+      fromCache = true;
+      stats.dedup_hits++;
+    } else {
+      try {
+        result = await extractParties(note.text, { resolverUrl: RESOLVER_URL, invokeExtractionAIImpl: invokeExtractionAI });
+      } catch (err) {
+        console.warn(`[w51] ${domain} sale=${saleId} extract failed: ${err.message}`);
+        continue;
+      }
+      noteCache.set(hash, result);
+      stats.ai_calls++;
     }
-    stats.ai_calls++;
     processed++;
     stats.scanned++;
     const provider = result.aiFinalProvider || 'unknown';
@@ -252,7 +305,8 @@ async function processDomain(domain, { batchTag, sampleCollector }) {
     }
 
     if (sampleRow && sampleCollector) sampleCollector.push(sampleRow);
-    if (DELAY_MS) await sleep(DELAY_MS);
+    // Only pace when we actually hit the resolver/AI — a dedup cache hit did no network.
+    if (DELAY_MS && !fromCache) await sleep(DELAY_MS);
   }
   return stats;
 }
@@ -329,4 +383,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((err) => { console.error('[w51] fatal:', err); process.exit(1); });
 }
 
-export { processDomain, noteText, missingMappedFields, selectCols };
+export { processDomain, noteText, noteHash, missingMappedFields, selectCols };

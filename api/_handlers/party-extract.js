@@ -11,17 +11,21 @@
 //
 // Adjudication (per canonical field, cores compared post-normalization):
 //   • A and B AGREE (normalized company cores match)  → write  source='party_extract_agree'
-//                                                         confidence 0.60
-//   • A present, B abstained (null)                   → write  source='gliner_extract'
-//                                                         confidence 0.55  (span-anchored)
+//                                                         confidence 0.60. AGREEMENT IS THE
+//                                                         ONLY WRITE PATH.
+//   • A present, B abstained (null)                   → NO write, log to disagreements
+//                                                         (disagreementKind='a_only')
 //   • A and B present but cores CONFLICT              → NO write, log to disagreements
 //   • B present, A absent (span-less LLM claim)       → NO write, log to disagreements
 //
-//   The plan's wording folds "disagreed" into the A-only gliner_extract write. We
-//   deliberately tighten that: a genuine value CONFLICT is ambiguity, and the standing
-//   data-write doctrine is "surface ambiguity to a review lane, never guess." So a
-//   conflict is logged (training signal, entity_match_labels philosophy), not written.
-//   Only abstention (B null) yields the A-only write.
+//   W5.1b (measured, session-35 100-row sample): the A-only lane (`gliner_extract`, GLiNER
+//   present / LLM abstained) was ~80% ENTITY-WRONG — it produced every serious error in the
+//   sample (tenant-as-seller, buyer-as-seller portfolio fan-out, buyer-as-listing-broker),
+//   while the agreement lane was ~93% entity-correct. So the A-only lane is DEMOTED to
+//   log-only: agreement between two independent extractors is now the sole write path. A
+//   value CONFLICT and a span-less B-only claim were already log-only (never-guess doctrine).
+//   `SOURCE_GLINER`/`CONF_GLINER` stay exported (the field_source_priority row stays
+//   registered) — the source simply gains no producers.
 //
 // This module is PURE + injectable — no direct DB/network at import time. The runner
 // (scripts/party-extract-backlog.mjs) wires the resolver fetch, invokeExtractionAI, the
@@ -212,15 +216,19 @@ export function adjudicateField(field, aValue, bValue) {
 
   if (a && b) {
     if (coresAgree(aCore, bCore)) {
-      // Agreement — write the MORE COMPLETE surface (still span-grounded via A).
-      const value = b.length > a.length ? b : a;
+      // Agreement — the ONLY write path. Prefer channel B's surface (the LLM tends to emit
+      // a clean party string; channel A's span can bleed into the surrounding address —
+      // sample evidence: A's "Philip Blvd. American Realty Capital Healthcare" vs B's clean
+      // "American Realty Capital Healthcare"). Fall back to A only when B is empty.
+      const value = b || a;
       return { field, decision: 'write', source: SOURCE_AGREE, confidence: CONF_AGREE, value, aValue: a, bValue: b, aCore, bCore };
     }
     return { field, decision: 'skip', disagreementKind: 'value_conflict', aValue: a, bValue: b, aCore, bCore };
   }
   if (a && !b) {
-    // A-only (LLM abstained). Span-anchored → gliner_extract write.
-    return { field, decision: 'write', source: SOURCE_GLINER, confidence: CONF_GLINER, value: a, aValue: a, bValue: null, aCore, bCore };
+    // A-only (LLM abstained). DEMOTED to log-only in W5.1b — ~80% entity-wrong in the sample.
+    // Never write; log as an a_only disagreement (training signal, like the other non-writes).
+    return { field, decision: 'skip', disagreementKind: 'a_only', aValue: a, bValue: null, aCore, bCore };
   }
   if (!a && b) {
     // B-only — span-less LLM claim is hallucination-shaped. Never write; log.
