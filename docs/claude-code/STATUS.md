@@ -30,6 +30,16 @@ and re-rendered so all 5 surfaces + the Copilot live artifact now carry it.
 - **Sync the two external BOV skills** with the naming block (SURFACE-SYNC-PROTOCOL); re-paste `NORTHMARQ_PROJECT_PROMPT.md` v1.12 into the Project.
 - **Rotate `LCC_API_KEY`** (still outstanding; it was exposed in chat).
 
+## Comps output unification — queued 2026-08-04
+Root cause of "many formats for the same request": ONE correct renderer exists —
+`bov-generator/comps_generator.py::populate_comps` (loads the canonical dialysis template, header-driven,
+formula-safe, sorts, flags estimated, trims to the AVG/TOTALS bar). Divergence only when a surface can't reach
+`generate_comps` and hand-rolls a layout. Verified this session by importing + running `populate_comps` directly
+(payload of query_comps field names → `unknown_keys: []`, sheets trimmed, chairs/patients populated).
+- **36** — enforce single renderer + documented local `populate_comps` fallback (skill + canon).
+- **37** — single-source `bov-generator/templates/` + conformance validator wired into the export path.
+- **38** — connector STILL errors after MCP_BASE_URL is set; deep-diagnose the exact OAuth/initialize hop.
+
 ## Open (in `prompts/`)
 | # | Prompt | Priority | State |
 |---|--------|----------|-------|
