@@ -36,6 +36,22 @@ function mountedRoutes() {
   return routes;
 }
 
+test('spec envelope is OpenAPI 3.1.0 with an object components.schemas (ChatGPT import guard)', () => {
+  // The two ChatGPT import failures Prompt 60 fixed:
+  //   1. ('openapi',): Input should be '3.1.1' or '3.1.0'  — was '3.0.3'.
+  //   2. In components section, schemas subsection is not an object — was missing.
+  const spec = generateChatGptSpec('https://example.test');
+  assert.equal(spec.openapi, '3.1.0', 'ChatGPT requires OpenAPI 3.1.x');
+  assert.ok(spec.components && typeof spec.components === 'object', 'components must be an object');
+  assert.ok(
+    spec.components.schemas !== null &&
+      typeof spec.components.schemas === 'object' &&
+      !Array.isArray(spec.components.schemas),
+    'components.schemas must be a plain object (not array/null) for ChatGPT 3.1 validation'
+  );
+  assert.ok(spec.components.securitySchemes?.bearerAuth, 'bearerAuth security scheme must be present');
+});
+
 test('curated op count is within the ChatGPT 30-operation cap', () => {
   const spec = generateChatGptSpec('https://example.test');
   let count = 0;
