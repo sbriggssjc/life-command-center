@@ -1065,7 +1065,7 @@ export async function buildDealPacket(entityId, workspaceId) {
   const correspondence = acts
     .filter(a => ['email', 'call', 'meeting', 'note'].includes(String(a.category || '').toLowerCase()))
     .slice(0, 25)
-    .map(a => ({ date: a.occurred_at, direction: a.direction || (a.metadata && a.metadata.direction) || '', subject: a.title || '', source: a.source_type || 'activity_events' }));
+    .map(a => ({ date: a.occurred_at, direction: a.direction || (a.metadata && a.metadata.direction) || '', subject: a.title || '', source: a.source_type || 'activity_events', action_summary: (a.metadata && a.metadata.action_summary) || null }));
   const offers = acts
     .filter(a => /offer|loi|bid/i.test(String(a.category || '') + ' ' + String(a.title || '')))
     .slice(0, 15)

@@ -28,6 +28,8 @@ import { authenticate } from '../_shared/auth.js';
 import { resolveDealByQuery, parseLccCategoryHint } from '../_shared/deal-resolve.js';
 import { deriveNextStep } from '../_shared/next-step-ai.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
+import { advanceOutboundTodos, findCrossPathDuplicate } from '../_shared/outbound-advance.js';
+import { maybeAttachActionSummary, touchedActionLabels } from '../_shared/action-summary.js';
 
 const PA_WEBHOOK_SECRET = process.env.PA_WEBHOOK_SECRET;
 function authenticateWebhook(req) {
@@ -199,6 +201,35 @@ export async function handleTaggedComm(req, res) {
     });
   }
 
+  // Cross-path de-dupe: a tagged SEND also lands in Sent Items, so the untagged
+  // sweep may have already logged this internet_message_id as `outlook_sent`
+  // (and already advanced its to-dos). The two paths use different source_type
+  // values, so the per-path unique index can't catch it — skip here so a to-do
+  // never advances twice for one send.
+  const priorSent = await findCrossPathDuplicate({
+    opsQuery, workspaceId, externalId: String(internetMsgId), sourceTypes: ['outlook_sent'],
+  });
+  if (priorSent) {
+    return res.status(200).json({
+      ok: true, logged: false, duplicate: true, cross_path: 'outlook_sent',
+      activity_id: priorSent.id, deal_entity_id: resolved.deal_entity_id,
+      note: 'Already logged via the Sent-Items sweep (outlook_sent) — skipped to avoid a double advance.',
+    });
+  }
+
+  const metadata = {
+    direction,
+    from: fromAddr,
+    to: toAddrs.length ? toAddrs : null,
+    via: 'outlook_tagged',
+    categories: Array.isArray(p.categories) ? p.categories : (p.categories ? [p.categories] : null),
+    hint: hint || null,
+    conversation_id: conversationId,
+    resolution_method: resolved.method,
+    party_entity_id: resolved.party_entity_id,
+    deal_entity_id: resolved.deal_entity_id,
+  };
+
   // Log deal-stamped on the spine (idempotent on internet_message_id).
   const res2 = await appendActivityEvent({
     workspaceId,
@@ -211,18 +242,7 @@ export async function handleTaggedComm(req, res) {
     externalId: String(internetMsgId),
     externalUrl: webLink,
     occurredAt,
-    metadata: {
-      direction,
-      from: fromAddr,
-      to: toAddrs.length ? toAddrs : null,
-      via: 'outlook_tagged',
-      categories: Array.isArray(p.categories) ? p.categories : (p.categories ? [p.categories] : null),
-      hint: hint || null,
-      conversation_id: conversationId,
-      resolution_method: resolved.method,
-      party_entity_id: resolved.party_entity_id,
-      deal_entity_id: resolved.deal_entity_id,
-    },
+    metadata,
   });
 
   // Best-effort self-updating to-do for an inbound tagged reply (mirror the
@@ -231,15 +251,44 @@ export async function handleTaggedComm(req, res) {
     let ns = null;
     try { ns = await deriveNextStep(subject, bodyPreview || '', null, { invokeExtractionAI, premise: 'seller' }); }
     catch (_e) { ns = null; }
+    let inboundAdvance = null;
     try {
-      await opsQuery('POST', 'rpc/lcc_advance_todos', {
+      const rr = await opsQuery('POST', 'rpc/lcc_advance_todos', {
         p_entity_id: resolved.deal_entity_id, p_activity_id: res2.id || null,
         p_party_entity_id: resolved.party_entity_id, p_channel: 'email', p_direction: 'inbound',
         p_context: subject ? ('Tagged reply: ' + String(subject).slice(0, 160)) : null,
         p_next_action: ns?.next_action ?? null, p_next_type: ns?.action_type ?? null,
         p_next_due_offset: ns?.due_offset ?? null,
       });
+      inboundAdvance = Array.isArray(rr.data) ? rr.data[0] : rr.data;
     } catch (_e) { /* best-effort */ }
+    // W7.5 Part C — flag-gated action narration on the inbound advance too.
+    await maybeAttachActionSummary({
+      opsQuery, invokeExtractionAI, activityId: res2.id || null, metadata,
+      subject, body: bodyPreview || '', touchedLabels: touchedActionLabels(inboundAdvance),
+      direction: 'inbound',
+    }).catch(() => null);
+  }
+
+  // W7.5 — a tagged SEND completes the work a to-do asked for. Mirror the
+  // outbound branch of handleOutlookSent: advance the deal's offer_review /
+  // reach-out follow_ups (+ schedule the seller follow-up) and NON-DESTRUCTIVELY
+  // reconcile the open deal_next_step. Best-effort; never blocks the log.
+  let advanceResult = null;
+  if (res2?.inserted && direction === 'outbound') {
+    const adv = await advanceOutboundTodos({
+      opsQuery, dealEntityId: resolved.deal_entity_id, partyEntityId: resolved.party_entity_id,
+      activityId: res2.id || null, subject, occurredAt,
+      context: subject ? ('Tagged send: ' + String(subject).slice(0, 160)) : null,
+    });
+    advanceResult = adv.advance;
+    // W7.5 Part C — flag-gated one-line "action taken" narration (no-op unless
+    // W75_ACTION_SUMMARY=true). Never blocks / errors.
+    await maybeAttachActionSummary({
+      opsQuery, invokeExtractionAI, activityId: res2.id || null, metadata,
+      subject, body: bodyPreview || '', touchedLabels: touchedActionLabels(advanceResult),
+      direction: 'outbound',
+    }).catch(() => null);
   }
 
   return res.status(200).json({
@@ -249,6 +298,8 @@ export async function handleTaggedComm(req, res) {
     activity_id: res2?.id || null,
     deal_entity_id: resolved.deal_entity_id,
     resolution_method: resolved.method,
+    direction,
+    advance: advanceResult || undefined,
     note: 'Logged — the deal summary and next steps update within the hour.',
   });
 }
