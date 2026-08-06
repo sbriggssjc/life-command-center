@@ -2,8 +2,8 @@
   "swagger": "2.0",
   "info": {
     "title": "LCC Deal Intelligence",
-    "version": "4.1.1",
-    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 88 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException. | v4.1.0 (2026-08-06): added W7.3 capture actions log_call_note + tag_comm_to_deal to the dispatchCopilotAction copilot_action enum (params via the existing free-form params object; see docs/architecture/copilot_action_registry.md for input shapes). | v4.1.1 (2026-08-06): removed the bearerAuth securityDefinition — Power Platform honors only ONE security definition per custom connector, and importing a spec with two flipped the API-key header from X-LCC-Key to Authorization, causing 401s on every call (root cause of the 2026-08-06 agent outage). apiKey/X-LCC-Key is the ONLY auth definition; never re-add a second one."
+    "version": "4.2.0",
+    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 88 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException. | v4.1.0 (2026-08-06): added W7.3 capture actions log_call_note + tag_comm_to_deal to the dispatchCopilotAction copilot_action enum (params via the existing free-form params object; see docs/architecture/copilot_action_registry.md for input shapes). | v4.1.1 (2026-08-06): removed the bearerAuth securityDefinition — Power Platform honors only ONE security definition per custom connector, and importing a spec with two flipped the API-key header from X-LCC-Key to Authorization, causing 401s on every call (root cause of the 2026-08-06 agent outage). apiKey/X-LCC-Key is the ONLY auth definition; never re-add a second one. | v4.2.0 (2026-08-06): RESTORED the 41 legacy /api/copilot/compat/* snake_case operations (verbatim from v3, security normalized to apiKey) — the v4 cleanup removed them but the Copilot Studio agent still has tool tiles bound to those operationIds, so importing v4 made every agent message fail with ConnectorOperationNotFound. The server still routes /api/copilot/compat/:action through the dispatch registry (all 41 verified present in ACTION_REGISTRY). Do NOT remove connector operations while agent tools reference them: retire the tool tile in Copilot Studio FIRST, publish, and only then drop the operation from this spec."
   },
   "host": "tranquil-delight-production-633f.up.railway.app",
   "basePath": "/",
@@ -33,7 +33,7 @@
     "/api/chat": {
       "post": {
         "operationId": "dispatchCopilotAction",
-        "summary": "Copilot Action Gateway \u2014 dispatch any registered action",
+        "summary": "Copilot Action Gateway — dispatch any registered action",
         "description": "Single entry point for all Copilot actions. Validates action_id against the registry, enforces tier-based confirmation, routes internally, and logs telemetry.",
         "x-ms-summary": "Dispatch Copilot Action",
         "parameters": [
@@ -216,8 +216,8 @@
     "/api/copilot/portfolio/list-staged-intake-inbox": {
       "post": {
         "operationId": "ListStagedIntakeInbox",
-        "summary": "List inbox items awaiting triage \u2014 flagged emails, SF tasks, system alerts.",
-        "description": "**Tier 0** (read-only). Category: portfolio. List inbox items awaiting triage \u2014 flagged emails, SF tasks, system alerts.",
+        "summary": "List inbox items awaiting triage — flagged emails, SF tasks, system alerts.",
+        "description": "**Tier 0** (read-only). Category: portfolio. List inbox items awaiting triage — flagged emails, SF tasks, system alerts.",
         "x-ms-summary": "List Staged Intake Inbox",
         "tags": [
           "portfolio"
@@ -292,8 +292,8 @@
     "/api/copilot/portfolio/get-my-execution-queue": {
       "post": {
         "operationId": "GetMyExecutionQueue",
-        "summary": "Get my prioritized work queue \u2014 open action items sorted by due date and priorit",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get my prioritized work queue \u2014 open action items sorted by due date and priority.",
+        "summary": "Get my prioritized work queue — open action items sorted by due date and priorit",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get my prioritized work queue — open action items sorted by due date and priority.",
         "x-ms-summary": "Get My Execution Queue",
         "tags": [
           "portfolio"
@@ -476,8 +476,8 @@
     "/api/copilot/portfolio/fetch-listing-activity-context": {
       "post": {
         "operationId": "FetchListingActivityContext",
-        "summary": "Get the activity timeline for a specific entity \u2014 calls, emails, status changes,",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get the activity timeline for a specific entity \u2014 calls, emails, status changes, research.",
+        "summary": "Get the activity timeline for a specific entity — calls, emails, status changes,",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get the activity timeline for a specific entity — calls, emails, status changes, research.",
         "x-ms-summary": "Fetch Listing Activity Context",
         "tags": [
           "portfolio"
@@ -531,8 +531,8 @@
     "/api/copilot/portfolio/search-deals": {
       "post": {
         "operationId": "SearchDeals",
-        "summary": "Count and list LIVE government deals by state from the live database \u2014 currently",
-        "description": "**Tier 0** (read-only). Category: portfolio. Count and list LIVE government deals by state from the live database \u2014 currently-available listings and sales closed within the past N months. Use this for any quantitative or geographic deal question (e.g. \"how many gov deals are available in Texas\", \"what sold in Florida in the last 12 months\"). Returns exact live counts; prefer this over knowledge-file lookups for current numbers.",
+        "summary": "Count and list LIVE government deals by state from the live database — currently",
+        "description": "**Tier 0** (read-only). Category: portfolio. Count and list LIVE government deals by state from the live database — currently-available listings and sales closed within the past N months. Use this for any quantitative or geographic deal question (e.g. \"how many gov deals are available in Texas\", \"what sold in Florida in the last 12 months\"). Returns exact live counts; prefer this over knowledge-file lookups for current numbers.",
         "x-ms-summary": "Search Deals",
         "tags": [
           "portfolio"
@@ -673,8 +673,8 @@
     "/api/copilot/portfolio/get-relationship-context": {
       "post": {
         "operationId": "GetRelationshipContext",
-        "summary": "Get full relationship context and relationship health summary for a contact \u2014 co",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get full relationship context and relationship health summary for a contact \u2014 communication history, engagement score, relationship health, and talking points. Use contact_name (fuzzy name lookup) or contact_id (exact match). Call this before drafting outreach to enrich with real history.",
+        "summary": "Get full relationship context and relationship health summary for a contact — co",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get full relationship context and relationship health summary for a contact — communication history, engagement score, relationship health, and talking points. Use contact_name (fuzzy name lookup) or contact_id (exact match). Call this before drafting outreach to enrich with real history.",
         "x-ms-summary": "Get Relationship Context",
         "tags": [
           "portfolio"
@@ -693,7 +693,7 @@
                 },
                 "contact_name": {
                   "type": "string",
-                  "description": "Contact full name \u2014 used for fuzzy lookup when contact_id is not available"
+                  "description": "Contact full name — used for fuzzy lookup when contact_id is not available"
                 }
               }
             }
@@ -724,8 +724,8 @@
     "/api/copilot/portfolio/get-pipeline-intelligence": {
       "post": {
         "operationId": "GetPipelineIntelligence",
-        "summary": "Get pipeline intelligence \u2014 deal velocity, conversion rates, bottleneck analysis",
-        "description": "**Tier 0** (read-only). Category: portfolio. Get pipeline intelligence \u2014 deal velocity, conversion rates, bottleneck analysis across domains.",
+        "summary": "Get pipeline intelligence — deal velocity, conversion rates, bottleneck analysis",
+        "description": "**Tier 0** (read-only). Category: portfolio. Get pipeline intelligence — deal velocity, conversion rates, bottleneck analysis across domains.",
         "x-ms-summary": "Get Pipeline Intelligence",
         "tags": [
           "portfolio"
@@ -780,8 +780,8 @@
     "/api/copilot/ops/get-sync-run-health": {
       "post": {
         "operationId": "GetSyncRunHealth",
-        "summary": "Check health status of all sync connectors \u2014 Salesforce, Outlook, domain databas",
-        "description": "**Tier 0** (read-only). Category: ops. Check health status of all sync connectors \u2014 Salesforce, Outlook, domain databases.",
+        "summary": "Check health status of all sync connectors — Salesforce, Outlook, domain databas",
+        "description": "**Tier 0** (read-only). Category: ops. Check health status of all sync connectors — Salesforce, Outlook, domain databases.",
         "x-ms-summary": "Get Sync Run Health",
         "tags": [
           "ops"
@@ -831,8 +831,8 @@
     "/api/copilot/ops/get-work-counts": {
       "post": {
         "operationId": "GetWorkCounts",
-        "summary": "Get aggregate work counts \u2014 open actions, inbox items, overdue tasks, by domain ",
-        "description": "**Tier 0** (read-only). Category: ops. Get aggregate work counts \u2014 open actions, inbox items, overdue tasks, by domain and priority.",
+        "summary": "Get aggregate work counts — open actions, inbox items, overdue tasks, by domain ",
+        "description": "**Tier 0** (read-only). Category: ops. Get aggregate work counts — open actions, inbox items, overdue tasks, by domain and priority.",
         "x-ms-summary": "Get Work Counts",
         "tags": [
           "ops"
@@ -936,7 +936,7 @@
       "post": {
         "operationId": "RetrySyncErrorRecord",
         "summary": "Retry a failed sync job.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: ops. Retry a failed sync job.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: ops. Retry a failed sync job.",
         "x-ms-summary": "Retry Sync Error Record",
         "tags": [
           "ops"
@@ -1135,11 +1135,11 @@
                     "properties": {
                       "entity_id": {
                         "type": "string",
-                        "description": "LCC entity UUID \u2014 use with get_entity_context"
+                        "description": "LCC entity UUID — use with get_entity_context"
                       },
                       "contact_id": {
                         "type": "string",
-                        "description": "GOV contacts unified_id \u2014 use with draft_outreach_email"
+                        "description": "GOV contacts unified_id — use with draft_outreach_email"
                       },
                       "name": {
                         "type": "string"
@@ -1185,8 +1185,8 @@
     "/api/copilot/outreach/generate-prospecting-brief": {
       "post": {
         "operationId": "GenerateProspectingBrief",
-        "summary": "Generate an AI-powered daily prospecting call sheet \u2014 ranks top BD contacts from",
-        "description": "**Tier 0** (read-only). Category: outreach. Generate an AI-powered daily prospecting call sheet \u2014 ranks top BD contacts from the LCC queue by cadence urgency (days overdue) and portfolio value (annual rent). Falls back to Outlook engagement scores if no LCC queue data exists.",
+        "summary": "Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from",
+        "description": "**Tier 0** (read-only). Category: outreach. Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from the LCC queue by cadence urgency (days overdue) and portfolio value (annual rent). Falls back to Outlook engagement scores if no LCC queue data exists.",
         "x-ms-summary": "Generate Prospecting Brief",
         "tags": [
           "outreach"
@@ -1250,7 +1250,7 @@
       "post": {
         "operationId": "DraftOutreachEmail",
         "summary": "Draft a personalized outreach email for a business development contact and autom",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Draft a personalized outreach email for a business development contact and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. ALWAYS pass contact_name when known \u2014 it drives LCC relationship enrichment and email personalization. Pass to with the recipient email. You do NOT need contact_id if you have contact_name. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Draft a personalized outreach email for a business development contact and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. ALWAYS pass contact_name when known — it drives LCC relationship enrichment and email personalization. Pass to with the recipient email. You do NOT need contact_id if you have contact_name. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
         "x-ms-summary": "Draft Outreach Email",
         "tags": [
           "outreach"
@@ -1269,11 +1269,11 @@
               "properties": {
                 "contact_id": {
                   "type": "string",
-                  "description": "Contact unified_id from GOV contacts DB (optional \u2014 use if available from a prior search)"
+                  "description": "Contact unified_id from GOV contacts DB (optional — use if available from a prior search)"
                 },
                 "contact_name": {
                   "type": "string",
-                  "description": "Contact full name \u2014 ALWAYS pass this when the person's name is known, even without a contact_id (required)"
+                  "description": "Contact full name — ALWAYS pass this when the person's name is known, even without a contact_id (required)"
                 },
                 "intent": {
                   "type": "string",
@@ -1332,7 +1332,7 @@
       "post": {
         "operationId": "DraftSellerUpdateEmail",
         "summary": "Draft a seller update email for an active listing and automatically save it to O",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Draft a seller update email for an active listing and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. Pass entity_id for the listing and to for the seller email. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Draft a seller update email for an active listing and automatically save it to Outlook Drafts via Power Automate. Always creates an Outlook draft when a recipient email is available. Pass entity_id for the listing and to for the seller email. Pass text_only=true ONLY if the user explicitly asks to preview text without saving to Outlook.",
         "x-ms-summary": "Draft Seller Update Email",
         "tags": [
           "outreach"
@@ -1407,7 +1407,7 @@
       "post": {
         "operationId": "DraftReplyFromInbox",
         "summary": "Draft a context-aware reply to a flagged email already in the LCC inbox. Provide",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Draft a context-aware reply to a flagged email already in the LCC inbox. Provide inbox_item_id (UUID from inbox_items). The recipient is derived automatically from the original sender. Set create_draft=true to also create the reply as a real draft in the user's Outlook (returns draft_web_link).",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Draft a context-aware reply to a flagged email already in the LCC inbox. Provide inbox_item_id (UUID from inbox_items). The recipient is derived automatically from the original sender. Set create_draft=true to also create the reply as a real draft in the user's Outlook (returns draft_web_link).",
         "x-ms-summary": "Draft Reply From Inbox",
         "tags": [
           "outreach"
@@ -1435,7 +1435,7 @@
                 },
                 "guidance": {
                   "type": "string",
-                  "description": "Optional freeform instructions \u2014 facts to include, points to address, things to avoid."
+                  "description": "Optional freeform instructions — facts to include, points to address, things to avoid."
                 },
                 "create_draft": {
                   "type": "boolean",
@@ -1586,7 +1586,7 @@
       "post": {
         "operationId": "GenerateTemplateDraft",
         "summary": "Generate an email draft from a template and context payload. Populates variables",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: outreach. Generate an email draft from a template and context payload. Populates variables and renders the template.",
+        "description": "**Tier 1** (lightweight-confirm) — requires lightweight confirmation. Category: outreach. Generate an email draft from a template and context payload. Populates variables and renders the template.",
         "x-ms-summary": "Generate Template Draft",
         "tags": [
           "outreach"
@@ -1646,7 +1646,7 @@
       "post": {
         "operationId": "GenerateBatchDrafts",
         "summary": "Generate email drafts for multiple contacts using the same template. Used for li",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Generate email drafts for multiple contacts using the same template. Used for listing blasts and market updates.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Generate email drafts for multiple contacts using the same template. Used for listing blasts and market updates.",
         "x-ms-summary": "Generate Batch Drafts",
         "tags": [
           "outreach"
@@ -1714,7 +1714,7 @@
       "post": {
         "operationId": "RecordTemplateSend",
         "summary": "Record that a template-generated draft was sent. Tracks edit distance and feeds ",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: outreach. Record that a template-generated draft was sent. Tracks edit distance and feeds the learning loop.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: outreach. Record that a template-generated draft was sent. Tracks edit distance and feeds the learning loop.",
         "x-ms-summary": "Record Template Send",
         "tags": [
           "outreach"
@@ -1785,8 +1785,8 @@
     "/api/copilot/outreach/get-template-performance": {
       "post": {
         "operationId": "GetTemplatePerformance",
-        "summary": "Get template performance analytics \u2014 open rates, reply rates, deal advancement, ",
-        "description": "**Tier 0** (read-only). Category: outreach. Get template performance analytics \u2014 open rates, reply rates, deal advancement, and edit distances. Use to evaluate which templates are working and which need revision.",
+        "summary": "Get template performance analytics — open rates, reply rates, deal advancement, ",
+        "description": "**Tier 0** (read-only). Category: outreach. Get template performance analytics — open rates, reply rates, deal advancement, and edit distances. Use to evaluate which templates are working and which need revision.",
         "x-ms-summary": "Get Template Performance",
         "tags": [
           "outreach"
@@ -1870,8 +1870,8 @@
     "/api/copilot/outreach/evaluate-template-health": {
       "post": {
         "operationId": "EvaluateTemplateHealth",
-        "summary": "Evaluate the health of all email templates \u2014 identifies templates with high edit",
-        "description": "**Tier 0** (read-only). Category: outreach. Evaluate the health of all email templates \u2014 identifies templates with high edit rates (needs revision), underperformance against targets, and stale templates. Auto-flags templates for revision and generates suggestions.",
+        "summary": "Evaluate the health of all email templates — identifies templates with high edit",
+        "description": "**Tier 0** (read-only). Category: outreach. Evaluate the health of all email templates — identifies templates with high edit rates (needs revision), underperformance against targets, and stale templates. Auto-flags templates for revision and generates suggestions.",
         "x-ms-summary": "Evaluate Template Health",
         "tags": [
           "outreach"
@@ -1939,7 +1939,7 @@
       "post": {
         "operationId": "RunListingBdPipeline",
         "summary": "Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (sa",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (same asset type/state + geographic proximity) and queues draft candidates for review.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (same asset type/state + geographic proximity) and queues draft candidates for review.",
         "x-ms-summary": "Run Listing Bd Pipeline",
         "tags": [
           "outreach"
@@ -2010,7 +2010,7 @@
       "post": {
         "operationId": "GenerateDocument",
         "summary": "Generate a document (BOV, comp package, report) using AI-assembled context.",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires explicit confirmation. Category: outreach. Generate a document (BOV, comp package, report) using AI-assembled context.",
+        "description": "**Tier 1** (lightweight-confirm) — requires explicit confirmation. Category: outreach. Generate a document (BOV, comp package, report) using AI-assembled context.",
         "x-ms-summary": "Generate Document",
         "tags": [
           "outreach"
@@ -2076,7 +2076,7 @@
       "post": {
         "operationId": "CreateTodoTask",
         "summary": "Create a Microsoft To Do task linked to an LCC action item.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Create a Microsoft To Do task linked to an LCC action item.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Create a Microsoft To Do task linked to an LCC action item.",
         "x-ms-summary": "Create Todo Task",
         "tags": [
           "workflow"
@@ -2150,8 +2150,8 @@
     "/api/copilot/workflow/guided-entity-merge": {
       "post": {
         "operationId": "GuidedEntityMerge",
-        "summary": "Get merge guidance for two potentially duplicate entities \u2014 shows what would be ",
-        "description": "**Tier 0** (read-only). Category: workflow. Get merge guidance for two potentially duplicate entities \u2014 shows what would be combined.",
+        "summary": "Get merge guidance for two potentially duplicate entities — shows what would be ",
+        "description": "**Tier 0** (read-only). Category: workflow. Get merge guidance for two potentially duplicate entities — shows what would be combined.",
         "x-ms-summary": "Guided Entity Merge",
         "tags": [
           "workflow"
@@ -2202,7 +2202,7 @@
       "post": {
         "operationId": "IngestOutlookFlaggedEmails",
         "summary": "Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all curr",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: workflow. Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all currently flagged emails from Outlook via Power Automate and creates LCC inbox items for each.",
+        "description": "**Tier 1** (lightweight-confirm) — requires lightweight confirmation. Category: workflow. Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all currently flagged emails from Outlook via Power Automate and creates LCC inbox items for each.",
         "x-ms-summary": "Ingest Outlook Flagged Emails",
         "tags": [
           "workflow"
@@ -2246,7 +2246,7 @@
       "post": {
         "operationId": "IngestPdfDocument",
         "summary": "Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user up",
-        "description": "**Tier 1** (lightweight-confirm) \u2014 requires lightweight confirmation. Category: workflow. Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user uploads a document in Copilot chat (deed, offering memorandum, lease, brochure, financials, etc.) and wants it captured into LCC.",
+        "description": "**Tier 1** (lightweight-confirm) — requires lightweight confirmation. Category: workflow. Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user uploads a document in Copilot chat (deed, offering memorandum, lease, brochure, financials, etc.) and wants it captured into LCC.",
         "x-ms-summary": "Ingest Pdf Document",
         "tags": [
           "workflow"
@@ -2335,8 +2335,8 @@
     "/api/copilot/workflow/triage-inbox-item": {
       "post": {
         "operationId": "TriageInboxItem",
-        "summary": "Triage an inbox item \u2014 change status, set priority, assign.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires lightweight confirmation. Category: workflow. Triage an inbox item \u2014 change status, set priority, assign.",
+        "summary": "Triage an inbox item — change status, set priority, assign.",
+        "description": "**Tier 2** (explicit-confirm) — requires lightweight confirmation. Category: workflow. Triage an inbox item — change status, set priority, assign.",
         "x-ms-summary": "Triage Inbox Item",
         "tags": [
           "workflow"
@@ -2406,7 +2406,7 @@
       "post": {
         "operationId": "PromoteIntakeToAction",
         "summary": "Promote an inbox item to a shared team action item.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Promote an inbox item to a shared team action item.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Promote an inbox item to a shared team action item.",
         "x-ms-summary": "Promote Intake To Action",
         "tags": [
           "workflow"
@@ -2426,7 +2426,7 @@
                 },
                 "title": {
                   "type": "string",
-                  "description": "Action item title \u2014 defaults to the intake item title if omitted."
+                  "description": "Action item title — defaults to the intake item title if omitted."
                 },
                 "action_type": {
                   "type": "string",
@@ -2452,7 +2452,7 @@
                 "assigned_to": {
                   "type": "string",
                   "format": "uuid",
-                  "description": "UUID of the team member to assign the action to (optional \u2014 defaults to the current user)."
+                  "description": "UUID of the team member to assign the action to (optional — defaults to the current user)."
                 },
                 "due_date": {
                   "type": "string",
@@ -2462,7 +2462,7 @@
                 "entity_id": {
                   "type": "string",
                   "format": "uuid",
-                  "description": "Entity UUID to link this action to (optional \u2014 defaults to the intake item entity)."
+                  "description": "Entity UUID to link this action to (optional — defaults to the intake item entity)."
                 }
               },
               "required": [
@@ -2496,7 +2496,7 @@
       "post": {
         "operationId": "CreateListingPursuitFollowupTask",
         "summary": "Create a follow-up action item for a listing pursuit.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Create a follow-up action item for a listing pursuit.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Create a follow-up action item for a listing pursuit.",
         "x-ms-summary": "Create Listing Pursuit Followup Task",
         "tags": [
           "workflow"
@@ -2573,7 +2573,7 @@
       "post": {
         "operationId": "UpdateExecutionTaskStatus",
         "summary": "Update the status of an action item in the execution queue.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Update the status of an action item in the execution queue.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Update the status of an action item in the execution queue.",
         "x-ms-summary": "Update Execution Task Status",
         "tags": [
           "workflow"
@@ -2638,7 +2638,7 @@
       "post": {
         "operationId": "ResearchFollowup",
         "summary": "Close a research task and optionally create a follow-up action item.",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Close a research task and optionally create a follow-up action item.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Close a research task and optionally create a follow-up action item.",
         "x-ms-summary": "Research Followup",
         "tags": [
           "workflow"
@@ -2708,7 +2708,7 @@
       "post": {
         "operationId": "ReassignWorkItem",
         "summary": "Reassign a work item (action, inbox, or research task) to a different team membe",
-        "description": "**Tier 2** (explicit-confirm) \u2014 requires explicit confirmation. Category: workflow. Reassign a work item (action, inbox, or research task) to a different team member.",
+        "description": "**Tier 2** (explicit-confirm) — requires explicit confirmation. Category: workflow. Reassign a work item (action, inbox, or research task) to a different team member.",
         "x-ms-summary": "Reassign Work Item",
         "tags": [
           "workflow"
@@ -2777,7 +2777,7 @@
       "post": {
         "operationId": "EscalateAction",
         "summary": "Escalate an action item to a manager with a reason. Requires manager-level appro",
-        "description": "**Tier 3** (human-approval) \u2014 requires explicit confirmation. Category: workflow. Escalate an action item to a manager with a reason. Requires manager-level approval.",
+        "description": "**Tier 3** (human-approval) — requires explicit confirmation. Category: workflow. Escalate an action item to a manager with a reason. Requires manager-level approval.",
         "x-ms-summary": "Escalate Action",
         "tags": [
           "workflow"
@@ -2974,7 +2974,7 @@
       "post": {
         "operationId": "contextRetrieveEntity",
         "summary": "Retrieve full entity context (timeline + open work + recent inbox)",
-        "description": "THE memory-retrieval action. Call at the start of any conversation that mentions a specific contact, property, or organization \u2014 before drafting emails or making recommendations.",
+        "description": "THE memory-retrieval action. Call at the start of any conversation that mentions a specific contact, property, or organization — before drafting emails or making recommendations.",
         "x-ms-summary": "Retrieve full entity context (timeline + open work + recent inbox)",
         "tags": [
           "context"
@@ -3233,13 +3233,13 @@
                 },
                 "markdown": {
                   "type": "string",
-                  "description": "Pre-rendered comp table \u2014 display this field VERBATIM as the answer."
+                  "description": "Pre-rendered comp table — display this field VERBATIM as the answer."
                 }
               }
             }
           },
           "401": {
-            "description": "Unauthorized \u2014 invalid or missing X-LCC-Key"
+            "description": "Unauthorized — invalid or missing X-LCC-Key"
           }
         }
       }
@@ -3383,13 +3383,13 @@
                 },
                 "markdown": {
                   "type": "string",
-                  "description": "Pre-rendered comp table \u2014 display this field VERBATIM as the answer."
+                  "description": "Pre-rendered comp table — display this field VERBATIM as the answer."
                 }
               }
             }
           },
           "401": {
-            "description": "Unauthorized \u2014 invalid or missing X-LCC-Key"
+            "description": "Unauthorized — invalid or missing X-LCC-Key"
           }
         }
       }
@@ -3493,7 +3493,7 @@
             "description": "Missing comp type or rows"
           },
           "401": {
-            "description": "Unauthorized \u2014 invalid or missing X-LCC-Key"
+            "description": "Unauthorized — invalid or missing X-LCC-Key"
           }
         }
       }
@@ -3818,6 +3818,2670 @@
             "description": "Confirmation required"
           }
         }
+      }
+    },
+    "/api/copilot/compat/get-daily-briefing-snapshot": {
+      "post": {
+        "operationId": "get_daily_briefing_snapshot",
+        "summary": "Get today's prioritized daily briefing with strategic, important, and urgent ite",
+        "x-ms-summary": "Get Daily Briefing Snapshot",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "timeframe": {
+                  "type": "string",
+                  "enum": [
+                    "today",
+                    "since_yesterday",
+                    "this_week"
+                  ],
+                  "description": "Time range for the briefing"
+                },
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis",
+                    "both"
+                  ],
+                  "description": "Filter by business domain"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "briefing": {
+                  "type": "object",
+                  "description": "Structured briefing with priority sections",
+                  "additionalProperties": true
+                },
+                "generated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/list-staged-intake-inbox": {
+      "post": {
+        "operationId": "list_staged_intake_inbox",
+        "summary": "List inbox items awaiting triage — flagged emails, SF tasks, system alerts.",
+        "x-ms-summary": "List Staged Intake Inbox",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "new",
+                    "triaged",
+                    "promoted",
+                    "dismissed"
+                  ],
+                  "description": "Filter by inbox status"
+                },
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ],
+                  "description": "Filter by domain"
+                },
+                "source_type": {
+                  "type": "string",
+                  "enum": [
+                    "flagged_email",
+                    "sf_task",
+                    "system",
+                    "listing_bd_trigger"
+                  ],
+                  "description": "Filter by source"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "description": "Max items to return"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "description": "Inbox items",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-my-execution-queue": {
+      "post": {
+        "operationId": "get_my_execution_queue",
+        "summary": "Get my prioritized work queue — open action items sorted by due date and priorit",
+        "x-ms-summary": "Get My Execution Queue",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ],
+                  "description": "Filter by domain"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "order": {
+                  "type": "string",
+                  "description": "Sort order (e.g., sort_date.asc)"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "description": "Prioritized work items",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "view": {
+                  "type": "string",
+                  "enum": [
+                    "my_work"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-hot-business-contacts": {
+      "post": {
+        "operationId": "get_hot_business_contacts",
+        "summary": "List high-priority business development contacts with recent activity or upcomin",
+        "x-ms-summary": "Get Hot Business Contacts",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 50
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "contacts": {
+                  "type": "array",
+                  "description": "Hot lead contacts with activity context",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/search-entity-targets": {
+      "post": {
+        "operationId": "search_entity_targets",
+        "summary": "Search canonical entities (contacts, organizations, assets) by name across all t",
+        "x-ms-summary": "Search Entity Targets",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "q": {
+                  "type": "string",
+                  "description": "Search query (name match)"
+                },
+                "entity_type": {
+                  "type": "string",
+                  "enum": [
+                    "contact",
+                    "organization",
+                    "asset"
+                  ],
+                  "description": "Filter by entity type"
+                },
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ]
+                }
+              },
+              "required": [
+                "q"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "entities": {
+                  "type": "array",
+                  "description": "Matching entities",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/fetch-listing-activity-context": {
+      "post": {
+        "operationId": "fetch_listing_activity_context",
+        "summary": "Get the activity timeline for a specific entity — calls, emails, status changes,",
+        "x-ms-summary": "Fetch Listing Activity Context",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Entity UUID"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 200
+                }
+              },
+              "required": [
+                "entity_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "description": "Timeline events",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/search-deals": {
+      "post": {
+        "operationId": "search_deals",
+        "summary": "Count and list LIVE government deals by state from the live database — currently",
+        "x-ms-summary": "Search Deals",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "description": "US state, 2-letter code or full name (e.g. \"TX\" or \"Texas\")."
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "available",
+                    "sold",
+                    "both"
+                  ],
+                  "description": "Which deals to return (default: both)."
+                },
+                "months": {
+                  "type": "integer",
+                  "description": "Look-back window in months for sold deals (default: 12)."
+                },
+                "agency": {
+                  "type": "string",
+                  "description": "Optional tenant/agency filter (substring match), e.g. \"SSA\", \"VA\"."
+                },
+                "limit": {
+                  "type": "integer",
+                  "description": "Max sample rows to return per category (default: 10, max: 25)."
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string"
+                },
+                "available_count": {
+                  "type": "integer",
+                  "description": "Exact count of active listings in the state."
+                },
+                "available_sample": {
+                  "type": "array",
+                  "items": {}
+                },
+                "sold_count": {
+                  "type": "integer",
+                  "description": "Exact count of sales in the look-back window."
+                },
+                "sold_window_months": {
+                  "type": "integer"
+                },
+                "sold_sample": {
+                  "type": "array",
+                  "items": {}
+                },
+                "source": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/generate-listing-pursuit-dossier": {
+      "post": {
+        "operationId": "generate_listing_pursuit_dossier",
+        "summary": "Generate an AI-powered listing pursuit dossier with market analysis, comp data, ",
+        "x-ms-summary": "Generate Listing Pursuit Dossier",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ]
+                }
+              },
+              "required": [
+                "entity_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "dossier": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "provider": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-relationship-context": {
+      "post": {
+        "operationId": "get_relationship_context",
+        "summary": "Get full relationship context and relationship health summary for a contact — co",
+        "x-ms-summary": "Get Relationship Context",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "contact_id": {
+                  "type": "string",
+                  "description": "Contact unified_id from GOV contacts DB (exact match, preferred)"
+                },
+                "contact_name": {
+                  "type": "string",
+                  "description": "Contact full name — used for fuzzy lookup when contact_id is not available"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "contact": {
+                  "type": "object",
+                  "description": "Contact profile with engagement metrics and relationship health",
+                  "additionalProperties": true
+                },
+                "response": {
+                  "type": "string",
+                  "description": "AI-generated relationship briefing with talking points"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-pipeline-intelligence": {
+      "post": {
+        "operationId": "get_pipeline_intelligence",
+        "summary": "Get pipeline intelligence — deal velocity, conversion rates, bottleneck analysis",
+        "x-ms-summary": "Get Pipeline Intelligence",
+        "tags": [
+          "portfolio"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis",
+                    "both"
+                  ]
+                },
+                "timeframe": {
+                  "type": "string",
+                  "enum": [
+                    "30d",
+                    "90d",
+                    "6m",
+                    "1y"
+                  ]
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "intelligence": {
+                  "type": "object",
+                  "description": "Pipeline metrics and analysis",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-sync-run-health": {
+      "post": {
+        "operationId": "get_sync_run_health",
+        "summary": "Check health status of all sync connectors — Salesforce, Outlook, domain databas",
+        "x-ms-summary": "Get Sync Run Health",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "connector": {
+                  "type": "string",
+                  "description": "Optional: filter to a specific connector name (e.g., \"salesforce\", \"outlook\"). Omit for all connectors."
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "connectors": {
+                  "type": "array",
+                  "description": "Connector health statuses",
+                  "items": {}
+                },
+                "overall_status": {
+                  "type": "string",
+                  "enum": [
+                    "healthy",
+                    "degraded",
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-work-counts": {
+      "post": {
+        "operationId": "get_work_counts",
+        "summary": "Get aggregate work counts — open actions, inbox items, overdue tasks, by domain ",
+        "x-ms-summary": "Get Work Counts",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ]
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "counts": {
+                  "type": "object",
+                  "description": "Categorized work counts",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/generate-teams-card": {
+      "post": {
+        "operationId": "generate_teams_card",
+        "summary": "Generate a Microsoft Teams adaptive card for a work item, briefing, or notificat",
+        "x-ms-summary": "Generate Teams Card",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "card_type": {
+                  "type": "string",
+                  "enum": [
+                    "work_item",
+                    "briefing",
+                    "alert",
+                    "listing_update"
+                  ],
+                  "description": "Type of card to generate"
+                },
+                "data": {
+                  "type": "object",
+                  "description": "Data payload to render into the card",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "card_type",
+                "data"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "card": {
+                  "type": "object",
+                  "description": "Adaptive card JSON",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/retry-sync-error-record": {
+      "post": {
+        "operationId": "retry_sync_error_record",
+        "summary": "Retry a failed sync job.",
+        "x-ms-summary": "Retry Sync Error Record",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "job_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Sync job ID to retry"
+                }
+              },
+              "required": [
+                "job_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "job": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "ok": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/list-government-review-observations": {
+      "post": {
+        "operationId": "list_government_review_observations",
+        "summary": "List government domain research observations pending review or promotion.",
+        "x-ms-summary": "List Government Review Observations",
+        "tags": [
+          "domain"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "description": "Filter by observation status"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "observations": {
+                  "type": "array",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/list-dialysis-review-queue": {
+      "post": {
+        "operationId": "list_dialysis_review_queue",
+        "summary": "List dialysis clinic-property link review queue for operator verification.",
+        "x-ms-summary": "List Dialysis Review Queue",
+        "tags": [
+          "domain"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/search-entities": {
+      "post": {
+        "operationId": "search_entities",
+        "summary": "Search the LCC entity graph and GOV contacts database by name or keyword. Return",
+        "x-ms-summary": "Search Entities",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "query"
+              ],
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "minLength": 2,
+                  "description": "Name, company, or keyword to search for (min 2 characters)"
+                },
+                "entity_type": {
+                  "type": "string",
+                  "enum": [
+                    "person",
+                    "org",
+                    "asset"
+                  ],
+                  "description": "Optional: filter LCC entities by type"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 20,
+                  "description": "Max results to return (default 10)"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "entities": {
+                  "type": "array",
+                  "description": "Matching entities/contacts. Each item has: entity_id (for get_entity_context), contact_id (for draft_outreach_email), name, entity_type, email, company, domain, source.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "entity_id": {
+                        "type": "string",
+                        "description": "LCC entity UUID — use with get_entity_context"
+                      },
+                      "contact_id": {
+                        "type": "string",
+                        "description": "GOV contacts unified_id — use with draft_outreach_email"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "entity_type": {
+                        "type": "string"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "company": {
+                        "type": "string"
+                      },
+                      "domain": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "gov_contacts",
+                          "lcc_entities"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "query": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/generate-prospecting-brief": {
+      "post": {
+        "operationId": "generate_prospecting_brief",
+        "summary": "Generate an AI-powered daily prospecting call sheet — ranks top BD contacts from",
+        "x-ms-summary": "Generate Prospecting Brief",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 25,
+                  "description": "Number of top contacts to include (default 10)"
+                },
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ],
+                  "description": "Optional: filter by business domain"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "response": {
+                  "type": "string",
+                  "description": "AI-generated call sheet with prep notes and domain-specific openers"
+                },
+                "contacts": {
+                  "type": "array",
+                  "description": "Ranked contacts with LCC queue signals (days_overdue, annual_rent, priority_signal, etc.)",
+                  "items": {}
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Data source: lcc_queue | outlook_engagement | none"
+                },
+                "provider": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/draft-outreach-email": {
+      "post": {
+        "operationId": "draft_outreach_email",
+        "summary": "Draft a personalized outreach email for a business development contact and autom",
+        "x-ms-summary": "Draft Outreach Email",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "contact_name",
+                "to"
+              ],
+              "properties": {
+                "contact_id": {
+                  "type": "string",
+                  "description": "Contact unified_id from GOV contacts DB (optional — use if available from a prior search)"
+                },
+                "contact_name": {
+                  "type": "string",
+                  "description": "Contact full name — ALWAYS pass this when the person's name is known, even without a contact_id (required)"
+                },
+                "intent": {
+                  "type": "string",
+                  "description": "Purpose of the outreach (e.g., \"reconnect\", \"listing pitch\", \"market update\")"
+                },
+                "tone": {
+                  "type": "string",
+                  "description": "Desired tone (default: professional, warm, and concise)"
+                },
+                "to": {
+                  "type": "string",
+                  "description": "Recipient email address (required). Draft saves to Outlook Drafts automatically when present."
+                },
+                "cc": {
+                  "type": "string",
+                  "description": "Optional CC email address(es), semicolon-separated."
+                },
+                "text_only": {
+                  "type": "boolean",
+                  "description": "Set true ONLY when user explicitly asks to preview text without saving to Outlook."
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "draft_created": {
+                  "type": "boolean"
+                },
+                "draft_web_link": {
+                  "type": "string",
+                  "description": "Link that opens the created Outlook draft."
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/draft-seller-update-email": {
+      "post": {
+        "operationId": "draft_seller_update_email",
+        "summary": "Draft a seller update email for an active listing and automatically save it to O",
+        "x-ms-summary": "Draft Seller Update Email",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "entity_id",
+                "to"
+              ],
+              "properties": {
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Listing entity UUID (required)"
+                },
+                "include_metrics": {
+                  "type": "boolean",
+                  "description": "Include marketing metrics (OM downloads, showings)"
+                },
+                "to": {
+                  "type": "string",
+                  "description": "Seller recipient email address (required). Draft saves to Outlook Drafts automatically when present."
+                },
+                "cc": {
+                  "type": "string",
+                  "description": "Optional CC email address(es), semicolon-separated."
+                },
+                "text_only": {
+                  "type": "boolean",
+                  "description": "Set true ONLY when user explicitly asks to preview text without saving to Outlook."
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "draft_created": {
+                  "type": "boolean"
+                },
+                "draft_web_link": {
+                  "type": "string",
+                  "description": "Link that opens the created Outlook draft."
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/draft-reply-from-inbox": {
+      "post": {
+        "operationId": "draft_reply_from_inbox",
+        "summary": "Draft a context-aware reply to a flagged email already in the LCC inbox. Provide",
+        "x-ms-summary": "Draft Reply From Inbox",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "inbox_item_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "UUID of the inbox_items row (the flagged email)."
+                },
+                "intent": {
+                  "type": "string",
+                  "description": "Purpose of the reply (e.g., \"answer the question\", \"schedule a call\", \"request more info\", \"decline politely\"). Drives the call-to-action."
+                },
+                "tone": {
+                  "type": "string",
+                  "description": "Desired tone (default: professional, warm, and responsive)."
+                },
+                "guidance": {
+                  "type": "string",
+                  "description": "Optional freeform instructions — facts to include, points to address, things to avoid."
+                },
+                "create_draft": {
+                  "type": "boolean",
+                  "description": "If true, create the reply as a real draft in Outlook (recipient derived from the original sender)."
+                },
+                "cc": {
+                  "type": "string",
+                  "description": "Optional CC email address(es), semicolon-separated."
+                }
+              },
+              "required": [
+                "inbox_item_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string",
+                  "description": "Reply subject (typically \"Re: <original subject>\")."
+                },
+                "body": {
+                  "type": "string",
+                  "description": "AI-drafted reply body."
+                },
+                "original_sender": {
+                  "type": "string",
+                  "description": "Email address the reply will be sent to."
+                },
+                "original_subject": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "draft_created": {
+                  "type": "boolean"
+                },
+                "draft_web_link": {
+                  "type": "string",
+                  "description": "Link that opens the created Outlook draft."
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/list-email-templates": {
+      "post": {
+        "operationId": "list_email_templates",
+        "summary": "List all active email templates available for draft generation.",
+        "x-ms-summary": "List Email Templates",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "description": "Optional: filter by template category (e.g., \"outreach\", \"seller_update\", \"follow_up\")."
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "templates": {
+                  "type": "array",
+                  "description": "Active template definitions",
+                  "items": {}
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-email-template": {
+      "post": {
+        "operationId": "get_email_template",
+        "summary": "Get a specific email template by ID with its variable bindings and tone notes.",
+        "x-ms-summary": "Get Email Template",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "template_id": {
+                  "type": "string",
+                  "description": "Template ID (e.g., T-001)"
+                }
+              },
+              "required": [
+                "template_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "object",
+                  "description": "Full template definition",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/generate-template-draft": {
+      "post": {
+        "operationId": "generate_template_draft",
+        "summary": "Generate an email draft from a template and context payload. Populates variables",
+        "x-ms-summary": "Generate Template Draft",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "template_id": {
+                  "type": "string",
+                  "description": "Template ID (e.g., T-003)"
+                },
+                "context": {
+                  "type": "object",
+                  "description": "Merged context payload with contact, property, listing data",
+                  "additionalProperties": true
+                },
+                "strict": {
+                  "type": "boolean",
+                  "description": "Fail if mandatory variables are missing"
+                }
+              },
+              "required": [
+                "template_id",
+                "context"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "draft": {
+                  "type": "object",
+                  "description": "Rendered draft with subject, body, variable resolution status",
+                  "additionalProperties": true
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/generate-batch-drafts": {
+      "post": {
+        "operationId": "generate_batch_drafts",
+        "summary": "Generate email drafts for multiple contacts using the same template. Used for li",
+        "x-ms-summary": "Generate Batch Drafts",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "template_id": {
+                  "type": "string"
+                },
+                "contacts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "description": "Array of contact context objects"
+                },
+                "shared_context": {
+                  "type": "object",
+                  "description": "Shared listing/property context merged with each contact",
+                  "additionalProperties": true
+                },
+                "strict": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "template_id",
+                "contacts"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "drafts": {
+                  "type": "array",
+                  "items": {}
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {}
+                },
+                "ok": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/record-template-send": {
+      "post": {
+        "operationId": "record_template_send",
+        "summary": "Record that a template-generated draft was sent. Tracks edit distance and feeds ",
+        "x-ms-summary": "Record Template Send",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "template_id": {
+                  "type": "string"
+                },
+                "template_version": {
+                  "type": "integer"
+                },
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "domain": {
+                  "type": "string"
+                },
+                "rendered_subject": {
+                  "type": "string"
+                },
+                "rendered_body": {
+                  "type": "string"
+                },
+                "final_subject": {
+                  "type": "string",
+                  "description": "Subject after broker edits"
+                },
+                "final_body": {
+                  "type": "string",
+                  "description": "Body after broker edits"
+                }
+              },
+              "required": [
+                "template_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "send": {
+                  "type": "object",
+                  "description": "Created template_send record",
+                  "additionalProperties": true
+                },
+                "ok": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/get-template-performance": {
+      "post": {
+        "operationId": "get_template_performance",
+        "summary": "Get template performance analytics — open rates, reply rates, deal advancement, ",
+        "x-ms-summary": "Get Template Performance",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "template_id": {
+                  "type": "string",
+                  "description": "Filter to a specific template ID (e.g., T-003). Omit for all templates."
+                },
+                "days": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 365,
+                  "description": "Lookback window in days (default 90)"
+                },
+                "domain": {
+                  "type": "string",
+                  "description": "Filter by domain (e.g., briggscre.com)"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "lookback_days": {
+                  "type": "integer"
+                },
+                "total_sends": {
+                  "type": "integer"
+                },
+                "templates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "template_id": {
+                        "type": "string"
+                      },
+                      "total_sends": {
+                        "type": "integer"
+                      },
+                      "open_rate_pct": {
+                        "type": "number"
+                      },
+                      "reply_rate_pct": {
+                        "type": "number"
+                      },
+                      "deal_advance_rate_pct": {
+                        "type": "number"
+                      },
+                      "avg_edit_distance_pct": {
+                        "type": "number",
+                        "description": "0=no edits, 100=completely rewritten. High values suggest template needs revision."
+                      }
+                    }
+                  }
+                },
+                "_insight": {
+                  "type": "string",
+                  "description": "AI-generated summary of template performance"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/evaluate-template-health": {
+      "post": {
+        "operationId": "evaluate_template_health",
+        "summary": "Evaluate the health of all email templates — identifies templates with high edit",
+        "x-ms-summary": "Evaluate Template Health",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "template_id": {
+                  "type": "string",
+                  "description": "Evaluate a specific template (e.g., T-001). Omit for all."
+                },
+                "lookback_days": {
+                  "type": "integer",
+                  "minimum": 7,
+                  "maximum": 365,
+                  "description": "Analysis window in days (default 120)"
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "total_templates": {
+                  "type": "integer"
+                },
+                "summary": {
+                  "type": "object",
+                  "description": "Counts by status: needs_revision, underperforming, stale, healthy",
+                  "additionalProperties": true
+                },
+                "evaluations": {
+                  "type": "array",
+                  "description": "Per-template health evaluations with metrics and issues",
+                  "items": {}
+                },
+                "revisions_flagged": {
+                  "type": "integer"
+                },
+                "revision_suggestions": {
+                  "type": "array",
+                  "description": "AI revision suggestions for flagged templates",
+                  "items": {}
+                },
+                "_insight": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/run-listing-bd-pipeline": {
+      "post": {
+        "operationId": "run_listing_bd_pipeline",
+        "summary": "Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (sa",
+        "x-ms-summary": "Run Listing Bd Pipeline",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "listing_entity_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The listing entity to run BD matching against"
+                },
+                "exclude_entity_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Entity IDs to exclude (e.g., the seller)"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "description": "Max contacts per match pool"
+                }
+              },
+              "required": [
+                "listing_entity_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "listing_id": {
+                  "type": "string"
+                },
+                "t011_same_asset": {
+                  "type": "object",
+                  "description": "T-011 match results (same asset type/state)",
+                  "additionalProperties": true
+                },
+                "t012_geographic": {
+                  "type": "object",
+                  "description": "T-012 match results (geographic proximity)",
+                  "additionalProperties": true
+                },
+                "total_queued": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/generate-document": {
+      "post": {
+        "operationId": "generate_document",
+        "summary": "Generate a document (BOV, comp package, report) using AI-assembled context.",
+        "x-ms-summary": "Generate Document",
+        "tags": [
+          "outreach"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "document_type": {
+                  "type": "string",
+                  "enum": [
+                    "bov",
+                    "comp_package",
+                    "market_report",
+                    "seller_report"
+                  ]
+                },
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "domain": {
+                  "type": "string",
+                  "enum": [
+                    "government",
+                    "dialysis"
+                  ]
+                }
+              },
+              "required": [
+                "document_type",
+                "entity_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "document": {
+                  "type": "object",
+                  "description": "Generated document content",
+                  "additionalProperties": true
+                },
+                "provider": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/create-todo-task": {
+      "post": {
+        "operationId": "create_todo_task",
+        "summary": "Create a Microsoft To Do task linked to an LCC action item.",
+        "x-ms-summary": "Create Todo Task",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "Task title"
+                },
+                "body": {
+                  "type": "string",
+                  "description": "Task notes/body"
+                },
+                "due_date": {
+                  "type": "string",
+                  "format": "date",
+                  "description": "Due date (YYYY-MM-DD)"
+                },
+                "importance": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high"
+                  ]
+                },
+                "list_name": {
+                  "type": "string",
+                  "description": "To Do list name"
+                },
+                "lcc_action_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Linked LCC action item ID"
+                }
+              },
+              "required": [
+                "title"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "task": {
+                  "type": "object",
+                  "description": "Created To Do task",
+                  "additionalProperties": true
+                },
+                "ok": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/guided-entity-merge": {
+      "post": {
+        "operationId": "guided_entity_merge",
+        "summary": "Get merge guidance for two potentially duplicate entities — shows what would be ",
+        "x-ms-summary": "Guided Entity Merge",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "source_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "target_id",
+                "source_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "guidance": {
+                  "type": "object",
+                  "description": "Merge preview with field-by-field comparison",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/ingest-outlook-flagged-emails": {
+      "post": {
+        "operationId": "ingest_outlook_flagged_emails",
+        "summary": "Trigger ingestion of flagged Outlook emails into the inbox queue. Pulls all curr",
+        "x-ms-summary": "Ingest Outlook Flagged Emails",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "description": "Maximum number of flagged emails to ingest in this run (optional, default: 50)."
+                }
+              }
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "processed": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/ingest-pdf-document": {
+      "post": {
+        "operationId": "ingest_pdf_document",
+        "summary": "Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user up",
+        "x-ms-summary": "Ingest Pdf Document",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string",
+                  "description": "Original filename including extension, e.g. \"deed.pdf\""
+                },
+                "file_content_base64": {
+                  "type": "string",
+                  "description": "Base64-encoded PDF content. Provide this OR file_url."
+                },
+                "file_url": {
+                  "type": "string",
+                  "format": "uri",
+                  "description": "Publicly accessible HTTPS download URL (SharePoint or OneDrive share link, direct PDF URL). Provide this OR file_content_base64."
+                },
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Optional UUID of a property or organization this document relates to. Pre-links the intake item to that entity."
+                },
+                "note": {
+                  "type": "string",
+                  "description": "Optional one-line user description of what the document is."
+                }
+              },
+              "required": [
+                "file_name"
+              ],
+              "additionalProperties": false
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "inbox_item_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "file_name": {
+                  "type": "string"
+                },
+                "page_count": {
+                  "type": "integer"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "text_preview": {
+                  "type": "string"
+                },
+                "extraction_ok": {
+                  "type": "boolean"
+                },
+                "entity_id": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Human-readable summary for Copilot to display to the user."
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/triage-inbox-item": {
+      "post": {
+        "operationId": "triage_inbox_item",
+        "summary": "Triage an inbox item — change status, set priority, assign.",
+        "x-ms-summary": "Triage Inbox Item",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Inbox item ID"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "triaged",
+                    "dismissed",
+                    "snoozed"
+                  ]
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "urgent"
+                  ]
+                },
+                "assigned_to": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "item": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "ok": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/promote-intake-to-action": {
+      "post": {
+        "operationId": "promote_intake_to_action",
+        "summary": "Promote an inbox item to a shared team action item.",
+        "x-ms-summary": "Promote Intake To Action",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "inbox_item_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "action_type": {
+                  "type": "string",
+                  "enum": [
+                    "follow_up",
+                    "research",
+                    "review",
+                    "outreach",
+                    "meeting"
+                  ]
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "urgent"
+                  ]
+                },
+                "assigned_to": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "due_date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "inbox_item_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "object",
+                  "description": "Created action item",
+                  "additionalProperties": true
+                },
+                "inbox_status": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/create-listing-pursuit-followup-task": {
+      "post": {
+        "operationId": "create_listing_pursuit_followup_task",
+        "summary": "Create a follow-up action item for a listing pursuit.",
+        "x-ms-summary": "Create Listing Pursuit Followup Task",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "entity_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "action_type": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "urgent"
+                  ]
+                },
+                "due_date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "entity_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "ok": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/update-execution-task-status": {
+      "post": {
+        "operationId": "update_execution_task_status",
+        "summary": "Update the status of an action item in the execution queue.",
+        "x-ms-summary": "Update Execution Task Status",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Action item ID"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "in_progress",
+                    "blocked",
+                    "completed",
+                    "cancelled"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "status"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "ok": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/research-followup": {
+      "post": {
+        "operationId": "research_followup",
+        "summary": "Close a research task and optionally create a follow-up action item.",
+        "x-ms-summary": "Research Followup",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "research_task_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "outcome": {
+                  "type": "object",
+                  "description": "Research outcome data",
+                  "additionalProperties": true
+                },
+                "followup_title": {
+                  "type": "string"
+                },
+                "followup_type": {
+                  "type": "string"
+                },
+                "followup_priority": {
+                  "type": "string"
+                },
+                "assigned_to": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "due_date": {
+                  "type": "string",
+                  "format": "date"
+                }
+              },
+              "required": [
+                "research_task_id"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "research_status": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/reassign-work-item": {
+      "post": {
+        "operationId": "reassign_work_item",
+        "summary": "Reassign a work item (action, inbox, or research task) to a different team membe",
+        "x-ms-summary": "Reassign Work Item",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "item_type": {
+                  "type": "string",
+                  "enum": [
+                    "action",
+                    "inbox",
+                    "research"
+                  ]
+                },
+                "item_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "assigned_to": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Target user ID"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Reason for reassignment"
+                }
+              },
+              "required": [
+                "item_type",
+                "item_id",
+                "assigned_to"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "item_id": {
+                  "type": "string"
+                },
+                "assigned_to": {
+                  "type": "string"
+                },
+                "previous": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
+      }
+    },
+    "/api/copilot/compat/escalate-action": {
+      "post": {
+        "operationId": "escalate_action",
+        "summary": "Escalate an action item to a manager with a reason. Requires manager-level appro",
+        "x-ms-summary": "Escalate Action",
+        "tags": [
+          "workflow"
+        ],
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "action_item_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "escalate_to": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Manager user ID"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Escalation reason"
+                }
+              },
+              "required": [
+                "action_item_id",
+                "escalate_to",
+                "reason"
+              ]
+            },
+            "x-ms-requestBody-name": "body"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "action_item_id": {
+                  "type": "string"
+                },
+                "escalated_to": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-ms-requestBody-name": "body"
       }
     }
   },

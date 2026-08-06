@@ -31,6 +31,15 @@
 > touching the agent. The connector the agent binds to is **"LCC Intelligence"**
 > (Power Automate → Custom connectors, env Default-fccf69d3); "LCC Deal Intelligence"
 > is a stray/legacy duplicate — do not import into it.
+>
+> **NEVER remove a connector operation while an agent tool tile references it** (second
+> root cause of the 2026-08-06 outage): the v4 cleanup dropped the 41 legacy
+> `/api/copilot/compat/*` snake_case operations, but the agent's tool tiles (added in the
+> snake_case era) still bound those operationIds — the orchestrator failed tool-loading on
+> EVERY message with ConnectorOperationNotFound, even messages needing no tool. Spec
+> v4.2.0 restored all 41 (server still routes them; all verified in ACTION_REGISTRY).
+> Retirement order is always: delete the tool tile in Copilot Studio → Publish → only then
+> drop the operation from the spec → re-import.
 
 # Copilot Studio Setup Guide — LCC Assistant
 
