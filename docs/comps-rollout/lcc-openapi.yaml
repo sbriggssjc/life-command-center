@@ -1,563 +1,708 @@
+# ─────────────────────────────────────────────────────────────────────────
+# GENERATED — DO NOT HAND-EDIT.
+#
+# This is the curated ChatGPT GPT-Action spec (Prompt 59), the ≤30-op
+# user-facing subset of the LCC HTTP surface. It is generated from
+# api/_shared/action-schemas.js::generateChatGptSpec by
+# scripts/generate-chatgpt-spec.mjs (npm run spec:chatgpt).
+#
+# DO NOT paste this file into ChatGPT. Import the LIVE URL instead so the
+# GPT's tool set can never drift and never trips the 30-op cap:
+#     https://tranquil-delight-production-633f.up.railway.app/api/gpt-spec
+#   (equivalently https://tranquil-delight-production-633f.up.railway.app/api/copilot-spec?surface=chatgpt)
+#
+# Setup: docs/setup/GPT_ACTIONS_SETUP.md.  Full Copilot spec (46 ops, do NOT
+# import into ChatGPT): /api/copilot-spec  and  /api/copilot-spec-v2.
+# ─────────────────────────────────────────────────────────────────────────
 openapi: 3.1.0
 info:
-  title: LCC API (full read + comps surface)
-  description: >
-    The single OpenAPI schema for the Life Command Center MCP server's HTTP surface. Import this to
-    give ChatGPT (GPT Action) and Microsoft Copilot Studio (custom connector) the SAME read + comps
-    capabilities Claude gets natively over MCP — one server, one Bearer auth. Every operation here
-    calls the EXACT same shared engine as the Claude MCP tool of the same name (search_entities,
-    get_property_context, get_contact_context, get_daily_briefing, get_queue_summary,
-    get_pipeline_health, recall_memory, query_comps, synthesize_comps), so a request resolves to the
-    same data no matter which surface asks. Cap rates are decimals (0.0745 = 7.45%).
-
-    READ-ONLY: every operation in this schema is read-only — none mutates data. The Cortex WRITE tool
-    (log_memory) is intentionally NOT exposed over HTTP; it stays on the Claude / MCP surfaces only.
-
-    ACTION-SIZE-BOUNDED: unlike the Claude MCP surface (which returns full payloads), these HTTP
-    responses are bounded to stay under the ChatGPT Action / Copilot connector ~100k-char limit. Rich
-    tools default to small, value-ranked sets (top-N per band / capped nested arrays, raw & document
-    blobs dropped) — request the specific record, pass a smaller `limit`, or (for property-context)
-    `verbose: true` for full detail. When a response was still shrunk it carries `truncated: true` and
-    a `truncation_note`.
-
-    Supersedes `lcc-comps-openapi.yaml` (the comps-only subset, retained for back-compat). Workbook
-    generation (generateComps / generateBov) is added under the SAME server + Bearer auth by the
-    companion prompt `CCP_generate_comps_action_chatgpt_copilot.md`; merge those operations into this
-    file so ChatGPT/Copilot reach full parity from one import.
-  version: 2.0.0
+  title: Life Command Center — ChatGPT Tools
+  version: 1.0.0
+  description: >-
+    Curated, user-facing subset of the Life Command Center HTTP surface for a ChatGPT custom GPT Action. Every operation
+    is a live, Bearer-authenticated route that runs the SAME shared engine as the Claude MCP tool of the same name. Read
+    tools are size-bounded; the Salesforce write tools require user_confirmed. Cap rates are decimals (0.0745 = 7.45%).
+    Intentionally the user-facing subset — internal pipeline/ingest/merge/cron actions are on the Copilot spec at
+    /api/copilot-spec.
 servers:
   - url: https://tranquil-delight-production-633f.up.railway.app
-    description: LCC MCP server (set to the value of MCP_BASE_URL; all /api/* routes live here)
-security:
-  - bearerAuth: []
+    description: Production (tranquil-delight)
 paths:
-  # ── Read tools (Option A — full read-capability parity) ────────────────────
   /api/search-entities:
     post:
       operationId: searchEntities
-      summary: Search properties, contacts, or organizations in LCC.
-      description: >
-        Search the LCC entity graph by name, address, or keyword. Returns matched entities
-        (value-ranked, canonical buyer-parent floated to the top) plus, for org/person matches, the
-        deals where the entity is the tenant or guarantor, and address-like terms also return domain
-        property hits.
+      summary: Search properties, contacts, or organizations in LCC
+      description: >-
+        Search the LCC entity graph by name, address, or keyword. For an organization/person match also returns the
+        deals where it is the tenant or guarantor.
+      tags:
+        - read
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/SearchEntitiesRequest' }
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: Name, address, or keyword to search
+                entity_type:
+                  type: string
+                  enum:
+                    - person
+                    - organization
+                    - asset
+                  description: Optional filter by entity type
+                domain:
+                  type: string
+                  enum:
+                    - government
+                    - dialysis
+                    - both
+                  description: Optional domain filter
+                limit:
+                  type: number
+                  description: Max results to return
+              required:
+                - query
       responses:
-        '200': { description: Matched entities + properties., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
-        '401': { description: Missing or invalid Bearer token. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
   /api/property-context:
     post:
       operationId: getPropertyContext
-      summary: Full context for one property.
-      description: >
-        Lease details, ownership history, comps, investment score, research status, related contacts,
-        and the property's tenant(s) + guarantor(s). Resolve by entity_id or address. Read-only; may
-        warm the shared context-packet cache exactly as the MCP tool does.
+      summary: Full context for a specific property
+      description: >-
+        Lease details, ownership history, comps, investment score, research status, related contacts, and the property's
+        tenant(s) + guarantor(s). Pass verbose:true for full detail (responses are size-bounded).
+      tags:
+        - read
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PropertyContextRequest' }
+            schema:
+              type: object
+              properties:
+                entity_id:
+                  type: string
+                  description: LCC entity UUID
+                property_id:
+                  type: string
+                  description: Domain properties.property_id; pair with domain when known
+                domain:
+                  type: string
+                  enum:
+                    - dia
+                    - dialysis
+                    - gov
+                    - government
+                  description: Domain for property_id identity resolution
+                address:
+                  type: string
+                  description: Property address (alternative to entity_id)
+                query:
+                  type: string
+                  description: Free-text property reference (address, name, or "domain:id")
+                verbose:
+                  type: boolean
+                  description: Return full (un-shrunk) detail
       responses:
-        '200': { description: Property context packet., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
-        '401': { description: Missing or invalid Bearer token. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  truncated:
+                    type: boolean
   /api/contact-context:
     post:
       operationId: getContactContext
-      summary: Relationship context for a contact.
-      description: >
-        Touchpoint history, active deals, last interaction, days-since-contact, Salesforce id, and an
-        outreach recommendation. Resolve by entity_id, name, or email.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/ContactContextRequest' }
-      responses:
-        '200': { description: Contact relationship context., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
-        '401': { description: Missing or invalid Bearer token. }
-  /api/ai/daily-briefing:
-    post:
-      operationId: getDailyBriefing
-      summary: Today's strategic / important / urgent priorities.
-      description: The team's daily briefing (snapshot when available, else priority-ranked action items).
+      summary: Relationship context for a contact
+      description: Touchpoint history, active deals, last interaction, and outreach recommendations for a contact.
+      tags:
+        - read
       requestBody:
         required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/DailyBriefingRequest' }
+            schema:
+              type: object
+              properties:
+                entity_id:
+                  type: string
+                  description: LCC entity UUID
+                name:
+                  type: string
+                  description: Contact name (alternative to entity_id)
+                email:
+                  type: string
+                  description: Email address (alternative to entity_id)
       responses:
-        '200': { description: Daily briefing., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
-        '401': { description: Missing or invalid Bearer token. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+  /api/daily-briefing:
+    post:
+      operationId: getDailyBriefing
+      summary: Today's strategic, important, and urgent priorities
+      description: >-
+        Get today's strategic, important, and urgent priorities for the team — live market numbers and the ranked
+        priority queue, not a from-memory description.
+      tags:
+        - read
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workspace_id:
+                  type: string
+                  description: LCC workspace ID (optional)
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
   /api/queue-summary:
     post:
       operationId: getQueueSummary
-      summary: The current research / action priority queue.
-      description: >
-        The operator's real, value-ranked priority queue (doctrinal bands, top-N by value) plus band
-        counts and the research-gap universe. Filter by domain / status.
+      summary: Current research and action queue in priority order
+      description: What needs to be done, value-ranked, capped to the actionable top-N.
+      tags:
+        - read
       requestBody:
         required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/QueueSummaryRequest' }
+            schema:
+              type: object
+              properties:
+                domain:
+                  type: string
+                  enum:
+                    - government
+                    - dialysis
+                    - all
+                  description: Filter by domain
+                status:
+                  type: string
+                  enum:
+                    - pending
+                    - in_progress
+                    - all
+                  description: Filter by status
+                limit:
+                  type: number
+                  description: Max items to return
       responses:
-        '200': { description: Priority queue summary + items., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
-        '401': { description: Missing or invalid Bearer token. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
   /api/pipeline-health:
     post:
       operationId: getPipelineHealth
-      summary: Data-pipeline health across domains.
-      description: Per-domain last-run / success-rate / failures + open LCC automation alerts. No body required.
+      summary: Status of all data pipelines
+      description: Last run times, success rates, and any failures across the LCC data pipelines.
+      tags:
+        - read
       requestBody:
         required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EmptyRequest' }
+            schema:
+              type: object
+              properties: {}
       responses:
-        '200': { description: Pipeline health., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
-        '401': { description: Missing or invalid Bearer token. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
   /api/recall-memory:
     post:
       operationId: recallMemory
-      summary: Recall shared Cortex memory (read-only).
-      description: >
-        Recall durable decisions/facts/outcomes/preferences logged across past sessions. Filter by
-        query / domain / kind. (The write counterpart, log_memory, is intentionally NOT exposed over
-        HTTP — it stays Claude/MCP-only.)
+      summary: Recall shared Cortex memory
+      description: >-
+        Recall decisions, facts, outcomes, and preferences logged across past work sessions. Call at the start of a task
+        to stay consistent with prior context. Filter by query/domain/kind.
+      tags:
+        - read
       requestBody:
         required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/RecallMemoryRequest' }
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: Keyword to match within the memory summary (optional)
+                domain:
+                  type: string
+                  enum:
+                    - work
+                    - personal
+                    - global
+                  description: Optional domain filter
+                kind:
+                  type: string
+                  enum:
+                    - decision
+                    - fact
+                    - outcome
+                    - preference
+                    - note
+                  description: Optional kind filter
+                limit:
+                  type: number
+                  description: Max entries (default 20, max 50)
       responses:
-        '200': { description: Matching memory entries., content: { application/json: { schema: { $ref: '#/components/schemas/JsonObject' } } } }
-        '401': { description: Missing or invalid Bearer token. }
-
-  # ── Comps engine ───────────────────────────────────────────────────────────
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
   /api/query-comps:
     post:
       operationId: queryComps
-      summary: Pull sales comps with explicit structured filters.
-      description: >
-        Pulls candidate dialysis/government sale comps from the LCC engine for a market or asset.
-        Filters by geography, product type, date window, cap rate, and price, then returns a
-        bounded, ranked comp set, not the full universe.
+      summary: Pull sales comps on demand
+      description: >-
+        Pull sales comps across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and
+        de-duplicated. Cap rates returned as decimals. By default only comps with a reliable NOI/cap are returned; pass
+        include_unreliable_noi:true to include modeled-NOI comps.
+      tags:
+        - comps
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/QueryCompsRequest' }
+            schema:
+              type: object
+              properties:
+                request:
+                  type: string
+                  description: Optional natural-language request parsed server-side before explicit fields are applied.
+                property_types:
+                  type: array
+                  items:
+                    type: string
+                  description: e.g. medical, office, retail, industrial, dialysis, government
+                states:
+                  type: array
+                  items:
+                    type: string
+                  description: Two-letter state codes
+                tenant:
+                  type: string
+                  description: Single operator/tenant scope, e.g. DaVita, Fresenius.
+                tenants:
+                  type: array
+                  items:
+                    type: string
+                  description: Multiple operators/tenants.
+                include_unreliable_noi:
+                  type: boolean
+                  description: Also include modeled-NOI / no-NOI comps.
+                limit:
+                  type: number
+                  description: Default 40, max 100.
       responses:
-        '200': { description: 'Ranked, de-duplicated comp set.', content: { application/json: { schema: { $ref: '#/components/schemas/CompsResponse' } } } }
-        '401': { description: Missing or invalid Bearer token. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  comps:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
   /api/synthesize-comps:
     post:
       operationId: synthesizeComps
-      summary: Assemble a ranked comp set from a plain-language request.
-      description: >
-        Takes a comp set or plain-language query and produces the narrative/adjusted comp synthesis
-        plus summary stats used in a BOV or OM. Returns bounded results from the LCC comps engine for
-        presentation.
+      summary: Assemble one ranked comp set for a request
+      description: >-
+        Assemble one ranked, de-duplicated comp set from every relevant source for a plain-language request. Returns
+        comps scored by relevance, ready for the briggs-comps template.
+      tags:
+        - comps
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/SynthesizeCompsRequest' }
+            schema:
+              type: object
+              properties:
+                request:
+                  type: string
+                  description: The comp request; also routes government intent.
+                property_types:
+                  type: array
+                  items:
+                    type: string
+                states:
+                  type: array
+                  items:
+                    type: string
+                comp_type:
+                  type: string
+                  enum:
+                    - sales
+                    - lease
+                tenant:
+                  type: string
+                tenants:
+                  type: array
+                  items:
+                    type: string
+                include_unreliable_noi:
+                  type: boolean
+                limit:
+                  type: number
+                  description: Default 25, max 50.
       responses:
-        '200': { description: 'Ranked, relevance-scored comp set.', content: { application/json: { schema: { $ref: '#/components/schemas/CompsResponse' } } } }
-        '401': { description: Missing or invalid Bearer token. }
-
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  comps:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
   /api/comps:
     post:
       operationId: generateComps
-      summary: Generate a Team Briggs comps workbook.
-      description: >
-        Pass `request` (Scott's text) for an appraisal/workbook: the server runs synthesize + workbook in
-        one pass and returns only the download URL + compact counts, so the 20-25 rows never round-trip the
-        model/connector. Small interactive exports may still pass `template_comps` rows directly.
+      summary: Generate a Briggs CRE comps workbook
+      description: >-
+        Generate a Briggs CRE comps workbook and return a short-lived download link plus compact counts. One-shot mode:
+        pass `request` with the original text; the server synthesizes rows and builds the workbook server-side.
+      tags:
+        - comps
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/GenerateCompsRequest' }
+            schema:
+              type: object
+              properties:
+                request:
+                  type: string
+                  description: One-shot workbook mode — pass the comp/appraisal request verbatim.
+                comp_type:
+                  type: string
+                  enum:
+                    - sales
+                    - lease
+                  description: sales = On Market + Sold sheets | lease = Lease Comps sheet
+                vertical:
+                  type: string
+                  description: Set to 'dialysis' for the dialysis sales template (CHAIRS + PATIENTS).
+                limit:
+                  type: number
+                  description: One-shot row target. Default 25, max 50.
+                name:
+                  type: string
+                  description: Label for the filename.
       responses:
-        '200': { description: Generated workbook metadata., content: { application/json: { schema: { $ref: '#/components/schemas/GenerateCompsResponse' } } } }
-        '400': { description: Missing comp type or rows. }
-        '401': { description: Missing or invalid API key. }
-
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  status:
+                    type: string
+                  filename:
+                    type: string
+                  download_url:
+                    type: string
   /api/deal/dossier:
     post:
       operationId: getDealDossier
-      summary: Read a deal's dossier — entity snapshot + correspondence/activity + milestones.
-      description: >
-        Returns the deal's entity snapshot plus its correspondence/activity log and milestone
-        timeline, projected from entities + activity_events. Identify the deal by name, address,
-        or entity id (e.g. "Fresenius Woodland Hills").
+      summary: Read a deal's living context
+      description: >-
+        Read a deal's living context — the entity snapshot plus its correspondence/activity timeline and milestones.
+        Call FIRST when working a specific transaction.
+      tags:
+        - deal
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/DealDossierRequest' }
+            schema:
+              type: object
+              properties:
+                deal:
+                  type: string
+                  description: Deal name / address / entity id
+              required:
+                - deal
       responses:
-        '200': { description: Dossier projection., content: { application/json: { schema: { $ref: '#/components/schemas/DealDossier' } } } }
-        '400': { description: Missing/unmatched deal. }
-        '401': { description: Missing or invalid Bearer token. }
-        '409': { description: Ambiguous deal match (candidates returned). }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
   /api/deal/checkpoints:
     post:
       operationId: listDealCheckpoints
-      summary: List a deal's milestone checkpoints, flagging overdue / due-soon.
+      summary: List a deal's milestone checkpoints
+      description: List a deal's milestone checkpoints, flagging overdue / due within N days.
+      tags:
+        - deal
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/DealCheckpointsRequest' }
+            schema:
+              type: object
+              properties:
+                deal:
+                  type: string
+                within_days:
+                  type: number
+                  description: default 14
+              required:
+                - deal
       responses:
-        '200': { description: Checkpoints., content: { application/json: { schema: { $ref: '#/components/schemas/Checkpoints' } } } }
-        '401': { description: Missing or invalid Bearer token. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  checkpoints:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
   /api/sf/log-activity:
     post:
-      operationId: logSalesforceActivity
-      summary: Queue a Salesforce activity/note on a deal (enqueues sf_sync_queue). Requires confirmation.
+      operationId: sfLogActivity
+      summary: Log a call/email/meeting on a deal
+      description: >-
+        Log an interaction in LCC (system of record) and enqueue a link-only pointer to Salesforce. Notes are retained
+        in LCC, not synced out. Requires user_confirmed.
+      tags:
+        - salesforce
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/SfLogActivityRequest' }
+            schema:
+              type: object
+              properties:
+                deal:
+                  type: string
+                  description: Property name/address / entity id the activity is on
+                subject:
+                  type: string
+                  description: Activity subject (default "Call")
+                note:
+                  type: string
+                  description: Interaction detail (retained in LCC only)
+                activity_type:
+                  type: string
+                  enum:
+                    - Call
+                    - Email
+                    - Meeting
+                  description: default Call
+                user_confirmed:
+                  type: boolean
+                  description: Must be true to execute the write
+              required:
+                - deal
       responses:
-        '202': { description: Queued. }
-        '400': { description: Bad request. }
-        '401': { description: Missing or invalid Bearer token. }
-        '409': { description: Ambiguous deal match. }
-        '428': { description: Confirmation required (resend with user_confirmed=true). }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  queued:
+                    type: boolean
+                  lcc_activity_id:
+                    type: string
   /api/sf/create-task:
     post:
-      operationId: createSalesforceTask
-      summary: Queue a Salesforce task/follow-up on a deal. Requires confirmation.
+      operationId: sfCreateTask
+      summary: Create a Salesforce task on a deal
+      description: Enqueue a Salesforce task on a deal. Requires user_confirmed.
+      tags:
+        - salesforce
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/SfCreateTaskRequest' }
+            schema:
+              type: object
+              properties:
+                deal:
+                  type: string
+                  description: Property name/address / entity id the task is on
+                subject:
+                  type: string
+                  description: Task subject
+                due_date:
+                  type: string
+                  description: YYYY-MM-DD (optional)
+                assignee_email:
+                  type: string
+                  description: Assignee email (optional)
+                user_confirmed:
+                  type: boolean
+                  description: Must be true to execute the write
+              required:
+                - deal
+                - subject
       responses:
-        '202': { description: Queued. }
-        '400': { description: Bad request. }
-        '401': { description: Missing or invalid Bearer token. }
-        '409': { description: Ambiguous deal match. }
-        '428': { description: Confirmation required. }
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  queued:
+                    type: boolean
   /api/sf/update-opportunity:
     post:
-      operationId: updateSalesforceOpportunity
-      summary: Queue a Salesforce Opportunity field update on a deal. Requires confirmation.
+      operationId: sfUpdateOpportunity
+      summary: Advance a Salesforce Opportunity stage
+      description: >-
+        Advance an Opportunity stage on a deal (the poller currently supports STAGE advancement — send fields.stage).
+        Requires user_confirmed.
+      tags:
+        - salesforce
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/SfUpdateOpportunityRequest' }
+            schema:
+              type: object
+              properties:
+                deal:
+                  type: string
+                  description: Property name/address / entity id the opportunity is on
+                fields:
+                  type: object
+                  description: Opportunity fields to set; currently { stage } is supported
+                  properties:
+                    stage:
+                      type: string
+                user_confirmed:
+                  type: boolean
+                  description: Must be true to execute the write
+              required:
+                - deal
+                - fields
       responses:
-        '202': { description: Queued. }
-        '400': { description: Bad request (no fields / disallowed field). }
-        '401': { description: Missing or invalid Bearer token. }
-        '409': { description: Ambiguous deal match. }
-        '428': { description: Confirmation required. }
-
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  ok:
+                    type: boolean
+                  queued:
+                    type: boolean
 components:
+  schemas: {}
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      description: 'Send: Authorization: Bearer <LCC_API_KEY>'
-  schemas:
-    # Read tools return rich, nested JSON; the object shapes are permissive by design.
-    JsonObject:
-      type: object
-      properties: {}
-      additionalProperties: true
-      description: The tool's JSON output — identical to the Claude MCP tool of the same name.
-    EmptyRequest:
-      type: object
-      properties: {}
-      additionalProperties: false
-    SearchEntitiesRequest:
-      type: object
-      required: [query]
-      properties:
-        query: { type: string, description: 'Name, address, or keyword (min 2 chars).' }
-        entity_type: { type: string, enum: [person, organization, asset], description: Optional entity-type filter. }
-        domain: { type: string, enum: [government, dialysis, both], description: Optional domain filter. }
-        limit: { type: number, description: 'Max results (default 10, max 50).' }
-    PropertyContextRequest:
-      type: object
-      properties:
-        entity_id: { type: string, description: LCC entity UUID. }
-        address: { type: string, description: Property address (alternative to entity_id). }
-        verbose: { type: boolean, description: 'Return the full context packet. Default false (HTTP responses cap nested arrays and drop raw/document blobs to stay under the Action size limit).' }
-        limit: { type: number, description: 'Per-array cap for nested lists (comps, leases, ownership history, tasks, contacts). Default 8, max 50.' }
-        sections:
-          type: array
-          items: { type: string, enum: [entity, property, active_tasks, context_packet, tenant_guarantor, gov_data, dia_data] }
-          description: 'Optional — return only these top-level sections (entity identity is always retained).'
-      description: Provide entity_id OR address.
-    ContactContextRequest:
-      type: object
-      properties:
-        entity_id: { type: string, description: LCC entity UUID. }
-        name: { type: string, description: Contact name (alternative to entity_id). }
-        email: { type: string, description: Email address (alternative to entity_id). }
-      description: Provide entity_id, name, OR email.
-    DailyBriefingRequest:
-      type: object
-      properties:
-        workspace_id: { type: string, description: LCC workspace UUID (defaults to the primary workspace). }
-        limit: { type: number, description: 'Max items per priority band (urgent / high / normal). Default 10, max 50. HTTP responses return display fields only, not the full snapshot.' }
-    QueueSummaryRequest:
-      type: object
-      properties:
-        domain: { type: string, enum: [government, dialysis, all], description: Domain filter. }
-        status: { type: string, enum: [pending, in_progress, all], description: Status filter. }
-        limit: { type: number, description: 'Max items (default 25, max 100).' }
-    RecallMemoryRequest:
-      type: object
-      properties:
-        query: { type: string, description: Keyword to match within the memory summary. }
-        domain: { type: string, enum: [work, personal, global] }
-        kind: { type: string, enum: [decision, fact, outcome, preference, note] }
-        limit: { type: number, description: 'Max entries (default 20, max 50).' }
-    QueryCompsRequest:
-      type: object
-      properties:
-        comp_type: { type: string, enum: [sale, lease, both], default: sale }
-        verticals:
-          type: array
-          items: { type: string, enum: [government, dialysis] }
-          description: Which canonical DBs to query. Omit for both.
-        property_types:
-          type: array
-          items: { type: string }
-          description: Plain terms (medical, office, retail, industrial, dialysis, government) expanded to source synonyms.
-        states: { type: array, items: { type: string }, description: Two-letter state codes. }
-        metros: { type: array, items: { type: string } }
-        date_from: { type: string, format: date }
-        date_to: { type: string, format: date }
-        size_min_sf: { type: number }
-        size_max_sf: { type: number }
-        government_only: { type: boolean, description: Restrict to government-tenanted comps (also blocks the dialysis DB). }
-        include_salesforce: { type: boolean, default: true }
-        include_on_market: { type: boolean, default: false }
-        include_unreliable_noi: { type: boolean, default: false, description: Include modeled/estimated NOI/cap comps (default excludes). }
-        tenant: { type: string, description: 'Scope to an operator/tenant (e.g. DaVita, Fresenius, US Renal).' }
-        request: { type: string, description: 'Optional natural-language request parsed server-side before explicit fields are applied.' }
-        limit: { type: number, default: 40, maximum: 100 }
-    SynthesizeCompsRequest:
-      type: object
-      required: [request]
-      properties:
-        request: { type: string, description: Plain-language comp request. }
-        comp_type: { type: string, enum: [sale, lease, both] }
-        property_types: { type: array, items: { type: string } }
-        states: { type: array, items: { type: string } }
-        metros: { type: array, items: { type: string } }
-        date_from: { type: string, format: date }
-        date_to: { type: string, format: date }
-        size_min_sf: { type: number }
-        size_max_sf: { type: number }
-        government_only: { type: boolean }
-        include_on_market: { type: boolean }
-        include_unreliable_noi: { type: boolean }
-        tenant: { type: string, description: 'Scope to an operator/tenant (e.g. DaVita, Fresenius, US Renal).' }
-        limit: { type: number, default: 25, maximum: 50 }
-    GenerateCompsRequest:
-      type: object
-      properties:
-        request: { type: string, description: "One-shot workbook mode. Pass the appraisal/comp workbook request verbatim; server returns link only." }
-        limit: { type: number, default: 25, maximum: 50, description: One-shot mode row target. }
-        include_on_market: { type: boolean, description: One-shot mode active listings flag. Appraisal defaults true. }
-        include_unreliable_noi: { type: boolean, description: One-shot mode estimated/model NOI flag. Appraisal defaults true. }
-        comp_type: { type: string, enum: [sales, lease], description: Row-driven export mode only. }
-        vertical: { type: string, description: "Row-driven mode: set to dialysis for chairs/patients template." }
-        on_market: { type: array, items: { type: object, additionalProperties: true }, description: Row-driven sales workbook on-market rows. }
-        sold: { type: array, items: { type: object, additionalProperties: true }, description: Row-driven sales workbook sold rows. }
-        comps: { type: array, items: { type: object, additionalProperties: true }, description: Lease workbook rows. }
-        name: { type: string }
-        client:
-          oneOf:
-            - { type: string }
-            - { type: object, additionalProperties: true }
-    GenerateCompsResponse:
-      type: object
-      properties:
-        status: { type: string }
-        filename: { type: string }
-        download_url: { type: string }
-        comp_type: { type: string }
-        rows_by_sheet: { type: object, additionalProperties: true }
-        counts:
-          type: object
-          properties:
-            sold: { type: integer }
-            on_market: { type: integer }
-            total: { type: integer }
-        cap_rate_range:
-          type: object
-          nullable: true
-          properties:
-            min: { type: number }
-            max: { type: number }
-            median: { type: number }
-        tiers:
-          type: object
-          properties:
-            A: { type: integer }
-            B: { type: integer }
-            C: { type: integer }
-        flagged_count: { type: integer }
-        subject: { type: object, additionalProperties: true, nullable: true }
-        summary: { type: string }
-        transparency: { type: string }
-    CompsResponse:
-      type: object
-      properties:
-        comps: { type: array, items: { $ref: '#/components/schemas/Comp' } }
-        template_comps: { type: array, items: { $ref: '#/components/schemas/TemplateComp' }, description: Team Briggs template-ready projection. }
-        meta:
-          type: object
-          properties:
-            returned: { type: integer }
-            total_before_cap: { type: integer }
-            flagged_for_review: { type: integer, description: Count of comps whose cap/rent tripped a reconciliation flag. }
-            review_flags: { type: array, items: { type: object, additionalProperties: true } }
-            excluded_unreliable_noi: { type: integer }
-            by_source: { type: object, additionalProperties: { type: integer } }
-            warnings: { type: array, items: { type: object, additionalProperties: true } }
-            interpreted_params: { type: object, additionalProperties: true }
-        markdown: { type: string, description: Ready-to-render comps table (the shared format every surface shows). }
-    Comp:
-      type: object
-      description: One normalized comp. Cap rates are decimals. Extra fields may be present.
-      additionalProperties: true
-      properties:
-        comp_id: { type: string }
-        source: { type: string, description: dialysis_db | government_db | salesforce }
-        vertical: { type: string, enum: [government, dialysis] }
-        tenant: { type: string, description: Display name (multi-tenant rendered as "MOB (VA)" / "MT (SSA)"). }
-        agency: { type: string }
-        address: { type: string }
-        city: { type: string }
-        state: { type: string }
-        building_sf: { type: number }
-        sale_price: { type: number }
-        price_withheld: { type: boolean }
-        cap_rate: { type: number, description: Decimal (0.0745 = 7.45%). }
-        noi: { type: number }
-        annual_rent: { type: number }
-        rent_is_imputed: { type: boolean }
-        sale_date: { type: string, format: date }
-        chairs: { type: number, description: Dialysis only. }
-        patient_count: { type: number, description: Dialysis only. }
-        review_flags:
-          type: array
-          items: { type: string }
-          description: e.g. cap_mismatch, rent_disagreement, price_over_ask (present only when flagged).
-    TemplateComp:
-      type: object
-      description: Team Briggs comps-template projection. Tenant-first; chairs/patients sit after RBA for dialysis rows.
-      properties:
-        property_name: { type: string }
-        tenant: { type: string }
-        address: { type: string }
-        city: { type: string }
-        state: { type: string }
-        rba_sf: { type: number }
-        chairs: { type: number }
-        patients: { type: number }
-        sale_price: { type: number }
-        cap_rate: { type: number }
-        price_per_sf: { type: number }
-        annual_noi: { type: number }
-        annual_rent: { type: number }
-        rent_per_sf: { type: number }
-        sale_date: { type: string, format: date }
-        buyer: { type: string }
-        seller: { type: string }
-        source: { type: string }
-        comp_id: { type: string }
-    DealDossierRequest:
-      type: object
-      required: [deal]
-      properties:
-        deal: { type: string, description: 'Deal name, address, or entity id (e.g. Fresenius Woodland Hills).' }
-    DealCheckpointsRequest:
-      type: object
-      required: [deal]
-      properties:
-        deal: { type: string, description: 'Deal name, address, or entity id.' }
-        within_days: { type: integer, description: Due-soon window in days (default 14). }
-    DealDossier:
-      type: object
-      properties:
-        entity_id: { type: string }
-        name: { type: string }
-        address: { type: string }
-        city: { type: string }
-        state: { type: string }
-        domain: { type: string }
-        correspondence:
-          type: array
-          items:
-            type: object
-            properties:
-              occurred_at: { type: string }
-              category: { type: string }
-              title: { type: string }
-              body: { type: string }
-              source_type: { type: string }
-              external_url: { type: string }
-        milestones: { type: array, items: { type: object } }
-        activity_count: { type: integer }
-    Checkpoints:
-      type: object
-      properties:
-        entity_id: { type: string }
-        name: { type: string }
-        next_checkpoint:
-          type: object
-          properties:
-            milestone: { type: string }
-            date: { type: string }
-            status: { type: string }
-            condition: { type: string }
-            flag: { type: string, description: 'overdue | due-soon | pending | met | waived' }
-        checkpoints: { type: array, items: { type: object } }
-    SfLogActivityRequest:
-      type: object
-      required: [deal, subject, user_confirmed]
-      properties:
-        deal: { type: string, description: 'Deal name/address/entity id.' }
-        subject: { type: string }
-        note: { type: string }
-        activity_type: { type: string, description: "Call | Email | Meeting (default Call)." }
-        user_confirmed: { type: boolean, description: Must be true — show the resolved deal + change first. }
-    SfCreateTaskRequest:
-      type: object
-      required: [deal, subject, user_confirmed]
-      properties:
-        deal: { type: string }
-        subject: { type: string }
-        due_date: { type: string, description: 'YYYY-MM-DD' }
-        assignee_email: { type: string }
-        user_confirmed: { type: boolean }
-    SfUpdateOpportunityRequest:
-      type: object
-      required: [deal, fields, user_confirmed]
-      properties:
-        deal: { type: string }
-        fields:
-          type: object
-          description: "Whitelisted only: stage, close_date, amount, probability, next_step (confirm SF API names)."
-          additionalProperties: true
-        user_confirmed: { type: boolean }
+      description: Bearer LCC_API_KEY
+security:
+  - bearerAuth: []

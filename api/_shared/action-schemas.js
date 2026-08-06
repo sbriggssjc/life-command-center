@@ -1081,6 +1081,201 @@ const TYPED_GATEWAY_OPERATIONS = [
   }
 ];
 
+// ── ChatGPT curated tool set (Prompt 59) ─────────────────────────────────────
+// THE single source of truth for the ChatGPT GPT Action surface. ChatGPT caps a
+// GPT Action at 30 operations, so it must NOT get the full /api/copilot-spec
+// (46 dispatch ops + typed gateway = well over 30). This is the CURATED flat REST
+// subset — the ~15 user-facing tools that are already live, Bearer-authed routes.
+//
+// EVERY `path` here MUST be a REAL route mounted (and `authenticate`-gated) by
+// mountLccMcp() in mcp/server.js — the read-tool HTTP routes (READ_HTTP_ROUTES),
+// the comps routes, the deal-dossier routes, and the Salesforce write-back routes.
+// test/chatgpt-curated-spec.test.mjs is the anti-drift guard: it mounts the MCP,
+// introspects the router, and fails CI if any curated op maps to a route that is
+// not mounted or not Bearer-authed (the exact class of bug that had the briefing
+// declared at /api/ai/daily-briefing while it is really mounted at
+// /api/daily-briefing). It also asserts the op count stays ≤ 30.
+//
+// Keep this list ≤ 30. To add a user-facing tool: register the live route in
+// mcp/server.js first, then add its entry here.
+const CHATGPT_CURATED_OPERATIONS = [
+  // ── Read tools (READ_HTTP_ROUTES) ──────────────────────────────────────────
+  {
+    path: '/api/search-entities', method: 'post', operationId: 'searchEntities', tag: 'read',
+    summary: 'Search properties, contacts, or organizations in LCC',
+    description: 'Search the LCC entity graph by name, address, or keyword. For an organization/person match also returns the deals where it is the tenant or guarantor.',
+    inputs: { type: 'object', properties: {
+      query: { type: 'string', description: 'Name, address, or keyword to search' },
+      entity_type: { type: 'string', enum: ['person', 'organization', 'asset'], description: 'Optional filter by entity type' },
+      domain: { type: 'string', enum: ['government', 'dialysis', 'both'], description: 'Optional domain filter' },
+      limit: { type: 'number', description: 'Max results to return' }
+    }, required: ['query'] },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, results: { type: 'array', items: { type: 'object', additionalProperties: true } } } }
+  },
+  {
+    path: '/api/property-context', method: 'post', operationId: 'getPropertyContext', tag: 'read',
+    summary: 'Full context for a specific property',
+    description: "Lease details, ownership history, comps, investment score, research status, related contacts, and the property's tenant(s) + guarantor(s). Pass verbose:true for full detail (responses are size-bounded).",
+    inputs: { type: 'object', properties: {
+      entity_id: { type: 'string', description: 'LCC entity UUID' },
+      property_id: { type: 'string', description: 'Domain properties.property_id; pair with domain when known' },
+      domain: { type: 'string', enum: ['dia', 'dialysis', 'gov', 'government'], description: 'Domain for property_id identity resolution' },
+      address: { type: 'string', description: 'Property address (alternative to entity_id)' },
+      query: { type: 'string', description: 'Free-text property reference (address, name, or "domain:id")' },
+      verbose: { type: 'boolean', description: 'Return full (un-shrunk) detail' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, truncated: { type: 'boolean' } } }
+  },
+  {
+    path: '/api/contact-context', method: 'post', operationId: 'getContactContext', tag: 'read',
+    summary: 'Relationship context for a contact',
+    description: 'Touchpoint history, active deals, last interaction, and outreach recommendations for a contact.',
+    inputs: { type: 'object', properties: {
+      entity_id: { type: 'string', description: 'LCC entity UUID' },
+      name: { type: 'string', description: 'Contact name (alternative to entity_id)' },
+      email: { type: 'string', description: 'Email address (alternative to entity_id)' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' } } }
+  },
+  {
+    path: '/api/daily-briefing', method: 'post', operationId: 'getDailyBriefing', tag: 'read',
+    summary: "Today's strategic, important, and urgent priorities",
+    description: "Get today's strategic, important, and urgent priorities for the team — live market numbers and the ranked priority queue, not a from-memory description.",
+    inputs: { type: 'object', properties: { workspace_id: { type: 'string', description: 'LCC workspace ID (optional)' } } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' } } }
+  },
+  {
+    path: '/api/queue-summary', method: 'post', operationId: 'getQueueSummary', tag: 'read',
+    summary: 'Current research and action queue in priority order',
+    description: 'What needs to be done, value-ranked, capped to the actionable top-N.',
+    inputs: { type: 'object', properties: {
+      domain: { type: 'string', enum: ['government', 'dialysis', 'all'], description: 'Filter by domain' },
+      status: { type: 'string', enum: ['pending', 'in_progress', 'all'], description: 'Filter by status' },
+      limit: { type: 'number', description: 'Max items to return' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' } } }
+  },
+  {
+    path: '/api/pipeline-health', method: 'post', operationId: 'getPipelineHealth', tag: 'read',
+    summary: 'Status of all data pipelines',
+    description: 'Last run times, success rates, and any failures across the LCC data pipelines.',
+    inputs: { type: 'object', properties: {} },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' } } }
+  },
+  {
+    path: '/api/recall-memory', method: 'post', operationId: 'recallMemory', tag: 'read',
+    summary: 'Recall shared Cortex memory',
+    description: 'Recall decisions, facts, outcomes, and preferences logged across past work sessions. Call at the start of a task to stay consistent with prior context. Filter by query/domain/kind.',
+    inputs: { type: 'object', properties: {
+      query: { type: 'string', description: 'Keyword to match within the memory summary (optional)' },
+      domain: { type: 'string', enum: ['work', 'personal', 'global'], description: 'Optional domain filter' },
+      kind: { type: 'string', enum: ['decision', 'fact', 'outcome', 'preference', 'note'], description: 'Optional kind filter' },
+      limit: { type: 'number', description: 'Max entries (default 20, max 50)' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, entries: { type: 'array', items: { type: 'object', additionalProperties: true } } } }
+  },
+  // ── Comps ──────────────────────────────────────────────────────────────────
+  {
+    path: '/api/query-comps', method: 'post', operationId: 'queryComps', tag: 'comps',
+    summary: 'Pull sales comps on demand',
+    description: 'Pull sales comps across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and de-duplicated. Cap rates returned as decimals. By default only comps with a reliable NOI/cap are returned; pass include_unreliable_noi:true to include modeled-NOI comps.',
+    inputs: { type: 'object', properties: {
+      request: { type: 'string', description: 'Optional natural-language request parsed server-side before explicit fields are applied.' },
+      property_types: { type: 'array', items: { type: 'string' }, description: 'e.g. medical, office, retail, industrial, dialysis, government' },
+      states: { type: 'array', items: { type: 'string' }, description: 'Two-letter state codes' },
+      tenant: { type: 'string', description: 'Single operator/tenant scope, e.g. DaVita, Fresenius.' },
+      tenants: { type: 'array', items: { type: 'string' }, description: 'Multiple operators/tenants.' },
+      include_unreliable_noi: { type: 'boolean', description: 'Also include modeled-NOI / no-NOI comps.' },
+      limit: { type: 'number', description: 'Default 40, max 100.' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, comps: { type: 'array', items: { type: 'object', additionalProperties: true } } } }
+  },
+  {
+    path: '/api/synthesize-comps', method: 'post', operationId: 'synthesizeComps', tag: 'comps',
+    summary: 'Assemble one ranked comp set for a request',
+    description: 'Assemble one ranked, de-duplicated comp set from every relevant source for a plain-language request. Returns comps scored by relevance, ready for the briggs-comps template.',
+    inputs: { type: 'object', properties: {
+      request: { type: 'string', description: 'The comp request; also routes government intent.' },
+      property_types: { type: 'array', items: { type: 'string' } },
+      states: { type: 'array', items: { type: 'string' } },
+      comp_type: { type: 'string', enum: ['sales', 'lease'] },
+      tenant: { type: 'string' },
+      tenants: { type: 'array', items: { type: 'string' } },
+      include_unreliable_noi: { type: 'boolean' },
+      limit: { type: 'number', description: 'Default 25, max 50.' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, comps: { type: 'array', items: { type: 'object', additionalProperties: true } } } }
+  },
+  {
+    path: '/api/comps', method: 'post', operationId: 'generateComps', tag: 'comps',
+    summary: 'Generate a Briggs CRE comps workbook',
+    description: "Generate a Briggs CRE comps workbook and return a short-lived download link plus compact counts. One-shot mode: pass `request` with the original text; the server synthesizes rows and builds the workbook server-side.",
+    inputs: { type: 'object', properties: {
+      request: { type: 'string', description: 'One-shot workbook mode — pass the comp/appraisal request verbatim.' },
+      comp_type: { type: 'string', enum: ['sales', 'lease'], description: 'sales = On Market + Sold sheets | lease = Lease Comps sheet' },
+      vertical: { type: 'string', description: "Set to 'dialysis' for the dialysis sales template (CHAIRS + PATIENTS)." },
+      limit: { type: 'number', description: 'One-shot row target. Default 25, max 50.' },
+      name: { type: 'string', description: 'Label for the filename.' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { status: { type: 'string' }, filename: { type: 'string' }, download_url: { type: 'string' } } }
+  },
+  // ── Deal spine ─────────────────────────────────────────────────────────────
+  {
+    path: '/api/deal/dossier', method: 'post', operationId: 'getDealDossier', tag: 'deal',
+    summary: "Read a deal's living context",
+    description: "Read a deal's living context — the entity snapshot plus its correspondence/activity timeline and milestones. Call FIRST when working a specific transaction.",
+    inputs: { type: 'object', properties: { deal: { type: 'string', description: 'Deal name / address / entity id' } }, required: ['deal'] },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' } } }
+  },
+  {
+    path: '/api/deal/checkpoints', method: 'post', operationId: 'listDealCheckpoints', tag: 'deal',
+    summary: "List a deal's milestone checkpoints",
+    description: "List a deal's milestone checkpoints, flagging overdue / due within N days.",
+    inputs: { type: 'object', properties: { deal: { type: 'string' }, within_days: { type: 'number', description: 'default 14' } }, required: ['deal'] },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, checkpoints: { type: 'array', items: { type: 'object', additionalProperties: true } } } }
+  },
+  // ── Salesforce write-back (link-only; notes retained in LCC) ────────────────
+  {
+    path: '/api/sf/log-activity', method: 'post', operationId: 'sfLogActivity', tag: 'salesforce',
+    summary: 'Log a call/email/meeting on a deal',
+    description: 'Log an interaction in LCC (system of record) and enqueue a link-only pointer to Salesforce. Notes are retained in LCC, not synced out. Requires user_confirmed.',
+    inputs: { type: 'object', properties: {
+      deal: { type: 'string', description: 'Property name/address / entity id the activity is on' },
+      subject: { type: 'string', description: 'Activity subject (default "Call")' },
+      note: { type: 'string', description: 'Interaction detail (retained in LCC only)' },
+      activity_type: { type: 'string', enum: ['Call', 'Email', 'Meeting'], description: 'default Call' },
+      user_confirmed: { type: 'boolean', description: 'Must be true to execute the write' }
+    }, required: ['deal'] },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, queued: { type: 'boolean' }, lcc_activity_id: { type: 'string' } } }
+  },
+  {
+    path: '/api/sf/create-task', method: 'post', operationId: 'sfCreateTask', tag: 'salesforce',
+    summary: 'Create a Salesforce task on a deal',
+    description: 'Enqueue a Salesforce task on a deal. Requires user_confirmed.',
+    inputs: { type: 'object', properties: {
+      deal: { type: 'string', description: 'Property name/address / entity id the task is on' },
+      subject: { type: 'string', description: 'Task subject' },
+      due_date: { type: 'string', description: 'YYYY-MM-DD (optional)' },
+      assignee_email: { type: 'string', description: 'Assignee email (optional)' },
+      user_confirmed: { type: 'boolean', description: 'Must be true to execute the write' }
+    }, required: ['deal', 'subject'] },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, queued: { type: 'boolean' } } }
+  },
+  {
+    path: '/api/sf/update-opportunity', method: 'post', operationId: 'sfUpdateOpportunity', tag: 'salesforce',
+    summary: 'Advance a Salesforce Opportunity stage',
+    description: 'Advance an Opportunity stage on a deal (the poller currently supports STAGE advancement — send fields.stage). Requires user_confirmed.',
+    inputs: { type: 'object', properties: {
+      deal: { type: 'string', description: 'Property name/address / entity id the opportunity is on' },
+      fields: { type: 'object', description: 'Opportunity fields to set; currently { stage } is supported', properties: { stage: { type: 'string' } } },
+      user_confirmed: { type: 'boolean', description: 'Must be true to execute the write' }
+    }, required: ['deal', 'fields'] },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, queued: { type: 'boolean' } } }
+  }
+];
+// Exported for the anti-drift guard test (test/chatgpt-curated-spec.test.mjs).
+export { CHATGPT_CURATED_OPERATIONS };
+
 /**
  * Generate an OpenAPI 3.0 spec from the ACTION_REGISTRY + ACTION_SCHEMAS.
  * This spec is consumable by MS Copilot as a plugin manifest.
@@ -1219,6 +1414,72 @@ export function generateOpenApiSpec(registry, baseUrl = process.env.LCC_BASE_URL
         tags: [op.tag],
         requestBody: { required: true, content: { 'application/json': { schema: op.inputs } } },
         responses: { '200': { description: 'Success', content: { 'application/json': { schema: op.outputs } } } }
+      }
+    };
+  }
+
+  return spec;
+}
+
+/**
+ * Generate the CURATED ChatGPT GPT-Action OpenAPI 3.x spec (Prompt 59).
+ *
+ * ChatGPT caps a GPT Action at 30 operations, so it must not import the full
+ * /api/copilot-spec. This emits ONLY the curated flat REST surface defined by
+ * CHATGPT_CURATED_OPERATIONS — the ~15 user-facing tools that are live,
+ * Bearer-authed routes mounted by mountLccMcp() in mcp/server.js.
+ *
+ * Same spec skeleton as generateOpenApiSpec (servers, bearerAuth securityScheme),
+ * so the two surfaces stay stylistically identical; the ops just come from the
+ * curated list rather than the ACTION_REGISTRY dispatch fan-out.
+ *
+ * @param {string} baseUrl - The public base URL (tranquil-delight).
+ * @returns {object} OpenAPI 3.0 spec object (≤ 30 operations).
+ */
+export function generateChatGptSpec(baseUrl = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app') {
+  const spec = {
+    openapi: '3.1.0',
+    info: {
+      title: 'Life Command Center — ChatGPT Tools',
+      version: '1.0.0',
+      description: 'Curated, user-facing subset of the Life Command Center HTTP surface for a ChatGPT custom GPT Action. Every operation is a live, Bearer-authenticated route that runs the SAME shared engine as the Claude MCP tool of the same name. Read tools are size-bounded; the Salesforce write tools require user_confirmed. Cap rates are decimals (0.0745 = 7.45%). Intentionally the user-facing subset — internal pipeline/ingest/merge/cron actions are on the Copilot spec at /api/copilot-spec.'
+    },
+    servers: [{ url: baseUrl, description: 'Production (tranquil-delight)' }],
+    paths: {},
+    components: {
+      // ChatGPT validates the curated spec as OpenAPI 3.1 and rejects a
+      // `components` block whose `schemas` is missing/not-an-object. The
+      // curated ops use INLINE request/response schemas (no `$ref`s into
+      // `#/components/schemas/*`), so an empty object is correct here.
+      schemas: {},
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          description: 'Bearer LCC_API_KEY'
+        }
+      }
+    },
+    security: [{ bearerAuth: [] }]
+  };
+
+  for (const op of CHATGPT_CURATED_OPERATIONS) {
+    const method = (op.method || 'post').toLowerCase();
+    spec.paths[op.path] = spec.paths[op.path] || {};
+    spec.paths[op.path][method] = {
+      operationId: op.operationId,
+      summary: op.summary,
+      description: op.description,
+      tags: [op.tag || 'lcc'],
+      requestBody: {
+        required: Array.isArray(op.inputs?.required) && op.inputs.required.length > 0,
+        content: { 'application/json': { schema: op.inputs || { type: 'object', additionalProperties: true } } }
+      },
+      responses: {
+        '200': {
+          description: 'Success',
+          content: { 'application/json': { schema: op.outputs || { type: 'object', additionalProperties: true } } }
+        }
       }
     };
   }
