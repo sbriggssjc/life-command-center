@@ -2,8 +2,8 @@
   "swagger": "2.0",
   "info": {
     "title": "LCC Deal Intelligence",
-    "version": "4.1.0",
-    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 88 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException. | v4.1.0 (2026-08-06): added W7.3 capture actions log_call_note + tag_comm_to_deal to the dispatchCopilotAction copilot_action enum (params via the existing free-form params object; see docs/architecture/copilot_action_registry.md for input shapes)."
+    "version": "4.1.1",
+    "description": "Canonical Swagger 2.0 spec for the LCC Deal Intelligence custom connector in Power Platform. 88 operations. x-ms-requestBody-name added to all POST body params to fix PowerFxJsonException. | v4.1.0 (2026-08-06): added W7.3 capture actions log_call_note + tag_comm_to_deal to the dispatchCopilotAction copilot_action enum (params via the existing free-form params object; see docs/architecture/copilot_action_registry.md for input shapes). | v4.1.1 (2026-08-06): removed the bearerAuth securityDefinition — Power Platform honors only ONE security definition per custom connector, and importing a spec with two flipped the API-key header from X-LCC-Key to Authorization, causing 401s on every call (root cause of the 2026-08-06 agent outage). apiKey/X-LCC-Key is the ONLY auth definition; never re-add a second one."
   },
   "host": "tranquil-delight-production-633f.up.railway.app",
   "basePath": "/",
@@ -17,12 +17,6 @@
     "application/json"
   ],
   "securityDefinitions": {
-    "bearerAuth": {
-      "type": "apiKey",
-      "in": "header",
-      "name": "Authorization",
-      "description": "LCC JWT or API key"
-    },
     "apiKey": {
       "type": "apiKey",
       "in": "header",
@@ -33,9 +27,6 @@
   "security": [
     {
       "apiKey": []
-    },
-    {
-      "bearerAuth": []
     }
   ],
   "paths": {
