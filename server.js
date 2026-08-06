@@ -346,6 +346,7 @@ app.all('/api/recalculate-cap-rates', (req, res) => { req.query._domain = 'cap-r
 // intake rewrites
 app.all('/api/copilot/action', (req, res) => { req.query._route = 'copilot-action'; intakeHandler(req, res); });
 app.all('/api/intake-outlook-message', (req, res) => { req.query._route = 'outlook-message'; intakeHandler(req, res); });
+app.all('/api/intake-outlook-sent', (req, res) => { req.query._route = 'outlook-sent'; intakeHandler(req, res); });
 app.all('/api/intake-summary', (req, res) => { req.query._route = 'summary'; intakeHandler(req, res); });
 app.all('/api/intake-extract', (req, res) => { req.query._route = 'extract'; intakeHandler(req, res); });
 app.all('/api/intake-queue', (req, res) => { req.query._route = 'queue'; intakeHandler(req, res); });

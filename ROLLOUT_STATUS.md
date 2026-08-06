@@ -13,7 +13,8 @@ Plan: `docs/architecture/WAVE7_COMMS_CONTEXT_PROPAGATION_PLAN.md`
 | **W7.1** Correspondence attribution goes LIVE | **BUILT — awaiting flag flip** | Matcher on an hourly cron (flag-gated), deal-mapping at ingest via the authoritative roster, historical backfill plumbing drop-in. |
 | **W7.2** The propagation tick | **BUILT — awaiting flag flip** | Hourly consumer on deal-stamped correspondence → summary / milestone / next-step / dossier + packet refresh. Own ledger seam; LLM summarizes/proposes only. |
 | **W7.3** Call notes + Microsoft-side capture | **BUILT — awaiting flag flip / connector** | Three capture paths, one spine shape: in-app quick-log (`/api/intake-log-call`), Copilot actions (`log_call_note` + `tag_comm_to_deal`), Outlook category tagging (`/api/intake-tagged-comm`, flag `TAGGED_COMM_INTAKE`). All land as deal-stamped `activity_events` → W7.2 propagates them with zero new propagation code. |
-| W7.4 Role evolution + open-issues | not started | |
+| W7.4 Role evolution + open-issues | **BUILT — flag off** (`W74_ROLE_ISSUES`) | Evidence-validated role-evolution + open-issues propagation pass. |
+| **W7.5** Outbound loop closure + per-action summaries | **BUILT — flag off for Part C** (`W75_ACTION_SUMMARY`) | (A) tagged outbound sends advance to-dos; (B) untagged Sent-Items sweep feeds `handleOutlookSent` + cross-path de-dupe; (C) flag-gated per-action Ollama narration. Parts A/B live once merged (extend the live engine). |
 
 ### W7.1 — session log (2026-08-06)
 Branch `claude/deal-correspondence-attribution-live-s8ta63`.
@@ -185,3 +186,42 @@ The W7.2 tick was NOT touched.
   redeploy. **Verify (Scott):** (1) quick-log a call on an open deal → next tick updates its summary + any
   commitment to-do; (2) from Copilot run `log_call_note` + `tag_comm_to_deal` on a real email; (3) categorize a
   sent email `LCC:<deal>` → receiver logs it deal-stamped. All three visible in the deal's next summary regen.
+
+### W7.5 — session log (outbound loop closure + per-action summaries, 2026-08-06)
+Branch `claude/outbound-loop-closure-xbsem3`.
+
+The gap: `handleOutlookSent` (the outbound completion engine) was complete but **UNFED**, and the
+tagged-comm receiver advanced to-dos for INBOUND mail only — so **sending** the email a to-do asked for
+did not close the to-do. Three parts, one PR:
+
+- **A. Outbound advance in the tagged path** (`api/_handlers/intake-tagged-comm.js`). When a tagged message
+  is `outbound` and resolves a deal, the receiver now calls `lcc_advance_todos` (`p_channel='email',
+  p_direction='outbound'`) + `lcc_reconcile_deal_todo` (non-destructive) — mirroring the inbound branch,
+  same best-effort/never-block pattern. The existing 5-min tagged sweep then closes to-dos for tagged sends
+  with zero new infra. The `advance` result is surfaced in the receiver response (dry-run observable).
+- **B. Untagged sent-mail feed + cross-path de-dupe.** PA spec `docs/setup/OUTLOOK_SENT_SWEEP_FLOW.md` (5-min
+  Graph sweep of Sent Items → `POST /api/intake-outlook-sent`, the existing engine; friendly alias added in
+  `server.js`). Server-side cross-path de-dupe (`api/_shared/outbound-advance.js::findCrossPathDuplicate`):
+  the same `internet_message_id` arriving via BOTH `outlook_tagged` and `outlook_sent` is caught (different
+  `source_type`s dodge the per-path unique index) — the second path skips both the insert and the advance,
+  so a to-do never advances twice for one send.
+- **C. Per-action Ollama summary** (`api/_shared/action-summary.js`, flag `W75_ACTION_SUMMARY` default off,
+  migration `20260823120000` — flag registered in `feature_flags_registry`, closing the W7.3 flag-row gap).
+  After an advance, a one-line "action taken" narration is generated via `invokeExtractionAI` (Ollama),
+  **validated** (only references to-dos actually touched — a fabricated label drops the whole summary), and
+  stored in `activity_events.metadata.action_summary`, surfaced in the dossier correspondence section
+  (`dossier-generator.js` + `entities-handler.js::buildDealPacket`). Failure = no summary, never an error.
+
+- **Doctrine:** non-destructive on `deal_next_step` (reuses `lcc_reconcile_deal_todo`); reversible/metadata-
+  stamped completions (reuses `lcc_advance_todos`, no new writer); idempotent on `internet_message_id` across
+  both paths; flag-gated (Part C); flag registered in the migration.
+- **Out of scope (need Scott decisions):** mailbox write-back (unflag/move/mark-read — needs Graph write
+  scopes + a doctrine call on LCC mutating the mailbox), filing email bodies as deal-folder artifacts, SF
+  parity for calls (generic "Call logged" Task).
+- **Tests:** `test/outbound-loop-closure.test.mjs` (advance helper calls outbound + reconcile; cross-path
+  de-dupe finds the other path; action-summary validator drops a fabricated to-do label; flag off → null;
+  `touchedActionLabels` mapping) + park-lane regression retained in `test/tagged-comm-receiver.test.mjs`.
+- **Awaiting (env/connector, not code):** Part A is live on redeploy (given `TAGGED_COMM_INTAKE_ENABLED`);
+  Part B needs the Sent-Items PA flow; Part C needs `W75_ACTION_SUMMARY=true` (`OLLAMA_URL` already live).
+  **Dry-run note:** with A merged + flag off, a tagged **outbound** send in prod shows `advance` results in
+  the receiver response with **no** summary writes.

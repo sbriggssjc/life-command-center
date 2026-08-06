@@ -31,6 +31,8 @@ until a human or a manual generation touches them.
 | W7.3 call notes | **BUILT — awaiting flag flip / PA connector** (migration `20260821120000`). Three capture paths, one spine shape (all deal-stamped `activity_events` → the W7.2 tick, zero new propagation code): (A) in-app quick-log `POST /api/intake-log-call` + deal-surface "Log call" button (`logManualCallNote`, Ollama structuring proposal-only/gated); (B) Copilot actions `log_call_note` + `tag_comm_to_deal` (ambiguity→pick-list, never guess; cross-deal restamp refused); (C) Outlook category tagging `POST /api/intake-tagged-comm` (flag `TAGGED_COMM_INTAKE`, X-PA-Webhook-Secret) — unresolved→`tag_unresolved` My Work lane. PA spec: `docs/setup/OUTLOOK_CATEGORY_TAGGING_FLOW.md`. Ledger: `ROLLOUT_STATUS.md` (W7.3). |
 | W7.4 role evolution + open issues | **BUILT — flag off** (`W74_ROLE_ISSUES`, migration `20260822120000`). A new W7.2-tick pass (AFTER summaries/cues/to-dos, own watermark over the comm set) PROPOSES: (a) party ROLE evolution (decision-maker vs transaction manager vs attorney/lender) and (b) OPEN ISSUES / "what's coming" (asks/questions/commitments/deadlines) — one Ollama call/deal via `invokeExtractionAI`, JSON-constrained. Every proposal is EVIDENCE-VALIDATED (`api/_shared/deal-role-issues.js`): a quote not appearing verbatim (whitespace-normalized) in the CITED comm is DROPPED + logged to `lcc_deal_analysis_dropped_log`, never surfaced. Versioned like the summary (`lcc_deal_dossier_analysis`, kind=roles\|issues, `is_current` flip, history retained); idempotent (unchanged corpus → 0 writes). Issue lifecycle: a later comm that answers an open issue flips it to resolved (with closing evidence) via a new versioned row. Stage awareness (`api/_shared/deal-stage-line.js`) is 100% deterministic from the milestone set (latest stage + Banning-style regression flag, no LLM). Dossier renders a "What's Coming / Open Issues" panel + an emerging-roles note under Parties, both labeled ANALYSIS with collapsible evidence. Isolated try/catch — a role/issues failure never blocks the summary/cue/to-do passes. Dry-run: `GET /api/deal-comms-propagate-tick?dry_run=1&force=1&roles=1`. Ledger: `ROLLOUT_STATUS.md` (W7.4). |
 
+| W7.5 outbound loop closure | **BUILT — flag off for Part C** (`W75_ACTION_SUMMARY`, migration `20260823120000`). (A) tagged outbound sends now advance to-dos (`lcc_advance_todos` outbound + `lcc_reconcile_deal_todo`) in `intake-tagged-comm.js`, mirroring the inbound branch; (B) untagged Sent-Items sweep feeds the existing `handleOutlookSent` engine (PA spec `docs/setup/OUTLOOK_SENT_SWEEP_FLOW.md`) + cross-path de-dupe on `internet_message_id` (`api/_shared/outbound-advance.js`) so a to-do never advances twice; (C) flag-gated per-action Ollama narration (`api/_shared/action-summary.js`) with a no-fabrication validator, surfaced in the dossier correspondence section. Parts A/B need no flag (extend the live outbound engine). Ledger: `ROLLOUT_STATUS.md` (W7.5). |
+
 ## 1. Doctrine for this wave (unchanged, applied)
 - LLM may EXTRACT/SUMMARIZE/PROPOSE (correspondence summaries, milestone candidates, action-item
   drafts, dossier Analysis) — it may NEVER be the value gate for an auditable write. Structured
@@ -113,6 +115,27 @@ From the attributed thread corpus: party role inference (decision-maker vs trans
 manager emerging near LOI), open-issues/topic extraction into the dossier's "what's coming"
 panel, correspondence-aware commission stage awareness. All LLM outputs are proposals into
 the dossier's Analysis/summary sections or confirm lanes — never silent fact writes.
+
+### W7.5 — Outbound loop closure (sent mail completes work) + per-action summaries — ✅ BUILT 2026-08-06
+The gap: `handleOutlookSent` (the outbound completion engine — auto-resolves offer_review/
+follow_ups + schedules the seller follow-up) was complete but **UNFED** (no live flow posted
+sent mail), and the tagged-comm receiver only advanced to-dos for INBOUND mail — a tagged
+outbound send stamped the spine but completed nothing. Three parts, one PR:
+- **A (outbound advance in the tagged path):** `intake-tagged-comm.js` now calls
+  `lcc_advance_todos` (`p_direction='outbound'`) + `lcc_reconcile_deal_todo` when a tagged
+  send resolves a deal — mirroring the inbound branch. The existing 5-min tagged sweep then
+  closes to-dos for tagged sends with zero new infra.
+- **B (untagged sent-mail feed):** PA spec `docs/setup/OUTLOOK_SENT_SWEEP_FLOW.md` — a 5-min
+  Graph sweep of Sent Items → `POST /api/intake-outlook-sent` (the existing engine). Server:
+  cross-path de-dupe on `internet_message_id` (an `outlook_sent` vs `outlook_tagged` row for
+  the same send skips the second insert AND advance — a to-do never advances twice).
+- **C (per-action Ollama summary, proposal-only):** flag `W75_ACTION_SUMMARY` (default off,
+  migration `20260823120000`). After an advance, a one-line "action taken" narration is
+  validated (only references to-dos actually touched — a fabricated label drops it) and stored
+  in `activity_events.metadata.action_summary`, surfaced in the dossier correspondence section.
+  Ollama via `invokeExtractionAI`; failure = no summary, never an error.
+Out of scope (need Scott decisions): mailbox write-back (unflag/move/mark-read), filing email
+bodies as deal-folder artifacts, SF parity for calls. Ledger: `ROLLOUT_STATUS.md` (W7.5).
 
 ## 3. Operator prereqs
 - W7.1's backfill needs the Outlook/Graph PA flow (SF-owner-flow pattern) — connector work.

@@ -25,7 +25,9 @@ const nodeRequire = createRequire(import.meta.url);
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { logInboundCorrespondenceDualAnchor, logManualCallNote } from './_shared/intake-correspondence.js';
-import { getAiConfig } from './_shared/ai.js';
+import { getAiConfig, invokeExtractionAI } from './_shared/ai.js';
+import { findCrossPathDuplicate } from './_shared/outbound-advance.js';
+import { maybeAttachActionSummary, touchedActionLabels } from './_shared/action-summary.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
@@ -387,6 +389,21 @@ async function handleOutlookSent(req, res) {
     dealEntityId = prior?.data?.[0]?.entity_id || null;
   }
 
+  // W7.5 cross-path de-dupe: a tagged send (source_type='outlook_tagged') may
+  // have already logged this internet_message_id and advanced its to-dos. The
+  // two outbound paths use different source_type values, so the per-path unique
+  // index can't catch it — skip here so a to-do never advances twice for one send.
+  const priorTagged = await findCrossPathDuplicate({
+    opsQuery, workspaceId, externalId: String(internetMsgId), sourceTypes: ['outlook_tagged'],
+  });
+  if (priorTagged) {
+    return res.status(200).json({
+      ok: true, logged: false, duplicate: true, cross_path: 'outlook_tagged',
+      activity_id: priorTagged.id, deal_entity_id: dealEntityId, recipients: recips,
+      note: 'Already logged via the tagged-comm path (outlook_tagged) — skipped to avoid a double advance.',
+    });
+  }
+
   const row = {
     workspace_id: workspaceId,
     actor_id: user.id || user.user_id || 'b0000000-0000-0000-0000-000000000001',
@@ -429,6 +446,13 @@ async function handleOutlookSent(req, res) {
             p_subject: subject, p_occurred_at: sentAtIso });
       } catch (_e) { /* best-effort */ }
     }
+    // W7.5 Part C — flag-gated one-line "action taken" narration (no-op unless
+    // W75_ACTION_SUMMARY=true). Only references the to-dos actually touched.
+    await maybeAttachActionSummary({
+      opsQuery, invokeExtractionAI, activityId, metadata: row.metadata,
+      subject, body: bodySnippet || '', touchedLabels: touchedActionLabels(autoResolved),
+      direction: 'outbound',
+    }).catch(() => null);
   }
 
   return res.status(200).json({

@@ -739,7 +739,9 @@ function renderDealSections(p) {
   }
   if (Array.isArray(d.correspondence) && d.correspondence.length) {
     const rows = d.correspondence.map(c =>
-      `<tr><td>${esc(fmtDate(c.date))}</td><td>${esc(c.direction || '')}</td><td>${esc(c.subject || '')}</td><td class="src">${esc(c.source || '')}</td></tr>`
+      `<tr><td>${esc(fmtDate(c.date))}</td><td>${esc(c.direction || '')}</td><td>${esc(c.subject || '')}` +
+      (c.action_summary ? `<div class="src" style="margin-top:2px">↳ ${esc(c.action_summary)}</div>` : '') +
+      `</td><td class="src">${esc(c.source || '')}</td></tr>`
     ).join('');
     out.push(`<h2>Correspondence</h2><table class="hist"><thead><tr><th>Date</th><th>Direction</th><th>Subject</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
   } else if (!(d.correspondence_summary && d.correspondence_summary.summary)) {

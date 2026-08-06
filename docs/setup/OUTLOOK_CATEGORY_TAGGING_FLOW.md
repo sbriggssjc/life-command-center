@@ -74,8 +74,16 @@ full `categories` array through; LCC parses the hint.
   `direction` is optional — LCC infers it from an internal sender when omitted.
   `categories` must be the raw array (not a string) so `LCC:<hint>` survives.
 
-The receiver returns `{ ok, logged, parked, deal_entity_id, note }`. `parked:true`
-means it couldn't match a single open deal and filed a `tag_unresolved` task.
+The receiver returns `{ ok, logged, parked, deal_entity_id, direction, advance, note }`.
+`parked:true` means it couldn't match a single open deal and filed a `tag_unresolved` task.
+
+**W7.5 — a tagged SEND now completes work.** When `direction` resolves to
+`outbound` and a deal is matched, the receiver advances the deal's `offer_review`
+/ reach-out `follow_up` to-dos (and schedules the seller follow-up) and
+non-destructively stamps the open `deal_next_step` — the same outbound engine
+`handleOutlookSent` runs. The `advance` field in the response shows what fired.
+A tagged send and the untagged Sent-Items sweep (`OUTLOOK_SENT_SWEEP_FLOW.md`)
+are de-duped on `internet_message_id`, so a to-do never advances twice.
 
 ---
 
