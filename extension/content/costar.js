@@ -265,7 +265,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const _figAll  = deepQuerySelectorAll('figure[data-testid]').length;
       const _figC    = deepQuerySelectorAll('figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]').length;
       const _mailC   = deepQuerySelectorAll('a[href^="mailto:"]').length;
-      console.warn(`[LCC costar v27] capture: figures(any)=${_figAll} figures(contact)=${_figC} mailto=${_mailC} lines=${lines.length}`);
+      console.warn(`[LCC costar v29] capture: figures(any)=${_figAll} figures(contact)=${_figC} mailto=${_mailC} lines=${lines.length}`);
     } catch (_) {}
     const structuredContacts = extractStructuredForSaleContacts();
     let contacts = [];
@@ -589,7 +589,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 28,
+        _version: 29,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
@@ -3597,42 +3597,40 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const txt = (el) => (el && (el.textContent || '')).replace(/\s+/g, ' ').trim();
       const figures = [];
       for (const fig of figureEls) {
-        // Only figures inside a "Contacts" section — guards against a stray
-        // companyIC card elsewhere on the page.
-        const section = fig.closest('section');
-        if (section && !/(^|\s)contacts(\s|$)/i.test(
-              txt(section.querySelector('[data-testid$="heading-link-heading"],header h2')) || '')) {
-          // If we can't confirm the section header, still accept the figure —
-          // the companyIC/contactsIC testids are Contacts-panel specific.
-        }
-        const nameEl = fig.querySelector('[data-testid="contact-name"] a[data-testid="name-link"]')
-          || fig.querySelector('[data-testid="contact-name"] a')
-          || fig.querySelector('[data-testid="contact-name"]');
+        // The figure's inner content (name/designation/phone/email/address) is
+        // rendered inside nested shadow roots (web components with slot="title"
+        // etc.), so a plain fig.querySelector — which does NOT pierce shadow —
+        // returns empty. Query each field with the shadow-piercing deep query
+        // SCOPED to this figure, using single-testid selectors (a cross-boundary
+        // descendant selector like `[a] [b]` breaks at a shadow edge).
+        const q1 = (sel) => deepQuerySelectorAll(sel, fig)[0] || null;
+        const qN = (sel) => deepQuerySelectorAll(sel, fig);
+
+        const nameEl = q1('a[data-testid="name-link"]') || q1('[data-testid="contact-name"]');
         const name = txt(nameEl);
         if (!name) continue;
 
-        const designation = txt(fig.querySelector('[data-testid="company-designation-company-type"]'));
-        const jobTitle    = txt(fig.querySelector('[data-testid="contact-job-title"]'));
-        const company     = txt(fig.querySelector('[data-testid="company-name-link"]'));
+        const designation = txt(q1('[data-testid="company-designation-company-type"]'));
+        const jobTitle    = txt(q1('[data-testid="contact-job-title"]'));
+        const company     = txt(q1('[data-testid="company-name-link"]'));
 
         const phones = [];
-        fig.querySelectorAll('[data-testid^="phone-number-"]').forEach((el) => {
-          // Skip the wrapper/icon-label spans; keep the value spans.
+        qN('[data-testid^="phone-number-"]').forEach((el) => {
           const tid = el.getAttribute('data-testid') || '';
-          if (/(-wrapper|-icon-label)$/.test(tid)) return;
+          if (/(-wrapper|-icon-label)$/.test(tid)) return; // skip wrapper/icon spans
           const v = txt(el);
           if (v && /\d{3}[^\d]*\d{3}[^\d]*\d{4}/.test(v)) phones.push(v);
         });
 
         let email = '';
-        const emailEl = fig.querySelector('a[data-testid="email"]');
+        const emailEl = q1('a[data-testid="email"]');
         if (emailEl) {
           const href = emailEl.getAttribute('href') || '';
           email = href.replace(/^mailto:/i, '').split('?')[0].trim() || txt(emailEl);
         }
 
         const addressLines = [];
-        fig.querySelectorAll('[data-testid="address-address"] [automation-id^="address-line-"]').forEach((el) => {
+        qN('[automation-id^="address-line-"]').forEach((el) => {
           const v = txt(el);
           if (v) addressLines.push(v);
         });
