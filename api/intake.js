@@ -190,6 +190,16 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleTaggedComm } = await import('./_handlers/intake-tagged-comm.js');
       return handleTaggedComm(req, res);
     }
+    case 'mailbox-reconcile-worklist': {
+      // W7.6 — Mailbox Mirror: deterministic worklist of closed-loop flagged emails.
+      const { handleMailboxWorklist } = await import('./_handlers/mailbox-reconcile.js');
+      return handleMailboxWorklist(req, res);
+    }
+    case 'mailbox-reconcile-ack': {
+      // W7.6 — Mailbox Mirror: the PA mover acks each move outcome here.
+      const { handleMailboxAck } = await import('./_handlers/mailbox-reconcile.js');
+      return handleMailboxAck(req, res);
+    }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
       return handleIntakeFeedback(req, res);
@@ -200,7 +210,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, log-call, tagged-comm, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, log-call, tagged-comm, mailbox-reconcile-worklist, mailbox-reconcile-ack, feedback, accuracy'
       });
   }
 });

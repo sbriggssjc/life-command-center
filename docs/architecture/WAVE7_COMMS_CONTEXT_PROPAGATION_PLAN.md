@@ -134,8 +134,30 @@ outbound send stamped the spine but completed nothing. Three parts, one PR:
   validated (only references to-dos actually touched — a fabricated label drops it) and stored
   in `activity_events.metadata.action_summary`, surfaced in the dossier correspondence section.
   Ollama via `invokeExtractionAI`; failure = no summary, never an error.
-Out of scope (need Scott decisions): mailbox write-back (unflag/move/mark-read), filing email
-bodies as deal-folder artifacts, SF parity for calls. Ledger: `ROLLOUT_STATUS.md` (W7.5).
+Out of scope (need Scott decisions): mailbox write-back (unflag/move/mark-read → now W7.6),
+filing email bodies as deal-folder artifacts, SF parity for calls. Ledger: `ROLLOUT_STATUS.md` (W7.5).
+
+### W7.6 — Mailbox Mirror (Outlook folders reflect open LCC work) — ✅ BUILT 2026-08-06
+The W7.5 out-of-scope mailbox write-back, done as a PULL model — LCC never touches the
+mailbox. LCC publishes a **deterministic** worklist of intake-captured flagged emails whose
+loop has CLOSED; a Power Automate "mover" flow moves each from the "Intake Staged, Not
+Complete" Outlook folder to a Processed folder (+ unflag + mark read) via Graph and acks back.
+**Move-only, never delete.**
+- **Closure gate = pure SQL** (`v_lcc_mailbox_reconcile_worklist`, NO LLM): closed when ANY of
+  (a) every to-do generated from it (`action_items.inbox_item_id`) is terminal, (b) a later
+  in-thread outbound reply exists (same `conversation_id`), (c) the `inbox_item` was triaged
+  `dismissed`/`archived`. Inverse guard: withheld while the deal has an open `offer_review`.
+- **Own seam:** ledger `lcc_mailbox_reconcile_ledger` (unique on `internet_message_id`); ack
+  RPC `lcc_mailbox_reconcile_ack` is idempotent, backs off failed moves 1h, and **parks after
+  5 tries** with a loud `lcc_health_alerts` (`mailbox_mirror_parked`) row.
+- **Endpoints:** `GET /api/mailbox-reconcile-worklist` + `POST /api/mailbox-reconcile-ack`
+  (`api/_handlers/mailbox-reconcile.js`), flag-gated `MAILBOX_MIRROR` (default off →
+  `{skipped:'flag_off'}`). PA spec: `docs/setup/OUTLOOK_MAILBOX_MIRROR_FLOW.md`. Migration
+  `20260824120000`.
+- **Grounded:** live worklist = 3,908 closed-loop flagged emails (all via the triage arm today
+  — historical inbound rows predate W7.1 `conversation_id`, so the thread-reply arm is
+  wired-but-inert until forward mail carries it, same honest pattern as the rest of Wave 7).
+  Gate proven by a self-rolling-back synthetic fixture (all 8 invariants, 0 residue).
 
 ## 3. Operator prereqs
 - W7.1's backfill needs the Outlook/Graph PA flow (SF-owner-flow pattern) — connector work.
