@@ -145,6 +145,22 @@ function domainForms(domain) {
   return [domain];
 }
 
+// Prompt 58 — robust free-text argument extraction. The various connector
+// surfaces (personal Claude, ChatGPT, Copilot) don't always send the arg under
+// the exact inputSchema key: a plain "1050 Old Camp Rd" or "DaVita" arrives as
+// { query }, { q }, { request }, { text }, or even a bare string instead of the
+// documented { address } / { query }. Reading only the one canonical key made
+// get_property_context resolve nothing (raw_ref {}) and made search_entities
+// crash on `undefined.replace`. Pull the first non-empty string across the
+// common aliases so a missing/renamed key can never strand or crash a tool.
+export function firstNonEmptyString(...vals) {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim() !== '') return v.trim();
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  return null;
+}
+
 // Lightweight street-address normalizer (mirror of api/_shared/entity-link.js
 // normalizeAddress) so the gov/dia property fallback resolves "350 Rhode Island
 // St" the same way the rest of the app does. Kept local — the MCP server is a
@@ -443,7 +459,8 @@ const TOOL_DEFINITIONS = {
         entity_id: { type: 'string', description: 'LCC entity UUID' },
         property_id: { type: 'string', description: 'Domain properties.property_id; pair with domain when known' },
         domain: { type: 'string', enum: ['dia', 'dialysis', 'gov', 'government'], description: 'Domain for property_id identity resolution' },
-        address: { type: 'string', description: 'Property address (alternative to entity_id)' }
+        address: { type: 'string', description: 'Property address (alternative to entity_id)' },
+        query: { type: 'string', description: 'Free-text property reference (address, name, or "domain:id") — resolved the same as address' }
       }
     }
   },
@@ -663,7 +680,7 @@ function compactCompsWorkbookResult(data) {
 
 // ── Tool handlers ─────────────────────────────────────────────────────────
 // These are the exact same async functions from the former s.tool() calls.
-const TOOL_HANDLERS = {
+export const TOOL_HANDLERS = {
   generate_comps: async (args) => {
     return withTiming("generate_comps", async () => {
       const payload = args || {};
@@ -833,13 +850,27 @@ const TOOL_HANDLERS = {
     });
   },
 
-  search_entities: async ({ query, entity_type, domain, limit }) => {
+  search_entities: async (args = {}) => {
     return withTiming("search_entities", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
       }
 
-      const searchTerm = query.replace(/[%_]/g, "").trim();
+      // Accept the search string from the documented `query` key OR any of the
+      // aliases a connector may send it under (or a bare string). Null-safe so a
+      // missing key returns a clean error instead of crashing on `.replace`.
+      const rawQuery = typeof args === 'string'
+        ? args
+        : firstNonEmptyString(
+            args.query, args.q, args.search, args.request,
+            args.text, args.term, args.name, args.keyword
+          );
+      const { entity_type, domain, limit } = (typeof args === 'object' && args) || {};
+      if (!rawQuery) {
+        return textResult({ error: "Search term is required (pass `query`)" });
+      }
+
+      const searchTerm = rawQuery.replace(/[%_]/g, "").trim();
       if (searchTerm.length < 2) {
         return textResult({ error: "Search term must be at least 2 characters" });
       }
@@ -981,14 +1012,29 @@ const TOOL_HANDLERS = {
     });
   },
 
-  get_property_context: async ({ entity_id, address, property_id, domain }) => {
+  get_property_context: async (args = {}) => {
     return withTiming("get_property_context", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
       }
 
+      // A bare string, or the property reference sent under an alias key
+      // (query/q/ref/request/text/property/name), must resolve exactly like the
+      // documented { address }. Pull the canonical keys first, then fall back to
+      // a generic free-text ref that the resolver's own q-parsing routes to
+      // address / property_id / entity_id. This is why raw_ref used to come back
+      // {} — the free text arrived under a key this handler didn't read.
+      const a = typeof args === 'string' ? { q: args } : (args || {});
+      const entity_id = a.entity_id || a.entityId || null;
+      let property_id = a.property_id || a.propertyId || null;
+      const domain = a.domain || null;
+      const address = a.address || null;
+      const freeText = firstNonEmptyString(
+        address, a.query, a.q, a.ref, a.request, a.text, a.property, a.name
+      );
+
       const resolution = await resolveSubject(
-        { entity_id, address, property_id, domain },
+        { entity_id, address, property_id, domain, q: freeText },
         {
           type: 'property',
           tool: 'get_property_context',
