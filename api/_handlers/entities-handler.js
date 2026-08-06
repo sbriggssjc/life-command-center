@@ -22,6 +22,7 @@ import { resolveArtifactDownload, uploadDocToFolder } from '../_shared/storage-a
 import { assemblePropertyPacket } from '../operations.js';
 import { generateDossier, recordDossier } from '../_shared/dossier-generator.js';
 import { projectRentAtDate } from '../_shared/rent-projection.js';
+import { deriveStageLine } from '../_shared/deal-stage-line.js';
 import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain } from '../_shared/entity-link.js';
@@ -1124,9 +1125,28 @@ export async function buildDealPacket(entityId, workspaceId) {
     deal_spine: `entity ${String(entityId).slice(0, 8)}`,
   };
 
+  // W7.4 — role evolution + open issues (LLM PROPOSALS, evidence-validated,
+  // versioned) + the deterministic stage-awareness line. The analysis rows are
+  // rendered in a clearly-labeled ANALYSIS panel; the stage line is 100%
+  // deterministic from the milestone set (no LLM). Best-effort — absent → empty.
+  let role_evolution = [];
+  let open_issues = [];
+  try {
+    const anRes = await opsQuery('GET',
+      `v_lcc_deal_dossier_analysis_current?entity_id=eq.${encodeURIComponent(entityId)}&select=kind,payload,generated_at,metadata`).catch(() => null);
+    for (const row of (anRes?.ok && Array.isArray(anRes.data) ? anRes.data : [])) {
+      if (row.kind === 'roles' && Array.isArray(row.payload)) role_evolution = row.payload;
+      if (row.kind === 'issues' && Array.isArray(row.payload)) open_issues = row.payload;
+    }
+  } catch (_e) { /* best-effort */ }
+  const stage_awareness = deriveStageLine(Array.isArray(spine.milestones) ? spine.milestones : []);
+
   const cad = (cadRes?.ok && cadRes.data?.[0]) || null;
   const deal = {
     stage: tag(bd && bd.stage, 'sf'),
+    stage_awareness,
+    role_evolution,
+    open_issues,
     sf_opportunity_id: tag(bd && bd.sf_opp_id, 'sf'),
     parties,
     commission: Array.isArray(spine.commission) ? spine.commission : [],

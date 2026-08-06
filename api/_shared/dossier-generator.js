@@ -576,6 +576,76 @@ function renderDocuments(docs) {
   return `<h2>Documents on File</h2><table class="hist"><thead><tr><th>Type</th><th>File</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+// W7.4 — collapsible evidence quotes for an analysis proposal. Deterministic;
+// escapes the quotes; caps count. Renders nothing when there is no evidence.
+function renderEvidence(evidence) {
+  const ev = Array.isArray(evidence) ? evidence.filter((e) => e && e.quote) : [];
+  if (!ev.length) return '';
+  const items = ev.slice(0, 4).map((e) =>
+    `<li><span class="src">${esc(String(e.comm_id || '').slice(0, 8))}</span> &ldquo;${esc(String(e.quote).slice(0, 300))}&rdquo;</li>`
+  ).join('');
+  return `<details class="evidence"><summary class="src">evidence (${ev.length})</summary><ul style="margin:4px 0 0;padding-left:16px">${items}</ul></details>`;
+}
+
+const ROLE_LABEL = {
+  decision_maker: 'decision-maker', transaction_manager: 'transaction manager',
+  attorney: 'attorney', lender: 'lender', broker: 'broker', analyst: 'analyst',
+  principal: 'principal', other: 'party',
+};
+
+// W7.4 — the ANALYSIS panels: deterministic stage-awareness line, open-issues
+// "what's coming" panel, and the emerging-roles note. All PROPOSALS are clearly
+// labeled ANALYSIS; the stage line is deterministic (no LLM).
+function renderDealAnalysis(d) {
+  const out = [];
+
+  // Stage awareness — deterministic from the milestone set.
+  const sa = d.stage_awareness || null;
+  if (sa && sa.line) {
+    const reg = sa.regressed
+      ? `<div class="conflict">${esc(sa.regression_note || 'Stage regression detected.')}</div>`
+      : '';
+    out.push(`<h2>Deal Stage</h2><table class="kv"><tr><td class="v">${esc(sa.line)}</td></tr></table>${reg}`);
+  }
+
+  // Open issues / what's coming — ANALYSIS (proposals). Open first, then recently-resolved.
+  const issues = Array.isArray(d.open_issues) ? d.open_issues : [];
+  if (issues.length) {
+    const order = { deadline: 0, commitment: 1, ask: 2, question: 3 };
+    const openRows = issues.filter((i) => i && i.status !== 'resolved')
+      .sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
+    const resolvedRows = issues.filter((i) => i && i.status === 'resolved');
+    const row = (i, resolved) => {
+      const due = i.due_hint ? ` <span class="src">&middot; due ${esc(String(i.due_hint).slice(0, 40))}</span>` : '';
+      const status = resolved ? '<span class="badge b-rec">resolved</span>' : '<span class="badge b-off">open</span>';
+      const ev = renderEvidence(resolved && Array.isArray(i.closing_evidence) ? i.closing_evidence : i.evidence);
+      return `<tr><td>${esc(i.kind || 'ask')}</td><td>${esc(i.title || '')}${due} ${status}${ev}</td></tr>`;
+    };
+    const body = [...openRows.map((i) => row(i, false)), ...resolvedRows.map((i) => row(i, true))].join('');
+    out.push(
+      `<h2>What&rsquo;s Coming / Open Issues <span class="src">(Analysis &mdash; proposals from correspondence)</span></h2>` +
+      `<table class="hist"><thead><tr><th>Kind</th><th>Item</th></tr></thead><tbody>${body}</tbody></table>`
+    );
+  }
+
+  return out.join('\n');
+}
+
+// W7.4 — emerging-role note appended under Parties ("emerging decision-maker: …,
+// per N threads"). ANALYSIS proposal, evidence-collapsible.
+function renderEmergingRoles(roles) {
+  const rows = Array.isArray(roles) ? roles.filter((r) => r && r.party && r.proposed_role) : [];
+  if (!rows.length) return '';
+  const lines = rows.slice(0, 8).map((r) => {
+    const label = ROLE_LABEL[r.proposed_role] || String(r.proposed_role).replace(/_/g, ' ');
+    const n = Number(r.thread_count) || (Array.isArray(r.evidence) ? new Set(r.evidence.map((e) => e.comm_id)).size : 0);
+    const per = n ? ` <span class="src">&middot; per ${n} thread${n === 1 ? '' : 's'}</span>` : '';
+    const conf = r.confidence != null ? ` <span class="src">&middot; conf ${esc(Number(r.confidence).toFixed(2))}</span>` : '';
+    return `<li>emerging ${esc(label)}: <b>${esc(r.party)}</b>${per}${conf}${renderEvidence(r.evidence)}</li>`;
+  }).join('');
+  return `<div class="analysis"><div class="lbl">Emerging roles &mdash; Analysis (proposals from correspondence, not asserted facts)</div><ul style="margin:8px 0 0;padding-left:18px">${lines}</ul></div>`;
+}
+
 function renderDealSections(p) {
   const d = p.deal || {};
   const out = [];
@@ -591,6 +661,9 @@ function renderDealSections(p) {
     kvRow('Year-1 base rent', lease.annual_base_rent, fmtMoney),
     kvRow('Lease term', renderTermTag(lease)),
   ].filter(Boolean)));
+
+  // 2a. W7.4 — deterministic stage line + open-issues "what's coming" panel.
+  out.push(renderDealAnalysis(d));
 
   // 2b. Commission (stage-aware). Absent → "Not on file" (no ELA linked).
   if (Array.isArray(d.commission) && d.commission.length) {
@@ -634,9 +707,9 @@ function renderDealSections(p) {
       const flag = pt.flag ? ` <span class="badge b-off">${esc(pt.flag)}</span>` : '';
       return `<tr><td>${esc(pt.side || '')}</td><td>${esc(pt.role || '')}</td><td>${esc(pt.name || '')}${flag}</td><td class="src">${esc(pt.source || '')}</td></tr>`;
     }).join('');
-    out.push(`<h2>Parties</h2><table class="hist"><thead><tr><th>Side</th><th>Role</th><th>Party</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`);
+    out.push(`<h2>Parties</h2><table class="hist"><thead><tr><th>Side</th><th>Role</th><th>Party</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>${renderEmergingRoles(d.role_evolution)}`);
   } else {
-    out.push(`<h2>Parties</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>`);
+    out.push(`<h2>Parties</h2><table class="kv"><tr><td class="v">${NA}</td></tr></table>${renderEmergingRoles(d.role_evolution)}`);
   }
 
   // 3b. Conflicts (surfaced, never auto-resolved).
@@ -909,4 +982,4 @@ export async function recordDossier({
   };
 }
 
-export const __test__ = { renderTag, sanitizeAnalysisFragment, renderPropertySections, renderDealSections, esc, NA };
+export const __test__ = { renderTag, sanitizeAnalysisFragment, renderPropertySections, renderDealSections, renderDealAnalysis, renderEmergingRoles, renderEvidence, esc, NA };
