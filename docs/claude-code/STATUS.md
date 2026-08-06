@@ -384,3 +384,23 @@ Parity showed **40 drift** — every block EXCEPT comps went stale across all 5 
 ### Carried forward (non-blocking)
 - Review lanes: prompt-50 (57 rows) + 269 E Caroline (2) + NEW prompt-57 exclusions (10: no/short-term + no-price) — data-acquisition/verification backlog, all reversible/auditable.
 - "Always-include-our-deals" opt-in (Woodland Hills size-rank); rotate `LCC_API_KEY`; Census key (19 parked). Cosmetic: `subject.kind` still "place".
+
+
+## Connected-tools rollout — kickoff 2026-08-06
+
+Comps arc complete → moving to roll the LCC tools out across all 4 surfaces (Copilot, ChatGPT, Northmarq,
+Personal-Claude skills). Kit: `docs/comps-rollout/ROLLOUT-AND-TEST-KIT-2026-08-06.md` (foundation order, smoke-test
+baseline, per-surface wire-up + test scripts).
+
+**Foundation (Scott, gates everything):** (1) redeploy BOTH `tranquil-delight` AND the standalone MCP from current
+`main` — engine 36–57 was verified only against the standalone MCP; ChatGPT/Copilot/Northmarq reach the engine via
+`tranquil-delight`, so if it's behind they'll still show old comps. (2) Rotate `LCC_API_KEY` once, distribute the
+new value to each surface as wired. (3) Land prompt 58.
+
+**Connector smoke-test baseline (2026-08-06):** ✅ `generate_comps`, `synthesize_comps`, `get_daily_briefing`,
+`get_pipeline_health`, `get_queue_summary` all correct. ❌ **`get_property_context`** returns `not_on_file` for
+properties that exist (incl. 31964, which comps still hydrates) — regression; ❌ **`search_entities`** crashes
+(`.replace` of undefined). → **prompt 58** queued (fix both; don't roll those two out until merged).
+
+**Ops-health alerts noticed:** owner-reconcile queue depth 2,014 > 1,500; Power Automate HTTP-Switch + RCM AMBER —
+separate from comps, triage on request.
