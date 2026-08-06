@@ -589,7 +589,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 27,
+        _version: 28,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
@@ -3640,7 +3640,14 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         figures.push({ name, designation, jobTitle, company, email, phones, addressLines });
       }
 
-      return globalThis.__lccForSaleContacts.mapForSaleFigures(figures);
+      try {
+        console.warn('[LCC costar] structured raw figures:',
+          JSON.stringify(figures.map(f => ({ name: f.name, desig: f.designation, job: f.jobTitle, ph: f.phones, addr: f.addressLines }))));
+      } catch (_) {}
+      const mapped = globalThis.__lccForSaleContacts.mapForSaleFigures(figures);
+      console.warn(`[LCC costar] structured mapped=${mapped.length}:`,
+        mapped.map(c => `${c.name}(${c.role})`).join('; '));
+      return mapped;
     } catch (err) {
       try { console.warn('[costar] extractStructuredForSaleContacts failed:', err && err.message); } catch (_) {}
       return [];
