@@ -417,3 +417,25 @@ separate from comps, triage on request.
 **Connector smoke-test baseline is now fully green:** generate_comps, synthesize_comps, get_daily_briefing, get_pipeline_health, get_queue_summary, get_property_context, search_entities all correct → the rollout kit's "Foundation #3" is satisfied; property-context + entity-search can now ride out to the other surfaces.
 
 Note (from the 58 response, unrelated): a pre-existing failure in `test/mcp-comps-http-route.test.mjs` fails on a clean tree too — not caused by 58; flag if we want it triaged.
+
+
+## Rollout progress 2026-08-06 — Copilot/ChatGPT wiring + prompt 59 (curated GPT spec)
+
+**Canon:** re-rendered to **v1.4.3** (0 drift); comps block compressed to fit Copilot's 20k limit. Fresh paste files
+(v1.4.3) delivered: `Copilot_LCC_Deal_Agent_Instructions_v1.4.3.md` (19,567 chars, under 20k) + `ChatGPT_LCC-CANON_Knowledge_v1.4.3.md`.
+Stale v1.4.2 paste files retired.
+
+**Copilot Studio:** paste file + wiring steps delivered (MCP `/mcp`, Bearer new key, publish, smoke test). Awaiting Scott's paste + test.
+
+**ChatGPT GPT:** instructions/knowledge pasted; the briefing came back from-memory because the **Action** wasn't wired.
+Diagnosed: importing the full `/api/copilot-spec` (46 ops) hits ChatGPT's **30-op cap**; the static `lcc-openapi.yaml` is a
+hand-maintained snapshot that had drifted (declared briefing at `/api/ai/daily-briefing` vs live `/api/daily-briefing`).
+
+**Prompt 59 — IMPLEMENTED, PR #1592, awaiting merge+redeploy.** Serves a curated ≤30-op ChatGPT spec live from the routes:
+`CHATGPT_CURATED_OPERATIONS` (single source, 15 flat user-facing tools) + `generateChatGptSpec()` served at `GET /api/gpt-spec`
+and `/api/copilot-spec?surface=chatgpt` (no-auth GET, Bearer for calls); briefing canonicalized to `/api/daily-briefing`;
+static yaml retired to a GENERATED+stamped file (`npm run spec:chatgpt`); anti-drift CI test (every curated op → mounted+Bearer route, ≤30 ops).
+`/api/copilot-spec` (full 46) + `/api/copilot-spec-v2` (swagger2, Copilot) unchanged. Code-only → redeploy tranquil-delight + standalone MCP.
+**Next:** merge #1592 → redeploy → import ChatGPT Action from `{tranquil-delight}/api/gpt-spec` + Bearer key → verify briefing/comps live.
+
+**Connector baseline (58):** fully green — all 7 tools correct.
