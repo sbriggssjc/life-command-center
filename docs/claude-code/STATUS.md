@@ -439,3 +439,20 @@ static yaml retired to a GENERATED+stamped file (`npm run spec:chatgpt`); anti-d
 **Next:** merge #1592 → redeploy → import ChatGPT Action from `{tranquil-delight}/api/gpt-spec` + Bearer key → verify briefing/comps live.
 
 **Connector baseline (58):** fully green — all 7 tools correct.
+
+
+## ChatGPT surface — COMPLETE 2026-08-06 ✅
+
+`getQueueSummary` (and the other Actions) now return live data in the published GPT (verified: 1,148 queue items,
+priority bands, real government ownership-resolution top items). Prompts 59 (curated `/api/gpt-spec` endpoint) + 60
+(OpenAPI 3.1.0 + `components.schemas`) merged, live, and imported clean.
+
+**What it took to get ChatGPT calling the Actions (record for the other surfaces):**
+1. **Curated ≤30-op spec** served live at `/api/gpt-spec` (59) — the full 46-op `/api/copilot-spec` trips ChatGPT's 30-op cap.
+2. **OpenAPI 3.1.0 + `components.schemas: {}`** (60) — ChatGPT's importer rejects 3.0.3 and a missing schemas object.
+3. **Capabilities OFF: Web Search AND Code Interpreter** — with them on, the GPT answered data questions by web-searching ("queue" → Minecraft/AWS docs) or reading the canon knowledge file via Code Interpreter, instead of calling the Action.
+4. **Persona referencing the REAL operationIds** — the old `gpt-actions-system-prompt.txt` told the model to call `get_daily_briefing_snapshot` / `search_entity_targets` (Copilot dispatch names that DON'T exist in the curated spec), so it never found the tool. Rewrote it to `getDailyBriefing` / `getQueueSummary` / `getPipelineHealth` / `synthesizeComps` / `getPropertyContext` / … + a hard "Actions-for-data, knowledge-file-is-rules-only, never web-search/fabricate" rule (committed `4aab2618`).
+
+Auth = API Key / Bearer / raw `LCC_API_KEY` (no "Bearer " prefix — ChatGPT adds it). Privacy policy URL set. Import via URL (`/api/gpt-spec`), not a pasted file.
+
+**Rollout status:** Personal-Claude connector ✅ (baseline green). ChatGPT ✅. **Copilot** — paste file + wiring steps delivered, awaiting Scott's paste + smoke test. **Northmarq** — prompt-diff + admin-connector still to do. **Personal-Claude skills** — v1.4.3 comps sync still to do.
