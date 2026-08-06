@@ -19,6 +19,18 @@
 >    `docs/copilot/agent-instructions.md` into Copilot Studio → LCC Deal Agent → Instructions
 >    → Publish. `tools/check-parity.mjs` guards render drift; `test/copilot-connector-drift.test.mjs`
 >    guards spec drift.
+>
+> **ONE security definition only (root cause of the 2026-08-06 agent outage):** Power
+> Platform honors exactly ONE securityDefinition per custom connector. The spec once
+> carried two (apiKey `X-LCC-Key` + bearerAuth `Authorization`); re-importing it flipped
+> the connector's API-key header to `Authorization`, the saved connection stopped
+> sending `X-LCC-Key`, and EVERY agent message failed 401 → "I'm having trouble right
+> now." Fix applied: spec v4.1.1 keeps only apiKey/`X-LCC-Key`; the connector's
+> Security tab must always read Parameter name = `X-LCC-Key`, location = Header. After
+> ANY re-import, check the Security tab and run Test → dispatchCopilotAction before
+> touching the agent. The connector the agent binds to is **"LCC Intelligence"**
+> (Power Automate → Custom connectors, env Default-fccf69d3); "LCC Deal Intelligence"
+> is a stray/legacy duplicate — do not import into it.
 
 # Copilot Studio Setup Guide — LCC Assistant
 
