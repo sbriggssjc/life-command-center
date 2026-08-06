@@ -15,6 +15,39 @@ Plan: `docs/architecture/WAVE7_COMMS_CONTEXT_PROPAGATION_PLAN.md`
 | **W7.3** Call notes + Microsoft-side capture | **BUILT — awaiting flag flip / connector** | Three capture paths, one spine shape: in-app quick-log (`/api/intake-log-call`), Copilot actions (`log_call_note` + `tag_comm_to_deal`), Outlook category tagging (`/api/intake-tagged-comm`, flag `TAGGED_COMM_INTAKE`). All land as deal-stamped `activity_events` → W7.2 propagates them with zero new propagation code. |
 | W7.4 Role evolution + open-issues | **BUILT — flag off** (`W74_ROLE_ISSUES`) | Evidence-validated role-evolution + open-issues propagation pass. |
 | **W7.5** Outbound loop closure + per-action summaries | **BUILT — flag off for Part C** (`W75_ACTION_SUMMARY`) | (A) tagged outbound sends advance to-dos; (B) untagged Sent-Items sweep feeds `handleOutlookSent` + cross-path de-dupe; (C) flag-gated per-action Ollama narration. Parts A/B live once merged (extend the live engine). |
+| **W7.6** Mailbox Mirror (Outlook folders reflect open work) | **BUILT — flag off** (`MAILBOX_MIRROR`) | PULL model: LCC publishes a deterministic (no-LLM) worklist of intake-captured flagged emails whose loop closed (all to-dos terminal, OR a later in-thread reply, OR the inbox_item triaged); a PA "mover" flow moves each from "Intake Staged, Not Complete" → Processed via Graph and acks back. Move-only, never delete. Own ledger `lcc_mailbox_reconcile_ledger` (idempotent, 1h backoff, park+alert after 5 fails). Endpoints `GET /api/mailbox-reconcile-worklist` + `POST /api/mailbox-reconcile-ack`. Migration `20260824120000`; PA spec `docs/setup/OUTLOOK_MAILBOX_MIRROR_FLOW.md`. |
+
+### W7.6 — session log (2026-08-06)
+Branch `claude/clever-maxwell-xlc52x`.
+
+**Mailbox Mirror — Outlook folders reflect open LCC work.** The W7.5 out-of-scope
+mailbox write-back, built as a PULL model (LCC never touches the mailbox).
+- **Migration `20260824120000_lcc_w7_6_mailbox_mirror.sql`** (applied live to LCC
+  Opps `xengecqvemvfknjvbvrq`, mirror-from-applied-SQL): the ledger
+  `lcc_mailbox_reconcile_ledger` (unique on `internet_message_id`), the
+  deterministic worklist view `v_lcc_mailbox_reconcile_worklist`, the ack RPC
+  `lcc_mailbox_reconcile_ack`, and the `feature_flags_registry` row for
+  `MAILBOX_MIRROR` (off).
+- **Gate (pure SQL, no LLM):** a flagged-email `inbox_item` is CLOSED when ANY of
+  (a) every to-do generated from it (`action_items.inbox_item_id` lineage) is
+  terminal, (b) a later outbound comm exists in the same `conversation_id`
+  (`outlook_sent`/`outlook_tagged`), (c) the `inbox_item` was triaged
+  `dismissed`/`archived`. Withheld while the deal has an open `offer_review`;
+  excludes ledger-moved/parked/backoff messages.
+- **Endpoints** (`api/_handlers/mailbox-reconcile.js`, wired in `intake.js` +
+  `server.js`): `GET /api/mailbox-reconcile-worklist` (up to N, default 25,
+  FIFO by `closed_at`) + `POST /api/mailbox-reconcile-ack`
+  (`{internet_message_id, moved, reason?, error?}`). Flag off → `{skipped:'flag_off'}`.
+  Failed moves back off 1h and park after 5 tries with an `lcc_health_alerts`
+  (`mailbox_mirror_parked`) row.
+- **PA spec** `docs/setup/OUTLOOK_MAILBOX_MIRROR_FLOW.md` (Graph resolve-by-
+  internetMessageId → move → PATCH flag/isRead → ack; 36y fx/`?['value']` pitfalls).
+- **Verified:** live worklist = 3,908 closed-loop flagged emails (all via the
+  triage arm — historical inbound predates W7.1 `conversation_id`, so the
+  thread-reply arm is wired-but-inert until forward mail carries it). Ack RPC
+  round-trip (5 fails → park + alert → success) and all 8 gate invariants proven by
+  self-rolling-back synthetic fixtures (0 residue). JS tests
+  `test/mailbox-reconcile.test.mjs` (11) incl. the no-LLM-import assertion.
 
 ### W7.1 — session log (2026-08-06)
 Branch `claude/deal-correspondence-attribution-live-s8ta63`.
