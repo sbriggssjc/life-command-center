@@ -105,7 +105,10 @@ async function parkUnresolved({ workspaceId, internetMsgId, subject, from, hint,
     instructions: 'An Outlook message was tagged for LCC but could not be matched to a single open deal ('
       + reason + '). Pick the deal (Copilot: tag_comm_to_deal with the internet_message_id) or ignore.',
     entity_id: null,
-    domain: null,
+    // research_tasks.domain is NOT NULL — an explicit null here made every park
+    // insert fail silently (caught 2026-08-06, session 36y). Tagged mail is
+    // deal-agnostic until resolved, so it parks under the generic 'lcc' domain.
+    domain: 'lcc',
     status: 'queued',
     priority: 30,
     source_record_id: String(internetMsgId),
@@ -122,9 +125,13 @@ async function parkUnresolved({ workspaceId, internetMsgId, subject, from, hint,
   try {
     const r = await q('POST', 'research_tasks?on_conflict=source_table,source_record_id,research_type,domain',
       row, { headers: { Prefer: 'return=representation,resolution=ignore-duplicates' } });
-    return { parked: true, id: Array.isArray(r.data) ? r.data[0]?.id : null };
-  } catch (_e) {
-    return { parked: false };
+    const insertedId = Array.isArray(r.data) ? r.data[0]?.id : null;
+    return { parked: true, id: insertedId };
+  } catch (e) {
+    // Never report parked:true on a failed insert — a silently dropped park is a
+    // lost message in the never-guess lane. Log loudly instead.
+    console.error('[intake-tagged-comm] park insert FAILED', String(e?.message || e).slice(0, 300));
+    return { parked: false, park_error: String(e?.message || e).slice(0, 200) };
   }
 }
 
