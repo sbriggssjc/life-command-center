@@ -35,6 +35,10 @@ import { invokeExtractionAI } from '../_shared/ai.js';
 import { deriveNextStep } from '../_shared/next-step-ai.js';
 import { detectMilestoneCues } from '../_shared/deal-milestone-cues.js';
 import { buildSummaryPrompt, buildIncrementalSummaryPrompt, parseSummaryResponse } from '../_shared/deal-comms-summary.js';
+import {
+  buildRoleIssuesPrompt, parseRoleIssuesResponse, validateRoles, applyIssueLifecycle,
+  commsIndex, roleIssuesWatermark,
+} from '../_shared/deal-role-issues.js';
 import { buildDealPacket } from './entities-handler.js';
 import { generateDossier, recordDossier } from '../_shared/dossier-generator.js';
 
@@ -282,6 +286,88 @@ async function propagateTodos(deal, newComms, perActivity) {
   return { generated, deduped };
 }
 
+// ── W7.4 role evolution + open-issues pass (LLM PROPOSES; evidence-validated) ─
+// Own seam: reads/writes lcc_deal_dossier_analysis (kind=roles|issues), versioned
+// like the summary. The per-deal watermark over the comm set short-circuits an
+// unchanged corpus (idempotent → 0 writes). AI failure skips this deal's pass
+// entirely (never blocks the summary/cue/to-do passes; the caller isolates it).
+// Returns { outcome:'written'|'skipped'|'preview', roles, issuesOpen, issuesClosed, dropped }.
+// With { dry:true } it does everything EXCEPT the writes (version flip / insert /
+// dropped-log) and returns the validated proposals for the dry-run report.
+async function refreshRoleIssues(deal, comms, runId, { dry = false } = {}) {
+  const watermark = roleIssuesWatermark(comms);
+
+  // Prior current analysis rows (roles + issues) for this deal.
+  let priorRoles = null, priorIssues = null;
+  try {
+    const r = await opsQuery('GET',
+      `v_lcc_deal_dossier_analysis_current?entity_id=eq.${enc(deal.entity_id)}` +
+      `&select=kind,payload,watermark`);
+    for (const row of (r.ok && Array.isArray(r.data) ? r.data : [])) {
+      if (row.kind === 'roles') priorRoles = row;
+      if (row.kind === 'issues') priorIssues = row;
+    }
+  } catch (_e) { /* first run → full path */ }
+
+  // Idempotency short-circuit: same corpus AND we already have current rows.
+  const bothPresent = priorRoles && priorIssues;
+  if (bothPresent && priorRoles.watermark === watermark && priorIssues.watermark === watermark) {
+    return { outcome: 'skipped', roles: 0, issuesOpen: 0, issuesClosed: 0, dropped: 0 };
+  }
+
+  const priorOpenIssues = (priorIssues && Array.isArray(priorIssues.payload))
+    ? priorIssues.payload.filter((i) => i && i.status !== 'resolved')
+    : [];
+
+  // One Ollama call. AI down/empty → skip this deal's pass (no writes).
+  let parsed = null, provider = null;
+  try {
+    const prompt = buildRoleIssuesPrompt(deal, comms, priorOpenIssues);
+    const resp = await invokeExtractionAI({ prompt });
+    parsed = parseRoleIssuesResponse(aiText(resp));
+    provider = resp?.provider || null;
+  } catch (_e) { parsed = null; }
+  if (!parsed) return { outcome: 'skipped', roles: 0, issuesOpen: 0, issuesClosed: 0, dropped: 0 };
+
+  const byId = commsIndex(comms);
+  const { roles, dropped: roleDrops } = validateRoles(parsed.roles, byId);
+  const life = applyIssueLifecycle(priorOpenIssues, parsed, byId);
+  const allDropped = [...roleDrops, ...life.dropped];
+
+  const openCount = life.issues.filter((i) => i.status !== 'resolved').length;
+  const now = new Date().toISOString();
+  const metaBase = { generated_by: 'w7.4_tick', ai_provider: provider, dropped: allDropped.length };
+
+  // Dry-run: return the validated proposals for eyeballing; write nothing.
+  if (dry) {
+    return {
+      outcome: 'preview', roles: roles.length, issuesOpen: openCount, issuesClosed: life.closed,
+      dropped: allDropped.length, proposed_roles: roles, proposed_issues: life.issues,
+    };
+  }
+
+  // Log dropped proposals for audit (never surfaced). Best-effort.
+  if (allDropped.length) {
+    await opsQuery('POST', 'lcc_deal_analysis_dropped_log',
+      allDropped.map((dd) => ({ entity_id: deal.entity_id, run_id: runId || null, kind: dd.type || dd.kind || null, item: dd })),
+      { headers: { Prefer: 'return=minimal' } }).catch(() => null);
+  }
+
+  // Version flip + insert per kind (mirror the summary pass).
+  await opsQuery('PATCH',
+    `lcc_deal_dossier_analysis?entity_id=eq.${enc(deal.entity_id)}&is_current=eq.true`,
+    { is_current: false }).catch(() => null);
+  await opsQuery('POST', 'lcc_deal_dossier_analysis', [
+    { entity_id: deal.entity_id, kind: 'roles', payload: roles, watermark, source: 'comms_tick',
+      is_current: true, generated_at: now, metadata: { ...metaBase, role_count: roles.length } },
+    { entity_id: deal.entity_id, kind: 'issues', payload: life.issues, watermark, source: 'comms_tick',
+      is_current: true, generated_at: now,
+      metadata: { ...metaBase, open: openCount, opened: life.opened, closed: life.closed, carried: life.carried } },
+  ], { headers: { Prefer: 'return=minimal' } }).catch(() => null);
+
+  return { outcome: 'written', roles: roles.length, issuesOpen: openCount, issuesClosed: life.closed, dropped: allDropped.length };
+}
+
 // ── Dossier regenerate-on-change + context-packet invalidation ──────────────
 async function refreshDossierAndPackets(deal, workspaceId) {
   let dossierRegenerated = 0, packetsRefreshed = 0;
@@ -350,8 +436,12 @@ export async function handleDealCommsPropagateTick(req, res) {
     summaries_written: 0, summary_skipped: 0,
     milestones_written: 0, milestones_rolled_up: 0, milestone_candidates: 0,
     todos_generated: 0, todos_deduped: 0, reply_overdue_generated: 0,
+    roles_written: 0, issues_open: 0, issues_closed: 0, analysis_skipped: 0, analysis_dropped: 0,
     dossiers_regenerated: 0, packets_refreshed: 0,
   };
+  // W7.4 role/issues pass runs only when its own flag is set (the parent tick
+  // still gates the tick itself). ?force=1 also exercises it for the dry/live gate.
+  const roleIssuesEnabled = !!process.env.W74_ROLE_ISSUES;
   const errors = [];
 
   try {
@@ -378,6 +468,28 @@ export async function handleDealCommsPropagateTick(req, res) {
           deterministic_cues: cueCount, todo_eligible: todoEligible,
         };
       });
+      // W7.4 — role/issues dry preview (no writes). Only when the pass is
+      // enabled/forced AND ?roles=1 is asked (it invokes Ollama per deal, so it's
+      // opt-in). Caps to the first few comm-active deals for a readable report.
+      let roleIssuesPreview = null;
+      if ((roleIssuesEnabled || force) && truthy(q.roles)) {
+        roleIssuesPreview = [];
+        const previewDeals = deals.filter((d) => Array.isArray(d.comms) && d.comms.length)
+          .slice(0, Math.min(5, Math.max(1, parseInt(q.roles_limit || '5', 10) || 5)));
+        for (const d of previewDeals) {
+          try {
+            const ri = await refreshRoleIssues(
+              { entity_id: d.entity_id, deal_name: d.deal_name },
+              Array.isArray(d.comms) ? d.comms : [], null, { dry: true });
+            roleIssuesPreview.push({
+              entity_id: d.entity_id, deal_name: d.deal_name, outcome: ri.outcome,
+              roles: ri.proposed_roles || [], issues: ri.proposed_issues || [], dropped: ri.dropped || 0,
+            });
+          } catch (e) {
+            roleIssuesPreview.push({ entity_id: d.entity_id, deal_name: d.deal_name, error: String(e?.message || e).slice(0, 160) });
+          }
+        }
+      }
       // Reply-SLA dry-count — how many open deals currently trip the SLA (Scott
       // sanity-checks this before the first live generation).
       const replySla = await propagateReplySla({ dry: true });
@@ -390,6 +502,7 @@ export async function handleDealCommsPropagateTick(req, res) {
       return res.status(200).json({
         ok: true, dry_run: true, run_id: runId, deals_scanned: deals.length,
         reply_sla_candidates: replySla.candidates, deals: preview,
+        role_issues_preview: roleIssuesPreview,
       });
     }
 
@@ -411,6 +524,22 @@ export async function handleDealCommsPropagateTick(req, res) {
         // 3. to-dos (recent inbound matcher-backfill only)
         const td = await propagateTodos(deal, newComms, perActivity);
         c.todos_generated += td.generated; c.todos_deduped += td.deduped;
+        // 3.5 W7.4 — role evolution + open issues (flag-gated; isolated so a
+        // failure here NEVER blocks the summary/cue/to-do passes above or the
+        // dossier below). Runs before the dossier so a fresh analysis flows in.
+        if (roleIssuesEnabled || force) {
+          try {
+            const ri = await refreshRoleIssues(deal, comms, null);
+            if (ri.outcome === 'written') {
+              c.roles_written += ri.roles; c.issues_open += ri.issuesOpen;
+              c.issues_closed += ri.issuesClosed; c.analysis_dropped += ri.dropped;
+            } else {
+              c.analysis_skipped += 1;
+            }
+          } catch (e) {
+            errors.push({ entity_id: d.entity_id, stage: 'role_issues', error: String(e?.message || e).slice(0, 200) });
+          }
+        }
         // 4. dossier + packets
         const dp = await refreshDossierAndPackets(deal, workspaceId);
         c.dossiers_regenerated += dp.dossierRegenerated; c.packets_refreshed += dp.packetsRefreshed;
@@ -440,6 +569,8 @@ export async function handleDealCommsPropagateTick(req, res) {
       milestone_candidates: c.milestone_candidates,
       todos_generated: c.todos_generated, todos_deduped: c.todos_deduped,
       reply_overdue_generated: c.reply_overdue_generated,
+      roles_written: c.roles_written, issues_open: c.issues_open, issues_closed: c.issues_closed,
+      analysis_skipped: c.analysis_skipped, analysis_dropped: c.analysis_dropped,
       dossiers_regenerated: c.dossiers_regenerated, packets_refreshed: c.packets_refreshed,
       error_count: errors.length, ok, detail: errors.length ? { errors: errors.slice(0, 20) } : null,
     });
@@ -448,6 +579,7 @@ export async function handleDealCommsPropagateTick(req, res) {
       `consumed=${c.comms_consumed} summ=${c.summaries_written}/${c.summary_skipped} ` +
       `mstone=${c.milestones_written}(+${c.milestones_rolled_up}roll,+${c.milestone_candidates}cand) ` +
       `todos=${c.todos_generated}/${c.todos_deduped} replySLA=${c.reply_overdue_generated} ` +
+      `roles=${c.roles_written} issues=${c.issues_open}open/${c.issues_closed}closed(skip=${c.analysis_skipped},drop=${c.analysis_dropped}) ` +
       `dossier=${c.dossiers_regenerated} packets=${c.packets_refreshed} errors=${errors.length}`);
 
     return res.status(200).json({ ok, run_id: runId, ...c, errors: errors.slice(0, 20) });
