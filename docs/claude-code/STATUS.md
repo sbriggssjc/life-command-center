@@ -404,3 +404,16 @@ properties that exist (incl. 31964, which comps still hydrates) — regression; 
 
 **Ops-health alerts noticed:** owner-reconcile queue depth 2,014 > 1,500; Power Automate HTTP-Switch + RCM AMBER —
 separate from comps, triage on request.
+
+
+## Reconcile 2026-08-06 (prompt 58 — merged, live, verified) — connector baseline now FULLY GREEN
+
+**58 landed** (PR #1589, code-only fix, standalone MCP redeployed). Re-ran the two broken tools live:
+- ✅ `get_property_context("1050 Old Camp Rd, The Villages, FL")` → **resolved**, confidence 0.96, property_id 31964, full entity (12 chairs / 18 patients / cap 6.75% / lease + listing 12223 + 15 documents). No more false `not_on_file`.
+- ✅ `search_entities("DaVita")` → 10 entity matches, no `.replace` crash.
+
+**Root cause (single, for both):** connector passes the free-text arg under a key the handler didn't read (`query`/`q`/`request`/bare string) → empty ref → false `not_on_file` / `.replace` of undefined. Fix = `firstNonEmptyString()` alias acceptance in both `server.js` handlers; `{status,candidates}` envelope preserved. Code-only (no DB/env change). DIA resolver leg confirmed live (31964 resolved from dia).
+
+**Connector smoke-test baseline is now fully green:** generate_comps, synthesize_comps, get_daily_briefing, get_pipeline_health, get_queue_summary, get_property_context, search_entities all correct → the rollout kit's "Foundation #3" is satisfied; property-context + entity-search can now ride out to the other surfaces.
+
+Note (from the 58 response, unrelated): a pre-existing failure in `test/mcp-comps-http-route.test.mjs` fails on a clean tree too — not caused by 58; flag if we want it triaged.
