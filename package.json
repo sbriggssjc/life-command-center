@@ -21,7 +21,8 @@
     "ai:apply-manual": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_MANUAL_EDGE_PRESET.env.example --target .env.local",
     "test": "node --test test/*.test.js test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.js test/*.test.mjs",
-    "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs"
+    "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs",
+    "spec:chatgpt": "node scripts/generate-chatgpt-spec.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

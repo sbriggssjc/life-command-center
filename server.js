@@ -285,6 +285,9 @@ app.all('/api/copilot/intelligence/:action', (req, res) => { req.query._route = 
 app.all('/api/copilot/compat/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
 app.all('/api/copilot-spec', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'openapi'; operationsHandler(req, res); });
 app.all('/api/copilot-spec-v2', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'swagger2'; operationsHandler(req, res); });
+// Curated ChatGPT GPT-Action spec (Prompt 59) — the ≤30-op user-facing subset.
+// Also reachable via /api/copilot-spec?surface=chatgpt.
+app.all('/api/gpt-spec', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'chatgpt'; operationsHandler(req, res); });
 app.all('/api/copilot-manifest', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'manifest'; operationsHandler(req, res); });
 app.all('/api/chat', (req, res) => { req.query._route = 'chat'; operationsHandler(req, res); });
 app.all('/api/draft', (req, res) => { req.query._route = 'draft'; operationsHandler(req, res); });
