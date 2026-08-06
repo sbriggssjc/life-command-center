@@ -72,7 +72,7 @@ import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
 import { logSalesforceActivity, resolveDraftLogMode, createSalesforceTask } from './_shared/salesforce.js';
-import { ACTION_SCHEMAS, generateOpenApiSpec, generateSwagger2Spec, generatePluginManifest } from './_shared/action-schemas.js';
+import { ACTION_SCHEMAS, generateOpenApiSpec, generateSwagger2Spec, generatePluginManifest, generateChatGptSpec } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
 import { ingestPdfWorker } from './intake.js';
 import {
@@ -7019,6 +7019,13 @@ async function handleChatRoute(req, res) {
     const host = req.headers?.host || fallbackHost;
     const baseUrl = `${proto}://${host}`;
 
+    // Curated ChatGPT GPT-Action spec (Prompt 59). ChatGPT caps a GPT Action at
+    // 30 operations, so it gets the ~15-op user-facing subset, NOT the full
+    // ACTION_REGISTRY dispatch spec. Reached via /api/gpt-spec or
+    // /api/copilot-spec?surface=chatgpt. No auth on the GET (import-time fetch).
+    if (req.query.copilot_spec === 'chatgpt' || req.query.surface === 'chatgpt') {
+      return res.status(200).json(generateChatGptSpec(baseUrl));
+    }
     if (req.query.copilot_spec === 'manifest') {
       return res.status(200).json(generatePluginManifest(baseUrl));
     }
