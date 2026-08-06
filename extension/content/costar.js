@@ -265,7 +265,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const _figAll  = deepQuerySelectorAll('figure[data-testid]').length;
       const _figC    = deepQuerySelectorAll('figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]').length;
       const _mailC   = deepQuerySelectorAll('a[href^="mailto:"]').length;
-      console.warn(`[LCC costar v29] capture: figures(any)=${_figAll} figures(contact)=${_figC} mailto=${_mailC} lines=${lines.length}`);
+      console.warn(`[LCC costar v30] capture: figures(any)=${_figAll} figures(contact)=${_figC} mailto=${_mailC} lines=${lines.length}`);
     } catch (_) {}
     const structuredContacts = extractStructuredForSaleContacts();
     let contacts = [];
@@ -589,7 +589,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 29,
+        _version: 30,
         // Round 76cg: never let raw document.title leak through as the
         // address. parseAddress(title) will succeed when the title contains
         // a real address (after stripping 'Properties | ' style prefixes).
@@ -3594,7 +3594,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
       console.warn(`[LCC costar] structured Contacts: ${figureEls.length} figure(s) found`);
 
-      const txt = (el) => (el && (el.textContent || '')).replace(/\s+/g, ' ').trim();
+      // Null-safe: a missing field (q1 → null) must yield '' — `(null && …)`
+      // returns null, and calling .replace on null throws (which previously
+      // aborted the whole loop into the catch and forced the fallback path).
+      const txt = (el) => ((el && el.textContent) ? el.textContent : '').replace(/\s+/g, ' ').trim();
       const figures = [];
       for (const fig of figureEls) {
         // The figure's inner content (name/designation/phone/email/address) is
@@ -3647,7 +3650,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         mapped.map(c => `${c.name}(${c.role})`).join('; '));
       return mapped;
     } catch (err) {
-      try { console.warn('[costar] extractStructuredForSaleContacts failed:', err && err.message); } catch (_) {}
+      try { console.warn('[LCC costar] extractStructuredForSaleContacts failed:', err && err.message, err && err.stack); } catch (_) {}
       return [];
     }
   }
