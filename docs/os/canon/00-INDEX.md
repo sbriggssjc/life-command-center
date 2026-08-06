@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.4.2** — 2026-08-06. (1.4.2: logging-and-touchpoints gains the W7.3 deal-spine capture
+**CANON_VERSION: 1.4.3** — 2026-08-06. (1.4.3: comps block compressed — every rule retained, denser phrasing — to bring the rendered Copilot instructions under Copilot Studio's 20,000-char limit. 1.4.2: logging-and-touchpoints gains the W7.3 deal-spine capture
 actions `log_call_note` + `tag_comm_to_deal` via dispatchCopilotAction — pick-list on ambiguity, never guess.) Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 

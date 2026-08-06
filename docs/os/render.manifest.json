@@ -17,12 +17,14 @@
         "bov",
         "intake-triage",
         "personal"
-      ]
+      ],
+      "pasteLimit": 20000,
+      "pasteSoftLimit": 19500
     },
     "chatgpt": {
       "external": true,
       "liveArtifact": null,
-      "deliverAs": "GPT Knowledge upload of surfaces/chatgpt.canon.md \u2014 Custom GPT instructions cap at 8000 chars, so the canon rides as a Knowledge file (no cap) and the instructions stay a short persona that points at it.",
+      "deliverAs": "GPT Knowledge upload of surfaces/chatgpt.canon.md — Custom GPT instructions cap at 8000 chars, so the canon rides as a Knowledge file (no cap) and the instructions stay a short persona that points at it.",
       "blocks": [
         "comps",
         "resolution",

@@ -57,6 +57,23 @@ for (const [id, s] of Object.entries(manifest.surfaces)) {
       const body = text.split('\n').filter(l => !l.startsWith('<!-- GENERATED') && !l.startsWith('<!-- Change a rule')).join('\n').trim();
       upsertLive(p, body, version, s.markerBegin, s.markerEnd);
       console.log(`  ↳ wrote managed region into ${s.liveArtifact}`);
+      // Length guard: Copilot Studio rejects Instructions over 20,000 chars.
+      // The paste region is everything below the first '---'. Warn at the soft
+      // ceiling so a canon addition never silently blows the hard limit.
+      if (s.pasteLimit) {
+        const live = readFileSync(p, 'utf8');
+        const cut = live.indexOf('\n---\n');
+        const pasteLen = (cut >= 0 ? live.slice(cut + 5) : live).length;
+        const soft = s.pasteSoftLimit || Math.floor(s.pasteLimit * 0.975);
+        if (pasteLen > s.pasteLimit) {
+          console.error(`  ✗ ${s.liveArtifact} paste region is ${pasteLen} chars — OVER the ${s.pasteLimit} hard limit. Trim canon blocks or surface sections before pasting.`);
+          process.exitCode = 1;
+        } else if (pasteLen > soft) {
+          console.warn(`  ⚠ ${s.liveArtifact} paste region is ${pasteLen} chars — within ${s.pasteLimit - pasteLen} of the ${s.pasteLimit} hard limit.`);
+        } else {
+          console.log(`  ↳ paste region ${pasteLen}/${s.pasteLimit} chars (${s.pasteLimit - pasteLen} headroom)`);
+        }
+      }
     } else console.log(`  ↳ live artifact not found (external?): ${s.liveArtifact}`);
   }
 }

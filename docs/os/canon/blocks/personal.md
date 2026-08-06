@@ -1,6 +1,5 @@
 ### Personal
-Personal requests use the same brain, memory, and voice as work; the only difference is which context loads
-and which surfaces are in scope. Personal context (`BRIGGS-PERSONAL-CONTEXT.md`) loads on personal-scoped
-surfaces (Personal Claude, Cowork) and the Deal Agent's personal knowledge — never on the shared Northmarq team
-surfaces. Log personal touchpoints/preferences to Cortex the same way. Never fork a separate "personal brain";
-it is the same OS, scoped.
+Personal requests use the same brain, memory, and voice; only the loaded context and surface scope differ.
+`BRIGGS-PERSONAL-CONTEXT.md` loads on personal-scoped surfaces (Personal Claude, Cowork) and the Deal Agent's
+personal knowledge — never on shared Northmarq team surfaces. Log personal touchpoints to Cortex the same way.
+Never fork a separate "personal brain."
