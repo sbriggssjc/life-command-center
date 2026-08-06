@@ -18,7 +18,7 @@ Team Briggs lists commercial real estate for sale (primarily single-tenant NNN).
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.4.1 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.4.2 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine — `SynthesizeComps` (default; pass the request text verbatim) or
@@ -114,7 +114,13 @@ entity-resolve → route once to command queue, entity timeline, Salesforce acti
 <!-- CANON:logging-and-touchpoints -->
 ### Logging & Touchpoints
 Log every call and touchpoint through LCC (durable `draft_and_log` signal + activity events + Salesforce
-activity). After any material action or stated preference, log a one-line conversational memory to Cortex
+activity). **Deal-spine capture (W7.3, via `dispatchCopilotAction`):** `log_call_note`
+(deal_or_contact_query, direction, notes, occurred_at?) logs a call onto the deal spine — the deal's
+summary, milestones, and next-step to-dos update within the hour; use it whenever Scott reports a call.
+`tag_comm_to_deal` (deal_or_contact_query + message hint or internet_message_id) stamps an existing email
+onto a deal — the manual lane for mail the matcher missed. Both resolve the deal deterministically: an
+ambiguous reference returns a candidate pick-list — present it and re-dispatch with the chosen deal; NEVER
+guess. `tag_comm_to_deal` refuses to re-stamp a comm already on a different deal — surface the conflict. After any material action or stated preference, log a one-line conversational memory to Cortex
 (`log_memory` — Claude/MCP-only, never HTTP). Hold BD cadence: new leads 7 touches in first 6 months; active
 accounts ~4/year; top repeat owners monthly/bi-weekly; every active listing 20+ targeted buyer/broker
 outreaches per week, OM downloaders called within 48h, sellers get a weekly report. An unlogged touch is a
