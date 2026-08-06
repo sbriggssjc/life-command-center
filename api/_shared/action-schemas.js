@@ -1438,7 +1438,7 @@ export function generateOpenApiSpec(registry, baseUrl = process.env.LCC_BASE_URL
  */
 export function generateChatGptSpec(baseUrl = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app') {
   const spec = {
-    openapi: '3.0.3',
+    openapi: '3.1.0',
     info: {
       title: 'Life Command Center — ChatGPT Tools',
       version: '1.0.0',
@@ -1447,6 +1447,11 @@ export function generateChatGptSpec(baseUrl = process.env.LCC_BASE_URL || 'https
     servers: [{ url: baseUrl, description: 'Production (tranquil-delight)' }],
     paths: {},
     components: {
+      // ChatGPT validates the curated spec as OpenAPI 3.1 and rejects a
+      // `components` block whose `schemas` is missing/not-an-object. The
+      // curated ops use INLINE request/response schemas (no `$ref`s into
+      // `#/components/schemas/*`), so an empty object is correct here.
+      schemas: {},
       securitySchemes: {
         bearerAuth: {
           type: 'http',
