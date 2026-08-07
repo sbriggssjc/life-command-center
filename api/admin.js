@@ -39,6 +39,13 @@ import {
   parseDupPairJson, isProposablePair, dupPairDisposition, DUP_PAIR_NEEDS_HUMAN_SIM,
   scoreDupPairsWithBudget,
 } from './_shared/dup-pair-planner.js';
+import {
+  LINK_POOL_CHAIN, LINK_POOL_PERSON_EMAIL, CHAIN_GAP_CATALOGUE, chainGapSpec,
+  chainSubjectRef, personEmailSubjectRef, normDomain as linkNormDomain,
+  valueGateChainRows, assembleEvidence, evidenceIsEmpty, evidenceHash, linkScoredKeyFor,
+  buildLinkPropagationPrompt, parseLinkProposalJson, normalizeLinkProposal,
+  validateLinkProposal, isProposableLink, LINK_MIN_CONFIDENCE, scoreLinksWithBudget,
+} from './_shared/link-propagation-planner.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
@@ -159,6 +166,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
+    case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -2402,6 +2410,406 @@ async function attachPqOppState(items) {
 }
 
 // ============================================================================
+// W8 U3 (Prompt 69, 2026-08-07): Ollama connection propagation — evidence-grounded
+// link proposals.
+//
+// Reuses U1/U2's shapes (pure planner module api/_shared/link-propagation-planner.js,
+// GET dry-run / ?score=1&n= inline sample / POST flag-gated apply, nightly cron,
+// in-migration flag, bounded+resumable scoring). For an ownership-chain gap
+// (v_ownership_chain_worklist) or a person-email-merge candidate
+// (v_lcc_person_email_merge_candidates), it assembles the evidence LCC ALREADY
+// holds (bounded), asks Ollama to propose the missing link WITH a VERBATIM quote,
+// DROPS + logs any proposal whose quote isn't a substring of that evidence (the
+// free precision floor, W7.4 pattern), and lands survivors in w8_u3_link_review for
+// a HUMAN verdict. No web search (internal evidence only). No evidence ⇒ no LLM
+// call (no_evidence counter). The verdict applies via the deterministic writer
+// (entity_relationships edge + provenance) — NEVER an auto-write.
+//
+//   GET  /api/link-propagation-tick             -> dry-run report (pool counts by gap)
+//   GET  /api/link-propagation-tick?score=1&n=  -> dry-run + inline model proposals (NO writes)
+//   POST /api/link-propagation-tick             -> apply: assemble + score + write proposals
+//                                                  (flag-gated; no-ops while OFF)
+// ============================================================================
+const LINK_MAX_CANDIDATES = Math.max(20, parseInt(process.env.LINK_MAX_CANDIDATES || '60', 10));
+const LINK_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.LINK_SCORE_BUDGET_MS || '150000', 10));
+const LINK_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.LINK_SCORE_BATCH_SIZE || '15', 10));
+const LINK_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.LINK_INLINE_N || '4', 10));
+const LINK_MIN_CONF = (() => {
+  const v = parseFloat(process.env.LINK_MIN_CONFIDENCE || String(LINK_MIN_CONFIDENCE));
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : LINK_MIN_CONFIDENCE;
+})();
+// The chain-gap catalogue keys (developer_unidentified | no_prior_owners_recorded).
+const LINK_CHAIN_GAPS = Object.keys(CHAIN_GAP_CATALOGUE);
+
+function linkPropagationEnabled(flagRow) {
+  const env = String(process.env.W8_U3_LINK_PROPAGATION || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchLinkPropagationFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U3_LINK_PROPAGATION&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Exclusion set: subject_refs already in w8_u3_link_review (any status). A re-scan
+// never re-proposes a subject a human already worked. Best-effort.
+async function fetchLinkKnownSubjects() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'w8_u3_link_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(String(x.subject_ref));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// The resumable scored-marker set persisted on the most recent scan batch
+// (details.scored_markers) — a linkScoredKeyFor per candidate seen last run, so a
+// row is re-scored ONLY when its evidence-hash changes (evidence changed).
+async function fetchLinkScoredMarkers() {
+  const set = new Set();
+  try {
+    const r = await opsQuery('GET', 'w8_u3_link_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && Array.isArray(r.data[0].details.scored_markers)) {
+      for (const m of r.data[0].details.scored_markers) if (m) set.add(String(m));
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// ── Evidence assembly (deterministic, bounded) — ONLY what LCC already holds. ──
+// Each helper is best-effort (a failed/absent source contributes nothing, never
+// throws). No web search. Returns an array of { source, ref, text } blocks.
+async function gatherChainEvidenceBlocks(row) {
+  const blocks = [];
+  const dom = linkNormDomain(row.source_domain);
+  const pid = row.source_property_id;
+  if (pid == null) return blocks;
+  // 1. Domain sale notes (sale_notes_raw + dia notes) — the richest free text.
+  try {
+    const noteCols = dom === 'dia' ? 'sale_id,sale_notes_raw,notes' : 'sale_id,sale_notes_raw';
+    const sr = await domainQuery(dom, 'GET', 'sales_transactions?select=' + noteCols
+      + '&property_id=eq.' + encodeURIComponent(pid) + '&order=sale_date.desc.nullslast&limit=5');
+    if (sr.ok && Array.isArray(sr.data)) {
+      for (const s of sr.data) {
+        if (s.sale_notes_raw) blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.sale_notes_raw });
+        if (s.notes) blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.notes });
+      }
+    }
+  } catch (_e) { /* best-effort */ }
+  // 2. Domain deed grantor/grantee (names a prior owner / developer).
+  try {
+    const dr = await domainQuery(dom, 'GET', 'deed_records?select=id,grantor,grantee'
+      + '&property_id=eq.' + encodeURIComponent(pid) + '&limit=5');
+    if (dr.ok && Array.isArray(dr.data)) {
+      for (const d of dr.data) {
+        const t = ['grantor: ' + (d.grantor || ''), 'grantee: ' + (d.grantee || '')].filter((x) => x.length > 9).join('; ');
+        if (t) blocks.push({ source: 'deed', ref: d.id, text: t });
+      }
+    }
+  } catch (_e) { /* best-effort */ }
+  // 3. Ops correspondence summaries / activity for the current owner entity.
+  if (row.current_owner_entity_id) {
+    try {
+      const ar = await opsQuery('GET', 'activity_events?select=activity_id,subject,body'
+        + '&entity_id=eq.' + encodeURIComponent(row.current_owner_entity_id)
+        + '&order=occurred_at.desc.nullslast&limit=4');
+      if (ar.ok && Array.isArray(ar.data)) {
+        for (const a of ar.data) {
+          const t = [a.subject || '', a.body || ''].filter(Boolean).join('\n');
+          if (t) blocks.push({ source: 'activity', ref: a.activity_id, text: t });
+        }
+      }
+    } catch (_e) { /* best-effort */ }
+  }
+  return blocks;
+}
+
+function gatherPersonEmailEvidenceBlocks(row) {
+  // The shared email + the record names ARE the verbatim evidence (already held).
+  const losers = Array.isArray(row.loser_names) ? row.loser_names : [];
+  const text = ['email: ' + (row.email || ''),
+    'winner: ' + (row.winner_name || ''),
+    'others: ' + losers.map((n) => String(n)).join(', ')].filter((s) => s.length > 7).join('\n');
+  return text ? [{ source: 'person_email', ref: row.winner_id, text }] : [];
+}
+
+// Build the fresh scored-ready item pool for one tick (both pools). Value-gated
+// (chain rows ordered by rank_value; person pool after). Assembles evidence,
+// short-circuits no-evidence (counted, NO LLM), and excludes already-known /
+// unchanged-evidence subjects. Returns { items, counts }.
+async function buildFreshLinkItems(opts = {}) {
+  const cap = Number.isFinite(opts.cap) ? opts.cap : LINK_MAX_CANDIDATES;
+  const known = opts.known instanceof Set ? opts.known : await fetchLinkKnownSubjects();
+  const markers = opts.markers instanceof Set ? opts.markers : await fetchLinkScoredMarkers();
+  const counts = { chain: { by_gap: {}, candidates: 0, no_evidence: 0, already_known: 0, fresh: 0 },
+    person_email: { candidates: 0, no_evidence: 0, already_known: 0, fresh: 0 } };
+  const items = [];
+
+  // --- Chain pool (value-ranked). ---
+  try {
+    const gapPred = '&gap=in.(' + LINK_CHAIN_GAPS.join(',') + ')';
+    const cr = await opsQuery('GET', 'v_ownership_chain_worklist?select=source_domain,source_property_id,'
+      + 'current_owner_entity_id,current_owner_name,true_owner_name,developer_name,earliest_known_owner,'
+      + 'owner_links,address,city,state,current_annual_rent,rank_value,gap' + gapPred
+      + '&order=rank_value.desc.nullslast&limit=' + cap);
+    const rows = valueGateChainRows((cr.ok && Array.isArray(cr.data)) ? cr.data : []);
+    counts.chain.candidates = rows.length;
+    for (const row of rows) {
+      counts.chain.by_gap[row.gap] = (counts.chain.by_gap[row.gap] || 0) + 1;
+      const subjectRef = chainSubjectRef(row.source_domain, row.source_property_id, row.gap);
+      if (known.has(subjectRef)) { counts.chain.already_known += 1; continue; }
+      const blocks = await gatherChainEvidenceBlocks(row);
+      const assembled = assembleEvidence(blocks);
+      if (evidenceIsEmpty(assembled)) { counts.chain.no_evidence += 1; continue; } // NO LLM call
+      const evHash = evidenceHash(assembled, String(row.owner_links || '') + '|' + String(row.earliest_known_owner || ''));
+      const marker = linkScoredKeyFor(LINK_POOL_CHAIN, row.source_domain, row.source_property_id, row.gap, evHash);
+      if (markers.has(marker)) continue; // evidence unchanged since last scan
+      counts.chain.fresh += 1;
+      items.push({ pool: LINK_POOL_CHAIN, subjectRef, row, assembled, evHash, marker,
+        domain: linkNormDomain(row.source_domain) });
+    }
+  } catch (e) { counts.chain.error = e?.message || String(e); }
+
+  // --- Person-email pool (smaller). ---
+  try {
+    const pr = await opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,winner_id,winner_name,'
+      + 'loser_ids,loser_names,member_count,sf_linked_member_count,name_compatible'
+      + '&order=member_count.desc.nullslast&limit=' + cap);
+    const rows = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+    counts.person_email.candidates = rows.length;
+    for (const row of rows) {
+      const subjectRef = personEmailSubjectRef(row.winner_id);
+      if (known.has(subjectRef)) { counts.person_email.already_known += 1; continue; }
+      const blocks = gatherPersonEmailEvidenceBlocks(row);
+      const assembled = assembleEvidence(blocks);
+      if (evidenceIsEmpty(assembled)) { counts.person_email.no_evidence += 1; continue; }
+      const evHash = evidenceHash(assembled, String(row.member_count || ''));
+      const marker = linkScoredKeyFor(LINK_POOL_PERSON_EMAIL, 'lcc', row.winner_id, 'person_email', evHash);
+      if (markers.has(marker)) continue;
+      counts.person_email.fresh += 1;
+      items.push({ pool: LINK_POOL_PERSON_EMAIL, subjectRef, row, assembled, evHash, marker, domain: 'lcc' });
+    }
+  } catch (e) { counts.person_email.error = e?.message || String(e); }
+
+  return { items, counts };
+}
+
+// Cheap pool counts by gap type for the plain dry-run (no evidence assembly).
+async function linkPoolCounts() {
+  const out = { chain: { by_gap: {}, total: 0 }, person_email: { total: 0 } };
+  try {
+    for (const gap of LINK_CHAIN_GAPS) {
+      const c = await opsCnt('v_ownership_chain_worklist?gap=eq.' + gap);
+      out.chain.by_gap[gap] = c || 0;
+      out.chain.total += c || 0;
+    }
+  } catch (_e) { /* best-effort */ }
+  try { out.person_email.total = (await opsCnt('v_lcc_person_email_merge_candidates')) || 0; } catch (_e) { /* best-effort */ }
+  return out;
+}
+
+// Score one item → validated proposal (+ meta). Proposal-only. The validator DROPS
+// (and the caller logs) any non-verbatim / no-entity quote — the free precision floor.
+async function scoreLinkItem(item) {
+  const prompt = buildLinkPropagationPrompt(item.row, item.assembled, item.pool);
+  const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+  const parsed = parseLinkProposalJson(ai?.data?.response || '');
+  const proposal = normalizeLinkProposal(parsed);
+  if (!parsed) { proposal.verdict = 'no_evidence_found'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; treated as no_evidence_found.'; }
+  const validated = validateLinkProposal(proposal, item.assembled.combined);
+  return { proposal, validated, provider: ai?.provider || null, model: ai?.data?.model || null };
+}
+
+async function logLinkDropped(item, proposal, drop, sourceRunId) {
+  try {
+    await opsQuery('POST', 'w8_u3_dropped_log', {
+      subject_ref: item.subjectRef, pool: item.pool, domain: item.domain,
+      proposed_verdict: proposal.verdict, linked_entity_name: proposal.linked_entity_name || null,
+      quote: drop && drop.quote != null ? String(drop.quote).slice(0, 400) : (proposal.evidence_quote || null),
+      reason: (drop && drop.reason) || 'dropped', source_run_id: sourceRunId,
+    }, { headers: { Prefer: 'return=minimal' } });
+  } catch (_e) { /* precision-floor log is best-effort */ }
+}
+
+async function upsertLinkProposal(item, proposal, meta) {
+  const row = item.row;
+  const spec = item.pool === LINK_POOL_CHAIN ? (chainGapSpec(row.gap) || {}) : { chain_position: 'same_person', proposal_type: 'person_email_merge' };
+  const body = {
+    subject_ref: item.subjectRef, pool: item.pool, domain: item.domain,
+    source_property_id: item.pool === LINK_POOL_CHAIN ? String(row.source_property_id) : null,
+    gap: item.pool === LINK_POOL_CHAIN ? row.gap : null,
+    proposal_type: spec.proposal_type || 'link',
+    current_owner_entity_id: item.pool === LINK_POOL_CHAIN ? (row.current_owner_entity_id || null) : null,
+    current_owner_name: item.pool === LINK_POOL_CHAIN ? (row.current_owner_name || null) : null,
+    winner_entity_id: item.pool === LINK_POOL_PERSON_EMAIL ? String(row.winner_id) : null,
+    proposed_verdict: proposal.verdict,
+    linked_entity_name: proposal.linked_entity_name || null,
+    role: proposal.role || spec.role || null,
+    confidence: proposal.confidence,
+    evidence_quote: proposal.evidence_quote || null,
+    evidence_source: proposal.evidence_source || null,
+    evidence_hash: item.evHash || null,
+    reason: proposal.reason || null,
+    rank_value: item.pool === LINK_POOL_CHAIN ? (Number(row.rank_value) || null) : (Number(row.member_count) || null),
+    seeder: 'w8_u3_link_propagation',
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'w8_u3_link_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function recordLinkHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'link_propagation', p_check_name: 'ollama_link_propagation',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handleLinkPropagationTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchLinkPropagationFlag();
+  const enabled = linkPropagationEnabled(flag);
+  const limit = Math.min(40, Math.max(1, parseInt(req.query.limit || req.body?.limit || '15', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordLinkHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U3_LINK_PROPAGATION feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u3_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const known = await fetchLinkKnownSubjects();
+    const markers = await fetchLinkScoredMarkers();
+    const { items, counts } = await buildFreshLinkItems({ known, markers });
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'w8_u3_link_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { counts, fresh: items.length } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const batchSize = Math.min(limit, LINK_SCORE_BATCH_SIZE);
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId, pool_counts: counts,
+      candidates_fresh: items.length, batch_size: batchSize, budget_ms: LINK_SCORE_BUDGET_MS,
+      min_confidence: LINK_MIN_CONF, scored: 0, proposed: 0, no_evidence_found: 0,
+      dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
+      budget_exhausted: false, remaining_unscored: items.length, by_verdict: {} };
+    const newMarkers = [];
+    const budgetRun = await scoreLinksWithBudget(items, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreLinkItem(item);
+        summary.scored += 1;
+        newMarkers.push(item.marker);
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        if (validated.verdict === 'no_evidence_found') { summary.no_evidence_found += 1; return null; }
+        if (validated.drop) { // fabricated / non-verbatim → precision-floor drop
+          summary.dropped_not_verbatim += 1;
+          await logLinkDropped(item, proposal, validated.drop, sourceRunId);
+          return null;
+        }
+        if (!isProposableLink(validated, LINK_MIN_CONF)) { // below confidence floor
+          summary.dropped_below_conf += 1;
+          await logLinkDropped(item, proposal, { reason: 'below_confidence', quote: proposal.evidence_quote }, sourceRunId);
+          return null;
+        }
+        const wr = await upsertLinkProposal(item, validated.proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[link-propagation] score/write failed', item?.subjectRef, e?.message || e);
+      }
+      return null;
+    }, { budgetMs: LINK_SCORE_BUDGET_MS, maxN: batchSize });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, items.length - summary.scored - summary.failed);
+    // Persist the scored-markers (union with prior) so a scored row isn't re-scored
+    // next run unless its evidence changes.
+    if (scanBatchId != null) {
+      try {
+        const merged = Array.from(new Set([...markers, ...newMarkers])).slice(-5000);
+        await opsQuery('PATCH', 'w8_u3_link_batch?batch_id=eq.' + scanBatchId,
+          { details: { counts, fresh: items.length, scored_markers: merged, summary } });
+      } catch (_e) { /* best-effort */ }
+    }
+    await recordLinkHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
+      lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: pool counts by gap. ?score=1 adds inline model proposals. --
+  const poolCounts = await linkPoolCounts();
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    pool_counts: poolCounts };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const inlineN = Math.min(30, Math.max(1, parseInt(req.query.n || String(LINK_INLINE_DEFAULT_N), 10) || LINK_INLINE_DEFAULT_N));
+    const { items, counts } = await buildFreshLinkItems({ cap: Math.max(LINK_MAX_CANDIDATES, inlineN * 4) });
+    out.scan_counts = counts;
+    out.candidates_fresh = items.length;
+    const proposals = [];
+    const byVerdict = {};
+    let noEvidence = 0;
+    let droppedNotVerbatim = 0;
+    let droppedBelowConf = 0;
+    const budgetRun = await scoreLinksWithBudget(items, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreLinkItem(item);
+        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        let disposition = 'propose';
+        if (validated.verdict === 'no_evidence_found') { noEvidence += 1; disposition = 'no_evidence_found'; }
+        else if (validated.drop) { droppedNotVerbatim += 1; disposition = 'dropped:' + validated.drop.reason; }
+        else if (!isProposableLink(validated, LINK_MIN_CONF)) { droppedBelowConf += 1; disposition = 'dropped:below_confidence'; }
+        proposals.push({ subject_ref: item.subjectRef, pool: item.pool, domain: item.domain,
+          gap: item.row.gap || null, source_property_id: item.row.source_property_id || null,
+          current_owner_name: item.row.current_owner_name || item.row.winner_name || null,
+          evidence_chars: item.assembled.chars, ...proposal, disposition,
+          quote_verbatim: !!(validated.proposal),
+          would_propose: disposition === 'propose', model_provider: provider, model_name: model });
+      } catch (e) { proposals.push({ subject_ref: item?.subjectRef, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: LINK_SCORE_BUDGET_MS, maxN: inlineN });
+    out.scored = proposals.length;
+    out.batch_size = inlineN;
+    out.budget_ms = LINK_SCORE_BUDGET_MS;
+    out.min_confidence = LINK_MIN_CONF;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.remaining_unscored = Math.max(0, items.length - proposals.length);
+    out.by_verdict = byVerdict;
+    out.no_evidence_found = noEvidence;
+    out.dropped_not_verbatim = droppedNotVerbatim;
+    out.dropped_below_conf = droppedBelowConf;
+    out.would_propose = proposals.filter((p) => p.would_propose).length;
+    out.proposals = proposals;
+    out.note = 'dry-run scoring — NO rows written. Every would-propose carries a VERBATIM evidence_quote '
+      + '(quote_verbatim=true, validator-checked as a substring of the assembled evidence); a non-verbatim / '
+      + 'fabricated quote is DROPPED (dropped_not_verbatim → w8_u3_dropped_log); no_evidence_found is honest/counted. '
+      + 'Review, then POST (with the flag ON).'
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + LINK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
 // PRIORITY QUEUE LIST (BD front door, 2026-06-03)
 // GET /api/priority-queue?band=<P1|P0.5|...>&limit=<n>&offset=<n>
 //   The 'start here' worklist: the doctrinal priority bands from
@@ -2649,6 +3057,11 @@ const FEDERATED_DECISION_TYPES = new Set([
   // v_junk_entity_review_open; a verdict soft-retires (reversible) or routes an
   // FK-referenced row to a conflict, all human-gated.
   'junk_entity_review',
+  // W8 U3 (Prompt 69): Ollama connection-propagation link proposals. Source =
+  // v_w8_u3_link_review_open; every proposal carries a VERBATIM evidence quote.
+  // confirm -> the deterministic writer creates the entity_relationships edge +
+  // provenance (reversible w8_u3_link_apply_log); reject -> kept. NEVER auto-writes.
+  'w8_u3_link_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
@@ -2797,6 +3210,9 @@ function federatedSubjectRef(type, s) {
     case 'junk_entity_review': return s.subject_ref
       ? String(s.subject_ref)
       : ((s.domain && s.table_name && s.pk_value != null) ? junkSubjectRef(s.domain, s.table_name, s.pk_value) : null);
+    // W8 U3: the pre-built subject_ref rides straight through
+    // (link:chain:<dom>:<propId>:<gap> | link:pmail:<winnerId>).
+    case 'w8_u3_link_review': return s.subject_ref ? String(s.subject_ref) : null;
   }
   return null;
 }
@@ -3014,6 +3430,34 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = await opsCnt('junk_entity_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'w8_u3_link_review') {
+    // W8 U3: open Ollama connection-propagation link proposals, most-confident /
+    // highest-$ first. Every row carries a validated VERBATIM evidence quote.
+    const r = await opsQuery('GET', 'v_w8_u3_link_review_open?select=review_id,subject_ref,pool,domain,'
+      + 'source_property_id,gap,proposal_type,current_owner_entity_id,current_owner_name,winner_entity_id,'
+      + 'proposed_verdict,linked_entity_name,role,confidence,evidence_quote,evidence_source,reason,rank_value,'
+      + 'model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: row.source_property_id || null,
+      subject_entity_id: row.current_owner_entity_id || row.winner_entity_id || null,
+      rank_value: (Number(row.confidence) || 0) * 100 + (Number(row.rank_value) || 0) / 1e9,
+      context: {
+        review_id: row.review_id, subject_ref: row.subject_ref, pool: row.pool, domain: row.domain,
+        source_property_id: row.source_property_id, gap: row.gap, proposal_type: row.proposal_type,
+        current_owner_entity_id: row.current_owner_entity_id, current_owner_name: row.current_owner_name,
+        winner_entity_id: row.winner_entity_id, proposed_verdict: row.proposed_verdict,
+        linked_entity_name: row.linked_entity_name, role: row.role, confidence: row.confidence,
+        evidence_quote: row.evidence_quote, evidence_source: row.evidence_source, reason: row.reason,
+        rank_value: row.rank_value, model_provider: row.model_provider, model_name: row.model_name,
+      },
+    }));
+    out.total = await opsCnt('w8_u3_link_review?status=eq.proposed&proposed_verdict=eq.link_proposal');
     return out;
   }
 
@@ -4407,6 +4851,149 @@ async function handleDecisionVerdict(req, res) {
       const rr = await record(verdict, 'resolved', { plan: plan.action, review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', ...reversal });
+    }
+
+    // ---- w8_u3_link_review (W8 U3 / Prompt 69) -------------------------------
+    // The human verdict on an Ollama connection-propagation proposal. confirm ->
+    // the deterministic writer resolves/mints the proposed entity, creates the
+    // entity_relationships edge, and stamps provenance (fill-blanks, source
+    // w8_u3_link_propagation) — all recorded in w8_u3_link_apply_log so it is
+    // reversible. A person-email-merge proposal (dupes are the resolver's job) is
+    // routed to a research_task, NEVER auto-merged. reject -> the row is kept.
+    // NEVER auto-writes without this verdict.
+    if (decision.decision_type === 'w8_u3_link_review') {
+      const revR = await opsQuery('GET', 'w8_u3_link_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'w8_u3_link_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'link']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss', 'distinct']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'w8_u3_link_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { pool: review.pool, proposal_type: review.proposal_type };
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'resolved', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // --- confirm: person-email pool → route to the resolver (research task). ---
+      if (review.pool === 'person_email') {
+        const rt = await createResearchTask({ research_type: 'person_email_merge_review',
+          title: 'Confirm person merge: ' + (review.current_owner_name || review.linked_entity_name || review.subject_ref),
+          instructions: 'Ollama proposed these email-sharing person records are the SAME person. '
+            + 'Dupes are the resolver\'s job — confirm/merge via the entity resolver, not here. Evidence: '
+            + (review.evidence_quote || '') });
+        if (!rt.ok) { await recordEffectFailure({ ...effects, error: 'research_task_failed', detail: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+          { status: 'applied', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'resolved', { review_id: review.review_id }, { ...effects, research_task: true });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'routed_to_resolver', review_id: review.review_id });
+      }
+
+      // --- confirm: chain pool → the deterministic edge writer. ---
+      const targetOwner = review.current_owner_entity_id;
+      if (!targetOwner) {
+        // No current-owner entity to attach the edge to → conflict card, not a guess.
+        const led = await opsQuery('POST', 'w8_u3_link_apply_log',
+          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+            status: 'conflict', actor: user.id || null, reversal: {},
+            details: { reason: 'no_current_owner_entity', linked_entity_name: review.linked_entity_name } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+          { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'resolved', { review_id: review.review_id }, { ...effects, conflict: 'no_current_owner_entity' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'no_current_owner_entity', review_id: review.review_id });
+      }
+
+      const relType = (review.role === 'developed' || review.role === 'developer') ? 'developed' : 'owns';
+      const linkedName = String(review.linked_entity_name || '').trim();
+      if (!linkedName) return res.status(400).json({ error: 'w8_u3_link_review: proposal has no linked_entity_name' });
+      let ws = decision.workspace_id;
+      if (!ws) { try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; } }
+      if (!ws) {
+        try { const wr = await opsQuery('GET', 'workspaces?select=id&order=created_at.asc&limit=1');
+          if (wr.ok && Array.isArray(wr.data) && wr.data[0]) ws = wr.data[0].id; } catch (_e) { /* honest fail below */ }
+      }
+
+      // Resolve the linked entity (exact-name, unambiguous) or mint it fresh.
+      let linkedEntityId = null; let createdEntityId = null;
+      const edom = review.domain === 'lcc' ? 'lcc' : review.domain;
+      try {
+        const er = await opsQuery('GET', 'entities?select=id&name=eq.' + pgFilterVal(linkedName)
+          + '&merged_into_entity_id=is.null&order=created_at.asc&limit=2');
+        if (er.ok && Array.isArray(er.data) && er.data.length === 1) linkedEntityId = er.data[0].id;
+      } catch (_e) { /* fall through to mint */ }
+      if (!linkedEntityId) {
+        const mr = await opsQuery('POST', 'entities',
+          { workspace_id: ws, name: linkedName, entity_type: 'organization', domain: edom,
+            metadata: { created_by: 'w8_u3_link_propagation', evidence_quote: review.evidence_quote || null } },
+          { headers: { Prefer: 'return=representation' } });
+        if (!mr.ok || !Array.isArray(mr.data) || !mr.data[0]) {
+          await recordEffectFailure({ ...effects, error: 'entity_mint_failed', detail: mr.data });
+          return res.status(502).json({ error: 'entity_mint_failed', detail: mr.data });
+        }
+        linkedEntityId = mr.data[0].id; createdEntityId = linkedEntityId;
+      }
+      if (String(linkedEntityId) === String(targetOwner)) {
+        return res.status(409).json({ error: 'self_loop', detail: 'proposed entity equals current owner' });
+      }
+
+      // Ledger FIRST (reversal record exists before the mutation), then the edge,
+      // then provenance, then stamp the proposal.
+      const led = await opsQuery('POST', 'w8_u3_link_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { relationship_id: null, created_entity_id: createdEntityId, provenance_ids: [] },
+          details: { linked_entity_name: linkedName, relationship_type: relType, from_entity_id: linkedEntityId, to_entity_id: targetOwner } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      const relBody = { workspace_id: ws, from_entity_id: linkedEntityId, to_entity_id: targetOwner,
+        relationship_type: relType,
+        metadata: { role: review.role || relType, chain_position: review.proposal_type, source: 'w8_u3_link_propagation',
+          evidence_quote: review.evidence_quote || null, review_id: review.review_id, apply_log_id: applyLogId } };
+      const rel = await opsQuery('POST', 'entity_relationships', relBody, { headers: { Prefer: 'return=representation' } });
+      if (!rel.ok || !Array.isArray(rel.data) || !rel.data[0]) {
+        if (applyLogId != null) await opsQuery('PATCH', 'w8_u3_link_apply_log?apply_id=eq.' + applyLogId,
+          { status: 'conflict', details: { error: 'edge_insert_failed', detail: rel.data } }).catch(() => {});
+        await recordEffectFailure({ ...effects, error: 'edge_insert_failed', detail: rel.data });
+        return res.status(502).json({ error: 'edge_insert_failed', detail: rel.data });
+      }
+      const relId = rel.data[0].id;
+
+      // Provenance stamp (fill-blanks semantics; source w8_u3_link_propagation@85).
+      let provenanceId = null;
+      try {
+        const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
+          p_workspace_id: ws || null, p_target_database: 'lcc', p_target_table: 'entity_relationships',
+          p_record_pk: String(relId), p_field_name: relType,
+          p_value: JSON.stringify(linkedName), p_source: 'w8_u3_link_propagation',
+          p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
+          p_recorded_by: user.id || null,
+        });
+        if (pv.ok && Array.isArray(pv.data) && pv.data[0]) provenanceId = pv.data[0].provenance_id || null;
+      } catch (_e) { /* provenance is best-effort; the edge + ledger are the record */ }
+
+      if (applyLogId != null) {
+        await opsQuery('PATCH', 'w8_u3_link_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { relationship_id: relId, created_entity_id: createdEntityId, provenance_ids: provenanceId ? [provenanceId] : [] } }).catch(() => {});
+      }
+      await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      effects.relationship_id = relId; effects.linked_entity_id = linkedEntityId; effects.created_entity = !!createdEntityId; effects.apply_log_id = applyLogId;
+      const rr = await record(verdict, 'resolved', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: 'linked', relationship_id: relId,
+        linked_entity_id: linkedEntityId, created_entity: !!createdEntityId, review_id: review.review_id });
     }
 
     // ---- owner_reconcile (W3.2 / audit 3.2.3) --------------------------------
