@@ -454,6 +454,14 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### First live lane verdict 2026-08-07 — "verdict record failed" → prompt 74 queued (one-liner)
+Scott worked the first real U1 card; the WORK applied (review row 'applied', soft-retire landed)
+but the decision-close step wrote `lcc_decisions.status='resolved'` — invalid per the CHECK
+(open/decided/skipped/superseded). Traced to the 62-session "always use 'resolved'" hardening.
+**Prompt 74**: fix to 'decided', sweep all three W8 verdict branches for the same literal, repair
+the one stranded open decision row, structural guard. **Scott: pause lane-working until 74
+deploys** (each verdict would apply but error + strand a decision row).
+
 ### ✅✅ WAVE 8 BUILD-OUT COMPLETE — 2026-08-07 (all 4 units LIVE)
 Final verification runs both PASSED post-72/73 deploy: **U3 chain evidence FIXED** (scan_errors
 empty, deed 83 / activity 12 hits, Cira Square 768 chars / 6 blocks; the 4 no_evidence verdicts
