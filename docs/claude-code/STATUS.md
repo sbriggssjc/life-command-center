@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ W8 U1 LIVE 2026-08-07 13:51 UTC — flag flipped after clean fifth run
+Post-67 `?score=1` PASSED all acceptance: suspect_distribution false (threshold 0.9, share 0.67),
+**WALDSCHMITT→keep 1.0** ("consonant run is part of a real surname" — the model itself, on ollama),
+CCMCRHS SPE→keep, garbage/`CO` orphans→dismiss with independent evidence, keeps counted-not-enqueued,
+bounded (6 scored/241 remaining). **Cowork flipped `W8_U1_JUNK_PRESCREEN`→on.** Nightly cron
+(3:40 UTC) now drains ~25/night into the Decision Center junk-review lane; ~247-row pool ≈10 nights.
+Review spot: Decision Center junk lane (backing view `v_junk_entity_review_open`; health
+`v_lcc_junk_prescreen_health` incl. scored_total/scored_24h). All writes human-gated + reversible.
+**Next: send prompt 63 (U2 duplicate-pair fuel).** Naming-hygiene backlog (~6.5k: lcc 5,091 /
+gov 973 / dia 395) counted, unenqueued — future rename/normalize unit.
+
 ### Prompt 67 landed — PR #1604, awaiting merge + redeploy → THEN flag flip
 Distribution guard recalibrated: default 0.5→0.9, env `JUNK_DISMISS_GUARD_THRESHOLD` (validated
 (0,1]) threaded through both call sites — 5/6 dismiss on the pre-filtered pool no longer suspect;
