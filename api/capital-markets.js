@@ -1125,6 +1125,20 @@ async function exportWorkbook(req, res) {
   });
   const realCharts = await Promise.all(chartFetches);
 
+  // CM export audit item 2 (2026-08-07) — log the resolved display_from for
+  // every realCharts-driven sheet at export time (the crop itself is applied at
+  // fetch, line ~1098). Sheets whose rows are later overridden by a master_m
+  // mapper log again inside that loop with the re-applied crop. Together these
+  // make sheet->display_from fully visible in the deploy logs so a missing crop
+  // (Bid-Ask started 2001) can never silently recur.
+  for (const c of realCharts) {
+    const df = resolveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name);
+    console.log(
+      `[exportWorkbook] display_from sheet=${c.chart_template_id} ` +
+      `view=${c.view_name} display_from=${df || 'none'} rows=${Array.isArray(c.rows) ? c.rows.length : 0}`
+    );
+  }
+
   // CM export audit item 1 — core dot freshness assertion. The Core Cap Rate
   // Dot Plot reads the core-cohort view (cm_{v}_core_cap_dot_q). After the
   // pagination fix the sheet carries every qualifying core sale, so its newest
@@ -1372,12 +1386,18 @@ async function exportWorkbook(req, res) {
       // from the wrapper view directly via the realCharts path.
       //
       // (No perf concern — both wrappers run sub-200ms after Round 11.)
-      bid_ask_spread: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        avg_bid_ask_spread: r.avg_bid_ask_spread,
-        pct_price_change: r.pct_price_change_bid_ask,
-        avg_last_ask_cap: r.avg_last_ask_cap,
-      })),
+      // 2026-08-07 — `bid_ask_spread` master_m mapper REMOVED (same pattern as
+      // the nm_vs_market_cap / cap_rate_by_lease_term / seller_sentiment
+      // removals above). master_m only carries avg_bid_ask_spread /
+      // pct_price_change_bid_ask / avg_last_ask_cap, so mapping from it here
+      // DROPPED the R66 min_last_ask_cap / max_last_ask_cap /
+      // achieved_last_ask_cap columns (Data_Bid_Ask "Last Ask — Low/High" +
+      // "Achieved Cap" rendered ALL-NULL) AND wiped the display_from crop
+      // (Bid-Ask started 2001 instead of the registered 2015-04-30, because
+      // the override replaced the already-cropped realCharts rows with
+      // uncropped master_m rows). The dedicated monthly wrapper
+      // cm_<vertical>_bid_ask_spread_m carries every column at monthly cadence
+      // and is cropped on the realCharts path — let the chart read it directly.
       buyer_pool_breakdown: (rows) => rows.map(r => ({
         period_end: r.period_end,
         private_volume: r.private_volume,
@@ -1415,22 +1435,15 @@ async function exportWorkbook(req, res) {
         low_loan_constant:  r.low_loan_constant,
         high_loan_constant: r.high_loan_constant,
       })),
-      cash_leveraged_returns: (rows) => rows.map(r => {
-        // Match the cm_<vertical>_returns_indexes_q derivation: cash_return =
-        // avg_cap_rate; leveraged_return_mid uses 50% LTV on the mid loan
-        // constant. Reproduce the formula here so monthly TTM chart matches
-        // quarterly view shape.
-        const cap = r.avg_cap_rate_ttm;
-        const lo = r.low_loan_constant, hi = r.high_loan_constant;
-        const mid = (lo != null && hi != null) ? (lo + hi) / 2.0 : null;
-        const lev = (cap != null && mid != null)
-          ? (Number(cap) - Number(mid) * 0.5) / 0.5 : null;
-        return {
-          period_end: r.period_end,
-          cash_return: cap,
-          leveraged_return_mid: lev,
-        };
-      }),
+      // 2026-08-07 — `cash_leveraged_returns` master_m mapper REMOVED. It
+      // recomputed only cash_return + leveraged_return_mid from master_m loan
+      // constants, DROPPING the leveraged_return_low / leveraged_return_high
+      // columns added to cm_<vertical>_returns_indexes_m (migration
+      // 20260807_cm_dia_export_audit_views.sql) — so Data_Returns_Idx
+      // "Leveraged High/Low" rendered ALL-NULL — and it wiped the display_from
+      // crop. The extended monthly wrapper carries cash_return,
+      // leveraged_return_mid/low/high at monthly cadence and is cropped on the
+      // realCharts path — read it directly.
       net_lease_spread: (rows) => rows.map(r => ({
         period_end: r.period_end,
         treasury_10y_yield: r.treasury_10y_yield,
@@ -1457,13 +1470,14 @@ async function exportWorkbook(req, res) {
 
     // Vertical-specific mappers — fields that live on only one master_m.
     const verticalMappers = vertical === 'dialysis' ? {
-      seller_sentiment: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        pct_price_change_all: r.pct_price_change_all,
-        pct_price_change_long_term: r.pct_price_change_long_term,
-        last_ask_cap_all: r.last_ask_cap_all,
-        last_ask_cap_long_term: r.last_ask_cap_long_term,
-      })),
+      // 2026-08-07 — dialysis `seller_sentiment` master_m mapper REMOVED (gov's
+      // was already removed at R12, below). master_m carries only the
+      // pct_price_change / last_ask_cap cohorts, so mapping from it DROPPED the
+      // n_all / n_long_term counts — Data_Sentiment "N (all)" / "N (10+ yr)"
+      // rendered ALL-NULL — and wiped the display_from crop. The dedicated
+      // wrapper cm_dialysis_seller_sentiment_m carries n_all + n_long_term +
+      // both cohorts at monthly cadence and is gated/anchored — read it
+      // directly via the realCharts path (identical treatment to gov).
       // Round 3 PDF parity (dialysis p.22): override the shared
       // cap_rate_by_lease_term mapper to expose the dialysis-specific
       // 12+/8-12/6-8/<=5 cohorts ALONGSIDE the legacy 10+/6-10/<5/outside.
@@ -1513,8 +1527,27 @@ async function exportWorkbook(req, res) {
     for (const c of realCharts) {
       const mapper = monthlyMappers[c.chart_template_id];
       if (mapper) {
-        c.rows = mapper(masterMonthlyRows);
+        // CM export audit item 2 (2026-08-07) — the master_m override REPLACES
+        // c.rows wholesale, which previously discarded the display_from crop +
+        // as-of clamp applied on the realCharts fetch (line ~1098). master_m
+        // rows run back to 2001, so every mapped sales-series sheet (Volume_TTM,
+        // Cap_TTM, Count_TTM, Avg_Deal, YoY, Cap_Quartile, …) started 2001-01-31
+        // instead of its registered display_from. Re-apply BOTH transforms to
+        // the mapped output so a master_m-driven sheet crops exactly like a
+        // realCharts-driven one.
+        const df = resolveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name);
+        c.rows = cropRowsToDisplayFrom(
+          clampRowsToAsOf(mapper(masterMonthlyRows), c, as_of),
+          c,
+          df
+        );
         c.cadence = 'monthly';  // hint for the renderer's window-size logic
+        // CM export audit item 2 — log the resolved crop per sheet at export
+        // time so a missing/way-off display_from is visible in the deploy logs.
+        console.log(
+          `[exportWorkbook] display_from sheet=${c.chart_template_id} ` +
+          `view=${c.view_name} display_from=${df || 'none'} rows=${c.rows.length}`
+        );
         swapped++;
       }
     }
@@ -1633,6 +1666,24 @@ async function exportWorkbook(req, res) {
   }
 
   // 5b. Default: ExcelJS-rendered workbook with data tabs + MasterPasteReady.
+  // CM export audit item 5 — build-provenance for the Cover stamp. The git SHA
+  // comes from the same Railway/host env vars server.js uses for /version, so
+  // the workbook's stamp matches the live /version and a deployed-vs-HEAD
+  // divergence is immediately visible on the deliverable.
+  const provenance = {
+    gitSha: (
+      process.env.RAILWAY_GIT_COMMIT_SHA ||
+      process.env.RENDER_GIT_COMMIT ||
+      process.env.SOURCE_VERSION ||
+      'unknown'
+    ),
+    generatedAt: new Date().toISOString(),
+    builder: 'api/capital-markets.js::exportWorkbook → cm-excel-export.js',
+  };
+  if (res && typeof res.setHeader === 'function') {
+    res.setHeader('X-CM-Build-Sha', provenance.gitSha);
+  }
+
   const wb = buildCapitalMarketsWorkbook({
     vertical,
     subspecialty,
@@ -1641,6 +1692,7 @@ async function exportWorkbook(req, res) {
     brand,
     masterRows,
     chartImages,
+    provenance,
   });
 
   let buffer = await wb.xlsx.writeBuffer();

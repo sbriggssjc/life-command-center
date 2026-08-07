@@ -312,6 +312,30 @@ const COHORT_CAP_TEMPLATES = new Set([
   'asking_cap_by_term_dot_plot',
 ]);
 
+// CM export audit item 3 (2026-08-07) — physically REMOVE (not just hide, per
+// R43 below) columns explicitly flagged `pruneIfEmpty: true` when they carry no
+// data across the exported rows. These are per-vertical-divergent columns whose
+// source field exists on ONE vertical's view but not the other (e.g.
+// valuation_index avg_expenses_psf / avg_noi_psf and available_cap_dot
+// is_northmarq exist on gov but not dia; volume_ttm yoy_change_pct exists on
+// neither and duplicates Data_YoY_Change). The R43 hide left them in the sheet
+// as ALL-NULL columns an openpyxl auditor still reads as "dead". Removal here
+// runs BEFORE the data-write loop so headers, data, the R43 hide, and the
+// native-chart column-letter assignment all see the same pruned column set —
+// letters stay internally consistent. A flagged column is KEPT when it has data
+// (so gov keeps its populated expenses/NOI/NM columns) or when no rows are
+// supplied (schema-sniffing/test callers).
+function pruneEmptyFlaggedColumns(cols, rows) {
+  if (!Array.isArray(cols)) return cols;
+  const rowList = Array.isArray(rows) ? rows : [];
+  if (rowList.length === 0) return cols;
+  const colHasData = (c) => {
+    const keys = [c.key, ...(Array.isArray(c.fieldKeys) ? c.fieldKeys : [])];
+    return rowList.some((r) => r != null && keys.some((k) => r[k] != null));
+  };
+  return cols.filter((c) => (c && c.pruneIfEmpty ? colHasData(c) : true));
+}
+
 function selectCohortColumns(cols, chartTemplateId, vertical, rows) {
   if (!COHORT_CAP_TEMPLATES.has(chartTemplateId)) return cols;
   // strip a trailing `_n` (count sibling) to get the cohort base key
@@ -337,7 +361,9 @@ const CHART_COLUMNS = {
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
     { key: 'volume_dollars',   header: 'TTM Volume ($)',      format: 'currency_dollars',    width: 18 },
-    { key: 'yoy_change_pct',   header: 'YoY Change',          format: 'percent_one_decimal', width: 13 },
+    // item 3 — dead on both verticals (neither volume_ttm_m view exposes it and
+    // the master_m mapper never emits it); YoY lives in Data_YoY_Change. Prune.
+    { key: 'yoy_change_pct',   header: 'YoY Change',          format: 'percent_one_decimal', width: 13, pruneIfEmpty: true },
   ],
   quarterly_volume_bars: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',         width: 13 },
@@ -460,7 +486,10 @@ const CHART_COLUMNS = {
     { key: 'period_end',       header: 'As of',               format: 'date_short',          width: 13 },
     { key: 'cap_rate',         header: 'Asking Cap',          format: 'percent_basis_points', width: 14 },
     { key: 'firm_term_years',  header: 'Firm Term (yrs)',     format: 'number_one_decimal',  width: 16 },
-    { key: 'is_northmarq',     header: 'NM-Listed',           width: 12 },
+    // item 3 — gov's available_cap_dot view carries is_northmarq; dia's exposes
+    // is_core_10plus instead (no NM flag). pruneIfEmpty drops the dead NM-Listed
+    // column from the dia workbook while gov keeps its populated one.
+    { key: 'is_northmarq',     header: 'NM-Listed',           width: 12, pruneIfEmpty: true },
     { key: 'last_price',       header: 'Asking Price ($)',    format: 'currency_dollars',    width: 18 },
   ],
   // Round 31 — NEW: Asking Cap Rate Ranges by Lease Term Buckets
@@ -472,10 +501,15 @@ const CHART_COLUMNS = {
     { key: 'cap_8to12',   header: '8-12 Year Cap', format: 'percent_basis_points', width: 15 },
     { key: 'cap_6to8',    header: '6-8 Year Cap',  format: 'percent_basis_points', width: 14 },
     { key: 'cap_5orless', header: '≤5 Year Cap',   format: 'percent_basis_points', width: 14 },
-    { key: 'cap_12plus_n',  header: '12+ n',  format: 'integer_count', width: 8 },
-    { key: 'cap_8to12_n',   header: '8-12 n', format: 'integer_count', width: 8 },
-    { key: 'cap_6to8_n',    header: '6-8 n',  format: 'integer_count', width: 8 },
-    { key: 'cap_5orless_n', header: '≤5 n',   format: 'integer_count', width: 8 },
+    // item 4 (2026-08-07) — the n's are DISTINCT listings over the view's
+    // trailing 24-month window (cm_dialysis_asking_cap_by_term_m: a 2-year
+    // `windowed` CTE + row_number() per listing → distinct count), NOT the
+    // point-in-time active count. That is why they sum to ~392 vs ~204 current
+    // actives. Headers state the basis so the two counts can't be conflated.
+    { key: 'cap_12plus_n',  header: '12+ n (24-mo distinct)',  format: 'integer_count', width: 20 },
+    { key: 'cap_8to12_n',   header: '8-12 n (24-mo distinct)', format: 'integer_count', width: 20 },
+    { key: 'cap_6to8_n',    header: '6-8 n (24-mo distinct)',  format: 'integer_count', width: 20 },
+    { key: 'cap_5orless_n', header: '≤5 n (24-mo distinct)',   format: 'integer_count', width: 20 },
   ],
   // Round 30 — Sold_Cap_by_Term redefined as 4-line TTM cohort series.
   // Different column shape for gov vs dia. Data-tab writer iterates the
@@ -537,8 +571,14 @@ const CHART_COLUMNS = {
     { key: 'subspecialty',       header: 'Subspecialty',          width: 14 },
     { key: 'rent_psf',           header: 'Avg Rent / SF (TTM)',   format: 'currency_per_sf',  width: 20 },
     { key: 'price_psf',          header: 'Avg Sale Price / SF',   format: 'currency_per_sf',  width: 22 },
-    { key: 'n_with_rent_ttm',    header: 'N w/ Rent (TTM)',       format: 'integer_count',    width: 17 },
-    { key: 'n_with_price_ttm',   header: 'N w/ Price (TTM)',      format: 'integer_count',    width: 17 },
+    // item 3 — the count columns are LIVE, just under different field names per
+    // vertical: gov's rent_price_psf_q exposes n_with_rent_ttm/n_with_price_ttm,
+    // dia's exposes rent_n/price_n. Coalesce via fieldKeys so both populate
+    // (previously dia rendered these ALL-NULL against the gov-only key).
+    { key: 'n_with_rent_ttm',  fieldKeys: ['n_with_rent_ttm', 'rent_n'],
+                               header: 'N w/ Rent (TTM)',       format: 'integer_count',    width: 17 },
+    { key: 'n_with_price_ttm', fieldKeys: ['n_with_price_ttm', 'price_n'],
+                               header: 'N w/ Price (TTM)',      format: 'integer_count',    width: 17 },
   ],
   // Round 31 — Dia counterpart (per-chair unit econ).
   rent_and_price_per_chair: [
@@ -700,8 +740,10 @@ const CHART_COLUMNS = {
   valuation_index: [
     { key: 'period_end',         header: 'Quarter End',          format: 'date_short',          width: 13 },
     { key: 'avg_rent_psf',       header: 'Avg Rent PSF (TTM)',   format: 'currency_per_sf',     width: 18 },
-    { key: 'avg_expenses_psf',   header: 'Expenses PSF (TTM)',   format: 'currency_per_sf',     width: 19 },
-    { key: 'avg_noi_psf',        header: 'NOI PSF (TTM)',        format: 'currency_per_sf',     width: 17 },
+    // item 3 — gov's valuation_index_m view carries these; dia's does not.
+    // pruneIfEmpty drops them from the dia workbook (dead) while gov keeps them.
+    { key: 'avg_expenses_psf',   header: 'Expenses PSF (TTM)',   format: 'currency_per_sf',     width: 19, pruneIfEmpty: true },
+    { key: 'avg_noi_psf',        header: 'NOI PSF (TTM)',        format: 'currency_per_sf',     width: 17, pruneIfEmpty: true },
     { key: 'avg_cap_rate',       header: 'Avg Cap Rate (TTM)',   format: 'percent_basis_points', width: 18 },
     { key: 'valuation_index',    header: 'Valuation Index ($/SF)',format: 'currency_per_sf',    width: 22 },
     // Round 22 — surface the Round 20 yoy_change column in the data tab
@@ -1135,7 +1177,7 @@ const NAME_OVERRIDES_BY_VERTICAL = {
   },
 };
 
-export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages }) {
+export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance }) {
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
   const fonts   = (brand?.fonts)   ? brand.fonts   : DEFAULT_BRAND.fonts;
   // R56 — patch chart.name based on per-vertical overrides ONCE up front.
@@ -1212,6 +1254,20 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
 
   cover.getCell('B6').value = `Generated: ${new Date().toISOString().slice(0, 10)} by Life Command Center`;
   cover.getCell('B6').font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+
+  // CM export audit item 5 (2026-08-07) — build-provenance stamp. Records the
+  // exact deploy that produced this workbook (git SHA + full generated_at
+  // timestamp + builder module) so a "deployed build behind HEAD" divergence
+  // (the root cause behind the #1613 "fixed at HEAD yet still ALL-NULL" reports)
+  // is always visible ON the deliverable. Falls back gracefully when the caller
+  // passes no provenance (e.g. unit tests).
+  const prov = provenance || {};
+  const provSha = prov.gitSha || 'unknown';
+  const provWhen = prov.generatedAt || new Date().toISOString();
+  const provBuilder = prov.builder || 'cm-excel-export.js::buildCapitalMarketsWorkbook';
+  cover.getCell('B7').value =
+    `Build: ${provSha} · ${provWhen} · ${provBuilder}`;
+  cover.getCell('B7').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
 
   cover.getCell('B8').value = 'Data Source';
   cover.getCell('B8').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
@@ -1373,6 +1429,12 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // cohort scheme so no chart series binds to a permanently-NULL column set
     // (the "missing 10+ cohort" / "data conflicts with itself" notes).
     cols = selectCohortColumns(cols, chart.chart_template_id, vertical, chart.rows);
+
+    // CM export audit item 3 — drop per-vertical-divergent columns that are
+    // dead for THIS vertical (flagged `pruneIfEmpty` in CHART_COLUMNS) so the
+    // dialysis workbook never ships an ALL-NULL Expenses/NOI/NM-Listed/YoY
+    // column while gov keeps the same columns (its views populate them).
+    cols = pruneEmptyFlaggedColumns(cols, chart.rows);
 
     // Per-tab layout when chart image is available:
     //   Rows 1-22: chart PNG (~440px tall at default row height)
@@ -2662,6 +2724,8 @@ export function getExportBundleSchema() {
     // R76 Layer A1 — vertical-aware cohort-column pruner for the cap-by-term
     // tabs (exported for regression coverage of the empty-column fix).
     selectCohortColumns,
+    // item 3 — pruneIfEmpty column remover (exported for regression coverage).
+    pruneEmptyFlaggedColumns,
     periodSummaryTemplates: PERIOD_SUMMARY_TEMPLATES,
     // Charts whose worksheet is built via a dedicated renderPeriodSummaryTab /
     // renderKpiBlockTab / renderOnMarketSnapshotTab path. They need a tab name
