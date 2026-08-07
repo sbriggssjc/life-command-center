@@ -227,6 +227,46 @@ const ADDRESS_AS_NAME_RE = /^\s*\d+\s+.*/;
 // operator (SMBC, FCMC, LFLP, PVLLC) — never junk on the acronym shape alone.
 const ACRONYM_ONLY_RE = /^[A-Z]{2,5}$/;
 
+// W8 U1 surname guard (Prompt 67): the consonant-run heuristic has a predictable
+// FALSE-POSITIVE class — Germanic/Slavic family/firm surnames (WALDSCHMITT,
+// SCHMIDT, KRZYZANOWSKI) pack long consonant clusters that are perfectly real.
+// SURNAME_MORPHOLOGY_RE marks a token carrying such a marker; the personal/
+// partnership NAME shapes below distinguish "CLOVER/WALDSCHMITT, L.L.C." /
+// "John Schmidt" from OCR gibberish.
+const SURNAME_MORPHOLOGY_RE = /(sch|stein|berg|mann|baum|thal|holtz|brandt|dt$|tt$|wicz|czyk|ski|sky|zk|rz)/i;
+// X/Y or X & Y — a two-party partnership/family firm.
+const PARTNERSHIP_SHAPE_RE = /[A-Za-z]{2,}\s*[/&]\s*[A-Za-z]{2,}/;
+// "First Last" / "First M. Last" — a personal name.
+const FIRST_LAST_RE = /^[A-Z][a-z]+(\s+[A-Z]\.?)?\s+[A-Z][a-z]+/;
+
+// A SECOND, independent junk signal beyond the consonant run: non-ASCII/control
+// garbage (OCR noise) or a digit fused into a word. Used to let a genuinely
+// broken surname-shaped string still be dismissed.
+export function hasSecondJunkSignal(name) {
+  const s = String(name == null ? '' : name);
+  if (/[^\x09\x0A\x0D\x20-\x7E]/.test(s)) return true; // non-ASCII / control chars
+  if (/[A-Za-z]\d|\d[A-Za-z]/.test(s)) return true;    // digit fused into a word
+  return false;
+}
+
+// Is a consonant run sitting INSIDE a surname-like token? Finds the token that
+// contains the run, then requires (a) the whole value reads as a personal/
+// partnership name OR the host token is a plain Title-case/all-caps word, AND
+// (b) the host token carries Germanic/Slavic surname morphology. Conservative:
+// only the family-name class the heuristic mis-fires on returns true.
+export function consonantRunSurnameLike(name, run) {
+  const s = String(name == null ? '' : name).trim();
+  const runLc = String(run == null ? '' : run).toLowerCase();
+  if (!s || !runLc) return false;
+  const host = s.split(/[\s,]+/).filter(Boolean).find((t) => t.toLowerCase().includes(runLc));
+  if (!host) return false;
+  const alphaHost = host.replace(/[^A-Za-z/&]/g, '');
+  if (!SURNAME_MORPHOLOGY_RE.test(alphaHost)) return false;
+  const nameShaped = PARTNERSHIP_SHAPE_RE.test(s) || FIRST_LAST_RE.test(s)
+    || /^[A-Z][a-z]+$/.test(alphaHost) || /^[A-Z/&]+$/.test(alphaHost);
+  return nameShaped;
+}
+
 export function isSpeCodedName(name) {
   const s = String(name == null ? '' : name).trim().toUpperCase();
   if (!s) return false;
@@ -301,6 +341,15 @@ export function classifyName(name) {
   if (gib) {
     const out = { category: 'junk', heuristic: 'consonant_run', evidence: gib[0] };
     if (isAcronymOnly(trimmed)) out.acronymOnly = true;
+    // Surname false-positive guard (Prompt 67): a consonant run inside a
+    // Germanic/Slavic surname-like token (WALDSCHMITT, SCHMIDT) is almost always
+    // a real family/partnership name. With no SECOND junk signal it is flagged
+    // surnameLike so the LLM rubric line + the post-LLM guard keep it rather than
+    // dismiss on the run shape alone. It stays a candidate (downgraded to the LLM,
+    // not silently excluded) so a genuinely broken string can still be caught.
+    if (consonantRunSurnameLike(trimmed, gib[0]) && !hasSecondJunkSignal(trimmed)) {
+      out.surnameLike = true;
+    }
     return out;
   }
   if (NO_VOWEL_RE.test(trimmed)) {
@@ -321,6 +370,7 @@ export function junkCandidateReason(name) {
   if (!c || c.category !== 'junk') return null;
   const out = { heuristic: c.heuristic, evidence: c.evidence };
   if (c.acronymOnly) out.acronymOnly = true;
+  if (c.surnameLike) out.surnameLike = true;
   return out;
 }
 
@@ -368,6 +418,7 @@ export function buildJunkPrescreenPrompt(candidate, fewShot) {
     relationship_count: ctx.relationship_count != null ? ctx.relationship_count : null,
     identity_count: ctx.identity_count != null ? ctx.identity_count : null,
     is_fk_referenced: ctx.connected != null ? !!ctx.connected : null,
+    surname_like: candidate.surnameLike ? true : null,
     context: ctx,
   };
   const lines = [
@@ -380,6 +431,7 @@ export function buildJunkPrescreenPrompt(candidate, fewShot) {
     '  • Abbreviated firm names — "Prtnrs" (Partners), "Ptnrshp", "Hldgs", "Mgmt", "Assoc". Real company, just truncated → rename, never dismiss.',
     '  • CMBS / loan / securitization tags — "Brookfield Prop Prtnrs DBUBS 2011-LC1" is Brookfield with a loan pool tag; at worst a rename → keep or rename.',
     '  • Address-as-name — "3710 Fm 1889", "654 SR 75" are addresses mis-entered as a name; the fix is to parse/link them to a property → parse_contact, never dismiss.',
+    '  • Surnames — consonant runs inside capitalized surname-like tokens (WALDSCHMITT, SCHMIDT, KRZYZANOWSKI) are usually REAL family/partnership names ("Clover/Waldschmitt, L.L.C."). Keep unless there is other junk (non-ASCII garbage, a digit fused into a word). The `surname_like` context flag marks this class.',
     '',
     'Return ONLY strict JSON with keys: verdict, confidence, evidence_quote, reason.',
     '- verdict: one of "dismiss" (genuinely junk / test / a non-entity — soft-retire), "rename" (real entity, name malformed/abbreviated), "parse_contact" (value is really a phone/email/address to split out), "keep" (real entity, do not touch).',
@@ -396,6 +448,7 @@ export function buildJunkPrescreenPrompt(candidate, fewShot) {
     '- "Brookfield Prop Prtnrs DBUBS 2011-LC1" -> keep (Brookfield with a CMBS tag)',
     '- "Cushman Wakefield Prtnrs" -> rename (real firm, abbreviated "Partners")',
     '- "3710 Fm 1889" -> parse_contact (an address mis-entered as a name)',
+    '- "Clover/Waldschmitt, L.L.C." -> keep (a real family/partnership name; the consonant run is a surname, not gibberish)',
     '- "--" -> dismiss (pure punctuation, no entity reading)',
     '- "Test Test" -> dismiss (test data)',
   ];
@@ -471,7 +524,15 @@ export function applyPrescreenGuards(proposal, candidate, ctx) {
     guards.push('acronym_gate');
     reason = 'All-caps acronym with existing relationships/identities — not dismissable on the acronym shape alone.';
   }
-  // Guard 3 — heuristic downgrade: a known-abbreviation or address-as-name row
+  // Guard 3 — surname guard (Prompt 67): a consonant run inside a surname-like
+  // token (Germanic/Slavic family/partnership name) with no second junk signal
+  // can never be dismissed on the run shape alone. Cap at keep.
+  if (verdict === 'dismiss' && candidate?.surnameLike) {
+    verdict = 'keep';
+    guards.push('surname_gate');
+    reason = 'Consonant run occurs inside a surname-like token (real family/partnership name); not dismissable on the run shape alone.';
+  }
+  // Guard 4 — heuristic downgrade: a known-abbreviation or address-as-name row
   // can never be dismissed; it downgrades to its non-destructive preVerdict.
   if (verdict === 'dismiss' && candidate?.preVerdict) {
     verdict = candidate.preVerdict;
@@ -482,11 +543,17 @@ export function applyPrescreenGuards(proposal, candidate, ctx) {
   return { ...proposal, verdict, reason: reason.slice(0, 400), guards };
 }
 
-// Verdict-distribution guard on a scored batch. A junk pre-screen over CURATED
-// tables should find a small MINORITY of true junk; a batch that proposes >50%
-// dismiss is anchoring on the heuristic, not judging — flag it suspect and (on
-// the tick) refuse to persist that batch. `byVerdict` is a { verdict: count } map.
-export function dismissDistributionGuard(byVerdict, threshold = 0.5) {
+// Verdict-distribution guard on a scored batch. It refuses to persist a batch
+// whose dismiss share EXCEEDS `threshold` — a runaway model anchoring on the
+// heuristic instead of judging. `byVerdict` is a { verdict: count } map.
+//
+// Prompt 67 recalibration: the pre-65 broad pool made a high dismiss share
+// suspect (threshold 0.5). Post-65 the candidate pool is PRE-FILTERED to
+// true-junk only, so a high dismiss share is the EXPECTED, correct outcome — a
+// 5/6 (83%) true-junk batch must NOT be refused. The threshold now defaults to
+// 0.9 (env JUNK_DISMISS_GUARD_THRESHOLD, plumbed from admin.js) so only the
+// near-total (>90%) all-dismiss pathology stays refusable.
+export function dismissDistributionGuard(byVerdict, threshold = 0.9) {
   const counts = byVerdict && typeof byVerdict === 'object' ? byVerdict : {};
   let total = 0;
   for (const v of Object.values(counts)) total += Number(v) || 0;
