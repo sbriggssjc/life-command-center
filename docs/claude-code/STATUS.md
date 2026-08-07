@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 67 landed — PR #1604, awaiting merge + redeploy → THEN flag flip
+Distribution guard recalibrated: default 0.5→0.9, env `JUNK_DISMISS_GUARD_THRESHOLD` (validated
+(0,1]) threaded through both call sites — 5/6 dismiss on the pre-filtered pool no longer suspect;
+all-dismiss pathology (>90%) still refusable. Surname guard: `consonantRunSurnameLike` morphology
+(sch/…dt$/…tt$/wicz/ski + personal/partnership name shapes) + `hasSecondJunkSignal`; surname-like
+candidates route to the LLM with a WALDSCHMITT rubric line AND a post-LLM `surname_gate` veto
+(dismiss→keep) — belt and braces. `CLOVER/WALDSCHMITT, L.L.C.` is a regression fixture. 86 tests
+green. **Gate: merge #1604 → redeploy → `?score=1&n=6` (expect no suspect_distribution,
+WALDSCHMITT-class keep-or-absent, garbage still dismiss) → Cowork flips `W8_U1_JUNK_PRESCREEN`.**
+
 ### 66 fourth run 2026-08-07 — bounded scoring WORKS on ollama, rubric proven; 2 residuals → prompt 67
 `?score=1` returned clean in-budget (6 scored/241 remaining, qwen2.5:14b). Rubric holding live:
 `CCMCRHS 850 CANAL LLC`→keep (SPE reasoning), OCR garbage + zero-connection `CO` stubs→dismiss with
