@@ -8,54 +8,36 @@
 // ?k=, or body._k) — this gates the endpoint without exposing the API key.
 //
 // POST /api/comps
-//   body: { comp_type:"sales", on_market:[...], sold:[...], name, client }   or
-//         { comp_type:"lease", comps:[...], name, client }
-//   → { status, filename, download_url, comp_type, rows_by_sheet,
-//       skipped_formula_keys, unknown_keys }   (base64 payload is stripped)
+//   ONE-SHOT: { request:"…natural language…", include_on_market?, include_unreliable_noi?,
+//              limit?, name?, client? }
+//     → proxied to the engine's own one-shot (${MCP_BASE}/api/comps); returns the engine's
+//       compact JSON verbatim ({ status, filename, download_url, counts, cap_rate_range, … }).
+//   ROW-MODE: { comp_type:"sales", on_market:[...], sold:[...], name, client }   or
+//             { comp_type:"lease", comps:[...], name, client }
+//     → proxied to the BOV builder (BOV_SERVICE_URL); returns { status, filename, download_url,
+//       comp_type, rows_by_sheet, … }   (base64 payload is stripped)
 //
-// Env (shared with api/bov.js — same generator service):
-//   BOV_SERVICE_URL   default https://pacific-love-production-f6b9.up.railway.app
-//   BOV_API_KEY       required — same value set on the BOV Railway service
-//   BOV_BRIDGE_TOKEN  optional — shared secret gating this endpoint
+// Env:
+//   GOV_API_URL       the MCP/engine base (default life-command-center-production…) — the engine
+//                     owns comps-tools.js + the domain DBs; tranquil-delight is a PROXY with no DB.
+//   LCC_API_KEY       validates the incoming caller AND is sent as the bearer to the engine
+//                     (same base/key as api/query-comps.js).
+//   BOV_SERVICE_URL   default https://pacific-love-production-f6b9.up.railway.app (row-mode only)
+//   BOV_API_KEY       row-mode only — same value set on the BOV Railway service
 // ============================================================================
 
 import { handleCors, authenticate } from './_shared/auth.js';
-import { domainQuery } from './_shared/domain-db.js';
-import { runGenerateCompsFromRequest } from '../mcp/comps-tools.js';
 
 const BOV_SERVICE_URL = (process.env.BOV_SERVICE_URL || 'https://pacific-love-production-f6b9.up.railway.app').replace(/\/+$/, '');
 const BOV_API_KEY = process.env.BOV_API_KEY || '';
 
-// Prompt 69 — the shared one-shot renderer (mcp/comps-tools.js::runGenerateCompsFromRequest)
-// expects PostgREST fetch helpers with the signature (method, path, body, prefer) → { ok, data }.
-// api/_shared/domain-db.js::domainQuery has a (domain, method, path, body, extraHeaders) shape,
-// so wrap it. This is the SAME engine the MCP `generate_comps` one-shot uses — tranquil-delight
-// and the standalone MCP therefore synthesize a byte-identical workbook (canon: ONE renderer).
-const diaQuery = (method, path, body, prefer) =>
-  domainQuery('dialysis', method, path, body, prefer ? { Prefer: prefer } : {});
-const govQuery = (method, path, body, prefer) =>
-  domainQuery('government', method, path, body, prefer ? { Prefer: prefer } : {});
-
-// The outbound BOV build — posts the template rows the shared renderer produced to the BOV
-// service exactly as row-mode does below (X-API-Key: BOV_API_KEY, base64 blob stripped). This
-// is the `generateWorkbook` callback runGenerateCompsFromRequest calls after synthesize.
-async function postCompsToBov(compsPayload) {
-  const resp = await fetch(`${BOV_SERVICE_URL}/generate-comps`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': BOV_API_KEY },
-    body: JSON.stringify(compsPayload),
-    signal: AbortSignal.timeout(180000),
-  });
-  const text = await resp.text();
-  if (!resp.ok) {
-    throw new Error('Comps service returned HTTP ' + resp.status + ': ' + text.slice(0, 500));
-  }
-  let data;
-  try { data = JSON.parse(text); }
-  catch { throw new Error('Comps service returned non-JSON: ' + text.slice(0, 300)); }
-  const { file_base64, ...rest } = data;
-  return rest;
-}
+// Prompt 70 — the one-shot renderer + the domain DBs live on the ENGINE service, not on
+// tranquil-delight (a proxy with no DB env). Mirror api/query-comps.js exactly: same MCP_BASE
+// (GOV_API_URL) and the same LCC_API_KEY bearer sent to the engine. tranquil-delight forwards
+// the natural-language one-shot to the engine's working `/api/comps`, so all surfaces synthesize
+// a byte-identical workbook from the ONE renderer.
+const MCP_BASE = (process.env.GOV_API_URL || 'https://life-command-center-production.up.railway.app').replace(/\/+$/, '');
+const LCC_API_KEY = process.env.LCC_API_KEY || '';
 
 export default async function compsHandler(req, res) {
   if (handleCors(req, res)) return;
@@ -70,11 +52,6 @@ export default async function compsHandler(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
 
-  if (!BOV_API_KEY) {
-    res.status(500).json({ error: 'Comps service not configured — set BOV_API_KEY on the Copilot service.' });
-    return;
-  }
-
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Use POST with a JSON comps payload.' });
     return;
@@ -85,29 +62,49 @@ export default async function compsHandler(req, res) {
                   (Array.isArray(payload.sold) && payload.sold.length) ||
                   (Array.isArray(payload.comps) && payload.comps.length);
 
-  // Prompt 69 — ONE-SHOT `request` mode (Copilot GenerateComps / plain-language appraisal
-  // requests). When the caller passes a natural-language `request` and no explicit rows, run
-  // the SAME synthesize-then-build path the MCP `generate_comps` one-shot uses, then build the
-  // workbook through the existing BOV path below. Dialysis + appraisal mode are detected from
-  // the request text by the engine (no `vertical`/`appraisal_mode` needed from the caller);
-  // appraisal defaults (include_on_market / include_unreliable_noi, cap discipline on the
-  // displayed rows) live inside runGenerateCompsFromRequest. Only the compact result (download
-  // link + counts, no raw rows) is returned, per canon.
+  // Prompt 70 — ONE-SHOT `request` mode (Copilot GenerateComps / plain-language appraisal
+  // requests) is a PROXY to the engine's own one-shot, exactly like api/query-comps.js. The
+  // engine owns comps-tools.js + the domain DBs; tranquil-delight has no DB env, so it must NOT
+  // hit the DB directly (the prompt-69 direct-DB call 502'd here for missing DIA/GOV_SUPABASE_*).
+  // Forward the caller's `request` (+ optional one-shot fields) to ${MCP_BASE}/api/comps and
+  // return the engine's compact JSON verbatim ({ download_url, counts, cap_rate_range, … }).
   const request = String(payload.request || req.body?.request || '').trim();
   if (request && !hasRows) {
-    let result;
+    // Drop our own inbound-gate fields before forwarding to the engine.
+    const { _k, api_key, lcc_api_key, ...body } = payload;
+    let upstream, text;
     try {
-      result = await runGenerateCompsFromRequest(payload, { govQuery, diaQuery }, postCompsToBov);
+      upstream = await fetch(`${MCP_BASE}/api/comps`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${LCC_API_KEY}` },
+        body: JSON.stringify(body),
+        // Generous timeout — the engine synthesizes + builds the workbook.
+        signal: AbortSignal.timeout(180000),
+      });
+      text = await upstream.text();
     } catch (e) {
-      res.status(502).json({ error: 'Could not build comps workbook: ' + (e?.message || String(e)) });
+      res.status(502).json({ error: 'Could not reach comps engine: ' + e.message });
       return;
     }
-    res.status(result && result.error ? 400 : 200).json(result);
+    if (!upstream.ok) {
+      res.status(502).json({ error: 'Comps engine error ' + upstream.status, detail: text.slice(0, 800) });
+      return;
+    }
+    let data;
+    try { data = JSON.parse(text); }
+    catch { res.status(502).json({ error: 'Comps engine returned non-JSON.', raw: text.slice(0, 400) }); return; }
+    // The engine already returns the compact result (download link + counts, no raw rows).
+    res.status(data && data.error ? 400 : 200).json(data);
     return;
   }
 
   // Row-mode (structured comp_type + rows) — unchanged. ChatGPT / existing callers pass
-  // explicit rows and build directly, with no synthesize.
+  // explicit rows and build directly through the BOV service, with no synthesize.
+  if (!BOV_API_KEY) {
+    res.status(500).json({ error: 'Comps service not configured — set BOV_API_KEY on the Copilot service.' });
+    return;
+  }
+
   const compType = String(payload.comp_type || '').toLowerCase();
   if (compType !== 'sales' && compType !== 'lease') {
     res.status(400).json({ error: 'Payload must include comp_type: "sales" or "lease" (or a one-shot `request`).' });

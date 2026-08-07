@@ -377,6 +377,55 @@ describe('structural guards — admin.js wiring (Prompt 69 doctrine)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Prompt 72 — gatherChainEvidenceBlocks selects columns that ACTUALLY exist.
+// Root cause of the residual {deed:0, activity:0}: the deed select used
+// `id` (gov PK is `deed_id`) and the activity select used `activity_id,subject`
+// (real columns are `id,title`). Pin the live schemas so a future rename
+// re-breaks a test, not the production evidence gather.
+describe('Prompt 72 — chain evidence queries select schema-valid columns', () => {
+  const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
+  const gatherStart = admin.indexOf('async function gatherChainEvidenceBlocks');
+  const gatherEnd = admin.indexOf('function _linkErrDetail', gatherStart);
+  assert.ok(gatherStart > 0 && gatherEnd > gatherStart, 'gatherChainEvidenceBlocks not found');
+  const gather = admin.slice(gatherStart, gatherEnd);
+
+  // Live schemas (queried 2026-08-07). Update ONLY alongside a verified schema change.
+  const GOV_DEED_COLS = new Set(['deed_id', 'grantor', 'grantee', 'property_id']);
+  const DIA_DEED_COLS = new Set(['id', 'grantor', 'grantee', 'property_id']);
+  const ACTIVITY_COLS = new Set(['id', 'title', 'body', 'entity_id', 'occurred_at']);
+
+  it('deed select uses domain-correct PK (deed_id for gov, id for dia) + grantor/grantee', () => {
+    // gov branch (default) must select deed_id, dia must select id
+    assert.match(gather, /dom === 'dia' \? 'ref:id' : 'ref:deed_id'/);
+    assert.ok(GOV_DEED_COLS.has('deed_id') && DIA_DEED_COLS.has('id'));
+    // the alias `ref` is what the loop reads, so both domains resolve a value
+    assert.match(gather, /blocks\.push\(\{ source: 'deed', ref: d\.ref/);
+    // the OLD broken literal `select=id,grantor,grantee` must be gone
+    assert.ok(!gather.includes("deed_records?select=id,grantor,grantee"), 'stale deed select=id must be removed');
+  });
+
+  it('activity select uses id,title,body — NOT activity_id,subject (which do not exist)', () => {
+    assert.match(gather, /activity_events\?select=id,title,body/);
+    assert.ok(!/select=[^&']*activity_id/.test(gather), 'activity_id must not be a selected column (does not exist)');
+    assert.ok(!/\ba\.activity_id\b/.test(gather), 'the loop must not read a.activity_id');
+    assert.ok(!/select=activity_id,subject/.test(gather), 'stale activity select must be removed');
+    for (const c of ['id', 'title', 'body', 'entity_id', 'occurred_at']) assert.ok(ACTIVITY_COLS.has(c));
+    // the loop reads a.title / a.id, not a.subject / a.activity_id
+    assert.match(gather, /ref: a\.id/);
+    assert.match(gather, /a\.title \|\| ''/);
+  });
+
+  it('intake match_domain filter accepts BOTH long+short forms (dia/gov alias footgun)', () => {
+    // match_domain is stored long-form (government/dialysis/lcc); an eq.<short>
+    // filter silently matched 0 of 7,713 rows.
+    assert.match(gather, /dom === 'gov' \? '\(gov,government\)'/);
+    assert.match(gather, /dom === 'dia' \? '\(dia,dialysis\)'/);
+    assert.match(gather, /match_domain=in\.' \+ intakeForms/);
+    assert.ok(!gather.includes('match_domain=eq.'), 'stale eq.<short-form> match_domain filter must be removed');
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('structural guards — migration (provenance + flag OFF)', () => {
   const migration = readFileSync(join(root, 'supabase/migrations/20260807180000_lcc_w8_u3_link_propagation.sql'), 'utf8');
 

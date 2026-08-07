@@ -2523,21 +2523,33 @@ async function gatherChainEvidenceBlocks(row) {
     } else if (!sr.ok) { errors.push({ source: 'sale_notes', status: sr.status || null, detail: _linkErrDetail(sr.data) }); }
   } catch (e) { errors.push({ source: 'sale_notes', detail: e?.message || String(e) }); }
   // 2. Domain deed grantor/grantee (names a prior owner / developer).
+  //    PK column differs by domain: gov deed_records.deed_id (uuid) vs dia
+  //    deed_records.id (uuid). Alias it to `ref` so the select column always
+  //    exists (the pre-fix `select=id` 400'd every gov chain candidate:
+  //    "column deed_records.id does not exist").
   try {
-    const dr = await domainQuery(dom, 'GET', 'deed_records?select=id,grantor,grantee'
+    const deedRefCol = dom === 'dia' ? 'ref:id' : 'ref:deed_id';
+    const dr = await domainQuery(dom, 'GET', 'deed_records?select=' + deedRefCol + ',grantor,grantee'
       + '&property_id=eq.' + encodeURIComponent(pid) + '&limit=' + CHAIN_EV_LIMITS.deed);
     if (dr.ok && Array.isArray(dr.data)) {
       for (const d of dr.data) {
         const t = ['grantor: ' + (d.grantor || ''), 'grantee: ' + (d.grantee || '')].filter((x) => x.length > 9).join('; ');
-        if (t) { blocks.push({ source: 'deed', ref: d.id, text: t }); note('deed'); }
+        if (t) { blocks.push({ source: 'deed', ref: d.ref, text: t }); note('deed'); }
       }
     } else if (!dr.ok) { errors.push({ source: 'deed', status: dr.status || null, detail: _linkErrDetail(dr.data) }); }
   } catch (e) { errors.push({ source: 'deed', detail: e?.message || String(e) }); }
   // 3. Intake extraction snapshots matched to this property (party/owner free text).
   //    The extraction lives at raw_payload->extraction_result (INTAKE_LANE_SELECT).
+  //    match_domain is stored LONG-FORM (government/dialysis/lcc), so an eq.<short-form>
+  //    filter silently missed every row (7,713 match_property_id rows, 0 hits). Accept
+  //    both forms (dia/gov alias footgun). match_property_id is a jsonb number; ->>
+  //    yields its text form so eq.<pid-string> still matches.
   try {
+    const intakeForms = dom === 'gov' ? '(gov,government)'
+                      : dom === 'dia' ? '(dia,dialysis)'
+                      : '(' + dom + ')';
     const ir = await opsQuery('GET', 'staged_intake_items?select=intake_id,snap:raw_payload->extraction_result'
-      + '&raw_payload->extraction_result->>match_domain=eq.' + encodeURIComponent(dom)
+      + '&raw_payload->extraction_result->>match_domain=in.' + intakeForms
       + '&raw_payload->extraction_result->>match_property_id=eq.' + encodeURIComponent(pid)
       + '&order=created_at.desc.nullslast&limit=' + CHAIN_EV_LIMITS.intake);
     if (ir.ok && Array.isArray(ir.data)) {
@@ -2550,13 +2562,16 @@ async function gatherChainEvidenceBlocks(row) {
   // 4. Ops correspondence summaries / activity for the current owner entity.
   if (row.current_owner_entity_id) {
     try {
-      const ar = await opsQuery('GET', 'activity_events?select=activity_id,subject,body'
+      // activity_events PK is `id` (uuid) and the headline column is `title`,
+      // not `activity_id`/`subject` (the pre-fix select 400'd every candidate:
+      // "column activity_events.activity_id does not exist").
+      const ar = await opsQuery('GET', 'activity_events?select=id,title,body'
         + '&entity_id=eq.' + encodeURIComponent(row.current_owner_entity_id)
         + '&order=occurred_at.desc.nullslast&limit=' + CHAIN_EV_LIMITS.activity);
       if (ar.ok && Array.isArray(ar.data)) {
         for (const a of ar.data) {
-          const t = [a.subject || '', a.body || ''].filter(Boolean).join('\n');
-          if (t) { blocks.push({ source: 'activity', ref: a.activity_id, text: t }); note('activity'); }
+          const t = [a.title || '', a.body || ''].filter(Boolean).join('\n');
+          if (t) { blocks.push({ source: 'activity', ref: a.id, text: t }); note('activity'); }
         }
       } else if (!ar.ok) { errors.push({ source: 'activity', status: ar.status || null, detail: _linkErrDetail(ar.data) }); }
     } catch (e) { errors.push({ source: 'activity', detail: e?.message || String(e) }); }
