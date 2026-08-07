@@ -625,6 +625,84 @@ export function cropRowsToDisplayFrom(rows, template, df) {
 }
 
 // ============================================================================
+// Q1 as-of regeneration (residual #1B, 2026-08-08) — annual buyer-pool YTD clamp
+// ============================================================================
+//
+// buyer_class_pct_by_year is an ANNUAL stacked bar (Data_Buyer_Pool). Its
+// source yearly view (cm_{vertical}_buyer_share_y) rolls every quarter of each
+// calendar year into that year's bar with NO as-of awareness, so a Q1
+// (as_of=2026-03-31) export summed Q1+Q2-2026 volume into the 2026 bar. The
+// year-axis crop/clamp can only DROP whole years, never re-sum a partial one.
+//
+// Fix: reconstruct the annual series in JS from the period_end-keyed quarterly
+// buyer-share view (cm_{vertical}_buyer_share_q — gov already had one; dia gets
+// it in 20260808_cm_q1_asof_residuals.sql), summing ONLY quarters whose
+// period_end <= as_of. The current (as_of) year is then a true YTD roll-up, and
+// when as_of is not a Q4/Dec year-end its bar is relabelled "<year> YTD" so the
+// partial year is never misread as a full year.
+const BUYER_SHARE_Q_VERTICALS = new Set(['dialysis', 'gov']);
+
+/**
+ * Roll period_end-keyed quarterly buyer-share rows up to an annual series,
+ * clamping every quarter to `asOf` (so the as-of year is a YTD sum, not a full
+ * year). Returns rows shaped exactly like the cm_{vertical}_buyer_share_y view
+ * (year, subspecialty, *_volume, *_pct) plus `ytd`/`ytd_through` provenance.
+ */
+export function buildAnnualBuyerShare(quarterRows, asOf) {
+  if (!Array.isArray(quarterRows) || quarterRows.length === 0) return [];
+  const cap = asOf ? String(asOf).slice(0, 10) : null;
+  // as-of month (0-11); a Q4/Dec (month 11) as-of means the year is complete.
+  const asOfMonth = cap
+    ? new Date(cap + 'T00:00:00Z').getUTCMonth()
+    : null;
+  const byYear = new Map();
+  for (const r of quarterRows) {
+    const pe = r?.period_end ? String(r.period_end).slice(0, 10) : null;
+    if (!pe) continue;
+    if (cap && pe > cap) continue; // as-of end clamp — drop quarters past as_of
+    const year = Number(pe.slice(0, 4));
+    if (!Number.isFinite(year)) continue;
+    if (!byYear.has(year)) {
+      byYear.set(year, {
+        year, subspecialty: r.subspecialty ?? null,
+        private_volume: 0, reit_volume: 0, cross_border_volume: 0, institutional_volume: 0,
+      });
+    }
+    const a = byYear.get(year);
+    a.private_volume       += Number(r.private_volume)       || 0;
+    a.reit_volume          += Number(r.reit_volume)          || 0;
+    a.cross_border_volume  += Number(r.cross_border_volume)  || 0;
+    a.institutional_volume += Number(r.institutional_volume) || 0;
+  }
+  const years = [...byYear.values()].sort((a, b) => a.year - b.year);
+  const maxYear = years.length ? years[years.length - 1].year : null;
+  // Partial (YTD) only when the as-of year is not yet complete (as_of before Q4).
+  const partialYear = cap && asOfMonth != null && asOfMonth !== 11;
+  return years
+    .filter((a) => a.year >= 2010) // mirror the yearly view's >= 2010 floor
+    .map((a) => {
+      const total = a.private_volume + a.reit_volume + a.cross_border_volume + a.institutional_volume;
+      const pct = (v) => (total > 0 ? v / total : null);
+      const isYtd = !!partialYear && a.year === maxYear;
+      return {
+        year: isYtd ? `${a.year} YTD` : a.year,
+        year_num: a.year,
+        subspecialty: a.subspecialty,
+        private_volume: a.private_volume,
+        reit_volume: a.reit_volume,
+        cross_border_volume: a.cross_border_volume,
+        institutional_volume: a.institutional_volume,
+        private_pct: pct(a.private_volume),
+        reit_pct: pct(a.reit_volume),
+        cross_border_pct: pct(a.cross_border_volume),
+        institutional_pct: pct(a.institutional_volume),
+        ytd: isYtd,
+        ytd_through: isYtd ? cap : null,
+      };
+    });
+}
+
+// ============================================================================
 // Historical as-of resolution (CM historical regeneration, 2026-08-07)
 // ============================================================================
 //
@@ -1195,8 +1273,18 @@ async function exportWorkbook(req, res) {
     // latest quarter reproduces the current max() snapshot views exactly.
     const qViewTmpl = RECONSTRUCTABLE_QVIEW[tmpl.chart_template_id];
     const reconstructed = !!qViewTmpl && RECONSTRUCTABLE_VERTICALS.has(vertical);
-    const view_name = (reconstructed ? qViewTmpl : tmpl.view_name_template)
-      .replace('{vertical}', vertical);
+    // Q1 as-of regeneration (residual #1B) — the annual buyer-pool bar is
+    // rebuilt from the period_end-keyed quarterly buyer-share view and rolled
+    // up in JS with an as-of clamp (see buildAnnualBuyerShare), so its current
+    // year is Q1 YTD rather than the whole calendar year. Only verticals with a
+    // cm_{vertical}_buyer_share_q view participate; others fall back to the
+    // yearly view unchanged.
+    const buyerAnnualYtd =
+      tmpl.chart_template_id === 'buyer_class_pct_by_year' &&
+      BUYER_SHARE_Q_VERTICALS.has(vertical);
+    const view_name = buyerAnnualYtd
+      ? `cm_${vertical}_buyer_share_q`
+      : (reconstructed ? qViewTmpl : tmpl.view_name_template).replace('{vertical}', vertical);
     // A historical as_of on a current-only snapshot with NO reconstruction
     // (e.g. gov's tenant/term/per-listing feeds) must be labeled honestly on
     // the sheet rather than silently mislabeled as the report quarter.
@@ -1204,7 +1292,9 @@ async function exportWorkbook(req, res) {
       !reconstructed &&
       CURRENT_ONLY_SNAPSHOT_SHAPES.has(String(tmpl.data_shape || '').toLowerCase()) &&
       resolvedAsOf !== asOfResolution.latest;
-    const orderCol = timeAxisColumnFor(tmpl);
+    // The buyer-share_q view is period_end-keyed (no `year` column), so order
+    // it by period_end regardless of the yearly chart's time axis.
+    const orderCol = buyerAnnualYtd ? 'period_end' : timeAxisColumnFor(tmpl);
     try {
       const result = await fetchView(view_name, orderCol);
       // Reconstructed feeds: narrow the all-quarters view to the target period
@@ -1231,11 +1321,17 @@ async function exportWorkbook(req, res) {
         // 2026-05-29 - clamp time-series rows to the requested as-of period
         // so Data_* tabs never bleed past the report quarter (see
         // clampRowsToAsOf). Snapshot/table/kpi shapes pass through untouched.
-        rows: cropRowsToDisplayFrom(
-          clampRowsToAsOf(baseRows, tmpl, resolvedAsOf),
-          tmpl,
-          resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, view_name)
-        ),
+        // Q1 as-of regeneration (residual #1B): the annual buyer-pool bar is
+        // rebuilt (as-of-clamped YTD roll-up) from the quarterly buyer-share
+        // rows rather than the yearly view — buildAnnualBuyerShare already
+        // applies the as-of clamp, so the generic crop/clamp is skipped.
+        rows: buyerAnnualYtd
+          ? buildAnnualBuyerShare(baseRows, resolvedAsOf)
+          : cropRowsToDisplayFrom(
+              clampRowsToAsOf(baseRows, tmpl, resolvedAsOf),
+              tmpl,
+              resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, view_name)
+            ),
         // Round 68-E (G8): distinguish a real fetch failure (after the
         // fetchView retry pass) from a legitimately empty view, so the tab
         // writer can stamp "FETCH FAILED — re-export" instead of a silent
@@ -1723,8 +1819,16 @@ async function exportWorkbook(req, res) {
     // same 2007-03-31 start as the realCharts sales series. Pace's YoY-lag output
     // naturally starts ~2008, so its 2007-03-31 crop is a no-op (acceptance: pace
     // 2008-01 is fine). Best-effort: no registry row → no crop (whole history).
+    //
+    // Q1 as-of regeneration (residual #1A, 2026-08-08) — ALSO apply the as-of END
+    // clamp here. #1624 applied only the display_from START crop to synthetic
+    // series, so Data_Buyer_Pool_M / Data_Volume_Quarterly still ran past as_of
+    // (through 2026-06-30 on a 2026-03-31 export) because these composers read
+    // masterMonthlyRows, which run to the latest completed quarter regardless of
+    // the requested as_of. clampRowsToAsOf drops rows with period_end > as_of on
+    // the same time-series shapes the realCharts path already clamps.
     const df = resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, tmpl.view_name_template);
-    rows = cropRowsToDisplayFrom(rows, tmpl, df);
+    rows = cropRowsToDisplayFrom(clampRowsToAsOf(rows, tmpl, resolvedAsOf), tmpl, df);
     return {
       chart_template_id: tmpl.chart_template_id,
       name: tmpl.name,
