@@ -86,14 +86,16 @@ test('operation count ≈ actions + typed gateway ops (roughly halved from 95)',
     'every schema-backed action should still emit a discrete op');
 });
 
-// Prompt 67: the slimmed v2 spec must keep the Comps Flow, or re-importing it
-// drops comps from the LCC Intelligence connector.
-test('comps operations are advertised at their real flat routes (Prompt 67)', () => {
+// Prompt 68: the v2 spec's comps ops now resolve under /api/copilot/comps/* so
+// they ride authenticate()'s M365 passthrough (same auth as every other connector
+// tool), instead of the flat keyed routes. OperationIds / tags are unchanged so
+// the connector's comps tools rebind on a swagger update (no re-add).
+test('comps operations resolve under /api/copilot/comps/* (Prompt 68)', () => {
   const spec = v2Spec();
   const expected = {
-    SynthesizeComps: '/api/synthesize-comps',
-    QueryComps: '/api/query-comps',
-    GenerateComps: '/api/comps'
+    SynthesizeComps: '/api/copilot/comps/synthesize-comps',
+    QueryComps: '/api/copilot/comps/query-comps',
+    GenerateComps: '/api/copilot/comps/generate-comps'
   };
   const byId = new Map(allOperations(spec).map((op) => [op.operationId, op]));
   for (const [id, path] of Object.entries(expected)) {
@@ -102,4 +104,14 @@ test('comps operations are advertised at their real flat routes (Prompt 67)', ()
       `${id} must map to ${path}`);
     assert.equal(byId.get(id).tags[0], 'comps', `${id} must keep tag 'comps'`);
   }
+  // The flat comps paths must NOT appear in the v2 spec anymore (they stay for
+  // ChatGPT/MCP, advertised by the curated spec, not here).
+  for (const flat of ['/api/synthesize-comps', '/api/query-comps', '/api/comps']) {
+    assert.ok(!(flat in spec.paths), `flat comps path ${flat} must not be in the v2 spec`);
+  }
+  // Still exactly three comps ops, still unique operationIds.
+  const compsOps = allOperations(spec).filter((op) => op.tags && op.tags[0] === 'comps');
+  assert.equal(compsOps.length, 3, 'exactly three comps ops in the v2 spec');
+  // No dispatch gateway / no /compat/ (guarded elsewhere, re-assert for comps).
+  assert.ok(!Object.keys(spec.paths).some((p) => p.startsWith('/api/copilot/compat/')));
 });
