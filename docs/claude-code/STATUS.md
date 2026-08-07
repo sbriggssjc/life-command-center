@@ -454,6 +454,15 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### 65 third run 2026-08-07 — SCOPE FIXED (247 candidates ✅), but `?score=1` 502s → prompt 66 queued
+Post-65 deploy (`6bb9c1aaa57a`): bare scan returns fast — **247 true-junk candidates**,
+naming_hygiene_backlog counted, connection exclusion live. `?score=1` 502s at the Railway proxy:
+with `OLLAMA_SURFACES` unset, clean_assist scores on GaryBuilt (~16s/call) → 20 inline calls ≈320s
+> proxy timeout (earlier runs survived on gpt-4o-mini). Same math would break the nightly apply
+(247×16s ≈ 66 min). **Prompt 66**: inline scoring time-budget + `&n=` cap (default 6), resumable
+`JUNK_SCORE_BATCH_SIZE` batches on the cron path with a scored-marker dedupe, honest
+remaining/budget counts. Flag stays OFF until 66 + a clean scored sample.
+
 ### Prompt 65 landed — branch `claude/w8-u1-true-junk-scope-i9v78v`, awaiting merge + redeploy
 Scope tighten implemented per spec: `classifyName()` splits junk vs naming_hygiene vs null;
 abbrev/address classes dropped from candidacy (counted-only `naming_hygiene_backlog` per domain);
