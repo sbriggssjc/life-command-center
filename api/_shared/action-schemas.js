@@ -1078,6 +1078,57 @@ const TYPED_GATEWAY_OPERATIONS = [
     description: 'Explicit memory write. Use to capture context the agent decides should persist across conversations.',
     inputs: { type: 'object', properties: { entity_id: { type: 'string' }, summary: { type: 'string' }, turn_text: { type: 'string' }, channel: { type: 'string' } }, required: ['summary'] },
     outputs: { type: 'object', properties: { ok: { type: 'boolean' }, activity_id: { type: 'string' } } }
+  },
+  // ── Comps (Prompt 67) ────────────────────────────────────────────────────
+  // The v2 connector (LCC Intelligence) must keep the Comps Flow when the
+  // slimmed spec is re-imported. Comps live only in CHATGPT_CURATED_OPERATIONS
+  // (the ChatGPT/curated surface) and the flat routes are already mounted in
+  // server.js; advertise them here as typed gateway ops (PascalCase operationIds
+  // uniform with the other discrete ops) so they ride the v2 spec too. Inputs /
+  // outputs / paths mirror the curated comps entries exactly.
+  {
+    path: '/api/synthesize-comps', operationId: 'SynthesizeComps', tag: 'comps',
+    summary: 'Synthesize a ranked sales-comp set from a plain-language request',
+    description: 'Assemble one ranked, de-duplicated comp set from every relevant source for a plain-language request. Returns comps scored by relevance, ready for the briggs-comps template.',
+    inputs: { type: 'object', properties: {
+      request: { type: 'string', description: 'The comp request; also routes government intent.' },
+      property_types: { type: 'array', items: { type: 'string' } },
+      states: { type: 'array', items: { type: 'string' } },
+      comp_type: { type: 'string', enum: ['sales', 'lease'] },
+      tenant: { type: 'string' },
+      tenants: { type: 'array', items: { type: 'string' } },
+      include_unreliable_noi: { type: 'boolean' },
+      limit: { type: 'number', description: 'Default 25, max 50.' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, comps: { type: 'array', items: { type: 'object', additionalProperties: true } } } }
+  },
+  {
+    path: '/api/query-comps', operationId: 'QueryComps', tag: 'comps',
+    summary: 'Query de-duplicated sales comps by explicit filters',
+    description: 'Pull sales comps across the dialysis DB, government DB, and Salesforce-staged comps, normalized to one shape and de-duplicated. Cap rates returned as decimals. By default only comps with a reliable NOI/cap are returned; pass include_unreliable_noi:true to include modeled-NOI comps.',
+    inputs: { type: 'object', properties: {
+      request: { type: 'string', description: 'Optional natural-language request parsed server-side before explicit fields are applied.' },
+      property_types: { type: 'array', items: { type: 'string' }, description: 'e.g. medical, office, retail, industrial, dialysis, government' },
+      states: { type: 'array', items: { type: 'string' }, description: 'Two-letter state codes' },
+      tenant: { type: 'string', description: 'Single operator/tenant scope, e.g. DaVita, Fresenius.' },
+      tenants: { type: 'array', items: { type: 'string' }, description: 'Multiple operators/tenants.' },
+      include_unreliable_noi: { type: 'boolean', description: 'Also include modeled-NOI / no-NOI comps.' },
+      limit: { type: 'number', description: 'Default 40, max 100.' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, comps: { type: 'array', items: { type: 'object', additionalProperties: true } } } }
+  },
+  {
+    path: '/api/comps', operationId: 'GenerateComps', tag: 'comps',
+    summary: 'Generate a Briggs CRE comps workbook (returns a download link)',
+    description: "Generate a Briggs CRE comps workbook and return a short-lived download link plus compact counts. One-shot mode: pass `request` with the original text; the server synthesizes rows and builds the workbook server-side.",
+    inputs: { type: 'object', properties: {
+      request: { type: 'string', description: 'One-shot workbook mode — pass the comp/appraisal request verbatim.' },
+      comp_type: { type: 'string', enum: ['sales', 'lease'], description: 'sales = On Market + Sold sheets | lease = Lease Comps sheet' },
+      vertical: { type: 'string', description: "Set to 'dialysis' for the dialysis sales template (CHAIRS + PATIENTS)." },
+      limit: { type: 'number', description: 'One-shot row target. Default 25, max 50.' },
+      name: { type: 'string', description: 'Label for the filename.' }
+    } },
+    outputs: { type: 'object', additionalProperties: true, properties: { status: { type: 'string' }, filename: { type: 'string' }, download_url: { type: 'string' } } }
   }
 ];
 
