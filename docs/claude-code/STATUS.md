@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Post-75 live verify 2026-08-07 — U3 lane RENDERS but confirm fails; U2 buried → prompt 76
+U3 lane visible (75 works) but Confirm → `entity_mint_failed`: mint INSERT omits
+`entities.canonical_name` (NOT NULL, no default — verified live; enum 'organization' is valid).
+Also the resolve step matches raw `name=eq.` (would mint case-variant dupes) — 76 switches to the
+house canonical_name resolve. The USAA Real Estate proposal (review 1, $14.2M, deed-grounded
+"grantor: USAA Real Estate") got mislabeled `rejected` after the error — 76 restores it to
+proposed + supersedes the verdict row. **U2:** owner_reconcile lane = ~5,300 rows; the 38 ollama
+pairs are undiscoverable → 76 adds seeder filter chips + U2-first sort. Prompt 76 queued.
+Proposal quality note: both chain proposals are exactly on-design (deed grantor→prior_owner links
+with verbatim quotes, $8M/$14.2M rank properties).
+
 ### Prompt 75 landed — PR #1623, awaiting merge + redeploy
 U3 lane fully wired (list entry "Ownership links — Ollama proposals" + meta + card branch handling
 both pools, verbatim quote + Confirm/Reject → decided/skipped per 74). Badges: DC page now
