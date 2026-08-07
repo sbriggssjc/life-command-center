@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Expansion queue 2026-08-07 — Scott approved all four tracks; prompts 77–81 drafted
+
+Send in this order (leaks before expansion, per doctrine):
+| # | What | Class |
+|---|---|---|
+| 77 | U3 ambiguous_entity_match conflict-resolution card (Trammell Crow is stuck invisible) | small polish |
+| 78 | **PGRST204 schema-drift writers** — dia 3,702 + gov 3,243 failed writes/mo, diagnose from `ingest_write_failures` payloads, schema-pinned regression guards | the big leak |
+| 79 | **W8 U5 naming-hygiene campaign** — ~6.5k backlog; deterministic dictionary renames (no LLM) + address-as-name → property-LINK proposals (not renames); own lane (75 guard enforces full wiring); bulk-confirm for mechanical renames; flag `W8_U5_NAMING_HYGIENE` | expansion |
+| 80 | **Match-disambiguation pre-rank assist** — 1,120 open / 0 ever decided; Ollama annotation-only ranking + agree/disagree self-measurement feeding U4; flag `MATCH_DISAMBIG_ASSIST` | expansion |
+| 81 | Ops cleanup — zombie `Unflag Completed Email Tasks` (524 fails, flow supposedly retired), 23505 dedup-respect folds (2,221), 23503 FK (494), 42P10 ON-CONFLICT (243), sidebar 409s | stub list |
+
 ### ✅ FIRST FULL HUMAN CYCLE COMPLETE — 2026-08-07 evening (Cowork-verified in DB)
 Scott worked all three lanes end-to-end post-76. **U2: 30 verdicts → 30 `entity_match_labels`
 training rows written** (3 confirmed_match + 27 distinct = exactly the hard negatives the W4.3
