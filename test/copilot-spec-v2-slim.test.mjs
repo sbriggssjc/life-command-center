@@ -77,10 +77,29 @@ test('discrete briefing op is present and named GetDailyBriefingSnapshot', () =>
 test('operation count ≈ actions + typed gateway ops (roughly halved from 95)', () => {
   const spec = v2Spec();
   const count = allOperations(spec).length;
-  // 43 discrete actions + 4 typed gateway ops today; a compat/gateway
-  // regression would roughly double this. Guard the halved regime, not an
-  // exact number, so adding a real action doesn't trip the test.
-  assert.ok(count < 60, `expected the slimmed count (~48), got ${count}`);
+  // 43 discrete actions + 4 typed gateway ops + 3 comps ops (Prompt 67) = ~50
+  // today; a compat/gateway regression would roughly double this. Guard the
+  // slimmed regime, not an exact number, so adding a real action doesn't trip
+  // the test.
+  assert.ok(count < 60, `expected the slimmed count (~50), got ${count}`);
   assert.ok(count >= Object.keys(ACTION_SCHEMAS).length,
     'every schema-backed action should still emit a discrete op');
+});
+
+// Prompt 67: the slimmed v2 spec must keep the Comps Flow, or re-importing it
+// drops comps from the LCC Intelligence connector.
+test('comps operations are advertised at their real flat routes (Prompt 67)', () => {
+  const spec = v2Spec();
+  const expected = {
+    SynthesizeComps: '/api/synthesize-comps',
+    QueryComps: '/api/query-comps',
+    GenerateComps: '/api/comps'
+  };
+  const byId = new Map(allOperations(spec).map((op) => [op.operationId, op]));
+  for (const [id, path] of Object.entries(expected)) {
+    assert.ok(byId.has(id), `v2 spec must advertise ${id}`);
+    assert.ok(spec.paths[path] && spec.paths[path].post && spec.paths[path].post.operationId === id,
+      `${id} must map to ${path}`);
+    assert.equal(byId.get(id).tags[0], 'comps', `${id} must keep tag 'comps'`);
+  }
 });
