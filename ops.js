@@ -1863,6 +1863,12 @@ var _DC_FEDERATED = new Set([
   // FK-referenced row to a conflict. Keep in sync with admin.js
   // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
   'junk_entity_review',
+  // W8 U3 (Prompt 69): Ollama connection-propagation link proposals. Source =
+  // v_w8_u3_link_review_open; verdict confirm runs the deterministic edge writer
+  // (entity_relationships + provenance, reversible) / person-email routes to the
+  // resolver. Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs).
+  'w8_u3_link_review',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
