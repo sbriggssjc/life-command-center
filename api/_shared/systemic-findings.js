@@ -362,16 +362,28 @@ export function buildExtractionSection(raw, prev) {
 export function assembleReport(inputs, { period, now = null, prevSections = null } = {}) {
   const prevBy = {};
   if (Array.isArray(prevSections)) for (const s of prevSections) prevBy[s.key] = s;
-  const sections = [
-    buildIngestFailureSection(inputs.ingest_clusters, inputs.windows, prevBy.ingest_failures),
-    buildFlowFailureSection(inputs.flow_clusters, inputs.windows, prevBy.flow_failures),
-    buildProvenanceSection(inputs.provenance, prevBy.provenance),
-    buildChainSection(inputs.chain, prevBy.chain),
-    buildPrecisionFloorSection(inputs.precision, prevBy.precision_floors),
-    buildLaneThroughputSection(inputs.lanes, prevBy.lane_throughput),
-    buildNamingHygieneSection(inputs.naming_hygiene, prevBy.naming_hygiene),
-    buildExtractionSection(inputs.extraction, prevBy.extraction),
+  // Per-section resilience (Prompt 73): each builder runs in its own try/catch so a
+  // single throwing section contributes a loud {section, error} entry to
+  // `section_errors` instead of killing the whole tick. Honest partial > silent death.
+  const builders = [
+    ['ingest_failures', () => buildIngestFailureSection(inputs.ingest_clusters, inputs.windows, prevBy.ingest_failures)],
+    ['flow_failures', () => buildFlowFailureSection(inputs.flow_clusters, inputs.windows, prevBy.flow_failures)],
+    ['provenance', () => buildProvenanceSection(inputs.provenance, prevBy.provenance)],
+    ['chain', () => buildChainSection(inputs.chain, prevBy.chain)],
+    ['precision_floors', () => buildPrecisionFloorSection(inputs.precision, prevBy.precision_floors)],
+    ['lane_throughput', () => buildLaneThroughputSection(inputs.lanes, prevBy.lane_throughput)],
+    ['naming_hygiene', () => buildNamingHygieneSection(inputs.naming_hygiene, prevBy.naming_hygiene)],
+    ['extraction', () => buildExtractionSection(inputs.extraction, prevBy.extraction)],
   ];
+  const sections = [];
+  const sectionErrors = [];
+  for (const [key, fn] of builders) {
+    try {
+      sections.push(fn());
+    } catch (e) {
+      sectionErrors.push({ section: key, error: (e && e.message) ? e.message : String(e) });
+    }
+  }
   const findingsFlat = [];
   for (const s of sections) {
     for (const f of s.findings) findingsFlat.push({ section: s.key, ...f });
@@ -384,11 +396,13 @@ export function assembleReport(inputs, { period, now = null, prevSections = null
     period: period || null,
     generated_at: now || null,
     sections,
+    section_errors: sectionErrors,
     findings_flat: findingsFlat,
     totals: {
       sections: sections.length,
       findings: findingsFlat.length,
       code_error_sections: codeErrors.length,
+      section_errors: sectionErrors.length,
       by_severity: bySeverity,
     },
   };

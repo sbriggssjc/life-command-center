@@ -299,3 +299,74 @@ describe('structural guards — no new lane, flag off, monthly cron', () => {
     assert.match(mig, /period\s+text NOT NULL UNIQUE/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Prompt 73 — tick hardening: per-section resilience, crash-proof envelope, and
+// NO inline narration on the GET path.
+describe('Prompt 73 — per-section resilience (section_errors)', () => {
+  const okInputs = {
+    ingest_clusters: [{ domain: 'd', http_status: 400, label: 'PGRST204', cnt: 100 }],
+    flow_clusters: [], windows: { iwf_total: 100, iwf_30d: 100 },
+    provenance: { unranked: 33, conflicts: 5 },
+    chain: { total: 10, complete: 4, incomplete: 6, gaps: [], u3: {} },
+    precision: {}, lanes: {}, naming_hygiene: null, extraction: {},
+  };
+
+  it('a throwing section contributes {section, error} and does NOT kill the tick', () => {
+    // Poison ONE section's input with a throwing getter → its builder throws.
+    const poisoned = { ...okInputs,
+      provenance: { get unranked() { throw new Error('boom-provenance'); }, conflicts: 5 } };
+    const r = assembleReport(poisoned, { period: '2026-08' });
+    // The tick still returns a report (honest partial > silent death).
+    assert.ok(Array.isArray(r.section_errors));
+    assert.equal(r.section_errors.length, 1);
+    assert.equal(r.section_errors[0].section, 'provenance');
+    assert.match(r.section_errors[0].error, /boom-provenance/);
+    // The other 7 sections still built.
+    assert.equal(r.sections.length, 7);
+    assert.equal(r.totals.section_errors, 1);
+    assert.ok(!r.sections.some((s) => s.key === 'provenance'));
+  });
+
+  it('a clean report has an empty section_errors array', () => {
+    const r = assembleReport(okInputs, { period: '2026-08' });
+    assert.deepEqual(r.section_errors, []);
+    assert.equal(r.totals.section_errors, 0);
+    assert.equal(r.sections.length, 8);
+  });
+});
+
+describe('Prompt 73 — crash-proof envelope + no inline narrate (handler source)', () => {
+  const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
+  it('the handler wraps its impl in a try/catch that returns a JSON 500 envelope', () => {
+    // The public handler delegates to an impl and never leaves a response-less path.
+    assert.match(admin, /async function handleSystemicFindingsTick\([^)]*\)\s*\{[\s\S]*?try\s*\{[\s\S]*?systemicFindingsTickImpl/);
+    assert.match(admin, /ok:\s*false,\s*error:[^\n]*section:\s*'handler'/);
+    assert.match(admin, /res\.headersSent/);
+  });
+
+  it('the GET path does NOT call the narrator inline — ?narrate=1 is deferred', () => {
+    // Isolate the GET dry-run block (after the POST apply block returns).
+    const getBlock = admin.slice(admin.indexOf('GET dry-run: the full computed findings JSON'));
+    assert.match(getBlock, /narrate\s*=\s*'deferred'/);
+    // No model-drafting call in the GET block.
+    assert.ok(!/draftSystemicNarrative\(/.test(getBlock),
+      'GET path must not draft the narrative inline (that was the 502 hang)');
+  });
+
+  it('the GET dry-run still ships the deterministic doc render + section_errors', () => {
+    const getBlock = admin.slice(admin.indexOf('GET dry-run: the full computed findings JSON'));
+    assert.match(getBlock, /renderFindingsDoc\(report,\s*null/);
+    assert.match(getBlock, /section_errors/);
+  });
+
+  it('narrate budget on the apply path: single call + ONE validator retry (2 attempts max)', () => {
+    // draftSystemicNarrative loops at most twice (attempt < 2) — one draft + one retry.
+    const draftBlock = admin.slice(admin.indexOf('async function draftSystemicNarrative'));
+    assert.match(draftBlock, /attempt\s*<\s*2/);
+    // Narration is only invoked on the POST apply path, never GET.
+    const impl = admin.slice(admin.indexOf('async function systemicFindingsTickImpl'));
+    const apply = impl.slice(0, impl.indexOf('GET dry-run'));
+    assert.match(apply, /draftSystemicNarrative\(report\)/);
+  });
+});
