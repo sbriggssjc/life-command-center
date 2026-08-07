@@ -697,7 +697,14 @@ const CHART_COLUMNS = {
     // views (min_last_ask_cap / max_last_ask_cap / achieved_last_ask_cap).
     { key: 'min_last_ask_cap',      header: 'Last Ask — Low (TTM)',  format: 'percent_basis_points', width: 19 },
     { key: 'max_last_ask_cap',      header: 'Last Ask — High (TTM)', format: 'percent_basis_points', width: 19 },
-    { key: 'achieved_last_ask_cap', header: 'Achieved Cap (TTM)',    format: 'percent_basis_points', width: 19 },
+    // CM export audit (2026-08-07) — the static `achieved_last_ask_cap` column
+    // was a DUPLICATE of the native-chart helper column `achieved_cap`
+    // (cm-native-chart-injector.js bid_ask_spread spec), which computes the
+    // identical value (avg_last_ask_cap + avg_bid_ask_spread) and is the column
+    // the chart's navy "Achieved" marker line actually binds to (via cols.length).
+    // Both rendered header "Achieved Cap (TTM)" with byte-identical data (verified
+    // 149/149 rows). Drop the static one; the helper remains and keeps the chart
+    // wired. (min/max Low/High stay — they are distinct range columns.)
   ],
 
   // Phase 2c additions (FRED macro)
@@ -1272,7 +1279,14 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   cover.getCell('B8').value = 'Data Source';
   cover.getCell('B8').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
 
-  cover.getCell('B9').value = 'Live-computed from public.sales_transactions on the Government Supabase, filtered to closed sales (sold_price > 0). Cap rate aggregates use N≥3 quarter guard for representative stats; NM/non-NM attribution stats use N≥1.';
+  // CM export audit (2026-08-07) — the data-source line must name the vertical's
+  // OWN backend, not a shared constant. A dialysis export previously read
+  // "Government Supabase" verbatim (copy-paste from the gov cover). Each vertical
+  // sources from a distinct Supabase project/table, so resolve it per-vertical.
+  const dataSourceBlurb = vertical === 'dialysis'
+    ? 'Live-computed from public.sales_transactions on the Dialysis Supabase (project zqzrriwuavgrquhisnoa), filtered to closed sales (sold_price > 0). Cap rate aggregates use N≥3 quarter guard for representative stats; NM/non-NM attribution stats use N≥1.'
+    : 'Live-computed from public.sales_transactions on the Government Supabase, filtered to closed sales (sold_price > 0). Cap rate aggregates use N≥3 quarter guard for representative stats; NM/non-NM attribution stats use N≥1.';
+  cover.getCell('B9').value = dataSourceBlurb;
   cover.getCell('B9').font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
   cover.getCell('B9').alignment = { wrapText: true, vertical: 'top' };
   cover.getRow(9).height = 48;
