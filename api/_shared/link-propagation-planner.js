@@ -245,14 +245,15 @@ function buildPersonEmailPrompt(row, assembled) {
     blocks || '(no evidence)',
     '',
     'Return ONLY strict JSON with keys: verdict, linked_entity_name, role, confidence, evidence_quote, evidence_source, reason.',
-    '- verdict: "link_proposal" (SAME person — a duplicate) OR "no_evidence_found" (different people / not enough signal).',
-    '- linked_entity_name: the winner name if same_person, else null.',
-    '- role: "same_person".',
+    '- verdict: one of "link_proposal" (SAME person — a duplicate), "different_people" (the names shown are DISTINCT people who share one mailbox — a team/family distro), or "no_evidence_found" (not enough signal to decide either way).',
+    '- linked_entity_name: the winner name if same_person (link_proposal), else null.',
+    '- role: "same_person" for link_proposal; "different_people" for different_people; null otherwise.',
     '- confidence: 0.0 to 1.0.',
-    '- evidence_quote: the VERBATIM span (a name or the email) from the EVIDENCE above supporting SAME person. null otherwise.',
+    '- evidence_quote: the VERBATIM span from the EVIDENCE above. For link_proposal: the name/email showing SAME person. For different_people: the span showing the DISTINCT names (e.g. the "others:" line naming clearly different people). null for no_evidence_found.',
     '- evidence_source: the [E#] tag you quoted.',
     '- reason: one short sentence.',
-    '- A multi-person composite ("A, B & C") sharing one email is NOT one person — return no_evidence_found.',
+    '- A multi-person composite ("A, B & C") sharing one email, or clearly different individuals, is "different_people" (NOT one person, and NOT unknown) — return different_people with the verbatim span naming them.',
+    '- Only return no_evidence_found when you genuinely cannot tell whether the records are the same or different.',
   ].join('\n');
 }
 
@@ -271,41 +272,73 @@ export function parseLinkProposalJson(text) {
   return null;
 }
 
-const LINK_VERDICTS = new Set(['link_proposal', 'no_evidence_found']);
+// The verdict vocabulary. `different_people` (person_email pool ONLY) is a
+// candidate-RESOLVING finding — "the records that share this email are DISTINCT
+// people, not one duplicate." Like link_proposal it carries a VERBATIM quote (the
+// span that shows the distinct names); UNLIKE it, it names no linked entity and,
+// on human confirm, resolves the merge candidate as distinct + seeds a
+// hard-negative label (NEVER a merge). no_evidence_found stays quote-free.
+const LINK_VERDICTS = new Set(['link_proposal', 'no_evidence_found', 'different_people']);
 
 // Normalize a raw model object into a link proposal. Verdict defaults to
-// no_evidence_found on anything unrecognized (never a silent link).
+// no_evidence_found on anything unrecognized (never a silent link). A
+// no_evidence_found verdict is stripped of any stray quote/source the model
+// echoed (Prompt 71 do#3 — no_evidence requires NO quote).
 export function normalizeLinkProposal(raw) {
   const obj = raw && typeof raw === 'object' ? raw : {};
   let verdict = String(obj.verdict || '').toLowerCase().trim().replace(/\s+/g, '_');
   if (verdict === 'link' || verdict === 'proposal' || verdict === 'found' || verdict === 'yes') verdict = 'link_proposal';
   if (verdict === 'no_evidence' || verdict === 'none' || verdict === 'no' || verdict === 'not_found') verdict = 'no_evidence_found';
+  if (verdict === 'different' || verdict === 'different_person' || verdict === 'distinct'
+      || verdict === 'distinct_people' || verdict === 'not_same' || verdict === 'not_same_person'
+      || verdict === 'not_duplicate') verdict = 'different_people';
   if (!LINK_VERDICTS.has(verdict)) verdict = 'no_evidence_found';
   const n = Number(obj.confidence);
   const confidence = Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
   const linked = obj.linked_entity_name != null ? String(obj.linked_entity_name).replace(/\s+/g, ' ').trim().slice(0, 200) : '';
   const role = obj.role != null ? String(obj.role).replace(/\s+/g, ' ').trim().slice(0, 40) : '';
-  const quote = obj.evidence_quote != null ? String(obj.evidence_quote).slice(0, 400) : '';
-  const source = obj.evidence_source != null ? String(obj.evidence_source).replace(/\s+/g, ' ').trim().slice(0, 40) : '';
+  let quote = obj.evidence_quote != null ? String(obj.evidence_quote).slice(0, 400) : '';
+  let source = obj.evidence_source != null ? String(obj.evidence_source).replace(/\s+/g, ' ').trim().slice(0, 40) : '';
   const reason = obj.reason != null ? String(obj.reason).replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+  // no_evidence_found carries NO quote — strip a stray one the model echoed.
+  if (verdict === 'no_evidence_found') { quote = ''; source = ''; }
   return { verdict, confidence, linked_entity_name: linked, role, evidence_quote: quote, evidence_source: source, reason };
 }
 
 // ---------------------------------------------------------------------------
 // The validator (the free precision floor). A proposal is KEPT only when:
-//   * verdict === 'link_proposal'
-//   * it names an entity (linked_entity_name non-empty)
-//   * its evidence_quote appears VERBATIM in the supplied evidence text
+//   * verdict === 'link_proposal' — names an entity + VERBATIM quote, OR
+//   * verdict === 'different_people' (person_email pool ONLY) — VERBATIM quote
+//     (no entity named; the quote IS the distinct-names evidence).
 // Anything else is dropped with a reason (for the w8_u3_dropped_log). A
-// no_evidence_found is NOT a drop — it is an honest, counted non-proposal.
+// no_evidence_found is NOT a drop — it is an honest, counted non-proposal, and
+// carries NO quote (a stray quote is ignored, the verdict is kept). A
+// different_people verdict outside the person_email pool degrades to
+// no_evidence_found (the chain pool has no such finding to consume).
+// `pool` is optional (defaults to whatever pool the verdict is valid in).
 // Returns { proposal|null, verdict, drop: { reason }|null }.
 // ---------------------------------------------------------------------------
-export function validateLinkProposal(proposal, evidenceText) {
+export function validateLinkProposal(proposal, evidenceText, pool) {
   const p = proposal && typeof proposal === 'object' ? proposal : {};
-  const verdict = String(p.verdict || 'no_evidence_found');
+  let verdict = String(p.verdict || 'no_evidence_found');
+  // different_people is consumable ONLY in the person_email pool.
+  if (verdict === 'different_people' && pool != null && pool !== LINK_POOL_PERSON_EMAIL) {
+    verdict = 'no_evidence_found';
+  }
   if (verdict === 'no_evidence_found') {
     return { proposal: null, verdict, drop: null };
   }
+  if (verdict === 'different_people') {
+    // No entity is named (it is a resolution, not a link) — the quote is the floor.
+    if (!p.evidence_quote) {
+      return { proposal: null, verdict, drop: { reason: 'no_quote', quote: null } };
+    }
+    if (!quoteVerbatimInEvidence(p.evidence_quote, evidenceText)) {
+      return { proposal: null, verdict, drop: { reason: 'quote_not_verbatim', quote: String(p.evidence_quote).slice(0, 200) } };
+    }
+    return { proposal: { ...p, verdict }, verdict, drop: null };
+  }
+  // link_proposal.
   if (!p.linked_entity_name) {
     return { proposal: null, verdict, drop: { reason: 'no_entity_named', quote: p.evidence_quote || null } };
   }
