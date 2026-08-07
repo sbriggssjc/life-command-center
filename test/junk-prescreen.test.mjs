@@ -12,6 +12,8 @@ import {
   JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
   junkCandidateReason, isJunkCandidate, buildJunkPrescreenPrompt,
   normalizeJunkProposal, parseJunkVerdictJson, planJunkApply, buildRetireMarker,
+  isSpeCodedName, knownAbbrevEvidence, isAddressAsName, isAcronymOnly,
+  applyPrescreenGuards, dismissDistributionGuard,
 } from '../api/_shared/junk-prescreen.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -163,6 +165,154 @@ describe('buildRetireMarker — reversible, non-clobbering', () => {
   });
 });
 
+// ===========================================================================
+// Prompt 64 — precision fix. Regression fixtures are the VERBATIM names from the
+// first live scored batch (2026-08-07) that were wrongly proposed `dismiss`.
+// ===========================================================================
+describe('SPE-pattern guard — net-lease coded shells are NOT candidates', () => {
+  const SPE_NAMES = [
+    'ARC3 GSCRGCO001, LLC', 'ARHC MCNWDNY01, LLC', 'ARC GSDVRDE001, LLC', 'Arg Ddblvtn001 Llc',
+  ];
+  it('isSpeCodedName is true for entity-form + code-token names', () => {
+    for (const n of SPE_NAMES) assert.equal(isSpeCodedName(n), true, `${n} should be SPE-coded`);
+  });
+  it('junkCandidateReason returns null (never reaches the LLM)', () => {
+    for (const n of SPE_NAMES) assert.equal(junkCandidateReason(n), null, `${n} should not be a candidate`);
+  });
+  it('does NOT swallow a real address-named SPE or a plain code without a form word', () => {
+    assert.equal(isSpeCodedName('20931 Burbank Blvd LLC'), false); // no code token
+    assert.equal(isSpeCodedName('GSCRGCO001'), false);            // no entity form
+  });
+});
+
+describe('known-abbreviation guard — real-but-truncated firm names => rename', () => {
+  it('detects the abbreviation and downgrades to a rename preVerdict', () => {
+    const r = junkCandidateReason('Brookfield Prop Prtnrs DBUBS 2011-LC1');
+    assert.equal(r.heuristic, 'known_abbreviation');
+    assert.equal(r.preVerdict, 'rename');
+    assert.equal(knownAbbrevEvidence('Cushman Wakefield Prtnrs'), 'Prtnrs');
+  });
+  it('a known-abbrev candidate can NEVER be dismissed post-guard', () => {
+    const cand = { heuristic: 'known_abbreviation', evidence: 'Prtnrs', preVerdict: 'rename', entity_name: 'X Prtnrs' };
+    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.9 }, cand, { connected: false });
+    assert.equal(out.verdict, 'rename');
+    assert.ok(out.guards.includes('heuristic_downgrade'));
+  });
+});
+
+describe('address-as-name guard => parse_contact, never dismiss', () => {
+  it('flags bare addresses mis-entered as a name', () => {
+    assert.equal(isAddressAsName('3710 Fm 1889'), true);
+    assert.equal(isAddressAsName('654 SR 75'), true);
+    assert.equal(junkCandidateReason('3710 Fm 1889').preVerdict, 'parse_contact');
+  });
+  it('does NOT flag an address-named SPE that carries a legal form', () => {
+    assert.equal(isAddressAsName('20931 Burbank Blvd LLC'), false);
+  });
+  it('a downgraded address dismiss becomes parse_contact', () => {
+    const cand = { heuristic: 'address_as_name', evidence: '3710 Fm 1889', preVerdict: 'parse_contact', entity_name: '3710 Fm 1889' };
+    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.9 }, cand, { connected: false });
+    assert.equal(out.verdict, 'parse_contact');
+  });
+});
+
+describe('acronym guard — bank/operator acronyms are not junk on shape alone', () => {
+  const ACRONYMS = ['SMBC', 'FCMC', 'LFLP', 'PVLLC'];
+  it('flags acronyms with the acronymOnly marker', () => {
+    for (const a of ACRONYMS) {
+      assert.equal(isAcronymOnly(a), true, `${a} acronym`);
+      assert.equal(junkCandidateReason(a).acronymOnly, true, `${a} candidate.acronymOnly`);
+    }
+  });
+  it('an acronym with any connection is capped at keep, never dismissed', () => {
+    const cand = { heuristic: 'no_vowel', evidence: 'SMBC', acronymOnly: true, entity_name: 'SMBC' };
+    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.9 }, cand, { connected: true, connectionDetail: 'properties.true_owner_id (3)' });
+    assert.equal(out.verdict, 'keep');
+    assert.ok(out.guards.includes('connection_gate'));
+  });
+  it('an acronym with provenance but no FK is still not dismissable', () => {
+    const cand = { heuristic: 'no_vowel', evidence: 'SMBC', acronymOnly: true, entity_name: 'SMBC' };
+    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.9 }, cand, { connected: false, hasProvenance: true });
+    assert.equal(out.verdict, 'keep');
+    assert.ok(out.guards.includes('acronym_gate'));
+  });
+});
+
+describe('applyPrescreenGuards — connection gate + softening-only invariant', () => {
+  it('a connected entity is never dismissed regardless of name', () => {
+    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.95 },
+      { heuristic: 'consonant_run', evidence: 'bcdfgh', entity_name: 'bcdfgh' },
+      { connected: true, connectionDetail: 'entity_relationships.from_entity_id (2)' });
+    assert.equal(out.verdict, 'keep');
+    assert.match(out.reason, /Connected entity/);
+  });
+  it('guards only ever SOFTEN — a keep/rename is left intact', () => {
+    const keep = applyPrescreenGuards({ verdict: 'keep', confidence: 0.5 }, { entity_name: 'x' }, { connected: false });
+    assert.equal(keep.verdict, 'keep');
+    assert.deepEqual(keep.guards, []);
+  });
+  it('an unconnected true junk row stays dismiss', () => {
+    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.95 },
+      { heuristic: 'token_junk', evidence: 'Test Test', entity_name: 'Test Test' },
+      { connected: false, hasProvenance: false });
+    assert.equal(out.verdict, 'dismiss');
+    assert.deepEqual(out.guards, []);
+  });
+});
+
+describe('the `--` / test-data class is still correctly dismissable', () => {
+  it('pure punctuation and test strings remain candidates', () => {
+    assert.equal(junkCandidateReason('--').heuristic, 'all_non_alpha');
+    assert.equal(junkCandidateReason('Test Test').heuristic, 'token_junk');
+    assert.equal(isSpeCodedName('--'), false);
+  });
+});
+
+describe('dismissDistributionGuard — honest-counts guard on a scored batch', () => {
+  it('flags a batch that is majority-dismiss', () => {
+    const g = dismissDistributionGuard({ dismiss: 18, keep: 1, rename: 1 });
+    assert.equal(g.suspect_distribution, true);
+    assert.ok(g.dismiss_share > 0.5);
+  });
+  it('passes a healthy small-minority-junk batch', () => {
+    const g = dismissDistributionGuard({ dismiss: 3, keep: 15, rename: 2 });
+    assert.equal(g.suspect_distribution, false);
+  });
+  it('an empty batch is not suspect', () => {
+    assert.equal(dismissDistributionGuard({}).suspect_distribution, false);
+  });
+});
+
+describe('buildJunkPrescreenPrompt — rubric rewrite (judge, do not parrot)', () => {
+  const prompt = buildJunkPrescreenPrompt(
+    { domain: 'lcc', table: 'entities', entity_name: 'SMBC', heuristic: 'no_vowel', evidence: 'SMBC',
+      context: { connected: false, relationship_count: 0, identity_count: 0 } },
+    [],
+  );
+  it('states the heuristic is a WEAK HINT with false-positive classes', () => {
+    assert.match(prompt, /WEAK/);
+    assert.match(prompt, /FALSE-POSITIVE/i);
+  });
+  it('instructs dismiss ONLY when no plausible real reading exists', () => {
+    assert.match(prompt, /Propose "dismiss" ONLY if/);
+  });
+  it('requires the reason to cite evidence BEYOND the heuristic', () => {
+    assert.match(prompt, /BEYOND the heuristic/);
+    assert.match(prompt, /Do NOT simply restate/);
+  });
+  it('carries the few-shot negatives from the live failures', () => {
+    assert.match(prompt, /ARC GSDVRDE001, LLC.*keep/);
+    assert.match(prompt, /SMBC.*keep/);
+    assert.match(prompt, /Prtnrs.*rename/);
+    assert.match(prompt, /"--".*dismiss/);
+    assert.match(prompt, /Test Test.*dismiss/);
+  });
+  it('feeds the relationship/identity context into the prompt', () => {
+    assert.match(prompt, /relationship_count/);
+    assert.match(prompt, /is_fk_referenced/);
+  });
+});
+
 describe('structural wiring guards (admin.js + server.js + migration)', () => {
   const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
   const server = readFileSync(join(root, 'server.js'), 'utf8');
@@ -185,6 +335,13 @@ describe('structural wiring guards (admin.js + server.js + migration)', () => {
   it('POST apply is flag-gated (no-ops while OFF); GET is a dry-run', () => {
     assert.match(admin, /feature_flag_off/);
     assert.match(admin, /mode: 'dry_run'/);
+  });
+  it('the tick applies the precision guards + distribution guard (Prompt 64)', () => {
+    assert.match(admin, /applyPrescreenGuards/);
+    assert.match(admin, /dismissDistributionGuard/);
+    assert.match(admin, /suspect_distribution/);
+    // scoring probes the FK connection before spending an LLM call
+    assert.match(admin, /junkFkReferenced\(target, candidate\.pk\)/);
   });
   it('the migration registers the flag OFF and never hard-deletes', () => {
     assert.match(mig, /W8_U1_JUNK_PRESCREEN/);
