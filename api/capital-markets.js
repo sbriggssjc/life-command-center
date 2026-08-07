@@ -595,6 +595,23 @@ function clampRowsToAsOf(rows, template, asOf) {
 }
 
 /**
+ * CM export audit item 7 — crop a chart's rows to its registered display_from.
+ * Only period_end time-series are cropped (the seeded series are all
+ * period_end-based); a display_from is a date, and period_end is an ISO
+ * 'YYYY-MM-DD' string that compares correctly as text. Non-time-series and
+ * year-axis shapes pass through untouched.
+ */
+export function cropRowsToDisplayFrom(rows, template, displayFromByChart) {
+  if (!Array.isArray(rows) || rows.length === 0 || !displayFromByChart) return rows;
+  const df = displayFromByChart[template?.chart_template_id];
+  if (!df) return rows;
+  if (timeAxisColumnFor(template) !== 'period_end') return rows; // year-axis: skip
+  return rows.filter(
+    (r) => r?.period_end == null || String(r.period_end).slice(0, 10) >= df
+  );
+}
+
+/**
  * GET /api/capital-markets?action=chart&vertical=gov&chart_template_id=volume_ttm_by_quarter&subspecialty=all&from=&to=
  *   → { rows: [...], meta: { chart_template_id, vertical, view_name, ... } }
  */
@@ -849,6 +866,29 @@ async function exportWorkbook(req, res) {
 
   const domain = VERTICAL_TO_DOMAIN[vertical];
 
+  // CM export audit item 7 — per-series display_from policy. cm_view_registry
+  // stores the first period each registered series clears its density floor
+  // (e.g. the 2001-start sale series don't clear 25 TTM deals until 2007-Q1);
+  // the exporter drops rows earlier than that so charts inherit clean x-axes
+  // without hand-cropping. Best-effort: a missing registry / column just means
+  // no cropping (whole-history export, the prior behavior).
+  const displayFromByChart = {};
+  if (domain) {
+    try {
+      const reg = await domainQuery(
+        domain, 'GET',
+        `cm_view_registry?select=chart_template_id,display_from&vertical=eq.${encodeURIComponent(vertical)}&display_from=not.is.null`
+      );
+      if (reg && reg.ok !== false && Array.isArray(reg.data)) {
+        for (const row of reg.data) {
+          if (row && row.chart_template_id && row.display_from) {
+            displayFromByChart[row.chart_template_id] = String(row.display_from).slice(0, 10);
+          }
+        }
+      }
+    } catch { /* registry optional — no crop on failure */ }
+  }
+
   // Fetch a chart-source view robustly: many older gov views were built
   // without a `subspecialty` column and some use `period_label` instead of
   // `period_end`. Strict filters → PostgREST 400 → empty Data_* tabs in
@@ -863,39 +903,75 @@ async function exportWorkbook(req, res) {
       `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}`,
       `${view_name}?select=*`,
     ];
-    // Run the full fallback ladder once.
+    // PostgREST caps every response at 1000 rows regardless of `limit` (see
+    // CLAUDE.md footgun). A `per_sale` dot-cloud view like cm_{v}_core_cap_dot_q
+    // holds >1000 rows; ordered ASC, the cap silently truncated the NEWEST
+    // sales (Data_Core_Cap_Dot ran only through mid-2025 — the audit's
+    // A/Data_Core_Cap_Dot bug). Page through with limit/offset on the WINNING
+    // path so every row lands and truncation is impossible. Uses the same
+    // stable order clause the winning try carried (offset paging is only
+    // stable under an ORDER BY; the ladder's ordered tries win first).
+    const PAGE = 1000;
+    const MAX_ROWS = 500000; // runaway backstop
+    const paginate = async (winningPath, firstPage) => {
+      if (!Array.isArray(firstPage) || firstPage.length < PAGE) return firstPage;
+      const all = firstPage.slice();
+      let offset = all.length;
+      // Strip any pre-existing limit/offset the caller may have added.
+      const basePath = winningPath.replace(/[?&](limit|offset)=\d+/g, '');
+      const sep = basePath.includes('?') ? '&' : '?';
+      while (all.length < MAX_ROWS) {
+        const pagePath = `${basePath}${sep}limit=${PAGE}&offset=${offset}`;
+        let pageRes;
+        try { pageRes = await exec(pagePath); }
+        catch { break; }
+        if (!pageRes || pageRes.ok === false || !Array.isArray(pageRes.data) || pageRes.data.length === 0) break;
+        all.push(...pageRes.data);
+        offset += pageRes.data.length;
+        if (pageRes.data.length < PAGE) break;
+      }
+      return all;
+    };
+    // Run the full fallback ladder once. Returns { result, path } so the
+    // pager can re-issue the winning query with limit/offset.
     const runLadder = async () => {
       let lastResult = null;
       for (const p of tries) {
         try {
           const result = await exec(p);
-          if (result.ok) return result;
+          if (result.ok) return { result, path: p };
           lastResult = result;
         } catch (e) {
           lastResult = { ok: false, status: 0, data: { error: String(e) } };
         }
       }
-      return lastResult || { ok: false, status: 0, data: [] };
+      return { result: lastResult || { ok: false, status: 0, data: [] }, path: null };
     };
     // Round 68-E (G8): the renewal_rent_growth empty-tab incident (2026-06-04)
     // was a TRANSIENT fetch failure on a cold dyno — the view was live with 158
     // rows and every prior export had data. A single retry pass after a short
     // backoff absorbs that class of cold-start blip before we surface it.
-    let result = await runLadder();
+    let { result, path } = await runLadder();
     if (result.ok === false) {
       await new Promise((r) => setTimeout(r, 400));
       const retry = await runLadder();
-      if (retry.ok !== false) {
-        result = retry;
+      if (retry.result.ok !== false) {
+        ({ result, path } = retry);
       } else {
         console.error(
           `[fetchView] ${view_name} failed after retry ` +
           `(vertical=${vertical}, subspecialty=${subspecialty}, ` +
-          `status=${retry.status || 'n/a'}): ${JSON.stringify(retry.data)?.slice(0, 200)} ` +
+          `status=${retry.result.status || 'n/a'}): ${JSON.stringify(retry.result.data)?.slice(0, 200)} ` +
           `— tab will be marked FETCH FAILED, re-export needed.`
         );
-        result = retry;
+        result = retry.result;
+        path = retry.path;
       }
+    }
+    // Page past the PostgREST 1000-row cap on the winning query so large
+    // per-sale/per-listing dot views export in full.
+    if (result.ok !== false && path && Array.isArray(result.data) && result.data.length === PAGE) {
+      result = { ...result, data: await paginate(path, result.data) };
     }
     return result;
   };
@@ -922,10 +998,14 @@ async function exportWorkbook(req, res) {
         // 2026-05-29 - clamp time-series rows to the requested as-of period
         // so Data_* tabs never bleed past the report quarter (see
         // clampRowsToAsOf). Snapshot/table/kpi shapes pass through untouched.
-        rows: clampRowsToAsOf(
-          result.ok !== false ? (result.data || []) : [],
+        rows: cropRowsToDisplayFrom(
+          clampRowsToAsOf(
+            result.ok !== false ? (result.data || []) : [],
+            tmpl,
+            as_of
+          ),
           tmpl,
-          as_of
+          displayFromByChart
         ),
         // Round 68-E (G8): distinguish a real fetch failure (after the
         // fetchView retry pass) from a legitimately empty view, so the tab
@@ -947,6 +1027,35 @@ async function exportWorkbook(req, res) {
     }
   });
   const realCharts = await Promise.all(chartFetches);
+
+  // CM export audit item 6 — macro ingestion-lag guard. Treasury-joined series
+  // (cost of capital, leveraged returns, fed-funds-vs-10Y, net-lease spread)
+  // read FRED/treasury rates that can land a month behind the export date, so
+  // the final plotted point falls to null and the chart ends on a cliff. We do
+  // NOT fabricate a synthetic final point (never-fabricate doctrine); instead
+  // we surface the lag loudly so the operator ingests FRED for the export month
+  // before shipping. The clean fix is running the treasury ingestion first —
+  // this guard makes a stale tail impossible to miss.
+  const MACRO_TAIL_CHECK = {
+    cost_of_capital:        'treasury_10y_yield',
+    fed_funds_vs_treasury:  'treasury_10y_yield',
+    cash_leveraged_returns: 'leveraged_return_mid',
+    net_lease_spread:       'nm_spread',
+  };
+  for (const c of realCharts) {
+    const key = MACRO_TAIL_CHECK[c.chart_template_id];
+    if (!key || !Array.isArray(c.rows) || c.rows.length === 0) continue;
+    const last = c.rows[c.rows.length - 1];
+    if (last && last[key] == null) {
+      const lastGood = [...c.rows].reverse().find((r) => r && r[key] != null);
+      console.warn(
+        `[cm-export] macro tail lag on ${c.chart_template_id} (view=${c.view_name}): ` +
+        `final period ${last.period_end || '?'} has null ${key} — ` +
+        `${lastGood ? `last populated ${lastGood.period_end}` : 'no populated period'}. ` +
+        `Run FRED/treasury ingestion for the export month before shipping.`
+      );
+    }
+  }
 
   // Round 7 — moved synthCharts construction below master_m mapper so
   // synthetic composers see post-mapped (monthly) inputs. Previously

@@ -615,8 +615,15 @@ const CHART_COLUMNS = {
     // the typical fresh-listing experience. See dia DOM view for full
     // calc + 0-3650 day cap.
     { key: 'median_dom',          header: 'Median DOM (days)',     format: 'integer_count',       width: 17 },
-    { key: 'pct_of_ask',          header: '% of Ask Price',        format: 'percent_one_decimal', width: 16 },
-    { key: 'median_pct_of_ask',   header: 'Median % of Ask',       format: 'percent_one_decimal', width: 17 },
+    // CM export audit item E (2026-08-07): the canonical closed-sale
+    // price-realization basis for Data_DOM_Ask is % of ORIGINAL LIST
+    // (cm_{v}_dom_pct_ask_m derives `sold_price / initial_price`), NOT % of
+    // last ask. The parallel cm_{v}_dom_pct_ask_q view computes % of LAST ask
+    // (`sold_price / last_price`) and is NOT consumed by the export — headers
+    // are made explicit so the two bases can never be conflated in the report
+    // copy again. See the migration `..._cm_dom_pct_ask_canonical_labels`.
+    { key: 'pct_of_ask',          header: '% of Original List',        format: 'percent_one_decimal', width: 18 },
+    { key: 'median_pct_of_ask',   header: 'Median % of Original List', format: 'percent_one_decimal', width: 20 },
   ],
   bid_ask_spread: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -866,7 +873,8 @@ const CHART_COLUMNS = {
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
     { key: 'n_sales',          header: 'N Sales (TTM)',       format: 'integer_count',        width: 14 },
     { key: 'avg_dom',          header: 'Avg DOM (days)',      format: 'integer_count',        width: 14 },
-    { key: 'pct_of_ask',       header: '% of Ask Price',      format: 'percent_one_decimal',  width: 16 },
+    // CM export audit item E — canonical basis is % of ORIGINAL LIST (see dom_and_pct_of_ask).
+    { key: 'pct_of_ask',       header: '% of Original List',  format: 'percent_one_decimal',  width: 18 },
   ],
   bid_ask_spread_monthly: [
     { key: 'period_end',         header: 'Month End',           format: 'date_short',           width: 13 },
@@ -1150,6 +1158,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // inject native chart XML for migrated chart_template_ids. Each entry
   // is { tabName, spec } per the injectNativeCharts() contract.
   const nativeInjections = [];
+  // CM export audit (2026-08-07) — collects schema-drift warnings (template
+  // column absent from the pulled view) across every sheet for a single
+  // end-of-export console summary.
+  const driftWarnings = [];
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Northmarq Capital Markets — LCC';
@@ -1588,6 +1600,34 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       dataRowIdx++;
     }
 
+    // CM export audit (2026-08-07) — schema-drift assertion. A sheet template
+    // column whose `key` AND every `fieldKeys` alias is ABSENT from the view's
+    // returned row object (not merely null-valued) means the sheet was built
+    // against a different view schema than the one the export pulled — the
+    // "monthly-vs-quarterly drift" root cause behind the ALL-NULL columns
+    // (Data_Returns_Idx / Data_Val_Index). Absence ≠ thin data: PostgREST
+    // returns every real view column as a key even when its value is null, so
+    // a missing key can only be drift. We warn loudly (per-vertical legitimate
+    // omissions — e.g. dialysis valuation_index has no expenses/NOI — are
+    // expected and the R43 hide below keeps them out of the sheet), collecting
+    // into driftWarnings for the caller's end-of-export summary.
+    if ((chart.rows || []).length > 0) {
+      const rowKeys = new Set(Object.keys(chart.rows[0] || {}));
+      const drifted = cols
+        .filter((c) => {
+          const keys = [c.key, ...(Array.isArray(c.fieldKeys) ? c.fieldKeys : [])];
+          return !keys.some((k) => rowKeys.has(k));
+        })
+        .map((c) => c.key);
+      if (drifted.length > 0) {
+        const msg =
+          `[cm-export] schema drift on ${tabName} (view=${chart.view_name}, ` +
+          `vertical=${vertical}): template columns absent from view → ${drifted.join(', ')}`;
+        console.warn(msg);
+        if (Array.isArray(driftWarnings)) driftWarnings.push(msg);
+      }
+    }
+
     // R43 — hide columns that ended up 100% empty across all rows.
     // Skip the first two anchor columns (period_end / subspecialty)
     // and any column explicitly marked `keepIfEmpty: true` in the
@@ -2021,6 +2061,15 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // Backward-compat: legacy property access still works because the
   // returned object exposes the workbook as both `.wb` and via spread.
   wb.nativeInjections = nativeInjections;
+  // CM export audit (2026-08-07) — surface schema drift once, loudly.
+  wb.driftWarnings = driftWarnings;
+  if (driftWarnings.length > 0) {
+    console.warn(
+      `[cm-export] ${driftWarnings.length} schema-drift warning(s) for ` +
+      `vertical=${vertical} — sheet templates reference view columns that ` +
+      `do not exist; affected columns were hidden. See per-sheet warnings above.`
+    );
+  }
   return wb;
 }
 
