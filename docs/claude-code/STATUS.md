@@ -461,9 +461,12 @@ real shared-email findings (e.g. Hughes/Lawrence/Austin one inbox) → Cowork fl
 **Chain arm still starved, now DIAGNOSABLY** — the 71 loud-errors exposed wrong column names:
 `deed_records.id` and `activity_events.activity_id` don't exist (42703 on every gov candidate) →
 **prompt 72** queued (schema-check the two queries + gov intake-match filter). Skip-marked chain
-rows re-enter automatically post-fix (evidence-hash changes). **U4 `?narrate=1` 502'd** —
-suspected proxy timeout (aggregation + inline ollama narrate; prompt-66 class). Scott running the
-bare tick to isolate; fix prompt after diagnosis.
+rows re-enter automatically post-fix (evidence-hash changes). **U4 `?narrate=1` 502'd** — Cowork timed all
+10 `v_lcc_w8_u4_*` views live: instant (aggregation NOT the bottleneck) → crash/hang in the
+handler or the inline narrate call. **Prompt 73 queued:** retire inline narrate (GET = computed
+JSON + deterministic doc only; narration moves to the POST/cron path, budget-bounded, single
+validator retry), crash-proof JSON envelopes, per-section try/catch with loud `section_errors`.
+Gate: merge → redeploy → bare GET → review → flip `W8_U4_FINDINGS_REPORT`.
 
 ### Prompts 70 & 71 landed (PRs #1611, #1614) — both migrations LIVE (Cowork-verified), both flags OFF
 
