@@ -454,6 +454,27 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ FIRST FULL HUMAN CYCLE COMPLETE — 2026-08-07 evening (Cowork-verified in DB)
+Scott worked all three lanes end-to-end post-76. **U2: 30 verdicts → 30 `entity_match_labels`
+training rows written** (3 confirmed_match + 27 distinct = exactly the hard negatives the W4.3
+finding diagnosed as missing; 8 pairs remain). Tonight's 7:30 UTC W4.4 retrain consumes them —
+the self-learning loop is closed. **U3:** USAA → rejected (human judgment); Trammell Crow →
+**`conflict: ambiguous_entity_match`** — the never-guess canonical-resolve guard fired correctly
+(≥2 existing Trammell Crow entities; the conflict card awaits a pick-the-survivor decision — check
+it surfaces somewhere workable, else queue a polish). U1 cleared earlier (18 verdicts). Wave 8 is
+now FULLY validated at every layer: producers → gates → lanes → human verdicts → writers →
+training fuel. Nightly crons carry it from here; first narrated U4 report 2026-09-01.
+
+### Prompt 76 landed — PR #1627, repair migration LIVE (Cowork-verified), awaiting merge + redeploy
+Mint fix: `canonical_name` via house `normalizeCanonicalName` (same fn as ensureEntityLink);
+resolve-before-mint now on canonical_name (case-variants resolve, no dupes); ≥2-match ambiguity →
+conflict card kept. Repair applied live + verified: both U3 rows (USAA + Trammell Crow) back to
+`proposed`, decided_by cleared, decision row reopened w/ superseded_reason. U2: backend sorts
+ollama pairs first + per-seeder `parts`; lane renders one-click seeder chips
+("All (5.3k) | Ollama pairs (38) | …"). 12 new tests. **Gate: merge #1627 → redeploy → Scott
+confirms Trammell Crow end-to-end (resolve-or-mint w/ canonical_name → entity_relationships edge →
+provenance → apply-log → decision 'decided'), then USAA; owner-reconcile chip → 38 pairs.**
+
 ### Post-75 live verify 2026-08-07 — U3 lane RENDERS but confirm fails; U2 buried → prompt 76
 U3 lane visible (75 works) but Confirm → `entity_mint_failed`: mint INSERT omits
 `entities.canonical_name` (NOT NULL, no default — verified live; enum 'organization' is valid).
