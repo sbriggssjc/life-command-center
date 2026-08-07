@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 65 landed — branch `claude/w8-u1-true-junk-scope-i9v78v`, awaiting merge + redeploy
+Scope tighten implemented per spec: `classifyName()` splits junk vs naming_hygiene vs null;
+abbrev/address classes dropped from candidacy (counted-only `naming_hygiene_backlog` per domain);
+scan-time batch connection exclusion (`excluded_connected`) with the per-row FK probe kept as the
+apply-path safety net; `isEnqueueableJunkVerdict()` — only dismiss/rename/parse_contact persist,
+keeps counted `kept_not_enqueued` and dropped (both GET dry-run and POST apply). 60/60 dedicated
+tests green (verbatim 64 fixtures reused). Acceptance is live-runtime: **gate = merge → redeploy →
+Scott's third `?score=1`** (expect: pool back to few-hundred true-junk, sample dominated by
+`--`/`Test Test`/gibberish with surviving dismiss verdicts, ~6k backlog counted-not-enqueued,
+distribution guard active) → THEN flip `W8_U1_JUNK_PRESCREEN`.
+
 ### 64 re-run REVIEWED 2026-08-07 — guards work, but scope overshoot → prompt 65 queued, flag stays OFF
 Second `?score=1` (post-64 deploy): 0% dismiss, SPEs excluded, connection gate + distribution guard
 live — the 64 fixes all held. New flaws: **pool exploded 649→6,946** (the new `known_abbreviation`
