@@ -33,6 +33,11 @@ import {
   applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
   junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
 } from './_shared/junk-prescreen.js';
+import {
+  DUP_PAIR_TARGETS, findDupPairTarget, dupSideRef, dupPairKey, dupPairSubjectRef,
+  generateCandidatePairs, excludeKnownPairs, buildDupPairPrompt, normalizeDupPairProposal,
+  parseDupPairJson, isProposablePair, scoreDupPairsWithBudget,
+} from './_shared/dup-pair-planner.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
@@ -152,6 +157,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
+    case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -1799,6 +1805,322 @@ async function handleJunkPrescreenTick(req, res) {
 }
 
 // ============================================================================
+// W8 U2 (Prompt 63, 2026-08-07): Ollama duplicate-pair proposals → resolver fuel.
+//
+// Reuses U1's shapes (pure planner module, GET dry-run / POST flag-gated apply,
+// nightly cron, in-migration flag). A deterministic near-miss generator (NO LLM,
+// api/_shared/dup-pair-planner.js) finds the name/address/abbrev pairs the
+// resolver's token-blocks skip; Ollama gives a same_party/distinct/unsure second
+// look via invokeExtractionAI({surface:'clean_assist'}); PROPOSABLE pairs
+// (decided verdict + confidence floor) land in w8_u2_dup_pair, surfaced through
+// the EXISTING owner_reconcile resolver review pool (seeder 'w8_u2_ollama_pair').
+// The verdict is HUMAN and writes an entity_match_labels row — NEVER a merge.
+//
+//   GET  /api/dup-pair-tick            -> dry-run report (per-domain counts)
+//   GET  /api/dup-pair-tick?score=1    -> dry-run + inline model proposals (NO writes)
+//   POST /api/dup-pair-tick            -> apply: generate + score + write proposals
+//                                         (flag-gated; no-ops while OFF)
+// ============================================================================
+const DUP_PAIR_MAX_RECORDS = Math.max(500, parseInt(process.env.DUP_PAIR_MAX_RECORDS || '8000', 10));
+const DUP_PAIR_MAX_PER_DOMAIN = Math.max(20, parseInt(process.env.DUP_PAIR_MAX_PER_DOMAIN || '200', 10));
+const DUP_PAIR_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.DUP_PAIR_SCORE_BUDGET_MS || '120000', 10));
+const DUP_PAIR_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.DUP_PAIR_SCORE_BATCH_SIZE || '25', 10));
+const DUP_PAIR_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.DUP_PAIR_INLINE_N || '6', 10));
+const DUP_PAIR_MIN_CONFIDENCE = (() => {
+  const v = parseFloat(process.env.DUP_PAIR_MIN_CONFIDENCE || '0.6');
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.6;
+})();
+const DUP_PAIR_NAME_THRESHOLD = (() => {
+  const v = parseFloat(process.env.DUP_PAIR_NAME_THRESHOLD || '0.82');
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.82;
+})();
+
+function dupPairEnabled(flagRow) {
+  const env = String(process.env.W8_U2_DUP_PAIRS || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchDupPairFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U2_DUP_PAIRS&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Few-shot grounding from real accrued human pair verdicts (entity_match_labels),
+// so the model scores against the operator's rubric. Best-effort; empty on failure.
+async function fetchDupPairFewShot() {
+  try {
+    const r = await opsQuery('GET', 'entity_match_labels?select=owner_a,owner_b,verdict'
+      + '&owner_a=not.is.null&owner_b=not.is.null&order=decided_at.desc.nullslast&limit=8');
+    if (!r.ok || !Array.isArray(r.data)) return [];
+    return r.data.map((d) => (d.owner_a && d.owner_b)
+      ? { a: d.owner_a, b: d.owner_b, verdict: String(d.verdict) } : null).filter(Boolean);
+  } catch (_e) { return []; }
+}
+
+// Pull (pk, name[, address]) rows for a target, bounded by DUP_PAIR_MAX_RECORDS.
+// The JS generator is authoritative; the pull is a nightly ceiling (logged on hit).
+async function pullDupPairRecordsForTarget(target) {
+  const cols = target.pkCol + ',' + target.nameCol + (target.addrCol ? ',' + target.addrCol : '');
+  const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
+  const extraPred = target.extraFilter ? '&' + target.extraFilter : '';
+  const namePred = '&' + target.nameCol + '=not.is.null';
+  const records = [];
+  const PAGE = 1000;
+  let scanned = 0;
+  let truncated = false;
+  for (let offset = 0; offset < DUP_PAIR_MAX_RECORDS; offset += PAGE) {
+    const path = target.table + '?select=' + cols + mergedPred + extraPred + namePred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE + '&offset=' + offset;
+    const r = target.domain === 'lcc'
+      ? await opsQuery('GET', path)
+      : await domainQuery(target.domain, 'GET', path);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    scanned += rows.length;
+    for (const row of rows) {
+      const pk = row[target.pkCol];
+      records.push({
+        ref: dupSideRef(target.domain, target.table, pk),
+        pk: String(pk),
+        name: row[target.nameCol] == null ? '' : String(row[target.nameCol]),
+        address: target.addrCol ? (row[target.addrCol] == null ? '' : String(row[target.addrCol])) : '',
+      });
+    }
+    if (rows.length < PAGE) break;
+    if (offset + PAGE >= DUP_PAIR_MAX_RECORDS) truncated = true;
+  }
+  if (truncated) console.warn('[dup-pair] record scan truncated at cap', target.domain, target.table, DUP_PAIR_MAX_RECORDS);
+  return { records, scanned, truncated };
+}
+
+// Extract the source pk from a dupSideRef (dom:table:pk → pk).
+function dupRefPk(ref) {
+  const s = String(ref || '');
+  const i = s.indexOf(':');
+  const j = i >= 0 ? s.indexOf(':', i + 1) : -1;
+  return j >= 0 ? s.slice(j + 1) : s;
+}
+
+// The exclusion key set for a domain/table: pairs already proposed (any status in
+// w8_u2_dup_pair) OR already labeled from this seeder (entity_match_labels
+// subject_ref like 'ownrec:w8u2:%'). Keyed on pair_key so generateCandidatePairs
+// output filters cleanly. Best-effort — a failed read yields an empty set.
+async function fetchDupPairKnownKeys() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'w8_u2_dup_pair?select=pair_key&order=pair_id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.pair_key) set.add(x.pair_key);
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'entity_match_labels?select=subject_ref&subject_ref=like.ownrec:w8u2:*&order=id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(String(x.subject_ref).replace(/^ownrec:w8u2:/, ''));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// Deterministic generate + exclude across every target. Returns perDomain counts
+// + the capped fresh pair pool (unscored). NO LLM here (auditable gate).
+async function dupPairScanAll() {
+  const knownKeys = await fetchDupPairKnownKeys();
+  const perDomain = {};
+  const fresh = [];
+  for (const target of DUP_PAIR_TARGETS) {
+    const key = target.domain + ':' + target.table;
+    let pull;
+    try { pull = await pullDupPairRecordsForTarget(target); }
+    catch (e) { perDomain[key] = { error: e?.message || String(e), records: 0, generated: 0, fresh: 0 }; continue; }
+    const generated = generateCandidatePairs(pull.records, {
+      nameThreshold: DUP_PAIR_NAME_THRESHOLD, maxPairs: DUP_PAIR_MAX_PER_DOMAIN });
+    const freshPairs = excludeKnownPairs(generated, knownKeys);
+    const byMethod = { name_near_miss: 0, same_address_diff_name: 0, abbrev_expansion: 0 };
+    for (const p of freshPairs) {
+      byMethod[p.method] = (byMethod[p.method] || 0) + 1;
+      fresh.push({ domain: target.domain, table: target.table, pair: p,
+        entity_a: dupRefPk(p.a.ref), entity_b: dupRefPk(p.b.ref) });
+    }
+    perDomain[key] = {
+      domain: target.domain, table: target.table,
+      records: pull.scanned, generated: generated.length,
+      excluded_known: generated.length - freshPairs.length,
+      fresh: freshPairs.length, by_method: byMethod, truncated: pull.truncated || false,
+    };
+  }
+  return { perDomain, fresh, knownKeys };
+}
+
+function dupPairDomainRollup(perDomain) {
+  const roll = {};
+  for (const v of Object.values(perDomain)) {
+    const d = v.domain || 'unknown';
+    roll[d] = roll[d] || { records: 0, generated: 0, excluded_known: 0, fresh: 0 };
+    roll[d].records += v.records || 0;
+    roll[d].generated += v.generated || 0;
+    roll[d].excluded_known += v.excluded_known || 0;
+    roll[d].fresh += v.fresh || 0;
+  }
+  return roll;
+}
+
+async function recordDupPairHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'dup_pair_prescreen', p_check_name: 'ollama_dup_pair',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Score one candidate pair with the local model → normalized proposal (+ meta).
+// Proposal-only: the model NEVER merges. The verdict is same_party/distinct/unsure.
+async function scoreDupPair(item, fewShot) {
+  const prompt = buildDupPairPrompt(item.pair, fewShot);
+  const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+  const parsed = parseDupPairJson(ai?.data?.response || '');
+  const proposal = normalizeDupPairProposal(parsed, item.pair);
+  if (!parsed) { proposal.verdict = 'unsure'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; dropped as unsure.'; }
+  return { proposal, provider: ai?.provider || null, model: ai?.data?.model || null };
+}
+
+async function upsertDupPairProposal(item, proposal, meta) {
+  const body = {
+    pair_key: item.pair.pairKey,
+    subject_ref: dupPairSubjectRef(item.pair.a.ref, item.pair.b.ref),
+    domain: item.domain, table_name: item.table,
+    entity_a: item.entity_a, entity_b: item.entity_b,
+    name_a: item.pair.a.name, name_b: item.pair.b.name,
+    generator_method: item.pair.method, name_similarity: item.pair.similarity,
+    gen_evidence: item.pair.evidence,
+    proposed_verdict: proposal.verdict, confidence: proposal.confidence,
+    evidence_quote: proposal.evidence_quote, reason: proposal.reason,
+    seeder: 'w8_u2_ollama_pair',
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'w8_u2_dup_pair?on_conflict=pair_key', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function handleDupPairTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchDupPairFlag();
+  const enabled = dupPairEnabled(flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || '20', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordDupPairHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U2_DUP_PAIRS feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u2_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const scan = await dupPairScanAll();
+    const fewShot = await fetchDupPairFewShot();
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'w8_u2_dup_pair_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { per_domain: scan.perDomain, rollup: dupPairDomainRollup(scan.perDomain), fresh: scan.fresh.length } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const batchSize = Math.min(limit, DUP_PAIR_SCORE_BATCH_SIZE);
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
+      per_domain: dupPairDomainRollup(scan.perDomain), pairs_generated: scan.fresh.length,
+      batch_size: batchSize, budget_ms: DUP_PAIR_SCORE_BUDGET_MS, min_confidence: DUP_PAIR_MIN_CONFIDENCE,
+      scored: 0, proposed: 0, dropped_unsure: 0, failed: 0,
+      budget_exhausted: false, remaining_unscored: scan.fresh.length, by_verdict: {} };
+    const budgetRun = await scoreDupPairsWithBudget(scan.fresh, async (item) => {
+      try {
+        const { proposal, provider, model } = await scoreDupPair(item, fewShot);
+        summary.scored += 1;
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        // Proposal-only, value-gated: only a DECIDED verdict above the floor
+        // persists. unsure / low-confidence is dropped (counted only) — the LLM
+        // verdict never writes anything on its own.
+        if (!isProposablePair(proposal, DUP_PAIR_MIN_CONFIDENCE)) { summary.dropped_unsure += 1; return null; }
+        const wr = await upsertDupPairProposal(item, proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[dup-pair] score/write failed', item?.pair?.pairKey, e?.message || e);
+      }
+      return null;
+    }, { budgetMs: DUP_PAIR_SCORE_BUDGET_MS, maxN: batchSize });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, scan.fresh.length - summary.scored - summary.failed);
+    await recordDupPairHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
+      lastError: summary.failed ? summary.failed + ' pair(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: deterministic per-domain report; ?score=1 adds inline ---
+  // model proposals for sampling. NEVER writes.
+  const scan = await dupPairScanAll();
+  const rollup = dupPairDomainRollup(scan.perDomain);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    per_target: scan.perDomain, per_domain: rollup, pairs_generated: scan.fresh.length,
+    sample: scan.fresh.slice(0, 20).map((i) => ({ domain: i.domain, table: i.table,
+      pair_key: i.pair.pairKey, name_a: i.pair.a.name, name_b: i.pair.b.name,
+      method: i.pair.method, similarity: i.pair.similarity, evidence: i.pair.evidence })) };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const fewShot = await fetchDupPairFewShot();
+    const inlineN = Math.min(60, Math.max(1, parseInt(req.query.n || String(DUP_PAIR_INLINE_DEFAULT_N), 10) || DUP_PAIR_INLINE_DEFAULT_N));
+    const proposals = [];
+    const byVerdict = {};
+    let droppedUnsure = 0;
+    const budgetRun = await scoreDupPairsWithBudget(scan.fresh, async (item) => {
+      try {
+        const { proposal, provider, model } = await scoreDupPair(item, fewShot);
+        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        const proposable = isProposablePair(proposal, DUP_PAIR_MIN_CONFIDENCE);
+        if (!proposable) droppedUnsure += 1;
+        proposals.push({ pair_key: item.pair.pairKey, domain: item.domain, table: item.table,
+          name_a: item.pair.a.name, name_b: item.pair.b.name, method: item.pair.method,
+          similarity: item.pair.similarity, ...proposal,
+          would_propose: proposable, model_provider: provider, model_name: model });
+      } catch (e) { proposals.push({ pair_key: item?.pair?.pairKey, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: DUP_PAIR_SCORE_BUDGET_MS, maxN: inlineN });
+    out.scored = proposals.length;
+    out.batch_size = inlineN;
+    out.budget_ms = DUP_PAIR_SCORE_BUDGET_MS;
+    out.min_confidence = DUP_PAIR_MIN_CONFIDENCE;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.remaining_unscored = Math.max(0, scan.fresh.length - proposals.length);
+    out.by_verdict = byVerdict;
+    out.dropped_unsure = droppedUnsure;
+    out.would_propose = proposals.filter((p) => p.would_propose).length;
+    out.proposals = proposals;
+    out.note = 'dry-run scoring — NO rows written. Only same_party/distinct proposals >= '
+      + DUP_PAIR_MIN_CONFIDENCE + ' confidence persist (both are training fuel); unsure/low-conf are dropped'
+      + ' (dropped_unsure). Review, then POST (with the flag ON).'
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + DUP_PAIR_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
 // PRIORITY BAND (Phase 8, PR3 2026-05-30)
 // GET /api/priority-band?domain=gov&property_id=16404
 //   -> the owner's BD priority band for a property, from v_priority_queue_enriched
@@ -2362,6 +2684,10 @@ function federatedSubjectRef(type, s) {
       }
       if (s.kind === 'owner_unification') return s.queue_id != null ? 'ownrec:govu:' + s.queue_id : null;
       if (s.kind === 'entity_match_candidate') return (s.domain && s.candidate_id != null) ? 'ownrec:emc:' + s.domain + ':' + s.candidate_id : null;
+      // W8 U2: the pre-built subject_ref rides straight through (ownrec:w8u2:<pair_key>).
+      if (s.kind === 'w8_u2_ollama_pair') return s.subject_ref
+        ? String(s.subject_ref)
+        : ((s.entity_a != null && s.entity_b != null) ? dupPairSubjectRef(s.entity_a, s.entity_b) : null);
       return null;
     }
     // W4.3: one card per queued owner (queue_id), namespaced by domain.
@@ -3260,20 +3586,40 @@ async function fetchFederatedSource(type, cap, opts) {
     };
     const [cGov, cDia] = await Promise.all([fetchEmc('gov'), fetchEmc('dia')]);
 
-    out.items = aItems.concat(bItems).concat(cGov).concat(cDia)
+    // Seeder D (W8 U2): Ollama duplicate-pair PROPOSALS from the near-miss
+    // generator, landed in the resolver review pool (NOT a new lane). Proposal-
+    // only: approve labels the pair (same_party) + dispositions the row; it NEVER
+    // merges (dupes are the resolver's job). Read from the LCC Opps proposal view.
+    const dR = await opsQuery('GET', 'v_w8_u2_dup_pair_open?select=pair_id,pair_key,subject_ref,'
+      + 'domain,table_name,entity_a,entity_b,name_a,name_b,generator_method,name_similarity,'
+      + 'gen_evidence,proposed_verdict,confidence,evidence_quote,reason&limit=' + cap);
+    const dItems = ((dR.ok && Array.isArray(dR.data)) ? dR.data : []).map((row) => ({
+      subject_ref: row.subject_ref, subject_domain: row.domain, subject_property_id: null,
+      subject_entity_id: null, rank_value: (Number(row.confidence) || 0) * 100,
+      context: { kind: 'w8_u2_ollama_pair', domain: row.domain, table_name: row.table_name,
+        pair_id: row.pair_id, subject_ref: row.subject_ref,
+        entity_a: row.entity_a, entity_b: row.entity_b,
+        owner_name: row.name_a, candidate_name: row.name_b,
+        generator_method: row.generator_method, name_similarity: row.name_similarity,
+        gen_evidence: row.gen_evidence, proposed_verdict: row.proposed_verdict,
+        confidence: row.confidence, evidence_quote: row.evidence_quote, reason: row.reason },
+    }));
+
+    out.items = aItems.concat(bItems).concat(cGov).concat(cDia).concat(dItems)
       .sort((a, b) => b.rank_value - a.rank_value);
 
     // Honest counts (each seeder's pending universe). The LCC review count is an
     // upper bound (multiple evidence rows can exist per pair - deduped in items);
     // the deduped item list is authoritative (mirrors merge_duplicate_entities).
-    const [ac, bc, ccGov, ccDia] = await Promise.all([
+    const [ac, bc, ccGov, ccDia, dc] = await Promise.all([
       opsCnt('v_lcc_owner_reconcile_review'),
       domCnt('gov', 'owner_unification_review_queue?status=eq.pending_review'),
       domCnt('gov', 'entity_match_candidates?status=eq.pending_review'),
       domCnt('dia', 'entity_match_candidates?status=eq.pending_review'),
+      opsCnt('w8_u2_dup_pair?status=eq.proposed'),
     ]);
-    out.total = (ac == null && bc == null && ccGov == null && ccDia == null)
-      ? null : (ac || 0) + (bc || 0) + (ccGov || 0) + (ccDia || 0);
+    out.total = (ac == null && bc == null && ccGov == null && ccDia == null && dc == null)
+      ? null : (ac || 0) + (bc || 0) + (ccGov || 0) + (ccDia || 0) + (dc || 0);
     return out;
   }
 
@@ -4052,6 +4398,27 @@ async function handleDecisionVerdict(req, res) {
           entity_b: rc.target_id != null ? String(rc.target_id) : null,
           match_score: rc.similarity != null ? Number(rc.similarity) : null,
           evidence_json: { match_method: rc.match_method, source_table: rc.source_table, target_table: rc.target_table } };
+      } else if (kind === 'w8_u2_ollama_pair') {
+        // W8 U2 — Ollama duplicate-pair PROPOSAL. Proposal-only: a verdict ONLY
+        // dispositions the w8_u2_dup_pair row + labels the pair. It NEVER merges
+        // (dupes are the resolver's job) — that is the whole point of the unit.
+        const pairId = rc.pair_id;
+        if (pairId == null) return res.status(400).json({ error: 'w8_u2_ollama_pair pair_id missing' });
+        const patch = { status: isApprove ? 'confirmed_match' : 'rejected',
+          decided_by: user.id || null, decided_at: new Date().toISOString() };
+        const pr = await opsQuery('PATCH', 'w8_u2_dup_pair?pair_id=eq.' + encodeURIComponent(pairId), patch);
+        if (!pr.ok) { await recordEffectFailure({ dispositioned: false, error: pr.data });
+          return res.status(502).json({ error: 'disposition_failed', detail: pr.data }); }
+        effects.dispositioned = patch.status;
+        effects.merged = false;   // NEVER a merge from this unit
+        labelRow = { owner_a: rc.owner_name || rc.name_a || null,
+          owner_b: rc.candidate_name || rc.name_b || null,
+          entity_a: rc.entity_a != null ? String(rc.entity_a) : null,
+          entity_b: rc.entity_b != null ? String(rc.entity_b) : null,
+          match_score: rc.confidence != null ? Number(rc.confidence) : null,
+          evidence_json: { generator_method: rc.generator_method, gen_evidence: rc.gen_evidence,
+            name_similarity: rc.name_similarity, proposed_verdict: rc.proposed_verdict,
+            evidence_quote: rc.evidence_quote } };
       } else {
         return res.status(400).json({ error: 'unknown owner_reconcile seeder kind: ' + kind });
       }
