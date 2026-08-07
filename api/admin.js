@@ -5205,8 +5205,11 @@ async function handleDecisionVerdict(req, res) {
       // keeps the human-decision audit trail.
       // The lcc_decisions row only needs status != open to exclude the subject;
       // the disposition nuance (applied / conflict / dismissed / edit) lives on
-      // the junk_entity_review row. Always 'resolved' to satisfy the status CHECK.
-      const rr = await record(verdict, 'resolved', { plan: plan.action, review_id: review.review_id }, effects);
+      // the junk_entity_review row. Close with a CHECK-valid status matching the
+      // sf_link_candidate/owner_reconcile house semantic: a keep/not-junk verdict
+      // (dismiss_proposal) is 'skipped'; an applied disposition is 'decided'.
+      const decStatus = plan.action === 'dismiss_proposal' ? 'skipped' : 'decided';
+      const rr = await record(verdict, decStatus, { plan: plan.action, review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', ...reversal });
     }
@@ -5234,7 +5237,7 @@ async function handleDecisionVerdict(req, res) {
       if (humanAction === 'reject') {
         await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
           { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
-        const rr = await record(verdict, 'resolved', { review_id: review.review_id }, effects);
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
         if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
         return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
       }
@@ -5282,7 +5285,7 @@ async function handleDecisionVerdict(req, res) {
           }
           await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
             { status: 'applied', decided_by: user.id || null, decided_at: nowIso });
-          const rr = await record(verdict, 'resolved', { review_id: review.review_id }, { ...effects, different_people: true });
+          const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, different_people: true });
           if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
           return res.status(200).json({ ok: true, verdict, action: 'resolved_distinct', label_written: !!lw.ok, review_id: review.review_id });
         }
@@ -5296,7 +5299,7 @@ async function handleDecisionVerdict(req, res) {
           return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
           { status: 'applied', decided_by: user.id || null, decided_at: nowIso });
-        const rr = await record(verdict, 'resolved', { review_id: review.review_id }, { ...effects, research_task: true });
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, research_task: true });
         if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
         return res.status(200).json({ ok: true, verdict, action: 'routed_to_resolver', review_id: review.review_id });
       }
@@ -5313,7 +5316,7 @@ async function handleDecisionVerdict(req, res) {
         const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
         await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
           { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
-        const rr = await record(verdict, 'resolved', { review_id: review.review_id }, { ...effects, conflict: 'no_current_owner_entity' });
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'no_current_owner_entity' });
         if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
         return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'no_current_owner_entity', review_id: review.review_id });
       }
@@ -5394,7 +5397,7 @@ async function handleDecisionVerdict(req, res) {
       await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
         { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
       effects.relationship_id = relId; effects.linked_entity_id = linkedEntityId; effects.created_entity = !!createdEntityId; effects.apply_log_id = applyLogId;
-      const rr = await record(verdict, 'resolved', { review_id: review.review_id }, effects);
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: 'linked', relationship_id: relId,
         linked_entity_id: linkedEntityId, created_entity: !!createdEntityId, review_id: review.review_id });
