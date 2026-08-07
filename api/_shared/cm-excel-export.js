@@ -436,6 +436,19 @@ const CHART_COLUMNS = {
     { key: 'period_end',          header: 'As of',           format: 'date_short',          width: 13 },
   ],
   // Round 18 — 3 new charts
+  // ── Data_Core_Cap_Dot / page-49 "Core Cap Rate Dot Plot" source of truth ──
+  // The catalog points core_cap_rate_dot_plot at cm_{vertical}_core_cap_dot_q,
+  // which is the CORE COHORT: firm_term_years >= 8, cap_rate in [0.04, 0.12],
+  // sale_date >= 2001-01-01 (it aliases the sale date to `period_end`). That is
+  // the intended plot — one dot per qualifying core sale. Do NOT repoint this
+  // at cm_{vertical}_core_cap_rate_dots: that view is the UNFILTERED superset
+  // (every sale back to 1985, stub terms + out-of-band caps included, ~3,019
+  // dia rows) and would contaminate the core plot. The prior "missing recent
+  // dots" symptom was the PostgREST 1000-row cap truncating the newest sales
+  // under ascending order — fixed by pagination in fetchView (capital-markets.js),
+  // NOT by switching views. A post-export freshness assertion (core dot
+  // max(sale_date) within 45 days of the export date) guards against a stalled
+  // source; see the CORE_DOT check in exportWorkbook.
   core_cap_rate_dot_plot: [
     { key: 'period_end',       header: 'Sale Date',           format: 'date_short',          width: 13 },
     { key: 'cap_rate',         header: 'Cap Rate',            format: 'percent_basis_points', width: 13 },
