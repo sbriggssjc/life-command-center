@@ -2494,49 +2494,92 @@ async function fetchLinkScoredMarkers() {
 // ── Evidence assembly (deterministic, bounded) — ONLY what LCC already holds. ──
 // Each helper is best-effort (a failed/absent source contributes nothing, never
 // throws). No web search. Returns an array of { source, ref, text } blocks.
+// Per-source LIMITS for chain evidence assembly. Prompt 71: raise the per-source
+// topK (an unreachable source contributes nothing; a reachable-but-thin one should
+// contribute all it has) — the assembleEvidence() char cap is the real bound.
+const CHAIN_EV_LIMITS = { sale_notes: 8, deed: 8, activity: 6, intake: 6 };
+
+// Gather chain evidence and report, per source, how many BLOCKS it contributed
+// and whether the query ERRORED (loud — mirrors U2's scan_errors; a swallowed 403
+// is exactly the starvation Prompt 71 diagnoses). Returns { blocks, sources, errors }.
 async function gatherChainEvidenceBlocks(row) {
   const blocks = [];
+  const sources = { sale_notes: 0, deed: 0, activity: 0, intake: 0 };
+  const errors = [];
   const dom = linkNormDomain(row.source_domain);
   const pid = row.source_property_id;
-  if (pid == null) return blocks;
+  if (pid == null) return { blocks, sources, errors };
+  const note = (src) => { sources[src] += 1; };
   // 1. Domain sale notes (sale_notes_raw + dia notes) — the richest free text.
   try {
     const noteCols = dom === 'dia' ? 'sale_id,sale_notes_raw,notes' : 'sale_id,sale_notes_raw';
     const sr = await domainQuery(dom, 'GET', 'sales_transactions?select=' + noteCols
-      + '&property_id=eq.' + encodeURIComponent(pid) + '&order=sale_date.desc.nullslast&limit=5');
+      + '&property_id=eq.' + encodeURIComponent(pid) + '&order=sale_date.desc.nullslast&limit=' + CHAIN_EV_LIMITS.sale_notes);
     if (sr.ok && Array.isArray(sr.data)) {
       for (const s of sr.data) {
-        if (s.sale_notes_raw) blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.sale_notes_raw });
-        if (s.notes) blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.notes });
+        if (s.sale_notes_raw) { blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.sale_notes_raw }); note('sale_notes'); }
+        if (s.notes) { blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.notes }); note('sale_notes'); }
       }
-    }
-  } catch (_e) { /* best-effort */ }
+    } else if (!sr.ok) { errors.push({ source: 'sale_notes', status: sr.status || null, detail: _linkErrDetail(sr.data) }); }
+  } catch (e) { errors.push({ source: 'sale_notes', detail: e?.message || String(e) }); }
   // 2. Domain deed grantor/grantee (names a prior owner / developer).
   try {
     const dr = await domainQuery(dom, 'GET', 'deed_records?select=id,grantor,grantee'
-      + '&property_id=eq.' + encodeURIComponent(pid) + '&limit=5');
+      + '&property_id=eq.' + encodeURIComponent(pid) + '&limit=' + CHAIN_EV_LIMITS.deed);
     if (dr.ok && Array.isArray(dr.data)) {
       for (const d of dr.data) {
         const t = ['grantor: ' + (d.grantor || ''), 'grantee: ' + (d.grantee || '')].filter((x) => x.length > 9).join('; ');
-        if (t) blocks.push({ source: 'deed', ref: d.id, text: t });
+        if (t) { blocks.push({ source: 'deed', ref: d.id, text: t }); note('deed'); }
       }
-    }
-  } catch (_e) { /* best-effort */ }
-  // 3. Ops correspondence summaries / activity for the current owner entity.
+    } else if (!dr.ok) { errors.push({ source: 'deed', status: dr.status || null, detail: _linkErrDetail(dr.data) }); }
+  } catch (e) { errors.push({ source: 'deed', detail: e?.message || String(e) }); }
+  // 3. Intake extraction snapshots matched to this property (party/owner free text).
+  //    The extraction lives at raw_payload->extraction_result (INTAKE_LANE_SELECT).
+  try {
+    const ir = await opsQuery('GET', 'staged_intake_items?select=intake_id,snap:raw_payload->extraction_result'
+      + '&raw_payload->extraction_result->>match_domain=eq.' + encodeURIComponent(dom)
+      + '&raw_payload->extraction_result->>match_property_id=eq.' + encodeURIComponent(pid)
+      + '&order=created_at.desc.nullslast&limit=' + CHAIN_EV_LIMITS.intake);
+    if (ir.ok && Array.isArray(ir.data)) {
+      for (const it of ir.data) {
+        const t = _linkIntakeSnapshotText(it.snap);
+        if (t) { blocks.push({ source: 'intake', ref: it.intake_id, text: t }); note('intake'); }
+      }
+    } else if (!ir.ok) { errors.push({ source: 'intake', status: ir.status || null, detail: _linkErrDetail(ir.data) }); }
+  } catch (e) { errors.push({ source: 'intake', detail: e?.message || String(e) }); }
+  // 4. Ops correspondence summaries / activity for the current owner entity.
   if (row.current_owner_entity_id) {
     try {
       const ar = await opsQuery('GET', 'activity_events?select=activity_id,subject,body'
         + '&entity_id=eq.' + encodeURIComponent(row.current_owner_entity_id)
-        + '&order=occurred_at.desc.nullslast&limit=4');
+        + '&order=occurred_at.desc.nullslast&limit=' + CHAIN_EV_LIMITS.activity);
       if (ar.ok && Array.isArray(ar.data)) {
         for (const a of ar.data) {
           const t = [a.subject || '', a.body || ''].filter(Boolean).join('\n');
-          if (t) blocks.push({ source: 'activity', ref: a.activity_id, text: t });
+          if (t) { blocks.push({ source: 'activity', ref: a.activity_id, text: t }); note('activity'); }
         }
-      }
-    } catch (_e) { /* best-effort */ }
+      } else if (!ar.ok) { errors.push({ source: 'activity', status: ar.status || null, detail: _linkErrDetail(ar.data) }); }
+    } catch (e) { errors.push({ source: 'activity', detail: e?.message || String(e) }); }
   }
-  return blocks;
+  return { blocks, sources, errors };
+}
+
+function _linkErrDetail(data) {
+  if (data == null) return null;
+  if (typeof data === 'string') return data.slice(0, 200);
+  try { return JSON.stringify(data).slice(0, 200); } catch (_e) { return String(data).slice(0, 200); }
+}
+
+// Pull the party/owner-bearing free text out of an intake extraction snapshot.
+function _linkIntakeSnapshotText(ex) {
+  if (!ex || typeof ex !== 'object') return '';
+  const parts = [];
+  for (const k of ['seller', 'buyer', 'owner', 'true_owner', 'developer', 'tenant_name',
+    'sale_notes_raw', 'notes', 'summary', 'tenants_raw', 'agency']) {
+    const v = ex[k];
+    if (v && typeof v === 'string') parts.push(k + ': ' + v);
+  }
+  return parts.join('\n').slice(0, 2000);
 }
 
 function gatherPersonEmailEvidenceBlocks(row) {
@@ -2545,7 +2588,8 @@ function gatherPersonEmailEvidenceBlocks(row) {
   const text = ['email: ' + (row.email || ''),
     'winner: ' + (row.winner_name || ''),
     'others: ' + losers.map((n) => String(n)).join(', ')].filter((s) => s.length > 7).join('\n');
-  return text ? [{ source: 'person_email', ref: row.winner_id, text }] : [];
+  const blocks = text ? [{ source: 'person_email', ref: row.winner_id, text }] : [];
+  return { blocks, sources: { person_email: blocks.length }, errors: [] };
 }
 
 // Build the fresh scored-ready item pool for one tick (both pools). Value-gated
@@ -2556,9 +2600,17 @@ async function buildFreshLinkItems(opts = {}) {
   const cap = Number.isFinite(opts.cap) ? opts.cap : LINK_MAX_CANDIDATES;
   const known = opts.known instanceof Set ? opts.known : await fetchLinkKnownSubjects();
   const markers = opts.markers instanceof Set ? opts.markers : await fetchLinkScoredMarkers();
-  const counts = { chain: { by_gap: {}, candidates: 0, no_evidence: 0, already_known: 0, fresh: 0 },
-    person_email: { candidates: 0, no_evidence: 0, already_known: 0, fresh: 0 } };
+  const counts = { chain: { by_gap: {}, candidates: 0, no_evidence: 0, already_known: 0, fresh: 0,
+      evidence_sources: { sale_notes: 0, deed: 0, activity: 0, intake: 0 } },
+    person_email: { candidates: 0, no_evidence: 0, already_known: 0, fresh: 0,
+      evidence_sources: { person_email: 0 } } };
   const items = [];
+  const scanErrors = [];   // loud per-source query errors (U2 scan_errors pattern)
+  const skipMarkers = [];  // assembly-level no-evidence markers (only re-enter when evidence lands)
+  const addSources = (agg, src) => { for (const k of Object.keys(src || {})) agg[k] = (agg[k] || 0) + src[k]; };
+  const pushErrors = (pool, subjectRef, errs) => {
+    for (const e of (errs || [])) scanErrors.push({ pool, subject_ref: subjectRef, ...e });
+  };
 
   // --- Chain pool (value-ranked). ---
   try {
@@ -2573,11 +2625,18 @@ async function buildFreshLinkItems(opts = {}) {
       counts.chain.by_gap[row.gap] = (counts.chain.by_gap[row.gap] || 0) + 1;
       const subjectRef = chainSubjectRef(row.source_domain, row.source_property_id, row.gap);
       if (known.has(subjectRef)) { counts.chain.already_known += 1; continue; }
-      const blocks = await gatherChainEvidenceBlocks(row);
-      const assembled = assembleEvidence(blocks);
-      if (evidenceIsEmpty(assembled)) { counts.chain.no_evidence += 1; continue; } // NO LLM call
+      const gathered = await gatherChainEvidenceBlocks(row);
+      addSources(counts.chain.evidence_sources, gathered.sources);
+      pushErrors(LINK_POOL_CHAIN, subjectRef, gathered.errors);
+      const assembled = assembleEvidence(gathered.blocks);
       const evHash = evidenceHash(assembled, String(row.owner_links || '') + '|' + String(row.earliest_known_owner || ''));
       const marker = linkScoredKeyFor(LINK_POOL_CHAIN, row.source_domain, row.source_property_id, row.gap, evHash);
+      if (evidenceIsEmpty(assembled)) {
+        // Assembly-level no-evidence: mark by evidence-hash so it only RE-ENTERS
+        // when new evidence lands (measured once for the U4 data-acquisition backlog).
+        if (!markers.has(marker)) { counts.chain.no_evidence += 1; skipMarkers.push(marker); }
+        continue; // NO LLM call
+      }
       if (markers.has(marker)) continue; // evidence unchanged since last scan
       counts.chain.fresh += 1;
       items.push({ pool: LINK_POOL_CHAIN, subjectRef, row, assembled, evHash, marker,
@@ -2595,18 +2654,23 @@ async function buildFreshLinkItems(opts = {}) {
     for (const row of rows) {
       const subjectRef = personEmailSubjectRef(row.winner_id);
       if (known.has(subjectRef)) { counts.person_email.already_known += 1; continue; }
-      const blocks = gatherPersonEmailEvidenceBlocks(row);
-      const assembled = assembleEvidence(blocks);
-      if (evidenceIsEmpty(assembled)) { counts.person_email.no_evidence += 1; continue; }
+      const gathered = gatherPersonEmailEvidenceBlocks(row);
+      addSources(counts.person_email.evidence_sources, gathered.sources);
+      pushErrors(LINK_POOL_PERSON_EMAIL, subjectRef, gathered.errors);
+      const assembled = assembleEvidence(gathered.blocks);
       const evHash = evidenceHash(assembled, String(row.member_count || ''));
       const marker = linkScoredKeyFor(LINK_POOL_PERSON_EMAIL, 'lcc', row.winner_id, 'person_email', evHash);
+      if (evidenceIsEmpty(assembled)) {
+        if (!markers.has(marker)) { counts.person_email.no_evidence += 1; skipMarkers.push(marker); }
+        continue;
+      }
       if (markers.has(marker)) continue;
       counts.person_email.fresh += 1;
       items.push({ pool: LINK_POOL_PERSON_EMAIL, subjectRef, row, assembled, evHash, marker, domain: 'lcc' });
     }
   } catch (e) { counts.person_email.error = e?.message || String(e); }
 
-  return { items, counts };
+  return { items, counts, scan_errors: scanErrors, skip_markers: skipMarkers };
 }
 
 // Cheap pool counts by gap type for the plain dry-run (no evidence assembly).
@@ -2631,7 +2695,7 @@ async function scoreLinkItem(item) {
   const parsed = parseLinkProposalJson(ai?.data?.response || '');
   const proposal = normalizeLinkProposal(parsed);
   if (!parsed) { proposal.verdict = 'no_evidence_found'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; treated as no_evidence_found.'; }
-  const validated = validateLinkProposal(proposal, item.assembled.combined);
+  const validated = validateLinkProposal(proposal, item.assembled.combined, item.pool);
   return { proposal, validated, provider: ai?.provider || null, model: ai?.data?.model || null };
 }
 
@@ -2705,20 +2769,22 @@ async function handleLinkPropagationTick(req, res) {
     const sourceRunId = 'w8u3_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
     const known = await fetchLinkKnownSubjects();
     const markers = await fetchLinkScoredMarkers();
-    const { items, counts } = await buildFreshLinkItems({ known, markers });
+    const { items, counts, scan_errors: scanErrors, skip_markers: skipMarkers } = await buildFreshLinkItems({ known, markers });
     let scanBatchId = null;
     try {
       const br = await opsQuery('POST', 'w8_u3_link_batch',
         { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
-          details: { counts, fresh: items.length } },
+          details: { counts, fresh: items.length, scan_errors: scanErrors } },
         { headers: { Prefer: 'return=representation' } });
       if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
     } catch (_e) { /* ledger best-effort */ }
 
     const batchSize = Math.min(limit, LINK_SCORE_BATCH_SIZE);
     const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId, pool_counts: counts,
+      evidence_sources: { chain: counts.chain.evidence_sources, person_email: counts.person_email.evidence_sources },
+      scan_errors: scanErrors,
       candidates_fresh: items.length, batch_size: batchSize, budget_ms: LINK_SCORE_BUDGET_MS,
-      min_confidence: LINK_MIN_CONF, scored: 0, proposed: 0, no_evidence_found: 0,
+      min_confidence: LINK_MIN_CONF, scored: 0, proposed: 0, no_evidence_found: 0, different_people: 0,
       dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
       budget_exhausted: false, remaining_unscored: items.length, by_verdict: {} };
     const newMarkers = [];
@@ -2740,7 +2806,8 @@ async function handleLinkPropagationTick(req, res) {
           return null;
         }
         const wr = await upsertLinkProposal(item, validated.proposal, { provider, model, sourceRunId, scanBatchId });
-        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+        if (wr.ok) { summary.proposed += 1; if (validated.verdict === 'different_people') summary.different_people += 1; }
+        else summary.failed += 1;
       } catch (e) {
         summary.failed += 1;
         console.warn('[link-propagation] score/write failed', item?.subjectRef, e?.message || e);
@@ -2753,9 +2820,11 @@ async function handleLinkPropagationTick(req, res) {
     // next run unless its evidence changes.
     if (scanBatchId != null) {
       try {
-        const merged = Array.from(new Set([...markers, ...newMarkers])).slice(-5000);
+        // Persist scored markers (LLM-scored) AND assembly-level no-evidence skip
+        // markers, so a no-evidence row only re-enters when its evidence changes.
+        const merged = Array.from(new Set([...markers, ...newMarkers, ...(skipMarkers || [])])).slice(-5000);
         await opsQuery('PATCH', 'w8_u3_link_batch?batch_id=eq.' + scanBatchId,
-          { details: { counts, fresh: items.length, scored_markers: merged, summary } });
+          { details: { counts, fresh: items.length, scored_markers: merged, scan_errors: scanErrors, summary } });
       } catch (_e) { /* best-effort */ }
     }
     await recordLinkHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
@@ -2769,12 +2838,15 @@ async function handleLinkPropagationTick(req, res) {
     pool_counts: poolCounts };
   if (req.query.score === '1' || req.query.score === 'true') {
     const inlineN = Math.min(30, Math.max(1, parseInt(req.query.n || String(LINK_INLINE_DEFAULT_N), 10) || LINK_INLINE_DEFAULT_N));
-    const { items, counts } = await buildFreshLinkItems({ cap: Math.max(LINK_MAX_CANDIDATES, inlineN * 4) });
+    const { items, counts, scan_errors: scanErrors } = await buildFreshLinkItems({ cap: Math.max(LINK_MAX_CANDIDATES, inlineN * 4) });
     out.scan_counts = counts;
+    out.evidence_sources = { chain: counts.chain.evidence_sources, person_email: counts.person_email.evidence_sources };
+    out.scan_errors = scanErrors;
     out.candidates_fresh = items.length;
     const proposals = [];
     const byVerdict = {};
     let noEvidence = 0;
+    let differentPeople = 0;
     let droppedNotVerbatim = 0;
     let droppedBelowConf = 0;
     const budgetRun = await scoreLinksWithBudget(items, async (item) => {
@@ -2785,12 +2857,14 @@ async function handleLinkPropagationTick(req, res) {
         if (validated.verdict === 'no_evidence_found') { noEvidence += 1; disposition = 'no_evidence_found'; }
         else if (validated.drop) { droppedNotVerbatim += 1; disposition = 'dropped:' + validated.drop.reason; }
         else if (!isProposableLink(validated, LINK_MIN_CONF)) { droppedBelowConf += 1; disposition = 'dropped:below_confidence'; }
+        else if (validated.verdict === 'different_people') { differentPeople += 1; disposition = 'propose:different_people'; }
         proposals.push({ subject_ref: item.subjectRef, pool: item.pool, domain: item.domain,
           gap: item.row.gap || null, source_property_id: item.row.source_property_id || null,
           current_owner_name: item.row.current_owner_name || item.row.winner_name || null,
-          evidence_chars: item.assembled.chars, ...proposal, disposition,
+          evidence_chars: item.assembled.chars, evidence_source_blocks: item.assembled.blocks.length, ...proposal, disposition,
           quote_verbatim: !!(validated.proposal),
-          would_propose: disposition === 'propose', model_provider: provider, model_name: model });
+          would_propose: disposition === 'propose' || disposition === 'propose:different_people',
+          model_provider: provider, model_name: model });
       } catch (e) { proposals.push({ subject_ref: item?.subjectRef, error: e?.message || String(e) }); }
       return null;
     }, { budgetMs: LINK_SCORE_BUDGET_MS, maxN: inlineN });
@@ -2802,6 +2876,7 @@ async function handleLinkPropagationTick(req, res) {
     out.remaining_unscored = Math.max(0, items.length - proposals.length);
     out.by_verdict = byVerdict;
     out.no_evidence_found = noEvidence;
+    out.different_people = differentPeople;
     out.dropped_not_verbatim = droppedNotVerbatim;
     out.dropped_below_conf = droppedBelowConf;
     out.would_propose = proposals.filter((p) => p.would_propose).length;
@@ -3702,7 +3777,7 @@ async function fetchFederatedSource(type, cap, opts) {
         rank_value: row.rank_value, model_provider: row.model_provider, model_name: row.model_name,
       },
     }));
-    out.total = await opsCnt('w8_u3_link_review?status=eq.proposed&proposed_verdict=eq.link_proposal');
+    out.total = await opsCnt('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)');
     return out;
   }
 
@@ -5126,8 +5201,54 @@ async function handleDecisionVerdict(req, res) {
         return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
       }
 
-      // --- confirm: person-email pool → route to the resolver (research task). ---
+      // --- confirm: person-email pool. Branch on the PROPOSED verdict. ---
       if (review.pool === 'person_email') {
+        // different_people: RESOLVE the merge candidate as distinct (NEVER a merge,
+        // NEVER research). Write an entity_match_labels 'distinct' hard-negative
+        // (seeder w8_u3_shared_email — W4.4 corpus) + a minimal reversible dismissed
+        // mark on the winner entity. Reverse by clearing the metadata key.
+        if (review.proposed_verdict === 'different_people') {
+          let winnerName = review.current_owner_name || null;
+          let winnerMeta = {};
+          if (review.winner_entity_id) {
+            try {
+              const wr = await opsQuery('GET', 'entities?select=name,metadata&id=eq.'
+                + pgFilterVal(review.winner_entity_id) + '&limit=1');
+              if (wr.ok && Array.isArray(wr.data) && wr.data[0]) {
+                winnerName = winnerName || wr.data[0].name || null;
+                winnerMeta = (wr.data[0].metadata && typeof wr.data[0].metadata === 'object') ? wr.data[0].metadata : {};
+              }
+            } catch (_e) { /* best-effort */ }
+          }
+          const lw = await writeEntityMatchLabel({
+            seeder: 'w8_u3_shared_email', source_domain: 'lcc',
+            verdict: 'distinct', raw_verdict: verdict,
+            owner_a: winnerName, owner_b: review.evidence_quote || null,
+            entity_a: review.winner_entity_id != null ? String(review.winner_entity_id) : null,
+            entity_b: null,
+            match_score: review.confidence != null ? Number(review.confidence) : null,
+            evidence_json: { finding: 'different_people', evidence_quote: review.evidence_quote || null,
+              email: review.subject_ref, model_provider: review.model_provider, model_name: review.model_name },
+            decision_id: decisionId, subject_ref: review.subject_ref,
+            decided_by: user.id || null, decided_at: nowIso });
+          effects.label_written = !!lw.ok;
+          effects.merged = false; // NEVER a merge from this finding
+          // Reversible dismissed mark on the candidate surface (winner entity).
+          if (review.winner_entity_id) {
+            try {
+              const merged = { ...winnerMeta, w8_u3_email_distinct: { at: nowIso, subject_ref: review.subject_ref,
+                reason: 'different_people (shared mailbox)', review_id: review.review_id } };
+              await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(review.winner_entity_id), { metadata: merged });
+              effects.dismissed_mark = true;
+            } catch (_e) { /* mark is best-effort; the label + review status are the record */ }
+          }
+          await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+            { status: 'applied', decided_by: user.id || null, decided_at: nowIso });
+          const rr = await record(verdict, 'resolved', { review_id: review.review_id }, { ...effects, different_people: true });
+          if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+          return res.status(200).json({ ok: true, verdict, action: 'resolved_distinct', label_written: !!lw.ok, review_id: review.review_id });
+        }
+        // link_proposal (SAME person) → route to the resolver (research task).
         const rt = await createResearchTask({ research_type: 'person_email_merge_review',
           title: 'Confirm person merge: ' + (review.current_owner_name || review.linked_entity_name || review.subject_ref),
           instructions: 'Ollama proposed these email-sharing person records are the SAME person. '

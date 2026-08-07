@@ -170,6 +170,79 @@ describe('verbatim validator (the free precision floor)', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('different_people verdict (person_email pool only)', () => {
+  const ev = 'email: team@acme.com\nwinner: Jane Doe\nothers: Bob Smith, Carol White';
+
+  it('normalizes distinct/different synonyms to different_people', () => {
+    for (const v of ['different_people', 'different people', 'distinct', 'not_same', 'different']) {
+      assert.equal(normalizeLinkProposal({ verdict: v }).verdict, 'different_people');
+    }
+  });
+
+  it('ACCEPTS a different_people finding with a verbatim quote in the person_email pool', () => {
+    const p = normalizeLinkProposal({ verdict: 'different_people', confidence: 0.95,
+      evidence_quote: 'others: Bob Smith, Carol White', evidence_source: 'E1', reason: 'distinct names' });
+    const v = validateLinkProposal(p, ev, LINK_POOL_PERSON_EMAIL);
+    assert.equal(v.drop, null);
+    assert.ok(v.proposal);
+    assert.equal(v.verdict, 'different_people');
+    // no linked entity required — it is a resolution, not a link
+    assert.equal(v.proposal.linked_entity_name, '');
+    assert.equal(isProposableLink(v, LINK_MIN_CONFIDENCE), true);
+  });
+
+  it('DROPS a different_people finding whose quote is not verbatim', () => {
+    const p = normalizeLinkProposal({ verdict: 'different_people', confidence: 0.95,
+      evidence_quote: 'these are clearly three separate people', evidence_source: 'E1' });
+    const v = validateLinkProposal(p, ev, LINK_POOL_PERSON_EMAIL);
+    assert.equal(v.proposal, null);
+    assert.equal(v.drop.reason, 'quote_not_verbatim');
+  });
+
+  it('DROPS a different_people finding with no quote at all', () => {
+    const p = normalizeLinkProposal({ verdict: 'different_people', confidence: 0.9 });
+    const v = validateLinkProposal(p, ev, LINK_POOL_PERSON_EMAIL);
+    assert.equal(v.proposal, null);
+    assert.equal(v.drop.reason, 'no_quote');
+  });
+
+  it('DEGRADES a different_people verdict to no_evidence_found outside the person_email pool', () => {
+    const p = normalizeLinkProposal({ verdict: 'different_people', confidence: 0.95,
+      evidence_quote: 'others: Bob Smith, Carol White' });
+    const v = validateLinkProposal(p, ev, LINK_POOL_CHAIN);
+    assert.equal(v.verdict, 'no_evidence_found');
+    assert.equal(v.proposal, null);
+    assert.equal(v.drop, null);
+  });
+
+  it('person-email prompt offers the different_people verdict', () => {
+    const row = { email: 'team@acme.com', winner_name: 'Jane Doe', loser_names: ['Bob Smith', 'Carol White'] };
+    const a = assembleEvidence([{ source: 'person_email', text: 'email: team@acme.com\nwinner: Jane Doe\nothers: Bob Smith, Carol White' }]);
+    const prompt = buildLinkPropagationPrompt(row, a, LINK_POOL_PERSON_EMAIL);
+    assert.match(prompt, /different_people/);
+    assert.match(prompt, /same_person/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('no_evidence_found is quote-free (Prompt 71 do#3)', () => {
+  it('normalize strips a stray quote/source the model echoed on no_evidence_found', () => {
+    const p = normalizeLinkProposal({ verdict: 'no_evidence_found', confidence: 0.2,
+      evidence_quote: 'some span it should not have quoted', evidence_source: 'E1' });
+    assert.equal(p.verdict, 'no_evidence_found');
+    assert.equal(p.evidence_quote, '');
+    assert.equal(p.evidence_source, '');
+  });
+  it('validator keeps the no_evidence verdict and never treats the stray quote as a drop', () => {
+    const p = normalizeLinkProposal({ verdict: 'no_evidence_found', evidence_quote: 'x'.repeat(40) });
+    const v = validateLinkProposal(p, 'x'.repeat(40), LINK_POOL_PERSON_EMAIL);
+    assert.equal(v.verdict, 'no_evidence_found');
+    assert.equal(v.proposal, null);
+    assert.equal(v.drop, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('proposal normalization + confidence gate', () => {
   it('normalizes verdict synonyms and clamps confidence', () => {
     assert.equal(normalizeLinkProposal({ verdict: 'FOUND', confidence: 2 }).verdict, 'link_proposal');
@@ -268,6 +341,33 @@ describe('structural guards — admin.js wiring (Prompt 69 doctrine)', () => {
     assert.match(admin, /evidenceIsEmpty\(assembled\)/);
     assert.match(admin, /NO LLM call/);
   });
+  it('assembly surfaces per-source hit counts + loud scan errors (Prompt 71 do#1)', () => {
+    assert.match(admin, /evidence_sources/);
+    assert.match(admin, /scan_errors/);
+    // per-source counts are recorded in the gather helper
+    assert.match(admin, /sources = \{ sale_notes: 0, deed: 0, activity: 0, intake: 0 \}/);
+  });
+  it('assembly-level no-evidence rows are marked by evidence-hash (only re-enter when evidence lands)', () => {
+    const start = admin.indexOf('async function buildFreshLinkItems');
+    const end = admin.indexOf('async function linkPoolCounts', start);
+    const fn = admin.slice(start, end);
+    assert.ok(fn.includes('skipMarkers') && fn.includes('skip_markers'), 'assembly skips must persist a marker');
+    // the marker is computed from the evidence hash BEFORE the empty check
+    assert.ok(fn.indexOf('const evHash = evidenceHash') < fn.indexOf('if (evidenceIsEmpty(assembled))'));
+  });
+  it('different_people (person_email) resolves DISTINCT + seeds a hard-negative label, NEVER a merge', () => {
+    const start = admin.indexOf("decision.decision_type === 'w8_u3_link_review'");
+    const end = admin.indexOf("owner_reconcile (W3.2", start);
+    const branch = admin.slice(start, end);
+    assert.ok(branch.includes("review.proposed_verdict === 'different_people'"), 'must branch on different_people');
+    assert.ok(branch.includes("seeder: 'w8_u3_shared_email'"), 'must seed the W4.4 hard-negative label');
+    assert.ok(branch.includes("verdict: 'distinct'"), 'the label verdict is distinct');
+    assert.ok(branch.includes('action: \'resolved_distinct\''));
+    assert.ok(!branch.includes('lcc_merge_entity'), 'different_people must never merge');
+  });
+  it('the dry-run + tick pass the pool to the validator (different_people is pool-gated)', () => {
+    assert.match(admin, /validateLinkProposal\(proposal, item\.assembled\.combined, item\.pool\)/);
+  });
   it('no web search — internal evidence only (owner-contact-websearch is PAUSED)', () => {
     const start = admin.indexOf('W8 U3 (Prompt 69');
     const end = admin.indexOf('PRIORITY QUEUE LIST', start);
@@ -303,5 +403,18 @@ describe('structural guards — migration (provenance + flag OFF)', () => {
   });
   it('the proposed_verdict CHECK forbids any auto-merge verdict (only link_proposal|no_evidence_found)', () => {
     assert.match(migration, /proposed_verdict IN \('link_proposal', 'no_evidence_found'\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('structural guards — different_people migration (Prompt 71)', () => {
+  const dpMig = readFileSync(join(root, 'supabase/migrations/20260808120000_lcc_w8_u3_different_people_verdict.sql'), 'utf8');
+
+  it('adds different_people to the proposed_verdict CHECK (still no merge/auto-link shape)', () => {
+    assert.match(dpMig, /proposed_verdict IN \('link_proposal', 'no_evidence_found', 'different_people'\)/);
+    assert.ok(!/auto_merge|auto_link|merge_proposal/i.test(dpMig), 'no merge/auto-link verdict may exist');
+  });
+  it('the open-lane view surfaces both proposable verdicts', () => {
+    assert.match(dpMig, /proposed_verdict IN \('link_proposal', 'different_people'\)/);
   });
 });
