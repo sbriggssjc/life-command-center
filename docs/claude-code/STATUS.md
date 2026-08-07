@@ -454,6 +454,15 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Queued 2026-08-07: prompt 70 (W8 U4 — systemic-findings monthly report, final unit)
+Deterministic aggregator (ingest/flow failure clusters, provenance drift/conflicts, chain
+completeness + U3 drain, precision floors, U1/U2 lane throughput + accept rates, naming-hygiene
+backlog, extraction provider mix; monthly snapshot for deltas) + Ollama narrative FROM computed
+numbers with a W7.2-style figure validator (every number in prose must match the table). Output:
+one monthly doc `docs/audits/systemic-findings/YYYY-MM.md` + fix-unit stubs; NO new lane. Flag
+`W8_U4_FINDINGS_REPORT` OFF; monthly cron 1st 05:00 UTC; dry-run tick for pre-flip review.
+In `prompts/`, ready to send. U2 flag-on re-run verified stable (identical output to acceptance run).
+
 ### Prompt 69 (W8 U3) landed — PR #1609, migration LIVE (Cowork-verified), flag OFF, awaiting merge+redeploy
 Full unit per spec: planner (value-gate ordering, bounded evidence assembly, VERBATIM-quote
 validator → `w8_u3_dropped_log`, no-evidence short-circuit, evidence-hash resumable markers),
