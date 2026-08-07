@@ -601,14 +601,83 @@ function clampRowsToAsOf(rows, template, asOf) {
  * 'YYYY-MM-DD' string that compares correctly as text. Non-time-series and
  * year-axis shapes pass through untouched.
  */
-export function cropRowsToDisplayFrom(rows, template, displayFromByChart) {
-  if (!Array.isArray(rows) || rows.length === 0 || !displayFromByChart) return rows;
-  const df = displayFromByChart[template?.chart_template_id];
-  if (!df) return rows;
+export function cropRowsToDisplayFrom(rows, template, df) {
+  if (!Array.isArray(rows) || rows.length === 0 || df == null) return rows;
+  // Backward-compat: accept either a resolved display_from string or a
+  // {chart_template_id → date} map (used by the unit tests).
+  const cutoff = typeof df === 'string'
+    ? df
+    : df[template?.chart_template_id];
+  if (!cutoff) return rows;
   if (timeAxisColumnFor(template) !== 'period_end') return rows; // year-axis: skip
   return rows.filter(
-    (r) => r?.period_end == null || String(r.period_end).slice(0, 10) >= df
+    (r) => r?.period_end == null || String(r.period_end).slice(0, 10) >= String(cutoff).slice(0, 10)
   );
+}
+
+/**
+ * CM export audit item 4 — treasury freshness step, run BEFORE the workbook is
+ * built. Treasury-derived series (10Y, loan constants, leveraged returns) read
+ * FRED DGS10 from economic_indicators, which is written by the single dia
+ * `ingest_fred` pipeline (we do NOT write it from here — a second writer would
+ * fork the dedup/data_hash). This step:
+ *   1. checks whether DGS10 covers the export month;
+ *   2. if not AND a refresh webhook is configured (CM_TREASURY_REFRESH_URL),
+ *      fires it once and re-checks (the env-gated ingestion trigger seam —
+ *      no-op when unset, so default behavior is unchanged);
+ *   3. returns { maxDate, stale } for meta; the per-chart macro-tail lag
+ *      warning remains the fallback when the month genuinely isn't published.
+ */
+async function ensureTreasuryFreshForExport(domain, asOf) {
+  if (!domain) return { maxDate: null, stale: null };
+  const monthStart = (d) => String(d || new Date().toISOString().slice(0, 10)).slice(0, 7) + '-01';
+  const readMax = async () => {
+    try {
+      const res = await domainQuery(
+        domain, 'GET',
+        'economic_indicators?series_id=eq.DGS10&select=observation_date&order=observation_date.desc&limit=1'
+      );
+      const v = res && res.ok !== false && Array.isArray(res.data) && res.data[0];
+      return v && v.observation_date ? String(v.observation_date).slice(0, 10) : null;
+    } catch { return null; }
+  };
+  const target = monthStart(asOf);
+  let maxDate = await readMax();
+  let stale = !maxDate || maxDate < target;
+  if (stale && process.env.CM_TREASURY_REFRESH_URL) {
+    try {
+      await fetch(process.env.CM_TREASURY_REFRESH_URL, { method: 'POST' });
+      maxDate = await readMax();
+      stale = !maxDate || maxDate < target;
+    } catch (e) {
+      console.warn(`[cm-export] treasury refresh webhook failed: ${e?.message || e}`);
+    }
+  }
+  if (stale) {
+    console.warn(
+      `[cm-export] treasury freshness: DGS10 latest ${maxDate || 'none'} does not cover ` +
+      `export month ${target.slice(0, 7)}. Run the dia FRED ingestion (ingest_fred) for ` +
+      `that month before shipping, or set CM_TREASURY_REFRESH_URL to auto-trigger it. ` +
+      `Treasury-joined series will end on the last published month (see per-chart macro-tail warnings).`
+    );
+  }
+  return { maxDate, stale };
+}
+
+/**
+ * Resolve a chart's display_from from the registry rows, preferring the row
+ * whose view_name equals the view this chart actually exports (so an _m chart
+ * with both _m and _q sibling rows crops on the cadence it reads). Falls back
+ * to any row for the chart_template_id. Returns an ISO date string or null.
+ */
+export function resolveDisplayFrom(displayFromRows, chart_template_id, view_name) {
+  if (!Array.isArray(displayFromRows) || displayFromRows.length === 0) return null;
+  const matches = displayFromRows.filter(
+    (r) => r.chart_template_id === chart_template_id && r.display_from
+  );
+  if (matches.length === 0) return null;
+  const exact = matches.find((r) => r.view_name === view_name);
+  return String((exact || matches[0]).display_from).slice(0, 10);
 }
 
 /**
@@ -872,21 +941,27 @@ async function exportWorkbook(req, res) {
   // the exporter drops rows earlier than that so charts inherit clean x-axes
   // without hand-cropping. Best-effort: a missing registry / column just means
   // no cropping (whole-history export, the prior behavior).
-  const displayFromByChart = {};
+  // A chart_template_id can have >1 registry row (an _m and a _q sibling view);
+  // keep the full rows so the crop resolves the row whose view_name matches the
+  // view this chart actually exports (see resolveDisplayFrom).
+  let displayFromRows = [];
   if (domain) {
     try {
       const reg = await domainQuery(
         domain, 'GET',
-        `cm_view_registry?select=chart_template_id,display_from&vertical=eq.${encodeURIComponent(vertical)}&display_from=not.is.null`
+        `cm_view_registry?select=chart_template_id,view_name,display_from&vertical=eq.${encodeURIComponent(vertical)}&display_from=not.is.null`
       );
       if (reg && reg.ok !== false && Array.isArray(reg.data)) {
-        for (const row of reg.data) {
-          if (row && row.chart_template_id && row.display_from) {
-            displayFromByChart[row.chart_template_id] = String(row.display_from).slice(0, 10);
-          }
-        }
+        displayFromRows = reg.data.filter((r) => r && r.chart_template_id && r.display_from);
       }
     } catch { /* registry optional — no crop on failure */ }
+  }
+
+  // CM export audit item 4 — treasury freshness step, before the workbook build.
+  const treasuryFreshness = await ensureTreasuryFreshForExport(domain, as_of);
+  if (res && typeof res.setHeader === 'function') {
+    res.setHeader('X-CM-Treasury-Max', treasuryFreshness.maxDate || 'none');
+    res.setHeader('X-CM-Treasury-Stale', String(treasuryFreshness.stale));
   }
 
   // Fetch a chart-source view robustly: many older gov views were built
@@ -1005,7 +1080,7 @@ async function exportWorkbook(req, res) {
             as_of
           ),
           tmpl,
-          displayFromByChart
+          resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, view_name)
         ),
         // Round 68-E (G8): distinguish a real fetch failure (after the
         // fetchView retry pass) from a legitimately empty view, so the tab
@@ -1027,6 +1102,35 @@ async function exportWorkbook(req, res) {
     }
   });
   const realCharts = await Promise.all(chartFetches);
+
+  // CM export audit item 1 — core dot freshness assertion. The Core Cap Rate
+  // Dot Plot reads the core-cohort view (cm_{v}_core_cap_dot_q). After the
+  // pagination fix the sheet carries every qualifying core sale, so its newest
+  // sale should be within 45 days of the export date; a larger gap means the
+  // upstream sales feed stalled (or the 1000-cap regressed). Warn loudly and
+  // stamp meta so the acceptance re-run can assert it. The date lives in
+  // `period_end` (the core view aliases sale_date → period_end).
+  const CORE_DOT_FRESH_DAYS = 45;
+  for (const c of realCharts) {
+    if (c.chart_template_id !== 'core_cap_rate_dot_plot') continue;
+    if (!Array.isArray(c.rows) || c.rows.length === 0) continue;
+    let maxMs = -Infinity;
+    for (const r of c.rows) {
+      const t = Date.parse(String(r?.period_end || '').slice(0, 10));
+      if (!Number.isNaN(t) && t > maxMs) maxMs = t;
+    }
+    if (maxMs === -Infinity) continue;
+    const ageDays = Math.round((Date.now() - maxMs) / 86400000);
+    c.core_dot_max_sale = new Date(maxMs).toISOString().slice(0, 10);
+    c.core_dot_age_days = ageDays;
+    if (ageDays > CORE_DOT_FRESH_DAYS) {
+      console.warn(
+        `[cm-export] core dot freshness: newest core sale ${c.core_dot_max_sale} ` +
+        `is ${ageDays}d old (> ${CORE_DOT_FRESH_DAYS}d) — check the sales feed / ` +
+        `pagination before shipping (view=${c.view_name}).`
+      );
+    }
+  }
 
   // CM export audit item 6 — macro ingestion-lag guard. Treasury-joined series
   // (cost of capital, leveraged returns, fed-funds-vs-10Y, net-lease spread)
