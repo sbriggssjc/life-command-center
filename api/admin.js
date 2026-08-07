@@ -30,6 +30,7 @@ import {
   JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
   junkCandidateReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
   parseJunkVerdictJson, planJunkApply, buildRetireMarker,
+  applyPrescreenGuards, dismissDistributionGuard,
 } from './_shared/junk-prescreen.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -1355,6 +1356,7 @@ async function pullJunkCandidatesForTarget(target) {
         domain: target.domain, table: target.table, pk: String(pk),
         entity_name: name == null ? '' : String(name),
         heuristic: hit.heuristic, evidence: hit.evidence,
+        preVerdict: hit.preVerdict || null, acronymOnly: hit.acronymOnly || false,
         subject_ref: junkSubjectRef(target.domain, target.table, pk),
         context: { pk_col: target.pkCol, name_col: target.nameCol },
       });
@@ -1443,13 +1445,47 @@ async function recordJunkPrescreenHealth({ status, count, lastError, details }) 
 }
 
 // Score one candidate with the local model → normalized proposal (+ meta).
+// Prompt 64: probe the relationship/portfolio connection FIRST (via the existing
+// FK-guard machinery). A connected row is by definition not junk, so we short-
+// circuit to `keep` WITHOUT spending an LLM call. Otherwise the model judges,
+// then applyPrescreenGuards vetoes any unsafe dismiss (acronym / abbreviation /
+// address) — the model can never retire a real entity on a name-shape hint.
 async function scoreJunkCandidate(candidate, fewShot) {
-  const prompt = buildJunkPrescreenPrompt(candidate, fewShot);
+  const target = findJunkTarget(candidate.domain, candidate.table);
+  let connection = { referenced: false };
+  if (target) {
+    try { connection = await junkFkReferenced(target, candidate.pk); }
+    catch (_e) { connection = { referenced: true, child: null, probe_error: true }; }
+  }
+  const connected = !!connection.referenced;
+  const connectionDetail = connection.child
+    ? connection.child + (connection.count != null ? ' (' + connection.count + ')' : '')
+    : (connection.probe_error ? 'probe_error → treated as connected' : null);
+
+  // Connected → never junk. Skip the LLM, propose keep deterministically.
+  if (connected) {
+    return {
+      proposal: {
+        verdict: 'keep', confidence: 0.2,
+        evidence_quote: candidate.evidence != null ? String(candidate.evidence) : '',
+        reason: 'Connected entity (' + (connectionDetail || 'FK-referenced') + ') — a referenced record is not junk regardless of name shape.',
+        guards: ['connection_gate'],
+      },
+      provider: null, model: null, skipped_llm: true, connected: true,
+    };
+  }
+
+  const ctx = Object.assign({}, candidate.context || {}, {
+    connected: false, relationship_count: 0, identity_count: 0,
+  });
+  const prompt = buildJunkPrescreenPrompt(Object.assign({}, candidate, { context: ctx }), fewShot);
   const ai = await invokeExtractionAI({ prompt, surface: 'junk_prescreen' });
   const parsed = parseJunkVerdictJson(ai?.data?.response || '');
-  const proposal = normalizeJunkProposal(parsed, candidate);
+  let proposal = normalizeJunkProposal(parsed, candidate);
   if (!parsed) { proposal.verdict = 'uncertain'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; queued as uncertain for human review.'; }
-  return { proposal, provider: ai?.provider || null, model: ai?.data?.model || null };
+  // Deterministic vetoes (dismiss → keep/rename/parse_contact only).
+  proposal = applyPrescreenGuards(proposal, candidate, { connected: false, hasProvenance: false, connectionDetail });
+  return { proposal, provider: ai?.provider || null, model: ai?.data?.model || null, connected: false };
 }
 
 async function upsertJunkProposal(candidate, proposal, meta) {
@@ -1501,16 +1537,42 @@ async function handleJunkPrescreenTick(req, res) {
     const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
       per_domain: junkDomainRollup(scan.perDomain), candidates_new: scan.fresh.length,
       scored: 0, proposed: 0, failed: 0, by_verdict: {} };
+    // Phase 1 — score all selected candidates (NO writes yet) so the verdict
+    // distribution is known before we persist anything.
+    const scoredRows = [];
+    const scoreVerdicts = {};
     for (const cand of selected) {
       try {
         const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
         summary.scored += 1;
+        scoreVerdicts[proposal.verdict] = (scoreVerdicts[proposal.verdict] || 0) + 1;
+        scoredRows.push({ cand, proposal, provider, model });
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[junk-prescreen] score failed', cand.subject_ref, e?.message || e);
+      }
+    }
+    // Distribution guard — a curated-table junk pre-screen should find a small
+    // MINORITY of true junk. >50% dismiss ⇒ the batch is anchoring, not judging;
+    // refuse to persist it (honest-counts doctrine).
+    const dist = dismissDistributionGuard(scoreVerdicts);
+    summary.by_verdict = scoreVerdicts;
+    summary.distribution = dist;
+    if (dist.suspect_distribution) {
+      await recordJunkPrescreenHealth({ status: 'amber', count: 0,
+        lastError: 'suspect_distribution: ' + Math.round(dist.dismiss_share * 100) + '% dismiss (> ' + Math.round(dist.threshold * 100) + '%) — batch not persisted',
+        details: summary });
+      return res.status(200).json({ ok: true, mode: 'apply', skipped: 'suspect_distribution', proposed: 0, ...summary });
+    }
+    // Phase 2 — persist the vetted proposals.
+    for (const { cand, proposal, provider, model } of scoredRows) {
+      try {
         const wr = await upsertJunkProposal(cand, proposal, { provider, model, sourceRunId, scanBatchId });
-        if (wr.ok) { summary.proposed += 1; summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1; }
+        if (wr.ok) summary.proposed += 1;
         else summary.failed += 1;
       } catch (e) {
         summary.failed += 1;
-        console.warn('[junk-prescreen] score/write failed', cand.subject_ref, e?.message || e);
+        console.warn('[junk-prescreen] write failed', cand.subject_ref, e?.message || e);
       }
     }
     await recordJunkPrescreenHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
@@ -1539,10 +1601,15 @@ async function handleJunkPrescreenTick(req, res) {
           entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal, model_provider: provider, model_name: model });
       } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
     }
+    const dist = dismissDistributionGuard(byVerdict);
     out.scored = proposals.length;
     out.by_verdict = byVerdict;
+    out.distribution = dist;
+    out.suspect_distribution = dist.suspect_distribution;
     out.proposals = proposals;
-    out.note = 'dry-run scoring — NO rows written. Review, then POST (with the flag ON) to persist proposals.';
+    out.note = dist.suspect_distribution
+      ? 'dry-run scoring — NO rows written. ⚠️ SUSPECT DISTRIBUTION (' + Math.round(dist.dismiss_share * 100) + '% dismiss > ' + Math.round(dist.threshold * 100) + '%): a POST apply would be REFUSED for this batch.'
+      : 'dry-run scoring — NO rows written. Review, then POST (with the flag ON) to persist proposals.';
   }
   return res.status(200).json(out);
 }
