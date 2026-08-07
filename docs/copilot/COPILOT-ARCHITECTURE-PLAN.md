@@ -47,4 +47,42 @@ billing/harness question before committing to multi-agent.
 - On the LCC Deal Agent **Tools** page, disable everything except the ~15 essentials:
   GetDailyBriefingSnapshot, GetMyExecutionQueue, GetPipelineIntelligence, GetHotBusinessContacts, SearchEntities,
   GetRelationshipContext, GenerateProspectingBrief, DraftOutreachEmail, DraftSellerUpdateEmail,
-  ListStagedIntakeInbox, TriageInboxItem, CreateTodoTask, LogCall
+  ListStagedIntakeInbox, TriageInboxItem, CreateTodoTask, LogCallNote, SynthesizeComps, QueryComps.
+  (After Phase 0, the compat dupes + gateway are already gone, so this is fast.)
+- **Slim the instructions under 8,000 chars:** move the full Canon block into the **LCC-CANON knowledge file**
+  (already uploaded); keep the instructions = router/flows + the tool map with CORRECT operation names + a pointer
+  to the knowledge file for detailed rules.
+- Republish; run the smoke test (briefing, queue, comps) against the known-good baseline.
+- **Exit criteria:** briefing + queue + comps return live data in the test panel. This proves engine → connector
+  → orchestration end-to-end.
+
+### Phase 2 — Design the child-agent architecture
+- Parent (LCC Deal Agent) becomes a thin **router**: canon knowledge + routing instructions, minimal/no direct tools.
+- Child agents (each 3–5 tools, crisp non-overlapping descriptions):
+  - **Briefing & Pipeline** — GetDailyBriefingSnapshot, GetMyExecutionQueue, GetPipelineIntelligence,
+    GetWorkCounts, GetSyncRunHealth
+  - **Comps** — SynthesizeComps, QueryComps, generateComps
+  - **Contacts & Prospecting** — GetHotBusinessContacts, SearchEntities, GetRelationshipContext,
+    GenerateProspectingBrief
+  - **Outreach** — DraftOutreachEmail, DraftSellerUpdateEmail, DraftReplyFromInbox
+  - **Intake & Triage** — ListStagedIntakeInbox, TriageInboxItem, CreateTodoTask, LogCallNote
+- Write each child's focused instructions from the relevant canon block; define input/output passing where needed.
+
+### Phase 3 — Build & test child agents
+- Create each child agent; assign only its connector operations; give it a distinct description so the router
+  delegates correctly (Microsoft: routing is driven by child name + description — avoid overlap).
+- Wire children under the LCC Deal Agent; test routing per category against the smoke-test baseline; republish.
+
+### Phase 4 — Roll the pattern to the full designed surface
+- Bring back the remaining categories (email templates, listing-BD pipeline, document assembly, review queues,
+  sync ops) as their own child agents or folded into existing ones — each staying within limits.
+- This realizes the full intended design with no single orchestrator ever overloaded.
+
+## Tradeoffs (accepted, eyes open)
+- **Latency:** each request adds a parent → child orchestration hop.
+- **Management surface:** more agents to test/govern (mitigated by the phased build + the smoke-test baseline).
+- **Billing:** confirm harness/credits in Phase 0 before committing.
+
+## Open / carried items
+- Rotate `LCC_API_KEY` (exposed earlier) — refresh the connection credential when we touch the connector.
+- The other three surfaces (ChatGPT, Personal-Claude, Northmarq) are unaffected by this Copilot work.
