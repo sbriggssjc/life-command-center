@@ -1555,6 +1555,22 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     sheet.getCell(`A${subRow}`).value = `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
     sheet.getCell(`A${subRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
 
+    // Historical as-of provenance stamp (2026-08-07). A reconstructed snapshot
+    // (available tenant/term/cap-dot) notes the exact quarter it was rebuilt
+    // for; a current-only snapshot that could NOT be reconstructed for a
+    // historical as_of is flagged honestly so it is never mistaken for the
+    // report quarter (item 2 fallback contract).
+    if (chart.snapshot_not_historical) {
+      const noteRow = subRow;  // overwrite subtitle with the loud warning
+      const gen = new Date().toISOString().slice(0, 10);
+      sheet.getCell(`A${noteRow}`).value =
+        `⚠ Snapshot as of ${gen} (generation date) — NOT historical. This active-inventory feed cannot be reconstructed as of a past quarter for this vertical.`;
+      sheet.getCell(`A${noteRow}`).font = { name: fonts.body_family, size: 9, bold: true, italic: true, color: { argb: 'FFC00000' } };
+    } else if (chart.reconstructed && chart.snapshot_period) {
+      sheet.getCell(`A${subRow}`).value =
+        `${chart.metric_focus || ''} · reconstructed active inventory as of ${chart.snapshot_period} · subspecialty=${subspecialty}`;
+    }
+
     // Round 68-E (G8): a real fetch failure (after fetchView's retry pass) is
     // surfaced loudly so a transient cold-dyno blip can't masquerade as a
     // legitimate empty view (the renewal_rent_growth empty-tab incident).
