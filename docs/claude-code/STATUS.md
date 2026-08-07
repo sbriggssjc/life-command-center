@@ -454,6 +454,19 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ W8 U2 LIVE 2026-08-07 16:26 UTC — flag flipped after clean second run
+Post-68 `?score=1` PASSED: coverage fixed (gov 8,000 w/ resumable cursor, dia 6,967 full/wrapped,
+scan_errors []), sample all recognizable near-misses (MAINSTREET/Main Street, NorthStar/North Star,
+Invester/Investar, Winbrook/Twinbrook, Andersen/Anderson, Heritage/Meritage), fixtures all behaved:
+**NorthStar↔North Star Realty→same_party 0.85**, Winbrook↔Twinbrook→same_party 0.9 (pending human),
+Harrison↔Garrison→distinct 0.9 (hard negative), MAINSTREET↔Main Street Group→**needs_human**
+(dropped_unsure 0). **Cowork flipped `W8_U2_DUP_PAIRS`→on.** Nightly 3:50 UTC cron scores 25/night
+→ proposals into the owner_reconcile DC lane (seeder `w8_u2_ollama_pair`); accepted verdicts →
+entity_match_labels → nightly W4.4 retrain. **Watch item:** `abbrev_expansion` pairs = 84% of
+generated (504/600) and none were in the scored sample yet — eyeball the first nightly lane batches;
+if that class is noisy, tune the abbrev map (human gate + 25/night bounds the risk). Same-address
+method 0 everywhere (gov lacks the column; lcc/dia to observe).
+
 ### Prompt 68 landed — PR #1607 (`e8252ef`), awaiting merge + redeploy
 All three U2 defects root-caused + fixed: (1) distinctive-core similarity — expanded generic-CRE
 stoplist + `coreIsPairable` gate (core ≥4 chars, ≥3-char token, never pure initials; initials pair
