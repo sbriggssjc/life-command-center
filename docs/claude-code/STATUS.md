@@ -441,6 +441,21 @@ static yaml retired to a GENERATED+stamped file (`npm run spec:chatgpt`); anti-d
 **Connector baseline (58):** fully green — all 7 tools correct.
 
 
+## Reconcile 2026-08-06 (prompts 61 & 62 — landed as PRs, awaiting merge + redeploy)
+
+| # | Outcome | State |
+|---|---|---|
+| 61 | Ollama extraction hardening + seam fixes | ✅ code landed — **PR #1598** (`db4fc3f`). New `intake-extraction-prompt.js` (strict full-key schema, doc-type rubric incl. psa/listing_agreement/valuation_proposal, party-role + sale-record guards, abstain preserved); Ollama native JSON (`OLLAMA_JSON_FORMAT`, default on); snapshot `_provider` stamp; **per-surface gating** `invokeExtractionAI({surface})` + `OLLAMA_SURFACES` env; loud misconfig warn; promoter guard (PSA never rescued to om). **Edge-400 ROOT-CAUSED:** ai-copilot `/chat` edge caps `max_tokens=1500` + injects a sales system prompt — `AI_EXTRACTION_PRIMARY=openai` routes extraction off it (no deploy needed for the JS side). **Bypass finding: extraction runs ONLY in `server.js` (tranquil-delight)** — the 17/50 edge-first artifacts came from a server.js instance missing `OLLAMA_*` env. 18 new tests; 3 full-suite failures pre-existing. ⏳ merge + redeploy gates it. |
+| 62 | W8 U1 junk-entity pre-screen | ✅ code landed — **PR #1599**; **migration `20260807120000` APPLIED LIVE to LCC Opps + Cowork-verified 2026-08-06** (flag `W8_U1_JUNK_PRESCREEN` off, `junk_entity_review`/`junk_review_batch` empty, cron `40 3 * * *` no-oping, both views present). Extends prompt-32 clean-assist (no parallel agent). Pure planner `junk-prescreen.js` (deterministic candidate filter, FK guard — live-schema-validated incl. `entity_relationships.from/to_entity_id` fix), `/api/junk-prescreen-tick` (GET dry-run / `?score=1` sample / POST flag-gated apply), DC federated lane + verdict branch, reversible soft-retire. Live scope: candidate pool small (ops ~194 / dia 19 / gov 8). 28 tests. Prompt moved to done/ in the PR. |
+
+### Needs Scott (this batch)
+- **Merge PR #1598 + #1599 → redeploy tranquil-delight + standalone MCP.**
+- **Set the approved interim revert** (post-61 deploy): `OLLAMA_SURFACES=summaries,roles,narrations,next_step` on tranquil-delight → intake goes cloud-primary, narrative stays local. Optionally `AI_EXTRACTION_PRIMARY=openai` to skip the broken edge hop.
+- **Confirm `OLLAMA_URL`/`OLLAMA_MODEL`/`CF_ACCESS_*` on every service running `server.js`** — the new warn names the offender in logs.
+- Optional: redeploy `ai-copilot` edge fn (Dialysis project) for `AI_COPILOT_MAX_TOKENS`.
+- **U1 first run** (post-deploy): `GET /api/junk-prescreen-tick?score=1` → review the proposal sheet → flip `W8_U1_JUNK_PRESCREEN` on. Then Cowork queues U2 (duplicate proposals → resolver fuel).
+- **W5.3 re-grade** after ~50 fresh intakes post-redeploy (acceptance queries in the W5_3 report).
+
 ## W5.3 CLOSED + W8 hygiene campaign kicked off — 2026-08-06 (Cowork)
 
 Per `docs/audits/W53_AND_OLLAMA_HYGIENE_KICKOFF.md`. **Wave 5 closes** — verdict in ROLLOUT_STATUS
