@@ -3068,6 +3068,36 @@ function _fedCardHTML(it, i, isNext) {
       + '<div class="q-item-meta" style="opacity:.7">Ollama proposes only — confirm to soft-retire (reversible; FK-referenced rows route to a conflict card), or keep.</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — retire junk</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — not junk</button>';
+  } else if (_dcFedType === 'w8_u3_link_review' && c.conflict) {
+    // Prompt 77: an ambiguous_entity_match conflict — the deterministic writer
+    // found ≥2 existing entities sharing the proposed canonical name and refused
+    // to guess. Render a pick-the-survivor card (mirrors the sf_link three-way
+    // conflict card): show the proposal + each candidate entity (name/domain +
+    // link & portfolio counts so the right one is obvious) + explicit "Mint new".
+    const linked = c.linked_entity_name || 'linked party';
+    const owner = c.current_owner_name || 'owner';
+    const role = (c.role === 'developed' || c.role === 'developer') ? 'developed' : 'owns';
+    const cands = Array.isArray(c.candidates) ? c.candidates : [];
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(owner)
+      + ' <span style="opacity:.6">&rarr;</span> ' + esc(linked) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge pri-high">conflict — ambiguous match</span>'
+      + '<span class="q-badge">' + cands.length + ' candidates</span></div></div>'
+      + '<div class="q-item-meta">Proposed link: <b>' + esc(owner) + '</b> ' + role + ' <b>' + esc(linked) + '</b>'
+        + (c.source_property_id != null ? ' <span style="opacity:.6">· property ' + esc(String(c.source_property_id)) + '</span>' : '') + '</div>'
+      + (c.evidence_quote ? '<div class="q-item-meta">Evidence: <b>' + esc(String(c.evidence_quote)) + '</b>'
+        + (c.evidence_source ? ' <span style="opacity:.6">— ' + esc(String(c.evidence_source)) + '</span>' : '') + '</div>' : '')
+      + '<div class="q-item-meta">⚠ ' + cands.length + ' existing entities share this name — pick which one the link means, or mint a new entity.</div>';
+    let picks = '';
+    cands.forEach(function (e) {
+      picks += '<button class="q-action" onclick="dcFedU3Pick(' + i + ',\'' + esc(String(e.entity_id)) + '\')">'
+        + 'Use “' + esc(e.name || '(unnamed)') + '”'
+        + ' <span style="opacity:.6">· ' + esc(String(e.domain || '')) + ' · '
+        + Number(e.relationship_count || 0) + ' links · ' + Number(e.portfolio_count || 0) + ' props</span></button>';
+    });
+    actions = picks
+      + '<button class="q-action primary" onclick="dcFedU3Pick(' + i + ',null,true)">Mint new entity</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\',{resolve_conflict:true})">Reject — keep untouched</button>';
   } else if (_dcFedType === 'w8_u3_link_review') {
     // W8 U3: an Ollama connection-propagation link proposal. The model PROPOSED;
     // the human decides. Confirm runs the deterministic edge writer (chain pool)
@@ -3396,6 +3426,17 @@ async function dcFed(i, verdict, payload) {
   }
 }
 window.dcFed = dcFed;
+
+// Prompt 77: resolve a w8_u3 ambiguous_entity_match conflict by picking the
+// survivor entity (entityId) or minting a new one (mintNew). Rides the same
+// dcFed verdict path with resolve_conflict set, so the writer bypasses the
+// ambiguity guard and lands the edge end-to-end.
+async function dcFedU3Pick(i, entityId, mintNew) {
+  const payload = { resolve_conflict: true };
+  if (mintNew) payload.mint_new = true; else payload.chosen_entity_id = entityId;
+  return dcFed(i, 'link', payload);
+}
+window.dcFedU3Pick = dcFedU3Pick;
 
 // Unit 2 — merge with an operator-chosen survivor. Reads the survivor dropdown
 // (default = the view winner) and only sends winner_id on a real override, so
