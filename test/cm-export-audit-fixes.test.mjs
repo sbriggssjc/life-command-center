@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCapitalMarketsWorkbook } from '../api/_shared/cm-excel-export.js';
-import { cropRowsToDisplayFrom, resolveDisplayFrom } from '../api/capital-markets.js';
+import { cropRowsToDisplayFrom, resolveDisplayFrom, buildAnnualBuyerShare } from '../api/capital-markets.js';
 
 test('resolveDisplayFrom prefers the registry row matching the exported view_name', () => {
   const rows = [
@@ -51,6 +51,45 @@ test('cropRowsToDisplayFrom skips year-axis (non period_end) shapes', () => {
   const rows = [{ year: 2001 }, { year: 2020 }];
   const tmpl = { chart_template_id: 'buyer_class_pct_by_year', data_shape: 'time_series_yearly' };
   assert.equal(cropRowsToDisplayFrom(rows, tmpl, { buyer_class_pct_by_year: '2007-03-31' }).length, 2);
+});
+
+// Q1 as-of regeneration residual #1B — annual buyer-pool YTD roll-up.
+const BUYER_Q = [
+  { period_end: '2025-09-30', subspecialty: 'all', private_volume: 120, reit_volume: 20, cross_border_volume: 0, institutional_volume: 7 },
+  { period_end: '2025-12-31', subspecialty: 'all', private_volume: 290, reit_volume: 6,  cross_border_volume: 0, institutional_volume: 21 },
+  { period_end: '2026-03-31', subspecialty: 'all', private_volume: 150, reit_volume: 25, cross_border_volume: 0, institutional_volume: 0 },
+  { period_end: '2026-06-30', subspecialty: 'all', private_volume: 122, reit_volume: 13, cross_border_volume: 0, institutional_volume: 3 },
+];
+
+test('buildAnnualBuyerShare sums ONLY quarters <= as_of into the current-year bar', () => {
+  const out = buildAnnualBuyerShare(BUYER_Q, '2026-03-31');
+  const y2026 = out.find((r) => r.year_num === 2026);
+  // Q1 only — Q2 (2026-06-30) is dropped by the as-of clamp.
+  assert.equal(y2026.private_volume, 150);
+  assert.equal(y2026.reit_volume, 25);
+  assert.equal(y2026.institutional_volume, 0);
+  assert.equal(Math.round(y2026.private_pct * 1000) / 1000, 0.857); // 150/175
+});
+
+test('buildAnnualBuyerShare labels a partial current year "<year> YTD"', () => {
+  const out = buildAnnualBuyerShare(BUYER_Q, '2026-03-31');
+  const y2026 = out.find((r) => r.year_num === 2026);
+  assert.equal(y2026.year, '2026 YTD');
+  assert.equal(y2026.ytd, true);
+  assert.equal(y2026.ytd_through, '2026-03-31');
+  // A complete (year-end) prior year keeps its plain numeric label.
+  const y2025 = out.find((r) => r.year_num === 2025);
+  assert.equal(y2025.year, 2025);
+  assert.equal(y2025.ytd, false);
+});
+
+test('buildAnnualBuyerShare treats a Q4/Dec as_of as a complete (non-YTD) year', () => {
+  const out = buildAnnualBuyerShare(BUYER_Q, '2025-12-31');
+  const y2025 = out.find((r) => r.year_num === 2025);
+  assert.equal(y2025.year, 2025);        // not "2025 YTD"
+  assert.equal(y2025.ytd, false);
+  assert.equal(y2025.private_volume, 410); // both 2025 quarters summed
+  assert.equal(out.some((r) => r.year_num === 2026), false); // 2026 dropped
 });
 
 test('buildCapitalMarketsWorkbook flags schema drift when a template column is absent from the view rows', () => {
