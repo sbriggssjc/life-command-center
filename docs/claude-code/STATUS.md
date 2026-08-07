@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 64 landed — PR #1600 (`c9a7584`), awaiting merge + redeploy
+Precision fix implemented per spec: deterministic SPE-pattern guard (code-token LLCs never reach the
+model), abbreviation dictionary → rename preVerdict, address-as-name → parse_contact, acronym
+marker + connection gate (FK-referenced ⇒ keep, probed BEFORE spending the LLM call), softening-only
+post-LLM guards, judge-don't-parrot rubric with the live failures as few-shot fixtures, and the
+>50%-dismiss distribution guard (blocks POST apply). 52/52 dedicated tests green; only
+junk-prescreen.test.mjs exercises the touched code; full-suite 3 failures pre-existing (suite also
+OOM-SIGKILLs at ~2,985 tests on the runner — noted, unrelated). **Gate: merge #1600 → redeploy →
+Scott re-runs `?score=1`** (expect: SPE/acronym/Brookfield keep-or-absent, Prtnrs→rename,
+addresses→parse_contact, `--`/`Test Test` dismiss, dismiss share well under 50%) → THEN flip
+`W8_U1_JUNK_PRESCREEN`.
+
 ### U1 first dry-run REVIEWED 2026-08-07 — FAILED precision review → prompt 64 queued, flag stays OFF
 Scott ran `?score=1`: 649 candidates (lcc 278/dia 268/gov 103), 20 scored, **18/20 dismiss — many
 false positives**: ARC/ARHC SPE-code LLCs (`ARC3 GSCRGCO001, LLC` etc. — real net-lease SPEs),
