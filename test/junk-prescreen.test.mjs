@@ -306,17 +306,78 @@ describe('the `--` / test-data class is still correctly dismissable', () => {
 });
 
 describe('dismissDistributionGuard — honest-counts guard on a scored batch', () => {
-  it('flags a batch that is majority-dismiss', () => {
-    const g = dismissDistributionGuard({ dismiss: 18, keep: 1, rename: 1 });
-    assert.equal(g.suspect_distribution, true);
-    assert.ok(g.dismiss_share > 0.5);
+  it('Prompt 67: default threshold is 0.9 (tightened true-junk pool)', () => {
+    assert.equal(dismissDistributionGuard({ dismiss: 1 }).threshold, 0.9);
   });
-  it('passes a healthy small-minority-junk batch', () => {
-    const g = dismissDistributionGuard({ dismiss: 3, keep: 15, rename: 2 });
+  it('Prompt 67: a true-junk-dominated batch (5/6 = 83% dismiss) is NOT suspect', () => {
+    const g = dismissDistributionGuard({ dismiss: 5, keep: 1 });
     assert.equal(g.suspect_distribution, false);
+    assert.ok(g.dismiss_share > 0.5 && g.dismiss_share < 0.9);
+  });
+  it('still refuses the near-total all-dismiss pathology (>90%)', () => {
+    const g = dismissDistributionGuard({ dismiss: 19, keep: 1 });
+    assert.equal(g.suspect_distribution, true);
+    assert.ok(g.dismiss_share > 0.9);
+  });
+  it('an exactly-at-threshold batch is NOT suspect (refuse only when > threshold)', () => {
+    const g = dismissDistributionGuard({ dismiss: 9, keep: 1 }); // 0.9 exactly
+    assert.equal(g.dismiss_share, 0.9);
+    assert.equal(g.suspect_distribution, false);
+  });
+  it('the threshold is configurable (env plumbing)', () => {
+    const g = dismissDistributionGuard({ dismiss: 5, keep: 1 }, 0.5);
+    assert.equal(g.threshold, 0.5);
+    assert.equal(g.suspect_distribution, true); // 83% > 0.5
   });
   it('an empty batch is not suspect', () => {
     assert.equal(dismissDistributionGuard({}).suspect_distribution, false);
+  });
+});
+
+// ===========================================================================
+// Prompt 67 — surname guard. Consonant runs inside Germanic/Slavic surname-like
+// tokens (WALDSCHMITT, SCHMIDT) are a predictable consonant_run false-positive
+// class — real family/partnership names, not gibberish.
+// ===========================================================================
+describe('surname guard — consonant runs inside surname-like tokens are real names', () => {
+  it('CLOVER/WALDSCHMITT, L.L.C. — the live regression fixture — is keep-or-absent', () => {
+    const hit = junkCandidateReason('CLOVER/WALDSCHMITT, L.L.C.');
+    if (hit) {
+      // Still a candidate (downgraded to the LLM), but flagged surnameLike so the
+      // post-LLM guard vetoes any dismiss → keep (absent from the enqueued lane).
+      assert.equal(hit.surnameLike, true);
+      const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 1 },
+        { ...hit, surnameLike: true, entity_name: 'CLOVER/WALDSCHMITT, L.L.C.' },
+        { connected: false, hasProvenance: false });
+      assert.equal(out.verdict, 'keep');
+      assert.ok(out.guards.includes('surname_gate'));
+    }
+  });
+  it('marks a plain Germanic surname consonant run surnameLike', () => {
+    const hit = junkCandidateReason('Waldschmitt');
+    assert.ok(hit && hit.heuristic === 'consonant_run');
+    assert.equal(hit.surnameLike, true);
+  });
+  it('OCR gibberish with a SECOND junk signal (digit-in-word) is still dismissable', () => {
+    const hit = junkCandidateReason('bcdfghjk3');
+    assert.ok(hit && hit.heuristic === 'consonant_run');
+    assert.notEqual(hit.surnameLike, true);
+    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.95 },
+      { ...hit, entity_name: 'bcdfghjk3' }, { connected: false, hasProvenance: false });
+    assert.equal(out.verdict, 'dismiss');
+  });
+  it('pure gibberish consonant run (no surname morphology) is NOT surnameLike', () => {
+    const hit = junkCandidateReason('bcdfghjk');
+    assert.ok(hit && hit.heuristic === 'consonant_run');
+    assert.notEqual(hit.surnameLike, true);
+  });
+  it('the prompt carries the surname rubric line + calibration example', () => {
+    const prompt = buildJunkPrescreenPrompt(
+      { domain: 'gov', table: 'recorded_owners', entity_name: 'CLOVER/WALDSCHMITT, L.L.C.',
+        heuristic: 'consonant_run', evidence: 'LDSCHM', surnameLike: true }, []);
+    assert.match(prompt, /surname_like/);
+    assert.match(prompt, /WALDSCHMITT/);
+    assert.match(prompt, /Clover\/Waldschmitt.*keep/);
   });
 });
 
@@ -499,6 +560,15 @@ describe('structural wiring guards (admin.js + server.js + migration)', () => {
   });
   it('honest surfacing: remaining_unscored is reported', () => {
     assert.match(admin, /remaining_unscored/);
+  });
+
+  // Prompt 67 — configurable distribution threshold + surname guard wiring.
+  it('the dismiss-share threshold is env-configurable and plumbed into the guard', () => {
+    assert.match(admin, /JUNK_DISMISS_GUARD_THRESHOLD/);
+    assert.match(admin, /dismissDistributionGuard\([^)]*JUNK_DISMISS_GUARD_THRESHOLD/);
+  });
+  it('the surnameLike flag is carried onto the scanned candidate', () => {
+    assert.match(admin, /surnameLike: hit\.surnameLike/);
   });
   it('the resume-cursor migration adds junk_prescreen_scored keyed on name_hash', () => {
     const cur = readFileSync(join(root, 'supabase/migrations/20260807140000_lcc_w8_u1_junk_prescreen_scored_cursor.sql'), 'utf8');
