@@ -39,6 +39,9 @@ const BOV_API_KEY = process.env.BOV_API_KEY || '';
 const MCP_BASE = (process.env.GOV_API_URL || 'https://life-command-center-production.up.railway.app').replace(/\/+$/, '');
 const LCC_API_KEY = process.env.LCC_API_KEY || '';
 
+// Prompt 71 — log the resolved engine target once so a wrong MCP_BASE is visible in exported logs.
+console.log('[comps-proxy] MCP_BASE=' + MCP_BASE);
+
 export default async function compsHandler(req, res) {
   if (handleCors(req, res)) return;
 
@@ -72,6 +75,9 @@ export default async function compsHandler(req, res) {
   if (request && !hasRows) {
     // Drop our own inbound-gate fields before forwarding to the engine.
     const { _k, api_key, lcc_api_key, ...body } = payload;
+    // Prompt 71 — instrument the one-shot proxy hop so the failing hop is visible in logs.
+    console.log('[comps-proxy] one-shot → POST', `${MCP_BASE}/api/comps`, 'reqLen=' + request.length);
+    const t0 = Date.now();
     let upstream, text;
     try {
       upstream = await fetch(`${MCP_BASE}/api/comps`, {
@@ -82,11 +88,14 @@ export default async function compsHandler(req, res) {
         signal: AbortSignal.timeout(180000),
       });
       text = await upstream.text();
+      console.log('[comps-proxy] upstream status=' + upstream.status + ' in ' + (Date.now() - t0) + 'ms');
     } catch (e) {
+      console.error('[comps-proxy] fetch error after ' + (Date.now() - t0) + 'ms: ' + (e?.name || '') + ' ' + (e?.message || e));
       res.status(502).json({ error: 'Could not reach comps engine: ' + e.message });
       return;
     }
     if (!upstream.ok) {
+      console.error('[comps-proxy] upstream FAILED status=' + upstream.status + ' detail=' + text.slice(0, 300));
       res.status(502).json({ error: 'Comps engine error ' + upstream.status, detail: text.slice(0, 800) });
       return;
     }
