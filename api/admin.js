@@ -26,6 +26,11 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout }
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { invokeExtractionAI } from './_shared/ai.js';
+import {
+  JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
+  junkCandidateReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
+  parseJunkVerdictJson, planJunkApply, buildRetireMarker,
+} from './_shared/junk-prescreen.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
@@ -144,6 +149,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
+    case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -1277,6 +1283,271 @@ async function handleOllamaCleanAssistTick(req, res) {
 }
 
 // ============================================================================
+// W8 U1 (Prompt 62, 2026-08-07): Ollama junk-entity pre-screen.
+//
+// Extends the prompt-32 clean-assist machinery. A deterministic pre-filter finds
+// junk CANDIDATES cheaply across dia/gov/ops entity tables (junkCandidateReason,
+// NO LLM); the local model (invokeExtractionAI) scores ONLY that candidate pool;
+// proposals land in junk_entity_review (the Decision Center federated lane). The
+// verdict is HUMAN (handleDecisionVerdict junk_entity_review branch). Nothing
+// here writes canonical data — that is the apply path, gated on a human confirm.
+//
+//   GET  /api/junk-prescreen-tick            -> dry-run report (per-domain counts)
+//   GET  /api/junk-prescreen-tick?score=1    -> dry-run + inline model proposals
+//                                               (NO writes — a sampleable sheet)
+//   POST /api/junk-prescreen-tick            -> apply: scan + score + write props
+//                                               (flag-gated; no-ops while OFF)
+// ============================================================================
+const JUNK_PRESCREEN_MAX_SCAN = Math.max(2000, parseInt(process.env.JUNK_PRESCREEN_MAX_SCAN || '80000', 10));
+
+function junkPrescreenEnabled(flagRow) {
+  const env = String(process.env.W8_U1_JUNK_PRESCREEN || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchJunkPrescreenFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U1_JUNK_PRESCREEN&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Few-shot grounding drawn from real accrued human junk_entity_name verdicts, so
+// the model scores against the operator's rubric. Best-effort; empty on failure.
+async function fetchJunkFewShot() {
+  try {
+    const r = await opsQuery('GET', 'lcc_decisions?select=verdict,context&decision_type=eq.junk_entity_name'
+      + '&status=neq.open&verdict=not.is.null&order=decided_at.desc.nullslast&limit=8');
+    if (!r.ok || !Array.isArray(r.data)) return [];
+    return r.data.map((d) => {
+      const ctx = d.context && typeof d.context === 'object' ? d.context : {};
+      const name = ctx.name || ctx.entity_name || ctx.subject_name || null;
+      return name ? { name, verdict: String(d.verdict) } : null;
+    }).filter(Boolean);
+  } catch (_e) { return []; }
+}
+
+// Page a target's (pk, name) rows and gate each with the deterministic filter.
+// The JS gate is authoritative — the pull is bounded by JUNK_PRESCREEN_MAX_SCAN
+// (a nightly ceiling; logged when hit so a truncation is never silent).
+async function pullJunkCandidatesForTarget(target) {
+  const cols = target.pkCol + ',' + target.nameCol;
+  const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
+  const found = [];
+  const PAGE = 1000;
+  let scanned = 0;
+  let truncated = false;
+  for (let offset = 0; offset < JUNK_PRESCREEN_MAX_SCAN; offset += PAGE) {
+    const path = target.table + '?select=' + cols + mergedPred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE + '&offset=' + offset;
+    const r = target.domain === 'lcc'
+      ? await opsQuery('GET', path)
+      : await domainQuery(target.domain, 'GET', path);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    scanned += rows.length;
+    for (const row of rows) {
+      const name = row[target.nameCol];
+      const hit = junkCandidateReason(name);
+      if (!hit) continue;
+      const pk = row[target.pkCol];
+      found.push({
+        domain: target.domain, table: target.table, pk: String(pk),
+        entity_name: name == null ? '' : String(name),
+        heuristic: hit.heuristic, evidence: hit.evidence,
+        subject_ref: junkSubjectRef(target.domain, target.table, pk),
+        context: { pk_col: target.pkCol, name_col: target.nameCol },
+      });
+    }
+    if (rows.length < PAGE) break;
+    if (offset + PAGE >= JUNK_PRESCREEN_MAX_SCAN) truncated = true;
+  }
+  if (truncated) console.warn('[junk-prescreen] scan truncated at cap', target.domain, target.table, JUNK_PRESCREEN_MAX_SCAN);
+  return { candidates: found, scanned, truncated };
+}
+
+// FK guard (hazard class): true when the row is referenced by ANY configured
+// child. A referenced row is never retired — it routes to a conflict card.
+async function junkFkReferenced(target, pk) {
+  for (const child of (target.fkChildren || [])) {
+    const path = child.table + '?select=' + child.col + '&' + child.col + '=eq.'
+      + encodeURIComponent(pk) + '&limit=1';
+    try {
+      const r = target.domain === 'lcc'
+        ? await opsQuery('GET', path, undefined, { countMode: 'exact' })
+        : await domainQuery(target.domain, 'GET', path, undefined, { 'Prefer': 'count=exact' });
+      const n = (typeof r.count === 'number') ? r.count : ((Array.isArray(r.data) && r.data.length) ? r.data.length : 0);
+      if (n > 0) return { referenced: true, child: child.table + '.' + child.col, count: n };
+    } catch (_e) { /* a failed child probe is treated as unknown → safe (referenced) */
+      return { referenced: true, child: child.table + '.' + child.col, count: null, probe_error: true };
+    }
+  }
+  return { referenced: false };
+}
+
+// Deterministic scan across every target: candidates, minus already-proposed
+// (any junk_entity_review row) and already-decided (lcc_decisions) subjects.
+async function junkScanAll() {
+  const [existing, decided] = await Promise.all([
+    (async () => {
+      const set = new Set();
+      const PAGE = 1000;
+      for (let off = 0; ; off += PAGE) {
+        const r = await opsQuery('GET', 'junk_entity_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+        const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+        for (const x of rows) if (x.subject_ref) set.add(x.subject_ref);
+        if (rows.length < PAGE) break;
+      }
+      return set;
+    })(),
+    fetchExcludedRefs('junk_entity_review').catch(() => new Set()),
+  ]);
+  const perDomain = {};
+  const fresh = [];
+  for (const target of JUNK_TARGETS) {
+    const key = target.domain + ':' + target.table;
+    let pull;
+    try { pull = await pullJunkCandidatesForTarget(target); }
+    catch (e) { perDomain[key] = { error: e?.message || String(e), candidates: 0, scanned: 0 }; continue; }
+    const newOnes = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
+    perDomain[key] = {
+      domain: target.domain, table: target.table,
+      scanned: pull.scanned, candidates: pull.candidates.length,
+      new: newOnes.length, truncated: pull.truncated || false,
+    };
+    for (const c of newOnes) fresh.push(c);
+  }
+  return { perDomain, fresh };
+}
+
+function junkDomainRollup(perDomain) {
+  const roll = {};
+  for (const v of Object.values(perDomain)) {
+    const d = v.domain || 'unknown';
+    roll[d] = roll[d] || { scanned: 0, candidates: 0, new: 0 };
+    roll[d].scanned += v.scanned || 0;
+    roll[d].candidates += v.candidates || 0;
+    roll[d].new += v.new || 0;
+  }
+  return roll;
+}
+
+async function recordJunkPrescreenHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'junk_prescreen', p_check_name: 'ollama_junk_prescreen',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Score one candidate with the local model → normalized proposal (+ meta).
+async function scoreJunkCandidate(candidate, fewShot) {
+  const prompt = buildJunkPrescreenPrompt(candidate, fewShot);
+  const ai = await invokeExtractionAI({ prompt, surface: 'junk_prescreen' });
+  const parsed = parseJunkVerdictJson(ai?.data?.response || '');
+  const proposal = normalizeJunkProposal(parsed, candidate);
+  if (!parsed) { proposal.verdict = 'uncertain'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; queued as uncertain for human review.'; }
+  return { proposal, provider: ai?.provider || null, model: ai?.data?.model || null };
+}
+
+async function upsertJunkProposal(candidate, proposal, meta) {
+  const body = {
+    subject_ref: candidate.subject_ref,
+    domain: candidate.domain, table_name: candidate.table, pk_value: candidate.pk,
+    entity_name: candidate.entity_name, heuristic: candidate.heuristic,
+    proposed_verdict: proposal.verdict, confidence: proposal.confidence,
+    evidence_quote: proposal.evidence_quote, reason: proposal.reason,
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function handleJunkPrescreenTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchJunkPrescreenFlag();
+  const enabled = junkPrescreenEnabled(flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || '20', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordJunkPrescreenHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U1_JUNK_PRESCREEN feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u1_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const scan = await junkScanAll();
+    const fewShot = await fetchJunkFewShot();
+    // Open the scan ledger row.
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'junk_review_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { per_domain: scan.perDomain, rollup: junkDomainRollup(scan.perDomain), fresh: scan.fresh.length } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const selected = scan.fresh.slice(0, limit);
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
+      per_domain: junkDomainRollup(scan.perDomain), candidates_new: scan.fresh.length,
+      scored: 0, proposed: 0, failed: 0, by_verdict: {} };
+    for (const cand of selected) {
+      try {
+        const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
+        summary.scored += 1;
+        const wr = await upsertJunkProposal(cand, proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) { summary.proposed += 1; summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1; }
+        else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[junk-prescreen] score/write failed', cand.subject_ref, e?.message || e);
+      }
+    }
+    await recordJunkPrescreenHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
+      lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: deterministic per-domain report; ?score=1 adds inline ---
+  // model proposals for sampling. NEVER writes.
+  const scan = await junkScanAll();
+  const rollup = junkDomainRollup(scan.perDomain);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    per_target: scan.perDomain, per_domain: rollup, candidates_new: scan.fresh.length,
+    sample: scan.fresh.slice(0, 20) };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const fewShot = await fetchJunkFewShot();
+    const n = Math.min(limit, scan.fresh.length);
+    const proposals = [];
+    const byVerdict = {};
+    for (let i = 0; i < n; i++) {
+      const cand = scan.fresh[i];
+      try {
+        const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
+        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        proposals.push({ subject_ref: cand.subject_ref, domain: cand.domain, table: cand.table,
+          entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal, model_provider: provider, model_name: model });
+      } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
+    }
+    out.scored = proposals.length;
+    out.by_verdict = byVerdict;
+    out.proposals = proposals;
+    out.note = 'dry-run scoring — NO rows written. Review, then POST (with the flag ON) to persist proposals.';
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
 // PRIORITY BAND (Phase 8, PR3 2026-05-30)
 // GET /api/priority-band?domain=gov&property_id=16404
 //   -> the owner's BD priority band for a property, from v_priority_queue_enriched
@@ -1700,6 +1971,10 @@ async function refreshQueueAfterDecision() {
 //     (universe − decided), each labeled with its mode.
 // ============================================================================
 const FEDERATED_DECISION_TYPES = new Set([
+  // W8 U1 (Prompt 62): Ollama junk-entity pre-screen proposals. Source =
+  // v_junk_entity_review_open; a verdict soft-retires (reversible) or routes an
+  // FK-referenced row to a conflict, all human-gated.
+  'junk_entity_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
@@ -1840,6 +2115,10 @@ function federatedSubjectRef(type, s) {
     }
     // W4.3: one card per queued owner (queue_id), namespaced by domain.
     case 'sf_link_candidate': return (s.domain && s.queue_id != null) ? 'sf_link:' + s.domain + ':' + s.queue_id : null;
+    // W8 U1: the pre-built subject_ref rides straight through (junk:<dom>:<tbl>:<pk>).
+    case 'junk_entity_review': return s.subject_ref
+      ? String(s.subject_ref)
+      : ((s.domain && s.table_name && s.pk_value != null) ? junkSubjectRef(s.domain, s.table_name, s.pk_value) : null);
   }
   return null;
 }
@@ -2035,6 +2314,30 @@ async function fetchFederatedSource(type, cap, opts) {
       undefined, { countMode: 'exact' });
     return (r.ok && typeof r.count === 'number') ? r.count : null;
   };
+
+  if (type === 'junk_entity_review') {
+    // W8 U1: open Ollama junk-entity proposals, most-confidently-junk first.
+    const r = await opsQuery('GET', 'v_junk_entity_review_open?select=review_id,subject_ref,'
+      + 'domain,table_name,pk_value,entity_name,heuristic,proposed_verdict,confidence,'
+      + 'evidence_quote,reason,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: null,
+      rank_value: Number(row.confidence) || 0,
+      context: {
+        review_id: row.review_id, domain: row.domain, table_name: row.table_name,
+        pk_value: row.pk_value, entity_name: row.entity_name, heuristic: row.heuristic,
+        proposed_verdict: row.proposed_verdict, confidence: row.confidence,
+        evidence_quote: row.evidence_quote, reason: row.reason,
+        model_provider: row.model_provider, model_name: row.model_name,
+      },
+    }));
+    out.total = await opsCnt('junk_entity_review?status=eq.proposed');
+    return out;
+  }
 
   if (type === 'listing_event_action') {
     // R48: unprocessed sale events, value-ranked by sale price. The queue view
@@ -3317,6 +3620,97 @@ async function handleDecisionVerdict(req, res) {
       { effects, updated_at: new Date().toISOString() });
 
   try {
+    // ---- junk_entity_review (W8 U1 / Prompt 62) ------------------------------
+    // The human verdict on an Ollama junk-entity proposal. confirm -> the
+    // proposed disposition is applied (dismiss => reversible soft-retire, unless
+    // the row is FK-referenced -> conflict card; rename/parse_contact => the edit
+    // lane; keep => close). reject -> the row is kept. NEVER hard-deletes; every
+    // outcome writes the lcc_decisions verdict (exclusion + audit) + a
+    // junk_review_batch ledger row + stamps the proposal.
+    if (decision.decision_type === 'junk_entity_review') {
+      const parsed = parseJunkSubjectRef(decision.subject_ref);
+      if (!parsed) return res.status(400).json({ error: 'junk_entity_review: unparseable subject_ref' });
+      const revR = await opsQuery('GET', 'junk_entity_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'junk_entity_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'junk', 'retire', 'yes', 'merge', 'apply']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'junk_entity_review: unknown verdict ' + verdict });
+
+      const target = findJunkTarget(parsed.domain, parsed.table);
+      if (!target) return res.status(400).json({ error: 'junk_entity_review: unknown target ' + parsed.domain + ':' + parsed.table });
+
+      // FK guard only matters when a confirm could retire. Compute lazily.
+      let fk = { referenced: false };
+      if (humanAction === 'confirm' && review.proposed_verdict === 'dismiss') {
+        fk = await junkFkReferenced(target, review.pk_value);
+      }
+      const plan = planJunkApply({ humanVerdict: humanAction, proposedVerdict: review.proposed_verdict, fkReferenced: fk.referenced });
+      const nowIso = new Date().toISOString();
+      const effects = { plan: plan.action, proposed_verdict: review.proposed_verdict, fk };
+      let reversal = {};
+
+      if (plan.action === 'soft_retire') {
+        // Capture the old marker value (reversal), then merge the retire marker.
+        const selPath = target.table + '?select=' + target.markerCol + '&' + target.pkCol
+          + '=eq.' + encodeURIComponent(review.pk_value) + '&limit=1';
+        const cur = target.domain === 'lcc' ? await opsQuery('GET', selPath) : await domainQuery(target.domain, 'GET', selPath);
+        const oldVal = (cur.ok && Array.isArray(cur.data) && cur.data[0]) ? cur.data[0][target.markerCol] : null;
+        // Ledger apply row FIRST (so a reversal record exists even if the PATCH
+        // partially applies), then the mutation, then stamp the proposal.
+        const led = await opsQuery('POST', 'junk_review_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'applied',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null,
+            reversal: { domain: target.domain, table: target.table, pk_col: target.pkCol, pk: review.pk_value, marker_col: target.markerCol, marker_kind: target.markerKind, old_value: oldVal },
+            details: { entity_name: review.entity_name, heuristic: review.heuristic, subject_ref: review.subject_ref } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        const body = buildRetireMarker(target, oldVal, applyBatchId, review.source_run_id || 'verdict', nowIso);
+        const patchPath = target.table + '?' + target.pkCol + '=eq.' + encodeURIComponent(review.pk_value);
+        const pr = target.domain === 'lcc'
+          ? await opsQuery('PATCH', patchPath, body)
+          : await domainQuery(target.domain, 'PATCH', patchPath, body);
+        if (!pr.ok) {
+          if (applyBatchId != null) await opsQuery('PATCH', 'junk_review_batch?batch_id=eq.' + applyBatchId, { status: 'open', details: { error: 'soft_retire PATCH failed', detail: pr.data } }).catch(() => {});
+          await recordEffectFailure({ ...effects, error: 'soft_retire_write_failed', detail: pr.data });
+          return res.status(502).json({ error: 'junk_soft_retire_failed', detail: pr.data });
+        }
+        reversal = { apply_batch_id: applyBatchId, marker_col: target.markerCol };
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_batch_id: applyBatchId, retired_at: nowIso, decided_by: user.id || null, decided_at: nowIso });
+        effects.apply_batch_id = applyBatchId;
+      } else if (plan.action === 'conflict_fk') {
+        const led = await opsQuery('POST', 'junk_review_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'conflict',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null, reversal: {}, details: { reason: plan.reason, fk } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'conflict', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+        effects.apply_batch_id = applyBatchId;
+      } else if (plan.action === 'accept_edit_lane') {
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'accepted_edit', decided_by: user.id || null, decided_at: nowIso });
+        effects.edit_kind = plan.edit_kind;
+      } else { // dismiss_proposal (reject, or confirmed keep)
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+      }
+
+      // Record the lcc_decisions verdict so the lane excludes this subject +
+      // keeps the human-decision audit trail.
+      // The lcc_decisions row only needs status != open to exclude the subject;
+      // the disposition nuance (applied / conflict / dismissed / edit) lives on
+      // the junk_entity_review row. Always 'resolved' to satisfy the status CHECK.
+      const rr = await record(verdict, 'resolved', { plan: plan.action, review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', ...reversal });
+    }
+
     // ---- owner_reconcile (W3.2 / audit 3.2.3) --------------------------------
     // Three folded seeders, one verdict shape. Every verdict writes lcc_decisions
     // (don't-re-ask) AND a labeled pair into entity_match_labels (Wave 4 corpus).
