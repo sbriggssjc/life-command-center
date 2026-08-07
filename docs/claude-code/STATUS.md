@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### U2 first dry-run REVIEWED 2026-08-07 — FAILED (3 flaws) → prompt 68 queued, flag stays OFF
+Scott ran `/api/dup-pair-tick?score=1`: (1) **similarity degenerate** — generic CRE vocabulary
+dominates char-similarity (`P & A Investments`↔`B & W REALTY INVESTMENT` 0.909, `Owner`↔`Downer &
+Associates` 0.833); (2) **coverage broken** — gov+dia true_owners scanned 0 records (silent query
+failure, allowlist-footgun class) and lcc truncated at 8,000/60,431; (3) **value inversion** —
+junk pairs labeled distinct 0.95 (more easy negatives = the W4.3 corpus disease) while the best
+finds dropped as unsure 0.3 (`Invester↔Investar` typo-dupe, `Winbrook↔Twinbrook`). **Prompt 68**:
+distinctive-core similarity (legal-form + generic-noun stoplist; initials-only cores unpairable by
+name), loud coverage errors + paged resumable scan window, distinct-persists-only-on-true-near-miss,
+high-sim unsure → review lane instead of dropped. Verbatim regression fixtures.
+
 ### Prompt 63 (W8 U2) landed — PR #1606, migration LIVE (Cowork-verified), flag OFF, awaiting merge+redeploy
 Dup-pair proposals → resolver fuel, doctrine held (zero merges structurally tested; LLM writes
 nothing). Pure planner `dup-pair-planner.js` (trigram/levenshtein no-shared-block pairs, same-address
