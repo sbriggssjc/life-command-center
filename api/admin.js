@@ -1309,6 +1309,13 @@ const JUNK_PRESCREEN_MAX_SCAN = Math.max(2000, parseInt(process.env.JUNK_PRESCRE
 const JUNK_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.JUNK_SCORE_BUDGET_MS || '120000', 10));
 const JUNK_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.JUNK_SCORE_BATCH_SIZE || '25', 10));
 const JUNK_SCORE_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.JUNK_SCORE_INLINE_N || '6', 10));
+// Prompt 67 — the dismiss-share above which the batch is refused as suspect.
+// Post-65 the candidate pool is pre-filtered true-junk, so a high dismiss share
+// is expected; default 0.9 refuses only the near-total all-dismiss pathology.
+const JUNK_DISMISS_GUARD_THRESHOLD = (() => {
+  const v = parseFloat(process.env.JUNK_DISMISS_GUARD_THRESHOLD || '0.9');
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.9;
+})();
 
 function junkPrescreenEnabled(flagRow) {
   const env = String(process.env.W8_U1_JUNK_PRESCREEN || '').toLowerCase();
@@ -1378,6 +1385,7 @@ async function pullJunkCandidatesForTarget(target) {
         name_hash: junkNameHash(name),
         heuristic: hit.heuristic, evidence: hit.evidence,
         acronymOnly: hit.acronymOnly || false,
+        surnameLike: hit.surnameLike || false,
         subject_ref: junkSubjectRef(target.domain, target.table, pk),
         context: { pk_col: target.pkCol, name_col: target.nameCol },
       });
@@ -1707,7 +1715,7 @@ async function handleJunkPrescreenTick(req, res) {
     // Distribution guard — a curated-table junk pre-screen should find a small
     // MINORITY of true junk. >50% dismiss ⇒ the batch is anchoring, not judging;
     // refuse to persist it (honest-counts doctrine).
-    const dist = dismissDistributionGuard(scoreVerdicts);
+    const dist = dismissDistributionGuard(scoreVerdicts, JUNK_DISMISS_GUARD_THRESHOLD);
     summary.by_verdict = scoreVerdicts;
     summary.distribution = dist;
     if (dist.suspect_distribution) {
@@ -1770,7 +1778,7 @@ async function handleJunkPrescreenTick(req, res) {
       } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
       return null;
     }, { budgetMs: JUNK_SCORE_BUDGET_MS, maxN: inlineN });
-    const dist = dismissDistributionGuard(byVerdict);
+    const dist = dismissDistributionGuard(byVerdict, JUNK_DISMISS_GUARD_THRESHOLD);
     out.scored = proposals.length;
     out.batch_size = inlineN;
     out.budget_ms = JUNK_SCORE_BUDGET_MS;
