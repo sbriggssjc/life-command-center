@@ -3054,6 +3054,18 @@ async function recordFindingsHealth({ status, count, lastError, details }) {
 }
 
 async function handleSystemicFindingsTick(req, res) {
+  // Prompt 73: crash-proof envelope. Any uncaught throw in the handler path yields a
+  // JSON 500 ({ok:false, error, section}) — never a response-less hang (the class of
+  // failure that produced Railway's 502 "Application failed to respond").
+  try {
+    return await systemicFindingsTickImpl(req, res);
+  } catch (e) {
+    if (res.headersSent) return;
+    return res.status(500).json({ ok: false, error: (e && e.message) ? e.message : String(e), section: 'handler' });
+  }
+}
+
+async function systemicFindingsTickImpl(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const user = await authenticate(req, res);
   if (!user) return;
@@ -3068,6 +3080,9 @@ async function handleSystemicFindingsTick(req, res) {
   const report = assembleReport(inputs, { period, now: now.toISOString(), prevSections });
 
   // ---- POST apply: flag-gated. Persist snapshot + open research_task. ---------
+  // Narrative generation lives EXCLUSIVELY here (never on the interactive GET path):
+  // the monthly cron POSTs, so the single ollama call + one validator retry lands
+  // where no interactive proxy is waiting on the response.
   if (req.method === 'POST') {
     if (!enabled) {
       await recordFindingsHealth({ status: 'amber', count: 0,
@@ -3115,31 +3130,39 @@ async function handleSystemicFindingsTick(req, res) {
     } catch (e) { console.warn('[systemic-findings] research_task failed', e?.message || e); }
 
     const bs = report.totals.by_severity || {};
-    await recordFindingsHealth({ status: 'green', count: report.totals.findings,
-      lastError: null,
+    const sectionErrors = report.section_errors || [];
+    // A failing section is loud: it degrades the health status to amber (not a silent
+    // green over a broken section) but the tick still persists + delivers a response.
+    await recordFindingsHealth({ status: sectionErrors.length ? 'amber' : 'green', count: report.totals.findings,
+      lastError: sectionErrors.length ? (sectionErrors.length + ' section(s) errored') : null,
       details: { period, snapshot_id: snapshotId, research_task_id: taskId,
         narrative_note: drafted.note, narrative_ok: drafted.validation ? drafted.validation.ok : null,
-        by_severity: bs, source_run_id: sourceRunId } });
+        by_severity: bs, section_errors: sectionErrors, source_run_id: sourceRunId } });
 
     return res.status(200).json({ ok: true, mode: 'apply', period, source_run_id: sourceRunId,
       snapshot_id: snapshotId, research_task_id: taskId, doc_path: docPath,
       narrative_note: drafted.note, narrative_ok: drafted.validation ? drafted.validation.ok : null,
-      totals: report.totals, doc_markdown: markdown });
+      totals: report.totals, section_errors: sectionErrors, doc_markdown: markdown });
   }
 
-  // ---- GET dry-run: the full computed findings JSON. ?narrate=1 adds prose. ----
+  // ---- GET dry-run: the full computed findings JSON — FAST, no narrate work. ----
+  // Prompt 73: inline narration is REMOVED from the GET path (it was the long ollama
+  // call + validator retry that hung behind the proxy → 502). The dry-run returns the
+  // computed JSON + the deterministic doc render only. `?narrate=1` is retired: it
+  // reports the deferral instead of doing model work here.
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
-    period, report, fix_unit_stubs: renderFixUnitStubs(report),
+    period, report, section_errors: report.section_errors || [],
+    fix_unit_stubs: renderFixUnitStubs(report),
+    doc_markdown: renderFindingsDoc(report, null, { generatedAt: now.toISOString() }),
     note: 'Computed deterministically from the v_lcc_w8_u4_* views (honest zeros where a source is empty). '
-      + 'No rows written. POST (with the flag ON) persists the monthly snapshot + opens the research_task.' };
+      + 'No rows written. POST (with the flag ON) persists the monthly snapshot, drafts the figure-validated '
+      + 'narrative, and opens the research_task.' };
   if (req.query.narrate === '1' || req.query.narrate === 'true') {
-    const drafted = await draftSystemicNarrative(report);
-    out.narrative = drafted.narrative;
-    out.narrative_note = drafted.note;
-    out.narrative_validation = drafted.validation;
-    out.doc_markdown = renderFindingsDoc(report, drafted.narrative,
-      { generatedAt: now.toISOString(), narrativeNote: drafted.note });
-    out.note += ' Narrative is figure-validated (every prose number must match a computed value or it is dropped).';
+    // Narration is deferred to the POST/cron path (its own wall-clock budget) — the GET
+    // stays proxy-safe. No model call happens here.
+    out.narrate = 'deferred';
+    out.note += ' Narration is generated only on the POST/cron path; the dry-run ships tables + the '
+      + 'deterministic doc render.';
   }
   return res.status(200).json(out);
 }
