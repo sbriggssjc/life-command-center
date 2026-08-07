@@ -43,7 +43,14 @@ export async function handleChat(body: { message: string; context?: Record<strin
   if (!ANTHROPIC_API_KEY) return jsonResponse({ error: "Anthropic API key not configured" }, 500);
   const systemPrompt = `You are an AI sales strategy copilot for a commercial real estate (CRE) business development professional at Northmarq, focused on net lease investment properties. Be concise but thorough. Reference actual data points. Always suggest next steps.`;
   const messages = [...(history || []).map((h: { role: string; content: string }) => ({ role: h.role, content: h.content })), { role: "user", content: message }];
-  try { const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500, system: systemPrompt, messages }) }); const result = await resp.json(); if (!resp.ok) return jsonResponse({ error: "Claude API error", details: result }, resp.status); return jsonResponse({ response: result.content?.[0]?.text || "", usage: result.usage }); } catch (e) { return jsonResponse({ error: "Failed to call Claude API", details: (e as Error).message }, 500); }
+  // Prompt 61 (#4): max_tokens was a hardcoded 1500 — fine for short strategy
+  // chat, but it truncates large structured extraction output when this handler
+  // is (mis)used as the extraction primary. Make it env-configurable (additive;
+  // default unchanged at 1500). Note the ARCHITECTURAL fix lives on the LCC side
+  // (AI_EXTRACTION_PRIMARY=openai routes extraction off this sales-copilot chat
+  // entirely — this handler injects a sales system prompt that biases JSON output).
+  const maxTokens = Number(Deno.env.get("AI_COPILOT_MAX_TOKENS") || "1500") || 1500;
+  try { const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system: systemPrompt, messages }) }); const result = await resp.json(); if (!resp.ok) return jsonResponse({ error: "Claude API error", details: result }, resp.status); return jsonResponse({ response: result.content?.[0]?.text || "", usage: result.usage }); } catch (e) { return jsonResponse({ error: "Failed to call Claude API", details: (e as Error).message }, 500); }
 }
 
 export async function handleSyncActivities(req: Request, body: { activities?: SFActivity[]; activity?: SFActivity; accounts?: SFAccount[] | { value?: SFAccount[] }; contacts?: SFContact[] | { value?: SFContact[] }; }) {

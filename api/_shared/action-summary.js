@@ -84,7 +84,7 @@ export async function generateActionSummary({
 
   let resp = null;
   try {
-    resp = await invokeExtractionAI({ prompt });
+    resp = await invokeExtractionAI({ prompt, surface: 'summaries' });
   } catch (_e) {
     return null; // failure = no summary, never an error
   }

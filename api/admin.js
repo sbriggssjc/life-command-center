@@ -1242,7 +1242,7 @@ async function handleOllamaCleanAssistTick(req, res) {
     const prompt = buildCleanAssistPrompt(item, kind);
     const promptHash = createHash('sha256').update(prompt).digest('hex');
     try {
-      const ai = await invokeExtractionAI({ prompt });
+      const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
       const parsed = parseCleanAssistJson(ai?.data?.response || '');
       const proposal = cleanAssistNormalizeProposal(parsed, kind);
       if (!parsed) {

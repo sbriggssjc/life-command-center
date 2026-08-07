@@ -122,7 +122,7 @@ async function refreshSummary(deal, comms) {
     const prompt = incremental
       ? buildIncrementalSummaryPrompt(deal, promptComms, prior.compressed_block)
       : buildSummaryPrompt(deal, comms);
-    const resp = await invokeExtractionAI({ prompt });
+    const resp = await invokeExtractionAI({ prompt, surface: 'summaries' });
     parsed = parseSummaryResponse(aiText(resp));
     provider = resp?.provider || null;
   } catch (_e) { parsed = null; }
@@ -323,7 +323,7 @@ async function refreshRoleIssues(deal, comms, runId, { dry = false } = {}) {
   let parsed = null, provider = null;
   try {
     const prompt = buildRoleIssuesPrompt(deal, comms, priorOpenIssues);
-    const resp = await invokeExtractionAI({ prompt });
+    const resp = await invokeExtractionAI({ prompt, surface: 'roles' });
     parsed = parseRoleIssuesResponse(aiText(resp));
     provider = resp?.provider || null;
   } catch (_e) { parsed = null; }

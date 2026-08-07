@@ -21,7 +21,8 @@ function cleanAssistBlock() {
 describe('Prompt 32 Ollama cleaning-assist guardrails', () => {
   it('uses invokeExtractionAI and writes proposals, not canonical data', () => {
     const block = cleanAssistBlock();
-    assert.match(block, /invokeExtractionAI\(\{ prompt \}\)/);
+    // Prompt 61: the seam call now carries a per-surface tag ({ prompt, surface: 'clean_assist' }).
+    assert.match(block, /invokeExtractionAI\(\{ prompt(, surface: '[a-z_]+')? \}\)/);
     assert.match(block, /lcc_clean_assist_proposals\?on_conflict=/);
     assert.match(block, /CLEAN_ASSIST_SOURCE\s*=\s*'ollama_clean_assist'/);
 

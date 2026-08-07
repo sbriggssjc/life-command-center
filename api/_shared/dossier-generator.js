@@ -831,7 +831,7 @@ async function authorAnalysis(packet, kind) {
     // the facts are already rendered, so we just omit analysis on timeout.
     const capMs = Number(process.env.DOSSIER_ANALYSIS_TIMEOUT_MS || 20000);
     const res = await Promise.race([
-      invokeExtractionAI({ prompt }),
+      invokeExtractionAI({ prompt, surface: 'narrations' }),
       new Promise((resolve) => setTimeout(() => resolve({ ok: false, data: { error: 'analysis_timeout' } }), capMs)),
     ]);
     if (!res || !res.ok) return { fragment: null, ok: false, model: res?.data?.model || null };

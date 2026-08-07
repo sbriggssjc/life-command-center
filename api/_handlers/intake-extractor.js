@@ -18,6 +18,7 @@
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI, invokeVisionExtractionAI } from '../_shared/ai.js';
+import { buildExtractionPrompt, buildProviderStamp } from '../_shared/intake-extraction-prompt.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
 import { isNonDealSnapshot, normalizeCapRate, firstOf } from '../_shared/intake-classify.js';
@@ -360,80 +361,11 @@ async function callAiExtraction(base64Data, mediaType) {
           : '[Note: text source was empty after decoding.]\n')
     : '[Note: source is a non-PDF binary document. Extract any identifiable fields from context.]\n';
 
-  const prompt = `Extract all available deal data from this CRE document.
-Return ONLY a JSON object — no markdown, no explanation, no preamble.
-
-For any field not present in the document, use null.
-For monetary values, return numbers only (no $ or commas).
-For percentages, return decimals (7.5% → 7.5).
-EXCEPTION — "cap_rate": return a DECIMAL FRACTION, not a whole-number percent (6.5% → 0.065, 7.75% → 0.0775).
-For dates, return YYYY-MM-DD format.
-"address" MUST be the SUBJECT PROPERTY's street address. Do NOT return the listing broker's, marketing firm's, or contact-block address (often in the header/footer or a "For more information contact …" section). If only a contact/brokerage address is present and no subject-property address, return null for "address".
-If the document markets MULTIPLE properties (a portfolio OM), return EVERY subject-property street address as a JSON array of strings in "addresses", and put the first/primary one in "address". For a single-property document, leave "addresses" null. Never pack multiple addresses into the single "address" string.
-
-${documentBody}
-{
-  "document_type": "om|rent_roll|lease_abstract|flyer|marketing_brochure|price_change|broker_email|market_update|email_update|comp|unknown",
-  "address": null,
-  "addresses": null,
-  "city": null,
-  "state": null,
-  "zip_code": null,
-  "tenant_name": null,
-  "tenant_guarantor": null,
-  "property_type": null,
-  "building_sf": null,
-  "lot_sf": null,
-  "year_built": null,
-  "asking_price": null,
-  "price_per_sf": null,
-  "cap_rate": null,
-  "sold_price": null,
-  "sold_cap_rate": null,
-  "noi": null,
-  "financial_projections": null,
-  "annual_rent": null,
-  "rent_per_sf": null,
-  "lease_commencement": null,
-  "lease_expiration": null,
-  "lease_term_years": null,
-  "renewal_options": null,
-  "expense_structure": null,
-  "rent_escalations": null,
-  "roof_responsibility": null,
-  "hvac_responsibility": null,
-  "structure_responsibility": null,
-  "parking_responsibility": null,
-  "listing_broker": null,
-  "listing_broker_email": null,
-  "listing_firm": null,
-  "seller_name": null,
-  "seller_email": null,
-  "seller_phone": null,
-  "seller_address": null,
-  "buyer_name": null,
-  "buyer_email": null,
-  "buyer_phone": null,
-  "owner_contact_name": null,
-  "owner_contact_email": null,
-  "owner_contact_phone": null,
-  "parcel_number": null,
-  "confidence_notes": null
-}
-
-"noi" is the IN-PLACE / current NOI the document states (net operating income), a number only. "cap_rate" is the current/asking cap (decimal fraction). If the document also states a CLOSED SALE (a sold price and/or sold cap for THIS property), return "sold_price" (number) and "sold_cap_rate" (decimal fraction); leave both null for a purely on-market OM.
-"financial_projections": if the document presents a MULTI-YEAR rent / expense / NOI schedule (e.g. an OM cash-flow proforma or lease escalation table with per-year figures), return a JSON array of objects, one per year: [{"year": 2025, "gross_rent": null, "expenses": null, "noi": null}, …]. Use numbers only; use null for any per-year field the table does not state; return null (not []) when the document has no multi-year schedule. Do NOT fabricate years or interpolate — include only years the document explicitly tabulates.
-
-Responsibility fields: for roof, hvac, structure, parking — return "tenant", "landlord", or "shared" based on lease language.
-Look for keywords like "repair", "replace", "maintain", "responsible" near "roof", "HVAC"/"heating"/"cooling", "structural"/"foundation"/"walls", "parking"/"lot"/"striping".
-If the document is an OM, these may appear in the lease abstract section.
-If not determinable, use null.
-
-Party contacts (ORE Phase 1 Unit E): when the document explicitly states them, extract the deal PARTIES and their contact details:
-- "seller_name"/"seller_email"/"seller_phone"/"seller_address": the property seller / current owner of record (the entity disposing of the asset). "seller_address" is the SELLER's own mailing / notice / contact address — NOT the subject property's address.
-- "buyer_name"/"buyer_email"/"buyer_phone": the buyer / acquirer, when a sale doc names one.
-- "owner_contact_name"/"owner_contact_email"/"owner_contact_phone": a named owner/principal contact when it is DISTINCT from the listing broker and the seller (e.g. an asset-manager or principal contact block).
-Extract ONLY what the document literally states — never infer, guess, or fabricate a phone/email/address. Leave any field null when it is not present. Do NOT copy the listing broker's contact details into the seller/buyer/owner fields (the broker has its own fields above).`;
+  // Prompt 61: the extraction prompt now lives in a pure, hardened, unit-tested
+  // builder (_shared/intake-extraction-prompt.js) — strict full-key JSON schema,
+  // doc-type rubric with the real vocabulary, party-role + sale-record guards,
+  // abstain-don't-fabricate preserved. One prompt, model-agnostic.
+  const prompt = buildExtractionPrompt(documentBody);
 
   // F8 (2026-06-04): zero-text PDF → vision/OCR fallback. pdf-parse returns 0
   // chars on scanned/image-based PDFs (no pdf_parse_error), so the text-in-
@@ -490,7 +422,7 @@ Extract ONLY what the document literally states — never infer, guess, or fabri
   // (default: OpenAI gpt-4o-mini, separate rate-limit pool from Claude).
   // On final failure → backoff + retry primary once. See _shared/ai.js
   // invokeExtractionAI for the full chain logic.
-  const result = await invokeExtractionAI({ prompt });
+  const result = await invokeExtractionAI({ prompt, surface: 'intake' });
 
   // Surface which model actually succeeded into per-artifact diagnostics.
   // Lets the SQL audit query show "this intake fell back from edge → openai
@@ -774,6 +706,16 @@ export async function processIntakeExtraction(intakeId, context = {}) {
       diag.ai_ms = Date.now() - t1;
 
       if (parsed) {
+        // Prompt 61 (#2): stamp the provider onto the extraction SNAPSHOT itself
+        // (not just the raw_payload diagnostics), so W5.3-style grading can read
+        // provider/fell_back straight off staged_intake_extractions.extraction_snapshot._provider
+        // without a raw_payload join (which only 88/238 items carried).
+        if (typeof parsed === 'object' && globalThis.__lastAiCallInfo) {
+          parsed._provider = {
+            ...buildProviderStamp(globalThis.__lastAiCallInfo),
+            stamped_at: new Date().toISOString(),
+          };
+        }
         diag.ai_ok = true;
         diag.document_type = parsed.document_type || null;
         extractions.push(parsed);

@@ -26,6 +26,24 @@ export const LISTING_DOCUMENT_TYPES = new Set([
   'marketing_brochure',
 ]);
 
+// Explicit non-listing DEAL doctypes (Prompt 61). When the extractor confidently
+// classifies a document as one of these, it is a legal/advisory artifact ABOUT a
+// property — NOT a live on-market listing — and must never be rescued to 'om' by
+// the listing-grade heuristic (a PSA carries an address + price + cap and would
+// otherwise trip snapshotLooksLikeListing and get promoted into available_listings
+// as a phantom listing). These flow to review as their own type instead.
+export const EXPLICIT_NON_LISTING_TYPES = new Set([
+  'psa',
+  'listing_agreement',
+  'valuation_proposal',
+]);
+
+/** True when the extractor gave an explicit non-listing deal doctype. */
+export function isExplicitNonListingType(dt) {
+  if (!dt || typeof dt !== 'string') return false;
+  return EXPLICIT_NON_LISTING_TYPES.has(dt.toLowerCase().trim());
+}
+
 // ── Doctype normalization (Bug Z fix, 2026-04-27) ────────────────────────
 // The extractor returns document_type values that vary across AI providers
 // and prompt versions: 'om', 'OM', 'offering_memorandum', 'offering memorandum',
