@@ -1035,7 +1035,7 @@ async function handleReviewCounts(req, res) {
   // five folded seeders (mirrors fetchFederatedSource('owner_reconcile').total),
   // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
   const [
-    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open,
+    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict,
   ] = await Promise.all([
     withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
     withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
@@ -1043,6 +1043,8 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(domCount('dia', 'entity_match_candidates?status=eq.pending_review')),
     withLaneTimeout(opsCount('w8_u2_dup_pair?status=eq.proposed')),
     withLaneTimeout(opsCount('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)')),
+    // Prompt 77: conflict rows (ambiguous_entity_match) are real, resolvable work.
+    withLaneTimeout(opsCount('w8_u3_link_review?status=eq.conflict')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -1106,8 +1108,9 @@ async function handleReviewCounts(req, res) {
       count_mode: 'exact', status: laneStatus(orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2),
       href: 'pageDataQuality', tone: '' },
     { key: 'w8_u3_link_review', label: 'Ownership links — Ollama proposals',
-      count: sum(u3Open), parts: { open_proposals: val(u3Open) },
-      count_mode: 'exact', status: laneStatus(u3Open),
+      count: sum(u3Open, u3Conflict),
+      parts: { open_proposals: val(u3Open), conflicts: val(u3Conflict) },
+      count_mode: 'exact', status: laneStatus(u3Open, u3Conflict),
       href: 'pageDataQuality', tone: '' },
   ];
 
@@ -3843,7 +3846,53 @@ async function fetchFederatedSource(type, cap, opts) {
         rank_value: row.rank_value, model_provider: row.model_provider, model_name: row.model_name,
       },
     }));
-    out.total = await opsCnt('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)');
+    // Prompt 77 (W8 U3 polish): conflict rows (status='conflict') are real,
+    // resolvable work — the canonical-resolve guard found ≥2 entities sharing the
+    // proposed name and refused to guess (ambiguous_entity_match). v_w8_u3_link_review_open
+    // excludes them, so they were a dead-end. Surface them as pick-the-survivor
+    // cards: the candidate entities (name/domain + link & portfolio counts so the
+    // right one is obvious) + an explicit "Mint new". Mirrors the sf_link three-way
+    // conflict card. Only chain-pool rows with a current-owner endpoint AND a
+    // still-reproducing ≥2-candidate ambiguity are pick-resolvable.
+    const cf = await opsQuery('GET', 'w8_u3_link_review?status=eq.conflict&pool=eq.chain&select=review_id,subject_ref,pool,domain,'
+      + 'source_property_id,gap,proposal_type,current_owner_entity_id,current_owner_name,winner_entity_id,'
+      + 'proposed_verdict,linked_entity_name,role,confidence,evidence_quote,evidence_source,reason,rank_value,'
+      + 'model_provider,model_name&order=confidence.desc&limit=25');
+    const confRows = (cf.ok && Array.isArray(cf.data)) ? cf.data : [];
+    for (const row of confRows) {
+      if (!row.current_owner_entity_id) continue; // no_current_owner_entity → not pick-resolvable
+      const canon = normalizeCanonicalName(row.linked_entity_name || '');
+      if (!canon) continue;
+      const er = await opsQuery('GET', 'entities?select=id,name,domain,entity_type,canonical_name&canonical_name=eq.'
+        + pgFilterVal(canon) + '&merged_into_entity_id=is.null&order=created_at.asc&limit=10');
+      const ents = (er.ok && Array.isArray(er.data)) ? er.data : [];
+      if (ents.length < 2) continue; // ambiguity no longer reproduces (entities merged/removed)
+      const candidates = await Promise.all(ents.map(async (e) => ({
+        entity_id: e.id, name: e.name, domain: e.domain, entity_type: e.entity_type,
+        relationship_count: (await opsCnt('entity_relationships?or=(from_entity_id.eq.' + e.id + ',to_entity_id.eq.' + e.id + ')')) || 0,
+        portfolio_count: (await opsCnt('lcc_entity_portfolio_facts?entity_id=eq.' + e.id)) || 0,
+      })));
+      out.items.push({
+        subject_ref: row.subject_ref, subject_domain: row.domain,
+        subject_property_id: row.source_property_id || null,
+        subject_entity_id: row.current_owner_entity_id || null,
+        rank_value: (Number(row.confidence) || 0) * 100,
+        context: {
+          review_id: row.review_id, subject_ref: row.subject_ref, pool: row.pool, domain: row.domain,
+          source_property_id: row.source_property_id, gap: row.gap, proposal_type: row.proposal_type,
+          current_owner_entity_id: row.current_owner_entity_id, current_owner_name: row.current_owner_name,
+          winner_entity_id: row.winner_entity_id, proposed_verdict: row.proposed_verdict,
+          linked_entity_name: row.linked_entity_name, role: row.role, confidence: row.confidence,
+          evidence_quote: row.evidence_quote, evidence_source: row.evidence_source, reason: row.reason,
+          rank_value: row.rank_value, model_provider: row.model_provider, model_name: row.model_name,
+          conflict: true, conflict_reason: 'ambiguous_entity_match', conflict_canonical: canon, candidates,
+        },
+      });
+    }
+    // Honest count: open proposals + conflict rows (both are workable).
+    const u3OpenCnt = await opsCnt('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)');
+    const u3ConfCnt = await opsCnt('w8_u3_link_review?status=eq.conflict');
+    out.total = (u3OpenCnt || 0) + (u3ConfCnt || 0);
     return out;
   }
 
@@ -5086,10 +5135,17 @@ async function handleDecisionVerdict(req, res) {
     if (!subjectRef) return res.status(400).json({ error: 'subject missing identifying fields for ' + dtype });
     // Idempotent guard: a subject already decided is not re-minted (a double-
     // click or a re-surfaced row is a no-op, not a duplicate row).
+    // EXCEPTION (Prompt 77): a w8_u3 conflict resolution re-decides a subject
+    // whose first confirm hit ambiguous_entity_match and recorded a terminal
+    // 'decided' — resolving that conflict is legitimate new work, so bypass the
+    // guard (the w8_u3 handler gates on review.status='conflict', so this can't
+    // resurrect an applied/rejected row).
+    const isU3ConflictResolve = (dtype === 'w8_u3_link_review'
+      && payload && payload.resolve_conflict === true);
     const prior = await opsQuery('GET', 'lcc_decisions?select=id,status&decision_type=eq.'
       + pgFilterVal(dtype) + '&subject_ref=eq.' + pgFilterVal(subjectRef)
       + '&status=neq.open&order=decided_at.desc&limit=1');
-    if (prior.ok && Array.isArray(prior.data) && prior.data[0]) {
+    if (!isU3ConflictResolve && prior.ok && Array.isArray(prior.data) && prior.data[0]) {
       return res.status(409).json({ error: 'already_decided', status: prior.data[0].status, decision_id: prior.data[0].id });
     }
     let ws = null; try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
@@ -5279,6 +5335,17 @@ async function handleDecisionVerdict(req, res) {
       if (!humanAction) return res.status(400).json({ error: 'w8_u3_link_review: unknown verdict ' + verdict });
       const nowIso = new Date().toISOString();
       const effects = { pool: review.pool, proposal_type: review.proposal_type };
+      // Prompt 77: a conflict-resolution verdict (operator picked the survivor
+      // entity from an ambiguous_entity_match card, or chose Mint new). The chain
+      // path below reads this to skip the canonical resolve/ambiguity guard (that
+      // guard is what produced the conflict) and go straight to the writer.
+      const isConflictResolve = !!(payload && payload.resolve_conflict === true);
+      // Idempotency: once resolved/applied/rejected there is nothing to re-do.
+      if (isConflictResolve && humanAction === 'confirm'
+          && review.status !== 'conflict' && review.status !== 'proposed') {
+        await record(verdict, 'skipped', { review_id: review.review_id }, { ...effects, already_resolved: true });
+        return res.status(200).json({ ok: true, verdict, action: 'already_resolved', review_id: review.review_id });
+      }
 
       if (humanAction === 'reject') {
         await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
@@ -5385,31 +5452,52 @@ async function handleDecisionVerdict(req, res) {
       let linkedEntityId = null; let createdEntityId = null;
       const edom = review.domain === 'lcc' ? 'lcc' : review.domain;
       const linkedCanonical = normalizeCanonicalName(linkedName);
-      let canonMatches = [];
-      if (linkedCanonical) {
-        try {
-          const er = await opsQuery('GET', 'entities?select=id,name&canonical_name=eq.' + pgFilterVal(linkedCanonical)
-            + '&merged_into_entity_id=is.null&order=created_at.asc&limit=2');
-          if (er.ok && Array.isArray(er.data)) canonMatches = er.data;
-        } catch (_e) { /* fall through to mint */ }
-      }
-      if (canonMatches.length === 1) {
-        linkedEntityId = canonMatches[0].id;
-      } else if (canonMatches.length >= 2) {
-        // ≥2 entities share this canonical_name — ambiguous. Never guess which one
-        // the proposal means → conflict card (mirrors no_current_owner_entity).
-        const led = await opsQuery('POST', 'w8_u3_link_apply_log',
-          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
-            status: 'conflict', actor: user.id || null, reversal: {},
-            details: { reason: 'ambiguous_entity_match', linked_entity_name: linkedName,
-              canonical_name: linkedCanonical, match_count: canonMatches.length } },
-          { headers: { Prefer: 'return=representation' } });
-        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
-        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
-          { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
-        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'ambiguous_entity_match' });
-        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
-        return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'ambiguous_entity_match', review_id: review.review_id });
+      if (isConflictResolve) {
+        // Prompt 77 conflict resolution: the operator picked the survivor entity
+        // (or Mint new). Skip the ambiguity guard — validate the chosen id exists,
+        // is unmerged, and actually shares the proposed canonical_name (never trust
+        // an arbitrary id from the client), then drop into the writer. mint_new
+        // leaves linkedEntityId null so the shared mint block below fires.
+        if (payload.mint_new !== true) {
+          const chosen = payload.chosen_entity_id != null ? String(payload.chosen_entity_id).trim() : '';
+          if (!chosen) return res.status(400).json({ error: 'w8_u3_link_review: chosen_entity_id or mint_new required' });
+          const cr = await opsQuery('GET', 'entities?select=id,canonical_name,merged_into_entity_id&id=eq.'
+            + pgFilterVal(chosen) + '&limit=1');
+          const cent = (cr.ok && Array.isArray(cr.data)) ? cr.data[0] : null;
+          if (!cent || cent.merged_into_entity_id) return res.status(400).json({ error: 'w8_u3_link_review: chosen entity not found or merged' });
+          if (linkedCanonical && cent.canonical_name && String(cent.canonical_name) !== String(linkedCanonical)) {
+            return res.status(400).json({ error: 'w8_u3_link_review: chosen entity does not match the proposed name' });
+          }
+          linkedEntityId = cent.id;
+        }
+      } else {
+        let canonMatches = [];
+        if (linkedCanonical) {
+          try {
+            const er = await opsQuery('GET', 'entities?select=id,name&canonical_name=eq.' + pgFilterVal(linkedCanonical)
+              + '&merged_into_entity_id=is.null&order=created_at.asc&limit=2');
+            if (er.ok && Array.isArray(er.data)) canonMatches = er.data;
+          } catch (_e) { /* fall through to mint */ }
+        }
+        if (canonMatches.length === 1) {
+          linkedEntityId = canonMatches[0].id;
+        } else if (canonMatches.length >= 2) {
+          // ≥2 entities share this canonical_name — ambiguous. Never guess which one
+          // the proposal means → conflict card (mirrors no_current_owner_entity).
+          // Prompt 77 surfaces this row as a pick-the-survivor card to resolve.
+          const led = await opsQuery('POST', 'w8_u3_link_apply_log',
+            { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+              status: 'conflict', actor: user.id || null, reversal: {},
+              details: { reason: 'ambiguous_entity_match', linked_entity_name: linkedName,
+                canonical_name: linkedCanonical, match_count: canonMatches.length } },
+            { headers: { Prefer: 'return=representation' } });
+          const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+          await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+            { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+          const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'ambiguous_entity_match' });
+          if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+          return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'ambiguous_entity_match', review_id: review.review_id });
+        }
       }
       if (!linkedEntityId) {
         // entities.canonical_name is NOT NULL — always mint WITH the house canonical
@@ -5472,6 +5560,7 @@ async function handleDecisionVerdict(req, res) {
       await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
         { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
       effects.relationship_id = relId; effects.linked_entity_id = linkedEntityId; effects.created_entity = !!createdEntityId; effects.apply_log_id = applyLogId;
+      if (isConflictResolve) { effects.resolved_conflict = 'ambiguous_entity_match'; effects.picked_mint = payload.mint_new === true; }
       const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: 'linked', relationship_id: relId,
