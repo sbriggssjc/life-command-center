@@ -1,6 +1,7 @@
 # Copilot LCC Deal Agent — Tool Selection Sheet (Phase 1)
 
-Keep ONLY the 20 tools below enabled on the LCC Deal Agent (Tools page). Disable everything else.
+Keep ONLY the 19 tools below enabled on the LCC Deal Agent (Tools page). Disable everything else.
+(GenerateDocument was removed — it was mis-catching comps "workbook" requests; BOV/OM/doc bodies are delegated to the Document Assembly Agent.)
 Left column = the name shown in Copilot's "Add tool" / Tools list (LCC Intelligence). Right = the operationId
 the instructions call. All are the discrete PascalCase ops from the slimmed connector (post prompts 66 + 67).
 
@@ -19,18 +20,19 @@ the instructions call. All are the discrete PascalCase ops from the slimmed conn
 | Synthesize a ranked sales-comp set from a plain-language request | SynthesizeComps* |
 | Query de-duplicated sales comps by explicit filters | QueryComps* |
 
-## KEEP — Write (9)
+## KEEP — Write (8)
 | Copilot display name (LCC Intelligence) | operationId |
 |---|---|
 | Draft a personalized outreach email for a business development contact | DraftOutreachEmail |
 | Draft a seller update email for an active listing | DraftSellerUpdateEmail |
 | Generate an AI-powered daily prospecting call sheet | GenerateProspectingBrief |
 | Generate a Briggs CRE comps workbook (returns a download link) | GenerateComps* |
-| Generate a document (BOV, comp package, report) using AI-assembled context | GenerateDocument |
 | Create a Microsoft To Do task linked to an LCC action item | CreateTodoTask |
 | Triage an inbox item — change status, set priority, assign | TriageInboxItem |
 | Update the status of an action item in the execution queue | UpdateExecutionTaskStatus |
 | Log a phone/Teams call as a first-class call note on a deal | LogCallNote |
+
+**DISABLE `GenerateDocument`** ("Generate a document (BOV, comp package, report)…") — it overlaps comps and mis-catches "build the comps workbook." Document bodies go through the Document Assembly Agent instead.
 
 \* SynthesizeComps / QueryComps / GenerateComps appear only after prompt 67 is merged + the connector re-imported.
 If you re-import before 67 deploys, the three comps tools won't be in the list yet — add them after 67.
