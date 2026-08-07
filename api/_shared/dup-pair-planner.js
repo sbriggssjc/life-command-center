@@ -38,13 +38,20 @@ export const DUP_PAIR_TARGETS = [
     extraFilter: 'domain=in.(dia,gov,cre)',
   },
   {
+    // gov.true_owners has NO scalar mailing-address column (the address lives in
+    // the `contact_info` jsonb) — selecting a non-existent `mailing_address`
+    // returned a PostgREST 400 that the old scan swallowed to records:0 (Prompt
+    // 68 coverage bug). addrCol=null ⇒ the same-address generator is skipped for
+    // this target (never guessed), name/abbrev methods still run.
     domain: 'gov', table: 'true_owners', pkCol: 'true_owner_id', nameCol: 'name',
-    mergedCol: 'merged_into_true_owner_id', addrCol: 'mailing_address',
+    mergedCol: 'merged_into_true_owner_id', addrCol: null,
     extraFilter: null,
   },
   {
+    // dia.true_owners has NO `address` column either — its owner mailing lives in
+    // `notice_address_1` (the same 400→records:0 bug). Use the real column.
     domain: 'dia', table: 'true_owners', pkCol: 'true_owner_id', nameCol: 'name',
-    mergedCol: 'merged_into_true_owner_id', addrCol: 'address',
+    mergedCol: 'merged_into_true_owner_id', addrCol: 'notice_address_1',
     extraFilter: null,
   },
 ];
@@ -85,16 +92,41 @@ export function dupPairSubjectRef(refA, refB) {
 // ---------------------------------------------------------------------------
 // Name normalization (NO LLM). Mirrors the resolver's shape closely enough that
 // "shares a token block" here is a faithful proxy for "the resolver already sees
-// this pair". Legal-entity form words are stripped for the CORE (the semantic
-// name) but a shared core is treated as an exact/blocked match — NOT a near-miss.
+// this pair". Legal-entity form words AND generic-CRE nouns are stripped for the
+// DISTINCTIVE CORE (the semantic name). A shared core is treated as an exact/
+// blocked match — NOT a near-miss.
+//
+// Prompt 68: the old set stripped legal forms + a few CRE nouns but MISSED the
+// high-frequency ones (investment(s), service(s), enterprise(s), real estate,
+// owner(s)), so generic vocabulary dominated char-level similarity and produced
+// garbage pairs ("P & A Investments" ↔ "B & W Realty Investment" = 0.909;
+// "Owner" ↔ "Downer & Associates" = 0.833; "T.D. Service Company" ↔ "I.C.E.
+// Services Inc" = 0.875). Stripping the full stoplist collapses those to an EMPTY
+// distinctive core so they are never paired, while true typo-dupes on the
+// distinctive word ("Invester" ↔ "Investar") survive.
 // ---------------------------------------------------------------------------
 const LEGAL_FORM_TOKENS = new Set([
+  // Pure legal-entity forms.
   'llc', 'l.l.c', 'llp', 'lp', 'l.p', 'inc', 'incorporated', 'corp', 'corporation',
   'co', 'company', 'ltd', 'limited', 'trust', 'reit', 'dst', 'lllp', 'plc', 'pllc',
+  'lc', 'pa', 'pc',
+  // Generic-CRE nouns (the stoplist): these carry no distinguishing signal — they
+  // recur across thousands of unrelated owners, so char-similarity on them is noise.
   'partners', 'partnership', 'holdings', 'holding', 'group', 'associates', 'assoc',
   'properties', 'property', 'realty', 'management', 'mgmt', 'capital', 'ventures',
+  'venture', 'investment', 'investments', 'investors', 'investor', 'enterprise',
+  'enterprises', 'service', 'services', 'real', 'estate', 'owner', 'owners',
+  'development', 'developments', 'equity', 'fund', 'funds', 'income', 'acquisitions',
+  'acquisition',
+  // Connectives / articles.
   'the', 'of', 'and',
 ]);
+
+// The distinctive core must clear this many alphanumeric characters (across all
+// significant tokens) to be pairable BY NAME similarity — below it the "core" is
+// initials/noise (e.g. "P & A" → nothing; "T.D." → nothing) and only a
+// same-address match may pair it. A single tunable knob.
+export const DISTINCTIVE_CORE_MIN_LEN = 4;
 
 export function normalizeOwnerName(name) {
   return String(name == null ? '' : name)
@@ -123,6 +155,20 @@ export function nameTokens(name) {
 // near-miss) and prefix bucketing.
 export function ownerCore(name) {
   return [...nameTokens(name)].sort().join(' ');
+}
+
+// TRUE iff a name's DISTINCTIVE core is substantial enough to pair on by name
+// similarity: at least DISTINCTIVE_CORE_MIN_LEN alphanumeric chars across its
+// significant tokens AND at least one token of length ≥ 3 (so a purely-initials
+// core like "ab cd" — or an empty one — is NOT pairable by name; it can still
+// pair via the same-address method). Prompt 68 guard against the initials-vs-
+// initials noise ("P & A" ↔ "B & W").
+export function coreIsPairable(name) {
+  const toks = [...nameTokens(name)];
+  if (!toks.length) return false;
+  const flatLen = toks.join('').replace(/[^a-z0-9]/g, '').length;
+  if (flatLen < DISTINCTIVE_CORE_MIN_LEN) return false;
+  return toks.some((t) => t.length >= 3);
 }
 
 // TRUE iff the two names share at least one significant token — i.e. the resolver
@@ -284,19 +330,19 @@ export function generateCandidatePairs(records, opts = {}) {
   const maxPairs = Number.isFinite(opts.maxPairs) ? Math.max(0, opts.maxPairs) : 200;
   const maxBucket = Number.isFinite(opts.maxBucket) ? opts.maxBucket : 400;
 
-  // Pre-compute per-record normalized fields once.
+  // Pre-compute per-record normalized fields once. Keep a record if it can
+  // participate in ANY method — a distinctive core/tokens (name near-miss /
+  // abbrev) or a usable address (same-address). `pairable` (Prompt 68) gates the
+  // NAME near-miss method only: an initials-only / sub-threshold core still
+  // reaches the same-address + abbrev methods but is never paired by name noise.
   const recs = [];
   for (const r of list) {
     const name = r && r.name != null ? String(r.name) : '';
+    const addr = r && r.address != null ? normalizeAddress(r.address) : '';
     const core = ownerCore(name);
-    if (!core || core.replace(/\s/g, '').length < 3) continue; // skip junk/too-short
-    recs.push({
-      ref: String(r.ref),
-      name,
-      core,
-      tokens: nameTokens(name),
-      addr: r && r.address != null ? normalizeAddress(r.address) : '',
-    });
+    const tokens = nameTokens(name);
+    if (!tokens.size && (!addr || isWeakAddress(addr))) continue; // nothing to match on
+    recs.push({ ref: String(r.ref), name, core, tokens, addr, pairable: coreIsPairable(name) });
   }
 
   const pairs = new Map(); // pairKey -> pair (first/strongest wins)
@@ -327,6 +373,7 @@ export function generateCandidatePairs(records, opts = {}) {
     map.get(key).push(r);
   };
   for (const r of recs) {
+    if (!r.pairable) continue; // only distinctive-core records pair by name similarity
     const flat = r.core.replace(/\s/g, '');
     addKey(byPrefix, 'p:' + flat.slice(0, prefixLen), r);
     if (flat.length >= prefixLen) addKey(byPrefix, 's:' + flat.slice(-prefixLen), r);
@@ -429,6 +476,10 @@ export function buildDupPairPrompt(pair, fewShot) {
     '- name_a "Blackstone Real Estate Fund I", name_b "Blackstone Real Estate Fund II" -> distinct (different fund series)',
     '- name_a "Oak Street Realty", name_b "Oakstreet Realty LLC" -> same_party (spacing variant of one firm)',
     '- name_a "ARC GSDVRDE001 LLC", name_b "ARC GSDVRDE002 LLC" -> distinct (different property-coded SPEs)',
+    '- name_a "Invester Properties LLC", name_b "Investar Properties LLC" -> same_party (a one-letter typo/spelling variant of the same firm; a human confirms)',
+    '- name_a "Winbrook Management", name_b "Twinbrook Properties" -> same_party (a spelling variant of one firm — lean same_party, pending human confirm)',
+    '- name_a "Harrison Capital", name_b "Garrison Capital" -> distinct (DIFFERENT personal/proper surnames, not a typo)',
+    'Rubric: a typo / spelling-variant of the SAME distinctive word leans same_party (a human confirms). DIFFERENT personal or proper surnames (Harrison vs Garrison, Downer vs Bowman) are distinct. An entity-form ("LLC" vs "LP") or state-suffix difference ALONE never distinguishes two records.',
   ];
   if (shots.length) {
     lines.push('Operator rubric — real past human verdicts on similar pairs:');
@@ -489,6 +540,31 @@ export function isProposablePair(proposal, minConfidence = 0.6) {
   if (v !== 'same_party' && v !== 'distinct') return false;
   const c = Number(proposal?.confidence);
   return Number.isFinite(c) && c >= minConfidence;
+}
+
+// Core-similarity floor at/above which an `unsure` verdict is NOT dropped but
+// ROUTED to the human review lane (Prompt 68). A high-core-similarity near-miss
+// the model can't decide is exactly the typo-variant judgment call the human lane
+// exists for — dropping it silently loses the unit's best finds. Below the floor,
+// an unsure is genuine noise and still drops.
+export const DUP_PAIR_NEEDS_HUMAN_SIM = 0.85;
+
+// The single disposition of a scored pair (Prompt 68): one of
+//   'propose'      — a decided verdict (same_party|distinct) above the confidence
+//                    floor. Persists as a model-decided proposal (training fuel).
+//   'needs_human'  — the model is unsure BUT the deterministic core similarity is
+//                    high (>= DUP_PAIR_NEEDS_HUMAN_SIM). Persists to the review
+//                    lane as an `unsure` proposal for a human verdict — NOT dropped.
+//   'drop'         — unsure + low similarity, or a decided verdict below the floor.
+//                    Counted only; never shown to a human, never a merge.
+export function dupPairDisposition(proposal, pair, opts = {}) {
+  const minConfidence = Number.isFinite(opts.minConfidence) ? opts.minConfidence : 0.6;
+  const needsHumanSim = Number.isFinite(opts.needsHumanSim) ? opts.needsHumanSim : DUP_PAIR_NEEDS_HUMAN_SIM;
+  if (isProposablePair(proposal, minConfidence)) return 'propose';
+  const v = String(proposal?.verdict || '').toLowerCase();
+  const sim = Number(pair?.similarity);
+  if (v === 'unsure' && Number.isFinite(sim) && sim >= needsHumanSim) return 'needs_human';
+  return 'drop';
 }
 
 // Bounded scorer (pure, injectable clock) — mirrors U1's scoreWithBudget so a

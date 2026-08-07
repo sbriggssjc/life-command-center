@@ -17,6 +17,7 @@ import {
   nameInitials, abbreviationMatch, normalizeAddress, isWeakAddress,
   generateCandidatePairs, excludeKnownPairs, buildDupPairPrompt,
   normalizeDupPairProposal, parseDupPairJson, isProposablePair, scoreDupPairsWithBudget,
+  coreIsPairable, DISTINCTIVE_CORE_MIN_LEN, dupPairDisposition, DUP_PAIR_NEEDS_HUMAN_SIM,
 } from '../api/_shared/dup-pair-planner.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -149,6 +150,90 @@ describe('generateCandidatePairs — the deterministic near-miss generator', () 
     ];
     const pairs = generateCandidatePairs(same, { nameThreshold: 0.5 });
     assert.equal(pairs.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prompt 68 — distinctive-core similarity, coverage, value inversion.
+describe('distinctive-core stoplist + pairability (Prompt 68)', () => {
+  it('strips the generic-CRE-noun stoplist to the distinctive core', () => {
+    // The high-frequency CRE nouns that used to dominate char-similarity are gone.
+    assert.equal(ownerCore('P & A Investments LLC'), '');          // only initials + stopwords
+    assert.equal(ownerCore('B & W REALTY INVESTMENT LTD'), '');
+    assert.equal(ownerCore('T.D. Service Company'), '');
+    assert.equal(ownerCore('I. C. E. SERVICES, INC'), '');
+    assert.equal(ownerCore('Owner'), '');
+    assert.equal(ownerCore('Invester Properties LLC'), 'invester'); // distinctive word survives
+    assert.equal(ownerCore('Winbrook Management'), 'winbrook');
+  });
+  it('coreIsPairable requires a substantial, non-initials core', () => {
+    assert.equal(coreIsPairable('Invester Properties LLC'), true);
+    assert.equal(coreIsPairable('Harrison Capital'), true);
+    assert.equal(coreIsPairable('P & A Investments LLC'), false); // empty core
+    assert.equal(coreIsPairable('Owner'), false);                 // stoplisted → empty
+    assert.equal(coreIsPairable('T.D. Service Company'), false);  // initials + stopwords
+    assert.equal(coreIsPairable('AB CD LLC'), false);             // purely 2-char initials
+    assert.ok(DISTINCTIVE_CORE_MIN_LEN >= 4);
+  });
+});
+
+describe('generateCandidatePairs — Prompt 68 regression fixtures (verbatim)', () => {
+  const recs = [
+    { ref: 'a:1', name: 'Invester Properties LLC' },
+    { ref: 'a:2', name: 'Investar Properties Llc' },
+    { ref: 'a:3', name: 'P & A Investments LLC' },
+    { ref: 'a:4', name: 'B & W REALTY INVESTMENT LTD' },
+    { ref: 'a:5', name: 'Owner' },
+    { ref: 'a:6', name: 'Downer & Associates' },
+    { ref: 'a:7', name: 'Harrison Capital' },
+    { ref: 'a:8', name: 'Garrison Capital' },
+    { ref: 'a:9', name: 'WINBROOK MANAGEMENT' },
+    { ref: 'a:10', name: 'Twinbrook Properties' },
+    { ref: 'a:11', name: 'T.D. Service Company' },
+    { ref: 'a:12', name: 'I. C. E. SERVICES, INC' },
+  ];
+  const pairs = generateCandidatePairs(recs, { nameThreshold: 0.82 });
+  const has = (n1, n2) => pairs.some((p) => [p.a.name, p.b.name].sort().join('|') === [n1, n2].sort().join('|'));
+
+  it('Invester ↔ Investar → PROPOSED (the best catch, never dropped)', () => {
+    assert.ok(has('Invester Properties LLC', 'Investar Properties Llc'));
+  });
+  it('Winbrook ↔ Twinbrook → generated', () => {
+    assert.ok(has('WINBROOK MANAGEMENT', 'Twinbrook Properties'));
+  });
+  it('Harrison ↔ Garrison → generated (distinct persists as a hard negative downstream)', () => {
+    assert.ok(has('Harrison Capital', 'Garrison Capital'));
+  });
+  it('P & A ↔ B & W → NEVER generated (initials-vs-initials noise)', () => {
+    assert.ok(!has('P & A Investments LLC', 'B & W REALTY INVESTMENT LTD'));
+  });
+  it('Owner ↔ Downer & Associates → NEVER generated (generic word)', () => {
+    assert.ok(!has('Owner', 'Downer & Associates'));
+  });
+  it('T.D. Service ↔ I.C.E. Services → NEVER generated (generic vocabulary)', () => {
+    assert.ok(!has('T.D. Service Company', 'I. C. E. SERVICES, INC'));
+  });
+  it('no generated pair has an empty / unpairable core on either side', () => {
+    for (const p of pairs) {
+      if (p.method !== 'name_near_miss') continue;
+      assert.ok(coreIsPairable(p.a.name) && coreIsPairable(p.b.name),
+        `name pair on an unpairable core: ${p.a.name} / ${p.b.name}`);
+    }
+  });
+});
+
+describe('dupPairDisposition — Prompt 68 three-way value logic', () => {
+  it('a decided verdict above the floor → propose', () => {
+    assert.equal(dupPairDisposition({ verdict: 'same_party', confidence: 0.8 }, { similarity: 0.9 }), 'propose');
+    assert.equal(dupPairDisposition({ verdict: 'distinct', confidence: 0.9 }, { similarity: 0.875 }), 'propose');
+  });
+  it('a high-core-similarity unsure → needs_human (routed, NOT dropped)', () => {
+    assert.equal(dupPairDisposition({ verdict: 'unsure', confidence: 0.2 }, { similarity: 0.9 }), 'needs_human');
+    assert.equal(dupPairDisposition({ verdict: 'unsure', confidence: 0.2 }, { similarity: DUP_PAIR_NEEDS_HUMAN_SIM }), 'needs_human');
+  });
+  it('a low-similarity unsure / below-floor verdict → drop', () => {
+    assert.equal(dupPairDisposition({ verdict: 'unsure', confidence: 0.99 }, { similarity: 0.6 }), 'drop');
+    assert.equal(dupPairDisposition({ verdict: 'same_party', confidence: 0.3 }, { similarity: 0.9 }), 'drop');
   });
 });
 
@@ -300,6 +385,47 @@ describe('admin.js wiring — emit to the EXISTING resolver review pool, verdict
     assert.match(admin, /skipped: 'feature_flag_off'/);
     assert.match(admin, /isProposablePair/);
     assert.match(admin, /dropped_unsure/);
+  });
+
+  it('Prompt 68: scan failures are surfaced LOUDLY, not swallowed to records:0', () => {
+    assert.match(admin, /SCAN FAILED/);
+    assert.match(admin, /dupPairScanErrors/);
+    assert.match(admin, /scan_errors/);
+    // The pull returns a real error object on !r.ok instead of an empty page.
+    assert.match(admin, /if \(!r\.ok\)/);
+  });
+
+  it('Prompt 68: the lcc scan is a resumable keyset window (cursor in the ledger)', () => {
+    assert.match(admin, /fetchDupPairScanCursors/);
+    assert.match(admin, /scan_cursors/);
+    assert.match(admin, /=gt\.'/);        // keyset predicate on the ascending pk
+    assert.match(admin, /nextCursor/);
+  });
+
+  it('Prompt 68: the write path routes needs_human to the review lane (three-way disposition)', () => {
+    assert.match(admin, /dupPairDisposition/);
+    assert.match(admin, /needs_human/);
+  });
+});
+
+describe('target catalogue — Prompt 68 coverage fix', () => {
+  it('gov true_owners addrCol is null (no scalar mailing column → no 400)', () => {
+    const gov = findDupPairTarget('gov', 'true_owners');
+    assert.equal(gov.addrCol, null);
+  });
+  it('dia true_owners uses the real notice_address_1 column', () => {
+    const dia = findDupPairTarget('dia', 'true_owners');
+    assert.equal(dia.addrCol, 'notice_address_1');
+  });
+});
+
+describe('buildDupPairPrompt — Prompt 68 rubric additions', () => {
+  it('teaches typo-variant → same_party and different surnames → distinct', () => {
+    const p = buildDupPairPrompt({ a: { name: 'Invester' }, b: { name: 'Investar' }, method: 'name_near_miss' }, []);
+    assert.match(p, /Invester/);
+    assert.match(p, /Harrison/);
+    assert.match(p, /spelling variant/i);
+    assert.match(p, /surname/i);
   });
 });
 
