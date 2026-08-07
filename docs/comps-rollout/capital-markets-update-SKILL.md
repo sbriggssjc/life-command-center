@@ -96,6 +96,40 @@ After writing, run a numbers-match check: extract every bolded figure from the e
 the frozen packet (or the pinned view rows). This is deterministic verification — no creativity — and can run
 on-box (plain Python or a local model). Claude writes; the checker verifies.
 
+## Known quirks (exporter / data layer)
+Read before touching `api/capital-markets.js`, `api/_shared/cm-excel-export.js`, or a `cm_view_registry`
+row. Each bit someone once and is easy to reintroduce.
+
+- **A new series must be REGISTERED in `cm_view_registry` to get an x-axis crop — synthetic series
+  included.** The exporter crops each sheet's left edge to a per-series `display_from` (first period the
+  series clears its density floor) resolved from `cm_view_registry` by `chart_template_id`. A series with
+  **no registry row gets no crop and ships its whole history** (the 2001-start-instead-of-2007-03-31 bug).
+  When you add or re-home a sales-derived sheet:
+  1. Insert a `cm_view_registry` row (`ON CONFLICT (view_name) DO UPDATE`), then `SELECT
+     cm_refresh_display_from();`. Sales series share the TTM sale cohort, so set `n_column='ttm_count'` +
+     `n_source_view='cm_dialysis_count_ttm_q'` (threshold 25 / 4 consecutive q → `2007-03-31`); they do NOT
+     need their own count column.
+  2. **Synthetic series (`view_name_template` starts `__synthetic__:`) need the crop applied in code too.**
+     The realCharts fetch loop crops real views, but synthetic composers build rows *after* it — they read
+     `masterMonthlyRows` (uncropped back to 2001) or other charts, so they need an explicit
+     `cropRowsToDisplayFrom(rows, tmpl, resolveDisplayFrom(displayFromRows, id, view_name_template))` in the
+     `synthCharts` construction. Register them with the synthetic marker as the PK `view_name` (e.g.
+     `__synthetic__:quarterly_volume_bars`); `cm_compute_display_from` reads `n_source_view`, not
+     `view_name`, so the marker is fine, and `resolveDisplayFrom` matches on `chart_template_id`.
+  3. A YoY-delta synthetic (e.g. `pace_of_cap_rate_expansion`) inherits its already-cropped base series and
+     naturally starts ~one lag later (2008), so its 2007-03-31 crop is a harmless no-op — register it for
+     completeness, don't expect it to start 2007-03-31.
+
+- **Data_Bid_Ask "Achieved Cap (TTM)" is a native-chart HELPER column, not a view column — don't also add
+  a static one.** The `bid_ask_spread` injector spec (`cm-native-chart-injector.js`) declares a
+  `helperCols` entry `achieved_cap = avg_last_ask_cap + avg_bid_ask_spread` and binds the chart's navy
+  "Achieved" marker line to it dynamically via `String.fromCharCode(65 + cols.length)` (the column right
+  after the static `CHART_COLUMNS.bid_ask_spread` set; the R53 wrapper shifts it +1 for `period_label`).
+  The view's own `achieved_last_ask_cap` computes the *identical* value, so listing it in
+  `CHART_COLUMNS.bid_ask_spread` renders a **duplicate** "Achieved Cap (TTM)" column. Keep the helper (the
+  chart depends on it); do not re-add the static column. The distinct `min/max_last_ask_cap`
+  (Last Ask — Low/High) range columns are legitimate and stay.
+
 ## Reference
 - Build plan + packet shape: `docs/comps-rollout/capital-markets-update-PLAN.md` (Section 4, 7).
 - Companion deal-level skill: `comps-engine` (sales comps, not market-report copy).
