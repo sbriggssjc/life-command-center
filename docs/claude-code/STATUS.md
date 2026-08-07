@@ -441,6 +441,32 @@ static yaml retired to a GENERATED+stamped file (`npm run spec:chatgpt`); anti-d
 **Connector baseline (58):** fully green — all 7 tools correct.
 
 
+## Post-deploy verify 2026-08-07 (61/62 merged + live) + queue 63
+
+Deploy verified: `/version` = `c86cdf01381f` (git-pinned). First post-deploy extraction (03:05Z,
+DaVita Chilton WI OM) is **provider-stamped** (`_provider.final_provider=ollama`, qwen2.5:14b) and
+the hardened prompt performed: NOI $115,500 / price $1.65M / cap 7.0% (internally exact), tenant/SF/
+address filled — vs pre-61's 4% NOI recall. **⚠️ Intake still ran OLLAMA** — if
+`OLLAMA_SURFACES=summaries,roles,narrations,next_step` was set, intake should be cloud-primary;
+**Scott confirmed 2026-08-07: intake stays on ollama deliberately** — ride the hardened prompt;
+the 50-intake re-grade is the decision gate (interim-revert plan superseded by the strong first
+post-61 sample).
+**Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
+fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
+
+### U1 first dry-run REVIEWED 2026-08-07 — FAILED precision review → prompt 64 queued, flag stays OFF
+Scott ran `?score=1`: 649 candidates (lcc 278/dia 268/gov 103), 20 scored, **18/20 dismiss — many
+false positives**: ARC/ARHC SPE-code LLCs (`ARC3 GSCRGCO001, LLC` etc. — real net-lease SPEs),
+`SMBC` (Sumitomo Mitsui), `Brookfield Prop Prtnrs…` proposed dismiss; LLM reasons parrot the
+heuristic (no independent judgment); address-as-name rows dismissed instead of rename/link.
+True junk (`--`, `Test Test`) correctly caught. **Prompt 64** adds deterministic SPE/abbreviation/
+relationship-gate guards, a judge-don't-parrot rubric with the failures as few-shot fixtures, and a
+>50%-dismiss distribution guard that blocks apply. **Do NOT flip `W8_U1_JUNK_PRESCREEN` until 64
+lands + a clean re-run.**
+**Env finding from the same run:** scoring attributed `gpt-4o-mini` → `OLLAMA_SURFACES` is active
+and excludes `clean_assist` (and `intake`) — contradicts Scott's keep-intake-on-ollama decision.
+**Scott: unset `OLLAMA_SURFACES`** (all-local default) or set it to include `intake,clean_assist`.
+
 ## Reconcile 2026-08-06 (prompts 61 & 62 — landed as PRs, awaiting merge + redeploy)
 
 | # | Outcome | State |
