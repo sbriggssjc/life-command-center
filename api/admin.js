@@ -36,7 +36,8 @@ import {
 import {
   DUP_PAIR_TARGETS, findDupPairTarget, dupSideRef, dupPairKey, dupPairSubjectRef,
   generateCandidatePairs, excludeKnownPairs, buildDupPairPrompt, normalizeDupPairProposal,
-  parseDupPairJson, isProposablePair, scoreDupPairsWithBudget,
+  parseDupPairJson, isProposablePair, dupPairDisposition, DUP_PAIR_NEEDS_HUMAN_SIM,
+  scoreDupPairsWithBudget,
 } from './_shared/dup-pair-planner.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -1862,7 +1863,19 @@ async function fetchDupPairFewShot() {
 
 // Pull (pk, name[, address]) rows for a target, bounded by DUP_PAIR_MAX_RECORDS.
 // The JS generator is authoritative; the pull is a nightly ceiling (logged on hit).
-async function pullDupPairRecordsForTarget(target) {
+//
+// Prompt 68 coverage fixes:
+//   * LOUD error surfacing — a non-ok PostgREST response (e.g. a 403 edge-allowlist
+//     block or a 400 on a non-existent column) is NO LONGER swallowed to records:0.
+//     It is captured, logged as an error, and propagated so the dry-run/health show
+//     the real failure instead of a silent zero.
+//   * Resumable keyset window — instead of always scanning the first
+//     DUP_PAIR_MAX_RECORDS by pk, the scan starts AFTER `startCursor` (a keyset on
+//     the ascending pk) so successive nightly runs cover DIFFERENT slices of a
+//     table larger than the window (the 60k lcc.entities case). Returns the last pk
+//     seen as `nextCursor`; when the table end is reached it wraps (nextCursor=null
+//     ⇒ the next run restarts from the beginning).
+async function pullDupPairRecordsForTarget(target, startCursor) {
   const cols = target.pkCol + ',' + target.nameCol + (target.addrCol ? ',' + target.addrCol : '');
   const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
   const extraPred = target.extraFilter ? '&' + target.extraFilter : '';
@@ -1871,16 +1884,31 @@ async function pullDupPairRecordsForTarget(target) {
   const PAGE = 1000;
   let scanned = 0;
   let truncated = false;
-  for (let offset = 0; offset < DUP_PAIR_MAX_RECORDS; offset += PAGE) {
-    const path = target.table + '?select=' + cols + mergedPred + extraPred + namePred
-      + '&order=' + target.pkCol + '.asc&limit=' + PAGE + '&offset=' + offset;
+  let reachedEnd = false;
+  let lastPk = null;
+  let cursor = startCursor != null && String(startCursor) !== '' ? String(startCursor) : null;
+  for (let pulled = 0; pulled < DUP_PAIR_MAX_RECORDS; pulled += PAGE) {
+    const cursorPred = cursor != null ? '&' + target.pkCol + '=gt.' + encodeURIComponent(cursor) : '';
+    const path = target.table + '?select=' + cols + mergedPred + extraPred + namePred + cursorPred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE;
     const r = target.domain === 'lcc'
       ? await opsQuery('GET', path)
       : await domainQuery(target.domain, 'GET', path);
-    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    if (!r.ok) {
+      // LOUD: do not swallow to records:0. Surface status + detail.
+      const detail = r.data && typeof r.data === 'object'
+        ? (r.data.message || r.data.error || JSON.stringify(r.data)) : String(r.data || '');
+      const err = 'HTTP ' + (r.status || '?') + (detail ? ': ' + String(detail).slice(0, 300) : '');
+      console.error('[dup-pair] SCAN FAILED', target.domain, target.table, err, 'path=', path);
+      return { records, scanned, truncated, error: err, status: r.status || null,
+        nextCursor: startCursor != null ? String(startCursor) : null, wrapped: false };
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
     scanned += rows.length;
     for (const row of rows) {
       const pk = row[target.pkCol];
+      lastPk = pk;
+      cursor = String(pk);
       records.push({
         ref: dupSideRef(target.domain, target.table, pk),
         pk: String(pk),
@@ -1888,11 +1916,15 @@ async function pullDupPairRecordsForTarget(target) {
         address: target.addrCol ? (row[target.addrCol] == null ? '' : String(row[target.addrCol])) : '',
       });
     }
-    if (rows.length < PAGE) break;
-    if (offset + PAGE >= DUP_PAIR_MAX_RECORDS) truncated = true;
+    if (rows.length < PAGE) { reachedEnd = true; break; }
+    if (pulled + PAGE >= DUP_PAIR_MAX_RECORDS) truncated = true;
   }
   if (truncated) console.warn('[dup-pair] record scan truncated at cap', target.domain, target.table, DUP_PAIR_MAX_RECORDS);
-  return { records, scanned, truncated };
+  // Wrap the keyset when the table end was reached OR the window under-filled, so
+  // the next run restarts from the top; otherwise advance to the last pk seen.
+  const wrapped = reachedEnd || !truncated;
+  return { records, scanned, truncated, error: null, status: 200,
+    nextCursor: wrapped ? null : (lastPk == null ? null : String(lastPk)), wrapped };
 }
 
 // Extract the source pk from a dupSideRef (dom:table:pk → pk).
@@ -1931,17 +1963,49 @@ async function fetchDupPairKnownKeys() {
   return set;
 }
 
+// Read the per-target keyset cursors persisted on the most recent scan batch
+// (details.scan_cursors). U1-style: the ledger IS the cursor. Best-effort — an
+// empty map means every target starts from the top this run.
+async function fetchDupPairScanCursors() {
+  try {
+    const r = await opsQuery('GET', 'w8_u2_dup_pair_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && r.data[0].details.scan_cursors) {
+      const c = r.data[0].details.scan_cursors;
+      return c && typeof c === 'object' ? c : {};
+    }
+  } catch (_e) { /* best-effort */ }
+  return {};
+}
+
 // Deterministic generate + exclude across every target. Returns perDomain counts
-// + the capped fresh pair pool (unscored). NO LLM here (auditable gate).
-async function dupPairScanAll() {
+// + the capped fresh pair pool (unscored) + the advanced per-target cursors. NO
+// LLM here (auditable gate). `cursors` (from fetchDupPairScanCursors) starts each
+// target's keyset window; `nextCursors` is what the caller persists for next run.
+async function dupPairScanAll(cursors = {}) {
   const knownKeys = await fetchDupPairKnownKeys();
   const perDomain = {};
+  const nextCursors = {};
   const fresh = [];
   for (const target of DUP_PAIR_TARGETS) {
     const key = target.domain + ':' + target.table;
     let pull;
-    try { pull = await pullDupPairRecordsForTarget(target); }
-    catch (e) { perDomain[key] = { error: e?.message || String(e), records: 0, generated: 0, fresh: 0 }; continue; }
+    try { pull = await pullDupPairRecordsForTarget(target, cursors ? cursors[key] : null); }
+    catch (e) {
+      perDomain[key] = { domain: target.domain, table: target.table,
+        error: e?.message || String(e), records: 0, generated: 0, fresh: 0 };
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      continue;
+    }
+    // A failed scan (non-ok HTTP) surfaces LOUDLY with records:0 AND the error —
+    // never a silent zero. The cursor holds (retry the same slice next run).
+    if (pull.error) {
+      perDomain[key] = { domain: target.domain, table: target.table,
+        error: pull.error, status: pull.status || null, records: 0, generated: 0,
+        excluded_known: 0, fresh: 0, by_method: { name_near_miss: 0, same_address_diff_name: 0, abbrev_expansion: 0 },
+        truncated: false };
+      nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : (cursors ? (cursors[key] || null) : null);
+      continue;
+    }
     const generated = generateCandidatePairs(pull.records, {
       nameThreshold: DUP_PAIR_NAME_THRESHOLD, maxPairs: DUP_PAIR_MAX_PER_DOMAIN });
     const freshPairs = excludeKnownPairs(generated, knownKeys);
@@ -1951,14 +2015,17 @@ async function dupPairScanAll() {
       fresh.push({ domain: target.domain, table: target.table, pair: p,
         entity_a: dupRefPk(p.a.ref), entity_b: dupRefPk(p.b.ref) });
     }
+    nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : null;
     perDomain[key] = {
       domain: target.domain, table: target.table,
       records: pull.scanned, generated: generated.length,
       excluded_known: generated.length - freshPairs.length,
       fresh: freshPairs.length, by_method: byMethod, truncated: pull.truncated || false,
+      scan_cursor_from: (cursors && cursors[key]) || null,
+      scan_cursor_to: nextCursors[key], wrapped: pull.wrapped || false,
     };
   }
-  return { perDomain, fresh, knownKeys };
+  return { perDomain, fresh, knownKeys, nextCursors };
 }
 
 function dupPairDomainRollup(perDomain) {
@@ -1972,6 +2039,17 @@ function dupPairDomainRollup(perDomain) {
     roll[d].fresh += v.fresh || 0;
   }
   return roll;
+}
+
+// Collect per-target scan failures for LOUD surfacing (Prompt 68). A non-empty
+// list means a target returned a real HTTP error (e.g. 403 allowlist / 400 column)
+// instead of rows — never a silent records:0.
+function dupPairScanErrors(perDomain) {
+  const out = [];
+  for (const [key, v] of Object.entries(perDomain || {})) {
+    if (v && v.error) out.push({ target: key, status: v.status || null, error: v.error });
+  }
+  return out;
 }
 
 async function recordDupPairHealth({ status, count, lastError, details }) {
@@ -2033,13 +2111,16 @@ async function handleDupPairTick(req, res) {
       return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
     }
     const sourceRunId = 'w8u2_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
-    const scan = await dupPairScanAll();
+    const cursors = await fetchDupPairScanCursors();
+    const scan = await dupPairScanAll(cursors);
+    const scanErrors = dupPairScanErrors(scan.perDomain);
     const fewShot = await fetchDupPairFewShot();
     let scanBatchId = null;
     try {
       const br = await opsQuery('POST', 'w8_u2_dup_pair_batch',
         { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
-          details: { per_domain: scan.perDomain, rollup: dupPairDomainRollup(scan.perDomain), fresh: scan.fresh.length } },
+          details: { per_domain: scan.perDomain, rollup: dupPairDomainRollup(scan.perDomain),
+            fresh: scan.fresh.length, scan_cursors: scan.nextCursors, scan_errors: scanErrors } },
         { headers: { Prefer: 'return=representation' } });
       if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
     } catch (_e) { /* ledger best-effort */ }
@@ -2048,19 +2129,24 @@ async function handleDupPairTick(req, res) {
     const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
       per_domain: dupPairDomainRollup(scan.perDomain), pairs_generated: scan.fresh.length,
       batch_size: batchSize, budget_ms: DUP_PAIR_SCORE_BUDGET_MS, min_confidence: DUP_PAIR_MIN_CONFIDENCE,
-      scored: 0, proposed: 0, dropped_unsure: 0, failed: 0,
+      scan_errors: scanErrors, scan_cursors: scan.nextCursors,
+      scored: 0, proposed: 0, needs_human: 0, dropped_unsure: 0, failed: 0,
       budget_exhausted: false, remaining_unscored: scan.fresh.length, by_verdict: {} };
     const budgetRun = await scoreDupPairsWithBudget(scan.fresh, async (item) => {
       try {
         const { proposal, provider, model } = await scoreDupPair(item, fewShot);
         summary.scored += 1;
         summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
-        // Proposal-only, value-gated: only a DECIDED verdict above the floor
-        // persists. unsure / low-confidence is dropped (counted only) — the LLM
-        // verdict never writes anything on its own.
-        if (!isProposablePair(proposal, DUP_PAIR_MIN_CONFIDENCE)) { summary.dropped_unsure += 1; return null; }
+        // Proposal-only, value-gated (Prompt 68 three-way disposition): a DECIDED
+        // verdict above the floor persists as a model proposal; a high-core-sim
+        // `unsure` ROUTES to the human review lane (persisted as unsure — its best
+        // finds are typo-variant judgment calls); a low-sim unsure / below-floor
+        // verdict is dropped (counted only). The LLM verdict never merges.
+        const disp = dupPairDisposition(proposal, item.pair, { minConfidence: DUP_PAIR_MIN_CONFIDENCE });
+        if (disp === 'drop') { summary.dropped_unsure += 1; return null; }
         const wr = await upsertDupPairProposal(item, proposal, { provider, model, sourceRunId, scanBatchId });
-        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+        if (wr.ok) { if (disp === 'needs_human') summary.needs_human += 1; else summary.proposed += 1; }
+        else summary.failed += 1;
       } catch (e) {
         summary.failed += 1;
         console.warn('[dup-pair] score/write failed', item?.pair?.pairKey, e?.message || e);
@@ -2069,36 +2155,49 @@ async function handleDupPairTick(req, res) {
     }, { budgetMs: DUP_PAIR_SCORE_BUDGET_MS, maxN: batchSize });
     summary.budget_exhausted = budgetRun.budget_exhausted;
     summary.remaining_unscored = Math.max(0, scan.fresh.length - summary.scored - summary.failed);
-    await recordDupPairHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
-      lastError: summary.failed ? summary.failed + ' pair(s) failed in ' + sourceRunId : null, details: summary });
+    const persisted = summary.proposed + summary.needs_human;
+    const healthErr = scanErrors.length ? scanErrors.length + ' target scan(s) failed: ' + scanErrors.map((e) => e.target).join(',')
+      : (summary.failed ? summary.failed + ' pair(s) failed in ' + sourceRunId : null);
+    await recordDupPairHealth({ status: (summary.failed || scanErrors.length) ? 'amber' : 'green', count: persisted,
+      lastError: healthErr, details: summary });
     return res.status(200).json({ ok: true, mode: 'apply', ...summary });
   }
 
   // ---- GET dry-run: deterministic per-domain report; ?score=1 adds inline ---
-  // model proposals for sampling. NEVER writes.
-  const scan = await dupPairScanAll();
+  // model proposals for sampling. NEVER writes. Reads (does not advance) the
+  // persisted keyset cursors so the sample reflects the slice the next run scans.
+  const cursors = await fetchDupPairScanCursors();
+  const scan = await dupPairScanAll(cursors);
+  const scanErrors = dupPairScanErrors(scan.perDomain);
   const rollup = dupPairDomainRollup(scan.perDomain);
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
     per_target: scan.perDomain, per_domain: rollup, pairs_generated: scan.fresh.length,
+    scan_errors: scanErrors, scan_cursors: scan.nextCursors,
     sample: scan.fresh.slice(0, 20).map((i) => ({ domain: i.domain, table: i.table,
       pair_key: i.pair.pairKey, name_a: i.pair.a.name, name_b: i.pair.b.name,
       method: i.pair.method, similarity: i.pair.similarity, evidence: i.pair.evidence })) };
+  if (scanErrors.length) {
+    out.scan_error_note = scanErrors.length + ' target(s) FAILED to scan (surfaced, not swallowed): '
+      + scanErrors.map((e) => e.target + ' → ' + e.error).join(' | ');
+  }
   if (req.query.score === '1' || req.query.score === 'true') {
     const fewShot = await fetchDupPairFewShot();
     const inlineN = Math.min(60, Math.max(1, parseInt(req.query.n || String(DUP_PAIR_INLINE_DEFAULT_N), 10) || DUP_PAIR_INLINE_DEFAULT_N));
     const proposals = [];
     const byVerdict = {};
     let droppedUnsure = 0;
+    let needsHuman = 0;
     const budgetRun = await scoreDupPairsWithBudget(scan.fresh, async (item) => {
       try {
         const { proposal, provider, model } = await scoreDupPair(item, fewShot);
         byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
-        const proposable = isProposablePair(proposal, DUP_PAIR_MIN_CONFIDENCE);
-        if (!proposable) droppedUnsure += 1;
+        const disp = dupPairDisposition(proposal, item.pair, { minConfidence: DUP_PAIR_MIN_CONFIDENCE });
+        if (disp === 'drop') droppedUnsure += 1;
+        else if (disp === 'needs_human') needsHuman += 1;
         proposals.push({ pair_key: item.pair.pairKey, domain: item.domain, table: item.table,
           name_a: item.pair.a.name, name_b: item.pair.b.name, method: item.pair.method,
-          similarity: item.pair.similarity, ...proposal,
-          would_propose: proposable, model_provider: provider, model_name: model });
+          similarity: item.pair.similarity, ...proposal, disposition: disp,
+          would_propose: disp !== 'drop', model_provider: provider, model_name: model });
       } catch (e) { proposals.push({ pair_key: item?.pair?.pairKey, error: e?.message || String(e) }); }
       return null;
     }, { budgetMs: DUP_PAIR_SCORE_BUDGET_MS, maxN: inlineN });
@@ -2110,11 +2209,13 @@ async function handleDupPairTick(req, res) {
     out.remaining_unscored = Math.max(0, scan.fresh.length - proposals.length);
     out.by_verdict = byVerdict;
     out.dropped_unsure = droppedUnsure;
+    out.needs_human = needsHuman;
     out.would_propose = proposals.filter((p) => p.would_propose).length;
     out.proposals = proposals;
-    out.note = 'dry-run scoring — NO rows written. Only same_party/distinct proposals >= '
-      + DUP_PAIR_MIN_CONFIDENCE + ' confidence persist (both are training fuel); unsure/low-conf are dropped'
-      + ' (dropped_unsure). Review, then POST (with the flag ON).'
+    out.note = 'dry-run scoring — NO rows written. same_party/distinct proposals >= '
+      + DUP_PAIR_MIN_CONFIDENCE + ' confidence persist (both are training fuel); a high-core-similarity'
+      + ' unsure (>= ' + DUP_PAIR_NEEDS_HUMAN_SIM + ') routes to the human review lane (needs_human);'
+      + ' low-similarity unsure / below-floor is dropped (dropped_unsure). Review, then POST (with the flag ON).'
       + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + DUP_PAIR_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
   }
   return res.status(200).json(out);
