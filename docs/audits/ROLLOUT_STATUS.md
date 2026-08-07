@@ -3,6 +3,17 @@
 **Execution plan:** `docs/audits/LCC_Audit_Rollout_Plan.md`
 **Convention:** update this file at the end of every working session (Cowork or Claude Code). One line per unit: status, date, session type, verification result. Statuses: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked · 🚫 skipped (with reason).
 
+## Wave 8 — Ollama data-hygiene campaign (Scott's directive; kickoff `docs/audits/W53_AND_OLLAMA_HYGIENE_KICKOFF.md` Part 2)
+
+Doctrine: Ollama PROPOSES; a deterministic gate or a human lane DECIDES. No LLM in auditable gates. Evidence-grounded (verbatim quote). Never hard-delete; never retire an FK-referenced row. Reversible ledgers, flag-gated. Four units, sequenced (U1 → U4), each its own prompt.
+
+| Unit | What | Status | Notes |
+|---|---|---|---|
+| U1 | Junk-entity pre-screen (Prompt 62) | ✅ 2026-08-07 | Claude Code. Extends the prompt-32 clean-assist machinery (does NOT fork a parallel agent). Migration `20260807120000_lcc_w8_u1_junk_entity_prescreen.sql` applied live to LCC Opps: `junk_entity_review` (proposals) + `junk_review_batch` (reversible ledger) + `v_junk_entity_review_open` (federated-lane source) + `v_lcc_junk_prescreen_health` + flag **`W8_U1_JUNK_PRESCREEN` (OFF)** registered in-migration (36y) + nightly `junk-prescreen-tick` cron (03:40, no-ops while OFF). New route `/api/junk-prescreen-tick` (GET dry-run / `?score=1` inline model sample / POST apply, flag-gated) + `junk_entity_review` Decision Center federated lane (confirm→reversible soft-retire; **FK-referenced→conflict card, never delete**; rename/parse_contact→edit lane; keep→close). Deterministic candidate filter (`api/_shared/junk-prescreen.js`, NO LLM) + Ollama scores ONLY the candidate pool via `invokeExtractionAI`, few-shot-grounded on accrued `junk_entity_name` human verdicts. **Live scope pass (2026-08-07):** candidates — ops entities ~194 (90 all-digits + 104 too-short), dia 19 (ro 1 / to 1 / contacts 17), gov 8 (ro 2 / to 3 / contacts 3). Tests: `test/junk-prescreen.test.mjs` (28) + partition guard updated. Flag OFF ⇒ cron no-ops; zero writes without a human verdict. **Operator step before flip:** GET `/api/junk-prescreen-tick?score=1` for a sampleable proposal sheet, then flip `W8_U1_JUNK_PRESCREEN`→on. |
+| U2 | Duplicate proposals → resolver fuel | ⬜ | Its own prompt (later). |
+| U3 | Connection propagation (chain-unresolvable) | ⬜ | Its own prompt (later). |
+| U4 | Systemic-findings monthly report | ⬜ | Its own prompt (later). |
+
 ## Baseline metrics (2026-07-29, from live DBs — re-query at each wave verification)
 
 | Metric | dia | gov |

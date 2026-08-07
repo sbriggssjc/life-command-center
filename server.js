@@ -195,6 +195,7 @@ app.all('/api/priority-trigger-properties', (req, res) => { req.query._route = '
 app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'; adminHandler(req, res); });
 app.all('/api/ops-health', (req, res) => { req.query._route = 'ops-health'; adminHandler(req, res); });
 app.all('/api/ollama-clean-assist-tick', (req, res) => { req.query._route = 'ollama-clean-assist-tick'; adminHandler(req, res); });
+app.all('/api/junk-prescreen-tick', (req, res) => { req.query._route = 'junk-prescreen-tick'; adminHandler(req, res); });
 app.all('/api/fl-sos-enrich-link', (req, res) => { req.query._route = 'fl-sos-enrich-link'; adminHandler(req, res); });
 app.all('/api/resolve-owner-link', (req, res) => { req.query._route = 'resolve-owner-link'; adminHandler(req, res); });
 // R7 Phase 1 Slice 2 (2026-06-07): Decision Center list / verdict / SF search.

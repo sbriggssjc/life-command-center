@@ -1858,6 +1858,11 @@ var _DC_FEDERATED = new Set([
   // = dia duplicate-NPI clusters (review the data_error / approve the
   // auto_resolvable survivor — never a silent auto-collapse).
   'agency_risk_action', 'npi_dedup_review', 'npi_dedup_autoapprove',
+  // W8 U1 (Prompt 62): Ollama junk-entity pre-screen proposals. Source =
+  // v_junk_entity_review_open; verdict soft-retires (reversible) or routes an
+  // FK-referenced row to a conflict. Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'junk_entity_review',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1943,6 +1948,7 @@ async function renderReviewConsolePage() {
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
     { dt: 'owner_reconcile', label: 'Owner reconcile — same party?', open: "renderFederatedLane('owner_reconcile')" },
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
+    { dt: 'junk_entity_review', label: 'Junk entities — Ollama pre-screen', open: "renderFederatedLane('junk_entity_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },
@@ -2571,6 +2577,8 @@ const _DC_FED_META = {
     intro: 'Candidate SAME-PARTY owner pairs from three sources folded into one drain: the ORE multi-signal engine (LCC — verdicts only, auto-merge is OFF), the gov owner-unification queue, and gov+dia entity-match candidates. Each card shows the two owner records plus the evidence that linked them. Approve (LCC pairs merge via lcc_merge_entity; gov/dia rows are dispositioned — the domain merge is the resolver job), reject (records them distinct), or research. Every verdict is recorded so it is not re-asked AND writes a labeled pair into entity_match_labels — the training corpus for the Wave 4 resolver.' },
   sf_link_candidate: { title: 'Salesforce link — confirm candidate',
     intro: 'The W4.3 splink batch’s best Salesforce-account match per owner (gov + dia), value-ranked by owner impact. Link attaches the SF id via the existing owner-sync semantics (never overwrites a different existing id — that renders a three-way conflict card instead); Not a match records the pair distinct. Every verdict writes a labeled pair into entity_match_labels — the hard-negative training data the W4.4 retrain needs. Work them fast; the population is homogeneous (~0.85 probability), so trust your eyes per row.' },
+  junk_entity_review: { title: 'Junk entities — Ollama pre-screen',
+    intro: 'W8 U1 hygiene. A deterministic filter flagged possible junk / test / gibberish / bookkeeping-stub entity rows across dia/gov/ops; the local Ollama model scored each with a verdict + a verbatim evidence quote. Ollama PROPOSES only — you decide. Confirm applies the proposal (a "dismiss" soft-retires the row reversibly; a row still referenced by child records routes to a conflict card instead of retiring — never a hard delete). Keep leaves the row untouched. Every verdict is recorded (won’t re-ask) with a reversible ledger entry.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -3012,6 +3020,25 @@ function _fedCardHTML(it, i, isNext) {
         + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Not a match</button>'
         + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
     }
+  } else if (_dcFedType === 'junk_entity_review') {
+    // W8 U1: an Ollama junk-entity proposal. The model PROPOSED; the human
+    // decides. Confirm applies the proposal (dismiss => reversible soft-retire,
+    // unless FK-referenced => conflict); Keep leaves the row untouched.
+    const nm = c.entity_name || '(blank name)';
+    const pv = c.proposed_verdict || 'keep';
+    const conf = (c.confidence != null && isFinite(Number(c.confidence))) ? Number(c.confidence) : null;
+    const pvBadge = { dismiss: 'pri-high', rename: '', parse_contact: '', keep: 'type', uncertain: '' }[pv] || '';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(nm) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge">' + esc(c.table_name || '') + '</span>'
+      + '<span class="q-badge">' + esc(c.heuristic || '') + '</span>'
+      + '<span class="q-badge ' + pvBadge + '">proposes: ' + esc(pv) + '</span>'
+      + (conf != null ? '<span class="q-badge">conf ' + conf.toFixed(2) + '</span>' : '') + '</div></div>'
+      + (c.evidence_quote ? '<div class="q-item-meta">Evidence: <b>' + esc(String(c.evidence_quote)) + '</b></div>' : '')
+      + (c.reason ? '<div class="q-item-meta">' + esc(String(c.reason)) + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.7">Ollama proposes only — confirm to soft-retire (reversible; FK-referenced rows route to a conflict card), or keep.</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — retire junk</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — not junk</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + _cleanAssistHTML(it)
