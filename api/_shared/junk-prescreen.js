@@ -11,6 +11,8 @@
 // The live query + write side lives in api/admin.js (handleJunkPrescreenTick +
 // the junk_entity_review verdict branch); this module is the brain it calls.
 
+import { createHash } from 'node:crypto';
+
 // ---------------------------------------------------------------------------
 // Target catalogue — the entity-class tables we pre-screen across the 3 DBs.
 // Each target is fully self-describing so the tick + apply path stay generic:
@@ -106,6 +108,73 @@ export function parseJunkSubjectRef(ref) {
   const m = /^junk:([^:]+):([^:]+):(.+)$/.exec(String(ref || ''));
   if (!m) return null;
   return { domain: m[1], table: m[2], pk: m[3] };
+}
+
+// ---------------------------------------------------------------------------
+// W8 U1 bounded/resumable scoring (Prompt 66). Scoring is EXPENSIVE (ollama ~16s
+// / call), so the tick must (a) never re-score an already-scored candidate and
+// (b) never outrun the Railway proxy in one HTTP invocation.
+//
+// The already-scored dedupe keys on (domain, table, pk, name_hash): a candidate
+// scored (proposal persisted OR keep-counted) is recorded in the
+// junk_prescreen_scored ledger and skipped on subsequent ticks — UNLESS its name
+// changed (a new name_hash ⇒ a fresh candidate to re-judge). name_hash is a
+// stable short digest of the exact stored name.
+// ---------------------------------------------------------------------------
+export function junkNameHash(name) {
+  return createHash('sha1').update(String(name == null ? '' : name)).digest('hex').slice(0, 16);
+}
+
+// The dedupe key for the scored ledger: subject_ref (domain:table:pk) + name_hash.
+export function junkScoredKey(subjectRef, nameHash) {
+  return `${String(subjectRef || '')}:${String(nameHash || '')}`;
+}
+
+export function junkScoredKeyFor(candidate) {
+  const c = candidate || {};
+  return junkScoredKey(c.subject_ref, c.name_hash != null ? c.name_hash : junkNameHash(c.entity_name));
+}
+
+// Resume cursor (pure): drop candidates whose (subject_ref, name_hash) is already
+// in the scored set. A name change yields a new name_hash ⇒ NOT excluded ⇒
+// re-scored. This is how the resumable batches "remember" where they left off.
+export function selectUnscoredCandidates(candidates, scoredKeySet) {
+  const set = scoredKeySet instanceof Set ? scoredKeySet : new Set(scoredKeySet || []);
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!set.size) return list.slice();
+  return list.filter((c) => !set.has(junkScoredKeyFor(c)));
+}
+
+// Bounded scorer (pure, injectable clock): score at most `maxN` candidates and
+// stop early once the wall-clock budget is spent, so a single HTTP invocation
+// stays well under the proxy limit. The budget is checked BEFORE each call (never
+// start a call we can't afford to have started); `scoreOne(candidate, index)`
+// does the real work. Returns the scored results + honest counts.
+export async function scoreWithBudget(candidates, scoreOne, opts = {}) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+  const budgetMs = Number.isFinite(opts.budgetMs) ? opts.budgetMs : Infinity;
+  const maxN = Number.isFinite(opts.maxN) ? Math.max(0, opts.maxN) : list.length;
+  const cap = Math.min(maxN, list.length);
+  const start = now();
+  const results = [];
+  let budgetExhausted = false;
+  for (let i = 0; i < cap; i++) {
+    if (now() - start >= budgetMs) { budgetExhausted = true; break; }
+    // eslint-disable-next-line no-await-in-loop
+    results.push(await scoreOne(list[i], i));
+  }
+  const scored = results.length;
+  return {
+    results,
+    scored,
+    budget_exhausted: budgetExhausted,
+    // remaining candidates in the whole pool NOT scored this invocation.
+    remaining_unscored: Math.max(0, list.length - scored),
+    // how many were capped out by maxN (vs. the budget) — batch drain visibility.
+    capped: Math.max(0, list.length - cap),
+    cap,
+  };
 }
 
 // ---------------------------------------------------------------------------
