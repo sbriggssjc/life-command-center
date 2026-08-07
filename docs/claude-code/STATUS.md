@@ -454,6 +454,21 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 68 landed — PR #1607 (`e8252ef`), awaiting merge + redeploy
+All three U2 defects root-caused + fixed: (1) distinctive-core similarity — expanded generic-CRE
+stoplist + `coreIsPairable` gate (core ≥4 chars, ≥3-char token, never pure initials; initials pair
+only via same-address). All verbatim fixtures verified (Invester↔Investar pairs; P&A↔B&W,
+Owner↔Downer, T.D.↔I.C.E. never generate; Harrison↔Garrison → hard negative). (2) Coverage —
+ROOT CAUSE: gov `true_owners` has no scalar mailing column, dia's is `notice_address_1`; the old
+select 400'd at PostgREST and was swallowed to `records:0`. Fixed mapping; scan errors now surface
+LOUDLY (`scan_errors`); lcc 60k scan pages a resumable keyset cursor in the batch ledger.
+(3) Value logic — three-way `dupPairDisposition`: propose / **needs_human** (high-core-sim unsure →
+review lane, never dropped) / drop; rubric typo-variant vs surname guidance. 61 tests green; 3
+full-suite failures pre-existing. **Gate: merge #1607 → redeploy → re-run
+`/api/dup-pair-tick?score=1` (expect gov/dia non-zero or loud error, near-miss-only sample,
+Invester-class proposed) → THEN flip `W8_U2_DUP_PAIRS`.** Note: gov same-address method is
+unavailable (no scalar address column) — name-core method only on gov; acceptable, documented.
+
 ### U2 first dry-run REVIEWED 2026-08-07 — FAILED (3 flaws) → prompt 68 queued, flag stays OFF
 Scott ran `/api/dup-pair-tick?score=1`: (1) **similarity degenerate** — generic CRE vocabulary
 dominates char-similarity (`P & A Investments`↔`B & W REALTY INVESTMENT` 0.909, `Owner`↔`Downer &
