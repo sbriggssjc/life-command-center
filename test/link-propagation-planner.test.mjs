@@ -255,7 +255,8 @@ describe('structural guards — admin.js wiring (Prompt 69 doctrine)', () => {
     assert.match(admin, /w8_u3_link_review: unknown verdict/);
     // the apply path lives ONLY in the verdict handler; the tick writes proposals, not edges
     const tickStart = admin.indexOf('async function handleLinkPropagationTick');
-    const tickEnd = admin.indexOf('PRIORITY BAND', tickStart);
+    const tickEnd = admin.indexOf('PRIORITY QUEUE LIST', tickStart);
+    assert.ok(tickStart > 0 && tickEnd > tickStart);
     const tick = admin.slice(tickStart, tickEnd);
     assert.ok(!tick.includes("opsQuery('POST', 'entity_relationships'"), 'the tick must not write edges — only proposals');
   });
@@ -269,7 +270,7 @@ describe('structural guards — admin.js wiring (Prompt 69 doctrine)', () => {
   });
   it('no web search — internal evidence only (owner-contact-websearch is PAUSED)', () => {
     const start = admin.indexOf('W8 U3 (Prompt 69');
-    const end = admin.indexOf('PRIORITY BAND', start);
+    const end = admin.indexOf('PRIORITY QUEUE LIST', start);
     const section = admin.slice(start, end);
     assert.ok(!/websearch|web_search|owner-contact-websearch/i.test(section) || /PAUSED|internal evidence only/i.test(section));
   });

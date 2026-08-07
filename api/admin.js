@@ -2230,6 +2230,186 @@ async function handleDupPairTick(req, res) {
 }
 
 // ============================================================================
+// PRIORITY BAND (Phase 8, PR3 2026-05-30)
+// GET /api/priority-band?domain=gov&property_id=16404
+//   -> the owner's BD priority band for a property, from v_priority_queue_enriched
+//      on LCC Opps. Powers the owner-level row at the top of the property-detail
+//      prospecting feed. Returns null-ish ({band:null}) when the property's owner
+//      is not in the queue, so the front-end degrades gracefully.
+// Also accepts ?entity_id=<uuid> to look up an entity-level band directly.
+// ============================================================================
+async function handlePriorityBand(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'GET only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainRaw = String(req.query.domain || '').toLowerCase();
+  const domain = domainRaw === 'government' ? 'gov' : domainRaw === 'dialysis' ? 'dia' : domainRaw;
+  const propertyId = req.query.property_id != null ? String(req.query.property_id) : null;
+  const entityId = req.query.entity_id ? String(req.query.entity_id) : null;
+
+  if (!entityId && !(domain && propertyId)) {
+    return res.status(400).json({ error: 'Provide entity_id, or domain + property_id' });
+  }
+
+  const selectCols = [
+    'entity_id', 'name', 'vertical', 'priority_band', 'reason',
+    'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
+    'total_property_count', 'current_property_count', 'next_touch_due',
+    'days_overdue', 'source_domain', 'source_property_id', 'source_property_address',
+    // R11 Unit 2: coalesced rank value (portfolio rollup, else representative-
+    // property rent) so the detail banner can show the same $ value the queue ranks on.
+    'current_annual_rent_total', 'source_property_rent', 'rank_annual_rent',
+    // R14 trigger-band rollup so the detail banner can show the owner-level
+    // rollup (count + rollup rent + top property fact) on P1/P3/P5/P8.
+    'trigger_property_count', 'trigger_rollup_annual_rent', 'trigger_top_fact',
+    // R6: ownership-resolution context so the detail Next-Step banner stays
+    // consistent with the queue's P0.4 verdict (same state source).
+    'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
+    // R17: connect-band fallback value (P0.4 / P-CONTACT) — folded into
+    // rank_annual_rent; surfaced here so the detail banner can show it.
+    'connected_property_value', 'connected_property_count',
+  ].join(',');
+
+  let path;
+  if (entityId) {
+    path = 'v_priority_queue_enriched?select=' + selectCols
+         + '&entity_id=eq.' + pgFilterVal(entityId) + '&limit=1';
+  } else {
+    // source_domain on the view is canonical short-form (dia/gov) as of E2E#5
+    // (2026-06-03). Accept the legacy long form too during the transition so a
+    // not-yet-migrated row still matches. (This was the third dia/gov alias bug:
+    // the old eq.<long-form> filter silently missed every short-form row — e.g.
+    // P5 dia 26502 / Palestra Properties returned no band.)
+    const srcForms = domain === 'gov' ? '(gov,government)'
+                   : domain === 'dia' ? '(dia,dialysis)'
+                   : '(' + domain + ')';
+    path = 'v_priority_queue_enriched?select=' + selectCols
+         + '&source_domain=in.' + srcForms
+         + '&source_property_id=eq.' + pgFilterVal(propertyId)
+         + '&limit=1';
+  }
+
+  const r = await opsQuery('GET', path);
+  if (!r.ok) {
+    // Soft-fail: the front-end treats a non-ok / empty result as "no band".
+    console.warn('[priority-band] query failed:', r.status, r.data);
+    return res.status(200).json({ priority_band: null });
+  }
+  const row = Array.isArray(r.data) ? r.data[0] : (r.data || null);
+
+  // Persisted lead/cadence truth for the property's owner entity (Bug c,
+  // 2026-06-03). Resolve the open prospect opportunity + cadence keyed on the
+  // entity — either the one passed in, or the one the queue resolved for this
+  // property. This lets the property "Next step" banner render the real state
+  // ("Lead is live" / "On cadence ✓") on a fresh reopen instead of stale-
+  // banding back to "Create the lead". Falls back to null on any soft failure.
+  const effectiveEntityId = entityId || (row && row.entity_id) || null;
+  const oppState = effectiveEntityId
+    ? await resolveOwnerOppState(effectiveEntityId)
+    : { open_opportunity: false, bd_opportunity_id: null, cadence_next_touch_due: null };
+
+  if (!row) {
+    // No queue row: still surface the opportunity/cadence truth (the owner may
+    // be led but no longer "due", so they've dropped out of the band view).
+    return res.status(200).json({
+      priority_band: null,
+      entity_id: effectiveEntityId,
+      open_opportunity: oppState.open_opportunity,
+      bd_opportunity_id: oppState.bd_opportunity_id,
+      cadence_next_touch_due: oppState.cadence_next_touch_due,
+    });
+  }
+
+  // Normalize owner name + numeric confidence for the UI.
+  return res.status(200).json({
+    priority_band: row.priority_band || null,
+    reason: row.reason || null,
+    owner_name: row.name || null,
+    owner_role: row.effective_owner_role || null,
+    owner_role_confidence: row.owner_role_confidence != null ? Number(row.owner_role_confidence) : null,
+    is_cross_vertical: !!row.is_cross_vertical,
+    total_property_count: row.total_property_count != null ? Number(row.total_property_count) : null,
+    next_touch_due: row.next_touch_due || null,
+    days_overdue: row.days_overdue != null ? Number(row.days_overdue) : null,
+    entity_id: row.entity_id || null,
+    source_property_address: row.source_property_address || null,
+    open_opportunity: oppState.open_opportunity,
+    bd_opportunity_id: oppState.bd_opportunity_id,
+    cadence_next_touch_due: oppState.cadence_next_touch_due,
+    // R6 ownership-resolution context (drives the banner's "Resolve ownership
+    // & control" step when the owner isn't yet connected).
+    resolve_reason: row.resolve_reason || null,
+    resolve_true_owner_name: row.resolve_true_owner_name || null,
+    resolve_is_connected: row.resolve_is_connected != null ? !!row.resolve_is_connected : null,
+    // R14 trigger-band rollup (P1/P3/P5/P8): owner-level count + rollup rent +
+    // the top property's fact (NULL on every other band).
+    trigger_property_count: row.trigger_property_count != null ? Number(row.trigger_property_count) : null,
+    trigger_rollup_annual_rent: row.trigger_rollup_annual_rent != null ? Number(row.trigger_rollup_annual_rent) : null,
+    trigger_top_fact: row.trigger_top_fact || null,
+  });
+}
+
+// Resolve an owner entity's persisted BD state: is there an OPEN prospect
+// opportunity, and what is the latest cadence next-touch date. Two cheap reads
+// against LCC Opps; soft-fails to "no opportunity" so the banner degrades
+// gracefully. (Bug c, 2026-06-03)
+async function resolveOwnerOppState(entityId) {
+  const out = { open_opportunity: false, bd_opportunity_id: null, cadence_next_touch_due: null };
+  try {
+    const oppR = await opsQuery('GET',
+      'bd_opportunities?select=id&entity_id=eq.' + pgFilterVal(entityId)
+      + '&type=eq.prospect&is_open=is.true&order=opened_at.desc&limit=1');
+    if (oppR.ok && Array.isArray(oppR.data) && oppR.data[0]) {
+      out.open_opportunity = true;
+      out.bd_opportunity_id = oppR.data[0].id || null;
+    }
+  } catch (_e) { /* soft-fail */ }
+  try {
+    const cadR = await opsQuery('GET',
+      'touchpoint_cadence?select=next_touch_due&entity_id=eq.' + pgFilterVal(entityId)
+      + '&order=updated_at.desc&limit=1');
+    if (cadR.ok && Array.isArray(cadR.data) && cadR.data[0]) {
+      out.cadence_next_touch_due = cadR.data[0].next_touch_due || null;
+    }
+  } catch (_e) { /* soft-fail */ }
+  return out;
+}
+
+// Batch-resolve open-prospect-opportunity state for a page of priority-queue
+// rows (R4-C §2 state-aware CTA). One cheap read per ~80 entities lets the
+// front-end pick the right CTA per row (Open opportunity / Log touch / View
+// opportunity) instead of always showing "Open opportunity →". Soft-fails to
+// leaving open_opportunity undefined so the UI falls back to band inference.
+async function attachPqOppState(items) {
+  const ids = Array.from(new Set(
+    (Array.isArray(items) ? items : [])
+      .map(it => it && it.entity_id)
+      .filter(Boolean)
+      .map(String)
+  ));
+  if (!ids.length) return;
+  const openSet = new Set();
+  for (let i = 0; i < ids.length; i += 80) {
+    const chunk = ids.slice(i, i + 80);
+    // UUIDs are safe inside an unquoted PostgREST in.() list.
+    const inList = 'in.(' + chunk.join(',') + ')';
+    try {
+      const r = await opsQuery('GET',
+        'bd_opportunities?select=entity_id&type=eq.prospect&is_open=is.true&entity_id=' + inList);
+      if (r.ok && Array.isArray(r.data)) {
+        for (const row of r.data) if (row && row.entity_id) openSet.add(String(row.entity_id));
+      }
+    } catch (_e) { /* soft-fail: leave this chunk unresolved */ }
+  }
+  for (const it of items) {
+    if (it && it.entity_id) it.open_opportunity = openSet.has(String(it.entity_id));
+  }
+}
+
+// ============================================================================
 // W8 U3 (Prompt 69, 2026-08-07): Ollama connection propagation — evidence-grounded
 // link proposals.
 //
@@ -2627,186 +2807,6 @@ async function handleLinkPropagationTick(req, res) {
       + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + LINK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
   }
   return res.status(200).json(out);
-}
-
-// ============================================================================
-// PRIORITY BAND (Phase 8, PR3 2026-05-30)
-// GET /api/priority-band?domain=gov&property_id=16404
-//   -> the owner's BD priority band for a property, from v_priority_queue_enriched
-//      on LCC Opps. Powers the owner-level row at the top of the property-detail
-//      prospecting feed. Returns null-ish ({band:null}) when the property's owner
-//      is not in the queue, so the front-end degrades gracefully.
-// Also accepts ?entity_id=<uuid> to look up an entity-level band directly.
-// ============================================================================
-async function handlePriorityBand(req, res) {
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'GET only' });
-  }
-  const user = await authenticate(req, res);
-  if (!user) return;
-
-  const domainRaw = String(req.query.domain || '').toLowerCase();
-  const domain = domainRaw === 'government' ? 'gov' : domainRaw === 'dialysis' ? 'dia' : domainRaw;
-  const propertyId = req.query.property_id != null ? String(req.query.property_id) : null;
-  const entityId = req.query.entity_id ? String(req.query.entity_id) : null;
-
-  if (!entityId && !(domain && propertyId)) {
-    return res.status(400).json({ error: 'Provide entity_id, or domain + property_id' });
-  }
-
-  const selectCols = [
-    'entity_id', 'name', 'vertical', 'priority_band', 'reason',
-    'owner_role_confidence', 'effective_owner_role', 'is_cross_vertical',
-    'total_property_count', 'current_property_count', 'next_touch_due',
-    'days_overdue', 'source_domain', 'source_property_id', 'source_property_address',
-    // R11 Unit 2: coalesced rank value (portfolio rollup, else representative-
-    // property rent) so the detail banner can show the same $ value the queue ranks on.
-    'current_annual_rent_total', 'source_property_rent', 'rank_annual_rent',
-    // R14 trigger-band rollup so the detail banner can show the owner-level
-    // rollup (count + rollup rent + top property fact) on P1/P3/P5/P8.
-    'trigger_property_count', 'trigger_rollup_annual_rent', 'trigger_top_fact',
-    // R6: ownership-resolution context so the detail Next-Step banner stays
-    // consistent with the queue's P0.4 verdict (same state source).
-    'resolve_reason', 'resolve_true_owner_name', 'resolve_is_connected',
-    // R17: connect-band fallback value (P0.4 / P-CONTACT) — folded into
-    // rank_annual_rent; surfaced here so the detail banner can show it.
-    'connected_property_value', 'connected_property_count',
-  ].join(',');
-
-  let path;
-  if (entityId) {
-    path = 'v_priority_queue_enriched?select=' + selectCols
-         + '&entity_id=eq.' + pgFilterVal(entityId) + '&limit=1';
-  } else {
-    // source_domain on the view is canonical short-form (dia/gov) as of E2E#5
-    // (2026-06-03). Accept the legacy long form too during the transition so a
-    // not-yet-migrated row still matches. (This was the third dia/gov alias bug:
-    // the old eq.<long-form> filter silently missed every short-form row — e.g.
-    // P5 dia 26502 / Palestra Properties returned no band.)
-    const srcForms = domain === 'gov' ? '(gov,government)'
-                   : domain === 'dia' ? '(dia,dialysis)'
-                   : '(' + domain + ')';
-    path = 'v_priority_queue_enriched?select=' + selectCols
-         + '&source_domain=in.' + srcForms
-         + '&source_property_id=eq.' + pgFilterVal(propertyId)
-         + '&limit=1';
-  }
-
-  const r = await opsQuery('GET', path);
-  if (!r.ok) {
-    // Soft-fail: the front-end treats a non-ok / empty result as "no band".
-    console.warn('[priority-band] query failed:', r.status, r.data);
-    return res.status(200).json({ priority_band: null });
-  }
-  const row = Array.isArray(r.data) ? r.data[0] : (r.data || null);
-
-  // Persisted lead/cadence truth for the property's owner entity (Bug c,
-  // 2026-06-03). Resolve the open prospect opportunity + cadence keyed on the
-  // entity — either the one passed in, or the one the queue resolved for this
-  // property. This lets the property "Next step" banner render the real state
-  // ("Lead is live" / "On cadence ✓") on a fresh reopen instead of stale-
-  // banding back to "Create the lead". Falls back to null on any soft failure.
-  const effectiveEntityId = entityId || (row && row.entity_id) || null;
-  const oppState = effectiveEntityId
-    ? await resolveOwnerOppState(effectiveEntityId)
-    : { open_opportunity: false, bd_opportunity_id: null, cadence_next_touch_due: null };
-
-  if (!row) {
-    // No queue row: still surface the opportunity/cadence truth (the owner may
-    // be led but no longer "due", so they've dropped out of the band view).
-    return res.status(200).json({
-      priority_band: null,
-      entity_id: effectiveEntityId,
-      open_opportunity: oppState.open_opportunity,
-      bd_opportunity_id: oppState.bd_opportunity_id,
-      cadence_next_touch_due: oppState.cadence_next_touch_due,
-    });
-  }
-
-  // Normalize owner name + numeric confidence for the UI.
-  return res.status(200).json({
-    priority_band: row.priority_band || null,
-    reason: row.reason || null,
-    owner_name: row.name || null,
-    owner_role: row.effective_owner_role || null,
-    owner_role_confidence: row.owner_role_confidence != null ? Number(row.owner_role_confidence) : null,
-    is_cross_vertical: !!row.is_cross_vertical,
-    total_property_count: row.total_property_count != null ? Number(row.total_property_count) : null,
-    next_touch_due: row.next_touch_due || null,
-    days_overdue: row.days_overdue != null ? Number(row.days_overdue) : null,
-    entity_id: row.entity_id || null,
-    source_property_address: row.source_property_address || null,
-    open_opportunity: oppState.open_opportunity,
-    bd_opportunity_id: oppState.bd_opportunity_id,
-    cadence_next_touch_due: oppState.cadence_next_touch_due,
-    // R6 ownership-resolution context (drives the banner's "Resolve ownership
-    // & control" step when the owner isn't yet connected).
-    resolve_reason: row.resolve_reason || null,
-    resolve_true_owner_name: row.resolve_true_owner_name || null,
-    resolve_is_connected: row.resolve_is_connected != null ? !!row.resolve_is_connected : null,
-    // R14 trigger-band rollup (P1/P3/P5/P8): owner-level count + rollup rent +
-    // the top property's fact (NULL on every other band).
-    trigger_property_count: row.trigger_property_count != null ? Number(row.trigger_property_count) : null,
-    trigger_rollup_annual_rent: row.trigger_rollup_annual_rent != null ? Number(row.trigger_rollup_annual_rent) : null,
-    trigger_top_fact: row.trigger_top_fact || null,
-  });
-}
-
-// Resolve an owner entity's persisted BD state: is there an OPEN prospect
-// opportunity, and what is the latest cadence next-touch date. Two cheap reads
-// against LCC Opps; soft-fails to "no opportunity" so the banner degrades
-// gracefully. (Bug c, 2026-06-03)
-async function resolveOwnerOppState(entityId) {
-  const out = { open_opportunity: false, bd_opportunity_id: null, cadence_next_touch_due: null };
-  try {
-    const oppR = await opsQuery('GET',
-      'bd_opportunities?select=id&entity_id=eq.' + pgFilterVal(entityId)
-      + '&type=eq.prospect&is_open=is.true&order=opened_at.desc&limit=1');
-    if (oppR.ok && Array.isArray(oppR.data) && oppR.data[0]) {
-      out.open_opportunity = true;
-      out.bd_opportunity_id = oppR.data[0].id || null;
-    }
-  } catch (_e) { /* soft-fail */ }
-  try {
-    const cadR = await opsQuery('GET',
-      'touchpoint_cadence?select=next_touch_due&entity_id=eq.' + pgFilterVal(entityId)
-      + '&order=updated_at.desc&limit=1');
-    if (cadR.ok && Array.isArray(cadR.data) && cadR.data[0]) {
-      out.cadence_next_touch_due = cadR.data[0].next_touch_due || null;
-    }
-  } catch (_e) { /* soft-fail */ }
-  return out;
-}
-
-// Batch-resolve open-prospect-opportunity state for a page of priority-queue
-// rows (R4-C §2 state-aware CTA). One cheap read per ~80 entities lets the
-// front-end pick the right CTA per row (Open opportunity / Log touch / View
-// opportunity) instead of always showing "Open opportunity →". Soft-fails to
-// leaving open_opportunity undefined so the UI falls back to band inference.
-async function attachPqOppState(items) {
-  const ids = Array.from(new Set(
-    (Array.isArray(items) ? items : [])
-      .map(it => it && it.entity_id)
-      .filter(Boolean)
-      .map(String)
-  ));
-  if (!ids.length) return;
-  const openSet = new Set();
-  for (let i = 0; i < ids.length; i += 80) {
-    const chunk = ids.slice(i, i + 80);
-    // UUIDs are safe inside an unquoted PostgREST in.() list.
-    const inList = 'in.(' + chunk.join(',') + ')';
-    try {
-      const r = await opsQuery('GET',
-        'bd_opportunities?select=entity_id&type=eq.prospect&is_open=is.true&entity_id=' + inList);
-      if (r.ok && Array.isArray(r.data)) {
-        for (const row of r.data) if (row && row.entity_id) openSet.add(String(row.entity_id));
-      }
-    } catch (_e) { /* soft-fail: leave this chunk unresolved */ }
-  }
-  for (const it of items) {
-    if (it && it.entity_id) it.open_opportunity = openSet.has(String(it.entity_id));
-  }
 }
 
 // ============================================================================
