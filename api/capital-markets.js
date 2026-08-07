@@ -571,7 +571,16 @@ function clampRowsToAsOf(rows, template, asOf) {
     shape.startsWith('time_series') ||
     shape.startsWith('monthly') ||
     shape.startsWith('quarterly') ||
-    shape.includes('yearly');
+    shape.includes('yearly') ||
+    // Historical as-of (2026-08-07): these snapshot shapes carry a REAL
+    // historical date in period_end (quarter-anchored cohort tables and
+    // per-sale dot clouds where period_end = sale_date), so clamping to
+    // <= as_of is correct — it selects the reporting quarter and drops
+    // sales/quarters that had not happened yet. (Active-inventory snapshots
+    // like tenant/term/per-listing are handled by _q reconstruction instead,
+    // never by this date clamp, which would wrongly empty a max()-only view.)
+    shape.startsWith('cohort_comparison') ||
+    shape.startsWith('per_sale');
   if (!isTimeSeries) return rows;
   const col = timeAxisColumnFor(template); // 'year' | 'period_end'
   // R68-E (G3): apply the per-chart lower bound (data-side x-axis crop).
@@ -613,6 +622,92 @@ export function cropRowsToDisplayFrom(rows, template, df) {
   return rows.filter(
     (r) => r?.period_end == null || String(r.period_end).slice(0, 10) >= String(cutoff).slice(0, 10)
   );
+}
+
+// ============================================================================
+// Historical as-of resolution (CM historical regeneration, 2026-08-07)
+// ============================================================================
+//
+// The export accepts ?as_of=YYYY-MM-DD. It is validated/snapped to a QUARTER
+// END and defaults to the latest COMPLETED quarter — the JS mirror of the SQL
+// `cm_last_completed_quarter_end()` (= date_trunc('quarter', current_date) - 1
+// day). A value that lands mid-quarter is snapped down to that quarter's end; a
+// value beyond the latest completed quarter is clamped back to it (a report can
+// never be "as of" an in-progress quarter). Unparseable input is rejected by
+// the caller (asOf === null).
+
+/** Quarter end (last calendar day of the quarter containing `d`), ISO date. */
+export function quarterEndOf(d) {
+  const dt = new Date(String(d).slice(0, 10) + 'T00:00:00Z');
+  if (Number.isNaN(dt.getTime())) return null;
+  const endMonth = Math.floor(dt.getUTCMonth() / 3) * 3 + 2; // 2,5,8,11
+  // Day 0 of the following month = last day of endMonth.
+  return new Date(Date.UTC(dt.getUTCFullYear(), endMonth + 1, 0)).toISOString().slice(0, 10);
+}
+
+/** Latest COMPLETED quarter end — JS mirror of cm_last_completed_quarter_end(). */
+export function latestCompletedQuarterEnd(today = new Date()) {
+  const startMonth = Math.floor(today.getUTCMonth() / 3) * 3;
+  const firstOfQuarter = Date.UTC(today.getUTCFullYear(), startMonth, 1);
+  return new Date(firstOfQuarter - 86400000).toISOString().slice(0, 10);
+}
+
+/**
+ * Resolve the requested as_of into a validated quarter-end.
+ * Returns { asOf, latest, defaulted, snapped } — asOf is null only when the
+ * caller passed an unparseable date (→ 400).
+ */
+export function resolveAsOf(raw) {
+  const latest = latestCompletedQuarterEnd();
+  if (raw == null || String(raw).trim() === '') {
+    return { asOf: latest, latest, defaulted: true, snapped: false };
+  }
+  const s = String(raw).slice(0, 10);
+  const qe = quarterEndOf(s);
+  if (!qe) return { asOf: null, latest, defaulted: false, snapped: false };
+  const clamped = qe > latest ? latest : qe;
+  return { asOf: clamped, latest, defaulted: false, snapped: clamped !== s };
+}
+
+// Snapshot feeds whose CURRENT-only views (max(period_end)) have a
+// period_end-keyed `_q` reconstruction sibling. For these, when exporting, we
+// fetch the `_q` view and select the requested quarter. Reconstruction is only
+// wired for verticals that actually have the `_q` views built (dialysis today);
+// any other vertical falls back to the current snapshot + an honest
+// "not historical" stamp on the sheet (see snapshot_not_historical below).
+const RECONSTRUCTABLE_QVIEW = {
+  available_by_tenant:         'cm_{vertical}_available_by_tenant_q',
+  available_by_term_bucket:    'cm_{vertical}_available_by_term_bucket_q',
+  available_cap_rate_dot_plot: 'cm_{vertical}_available_cap_dot_q',
+};
+const RECONSTRUCTABLE_VERTICALS = new Set(['dialysis']);
+
+// Data shapes that are point-in-time active-inventory snapshots (current-only
+// unless a `_q` reconstruction exists). Used to stamp sheets "Snapshot as of
+// <generation date> — not historical" when a historical as_of is requested but
+// the feed can't be reconstructed for this vertical.
+const CURRENT_ONLY_SNAPSHOT_SHAPES = new Set([
+  'tenant_summary_table',
+  'term_bucket_table',
+  'per_listing_snapshot',
+]);
+
+/**
+ * From a period_end-keyed reconstruction view, keep only the rows at the target
+ * quarter = the greatest period_end <= asOf. Selecting the latest quarter
+ * reproduces the current max(period_end) snapshot views exactly.
+ */
+export function selectSnapshotPeriod(rows, asOf) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const cap = String(asOf).slice(0, 10);
+  let target = null;
+  for (const r of rows) {
+    const p = String(r?.period_end || '').slice(0, 10);
+    if (!p || p > cap) continue;
+    if (target === null || p > target) target = p;
+  }
+  if (target === null) return [];
+  return rows.filter((r) => String(r?.period_end || '').slice(0, 10) === target);
 }
 
 /**
@@ -927,6 +1022,26 @@ async function fetchQuarterly(req, res) {
 async function exportWorkbook(req, res) {
   const { vertical, subspecialty = 'all', as_of, format = 'xlsx' } = req.query;
   if (!vertical) return res.status(400).json({ error: 'vertical required' });
+
+  // Historical as-of (2026-08-07): validate/snap to a quarter end; default =
+  // latest completed quarter. resolvedAsOf drives every sheet query, the
+  // display-window clamp, snapshot reconstruction, the filename, and the Cover
+  // "As of:" stamp — so the whole workbook is internally consistent.
+  const asOfResolution = resolveAsOf(as_of);
+  if (asOfResolution.asOf === null) {
+    return res.status(400).json({
+      error: 'invalid_as_of',
+      as_of,
+      hint: 'as_of must be a date (YYYY-MM-DD). It is snapped to the enclosing quarter end and defaults to the latest completed quarter.',
+    });
+  }
+  const resolvedAsOf = asOfResolution.asOf;
+  if (res && typeof res.setHeader === 'function') {
+    res.setHeader('X-CM-AsOf', resolvedAsOf);
+    res.setHeader('X-CM-AsOf-Latest', asOfResolution.latest);
+    res.setHeader('X-CM-AsOf-Defaulted', String(asOfResolution.defaulted));
+  }
+
   if (format !== 'xlsx') {
     return res.status(400).json({
       error: 'unsupported_format',
@@ -980,7 +1095,7 @@ async function exportWorkbook(req, res) {
   }
 
   // CM export audit item 4 — treasury freshness step, before the workbook build.
-  const treasuryFreshness = await ensureTreasuryFreshForExport(domain, as_of);
+  const treasuryFreshness = await ensureTreasuryFreshForExport(domain, resolvedAsOf);
   if (res && typeof res.setHeader === 'function') {
     res.setHeader('X-CM-Treasury-Max', treasuryFreshness.maxDate || 'none');
     res.setHeader('X-CM-Treasury-Stale', String(treasuryFreshness.stale));
@@ -1074,10 +1189,31 @@ async function exportWorkbook(req, res) {
   };
 
   const chartFetches = realTemplates.map(async (tmpl) => {
-    const view_name = tmpl.view_name_template.replace('{vertical}', vertical);
+    // Historical as-of: for the current-only available-inventory snapshot
+    // feeds, redirect to the period_end-keyed `_q` reconstruction view (when
+    // this vertical has one) and select the requested quarter. Selecting the
+    // latest quarter reproduces the current max() snapshot views exactly.
+    const qViewTmpl = RECONSTRUCTABLE_QVIEW[tmpl.chart_template_id];
+    const reconstructed = !!qViewTmpl && RECONSTRUCTABLE_VERTICALS.has(vertical);
+    const view_name = (reconstructed ? qViewTmpl : tmpl.view_name_template)
+      .replace('{vertical}', vertical);
+    // A historical as_of on a current-only snapshot with NO reconstruction
+    // (e.g. gov's tenant/term/per-listing feeds) must be labeled honestly on
+    // the sheet rather than silently mislabeled as the report quarter.
+    const snapshot_not_historical =
+      !reconstructed &&
+      CURRENT_ONLY_SNAPSHOT_SHAPES.has(String(tmpl.data_shape || '').toLowerCase()) &&
+      resolvedAsOf !== asOfResolution.latest;
     const orderCol = timeAxisColumnFor(tmpl);
     try {
       const result = await fetchView(view_name, orderCol);
+      // Reconstructed feeds: narrow the all-quarters view to the target period
+      // BEFORE clamp/crop so the composers + data tab see just that quarter.
+      const rawRows = result.ok !== false ? (result.data || []) : [];
+      const baseRows = reconstructed ? selectSnapshotPeriod(rawRows, resolvedAsOf) : rawRows;
+      const snapshot_period = reconstructed
+        ? (baseRows[0]?.period_end ? String(baseRows[0].period_end).slice(0, 10) : null)
+        : null;
       return {
         chart_template_id: tmpl.chart_template_id,
         name: tmpl.name,
@@ -1096,11 +1232,7 @@ async function exportWorkbook(req, res) {
         // so Data_* tabs never bleed past the report quarter (see
         // clampRowsToAsOf). Snapshot/table/kpi shapes pass through untouched.
         rows: cropRowsToDisplayFrom(
-          clampRowsToAsOf(
-            result.ok !== false ? (result.data || []) : [],
-            tmpl,
-            as_of
-          ),
+          clampRowsToAsOf(baseRows, tmpl, resolvedAsOf),
           tmpl,
           resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, view_name)
         ),
@@ -1109,6 +1241,10 @@ async function exportWorkbook(req, res) {
         // writer can stamp "FETCH FAILED — re-export" instead of a silent
         // 0-row tab that looks like a data gap.
         fetch_failed: result.ok === false,
+        // Historical as-of provenance for the sheet stamps.
+        reconstructed,
+        snapshot_period,
+        snapshot_not_historical,
       };
     } catch (e) {
       return {
@@ -1537,7 +1673,7 @@ async function exportWorkbook(req, res) {
         // realCharts-driven one.
         const df = resolveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name);
         c.rows = cropRowsToDisplayFrom(
-          clampRowsToAsOf(mapper(masterMonthlyRows), c, as_of),
+          clampRowsToAsOf(mapper(masterMonthlyRows), c, resolvedAsOf),
           c,
           df
         );
@@ -1625,7 +1761,7 @@ async function exportWorkbook(req, res) {
     chartImages = [];
   }
 
-  const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
+  const filename = exportFilename({ vertical, subspecialty, asOf: resolvedAsOf });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   // R66b — never cache the export at the browser/edge/proxy layer. The workbook
@@ -1656,7 +1792,7 @@ async function exportWorkbook(req, res) {
       const buf = await buildDialysisMasterWorkbook({
         masterRows: masterMonthlyRows,
         subspecialty,
-        asOf: as_of,
+        asOf: resolvedAsOf,
       });
       console.log(`[exportWorkbook] master_template path OK: ${buf.length} bytes from ${masterMonthlyRows.length} rows`);
       res.setHeader('X-CM-Workbook-Path', 'master_template');
@@ -1698,7 +1834,7 @@ async function exportWorkbook(req, res) {
   const wb = buildCapitalMarketsWorkbook({
     vertical,
     subspecialty,
-    asOf: as_of || null,
+    asOf: resolvedAsOf,
     charts,
     brand,
     masterRows,

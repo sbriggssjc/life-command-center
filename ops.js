@@ -3120,7 +3120,8 @@ function _fedCardHTML(it, i, isNext) {
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">' + confirmLabel + '</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject — keep untouched</button>';
   }
-  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
+  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '"'
+    + (c.kind ? ' data-seeder="' + esc(String(c.kind)) + '"' : '') + '>' + body
     + _cleanAssistHTML(it)
     + '<div class="q-actions">' + actions + '</div></div>';
 }
@@ -3148,6 +3149,37 @@ async function renderFederatedLane(type, view) {
           : '<button class="q-action" onclick="renderFederatedLane(\'intake_disposition\', \'all\')">Show all (matched · noise) →</button>')
       + '</div></div>';
   }
+  // W8: owner_reconcile folds 5 seeders into one drain, so the 38 w8_u2_ollama_pair
+  // cards were undiscoverable inside the ~5.3k lane. Backend now sorts them first +
+  // returns per-seeder sub-counts (res.data.parts); render one-click seeder chips so
+  // the Ollama pairs are immediately reachable. Filtering is client-side on the
+  // shown cards (via each card's data-seeder attribute).
+  if (type === 'owner_reconcile') {
+    const parts = (res.data && res.data.parts) || {};
+    const shownByKind = {};
+    items.forEach(function (it) { var k = (it.context && it.context.kind) || 'other'; shownByKind[k] = (shownByKind[k] || 0) + 1; });
+    const SEEDER_LABELS = {
+      w8_u2_ollama_pair: 'Ollama pairs', ore: 'ORE multi-signal',
+      owner_unification: 'Owner unification (gov)', entity_match_candidate: 'Entity match (gov+dia)',
+    };
+    // Order: Ollama pairs first (the discoverability fix), then the rest by sub-count.
+    const chipKeys = Object.keys(SEEDER_LABELS).filter(function (k) { return (parts[k] || shownByKind[k]); });
+    chipKeys.sort(function (a, b) {
+      if (a === 'w8_u2_ollama_pair') return -1; if (b === 'w8_u2_ollama_pair') return 1;
+      return (parts[b] || 0) - (parts[a] || 0);
+    });
+    if (chipKeys.length > 1) {
+      const totalCount = (total != null) ? total : items.length;
+      html += '<div class="pq-chips" id="ownRecSeederChips" style="margin:6px 0">';
+      html += '<button class="pq-chip active" data-seeder-chip="" onclick="dcFedSeederFilter(\'\')">All <b>' + esc(String(totalCount.toLocaleString())) + '</b></button>';
+      chipKeys.forEach(function (k) {
+        const n = (parts[k] != null) ? parts[k] : (shownByKind[k] || 0);
+        html += '<button class="pq-chip" data-seeder-chip="' + esc(k) + '" onclick="dcFedSeederFilter(\'' + esc(k) + '\')">'
+          + esc(SEEDER_LABELS[k]) + ' <b>' + esc(String(Number(n).toLocaleString())) + '</b></button>';
+      });
+      html += '</div>';
+    }
+  }
   if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
   html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
     + (total != null ? ' · ' + total.toLocaleString() + ' workable in this lane' : '') + '</div>';
@@ -3166,6 +3198,22 @@ async function renderFederatedLane(type, view) {
   el.innerHTML = html;
 }
 window.renderFederatedLane = renderFederatedLane;
+
+// W8 owner_reconcile seeder chip: filter the shown cards to a single seeder
+// (client-side, by each card's data-seeder attribute). Empty kind = show all.
+function dcFedSeederFilter(kind) {
+  const el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.querySelectorAll('.q-item[id^="dc-f"]').forEach(function (card) {
+    const k = card.getAttribute('data-seeder') || '';
+    card.style.display = (!kind || k === kind) ? '' : 'none';
+  });
+  const chips = document.getElementById('ownRecSeederChips');
+  if (chips) chips.querySelectorAll('.pq-chip').forEach(function (b) {
+    b.classList.toggle('active', (b.getAttribute('data-seeder-chip') || '') === (kind || ''));
+  });
+}
+window.dcFedSeederFilter = dcFedSeederFilter;
 
 // R59 Unit 3 — per-lane SAFE bulk verdict (record-only / non-destructive only).
 var _DC_BULK_SAFE = {

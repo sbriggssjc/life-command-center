@@ -70,7 +70,7 @@ import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
   snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES, classifyStagedIntake,
 } from './_shared/intake-classify.js';
-import { normalizeState, parseContactFromJunk } from './_shared/entity-link.js';
+import { normalizeState, parseContactFromJunk, normalizeCanonicalName } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -4536,8 +4536,13 @@ async function fetchFederatedSource(type, cap, opts) {
         confidence: row.confidence, evidence_quote: row.evidence_quote, reason: row.reason },
     }));
 
+    // W8: the 38 Ollama dup-pair proposals were undiscoverable inside the ~5.3k
+    // folded lane (ranked by confidence, they sank below the shown cap). Sort the
+    // w8_u2_ollama_pair seeder FIRST (then by rank within each group) so every one
+    // is in the shown window + reachable via the "Ollama pairs" chip.
+    const seederRank = (it) => (it && it.context && it.context.kind === 'w8_u2_ollama_pair') ? 0 : 1;
     out.items = aItems.concat(bItems).concat(cGov).concat(cDia).concat(dItems)
-      .sort((a, b) => b.rank_value - a.rank_value);
+      .sort((a, b) => (seederRank(a) - seederRank(b)) || (b.rank_value - a.rank_value));
 
     // Honest counts (each seeder's pending universe). The LCC review count is an
     // upper bound (multiple evidence rows can exist per pair - deduped in items);
@@ -4551,6 +4556,15 @@ async function fetchFederatedSource(type, cap, opts) {
     ]);
     out.total = (ac == null && bc == null && ccGov == null && ccDia == null && dc == null)
       ? null : (ac || 0) + (bc || 0) + (ccGov || 0) + (ccDia || 0) + (dc || 0);
+    // Per-seeder sub-counts so the lane can render seeder filter chips (the
+    // w8_u2_ollama_pair chip is the one that surfaces the buried 38). Keyed by the
+    // context.kind the frontend filters on.
+    out.parts = {
+      w8_u2_ollama_pair: dc || 0,
+      ore: ac || 0,
+      owner_unification: bc || 0,
+      entity_match_candidate: (ccGov || 0) + (ccDia || 0),
+    };
     return out;
   }
 
@@ -4634,7 +4648,11 @@ async function listFederatedLane(type, limit, offset, opts) {
     subject_property_id: it.subject_property_id, subject_ref: it.subject_ref,
     context: it.context, rank_value: it.rank_value,
   }));
-  return { type, mode: 'federated', total, items: await attachCleanAssistProposals(items) };
+  const ret = { type, mode: 'federated', total, items: await attachCleanAssistProposals(items) };
+  // Surface per-seeder sub-counts (e.g. owner_reconcile's w8_u2_ollama_pair) so the
+  // lane can render seeder filter chips against the honest universe counts.
+  if (src.parts) ret.parts = src.parts;
+  return ret;
 }
 
 async function handleDecisionsList(req, res) {
@@ -5359,17 +5377,46 @@ async function handleDecisionVerdict(req, res) {
           if (wr.ok && Array.isArray(wr.data) && wr.data[0]) ws = wr.data[0].id; } catch (_e) { /* honest fail below */ }
       }
 
-      // Resolve the linked entity (exact-name, unambiguous) or mint it fresh.
+      // Resolve the linked entity (by HOUSE canonical_name, unambiguous) or mint
+      // it fresh — mirrors ensureEntityLink's resolve-before-mint. Matching on the
+      // normalized canonical_name (not the raw name) collapses "Trammell Crow" /
+      // "TRAMMELL CROW" variants onto one entity instead of minting a duplicate.
+      // ≥2 canonical matches is genuine ambiguity → conflict card, never guess.
       let linkedEntityId = null; let createdEntityId = null;
       const edom = review.domain === 'lcc' ? 'lcc' : review.domain;
-      try {
-        const er = await opsQuery('GET', 'entities?select=id&name=eq.' + pgFilterVal(linkedName)
-          + '&merged_into_entity_id=is.null&order=created_at.asc&limit=2');
-        if (er.ok && Array.isArray(er.data) && er.data.length === 1) linkedEntityId = er.data[0].id;
-      } catch (_e) { /* fall through to mint */ }
+      const linkedCanonical = normalizeCanonicalName(linkedName);
+      let canonMatches = [];
+      if (linkedCanonical) {
+        try {
+          const er = await opsQuery('GET', 'entities?select=id,name&canonical_name=eq.' + pgFilterVal(linkedCanonical)
+            + '&merged_into_entity_id=is.null&order=created_at.asc&limit=2');
+          if (er.ok && Array.isArray(er.data)) canonMatches = er.data;
+        } catch (_e) { /* fall through to mint */ }
+      }
+      if (canonMatches.length === 1) {
+        linkedEntityId = canonMatches[0].id;
+      } else if (canonMatches.length >= 2) {
+        // ≥2 entities share this canonical_name — ambiguous. Never guess which one
+        // the proposal means → conflict card (mirrors no_current_owner_entity).
+        const led = await opsQuery('POST', 'w8_u3_link_apply_log',
+          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+            status: 'conflict', actor: user.id || null, reversal: {},
+            details: { reason: 'ambiguous_entity_match', linked_entity_name: linkedName,
+              canonical_name: linkedCanonical, match_count: canonMatches.length } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+          { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'ambiguous_entity_match' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'ambiguous_entity_match', review_id: review.review_id });
+      }
       if (!linkedEntityId) {
+        // entities.canonical_name is NOT NULL — always mint WITH the house canonical
+        // (fall back to the lowercased name when the normalizer strips to empty).
+        const mintCanonical = linkedCanonical || linkedName.trim().toLowerCase();
         const mr = await opsQuery('POST', 'entities',
-          { workspace_id: ws, name: linkedName, entity_type: 'organization', domain: edom,
+          { workspace_id: ws, name: linkedName, canonical_name: mintCanonical, entity_type: 'organization', domain: edom,
             metadata: { created_by: 'w8_u3_link_propagation', evidence_quote: review.evidence_quote || null } },
           { headers: { Prefer: 'return=representation' } });
         if (!mr.ok || !Array.isArray(mr.data) || !mr.data[0]) {

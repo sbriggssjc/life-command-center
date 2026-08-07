@@ -1524,6 +1524,38 @@
   }
 
   // ---- HTML skeleton ---------------------------------------------------------
+  // Historical as-of quarter picker (2026-08-07). Latest COMPLETED quarter end
+  // = first day of the current quarter minus one day (mirrors the server's
+  // cm_last_completed_quarter_end() / resolveAsOf default). Offers the latest
+  // plus the prior 11 quarters; the empty value lets the server default.
+  function latestCompletedQuarterEndClient(today = new Date()) {
+    const startMonth = Math.floor(today.getUTCMonth() / 3) * 3;
+    const firstOfQuarter = Date.UTC(today.getUTCFullYear(), startMonth, 1);
+    return new Date(firstOfQuarter - 86400000).toISOString().slice(0, 10);
+  }
+  function quarterEndBackClient(latest, k) {
+    const m = String(latest).match(/^(\d{4})-(\d{2})/);
+    if (!m) return latest;
+    const idx = (+m[1]) * 4 + (Math.ceil(+m[2] / 3) - 1) - k;
+    const ty = Math.floor(idx / 4);
+    const month = ((idx % 4) + 1) * 3; // 3,6,9,12
+    const day = (month === 6 || month === 9) ? 30 : 31;
+    return `${ty}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+  function asOfOptions() {
+    const latest = latestCompletedQuarterEndClient();
+    const opts = [];
+    for (let k = 0; k < 12; k++) {
+      const qe = quarterEndBackClient(latest, k);
+      const ym = qe.match(/^(\d{4})-(\d{2})/);
+      const label = ym ? `${ym[1]} Q${Math.ceil(+ym[2] / 3)} (${qe})` : qe;
+      const sel = k === 0 ? ' selected' : '';
+      const latestTag = k === 0 ? ' — latest' : '';
+      opts.push(`<option value="${qe}"${sel}>${label}${latestTag}</option>`);
+    }
+    return opts.join('');
+  }
+
   function renderSkeleton(vertical) {
     const navy = brandColor('nm_navy', '#003DA5');
     const subRows = (cmState.subspecialties[vertical] || []).map(s =>
@@ -1584,6 +1616,12 @@
                   <option value="retail">Retail</option>
                 ` : ''}
                 ${subRows}
+              </select>
+            </div>
+            <div>
+              <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px" title="Regenerate the workbook as of a past quarter end. Charts and snapshots are reconstructed to that quarter.">As of:</label>
+              <select id="cm-asof-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
+                ${asOfOptions()}
               </select>
             </div>
             <button id="cm-export-workbook-btn" style="padding:8px 14px;background:${navy};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download brand-styled .xlsx with all chart data — V1 ships data tabs only; V2 will embed pre-built charts bound to these tabs">
@@ -2046,9 +2084,16 @@
         exportBtn.disabled = true;
         exportBtn.textContent = '⏳ Generating…';
         try {
-          const charts = await loadQuarterly(vertical, cmState.currentSubspecialty);
-          const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
-          const asOf = latestVol?.period_end || '';
+          // Historical as-of: use the quarter picker. Empty → server defaults
+          // to the latest completed quarter. Falls back to the latest volume
+          // period only if the picker isn't present.
+          const asofSel = document.getElementById('cm-asof-select');
+          let asOf = asofSel ? asofSel.value : '';
+          if (!asOf) {
+            const charts = await loadQuarterly(vertical, cmState.currentSubspecialty);
+            const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
+            asOf = latestVol?.period_end || '';
+          }
 
           // R66b — cache-bust. The export URL was deterministic, so the browser
           // (and any edge cache) could replay a stale prior workbook even after
