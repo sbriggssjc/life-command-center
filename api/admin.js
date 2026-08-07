@@ -28,9 +28,9 @@ import { domainQuery } from './_shared/domain-db.js';
 import { invokeExtractionAI } from './_shared/ai.js';
 import {
   JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
-  junkCandidateReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
+  junkCandidateReason, namingHygieneReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
   parseJunkVerdictJson, planJunkApply, buildRetireMarker,
-  applyPrescreenGuards, dismissDistributionGuard,
+  applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
 } from './_shared/junk-prescreen.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -1336,6 +1336,9 @@ async function pullJunkCandidatesForTarget(target) {
   const cols = target.pkCol + ',' + target.nameCol;
   const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
   const found = [];
+  // Naming-hygiene backlog (Prompt 65): abbrev / address rows are REAL entities,
+  // NOT U1 junk — counted per class, never enqueued.
+  const namingHygiene = { known_abbreviation: 0, address_as_name: 0, total: 0 };
   const PAGE = 1000;
   let scanned = 0;
   let truncated = false;
@@ -1350,13 +1353,21 @@ async function pullJunkCandidatesForTarget(target) {
     for (const row of rows) {
       const name = row[target.nameCol];
       const hit = junkCandidateReason(name);
-      if (!hit) continue;
+      if (!hit) {
+        // Not junk — is it a naming-hygiene backlog row? (count only, no enqueue)
+        const hy = namingHygieneReason(name);
+        if (hy) {
+          namingHygiene[hy.heuristic] = (namingHygiene[hy.heuristic] || 0) + 1;
+          namingHygiene.total += 1;
+        }
+        continue;
+      }
       const pk = row[target.pkCol];
       found.push({
         domain: target.domain, table: target.table, pk: String(pk),
         entity_name: name == null ? '' : String(name),
         heuristic: hit.heuristic, evidence: hit.evidence,
-        preVerdict: hit.preVerdict || null, acronymOnly: hit.acronymOnly || false,
+        acronymOnly: hit.acronymOnly || false,
         subject_ref: junkSubjectRef(target.domain, target.table, pk),
         context: { pk_col: target.pkCol, name_col: target.nameCol },
       });
@@ -1365,7 +1376,41 @@ async function pullJunkCandidatesForTarget(target) {
     if (offset + PAGE >= JUNK_PRESCREEN_MAX_SCAN) truncated = true;
   }
   if (truncated) console.warn('[junk-prescreen] scan truncated at cap', target.domain, target.table, JUNK_PRESCREEN_MAX_SCAN);
-  return { candidates: found, scanned, truncated };
+  return { candidates: found, scanned, truncated, namingHygiene };
+}
+
+// Scan-time batch connection check (Prompt 65). A candidate that is FK-referenced
+// / carries identities or relationships is by definition NOT junk, so it is
+// EXCLUDED from the pool BEFORE scoring (killing both the wasted per-row LLM/probe
+// cost and the keep-flood). Returns the set of connected pks (as strings) for the
+// given target across its configured fkChildren, batched via `in.(…)`. A failed
+// batch probe treats those pks as connected (safe: excluded from the junk pool).
+// The per-row junkFkReferenced remains the apply-path safety net (belt + braces).
+async function junkConnectedPkSet(target, pks) {
+  const connected = new Set();
+  const children = target.fkChildren || [];
+  if (!pks.length || !children.length) return connected;
+  const CHUNK = 100;
+  for (const child of children) {
+    for (let i = 0; i < pks.length; i += CHUNK) {
+      const slice = pks.slice(i, i + CHUNK);
+      const inList = slice.map((p) => encodeURIComponent(p)).join(',');
+      const path = child.table + '?select=' + child.col + '&' + child.col + '=in.(' + inList + ')';
+      try {
+        const r = target.domain === 'lcc'
+          ? await opsQuery('GET', path)
+          : await domainQuery(target.domain, 'GET', path);
+        const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+        for (const row of rows) {
+          const v = row[child.col];
+          if (v != null) connected.add(String(v));
+        }
+      } catch (_e) {
+        for (const p of slice) connected.add(String(p));
+      }
+    }
+  }
+  return connected;
 }
 
 // FK guard (hazard class): true when the row is referenced by ANY configured
@@ -1412,12 +1457,26 @@ async function junkScanAll() {
     try { pull = await pullJunkCandidatesForTarget(target); }
     catch (e) { perDomain[key] = { error: e?.message || String(e), candidates: 0, scanned: 0 }; continue; }
     const newOnes = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
+    // Scan-time connection exclusion (Prompt 65): drop connected rows BEFORE
+    // scoring — a referenced record is not junk regardless of name shape.
+    let connectedSet = new Set();
+    try { connectedSet = await junkConnectedPkSet(target, newOnes.map((c) => c.pk)); }
+    catch (_e) { connectedSet = new Set(); }
+    let excludedConnected = 0;
+    const enqueueable = [];
+    for (const c of newOnes) {
+      if (connectedSet.has(String(c.pk))) { excludedConnected += 1; continue; }
+      enqueueable.push(c);
+    }
     perDomain[key] = {
       domain: target.domain, table: target.table,
       scanned: pull.scanned, candidates: pull.candidates.length,
-      new: newOnes.length, truncated: pull.truncated || false,
+      new: newOnes.length, excluded_connected: excludedConnected,
+      enqueueable: enqueueable.length,
+      naming_hygiene: pull.namingHygiene || { total: 0 },
+      truncated: pull.truncated || false,
     };
-    for (const c of newOnes) fresh.push(c);
+    for (const c of enqueueable) fresh.push(c);
   }
   return { perDomain, fresh };
 }
@@ -1426,10 +1485,28 @@ function junkDomainRollup(perDomain) {
   const roll = {};
   for (const v of Object.values(perDomain)) {
     const d = v.domain || 'unknown';
-    roll[d] = roll[d] || { scanned: 0, candidates: 0, new: 0 };
+    roll[d] = roll[d] || { scanned: 0, candidates: 0, new: 0, excluded_connected: 0, enqueueable: 0, naming_hygiene: 0 };
     roll[d].scanned += v.scanned || 0;
     roll[d].candidates += v.candidates || 0;
     roll[d].new += v.new || 0;
+    roll[d].excluded_connected += v.excluded_connected || 0;
+    roll[d].enqueueable += v.enqueueable || 0;
+    roll[d].naming_hygiene += (v.naming_hygiene && v.naming_hygiene.total) || 0;
+  }
+  return roll;
+}
+
+// Per-domain naming-hygiene backlog rollup (Prompt 65) — abbrev/address counts
+// only, no rows enqueued. Its own future rename/normalize campaign, not U1.
+function junkNamingHygieneRollup(perDomain) {
+  const roll = {};
+  for (const v of Object.values(perDomain)) {
+    const d = v.domain || 'unknown';
+    const hy = v.naming_hygiene || {};
+    roll[d] = roll[d] || { total: 0, known_abbreviation: 0, address_as_name: 0 };
+    roll[d].total += hy.total || 0;
+    roll[d].known_abbreviation += hy.known_abbreviation || 0;
+    roll[d].address_as_name += hy.address_as_name || 0;
   }
   return roll;
 }
@@ -1536,7 +1613,8 @@ async function handleJunkPrescreenTick(req, res) {
     const selected = scan.fresh.slice(0, limit);
     const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
       per_domain: junkDomainRollup(scan.perDomain), candidates_new: scan.fresh.length,
-      scored: 0, proposed: 0, failed: 0, by_verdict: {} };
+      naming_hygiene_backlog: junkNamingHygieneRollup(scan.perDomain),
+      scored: 0, proposed: 0, kept_not_enqueued: 0, failed: 0, by_verdict: {} };
     // Phase 1 — score all selected candidates (NO writes yet) so the verdict
     // distribution is known before we persist anything.
     const scoredRows = [];
@@ -1564,8 +1642,12 @@ async function handleJunkPrescreenTick(req, res) {
         details: summary });
       return res.status(200).json({ ok: true, mode: 'apply', skipped: 'suspect_distribution', proposed: 0, ...summary });
     }
-    // Phase 2 — persist the vetted proposals.
+    // Phase 2 — persist ONLY actionable proposals (Prompt 65). A keep (LLM or
+    // guard veto) or an uncertain is a non-event: counted as kept_not_enqueued
+    // and dropped, never written — persisting it would flood the lane with
+    // nothing-to-do cards (honest-counts).
     for (const { cand, proposal, provider, model } of scoredRows) {
+      if (!isEnqueueableJunkVerdict(proposal.verdict)) { summary.kept_not_enqueued += 1; continue; }
       try {
         const wr = await upsertJunkProposal(cand, proposal, { provider, model, sourceRunId, scanBatchId });
         if (wr.ok) summary.proposed += 1;
@@ -1586,30 +1668,37 @@ async function handleJunkPrescreenTick(req, res) {
   const rollup = junkDomainRollup(scan.perDomain);
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
     per_target: scan.perDomain, per_domain: rollup, candidates_new: scan.fresh.length,
+    naming_hygiene_backlog: junkNamingHygieneRollup(scan.perDomain),
     sample: scan.fresh.slice(0, 20) };
   if (req.query.score === '1' || req.query.score === 'true') {
     const fewShot = await fetchJunkFewShot();
     const n = Math.min(limit, scan.fresh.length);
     const proposals = [];
     const byVerdict = {};
+    let keptNotEnqueued = 0;
     for (let i = 0; i < n; i++) {
       const cand = scan.fresh[i];
       try {
         const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
         byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        const enqueueable = isEnqueueableJunkVerdict(proposal.verdict);
+        if (!enqueueable) keptNotEnqueued += 1;
         proposals.push({ subject_ref: cand.subject_ref, domain: cand.domain, table: cand.table,
-          entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal, model_provider: provider, model_name: model });
+          entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal,
+          would_enqueue: enqueueable, model_provider: provider, model_name: model });
       } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
     }
     const dist = dismissDistributionGuard(byVerdict);
     out.scored = proposals.length;
     out.by_verdict = byVerdict;
+    out.kept_not_enqueued = keptNotEnqueued;
+    out.would_enqueue = proposals.filter((p) => p.would_enqueue).length;
     out.distribution = dist;
     out.suspect_distribution = dist.suspect_distribution;
     out.proposals = proposals;
     out.note = dist.suspect_distribution
       ? 'dry-run scoring — NO rows written. ⚠️ SUSPECT DISTRIBUTION (' + Math.round(dist.dismiss_share * 100) + '% dismiss > ' + Math.round(dist.threshold * 100) + '%): a POST apply would be REFUSED for this batch.'
-      : 'dry-run scoring — NO rows written. Review, then POST (with the flag ON) to persist proposals.';
+      : 'dry-run scoring — NO rows written. Only dismiss/rename/parse_contact proposals persist; keeps are counted (kept_not_enqueued) and dropped. Review, then POST (with the flag ON).';
   }
   return res.status(200).json(out);
 }
