@@ -454,6 +454,19 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 69 (W8 U3) landed — PR #1609, migration LIVE (Cowork-verified), flag OFF, awaiting merge+redeploy
+Full unit per spec: planner (value-gate ordering, bounded evidence assembly, VERBATIM-quote
+validator → `w8_u3_dropped_log`, no-evidence short-circuit, evidence-hash resumable markers),
+`/api/link-propagation-tick`, `w8_u3_link_review` DC lane, deterministic provenance writer
+(verdict CHECK has NO merge shape), reversible apply log. Cowork-verified live: flag off, cron
+`10 4 * * *` (staggered after U1/U2), **2 fsp rows for `w8_u3_link_propagation`**, unranked view =
+33 (all pre-existing W6.6 baseline — U3 adds 0 drift). Pool grounded: 3,405 chain gaps
+(developer_unidentified 1,226 / no_prior_owners 2,179) + 258 person-email candidates. 36 planner
+tests; 3 full-suite failures pre-existing; clean-assist guard conflict found+fixed by relocation
+(`114a8a2`). **Gate: merge #1609 → redeploy → `GET /api/link-propagation-tick?score=1&n=6`
+(every would-propose must carry quote_verbatim=true; no_evidence_found honest) → Cowork flips
+`W8_U3_LINK_PROPAGATION`.**
+
 ### Queued 2026-08-07: prompt 69 (W8 U3 — connection propagation)
 Grounded live first — **premise correction:** `lcc_chain_unresolvable` is EMPTY; U3 targets
 `v_ownership_chain_worklist` (3,405 ranked rows, gap types e.g. developer_unidentified) +
