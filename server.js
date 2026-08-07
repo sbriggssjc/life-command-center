@@ -335,6 +335,17 @@ app.all('/api/comps', compsHandler);
 app.all('/api/query-comps', queryCompsHandler);
 app.all('/api/synthesize-comps', queryCompsHandler);
 
+// Prompt 68 — Copilot-namespaced comps routes. These set _copilot_path so the
+// shared authenticate() M365 passthrough applies (same as briefing/queue and the
+// other /api/copilot/{category}/:action routes), removing comps' dependence on a
+// matching LCC_API_KEY that the other connector tools never send. The flat routes
+// above stay keyed for the ChatGPT / MCP surfaces (which do send a real key).
+// _copilot_path also carries the synthesize-vs-query signal the flat routes derive
+// from req.path, so queryCompsHandler routes to the right engine endpoint.
+app.all('/api/copilot/comps/synthesize-comps', (req, res) => { req.query._copilot_path = 'synthesize-comps'; queryCompsHandler(req, res); });
+app.all('/api/copilot/comps/query-comps', (req, res) => { req.query._copilot_path = 'query-comps'; queryCompsHandler(req, res); });
+app.all('/api/copilot/comps/generate-comps', (req, res) => { req.query._copilot_path = 'generate-comps'; compsHandler(req, res); });
+
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
 app.all('/api/contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });

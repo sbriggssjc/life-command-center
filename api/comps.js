@@ -19,34 +19,23 @@
 //   BOV_BRIDGE_TOKEN  optional — shared secret gating this endpoint
 // ============================================================================
 
-import { handleCors } from './_shared/auth.js';
+import { handleCors, authenticate } from './_shared/auth.js';
 
 const BOV_SERVICE_URL = (process.env.BOV_SERVICE_URL || 'https://pacific-love-production-f6b9.up.railway.app').replace(/\/+$/, '');
 const BOV_API_KEY = process.env.BOV_API_KEY || '';
-const BOV_BRIDGE_TOKEN = process.env.BOV_BRIDGE_TOKEN || '';
-const LCC_API_KEY = process.env.LCC_API_KEY || '';
-
-function providedBridgeKey(req) {
-  return req.headers['x-lcc-key']
-    || req.headers['x-api-key']
-    || (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
-    || (req.query && (req.query.k || req.query.key))
-    || (req.body && (req.body._k || req.body.api_key || req.body.lcc_api_key))
-    || '';
-}
 
 export default async function compsHandler(req, res) {
   if (handleCors(req, res)) return;
 
-  // Optional shared-secret gate (only enforced when configured).
-  const allowedBridgeTokens = [BOV_BRIDGE_TOKEN, LCC_API_KEY].filter(Boolean);
-  if (allowedBridgeTokens.length) {
-    const provided = providedBridgeKey(req);
-    if (!allowedBridgeTokens.includes(provided)) {
-      res.status(401).json({ error: 'Unauthorized — invalid or missing bridge token.' });
-      return;
-    }
-  }
+  // Prompt 68 — inbound CALLER auth now rides the shared authenticate() (same as
+  // operationsHandler / the other connector tools). Copilot-namespaced calls carry
+  // _copilot_path → M365 passthrough; ChatGPT/MCP flat-route calls send a real
+  // LCC_API_KEY → validated; anonymous flat-route calls still 401 in production.
+  // The bearer parse in authenticate() tolerates a doubled "Bearer " prefix.
+  // BOV_API_KEY stays entirely server-side — it is the OUTBOUND key to the BOV
+  // service below and is never checked against the inbound caller.
+  const user = await authenticate(req, res);
+  if (!user) return;
 
   if (!BOV_API_KEY) {
     res.status(500).json({ error: 'Comps service not configured — set BOV_API_KEY on the Copilot service.' });
