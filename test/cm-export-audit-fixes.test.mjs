@@ -116,3 +116,100 @@ test('Data_DOM_Ask column headers state the % of Original List basis (audit item
   assert.ok(headerVals.includes('% of Original List'), `headers: ${headerVals.join(' | ')}`);
   assert.ok(!headerVals.includes('% of Ask Price'), 'stale "% of Ask Price" header must be gone');
 });
+
+// ---------------------------------------------------------------------------
+// 2026-08-07 follow-up — dual-builder root-cause fixes (Sentiment/Bid-Ask/
+// Returns full columns via wrapper views), display_from re-crop after the
+// master_m override, dead-column prune, Ask-Cap n basis label, provenance stamp.
+// ---------------------------------------------------------------------------
+
+const headersOf = (wb, tab) => {
+  const sheet = wb.getWorksheet(tab);
+  if (!sheet) return null;
+  const out = [];
+  sheet.eachRow((row) => row.eachCell((cell) => { if (typeof cell.value === 'string') out.push(cell.value); }));
+  return out;
+};
+
+test('Data_Bid_Ask emits Low/High/Achieved when the wrapper rows carry min/max/achieved (item 1)', () => {
+  const charts = [{
+    chart_template_id: 'bid_ask_spread', name: 'Bid-Ask', chart_type: 'combo',
+    data_shape: 'time_series_quarterly', view_name: 'cm_dialysis_bid_ask_spread_m', vertical: 'dialysis',
+    rows: [{ period_end: '2025-12-31', subspecialty: 'all', avg_bid_ask_spread: 0.002,
+      avg_last_ask_cap: 0.07, pct_price_change: 0.3,
+      min_last_ask_cap: 0.06, max_last_ask_cap: 0.085, achieved_last_ask_cap: 0.071 }],
+  }];
+  const wb = buildCapitalMarketsWorkbook({ vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts, brand: null });
+  assert.equal((wb.driftWarnings || []).filter((m) => /min_last_ask_cap|max_last_ask_cap|achieved_last_ask_cap/.test(m)).length, 0);
+  const h = headersOf(wb, 'Data_Bid_Ask');
+  for (const label of ['Last Ask — Low (TTM)', 'Last Ask — High (TTM)', 'Achieved Cap (TTM)']) {
+    assert.ok(h.includes(label), `missing ${label}; got ${h.join(' | ')}`);
+  }
+});
+
+test('Data_Returns_Idx emits Leveraged High/Low when the extended wrapper rows carry them (item 1)', () => {
+  const charts = [{
+    chart_template_id: 'cash_leveraged_returns', name: 'Returns', chart_type: 'line',
+    data_shape: 'time_series_quarterly', view_name: 'cm_dialysis_returns_indexes_m', vertical: 'dialysis',
+    rows: [{ period_end: '2025-12-31', cash_return: 0.07, leveraged_return_mid: 0.064,
+      leveraged_return_low: 0.062, leveraged_return_high: 0.066 }],
+  }];
+  const wb = buildCapitalMarketsWorkbook({ vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts, brand: null });
+  assert.equal((wb.driftWarnings || []).filter((m) => /leveraged_return_(low|high)/.test(m)).length, 0);
+});
+
+test('Rent_Price_PSF N columns coalesce dia rent_n/price_n via fieldKeys (item 3 map-from-view)', () => {
+  const charts = [{
+    chart_template_id: 'rent_and_price_psf', name: 'Rent/Price PSF', chart_type: 'combo',
+    data_shape: 'time_series_quarterly', view_name: 'cm_dialysis_rent_price_psf_q', vertical: 'dialysis',
+    rows: [{ period_end: '2025-12-31', subspecialty: 'all', rent_psf: 30, price_psf: 400, rent_n: 12, price_n: 9 }],
+  }];
+  const wb = buildCapitalMarketsWorkbook({ vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts, brand: null });
+  // No drift: rent_n/price_n satisfy the fieldKeys, so the columns are not "absent".
+  assert.equal((wb.driftWarnings || []).filter((m) => /n_with_(rent|price)_ttm/.test(m)).length, 0);
+  const sheet = wb.getWorksheet('Data_Rent_Price_PSF');
+  const nums = [];
+  sheet.eachRow((row) => row.eachCell((cell) => { if (typeof cell.value === 'number') nums.push(cell.value); }));
+  assert.ok(nums.includes(12) && nums.includes(9), `expected rent_n=12/price_n=9 in cells; got ${nums.join(',')}`);
+});
+
+test('valuation_index drops Expenses/NOI PSF for dia (empty) but keeps them for gov (populated) — item 3', () => {
+  const mk = (vertical, extra) => ({
+    chart_template_id: 'valuation_index', name: 'Val Index', chart_type: 'line',
+    data_shape: 'time_series_monthly', view_name: `cm_${vertical}_valuation_index_m`, vertical,
+    rows: [{ period_end: '2025-12-31', subspecialty: 'all', avg_rent_psf: 30,
+      avg_cap_rate: 0.07, valuation_index: 420, n_sales: 5, ...extra }],
+  });
+  // dia rows omit avg_expenses_psf/avg_noi_psf entirely (view lacks them) → pruned.
+  const diaWb = buildCapitalMarketsWorkbook({ vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts: [mk('dialysis', {})], brand: null });
+  const diaH = headersOf(diaWb, 'Data_Val_Index');
+  assert.ok(!diaH.includes('Expenses PSF (TTM)'), `dia should not ship Expenses PSF; got ${diaH.join(' | ')}`);
+  assert.ok(!diaH.includes('NOI PSF (TTM)'), 'dia should not ship NOI PSF');
+  // gov rows carry populated values → kept.
+  const govWb = buildCapitalMarketsWorkbook({ vertical: 'gov', subspecialty: 'all', asOf: '2025-12-31', charts: [mk('gov', { avg_expenses_psf: 8, avg_noi_psf: 22 })], brand: null });
+  const govH = headersOf(govWb, 'Data_Val_Index');
+  assert.ok(govH.includes('Expenses PSF (TTM)') && govH.includes('NOI PSF (TTM)'), `gov should keep Expenses/NOI PSF; got ${govH.join(' | ')}`);
+});
+
+test('Data_Ask_Cap_by_Term n headers state the 24-mo distinct basis (item 4)', () => {
+  const charts = [{
+    chart_template_id: 'asking_cap_by_term_dot_plot', name: 'Ask Cap by Term', chart_type: 'line',
+    data_shape: 'time_series_monthly', view_name: 'cm_dialysis_asking_cap_by_term_m', vertical: 'dialysis',
+    rows: [{ period_end: '2025-12-31', subspecialty: 'all', cap_12plus: 0.07, cap_12plus_n: 40,
+      cap_8to12: 0.075, cap_8to12_n: 30, cap_6to8: 0.08, cap_6to8_n: 20, cap_5orless: 0.09, cap_5orless_n: 10 }],
+  }];
+  const wb = buildCapitalMarketsWorkbook({ vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts, brand: null });
+  const h = headersOf(wb, 'Data_Ask_Cap_by_Term');
+  assert.ok(h.some((x) => /24-mo distinct/.test(x)), `expected a 24-mo distinct n header; got ${h.join(' | ')}`);
+  assert.ok(!h.includes('12+ n'), 'bare "12+ n" header must be relabeled');
+});
+
+test('Cover sheet carries the build-provenance stamp (item 5)', () => {
+  const wb = buildCapitalMarketsWorkbook({
+    vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts: [], brand: null,
+    provenance: { gitSha: 'abc123def456', generatedAt: '2026-08-07T12:00:00.000Z', builder: 'test-builder' },
+  });
+  const cover = wb.getWorksheet('Cover');
+  const b7 = cover.getCell('B7').value;
+  assert.ok(/abc123def456/.test(b7) && /2026-08-07T12:00:00/.test(b7) && /test-builder/.test(b7), `B7 stamp: ${b7}`);
+});
