@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### 64 re-run REVIEWED 2026-08-07 — guards work, but scope overshoot → prompt 65 queued, flag stays OFF
+Second `?score=1` (post-64 deploy): 0% dismiss, SPEs excluded, connection gate + distribution guard
+live — the 64 fixes all held. New flaws: **pool exploded 649→6,946** (the new `known_abbreviation`
++ `address_as_name` classes flag thousands of REAL entities — address-named property-anchor
+entities with 6–88 relationships, "Cohen Cos"-style names = naming-hygiene backlog, not junk), and
+**all 20 scored rows were connection-gated keeps persisted as proposals** (keep = non-event, would
+flood the lane). **Prompt 65**: restrict candidacy to true-junk classes (all_non_alpha/token_junk/
+gibberish/zero-connection too_short), drop abbrev+address classes to a counted-only
+`naming_hygiene_backlog` metric (future separate unit), move the connection check to scan time
+(batch exclusion), never persist keeps. Flag stays OFF until 65 + a clean third run.
+
 ### Prompt 64 landed — PR #1600 (`c9a7584`), awaiting merge + redeploy
 Precision fix implemented per spec: deterministic SPE-pattern guard (code-token LLCs never reach the
 model), abbreviation dictionary → rename preVerdict, address-as-name → parse_contact, acronym
