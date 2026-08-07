@@ -52,6 +52,7 @@ import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { registerCreProperty } from '../_shared/cre-registry.js';
 import {
   LISTING_DOCUMENT_TYPES,
+  isExplicitNonListingType,
   normalizeDocType,
   snapshotLooksLikeListing,
   normalizeCapRate,
@@ -2850,7 +2851,13 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   }
 
   let inferredFromSnapshot = false;
-  if (!LISTING_DOCUMENT_TYPES.has(docType) && snapshotLooksLikeListing(snapshot)) {
+  // Prompt 61: never rescue an EXPLICIT non-listing deal doctype (psa /
+  // listing_agreement / valuation_proposal) to 'om' — those legal/advisory docs
+  // carry listing-shaped fields (address/price/cap) but are not on-market
+  // listings, so the heuristic would otherwise create a phantom listing.
+  if (!LISTING_DOCUMENT_TYPES.has(docType)
+      && !isExplicitNonListingType(docType)
+      && snapshotLooksLikeListing(snapshot)) {
     docType = 'om';
     inferredFromSnapshot = true;
   }
