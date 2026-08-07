@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### DC lane visibility 2026-08-07 — U3 lane missing from frontend, U2 badge undercounts → prompt 75
+U1 lane worked + cleared by Scott (18 verdicts, post-74 fix verified silently). U2/U3 invisible:
+Cowork verified against origin/main — **U3** is in `_DC_FEDERATED` but has NO lane-list entry /
+meta / card branch (PR #1609 frontend touch incomplete; 2 open proposals incl. the FIRST chain
+link_proposal currently unreachable); **U2** folds correctly into owner_reconcile on the backend
+(v_w8_u2_dup_pair_open) but the lane badge source (open lcc_decisions by type) doesn't include the
+38 folded pairs → 0-badge lane holding real work (honest-counts violation). Neither W8 lane is in
+/api/review-counts. **Prompt 75**: complete U3's three frontend touches, badge add-on counts,
+structural guard (every _DC_FEDERATED member must have list+meta+render — pins the gap class).
+Interim: opening "Owner reconcile — same party?" despite the 0 badge should render the 38 pairs.
+
 ### Prompt 74 landed — PR #1621, stranded row repaired live, awaiting merge + redeploy
 All six invalid `'resolved'` sites fixed (U1 junk + U3's four close paths → house semantic
 `decided`/`skipped`; **U2 was already correct**). Structural guard test pins verdict statuses to
