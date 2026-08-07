@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 66 landed — PR #1603, migration LIVE (Cowork-verified), awaiting merge + redeploy
+Bounded/resumable scoring per spec: inline `?score=1` takes `&n=` (default 20→6) + wall-clock
+budget `JUNK_SCORE_BUDGET_MS` (120s); POST apply scores ≤`JUNK_SCORE_BATCH_SIZE` (25)/invocation —
+247 candidates drain over ~10 nights; new `junk_prescreen_scored` ledger keyed
+(domain,table,pk,name_hash) = resume cursor + no re-scoring unless renamed (suspect-distribution
+refusals deliberately NOT marked scored); honest counts (`scored`/`remaining_unscored`/
+`budget_exhausted`/`excluded_scored`); health view + scored_total/scored_24h. Migration
+`20260807140000` applied live to LCC Opps (verified: table present, 0 rows). 76+ tests green.
+**Gate: merge #1603 → redeploy → `?score=1&n=6` → if sample clean, flip `W8_U1_JUNK_PRESCREEN`.**
+
 ### 65 third run 2026-08-07 — SCOPE FIXED (247 candidates ✅), but `?score=1` 502s → prompt 66 queued
 Post-65 deploy (`6bb9c1aaa57a`): bare scan returns fast — **247 true-junk candidates**,
 naming_hygiene_backlog counted, connection exclusion live. `?score=1` 502s at the Railway proxy:
