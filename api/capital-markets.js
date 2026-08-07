@@ -646,7 +646,29 @@ async function ensureTreasuryFreshForExport(domain, asOf) {
   let stale = !maxDate || maxDate < target;
   if (stale && process.env.CM_TREASURY_REFRESH_URL) {
     try {
-      await fetch(process.env.CM_TREASURY_REFRESH_URL, { method: 'POST' });
+      // The refresh target is the dia FRED ingestion trigger. It may be a bare
+      // webhook (default POST, no auth) OR an authenticated dispatch endpoint —
+      // e.g. GitHub Actions workflow_dispatch, which requires an auth token and a
+      // JSON body {"ref":"main"}. Optional env wiring (all unset => legacy bare POST):
+      //   CM_TREASURY_REFRESH_METHOD  (default POST)
+      //   CM_TREASURY_REFRESH_TOKEN   -> Authorization: Bearer <token>
+      //   CM_TREASURY_REFRESH_BODY    -> raw request body (e.g. '{"ref":"main"}')
+      // For GitHub, point CM_TREASURY_REFRESH_URL at
+      //   https://api.github.com/repos/<owner>/Dialysis/actions/workflows/fred-ingest-daily.yml/dispatches
+      // NOTE: dispatch is asynchronous (the ingest runs for ~1 min), so this
+      // request cannot refresh the CURRENT export — it primes the NEXT one. The
+      // daily schedule + dia_check_fred_staleness watchdog are the real freshness
+      // guarantee; this seam just kicks an on-demand catch-up.
+      const headers = { 'Content-Type': 'application/json' };
+      if (process.env.CM_TREASURY_REFRESH_TOKEN) {
+        headers.Authorization = `Bearer ${process.env.CM_TREASURY_REFRESH_TOKEN}`;
+        headers.Accept = 'application/vnd.github+json'; // harmless for non-GitHub targets
+      }
+      await fetch(process.env.CM_TREASURY_REFRESH_URL, {
+        method: process.env.CM_TREASURY_REFRESH_METHOD || 'POST',
+        headers,
+        body: process.env.CM_TREASURY_REFRESH_BODY || undefined,
+      });
       maxDate = await readMax();
       stale = !maxDate || maxDate < target;
     } catch (e) {
