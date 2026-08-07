@@ -1654,9 +1654,22 @@ export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_UR
     }
   }
 
+  // Prompt 68 — the v2 (Copilot) connector must call comps through the
+  // Copilot-namespaced routes that ride authenticate()'s M365 passthrough (same
+  // auth as every other connector tool), NOT the flat keyed routes. Remap ONLY
+  // the comps op paths here; operationIds / summaries / inputs / outputs are
+  // unchanged so the connector's comps tools rebind (no re-add). The ChatGPT
+  // curated spec keeps the flat paths (generateChatGptSpec, untouched).
+  const V2_COMPS_PATHS = {
+    SynthesizeComps: '/api/copilot/comps/synthesize-comps',
+    QueryComps: '/api/copilot/comps/query-comps',
+    GenerateComps: '/api/copilot/comps/generate-comps',
+  };
+
   // Typed gateway operations (outside ACTION_REGISTRY) — keep the spec complete.
   for (const op of TYPED_GATEWAY_OPERATIONS) {
-    spec.paths[op.path] = {
+    const pathKey = V2_COMPS_PATHS[op.operationId] || op.path;
+    spec.paths[pathKey] = {
       post: {
         operationId: op.operationId,
         summary: op.summary,

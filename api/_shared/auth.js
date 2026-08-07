@@ -339,8 +339,12 @@ export async function authenticate(req, res) {
   // 1. Try Supabase JWT. Some Power Automate flows send the LCC API key as
   // Authorization: Bearer <key>; if it is not a valid JWT but it matches the
   // configured API key, accept it as internal integration auth.
-  if (authHeader.startsWith('Bearer ')) {
-    const jwt = authHeader.slice(7).trim();
+  if (/^Bearer\s+/i.test(authHeader)) {
+    // Harden the bearer parse (Prompt 68): strip a REPEATED leading "Bearer "
+    // prefix, in case a connection value was entered as "Bearer <key>" under a
+    // scheme that also prepends "Bearer " → "Bearer Bearer <key>". A single
+    // strip (slice(7)) would leave "Bearer <key>" and never match the API key.
+    const jwt = authHeader.replace(/^(Bearer\s+)+/i, '').trim();
     const supabaseUser = await verifySupabaseJwt(jwt);
     if (supabaseUser) {
       const user = await resolveUser(supabaseUser);
