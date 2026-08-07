@@ -1928,6 +1928,19 @@ async function renderReviewConsolePage() {
     if (s && typeof s.count === 'number') sfLinkN = s.count;
   }
   dc['sf_link_candidate'] = sfLinkN;
+  // W8 (Prompt 75): the two W8-touched federated badges read their LIVE
+  // /api/review-counts depth, not the heavy /api/decisions?summary=1 federated
+  // total (which fans out 8+ cross-DB owner_reconcile sub-queries and can time
+  // out to a 0 badge). owner_reconcile now INCLUDES the folded W8 U2 dup-pair
+  // count; w8_u3_link_review reads v_w8_u3_link_review_open. Honest-counts
+  // doctrine — a lane holding cards must never show a 0 badge. Fall back to the
+  // summary value when the live lane is unavailable (null), never override to 0.
+  if (res.ok && res.data && Array.isArray(res.data.lanes)) {
+    const orLane = res.data.lanes.find(function (l) { return l.key === 'owner_reconcile'; });
+    if (orLane && typeof orLane.count === 'number') dc['owner_reconcile'] = orLane.count;
+    const u3Lane = res.data.lanes.find(function (l) { return l.key === 'w8_u3_link_review'; });
+    if (u3Lane && typeof u3Lane.count === 'number') dc['w8_u3_link_review'] = u3Lane.count;
+  }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
   let compN = 0;
@@ -1953,8 +1966,10 @@ async function renderReviewConsolePage() {
     { dt: 'sf_link_candidate', label: 'Salesforce link — confirm candidate', open: "renderFederatedLane('sf_link_candidate')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
     { dt: 'owner_reconcile', label: 'Owner reconcile — same party?', open: "renderFederatedLane('owner_reconcile')" },
+    { dt: 'contact_company_link', label: 'Contact → company owner', open: "renderFederatedLane('contact_company_link')" },
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
     { dt: 'junk_entity_review', label: 'Junk entities — Ollama pre-screen', open: "renderFederatedLane('junk_entity_review')" },
+    { dt: 'w8_u3_link_review', label: 'Ownership links — Ollama proposals', open: "renderFederatedLane('w8_u3_link_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },
@@ -2585,6 +2600,14 @@ const _DC_FED_META = {
     intro: 'The W4.3 splink batch’s best Salesforce-account match per owner (gov + dia), value-ranked by owner impact. Link attaches the SF id via the existing owner-sync semantics (never overwrites a different existing id — that renders a three-way conflict card instead); Not a match records the pair distinct. Every verdict writes a labeled pair into entity_match_labels — the hard-negative training data the W4.4 retrain needs. Work them fast; the population is homogeneous (~0.85 probability), so trust your eyes per row.' },
   junk_entity_review: { title: 'Junk entities — Ollama pre-screen',
     intro: 'W8 U1 hygiene. A deterministic filter flagged possible junk / test / gibberish / bookkeeping-stub entity rows across dia/gov/ops; the local Ollama model scored each with a verdict + a verbatim evidence quote. Ollama PROPOSES only — you decide. Confirm applies the proposal (a "dismiss" soft-retires the row reversibly; a row still referenced by child records routes to a conflict card instead of retiring — never a hard delete). Keep leaves the row untouched. Every verdict is recorded (won’t re-ask) with a reversible ledger entry.' },
+  w8_u3_link_review: { title: 'Ownership links — Ollama proposals',
+    intro: 'W8 U3 connection-propagation. Ollama proposed an ownership link from a real signal: a CHAIN proposal fills a missing owner→parent/developer edge for a property (source = a deed/OM/registry evidence quote), or a DIFFERENT-PEOPLE finding flags that two email-sharing person records are NOT the same person (a shared mailbox). Each card shows the proposed link + role, the confidence, and the VERBATIM evidence quote + its source. Ollama PROPOSES only — you decide. Confirm runs the deterministic edge writer (entity_relationships + provenance, recorded in w8_u3_link_apply_log so it is reversible; a same-person email proposal routes to the resolver, never auto-merged); Reject keeps the records untouched. Every verdict is recorded (won’t re-ask).' },
+  agency_risk_action: { title: 'Agency risk → disposition',
+    intro: 'W5.2. A gov agency risk composite (spending decline / footprint reduction / RIF signals) with tracked portfolio exposure, value-ranked. A high-risk agency on properties we track is a disposition signal — reach the owners. Pursue disposition (BD outreach on the tracked portfolio), monitor (keep watching), or dismiss (stops asking). No domain write — this is a BD signal.' },
+  npi_dedup_review: { title: 'NPI duplicates → review',
+    intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate flagged as a genuine data error needing human eyes. Confirm duplicate marks the cluster for the resolver/worker to collapse; Not a duplicate records them distinct. NEVER a silent auto-collapse — you decide.' },
+  npi_dedup_autoapprove: { title: 'NPI duplicates → approve',
+    intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate scored auto-resolvable — a proposed survivor is shown. A human APPROVES the deterministic survivor (fill-blanks / never-guess applies to destructive dedup too), or rejects it. Approval spawns the reconcile task; the actual merge stays human/worker-driven — NEVER a silent auto-collapse.' },
 };
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
@@ -3045,6 +3068,57 @@ function _fedCardHTML(it, i, isNext) {
       + '<div class="q-item-meta" style="opacity:.7">Ollama proposes only — confirm to soft-retire (reversible; FK-referenced rows route to a conflict card), or keep.</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — retire junk</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — not junk</button>';
+  } else if (_dcFedType === 'w8_u3_link_review') {
+    // W8 U3: an Ollama connection-propagation link proposal. The model PROPOSED;
+    // the human decides. Confirm runs the deterministic edge writer (chain pool)
+    // or resolves distinct / routes to the resolver (person_email pool); Reject
+    // keeps the records untouched. Every card carries a VERBATIM evidence quote.
+    const isEmail = (c.pool === 'person_email');
+    const pv = c.proposed_verdict || (isEmail ? 'different_people' : 'link_proposal');
+    const isDiffPeople = (pv === 'different_people');
+    const conf = (c.confidence != null && isFinite(Number(c.confidence))) ? Number(c.confidence) : null;
+    const owner = c.current_owner_name || '';
+    const linked = c.linked_entity_name || '';
+    const role = c.role || '';
+    const pvBadge = isDiffPeople ? 'pri-high' : 'type';
+    const pvLabel = isDiffPeople ? 'different people' : 'link proposal';
+    let title;
+    if (isEmail) {
+      title = isDiffPeople
+        ? (esc(owner || linked || 'Person') + ' <span style="opacity:.6">vs</span> ' + esc(linked || 'other person'))
+        : (esc(owner || 'Person') + ' <span style="opacity:.6">&harr;</span> ' + esc(linked || 'other person'));
+    } else {
+      title = esc(owner || 'Owner') + ' <span style="opacity:.6">&rarr;</span> ' + esc(linked || 'linked party');
+    }
+    body = '<div class="q-item-header"><span class="q-item-title">' + title + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge">' + esc(c.pool || '') + '</span>'
+      + (c.proposal_type ? '<span class="q-badge">' + esc(String(c.proposal_type)) + '</span>' : '')
+      + '<span class="q-badge ' + pvBadge + '">proposes: ' + esc(pvLabel) + '</span>'
+      + (conf != null ? '<span class="q-badge">conf ' + conf.toFixed(2) + '</span>' : '') + '</div></div>';
+    if (isEmail) {
+      body += '<div class="q-item-meta">Shared email: <b>' + esc(String(c.subject_ref || '').replace(/^[^:]*:/, '')) + '</b></div>';
+      body += isDiffPeople
+        ? '<div class="q-item-meta">These email-sharing records look like DIFFERENT people (a shared mailbox).</div>'
+        : '<div class="q-item-meta">These email-sharing records look like the SAME person (dupes are the resolver’s job).</div>';
+    } else {
+      if (c.gap) body += '<div class="q-item-meta">Gap: ' + esc(String(c.gap))
+        + (c.source_property_id != null ? ' · property <b>' + esc(String(c.source_property_id)) + '</b>' : '') + '</div>';
+      body += '<div class="q-item-meta">Proposed link: <b>' + esc(owner || 'owner') + '</b> '
+        + (role === 'developed' || role === 'developer' ? 'developed' : 'owns') + ' <b>' + esc(linked || '?') + '</b>'
+        + (role ? ' <span style="opacity:.6">(' + esc(String(role)) + ')</span>' : '') + '</div>';
+    }
+    if (c.evidence_quote) body += '<div class="q-item-meta">Evidence: <b>' + esc(String(c.evidence_quote)) + '</b>'
+      + (c.evidence_source ? ' <span style="opacity:.6">— ' + esc(String(c.evidence_source)) + '</span>' : '') + '</div>';
+    if (c.reason) body += '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.reason)) + '</div>';
+    body += '<div class="q-item-meta" style="opacity:.7">Ollama proposes only — confirm to '
+      + (isEmail ? (isDiffPeople ? 'record them distinct (reversible)' : 'route to the entity resolver') : 'write the ownership edge (reversible)')
+      + ', or reject to keep untouched.</div>';
+    const confirmLabel = isEmail
+      ? (isDiffPeople ? 'Confirm — different people' : 'Confirm — route to resolver')
+      : 'Confirm — write link';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">' + confirmLabel + '</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject — keep untouched</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
     + _cleanAssistHTML(it)
