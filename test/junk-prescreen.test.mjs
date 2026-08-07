@@ -14,6 +14,7 @@ import {
   normalizeJunkProposal, parseJunkVerdictJson, planJunkApply, buildRetireMarker,
   isSpeCodedName, knownAbbrevEvidence, isAddressAsName, isAcronymOnly,
   applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
+  junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
 } from '../api/_shared/junk-prescreen.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -349,6 +350,80 @@ describe('buildJunkPrescreenPrompt — rubric rewrite (judge, do not parrot)', (
   });
 });
 
+// ===========================================================================
+// Prompt 66 — bounded, resumable scoring (fix the ollama-latency 502).
+// ===========================================================================
+describe('junkNameHash — stable, name-sensitive digest', () => {
+  it('is deterministic and 16 hex chars', () => {
+    const h = junkNameHash('Test Test');
+    assert.equal(h, junkNameHash('Test Test'));
+    assert.match(h, /^[0-9a-f]{16}$/);
+  });
+  it('changes when the name changes', () => {
+    assert.notEqual(junkNameHash('Test Test'), junkNameHash('Test Test 2'));
+  });
+  it('treats null / empty consistently', () => {
+    assert.equal(junkNameHash(null), junkNameHash(''));
+  });
+});
+
+describe('selectUnscoredCandidates — the resume cursor', () => {
+  const mk = (pk, name) => ({
+    subject_ref: junkSubjectRef('dia', 'contacts', pk),
+    domain: 'dia', table: 'contacts', pk: String(pk),
+    entity_name: name, name_hash: junkNameHash(name),
+  });
+  it('a second tick skips candidates scored on the first (same name)', () => {
+    const a = mk(1, 'asdf'); const b = mk(2, 'qwerty');
+    const scored = new Set([junkScoredKeyFor(a)]);
+    const remaining = selectUnscoredCandidates([a, b], scored);
+    assert.deepEqual(remaining.map((c) => c.pk), ['2']);
+  });
+  it('a renamed row (same pk, new name_hash) is NOT skipped — re-scored', () => {
+    const before = mk(1, 'asdf');
+    const scored = new Set([junkScoredKeyFor(before)]);
+    const after = mk(1, 'Real Company LLC'); // same pk, different name
+    const remaining = selectUnscoredCandidates([after], scored);
+    assert.equal(remaining.length, 1);
+  });
+  it('an empty scored set returns everything', () => {
+    const a = mk(1, 'asdf');
+    assert.equal(selectUnscoredCandidates([a], new Set()).length, 1);
+  });
+});
+
+describe('scoreWithBudget — size cap + wall-clock budget', () => {
+  it('n-param: caps the count at maxN (batch cap), rest remain unscored', async () => {
+    const items = Array.from({ length: 10 }, (_, i) => i);
+    const r = await scoreWithBudget(items, async () => 'x', { budgetMs: 1e9, maxN: 4, now: () => 0 });
+    assert.equal(r.scored, 4);
+    assert.equal(r.remaining_unscored, 6);
+    assert.equal(r.budget_exhausted, false);
+  });
+  it('budget-stop: a slow scorer stops at the wall-clock budget (fake clock)', async () => {
+    let t = 0;
+    const now = () => t;
+    const slow = async () => { t += 100; return 'x'; }; // each call "takes" 100ms
+    const r = await scoreWithBudget([1, 2, 3, 4, 5], slow, { budgetMs: 250, maxN: 5, now });
+    // iter0 (t=0<250) score→t=100; iter1 (100<250) score→t=200; iter2 (200<250) score→t=300; iter3 300>=250 break
+    assert.equal(r.scored, 3);
+    assert.equal(r.budget_exhausted, true);
+    assert.equal(r.remaining_unscored, 2);
+  });
+  it('no candidates ⇒ nothing scored, not exhausted', async () => {
+    const r = await scoreWithBudget([], async () => 'x', { budgetMs: 1000, maxN: 5, now: () => 0 });
+    assert.equal(r.scored, 0);
+    assert.equal(r.budget_exhausted, false);
+  });
+  it('budget beats maxN when both bound — honest counts', async () => {
+    let t = 0; const now = () => t;
+    const slow = async () => { t += 1000; return 'x'; };
+    const r = await scoreWithBudget([1, 2, 3, 4, 5, 6, 7, 8], slow, { budgetMs: 2500, maxN: 8, now });
+    assert.equal(r.scored, 3); // 3 calls consume 3000ms > 2500 budget
+    assert.equal(r.budget_exhausted, true);
+  });
+});
+
 describe('structural wiring guards (admin.js + server.js + migration)', () => {
   const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
   const server = readFileSync(join(root, 'server.js'), 'utf8');
@@ -400,5 +475,35 @@ describe('structural wiring guards (admin.js + server.js + migration)', () => {
   it('keeps are never persisted — only actionable verdicts enqueue (dry-run + apply)', () => {
     assert.match(admin, /isEnqueueableJunkVerdict/);
     assert.match(admin, /kept_not_enqueued/);
+  });
+
+  // Prompt 66 — bounded, resumable scoring wiring.
+  it('scoring is budget-bounded on both the inline and apply paths', () => {
+    assert.match(admin, /JUNK_SCORE_BUDGET_MS/);
+    assert.match(admin, /scoreWithBudget/);
+    assert.match(admin, /budget_exhausted/);
+  });
+  it('the inline dry-run accepts &n and defaults small (drop 20 → 6)', () => {
+    assert.match(admin, /req\.query\.n/);
+    assert.match(admin, /JUNK_SCORE_INLINE_DEFAULT_N/);
+  });
+  it('the apply path caps at one ollama-sized batch (JUNK_SCORE_BATCH_SIZE)', () => {
+    assert.match(admin, /JUNK_SCORE_BATCH_SIZE/);
+    assert.match(admin, /batch_size/);
+  });
+  it('scored candidates are recorded as the resume cursor + excluded next scan', () => {
+    assert.match(admin, /recordJunkScored/);
+    assert.match(admin, /junk_prescreen_scored/);
+    assert.match(admin, /selectUnscoredCandidates/);
+    assert.match(admin, /excluded_scored/);
+  });
+  it('honest surfacing: remaining_unscored is reported', () => {
+    assert.match(admin, /remaining_unscored/);
+  });
+  it('the resume-cursor migration adds junk_prescreen_scored keyed on name_hash', () => {
+    const cur = readFileSync(join(root, 'supabase/migrations/20260807140000_lcc_w8_u1_junk_prescreen_scored_cursor.sql'), 'utf8');
+    assert.match(cur, /CREATE TABLE IF NOT EXISTS public\.junk_prescreen_scored/);
+    assert.match(cur, /UNIQUE \(domain, table_name, pk_value, name_hash\)/);
+    assert.match(cur, /scored_total/);
   });
 });
