@@ -31,6 +31,7 @@ import {
   junkCandidateReason, namingHygieneReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
   parseJunkVerdictJson, planJunkApply, buildRetireMarker,
   applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
+  junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
 } from './_shared/junk-prescreen.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -1300,6 +1301,14 @@ async function handleOllamaCleanAssistTick(req, res) {
 //                                               (flag-gated; no-ops while OFF)
 // ============================================================================
 const JUNK_PRESCREEN_MAX_SCAN = Math.max(2000, parseInt(process.env.JUNK_PRESCREEN_MAX_SCAN || '80000', 10));
+// Prompt 66 — bounded, resumable scoring. Scoring is ollama-latency-bound
+// (~16s/call), so both the inline dry-run (GET ?score=1) and the cron/apply POST
+// enforce a wall-clock budget, and the apply path scores at most one ollama-sized
+// batch per invocation (the scored ledger is the resume cursor). Defaults keep a
+// single HTTP invocation well under the Railway proxy timeout.
+const JUNK_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.JUNK_SCORE_BUDGET_MS || '120000', 10));
+const JUNK_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.JUNK_SCORE_BATCH_SIZE || '25', 10));
+const JUNK_SCORE_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.JUNK_SCORE_INLINE_N || '6', 10));
 
 function junkPrescreenEnabled(flagRow) {
   const env = String(process.env.W8_U1_JUNK_PRESCREEN || '').toLowerCase();
@@ -1366,6 +1375,7 @@ async function pullJunkCandidatesForTarget(target) {
       found.push({
         domain: target.domain, table: target.table, pk: String(pk),
         entity_name: name == null ? '' : String(name),
+        name_hash: junkNameHash(name),
         heuristic: hit.heuristic, evidence: hit.evidence,
         acronymOnly: hit.acronymOnly || false,
         subject_ref: junkSubjectRef(target.domain, target.table, pk),
@@ -1432,10 +1442,32 @@ async function junkFkReferenced(target, pk) {
   return { referenced: false };
 }
 
+// Already-scored dedupe set (Prompt 66). Every candidate that was scored on a
+// prior tick (proposal persisted OR keep-counted) is recorded in
+// junk_prescreen_scored keyed by (domain, table, pk, name_hash); its
+// `subject_ref:name_hash` key excludes it from re-scoring until its name changes.
+// Best-effort: an unavailable table (migration not yet applied) yields an empty
+// set, so the tick degrades to the pre-Prompt-66 behavior instead of crashing.
+async function fetchJunkScoredKeys() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'junk_prescreen_scored?select=subject_ref,name_hash&order=id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(x.subject_ref + ':' + (x.name_hash || ''));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort — empty set degrades gracefully */ }
+  return set;
+}
+
 // Deterministic scan across every target: candidates, minus already-proposed
-// (any junk_entity_review row) and already-decided (lcc_decisions) subjects.
+// (any junk_entity_review row), already-decided (lcc_decisions) subjects, and
+// already-scored (junk_prescreen_scored, keyed on name_hash so a rename re-scores).
 async function junkScanAll() {
-  const [existing, decided] = await Promise.all([
+  const [existing, decided, scoredKeys] = await Promise.all([
     (async () => {
       const set = new Set();
       const PAGE = 1000;
@@ -1448,6 +1480,7 @@ async function junkScanAll() {
       return set;
     })(),
     fetchExcludedRefs('junk_entity_review').catch(() => new Set()),
+    fetchJunkScoredKeys(),
   ]);
   const perDomain = {};
   const fresh = [];
@@ -1456,7 +1489,11 @@ async function junkScanAll() {
     let pull;
     try { pull = await pullJunkCandidatesForTarget(target); }
     catch (e) { perDomain[key] = { error: e?.message || String(e), candidates: 0, scanned: 0 }; continue; }
-    const newOnes = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
+    const notProposed = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
+    // Resume cursor (Prompt 66): drop candidates already scored on a prior tick
+    // (unchanged name). A renamed row has a new name_hash ⇒ retained ⇒ re-scored.
+    const newOnes = selectUnscoredCandidates(notProposed, scoredKeys);
+    const excludedScored = notProposed.length - newOnes.length;
     // Scan-time connection exclusion (Prompt 65): drop connected rows BEFORE
     // scoring — a referenced record is not junk regardless of name shape.
     let connectedSet = new Set();
@@ -1472,6 +1509,7 @@ async function junkScanAll() {
       domain: target.domain, table: target.table,
       scanned: pull.scanned, candidates: pull.candidates.length,
       new: newOnes.length, excluded_connected: excludedConnected,
+      excluded_scored: excludedScored,
       enqueueable: enqueueable.length,
       naming_hygiene: pull.namingHygiene || { total: 0 },
       truncated: pull.truncated || false,
@@ -1485,11 +1523,12 @@ function junkDomainRollup(perDomain) {
   const roll = {};
   for (const v of Object.values(perDomain)) {
     const d = v.domain || 'unknown';
-    roll[d] = roll[d] || { scanned: 0, candidates: 0, new: 0, excluded_connected: 0, enqueueable: 0, naming_hygiene: 0 };
+    roll[d] = roll[d] || { scanned: 0, candidates: 0, new: 0, excluded_connected: 0, excluded_scored: 0, enqueueable: 0, naming_hygiene: 0 };
     roll[d].scanned += v.scanned || 0;
     roll[d].candidates += v.candidates || 0;
     roll[d].new += v.new || 0;
     roll[d].excluded_connected += v.excluded_connected || 0;
+    roll[d].excluded_scored += v.excluded_scored || 0;
     roll[d].enqueueable += v.enqueueable || 0;
     roll[d].naming_hygiene += (v.naming_hygiene && v.naming_hygiene.total) || 0;
   }
@@ -1580,6 +1619,31 @@ async function upsertJunkProposal(candidate, proposal, meta) {
     { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
 }
 
+// Record scored candidates in the resume-cursor ledger (Prompt 66). Keyed on
+// (domain, table, pk, name_hash) so an unchanged name is never re-scored, while a
+// rename (new name_hash) yields a fresh row and is re-judged. `enqueued` marks
+// whether an actionable proposal was persisted (vs. a kept/uncertain non-event).
+// Bulk upsert (merge-duplicates); best-effort — a failure only costs a re-score.
+async function recordJunkScored(scoredRows, sourceRunId) {
+  const rows = (scoredRows || []).map(({ cand, proposal }) => ({
+    subject_ref: cand.subject_ref,
+    domain: cand.domain, table_name: cand.table, pk_value: cand.pk,
+    name_hash: cand.name_hash != null ? cand.name_hash : junkNameHash(cand.entity_name),
+    entity_name: cand.entity_name,
+    verdict: proposal.verdict,
+    enqueued: isEnqueueableJunkVerdict(proposal.verdict),
+    source_run_id: sourceRunId,
+  }));
+  if (!rows.length) return { ok: true, skipped: 'empty' };
+  try {
+    return await opsQuery('POST', 'junk_prescreen_scored?on_conflict=domain,table_name,pk_value,name_hash', rows,
+      { headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+  } catch (e) {
+    console.warn('[junk-prescreen] scored-ledger write failed', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 async function handleJunkPrescreenTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const user = await authenticate(req, res);
@@ -1610,16 +1674,23 @@ async function handleJunkPrescreenTick(req, res) {
       if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
     } catch (_e) { /* ledger best-effort */ }
 
-    const selected = scan.fresh.slice(0, limit);
+    // Prompt 66 — resumable batches. Score at most one ollama-sized batch per
+    // invocation (min of the request's limit and JUNK_SCORE_BATCH_SIZE) AND stop
+    // at the wall-clock budget, so one HTTP invocation never outruns the Railway
+    // proxy. The scored ledger is the resume cursor: the next nightly run's
+    // junkScanAll excludes what this run scored and drains the next batch.
+    const batchSize = Math.min(limit, JUNK_SCORE_BATCH_SIZE);
     const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
       per_domain: junkDomainRollup(scan.perDomain), candidates_new: scan.fresh.length,
+      batch_size: batchSize, budget_ms: JUNK_SCORE_BUDGET_MS,
       naming_hygiene_backlog: junkNamingHygieneRollup(scan.perDomain),
-      scored: 0, proposed: 0, kept_not_enqueued: 0, failed: 0, by_verdict: {} };
-    // Phase 1 — score all selected candidates (NO writes yet) so the verdict
-    // distribution is known before we persist anything.
+      scored: 0, proposed: 0, kept_not_enqueued: 0, failed: 0,
+      budget_exhausted: false, remaining_unscored: scan.fresh.length, by_verdict: {} };
+    // Phase 1 — score up to one batch (budget-bounded) with NO writes yet, so the
+    // verdict distribution is known before we persist anything.
     const scoredRows = [];
     const scoreVerdicts = {};
-    for (const cand of selected) {
+    const budgetRun = await scoreWithBudget(scan.fresh, async (cand) => {
       try {
         const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
         summary.scored += 1;
@@ -1629,7 +1700,10 @@ async function handleJunkPrescreenTick(req, res) {
         summary.failed += 1;
         console.warn('[junk-prescreen] score failed', cand.subject_ref, e?.message || e);
       }
-    }
+      return null;
+    }, { budgetMs: JUNK_SCORE_BUDGET_MS, maxN: batchSize });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, scan.fresh.length - scoredRows.length - summary.failed);
     // Distribution guard — a curated-table junk pre-screen should find a small
     // MINORITY of true junk. >50% dismiss ⇒ the batch is anchoring, not judging;
     // refuse to persist it (honest-counts doctrine).
@@ -1657,6 +1731,11 @@ async function handleJunkPrescreenTick(req, res) {
         console.warn('[junk-prescreen] write failed', cand.subject_ref, e?.message || e);
       }
     }
+    // Resume cursor (Prompt 66): record EVERY scored candidate — enqueued proposals
+    // AND keeps/uncertains — so none is re-scored next tick unless its name changes.
+    // (Skipped on the suspect-distribution early return above, so a refused batch is
+    // re-evaluated rather than silently buried.)
+    await recordJunkScored(scoredRows, sourceRunId);
     await recordJunkPrescreenHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
       lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
     return res.status(200).json({ ok: true, mode: 'apply', ...summary });
@@ -1672,12 +1751,14 @@ async function handleJunkPrescreenTick(req, res) {
     sample: scan.fresh.slice(0, 20) };
   if (req.query.score === '1' || req.query.score === 'true') {
     const fewShot = await fetchJunkFewShot();
-    const n = Math.min(limit, scan.fresh.length);
+    // Prompt 66 — the inline path is size- AND time-capped so it never outruns
+    // the Railway proxy on ollama latency (~16s/call): `n` (default 6) bounds the
+    // count, JUNK_SCORE_BUDGET_MS the wall-clock; scoring stops at whichever hits.
+    const inlineN = Math.min(60, Math.max(1, parseInt(req.query.n || String(JUNK_SCORE_INLINE_DEFAULT_N), 10) || JUNK_SCORE_INLINE_DEFAULT_N));
     const proposals = [];
     const byVerdict = {};
     let keptNotEnqueued = 0;
-    for (let i = 0; i < n; i++) {
-      const cand = scan.fresh[i];
+    const budgetRun = await scoreWithBudget(scan.fresh, async (cand) => {
       try {
         const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
         byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
@@ -1687,18 +1768,24 @@ async function handleJunkPrescreenTick(req, res) {
           entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal,
           would_enqueue: enqueueable, model_provider: provider, model_name: model });
       } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
-    }
+      return null;
+    }, { budgetMs: JUNK_SCORE_BUDGET_MS, maxN: inlineN });
     const dist = dismissDistributionGuard(byVerdict);
     out.scored = proposals.length;
+    out.batch_size = inlineN;
+    out.budget_ms = JUNK_SCORE_BUDGET_MS;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.remaining_unscored = Math.max(0, scan.fresh.length - proposals.length);
     out.by_verdict = byVerdict;
     out.kept_not_enqueued = keptNotEnqueued;
     out.would_enqueue = proposals.filter((p) => p.would_enqueue).length;
     out.distribution = dist;
     out.suspect_distribution = dist.suspect_distribution;
     out.proposals = proposals;
-    out.note = dist.suspect_distribution
+    out.note = (dist.suspect_distribution
       ? 'dry-run scoring — NO rows written. ⚠️ SUSPECT DISTRIBUTION (' + Math.round(dist.dismiss_share * 100) + '% dismiss > ' + Math.round(dist.threshold * 100) + '%): a POST apply would be REFUSED for this batch.'
-      : 'dry-run scoring — NO rows written. Only dismiss/rename/parse_contact proposals persist; keeps are counted (kept_not_enqueued) and dropped. Review, then POST (with the flag ON).';
+      : 'dry-run scoring — NO rows written. Only dismiss/rename/parse_contact proposals persist; keeps are counted (kept_not_enqueued) and dropped. Review, then POST (with the flag ON).')
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + JUNK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
   }
   return res.status(200).json(out);
 }
