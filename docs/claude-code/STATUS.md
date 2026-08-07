@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### U3 first dry-run REVIEWED 2026-08-07 — safety PASSED, yield FAILED → prompt 71 queued, flag stays OFF
+Scott ran `?score=1&n=6` post-#1609: 6 honest no_evidence_found, dropped_not_verbatim 0, zero
+fabrication — validator + abstention working. But (1) **evidence assembly starving**: 59/60 chain
+candidates skipped no_evidence; the one scored (Cira Square) assembled only 459 chars — sources
+unreached (join keys / swallowed 403s / unqueried), needs per-source hit counts; (2)
+**different_people findings discarded**: model resolved person-email candidates as "distinct names
+share this email" 0.95 but the verdict vocab has no shape for it → dumped into no_evidence
+(consumption-doctrine violation). **Prompt 71**: fix assembly reach + per-source counts + honest
+genuinely-no-evidence marking (U4 feed), add first-class `different_people` verdict → resolves the
+merge candidate + writes `entity_match_labels` distinct (seeder `w8_u3_shared_email` — more W4.4
+hard negatives). Flag stays OFF until re-run shows yield.
+
 ### Queued 2026-08-07: prompt 70 (W8 U4 — systemic-findings monthly report, final unit)
 Deterministic aggregator (ingest/flow failure clusters, provenance drift/conflicts, chain
 completeness + U3 drain, precision floors, U1/U2 lane throughput + accept rates, naming-hygiene
