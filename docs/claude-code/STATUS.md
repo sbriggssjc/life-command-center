@@ -454,6 +454,20 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅✅ WAVE 8 BUILD-OUT COMPLETE — 2026-08-07 (all 4 units LIVE)
+Final verification runs both PASSED post-72/73 deploy: **U3 chain evidence FIXED** (scan_errors
+empty, deed 83 / activity 12 hits, Cira Square 768 chars / 6 blocks; the 4 no_evidence verdicts
+are honest — evidence real but doesn't name developers). **U4 tick fast + crash-proof**
+(section_errors [], 46 findings, honest zeros, 18 fix-unit stubs). **Cowork flipped
+`W8_U4_FINDINGS_REPORT` → on — Wave 8 is fully operational:** U1 3:40 / U2 3:50 / U3 4:10 nightly,
+U4 monthly (1st 05:00). Watch items: U3 chain `intake` source still 0/60 (queries verified live —
+plausibly genuine gov coverage gap; per-source counts make it measurable); U4's extraction section
+will read low `_provider` stamping until the 30d window rolls past the prompt-61 deploy.
+**Standing fix-unit backlog from U4's first doc (Scott to queue at will):** PGRST204 schema drift
+(dia 3,702 + gov 3,243, critical), `Unflag Completed Email Tasks` flow (524 fails — flow is
+supposedly OFF/retired, may be zombie-logging), dia 23505 dedup collisions (1,837),
+`propagateToDomainDbDirect:last_ingested_at` (702), `backfillListingSaleIdForListing` (505).
+
 ### Prompt 73 landed — PR #1619, awaiting merge (bundle with #1618 redeploy)
 U4 tick hardened per spec: crash-proof JSON envelope (`headersSent`-guarded 500 — no response-less
 path), `?narrate=1` retired on GET (`{narrate:'deferred'}` — narration lives ONLY on POST/cron,
