@@ -1027,6 +1027,24 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(domCount('dia', 'v_sf_link_review_queue')),
   ]);
 
+  // W8 (Prompt 75): live badge counts for the two W8-touched federated lanes.
+  // The DC page overrides its owner_reconcile / w8_u3_link_review badges with
+  // these — the /api/decisions?summary=1 federated total for owner_reconcile
+  // fans out 8+ cross-DB sub-queries and can time out to a 0 badge, and the U3
+  // lane must reflect v_w8_u3_link_review_open. owner_reconcile is the SUM of its
+  // five folded seeders (mirrors fetchFederatedSource('owner_reconcile').total),
+  // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
+  const [
+    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open,
+  ] = await Promise.all([
+    withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
+    withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
+    withLaneTimeout(domCount('gov', 'entity_match_candidates?status=eq.pending_review')),
+    withLaneTimeout(domCount('dia', 'entity_match_candidates?status=eq.pending_review')),
+    withLaneTimeout(opsCount('w8_u2_dup_pair?status=eq.proposed')),
+    withLaneTimeout(opsCount('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)')),
+  ]);
+
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
   const sum = (...rs) => {
     const v = rs.map(val).filter((x) => typeof x === 'number');
@@ -1080,6 +1098,16 @@ async function handleReviewCounts(req, res) {
       count: sum(govSfLink, diaSfLink),
       parts: { gov: val(govSfLink), dia: val(diaSfLink) },
       count_mode: 'exact', status: laneStatus(govSfLink, diaSfLink),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'owner_reconcile', label: 'Owner reconcile — same party?',
+      count: sum(orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2),
+      parts: { lcc_ore: val(orLcc), gov_unification: val(orGovUnif),
+        gov_entity_match: val(orGovEmc), dia_entity_match: val(orDiaEmc), w8_u2_dup_pairs: val(orU2) },
+      count_mode: 'exact', status: laneStatus(orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'w8_u3_link_review', label: 'Ownership links — Ollama proposals',
+      count: sum(u3Open), parts: { open_proposals: val(u3Open) },
+      count_mode: 'exact', status: laneStatus(u3Open),
       href: 'pageDataQuality', tone: '' },
   ];
 
