@@ -46,6 +46,11 @@ import {
   buildLinkPropagationPrompt, parseLinkProposalJson, normalizeLinkProposal,
   validateLinkProposal, isProposableLink, LINK_MIN_CONFIDENCE, scoreLinksWithBudget,
 } from './_shared/link-propagation-planner.js';
+import {
+  assembleReport, buildNarrativePrompt, parseNarrativeJson, collectComputedValues,
+  validateFigures, renderFindingsDoc, renderFixUnitStubs,
+} from './_shared/systemic-findings.js';
+import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
@@ -167,6 +172,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
+    case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -2805,6 +2811,245 @@ async function handleLinkPropagationTick(req, res) {
       + 'fabricated quote is DROPPED (dropped_not_verbatim → w8_u3_dropped_log); no_evidence_found is honest/counted. '
       + 'Review, then POST (with the flag ON).'
       + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + LINK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
+// W8 U4 (Prompt 70) — Systemic-findings monthly report tick.
+//   GET  /api/systemic-findings-tick            -> dry-run: the full COMPUTED
+//                                                  findings JSON (honest zeros).
+//   GET  /api/systemic-findings-tick?narrate=1  -> dry-run + the figure-validated
+//                                                  model narrative (NO writes).
+//   POST /api/systemic-findings-tick            -> flag-gated: persist the monthly
+//                                                  snapshot + open a research_task +
+//                                                  return the rendered doc markdown.
+// Numbers are computed DETERMINISTICALLY (from the v_lcc_w8_u4_* views); the model
+// only drafts the narrative FROM those numbers, figure-validated. Creates NO lane.
+// ============================================================================
+function systemicFindingsEnabled(flagRow) {
+  const env = String(process.env.W8_U4_FINDINGS_REPORT || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchSystemicFindingsFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U4_FINDINGS_REPORT&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+function currentPeriod(d) {
+  const dt = d || new Date();
+  return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0');
+}
+
+// Read every section's raw input from the pre-grouped U4 views (all on LCC Opps).
+// Each read is best-effort — a failed source yields an honest empty/zero, never a
+// thrown tick. Naming-hygiene backlog is read from the latest U1 apply snapshot
+// (junk_review_batch.details.naming_hygiene_backlog); null when U1 has not applied.
+async function fetchSystemicFindingsInputs() {
+  const rows = async (path) => {
+    try { const r = await opsQuery('GET', path); return (r.ok && Array.isArray(r.data)) ? r.data : []; }
+    catch (_e) { return []; }
+  };
+  const one = async (path) => { const d = await rows(path); return d[0] || null; };
+
+  const [ingestClusters, flowClusters, windows, chainRollup, chainGaps,
+    extractionMix, junkVerdicts, dupDisp, matchSeeders, u3Health] = await Promise.all([
+    rows('v_lcc_w8_u4_ingest_failure_clusters?select=domain,http_status,label,cnt,cnt_30d,last_seen&order=cnt.desc'),
+    rows('v_lcc_w8_u4_flow_failure_clusters?select=flow_name,error_kind,error_code,cnt,cnt_30d,last_seen&order=cnt.desc'),
+    one('v_lcc_w8_u4_failure_windows?select=iwf_total,iwf_30d,frf_total,frf_30d,frf_unresolved'),
+    one('v_lcc_w8_u4_chain_rollup?select=total,complete,incomplete'),
+    rows('v_lcc_w8_u4_chain_gaps?select=seg,cnt&order=cnt.desc'),
+    one('v_lcc_w8_u4_extraction_mix?select=total_30d,stamped,ollama,fell_back'),
+    rows('v_lcc_w8_u4_junk_verdicts?select=status,cnt'),
+    rows('v_lcc_w8_u4_dup_dispositions?select=status,cnt'),
+    rows('v_lcc_w8_u4_match_label_seeders?select=seeder,verdict,cnt&order=cnt.desc'),
+    one('v_lcc_w8_u3_link_health?select=details'),
+  ]);
+
+  // Provenance drift + conflicts (count-only views).
+  const provUnranked = await opsCntSafe('v_field_provenance_unranked');
+  const provConflicts = await opsCntSafe('v_field_provenance_conflicts');
+  // Precision floors.
+  const dealDropped = await opsCntSafe('lcc_deal_analysis_dropped_log');
+  const u3Dropped = await opsCntSafe('w8_u3_dropped_log');
+  const u3d = (u3Health && u3Health.details) || {};
+
+  // Naming-hygiene backlog from the latest U1 apply snapshot (best-effort).
+  let namingHygiene = null;
+  try {
+    const b = await opsQuery('GET', 'junk_review_batch?select=details&order=created_at.desc&limit=1');
+    if (b.ok && Array.isArray(b.data) && b.data[0] && b.data[0].details) {
+      const det = b.data[0].details;
+      const nh = det.naming_hygiene_backlog || det.summary?.naming_hygiene_backlog || null;
+      if (nh) namingHygiene = { total: nh.total || 0, known_abbreviation: nh.known_abbreviation || 0, address_as_name: nh.address_as_name || 0 };
+    }
+  } catch (_e) { /* honest null */ }
+
+  return {
+    ingest_clusters: ingestClusters, flow_clusters: flowClusters, windows: windows || {},
+    provenance: { unranked: provUnranked, conflicts: provConflicts },
+    chain: { ...(chainRollup || {}), gaps: chainGaps, u3: u3d },
+    precision: { deal_dropped: dealDropped, u3_dropped: u3Dropped,
+      u3_open: Number(u3d.open_proposals) || 0, u3_applied: Number(u3d.applied_total) || 0 },
+    lanes: { junk: junkVerdicts, dup: dupDisp, labels: matchSeeders },
+    naming_hygiene: namingHygiene,
+    extraction: extractionMix || {},
+  };
+}
+
+// Count helper (exact count via PostgREST) that never throws.
+async function opsCntSafe(path) {
+  try {
+    const sep = path.includes('?') ? '&' : '?';
+    const r = await opsQuery('GET', path + sep + 'select=*&limit=1', undefined, { countMode: 'exact' });
+    if (typeof r.count === 'number') return r.count;
+    return Array.isArray(r.data) ? r.data.length : 0;
+  } catch (_e) { return 0; }
+}
+
+// Prior period's snapshot sections (for MoM deltas). null before month 2.
+async function fetchPrevSnapshotSections(period) {
+  try {
+    const r = await opsQuery('GET', 'lcc_w8_u4_findings_snapshot?select=period,sections&period=lt.'
+      + encodeURIComponent(period) + '&order=period.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && Array.isArray(r.data[0].sections)) return r.data[0].sections;
+  } catch (_e) { /* best-effort */ }
+  return null;
+}
+
+// Draft + figure-validate the model narrative. Regenerate ONCE on a figure
+// mismatch, then fall back to the stock header (tables ship regardless). Never a
+// fabricated number. Returns { narrative|null, validation, note }.
+async function draftSystemicNarrative(report) {
+  const prompt = buildNarrativePrompt(report);
+  const computed = collectComputedValues(report);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let ai;
+    try { ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' }); }
+    catch (e) { return { narrative: null, validation: null, note: 'model error (' + (e?.message || e) + ') — tables only' }; }
+    const parsed = parseNarrativeJson(ai?.data?.response || '');
+    if (!parsed || !parsed.executive_summary) {
+      if (attempt === 0) continue;
+      return { narrative: null, validation: null, note: 'model returned no valid JSON — tables only',
+        provider: ai?.provider || null, model: ai?.data?.model || null };
+    }
+    const proseAll = [parsed.executive_summary, ...Object.values(parsed.sections || {})].join('\n');
+    const validation = validateFigures(proseAll, computed);
+    if (validation.ok) {
+      return { narrative: parsed, validation, note: 'figure-validated',
+        provider: ai?.provider || null, model: ai?.data?.model || null };
+    }
+    // mismatch → regenerate once; on the second miss, drop the narrative.
+    if (attempt === 1) {
+      return { narrative: null, validation, note: 'figure validation failed ('
+        + validation.unmatched.slice(0, 6).join(', ') + ') — dropped, tables only',
+        provider: ai?.provider || null, model: ai?.data?.model || null };
+    }
+  }
+  return { narrative: null, validation: null, note: 'tables only' };
+}
+
+async function recordFindingsHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'systemic_findings', p_check_name: 'w8_u4_findings_report',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handleSystemicFindingsTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchSystemicFindingsFlag();
+  const enabled = systemicFindingsEnabled(flag);
+  const now = new Date();
+  const period = req.query.period || req.body?.period || currentPeriod(now);
+
+  const inputs = await fetchSystemicFindingsInputs();
+  const prevSections = await fetchPrevSnapshotSections(period);
+  const report = assembleReport(inputs, { period, now: now.toISOString(), prevSections });
+
+  // ---- POST apply: flag-gated. Persist snapshot + open research_task. ---------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordFindingsHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U4_FINDINGS_REPORT feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing', period } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, period });
+    }
+    const sourceRunId = 'w8u4_' + now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const drafted = await draftSystemicNarrative(report);
+    const docPath = 'docs/audits/systemic-findings/' + period + '.md';
+    const markdown = renderFindingsDoc(report, drafted.narrative,
+      { generatedAt: now.toISOString(), sourceRunId, narrativeNote: drafted.note });
+
+    // Persist the per-period snapshot (upsert on period — a same-month re-run refreshes).
+    let snapshotId = null;
+    try {
+      const up = await opsQuery('POST', 'lcc_w8_u4_findings_snapshot?on_conflict=period', {
+        period, computed_at: now.toISOString(), source_run_id: sourceRunId,
+        sections: report.sections, findings: report.findings_flat, totals: report.totals,
+        narrative_ok: drafted.validation ? drafted.validation.ok : null,
+        doc_path: docPath, doc_markdown: markdown,
+      }, { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+      if (up.ok && Array.isArray(up.data) && up.data[0]) snapshotId = up.data[0].snapshot_id;
+    } catch (e) { console.warn('[systemic-findings] snapshot upsert failed', e?.message || e); }
+
+    // The doc IS the consumer — open ONE research_task pointing at it (no new lane).
+    // Idempotent on (research_type, domain, source_table, source_record_id=period).
+    let taskId = null;
+    try {
+      const rt = await openResearchTask({
+        researchType: 'systemic_findings_report',
+        title: 'Systemic-findings report — ' + period,
+        instructions: 'Monthly W8 U4 systemic-defects report (' + report.totals.findings + ' findings, '
+          + report.totals.code_error_sections + ' code-error section(s)). Review the tables + fix-unit stubs; '
+          + 'feed the W6.6 audit. Doc: ' + docPath + '. ' + (drafted.note || ''),
+        domain: 'lcc', propertyId: period, sourceTable: 'systemic_findings_report',
+        metadata: { period, doc_path: docPath, snapshot_id: snapshotId, source_run_id: sourceRunId,
+          totals: report.totals, narrative_note: drafted.note },
+      });
+      if (rt && rt.ok) taskId = rt.id;
+      if (taskId && snapshotId) {
+        await opsQuery('PATCH', 'lcc_w8_u4_findings_snapshot?snapshot_id=eq.' + snapshotId,
+          { research_task_id: taskId }).catch(() => null);
+      }
+    } catch (e) { console.warn('[systemic-findings] research_task failed', e?.message || e); }
+
+    const bs = report.totals.by_severity || {};
+    await recordFindingsHealth({ status: 'green', count: report.totals.findings,
+      lastError: null,
+      details: { period, snapshot_id: snapshotId, research_task_id: taskId,
+        narrative_note: drafted.note, narrative_ok: drafted.validation ? drafted.validation.ok : null,
+        by_severity: bs, source_run_id: sourceRunId } });
+
+    return res.status(200).json({ ok: true, mode: 'apply', period, source_run_id: sourceRunId,
+      snapshot_id: snapshotId, research_task_id: taskId, doc_path: docPath,
+      narrative_note: drafted.note, narrative_ok: drafted.validation ? drafted.validation.ok : null,
+      totals: report.totals, doc_markdown: markdown });
+  }
+
+  // ---- GET dry-run: the full computed findings JSON. ?narrate=1 adds prose. ----
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    period, report, fix_unit_stubs: renderFixUnitStubs(report),
+    note: 'Computed deterministically from the v_lcc_w8_u4_* views (honest zeros where a source is empty). '
+      + 'No rows written. POST (with the flag ON) persists the monthly snapshot + opens the research_task.' };
+  if (req.query.narrate === '1' || req.query.narrate === 'true') {
+    const drafted = await draftSystemicNarrative(report);
+    out.narrative = drafted.narrative;
+    out.narrative_note = drafted.note;
+    out.narrative_validation = drafted.validation;
+    out.doc_markdown = renderFindingsDoc(report, drafted.narrative,
+      { generatedAt: now.toISOString(), narrativeNote: drafted.note });
+    out.note += ' Narrative is figure-validated (every prose number must match a computed value or it is dropped).';
   }
   return res.status(200).json(out);
 }
