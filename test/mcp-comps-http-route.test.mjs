@@ -152,13 +152,35 @@ describe('MCP /api/comps one-shot HTTP route', () => {
   });
 });
 
-// Prompt 69 — tranquil-delight's own comps handler (api/comps.js) now has the SAME
-// one-shot `request` mode, reusing runGenerateCompsFromRequest — no forked builder.
+// Prompt 70 — tranquil-delight is a PROXY with no DB env. Its one-shot `request` mode
+// forwards to the engine's own one-shot (${MCP_BASE}/api/comps) — the SAME pattern
+// api/query-comps.js uses — instead of hitting the DB directly. Row-mode still builds
+// directly through the BOV service.
 describe('tranquil-delight api/comps.js', () => {
   let compsHandler;
+  const ENGINE_BASE = 'https://engine.test';
+
+  // Mock the engine one-shot upstream + the BOV row-mode upstream.
+  function installProxyMock(engineHandler) {
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u === `${ENGINE_BASE}/api/comps`) return engineHandler(opts);
+      if (u === 'https://bov.test/generate-comps') {
+        return new Response(JSON.stringify({
+          status: 'ok',
+          filename: 'route-comps.xlsx',
+          download_url: 'https://download.test/route-comps.xlsx',
+          comp_type: 'sales',
+          expires_in_seconds: 3600,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch ${u}`);
+    };
+  }
 
   before(async () => {
-    installCompsFetchMock();
+    process.env.GOV_API_URL = ENGINE_BASE;
+    process.env.BOV_API_KEY = process.env.BOV_API_KEY || 'test-bov-key';
     compsHandler = (await import('../api/comps.js')).default;
   });
 
@@ -166,7 +188,19 @@ describe('tranquil-delight api/comps.js', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('one-shot `request` builds via the shared renderer and returns a download link + counts', async () => {
+  it('one-shot `request` forwards to ${MCP_BASE}/api/comps and returns its download link + counts', async () => {
+    let forwarded = null;
+    installProxyMock((opts) => {
+      forwarded = JSON.parse(opts.body || '{}');
+      return new Response(JSON.stringify({
+        status: 'ok',
+        filename: 'route-comps.xlsx',
+        download_url: 'https://download.test/route-comps.xlsx',
+        counts: { sold: 1, on_market: 1 },
+        cap_rate_range: { min: 0.0529, max: 0.0708 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+
     const res = mockRes();
     await compsHandler(
       { method: 'POST', headers: {}, query: {}, body: {
@@ -179,11 +213,28 @@ describe('tranquil-delight api/comps.js', () => {
     assert.equal(res.body.download_url, 'https://download.test/route-comps.xlsx');
     assert.equal(res.body.counts.sold, 1);
     assert.equal(res.body.counts.on_market, 1);
+    // The natural-language request (and one-shot fields) are passed straight through.
+    assert.equal(forwarded.request, 'dialysis sales comps for The Villages, FL for an appraisal workbook at 6.00% cap');
+    assert.equal(forwarded.limit, 25);
     // Compact result only — no raw support rows leak through the connector.
     assert.equal(res.body.comps, undefined);
   });
 
+  it('one-shot upstream 5xx → 502', async () => {
+    installProxyMock(() => new Response('engine boom', { status: 503 }));
+
+    const res = mockRes();
+    await compsHandler(
+      { method: 'POST', headers: {}, query: {}, body: { request: 'dialysis comps for The Villages, FL' } },
+      res,
+    );
+    assert.equal(res.statusCode, 502);
+    assert.match(String(res.body.error || ''), /engine error 503/);
+  });
+
   it('row-mode (explicit comp_type + rows) still builds directly, no synthesize', async () => {
+    installProxyMock(() => { throw new Error('one-shot upstream must not be called in row mode'); });
+
     const res = mockRes();
     await compsHandler(
       { method: 'POST', headers: {}, query: {}, body: {
@@ -197,6 +248,8 @@ describe('tranquil-delight api/comps.js', () => {
   });
 
   it('neither `request` nor rows → 400', async () => {
+    installProxyMock(() => { throw new Error('no upstream in the 400 guard path'); });
+
     const res = mockRes();
     await compsHandler(
       { method: 'POST', headers: {}, query: {}, body: {} },
