@@ -2047,16 +2047,23 @@ app.get("/", (_req, res) => {
   app.post(prefixed("/api/query-comps"), authenticate, __compsRoutes.queryComps);
   app.post(prefixed("/api/synthesize-comps"), authenticate, __compsRoutes.synthesizeComps);
   app.post(prefixed("/api/comps"), authenticate, async (req, res) => {
+    // Prompt 71 — instrument the engine /api/comps handler so the failing hop is visible in logs.
+    const __t0 = Date.now();
     try {
       const payload = req.body || {};
-      if (String(payload.request || '').trim()) {
+      const hasRequest = !!String(payload.request || '').trim();
+      const hasRows = Array.isArray(payload.sold) || Array.isArray(payload.on_market) || Array.isArray(payload.comps);
+      console.log('[api/comps] hit; hasRequest=' + hasRequest + ' hasRows=' + hasRows);
+      if (hasRequest) {
         const result = await runGenerateCompsFromRequest(payload, { govQuery, diaQuery }, postCompsWorkbook);
+        console.log('[api/comps] one-shot ok in ' + (Date.now() - __t0) + 'ms; error=' + !!result.error);
         res.status(result.error ? 400 : 200).json(enforceHttpResponseSize(result));
         return;
       }
       const data = await postCompsWorkbook(payload);
       res.json(enforceHttpResponseSize(compactCompsWorkbookResult(data)));
     } catch (e) {
+      console.error('[api/comps] one-shot threw after ' + (Date.now() - __t0) + 'ms: ' + (e?.message || e));
       res.status(502).json({ error: String(e?.message || e) });
     }
   });
