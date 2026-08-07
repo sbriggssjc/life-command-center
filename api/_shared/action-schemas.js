@@ -1564,45 +1564,14 @@ export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_UR
     (categories[cat] = categories[cat] || []).push({ actionId, regEntry, schema });
   }
 
-  // Unified gateway
-  spec.paths['/api/chat'] = {
-    post: {
-      operationId: 'dispatchCopilotAction',
-      summary: 'Copilot Action Gateway — dispatch any registered action',
-      description: 'Single entry point for all Copilot actions. Validates action_id against the registry, enforces tier-based confirmation, routes internally, and logs telemetry.',
-      'x-ms-summary': 'Dispatch Copilot Action',
-      parameters: [{
-        in: 'body',
-        name: 'body',
-        required: true,
-        schema: {
-          type: 'object',
-          properties: {
-            copilot_action: { type: 'string', description: 'Action ID from the registry', enum: Object.keys(registry) },
-            params: { type: 'object', description: 'Action-specific parameters (see individual action schemas)' },
-            surface: { type: 'string', enum: ['copilot_chat', 'teams', 'outlook', 'power_automate'], description: 'Which Microsoft surface is calling' }
-          },
-          required: ['copilot_action']
-        }
-      }],
-      responses: {
-        '200': {
-          description: 'Action executed successfully or confirmation required',
-          schema: {
-            type: 'object',
-            properties: {
-              ok: { type: 'boolean' },
-              source: { type: 'string' },
-              data: { type: 'object' },
-              requires_confirmation: { type: 'boolean' },
-              action: { type: 'string' },
-              tier: { type: 'integer' }
-            }
-          }
-        }
-      }
-    }
-  };
+  // NOTE (Prompt 66, Copilot spec slim): the `dispatchCopilotAction` catch-all
+  // gateway (`POST /api/chat`) is intentionally NOT advertised in the v2
+  // connector spec. The orchestrator falls into the catch-all and stalls; every
+  // action is reachable via its discrete PascalCase per-action operation below.
+  // The runtime `/api/chat` route stays mounted in server.js — only its spec
+  // advertisement is removed here. Likewise the `/api/copilot/compat/*`
+  // snake_case aliases are no longer emitted (pure duplicates that doubled the
+  // operation count past Copilot Studio's orchestration limit).
 
   // Per-action paths
   for (const [category, actions] of Object.entries(categories)) {
@@ -1618,27 +1587,6 @@ export function generateSwagger2Spec(registry, baseUrl = process.env.LCC_BASE_UR
           operationId,
           summary: (schema.description || actionId).slice(0, 80),
           description: `**Tier ${regEntry.tier}** (${tierLabel})${regEntry.confirm ? ` — requires ${regEntry.confirm} confirmation` : ''}. Category: ${category}. ${schema.description || ''}`,
-          'x-ms-summary': actionId.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-          tags: [category],
-          parameters: [{
-            in: 'body',
-            name: 'body',
-            required: true,
-            schema: schema.inputs || { type: 'object' }
-          }],
-          responses: {
-            '200': { description: 'Success', schema: schema.outputs || { type: 'object' } }
-          }
-        }
-      };
-      // Snake_case compat alias — action bindings created during the snake_case
-      // period reference the original actionId (e.g. get_hot_business_contacts).
-      // This secondary path resolves those without breaking the PascalCase bindings.
-      const compatPathKey = `/api/copilot/compat/${actionId.replace(/_/g, '-')}`;
-      spec.paths[compatPathKey] = {
-        post: {
-          operationId: actionId,
-          summary: (schema.description || actionId).slice(0, 80),
           'x-ms-summary': actionId.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
           tags: [category],
           parameters: [{
