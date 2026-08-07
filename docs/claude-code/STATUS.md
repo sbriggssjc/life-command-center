@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 73 landed — PR #1619, awaiting merge (bundle with #1618 redeploy)
+U4 tick hardened per spec: crash-proof JSON envelope (`headersSent`-guarded 500 — no response-less
+path), `?narrate=1` retired on GET (`{narrate:'deferred'}` — narration lives ONLY on POST/cron,
+2-attempt budget), per-section try/catch → `section_errors` array (failing section degrades POST
+health to amber, never silent). 40/40 tests. **Final Wave 8 gate: merge #1618 + #1619 → ONE
+redeploy → Scott runs (a) `/api/link-propagation-tick?score=1` (expect scan_errors empty,
+deed/activity/intake >0, chain proposals w/ verbatim quotes) + (b) bare
+`/api/systemic-findings-tick` (fast computed JSON) → Cowork reviews → flip
+`W8_U4_FINDINGS_REPORT` → Wave 8 build-out COMPLETE (4/4 units live).**
+
 ### Prompt 72 landed — PR #1618, awaiting merge (bundle with #1611/#1614 redeploy)
 All three chain-evidence sources root-caused against live schemas: deed = gov PK is `deed_id`
 (dia `id`) → domain-aliased select; activity = columns are `id`/`title`/`body` (no
