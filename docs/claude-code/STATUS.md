@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompts 70 & 71 landed (PRs #1611, #1614) — both migrations LIVE (Cowork-verified), both flags OFF
+
+| # | Outcome | State |
+|---|---|---|
+| 70 (U4) | Systemic-findings monthly report | ✅ PR #1611. Pure aggregator + figure validator (prose numbers must match computed table), `GET /api/systemic-findings-tick` (`?narrate=1`), migration live (snapshot table, 10 views, flag `W8_U4_FINDINGS_REPORT` off — verified, monthly cron `0 5 1 * *` — verified). **First doc generated from live data: `docs/audits/systemic-findings/2026-08.md` (on the branch) — 46 findings (6 critical/9 high). Top signal: PGRST204 schema-drift writes, dia 3,722 + gov 3,271** ← real systemic defect surfaced on day one; candidate fix-unit. 34 tests. |
+| 71 (U3 fix) | Evidence depth + different_people verdict | ✅ PR #1614. Per-source evidence counts + loud scan_errors, NEW `intake` source (join path fixed to `raw_payload->extraction_result` after live schema check; 7,713 rows carry match_property_id), assembly-skip evidence-hash markers, `different_people` first-class (verbatim-quote floor; confirm → `entity_match_labels` distinct seeder `w8_u3_shared_email` + reversible mark — never merge). Constraint migration `20260808120000` applied live (verified: CHECK carries different_people). 50 tests. Honest note: intake snapshots are tenant/address-heavy — chain-gap yield may stay modest; per-source counts now make it measurable. |
+
+**Gate: merge #1611 + #1614 → redeploy → (a) U3: `GET /api/link-propagation-tick?score=1&n=6` —
+expect per-source evidence counts populated, different_people proposals with verbatim quotes,
+honest no_evidence; (b) U4: `GET /api/systemic-findings-tick` + review the JSON/doc. Cowork flips
+`W8_U3_LINK_PROPAGATION` and `W8_U4_FINDINGS_REPORT` on pass.**
+
 ### U3 first dry-run REVIEWED 2026-08-07 — safety PASSED, yield FAILED → prompt 71 queued, flag stays OFF
 Scott ran `?score=1&n=6` post-#1609: 6 honest no_evidence_found, dropped_not_verbatim 0, zero
 fabrication — validator + abstention working. But (1) **evidence assembly starving**: 59/60 chain
