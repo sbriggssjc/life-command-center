@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 72 landed — PR #1618, awaiting merge (bundle with #1611/#1614 redeploy)
+All three chain-evidence sources root-caused against live schemas: deed = gov PK is `deed_id`
+(dia `id`) → domain-aliased select; activity = columns are `id`/`title`/`body` (no
+activity_id/subject); intake = **the recurring dia/gov alias footgun** — `match_domain` stores
+long-form `government`/`dialysis`, `eq.gov` matched 0/7,713 → `in.(gov,government)` per the
+priority-band srcForms pattern. Each fixed query verified against live DBs (real rows returned).
+Schema-pinned regression tests (53 pass). Chain rows re-enter automatically post-deploy
+(evidence-hash change). **Gate: merge #1618 (+#1611/#1614 if pending) → redeploy → re-run
+`?score=1` — expect scan_errors empty, deed/activity/intake counts >0, chain proposals scored.**
+
 ### ✅ W8 U3 LIVE 2026-08-07 (post-71 re-run) + prompt 72 queued + U4 502 under diagnosis
 Post-71 `?score=1&n=6`: **different_people arm PASSED** — 5 proposals, all quote_verbatim=true,
 real shared-email findings (e.g. Hughes/Lawrence/Austin one inbox) → Cowork flipped
