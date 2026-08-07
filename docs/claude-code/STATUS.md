@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Queued 2026-08-07: prompt 69 (W8 U3 — connection propagation)
+Grounded live first — **premise correction:** `lcc_chain_unresolvable` is EMPTY; U3 targets
+`v_ownership_chain_worklist` (3,405 ranked rows, gap types e.g. developer_unidentified) +
+`v_lcc_person_email_merge_candidates` (257). Design: value-gated rank order, deterministic
+internal-evidence assembly (no web search — websearch proxy PAUSED), Ollama link proposals with
+W7.4-style VERBATIM-quote validator (fail ⇒ `w8_u3_dropped_log`), confirm lane → deterministic
+provenance writer (`w8_u3_link_propagation` fsp row; unranked view stays 0), flag
+`W8_U3_LINK_PROPAGATION` OFF, cron 4:10 UTC staggered after U1/U2 (GaryBuilt serial), ~15/night,
+evidence-hash re-score keying. In `prompts/`, ready to send.
+
 ### ✅ W8 U2 LIVE 2026-08-07 16:26 UTC — flag flipped after clean second run
 Post-68 `?score=1` PASSED: coverage fixed (gov 8,000 w/ resumable cursor, dia 6,967 full/wrapped,
 scan_errors []), sample all recognizable near-misses (MAINSTREET/Main Street, NorthStar/North Star,
