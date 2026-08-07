@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 63 (W8 U2) landed — PR #1606, migration LIVE (Cowork-verified), flag OFF, awaiting merge+redeploy
+Dup-pair proposals → resolver fuel, doctrine held (zero merges structurally tested; LLM writes
+nothing). Pure planner `dup-pair-planner.js` (trigram/levenshtein no-shared-block pairs, same-address
+diff-name, abbreviation/expansion incl. DVA↔DaVita; prefix+suffix blocking; exclusion joins; cap);
+`/api/dup-pair-tick` (GET dry-run/`?score=1`/POST flag-gated); proposals surface through the EXISTING
+`owner_reconcile` DC lane as folded seeder `w8_u2_ollama_pair`; accepted verdicts →
+`entity_match_labels` (corpus reader verified: no seeder allowlist — W4.4 consumes automatically).
+Migration `20260807160000` applied live (Cowork-verified: table present/empty, flag off, cron
+`50 3 * * *`). 43 planner tests; full suite 3,060 pass / 3 pre-existing. **Gate: merge #1606 →
+redeploy → Scott `GET /api/dup-pair-tick?score=1` → review pair sheet → flip `W8_U2_DUP_PAIRS`.**
+
 ### ✅ W8 U1 LIVE 2026-08-07 13:51 UTC — flag flipped after clean fifth run
 Post-67 `?score=1` PASSED all acceptance: suspect_distribution false (threshold 0.9, share 0.67),
 **WALDSCHMITT→keep 1.0** ("consonant run is part of a real surname" — the model itself, on ollama),
