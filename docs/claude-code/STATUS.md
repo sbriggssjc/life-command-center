@@ -454,6 +454,13 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 74 landed — PR #1621, stranded row repaired live, awaiting merge + redeploy
+All six invalid `'resolved'` sites fixed (U1 junk + U3's four close paths → house semantic
+`decided`/`skipped`; **U2 was already correct**). Structural guard test pins verdict statuses to
+the four CHECK-valid literals. Stranded decision 2831209 closed 'decided' live (its review row 18
+was already applied). **Gate: merge #1621 → redeploy → lanes safe to work.** Verify with one U1
+verdict (should complete silently).
+
 ### First live lane verdict 2026-08-07 — "verdict record failed" → prompt 74 queued (one-liner)
 Scott worked the first real U1 card; the WORK applied (review row 'applied', soft-retire landed)
 but the decision-close step wrote `lcc_decisions.status='resolved'` — invalid per the CHECK
