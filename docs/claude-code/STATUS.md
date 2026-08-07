@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ W8 U3 LIVE 2026-08-07 (post-71 re-run) + prompt 72 queued + U4 502 under diagnosis
+Post-71 `?score=1&n=6`: **different_people arm PASSED** — 5 proposals, all quote_verbatim=true,
+real shared-email findings (e.g. Hughes/Lawrence/Austin one inbox) → Cowork flipped
+`W8_U3_LINK_PROPAGATION` ON (person_email arm productive; 257-row backlog → distinct labels).
+**Chain arm still starved, now DIAGNOSABLY** — the 71 loud-errors exposed wrong column names:
+`deed_records.id` and `activity_events.activity_id` don't exist (42703 on every gov candidate) →
+**prompt 72** queued (schema-check the two queries + gov intake-match filter). Skip-marked chain
+rows re-enter automatically post-fix (evidence-hash changes). **U4 `?narrate=1` 502'd** —
+suspected proxy timeout (aggregation + inline ollama narrate; prompt-66 class). Scott running the
+bare tick to isolate; fix prompt after diagnosis.
+
 ### Prompts 70 & 71 landed (PRs #1611, #1614) — both migrations LIVE (Cowork-verified), both flags OFF
 
 | # | Outcome | State |
