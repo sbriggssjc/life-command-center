@@ -441,6 +441,29 @@ static yaml retired to a GENERATED+stamped file (`npm run spec:chatgpt`); anti-d
 **Connector baseline (58):** fully green — all 7 tools correct.
 
 
+## W5.3 CLOSED + W8 hygiene campaign kicked off — 2026-08-06 (Cowork)
+
+Per `docs/audits/W53_AND_OLLAMA_HYGIENE_KICKOFF.md`. **Wave 5 closes** — verdict in ROLLOUT_STATUS
+W5.3 row + full report `docs/audits/W5_3_LOCAL_LLM_EVALUATION_2026-08-06.md`. Headline: KEEP
+ollama-primary on narrative surfaces (W7.2/7.4/7.5 — no fabrication, validator working); intake OM
+extraction has a material recall/schema gap (NOI 4% vs cloud 93%) → TUNE + interim revert
+recommended; seam gaps found (17/50 artifacts bypass ollama — a process lacks OLLAMA_URL; snapshot
+has no provider stamp; feedback corpus unusable for grading — one bulk Jul-27 batch).
+
+**Queued:** prompt **61** (extraction hardening + provider stamp + env audit + edge-400 triage),
+prompt **62** (W8 U1 junk-entity pre-screen — extends prompt-32 `OLLAMA_CLEAN_ASSIST` machinery,
+junk_review lane, flag `W8_U1_JUNK_PRESCREEN` OFF, nightly cron). U2–U4 sequenced after U1 lands.
+Housekeeping: stale reconciled response docx (36–40) moved responses/ → done/.
+
+### Needs Scott (this batch)
+- **Interim revert APPROVED by Scott (2026-08-06): revert intake extraction to cloud NOW.** On the
+  Railway service(s) running the intake extractor: unset/blank `OLLAMA_URL` (or set
+  `AI_EXTRACTION_PROVIDER` back to cloud) + flip `feature_flags_registry.OLLAMA_EXTRACTION` off.
+  Narrative surfaces (W7.2/7.4/7.5, next-step) KEEP ollama — they route through the same seam, so
+  the flip must be the intake-surface flag, not a global OLLAMA_URL removal, if both share a service
+  (verify in prompt 61's env audit; if they share, prefer flag-level gating). Re-cutover after 61.
+- Send prompts 61 + 62 to Claude Code (in `prompts/`).
+
 ## ChatGPT surface — COMPLETE 2026-08-06 ✅
 
 `getQueueSummary` (and the other Actions) now return live data in the published GPT (verified: 1,148 queue items,
