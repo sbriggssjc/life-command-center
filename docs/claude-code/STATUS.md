@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 75 landed — PR #1623, awaiting merge + redeploy
+U3 lane fully wired (list entry "Ownership links — Ollama proposals" + meta + card branch handling
+both pools, verbatim quote + Confirm/Reject → decided/skipped per 74). Badges: DC page now
+overrides owner_reconcile + w8_u3_link_review from a NEW lightweight `/api/review-counts` add
+(owner_reconcile = 5 folded seeders incl. U2; U3 = open-proposal depth) instead of the heavy
+`/api/decisions?summary=1` fan-out — root cause of the 0 badge was that heavy path timing out,
+never-overrides-to-0 fallback. **Structural guard shipped and immediately caught THREE more
+half-wired lanes** (agency_risk_action/npi_dedup_* missing meta, contact_company_link missing
+chip) — all fixed rather than exempted. Every _DC_FEDERATED member now must have list+meta+render
+or tests fail. **Gate: merge #1623 → redeploy → hard-refresh DC → expect U3 lane badge 2 (incl.
+the first chain link_proposal) + owner_reconcile badge ~38 with pair cards inside.**
+
 ### DC lane visibility 2026-08-07 — U3 lane missing from frontend, U2 badge undercounts → prompt 75
 U1 lane worked + cleared by Scott (18 verdicts, post-74 fix verified silently). U2/U3 invisible:
 Cowork verified against origin/main — **U3** is in `_DC_FEDERATED` but has NO lane-list entry /
