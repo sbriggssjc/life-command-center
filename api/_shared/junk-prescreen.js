@@ -114,15 +114,17 @@ export function parseJunkSubjectRef(ref) {
 // candidate. `evidence` is the VERBATIM offending substring (doctrine: every
 // proposal is evidence-grounded). Order matters: cheapest/hardest signals first.
 //
-// W8 U1 precision fix (Prompt 64): the first live scored batch dismissed real
-// entities — net-lease SPE shells (ARC/ARHC + property-code + LLC), bank/operator
-// acronyms (SMBC, FCMC), abbreviated firm names (Prtnrs), and address-as-name
-// rows — because the raw consonant-run / no-vowel / too-short heuristics fire on
-// exactly those legitimate naming conventions. These deterministic guards run
-// BEFORE the LLM: an SPE-coded name is NOT a candidate at all; a known-abbrev or
-// address name is a candidate but carries a `preVerdict` that can never be
-// dismissed (rename/parse, not retire); a bare all-caps acronym is flagged
-// `acronymOnly` so the tick refuses to dismiss it without a second junk signal.
+// W8 U1 precision fix (Prompt 64): SPE-coded shells (ARC/ARHC + property-code +
+// LLC) and bare all-caps acronyms (SMBC, FCMC) are legitimate net-lease naming
+// conventions. An SPE-coded name is NOT a candidate at all; a bare acronym is
+// flagged `acronymOnly` and gated on zero connections before it can be dismissed.
+//
+// W8 U1 scope tighten (Prompt 65): candidacy is now TRUE-JUNK ONLY. Known-abbrev
+// ("… Prtnrs") and address-as-name ("3710 Fm 1889") rows are REAL-but-malformed
+// names — a NAMING-HYGIENE backlog with its own future rename unit — so they are
+// classified `naming_hygiene` (counted, never enqueued), NOT junk candidates.
+// The still-present `preVerdict`/heuristic_downgrade guard (below) is retained as
+// an apply-path belt-and-braces only; the candidate pool no longer feeds it.
 // ---------------------------------------------------------------------------
 const TOKEN_JUNK_RE = /^\s*(tests?|asdf+[a-z]*|qwerty[a-z]*|xxx+|zzz+|foo|bar|baz|sample|dummy|delete\s*me|delete|do\s*not\s*use|donotuse|do\s*not\s*delete|n\/?a|none|null|unknown|tbd|placeholder|example|temp|temporary|xxxx+|aaaa+)\b/i;
 const ALL_NONALPHA_RE = /^[^A-Za-z]+$/;            // all digits/punct/symbols, no letters
@@ -177,52 +179,89 @@ export function isAcronymOnly(name) {
   return ACRONYM_ONLY_RE.test(String(name == null ? '' : name).trim());
 }
 
-export function junkCandidateReason(name) {
+// W8 U1 scope tighten (Prompt 65): classify a name into ONE of three buckets:
+//   'junk'           — a TRUE-junk candidate (blank / all-non-alpha / test-token /
+//                      gibberish consonant-run / no-vowel / <=2 letters). These are
+//                      the only rows U1 enqueues.
+//   'naming_hygiene' — a REAL-but-malformed name (abbreviated firm name, address
+//                      mis-entered as a name). NOT junk, NOT a U1 candidate — it is
+//                      a separate rename/normalize backlog with its own future unit.
+//                      Reported as a per-domain count only; no rows enqueued.
+//   null             — a plausibly-real, well-formed name; nothing to do.
+// The second live batch (2026-08-07) exploded the pool 649 → 6,946 because the
+// known-abbreviation + address-as-name classes flag THOUSANDS of real entities
+// (address-anchored SPEs with 6–88 relationships, "Cohen Cos", "City-Core Dev
+// Inc"). Those are a naming-hygiene campaign, not junk — so they are split out
+// here and excluded from candidacy entirely.
+export function classifyName(name) {
   const raw = name == null ? '' : String(name);
   const trimmed = raw.trim();
   if (trimmed === '') {
-    return { heuristic: 'blank_name', evidence: raw };
+    return { category: 'junk', heuristic: 'blank_name', evidence: raw };
   }
   const tok = trimmed.match(TOKEN_JUNK_RE);
   if (tok) {
-    return { heuristic: 'token_junk', evidence: tok[0].trim() };
+    return { category: 'junk', heuristic: 'token_junk', evidence: tok[0].trim() };
   }
   // SPE / property-coded registered vehicle (e.g. "ARC GSDVRDE001, LLC") — a
   // core real entity class in this net-lease business, almost always FK-linked
-  // to a property. NOT a candidate; the code token's consonant run never fires.
+  // to a property. Neither junk nor a hygiene backlog; the code token never fires.
   if (isSpeCodedName(trimmed)) {
     return null;
   }
-  // Known abbreviated firm name ("Brookfield Prop Prtnrs …") — real, just
-  // truncated. Candidate, but the proposal can only ever be a rename.
+  // Naming-hygiene backlog (NOT U1 candidates). A known abbreviated firm name
+  // ("Brookfield Prop Prtnrs …") or an address mis-entered as a name
+  // ("3710 Fm 1889") is a REAL entity — the fix is rename/parse, never dismiss —
+  // so it is reported as a backlog count and never enqueued as junk.
   const abbrev = knownAbbrevEvidence(trimmed);
   if (abbrev) {
-    return { heuristic: 'known_abbreviation', evidence: abbrev, preVerdict: 'rename' };
+    return { category: 'naming_hygiene', heuristic: 'known_abbreviation', evidence: abbrev };
   }
-  // Address-as-name ("3710 Fm 1889") — parse/link to a property, never dismiss.
   if (isAddressAsName(trimmed)) {
-    return { heuristic: 'address_as_name', evidence: trimmed.slice(0, 60), preVerdict: 'parse_contact' };
+    return { category: 'naming_hygiene', heuristic: 'address_as_name', evidence: trimmed.slice(0, 60) };
   }
   if (ALL_NONALPHA_RE.test(trimmed)) {
-    return { heuristic: 'all_non_alpha', evidence: trimmed.slice(0, 60) };
+    return { category: 'junk', heuristic: 'all_non_alpha', evidence: trimmed.slice(0, 60) };
   }
   if (trimmed.replace(/[^A-Za-z]/g, '').length <= 2) {
-    const out = { heuristic: 'too_short', evidence: trimmed.slice(0, 60) };
+    const out = { category: 'junk', heuristic: 'too_short', evidence: trimmed.slice(0, 60) };
     if (isAcronymOnly(trimmed)) out.acronymOnly = true;
     return out;
   }
   const gib = trimmed.match(GIBBERISH_RUN_RE);
   if (gib) {
-    const out = { heuristic: 'consonant_run', evidence: gib[0] };
+    const out = { category: 'junk', heuristic: 'consonant_run', evidence: gib[0] };
     if (isAcronymOnly(trimmed)) out.acronymOnly = true;
     return out;
   }
   if (NO_VOWEL_RE.test(trimmed)) {
-    const out = { heuristic: 'no_vowel', evidence: trimmed.slice(0, 60) };
+    const out = { category: 'junk', heuristic: 'no_vowel', evidence: trimmed.slice(0, 60) };
     if (isAcronymOnly(trimmed)) out.acronymOnly = true;
     return out;
   }
   return null;
+}
+
+// TRUE-junk candidate detail, or null. This is the ONLY generator that feeds the
+// U1 candidate pool — known_abbreviation / address_as_name are deliberately NOT
+// returned here (they are naming_hygiene, see namingHygieneReason). The
+// too_short/acronym connection-gate is applied at scan time (a connected row is
+// excluded from the pool before scoring), NOT here — this is a pure name check.
+export function junkCandidateReason(name) {
+  const c = classifyName(name);
+  if (!c || c.category !== 'junk') return null;
+  const out = { heuristic: c.heuristic, evidence: c.evidence };
+  if (c.acronymOnly) out.acronymOnly = true;
+  return out;
+}
+
+// Naming-hygiene backlog detail (abbrev / address), or null. Never enqueued as
+// junk — surfaced only as a per-domain COUNT so the rename/normalize campaign
+// (a distinct future unit with its own consumer + gate) can be scoped.
+export function namingHygieneReason(name) {
+  const c = classifyName(name);
+  if (!c || c.category !== 'naming_hygiene') return null;
+  return { heuristic: c.heuristic, evidence: c.evidence };
 }
 
 export function isJunkCandidate(name) {
@@ -302,6 +341,16 @@ export function buildJunkPrescreenPrompt(candidate, fewShot) {
 }
 
 const JUNK_VERDICTS = new Set(['dismiss', 'rename', 'parse_contact', 'keep']);
+
+// W8 U1 scope tighten (Prompt 65): only ACTIONABLE proposals become
+// junk_entity_review rows. A `keep` (from the LLM or a guard veto) is a
+// non-event — persisting it floods the lane with nothing-to-do cards (the
+// honest-counts violation from the opposite direction as an all-dismiss batch).
+// `uncertain` (invalid model JSON) is likewise not an actionable proposal.
+const ENQUEUEABLE_JUNK_VERDICTS = new Set(['dismiss', 'rename', 'parse_contact']);
+export function isEnqueueableJunkVerdict(verdict) {
+  return ENQUEUEABLE_JUNK_VERDICTS.has(String(verdict == null ? '' : verdict).toLowerCase().trim());
+}
 
 export function normalizeJunkProposal(raw, candidate) {
   const obj = raw && typeof raw === 'object' ? raw : {};

@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
-  junkCandidateReason, isJunkCandidate, buildJunkPrescreenPrompt,
+  junkCandidateReason, namingHygieneReason, isJunkCandidate, buildJunkPrescreenPrompt,
   normalizeJunkProposal, parseJunkVerdictJson, planJunkApply, buildRetireMarker,
   isSpeCodedName, knownAbbrevEvidence, isAddressAsName, isAcronymOnly,
-  applyPrescreenGuards, dismissDistributionGuard,
+  applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
 } from '../api/_shared/junk-prescreen.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -185,14 +185,24 @@ describe('SPE-pattern guard — net-lease coded shells are NOT candidates', () =
   });
 });
 
-describe('known-abbreviation guard — real-but-truncated firm names => rename', () => {
-  it('detects the abbreviation and downgrades to a rename preVerdict', () => {
-    const r = junkCandidateReason('Brookfield Prop Prtnrs DBUBS 2011-LC1');
+// ===========================================================================
+// Prompt 65 — scope tighten. Abbrev + address rows are REAL-but-malformed names:
+// a naming-hygiene backlog with its own future unit, NEVER U1 junk candidates.
+// The 2nd live batch exploded 649 → 6,946 because these classes flag thousands
+// of real entities; they are split out of candidacy entirely.
+// ===========================================================================
+describe('known-abbreviation — naming-hygiene backlog, NOT a junk candidate', () => {
+  it('is NOT a junk candidate (dropped from candidacy)', () => {
+    assert.equal(junkCandidateReason('Brookfield Prop Prtnrs DBUBS 2011-LC1'), null);
+    assert.equal(isJunkCandidate('Cushman Wakefield Prtnrs'), false);
+    assert.equal(isJunkCandidate('Cohen Cos'), false);
+  });
+  it('is classified as a naming-hygiene backlog row (count only)', () => {
+    const r = namingHygieneReason('Brookfield Prop Prtnrs DBUBS 2011-LC1');
     assert.equal(r.heuristic, 'known_abbreviation');
-    assert.equal(r.preVerdict, 'rename');
     assert.equal(knownAbbrevEvidence('Cushman Wakefield Prtnrs'), 'Prtnrs');
   });
-  it('a known-abbrev candidate can NEVER be dismissed post-guard', () => {
+  it('the heuristic_downgrade guard stays as an apply-path belt-and-braces', () => {
     const cand = { heuristic: 'known_abbreviation', evidence: 'Prtnrs', preVerdict: 'rename', entity_name: 'X Prtnrs' };
     const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.9 }, cand, { connected: false });
     assert.equal(out.verdict, 'rename');
@@ -200,19 +210,45 @@ describe('known-abbreviation guard — real-but-truncated firm names => rename',
   });
 });
 
-describe('address-as-name guard => parse_contact, never dismiss', () => {
-  it('flags bare addresses mis-entered as a name', () => {
+describe('address-as-name — naming-hygiene backlog, NOT a junk candidate', () => {
+  it('still recognizes the shape but is NOT a candidate', () => {
     assert.equal(isAddressAsName('3710 Fm 1889'), true);
     assert.equal(isAddressAsName('654 SR 75'), true);
-    assert.equal(junkCandidateReason('3710 Fm 1889').preVerdict, 'parse_contact');
+    assert.equal(junkCandidateReason('3710 Fm 1889'), null);
+    assert.equal(isJunkCandidate('654 SR 75'), false);
+  });
+  it('is classified as a naming-hygiene backlog row (count only)', () => {
+    assert.equal(namingHygieneReason('3710 Fm 1889').heuristic, 'address_as_name');
   });
   it('does NOT flag an address-named SPE that carries a legal form', () => {
     assert.equal(isAddressAsName('20931 Burbank Blvd LLC'), false);
+    assert.equal(namingHygieneReason('20931 Burbank Blvd LLC'), null);
   });
-  it('a downgraded address dismiss becomes parse_contact', () => {
-    const cand = { heuristic: 'address_as_name', evidence: '3710 Fm 1889', preVerdict: 'parse_contact', entity_name: '3710 Fm 1889' };
-    const out = applyPrescreenGuards({ verdict: 'dismiss', confidence: 0.9 }, cand, { connected: false });
-    assert.equal(out.verdict, 'parse_contact');
+});
+
+describe('naming-hygiene split — real names never land in either pool wrongly', () => {
+  it('a true-junk row is a candidate, not naming-hygiene', () => {
+    assert.equal(junkCandidateReason('Test Test').heuristic, 'token_junk');
+    assert.equal(namingHygieneReason('Test Test'), null);
+  });
+  it('a well-formed real name is neither', () => {
+    for (const n of ['Cowperwood Holdings LLC', 'Fresenius Medical Care', 'Northmarq']) {
+      assert.equal(junkCandidateReason(n), null);
+      assert.equal(namingHygieneReason(n), null);
+    }
+  });
+});
+
+describe('isEnqueueableJunkVerdict — only actionable proposals persist (Prompt 65)', () => {
+  it('dismiss / rename / parse_contact are enqueueable', () => {
+    for (const v of ['dismiss', 'rename', 'parse_contact', 'DISMISS', ' rename ']) {
+      assert.equal(isEnqueueableJunkVerdict(v), true, `${v} should enqueue`);
+    }
+  });
+  it('keep / uncertain / unknown are NOT enqueueable (kept_not_enqueued)', () => {
+    for (const v of ['keep', 'uncertain', 'nuke', '', null, undefined]) {
+      assert.equal(isEnqueueableJunkVerdict(v), false, `${JSON.stringify(v)} should NOT enqueue`);
+    }
   });
 });
 
@@ -347,5 +383,22 @@ describe('structural wiring guards (admin.js + server.js + migration)', () => {
     assert.match(mig, /W8_U1_JUNK_PRESCREEN/);
     assert.match(mig, /'off'/);
     assert.doesNotMatch(mig, /DELETE FROM public\.(entities|recorded_owners|true_owners|contacts)/i);
+  });
+
+  // Prompt 65 — scope tighten wiring.
+  it('scan excludes connected rows at scan time (batch), before scoring', () => {
+    assert.match(admin, /junkConnectedPkSet/);
+    assert.match(admin, /excluded_connected/);
+    // the batched probe uses in.(…) not a per-row probe for the scan pass
+    assert.match(admin, /=in\.\(/);
+  });
+  it('naming-hygiene backlog is counted, never enqueued', () => {
+    assert.match(admin, /naming_hygiene_backlog/);
+    assert.match(admin, /junkNamingHygieneRollup/);
+    assert.match(admin, /namingHygieneReason/);
+  });
+  it('keeps are never persisted — only actionable verdicts enqueue (dry-run + apply)', () => {
+    assert.match(admin, /isEnqueueableJunkVerdict/);
+    assert.match(admin, /kept_not_enqueued/);
   });
 });
