@@ -1578,6 +1578,17 @@ async function exportWorkbook(req, res) {
     // synth output is also monthly (composer just maps row-by-row). Tag
     // accordingly so the renderer picks the monthly window/clipping.
     const upstreamMonthly = realCharts.some((c) => c.cadence === 'monthly');
+    // CM export audit item 2 (2026-08-07 follow-up) — crop synthetic series to
+    // their registered display_from too. Synthetic composers read masterMonthlyRows
+    // (uncropped back to 2001-01-31: quarterly_volume_bars, buyer_pool_monthly_count)
+    // or already-cropped realCharts (pace_of_cap_rate_expansion). The realCharts crop
+    // at line ~1098 never reaches these, so a registered sales-series synthetic still
+    // started 2001. Re-apply the crop here so a synthetic sales series inherits the
+    // same 2007-03-31 start as the realCharts sales series. Pace's YoY-lag output
+    // naturally starts ~2008, so its 2007-03-31 crop is a no-op (acceptance: pace
+    // 2008-01 is fine). Best-effort: no registry row → no crop (whole history).
+    const df = resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, tmpl.view_name_template);
+    rows = cropRowsToDisplayFrom(rows, tmpl, df);
     return {
       chart_template_id: tmpl.chart_template_id,
       name: tmpl.name,
