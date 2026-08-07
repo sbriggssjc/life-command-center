@@ -454,6 +454,15 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### 66 fourth run 2026-08-07 — bounded scoring WORKS on ollama, rubric proven; 2 residuals → prompt 67
+`?score=1` returned clean in-budget (6 scored/241 remaining, qwen2.5:14b). Rubric holding live:
+`CCMCRHS 850 CANAL LLC`→keep (SPE reasoning), OCR garbage + zero-connection `CO` stubs→dismiss with
+evidence beyond the heuristic. Residuals: (1) **distribution guard miscalibrated for the tightened
+pool** — 83% dismiss on pre-filtered true junk is CORRECT but >0.5 → every POST would be refused;
+(2) surname false positive (`CLOVER/WALDSCHMITT, L.L.C.`→dismiss 1.0 — consonant_run inside a
+German surname). **Prompt 67**: `JUNK_DISMISS_GUARD_THRESHOLD` env (default 0.9) + deterministic
+surname guard + WALDSCHMITT regression fixture. Then flag flip.
+
 ### Prompt 66 landed — PR #1603, migration LIVE (Cowork-verified), awaiting merge + redeploy
 Bounded/resumable scoring per spec: inline `?score=1` takes `&n=` (default 20→6) + wall-clock
 budget `JUNK_SCORE_BUDGET_MS` (120s); POST apply scores ≤`JUNK_SCORE_BATCH_SIZE` (25)/invocation —
