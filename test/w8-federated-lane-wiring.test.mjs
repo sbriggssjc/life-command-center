@@ -11,7 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+// W6.5 Stage 1 (P87): the federated lane meta/renderers/verdict handlers were
+// extracted from ops.js into dc-lanes.js (a classic <script> loaded before ops.js,
+// same global scope). Both files form ONE runtime surface, so the wiring guard
+// reads their concatenation — assertions unchanged, only the source path widened.
+const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8')
+  + '\n' + readFileSync(join(root, 'dc-lanes.js'), 'utf8');
 const adminSrc = readFileSync(join(root, 'api/admin.js'), 'utf8');
 
 function federatedMembers() {
