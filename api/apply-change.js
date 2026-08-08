@@ -12,6 +12,7 @@ import {
 } from './_shared/allowlist.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { recalculateSaleCapRates } from './_shared/rent-projection.js';
+import { reconcileLatestEvidence } from './_shared/rent-reconcile-hook.js';
 import { recordFieldWrites } from './_shared/field-priority-guard.js';
 import { domainSupabaseKey } from './_shared/supabase-keys.js';
 
@@ -365,10 +366,17 @@ export default withErrorHandler(async function handler(req, res) {
             `updated=${result.updated} skipped=${result.skipped} ` +
             `reason=${result.reason || 'n/a'}`
           );
+          // Rent Intelligence Phase 3: reconcile the freshly-set anchor (OM /
+          // lease load) against the modeled curve. NON-BLOCKING, chained after
+          // recalc so the anchor is already persisted. Conflicts queue + Teams.
+          return reconcileLatestEvidence('dialysis', pid, domainQuery, { source: 'om_intake' });
+        })
+        .then(rc => {
+          if (rc?.ok) console.log(`[rent-reconcile] apply-change property=${pid} verdict=${rc.verdict} forked=${rc.forked} queued=${rc.queued}`);
         })
         .catch(err => {
           console.error(
-            `[cap-rate-recalc] apply-change error property=${pid}:`,
+            `[cap-rate-recalc/rent-reconcile] apply-change error property=${pid}:`,
             err?.message || err
           );
         });

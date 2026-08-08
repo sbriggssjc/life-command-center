@@ -78,6 +78,9 @@ import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask } from './_shared/salesforce.js';
 import { handleSfOwnerSync, handleOwnerReconcile } from './_handlers/sf-owner-sync.js';
 import { planSfLinkVerdict, sfLinkColumn, sfLinkTarget, parseConflictExistingId } from './_handlers/sf-link-review.js';
+import * as RS from './_shared/sf-link-rescore-planner.js';
+import * as DH from './_shared/sf-donor-handoff-planner.js';
+import * as SA from './_shared/sf-link-assist-planner.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
 import { handleSfSellerOwner } from './_handlers/sf-seller-owner.js';
 import { artifactSafeName } from './_shared/artifact-storage.js';
@@ -195,6 +198,9 @@ export default withErrorHandler(async function handler(req, res) {
     case 'reachability-harvest-tick':  return handleReachabilityHarvestTick(req, res);
     case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
+    case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
+    case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
+    case 'sf-donor-handoff-tick':      return handleSfDonorHandoffTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -4875,6 +4881,550 @@ async function systemicFindingsTickImpl(req, res) {
 }
 
 // ============================================================================
+// W9.3 — SF linkage drain + live re-score (Prompt 90).
+//   WS1  /api/sf-link-assist-tick    — Ollama pre-rank of the sf_link_candidate
+//                                       review lane (annotation-only).
+//   WS2  /api/sf-link-rescore-tick   — live re-score of no_match queue rows vs the
+//                                       refreshed SF-account registry.
+//   WS3  /api/sf-donor-handoff-tick  — account->contacts expansion: stamp the
+//                                       person-level sf_contact_id W9.2 keys on.
+// House pattern: GET dry-run / ?score=1 inline sample (NO writes) / POST flag-gated
+// apply; bounded + resumable + loud errors; every write reversible + provenance.
+// ============================================================================
+
+function w93FlagEnabled(envName, flagRow) {
+  const env = String(process.env[envName] || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+async function fetchW93Flag(flagName) {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.' + flagName + '&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+async function recordW93Health(source, check, { status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: source, p_check_name: check, p_status: status, p_count: count || 0,
+      p_last_error: lastError || null, p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Enumerate the LOCAL ops SF-Account registry: external_identities salesforce/Account
+// joined to entities for the display name. Paged 1000-stride (the PostgREST cap;
+// a larger stride silently SKIPS rows). This is the CURRENT (live-synced) registry —
+// grown since W4.3's frozen 15,987 snapshot — which is exactly why a re-score can
+// now match rows W4.3 could not.
+async function fetchSfAccountRegistry() {
+  const accounts = [];
+  const PAGE = 1000;
+  let error = null;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET',
+        'external_identities?select=external_id,entities(canonical_name,name)'
+        + '&source_system=eq.salesforce&source_type=eq.Account'
+        + '&order=external_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok || !Array.isArray(r.data)) { error = 'registry_fetch_failed: ' + JSON.stringify(r.data || r.status); break; }
+      for (const row of r.data) {
+        const ent = row.entities || null;
+        const nm = ent ? (ent.canonical_name || ent.name) : null;
+        if (row.external_id) accounts.push({ sf_account_id: String(row.external_id), sf_account_name: nm });
+      }
+      if (r.data.length < PAGE) break;
+    }
+  } catch (e) { error = e?.message || String(e); }
+  return { accounts, error };
+}
+
+const RESCORE_DOMAINS = ['gov', 'dia'];
+const RESCORE_ROW_BATCH = 400;    // rows re-scored per tick
+const RESCORE_BUDGET_MS = 55000;
+
+// Count the no_match backlog still un-re-scored (score_resolved IS NULL is the
+// resumable cursor: a re-scored row gets a score, so it drops out).
+async function rescoreBacklogCount(dom) {
+  try {
+    const r = await domainQuery(dom, 'GET',
+      'sf_link_research_queue?status=eq.no_match&score_resolved=is.null&select=queue_id&limit=1',
+      undefined, { Prefer: 'count=exact' });
+    if (r.ok && r.count != null) return r.count;
+  } catch (_e) { /* fall through */ }
+  return null;
+}
+
+async function fetchNoMatchRows(dom, limit) {
+  const sel = 'queue_id,source_table,source_id,owner_name,canonical_name,state,priority_score';
+  const r = await domainQuery(dom, 'GET',
+    'sf_link_research_queue?status=eq.no_match&score_resolved=is.null&select=' + sel
+    + '&order=priority_score.desc.nullslast,queue_id&limit=' + limit);
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+async function handleSfLinkRescoreTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const flag = await fetchW93Flag('W9_3_RESCORE');
+  const enabled = w93FlagEnabled('W9_3_RESCORE', flag);
+
+  const registry = await fetchSfAccountRegistry();
+  const maps = RS.buildRegistryMaps(registry.accounts);
+  const today = new Date().toISOString().slice(0, 10);
+  const batchTag = RS.rescoreBatchTag(today);
+
+  // ---- POST apply: flag-gated. -------------------------------------------------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordW93Health('sf_link_rescore', 'sf_link_live_rescore', { status: 'amber', count: 0,
+        lastError: 'W9_3_RESCORE feature flag is off', details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    if (registry.error || maps.size === 0) {
+      await recordW93Health('sf_link_rescore', 'sf_link_live_rescore', { status: 'red', count: 0,
+        lastError: 'registry unavailable: ' + (registry.error || 'empty'), details: { registry_size: maps.size } });
+      return res.status(200).json({ ok: false, error: 'registry_unavailable', registry_size: maps.size, registry_error: registry.error });
+    }
+    const sourceRunId = 'w93r_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const summary = { source_run_id: sourceRunId, batch_tag: batchTag, registry_size: maps.size,
+      scanned: 0, auto_linked: 0, needs_review: 0, no_match: 0, conflicts: 0, idempotent: 0,
+      write_failed: 0, budget_exhausted: false, by_domain: {}, scan_errors: [] };
+
+    for (const dom of RESCORE_DOMAINS) {
+      const perDom = { scanned: 0, auto_linked: 0, needs_review: 0, no_match: 0, conflicts: 0 };
+      let rows = [];
+      try { rows = await fetchNoMatchRows(dom, RESCORE_ROW_BATCH); }
+      catch (e) { summary.scan_errors.push(dom + ':fetch:' + (e?.message || e)); summary.by_domain[dom] = perDom; continue; }
+
+      const budgetRun = RS.scoreRescoreWithBudget(rows, (row) => ({ row, score: RS.scoreQueueRow(row, maps) }),
+        { maxN: RESCORE_ROW_BATCH, budgetMs: RESCORE_BUDGET_MS });
+      if (budgetRun.budget_exhausted) summary.budget_exhausted = true;
+
+      for (const { row, score } of budgetRun.scored) {
+        summary.scanned += 1; perDom.scanned += 1;
+        try {
+          const tgt = sfLinkTarget(row.source_table);
+          const sfCol = sfLinkColumn(dom);
+          let currentSfId = null;
+          if (score.band === 'auto_link' && score.sf_account_id) {
+            const cur = await domainQuery(dom, 'GET', tgt.table + '?' + tgt.idColumn + '=eq.'
+              + encodeURIComponent(row.source_id) + '&select=' + sfCol + '&limit=1');
+            if (cur.ok && Array.isArray(cur.data) && cur.data[0]) currentSfId = cur.data[0][sfCol] || null;
+          }
+          const plan = RS.planRescoreDisposition({ score, currentSfId });
+          let applied = false;
+
+          if (plan.queueStatus === 'linked' && plan.writeSource) {
+            // Null-guarded owner write (filter re-asserts the column is still null).
+            const patchBody = { [sfCol]: plan.landedSfId };
+            if (dom === 'gov') patchBody.sf_last_synced = new Date().toISOString();
+            const wr = await domainQuery(dom, 'PATCH',
+              tgt.table + '?' + tgt.idColumn + '=eq.' + encodeURIComponent(row.source_id) + '&' + sfCol + '=is.null',
+              patchBody);
+            if (!wr.ok) { summary.write_failed += 1; summary.scan_errors.push(dom + ':owner_write:' + JSON.stringify(wr.data)); continue; }
+            applied = true;
+            // Provenance (splink_v2) — drained to LCC field_provenance by the flush.
+            await domainQuery(dom, 'POST', 'provenance_event_log', {
+              target_database: dom === 'gov' ? 'gov_db' : 'dia_db', target_table: tgt.table,
+              record_pk_value: String(row.source_id), field_name: sfCol,
+              old_value: null, new_value: plan.landedSfId, source: 'splink_v2',
+              confidence: plan.probability, metadata: { batch: batchTag, queue_id: row.queue_id, run: sourceRunId },
+            }, { Prefer: 'return=minimal' });
+          } else if (plan.queueStatus === 'linked') {
+            summary.idempotent += 1;
+          }
+
+          // Queue disposition (score_resolved set => drops out of the resumable cursor).
+          const qPatch = { status: plan.queueStatus, score_resolved: plan.probability,
+            last_attempted_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+          if (plan.queueStatus === 'linked' || plan.queueStatus === 'needs_review') {
+            qPatch.sf_account_id_resolved = plan.sfAccountId;
+            qPatch.sf_account_name_resolved = plan.sfAccountName;
+            if (plan.queueStatus === 'linked') qPatch.resolved_at = new Date().toISOString();
+          }
+          if (plan.conflict) qPatch.last_error = 'w9_3_conflict_existing_' + sfCol + '_' + plan.conflictExistingId;
+          const qr = await domainQuery(dom, 'PATCH',
+            'sf_link_research_queue?queue_id=eq.' + encodeURIComponent(row.queue_id), qPatch);
+          if (!qr.ok) { summary.write_failed += 1; summary.scan_errors.push(dom + ':queue:' + JSON.stringify(qr.data)); continue; }
+
+          // Reversible ledger row.
+          await domainQuery(dom, 'POST', 'w9_3_rescore_log', {
+            queue_id: row.queue_id, source_table: tgt.table, source_id: row.source_id,
+            prior_status: 'no_match', new_status: plan.queueStatus, band: plan.band, probability: plan.probability,
+            sf_account_id: plan.sfAccountId, sf_account_name: plan.sfAccountName,
+            prior_sf_value: currentSfId, conflict: !!plan.conflict, applied,
+            batch_tag: batchTag, source_run_id: sourceRunId,
+          }, { Prefer: 'return=minimal' });
+
+          if (plan.queueStatus === 'linked') { summary.auto_linked += 1; perDom.auto_linked += 1; if (plan.conflict) { summary.conflicts += 1; perDom.conflicts += 1; } }
+          else if (plan.queueStatus === 'needs_review') { summary.needs_review += 1; perDom.needs_review += 1; if (plan.conflict) { summary.conflicts += 1; perDom.conflicts += 1; } }
+          else { summary.no_match += 1; perDom.no_match += 1; }
+        } catch (e) {
+          summary.write_failed += 1;
+          summary.scan_errors.push(dom + ':' + (row?.queue_id) + ':' + (e?.message || e));
+        }
+      }
+      summary.by_domain[dom] = perDom;
+    }
+    await recordW93Health('sf_link_rescore', 'sf_link_live_rescore',
+      { status: summary.write_failed ? 'amber' : 'green', count: summary.auto_linked + summary.needs_review,
+        lastError: summary.write_failed ? summary.write_failed + ' write(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: backlog + registry + (score=1) inline sample. -------------
+  const [govBl, diaBl] = await Promise.all([rescoreBacklogCount('gov'), rescoreBacklogCount('dia')]);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    registry_size: maps.size, registry_error: registry.error, batch_tag: batchTag,
+    backlog: { gov: govBl, dia: diaBl, total: (govBl || 0) + (diaBl || 0) },
+    note: 'Deterministic conservative name gate (bands 0.9/0.1): exact clean-name UNIQUE match -> auto_link (splink_v2); ambiguous/near-exact -> needs_review (assist-ranked lane); else no_match re-tagged. Auto-link never overwrites a different existing id (-> conflict -> review). Reversible via w9_3_rescore_log + batch_tag.' };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const n = Math.min(50, Math.max(1, parseInt(req.query.n || '12', 10) || 12));
+    const sample = [];
+    const tally = { auto_link: 0, needs_review: 0, no_match: 0 };
+    for (const dom of RESCORE_DOMAINS) {
+      let rows = [];
+      try { rows = await fetchNoMatchRows(dom, Math.max(n * 4, 40)); } catch (_e) { /* skip */ }
+      for (const row of rows) {
+        const score = RS.scoreQueueRow(row, maps);
+        tally[score.band] = (tally[score.band] || 0) + 1;
+        if (sample.length < n && score.band !== 'no_match') {
+          sample.push({ domain: dom, queue_id: row.queue_id, owner_name: row.owner_name,
+            canonical_name: row.canonical_name, source_table: row.source_table, priority_score: row.priority_score,
+            band: score.band, probability: score.probability, match_key: score.match_key,
+            ambiguous: score.ambiguous, sf_account_id: score.sf_account_id, sf_account_name: score.sf_account_name });
+        }
+      }
+    }
+    out.sample_tally = tally;
+    out.sample = sample;
+    out.note += ' NO writes in dry-run. Sample shows would-be auto_link (exact unique) + needs_review (near/ambiguous) matches only.';
+  }
+  return res.status(200).json(out);
+}
+
+// ---------------------------------------------------------------------------
+// WS1 — sf_link_candidate assist pre-rank (annotation-only).
+// ---------------------------------------------------------------------------
+const SF_ASSIST_BATCH = 20;
+const SF_ASSIST_BUDGET_MS = 110000;
+
+// Subject_refs that already carry a W9.3 assist (resumable cursor).
+async function fetchSfAssistAnnotated() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref'
+        + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
+        + '&order=id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok || !Array.isArray(r.data)) break;
+      for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
+      if (r.data.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// Upsert a W9.3 sf-link assist annotation (source w9_3_sf_assist — distinct from
+// prompt-32's ollama_clean_assist so the two never collide on the unique key).
+async function upsertSfAssist(item, proposal, meta) {
+  return opsQuery('POST',
+    'lcc_clean_assist_proposals?on_conflict=decision_type,subject_ref,proposal_kind,source',
+    {
+      source: SA.SF_ASSIST_SOURCE, source_run_id: meta.sourceRunId, decision_id: null,
+      decision_type: SA.SF_ASSIST_DECISION_TYPE, subject_ref: item.subject_ref,
+      subject_domain: item.subject_domain || null, subject_property_id: null, subject_entity_id: null,
+      proposal_kind: SA.SF_ASSIST_KIND, verdict: proposal.verdict, reason: proposal.reason,
+      confidence: proposal.confidence, proposed_link: { sf_account_id: item.context?.sf_account_id_resolved || null },
+      conflict_summary: null, model_provider: meta.provider || null, model_name: meta.model || null,
+      ai_tried: Array.isArray(meta.tried) ? meta.tried : [], prompt_hash: meta.promptHash, status: 'proposed',
+    },
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function scoreSfAssistItem(item) {
+  const prompt = SA.buildSfAssistPrompt(item.context || {});
+  const promptHash = createHash('sha256').update(prompt).digest('hex');
+  const ai = await invokeExtractionAI({ prompt, surface: 'sf_link_assist' });
+  const parsed = SA.parseSfAssistJson(ai?.data?.response || '');
+  const proposal = SA.normalizeSfAssistProposal(parsed);
+  if (!parsed) { proposal.verdict = 'uncertain'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; queued as uncertain.'; }
+  return { proposal, promptHash, provider: ai?.provider || null, model: ai?.data?.model || null, tried: ai?.tried || [] };
+}
+
+async function handleSfLinkAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const flag = await fetchW93Flag('W9_3_SF_ASSIST');
+  const enabled = w93FlagEnabled('W9_3_SF_ASSIST', flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(SF_ASSIST_BATCH), 10)));
+
+  // Pull needs_review candidates (both domains) via the existing federated source,
+  // minus those already annotated (resumable).
+  const annotated = await fetchSfAssistAnnotated();
+  let src = { items: [] };
+  try { src = await fetchFederatedSource('sf_link_candidate', Math.max(120, limit * 6)); } catch (e) { src = { items: [], error: e?.message || String(e) }; }
+  const fresh = (src.items || []).filter((it) => it.subject_ref && !annotated.has(it.subject_ref));
+
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordW93Health('sf_link_assist', 'sf_link_candidate_assist', { status: 'amber', count: 0,
+        lastError: 'W9_3_SF_ASSIST feature flag is off', details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w93a_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const summary = { source_run_id: sourceRunId, candidates: fresh.length, annotated_existing: annotated.size,
+      proposed: 0, failed: 0, budget_exhausted: false, by_verdict: {} };
+    const start = Date.now();
+    for (const item of fresh.slice(0, limit)) {
+      if (Date.now() - start >= SF_ASSIST_BUDGET_MS) { summary.budget_exhausted = true; break; }
+      try {
+        const { proposal, promptHash, provider, model, tried } = await scoreSfAssistItem(item);
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        const wr = await upsertSfAssist(item, proposal, { sourceRunId, promptHash, provider, model, tried });
+        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+      } catch (e) { summary.failed += 1; console.warn('[sf-link-assist] failed', item.subject_ref, e?.message || e); }
+    }
+    await recordW93Health('sf_link_assist', 'sf_link_candidate_assist',
+      { status: summary.failed ? 'amber' : 'green', count: summary.proposed,
+        lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // GET dry-run (+ ?score=1 inline sample: NO writes).
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    lane_candidates: (src.items || []).length, annotated_existing: annotated.size, fresh: fresh.length,
+    note: 'Annotation-only. The assist ranks each owner<->SF-account candidate same-party/not/uncertain with confidence + one-line evidence, stored in lcc_clean_assist_proposals (source w9_3_sf_assist). NEVER a verdict; the lane sorts easy-first and each human verdict self-measures agree/disagree.' };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const n = Math.min(20, Math.max(1, parseInt(req.query.n || '6', 10) || 6));
+    const sample = [];
+    const start = Date.now();
+    for (const item of fresh.slice(0, n)) {
+      if (Date.now() - start >= SF_ASSIST_BUDGET_MS) break;
+      try {
+        const { proposal, provider, model } = await scoreSfAssistItem(item);
+        sample.push({ subject_ref: item.subject_ref, domain: item.subject_domain,
+          owner_name: item.context?.owner_name, sf_account_name: item.context?.sf_account_name_resolved,
+          machine_score: item.context?.score_resolved, ...proposal, sort_key: SA.sfAssistSortKey(proposal),
+          model_provider: provider, model_name: model });
+      } catch (e) { sample.push({ subject_ref: item.subject_ref, error: e?.message || String(e) }); }
+    }
+    out.sample = sample.sort((a, b) => (b.sort_key || 0) - (a.sort_key || 0));
+    out.note += ' NO writes in dry-run.';
+  }
+  return res.status(200).json(out);
+}
+
+// ---------------------------------------------------------------------------
+// WS3 — SF donor handoff: account->contacts expansion (fill-blanks sf_contact_id).
+// ---------------------------------------------------------------------------
+const DONOR_OWNER_BATCH = 120;    // owners processed per tick
+const DONOR_BUDGET_MS = 55000;
+
+// Blank owner-linked contacts missing a person key (the fill targets), one domain.
+async function fetchDonorBlankContacts(dom, limit) {
+  const c = DH.donorContactCols(dom);
+  const sel = c.pkCol + ',' + c.nameCol + ',sf_contact_id,true_owner_id,recorded_owner_id';
+  const r = await domainQuery(dom, 'GET',
+    'contacts?select=' + sel + '&sf_contact_id=is.null&' + c.emailCol + '=is.null&' + c.phoneCol + '=is.null'
+    + '&or=(true_owner_id.not.is.null,recorded_owner_id.not.is.null)'
+    + '&order=true_owner_id.desc.nullslast,recorded_owner_id.desc.nullslast&limit=' + limit);
+  return (r.ok && Array.isArray(r.data)) ? r.data.map((row) => ({
+    contact_id: row[c.pkCol], name: row[c.nameCol], sf_contact_id: row.sf_contact_id,
+    true_owner_id: row.true_owner_id || null, recorded_owner_id: row.recorded_owner_id || null,
+  })) : [];
+}
+
+// The blank-contact coverage metric (acceptance metric): total blank contacts vs
+// blank contacts carrying an sf_contact_id, one domain.
+async function donorCoverage(dom) {
+  const c = DH.donorContactCols(dom);
+  const base = 'contacts?' + c.emailCol + '=is.null&' + c.phoneCol + '=is.null&select=' + c.pkCol + '&limit=1';
+  let total = null; let withKey = null;
+  try {
+    const t = await domainQuery(dom, 'GET', base, undefined, { Prefer: 'count=exact' });
+    if (t.ok && t.count != null) total = t.count;
+    const w = await domainQuery(dom, 'GET', base + '&sf_contact_id=not.is.null', undefined, { Prefer: 'count=exact' });
+    if (w.ok && w.count != null) withKey = w.count;
+  } catch (_e) { /* best-effort */ }
+  return { total, withKey };
+}
+
+// Batched owner-sf-key lookup: map owner id -> sf account id, for a domain + table.
+async function fetchOwnerSfKeys(dom, table, idCol, ids) {
+  const map = new Map();
+  if (!ids.length) return map;
+  const sfCol = DH.donorOwnerSfCol(dom);
+  const PAGE = 300;
+  for (let i = 0; i < ids.length; i += PAGE) {
+    const chunk = ids.slice(i, i + PAGE);
+    const r = await domainQuery(dom, 'GET', table + '?' + idCol + '=in.(' + chunk.map(encodeURIComponent).join(',') + ')'
+      + '&' + sfCol + '=not.is.null&select=' + idCol + ',' + sfCol);
+    if (r.ok && Array.isArray(r.data)) for (const row of r.data) if (row[sfCol]) map.set(String(row[idCol]), String(row[sfCol]));
+  }
+  return map;
+}
+
+// Batched SF-contact bridge lookup: map sf_account_id -> [{sf_contact_id,name,email,phone}].
+async function fetchSfContactsForAccounts(dom, accountIds) {
+  const map = new Map();
+  if (!accountIds.length) return map;
+  const PAGE = 200;
+  for (let i = 0; i < accountIds.length; i += PAGE) {
+    const chunk = accountIds.slice(i, i + PAGE);
+    const inList = '(' + chunk.map(encodeURIComponent).join(',') + ')';
+    let rows = [];
+    if (dom === 'gov') {
+      const r = await domainQuery(dom, 'GET',
+        'sf_contacts_import?sf_account_id=in.' + inList + '&select=sf_account_id,sf_contact_id,full_name,email,phone');
+      if (r.ok && Array.isArray(r.data)) rows = r.data.map((x) => ({ acct: x.sf_account_id, sf_contact_id: x.sf_contact_id, name: x.full_name, email: x.email, phone: x.phone }));
+    } else {
+      const r = await domainQuery(dom, 'GET',
+        'salesforce_contacts?sf_account_id=in.' + inList + '&select=sf_account_id,sf_contact_id,first_name,last_name,email,phone');
+      if (r.ok && Array.isArray(r.data)) rows = r.data.map((x) => ({ acct: x.sf_account_id, sf_contact_id: x.sf_contact_id, name: [x.first_name, x.last_name].filter(Boolean).join(' '), email: x.email, phone: x.phone }));
+    }
+    for (const row of rows) {
+      if (!row.acct || !row.sf_contact_id) continue;
+      const k = String(row.acct);
+      let arr = map.get(k); if (!arr) { arr = []; map.set(k, arr); }
+      arr.push({ sf_contact_id: String(row.sf_contact_id), name: row.name, email: row.email, phone: row.phone });
+    }
+  }
+  return map;
+}
+
+async function handleSfDonorHandoffTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const flag = await fetchW93Flag('W9_3_DONOR_HANDOFF');
+  const enabled = w93FlagEnabled('W9_3_DONOR_HANDOFF', flag);
+  const today = new Date().toISOString().slice(0, 10);
+  const batchTag = 'w9_3_donor_' + today.replace(/-/g, '');
+  const apply = req.method === 'POST';
+  const dryScore = req.query.score === '1' || req.query.score === 'true';
+
+  if (apply && !enabled) {
+    await recordW93Health('sf_donor_handoff', 'sf_account_contact_expansion', { status: 'amber', count: 0,
+      lastError: 'W9_3_DONOR_HANDOFF feature flag is off', details: { enabled: false, flag_state: flag?.state || 'missing' } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+  }
+
+  const sourceRunId = 'w93d_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  const summary = { source_run_id: sourceRunId, batch_tag: batchTag, mode: apply ? 'apply' : 'dry_run',
+    enabled, flag_state: flag?.state || 'missing', by_domain: {}, coverage: {}, sample: [], scan_errors: [] };
+
+  for (const dom of RESCORE_DOMAINS) {
+    const perDom = { blank_contacts: 0, owners: 0, unique_matches: 0, ambiguous: 0, no_match: 0, stamped: 0, write_failed: 0 };
+    // Coverage metric first (the acceptance number).
+    const cov = await donorCoverage(dom);
+    summary.coverage[dom] = cov;
+
+    let blanks = [];
+    try { blanks = await fetchDonorBlankContacts(dom, DONOR_OWNER_BATCH * 4); }
+    catch (e) { summary.scan_errors.push(dom + ':contacts:' + (e?.message || e)); summary.by_domain[dom] = perDom; continue; }
+    perDom.blank_contacts = blanks.length;
+
+    // Resolve each blank contact's owner -> sf account id (batched by table).
+    const trueIds = [...new Set(blanks.filter((b) => b.true_owner_id).map((b) => String(b.true_owner_id)))];
+    const recIds = [...new Set(blanks.filter((b) => !b.true_owner_id && b.recorded_owner_id).map((b) => String(b.recorded_owner_id)))];
+    const trueKeys = await fetchOwnerSfKeys(dom, 'true_owners', 'true_owner_id', trueIds);
+    const recKeys = dom === 'gov' ? await fetchOwnerSfKeys(dom, 'recorded_owners', 'recorded_owner_id', recIds) : new Map();
+
+    // Group blanks by resolved account id.
+    const byAccount = new Map();
+    for (const b of blanks) {
+      const acct = b.true_owner_id ? trueKeys.get(String(b.true_owner_id))
+        : (b.recorded_owner_id ? recKeys.get(String(b.recorded_owner_id)) : null);
+      if (!acct) continue;
+      b._acct = acct;
+      b._owner_table = b.true_owner_id ? 'true_owners' : 'recorded_owners';
+      b._owner_id = b.true_owner_id || b.recorded_owner_id;
+      let arr = byAccount.get(acct); if (!arr) { arr = []; byAccount.set(acct, arr); }
+      arr.push(b);
+    }
+    perDom.owners = byAccount.size;
+
+    // One bridge lookup for all resolved accounts.
+    let bridge = new Map();
+    try { bridge = await fetchSfContactsForAccounts(dom, [...byAccount.keys()]); }
+    catch (e) { summary.scan_errors.push(dom + ':bridge:' + (e?.message || e)); }
+
+    const start = Date.now();
+    let budgetHit = false;
+    const items = [...byAccount.entries()];
+    const driver = DH.scoreDonorWithBudget(items, ([acct, contacts]) => {
+      const sfContacts = bridge.get(acct) || [];
+      const sigIndex = DH.buildSfContactSig(sfContacts);
+      const plans = [];
+      for (const contact of contacts) {
+        const p = DH.planDonorStamp({ contact, sigIndex });
+        if (p.fill) { plans.push({ contact, plan: p, acct }); perDom.unique_matches += 1; }
+        else if (p.reason === 'ambiguous_sf_contact') perDom.ambiguous += 1;
+        else perDom.no_match += 1;
+      }
+      return plans;
+    }, { maxN: DONOR_OWNER_BATCH, budgetMs: DONOR_BUDGET_MS, now: () => Date.now() });
+    if (driver.budget_exhausted) budgetHit = true;
+
+    const flatPlans = driver.results.flat();
+    for (const { contact, plan, acct } of flatPlans) {
+      if (summary.sample.length < 20) summary.sample.push({ domain: dom, contact_id: contact.contact_id,
+        contact_name: contact.name, sf_contact_id: plan.sfContactId, owner_table: contact._owner_table,
+        sf_account_id: acct, would_stamp: true });
+      if (!apply) continue;
+      try {
+        // Fill-blanks stamp (filter re-asserts sf_contact_id still null — never overwrite).
+        const c = DH.donorContactCols(dom);
+        const wr = await domainQuery(dom, 'PATCH',
+          'contacts?' + c.pkCol + '=eq.' + encodeURIComponent(contact.contact_id) + '&sf_contact_id=is.null',
+          { sf_contact_id: plan.sfContactId });
+        if (!wr.ok) { perDom.write_failed += 1; summary.scan_errors.push(dom + ':stamp:' + JSON.stringify(wr.data)); continue; }
+        perDom.stamped += 1;
+        await domainQuery(dom, 'POST', 'provenance_event_log', {
+          target_database: dom === 'gov' ? 'gov_db' : 'dia_db', target_table: 'contacts',
+          record_pk_value: String(contact.contact_id), field_name: 'sf_contact_id',
+          old_value: null, new_value: plan.sfContactId, source: 'sf_account_contact_expansion',
+          confidence: 1.0, metadata: { batch: batchTag, sf_account_id: acct, run: sourceRunId },
+        }, { Prefer: 'return=minimal' });
+        await domainQuery(dom, 'POST', 'w9_3_donor_handoff_log', {
+          contact_id: contact.contact_id, sf_contact_id: plan.sfContactId, owner_table: contact._owner_table,
+          owner_id: contact._owner_id, sf_account_id: acct, matched_by: plan.reason, applied: true,
+          batch_tag: batchTag, source_run_id: sourceRunId,
+        }, { Prefer: 'return=minimal' });
+      } catch (e) { perDom.write_failed += 1; summary.scan_errors.push(dom + ':' + contact.contact_id + ':' + (e?.message || e)); }
+    }
+    if (budgetHit) perDom.budget_exhausted = true;
+    summary.by_domain[dom] = perDom;
+
+    // Record the coverage metric (with this run's stamps folded in) for the U4 trend.
+    if (apply) {
+      try {
+        await opsQuery('POST', 'lcc_w9_3_donor_coverage_log', {
+          domain: dom, blank_contacts_total: cov.total,
+          blank_with_sf_key: (cov.withKey != null ? cov.withKey + perDom.stamped : null),
+          stamped_this_run: perDom.stamped, batch_tag: batchTag, source_run_id: sourceRunId,
+        }, { headers: { Prefer: 'return=minimal' } });
+      } catch (_e) { /* best-effort */ }
+    }
+  }
+
+  if (apply) {
+    const totalStamped = Object.values(summary.by_domain).reduce((a, d) => a + (d.stamped || 0), 0);
+    const totalFailed = Object.values(summary.by_domain).reduce((a, d) => a + (d.write_failed || 0), 0);
+    await recordW93Health('sf_donor_handoff', 'sf_account_contact_expansion',
+      { status: totalFailed ? 'amber' : 'green', count: totalStamped,
+        lastError: totalFailed ? totalFailed + ' write(s) failed in ' + sourceRunId : null, details: summary });
+  }
+  summary.note = "Account->contacts expansion. For an owner linked to SF account A, unique-name-match A's SF contacts (gov sf_contacts_import / dia salesforce_contacts) against the owner's blank domain contacts and FILL-BLANKS stamp the person-level sf_contact_id (W9.2's donor key). Ambiguous name matches skipped (never guessed). Coverage = blank contacts carrying an SF key (the acceptance metric, rising = W9.2 unlock)." + (dryScore ? ' NO writes in dry-run.' : '');
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// ============================================================================
 // PRIORITY QUEUE LIST (BD front door, 2026-06-03)
 // GET /api/priority-queue?band=<P1|P0.5|...>&limit=<n>&offset=<n>
 //   The 'start here' worklist: the doctrinal priority bands from
@@ -6404,12 +6954,42 @@ async function fetchFederatedSource(type, cap, opts) {
       domCnt('gov', 'v_sf_link_review_queue'),
       domCnt('dia', 'v_sf_link_review_queue'),
     ]);
-    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    // W9.3 WS1: pre-rank EASY-FIRST by the Ollama assist (decisive high-confidence
+    // calls first) so the lane finally moves; rank_value (owner impact) is the
+    // tiebreak. Attach the w9_3_sf_assist annotation for the sort; the render/verdict
+    // paths remain unchanged.
+    out.items = await attachSfLinkAssist(g.concat(d));
+    out.items.sort((a, b) => {
+      const ka = SA.sfAssistSortKey(a._sf_assist);
+      const kb = SA.sfAssistSortKey(b._sf_assist);
+      if (kb !== ka) return kb - ka;
+      return b.rank_value - a.rank_value;
+    });
     out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
     return out;
   }
 
   return out;
+}
+
+// W9.3 WS1: attach each sf_link candidate's latest w9_3_sf_assist annotation (verdict
+// + confidence) so the lane can order easy-first. Read-only; returns the same items.
+async function attachSfLinkAssist(items) {
+  const refs = [...new Set((items || []).map((it) => it.subject_ref).filter(Boolean))].slice(0, 200);
+  if (!refs.length) return items;
+  try {
+    const inList = '("' + refs.map((r) => String(r).replace(/"/g, '\\"')).join('","') + '")';
+    const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref,verdict,confidence,reason'
+      + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
+      + '&subject_ref=in.' + encodeURIComponent(inList) + '&order=id.desc', undefined, { countMode: 'none' });
+    if (!r.ok || !Array.isArray(r.data)) return items;
+    const by = new Map();
+    for (const row of r.data) if (!by.has(row.subject_ref)) by.set(row.subject_ref, row); // id.desc => first = latest
+    return items.map((it) => {
+      const a = by.get(it.subject_ref);
+      return a ? { ...it, _sf_assist: { verdict: a.verdict, confidence: a.confidence, reason: a.reason } } : it;
+    });
+  } catch (_e) { return items; }
 }
 
 function cleanAssistInList(refs) {
@@ -7843,6 +8423,27 @@ async function handleDecisionVerdict(req, res) {
         if (!lw.ok) { await recordEffectFailure(Object.assign({ label_written: false, error: lw.data }, effects));
           return res.status(502).json({ error: 'label_write_failed', detail: lw.data }); }
         effects.label_written = true;
+
+        // W9.3 WS1: self-measure the assist. If a w9_3_sf_assist annotation exists
+        // for this subject, compare its verdict (merge/not) to the human label
+        // (same_party/distinct) and append a measurement (metadata-only; never a
+        // verdict). Best-effort — a measurement failure never blocks the verdict.
+        try {
+          const ar = await opsQuery('GET', 'lcc_clean_assist_proposals?select=verdict,confidence'
+            + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
+            + '&subject_ref=eq.' + encodeURIComponent(decision.subject_ref) + '&order=id.desc&limit=1',
+            undefined, { countMode: 'none' });
+          const assist = (ar.ok && Array.isArray(ar.data)) ? ar.data[0] : null;
+          if (assist) {
+            const agr = SA.sfAssistAgreement(assist.verdict, plan.labelVerdict);
+            await opsQuery('POST', 'rpc/lcc_record_sf_assist_agreement', {
+              p_subject_ref: decision.subject_ref, p_domain: dom,
+              p_assist_verdict: assist.verdict, p_assist_conf: assist.confidence != null ? Number(assist.confidence) : null,
+              p_human_verdict: plan.labelVerdict, p_agreed: agr.measured ? agr.agreed : null,
+              p_decided_by: user.id || null,
+            });
+          }
+        } catch (_e) { /* measurement is best-effort */ }
       }
 
       const finalStatus = (plan.verdictKind === 'reject') ? 'skipped' : 'decided';

@@ -202,6 +202,9 @@ app.all('/api/link-propagation-tick', (req, res) => { req.query._route = 'link-p
 app.all('/api/reachability-harvest-tick', (req, res) => { req.query._route = 'reachability-harvest-tick'; adminHandler(req, res); });
 app.all('/api/systemic-findings-tick', (req, res) => { req.query._route = 'systemic-findings-tick'; adminHandler(req, res); });
 app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
+app.all('/api/sf-link-assist-tick',        (req, res) => { req.query._route = 'sf-link-assist-tick';        adminHandler(req, res); });
+app.all('/api/sf-link-rescore-tick',       (req, res) => { req.query._route = 'sf-link-rescore-tick';       adminHandler(req, res); });
+app.all('/api/sf-donor-handoff-tick',      (req, res) => { req.query._route = 'sf-donor-handoff-tick';      adminHandler(req, res); });
 app.all('/api/fl-sos-enrich-link', (req, res) => { req.query._route = 'fl-sos-enrich-link'; adminHandler(req, res); });
 app.all('/api/resolve-owner-link', (req, res) => { req.query._route = 'resolve-owner-link'; adminHandler(req, res); });
 // R7 Phase 1 Slice 2 (2026-06-07): Decision Center list / verdict / SF search.

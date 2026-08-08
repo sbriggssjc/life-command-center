@@ -25,6 +25,7 @@ import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { getCadenceState, entityHasBdSignal } from '../_shared/cadence-engine.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
+import { reconcileLatestEvidence } from '../_shared/rent-reconcile-hook.js';
 import { isOwnFirmAddress } from '../_shared/own-firm-addresses.js';
 // Round 76co: BEFORE-write priority gate. filterByFieldPriority drops
 // fields whose strict-mode rules block this source from updating; the
@@ -3575,6 +3576,20 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
       results.records.cap_rate_recalc = { updated, skipped };
     } catch (err) {
       console.error('[cap-rate-recalc] post-propagate error:', err?.message || err);
+    }
+
+    // Step 5g2 (Rent Intelligence Phase 3): post-ingest rent reconciliation.
+    // NON-BLOCKING — a reconciliation failure never fails this ingest; conflicts
+    // queue to rent_reconcile_queue and surface via Teams. Reconciles the freshest
+    // evidence (confirmed anchor OR latest sale) against the modeled rent curve.
+    try {
+      const rc = await reconcileLatestEvidence('dialysis', propertyId, domainQuery);
+      if (rc?.ok) {
+        console.log(`[rent-reconcile] property=${propertyId} verdict=${rc.verdict} forked=${rc.forked} queued=${rc.queued}`);
+        results.records.rent_reconcile = rc;
+      }
+    } catch (err) {
+      console.error('[rent-reconcile] post-propagate error (non-blocking):', err?.message || err);
     }
   }
 
