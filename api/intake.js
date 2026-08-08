@@ -177,6 +177,11 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleSfActivityIngest } = await import('./_handlers/sf-activity-ingest.js');
       return handleSfActivityIngest(req, res);
     }
+    case 'sf-cis': {
+      // Salesforce Closed-IS (CIS) national export → dia_nm_cis_closings.
+      const { handleSfCisIngest } = await import('./_handlers/sf-cis-ingest.js');
+      return handleSfCisIngest(req, res);
+    }
     case 'mobile-share': {
       // iPhone Share Sheet ("Send to LCC") — LinkedIn / Safari / any app.
       const { handleMobileShare } = await import('./_handlers/mobile-share.js');
@@ -210,7 +215,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, log-call, tagged-comm, mailbox-reconcile-worklist, mailbox-reconcile-ack, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, sf-cis, mobile-share, log-call, tagged-comm, mailbox-reconcile-worklist, mailbox-reconcile-ack, feedback, accuracy'
       });
   }
 });

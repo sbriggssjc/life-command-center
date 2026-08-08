@@ -409,6 +409,8 @@ app.all('/api/intake/document-notify', (req, res) => { req.query._route = 'docum
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).
 app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });
+// Salesforce Closed-IS (CIS) national export → dia_nm_cis_closings (Power Automate).
+app.all('/api/intake-sf-cis', (req, res) => { req.query._route = 'sf-cis'; intakeHandler(req, res); });
 
 // intake rewrites — slash-path Copilot action presets. These were present in
 // vercel.json's rewrites but missing from server.js, so PA Flow requests to
