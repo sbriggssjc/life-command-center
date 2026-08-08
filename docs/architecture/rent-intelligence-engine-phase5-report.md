@@ -247,14 +247,30 @@ cap chain); the 5c term view updates. This is exactly the specified promulgation
 
 ---
 
-## Continuation — remaining units on PR #1649
+## 5h. Convention auto-refit — SHIPPED, applied live — batch `phase5h_20260808`
 
-Sequence: **5h → 5j** (5j last, so its learning metrics measure the completed loop).
+Quarterly, re-fit `tenant_lease_conventions` empirically from structured `lease_escalations` (modal
+**annualized** bump + median interval, n≥20). Material annualized drift (>25 bps) writes a **new
+versioned row** (`effective_from`) — **history is never mutated**. The conventions stop being seeds and
+start being findings.
 
-- **5h — convention auto-refit.** Quarterly job re-fits `tenant_lease_conventions` empirically (modal
-  bump/interval per tenant, n≥20 structured leases), writing a **new versioned row** (`effective_from`)
-  on material drift (>25 bps bump or interval change); never mutates history. FMC's flagged placeholder
-  graduates when its n clears. Teams note on refit.
+- **Compare annualized rates.** A stored `10%/5yr` annualizes to 1.92%/yr, so raw-bump comparison would
+  false-trigger; the interval is folded into the annualized rate (the sole material-change test).
+- **`approved_standard` rows are curated:** a divergence is **surfaced** (Teams note +
+  `dia_convention_refit_log`), never auto-overridden — only empirical/fallback rows get a new version.
+- **`dia_refit_tenant_conventions(...)`** + **`api/_shared/dia-convention-refit-card.js`** (Teams note).
+  **pg_cron `dia-convention-refit` @ `0 7 1 1,4,7,10 *`**.
+
+**Grounded live:** **fresenius GRADUATED** — empirical_modal 0.017/1yr (flagged, n=324) → new
+empirical_refit **0.0200/1yr** (n=541, un-flagged); the 1990 row preserved. **davita NO CHANGE** (10%/5yr
+≡ 1.92% vs empirical 2.00%, 7.6 bps — no false trigger). **usrc DIVERGENCE SURFACED** (approved_standard
+2.5% vs empirical 2.0%, 50 bps — human review, not overridden).
+
+---
+
+## Continuation — final unit on PR #1649
+
+- **5j — learning metrics.**
 - **5i — propagation job.** Nightly, for each property whose timeline gained a version/confidence
   change since last run, re-derive dependent artifacts (5a caps, 5b implied caps, 5c terms) **for that
   property only** — bounded, provenance-tracked, ancestry-checked. The promulgation mechanic: one new
