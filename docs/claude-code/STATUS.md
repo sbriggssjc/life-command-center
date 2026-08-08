@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### U5 tick 502 (post-flip) → prompt 83 queued; assist tick verified healthy
+`naming-hygiene-tick?score=1` now 502s (passed once pre-flip — variable runtime crossing the proxy
+limit; review/batch/scored tables all EMPTY, first cron window tonight). Prime suspect: the
+address-link arm resolves a domain property PER candidate (4,145 candidates = thousands of
+round-trips in one request) on top of the 128k-row scan. Third instance of the 66/73 class →
+**prompt 83**: crash-proof envelope, sampled-only address resolution on GET, budget + resumable
+per-arm caps on POST/cron (det ~50 / LLM ~15 / addr ~15), batched `in.()` property lookups.
+**Watch: tonight's 4:25 cron may also fail until 83 lands** — check `naming_hygiene_batch`
+tomorrow. Assist tick (`match-disambig-assist-tick?score=1`) verified healthy flag-on; its 4:30
+cron writes the first annotations tonight.
+
 ### Prompt 82 landed — PR #1634, awaiting merge; PGRST204 confirmed ZERO since cache reload
 **PGRST204 = 0 since the schema-cache reload** (Cowork-verified) — the 8,306/30d cluster is fully
 closed: 78's migrations + writer fixes + the cache reload. September U4 shows the decay.
