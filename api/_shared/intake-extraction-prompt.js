@@ -135,6 +135,43 @@ export function buildProviderStamp(aiCallInfo) {
 }
 
 /**
+ * Guarantee an extraction snapshot carries a `_provider` stamp before it is
+ * persisted to staged_intake_extractions (Prompt 82). This is the SINGLE choke
+ * point every writer of extraction_snapshot funnels through — one stamp shape,
+ * no per-path forks.
+ *
+ * Coverage gap it closes (grounded 2026-08-08): the per-artifact stamp added in
+ * Prompt 61 was applied inside the extraction loop and could be dropped before
+ * the write (multi-artifact merge keeping only the priority winner's fields, a
+ * null `__lastAiCallInfo` sidechannel, or a channel whose snapshot bypassed the
+ * loop stamp), so only 4/15 fresh rows carried `_provider`. Stamping at the
+ * write site makes it 100%.
+ *
+ * Semantics of an ABSENT vs PRESENT stamp (Prompt 82 #2): a written row must
+ * NEVER be silently unstamped — a missing `_provider` should mean "old row
+ * written before the stamp existed", never "unknown path". When there is a live
+ * AI call sidechannel, stamp it; when a path genuinely made no AI call (e.g. a
+ * manual re-stage), stamp `{final_provider:'none'}` rather than omitting.
+ *
+ * Idempotent: an already-stamped snapshot is returned untouched, so the
+ * accurate per-artifact stamp (when present) wins over this write-site default.
+ *
+ * @param {object|null} snapshot     The extraction snapshot about to be written.
+ * @param {object|null} aiCallInfo   The __lastAiCallInfo sidechannel, or null.
+ * @param {string} [nowIso]          Injectable timestamp (for tests); defaults to now.
+ * @returns {object|null}            The same snapshot, mutated to carry `_provider`.
+ */
+export function ensureProviderStamp(snapshot, aiCallInfo, nowIso) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  if (snapshot._provider && typeof snapshot._provider === 'object') return snapshot;
+  const base = aiCallInfo
+    ? buildProviderStamp(aiCallInfo)
+    : { final_provider: 'none', final_model: null, fell_back: false, chain: [] };
+  snapshot._provider = { ...base, stamped_at: nowIso || new Date().toISOString() };
+  return snapshot;
+}
+
+/**
  * Build the full extraction prompt.
  *
  * @param {string} documentBody  The document text block (already framed by the
