@@ -1701,11 +1701,17 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
         }
       );
       if (domainContactId) {
+        // Prompt 78 (U4 PGRST204): dia.contacts has no `sf_last_synced` column
+        // (its sync stamp is `contact_fields_synced_at`); only gov.contacts has
+        // sf_last_synced. The unconditional stamp 400'd every dia link.
+        const syncStamp = domain === 'dialysis'
+          ? { contact_fields_synced_at: new Date().toISOString() }
+          : { sf_last_synced: new Date().toISOString() };
         await domainQuery(
           domain,
           'PATCH',
           `contacts?contact_id=eq.${encodeURIComponent(domainContactId)}`,
-          { sf_contact_id: sfId, sf_last_synced: new Date().toISOString() }
+          { sf_contact_id: sfId, ...syncStamp }
         ).catch(() => {});
       }
       result.sf_linked = {
