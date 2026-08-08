@@ -78,12 +78,13 @@ const CM_BRAND_FALLBACK = {
   palette: {
     primary: '003DA5', deep: '001159', accent: '62B5E5', blue85: '265AB2',
     gridline: 'E0E8F4', benchmark: '9EA9B7', peridot: '8FC49E', amethyst: '9B88A5',
-    topaz: '99B2DD', aquamarine: '5FA3A8', tourmaline: 'B6E0DA', iron: 'D8DFDF',
-    steel: '9EA9B7', slate: '6A748C', charcoal: '3D4A54', ink: '191919',
+    topaz: '99B2DD', aquamarine: '5FA3A8', tourmaline: 'B6E0DA', morganite: 'D4C8CB',
+    iron: 'D8DFDF', steel: '9EA9B7', slate: '6A748C', charcoal: '3D4A54', ink: '191919',
     paper: 'FFFFFF', black: '000000',
   },
-  series_ramp: ['003DA5', '62B5E5', '265AB2', '8FC49E', '9B88A5', '99B2DD', '5FA3A8', 'B6E0DA'],
-  text: { title: '003DA5', axisLabel: '3D4A54', legend: '6A748C', callout: '3D4A54' },
+  series: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
+  series_ramp: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
+  text: { title: '003DA5', axisLabel: '191919', legend: '6A748C', callout: '003DA5' },
   sizes: { title: 1200, axisTitle: 900, axisLabel: 900, dataLabel: 900, legend: 900 },
   banned: ['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79'],
 };
@@ -234,7 +235,7 @@ const CAT_AX_TICK_LBL_POS = '<c:tickLblPos val="low"/>';
 const CAT_AX_VERTICAL_TXT = `<c:txPr>
           <a:bodyPr rot="-5400000" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
           <a:lstStyle/>
-          <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="3D4A54"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+          <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
         </c:txPr>`;
 // R66 — retained alias so call sites read naturally; R63's "horizontal"
 // naming was a misnomer once the master parity was confirmed.

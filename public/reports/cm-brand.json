@@ -31,20 +31,23 @@
     "steel":      "9EA9B7",
     "slate":      "6A748C",
     "charcoal":   "3D4A54",
+    "morganite":  "D4C8CB",
     "ink":        "191919",
     "paper":      "FFFFFF",
     "black":      "000000"
   },
 
-  "series_ramp": ["003DA5", "62B5E5", "265AB2", "8FC49E", "9B88A5", "99B2DD", "5FA3A8", "B6E0DA"],
-  "_series_ramp_note": "Per colorproportions.png: primary blues dominate; tertiary hues (peridot/amethyst/topaz/aquamarine/tourmaline) are series 4+ and should occupy <10% of any chart. Use slot N for series N.",
+  "series": ["003DA5", "62B5E5", "265AB2", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
+  "series_ramp": ["003DA5", "62B5E5", "265AB2", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
+  "_series_note": "Guide series order: NM Blue, Sky, Blue 85, then tertiaries IN PALETTE ORDER (Aquamarine, Peridot, Amethyst, Tourmaline, Topaz, Morganite). Primary blues dominate; tertiary hues are series 4+ and should occupy <10% of any chart. Use slot N for series N.",
 
   "text": {
     "title":     "003DA5",
-    "axisLabel": "3D4A54",
+    "axisLabel": "191919",
     "legend":    "6A748C",
-    "callout":   "3D4A54"
+    "callout":   "003DA5"
   },
+  "_text_note": "Chart axis/category labels are Rich Black 191919 regular (2024 guide category/label rule) — supersedes charcoal for CHART labels; charcoal (3D4A54) stays for worksheet body cells per Briggs §2. Callout numbers: one color per chart, NM Blue default (use Sky 62B5E5 where the series itself is NM Blue, for contrast). Superscript $/+ and the '$5B+' convention apply to the report's KPI tiles, NOT Excel chart data labels (n/a for dLbls).",
 
   "sizes": { "title": 1200, "axisTitle": 900, "axisLabel": 900, "dataLabel": 900, "legend": 900 },
 
