@@ -425,6 +425,22 @@ function textResult(data) {
   };
 }
 
+// Compact one-line provenance summary for a rent-timeline row (get_property_rent_timeline).
+function summarizeRentProvenance(r) {
+  const p = r.provenance || {};
+  const a = r.assumptions || {};
+  if (p.evidence === true) {
+    const tbl = p.table || 'evidence';
+    return p.corroborated_by ? `${tbl} (corroborated by ${p.corroborated_by})` : `${tbl} evidence`;
+  }
+  if (p.shell === true) return `convention shell (${p.intercept_source || 'intercept'})`;
+  if (p.projected_from) {
+    const src = a.convention_source ? ` via ${a.convention_source}` : '';
+    return `projected from ${p.projected_from}${src}`;
+  }
+  return 'modeled';
+}
+
 // ── Tool definitions for direct JSON-RPC dispatch ─────────────────────────
 const TOOL_DEFINITIONS = {
   get_daily_briefing: {
@@ -461,6 +477,20 @@ const TOOL_DEFINITIONS = {
         domain: { type: 'string', enum: ['dia', 'dialysis', 'gov', 'government'], description: 'Domain for property_id identity resolution' },
         address: { type: 'string', description: 'Property address (alternative to entity_id)' },
         query: { type: 'string', description: 'Free-text property reference (address, name, or "domain:id") — resolved the same as address' }
+      }
+    }
+  },
+  get_property_rent_timeline: {
+    name: 'get_property_rent_timeline',
+    description: "Rent Intelligence Engine: the versioned, provenance-tracked rent-by-year timeline for a dialysis property. Returns per-year rent_annual, rent_psf, lease_phase, basis (contract|stated|projected|convention), confidence, and a compact provenance summary. Prefer this over ad-hoc rent_at_sale lookups for rent anchoring in cap-rate / BOV work. Current (unsuperseded) version by default; pass include_superseded for the full version history (audit).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        property_id: { type: 'string', description: 'dia properties.property_id (preferred)' },
+        address: { type: 'string', description: 'Property address (resolved to a dia property when property_id is absent)' },
+        query: { type: 'string', description: 'Free-text property reference (address or "dia:id")' },
+        year_range: { type: 'string', description: 'Optional "YYYY-YYYY" filter, e.g. "2011-2026"' },
+        include_superseded: { type: 'boolean', description: 'Include prior forked versions for audit (default false = current only)' }
       }
     }
   },
@@ -1178,6 +1208,82 @@ export const TOOL_HANDLERS = {
       }
 
       return textResult(result);
+    });
+  },
+
+  get_property_rent_timeline: async (args = {}) => {
+    return withTiming("get_property_rent_timeline", async () => {
+      if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
+        return textResult({ error: "DIA database not configured" });
+      }
+      const a = typeof args === 'string' ? { q: args } : (args || {});
+      let propertyId = a.property_id || a.propertyId || null;
+      const freeText = firstNonEmptyString(a.address, a.query, a.q, a.ref, a.text, a.property, a.name);
+
+      // Resolve the dia property_id when only an address/free-text ref is given.
+      if (!propertyId && freeText) {
+        const resolution = await resolveSubject(
+          { address: a.address || null, q: freeText, domain: 'dia' },
+          { type: 'property', tool: 'get_property_rent_timeline', surface: 'mcp',
+            opsQuery, diaQuery, govQuery,
+            domainAvailable: (dom) => dom === 'dia' ? !!(DIA_SUPABASE_URL && DIA_SUPABASE_KEY) : !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY) }
+        );
+        if (resolution.status === 'ambiguous') return textResult(resolution);
+        propertyId = resolution.domain_property?.property_id
+          || (resolution.entity?.external_identities || [])
+              .filter((x) => ["dia","dia_db","dia_supabase","dialysis"].includes(x.source_system))
+              .map((x) => x.external_id)[0]
+          || null;
+      }
+      if (!propertyId) {
+        return textResult({ error: "Property not resolved", property_id: a.property_id || null, address: a.address || null });
+      }
+
+      // year_range "YYYY-YYYY"
+      let yrLo = null, yrHi = null;
+      if (typeof a.year_range === 'string') {
+        const m = a.year_range.match(/(\d{4})\s*-\s*(\d{4})/);
+        if (m) { yrLo = Number(m[1]); yrHi = Number(m[2]); }
+      }
+
+      const includeSuperseded = a.include_superseded === true || a.include_superseded === 'true';
+      const src = includeSuperseded ? 'property_rent_timeline' : 'v_property_rent_current';
+      let path = `${src}?property_id=eq.${enc(propertyId)}` +
+        `&select=year,version,rent_annual,rent_psf,rba_sf,lease_phase,basis,confidence,provenance,assumptions` +
+        (includeSuperseded ? ',superseded_at' : '') +
+        `&order=year.asc` + (includeSuperseded ? ',version.asc' : '');
+      if (yrLo != null) path += `&year=gte.${yrLo}`;
+      if (yrHi != null) path += `&year=lte.${yrHi}`;
+
+      const res = await diaQuery("GET", path);
+      if (!res.ok) return textResult({ error: "rent timeline query failed", status: res.status, property_id: propertyId });
+      const rows = Array.isArray(res.data) ? res.data : [];
+      if (!rows.length) {
+        return textResult({ property_id: propertyId, rows: [], note: "No rent timeline on file (property may be in the research backlog)." });
+      }
+
+      // Compact provenance summary per year + a roll-up.
+      const compact = rows.map((r) => ({
+        year: r.year,
+        ...(includeSuperseded ? { version: r.version, superseded: r.superseded_at != null } : {}),
+        rent_annual: r.rent_annual,
+        rent_psf: r.rent_psf,
+        lease_phase: r.lease_phase,
+        basis: r.basis,
+        confidence: r.confidence,
+        provenance: summarizeRentProvenance(r),
+      }));
+      const currentRows = includeSuperseded ? rows.filter((r) => r.superseded_at == null) : rows;
+      const basisMix = currentRows.reduce((m, r) => { m[r.basis] = (m[r.basis] || 0) + 1; return m; }, {});
+      return textResult({
+        property_id: propertyId,
+        current_version: currentRows[0]?.version ?? null,
+        year_span: currentRows.length ? [currentRows[0].year, currentRows[currentRows.length - 1].year] : null,
+        rba_sf: currentRows[0]?.rba_sf ?? null,
+        basis_mix: basisMix,
+        include_superseded: includeSuperseded,
+        rows: compact,
+      });
     });
   },
 

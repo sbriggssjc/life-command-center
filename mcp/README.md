@@ -118,7 +118,20 @@ government routes to the government template). Formula-protected columns are nev
 Build the Briggs BOV workbook. Record-first: pass `property_lookup` (address) or `cre_property_id` for a known LCC
 property and every caller gets the identical workbook; hand-author only brand-new deals.
 
-### 12. `log_memory` / `recall_memory`
+### 12. `get_property_rent_timeline`
+Rent Intelligence Engine: the versioned, provenance-tracked rent-by-year timeline for a dialysis property.
+Returns per-year `rent_annual`, `rent_psf`, `lease_phase`, `basis` (contract | stated | projected | convention),
+`confidence`, and a compact provenance summary. Current (unsuperseded) version by default; `include_superseded`
+returns the full forked-version history for audit. **Rent-anchoring source of record** — the comps-engine and
+bov / bov-government skills should read this for rent at a given year instead of ad-hoc `rent_at_sale` lookups
+(consumer call-site migration is sequenced after the post-#1638 workbook regeneration).
+
+**Example prompts:**
+- "Show the rent timeline for property 24703"
+- "What was the modeled rent on the Tulsa DaVita in 2023?"
+- "Pull the rent-by-year with confidence for this deal, include superseded versions"
+
+### 13. `log_memory` / `recall_memory`
 Persist and recall durable notes across sessions.
 
 ## Endpoints
