@@ -5152,9 +5152,12 @@ async function routeListingMisroute(domain, propertyId, saleRow, reasons) {
   const listPrice = Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : null;
   const notesVal = saleRow?.notes || null;
 
+  // Prompt 78 (U4 PGRST204): available_listings has no `list_price` column
+  // (dia uses initial_price/last_price) so the misroute 400'd. Write the
+  // captured ask to `last_price` (the current-ask column).
   const record = {
     property_id: domain === 'dialysis' ? parseInt(propertyId, 10) : propertyId,
-    list_price: listPrice,
+    last_price: listPrice,
     status: 'off_market',
     notes: notesVal,
     data_source: 'costar_sidebar',
@@ -6638,16 +6641,21 @@ async function createSaleAlert(propertyId, saleData) {
   const capRate = saleData.stated_cap_rate ? ` at ${saleData.stated_cap_rate}% cap` : '';
   const buyer = saleData.buyer_name || 'unknown buyer';
 
+  // Prompt 78 (U4 PGRST204): the previous payload used title/message/
+  // data_source/is_resolved — none of which exist on alerts_unified — so every
+  // sale alert 400'd (dia 61 / 30d). Map to the real columns: alert_reason
+  // (title + message folded), source, resolved. Keys pinned by
+  // WRITER_COLUMN_SETS['sidebar:createSaleAlert'] (domain-writer-columns.js).
   await domainQuery('dialysis', 'POST', 'alerts_unified', {
-    entity_type:   'property',
-    entity_id:     String(propertyId),
-    alert_type:    'new_sale',
-    priority:      'high',
-    title:         `New sale captured via CoStar`,
-    message:       `Sold to ${buyer} for ${price}${capRate} on ${saleData.sale_date}`,
-    data_source:   'costar_sidebar',
-    is_resolved:   false,
-    created_at:    new Date().toISOString(),
+    entity_type:  'property',
+    entity_id:    String(propertyId),
+    property_id:  parseInt(propertyId, 10),
+    alert_type:   'new_sale',
+    priority:     'high',
+    alert_reason: `New sale captured via CoStar — sold to ${buyer} for ${price}${capRate} on ${saleData.sale_date}`,
+    source:       'costar_sidebar',
+    resolved:     false,
+    created_at:   new Date().toISOString(),
   });
 }
 
