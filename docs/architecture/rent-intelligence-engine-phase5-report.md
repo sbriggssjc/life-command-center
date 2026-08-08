@@ -179,10 +179,37 @@ overwritten.** Reversal: `SELECT public.dia_revert_listing_cap_fill('phase5b_202
 
 ---
 
+## 5g. BOV / diligence ingest hook — SHIPPED, applied live
+
+When a BOV / underwriting workbook is built from diligence docs (rent roll, lease abstract), or a
+comps-engine run surfaces a verified rent correction, the confirmed rent/commencement/term/bumps feed
+the timeline as **documented** evidence (provenance = `bov_id` + doc ref). Every workflow that *learns*
+a rent teaches the system.
+
+- **Ladder tier** `('contract','bov_confirmed',0.95)` — documented, just below a directly-executed
+  lease, above OM/stated/implied.
+- **`dia_bov_confirmed_evidence`** store; the builder reads it as a **5th contract-basis source** — BOV
+  rent wins the highest-conf-per-year dedup over stated/implied/projected. An `implied_source_kind='bov'`
+  provenance stamp ancestry-links the row.
+- **`dia_ingest_bov_rent_evidence(...)`** — SQL entry point (ancestry-checked; rebuilds the property's
+  timeline immediately). **`api/_shared/dia-bov-evidence-hook.js`** (`ingestBovRentEvidence`) is the
+  non-blocking JS hook for the `bov-underwriting` output step + comps verified corrections. Reversal:
+  `dia_revert_bov_evidence(bov_id)`.
+
+No BOV/diligence table exists in dia today (BOV is skill-driven; the deal spine lives in LCC Opps), so
+this ships the durable **entry point + documented channel**; grounded rows arrive when a BOV/comps run
+calls the hook (the SOS/SAM "mechanism-ships-first" pattern).
+
+**Acceptance** (self-rolling-back gate, property 21868, 0 residue): year 2015 projected (rent 135,046,
+conf 0.70) → after BOV ingest **basis `contract`, rent 999,111, conf 0.95, `bov_confirmed=true`**;
+`dia_check_ancestry(row, bov)` = TRUE. Documented BOV rent beat the projection.
+
+---
+
 ## Continuation — designed & grounded, in the accepted build order
 
 Remaining units ship as their own reviewed, dry-run-first, reversible increments on PR #1649, in the
-sequence: **5g → (5c/5d/5e serving-layer) → 5i → 5j**. All call `dia_check_ancestry` in every
+sequence: **(5c/5d/5e serving-layer) → 5i → 5j**. All call `dia_check_ancestry` in every
 derivation/corroboration path (violations skip + log).
 
 - **5c — term serving.** `v_dia_property_term_at_date(property_id, as_of)` → remaining firm term,
@@ -194,11 +221,6 @@ derivation/corroboration path (violations skip + log).
   `leases`/`lease_escalations` — documented evidence writes back only via the Phase 3 loop.
 - **5e — lease comps serving.** `v_dia_lease_comps_enriched` → `generate_comps` / Briggs Lease Comps
   mapping. Input fields only; formula-protected columns untouched.
-- **5g — BOV / diligence ingest hook.** When a BOV / underwriting workbook is built from diligence
-  docs (rent roll, lease abstract), confirmed rent/commencement/term/bumps feed the timeline as
-  **documented** evidence (provenance = `bov_id` + doc ref) through the Phase 3 reconcile path. Wire
-  into the `bov-underwriting` output step and comps-engine verified-rent corrections. Every workflow
-  that *learns* a rent teaches the system.
 - **5h — convention auto-refit.** Quarterly job re-fits `tenant_lease_conventions` empirically (modal
   bump/interval per tenant, n≥20 structured leases), writing a **new versioned row** (`effective_from`)
   on material drift (>25 bps bump or interval change); never mutates history. FMC's flagged placeholder
