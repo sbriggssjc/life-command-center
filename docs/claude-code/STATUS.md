@@ -454,6 +454,26 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### First full nightly slate 2026-08-08 03:40–04:30 UTC — 4/5 units produced; U1 scan-starved → prompt 84
+**U2 +21 pairs (29 open) / U3 +1 (1 open) / U5 first batch 67 proposals / assist 12 annotations —
+all healthy.** U1 wrote only a scan batch (no apply/scoring; 0 proposals; scored-ledger unchanged) —
+U1 is the only unit still full-scanning ~128k rows per invocation (no scan cursor), so the scan
+eats the budget and scoring never runs; scan batch also never closes. **Prompt 84** ports the 83
+windowed-cursor pattern back to U1 + guarantees scoring a budget slice + batch lifecycle. 199
+enqueueable blank-name dia contacts waiting to drain once it lands. Morning lane slate for Scott:
+29 dup pairs (chip), 1 link card, 67 hygiene proposals (bulk-confirm the deterministic renames),
+assist-sorted disambiguation lane.
+
+### ✅ Prompt 83 landed, merged, deployed, VERIFIED — all surfaces healthy (2026-08-08)
+U5 tick now bounded + fast: lcc scan capped 20k/invocation w/ resumable keyset cursor (smaller
+tables wrap), address resolution sampled-slice-only on GET, budget honest, scan_errors [].
+Sample quality unchanged from the passing review (Cohen-Cos-keep judgment intact; exactly-one
+address matches). Assist tick re-verified healthy (the previously-inflated 0.9 now an
+honest 0.7 on re-run). **Every W8 surface + assist is now live AND proxy-safe.** Tonight's crons
+(U1 3:40 / U2 3:50 / U3 4:10 / U5 4:25 / assist 4:30) run the first full slate; check
+`naming_hygiene_batch` + assist annotations + lane badges tomorrow. Remaining open: merge #1634
+(provider stamp) if not yet in; W5.3 re-grade at ~50 fresh extractions.
+
 ### U5 tick 502 (post-flip) → prompt 83 queued; assist tick verified healthy
 `naming-hygiene-tick?score=1` now 502s (passed once pre-flip — variable runtime crossing the proxy
 limit; review/batch/scored tables all EMPTY, first cron window tonight). Prime suspect: the
