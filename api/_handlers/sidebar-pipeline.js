@@ -39,6 +39,12 @@ import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 // cross-module bindings are hoisted function declarations resolved at call
 // time (runtime), never at module-load time.
 import { validateSaleIngest, validateContactIngest } from '../_shared/ingest-contract.js';
+// Prompt 89 — TrafficMetrix misparse guard. A property page's traffic-count table
+// was once parsed as a contact list (street names / column labels minted as person
+// contacts, all stamped with the page's one real email). Reject misparse names and
+// cap one-email fan-out at the contact-extraction path (belt+braces even though
+// the misparse capture path is dormant).
+import { isMisparseName, planContactMinting } from '../_shared/tm-misparse.js';
 // Round 77d (2026-06-02): listing_date derivation moved to a shared module so
 // the CoStar sidebar and the OM-intake promoter stay consistent. Re-exported
 // here for the existing test/derive-listing-date.test.js import path.
@@ -1749,6 +1755,64 @@ function classifyDomainWithDiag(metadata, entityFields) {
 
 // ── Step 1: Unpack Contacts ─────────────────────────────────────────────────
 
+// Prompt 89 — route misparse/fan-out-suspect contacts to a human review inbox
+// item instead of minting them. Best-effort + recoverable: the raw rejected
+// contacts ride in metadata so a real one that got swept up can be re-created.
+// A sidebar path that skips the bridge gate lands here with no workspaceId — then
+// there is no inbox to write to, so we only log (the mint is still correctly
+// suppressed by the caller).
+async function routeMisparseContactsToReview(reviewItems, ctx) {
+  const { propertyEntityId, workspaceId, userId, domain, source, extractedAt } = ctx || {};
+  const names = reviewItems.map((r) => r?.contact?.name).filter(Boolean);
+  const reasons = [...new Set(reviewItems.map((r) => r.reason))];
+  console.warn('[sidebar misparse] suppressed', reviewItems.length,
+    'suspect contact(s) [' + reasons.join(',') + ']:', names.slice(0, 20).join(' | '));
+  if (!workspaceId) return 0;
+  try {
+    const fanout = reviewItems.find((r) => r.reason === 'email_fanout');
+    const title = 'Suspect contacts blocked (' + reviewItems.length + ') — '
+      + (reasons.includes('misparse_name') ? 'street/label misparse' : 'one-email fan-out');
+    const bodyLines = [
+      'Captured from ' + (source || 'costar') + ' on ' + new Date(extractedAt || Date.now()).toLocaleDateString() + '.',
+      'These candidate contacts were NOT minted — they look like a TrafficMetrix-style'
+        + ' table-as-contact-list misparse (street names / column labels, or one page'
+        + ' email fanned out across many parsed contacts).',
+      '',
+      ...reviewItems.slice(0, 40).map((r) => '• ' + String(r.contact?.name || '').slice(0, 80)
+        + ' — ' + r.reason + (r.reason === 'email_fanout' ? (' (' + r.email + ' ×' + r.fanout + ')') : '')),
+      '',
+      'Confirm any that are genuine contacts to re-add them manually.',
+    ];
+    const res = await opsQuery('POST', 'inbox_items', {
+      workspace_id: workspaceId,
+      source_user_id: userId || null,
+      visibility: 'private',
+      title,
+      body: bodyLines.join('\n'),
+      source_type: 'contact_misparse_review',
+      status: 'new',
+      priority: 'normal',
+      entity_id: propertyEntityId || null,
+      domain: domain || null,
+      metadata: {
+        source: (source || 'costar') + '_sidebar',
+        reasons,
+        suppressed_count: reviewItems.length,
+        fanout_email: fanout ? fanout.email : null,
+        fanout_count: fanout ? fanout.fanout : null,
+        rejected_contacts: reviewItems.map((r) => ({ name: r.contact?.name || null, email: r.contact?.email || null, reason: r.reason })),
+        property_entity_id: propertyEntityId || null,
+        extracted_at: extractedAt || null,
+      },
+    }, { 'Prefer': 'return=minimal' });
+    if (!res?.ok) console.warn('[sidebar misparse] inbox_items POST failed:', res?.status, res?.data);
+    return reviewItems.length;
+  } catch (e) {
+    console.warn('[sidebar misparse] review-route exception:', e?.message || e);
+    return 0;
+  }
+}
+
 async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, domain) {
   const contacts = metadata.contacts;
   if (!Array.isArray(contacts) || contacts.length === 0) return 0;
@@ -1757,7 +1821,18 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
   const source = metadata.source || 'costar';
   const extractedAt = metadata.extracted_at || new Date().toISOString();
 
-  for (const contact of contacts) {
+  // Prompt 89 — TrafficMetrix misparse guard. Split contacts into mint vs review:
+  // a candidate whose NAME trips the street/label detector, OR whose email is part
+  // of a suspect one-email fan-out (> threshold parsed contacts sharing it), is
+  // routed to review (recoverable) rather than minted as a phantom person.
+  const mintPlan = planContactMinting(contacts);
+  if (mintPlan.review.length) {
+    await routeMisparseContactsToReview(mintPlan.review, {
+      propertyEntityId, workspaceId, userId, domain, source, extractedAt,
+    }).catch((e) => console.warn('[sidebar misparse] review-route failed:', e?.message || e));
+  }
+
+  for (const contact of mintPlan.mint) {
     if (!contact.name) continue;
 
     const entityType = contactEntityType(contact);
@@ -2406,6 +2481,11 @@ export function isJunkContactName(name) {
   if (typeof name !== 'string') return true;
   const trimmed = name.trim();
   if (trimmed.length < 3 || trimmed.length > 80) return true;
+
+  // Prompt 89 — TrafficMetrix / street-label misparse. A street name or a
+  // traffic-count column label ("Collection Street", "Traffic Vol", "Made with
+  // TrafficMetrix") is not a contact — reject it before it mints a phantom person.
+  if (isMisparseName(trimmed)) return true;
 
   // Class A: firm-name suffix patterns. Real person names don't end with these.
   // R4-6 (2026-05-20): added `Investors` (was missing alongside Investments?)
