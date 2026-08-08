@@ -126,4 +126,69 @@ dialysis closings 2023-26) before publishing the value-prop.
 - Full JS suite: see commit (comps/CM green; pre-existing live-DB-dependent failures unrelated to this
   change noted separately).
 
-*Awaiting review before Phase 3 (reconciliation loop + intake-path wiring).*
+---
+
+## Phase 2 review resolution (2026-08-08) — all three gate items closed
+
+### 1. Convention shells built (decision 3) — anchor split
+
+`dia_build_rent_convention_shells()` + `v_dia_rent_cohort_median` (tenant×vintage-decade×state, n≥5).
+Materializes `basis='convention'` rows ONLY where an intercept is derivable; anchor recorded in
+`assumptions`. Of **6,522** tenant-known shells (no evidence timeline):
+
+| outcome | properties | intercept | confidence |
+|---|---|---|---|
+| property-point shells | **133** | property `anchor_rent`/`last_known_rent` + a dated anchor | 0.40 |
+| cohort-median shells | **291** | cohort-median PSF × RBA | 0.35 |
+| skipped (no derivable intercept) | **6,098** | — (no rows; absence is signal) | — |
+
+11,169 shell rows. **Structural exclusion confirmed:** `basis='convention'` max confidence = **0.40**,
+`would_publish (conf≥0.7)` = **0**. Every shell row is excluded from published cm surfaces by BOTH the
+conf≥0.7 gate and the basis filter.
+
+### 2. Value-prop reconciliation closed — ONE canonical definition
+
+Root cause of the 64bps gap: my view used `calculated_cap_rate`, band [0.03,0.15], a trailing-from-today
+window, and no `transaction_type`/`exclude_from_market_metrics` filters. Scott's documented deal-level
+query is now **canonical**. `cm_dialysis_value_prop_24m` rewritten to reproduce it **line-for-line**
+(verified identical): **NM 6.95% vs market 7.03%, n=26/179.** Full filter set documented in the view:
+24mo ended `dia_value_prop_24m_anchor()` (2026-03-31); `cap_rate_final` with
+`cap_rate_quality='implausible_unverified'` nulled; band **[0.04,0.12]**; `transaction_type` NULL/
+Investment/Resale; NOT `exclude_from_market_metrics`; `sold_price>0`.
+
+**Publish gate added** — `v_dia_value_prop_publish_gate` recomputes the documented query independently
+and asserts equality: `reconciles=true`. `published=true` now requires `reconciles AND
+attribution_certified`. Guards drift: any edit off-canon flips `reconciles=false`. **Held published=false.**
+
+### 3. NM attribution reconstruction (bounded pass) — reported
+
+Source-agnostic evidence view `v_dia_nm_closing_evidence` = `sf_deal_staging` (Closed IS/Final, 82 rows)
+∪ `sf_comp_staging` (Internal-Sold) ∪ **`dia_nm_cis_closings`** (empty CIS drop-in). Rebuilt
+`v_dia_nm_attribution_audit` certifies each 2023-26 `is_northmarq` flag against this evidence:
+
+| verdict | count |
+|---|---|
+| certified_nm (SF evidence corroborates the TRUE flag) | **3** |
+| flagged_nm_uncertified | **50** |
+| evidence_but_flagged_market (hidden NM) | **0** |
+| market_no_evidence | 837 |
+
+**Only 3 of 53 (5.7%) certify from local SF** — as expected, `is_northmarq` spans **all** Northmarq
+brokers nationally while Team Briggs' SF visibility is local. The reconstruction is a weak bridge; the
+**CIS national export is required** and drops into `dia_nm_cis_closings` with **zero rework** (it UNIONs
+into the evidence view automatically). `attribution_certified` is now computed from the audit
+(uncertified=0 AND hidden_nm=0) → **false** today, auto-flips true when CIS certifies. Value-prop stays
+`published=false` pending (a) reconcile [DONE] AND (b) attribution certify [pending CIS].
+
+### Follow-up 2 sequencing (ratified)
+
+Legacy view call-site migration to per-tenant projection stays a separate, reviewed change, sequenced
+**after** post-#1638 workbook regeneration passes acceptance — projection math and the chart layer do
+not move under the same quarter's charts simultaneously.
+
+---
+
+*Phase 3 gate cleared: (1) shells built w/ anchor split, (2) value-prop reconciled on one documented
+definition + gate, (3) reconstruction pass reported. Awaiting GO for Phase 3 (reconciliation loop +
+single-writer post-ingest hooks on OM intake / sales ingest / listing refresh; unclassifiable conflicts
+to rent_reconcile_queue via the Teams card pipeline; report-back gate before Phase 4).*
