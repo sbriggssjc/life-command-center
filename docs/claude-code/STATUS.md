@@ -454,6 +454,29 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### TrafficMetrix misparse found by Scott in the U3 lane → prompt 89 queued
+Scott spotted a person_email card with street-name "evidence". Cowork forensics: a 2026-05-09
+sidebar/CoStar capture parsed the TrafficMetrix traffic-count widget as a CONTACT LIST — 16
+"person" entities minted (streets, "Traffic Vol", "Made with TrafficMetrix® Products"), all
+stamped with the page's one real email (rehmer@ehmergroup.com — Richard Ehmer, real broker).
+Scale measured: 17 street-label persons, 7 clusters ≥6 members, newest 2026-05-23 (dormant, but
+graph contamination persists + U3 pool feeds garbage to the LLM). **Scott advised to REJECT the
+card** (confirming would write nonsense pairs into entity_match_labels). **Prompt 89**: one-shot
+quarantine seeder → U1 lane as deterministic `tm_misparse` dismisses (real names excluded),
+un-stamp the fanned email on confirm, sidebar parser guard (street/label reject + one-email
+fan-out cap w/ the 16-name fixture), U3 pool excludes junk clusters, fix the "0 workable" lane
+counter quirk. 88 sent to Claude Code (response pending).
+
+### 86 done (Dialysis/FRED back online) + WAVE 9 UNIT 1 queued — prompt 88 (W9.2)
+Dialysis Railway service green again post-86. **Prompt 88 = W9.2 internal-harvest reachability**,
+the Wave 9 opener: two arms (deterministic exact-identity fills from SF/sidebar — no LLM,
+bulk-confirmable; LLM-attributed fills from correspondence/intake with U3 verbatim-quote
+validator), value-gated pool (4,234 dia unreachable contacts + gov count to be measured + owners
+where internal evidence names a person), proposals into the EXISTING owner-contact surfaces,
+fill-blanks writer w/ fsp rows (`w9_2_internal_harvest`/`comms_observed`), flag
+`W9_2_REACHABILITY_HARVEST` OFF, cron 4:40 UTC, full house pattern from day one. Headline metric
+for U4: reachability coverage %. Gate: dry-run → Scott review → flip.
+
 ### W6.5 Stage 1 MERGED + LIVE — PR #1641 (`b94d877`)
 DC federated lanes (~1,010 lines: `_DC_FED_META`, `_fedCardHTML` + 17 branches, renderFederatedLane,
 dcFed* verdict handlers) extracted VERBATIM from ops.js → new classic-script `dc-lanes.js` loaded
