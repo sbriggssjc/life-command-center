@@ -268,30 +268,61 @@ empirical_refit **0.0200/1yr** (n=541, un-flagged); the 1990 row preserved. **da
 
 ---
 
-## Continuation — final unit on PR #1649
+## 5j. Learning metrics — SHIPPED, applied live (one panel, QoQ)
 
-- **5j — learning metrics.**
-- **5i — propagation job.** Nightly, for each property whose timeline gained a version/confidence
-  change since last run, re-derive dependent artifacts (5a caps, 5b implied caps, 5c terms) **for that
-  property only** — bounded, provenance-tracked, ancestry-checked. The promulgation mechanic: one new
-  OM improves every sale, listing, and comp that property touches by morning. (Round-trip acceptance:
-  inject one OM on a multi-artifact property → next run its sale cap, listing implied cap, and term
-  view all update with linked provenance.)
-- **5j — learning metrics.** Extend `cm_dia_rent_coverage_*` + the packet/daily briefing with trend
-  metrics: coverage-class deltas QoQ, research-backlog burn-down (tenant × state), corroboration rate,
-  confidence-distribution drift, derived-cap population growth — one panel that shows the system is
-  getting smarter quarter over quarter.
+Proof, on one panel, that the engine is getting smarter quarter over quarter.
 
-**Vertical portability.** The Ancestry Rule model (`rent_evidence_provenance` + `dia_check_ancestry`)
-and the 5a derivation pattern are structurally identical for government reuse — swap `dia_*` for
-`gov_*`, the timeline/sale tables for the gov equivalents, and reuse the same edge/BFS/skip-and-log
-shape.
+- **`dia_rent_learning_metrics`** snapshot store + **`dia_capture_rent_learning_metrics(snapshot_date)`**
+  — captures ~64 metrics per snapshot: coverage classes, derived_cap / usable_cap / implied_evidence /
+  listing_implied_cap / bov_evidence / provenance_edges counts, timeline rows + properties, corroborated
+  rows, confidence avg/median/≥0.7, basis mix, open review + reconcile queues, convention refits, and
+  research backlog by tenant × state (top 40, dimension-tagged) for burn-down.
+- **`v_dia_rent_learning_panel`** — the one panel: latest snapshot vs the prior, per metric, with `delta`
+  + `pct_change` (QoQ). The packet / daily briefing read this view. **pg_cron
+  `dia-rent-learning-metrics` @ `30 5 1 1,4,7,10 *`** (quarterly).
+
+**Baseline snapshot (2026-08-08, 64 metrics):** evidence_timeline **4,466** (was 4,316 pre-5f),
+derived_cap **148**, implied_evidence **2,539**, usable_cap **2,875**, provenance_edges **2,688**,
+confidence avg **0.6302** / median **0.6500**, convention_refits **1**, listing_cap_review open **57**.
+Deltas populate on the next quarterly snapshot.
+
+---
+
+## Program close-out — the engine is complete
+
+All ten units (keystone + 5a–5j) are shipped and applied live to dia `zqzrriwuavgrquhisnoa`, each with
+grounded counts and an acceptance gate. Every piece of information — a listing price/cap, a lease, a
+sale, an OM, a BOV, a comp review — now yields a rent that propagates to every artifact tied to that
+property, and the system gets smarter each pass:
+
+- **The Ancestry Rule** (`dia_check_ancestry` + `rent_evidence_provenance`) governs every derivation and
+  corroboration path — proven to fire on real data (88 self-anchored sales skipped in 5a; the reconcile
+  self-confirmation hole closed).
+- **Self-improving loop:** 5f (inverse evidence) + 5g (BOV/diligence) feed the timeline; 5h turns
+  conventions from seeds into findings; 5i (nightly propagation) promulgates one new OM to every
+  dependent artifact by morning; 5j proves the gains on one panel.
+- **Enrichment / serving:** 5a (+148 derived caps), 5b (listing validation + labeled fills), 5c/5d/5e
+  (term / structure / lease-comps read-models).
+
+**Three new crons:** `dia-rent-propagation` (nightly), `dia-convention-refit` +
+`dia-rent-learning-metrics` (quarterly).
+
+**Vertical portability.** The Ancestry Rule model (`rent_evidence_provenance` + `dia_check_ancestry`),
+the evidence-store + builder-consumption pattern (5f/5g), and the derivation engines (5a/5b) are
+structurally identical for government reuse — swap `dia_*` for `gov_*`, the timeline/sale tables for the
+gov equivalents, and reuse the same edge/BFS/skip-and-log shape.
 
 ---
 
 ## Reversal / verification
 
-- Revert 5a: `SELECT public.dia_revert_sale_cap_derivation('phase5a_20260808');`
+- 5a caps: `SELECT public.dia_revert_sale_cap_derivation('phase5a_20260808');`
+- 5f inverse evidence: `SELECT public.dia_revert_inverse_rent_evidence('phase5f_20260808');`
+- 5b listing fills: `SELECT public.dia_revert_listing_cap_fill('phase5b_20260808');`
+- 5g BOV evidence: `SELECT public.dia_revert_bov_evidence('<bov_id>');`
+- 5h refit: delete the new-vintage `empirical_refit` rows + the batch's `dia_convention_refit_log` rows.
+- 5c/5d/5e serving views + 5j panel: `DROP` (read-only).
+- Crons: `SELECT cron.unschedule('dia-rent-propagation' | 'dia-convention-refit' | 'dia-rent-learning-metrics');`
 - Ancestry re-check any pair: `SELECT public.dia_check_ancestry('timeline', '<tid>', 'sale', '<sale_id>');`
 - Published CM cap views unchanged in definition; STATED caps byte-identical (fill-blanks on
-  `cap_rate_final IS NULL`).
+  `cap_rate_final IS NULL`); Phase 2/3/4 published series basis-labeled, unchanged.
