@@ -295,6 +295,55 @@ export function planAddressLinkProposal(entityName, resolution) {
 }
 
 // ---------------------------------------------------------------------------
+// Prompt 83 (W8 U5 tick bounding) — BATCHED address resolution helpers (PURE).
+// The per-candidate resolveHygieneProperty (one property query per address) was
+// the request-killer: 4,145 address candidates ⇒ thousands of PostgREST round
+// trips inside one HTTP invocation. These pure helpers let the tick resolve a
+// whole BATCH of address candidates with ONE properties prefilter query per
+// domain (an `or=(address.ilike.NUM*,…)` over the batch's leading numbers), then
+// match in memory — mirroring U1's batched FK-child probe.
+// ---------------------------------------------------------------------------
+
+// The leading street number of an address-as-name (the cheap prefilter key), or
+// null when the value has no leading number (then it is not link-resolvable).
+export function addressLeadingNumber(name) {
+  const norm = normalizeAddressForMatch(name);
+  const m = norm.match(/^\d+/);
+  return m ? m[0] : null;
+}
+
+// The deduped set of leading street numbers across a batch of address candidates
+// — feeds ONE bounded `or=(address.ilike.NUM*,…)` properties prefilter per domain.
+export function collectAddressNumbers(candidates) {
+  const numbers = new Set();
+  for (const c of (candidates || [])) {
+    const n = addressLeadingNumber(c && c.entity_name);
+    if (n) numbers.add(n);
+  }
+  return [...numbers];
+}
+
+// PURE matcher: given a candidate address name + the property rows fetched by the
+// batched prefilter (each {property_id, address, recorded_owner_id}) + an owner-
+// name map (recorded_owner_id → name, string-keyed), return the SAME resolution
+// shape resolveHygieneProperty produced. Conservative: exactly-one normalized-
+// address match resolves; >1 is ambiguous; 0 is unresolved. Never guesses.
+export function matchCandidateToProperties(domain, entityName, propertyRows, ownerNameById) {
+  const normTarget = normalizeAddressForMatch(entityName);
+  if (!normTarget || !/^\d/.test(normTarget)) return { resolved: null, ambiguousCount: 0 };
+  const matches = (propertyRows || []).filter((p) => normalizeAddressForMatch(p && p.address) === normTarget);
+  if (matches.length === 0) return { resolved: null, ambiguousCount: 0 };
+  if (matches.length > 1) return { resolved: null, ambiguousCount: matches.length };
+  const p = matches[0];
+  let ownerName = null;
+  if (p.recorded_owner_id != null && ownerNameById) {
+    const raw = ownerNameById.get(String(p.recorded_owner_id));
+    ownerName = raw && !isAddressAsName(raw) ? raw : null;
+  }
+  return { resolved: { domain, property_id: p.property_id, address: p.address, owner_name: ownerName }, ambiguousCount: 1 };
+}
+
+// ---------------------------------------------------------------------------
 // LLM prompt for the AMBIGUOUS-abbreviation case (judge-don't-parrot). The model
 // expands the ambiguous token IN CONTEXT or keeps it; it MUST NOT invent tokens.
 // ---------------------------------------------------------------------------
