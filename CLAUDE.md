@@ -296,6 +296,12 @@ Feature-flagged (`OCR_CLOUD_*`, `OPENAI_API_KEY`); unset ⇒ honest `needs_ocr`.
   `diaQuery`/`govQuery`, add it to the edge allowlist AND redeploy `data-query` to the Dialysis_DB project
   (`zqzrriwuavgrquhisnoa`) — NOT LCC Opps.** Mirror the entry in `api/_shared/allowlist.js` (its WRITE sets are
   live via `apply-change.js`; its READ sets are a documented mirror).
+- **PostgREST schema cache can go stale after domain-table DDL** — a newly added column can exist
+  in the DB while PostgREST still 400s `PGRST204 "Could not find the '<col>' column ... in the
+  schema cache"` on writes to it. Supabase usually auto-reloads on DDL, but not always (bit the
+  prompt-78 `property_documents.source` fix, 2026-08-08: migrations correct, failures continued
+  until a manual reload). Fix: `NOTIFY pgrst, 'reload schema';` on the affected project. When a
+  write 400s on a column you JUST added, check the cache before re-diagnosing the migration.
 - **`CREATE OR REPLACE VIEW` is append-only for columns** (Postgres 42P16 if you insert a column mid-list). All
   view edits add new columns at the END of the SELECT.
 - **Overview/snapshot tiles must render SYNCHRONOUSLY from the main data load, reading ONE canonical

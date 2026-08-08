@@ -454,6 +454,15 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Housekeeping 2026-08-08 (Cowork) — PGRST204 root-caused to STALE SCHEMA CACHE + prompt 82 queued
+Post-redeploy PGRST204 residue (16/3h, all `property_documents` 'source' column) was NOT code: the
+78 migrations were correct — PostgREST's schema cache hadn't reloaded. **Cowork ran
+`NOTIFY pgrst, 'reload schema'` on dia + gov** — rate should hit 0; verify on next check. Lore:
+add "schema cache reload after domain DDL" to the footgun list (columns can exist while PostgREST
+400s on them). **Prompt 82 queued:** provider-stamp coverage gap (4/15 fresh extractions stamped —
+some writer paths bypass buildProviderStamp; blocks a clean W5.3 re-grade). W5.3 re-grade waits on
+volume (15/~50 fresh extractions).
+
 ### ✅ EXPANSION LIVE 2026-08-08 — U5 + assist flags flipped after clean dry-run reviews
 Both sheets passed Scott+Cowork review: U5 deterministic sample 30/30 mechanical (bulk-confirmable),
 LLM arm correctly KEEPS "Cohen Cos"(surname)/"Dev I Ltd" — the U1 false-positive classes handled;
