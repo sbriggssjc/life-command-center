@@ -14,7 +14,10 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const adminSrc = readFileSync(join(root, 'api/admin.js'), 'utf8');
-const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+// W6.5 Stage 1 (P87): federated lane code moved to dc-lanes.js (classic script
+// loaded before ops.js, same global scope) - read both halves as one surface.
+const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8')
+  + String.fromCharCode(10) + readFileSync(join(root, 'dc-lanes.js'), 'utf8');
 const repairSrc = readFileSync(
   join(root, 'supabase/migrations/20260825120000_lcc_w8_u3_mint_repair.sql'), 'utf8');
 

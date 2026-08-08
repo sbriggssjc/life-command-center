@@ -13,7 +13,10 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
-const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+// W6.5 Stage 1 (P87): federated lane code moved to dc-lanes.js (classic script
+// loaded before ops.js, same global scope) — read both halves as one surface.
+const ops = readFileSync(join(root, 'ops.js'), 'utf8')
+  + '\n' + readFileSync(join(root, 'dc-lanes.js'), 'utf8');
 
 function fedSet(src, re) {
   const m = src.match(re);
