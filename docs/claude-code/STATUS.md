@@ -454,6 +454,13 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Reconcile 2026-08-07 evening (prompts 77 & 78 — landed; responses → done/)
+
+| # | Outcome | State |
+|---|---|---|
+| 77 | U3 conflict-resolution card | ✅ **PR #1629.** Conflict rows surface as pick-the-survivor cards (candidates w/ relationship+portfolio counts, Mint-new option, sf_link three-way pattern); `resolve_conflict` verdict validates the picked id SERVER-SIDE (exists, unmerged, shares the canonical name — never trusts the client) then resumes the deterministic writer; idempotency guard exempts conflict re-decide so the already-'decided' Trammell Crow is re-resolvable; conflicts count in the badge. 33 tests; 2 full-suite failures pre-existing (stash-verified). ⏳ merge + redeploy → Trammell Crow card reappears. |
+| 78 | PGRST204 schema-drift writers | ✅ **PR #1630.** Diagnosed from `ingest_write_failures` payloads — real before-count **8,306/30d** (grew past U4's 6,945), root-caused to **7 clusters**. Biggest: `attachEnrichDocument`/`insertLccDocument` probe a source-tagged payload that PGRST204s on EVERY attach then degrades (a designed-in failure logger). **Additive migrations applied LIVE to dia+gov first** (deploy-ordering) → column-class clusters stopped immediately; field-removal clusters stop on redeploy. Deterministic backfill ran: 2,377/4,775 `listing_sale_id` links. New `domain-writer-columns.js` contract module + schema-pinned tests (16/16) — drift now breaks CI, not production. Cowork verified live: PGRST204 rate declining (27→6/hr through the evening), to-zero check post-redeploy. ⏳ merge + redeploy. |
+
 ### Expansion queue 2026-08-07 — Scott approved all four tracks; prompts 77–81 drafted
 
 Send in this order (leaks before expansion, per doctrine):
