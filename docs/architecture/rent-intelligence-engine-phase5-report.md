@@ -105,10 +105,58 @@ per candidate (the rent used may not descend from THIS sale), banded **[0.03, 0.
 
 ---
 
-## Continuation — designed & grounded for the next increments
+## 5f. Inverse evidence (cap → rent) — SHIPPED, applied live — batch `phase5f_20260808`
 
-Each remaining unit is scoped to ship as its own reviewed, dry-run-first, reversible increment on this
-branch. All call `dia_check_ancestry` in every derivation/corroboration path (violations skip + log).
+Every `(price, cap)` pair is a rent observation: **implied rent = price × cap**, entered as
+**stated-tier evidence BELOW documents**. The builder's highest-confidence-per-year dedup guarantees
+documented/higher evidence always wins — implied rent only anchors gap years and previously-empty
+properties.
+
+- **Three channels** (grounded populations): `listing_creation` (initial_price × initial_cap_rate,
+  ~0.60), `listing_stated_cap_update` (last_price × last_cap_rate where
+  `last_cap_rate_source='master_or_manual'` **and the cap actually changed**, ~0.60), `sale_cap_no_rent`
+  (sold_price × stated cap where `rent_at_sale IS NULL`, ~0.70). **Our own 5a-derived caps are excluded
+  at source** so a derived cap can never round-trip back to rent.
+- **Ladder tiers** `('stated','listing_implied',0.60)` / `('stated','sale_implied',0.70)` — always below
+  documents.
+- **`dia_rent_implied_evidence`** — append-only tiered store (not written into `leases`/`sales`, which
+  would inflate documented evidence). **`dia_build_property_rent_timeline`** reads it as a 4th source
+  (Phase 2 body verbatim + one INSERT + implied-source provenance stamp).
+- **Ancestry:** `dia_provenance_parents` extended so an implied timeline row resolves to its
+  listing/sale source (`provenance.implied_source_*`). This closes the loop with the reconcile guard
+  shipped in Increment 1 — an implied rent is blocked from corroborating/deriving its own source.
+- **Sanity gate:** extraction is set-based and PSF-gated `[5,200]` — garbage goes to
+  `rent_reconcile_queue`, never the store (and the builder re-gates on consume).
+- **T9d price-only refresh stays unhooked** (documented at the hook site): a price move at constant
+  stated cap moves cap expectations, not rent; `listing_stated_cap_update` fires only on a *changed*
+  stated cap.
+
+**Grounded live result:**
+
+| metric | value |
+|---|---|
+| candidate `(price, cap)` pairs | **2,599** |
+| stored implied evidence | **2,539** |
+| PSF-gated → review queue | **60** |
+| properties affected | **1,608** |
+| properties with **no documented rent** that gained a timeline | **150** (159 implied stated rows now live) |
+| remaining affected (documented-rent) | ~1,458 — implied evidence stored, absorbed on next rebuild (**5i boundary**) |
+
+**Acceptance** (self-rolling-back gate, property 29984, 0 residue): rebuild landed an implied
+listing-sourced row (year 2011, basis `stated`, conf 0.60); `dia_check_ancestry(that row, listing 10224)`
+= **TRUE** → the listing is blocked from corroborating/deriving its own implied rent; documented DaVita
+evidence still won its years.
+
+**Reversal:** `SELECT public.dia_revert_inverse_rent_evidence('phase5f_20260808');` then rebuild affected
+properties.
+
+---
+
+## Continuation — designed & grounded, in the accepted build order
+
+Remaining units ship as their own reviewed, dry-run-first, reversible increments on PR #1649, in the
+sequence: **5b → 5g → (5c/5d/5e serving-layer) → 5i → 5j**. All call `dia_check_ancestry` in every
+derivation/corroboration path (violations skip + log).
 
 - **5b — listing validation + fills.** (i) actives with stated caps: compute timeline-implied cap;
   divergence > 75 bps → `listing_cap_review` queue + Teams card; **never overwrite stated**. (ii) fill
@@ -124,14 +172,6 @@ branch. All call `dia_check_ancestry` in every derivation/corroboration path (vi
   `leases`/`lease_escalations` — documented evidence writes back only via the Phase 3 loop.
 - **5e — lease comps serving.** `v_dia_lease_comps_enriched` → `generate_comps` / Briggs Lease Comps
   mapping. Input fields only; formula-protected columns untouched.
-- **5f — inverse evidence (cap → rent).** Every `(price, cap)` pair is a rent observation. Extract
-  implied rent = `price × cap` as `stated`-tier evidence at listing CREATION, stated-cap updates where
-  the source is broker-stated NOI, and sales with a stated cap but no rent. Confidence tiered **below
-  documents** (listing-implied ~0.6, sale-implied ~0.7); unit-normalize + sanity-gate through the
-  Phase 3 path so garbage queues. **T9d price-only refresh stays unhooked** (a price move at constant
-  stated cap restates cap expectations, not rent — document at the hook site). Ancestry: implied rent
-  is blocked from corroborating its own listing/sale — **the reconcile guard shipped this increment
-  already enforces exactly that** (proven by the CONTROL/BLOCKED gate above).
 - **5g — BOV / diligence ingest hook.** When a BOV / underwriting workbook is built from diligence
   docs (rent roll, lease abstract), confirmed rent/commencement/term/bumps feed the timeline as
   **documented** evidence (provenance = `bov_id` + doc ref) through the Phase 3 reconcile path. Wire
