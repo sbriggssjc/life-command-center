@@ -454,6 +454,24 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ U1 FULLY PRODUCTIVE — 2026-08-08 13:16 UTC manual drain verified
+Post-85 POST: **deterministic_dismissed 100** (blanks, zero LLM), **llm_scored 20** w/ real mix
+(17 dismiss / 1 keep / 2 rename — 0.85 share, guard correctly quiet on the LLM-only denominator),
+**119 proposals into the junk lane**, cursors advanced, scan_errors [], budgets honest,
+remaining_unscored 107 (~1 more night). **All five W8 units + assist now verified productive
+end-to-end. W8 build-out arc CLOSED — steady-state operations from here.** Scott's junk lane has
+119 cards (blanks bulk-review fast).
+
+### Prompt 85 merged+deployed; Dialysis Railway deploy failure → prompt 86 (DIALYSIS repo)
+85 reconciled (deterministic bypass + LLM-only guard denominator; PR #1637). **Dialysis Railway
+service** (auto-deploys from dialysis-repo main): failed deployment, NO build logs, first failure
+= the FRED API commit → config-stage death (malformed build definition / broken dependency entry /
+unresolvable build-time env ref). **NOT an outage** — prior deployment still serving (dia
+freshness verified: verification 12:17Z, property updates 12:38Z). **Prompt 86 queued — run in the
+DIALYSIS repo**: diff the FRED commit for build-def/manifest defects, flag-gate the feature
+(absence of FRED_API_KEY = no-op, never boot failure), timeout= on every network call per the
+SIGALRM footgun. Drain POST (U1 post-85) pending Scott's run.
+
 ### 84 verified live — mechanics WORK; guard livelock on blank names → prompt 85
 Manual POST post-84: windowed scan + budget split + cursors + honest bookkeeping all correct
 (20 scored, scan_errors [], budget fine). But 20/20 dismiss (the blank-name dia contacts) trips
