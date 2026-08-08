@@ -5852,7 +5852,9 @@ test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => 
   assert.deepEqual(roles, ['last', 'max', 'min'], 'three role-tagged callouts');
   const xml = buildSingleLineChartXml(out.spec);
   assert.match(xml, /<c:showLeaderLines val="1"\/>/, 'leader lines enabled');
-  assert.match(xml, /<c:manualLayout><c:x val="0"\/><c:y val="-0\.075"\/>/, 'max label offset up');
+  // CM chart fixes round 2, item 3b — offsets enlarged (~0.11) so Excel draws a
+  // leader line from the floated label back to the datapoint.
+  assert.match(xml, /<c:manualLayout><c:x val="0"\/><c:y val="-0\.11"\/>/, 'max label offset up');
 });
 
 // A3 (CM chart feedback item #3) — bid-ask shared cap axis is data-fit, not a
@@ -5876,4 +5878,110 @@ test('A3: bid_ask cap axis fits the plotted Last-Ask/Achieved window', () => {
   // Data max ≈ 0.079; fitted max must be close to it, NOT the old 0.10 ceiling.
   assert.ok(r.max <= 0.085 && r.max >= 0.079, `fitted max ${r.max} hugs data max`);
   assert.ok(r.min >= 0.06 && r.min <= 0.07, `fitted min ${r.min} hugs data min`);
+});
+
+// ===========================================================================
+// CM chart fixes round 2 (2026-08-08) — items 1, 2, 3.
+// ===========================================================================
+
+// Item 1 — dialysis rent-box report chart reads the LABELED MODELED variant.
+test('round2 item1: rent_psf_box_quarterly_modeled is a native box chart with the modeled title', () => {
+  assert.ok(
+    NATIVE_CHART_TEMPLATES.has('rent_psf_box_quarterly_modeled'),
+    'modeled companion registered for native injection'
+  );
+  const rows = Array.from({ length: 14 }, (_, i) => ({
+    period_end: `202${3 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    subspecialty: 'all',
+    basis_scope: 'contract,stated,projected; conf>=0.7 (modeled)',
+    n_points: 20 + i,
+    rent_min: 6, rent_lower_quartile: 15, rent_median: 22,
+    rent_upper_quartile: 30, rent_max: 60,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
+    { key: 'basis_scope', col: 'C' }, { key: 'n_points', col: 'D' },
+    { key: 'rent_min', col: 'E' }, { key: 'rent_lower_quartile', col: 'F' },
+    { key: 'rent_median', col: 'G' }, { key: 'rent_upper_quartile', col: 'H' },
+    { key: 'rent_max', col: 'I' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'rent_psf_box_quarterly_modeled',
+    tabName: 'Data_Rent_PSF_Box_Mdl', cols, dataStart: 5, dataEnd: 18,
+    brand: {}, rows, vertical: 'dialysis',
+    title: 'Rent/SF — Quarterly Box (incl. modeled rents)',
+    injectPeriodLabel: true,
+  });
+  assert.ok(out && out.spec, 'spec produced');
+  assert.equal(out.spec.type, 'combo', 'box decomposed as combo');
+  assert.equal(out.spec.title, 'Rent/SF — Quarterly Box (incl. modeled rents)', 'modeled title carried through');
+  // IQR band (lower base + iqr helper) + median line all present.
+  assert.equal(out.spec.barSeries.length, 2, 'invisible base + visible IQR band');
+  assert.equal(out.spec.lineSeries.length, 1, 'median line');
+  const xml = buildComboChartXml(out.spec);
+  assert.match(xml, /incl\. modeled rents/, 'title text embedded in chart XML');
+});
+
+// Item 2 — the volume_cap_quartile_combo right (cap) axis spans the quartile
+// band top (upper_quartile), not just the avg-cap series, so nothing clips.
+test('round2 item2: volume_cap_quartile_combo cap axis covers the upper-quartile band top', () => {
+  // upper_quartile peaks at 0.098 — above the OLD hardcoded dia max of 0.090.
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
+    volume_dollars: 1e8 + i * 1e7,
+    cap_rate: 0.065 + (i % 3) * 0.001,
+    upper_quartile: 0.090 + (i % 5) * 0.002,   // up to 0.098
+    lower_quartile: 0.050 + (i % 4) * 0.001,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
+    { key: 'volume_dollars', col: 'C' }, { key: 'cap_rate', col: 'D' },
+    { key: 'upper_quartile', col: 'E' }, { key: 'lower_quartile', col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'volume_cap_quartile_combo', tabName: 'Data_Vol_Cap_Combo',
+    cols, dataStart: 5, dataEnd: 14, brand: {}, rows, vertical: 'dialysis',
+    injectPeriodLabel: true,
+  });
+  const r = out.spec.yRightRange;
+  const bandTop = Math.max(...rows.map(x => x.upper_quartile)); // 0.098
+  assert.ok(r.max >= bandTop, `cap axis max ${r.max} covers band top ${bandTop}`);
+  assert.ok(r.max < 0.15, `cap axis max ${r.max} still snug`);
+  // The deliberate low floor (0.030 dia) is preserved to keep the volume area low.
+  assert.equal(r.min, 0.030, 'deliberate low cap-axis floor preserved');
+});
+
+// Item 3 — callouts are computed over the DISPLAYED (MIN_YEAR-trimmed) rows so
+// the emitted <c:idx> aligns with the plotted series, and labels render as a
+// charcoal label word + emphasized value.
+test('round2 item3: callout idx is plotted-space and text is label+value', () => {
+  // cap_rate_ttm_by_quarter has a dia MIN_YEAR trim; feed pre-cutoff rows so the
+  // plotted window is shorter than the full range. The last point is the max.
+  const rows = Array.from({ length: 20 }, (_, i) => ({
+    period_end: `${2005 + i}-06-30`,
+    ttm_weighted_cap_rate: 0.06 + i * 0.001,       // monotonic → last == max
+    transaction_count_ttm: i < 4 ? 2 : 40,          // sparse early years get trimmed
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'ttm_weighted_cap_rate', col: 'B' },
+    { key: 'transaction_count_ttm', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter', tabName: 'Data_Cap',
+    cols, dataStart: 5, dataEnd: 24, brand: {}, rows, vertical: 'dialysis',
+  });
+  const labels = out.spec.dataLabels || [];
+  assert.ok(labels.length >= 2, 'callouts produced');
+  // Every emitted idx must be a valid position within the PLOTTED window
+  // (dataEnd - effectiveStart + 1), never the full 20-row range.
+  const plottedLen = (out.spec.dataEnd - out.spec.dataStart) + 1;
+  for (const l of labels) {
+    assert.ok(l.idx >= 0 && l.idx < plottedLen,
+      `label idx ${l.idx} within plotted length ${plottedLen}`);
+  }
+  // Text carries a role word (Peak/Low/Latest) rendered in charcoal.
+  const xml = buildSingleLineChartXml(out.spec);
+  assert.match(xml, /<a:t>(Peak|Low|Latest) <\/a:t>/, 'role label word present');
+  assert.match(xml, /srgbClr val="3D4A54"/, 'charcoal callout text');
 });

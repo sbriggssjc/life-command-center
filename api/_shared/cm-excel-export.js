@@ -223,6 +223,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Cash return index (TTM avg cap) and modeled leveraged return (50% LTV, 30-yr am, 10Y + 180–220 bps). Leveraged > cash means accretive financing is achievable.',
   rent_psf_box_quarterly:
     'Quarterly rent / SF distribution: IQR (bars), median (line), min/max (whiskers).',
+  rent_psf_box_quarterly_modeled:
+    'Quarterly rent / SF distribution INCLUDING MODELED rents (contract/stated/projected, confidence ≥ 0.7): IQR (bars), median (line), min/max (whiskers). Companion to the actuals-only Data_Rent_PSF_Box; deepens the recent-quarter sample so the box chart plots every n ≥ 6 quarter since 2023.',
   ppsf_box_quarterly:
     'Quarterly price / SF distribution: IQR (bars), median (line), min/max (whiskers).',
   cap_rate_by_credit:
@@ -973,6 +975,21 @@ const CHART_COLUMNS = {
     { key: 'rent_upper_quartile', header: 'Upper Quartile',      format: 'currency_per_sf',  width: 16 },
     { key: 'rent_max',            header: 'Max',                 format: 'currency_per_sf',  width: 10 },
   ],
+  // CM chart fixes round 2, item 1 — dialysis LABELED MODELED rent-box variant
+  // (cm_dialysis_rent_box_q_with_modeled): contract/stated/projected @ conf>=0.7.
+  // basis_scope is kept visible so the reader sees the modeled basis; n_points
+  // replaces n_leases (the modeled view counts observations, not just leases).
+  rent_psf_box_quarterly_modeled: [
+    { key: 'period_end',          header: 'Quarter End',         format: 'date_short',       width: 13 },
+    { key: 'subspecialty',        header: 'Subspecialty',        width: 14 },
+    { key: 'basis_scope',         header: 'Basis Scope',         width: 40, keepIfEmpty: true },
+    { key: 'n_points',            header: 'N Points',            format: 'integer_count',    width: 12 },
+    { key: 'rent_min',            header: 'Min',                 format: 'currency_per_sf',  width: 10 },
+    { key: 'rent_lower_quartile', header: 'Lower Quartile',      format: 'currency_per_sf',  width: 16 },
+    { key: 'rent_median',         header: 'Median',              format: 'currency_per_sf',  width: 12 },
+    { key: 'rent_upper_quartile', header: 'Upper Quartile',      format: 'currency_per_sf',  width: 16 },
+    { key: 'rent_max',            header: 'Max',                 format: 'currency_per_sf',  width: 10 },
+  ],
 };
 
 // Period-summary template — column headers are computed at render time from
@@ -1070,6 +1087,9 @@ const TAB_NAMES = {
   seller_sentiment_monthly:     'Data_Sentiment_M',
   // Lease-rent distribution (StockChart-style 5-number summary per quarter)
   rent_psf_box_quarterly:       'Data_Rent_PSF_Box',
+  // CM chart fixes round 2, item 1 — modeled companion sheet (dia only). The
+  // actuals-only Data_Rent_PSF_Box sheet stays unchanged; this is additive.
+  rent_psf_box_quarterly_modeled: 'Data_Rent_PSF_Box_Mdl',
 };
 
 // ============================================================================
