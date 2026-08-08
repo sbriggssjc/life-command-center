@@ -61,6 +61,8 @@ const _DC_FED_META = {
     intro: 'W8 U1 hygiene. A deterministic filter flagged possible junk / test / gibberish / bookkeeping-stub entity rows across dia/gov/ops; the local Ollama model scored each with a verdict + a verbatim evidence quote. Ollama PROPOSES only — you decide. Confirm applies the proposal (a "dismiss" soft-retires the row reversibly; a row still referenced by child records routes to a conflict card instead of retiring — never a hard delete). Keep leaves the row untouched. Every verdict is recorded (won’t re-ask) with a reversible ledger entry.' },
   naming_hygiene_review: { title: 'Naming hygiene — rename / link',
     intro: 'W8 U5 hygiene. A deterministic filter flagged entity names that are ABBREVIATED (Prtnrs, Mgmt, Hldgs…) or an ADDRESS mis-entered as a name. Two fixes: a RENAME expands the abbreviation (deterministic dictionary expansions are unambiguous and one-click bulk-confirmable; ambiguous tokens were judged by Ollama in context), or a LINK attaches an address-named entity to its property (with a fill-blanks display name from the property owner). PROPOSES only — you decide. Confirm applies the rename (reversible ledger + provenance; a canonical-name collision routes to a conflict, never a silent clobber) or the property link; Keep leaves the row untouched. Every verdict is recorded (won’t re-ask).' },
+  reachability_harvest_review: { title: 'Contact reachability — internal harvest',
+    intro: 'W9.2 data-connectedness. Domain contacts (dia 71% / gov 68%) are missing an email AND a phone; this lane fills the blank from sources LCC ALREADY HOLDS. A DETERMINISTIC fill (arm=deterministic) is arithmetic — the SAME person\'s synced SF record (matched by identity key, not name-fuzz) carries the value, confidence 1.0, one-click bulk-confirmable. An LLM fill (arm=llm) was attributed from an intake snapshot naming this person, and carries a VERBATIM quote containing the value (a value not in the quote is dropped). PROPOSES only — you decide. Confirm runs the fill-blanks writer (domain contacts email/phone + provenance, reversible; a now-populated field routes to a conflict, never a clobber); Keep leaves it untouched. External acquisition (SOS/deed) is W9.1, not this lane.' },
   w8_u3_link_review: { title: 'Ownership links — Ollama proposals',
     intro: 'W8 U3 connection-propagation. Ollama proposed an ownership link from a real signal: a CHAIN proposal fills a missing owner→parent/developer edge for a property (source = a deed/OM/registry evidence quote), or a DIFFERENT-PEOPLE finding flags that two email-sharing person records are NOT the same person (a shared mailbox). Each card shows the proposed link + role, the confidence, and the VERBATIM evidence quote + its source. Ollama PROPOSES only — you decide. Confirm runs the deterministic edge writer (entity_relationships + provenance, recorded in w8_u3_link_apply_log so it is reversible; a same-person email proposal routes to the resolver, never auto-merged); Reject keeps the records untouched. Every verdict is recorded (won’t re-ask).' },
   agency_risk_action: { title: 'Agency risk → disposition',
@@ -562,6 +564,29 @@ function _fedCardHTML(it, i, isNext) {
       actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — rename</button>'
         + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — leave name</button>';
     }
+  } else if (_dcFedType === 'reachability_harvest_review') {
+    // W9.2: a contact-reachability fill proposal. Deterministic (arm=deterministic,
+    // arithmetic exact-identity, confidence 1.0) or LLM-attributed (verbatim quote).
+    // Confirm runs the fill-blanks writer; Keep leaves it untouched.
+    const det = (c.arm === 'deterministic');
+    const nm = c.contact_name || '(unnamed contact)';
+    const conf = (c.confidence != null && isFinite(Number(c.confidence))) ? Number(c.confidence) : null;
+    const badges = '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge">' + esc(c.field || '') + '</span>'
+      + (det ? '<span class="q-badge type">deterministic</span>' : '<span class="q-badge">ollama</span>')
+      + (conf != null ? '<span class="q-badge">conf ' + conf.toFixed(2) + '</span>' : '') + '</div>';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(nm)
+      + ' <span style="opacity:.6">&rarr;</span> ' + esc(String(c.proposed_value || '?')) + '</span>' + badges + '</div>'
+      + (c.owner_name ? '<div class="q-item-meta">Owner: ' + esc(String(c.owner_name)) + '</div>' : '')
+      + (det
+          ? '<div class="q-item-meta">Exact-identity donor: <b>' + esc(String(c.evidence_source || '')) + '</b> (same person, arithmetic fill).</div>'
+          : (c.evidence_quote ? '<div class="q-item-meta">Evidence: <b>' + esc(String(c.evidence_quote)) + '</b>'
+              + (c.evidence_source ? ' <span style="opacity:.6">— ' + esc(String(c.evidence_source)) + '</span>' : '') + '</div>' : ''))
+      + (c.reason ? '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.reason)) + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.7">Proposes only — confirm to fill the blank ' + esc(c.field || 'field')
+        + ' (reversible; a now-populated field routes to a conflict), or keep untouched.</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — fill ' + esc(c.field || 'value') + '</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — leave blank</button>';
   } else if (_dcFedType === 'w8_u3_link_review' && c.conflict) {
     // Prompt 77: an ambiguous_entity_match conflict — the deterministic writer
     // found ≥2 existing entities sharing the proposed canonical name and refused
@@ -726,6 +751,15 @@ async function renderFederatedLane(type, view) {
         + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkHygieneRenames()">Confirm all ' + detN + ' deterministic rename' + (detN === 1 ? '' : 's') + '</button></div></div>';
     }
   }
+  // W9.2 (Prompt 88): bulk-confirm the DETERMINISTIC (arm=deterministic, arithmetic
+  // exact-identity, confidence 1.0) reachability fills only — never the LLM cards.
+  if (type === 'reachability_harvest_review') {
+    var detFills = items.filter(function (it) { var c = it.context || {}; return c.arm === 'deterministic'; }).length;
+    if (detFills > 0) {
+      html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Deterministic exact-identity fills (arithmetic)</span>'
+        + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkReachabilityFills()">Confirm all ' + detFills + ' deterministic fill' + (detFills === 1 ? '' : 's') + '</button></div></div>';
+    }
+  }
   _dcFedType = type;
   _dcFedArr = items.slice();
   items.forEach(function (it, ix) { html += _fedCardHTML(it, ix, ix === 0); });
@@ -823,6 +857,39 @@ async function dcFedBulkHygieneRenames() {
   showToast('Renamed: ' + done + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
 }
 window.dcFedBulkHygieneRenames = dcFedBulkHygieneRenames;
+
+// W9.2 (Prompt 88): bulk-confirm the DETERMINISTIC reachability fills shown in the
+// reachability_harvest_review lane. Each confirm fill-blanks the domain contact's
+// email/phone from an exact-identity donor (arithmetic, confidence 1.0) — reversible
+// (reachability_harvest_apply_log). LLM cards are filtered out (per-card gate).
+async function dcFedBulkReachabilityFills() {
+  if (_dcFedType !== 'reachability_harvest_review') return;
+  var pending = (_dcFedArr || []).map(function (it, ix) { return { it: it, ix: ix }; })
+    .filter(function (p) {
+      var c = p.it.context || {};
+      if (c.arm !== 'deterministic') return false;
+      var r = document.getElementById('dc-f' + p.ix); return r && !r.classList.contains('resolved');
+    });
+  if (!pending.length) { showToast('No deterministic fills to confirm', 'info'); return; }
+  var ok = (typeof lccConfirm === 'function')
+    ? await lccConfirm('Confirm ' + pending.length + ' deterministic reachability fill' + (pending.length === 1 ? '' : 's') + '?\n\nEach copies an email/phone from the SAME person\'s synced record (exact identity match). Fill-blanks only; reversible via the ledger.')
+    : (typeof confirm === 'function' ? confirm('Confirm ' + pending.length + ' fills?') : true);
+  if (!ok) return;
+  var done = 0, failed = 0;
+  for (var k = 0; k < pending.length; k++) {
+    var p = pending[k];
+    var res = await opsApi('/api/decision-verdict', {
+      method: 'POST', body: JSON.stringify({ type: 'reachability_harvest_review', subject: p.it, verdict: 'confirm', payload: {} }),
+    });
+    var row = document.getElementById('dc-f' + p.ix);
+    if (res.ok && res.data && res.data.ok) { done++; if (row) { row.classList.add('resolved'); row.style.opacity = '0'; } }
+    else { failed++; }
+  }
+  document.querySelectorAll('#reviewConsoleContent .q-item.resolved[id^="dc-f"]').forEach(function (n) { if (n.parentNode) n.remove(); });
+  _dcAdvanceFed();
+  showToast('Filled: ' + done + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+}
+window.dcFedBulkReachabilityFills = dcFedBulkReachabilityFills;
 
 async function dcImplausibleCorrect(i) {
   const it = _dcFedArr[i]; if (!it) return;

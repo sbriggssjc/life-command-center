@@ -88,6 +88,40 @@ export function projectRentAtDate({
   };
 }
 
+// ── Convention resolver ─────────────────────────────────────────────────────
+
+/**
+ * Resolve the tenant lease convention (bump %/interval) from the DATA table
+ * `tenant_lease_conventions` — the single source of the escalation shape.
+ * NO hardcoded projection default lives in this module anymore (Rent
+ * Intelligence Engine, Phase 2): the generic-fallback row ('*') supplies the
+ * value the retired 0.10/60 literal used to hardcode.
+ *
+ * @returns {Promise<{bumpPct:number, bumpIntervalMonths:number,
+ *   tenantCanonical:string, source:string}>}
+ */
+export async function resolveTenantConvention(tenant, asOf, domainQuery) {
+  if (typeof domainQuery !== 'function') {
+    throw new Error('domainQuery function is required');
+  }
+  const res = await domainQuery(DOMAIN, 'POST', 'rpc/dia_resolve_lease_convention', {
+    p_tenant: tenant || null,
+    p_as_of: asOf || null,
+  });
+  const row = res.ok && Array.isArray(res.data) ? res.data[0] : null;
+  if (!row || row.bump_pct == null) {
+    // The RPC always returns the '*' fallback, so a null here means the DB is
+    // unreachable — surface that rather than silently re-introducing a literal.
+    throw new Error('tenant_lease_conventions unavailable — cannot resolve projection convention');
+  }
+  return {
+    bumpPct: Number(row.bump_pct),
+    bumpIntervalMonths: Math.round(Number(row.bump_interval_years) * 12),
+    tenantCanonical: row.tenant_canonical,
+    source: row.source,
+  };
+}
+
 // ── Recalc entry point ──────────────────────────────────────────────────────
 
 /**
@@ -111,7 +145,7 @@ export async function recalculateSaleCapRates(propertyId, domainQuery) {
 
   const propRes = await domainQuery(DOMAIN, 'GET',
     `properties?property_id=eq.${encodeURIComponent(propertyId)}` +
-    `&select=anchor_rent,anchor_rent_date,anchor_rent_source,` +
+    `&select=anchor_rent,anchor_rent_date,anchor_rent_source,tenant,operator,` +
     `lease_commencement,lease_bump_pct,lease_bump_interval_mo&limit=1`
   );
   if (!propRes.ok) {
@@ -125,6 +159,18 @@ export async function recalculateSaleCapRates(propertyId, domainQuery) {
 
   const confidence = prop.anchor_rent_source === 'lease_confirmed' ? 'high' : 'medium';
   const rentSource = `projected_from_${prop.anchor_rent_source || 'om_confirmed'}`;
+
+  // Resolve the escalation shape from tenant_lease_conventions (Phase 2): a
+  // documented per-property bump on the property row still wins (evidence >
+  // model); otherwise the tenant convention supplies it. The retired 0.10/60
+  // literal is gone — the '*' generic-fallback row is the only default now.
+  const convention = await resolveTenantConvention(
+    prop.tenant || prop.operator,
+    prop.lease_commencement || prop.anchor_rent_date,
+    domainQuery
+  );
+  const bumpPct = prop.lease_bump_pct != null ? Number(prop.lease_bump_pct) : convention.bumpPct;
+  const bumpIntervalMonths = prop.lease_bump_interval_mo || convention.bumpIntervalMonths;
 
   // Filter out incomplete sale rows at the DB level so we never PATCH
   // cap_rate_confidence / rent_source on a row that is missing the inputs
@@ -163,8 +209,8 @@ export async function recalculateSaleCapRates(propertyId, domainQuery) {
         anchorRent:         Number(prop.anchor_rent),
         anchorDate:         prop.anchor_rent_date,
         targetDate:         sale.sale_date,
-        bumpPct:            prop.lease_bump_pct != null ? Number(prop.lease_bump_pct) : 0.10,
-        bumpIntervalMonths: prop.lease_bump_interval_mo || 60,
+        bumpPct:            bumpPct,
+        bumpIntervalMonths: bumpIntervalMonths,
         leaseCommencement:  prop.lease_commencement,
       });
     } catch (err) {

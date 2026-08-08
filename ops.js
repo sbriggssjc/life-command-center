@@ -1875,6 +1875,10 @@ var _DC_FEDERATED = new Set([
   // Deterministic dictionary renames are bulk-confirmable. Keep in sync with
   // admin.js FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
   'naming_hygiene_review',
+  // W9.2 (Prompt 88): contact-reachability internal-harvest proposals. Source =
+  // v_reachability_harvest_review_open; confirm runs the fill-blanks writer (domain
+  // contacts email/phone + provenance, reversible reachability_harvest_apply_log).
+  'reachability_harvest_review',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1948,6 +1952,8 @@ async function renderReviewConsolePage() {
     if (u3Lane && typeof u3Lane.count === 'number') dc['w8_u3_link_review'] = u3Lane.count;
     const u5Lane = res.data.lanes.find(function (l) { return l.key === 'naming_hygiene_review'; });
     if (u5Lane && typeof u5Lane.count === 'number') dc['naming_hygiene_review'] = u5Lane.count;
+    const w92Lane = res.data.lanes.find(function (l) { return l.key === 'reachability_harvest_review'; });
+    if (w92Lane && typeof w92Lane.count === 'number') dc['reachability_harvest_review'] = w92Lane.count;
   }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
@@ -1979,6 +1985,7 @@ async function renderReviewConsolePage() {
     { dt: 'junk_entity_review', label: 'Junk entities — Ollama pre-screen', open: "renderFederatedLane('junk_entity_review')" },
     { dt: 'w8_u3_link_review', label: 'Ownership links — Ollama proposals', open: "renderFederatedLane('w8_u3_link_review')" },
     { dt: 'naming_hygiene_review', label: 'Naming hygiene — rename / link', open: "renderFederatedLane('naming_hygiene_review')" },
+    { dt: 'reachability_harvest_review', label: 'Contact reachability — internal harvest', open: "renderFederatedLane('reachability_harvest_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },

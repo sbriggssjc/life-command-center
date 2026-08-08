@@ -199,6 +199,7 @@ app.all('/api/junk-prescreen-tick', (req, res) => { req.query._route = 'junk-pre
 app.all('/api/naming-hygiene-tick', (req, res) => { req.query._route = 'naming-hygiene-tick'; adminHandler(req, res); });
 app.all('/api/dup-pair-tick', (req, res) => { req.query._route = 'dup-pair-tick'; adminHandler(req, res); });
 app.all('/api/link-propagation-tick', (req, res) => { req.query._route = 'link-propagation-tick'; adminHandler(req, res); });
+app.all('/api/reachability-harvest-tick', (req, res) => { req.query._route = 'reachability-harvest-tick'; adminHandler(req, res); });
 app.all('/api/systemic-findings-tick', (req, res) => { req.query._route = 'systemic-findings-tick'; adminHandler(req, res); });
 app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
 app.all('/api/fl-sos-enrich-link', (req, res) => { req.query._route = 'fl-sos-enrich-link'; adminHandler(req, res); });
