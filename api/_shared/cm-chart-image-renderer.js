@@ -2277,7 +2277,7 @@ function buildChartConfig(chart, brand) {
           o.scales.x = {
             type: 'time',
             time: { unit: 'year' },
-            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            ticks: { color: '#191919', font: { family: 'Calibri', size: 9 } },
             grid: { display: false },
           };
           return o;
@@ -2351,7 +2351,7 @@ function buildChartConfig(chart, brand) {
             min: xMin,
             max: xMax,
             title: { display: true, text: axisTitle, color: '#6A748C', font: { family: 'Calibri', size: 10 } },
-            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            ticks: { color: '#191919', font: { family: 'Calibri', size: 9 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;
@@ -2811,7 +2811,7 @@ function buildChartConfig(chart, brand) {
             type: 'linear', position: 'bottom', min: xMin, max: xMax,
             title: { display: true, text: 'Firm Lease Term Remaining at Sale (Years)',
                      color: '#6A748C', font: { family: 'Calibri', size: 10 } },
-            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            ticks: { color: '#191919', font: { family: 'Calibri', size: 9 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;
