@@ -2601,10 +2601,16 @@ async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
       { 'Prefer': 'return=representation,resolution=merge-duplicates' }
     );
 
-    // If upsert fails, try plain insert (may be first time)
+    // If upsert fails, retry via the (property_id, file_name) dedup path.
+    // Prompt 81 (item 2): a bare INSERT here aborted with 23505 (uix_prop_doc)
+    // on a re-ingest; use on_conflict merge so a known row folds into the
+    // dedup path, and suppress the handled duplicate from the failure surface.
     if (!r.ok) {
-      console.warn(`[doc-links] upsert failed for ${fileName} (${r.status}), trying plain insert`);
-      r = await domainQuery(domain, 'POST', 'property_documents', row);
+      console.warn(`[doc-links] upsert failed for ${fileName} (${r.status}), retrying via dedup merge`);
+      r = await domainQuery(domain, 'POST',
+        'property_documents?on_conflict=property_id,file_name', row,
+        { Prefer: 'return=representation,resolution=merge-duplicates' },
+        { suppressFailureCodes: ['23505'] });
     }
 
     if (r.ok) {
@@ -2681,6 +2687,84 @@ async function registerExternalListingPages(domain, propertyId, metadata) {
     console.log(`[external-pages] ${normDomain}/${propertyId}: ${registered} registered / ${skipped} skipped`);
   }
   return { registered, skipped };
+}
+
+// ── Prompt 81 (items 2 & 5): dedup-respect contact writers ──────────────────
+// contacts carries GLOBAL partial-unique indexes on email/phone plus a name
+// key. The sidebar deliberately INSERTs a fresh person when its name-affinity
+// check rejects a firm-pool-email match (findExisting), but the email/phone is
+// globally unique, so that INSERT is guaranteed to abort with 23505
+// (contacts_email_idx / contacts_phone_idx) — the row was simply LOST and the
+// failure logged (~1,600/mo). These helpers fold the collision into the
+// existing row (R37 dedup-respect): resolve the row by the colliding key and
+// fill-blanks-patch the NON-unique descriptive fields only, so the recovery
+// write can never itself re-collide. Handled duplicates are suppressed from
+// the ingest_write_failures surface.
+
+// Non-unique, safe-to-fill descriptive columns (email/phone/name are unique-ish
+// and never written on a recovery path).
+function _contactFillFields(col) {
+  return ['company', 'title', 'website', 'address', 'city', 'state', col.role];
+}
+
+async function insertContactOrReuse(domain, col, row) {
+  const r = await domainQuery(domain, 'POST', 'contacts', row, {},
+    { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+      label: 'upsertSidebarContacts:insert' });
+  if (r.ok) {
+    const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+    return { ok: true, reused: false, id: inserted?.[col.id] ?? null };
+  }
+  if (String(r?.data?.code) !== '23505') return { ok: false, reused: false, id: null, data: r.data };
+  // Identify the colliding unique key from the PG error details, e.g.
+  //   "Key (contact_email)=(a@b.com) already exists."
+  const details = String(r?.data?.details || '');
+  const m = details.match(/Key \(([^)]+)\)=\(/);
+  const collidedCol = m ? m[1] : null;
+  let filter = null;
+  if (collidedCol === col.email && row[col.email]) filter = `${col.email}=eq.${encodeURIComponent(row[col.email])}`;
+  else if (collidedCol === col.phone && row[col.phone]) filter = `${col.phone}=eq.${encodeURIComponent(row[col.phone])}`;
+  else if (row[col.name]) filter = `${col.name}=eq.${encodeURIComponent(row[col.name])}`;
+  if (!filter) return { ok: false, reused: false, id: null, data: r.data };
+  const found = await domainQuery(domain, 'GET', `contacts?${filter}&select=*&limit=1`);
+  if (!found.ok || !found.data?.length) return { ok: false, reused: false, id: null, data: r.data };
+  const existing = found.data[0];
+  const existingId = existing[col.id];
+  const patch = {};
+  for (const f of _contactFillFields(col)) {
+    if (f && row[f] != null && row[f] !== '' && (existing[f] == null || existing[f] === '')) {
+      patch[f] = row[f];
+    }
+  }
+  if (Object.keys(patch).length) {
+    patch.updated_at = new Date().toISOString();
+    patch.data_source = row.data_source || 'costar_sidebar';
+    await domainQuery(domain, 'PATCH', `contacts?${col.id}=eq.${existingId}`, patch, {},
+      { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+        label: 'upsertSidebarContacts:collisionReuse' }).catch(() => {});
+  }
+  return { ok: true, reused: true, id: existingId ?? null };
+}
+
+// PATCH an existing contact, tolerating a 23505 when the patch sets a unique
+// column (email/phone) whose value already belongs to a DIFFERENT row. On
+// collision, retry without the unique columns (fill only descriptive fields) —
+// fill-blanks discipline says we should not clobber another contact's identity
+// anyway. Handled collisions are suppressed from the failure surface.
+async function patchContactSafe(domain, col, existingId, patch, label) {
+  let res = await domainQuery(domain, 'PATCH', `contacts?${col.id}=eq.${existingId}`, patch, {},
+    { label, callerFile: 'sidebar-pipeline.js', suppressFailureCodes: ['23505'] });
+  if (!res.ok && String(res?.data?.code) === '23505') {
+    const { [col.email]: _e, [col.phone]: _p, [col.name]: _n, ...safe } = patch;
+    if (Object.keys(safe).length) {
+      res = await domainQuery(domain, 'PATCH', `contacts?${col.id}=eq.${existingId}`, safe, {},
+        { label: `${label}:deconflict`, callerFile: 'sidebar-pipeline.js',
+          suppressFailureCodes: ['23505'] });
+    } else {
+      res = { ok: true };
+    }
+  }
+  return res;
 }
 
 async function upsertSidebarContacts(domain, propertyId, entity, metadata, provCollect) {
@@ -2867,10 +2951,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
             console.warn('[upsertSidebarContacts] field-priority filter failed:', err?.message);
             return patch;
           });
-          await domainPatch(domain,
-            `contacts?${col.id}=eq.${existingId}`, filteredPatch,
-            'upsertSidebarContacts:personUpdate'
-          );
+          await patchContactSafe(domain, col, existingId, filteredPatch,
+            'upsertSidebarContacts:personUpdate');
           // Provenance must mirror what was actually patched. The PATCH
           // path doesn't touch the name column (matched-by-email rows
           // already have an authoritative name), so don't claim we
@@ -2891,12 +2973,13 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
             [col.role]:  role,
             data_source: 'costar_sidebar',
           };
-          const r = await domainQuery(domain, 'POST', 'contacts', row);
-          if (r.ok) {
-            count++;
-            const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-            // INSERT path actually wrote name + role — record those.
-            collectContactProv(inserted?.[col.id], {
+          const res = await insertContactOrReuse(domain, col, row);
+          if (res.ok) {
+            if (!res.reused) count++;
+            // INSERT path actually wrote name + role — record those. A reuse
+            // fold only fill-blanks-patched descriptive fields, so don't claim
+            // a name/email write on that path.
+            collectContactProv(res.id, res.reused ? {} : {
               [col.name]: person.name.trim(),
               [col.email]: email, [col.phone]: phone, company,
               [col.role]: role,
@@ -2918,10 +3001,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
         if (phone) patch[col.phone] = phone;
         if (company) patch.company = company;
         if (roleStr) patch[col.role] = roleStr;
-        await domainPatch(domain,
-          `contacts?${col.id}=eq.${existingId}`, patch,
-          'upsertSidebarContacts:personUpdate'
-        );
+        await patchContactSafe(domain, col, existingId, patch,
+          'upsertSidebarContacts:personUpdate');
         // Same as the gov branch: dia PATCH path doesn't touch the name
         // column on existing rows. Don't fabricate name-write provenance.
         const provFields = {};
@@ -2940,11 +3021,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           [col.role]:  roleStr,
           data_source: 'costar_sidebar',
         };
-        const r = await domainQuery(domain, 'POST', 'contacts', row);
-        if (r.ok) {
-          count++;
-          const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-          collectContactProv(inserted?.[col.id], {
+        const res = await insertContactOrReuse(domain, col, row);
+        if (res.ok) {
+          if (!res.reused) count++;
+          collectContactProv(res.id, res.reused ? {} : {
             [col.name]: person.name.trim(),
             [col.email]: email, [col.phone]: phone, company,
             [col.role]: roleStr,
@@ -3001,10 +3081,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           if (ent.address) patch.address = ent.address;
           if (ent.city)    patch.city = ent.city;
           if (ent.state)   patch.state = ent.state;
-          await domainPatch(domain,
-            `contacts?${col.id}=eq.${existingId}`, patch,
-            'upsertSidebarContacts:entityUpdate'
-          );
+          await patchContactSafe(domain, col, existingId, patch,
+            'upsertSidebarContacts:entityUpdate');
           collectContactProv(existingId, {
             [col.name]: ent.name.trim(),
             [col.email]: email, [col.phone]: phone,
@@ -3025,11 +3103,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
             state:       ent.state || null,
             data_source: 'costar_sidebar',
           };
-          const r = await domainQuery(domain, 'POST', 'contacts', row);
-          if (r.ok) {
-            count++;
-            const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-            collectContactProv(inserted?.[col.id], {
+          const res = await insertContactOrReuse(domain, col, row);
+          if (res.ok) {
+            if (!res.reused) count++;
+            collectContactProv(res.id, res.reused ? {} : {
               [col.name]: ent.name.trim(),
               [col.email]: email, [col.phone]: phone,
               [col.role]: mappedRole, website,
@@ -3054,10 +3131,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
         if (ent.city)    patch.city = ent.city;
         if (ent.state)   patch.state = ent.state;
         if (roleStr)     patch[col.role] = roleStr;
-        await domainPatch(domain,
-          `contacts?${col.id}=eq.${existingId}`, patch,
-          'upsertSidebarContacts:entityUpdate'
-        );
+        await patchContactSafe(domain, col, existingId, patch,
+          'upsertSidebarContacts:entityUpdate');
         collectContactProv(existingId, {
           [col.name]: ent.name.trim(),
           [col.email]: email, [col.phone]: phone,
@@ -3078,11 +3153,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           state:       ent.state || null,
           data_source: 'costar_sidebar',
         };
-        const r = await domainQuery(domain, 'POST', 'contacts', row);
-        if (r.ok) {
-          count++;
-          const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-          collectContactProv(inserted?.[col.id], {
+        const res = await insertContactOrReuse(domain, col, row);
+        if (res.ok) {
+          if (!res.reused) count++;
+          collectContactProv(res.id, res.reused ? {} : {
             [col.name]: ent.name.trim(),
             [col.email]: email, [col.phone]: phone,
             [col.role]: roleStr, website,
@@ -8579,7 +8653,9 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
       ...addrFields,
     });
 
-    const result = await domainQuery(domain, 'POST', 'recorded_owners', ownerData);
+    const result = await domainQuery(domain, 'POST', 'recorded_owners', ownerData,
+      {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+        label: 'upsertDomainOwners:ensureRecordedOwner' });
     if (result.ok && result.data) {
       const created = Array.isArray(result.data) ? result.data[0] : result.data;
       const id = created?.recorded_owner_id || null;
@@ -8611,15 +8687,41 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
     // pre-fetch and this POST. Re-query by the dedup column, cache, and reuse
     // the existing UUID — same semantics as the pre-fetch cache hit.
     if (result.status === 409 && result.data?.code === '23505') {
-      const stateForLookup = addrFields.state || (addrFields.contact_info && addrFields.contact_info.state) || null;
-      const lookupParams = domain === 'government'
-        ? `canonical_name=eq.${encodeURIComponent(normalizedName)}` +
-          (stateForLookup ? `&state=eq.${encodeURIComponent(stateForLookup)}` : '&state=is.null')
-        : `normalized_name=eq.${encodeURIComponent(normalizedName)}`;
-      const refetch = await domainQuery(domain, 'GET',
-        `recorded_owners?${lookupParams}&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
-      if (refetch.ok && refetch.data?.length) {
-        const existingId = refetch.data[0].recorded_owner_id;
+      // Prompt 81 (item 2): the pre-fetch cache and the fallback refetch key on
+      // the normalized/canonical column, but the unique CONSTRAINT that fired
+      // is on the RAW name (dia recorded_owners_name_key) or (canonical_name,
+      // state) (gov uq_recorded_owners_canonical). When the stored normalized
+      // value diverges from the current normalization (an owner written by
+      // another path with older normalization), the normalized refetch misses
+      // and the known row is "lost". Refetch by the EXACT colliding key parsed
+      // from the Postgres error first, then fall back to the prior logic.
+      let existingId = null;
+      const details = String(result.data?.details || '');
+      const km = details.match(/Key \(([^)]+)\)=\(([^)]*)\)/);
+      if (km) {
+        const cols = km[1].split(',').map(s => s.trim());
+        // A single-column key value can itself contain ", " (e.g. "Brandon
+        // Square, LLC") — only split the value list for a genuine composite key.
+        const vals = cols.length > 1 ? km[2].split(', ').map(s => s.trim()) : [km[2]];
+        const parts = cols.map((c, i) => {
+          const v = vals[i];
+          return (v === undefined || v === '') ? `${c}=is.null` : `${c}=eq.${encodeURIComponent(v)}`;
+        });
+        const byKey = await domainQuery(domain, 'GET',
+          `recorded_owners?${parts.join('&')}&select=recorded_owner_id&limit=1`);
+        if (byKey.ok && byKey.data?.length) existingId = byKey.data[0].recorded_owner_id;
+      }
+      if (!existingId) {
+        const stateForLookup = addrFields.state || (addrFields.contact_info && addrFields.contact_info.state) || null;
+        const lookupParams = domain === 'government'
+          ? `canonical_name=eq.${encodeURIComponent(normalizedName)}` +
+            (stateForLookup ? `&state=eq.${encodeURIComponent(stateForLookup)}` : '&state=is.null')
+          : `normalized_name=eq.${encodeURIComponent(normalizedName)}`;
+        const refetch = await domainQuery(domain, 'GET',
+          `recorded_owners?${lookupParams}&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
+        if (refetch.ok && refetch.data?.length) existingId = refetch.data[0].recorded_owner_id;
+      }
+      if (existingId) {
         ownerIds.set(normalizedName, existingId);
         return existingId;
       }
@@ -8891,15 +8993,23 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
             state: ro.state || null,
             owner_type: 'investor',
           });
-          const toResult = await domainQuery(domain, 'POST', 'true_owners', toData);
+          const toResult = await domainQuery(domain, 'POST', 'true_owners', toData,
+            {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+              label: 'upsertDomainOwners:recordedToTrue' });
           if (toResult.ok && toResult.data) {
             const created = Array.isArray(toResult.data) ? toResult.data[0] : toResult.data;
             trueOwnerId = created?.true_owner_id || null;
-          } else if (toResult.status === 409 && toResult.data?.code === '23505') {
-            // C4 race: another writer just landed the same true_owner. Re-fetch by key.
-            const refetch = await domainQuery(domain, 'GET',
+          } else if (String(toResult.data?.code) === '23505') {
+            // C4 race: another writer landed the same true_owner. Re-fetch by the
+            // normalized key, then (Prompt 81 item 2) fall back to the RAW name
+            // the true_owners_name_key constraint is actually on.
+            let refetch = await domainQuery(domain, 'GET',
               `true_owners?normalized_name=eq.${encodeURIComponent(normalizedName)}` +
               `&merged_into_true_owner_id=is.null&select=true_owner_id&limit=1`);
+            if (!(refetch.ok && refetch.data?.length)) {
+              refetch = await domainQuery(domain, 'GET',
+                `true_owners?name=eq.${encodeURIComponent(ro.name)}&select=true_owner_id&limit=1`);
+            }
             if (refetch.ok && refetch.data?.length) {
               trueOwnerId = refetch.data[0].true_owner_id;
             }
@@ -9805,9 +9915,10 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
       // incoming owner is created fresh and the fuzzy existing owner is filed to
       // entity_match_candidates (the W3.2 owner-reconcile lane) for a human merge.
       const createFreshTrueOwner = async () => {
+        const canonical = owner.name.toUpperCase();
         const r = await domainQuery('government', 'POST', 'true_owners', {
           name:           owner.name,
-          canonical_name: owner.name.toUpperCase(),
+          canonical_name: canonical,
           entity_type:    'buyer',
           contact_info:   JSON.stringify({
             address: owner.address || null,
@@ -9815,10 +9926,23 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
             state:   owner.state   || null,
             phone:   owner.phone   || null,
           }),
-        });
-        return r.ok && r.data
-          ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
-          : null;
+        }, {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+          label: 'ensureTrueOwner:createFresh' });
+        if (r.ok && r.data) {
+          return (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id;
+        }
+        // Prompt 81 (item 2): a bounded candidate fetch (leading-token ilike,
+        // limit 40) or a strict-core divergence can miss an existing row whose
+        // canonical_name is identical, so the "create fresh" POST collides on
+        // uq_true_owners_canonical. Fold into the existing row instead of losing
+        // it: refetch by the exact canonical_name that collided.
+        if (String(r?.data?.code) === '23505') {
+          const back = await domainQuery('government', 'GET',
+            `true_owners?canonical_name=eq.${encodeURIComponent(canonical)}` +
+            `&merged_into_true_owner_id=is.null&select=true_owner_id&limit=1`);
+          if (back.ok && back.data?.length) return back.data[0].true_owner_id;
+        }
+        return null;
       };
 
       const incomingCore = govOwnerStrictCoreJS(owner.name);
@@ -9899,10 +10023,22 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
       is_prospect:       true,
       updated_at:        new Date().toISOString(),
     });
-    const r = await domainQuery('dialysis', 'POST', 'true_owners', trueOwnerData);
-    return r.ok && r.data
-      ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
-      : null;
+    const r = await domainQuery('dialysis', 'POST', 'true_owners', trueOwnerData,
+      {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+        label: 'ensureTrueOwner:dia' });
+    if (r.ok && r.data) {
+      return (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id;
+    }
+    // Prompt 81 (item 2): the pre-insert lookup keys on normalized_name, but the
+    // unique constraint (true_owners_name_key) is on the RAW name. When the
+    // stored normalized_name diverges, the lookup misses and the POST collides.
+    // Fold into the existing row: refetch by the exact raw name.
+    if (String(r?.data?.code) === '23505') {
+      const back = await domainQuery('dialysis', 'GET',
+        `true_owners?name=eq.${encodeURIComponent(owner.name)}&select=true_owner_id&limit=1`);
+      if (back.ok && back.data?.length) return back.data[0].true_owner_id;
+    }
+    return null;
   }
 
   // Write true buyer
@@ -11484,16 +11620,40 @@ async function upsertGovListings(propertyId, entity, metadata) {
     var _existingActiveId = existingId;  // eslint-disable-line no-var
   }
 
-  // Upsert using the compound unique index. If no Active row matched above,
-  // this INSERTs; otherwise the PATCH above already ran and this becomes a
-  // no-op conflict-merge against the row we just updated.
-  const result = !(typeof _existingActiveId !== 'undefined' && _existingActiveId)
-    ? await domainQuery('government', 'POST',
-        'available_listings?on_conflict=property_id,listing_source,listing_status,listing_date',
-        record,
-        { Prefer: 'return=representation,resolution=merge-duplicates' }
-      )
-    : { ok: true };
+  // Insert the new listing. If an Active row matched above, the PATCH already
+  // ran and this is a no-op.
+  //
+  // Prompt 81 (item 4): the compound unique index
+  // available_listings_property_source_status_date_uniq is a PARTIAL index
+  // (WHERE property_id, listing_source, listing_status, listing_date ALL IS NOT
+  // NULL). PostgREST cannot infer a partial index from a bare on_conflict list,
+  // so the former on_conflict upsert aborted with 42P10 on EVERY new-listing
+  // INSERT reached here (223 gov failures, 0 rows actually written). The
+  // activeLookup pre-check above already handles the common dedup case, so a
+  // plain INSERT is correct on this path. On the rare concurrent-insert race
+  // that trips the partial unique index (23505), re-converge onto the active
+  // row and PATCH it — folding the collision into the dedup path (R37) — and
+  // suppress the handled duplicate from the failure surface.
+  let result;
+  if (typeof _existingActiveId !== 'undefined' && _existingActiveId) {
+    result = { ok: true };
+  } else {
+    result = await domainQuery('government', 'POST', 'available_listings', record,
+      { Prefer: 'return=representation' }, { suppressFailureCodes: ['23505'] });
+    if (!result.ok && String(result?.data?.code) === '23505') {
+      const raceLookup = await domainQuery('government', 'GET',
+        `available_listings?property_id=eq.${propertyId}` +
+        `&is_active=eq.true` +
+        `&select=listing_id&order=listing_date.desc.nullslast&limit=1`
+      );
+      if (raceLookup.ok && raceLookup.data?.length) {
+        const { property_id: _pidRace, ...patchRace } = record;
+        result = await domainPatch('government',
+          `available_listings?listing_id=eq.${raceLookup.data[0].listing_id}`,
+          patchRace, 'upsertGovListings:raceMerge');
+      }
+    }
+  }
   if (!result.ok) return { count: 0, insertedListingId: null };
 
   // Post-insert check: if a closed sale already exists for this property
