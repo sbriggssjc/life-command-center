@@ -2270,17 +2270,47 @@ function _dcCardHTML(it, isNext) {
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
   } else if (it.decision_type === 'match_disambiguation') {
     const cands = Array.isArray(c.candidates) ? c.candidates : [];
+    // Prompt 80: the Ollama pre-rank assist (metadata.assist) annotates — never
+    // decides. Show each candidate's assist rank/confidence/reason inline and
+    // offer a one-click "assist agrees" confirm that rides the SAME pick path.
+    const assist = (it.metadata && typeof it.metadata === 'object') ? it.metadata.assist : null;
+    const assistByKey = {};
+    if (assist && Array.isArray(assist.ranking)) {
+      assist.ranking.forEach(function (r) {
+        assistByKey[String(r.domain || '') + ':' + String(r.property_id == null ? '' : r.property_id)] = r;
+      });
+    }
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Intake ' + (c.intake_id || ''))) + '</span>'
       + (c.tenant ? '<div class="q-item-badges"><span class="q-badge">' + esc(c.tenant) + '</span></div>' : '') + '</div>'
       + '<div class="q-item-meta">The matcher found ' + cands.length + ' candidate propert' + (cands.length === 1 ? 'y' : 'ies')
       + ' above threshold. Pick the right one, or create a new property.</div>';
+    if (assist) {
+      const ra = String(assist.recommended_action || '').replace(/_/g, ' ');
+      const tc = assist.top_confidence == null ? '' : ' · top ' + Math.round(Number(assist.top_confidence || 0) * 100) + '%';
+      body += '<div class="q-item-meta clean-assist"><span class="q-badge type">Ollama assist: ' + esc(ra || 'ranked') + tc
+        + (assist.model ? ' · ' + esc(assist.model) : '') + '</span> ' + esc(assist.overall_reason || '') + '</div>';
+    }
     cands.forEach(function (cand) {
       const pid = String(cand.property_id == null ? '' : cand.property_id);
+      const ar = assistByKey[String(cand.domain || '') + ':' + pid];
+      const arTag = ar ? ' <span class="q-badge">assist #' + (Number(ar.rank) || '?') + ' · '
+        + Math.round(Number(ar.confidence || 0) * 100) + '%</span>' : '';
       body += '<div class="q-item-meta">• <b>' + esc(cand.domain || '') + '</b> #' + esc(pid)
-        + ' — ' + esc(cand.address || '') + (cand.tenant ? ' (' + esc(cand.tenant) + ')' : '')
-        + ' <button class="q-action" onclick="dcPickCandidate(' + id + ',\'' + esc(cand.domain || '') + '\',\'' + esc(pid) + '\')">Pick this →</button></div>';
+        + ' — ' + esc(cand.address || '') + (cand.tenant ? ' (' + esc(cand.tenant) + ')' : '') + arTag
+        + ' <button class="q-action" onclick="dcPickCandidate(' + id + ',\'' + esc(cand.domain || '') + '\',\'' + esc(pid) + '\')">Pick this →</button>'
+        + (ar && ar.reason ? '<div class="q-item-meta" style="margin-left:1em;opacity:.8">' + esc(ar.reason) + '</div>' : '')
+        + '</div>';
     });
-    actions = '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_property\')">None — create property</button>'
+    // "Assist agrees" one-click — the SAME human verdict path (pick / create_property).
+    let assistAction = '';
+    if (assist && assist.recommended_action === 'pick' && assist.top_pick && assist.top_pick.property_id != null) {
+      assistAction = '<button class="q-action primary" onclick="dcPickCandidate(' + id + ',\''
+        + esc(assist.top_pick.domain || '') + '\',\'' + esc(String(assist.top_pick.property_id)) + '\')">Assist agrees — pick #1 ✓</button>';
+    } else if (assist && assist.recommended_action === 'create_property') {
+      assistAction = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'create_property\')">Assist: none match — create ✓</button>';
+    }
+    actions = assistAction
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_property\')">None — create property</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
   } else if (it.decision_type === 'llc_research_dead') {
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.search_name || c.recorded_owner_id || 'Owner LLC') + '</span>'

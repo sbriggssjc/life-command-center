@@ -51,6 +51,10 @@ import {
   validateFigures, renderFindingsDoc, renderFixUnitStubs,
 } from './_shared/systemic-findings.js';
 import {
+  buildMatchDisambigPrompt, parseAssistJson, normalizeAssistRanking,
+  cardFromDecision, assistAgreement,
+} from './_shared/match-disambig-assist.js';
+import {
   NAMING_HYGIENE_TARGETS, findHygieneTarget, hygieneSubjectRef, parseHygieneSubjectRef,
   hygieneClass, hygieneNameHash, hygieneScoredKeyFor, planAbbreviationProposal,
   planAddressLinkProposal, normalizeAddressForMatch, buildAbbrevExpansionPrompt,
@@ -181,6 +185,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
     case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
+    case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -1348,6 +1353,166 @@ async function handleOllamaCleanAssistTick(req, res) {
     details: summary,
   });
   return res.status(200).json({ ok: true, ...summary });
+}
+
+// ============================================================================
+// PROMPT 80 — MATCH-DISAMBIGUATION PRE-RANK ASSIST TICK
+// ============================================================================
+// W8 consumption aid for the dead match_disambiguation lane (1,120 open, zero
+// decided). A nightly Ollama pass ranks each card's ≤5 candidate properties
+// best-first and stores the ranking as an ANNOTATION (metadata.assist) via the
+// metadata-only SQL writer lcc_annotate_match_disambig_assist. It NEVER writes a
+// verdict — the human verdict path (handleDecisionVerdict match_disambiguation
+// branch) is unchanged; the assist only sorts the lane + shows inline hints + a
+// one-click "assist agrees" confirm. Doctrine: LLM annotates, human decides.
+//
+//   GET  /api/match-disambig-assist-tick          -> counts (open, unannotated)
+//   GET  /api/match-disambig-assist-tick?score=1  -> inline sample ranking sheet
+//                                                    (NO writes — dry-run)
+//   POST /api/match-disambig-assist-tick          -> annotate one bounded, resumable
+//                                                    batch (flag-gated; no-op OFF)
+// ============================================================================
+const MATCH_ASSIST_BATCH_SIZE = Math.max(1, parseInt(process.env.MATCH_ASSIST_BATCH_SIZE || '20', 10));
+const MATCH_ASSIST_BUDGET_MS = Math.max(5000, parseInt(process.env.MATCH_ASSIST_BUDGET_MS || '120000', 10));
+const MATCH_ASSIST_INLINE_N = Math.max(1, parseInt(process.env.MATCH_ASSIST_INLINE_N || '5', 10));
+
+function matchDisambigAssistEnabled(flagRow) {
+  const env = String(process.env.MATCH_DISAMBIG_ASSIST || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchMatchDisambigAssistFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.MATCH_DISAMBIG_ASSIST&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+async function recordMatchDisambigAssistHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'match_disambig_assist', p_check_name: 'match_disambig_assist',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Open match_disambiguation cards whose assist annotation is missing
+// (metadata->>assist IS NULL) — the resume cursor. Already-annotated cards drop
+// out on their own, so successive nightly ticks advance without a separate ledger.
+// Ordered by rank_value (candidate count) then age so the drain is deterministic.
+async function fetchUnannotatedMatchDisambigCards(limit) {
+  const path = 'lcc_decisions?select=id,subject_ref,context,rank_value,created_at'
+    + '&decision_type=eq.match_disambiguation&status=eq.open'
+    + '&metadata->>assist=is.null'
+    + '&order=rank_value.desc.nullslast,created_at.asc&limit=' + Math.max(1, limit);
+  const r = await opsQuery('GET', path);
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+async function annotateMatchDisambigCard(decision, sourceRunId) {
+  const card = cardFromDecision(decision);
+  if (!card.candidates.length) {
+    return { ok: false, skipped: 'no_candidates', decision_id: decision.id };
+  }
+  const prompt = buildMatchDisambigPrompt(card);
+  const promptHash = createHash('sha256').update(prompt).digest('hex');
+  const ai = await invokeExtractionAI({ prompt, surface: 'match_disambig_assist' });
+  const parsed = parseAssistJson(ai?.data?.response || '');
+  const assist = normalizeAssistRanking(parsed, card, {
+    model: ai?.data?.model || null,
+    provider: ai?.provider || null,
+    at: new Date().toISOString(),
+  });
+  assist.source_run_id = sourceRunId;
+  assist.prompt_hash = promptHash;
+  assist.parsed_ok = !!parsed;
+  return { ok: true, assist, decision_id: decision.id, subject_ref: decision.subject_ref, parsed_ok: !!parsed };
+}
+
+async function handleMatchDisambigAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchMatchDisambigAssistFlag();
+  const enabled = matchDisambigAssistEnabled(flag);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(MATCH_ASSIST_BATCH_SIZE), 10)));
+
+  // Honest open + unannotated counts (the lane-drain visibility).
+  const openCntR = await opsQuery('GET', 'lcc_decisions?select=id&status=eq.open&decision_type=eq.match_disambiguation&limit=1', undefined, { countMode: 'exact' });
+  const unCntR = await opsQuery('GET', 'lcc_decisions?select=id&status=eq.open&decision_type=eq.match_disambiguation&metadata->>assist=is.null&limit=1', undefined, { countMode: 'exact' });
+  const openCount = (openCntR.ok && typeof openCntR.count === 'number') ? openCntR.count : null;
+  const unannotated = (unCntR.ok && typeof unCntR.count === 'number') ? unCntR.count : null;
+
+  // ---- GET dry-run --------------------------------------------------------
+  if (req.method === 'GET') {
+    const wantSample = req.query.score === '1' || req.query.score === 'true';
+    const out = { ok: true, enabled, flag_state: flag?.state || 'missing', limit,
+      open_cards: openCount, unannotated, surface: 'match_disambig_assist' };
+    if (!wantSample) return res.status(200).json(out);
+    // Inline sample sheet — annotate up to N cards in memory, NO writes.
+    const sampleN = Math.min(limit, MATCH_ASSIST_INLINE_N);
+    const cards = await fetchUnannotatedMatchDisambigCards(sampleN);
+    const sourceRunId = 'p80dry_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    const samples = [];
+    const scan = await scoreWithBudget(cards, async (d) => {
+      try {
+        const a = await annotateMatchDisambigCard(d, sourceRunId);
+        samples.push(a.ok
+          ? { decision_id: d.id, subject_ref: d.subject_ref, parsed_ok: a.parsed_ok,
+              recommended_action: a.assist.recommended_action, top_pick: a.assist.top_pick,
+              top_confidence: a.assist.top_confidence, ranking: a.assist.ranking }
+          : { decision_id: d.id, skipped: a.skipped });
+        return a;
+      } catch (e) { samples.push({ decision_id: d.id, error: e?.message || String(e) }); return null; }
+    }, { maxN: sampleN, budgetMs: MATCH_ASSIST_BUDGET_MS });
+    out.mode = 'dry_run';
+    out.sampled = scan.scored;
+    out.samples = samples;
+    out.note = 'Inline sample only — NO annotations written. POST (flag ON) writes metadata.assist.';
+    return res.status(200).json(out);
+  }
+
+  // ---- POST apply (flag-gated) --------------------------------------------
+  if (!enabled) {
+    await recordMatchDisambigAssistHealth({ status: 'amber', count: 0,
+      lastError: 'MATCH_DISAMBIG_ASSIST feature flag is off',
+      details: { enabled: false, flag_state: flag?.state || 'missing', open_cards: openCount, unannotated } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, open_cards: openCount, unannotated });
+  }
+
+  const sourceRunId = 'p80_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  const cards = await fetchUnannotatedMatchDisambigCards(limit);
+  const summary = { source_run_id: sourceRunId, open_cards: openCount, unannotated,
+    candidates: cards.length, annotated: 0, failed: 0, skipped: 0 };
+  const scan = await scoreWithBudget(cards, async (d) => {
+    try {
+      const a = await annotateMatchDisambigCard(d, sourceRunId);
+      if (!a.ok) { summary.skipped += 1; return a; }
+      const wr = await opsQuery('POST', 'rpc/lcc_annotate_match_disambig_assist',
+        { p_decision_id: d.id, p_assist: a.assist });
+      if (wr.ok) summary.annotated += 1; else summary.failed += 1;
+      return a;
+    } catch (e) {
+      summary.failed += 1;
+      console.warn('[match-disambig-assist] annotate failed', d.id, e?.message || e);
+      return null;
+    }
+  }, { maxN: limit, budgetMs: MATCH_ASSIST_BUDGET_MS });
+  summary.scored = scan.scored;
+  summary.budget_exhausted = scan.budget_exhausted;
+  summary.remaining_unscored = scan.remaining_unscored;
+
+  await recordMatchDisambigAssistHealth({
+    status: summary.failed ? 'amber' : 'green',
+    count: summary.annotated,
+    lastError: summary.failed ? `${summary.failed} annotation(s) failed in ${sourceRunId}` : null,
+    details: summary,
+  });
+  return res.status(200).json({ ok: true, mode: 'apply', ...summary });
 }
 
 // ============================================================================
@@ -3400,7 +3565,7 @@ async function fetchSystemicFindingsInputs() {
   const one = async (path) => { const d = await rows(path); return d[0] || null; };
 
   const [ingestClusters, flowClusters, windows, chainRollup, chainGaps,
-    extractionMix, junkVerdicts, dupDisp, matchSeeders, u3Health] = await Promise.all([
+    extractionMix, junkVerdicts, dupDisp, matchSeeders, matchAssistAcc, u3Health] = await Promise.all([
     rows('v_lcc_w8_u4_ingest_failure_clusters?select=domain,http_status,label,cnt,cnt_30d,last_seen&order=cnt.desc'),
     rows('v_lcc_w8_u4_flow_failure_clusters?select=flow_name,error_kind,error_code,cnt,cnt_30d,last_seen&order=cnt.desc'),
     one('v_lcc_w8_u4_failure_windows?select=iwf_total,iwf_30d,frf_total,frf_30d,frf_unresolved'),
@@ -3410,6 +3575,7 @@ async function fetchSystemicFindingsInputs() {
     rows('v_lcc_w8_u4_junk_verdicts?select=status,cnt'),
     rows('v_lcc_w8_u4_dup_dispositions?select=status,cnt'),
     rows('v_lcc_w8_u4_match_label_seeders?select=seeder,verdict,cnt&order=cnt.desc'),
+    rows('v_lcc_w8_u4_match_assist_accuracy?select=period,measured,agreed,disagreed&order=period.desc'),
     one('v_lcc_w8_u3_link_health?select=details'),
   ]);
 
@@ -3439,6 +3605,7 @@ async function fetchSystemicFindingsInputs() {
     precision: { deal_dropped: dealDropped, u3_dropped: u3Dropped,
       u3_open: Number(u3d.open_proposals) || 0, u3_applied: Number(u3d.applied_total) || 0 },
     lanes: { junk: junkVerdicts, dup: dupDisp, labels: matchSeeders },
+    match_assist: matchAssistAcc,
     naming_hygiene: namingHygiene,
     extraction: extractionMix || {},
   };
@@ -5232,10 +5399,17 @@ async function handleDecisionsList(req, res) {
   // Seeded lane: workable top-N from lcc_decisions ranked by $ value; universe
   // count returned separately so the UI can demote it to a subtitle.
   const selectCols = 'id,decision_type,status,subject_entity_id,subject_domain,'
-    + 'subject_property_id,subject_ref,question,context,rank_value,created_at';
+    + 'subject_property_id,subject_ref,question,context,metadata,rank_value,created_at';
+  // Prompt 80: the match_disambiguation lane sorts by the Ollama assist's top
+  // confidence FIRST (metadata.assist_top_conf; unannotated ⇒ SQL NULL ⇒ last),
+  // so the high-confidence easy calls surface first for momentum. Every other
+  // seeded lane keeps the $-value-then-age order.
+  const orderClause = (type === 'match_disambiguation')
+    ? 'metadata->assist_top_conf.desc.nullslast,rank_value.desc.nullslast,created_at.asc'
+    : 'rank_value.desc.nullslast,created_at.asc';
   const itemsPath = 'lcc_decisions?select=' + selectCols
     + '&status=eq.open&decision_type=eq.' + pgFilterVal(type)
-    + '&order=rank_value.desc.nullslast,created_at.asc'
+    + '&order=' + orderClause
     + '&limit=' + limit + '&offset=' + offset;
   const [itemsR, countR] = await Promise.all([
     opsQuery('GET', itemsPath),
@@ -7652,6 +7826,20 @@ async function handleDecisionVerdict(req, res) {
     if (decision.decision_type === 'match_disambiguation') {
       const intakeId = c.intake_id
         || (decision.subject_ref ? String(decision.subject_ref).replace(/^match_disambig:/, '') : null);
+      // Prompt 80 self-measuring loop: record agree/disagree vs the Ollama
+      // assist's top pick (metadata.assist_agreed) so the U4 report can measure
+      // assist accuracy per month. Best-effort — NEVER blocks the human verdict.
+      const _assist = (decision.metadata && typeof decision.metadata === 'object')
+        ? decision.metadata.assist : null;
+      const recordAssistAgreement = async (humanPick) => {
+        if (!_assist) return;
+        const ag = assistAgreement(_assist, humanPick);
+        if (!ag.measured) return;
+        try {
+          await opsQuery('POST', 'rpc/lcc_record_match_assist_agreement',
+            { p_decision_id: decisionId, p_agreed: ag.agreed, p_detail: ag });
+        } catch (_e) { /* measurement is best-effort */ }
+      };
       if (verdict === 'pick') {
         const dom = payload.domain === 'dia' ? 'dialysis' : payload.domain === 'gov' ? 'government' : null;
         const propId = payload.property_id != null ? String(payload.property_id) : null;
@@ -7672,12 +7860,14 @@ async function handleDecisionVerdict(req, res) {
         if (!sp.ok) { await recordEffectFailure({ pick: 'match_written_status_patch_failed', error: sp.data }); return res.status(502).json({ error: 'pick_status_failed', detail: sp.data }); }
         await record('pick', 'decided', { domain: payload.domain, property_id: propId },
           { match: 'manual_disambiguation', domain: payload.domain, property_id: propId });
+        await recordAssistAgreement({ action: 'pick', domain: payload.domain, property_id: propId });
         await emitIntakeMatchFeedback({ intakeId, verdictLabel: 'pick', pickPropId: propId, pickDomain: payload.domain });
         return res.status(200).json({ ok: true, verdict: 'pick',
           next: { action: 'intake_promote', intake_id: intakeId, domain: payload.domain, property_id: propId } });
       }
       if (verdict === 'create_property') {
         await record('create_property', 'decided', payload, { handoff: 'intake_create_property' });
+        await recordAssistAgreement({ action: 'create_property' });
         await emitIntakeMatchFeedback({ intakeId, fbDecision: 'no_match', verdictLabel: 'create_property' });
         return res.status(200).json({ ok: true, verdict: 'create_property',
           next: { action: 'intake_create_property', intake_id: intakeId } });
