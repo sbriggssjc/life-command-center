@@ -178,6 +178,52 @@ export async function scoreWithBudget(candidates, scoreOne, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// W8 U1 windowed scan (Prompt 84). U1 was the only unit still FULL-scanning all
+// ~128k rows across 7 targets every invocation (no scan cursor — U5 got one in
+// Prompt 83, U2 in 68), so the scan ate the whole invocation budget and the
+// scoring stage got nothing (a nightly `scan` batch with 0 scored). These two
+// PURE helpers port the 83 pattern back to U1: a bounded scan window with a
+// budget split that GUARANTEES scoring its slice, and a resumable keyset cursor.
+// ---------------------------------------------------------------------------
+
+// Split the whole-invocation wall-clock so the SCAN gets a bounded share and the
+// SCORING stage is guaranteed its slice. Returns the timestamp the scan must stop
+// by: scan may use at most min(scanBudgetMs, tickBudgetMs - minScoreBudgetMs),
+// never negative — so a runaway 7-target scan can never starve scoring again.
+export function computeScanDeadline(startMs, opts = {}) {
+  const start = Number.isFinite(startMs) ? startMs : 0;
+  const tick = Number.isFinite(opts.tickBudgetMs) ? opts.tickBudgetMs : Infinity;
+  const scan = Number.isFinite(opts.scanBudgetMs) ? opts.scanBudgetMs : tick;
+  const reserve = Number.isFinite(opts.minScoreBudgetMs) ? Math.max(0, opts.minScoreBudgetMs) : 0;
+  // The scan's share of the tick budget, after reserving scoring's floor.
+  const scanShare = Math.max(0, Math.min(scan, tick - reserve));
+  return start + scanShare;
+}
+
+// Scoring's remaining wall-clock at scoring time: whatever is left in the tick
+// budget, but never below the reserved floor (so scoring ALWAYS gets its slice
+// even if the scan overran its share). Bounds the ollama-latency-bound loop.
+export function remainingScoreBudget(nowMs, tickDeadlineMs, minScoreBudgetMs) {
+  const rem = (Number.isFinite(tickDeadlineMs) ? tickDeadlineMs : Infinity)
+    - (Number.isFinite(nowMs) ? nowMs : 0);
+  const floor = Number.isFinite(minScoreBudgetMs) ? Math.max(0, minScoreBudgetMs) : 0;
+  return Math.max(floor, rem);
+}
+
+// Resumable keyset cursor (pure). Given how a per-target scan window ended, decide
+// the next cursor: WRAP to the top (null) when the table end was reached OR the
+// window under-filled (so a light table restarts each run instead of stalling),
+// otherwise ADVANCE to the last pk seen so the next run resumes the exact slice.
+// Mirrors U5's pullHygieneCandidatesForTarget wrap logic, extracted for testing.
+export function nextScanCursor({ reachedEnd, truncated, lastPk, startCursor } = {}) {
+  const wrapped = !!reachedEnd || !truncated;
+  if (wrapped) return { nextCursor: null, wrapped: true };
+  const next = lastPk != null ? String(lastPk)
+    : (startCursor != null ? String(startCursor) : null);
+  return { nextCursor: next, wrapped: false };
+}
+
+// ---------------------------------------------------------------------------
 // Deterministic candidate filter (NO LLM — this is an auditable gate). Returns
 // null for a plausibly-real name, or { heuristic, evidence, ... } for a junk
 // candidate. `evidence` is the VERBATIM offending substring (doctrine: every
