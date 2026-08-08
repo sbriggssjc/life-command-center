@@ -50,6 +50,13 @@ import {
   assembleReport, buildNarrativePrompt, parseNarrativeJson, collectComputedValues,
   validateFigures, renderFindingsDoc, renderFixUnitStubs,
 } from './_shared/systemic-findings.js';
+import {
+  NAMING_HYGIENE_TARGETS, findHygieneTarget, hygieneSubjectRef, parseHygieneSubjectRef,
+  hygieneClass, hygieneNameHash, hygieneScoredKeyFor, planAbbreviationProposal,
+  planAddressLinkProposal, normalizeAddressForMatch, buildAbbrevExpansionPrompt,
+  parseExpansionJson, normalizeExpansionProposal, planHygieneApply,
+  isEnqueueableHygieneProposal,
+} from './_shared/naming-hygiene-planner.js';
 import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -170,6 +177,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
+    case 'naming-hygiene-tick':        return handleNamingHygieneTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
     case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
@@ -1035,7 +1043,7 @@ async function handleReviewCounts(req, res) {
   // five folded seeders (mirrors fetchFederatedSource('owner_reconcile').total),
   // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
   const [
-    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict,
+    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open,
   ] = await Promise.all([
     withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
     withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
@@ -1045,6 +1053,8 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(opsCount('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)')),
     // Prompt 77: conflict rows (ambiguous_entity_match) are real, resolvable work.
     withLaneTimeout(opsCount('w8_u3_link_review?status=eq.conflict')),
+    // W8 U5 (Prompt 79): open naming-hygiene proposals (rename + address-link).
+    withLaneTimeout(opsCount('naming_hygiene_review?status=eq.proposed')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -1111,6 +1121,10 @@ async function handleReviewCounts(req, res) {
       count: sum(u3Open, u3Conflict),
       parts: { open_proposals: val(u3Open), conflicts: val(u3Conflict) },
       count_mode: 'exact', status: laneStatus(u3Open, u3Conflict),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'naming_hygiene_review', label: 'Naming hygiene — rename / link',
+      count: sum(u5Open), parts: { open_proposals: val(u5Open) },
+      count_mode: 'exact', status: laneStatus(u5Open),
       href: 'pageDataQuality', tone: '' },
   ];
 
@@ -1846,6 +1860,414 @@ async function handleJunkPrescreenTick(req, res) {
       ? 'dry-run scoring — NO rows written. ⚠️ SUSPECT DISTRIBUTION (' + Math.round(dist.dismiss_share * 100) + '% dismiss > ' + Math.round(dist.threshold * 100) + '%): a POST apply would be REFUSED for this batch.'
       : 'dry-run scoring — NO rows written. Only dismiss/rename/parse_contact proposals persist; keeps are counted (kept_not_enqueued) and dropped. Review, then POST (with the flag ON).')
       + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + JUNK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
+// W8 U5 (Prompt 79, 2026-08-08): naming-hygiene campaign.
+//
+// The rename/normalize unit. U1 classifies + counts the naming-hygiene backlog
+// (known_abbreviation + address_as_name) but never enqueues it; this tick turns
+// it into two proposal types, DETERMINISTIC-FIRST:
+//   * known_abbreviation -> RENAME (unambiguous dictionary expansion, NO LLM;
+//     ambiguous tokens only get the model via invokeExtractionAI).
+//   * address_as_name    -> LINK-DON'T-RENAME (resolve the property at that
+//     address; propose the link + a fill-blanks display name).
+// Proposals land in naming_hygiene_review (the Decision Center federated lane);
+// the verdict is HUMAN. Deterministic renames are bulk-confirmable.
+//
+//   GET  /api/naming-hygiene-tick            -> dry-run report (per-class/domain)
+//   GET  /api/naming-hygiene-tick?score=1    -> dry-run + inline sample (deterministic
+//                                               renames + a few LLM/address, NO writes)
+//   POST /api/naming-hygiene-tick            -> apply: scan + enqueue proposals
+//                                               (flag-gated; no-ops while OFF)
+// ============================================================================
+const HYG_MAX_SCAN = Math.max(2000, parseInt(process.env.NAMING_HYGIENE_MAX_SCAN || '80000', 10));
+// Deterministic renames are cheap (no LLM) — a large nightly batch. LLM-assisted
+// (ambiguous) + address-link resolution are I/O-bound — smaller batches, bounded
+// by a wall-clock budget so one HTTP invocation never outruns the Railway proxy.
+const HYG_DET_BATCH = Math.max(1, parseInt(process.env.NAMING_HYGIENE_DET_BATCH || '50', 10));
+const HYG_LLM_BATCH = Math.max(1, parseInt(process.env.NAMING_HYGIENE_LLM_BATCH || '15', 10));
+const HYG_ADDR_BATCH = Math.max(1, parseInt(process.env.NAMING_HYGIENE_ADDR_BATCH || '25', 10));
+const HYG_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.NAMING_HYGIENE_BUDGET_MS || '120000', 10));
+
+function namingHygieneEnabled(flagRow) {
+  const env = String(process.env.W8_U5_NAMING_HYGIENE || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchNamingHygieneFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U5_NAMING_HYGIENE&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+async function recordNamingHygieneHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'naming_hygiene', p_check_name: 'ollama_naming_hygiene',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Page a target's (pk, name[, domain]) rows and classify each as a naming-hygiene
+// candidate. `domain` is pulled for the entities target so an address_as_name row
+// can be resolved against the right domain's property table.
+async function pullHygieneCandidatesForTarget(target) {
+  const wantDomain = target.table === 'entities';
+  const cols = [target.pkCol, target.nameCol].concat(wantDomain ? ['domain'] : []).join(',');
+  const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
+  const found = [];
+  const perClass = { known_abbreviation: 0, address_as_name: 0, actionable_abbrev: 0, actionable_address: 0 };
+  const PAGE = 1000;
+  let scanned = 0, truncated = false;
+  for (let offset = 0; offset < HYG_MAX_SCAN; offset += PAGE) {
+    const path = target.table + '?select=' + cols + mergedPred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE + '&offset=' + offset;
+    const r = target.domain === 'lcc'
+      ? await opsQuery('GET', path)
+      : await domainQuery(target.domain, 'GET', path);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    scanned += rows.length;
+    for (const row of rows) {
+      const name = row[target.nameCol];
+      const cls = hygieneClass(name);
+      if (!cls) continue;
+      perClass[cls] = (perClass[cls] || 0) + 1;
+      const pk = row[target.pkCol];
+      const base = {
+        domain: target.domain, table: target.table, pk: String(pk),
+        entity_name: name == null ? '' : String(name),
+        row_domain: wantDomain ? (row.domain || null) : target.domain,
+        name_hash: hygieneNameHash(name),
+        hygiene_class: cls,
+        subject_ref: hygieneSubjectRef(target.domain, target.table, pk),
+      };
+      if (cls === 'known_abbreviation') {
+        const plan = planAbbreviationProposal(name);
+        if (!plan.actionable) continue; // e.g. only "Corp" — nothing to expand
+        perClass.actionable_abbrev += 1;
+        found.push({ ...base, plan });
+      } else { // address_as_name
+        perClass.actionable_address += 1;
+        found.push({ ...base, plan: { proposed_action: 'link_property' } });
+      }
+    }
+    if (rows.length < PAGE) break;
+    if (offset + PAGE >= HYG_MAX_SCAN) truncated = true;
+  }
+  if (truncated) console.warn('[naming-hygiene] scan truncated at cap', target.domain, target.table, HYG_MAX_SCAN);
+  return { candidates: found, scanned, truncated, perClass };
+}
+
+// Resolve a domain property for an address-as-name entity. Bounded + conservative:
+// exactly-one normalized-address match resolves; >1 is ambiguous (human picks);
+// 0 is unresolved. Never guesses.
+async function resolveHygieneProperty(domain, addressName) {
+  const d = String(domain || '').toLowerCase();
+  const dom = d === 'dialysis' ? 'dia' : d === 'government' ? 'gov' : d;
+  if (dom !== 'dia' && dom !== 'gov') return { resolved: null, ambiguousCount: 0, skipped: 'domain_unsupported' };
+  const normTarget = normalizeAddressForMatch(addressName);
+  const num = (normTarget.match(/^\d+/) || [])[0];
+  if (!num) return { resolved: null, ambiguousCount: 0 };
+  const path = 'properties?select=property_id,address,recorded_owner_id&address=ilike.'
+    + encodeURIComponent(num + '%') + '&limit=200';
+  let rows = [];
+  try {
+    const r = await domainQuery(dom, 'GET', path);
+    rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  } catch (_e) { return { resolved: null, ambiguousCount: 0, error: true }; }
+  const matches = rows.filter((p) => normalizeAddressForMatch(p.address) === normTarget);
+  if (matches.length === 0) return { resolved: null, ambiguousCount: 0 };
+  if (matches.length > 1) return { resolved: null, ambiguousCount: matches.length };
+  const p = matches[0];
+  let ownerName = null;
+  if (p.recorded_owner_id != null) {
+    try {
+      const orr = await domainQuery(dom, 'GET', 'recorded_owners?select=name&recorded_owner_id=eq.'
+        + encodeURIComponent(p.recorded_owner_id) + '&limit=1');
+      if (orr.ok && Array.isArray(orr.data) && orr.data[0]) ownerName = orr.data[0].name;
+    } catch (_e) { /* owner name is best-effort (fill-blanks); link still proposable */ }
+  }
+  return { resolved: { domain: dom, property_id: p.property_id, address: p.address, owner_name: ownerName }, ambiguousCount: 1 };
+}
+
+// Deterministic scan across every target. Splits candidates into deterministic
+// renames (no LLM), LLM-assisted renames (ambiguous tokens), and address links.
+// Value-gate (Prompt 79): connected entities (relationships/portfolio) rank FIRST
+// — renaming a connected entity improves every surface it appears on.
+async function hygieneScanAll() {
+  const [existing, decided, scoredKeys] = await Promise.all([
+    (async () => {
+      const set = new Set(); const PAGE = 1000;
+      for (let off = 0; ; off += PAGE) {
+        const r = await opsQuery('GET', 'naming_hygiene_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+        const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+        for (const x of rows) if (x.subject_ref) set.add(x.subject_ref);
+        if (rows.length < PAGE) break;
+      }
+      return set;
+    })(),
+    fetchExcludedRefs('naming_hygiene_review').catch(() => new Set()),
+    (async () => {
+      const set = new Set(); const PAGE = 1000;
+      try {
+        for (let off = 0; ; off += PAGE) {
+          const r = await opsQuery('GET', 'naming_hygiene_scored?select=subject_ref,name_hash&order=id.asc&limit=' + PAGE + '&offset=' + off);
+          if (!r.ok) break;
+          const rows = Array.isArray(r.data) ? r.data : [];
+          for (const x of rows) if (x.subject_ref) set.add(x.subject_ref + ':' + (x.name_hash || ''));
+          if (rows.length < PAGE) break;
+        }
+      } catch (_e) { /* degrade gracefully */ }
+      return set;
+    })(),
+  ]);
+  const perDomain = {};
+  const deterministic = [], llm = [], address = [];
+  for (const target of NAMING_HYGIENE_TARGETS) {
+    const key = target.domain + ':' + target.table;
+    let pull;
+    try { pull = await pullHygieneCandidatesForTarget(target); }
+    catch (e) { perDomain[key] = { error: e?.message || String(e), candidates: 0, scanned: 0 }; continue; }
+    const notProposed = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
+    const fresh = selectUnscoredCandidates(
+      notProposed.map((c) => ({ ...c })), scoredKeys,
+    );
+    // Value-rank: connected-first (reuse U1's batched FK-child probe).
+    let connectedSet = new Set();
+    try { connectedSet = await junkConnectedPkSet(target, fresh.map((c) => c.pk)); }
+    catch (_e) { connectedSet = new Set(); }
+    for (const c of fresh) c.connected = connectedSet.has(String(c.pk));
+    fresh.sort((a, b) => (b.connected === true) - (a.connected === true));
+    let detN = 0, llmN = 0, addrN = 0;
+    for (const c of fresh) {
+      if (c.hygiene_class === 'known_abbreviation') {
+        if (c.plan.deterministic) { deterministic.push(c); detN += 1; }
+        else { llm.push(c); llmN += 1; }
+      } else { address.push(c); addrN += 1; }
+    }
+    perDomain[key] = {
+      domain: target.domain, table: target.table,
+      scanned: pull.scanned, candidates: pull.candidates.length,
+      fresh: fresh.length, deterministic: detN, llm_assisted: llmN, address_links: addrN,
+      connected_ranked_first: fresh.filter((c) => c.connected).length,
+      per_class: pull.perClass, truncated: pull.truncated || false,
+    };
+  }
+  return { perDomain, deterministic, llm, address };
+}
+
+function hygieneDomainRollup(perDomain) {
+  const roll = {};
+  for (const v of Object.values(perDomain)) {
+    const d = v.domain || 'unknown';
+    roll[d] = roll[d] || { scanned: 0, candidates: 0, fresh: 0, deterministic: 0, llm_assisted: 0, address_links: 0,
+      known_abbreviation: 0, address_as_name: 0 };
+    roll[d].scanned += v.scanned || 0;
+    roll[d].candidates += v.candidates || 0;
+    roll[d].fresh += v.fresh || 0;
+    roll[d].deterministic += v.deterministic || 0;
+    roll[d].llm_assisted += v.llm_assisted || 0;
+    roll[d].address_links += v.address_links || 0;
+    const pc = v.per_class || {};
+    roll[d].known_abbreviation += pc.known_abbreviation || 0;
+    roll[d].address_as_name += pc.address_as_name || 0;
+  }
+  return roll;
+}
+
+async function upsertHygieneProposal(candidate, proposal, meta) {
+  const body = {
+    subject_ref: candidate.subject_ref,
+    domain: candidate.domain, table_name: candidate.table, pk_value: candidate.pk,
+    entity_name: candidate.entity_name, hygiene_class: candidate.hygiene_class,
+    proposed_action: proposal.proposed_action, proposed_name: proposal.proposed_name || null,
+    proposed_property: proposal.proposed_property || null,
+    deterministic: !!proposal.deterministic, confidence: proposal.confidence != null ? proposal.confidence : 0,
+    evidence_quote: proposal.evidence_quote || null, reason: proposal.reason || null,
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'naming_hygiene_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function recordHygieneScored(scoredRows, sourceRunId) {
+  const rows = (scoredRows || []).map(({ cand, action, enqueued }) => ({
+    subject_ref: cand.subject_ref, domain: cand.domain, table_name: cand.table, pk_value: cand.pk,
+    name_hash: cand.name_hash != null ? cand.name_hash : hygieneNameHash(cand.entity_name),
+    entity_name: cand.entity_name, hygiene_class: cand.hygiene_class,
+    action: action || 'keep', enqueued: !!enqueued, source_run_id: sourceRunId,
+  }));
+  if (!rows.length) return { ok: true, skipped: 'empty' };
+  try {
+    return await opsQuery('POST', 'naming_hygiene_scored?on_conflict=domain,table_name,pk_value,name_hash', rows,
+      { headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+  } catch (e) {
+    console.warn('[naming-hygiene] scored-ledger write failed', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// Build the deterministic-rename proposal object for a candidate (no LLM).
+function hygieneDeterministicProposal(cand) {
+  return {
+    proposed_action: 'rename', proposed_name: cand.plan.proposed_name,
+    deterministic: true, confidence: 1,
+    evidence_quote: cand.plan.evidence, reason: cand.plan.reason,
+  };
+}
+
+async function handleNamingHygieneTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchNamingHygieneFlag();
+  const enabled = namingHygieneEnabled(flag);
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordNamingHygieneHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U5_NAMING_HYGIENE feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u5_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const scan = await hygieneScanAll();
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'naming_hygiene_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { per_domain: scan.perDomain, rollup: hygieneDomainRollup(scan.perDomain),
+            deterministic: scan.deterministic.length, llm: scan.llm.length, address: scan.address.length } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
+      per_domain: hygieneDomainRollup(scan.perDomain),
+      deterministic_available: scan.deterministic.length, llm_available: scan.llm.length,
+      address_available: scan.address.length,
+      proposed_rename_deterministic: 0, proposed_rename_llm: 0, proposed_link: 0,
+      kept_not_enqueued: 0, failed: 0, budget_exhausted: false };
+    const scoredRows = [];
+    const meta = { sourceRunId, scanBatchId };
+
+    // Phase 1 — deterministic renames (NO LLM). Cheap; drain up to HYG_DET_BATCH.
+    for (const cand of scan.deterministic.slice(0, HYG_DET_BATCH)) {
+      const proposal = hygieneDeterministicProposal(cand);
+      try {
+        const wr = await upsertHygieneProposal(cand, proposal, meta);
+        if (wr.ok) { summary.proposed_rename_deterministic += 1; scoredRows.push({ cand, action: 'rename', enqueued: true }); }
+        else { summary.failed += 1; }
+      } catch (e) { summary.failed += 1; console.warn('[naming-hygiene] det write failed', cand.subject_ref, e?.message || e); }
+    }
+
+    // Phase 2 — LLM-assisted renames (ambiguous tokens), budget + batch bounded.
+    const llmRun = await scoreWithBudget(scan.llm, async (cand) => {
+      try {
+        const prompt = buildAbbrevExpansionPrompt({
+          entity_name: cand.entity_name, domain: cand.domain, table: cand.table,
+          ambiguous: cand.plan.ambiguous, partial_expansion: cand.plan.partial_expansion,
+        });
+        const ai = await invokeExtractionAI({ prompt, surface: 'naming_hygiene' });
+        const parsed = parseExpansionJson(ai?.data?.response || '');
+        const norm = normalizeExpansionProposal(parsed, cand);
+        if (norm.action === 'rename' && norm.proposed_name) {
+          const proposal = { proposed_action: 'rename', proposed_name: norm.proposed_name,
+            deterministic: false, confidence: norm.confidence,
+            evidence_quote: cand.plan.evidence, reason: norm.reason };
+          const wr = await upsertHygieneProposal(cand, proposal, { ...meta, provider: ai?.provider || null, model: ai?.data?.model || null });
+          if (wr.ok) { summary.proposed_rename_llm += 1; scoredRows.push({ cand, action: 'rename', enqueued: true }); }
+          else summary.failed += 1;
+        } else {
+          summary.kept_not_enqueued += 1;
+          scoredRows.push({ cand, action: norm.action, enqueued: false });
+        }
+      } catch (e) { summary.failed += 1; console.warn('[naming-hygiene] llm score failed', cand.subject_ref, e?.message || e); }
+      return null;
+    }, { budgetMs: HYG_SCORE_BUDGET_MS, maxN: HYG_LLM_BATCH });
+    summary.budget_exhausted = llmRun.budget_exhausted;
+
+    // Phase 3 — address links (resolve the property; never guess). Bounded.
+    for (const cand of scan.address.slice(0, HYG_ADDR_BATCH)) {
+      try {
+        const resolution = await resolveHygieneProperty(cand.row_domain || cand.domain, cand.entity_name);
+        const plan = planAddressLinkProposal(cand.entity_name, resolution);
+        if (plan.actionable && isEnqueueableHygieneProposal(plan)) {
+          const proposal = { proposed_action: 'link_property', proposed_name: plan.proposed_name || null,
+            proposed_property: plan.proposed_property, deterministic: false, confidence: 0.9,
+            evidence_quote: cand.entity_name, reason: plan.reason };
+          const wr = await upsertHygieneProposal(cand, proposal, meta);
+          if (wr.ok) { summary.proposed_link += 1; scoredRows.push({ cand, action: 'link_property', enqueued: true }); }
+          else summary.failed += 1;
+        } else {
+          summary.kept_not_enqueued += 1;
+          scoredRows.push({ cand, action: plan.proposed_action, enqueued: false });
+        }
+      } catch (e) { summary.failed += 1; console.warn('[naming-hygiene] addr resolve failed', cand.subject_ref, e?.message || e); }
+    }
+
+    await recordHygieneScored(scoredRows, sourceRunId);
+    const totalProposed = summary.proposed_rename_deterministic + summary.proposed_rename_llm + summary.proposed_link;
+    await recordNamingHygieneHealth({ status: summary.failed ? 'amber' : 'green', count: totalProposed,
+      lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', total_proposed: totalProposed, ...summary });
+  }
+
+  // ---- GET dry-run: per-class/per-domain report; ?score=1 adds an inline -----
+  // sample (deterministic renames listed separately from LLM proposals). NEVER writes.
+  const scan = await hygieneScanAll();
+  const rollup = hygieneDomainRollup(scan.perDomain);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    per_target: scan.perDomain, per_domain: rollup,
+    available: { deterministic: scan.deterministic.length, llm_assisted: scan.llm.length, address_links: scan.address.length },
+    // Deterministic renames are the sampleable, no-LLM sheet — shown verbatim.
+    deterministic_sample: scan.deterministic.slice(0, 30).map((c) => ({
+      subject_ref: c.subject_ref, domain: c.domain, table: c.table, connected: c.connected,
+      from: c.entity_name, to: c.plan.proposed_name, evidence: c.plan.evidence })),
+    llm_pending_sample: scan.llm.slice(0, 20).map((c) => ({
+      subject_ref: c.subject_ref, domain: c.domain, table: c.table, connected: c.connected,
+      name: c.entity_name, ambiguous: c.plan.ambiguous })),
+    address_pending_sample: scan.address.slice(0, 20).map((c) => ({
+      subject_ref: c.subject_ref, domain: c.domain, row_domain: c.row_domain, table: c.table,
+      connected: c.connected, name: c.entity_name })),
+    note: 'dry-run — NO rows written. Deterministic renames are unambiguous dictionary expansions (bulk-confirmable). LLM/address samples are un-scored candidates.' };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    // Inline sample: score a few ambiguous renames + resolve a few address links,
+    // NO writes — a sheet Scott can review before flipping the flag.
+    const inlineN = Math.min(20, Math.max(1, parseInt(req.query.n || '6', 10) || 6));
+    const llmProposals = [];
+    await scoreWithBudget(scan.llm, async (cand) => {
+      try {
+        const prompt = buildAbbrevExpansionPrompt({ entity_name: cand.entity_name, domain: cand.domain,
+          table: cand.table, ambiguous: cand.plan.ambiguous, partial_expansion: cand.plan.partial_expansion });
+        const ai = await invokeExtractionAI({ prompt, surface: 'naming_hygiene' });
+        const norm = normalizeExpansionProposal(parseExpansionJson(ai?.data?.response || ''), cand);
+        llmProposals.push({ subject_ref: cand.subject_ref, name: cand.entity_name, ambiguous: cand.plan.ambiguous,
+          ...norm, model_provider: ai?.provider || null, model_name: ai?.data?.model || null });
+      } catch (e) { llmProposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: HYG_SCORE_BUDGET_MS, maxN: inlineN });
+    const addrProposals = [];
+    for (const cand of scan.address.slice(0, inlineN)) {
+      try {
+        const resolution = await resolveHygieneProperty(cand.row_domain || cand.domain, cand.entity_name);
+        addrProposals.push({ subject_ref: cand.subject_ref, name: cand.entity_name,
+          ...planAddressLinkProposal(cand.entity_name, resolution) });
+      } catch (e) { addrProposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
+    }
+    out.llm_proposals = llmProposals;
+    out.address_proposals = addrProposals;
   }
   return res.status(200).json(out);
 }
@@ -3451,6 +3873,12 @@ const FEDERATED_DECISION_TYPES = new Set([
   // confirm -> the deterministic writer creates the entity_relationships edge +
   // provenance (reversible w8_u3_link_apply_log); reject -> kept. NEVER auto-writes.
   'w8_u3_link_review',
+  // W8 U5 (Prompt 79): naming-hygiene proposals. Source = v_naming_hygiene_review_open;
+  // confirm+rename -> name write via the house normalizer (reversible ledger +
+  // provenance); confirm+link_property -> ensureEntityLink asset link + fill-blanks
+  // display name; reject/keep -> close. Deterministic dictionary renames are
+  // bulk-confirmable. NEVER auto-writes.
+  'naming_hygiene_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
@@ -3602,6 +4030,7 @@ function federatedSubjectRef(type, s) {
     // W8 U3: the pre-built subject_ref rides straight through
     // (link:chain:<dom>:<propId>:<gap> | link:pmail:<winnerId>).
     case 'w8_u3_link_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'naming_hygiene_review': return s.subject_ref ? String(s.subject_ref) : null;
   }
   return null;
 }
@@ -3819,6 +4248,35 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = await opsCnt('junk_entity_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'naming_hygiene_review') {
+    // W8 U5: open naming-hygiene proposals. Deterministic dictionary renames
+    // first (bulk-confirmable), then by confidence.
+    const r = await opsQuery('GET', 'v_naming_hygiene_review_open?select=review_id,subject_ref,'
+      + 'domain,table_name,pk_value,entity_name,hygiene_class,proposed_action,proposed_name,'
+      + 'proposed_property,deterministic,confidence,evidence_quote,reason,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: (row.proposed_property && row.proposed_property.property_id != null)
+        ? String(row.proposed_property.property_id) : null,
+      subject_entity_id: null,
+      // deterministic renames rank first (like the view), then by confidence.
+      rank_value: (row.deterministic ? 1e6 : 0) + (Number(row.confidence) || 0),
+      context: {
+        review_id: row.review_id, domain: row.domain, table_name: row.table_name,
+        pk_value: row.pk_value, entity_name: row.entity_name, hygiene_class: row.hygiene_class,
+        proposed_action: row.proposed_action, proposed_name: row.proposed_name,
+        proposed_property: row.proposed_property, deterministic: row.deterministic,
+        confidence: row.confidence, evidence_quote: row.evidence_quote, reason: row.reason,
+        model_provider: row.model_provider, model_name: row.model_name,
+        kind: row.deterministic ? 'deterministic_rename' : (row.proposed_action === 'link_property' ? 'address_link' : 'llm_rename'),
+      },
+    }));
+    out.total = await opsCnt('naming_hygiene_review?status=eq.proposed');
     return out;
   }
 
@@ -5314,6 +5772,168 @@ async function handleDecisionVerdict(req, res) {
       const rr = await record(verdict, decStatus, { plan: plan.action, review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', ...reversal });
+    }
+
+    // ---- naming_hygiene_review (W8 U5 / Prompt 79) ---------------------------
+    // The human verdict on a naming-hygiene proposal. confirm ->
+    //   rename        : write the expanded display name via the house normalizer
+    //                   (entities also recompute canonical_name; a unique-canonical
+    //                   collision routes to conflict — never a silent clobber),
+    //                   record field_provenance (source w8_u5_naming_hygiene) + a
+    //                   reversible ledger row (old name captured).
+    //   link_property : attach the entity to the resolved property via
+    //                   ensureEntityLink (asset identity) + fill-blanks the display
+    //                   name from the property owner. Reversible (link id logged).
+    // reject/keep -> the row is left untouched. NEVER hard-deletes; every outcome
+    // records the lcc_decisions verdict + a naming_hygiene_batch ledger row.
+    if (decision.decision_type === 'naming_hygiene_review') {
+      const parsed = parseHygieneSubjectRef(decision.subject_ref);
+      if (!parsed) return res.status(400).json({ error: 'naming_hygiene_review: unparseable subject_ref' });
+      const revR = await opsQuery('GET', 'naming_hygiene_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'naming_hygiene_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'apply', 'yes', 'rename', 'link']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'naming_hygiene_review: unknown verdict ' + verdict });
+
+      const target = findHygieneTarget(parsed.domain, parsed.table);
+      if (!target) return res.status(400).json({ error: 'naming_hygiene_review: unknown target ' + parsed.domain + ':' + parsed.table });
+      const plan = planHygieneApply({ humanVerdict: humanAction, proposedAction: review.proposed_action });
+      const nowIso = new Date().toISOString();
+      const effects = { plan: plan.action, proposed_action: review.proposed_action, hygiene_class: review.hygiene_class };
+      let reversal = {};
+
+      if (plan.action === 'apply_rename') {
+        const newName = review.proposed_name;
+        if (!newName) return res.status(400).json({ error: 'naming_hygiene_review: rename has no proposed_name' });
+        // Capture the old name (reversal).
+        const selPath = target.table + '?select=' + target.nameCol + '&' + target.pkCol
+          + '=eq.' + encodeURIComponent(review.pk_value) + '&limit=1';
+        const cur = target.domain === 'lcc' ? await opsQuery('GET', selPath) : await domainQuery(target.domain, 'GET', selPath);
+        const oldVal = (cur.ok && Array.isArray(cur.data) && cur.data[0]) ? cur.data[0][target.nameCol] : null;
+        // Ledger apply row FIRST (reversal payload), then the mutation.
+        const led = await opsQuery('POST', 'naming_hygiene_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'applied',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null,
+            reversal: { domain: target.domain, table: target.table, pk_col: target.pkCol, pk: review.pk_value,
+              field: target.nameCol, old_value: oldVal, canonical_col: target.canonicalCol || null },
+            details: { from: oldVal, to: newName, hygiene_class: review.hygiene_class, deterministic: review.deterministic } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        // Build the PATCH body. For LCC-native entities also recompute canonical_name
+        // via the house normalizer; a unique-canonical collision -> conflict (below).
+        const patchBody = { [target.nameCol]: newName };
+        if (target.canonicalCol && target.domain === 'lcc') {
+          try {
+            const nr = await opsQuery('POST', 'rpc/lcc_normalize_entity_name', { p_name: newName });
+            const canon = (nr.ok && typeof nr.data === 'string') ? nr.data
+              : (nr.ok && Array.isArray(nr.data) && typeof nr.data[0] === 'string') ? nr.data[0] : null;
+            if (canon) patchBody[target.canonicalCol] = canon;
+          } catch (_e) { /* normalizer best-effort — name still writes */ }
+        }
+        const patchPath = target.table + '?' + target.pkCol + '=eq.' + encodeURIComponent(review.pk_value);
+        const pr = target.domain === 'lcc'
+          ? await opsQuery('PATCH', patchPath, patchBody)
+          : await domainQuery(target.domain, 'PATCH', patchPath, patchBody);
+        if (!pr.ok) {
+          // A unique-canonical collision (23505) is an ambiguous-name conflict, not
+          // a failure — route to conflict (never clobber another entity's name).
+          const isUnique = /23505|duplicate key|unique/i.test(JSON.stringify(pr.data || ''));
+          if (applyBatchId != null) await opsQuery('PATCH', 'naming_hygiene_batch?batch_id=eq.' + applyBatchId,
+            { status: isUnique ? 'conflict' : 'open', details: { error: 'rename PATCH failed', detail: pr.data } }).catch(() => {});
+          if (isUnique) {
+            await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+              { status: 'conflict', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+            const rr0 = await record(verdict, 'decided', { plan: 'conflict', review_id: review.review_id },
+              { ...effects, error: 'canonical_collision', detail: pr.data });
+            if (!rr0.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr0.data });
+            return res.status(200).json({ ok: true, verdict, action: 'conflict', conflict: true, review_id: review.review_id });
+          }
+          await recordEffectFailure({ ...effects, error: 'rename_write_failed', detail: pr.data });
+          return res.status(502).json({ error: 'hygiene_rename_failed', detail: pr.data });
+        }
+        // Record field_provenance (audit; fsp row registered in-migration so the
+        // unranked view stays clean). Best-effort — the write already landed.
+        try {
+          const provDb = target.provDatabase || (target.domain === 'dia' ? 'dia_db' : target.domain === 'gov' ? 'gov_db' : 'ops');
+          await opsQuery('POST', 'field_provenance', {
+            target_database: provDb, target_table: target.provTable, record_pk_value: String(review.pk_value),
+            field_name: target.nameCol, value: newName, source: 'w8_u5_naming_hygiene',
+            source_run_id: review.source_run_id || 'verdict',
+            confidence: review.confidence != null ? review.confidence : null,
+            recorded_by: user.id || null, decision: 'write',
+            decision_reason: 'W8 U5 human-confirmed naming-hygiene rename', metadata: { review_id: review.review_id },
+          });
+          if (patchBody[target.canonicalCol]) {
+            await opsQuery('POST', 'field_provenance', {
+              target_database: provDb, target_table: target.provTable, record_pk_value: String(review.pk_value),
+              field_name: target.canonicalCol, value: patchBody[target.canonicalCol], source: 'w8_u5_naming_hygiene',
+              source_run_id: review.source_run_id || 'verdict', recorded_by: user.id || null, decision: 'write',
+              decision_reason: 'W8 U5 canonical recompute after confirmed rename', metadata: { review_id: review.review_id },
+            });
+          }
+        } catch (_e) { /* provenance is an audit log — never block the verdict */ }
+        await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+        reversal = { apply_batch_id: applyBatchId, field: target.nameCol, old_value: oldVal };
+        effects.apply_batch_id = applyBatchId;
+        effects.renamed = { from: oldVal, to: newName };
+      } else if (plan.action === 'apply_link') {
+        // address_as_name -> attach the entity to the resolved property (asset
+        // identity) via the ensureEntityLink choke point; fill-blanks the display
+        // name from the property owner. Only meaningful for LCC-native entities.
+        const prop = review.proposed_property || {};
+        if (target.domain !== 'lcc' || !target.propertyLink || prop.property_id == null) {
+          // Not link-applicable here (domain owner/contact rows already carry FK
+          // links) — close as a non-destructive disposition.
+          await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+            { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+          const rr1 = await record(verdict, 'skipped', { plan: 'link_not_applicable', review_id: review.review_id }, effects);
+          if (!rr1.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr1.data });
+          return res.status(200).json({ ok: true, verdict, action: 'link_not_applicable', review_id: review.review_id });
+        }
+        let ws = null; try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
+        const seedFields = {};
+        if (review.proposed_name) seedFields.name = review.proposed_name; // fill-blanks display name
+        let linkRes;
+        try {
+          linkRes = await ensureEntityLink({
+            workspaceId: ws, userId: user.id || null,
+            sourceSystem: prop.domain, sourceType: 'asset', externalId: String(prop.property_id),
+            domain: prop.domain, entityId: review.pk_value, seedFields,
+            metadata: { w8_u5_naming_hygiene: true, source_run_id: review.source_run_id || 'verdict' },
+          });
+        } catch (e) { linkRes = { ok: false, error: e?.message || String(e) }; }
+        if (!linkRes || linkRes.ok === false) {
+          await recordEffectFailure({ ...effects, error: 'link_write_failed', detail: linkRes });
+          return res.status(502).json({ error: 'hygiene_link_failed', detail: linkRes });
+        }
+        const led = await opsQuery('POST', 'naming_hygiene_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'applied',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null,
+            reversal: { kind: 'property_link', entity_id: review.pk_value, property: prop,
+              created_identity: !!linkRes.createdIdentity },
+            details: { property: prop, filled_name: review.proposed_name || null } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+        reversal = { apply_batch_id: applyBatchId, linked_property: prop };
+        effects.apply_batch_id = applyBatchId;
+        effects.linked = { property: prop, created_identity: !!linkRes.createdIdentity };
+      } else { // dismiss_proposal (reject, or confirmed keep/uncertain)
+        await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+          { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+      }
+
+      const decStatus = plan.action === 'dismiss_proposal' ? 'skipped' : 'decided';
+      const rr = await record(verdict, decStatus, { plan: plan.action, review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, ...reversal });
     }
 
     // ---- w8_u3_link_review (W8 U3 / Prompt 69) -------------------------------

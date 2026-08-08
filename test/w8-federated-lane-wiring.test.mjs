@@ -79,6 +79,13 @@ describe('W8 Decision Center federated-lane wiring completeness', () => {
     assert.ok(meta.has('w8_u3_link_review'), 'w8_u3_link_review needs a meta entry');
     assert.ok(branches.has('w8_u3_link_review'), 'w8_u3_link_review needs a render branch');
   });
+
+  it('naming_hygiene_review (W8 U5) specifically is fully wired (regression guard)', () => {
+    assert.ok(members.includes('naming_hygiene_review'), 'naming_hygiene_review must be federated');
+    assert.ok(sublanes.has('naming_hygiene_review'), 'naming_hygiene_review needs a lane-list entry');
+    assert.ok(meta.has('naming_hygiene_review'), 'naming_hygiene_review needs a meta entry');
+    assert.ok(branches.has('naming_hygiene_review'), 'naming_hygiene_review needs a render branch');
+  });
 });
 
 describe('W8 badge add-on counts in /api/review-counts', () => {
@@ -95,6 +102,17 @@ describe('W8 badge add-on counts in /api/review-counts', () => {
     assert.match(adminSrc, /key:\s*'w8_u3_link_review'/, 'review-counts must expose a w8_u3_link_review lane');
     assert.match(adminSrc, /w8_u3_link_review\?status=eq\.proposed&proposed_verdict=in\.\(link_proposal,different_people\)/,
       'w8_u3_link_review lane must count the open proposals');
+  });
+
+  it('exposes a naming_hygiene_review lane (W8 U5) counting open proposals', () => {
+    assert.match(adminSrc, /key:\s*'naming_hygiene_review'/, 'review-counts must expose a naming_hygiene_review lane');
+    assert.match(adminSrc, /naming_hygiene_review\?status=eq\.proposed/,
+      'naming_hygiene_review lane must count the open proposals');
+  });
+
+  it('the DC page overrides the U5 badge from the live review-counts lane', () => {
+    assert.match(opsSrc, /dc\['naming_hygiene_review'\]\s*=\s*u5Lane\.count/,
+      'ops.js must override dc.naming_hygiene_review with the live lane count');
   });
 
   it('the DC page overrides both W8 badges from the live review-counts lanes', () => {

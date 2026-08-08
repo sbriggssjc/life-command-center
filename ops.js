@@ -1869,6 +1869,12 @@ var _DC_FEDERATED = new Set([
   // resolver. Keep in sync with admin.js FEDERATED_DECISION_TYPES
   // (test/decision-center-partition.test.mjs).
   'w8_u3_link_review',
+  // W8 U5 (Prompt 79): naming-hygiene proposals. Source =
+  // v_naming_hygiene_review_open; confirm+rename writes the expanded display name
+  // (reversible + provenance); confirm+link attaches the entity to its property.
+  // Deterministic dictionary renames are bulk-confirmable. Keep in sync with
+  // admin.js FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'naming_hygiene_review',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1940,6 +1946,8 @@ async function renderReviewConsolePage() {
     if (orLane && typeof orLane.count === 'number') dc['owner_reconcile'] = orLane.count;
     const u3Lane = res.data.lanes.find(function (l) { return l.key === 'w8_u3_link_review'; });
     if (u3Lane && typeof u3Lane.count === 'number') dc['w8_u3_link_review'] = u3Lane.count;
+    const u5Lane = res.data.lanes.find(function (l) { return l.key === 'naming_hygiene_review'; });
+    if (u5Lane && typeof u5Lane.count === 'number') dc['naming_hygiene_review'] = u5Lane.count;
   }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
@@ -1970,6 +1978,7 @@ async function renderReviewConsolePage() {
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
     { dt: 'junk_entity_review', label: 'Junk entities — Ollama pre-screen', open: "renderFederatedLane('junk_entity_review')" },
     { dt: 'w8_u3_link_review', label: 'Ownership links — Ollama proposals', open: "renderFederatedLane('w8_u3_link_review')" },
+    { dt: 'naming_hygiene_review', label: 'Naming hygiene — rename / link', open: "renderFederatedLane('naming_hygiene_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },
@@ -2600,6 +2609,8 @@ const _DC_FED_META = {
     intro: 'The W4.3 splink batch’s best Salesforce-account match per owner (gov + dia), value-ranked by owner impact. Link attaches the SF id via the existing owner-sync semantics (never overwrites a different existing id — that renders a three-way conflict card instead); Not a match records the pair distinct. Every verdict writes a labeled pair into entity_match_labels — the hard-negative training data the W4.4 retrain needs. Work them fast; the population is homogeneous (~0.85 probability), so trust your eyes per row.' },
   junk_entity_review: { title: 'Junk entities — Ollama pre-screen',
     intro: 'W8 U1 hygiene. A deterministic filter flagged possible junk / test / gibberish / bookkeeping-stub entity rows across dia/gov/ops; the local Ollama model scored each with a verdict + a verbatim evidence quote. Ollama PROPOSES only — you decide. Confirm applies the proposal (a "dismiss" soft-retires the row reversibly; a row still referenced by child records routes to a conflict card instead of retiring — never a hard delete). Keep leaves the row untouched. Every verdict is recorded (won’t re-ask) with a reversible ledger entry.' },
+  naming_hygiene_review: { title: 'Naming hygiene — rename / link',
+    intro: 'W8 U5 hygiene. A deterministic filter flagged entity names that are ABBREVIATED (Prtnrs, Mgmt, Hldgs…) or an ADDRESS mis-entered as a name. Two fixes: a RENAME expands the abbreviation (deterministic dictionary expansions are unambiguous and one-click bulk-confirmable; ambiguous tokens were judged by Ollama in context), or a LINK attaches an address-named entity to its property (with a fill-blanks display name from the property owner). PROPOSES only — you decide. Confirm applies the rename (reversible ledger + provenance; a canonical-name collision routes to a conflict, never a silent clobber) or the property link; Keep leaves the row untouched. Every verdict is recorded (won’t re-ask).' },
   w8_u3_link_review: { title: 'Ownership links — Ollama proposals',
     intro: 'W8 U3 connection-propagation. Ollama proposed an ownership link from a real signal: a CHAIN proposal fills a missing owner→parent/developer edge for a property (source = a deed/OM/registry evidence quote), or a DIFFERENT-PEOPLE finding flags that two email-sharing person records are NOT the same person (a shared mailbox). Each card shows the proposed link + role, the confidence, and the VERBATIM evidence quote + its source. Ollama PROPOSES only — you decide. Confirm runs the deterministic edge writer (entity_relationships + provenance, recorded in w8_u3_link_apply_log so it is reversible; a same-person email proposal routes to the resolver, never auto-merged); Reject keeps the records untouched. Every verdict is recorded (won’t re-ask).' },
   agency_risk_action: { title: 'Agency risk → disposition',
@@ -3068,6 +3079,39 @@ function _fedCardHTML(it, i, isNext) {
       + '<div class="q-item-meta" style="opacity:.7">Ollama proposes only — confirm to soft-retire (reversible; FK-referenced rows route to a conflict card), or keep.</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — retire junk</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — not junk</button>';
+  } else if (_dcFedType === 'naming_hygiene_review') {
+    // W8 U5: a naming-hygiene proposal. rename => expand the abbreviated display
+    // name; link_property => attach the address-named entity to its property. The
+    // model/deterministic-rule PROPOSED; the human decides.
+    const nm = c.entity_name || '(blank name)';
+    const isLink = (c.proposed_action === 'link_property');
+    const det = !!c.deterministic;
+    const conf = (c.confidence != null && isFinite(Number(c.confidence))) ? Number(c.confidence) : null;
+    const badges = '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge">' + esc(c.table_name || '') + '</span>'
+      + '<span class="q-badge">' + esc(c.hygiene_class || '') + '</span>'
+      + (det ? '<span class="q-badge type">deterministic</span>' : '')
+      + (conf != null && !det ? '<span class="q-badge">conf ' + conf.toFixed(2) + '</span>' : '') + '</div>';
+    if (isLink) {
+      const prop = c.proposed_property || {};
+      body = '<div class="q-item-header"><span class="q-item-title">' + esc(nm) + '</span>' + badges + '</div>'
+        + '<div class="q-item-meta">Address mis-entered as a name — attach to property <b>'
+        + esc(String(prop.domain || '')) + ':' + esc(String(prop.property_id != null ? prop.property_id : '?')) + '</b>'
+        + (prop.address ? ' <span style="opacity:.6">(' + esc(String(prop.address)) + ')</span>' : '') + '</div>'
+        + (c.proposed_name ? '<div class="q-item-meta">Fill display name → <b>' + esc(String(c.proposed_name)) + '</b> (from property owner)</div>' : '')
+        + (c.reason ? '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.reason)) + '</div>' : '')
+        + '<div class="q-item-meta" style="opacity:.7">Proposes only — confirm to link the entity to its property (reversible), or keep.</div>';
+      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — link to property</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep untouched</button>';
+    } else {
+      body = '<div class="q-item-header"><span class="q-item-title">' + esc(nm)
+        + ' <span style="opacity:.6">&rarr;</span> ' + esc(String(c.proposed_name || '?')) + '</span>' + badges + '</div>'
+        + (c.evidence_quote ? '<div class="q-item-meta">Abbreviation: <b>' + esc(String(c.evidence_quote)) + '</b></div>' : '')
+        + (c.reason ? '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.reason)) + '</div>' : '')
+        + '<div class="q-item-meta" style="opacity:.7">Proposes only — confirm to rename (reversible; a canonical collision routes to a conflict), or keep.</div>';
+      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — rename</button>'
+        + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — leave name</button>';
+    }
   } else if (_dcFedType === 'w8_u3_link_review' && c.conflict) {
     // Prompt 77: an ambiguous_entity_match conflict — the deterministic writer
     // found ≥2 existing entities sharing the proposed canonical name and refused
@@ -3222,6 +3266,16 @@ async function renderFederatedLane(type, view) {
     html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Bulk action (safe only)</span>'
       + '<div class="triage-actions"><button class="q-action" onclick="dcFedBulkSafe()">' + esc(bulk.label) + '</button></div></div>';
   }
+  // W8 U5 (Prompt 79): bulk-confirm the UNAMBIGUOUS deterministic dictionary
+  // renames only (they're mechanical — one click per page, not per card). Never
+  // bulks the LLM-judged or address-link cards (they keep their per-card gate).
+  if (type === 'naming_hygiene_review') {
+    var detN = items.filter(function (it) { var c = it.context || {}; return c.deterministic === true && c.proposed_action === 'rename'; }).length;
+    if (detN > 0) {
+      html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Deterministic dictionary renames (unambiguous)</span>'
+        + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkHygieneRenames()">Confirm all ' + detN + ' deterministic rename' + (detN === 1 ? '' : 's') + '</button></div></div>';
+    }
+  }
   _dcFedType = type;
   _dcFedArr = items.slice();
   items.forEach(function (it, ix) { html += _fedCardHTML(it, ix, ix === 0); });
@@ -3285,6 +3339,40 @@ async function dcFedBulkSafe() {
   showToast('Bulk: ' + done + ' handled' + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
 }
 window.dcFedBulkSafe = dcFedBulkSafe;
+
+// W8 U5 (Prompt 79): bulk-confirm the deterministic dictionary renames shown in
+// the naming_hygiene_review lane. Unlike dcFedBulkSafe (record-only), each confirm
+// WRITES the expanded name — but only for UNAMBIGUOUS deterministic renames
+// (ambiguous/LLM + address-link cards are filtered out and keep their per-card
+// gate). Every write is reversible (naming_hygiene_batch ledger).
+async function dcFedBulkHygieneRenames() {
+  if (_dcFedType !== 'naming_hygiene_review') return;
+  var pending = (_dcFedArr || []).map(function (it, ix) { return { it: it, ix: ix }; })
+    .filter(function (p) {
+      var c = p.it.context || {};
+      if (!(c.deterministic === true && c.proposed_action === 'rename')) return false;
+      var r = document.getElementById('dc-f' + p.ix); return r && !r.classList.contains('resolved');
+    });
+  if (!pending.length) { showToast('No deterministic renames to confirm', 'info'); return; }
+  var ok = (typeof lccConfirm === 'function')
+    ? await lccConfirm('Confirm ' + pending.length + ' deterministic dictionary rename' + (pending.length === 1 ? '' : 's') + '?\n\nEach expands an unambiguous abbreviation (e.g. Prtnrs→Partners). Reversible via the ledger.')
+    : (typeof confirm === 'function' ? confirm('Confirm ' + pending.length + ' renames?') : true);
+  if (!ok) return;
+  var done = 0, failed = 0;
+  for (var k = 0; k < pending.length; k++) {
+    var p = pending[k];
+    var res = await opsApi('/api/decision-verdict', {
+      method: 'POST', body: JSON.stringify({ type: 'naming_hygiene_review', subject: p.it, verdict: 'confirm', payload: {} }),
+    });
+    var row = document.getElementById('dc-f' + p.ix);
+    if (res.ok && res.data && res.data.ok) { done++; if (row) { row.classList.add('resolved'); row.style.opacity = '0'; } }
+    else { failed++; }
+  }
+  document.querySelectorAll('#reviewConsoleContent .q-item.resolved[id^="dc-f"]').forEach(function (n) { if (n.parentNode) n.remove(); });
+  _dcAdvanceFed();
+  showToast('Renamed: ' + done + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+}
+window.dcFedBulkHygieneRenames = dcFedBulkHygieneRenames;
 
 async function dcImplausibleCorrect(i) {
   const it = _dcFedArr[i]; if (!it) return;

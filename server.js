@@ -196,6 +196,7 @@ app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'
 app.all('/api/ops-health', (req, res) => { req.query._route = 'ops-health'; adminHandler(req, res); });
 app.all('/api/ollama-clean-assist-tick', (req, res) => { req.query._route = 'ollama-clean-assist-tick'; adminHandler(req, res); });
 app.all('/api/junk-prescreen-tick', (req, res) => { req.query._route = 'junk-prescreen-tick'; adminHandler(req, res); });
+app.all('/api/naming-hygiene-tick', (req, res) => { req.query._route = 'naming-hygiene-tick'; adminHandler(req, res); });
 app.all('/api/dup-pair-tick', (req, res) => { req.query._route = 'dup-pair-tick'; adminHandler(req, res); });
 app.all('/api/link-propagation-tick', (req, res) => { req.query._route = 'link-propagation-tick'; adminHandler(req, res); });
 app.all('/api/systemic-findings-tick', (req, res) => { req.query._route = 'systemic-findings-tick'; adminHandler(req, res); });
