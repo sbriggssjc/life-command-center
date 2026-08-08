@@ -64,6 +64,7 @@ import {
   isEnqueueableHygieneProposal,
   collectAddressNumbers, matchCandidateToProperties,
 } from './_shared/naming-hygiene-planner.js';
+import * as RH from './_shared/reachability-harvest-planner.js';
 import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -187,6 +188,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'naming-hygiene-tick':        return handleNamingHygieneTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
+    case 'reachability-harvest-tick':  return handleReachabilityHarvestTick(req, res);
     case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
@@ -1051,7 +1053,7 @@ async function handleReviewCounts(req, res) {
   // five folded seeders (mirrors fetchFederatedSource('owner_reconcile').total),
   // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
   const [
-    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open,
+    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open,
   ] = await Promise.all([
     withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
     withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
@@ -1063,6 +1065,8 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(opsCount('w8_u3_link_review?status=eq.conflict')),
     // W8 U5 (Prompt 79): open naming-hygiene proposals (rename + address-link).
     withLaneTimeout(opsCount('naming_hygiene_review?status=eq.proposed')),
+    // W9.2 (Prompt 88): open contact-reachability proposals (deterministic + LLM).
+    withLaneTimeout(opsCount('reachability_harvest_review?status=eq.proposed')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -1133,6 +1137,10 @@ async function handleReviewCounts(req, res) {
     { key: 'naming_hygiene_review', label: 'Naming hygiene — rename / link',
       count: sum(u5Open), parts: { open_proposals: val(u5Open) },
       count_mode: 'exact', status: laneStatus(u5Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'reachability_harvest_review', label: 'Contact reachability — internal harvest',
+      count: sum(w92Open), parts: { open_proposals: val(w92Open) },
+      count_mode: 'exact', status: laneStatus(w92Open),
       href: 'pageDataQuality', tone: '' },
   ];
 
@@ -3921,6 +3929,567 @@ async function handleLinkPropagationTick(req, res) {
 }
 
 // ============================================================================
+// W9.2 (Prompt 88) — Contact-reachability INTERNAL harvest tick.
+//   GET  /api/reachability-harvest-tick             -> dry-run report (pool counts)
+//   GET  /api/reachability-harvest-tick?score=1&n=  -> dry-run + inline proposals
+//                                                      (deterministic + LLM; NO writes)
+//   POST /api/reachability-harvest-tick             -> apply: assemble + write
+//                                                      proposals (flag-gated; no-ops OFF)
+// Doctrine: deterministic-first (arm=deterministic, arithmetic exact-identity fills,
+// confidence 1.0, NO LLM) + LLM-attributed (arm=llm, verbatim-quote validator).
+// Proposal-only — a human verdict applies via the fill-blanks writer. Never fabricates.
+// ============================================================================
+const HARVEST_MAX_TARGETS = Math.max(20, parseInt(process.env.HARVEST_MAX_TARGETS || '120', 10));
+const HARVEST_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.HARVEST_SCORE_BUDGET_MS || '150000', 10));
+const HARVEST_LLM_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_LLM_BATCH_SIZE || '15', 10));
+const HARVEST_DET_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_DET_BATCH_SIZE || '100', 10));
+const HARVEST_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.HARVEST_INLINE_N || '6', 10));
+const HARVEST_INTAKE_INDEX_CAP = Math.max(500, parseInt(process.env.HARVEST_INTAKE_INDEX_CAP || '5000', 10));
+const HARVEST_MIN_CONF = (() => {
+  const v = parseFloat(process.env.HARVEST_MIN_CONFIDENCE || String(RH.HARVEST_MIN_CONFIDENCE));
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : RH.HARVEST_MIN_CONFIDENCE;
+})();
+
+function reachabilityHarvestEnabled(flagRow) {
+  const env = String(process.env.W9_2_REACHABILITY_HARVEST || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchReachabilityHarvestFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W9_2_REACHABILITY_HARVEST&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Exclusion set: subject_refs already in reachability_harvest_review (any status).
+async function fetchHarvestKnownSubjects() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'reachability_harvest_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(String(x.subject_ref));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+async function fetchHarvestScoredMarkers() {
+  const set = new Set();
+  try {
+    const r = await opsQuery('GET', 'reachability_harvest_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && Array.isArray(r.data[0].details.scored_markers)) {
+      for (const m of r.data[0].details.scored_markers) if (m) set.add(String(m));
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+function _harvestBlank(v) { return v == null || String(v).trim() === ''; }
+
+// Fetch target contacts (missing BOTH email and phone) for one domain, value-ranked
+// (owner-linked first — a coarse but honest proxy for owner portfolio value; the
+// domain contacts carry no portfolio rollup). Returns normalized target rows.
+async function fetchHarvestTargets(domain, cap) {
+  const d = RH.normDomain(domain);
+  const errors = [];
+  const targets = [];
+  try {
+    const sel = d === 'dia'
+      ? 'contact_id,contact_name,contact_email,contact_phone,sf_contact_id,salesforce_id,true_owner_id,recorded_owner_id,property_id'
+      : 'contact_id,name,email,phone,sf_contact_id,true_owner_id,recorded_owner_id,property_id';
+    const emailCol = RH.domainContactColumn(d, 'email');
+    const phoneCol = RH.domainContactColumn(d, 'phone');
+    // Missing BOTH: email null AND phone null. Ordered owner-linked first.
+    const q = 'contacts?select=' + sel
+      + '&' + emailCol + '=is.null&' + phoneCol + '=is.null'
+      + '&order=true_owner_id.desc.nullslast,property_id.desc.nullslast&limit=' + cap;
+    const r = await domainQuery(d, 'GET', q);
+    if (r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) {
+        const name = d === 'dia' ? row.contact_name : row.name;
+        // Post-filter '' blanks (query only caught NULLs).
+        const emailBlank = _harvestBlank(d === 'dia' ? row.contact_email : row.email);
+        const phoneBlank = _harvestBlank(d === 'dia' ? row.contact_phone : row.phone);
+        if (!emailBlank && !phoneBlank) continue;
+        const missing = [];
+        if (emailBlank) missing.push('email');
+        if (phoneBlank) missing.push('phone');
+        const rankValue = (row.true_owner_id ? 2000000 : 0) + (row.property_id != null ? 1 : 0);
+        targets.push({
+          domain: d, target_contact_id: String(row.contact_id), contact_name: name || null,
+          sf_contact_id: row.sf_contact_id || null, salesforce_id: d === 'dia' ? (row.salesforce_id || null) : null,
+          true_owner_id: row.true_owner_id ? String(row.true_owner_id) : null,
+          property_id: row.property_id != null ? String(row.property_id) : null,
+          missing_fields: missing, rank_value: rankValue,
+        });
+      }
+    } else if (!r.ok) { errors.push({ source: 'targets_' + d, status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+  } catch (e) { errors.push({ source: 'targets_' + d, detail: e?.message || String(e) }); }
+  return { targets: RH.valueGateTargets(targets), errors };
+}
+
+function _harvestErrDetail(data) {
+  if (data == null) return null;
+  if (typeof data === 'string') return data.slice(0, 200);
+  try { return JSON.stringify(data).slice(0, 200); } catch (_e) { return String(data).slice(0, 200); }
+}
+
+// Build the deterministic donor maps (ARM 1) for a target batch — batched in.()
+// lookups over BOTH domains' contacts (an SF contact id is global), NEVER per-row.
+// Returns { bySf: Map(sfId -> {email,phone,contact_id,domain}), bySalesforce: Map,
+//   errors:[], sources:{sf_contact_id,salesforce_id} }.
+async function harvestBuildDonorMaps(targets) {
+  const sfIds = new Set();
+  const salesforceIds = new Set();
+  for (const t of targets) {
+    if (t.sf_contact_id) sfIds.add(String(t.sf_contact_id));
+    if (t.salesforce_id) salesforceIds.add(String(t.salesforce_id));
+  }
+  const bySf = new Map();
+  const bySalesforce = new Map();
+  const errors = [];
+  const sources = { sf_contact_id: 0, salesforce_id: 0 };
+  const ingest = (map, key, donorDomain, email, phone, contactId) => {
+    if (!key) return;
+    const cur = map.get(key) || { email: null, phone: null, contact_id: null, domain: donorDomain };
+    if (!cur.email && RH.looksLikeEmail(email)) { cur.email = RH.normalizeEmail(email); cur.contact_id = String(contactId); cur.domain = donorDomain; }
+    if (!cur.phone && RH.looksLikePhone(phone)) { cur.phone = RH.normalizePhone(phone); cur.contact_id = cur.contact_id || String(contactId); cur.domain = donorDomain; }
+    if (cur.email || cur.phone) map.set(key, cur);
+  };
+  const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+  // Donors from BOTH domains, keyed by the global sf_contact_id.
+  if (sfIds.size) {
+    for (const dom of ['dia', 'gov']) {
+      const emailCol = RH.domainContactColumn(dom, 'email');
+      const phoneCol = RH.domainContactColumn(dom, 'phone');
+      const sel = 'contact_id,sf_contact_id,' + emailCol + ',' + phoneCol;
+      for (const c of chunk([...sfIds], 200)) {
+        try {
+          const inList = c.map((v) => pgFilterVal(v)).join(',');
+          const r = await domainQuery(dom, 'GET', 'contacts?select=' + sel + '&sf_contact_id=in.(' + inList + ')&limit=1000');
+          if (r.ok && Array.isArray(r.data)) {
+            for (const row of r.data) {
+              if (!row.sf_contact_id) continue;
+              ingest(bySf, String(row.sf_contact_id), dom, row[emailCol], row[phoneCol], row.contact_id);
+              sources.sf_contact_id += 1;
+            }
+          } else if (!r.ok) { errors.push({ source: 'donor_sf_' + dom, status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+        } catch (e) { errors.push({ source: 'donor_sf_' + dom, detail: e?.message || String(e) }); }
+      }
+    }
+  }
+  // salesforce_id donors exist only on dia.contacts.
+  if (salesforceIds.size) {
+    for (const c of chunk([...salesforceIds], 200)) {
+      try {
+        const inList = c.map((v) => pgFilterVal(v)).join(',');
+        const r = await domainQuery('dia', 'GET', 'contacts?select=contact_id,salesforce_id,contact_email,contact_phone&salesforce_id=in.(' + inList + ')&limit=1000');
+        if (r.ok && Array.isArray(r.data)) {
+          for (const row of r.data) {
+            if (!row.salesforce_id) continue;
+            ingest(bySalesforce, String(row.salesforce_id), 'dia', row.contact_email, row.contact_phone, row.contact_id);
+            sources.salesforce_id += 1;
+          }
+        } else if (!r.ok) { errors.push({ source: 'donor_salesforce_dia', status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+      } catch (e) { errors.push({ source: 'donor_salesforce_dia', detail: e?.message || String(e) }); }
+    }
+  }
+  return { bySf, bySalesforce, errors, sources };
+}
+
+// Build the LLM-arm intake index (ARM 2) — ONE bounded scan of intake extraction
+// snapshots carrying a party contact detail (owner/seller/broker email+phone),
+// indexed by NORMALIZED party name. NEVER per-row. Returns { index: Map(normName ->
+// [{name, email, phone, quote, intake_id}]), errors, count }.
+async function harvestBuildIntakeIndex() {
+  const index = new Map();
+  const errors = [];
+  let scanned = 0;
+  const PAGE = 1000;
+  const add = (name, email, phone, quote, intakeId) => {
+    const nm = RH.normalizeForMatch(name);
+    if (!nm || nm.length < 4) return;
+    if (!RH.looksLikeEmail(email) && !RH.looksLikePhone(phone)) return;
+    const arr = index.get(nm) || [];
+    arr.push({ name: String(name), email: RH.looksLikeEmail(email) ? RH.normalizeEmail(email) : null,
+      phone: RH.looksLikePhone(phone) ? RH.normalizePhone(phone) : null, quote, intake_id: intakeId });
+    index.set(nm, arr);
+  };
+  try {
+    for (let off = 0; off < HARVEST_INTAKE_INDEX_CAP; off += PAGE) {
+      const r = await opsQuery('GET', 'staged_intake_extractions?select=intake_id,extraction_snapshot'
+        + '&order=created_at.desc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) { errors.push({ source: 'intake', status: r.status || null, detail: _harvestErrDetail(r.data) }); break; }
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const row of rows) {
+        const ex = row.extraction_snapshot;
+        if (!ex || typeof ex !== 'object') continue;
+        scanned += 1;
+        // Each named party with a contact detail becomes an index entry. The quote
+        // is the verbatim span the LLM must copy (name + value together).
+        const parties = [
+          ['owner_contact_name', 'owner_contact_email', 'owner_contact_phone'],
+          ['seller_name', 'seller_email', null],
+          ['listing_broker', 'listing_broker_email', null],
+        ];
+        for (const [nk, ek, pk] of parties) {
+          const nm = ex[nk];
+          if (!nm || typeof nm !== 'string') continue;
+          const em = ek && typeof ex[ek] === 'string' ? ex[ek] : null;
+          const ph = pk && typeof ex[pk] === 'string' ? ex[pk] : null;
+          if (!RH.looksLikeEmail(em) && !RH.looksLikePhone(ph)) continue;
+          const quote = [nk + ': ' + nm, em ? ek + ': ' + em : '', ph ? pk + ': ' + ph : '']
+            .filter(Boolean).join('; ');
+          add(nm, em, ph, quote, row.intake_id);
+        }
+      }
+      if (rows.length < PAGE) break;
+    }
+  } catch (e) { errors.push({ source: 'intake', detail: e?.message || String(e) }); }
+  return { index, errors, count: scanned };
+}
+
+// Build the fresh scored-ready item pool for one tick. Deterministic proposals
+// (arm=deterministic) are built directly (arithmetic, no LLM); LLM items (arm=llm)
+// carry assembled evidence for scoring. Value-gated, resumable, excludes known /
+// unchanged. Returns { deterministic, llmItems, counts, scan_errors, skip_markers }.
+async function buildFreshHarvestItems(opts = {}) {
+  const cap = Number.isFinite(opts.cap) ? opts.cap : HARVEST_MAX_TARGETS;
+  const known = opts.known instanceof Set ? opts.known : await fetchHarvestKnownSubjects();
+  const markers = opts.markers instanceof Set ? opts.markers : await fetchHarvestScoredMarkers();
+  const perDomain = Math.max(10, Math.floor(cap / 2));
+  const counts = {
+    targets: { dia: 0, gov: 0, total: 0 },
+    deterministic: { candidates: 0, donors_found: 0, proposed: 0, no_donor: 0, already_known: 0 },
+    llm: { candidates: 0, with_evidence: 0, no_evidence: 0, fresh: 0, already_known: 0 },
+    evidence_sources: { sf_contact_id: 0, salesforce_id: 0, intake: 0 },
+  };
+  const deterministic = [];
+  const llmItems = [];
+  const scanErrors = [];
+  const skipMarkers = [];
+  const pushErrors = (errs) => { for (const e of (errs || [])) scanErrors.push(e); };
+
+  // 1. Targets (both domains, value-ranked).
+  const dia = await fetchHarvestTargets('dia', perDomain);
+  const gov = await fetchHarvestTargets('gov', perDomain);
+  pushErrors(dia.errors); pushErrors(gov.errors);
+  counts.targets.dia = dia.targets.length;
+  counts.targets.gov = gov.targets.length;
+  const allTargets = RH.valueGateTargets(dia.targets.concat(gov.targets));
+  counts.targets.total = allTargets.length;
+
+  // 2. Deterministic donor maps (batched, both domains).
+  const donor = await harvestBuildDonorMaps(allTargets);
+  pushErrors(donor.errors);
+  counts.evidence_sources.sf_contact_id = donor.sources.sf_contact_id;
+  counts.evidence_sources.salesforce_id = donor.sources.salesforce_id;
+
+  // 3. LLM intake index (one bounded scan).
+  const intake = await harvestBuildIntakeIndex();
+  pushErrors(intake.errors);
+  counts.evidence_sources.intake = intake.count;
+
+  // 4. Per target × missing field: deterministic-first, else LLM, else no_evidence.
+  for (const t of allTargets) {
+    for (const field of t.missing_fields) {
+      // -- ARM 1: deterministic exact-identity donor. --
+      counts.deterministic.candidates += 1;
+      let donorHit = null; let matchKey = null;
+      if (t.sf_contact_id && donor.bySf.has(String(t.sf_contact_id))) {
+        const cand = donor.bySf.get(String(t.sf_contact_id));
+        if (cand[field] && String(cand.contact_id) !== String(t.target_contact_id)) { donorHit = cand; matchKey = 'sf_contact_id'; }
+      }
+      if (!donorHit && t.salesforce_id && donor.bySalesforce.has(String(t.salesforce_id))) {
+        const cand = donor.bySalesforce.get(String(t.salesforce_id));
+        if (cand[field] && String(cand.contact_id) !== String(t.target_contact_id)) { donorHit = cand; matchKey = 'salesforce_id'; }
+      }
+      if (donorHit) {
+        counts.deterministic.donors_found += 1;
+        const subjectRef = RH.contactSubjectRef(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field);
+        if (known.has(subjectRef)) { counts.deterministic.already_known += 1; continue; }
+        const prop = RH.buildDeterministicProposal(field, { value: donorHit[field], match_key: matchKey,
+          donor_contact_id: donorHit.contact_id, donor_domain: donorHit.domain });
+        if (!prop) { counts.deterministic.no_donor += 1; continue; }
+        const evHash = RH.evidenceHash(null, matchKey + ':' + donorHit.contact_id + ':' + prop.value);
+        const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field, evHash);
+        if (markers.has(marker)) continue;
+        counts.deterministic.proposed += 1;
+        deterministic.push({ arm: RH.HARVEST_ARM_DETERMINISTIC, subjectRef, target: t, field, proposal: prop,
+          evHash, marker, domain: t.domain });
+        continue; // deterministic wins — do not also LLM this field
+      }
+      counts.deterministic.no_donor += 1;
+
+      // -- ARM 2: LLM attribution from the intake index (by name). --
+      counts.llm.candidates += 1;
+      const subjectRef = RH.contactSubjectRef(RH.HARVEST_ARM_LLM, t.domain, t.target_contact_id, field);
+      if (known.has(subjectRef)) { counts.llm.already_known += 1; continue; }
+      const nm = RH.normalizeForMatch(t.contact_name || '');
+      const hits = nm ? (intake.index.get(nm) || []) : [];
+      // Only evidence that carries THIS field.
+      const blocks = [];
+      for (const h of hits) {
+        if (field === 'email' && !h.email) continue;
+        if (field === 'phone' && !h.phone) continue;
+        blocks.push({ source: 'intake', ref: h.intake_id, text: h.quote });
+      }
+      const assembled = RH.assembleEvidence(blocks);
+      const evHash = RH.evidenceHash(assembled, field + '|' + (t.contact_name || ''));
+      const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_LLM, t.domain, t.target_contact_id, field, evHash);
+      if (RH.evidenceIsEmpty(assembled)) {
+        if (!markers.has(marker)) { counts.llm.no_evidence += 1; skipMarkers.push(marker); }
+        continue; // NO LLM call
+      }
+      if (markers.has(marker)) continue;
+      counts.llm.with_evidence += 1;
+      counts.llm.fresh += 1;
+      llmItems.push({ arm: RH.HARVEST_ARM_LLM, subjectRef, target: t, field, assembled, evHash, marker, domain: t.domain });
+    }
+  }
+
+  return { deterministic, llmItems, counts, scan_errors: scanErrors, skip_markers: skipMarkers };
+}
+
+// Cheap pool counts for the plain dry-run (no evidence assembly): the reachability
+// gap per domain (the campaign's headline number).
+async function harvestPoolCounts() {
+  const out = { dia: {}, gov: {} };
+  for (const d of ['dia', 'gov']) {
+    const emailCol = RH.domainContactColumn(d, 'email');
+    const phoneCol = RH.domainContactColumn(d, 'phone');
+    try {
+      const total = await domainCount(d, 'contacts');
+      const neither = await domainCount(d, 'contacts?' + emailCol + '=is.null&' + phoneCol + '=is.null');
+      out[d] = { contacts_total: total, contacts_missing_both: neither,
+        pct_unreachable: total ? Math.round((neither / total) * 1000) / 10 : null };
+    } catch (_e) { out[d] = { error: true }; }
+  }
+  return out;
+}
+
+async function domainCount(domain, path) {
+  try {
+    const sep = path.includes('?') ? '&' : '?';
+    const r = await domainQuery(RH.normDomain(domain), 'GET', path + sep + 'select=contact_id&limit=1',
+      undefined, { Prefer: 'count=exact' });
+    return (r && typeof r.count === 'number') ? r.count : null;
+  } catch (_e) { return null; }
+}
+
+// Score one LLM item → validated proposal (+ meta). The validator DROPS a value not
+// present verbatim in the quote — the free precision floor.
+async function scoreHarvestItem(item) {
+  const prompt = RH.buildReachabilityPrompt(item.target, item.assembled);
+  const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+  const parsed = RH.parseHarvestJson(ai?.data?.response || '');
+  const proposal = RH.normalizeHarvestProposal(parsed);
+  if (!parsed) { proposal.verdict = 'no_evidence_found'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; treated as no_evidence_found.'; }
+  // The model may name a different field than the one we sought; only keep matches.
+  if (proposal.verdict === 'fill_proposal' && proposal.field !== item.field) {
+    proposal.verdict = 'no_evidence_found'; proposal.field = ''; proposal.value = ''; proposal.evidence_quote = '';
+  }
+  const validated = RH.validateHarvestProposal(proposal, item.assembled.combined);
+  return { proposal, validated, provider: ai?.provider || null, model: ai?.data?.model || null };
+}
+
+async function logHarvestDropped(item, proposal, drop, sourceRunId) {
+  try {
+    await opsQuery('POST', 'reachability_harvest_dropped_log', {
+      subject_ref: item.subjectRef, arm: item.arm, domain: item.domain, field: item.field,
+      proposed_value: proposal.value || null,
+      quote: drop && drop.quote != null ? String(drop.quote).slice(0, 400) : (proposal.evidence_quote || null),
+      reason: (drop && drop.reason) || 'dropped', source_run_id: sourceRunId,
+    }, { headers: { Prefer: 'return=minimal' } });
+  } catch (_e) { /* precision-floor log is best-effort */ }
+}
+
+async function upsertHarvestProposal(item, proposal, meta) {
+  const t = item.target;
+  const provSource = item.arm === RH.HARVEST_ARM_DETERMINISTIC ? RH.HARVEST_SOURCE_DETERMINISTIC : RH.HARVEST_SOURCE_LLM;
+  const body = {
+    subject_ref: item.subjectRef, arm: item.arm, domain: item.domain, target_kind: 'contact',
+    target_contact_id: t.target_contact_id, target_owner_id: t.true_owner_id || null,
+    owner_name: t.owner_name || null, contact_name: t.contact_name || null,
+    field: item.field, proposed_value: proposal.value,
+    proposed_verdict: 'fill_proposal',
+    evidence_quote: proposal.evidence_quote || null,
+    evidence_source: proposal.evidence_source || null,
+    evidence_hash: item.evHash || null,
+    source_pointer: proposal.source_pointer || {},
+    confidence: proposal.confidence,
+    reason: proposal.reason || null,
+    rank_value: Number(t.rank_value) || null,
+    seeder: 'w9_2_reachability_harvest', provenance_source: provSource,
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'reachability_harvest_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function recordHarvestHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'reachability_harvest', p_check_name: 'contact_reachability_harvest',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handleReachabilityHarvestTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchReachabilityHarvestFlag();
+  const enabled = reachabilityHarvestEnabled(flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || '15', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordHarvestHealth({ status: 'amber', count: 0,
+        lastError: 'W9_2_REACHABILITY_HARVEST feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w92_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const known = await fetchHarvestKnownSubjects();
+    const markers = await fetchHarvestScoredMarkers();
+    const { deterministic, llmItems, counts, scan_errors: scanErrors, skip_markers: skipMarkers } = await buildFreshHarvestItems({ known, markers });
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'reachability_harvest_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { counts, deterministic: deterministic.length, llm_fresh: llmItems.length, scan_errors: scanErrors } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const detBatch = Math.min(HARVEST_DET_BATCH_SIZE, deterministic.length);
+    const llmBatch = Math.min(limit, HARVEST_LLM_BATCH_SIZE);
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId, pool_counts: counts,
+      evidence_sources: counts.evidence_sources, scan_errors: scanErrors,
+      deterministic_fresh: deterministic.length, llm_fresh: llmItems.length,
+      det_batch: detBatch, llm_batch: llmBatch, budget_ms: HARVEST_SCORE_BUDGET_MS, min_confidence: HARVEST_MIN_CONF,
+      det_proposed: 0, det_failed: 0, scored: 0, proposed: 0, no_evidence_found: 0,
+      dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
+      budget_exhausted: false, remaining_unscored: llmItems.length, by_verdict: {} };
+    const newMarkers = [];
+
+    // -- ARM 1: deterministic proposals (arithmetic, no LLM). --
+    for (const item of deterministic.slice(0, detBatch)) {
+      try {
+        const wr = await upsertHarvestProposal(item, item.proposal, { provider: 'none', model: null, sourceRunId, scanBatchId });
+        newMarkers.push(item.marker);
+        if (wr.ok) summary.det_proposed += 1; else summary.det_failed += 1;
+      } catch (e) { summary.det_failed += 1; console.warn('[reachability-harvest] det write failed', item?.subjectRef, e?.message || e); }
+    }
+
+    // -- ARM 2: LLM-attributed proposals (validated). --
+    const budgetRun = await RH.scoreHarvestWithBudget(llmItems, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreHarvestItem(item);
+        summary.scored += 1;
+        newMarkers.push(item.marker);
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        if (validated.verdict === 'no_evidence_found') { summary.no_evidence_found += 1; return null; }
+        if (validated.drop) { summary.dropped_not_verbatim += 1; await logHarvestDropped(item, proposal, validated.drop, sourceRunId); return null; }
+        if (!RH.isProposableHarvest(validated, HARVEST_MIN_CONF)) {
+          summary.dropped_below_conf += 1;
+          await logHarvestDropped(item, proposal, { reason: 'below_confidence', quote: proposal.evidence_quote }, sourceRunId);
+          return null;
+        }
+        const wr = await upsertHarvestProposal(item, validated.proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[reachability-harvest] score/write failed', item?.subjectRef, e?.message || e);
+      }
+      return null;
+    }, { budgetMs: HARVEST_SCORE_BUDGET_MS, maxN: llmBatch });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, llmItems.length - summary.scored - summary.failed);
+
+    if (scanBatchId != null) {
+      try {
+        const merged = Array.from(new Set([...markers, ...newMarkers, ...(skipMarkers || [])])).slice(-8000);
+        await opsQuery('PATCH', 'reachability_harvest_batch?batch_id=eq.' + scanBatchId,
+          { details: { counts, deterministic: deterministic.length, llm_fresh: llmItems.length,
+            scored_markers: merged, scan_errors: scanErrors, summary } });
+      } catch (_e) { /* best-effort */ }
+    }
+    const totalProposed = summary.det_proposed + summary.proposed;
+    await recordHarvestHealth({ status: (summary.failed || summary.det_failed) ? 'amber' : 'green', count: totalProposed,
+      lastError: (summary.failed || summary.det_failed) ? (summary.failed + summary.det_failed) + ' write(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', total_proposed: totalProposed, ...summary });
+  }
+
+  // ---- GET dry-run: reachability gap counts. ?score=1 adds inline proposals. --
+  const poolCounts = await harvestPoolCounts();
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing', pool_counts: poolCounts };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const inlineN = Math.min(30, Math.max(1, parseInt(req.query.n || String(HARVEST_INLINE_DEFAULT_N), 10) || HARVEST_INLINE_DEFAULT_N));
+    const { deterministic, llmItems, counts, scan_errors: scanErrors } = await buildFreshHarvestItems({ cap: Math.max(HARVEST_MAX_TARGETS, inlineN * 6) });
+    out.scan_counts = counts;
+    out.evidence_sources = counts.evidence_sources;
+    out.scan_errors = scanErrors;
+    out.deterministic_fresh = deterministic.length;
+    out.llm_fresh = llmItems.length;
+    const proposals = [];
+    // Deterministic sample (arithmetic — exact source pointers).
+    for (const item of deterministic.slice(0, inlineN)) {
+      proposals.push({ subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+        target_contact_id: item.target.target_contact_id, contact_name: item.target.contact_name,
+        field: item.field, proposed_value: item.proposal.value, confidence: item.proposal.confidence,
+        evidence_source: item.proposal.evidence_source, source_pointer: item.proposal.source_pointer,
+        reason: item.proposal.reason, disposition: 'propose', would_propose: true, quote_verbatim: null });
+    }
+    // LLM sample (verbatim-quoted).
+    const byVerdict = {};
+    let noEvidence = 0; let droppedNotVerbatim = 0; let droppedBelowConf = 0;
+    const budgetRun = await RH.scoreHarvestWithBudget(llmItems, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreHarvestItem(item);
+        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        let disposition = 'propose';
+        if (validated.verdict === 'no_evidence_found') { noEvidence += 1; disposition = 'no_evidence_found'; }
+        else if (validated.drop) { droppedNotVerbatim += 1; disposition = 'dropped:' + validated.drop.reason; }
+        else if (!RH.isProposableHarvest(validated, HARVEST_MIN_CONF)) { droppedBelowConf += 1; disposition = 'dropped:below_confidence'; }
+        proposals.push({ subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+          target_contact_id: item.target.target_contact_id, contact_name: item.target.contact_name,
+          field: item.field, evidence_chars: item.assembled.chars, evidence_source_blocks: item.assembled.blocks.length,
+          ...proposal, disposition, quote_verbatim: !!(validated.proposal),
+          would_propose: disposition === 'propose', model_provider: provider, model_name: model });
+      } catch (e) { proposals.push({ subject_ref: item?.subjectRef, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: HARVEST_SCORE_BUDGET_MS, maxN: inlineN });
+    out.batch_size = inlineN;
+    out.budget_ms = HARVEST_SCORE_BUDGET_MS;
+    out.min_confidence = HARVEST_MIN_CONF;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.by_verdict = byVerdict;
+    out.no_evidence_found = noEvidence;
+    out.dropped_not_verbatim = droppedNotVerbatim;
+    out.dropped_below_conf = droppedBelowConf;
+    out.would_propose = proposals.filter((p) => p.would_propose).length;
+    out.proposals = proposals;
+    out.note = 'dry-run scoring — NO rows written. Deterministic proposals carry an exact source pointer (donor identity key + contact_id); every LLM would-propose carries a VERBATIM evidence_quote (quote_verbatim=true, the harvested value is a substring of the assembled evidence); a value not in the quote is DROPPED (→ reachability_harvest_dropped_log). no_evidence_found is honest/counted. Review, then POST (with the flag ON).'
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + HARVEST_SCORE_BUDGET_MS + 'ms budget.' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
 // W8 U4 (Prompt 70) — Systemic-findings monthly report tick.
 //   GET  /api/systemic-findings-tick            -> dry-run: the full COMPUTED
 //                                                  findings JSON (honest zeros).
@@ -4443,6 +5012,11 @@ const FEDERATED_DECISION_TYPES = new Set([
   // display name; reject/keep -> close. Deterministic dictionary renames are
   // bulk-confirmable. NEVER auto-writes.
   'naming_hygiene_review',
+  // W9.2 (Prompt 88): contact-reachability internal-harvest proposals. Source =
+  // v_reachability_harvest_review_open; a deterministic fill (arm=deterministic,
+  // arithmetic exact-identity) or an LLM-attributed fill with a VERBATIM quote.
+  // Confirm runs the deterministic fill-blanks writer (domain contacts email/phone).
+  'reachability_harvest_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
@@ -4595,6 +5169,7 @@ function federatedSubjectRef(type, s) {
     // (link:chain:<dom>:<propId>:<gap> | link:pmail:<winnerId>).
     case 'w8_u3_link_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'naming_hygiene_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'reachability_harvest_review': return s.subject_ref ? String(s.subject_ref) : null;
   }
   return null;
 }
@@ -4841,6 +5416,36 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = await opsCnt('naming_hygiene_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'reachability_harvest_review') {
+    // W9.2: open contact-reachability proposals. Deterministic fills (arm=deterministic,
+    // confidence 1.0 — bulk-confirmable) rank first, then by $ value / confidence.
+    const r = await opsQuery('GET', 'v_reachability_harvest_review_open?select=review_id,subject_ref,'
+      + 'arm,domain,target_kind,target_contact_id,target_owner_id,owner_name,contact_name,field,'
+      + 'proposed_value,evidence_quote,evidence_source,source_pointer,confidence,reason,rank_value,'
+      + 'provenance_source,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: null,
+      // deterministic fills rank first (like the view), then by confidence + $ value.
+      rank_value: (row.arm === 'deterministic' ? 1e12 : 0) + (Number(row.confidence) || 0) * 1e6 + (Number(row.rank_value) || 0),
+      context: {
+        review_id: row.review_id, arm: row.arm, domain: row.domain, target_kind: row.target_kind,
+        target_contact_id: row.target_contact_id, target_owner_id: row.target_owner_id,
+        owner_name: row.owner_name, contact_name: row.contact_name, field: row.field,
+        proposed_value: row.proposed_value, evidence_quote: row.evidence_quote,
+        evidence_source: row.evidence_source, source_pointer: row.source_pointer,
+        confidence: row.confidence, reason: row.reason, rank_value: row.rank_value,
+        provenance_source: row.provenance_source, model_provider: row.model_provider, model_name: row.model_name,
+        kind: row.arm === 'deterministic' ? 'deterministic_fill' : 'llm_fill',
+      },
+    }));
+    out.total = await opsCnt('reachability_harvest_review?status=eq.proposed');
     return out;
   }
 
@@ -6343,6 +6948,106 @@ async function handleDecisionVerdict(req, res) {
       const rr = await record(verdict, decStatus, { plan: plan.action, review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', ...reversal });
+    }
+
+    // ---- reachability_harvest_review (W9.2 / Prompt 88) ----------------------
+    // The human verdict on a contact-reachability harvest proposal. confirm ->
+    // the deterministic fill-blanks writer sets the domain contact's missing
+    // email/phone (ONLY if still blank — a now-populated field routes to a conflict
+    // card, never a clobber), stamps field_provenance (source per arm:
+    // w9_2_internal_harvest / comms_observed), all recorded in
+    // reachability_harvest_apply_log so it is reversible. reject -> the row is kept
+    // (rubric fuel). NEVER auto-writes without this verdict; NEVER fabricated.
+    if (decision.decision_type === 'reachability_harvest_review') {
+      const revR = await opsQuery('GET', 'reachability_harvest_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'reachability_harvest_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'fill']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'reachability_harvest_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { arm: review.arm, domain: review.domain, field: review.field };
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // --- confirm: the deterministic fill-blanks writer. ---
+      const dom = review.domain === 'gov' ? 'gov' : 'dia';
+      const col = RH.domainContactColumn(dom, review.field);
+      const fspTable = dom === 'dia' ? 'dia.contacts' : 'gov.contacts';
+      const contactId = review.target_contact_id;
+      const value = review.proposed_value;
+      if (!col || !contactId || !value) {
+        return res.status(400).json({ error: 'reachability_harvest_review: incomplete proposal' });
+      }
+      // Re-check the field is STILL blank (fill-blanks only). A now-populated field
+      // (someone else filled it) routes to a conflict card — never a clobber.
+      const curR = await domainQuery(dom, 'GET', 'contacts?select=' + col + '&contact_id=eq.' + pgFilterVal(contactId) + '&limit=1');
+      const curRow = (curR.ok && Array.isArray(curR.data)) ? curR.data[0] : null;
+      if (!curRow) return res.status(404).json({ error: 'reachability_harvest_review: target contact not found' });
+      if (!_harvestBlank(curRow[col])) {
+        const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+            status: 'conflict', actor: user.id || null, reversal: {},
+            details: { reason: 'field_no_longer_blank', field: col, current_value_present: true } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+        await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+          { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'field_no_longer_blank' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'field_no_longer_blank', review_id: review.review_id });
+      }
+
+      // Ledger FIRST (reversal record exists before the mutation), then the fill,
+      // then provenance, then stamp the proposal. fill-blanks: prior_value is null.
+      const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { target_database: dom, target_table: 'contacts', record_id: contactId, field: col, prior_value: null, provenance_ids: [] },
+          details: { arm: review.arm, field: col, value, provenance_source: review.provenance_source } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      const wr = await domainQuery(dom, 'PATCH', 'contacts?contact_id=eq.' + pgFilterVal(contactId),
+        { [col]: value }, { Prefer: 'return=minimal' });
+      if (!wr.ok) {
+        if (applyLogId != null) await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+          { status: 'conflict', details: { error: 'contact_patch_failed', detail: wr.data } }).catch(() => {});
+        await recordEffectFailure({ ...effects, error: 'contact_patch_failed', detail: wr.data });
+        return res.status(502).json({ error: 'contact_patch_failed', detail: wr.data });
+      }
+
+      // Provenance stamp (fill-blanks semantics; source per arm, ranked below record sources).
+      let provenanceId = null;
+      try {
+        const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
+          p_workspace_id: decision.workspace_id || null, p_target_database: dom, p_target_table: fspTable,
+          p_record_pk: String(contactId), p_field_name: col,
+          p_value: JSON.stringify(value), p_source: review.provenance_source || 'w9_2_internal_harvest',
+          p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
+          p_recorded_by: user.id || null,
+        });
+        if (pv.ok && Array.isArray(pv.data) && pv.data[0]) provenanceId = pv.data[0].provenance_id || null;
+      } catch (_e) { /* provenance is best-effort; the fill + ledger are the record */ }
+
+      if (applyLogId != null) {
+        await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { target_database: dom, target_table: 'contacts', record_id: contactId, field: col, prior_value: null, provenance_ids: provenanceId ? [provenanceId] : [] } }).catch(() => {});
+      }
+      await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      effects.filled = { field: col, value }; effects.apply_log_id = applyLogId; effects.provenance_id = provenanceId;
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: 'filled', field: col, review_id: review.review_id });
     }
 
     // ---- naming_hygiene_review (W8 U5 / Prompt 79) ---------------------------
