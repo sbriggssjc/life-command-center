@@ -454,6 +454,30 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ EXPANSION LIVE 2026-08-08 — U5 + assist flags flipped after clean dry-run reviews
+Both sheets passed Scott+Cowork review: U5 deterministic sample 30/30 mechanical (bulk-confirmable),
+LLM arm correctly KEEPS "Cohen Cos"(surname)/"Dev I Ltd" — the U1 false-positive classes handled;
+address links exactly-one-match w/ owner names, honest uncertain otherwise. Assist: 5/5 parsed,
+grounded reasons, honest create_property on no-match (watch: one 0.9-confidence/hedged-reason —
+self-measurement will catch systematic overconfidence). **Cowork flipped `W8_U5_NAMING_HYGIENE` +
+`MATCH_DISAMBIG_ASSIST` → on.** Full nightly Ollama schedule now: U1 3:40 / U2 3:50 / U3 4:10 /
+U5 4:25 / assist 4:30, U4 monthly 1st 5:00. New DC lane: naming-hygiene (bulk-confirm for
+deterministic renames); disambiguation lane now assist-sorted easy-first. Pools: 430 deterministic
+renames + 670 LLM + 4,145 address-link candidates; assist 32 open cards.
+
+### Reconcile 2026-08-08 (prompts 79/80/81 — landed; responses → done/; Cowork live-verified)
+
+| # | Outcome | State |
+|---|---|---|
+| 79 (U5) | Naming-hygiene campaign | ✅ **PR #1631**, migration LIVE (verified: flag `W8_U5_NAMING_HYGIENE` off, cron 04:25, 8 fsp rows, 0 drift). Deterministic dictionary renames (no LLM) + ambiguous→Ollama; address_as_name → property-LINK via ensureEntityLink (exactly-one match or human, never guess); own DC lane (75-guard-covered) + bulk-confirm for mechanical renames only. 51+ tests. Scoping note: address-links target LCC-native entities only (domain rows already FK-linked — counted, not auto-linked). |
+| 80 | Match-disambig assist | ✅ **PR #1632**, migration LIVE (flag `MATCH_DISAMBIG_ASSIST` off, cron 04:30, metadata-only writer that structurally can't touch verdict/status; synthetic gate on a real card passed w/ 0 residue). Assist ranks candidates (hallucinated ids dropped), lane sorts easy-first, one-click "assist agrees", agree/disagree self-measurement → new U4 accuracy section (report now 9 sections). **Honest grounding correction: live open lane is 32 cards, not the historical 1,120.** 24 tests. |
+| 81 | Ops cleanup | ✅ **PR #1633**, view fix LIVE (verified: flow clusters now 0). **Zombie flows weren't zombies** — 100% of their failures already auto-resolved/quiet since 07-29; the defect was the U4 cluster view counting resolved rows (filtered to open — a real break re-surfaces instantly). 23505 folds (sidebar contacts fill-blanks into the colliding row — those inserts were previously LOST, not just noisy; property_documents/owner upserts on real keys), 23503 property-exists guard, 42P10 real causes found by live verification (agent's lease_ti guess CORRECTED: partial-index on available_listings + nonexistent index target on property_documents). 12 tests. dia/gov repos untouched (all LCC-side). |
+
+**Gate (one redeploy):** merge #1631 + #1632 + #1633 → redeploy → `npm run verify:deploy` →
+(a) U5: `GET /api/naming-hygiene-tick?score=1` → Scott reviews sheet → flip flag;
+(b) assist: `GET /api/match-disambig-assist-tick?score=1` → review sample → flip flag;
+(c) PGRST204/collision clusters decay measurable in September U4.
+
 ### Reconcile 2026-08-07 evening (prompts 77 & 78 — landed; responses → done/)
 
 | # | Outcome | State |
