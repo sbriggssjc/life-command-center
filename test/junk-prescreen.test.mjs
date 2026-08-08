@@ -14,6 +14,7 @@ import {
   normalizeJunkProposal, parseJunkVerdictJson, planJunkApply, buildRetireMarker,
   isSpeCodedName, knownAbbrevEvidence, isAddressAsName, isAcronymOnly,
   applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
+  deterministicDismissReason, isDeterministicJunk, isExactPlaceholder,
   junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
   computeScanDeadline, remainingScoreBudget, nextScanCursor,
 } from '../api/_shared/junk-prescreen.js';
@@ -533,6 +534,74 @@ describe('nextScanCursor — resumable keyset (advance vs wrap)', () => {
   });
 });
 
+// ===========================================================================
+// Prompt 85 (W8 U1) — deterministic-certainty junk bypasses the LLM + the guard.
+// blank_name / all_non_alpha / EXACT placeholder dismiss with NO model call and
+// are EXCLUDED from the dismiss-share guard (which polices a runaway MODEL, not
+// arithmetic). Fixes the 100%-deterministic-batch livelock (20/20 blank-name
+// dismiss refused as suspect_distribution forever).
+// ===========================================================================
+describe('deterministicDismissReason — class routing (deterministic vs LLM)', () => {
+  it('blank / all-non-alpha are deterministic dismissals (skip the LLM)', () => {
+    assert.equal(deterministicDismissReason('')?.heuristic, 'blank_name');
+    assert.equal(deterministicDismissReason('   ')?.heuristic, 'blank_name');
+    assert.equal(deterministicDismissReason(null)?.heuristic, 'blank_name');
+    assert.equal(deterministicDismissReason('--')?.heuristic, 'all_non_alpha');
+    assert.equal(deterministicDismissReason('12345')?.heuristic, 'all_non_alpha');
+  });
+  it('an EXACT placeholder is deterministic; a fuzzy token hit is NOT', () => {
+    assert.equal(deterministicDismissReason('Test Test')?.heuristic, 'token_junk');
+    assert.equal(deterministicDismissReason('Tbd')?.heuristic, 'token_junk');
+    assert.equal(deterministicDismissReason('Unknown')?.heuristic, 'token_junk');
+    assert.equal(deterministicDismissReason('N/A')?.heuristic, 'token_junk');
+    // fuzzy: starts with a junk token but carries real-ish words → stays LLM.
+    assert.equal(deterministicDismissReason('TEST company do not use'), null);
+    assert.equal(deterministicDismissReason('Sample Realty Partners LLC'), null);
+  });
+  it('the evidence is the verbatim value (empty for a blank name)', () => {
+    assert.equal(deterministicDismissReason('')?.evidence, '');
+    assert.equal(deterministicDismissReason('--')?.evidence, '--');
+  });
+  it('JUDGMENT classes (consonant_run / no_vowel) are NOT deterministic → LLM', () => {
+    assert.equal(deterministicDismissReason('bcdfghjk'), null); // consonant_run
+    assert.equal(deterministicDismissReason('SMBC'), null);     // no_vowel acronym
+    assert.equal(deterministicDismissReason('AB'), null);       // too_short
+  });
+  it('a plausibly-real name is never deterministic junk', () => {
+    for (const n of ['Fresenius Medical Care', 'Northmarq', 'Cohen Cos']) {
+      assert.equal(isDeterministicJunk(n), false, `${n}`);
+    }
+  });
+  it('isExactPlaceholder distinguishes whole-value vs prefix', () => {
+    assert.equal(isExactPlaceholder('Test Test'), true);
+    assert.equal(isExactPlaceholder('placeholder'), true);
+    assert.equal(isExactPlaceholder('placeholder holdings llc'), false);
+    assert.equal(isExactPlaceholder(''), false);
+  });
+});
+
+describe('dismiss-share guard denominator — LLM-judged verdicts only (Prompt 85)', () => {
+  it('a 100%-deterministic batch (empty LLM map) is NOT suspect — persists', () => {
+    // The livelock regression: 20/20 blank-name dismiss used to refuse forever.
+    // With deterministic dismissals excluded, the LLM denominator is empty → not
+    // suspect → the batch persists and its scored-markers advance.
+    const g = dismissDistributionGuard({}, 0.9);
+    assert.equal(g.suspect_distribution, false);
+    assert.equal(g.total, 0);
+  });
+  it('a mixed batch is judged ONLY on its LLM verdicts', () => {
+    // 100 deterministic dismissals are NOT in this map; the LLM judged 6 rows.
+    const llmVerdicts = { dismiss: 5, keep: 1 }; // 83% of the LLM subset
+    const g = dismissDistributionGuard(llmVerdicts, 0.9);
+    assert.equal(g.suspect_distribution, false);
+    assert.equal(g.total, 6);
+  });
+  it('a genuinely runaway MODEL (>90% of LLM verdicts) is still refused', () => {
+    const g = dismissDistributionGuard({ dismiss: 19, keep: 1 }, 0.9);
+    assert.equal(g.suspect_distribution, true);
+  });
+});
+
 describe('structural wiring guards (admin.js + server.js + migration)', () => {
   const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
   const server = readFileSync(join(root, 'server.js'), 'utf8');
@@ -657,6 +726,23 @@ describe('structural wiring guards (admin.js + server.js + migration)', () => {
   });
   it('the naming-hygiene backlog is persisted FLAT so the systemic reader sees a total', () => {
     assert.match(admin, /junkNamingHygieneFlat/);
+  });
+  // Prompt 85 — deterministic-certainty bypass + LLM-only guard denominator.
+  it('deterministic-certainty junk bypasses the LLM (no model call)', () => {
+    assert.match(admin, /deterministicDismissReason/);
+    assert.match(admin, /provider: 'none'/);
+    assert.match(admin, /deterministic: true/);
+    assert.match(admin, /JUNK_DET_BATCH_SIZE/);
+  });
+  it('the batch is composed deterministic-first, LLM budget on judgment classes', () => {
+    assert.match(admin, /const detCands = \[\], llmCands = \[\]/);
+    assert.match(admin, /scoreWithBudget\(llmCands/);
+  });
+  it('the dismiss-share guard measures ONLY the LLM-judged subset', () => {
+    assert.match(admin, /dismissDistributionGuard\(llmVerdicts/);
+    assert.match(admin, /deterministic_dismissed/);
+    assert.match(admin, /llm_scored/);
+    assert.match(admin, /llm_dismiss_share/);
   });
   it('the close-status migration widens the CHECK to add closed (additive/loosening)', () => {
     const m = readFileSync(join(root, 'supabase/migrations/20260808140000_lcc_w8_u1_scan_batch_close_status.sql'), 'utf8');
