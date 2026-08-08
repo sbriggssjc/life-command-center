@@ -5854,3 +5854,26 @@ test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => 
   assert.match(xml, /<c:showLeaderLines val="1"\/>/, 'leader lines enabled');
   assert.match(xml, /<c:manualLayout><c:x val="0"\/><c:y val="-0\.075"\/>/, 'max label offset up');
 });
+
+// A3 (CM chart feedback item #3) — bid-ask shared cap axis is data-fit, not a
+// fixed 5.5-10% band, so the floating bars sit inside the axis range.
+test('A3: bid_ask cap axis fits the plotted Last-Ask/Achieved window', () => {
+  const rows = Array.from({ length: 24 }, (_, i) => ({
+    period_end: `2024-${String((i % 12) + 1).padStart(2, '0')}-28`,
+    avg_last_ask_cap: 0.070 + (i % 6) * 0.001,   // ~7.0-7.5%
+    avg_bid_ask_spread: 0.004,                     // achieved ~7.4-7.9%
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'avg_last_ask_cap', col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
+    cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
+  });
+  const r = out.spec.yLeftRange;
+  // Data max ≈ 0.079; fitted max must be close to it, NOT the old 0.10 ceiling.
+  assert.ok(r.max <= 0.085 && r.max >= 0.079, `fitted max ${r.max} hugs data max`);
+  assert.ok(r.min >= 0.06 && r.min <= 0.07, `fitted min ${r.min} hugs data min`);
+});

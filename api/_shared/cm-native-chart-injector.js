@@ -4017,6 +4017,21 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //       (was 5.25-8%, which clipped everything above 8%).
       const achievedCol = String.fromCharCode(65 + cols.length);
       if (lastAskCol) {
+        // A3 (CM chart feedback item #3) — data-fit the shared cap axis over
+        // BOTH plotted levels (Last Ask + Achieved = last_ask + spread) instead
+        // of the fixed 5.5-10% band that left the bars floating in empty space.
+        // Fits to the plotted window ±0.5% snap; falls back to the prior literal
+        // only when there's nothing to fit (< 2 finite points).
+        const plotVals = [];
+        for (const r of plottedRows) {
+          const la = Number(r.avg_last_ask_cap);
+          const sp = Number(r.avg_bid_ask_spread);
+          if (Number.isFinite(la)) {
+            plotVals.push(la);
+            if (Number.isFinite(sp)) plotVals.push(la + sp);
+          }
+        }
+        const bidAskFit = fitDataAxisRange(plotVals, 'cap');
         return {
           tabName,
           spec: {
@@ -4027,9 +4042,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             barGrouping: 'stacked',
             sharedAxis:  true,
             barGapWidth: 60,
-            yLeftRange: ((vertical === 'gov' || vertical === 'government_leased')
-              ? { min: 0.055, max: 0.10 }
-              : { min: 0.055, max: 0.10 }),
+            yLeftRange: bidAskFit || { min: 0.055, max: 0.10 },
             yLeftNumFmt: VAL_FMT_PERCENT_2DP,
             barSeries: [
               // invisible base lifts the visible bar to the Last Ask level
