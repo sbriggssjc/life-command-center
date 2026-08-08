@@ -737,6 +737,10 @@ const CHART_COLUMNS = {
     { key: 'pct_price_change_long_term',  header: 'Price Chg % (10+ yr)',format: 'percent_one_decimal', width: 20 },
     { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 19 },
     { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (10+ yr)',format: 'percent_basis_points', width: 21 },
+    // B3 — trailing-8-quarter core columns (the CHARTED core lines bind here so
+    // a thin single-quarter core cohort no longer nulls the line mid-2025).
+    { key: 'pct_price_change_long_term_8q', header: 'Price Chg % (10+ yr, trailing 8-qtr)', format: 'percent_one_decimal',  width: 26 },
+    { key: 'last_ask_cap_long_term_8q',     header: 'Last Ask Cap (10+ yr, trailing 8-qtr)', format: 'percent_basis_points', width: 27 },
   ],
   sources_of_capital: [
     { key: 'rank_15y',          header: 'Rank',                width: 6 },

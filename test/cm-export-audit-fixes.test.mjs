@@ -127,6 +127,7 @@ test('buildCapitalMarketsWorkbook: no drift warning when every template column i
       period_end: '2025-12-31', subspecialty: 'all', n_all: 12, n_long_term: null,
       pct_price_change_all: 0.1, pct_price_change_long_term: null,
       last_ask_cap_all: 0.07, last_ask_cap_long_term: null,
+      pct_price_change_long_term_8q: 0.5, last_ask_cap_long_term_8q: 0.06,
     }],
   }];
   const wb = buildCapitalMarketsWorkbook({

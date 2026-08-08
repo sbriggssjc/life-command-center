@@ -4655,9 +4655,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //   Lines: palette[0] navy (all), palette[1] sky (8+yr)
       const periodCol = findCol('period_end');
       const barAllCol = findCol('pct_price_change_all');
-      const barLongCol = findCol('pct_price_change_long_term');
+      // B3 — bind the CORE series to the trailing-8-quarter columns when present
+      // (dia) so a thin single-quarter core cohort no longer nulls the line
+      // mid-2025; fall back to the single-quarter column (gov, no _8q yet).
+      const barLongCol = findCol('pct_price_change_long_term_8q', 'pct_price_change_long_term');
       const lineAllCol = findCol('last_ask_cap_all');
-      const lineLongCol = findCol('last_ask_cap_long_term');
+      const lineLongCol = findCol('last_ask_cap_long_term_8q', 'last_ask_cap_long_term');
       if (!periodCol || !barAllCol || !barLongCol || !lineAllCol || !lineLongCol) return null;
       // R37 P3 — peak/trough/most-recent labels on the all-cap navy line.
       // R66cc — compute over the DISPLAYED window (>= 2017) only; the chart trims to

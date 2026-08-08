@@ -1117,8 +1117,9 @@ function buildChartConfig(chart, brand) {
               data: rows.map(r => r.pct_price_change_all),
               backgroundColor: PDF_COLORS.sentiment_bar_all, borderRadius: 1,
               yAxisID: 'y1', order: 2 },
-            { type: 'bar',  label: `${govLike ? '6+' : '10+'} Yr Term Price Change %`,
-              data: rows.map(r => r.pct_price_change_long_term),
+            { type: 'bar',  label: `${govLike ? '6+' : '10+'} Yr Term Price Change %${govLike ? '' : ' (trailing 8-qtr)'}`,
+              // B3 — core bar binds to the trailing-8-quarter column when present.
+              data: rows.map(r => r.pct_price_change_long_term_8q ?? r.pct_price_change_long_term),
               backgroundColor: PDF_COLORS.sentiment_bar_long, borderRadius: 1,
               yAxisID: 'y1', order: 2 },
             // Lines (cap rate) on the LEFT axis, order=0 → drawn on top.
@@ -1127,8 +1128,9 @@ function buildChartConfig(chart, brand) {
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y', order: 0 },
-            { type: 'line', label: `Last Asking Cap (${govLike ? '6+' : '10+'} yr)`,
-              data: rows.map(r => r.last_ask_cap_long_term),
+            { type: 'line', label: `Last Asking Cap (${govLike ? '6+' : '10+'} yr${govLike ? '' : ', trailing 8-qtr'})`,
+              // B3 — core cap line binds to the trailing-8-quarter column when present.
+              data: rows.map(r => r.last_ask_cap_long_term_8q ?? r.last_ask_cap_long_term),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2,
               yAxisID: 'y', order: 0 },
