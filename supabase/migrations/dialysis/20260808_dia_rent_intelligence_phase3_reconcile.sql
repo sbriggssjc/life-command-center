@@ -1,0 +1,18 @@
+-- Rent Intelligence Engine Phase 3 — reconciliation loop (dia). Applied live to
+-- zqzrriwuavgrquhisnoa. dia_reconcile_rent_evidence: called by the post-ingest hooks
+-- (api/_shared/rent-reconcile-hook.js) after sale/OM/listing/lease evidence lands.
+-- Unit-normalize -> [5,200] PSF sanity gate -> diff stated vs modeled curve at date:
+--   within tolerance (default 5%) -> corroborate (raise confidence on surrounding
+--     projected years + provenance), NO fork
+--   outside -> classify BEFORE forking (rba_change | early_extension | renegotiation |
+--     bad_data) -> fork a new version via dia_build_property_rent_timeline (never
+--     overwrite; v1 preserved) or queue to rent_reconcile_queue; unclassified -> queue
+-- NON-BLOCKING at the caller (hook wraps in try/catch); internally defensive.
+-- Full body is authoritative in-DB; reproduce via
+--   pg_get_functiondef('public.dia_reconcile_rent_evidence'::regproc)
+-- Signature:
+--   dia_reconcile_rent_evidence(p_property_id int, p_rent numeric, p_evidence_date date,
+--     p_source text, p_source_ref jsonb DEFAULT '{}', p_source_confidence text DEFAULT NULL,
+--     p_new_rba numeric DEFAULT NULL, p_new_expiry date DEFAULT NULL,
+--     p_tolerance numeric DEFAULT 0.05, p_dry_run boolean DEFAULT false) RETURNS jsonb
+-- (Applied via mcp apply_migration dia_rent_intelligence_phase3_reconcile.)
