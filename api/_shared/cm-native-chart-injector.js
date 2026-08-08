@@ -460,6 +460,24 @@ const ANNOTATION_FORMATTERS = {
   index:         fmtIndexNative,
 };
 
+// A2 — infer the annotation formatter name from a y-axis Excel numFmt string
+// so line charts without an explicit annotateFmt still label max/min/latest in
+// a format that matches their axis. Returns null when it can't tell (skips the
+// auto-callout rather than mis-formatting).
+function inferAnnotationFmt(numFmt) {
+  if (!numFmt || typeof numFmt !== 'string') return null;
+  const f = numFmt;
+  if (f.includes('%')) return /0\.00/.test(f) ? 'pct2' : 'pct1';
+  if (f.includes('$')) {
+    if (/,,,/.test(f)) return 'currency_b';   // billions
+    if (/,,/.test(f))  return 'currency_m';    // millions
+    if (/,"K"|,"k"/.test(f) || /,K/.test(f)) return 'currency_k';
+    if (/0\.00/.test(f)) return 'currency_psf';
+    return 'currency';
+  }
+  return null;
+}
+
 /**
  * Given an array of rows + a value-extraction function, return the
  * indices and formatted labels for the max, min, and last data points.
@@ -486,27 +504,43 @@ function buildAnnotationsForSpec(rows, getter, formatter) {
   const lastP = points[points.length - 1];
 
   const out = [];
-  // Last (primary callout — emit first so it's deterministically present)
-  out.push({ idx: lastP.idx, text: formatter(lastP.val) });
+  // Last (primary callout — emit first so it's deterministically present).
+  // `role` drives the leader-line offset direction in dLblXml (A2).
+  out.push({ idx: lastP.idx, text: formatter(lastP.val), role: 'last' });
   // Max — emit only if distinct from last
   if (maxP.idx !== lastP.idx) {
-    out.push({ idx: maxP.idx, text: formatter(maxP.val) });
+    out.push({ idx: maxP.idx, text: formatter(maxP.val), role: 'max' });
   }
   // Min — emit only if distinct from both
   if (minP.idx !== lastP.idx && minP.idx !== maxP.idx) {
-    out.push({ idx: minP.idx, text: formatter(minP.val) });
+    out.push({ idx: minP.idx, text: formatter(minP.val), role: 'min' });
   }
   return out;
 }
+
+// A2 (CM chart feedback item #2) — role → manual-layout offset (fractions of
+// the plot area). Moving a label off its point is what makes Excel draw the
+// leader line back to the marker; the offsets keep max labels above, min
+// labels below, and the latest label to the upper-right of the line's end.
+const DLBL_ROLE_OFFSET = {
+  max:  { x: 0.0,  y: -0.075 },
+  min:  { x: 0.0,  y:  0.075 },
+  last: { x: 0.045, y: -0.03 },
+};
 
 /**
  * Emit a single <c:dLbl> block overriding one data point with a custom
  * text label. The other points in the series get no label (via the
  * surrounding <c:dLbls> showXxx=0 defaults).
  */
-function dLblXml(idx, text) {
+function dLblXml(idx, text, role) {
+  const off = DLBL_ROLE_OFFSET[role];
+  const layoutFrag = off
+    ? `<c:layout><c:manualLayout><c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
+    : '';
   return `          <c:dLbl>
             <c:idx val="${idx}"/>
+            ${layoutFrag}
             <c:tx>
               <c:rich>
                 <a:bodyPr wrap="none" anchor="ctr"/>
@@ -624,9 +658,11 @@ function trendlineXml(t) {
  *   3. Anything else → empty (no label block emitted).
  */
 function dLblsXml(spec) {
-  // Mode 1 — legacy array of per-point labels (R37 P3)
+  // Mode 1 — array of per-point labels (R37 P3 + A2 max/min/latest callouts).
+  // A2: emit showLeaderLines so the role-offset labels draw a leader back to
+  // their point.
   if (Array.isArray(spec) && spec.length > 0) {
-    const lbls = spec.map(p => dLblXml(p.idx, p.text)).join('\n');
+    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role)).join('\n');
     return `        <c:dLbls>
 ${lbls}
           <c:showLegendKey val="0"/>
@@ -635,6 +671,7 @@ ${lbls}
           <c:showSerName val="0"/>
           <c:showPercent val="0"/>
           <c:showBubbleSize val="0"/>
+          <c:showLeaderLines val="1"/>
         </c:dLbls>`;
   }
   // Mode 2 — R60 chart-level showVal for "label every point" mode
@@ -3183,12 +3220,22 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     const periodCol = findCol('period_end');
     const valCol = findCol(...(Array.isArray(valKeys) ? valKeys : [valKeys]));
     if (!periodCol || !valCol) return null;
-    // R37 P3 — compute data labels from rows if requested
+    // R37 P3 — compute data labels from rows if requested. A2: when a line
+    // chart doesn't explicitly opt in, auto-annotate max/min/latest on the
+    // primary series, inferring the label format from the y-axis numFmt so
+    // every single-line chart carries the standard callouts.
     let dataLabels;
-    if (opts.annotateKey && opts.annotateFmt && Array.isArray(rows)) {
-      const fmt = ANNOTATION_FORMATTERS[opts.annotateFmt];
+    let annKey = opts.annotateKey;
+    let annFmt = opts.annotateFmt;
+    if (!annKey && type === 'line' && Array.isArray(rows)) {
+      const keys = Array.isArray(valKeys) ? valKeys : [valKeys];
+      annKey = keys.find(k => cols.some(c => c.key === k)) || keys[0];
+      annFmt = inferAnnotationFmt(opts.valAxNumFmt);
+    }
+    if (annKey && annFmt && Array.isArray(rows)) {
+      const fmt = ANNOTATION_FORMATTERS[annFmt];
       if (fmt) {
-        dataLabels = buildAnnotationsForSpec(rows, r => r[opts.annotateKey], fmt);
+        dataLabels = buildAnnotationsForSpec(rows, r => r[annKey], fmt);
       }
     }
     return {

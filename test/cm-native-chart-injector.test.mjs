@@ -25,6 +25,7 @@ import {
   buildComboChartXml,
   buildRenewalRentGrowthXml,
   buildSingleBarChartXml,
+  buildSingleLineChartXml,
   buildDoughnutChartXml,
   fitDataAxisRange,
 } from '../api/_shared/cm-native-chart-injector.js';
@@ -5828,4 +5829,28 @@ test('R68-E G6: termination_rate XML — count bars + soft-term % line on a seco
   assert.match(rightAx, /0\.0%/, 'right axis formats as percent');
   // Line plots the real rate column G.
   assert.match(xml, /\$G\$5:\$G\$60/, 'rate line plots from terminated_outside_firm_term_pct (col G)');
+});
+
+// A2 (CM chart feedback item #2) — max/min/latest callouts carry leader lines
+// and role-based manual-layout offsets so the labels sit clear of the line.
+test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => {
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
+    ttm_weighted_cap_rate: 0.06 + (i % 5) * 0.002, // varied → distinct max/min/last
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'ttm_weighted_cap_rate', col: 'B' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap', cols, dataStart: 5, dataEnd: 16,
+    brand: {}, rows, vertical: 'dialysis',
+  });
+  // Auto-annotation produced max/min/latest with roles.
+  const roles = (out.spec.dataLabels || []).map(d => d.role).sort();
+  assert.deepEqual(roles, ['last', 'max', 'min'], 'three role-tagged callouts');
+  const xml = buildSingleLineChartXml(out.spec);
+  assert.match(xml, /<c:showLeaderLines val="1"\/>/, 'leader lines enabled');
+  assert.match(xml, /<c:manualLayout><c:x val="0"\/><c:y val="-0\.075"\/>/, 'max label offset up');
 });
