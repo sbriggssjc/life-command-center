@@ -25,6 +25,7 @@ import {
   buildComboChartXml,
   buildRenewalRentGrowthXml,
   buildSingleBarChartXml,
+  buildSingleLineChartXml,
   buildDoughnutChartXml,
   fitDataAxisRange,
 } from '../api/_shared/cm-native-chart-injector.js';
@@ -816,7 +817,7 @@ test('buildInjectionSpec: available_by_term_summary builds 1-bar + 4-scatter com
   // R50 → R67: Avg Cap re-swapped from R50's #00B1B0 teal (off-brand)
   // back to navy #003DA5 per user batch 6: "match brand standards."
   assert.deepEqual(out.spec.lineSeries.map(s => s.color),
-    ['003DA5', '7E6BAD', '62B5E5', '4CB582'],
+    ['003DA5', '9B88A5', '62B5E5', '8FC49E'],
     'R67: navy / purple / sky / sage (brand-aligned)');
   // All 4 are markers-only (no connecting line)
   assert.ok(out.spec.lineSeries.every(s => s.showMarker === true),
@@ -890,11 +891,11 @@ test('injectNativeCharts: bar + 4-scatter composite renders diamond markers acro
       lineSeries: [
         { titleCol: 'D', titleRow: 4, valCol: 'D', color: '003DA5',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
-        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '7E6BAD',
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '9B88A5',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
         { titleCol: 'G', titleRow: 4, valCol: 'G', color: '6A748C',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
-        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '4CB582',
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '8FC49E',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
       ],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
@@ -948,7 +949,7 @@ test('buildInjectionSpec: available_by_tenant_count_donut builds 4-segment dough
   assert.equal(out.spec.holeSize, 55);
   // 4 colors per segment: navy / sky / sage / gray
   assert.deepEqual(out.spec.colors,
-    ['003DA5', '62B5E5', '4CB582', '6A748C'],
+    ['003DA5', '62B5E5', '8FC49E', '6A748C'],
     'DaVita / FMC / US Renal / Other');
 });
 
@@ -983,7 +984,7 @@ test('buildInjectionSpec: doughnut extra segments past 4 fall back to gray', () 
   });
   assert.equal(out.spec.colors.length, 6);
   assert.deepEqual(out.spec.colors,
-    ['003DA5', '62B5E5', '4CB582', '6A748C', '6A748C', '6A748C']);
+    ['003DA5', '62B5E5', '8FC49E', '6A748C', '6A748C', '6A748C']);
 });
 
 test('injectNativeCharts: doughnut chart emits correct OOXML structure', async () => {
@@ -1006,7 +1007,7 @@ test('injectNativeCharts: doughnut chart emits correct OOXML structure', async (
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 8,
-      colors: ['003DA5', '62B5E5', '4CB582', '6A748C'],
+      colors: ['003DA5', '62B5E5', '8FC49E', '6A748C'],
       holeSize: 55,
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -1025,7 +1026,7 @@ test('injectNativeCharts: doughnut chart emits correct OOXML structure', async (
   // 4 per-point color blocks
   const dPtCount = (chartXml.match(/<c:dPt>/g) || []).length;
   assert.equal(dPtCount, 4, '4 segment dPt blocks');
-  for (const color of ['003DA5', '62B5E5', '4CB582', '6A748C']) {
+  for (const color of ['003DA5', '62B5E5', '8FC49E', '6A748C']) {
     assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `${color} segment present`);
   }
 
@@ -1202,7 +1203,7 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.equal(out.spec.barSeries[0].noFill, true);
   assert.equal(out.spec.barSeries[1].valCol, 'G', 'band = iqr_width helper');
   assert.equal(out.spec.barSeries[1].alpha, '30000', 'T10b — amethyst 30% alpha');
-  assert.equal(out.spec.barSeries[1].borderColor, '7E6BAD', 'T10b — amethyst border (was sky)');
+  assert.equal(out.spec.barSeries[1].borderColor, '9B88A5', 'T10b — amethyst border (was sky)');
 
   // Line series: cap_rate dots (navy circles — the lone navy element)
   assert.equal(out.spec.lineSeries.length, 1);
@@ -1617,9 +1618,9 @@ test('buildInjectionSpec: dom_price_change_active builds 2-bar + 2-line with das
   assert.equal(out.spec.type, 'combo');
   assert.equal(out.spec.barSeries.length, 2, '2 DOM bars');
   assert.equal(out.spec.lineSeries.length, 2, '2 price-change lines');
-  // Both lines share #1F4E79 (dark blue); core variant dashed
-  assert.equal(out.spec.lineSeries[0].color, '1F4E79');
-  assert.equal(out.spec.lineSeries[1].color, '1F4E79');
+  // Both lines share #003DA5 (dark blue); core variant dashed
+  assert.equal(out.spec.lineSeries[0].color, '003DA5');
+  assert.equal(out.spec.lineSeries[1].color, '003DA5');
   assert.equal(out.spec.lineSeries[0].dashed || false, false, 'total solid');
   assert.equal(out.spec.lineSeries[1].dashed, true, 'core dashed');
 });
@@ -1645,7 +1646,7 @@ test('buildInjectionSpec: seller_sentiment uses swapAxes (lines LEFT, bars RIGHT
   // Bars = price change % (sage + light purple)
   assert.equal(out.spec.barSeries.length, 2);
   assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['C', 'E']);
-  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['4CB582', '7E6BAD']);
+  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['8FC49E', '9B88A5']);
   // Lines = cap rate (navy + sky)
   assert.equal(out.spec.lineSeries.length, 2);
   assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
@@ -1761,7 +1762,7 @@ test('R56: pace_of_cap_rate_expansion adds pace_cost YOY line when col present',
   assert.equal(out.spec.barSeries.length, 2);
   assert.equal(out.spec.lineSeries.length, 1);
   assert.equal(out.spec.lineSeries[0].valCol, 'D', 'pace_cost line reads from col D');
-  assert.equal(out.spec.lineSeries[0].color, 'D97706', 'amber matches deferred color in R45/R50');
+  assert.equal(out.spec.lineSeries[0].color, '9EA9B7', 'amber matches deferred color in R45/R50');
 });
 
 test('injectNativeCharts: clustered-bar dispatch produces grouping=clustered XML', async () => {
@@ -1830,8 +1831,8 @@ test('injectNativeCharts: combo line series respect dashed flag (R35 P2)', async
         { titleCol: 'C', titleRow: 4, valCol: 'C', color: '9DC3E6' },
       ],
       lineSeries: [
-        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '1F4E79' },
-        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '1F4E79', dashed: true },
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '003DA5' },
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '003DA5', dashed: true },
       ],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -1862,7 +1863,7 @@ test('buildInjectionSpec: cap_rate_top_bottom_quartile builds 3-line with dashed
   assert.equal(out.spec.series.length, 3);
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
   assert.deepEqual(out.spec.series.map(s => s.color),
-    ['7E6BAD', '003DA5', '4CB582'], 'purple / navy / sage');
+    ['9B88A5', '003DA5', '8FC49E'], 'purple / navy / sage');
   assert.deepEqual(out.spec.series.map(s => !!s.dashed),
     [true, false, true], 'top + bottom dashed, median solid');
 });
@@ -1884,7 +1885,7 @@ test('buildInjectionSpec: cap_rate_by_credit builds 3-line federal/state/municip
   assert.equal(out.spec.series.length, 3);
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
   assert.deepEqual(out.spec.series.map(s => s.color),
-    ['003DA5', '62B5E5', '4CB582'], 'navy / sky / sage');
+    ['003DA5', '62B5E5', '8FC49E'], 'navy / sky / sage');
 });
 
 test('buildInjectionSpec: cpi_vs_renewal_cagr builds 2-line', () => {
@@ -2040,7 +2041,7 @@ test('R68-E G5: lease_renewal_rate builds diverging stacked combo + net line', (
   // Color order unchanged: pale / navy / mid / sky / amber
   assert.deepEqual(
     out.spec.barSeries.map(s => s.color),
-    ['E0E8F4', '003DA5', '265AB2', '62B5E5', 'D97706'],
+    ['E0E8F4', '003DA5', '265AB2', '62B5E5', '9EA9B7'],
   );
   // Additive series (first 3) chart their own positive cols B/C/D.
   // Subtractive series (non_renewed_expirations/terminated) chart NEGATED helper
@@ -2096,7 +2097,7 @@ test('R68-E G6: lease_termination_rate adds soft-term % line when the rate colum
   assert.equal(out.spec.barSeries[0].valCol, 'H', 'bottom = in_firm helper col');
   assert.equal(out.spec.lineSeries.length, 1, 'soft-term rate line');
   assert.equal(out.spec.lineSeries[0].valCol, 'G', 'line = terminated_outside_firm_term_pct');
-  assert.equal(out.spec.lineSeries[0].color, 'D97706', 'amber line');
+  assert.equal(out.spec.lineSeries[0].color, '9EA9B7', 'amber line');
 });
 
 test('buildInjectionSpec: buyer_pool_monthly_count builds 3-series stacked-bar', () => {
@@ -2123,7 +2124,7 @@ test('buildInjectionSpec: buyer_pool_monthly_count builds 3-series stacked-bar',
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['003DA5', '62B5E5', '4CB582'],
+    ['003DA5', '62B5E5', '8FC49E'],
     'colors: navy (Private) / sky (Institutional) / sage (REIT)'
   );
 });
@@ -2192,7 +2193,7 @@ test('buildInjectionSpec: cap_rate_by_lease_term — dia 4-cohort detection', ()
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['7E6BAD', '4CB582', '62B5E5', '003DA5'],
+    ['9B88A5', '8FC49E', '62B5E5', '003DA5'],
     'colors: purple / sage / sky / navy'
   );
   // No dashed lines on the dia branch
@@ -2229,7 +2230,7 @@ test('buildInjectionSpec: cap_rate_by_lease_term — gov 4-cohort with dashed Ou
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['7E6BAD', '4CB582', '003DA5', '6A748C'],
+    ['9B88A5', '8FC49E', '003DA5', '6A748C'],
     'colors: purple / sage / navy / gray'
   );
   // Outside Firm (last series, gray) is dashed
@@ -2366,7 +2367,7 @@ test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line comb
   //   navy solid line + navy DASHED line (no off-brand amber)
   assert.deepEqual(
     out.spec.barSeries.map(s => s.color),
-    ['62B5E5', '4CB582'],
+    ['62B5E5', '8FC49E'],
     'R65: brand bar colors — sky / nm_pale fill'
   );
   assert.equal(out.spec.barSeries[1].borderColor, '62B5E5',
@@ -2576,7 +2577,7 @@ test('R39: linear trendline omits order + forward fragments', async () => {
 // R41 — chart-area polish: explicit major gridlines + roundedCorners=0.
 // Audit finding (audit/cm-style-audit + on-demand inspection of master
 // Core Cap Chart's val axis XML): master has <c:majorGridlines> at every
-// val tick (~D9D9D9 light gray); our exports relied on Excel defaults
+// val tick (~E0E8F4 light gray); our exports relied on Excel defaults
 // which can render inconsistently across versions. Master also explicitly
 // sets <c:roundedCorners val="0"/> on the chart wrapper.
 // ============================================================================
@@ -2632,8 +2633,8 @@ test('R41: val axis emits <c:majorGridlines> with light-gray color', async () =>
   // Major gridlines inside the val axis block
   const valAx = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
   assert.match(valAx, /<c:majorGridlines>/, 'val axis has major gridlines');
-  assert.match(valAx, /<c:majorGridlines>[\s\S]*?<a:srgbClr val="D9D9D9"\/>/,
-    'gridline color is light gray D9D9D9 (matches master ~85%-lightened tx1)');
+  assert.match(valAx, /<c:majorGridlines>[\s\S]*?<a:srgbClr val="E0E8F4"\/>/,
+    'gridline color is light gray E0E8F4 (matches master ~85%-lightened tx1)');
   // Cat axis should NOT have gridlines (we only emit them on val axes)
   const catAx = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
   assert.ok(!/<c:majorGridlines>/.test(catAx),
@@ -2760,7 +2761,7 @@ test('R46: doughnut chart emits per-segment % labels when showSegmentLabels=true
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 7,
-      colors: ['003DA5', '62B5E5', '4CB582'],
+      colors: ['003DA5', '62B5E5', '8FC49E'],
       showSegmentLabels: true,
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -2792,7 +2793,7 @@ test('R46: doughnut omits dLbls when showSegmentLabels missing (backward compat)
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 7,
-      colors: ['003DA5', '62B5E5', '4CB582'],
+      colors: ['003DA5', '62B5E5', '8FC49E'],
       // no showSegmentLabels
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -3600,7 +3601,7 @@ test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
         { titleCol: 'C', titleRow: 5, valCol: 'C', color: '003DA5' },
         { titleCol: 'D', titleRow: 5, valCol: 'D', color: '265AB2' },
         { titleCol: 'E', titleRow: 5, valCol: 'E', color: '62B5E5' },
-        { titleCol: 'F', titleRow: 5, valCol: 'F', color: 'D97706' },
+        { titleCol: 'F', titleRow: 5, valCol: 'F', color: '9EA9B7' },
       ],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -3617,7 +3618,7 @@ test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
   const serCount = (chartXml.match(/<c:ser>/g) || []).length;
   assert.equal(serCount, 5, '5 series in stacked bar');
   // All 5 colors present
-  for (const color of ['E0E8F4', '003DA5', '265AB2', '62B5E5', 'D97706']) {
+  for (const color of ['E0E8F4', '003DA5', '265AB2', '62B5E5', '9EA9B7']) {
     assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `color ${color} present`);
   }
   // First and last series reference correct columns
@@ -3656,8 +3657,8 @@ test('injectNativeCharts: multi-line cohort chart renders correct XML (gov dashe
       catCol: 'A',
       dataStart: 5, dataEnd: 12,
       series: [
-        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '7E6BAD' },                  // 10+
-        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '4CB582' },                  // 6-10
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '9B88A5' },                  // 10+
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '8FC49E' },                  // 6-10
         { titleCol: 'E', titleRow: 4, valCol: 'E', color: '003DA5' },                  // <5
         { titleCol: 'F', titleRow: 4, valCol: 'F', color: '6A748C', dashed: true },   // Outside
       ],
@@ -3673,7 +3674,7 @@ test('injectNativeCharts: multi-line cohort chart renders correct XML (gov dashe
   assert.match(chartXml, /<c:grouping val="standard"\/>/, 'grouping=standard (not stacked)');
   const serCount = (chartXml.match(/<c:ser>/g) || []).length;
   assert.equal(serCount, 4, '4 series in multi-line');
-  for (const color of ['7E6BAD', '4CB582', '003DA5', '6A748C']) {
+  for (const color of ['9B88A5', '8FC49E', '003DA5', '6A748C']) {
     assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `color ${color} present`);
   }
   // Outside Firm series (dashed) should have <a:prstDash val="dash"/>
@@ -4672,7 +4673,7 @@ test('R38 C: doughnut emits legend at bottom (not right)', async () => {
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 7,
-      colors: ['003DA5', '62B5E5', '4CB582'],
+      colors: ['003DA5', '62B5E5', '8FC49E'],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
   }]);
@@ -5828,4 +5829,51 @@ test('R68-E G6: termination_rate XML — count bars + soft-term % line on a seco
   assert.match(rightAx, /0\.0%/, 'right axis formats as percent');
   // Line plots the real rate column G.
   assert.match(xml, /\$G\$5:\$G\$60/, 'rate line plots from terminated_outside_firm_term_pct (col G)');
+});
+
+// A2 (CM chart feedback item #2) — max/min/latest callouts carry leader lines
+// and role-based manual-layout offsets so the labels sit clear of the line.
+test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => {
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
+    ttm_weighted_cap_rate: 0.06 + (i % 5) * 0.002, // varied → distinct max/min/last
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'ttm_weighted_cap_rate', col: 'B' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap', cols, dataStart: 5, dataEnd: 16,
+    brand: {}, rows, vertical: 'dialysis',
+  });
+  // Auto-annotation produced max/min/latest with roles.
+  const roles = (out.spec.dataLabels || []).map(d => d.role).sort();
+  assert.deepEqual(roles, ['last', 'max', 'min'], 'three role-tagged callouts');
+  const xml = buildSingleLineChartXml(out.spec);
+  assert.match(xml, /<c:showLeaderLines val="1"\/>/, 'leader lines enabled');
+  assert.match(xml, /<c:manualLayout><c:x val="0"\/><c:y val="-0\.075"\/>/, 'max label offset up');
+});
+
+// A3 (CM chart feedback item #3) — bid-ask shared cap axis is data-fit, not a
+// fixed 5.5-10% band, so the floating bars sit inside the axis range.
+test('A3: bid_ask cap axis fits the plotted Last-Ask/Achieved window', () => {
+  const rows = Array.from({ length: 24 }, (_, i) => ({
+    period_end: `2024-${String((i % 12) + 1).padStart(2, '0')}-28`,
+    avg_last_ask_cap: 0.070 + (i % 6) * 0.001,   // ~7.0-7.5%
+    avg_bid_ask_spread: 0.004,                     // achieved ~7.4-7.9%
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'avg_last_ask_cap', col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
+    cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
+  });
+  const r = out.spec.yLeftRange;
+  // Data max ≈ 0.079; fitted max must be close to it, NOT the old 0.10 ceiling.
+  assert.ok(r.max <= 0.085 && r.max >= 0.079, `fitted max ${r.max} hugs data max`);
+  assert.ok(r.min >= 0.06 && r.min <= 0.07, `fitted min ${r.min} hugs data min`);
 });

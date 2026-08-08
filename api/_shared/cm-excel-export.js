@@ -23,7 +23,7 @@
 
 import ExcelJS from 'exceljs';
 import { summaryColumnHeaders, buildInlineSummary } from './cm-summary-table.js';
-import { NATIVE_CHART_TEMPLATES, buildInjectionSpec } from './cm-native-chart-injector.js';
+import { NATIVE_CHART_TEMPLATES, buildInjectionSpec, scanSpecPalette } from './cm-native-chart-injector.js';
 
 // Round 3d — Inline summary blocks under selected chart tabs.
 // Each entry maps a chart_template_id to a metrics array; the worksheet
@@ -366,9 +366,10 @@ const CHART_COLUMNS = {
     { key: 'yoy_change_pct',   header: 'YoY Change',          format: 'percent_one_decimal', width: 13, pruneIfEmpty: true },
   ],
   quarterly_volume_bars: [
-    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',         width: 13 },
-    { key: 'quarterly_volume',   header: 'Quarterly Volume ($)',format: 'currency_dollars',   width: 22 },
-    { key: 'quarterly_count',    header: 'Quarterly Count',     format: 'integer_count',      width: 17 },
+    // A5 — trailing-3-month rolling sum at monthly grain (was boxy quarter totals).
+    { key: 'period_end',         header: 'Month End',                 format: 'date_short',         width: 13 },
+    { key: 'quarterly_volume',   header: 'Rolling 3-Mo Volume ($)',   format: 'currency_dollars',   width: 22 },
+    { key: 'quarterly_count',    header: 'Rolling 3-Mo Count',        format: 'integer_count',      width: 17 },
   ],
   buyer_pool_monthly_count: [
     { key: 'period_end',           header: 'Month End',         format: 'date_short',         width: 13 },
@@ -736,6 +737,10 @@ const CHART_COLUMNS = {
     { key: 'pct_price_change_long_term',  header: 'Price Chg % (10+ yr)',format: 'percent_one_decimal', width: 20 },
     { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 19 },
     { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (10+ yr)',format: 'percent_basis_points', width: 21 },
+    // B3 — trailing-8-quarter core columns (the CHARTED core lines bind here so
+    // a thin single-quarter core cohort no longer nulls the line mid-2025).
+    { key: 'pct_price_change_long_term_8q', header: 'Price Chg % (10+ yr, trailing 8-qtr)', format: 'percent_one_decimal',  width: 26 },
+    { key: 'last_ask_cap_long_term_8q',     header: 'Last Ask Cap (10+ yr, trailing 8-qtr)', format: 'percent_basis_points', width: 27 },
   ],
   sources_of_capital: [
     { key: 'rank_15y',          header: 'Rank',                width: 6 },
@@ -1450,6 +1455,16 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // column while gov keeps the same columns (its views populate them).
     cols = pruneEmptyFlaggedColumns(cols, chart.rows);
 
+    // A4 (CM chart feedback item #8) — drop the 'Undisclosed Term' bucket from
+    // the Data_Avail_by_Term breakdown sheet + its bar chart. The undisclosed
+    // listings remain in every total-market metric (they're only removed from
+    // this per-term breakout, which is meaningless for an unknown term).
+    if (chart.chart_template_id === 'available_by_term_bucket' && Array.isArray(chart.rows)) {
+      chart.rows = chart.rows.filter(
+        (r) => String(r?.term_bucket ?? '').trim().toLowerCase() !== 'undisclosed term'
+      );
+    }
+
     // Per-tab layout when chart image is available:
     //   Rows 1-22: chart PNG (~440px tall at default row height)
     //   Row 23:    caption strip (only when chart image present)
@@ -1787,6 +1802,14 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       });
       if (spec) {
         nativeInjections.push(spec);
+
+        // CM chart feedback item #1 — flag any off-brand series color in the
+        // export log so a palette regression surfaces without altering output.
+        try {
+          for (const w of scanSpecPalette(spec, chart.chart_template_id)) {
+            driftWarnings.push(`[brand] ${w.template}: ${w.reason}`);
+          }
+        } catch { /* non-fatal — logging only */ }
 
         // R34 P8.5 — write declarative helper columns. Templates that
         // need derived data (e.g. IQR width = upper_q − lower_q for

@@ -86,8 +86,8 @@ function paletteSeries(brand) {
 // (gov p.13). Hard-coded here so they survive brand-token overrides.
 const PDF_COLORS = {
   // Cap_by_Term cohort lines (dialysis p.22)
-  cap_long_term:    '#7E6BAD', // purple — 12+ Year (longest term)
-  cap_mid_long:     '#4CB582', // sage green — 8-12 Year (or 6-10)
+  cap_long_term:    '#9B88A5', // purple — 12+ Year (longest term)
+  cap_mid_long:     '#8FC49E', // sage green — 8-12 Year (or 6-10)
   cap_mid:          '#62B5E5', // sky blue — 6-8 Year (or <5)
   cap_short:        '#003DA5', // dark navy — ≤5 Year (or outside firm)
   cap_outside_firm: '#6A748C', // gray — Outside Firm (gov p.13)
@@ -651,7 +651,7 @@ function buildChartConfig(chart, brand) {
       // Series colors per the PDF deck:
       //   • Private (Individual): dark navy #003DA5 (bottom of stack)
       //   • Institutional/Fund:   sky blue  #62B5E5 (middle)
-      //   • REIT:                 sage      #4CB582 (top)
+      //   • REIT:                 sage      #8FC49E (top)
       return {
         type: 'bar',
         data: {
@@ -835,9 +835,9 @@ function buildChartConfig(chart, brand) {
       // indices (1/0/2) gave sky-blue/navy/pale-blue — three blues that
       // blend at the screen sizes in the workbook export. Switch to
       // distinct hues from the PDF deck:
-      //   • Top Quartile    → purple #7E6BAD  (cap_long_term)
+      //   • Top Quartile    → purple #9B88A5  (cap_long_term)
       //   • Median          → dark navy #003DA5 (cap_short — anchor)
-      //   • Bottom Quartile → sage #4CB582    (cap_mid_long)
+      //   • Bottom Quartile → sage #8FC49E    (cap_mid_long)
       // Top + Bottom thinner; Median emphasized.
       return {
         type: 'line',
@@ -874,8 +874,8 @@ function buildChartConfig(chart, brand) {
       //
       // Colors per PDF (kept consistent across both schemes so the legend
       // reads the same chart family):
-      //   • Long-term:  purple   #7E6BAD
-      //   • Mid-long:   sage     #4CB582
+      //   • Long-term:  purple   #9B88A5
+      //   • Mid-long:   sage     #8FC49E
       //   • Mid:        sky      #62B5E5
       //   • Short:      navy     #003DA5
       //   • Outside:    gray     #6A748C (gov only)
@@ -1117,8 +1117,9 @@ function buildChartConfig(chart, brand) {
               data: rows.map(r => r.pct_price_change_all),
               backgroundColor: PDF_COLORS.sentiment_bar_all, borderRadius: 1,
               yAxisID: 'y1', order: 2 },
-            { type: 'bar',  label: `${govLike ? '6+' : '10+'} Yr Term Price Change %`,
-              data: rows.map(r => r.pct_price_change_long_term),
+            { type: 'bar',  label: `${govLike ? '6+' : '10+'} Yr Term Price Change %${govLike ? '' : ' (trailing 8-qtr)'}`,
+              // B3 — core bar binds to the trailing-8-quarter column when present.
+              data: rows.map(r => r.pct_price_change_long_term_8q ?? r.pct_price_change_long_term),
               backgroundColor: PDF_COLORS.sentiment_bar_long, borderRadius: 1,
               yAxisID: 'y1', order: 2 },
             // Lines (cap rate) on the LEFT axis, order=0 → drawn on top.
@@ -1127,8 +1128,9 @@ function buildChartConfig(chart, brand) {
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y', order: 0 },
-            { type: 'line', label: `Last Asking Cap (${govLike ? '6+' : '10+'} yr)`,
-              data: rows.map(r => r.last_ask_cap_long_term),
+            { type: 'line', label: `Last Asking Cap (${govLike ? '6+' : '10+'} yr${govLike ? '' : ', trailing 8-qtr'})`,
+              // B3 — core cap line binds to the trailing-8-quarter column when present.
+              data: rows.map(r => r.last_ask_cap_long_term_8q ?? r.last_ask_cap_long_term),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2,
               yAxisID: 'y', order: 0 },
@@ -1408,7 +1410,7 @@ function buildChartConfig(chart, brand) {
               yAxisID: 'y1', order: 0 },
             { type: 'line', label: '10+ Year Term — Avg Asking Cap',
               data: rows.map(r => r.avg_cap_core_10plus),
-              borderColor: '#D97706', backgroundColor: 'transparent',
+              borderColor: '#9EA9B7', backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y1', order: 0 },
           ],
@@ -1479,7 +1481,7 @@ function buildChartConfig(chart, brand) {
       // too so its hard to tell a difference." Use Active_Cap_Quart-style
       // solid/dashed split so the eye groups Total vs Core 10+ by hue
       // similarity but distinguishes them by line style.
-      const COLOR_DARK_BLUE_DPC  = '#1F4E79';
+      const COLOR_DARK_BLUE_DPC  = '#003DA5';
       return {
         type: 'bar',
         data: {
@@ -1542,7 +1544,7 @@ function buildChartConfig(chart, brand) {
                 const lo = r.lower_quartile, hi = r.upper_quartile;
                 return (lo != null && hi != null) ? [lo, hi] : null;
               }),
-              backgroundColor: 'rgba(126,107,173,0.30)',  // amethyst #7E6BAD @30%
+              backgroundColor: 'rgba(155,136,165,0.30)',  // amethyst #9B88A5 @30%
               borderColor: PDF_COLORS.cap_long_term,       // amethyst border
               borderWidth: 1,
               borderSkipped: false,
@@ -1725,7 +1727,7 @@ function buildChartConfig(chart, brand) {
         { key: 'renewed_leases',                 label: 'Renewed',                        color: PDF_COLORS.cap_short, sign: +1 },
         { key: 'succeeding_superseding_leases',  label: 'Succeeding/Superseding',         color: palette[2],           sign: +1 },
         { key: 'non_renewed_expirations',        label: 'Expired (Not Renewed)',          color: PDF_COLORS.cap_mid,   sign: -1 },
-        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: -1 },
+        { key: 'terminated_leases',              label: 'Terminated',                     color: '#9EA9B7',            sign: -1 },
       ];
       const netData = rows.map(r => {
         let net = 0; let seen = false;
@@ -1823,7 +1825,7 @@ function buildChartConfig(chart, brand) {
       if (hasSoftTermRate) {
         datasets.push({ type: 'line', label: 'Soft-Term Termination Rate (% of leases past firm term)',
           data: softTermRate,
-          borderColor: '#D97706', backgroundColor: 'transparent',
+          borderColor: '#9EA9B7', backgroundColor: 'transparent',
           tension: 0.3, pointRadius: 1, borderWidth: 2.5,
           yAxisID: 'y1', stack: 'rate', order: 0 });
       }
@@ -2145,7 +2147,7 @@ function buildChartConfig(chart, brand) {
               order: 1 },
             { type: 'line', label: 'Cost of Capital YoY Δ',
               data: rows.map(r => r.pace_cost),
-              borderColor: '#D97706',  // amber/orange
+              borderColor: '#9EA9B7',  // amber/orange
               backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               order: 0 },
