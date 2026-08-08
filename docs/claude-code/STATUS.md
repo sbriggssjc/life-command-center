@@ -454,6 +454,32 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### W9.2 dry-run HONEST-ZERO verified; sequencing corrected → prompt 90 (W9.3) queued
+W9.2 `?score=1&n=8`: mechanics clean (pools confirmed dia 71.1%/gov 68.3%, scan_errors [], intake
+index 5,000 entries loaded) but 0 proposals both arms. **Cowork probe confirmed the zeros are
+HONEST:** 0/7 sampled unreachable-contact names appear anywhere in intake snapshots — intake docs
+name brokers/listings, unreachable contacts are OWNERS; populations disjoint. Deterministic arm
+waits on SF keys (~20 exist). **Flag `W9_2_REACHABILITY_HARVEST` stays OFF (built, input-gated) —
+producer/consumer doctrine.** Sequencing correction owned: W9.3 is the true unlock (SF holds the
+emails/phones; true-owner SF coverage 11-12%). **Prompt 90 = W9.3**: (1) prompt-80-pattern assist
+pre-rank on the 3.3k sf_link_candidate pool; (2) live re-score of the 23,817 no_match vs a
+REFRESHED registry (W4.3 stale-registry caveat) w/ conservative 0.9/0.1 bands + splink_v2
+provenance; (3) donor-key propagation to the rows W9.2 reads — the rising blank-contact-with-SF-key
+count IS W9.2's unlock threshold.
+
+### TM quarantine EXECUTED 2026-08-08 — 23/23 seeded (dry-run reviewed → apply, zero errors)
+All 23 = SF Financial District streets + TM vocab from one CoStar page; Ehmer/Devincenti excluded
+by the fan-out gate as designed. Now in the junk lane as deterministic dismisses; each confirm
+soft-retires + un-stamps rehmer@'s email. Remaining W9.2 gate: `?score=1&n=8` dry-run → review →
+flip `W9_2_REACHABILITY_HARVEST`.
+
+### Reconcile 2026-08-08 (prompts 88 & 89 — landed; responses → done/)
+
+| # | Outcome | State |
+|---|---|---|
+| 88 (W9.2) | Reachability internal harvest | ✅ **PR #1643**, migration LIVE (4 tables, 2 views, 8 fsp rows w9_2_internal_harvest@60/comms_observed@40, flag `W9_2_REACHABILITY_HARVEST` OFF, cron 04:40). **Gov gap measured: 10,542/15,434 (68%) unreachable** (dia 71% confirmed). Two arms per spec (deterministic exact-identity-key fills — never name-fuzz — bulk-confirmable; LLM w/ value-in-quote validator + dropped-log). New `reachability_harvest_review` DC lane (75-guard covered). 22 tests. **Honest yield note: deterministic arm input-starved TODAY (only 15 dia + 5 gov blank contacts carry SF identity keys) — mechanism durable, yield scales as W9.3 lands keys.** Gate: merge → redeploy → `?score=1&n=8` → review → flip. |
+| 89 | TrafficMetrix quarantine | ✅ branch `claude/trafficmetrix-misparse-quarantine-ukpo4v` (no PR yet — Scott merge or request one). **Superb grounding:** found the fanned email lives in `entities.email`; caught that the street regex would false-positive REAL people ("Ladonna Street", "Chris Way") → value-gated the seeder on email fan-out >4 instead — 23 phantoms seed, Ehmer/Devincenti excluded cleanly. Un-stamp on confirm (clears email + detaches conflated identities, reversible). Sidebar guard routes suspects to `contact_misparse_review` (never mints). U3 pool skips misparse clusters. Lane counter root-caused (null→0 coercion). CLAUDE.md footgun note added. 14 tests; full suite green. **Post-deploy: dry-run `?action=tm-misparse-seed` → `&apply=1` → confirm in junk lane.** |
+
 ### TrafficMetrix misparse found by Scott in the U3 lane → prompt 89 queued
 Scott spotted a person_email card with street-name "evidence". Cowork forensics: a 2026-05-09
 sidebar/CoStar capture parsed the TrafficMetrix traffic-count widget as a CONTACT LIST — 16
