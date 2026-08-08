@@ -51,6 +51,115 @@ function escapeXml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
+// ----------------------------------------------------------------------------
+// CM_BRAND — Briggs Brand Standards v3 / Northmarq 2024 (single source of truth)
+// ----------------------------------------------------------------------------
+// CM chart feedback item #1 (2026-08): chart text runs inherited the workbook
+// theme minor font (+mn-lt = Calibri) with no explicit typeface, and several
+// series used off-brand accents (sage #4CB582, amethyst #7E6BAD, amber #D97706).
+// This config is the single knob for chart typography + palette per the Briggs
+// standard, and drives the off-palette linter so any regression surfaces in the
+// export log.
+//
+// ⚠️ TYPEFACE: `typeface` (Open Sans) is the Excel-safe default that renders on
+// every machine. `typefacePreferred` (Futura PT) is the brand primary — flip
+// CM_BRAND.typeface to it (or pass brand.chartFont) ONLY once Futura PT is
+// confirmed installed on every machine that opens these workbooks, else Excel
+// silently falls back to the theme font. Single knob — nothing else changes.
+const CM_BRAND = {
+  typeface: 'Open Sans',
+  typefacePreferred: 'Futura PT',
+  palette: {
+    primary:  '003DA5', // NM Blue — primary series, chart titles
+    deep:     '001159', // NM Blue Deep — emphasis / label text
+    accent:   '62B5E5', // Sky — secondary series
+    blue85:   '265AB2', // third blue series
+    gridline: 'E0E8F4', // NM Blue 12, 0.75-1pt
+    benchmark:'9EA9B7', // Steel — reference / constant lines (replaces orange)
+    // Tertiary (series 4+, <10% of chart)
+    peridot:    '8FC49E',
+    amethyst:   '9B88A5',
+    topaz:      '99B2DD',
+    aquamarine: '5FA3A8',
+    tourmaline: 'B6E0DA',
+    // Neutrals
+    iron:     'D8DFDF',
+    steel:    '9EA9B7',
+    slate:    '6A748C',
+    charcoal: '3D4A54',
+    ink:      '191919',
+    paper:    'FFFFFF',
+  },
+  // Text roles (color hex without '#')
+  text: {
+    title:     '003DA5', // primary, bold
+    axisLabel: '3D4A54', // charcoal, regular 9pt
+    legend:    '6A748C', // slate, 9pt
+    callout:   '3D4A54', // charcoal, value emphasized
+  },
+  sizes: { title: 1200, axisTitle: 900, axisLabel: 900, dataLabel: 900, legend: 900 },
+  // Retired / off-brand colors (slate 6A748C intentionally NOT banned).
+  banned: new Set(['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79']),
+};
+
+// Resolve the active chart font. brand.chartFont wins so the value is
+// overridable per-export without a code change.
+function chartFont(brand) {
+  return (brand && (brand.chartFont || brand.typeface)) || CM_BRAND.typeface;
+}
+
+// Emit <a:latin>/<a:ea>/<a:cs> so a text run declares an explicit typeface
+// instead of inheriting the theme minor font (+mn-lt).
+function fontRunFrag(brand) {
+  const f = escapeXml(chartFont(brand));
+  return `<a:latin typeface="${f}"/><a:ea typeface="${f}"/><a:cs typeface="${f}"/>`;
+}
+
+// On-brand hex set (uppercase, no '#') for off-palette detection.
+const CM_PALETTE_HEXES = new Set(
+  Object.values(CM_BRAND.palette).map(h => h.toUpperCase())
+    .concat(['000000']) // black baseline reference is allowed
+);
+const CM_BANNED_HEXES = new Set([...CM_BRAND.banned].map(h => h.toUpperCase()));
+
+/**
+ * Reason a color is off-brand, or null when on-brand / non-color. Pure.
+ * Semantic status colors (functional red/green/amber) are intentionally NOT
+ * flagged — only the retired brand accents + non-palette blues.
+ */
+function offPaletteReason(hex) {
+  if (!hex) return null;
+  const h = String(hex).replace('#', '').toUpperCase();
+  if (!/^[0-9A-F]{6}$/.test(h)) return null;
+  if (CM_PALETTE_HEXES.has(h)) return null;
+  if (CM_BANNED_HEXES.has(h)) return `banned off-brand color #${h}`;
+  return `non-palette color #${h}`;
+}
+
+/**
+ * Walk a chart injection spec and return { template, color, reason } for any
+ * off-palette series colors. Used by the exporter to log brand drift without
+ * altering chart output.
+ */
+function scanSpecPalette(injection, template) {
+  const out = [];
+  const spec = injection && injection.spec ? injection.spec : injection;
+  if (!spec || typeof spec !== 'object') return out;
+  const seen = new Set();
+  const check = (c) => {
+    const reason = offPaletteReason(c);
+    if (reason && !seen.has(reason)) { seen.add(reason); out.push({ template, color: c, reason }); }
+  };
+  check(spec.color);
+  for (const key of ['barSeries', 'lineSeries', 'colors']) {
+    const arr = spec[key];
+    if (Array.isArray(arr)) {
+      for (const s of arr) check(typeof s === 'string' ? s : (s && (s.color || s.borderColor)));
+    }
+  }
+  return out;
+}
+
 // R37 P1 — default cat-axis date format. Renders 2026-03-31 as "1Q-2026"
 // to match the PDF renderer's `Q1 '26` style (user feedback 2026-05-19:
 // "we had previously displayed the labels in year and quarter terms").
@@ -101,11 +210,11 @@ const CAT_AX_TICK_LBL_POS = '<c:tickLblPos val="low"/>';
 // auto-cuts them. Vertical rotation is the master's chosen idiom.
 //
 // txPr appears after spPr / before crossAx in the EG_AxShared sequence.
-// Color 595959 (NM neutral gray, dark enough to print) matches R63.
+// Color 3D4A54 (NM neutral gray, dark enough to print) matches R63.
 const CAT_AX_VERTICAL_TXT = `<c:txPr>
           <a:bodyPr rot="-5400000" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
           <a:lstStyle/>
-          <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+          <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="3D4A54"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
         </c:txPr>`;
 // R66 — retained alias so call sites read naturally; R63's "horizontal"
 // naming was a misnomer once the master parity was confirmed.
@@ -286,10 +395,10 @@ function valAxNumFmtFrag(numFmt) {
 // emitting the gridlines block explicitly pins the visual.
 //
 // Master uses tx1 schemeClr with lumMod 15000 / lumOff 85000
-// (= "Black, Text 1, Lighter 85%" → ~#D9D9D9). We use the equivalent
+// (= "Black, Text 1, Lighter 85%" → ~#E0E8F4). We use the equivalent
 // srgbClr so the color stays consistent regardless of the workbook's
 // theme — same approach we use for series colors elsewhere.
-const VAL_AX_GRIDLINE_COLOR = 'D9D9D9';  // ~85%-lightened tx1 (master parity)
+const VAL_AX_GRIDLINE_COLOR = 'E0E8F4';  // ~85%-lightened tx1 (master parity)
 const MAJOR_GRIDLINES_FRAG =
   `<c:majorGridlines>` +
     `<c:spPr><a:ln w="9525" cap="flat" cmpd="sng" algn="ctr">` +
@@ -384,7 +493,7 @@ function dLblXml(idx, text) {
                 <a:lstStyle/>
                 <a:p>
                   <a:r>
-                    <a:rPr lang="en-US" b="1" sz="900"/>
+                    <a:rPr lang="en-US" b="1" sz="900"><a:solidFill><a:srgbClr val="${CM_BRAND.text.callout}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:rPr>
                     <a:t>${escapeXml(text)}</a:t>
                   </a:r>
                 </a:p>
@@ -418,14 +527,15 @@ function chartTitleXml(text) {
             <a:pPr algn="ctr">
               <a:defRPr sz="1200" b="1" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
                 <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
-                <a:latin typeface="+mn-lt"/>
-                <a:ea typeface="+mn-ea"/>
-                <a:cs typeface="+mn-cs"/>
+                <a:latin typeface="${CM_BRAND.typeface}"/>
+                <a:ea typeface="${CM_BRAND.typeface}"/>
+                <a:cs typeface="${CM_BRAND.typeface}"/>
               </a:defRPr>
             </a:pPr>
             <a:r>
               <a:rPr lang="en-US" sz="1200" b="1">
                 <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
+                <a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/>
               </a:rPr>
               <a:t>${escapeXml(text)}</a:t>
             </a:r>
@@ -813,7 +923,7 @@ function buildStackedBarChartXml(spec) {
             <c:txPr>
               <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
               <a:lstStyle/>
-              <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="${lblColor}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+              <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="${lblColor}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
             </c:txPr>
             <c:dLblPos val="ctr"/>
             <c:showLegendKey val="0"/>
@@ -935,7 +1045,7 @@ function buildMultiLineChartXml(spec) {
           <c:tx><c:rich>
             <a:bodyPr rot="-5400000" vert="horz"/>
             <a:lstStyle/>
-            <a:p><a:r><a:rPr lang="en-US" sz="900" b="0"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill></a:rPr><a:t>${escapeXml(spec.yLeftAxisTitle || spec.yAxisTitle)}</a:t></a:r></a:p>
+            <a:p><a:r><a:rPr lang="en-US" sz="900" b="0"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:rPr><a:t>${escapeXml(spec.yLeftAxisTitle || spec.yAxisTitle)}</a:t></a:r></a:p>
           </c:rich></c:tx>
           <c:overlay val="0"/>
         </c:title>`
@@ -1127,6 +1237,7 @@ function buildComboChartXml(spec) {
           <a:lstStyle/>
           <a:p><a:r><a:rPr lang="en-US" sz="900" b="0">
             <a:solidFill><a:srgbClr val="6A748C"/></a:solidFill>
+            <a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/>
           </a:rPr><a:t>${escapeXml(text)}</a:t></a:r></a:p>
         </c:rich></c:tx>
         <c:overlay val="0"/>
@@ -1391,7 +1502,7 @@ function buildDoughnutChartXml(spec) {
           <c:txPr>
             <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
             <a:lstStyle/>
-            <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+            <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
           </c:txPr>
           <!-- R68-E (D14): dLblPos is ILLEGAL under c:doughnutChart per ECMA-376;
                its presence made Excel classify chart31/chart32 as corrupt and
@@ -2268,6 +2379,10 @@ export {
   heatRampColors,
   fitCapAxisRange,
   fitDataAxisRange,
+  CM_BRAND,
+  chartFont,
+  offPaletteReason,
+  scanSpecPalette,
 };
 
 // ----------------------------------------------------------------------------
@@ -3271,7 +3386,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
         { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
         { key: 'non_renewed_expirations',        color: '62B5E5', sign: -1 },  // sky — expired & not renewed
-        { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
+        { key: 'terminated_leases',              color: '9EA9B7', sign: -1 },  // amber
       ];
       const resolved = RENEWAL_SERIES
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -3349,7 +3464,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const seriesDefs = [
         { key: 'private_count',       color: '003DA5' },  // navy — Private
         { key: 'institutional_count', color: '62B5E5' },  // sky — Institutional/Fund
-        { key: 'reit_count',          color: '4CB582' },  // sage — REIT
+        { key: 'reit_count',          color: '8FC49E' },  // sage — REIT
       ];
       const series = seriesDefs
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -3381,8 +3496,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // matches the PDF visual exactly.
       //
       // Cohort palette per cm-chart-image-renderer.js PDF_COLORS:
-      //   cap_long_term     #7E6BAD  (purple)   — longest-term
-      //   cap_mid_long      #4CB582  (sage)     — middle-long
+      //   cap_long_term     #9B88A5  (purple)   — longest-term
+      //   cap_mid_long      #8FC49E  (sage)     — middle-long
       //   cap_mid           #62B5E5  (sky)      — middle (dia only)
       //   cap_short         #003DA5  (navy)     — shortest
       //   cap_outside_firm  #6A748C  (gray)     — gov only, dashed
@@ -3418,13 +3533,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         : 'cap_6to10';
 
       const seriesDefs = hasDialysisCohorts ? [
-        { key: 'cap_12plus',  color: '7E6BAD' },                       // 12+ purple
-        { key: 'cap_8to12',   color: '4CB582' },                       // 8-12 sage
+        { key: 'cap_12plus',  color: '9B88A5' },                       // 12+ purple
+        { key: 'cap_8to12',   color: '8FC49E' },                       // 8-12 sage
         { key: 'cap_6to8',    color: '62B5E5' },                       // 6-8 sky
         { key: 'cap_5orless', color: '003DA5' },                       // ≤5 navy
       ] : [
-        { key: 'cap_10plus',       color: '7E6BAD' },                  // 10+ purple
-        { key: govSixToTenKey,     color: '4CB582' },                  // 6-10 sage
+        { key: 'cap_10plus',       color: '9B88A5' },                  // 10+ purple
+        { key: govSixToTenKey,     color: '8FC49E' },                  // 6-10 sage
         { key: 'cap_less5',        color: '003DA5' },                  // <5 navy
         { key: 'cap_outside_firm', color: '6A748C', dashed: true },    // Outside dashed gray
       ];
@@ -3642,8 +3757,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //
       // R65 — colors realigned to Northmarq brand tokens (per user notes
       // 2026-05-22 batch 5: "Color scheme doesn't match the brand
-      // standards"). Pre-R65 used off-brand sage (#4CB582) for the core
-      // 10+ bar and amber (#D97706) for the core 10+ line. R65 swaps to:
+      // standards"). Pre-R65 used off-brand sage (#8FC49E) for the core
+      // 10+ bar and amber (#9EA9B7) for the core 10+ line. R65 swaps to:
       //   count_total         nm_sky  #62B5E5  (was sky — keep)
       //   count_core_10plus   nm_pale #E0E8F4  (pale fill + sky border)
       //   avg_cap_total       nm_navy #003DA5  solid line (was navy — keep)
@@ -3674,11 +3789,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky },
             // R67 — was pale-sky (#E0E8F4) which was too faint against the
             // gridlines and the user couldn't see the core-10+ bar at all.
-            // Sage (#4CB582) is the next NM brand-palette color over from
+            // Sage (#8FC49E) is the next NM brand-palette color over from
             // sky and creates clear visual separation in the clustered
             // grouping. Keep sky border as a tint cue ("close cousin of
             // total market"). User feedback 2026-05-23 batch 6.
-            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '4CB582', borderColor: sky },
+            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '8FC49E', borderColor: sky },
           ],
           lineSeries: [
             { titleCol: capTotCol,  titleRow: headerRow, valCol: capTotCol,  color: navy },
@@ -4125,11 +4240,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
-              color: '7E6BAD', dashed: true },  // purple
+              color: '9B88A5', dashed: true },  // purple
             { titleCol: medCol, titleRow: headerRow, valCol: medCol,
               color: '003DA5' },                // navy
             { titleCol: botCol, titleRow: headerRow, valCol: botCol,
-              color: '4CB582', dashed: true },  // sage
+              color: '8FC49E', dashed: true },  // sage
           ],
           anchor: standardAnchor,
         },
@@ -4179,7 +4294,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // State + Municipal = marker per present quarter (sparse → each
             // available reading visible across the null gaps).
             { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582', showMarker: true, markerSize: 4 },  // sage
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '8FC49E', showMarker: true, markerSize: 4 },  // sage
           ],
           anchor: standardAnchor,
         },
@@ -4410,7 +4525,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     case 'dom_price_change_active': {
       // 4 series — 2 DOM bars (left) + 2 price-change % lines (right).
-      // Both lines share the same color (#1F4E79 dark blue) with the
+      // Both lines share the same color (#003DA5 dark blue) with the
       // core variant DASHED per renderer line ~1393. Bar colors per
       // renderer: avg_dom_total=palette[3] (pale/sky), avg_dom_core=palette[1] (sky).
       const periodCol = findCol('period_end');
@@ -4419,7 +4534,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const pctTotCol = findCol('pct_price_change_total');
       const pctCorCol = findCol('pct_price_change_core');
       if (!periodCol || !domTotCol || !domCorCol || !pctTotCol || !pctCorCol) return null;
-      const DARK_BLUE = '1F4E79';
+      const DARK_BLUE = '003DA5';
       return {
         tabName,
         spec: {
@@ -4491,8 +4606,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yLeftNumFmt:  VAL_FMT_PERCENT_2DP,
           yRightNumFmt: VAL_FMT_PERCENT_0DP,
           barSeries: [
-            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '4CB582' },  // sage
-            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '7E6BAD' },  // light purple
+            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '8FC49E' },  // sage
+            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '9B88A5' },  // light purple
           ],
           lineSeries: [
             { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: navy,
@@ -4642,7 +4757,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           lineSeries: [
             // R56 — Cost-of-capital YoY pace, amber (matches the
             // renderer's deferred 3rd series color noted in R45/R50).
-            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: 'D97706' },
+            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: '9EA9B7' },
           ],
           anchor: standardAnchor,
         },
@@ -4872,7 +4987,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // other": volume area = pale fill + SKY edge (recedes, was navy), cap
       // quartile band = AMETHYST low-opacity (was sky — blended with the area),
       // avg-cap dots = NM navy (the lone navy element, the headline metric).
-      const amethyst = '7E6BAD';
+      const amethyst = '9B88A5';
 
       // R37 P3 — peak/trough/most-recent labels on the navy cap-rate dots
       // (renderer line 1489: buildAnnotations(rows, r => r.cap_rate, fmtPct2))
@@ -5010,7 +5125,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // PDF segment colors (positional — DaVita first, FMC second, etc.).
       // Excess rows get the "Other" gray. The data tab arrives pre-sorted
       // from the view (per the renderer's expectation).
-      const SEGMENT_COLORS = ['003DA5', '62B5E5', '4CB582', '6A748C'];
+      const SEGMENT_COLORS = ['003DA5', '62B5E5', '8FC49E', '6A748C'];
       // Build a per-row color array sized to the data range. Anything
       // past the 4 known segments falls back to the "Other" gray so
       // unknown tenants don't crash the chart.
@@ -5082,9 +5197,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //
       // Updated mapping (R50):
       //   Avg Cap        teal   (R50, was navy)    aquamarine #00B1B0
-      //   Upper Quartile purple (unchanged)         #7E6BAD
+      //   Upper Quartile purple (unchanged)         #9B88A5
       //   Lower Quartile sky   (R50, was gray)    #62B5E5
-      //   Median         sage   (unchanged)         #4CB582
+      //   Median         sage   (unchanged)         #8FC49E
       // R60 — per-dot callout labels. User notes 2026-05-22 batch 4:
       // "We need the data points labeled with call outs so we can see
       // the data, maybe even adjust the cap rate axis so we can see
@@ -5127,13 +5242,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               color: '003DA5', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('r') },
             { titleCol: upperQCol,  titleRow: headerRow, valCol: upperQCol,
-              color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              color: '9B88A5', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('t') },
             { titleCol: lowerQCol,  titleRow: headerRow, valCol: lowerQCol,
               color: '62B5E5', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('b') },
             { titleCol: medianCol,  titleRow: headerRow, valCol: medianCol,
-              color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              color: '8FC49E', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('l') },
           ],
           anchor: standardAnchor,
@@ -5226,7 +5341,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                         || { min: 0, max: 0.25 },
           barSeries,
           lineSeries: [
-            { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: 'D97706' },
+            { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: '9EA9B7' },
           ],
           anchor: standardAnchor,
         },

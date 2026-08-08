@@ -23,7 +23,7 @@
 
 import ExcelJS from 'exceljs';
 import { summaryColumnHeaders, buildInlineSummary } from './cm-summary-table.js';
-import { NATIVE_CHART_TEMPLATES, buildInjectionSpec } from './cm-native-chart-injector.js';
+import { NATIVE_CHART_TEMPLATES, buildInjectionSpec, scanSpecPalette } from './cm-native-chart-injector.js';
 
 // Round 3d — Inline summary blocks under selected chart tabs.
 // Each entry maps a chart_template_id to a metrics array; the worksheet
@@ -1787,6 +1787,14 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       });
       if (spec) {
         nativeInjections.push(spec);
+
+        // CM chart feedback item #1 — flag any off-brand series color in the
+        // export log so a palette regression surfaces without altering output.
+        try {
+          for (const w of scanSpecPalette(spec, chart.chart_template_id)) {
+            driftWarnings.push(`[brand] ${w.template}: ${w.reason}`);
+          }
+        } catch { /* non-fatal — logging only */ }
 
         // R34 P8.5 — write declarative helper columns. Templates that
         // need derived data (e.g. IQR width = upper_q − lower_q for
