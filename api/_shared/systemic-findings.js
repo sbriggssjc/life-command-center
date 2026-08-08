@@ -293,6 +293,37 @@ function tallyByStatus(rows) {
   return out;
 }
 
+// Prompt 80 — match-disambiguation assist accuracy. `raw` = the per-month rows
+// from v_lcc_w8_u4_match_assist_accuracy (period, measured, agreed, disagreed).
+// Reports the all-time measured sample + agreement accuracy (the meaningful
+// signal — accuracy accrues slowly, one verdict at a time). Honest zeros before
+// any verdict is measured. A high accuracy after a REAL sample is the future
+// gate for auto-resolving the top-confidence band — this section only MEASURES.
+export function buildMatchAssistSection(raw, prev) {
+  const monthRows = Array.isArray(raw) ? raw : [];
+  let measured = 0; let agreed = 0;
+  for (const r of monthRows) { measured += num(r.measured); agreed += num(r.agreed); }
+  const accuracy = pct(agreed, measured);
+  const findings = [{
+    metric: 'match_assist_verdicts_measured', value: measured,
+    ...computeDelta(measured, prevMetric(prev, 'match_assist_verdicts_measured')), severity: 'info',
+  }, {
+    metric: 'match_assist_agreed', value: agreed,
+    ...computeDelta(agreed, prevMetric(prev, 'match_assist_agreed')), severity: 'info',
+  }, {
+    metric: 'match_assist_accuracy_pct', value: accuracy,
+    ...computeDelta(accuracy, prevMetric(prev, 'match_assist_accuracy_pct')), severity: 'info',
+  }];
+  return {
+    key: 'match_assist', title: 'Match-disambiguation assist accuracy',
+    findings,
+    note: measured === 0
+      ? 'No measured match_disambiguation verdicts against an assist yet — accuracy uncounted (assist off, or no card with an assist has been worked).'
+      : measured + ' verdicts measured against the Ollama pre-rank assist; ' + agreed + ' agreed with its top pick ('
+        + accuracy + '% accuracy). A high accuracy after a real sample is the future gate for auto-resolving the top-confidence band — not yet.',
+  };
+}
+
 export function buildNamingHygieneSection(raw, prev) {
   // raw = the naming_hygiene_backlog rollup persisted by the U1 apply tick
   // (junk_review_batch.details.naming_hygiene_backlog), or null when U1 has not
@@ -372,6 +403,7 @@ export function assembleReport(inputs, { period, now = null, prevSections = null
     ['chain', () => buildChainSection(inputs.chain, prevBy.chain)],
     ['precision_floors', () => buildPrecisionFloorSection(inputs.precision, prevBy.precision_floors)],
     ['lane_throughput', () => buildLaneThroughputSection(inputs.lanes, prevBy.lane_throughput)],
+    ['match_assist', () => buildMatchAssistSection(inputs.match_assist, prevBy.match_assist)],
     ['naming_hygiene', () => buildNamingHygieneSection(inputs.naming_hygiene, prevBy.naming_hygiene)],
     ['extraction', () => buildExtractionSection(inputs.extraction, prevBy.extraction)],
   ];

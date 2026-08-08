@@ -152,10 +152,10 @@ describe('assembleReport + month-over-month deltas', () => {
     naming_hygiene: null,
     extraction: { total_30d: 10, stamped: 10, ollama: 10, fell_back: 0 },
   };
-  it('assembles 8 sections + flattened findings + severity totals', () => {
+  it('assembles 9 sections + flattened findings + severity totals', () => {
     const r = assembleReport(inputs, { period: '2026-08', now: '2026-08-07T00:00:00Z' });
-    assert.equal(r.sections.length, 8);
-    assert.equal(r.totals.sections, 8);
+    assert.equal(r.sections.length, 9);
+    assert.equal(r.totals.sections, 9);
     assert.ok(r.totals.findings > 0);
     assert.ok(r.totals.by_severity);
   });
@@ -322,8 +322,8 @@ describe('Prompt 73 — per-section resilience (section_errors)', () => {
     assert.equal(r.section_errors.length, 1);
     assert.equal(r.section_errors[0].section, 'provenance');
     assert.match(r.section_errors[0].error, /boom-provenance/);
-    // The other 7 sections still built.
-    assert.equal(r.sections.length, 7);
+    // The other 8 sections still built.
+    assert.equal(r.sections.length, 8);
     assert.equal(r.totals.section_errors, 1);
     assert.ok(!r.sections.some((s) => s.key === 'provenance'));
   });
@@ -332,7 +332,7 @@ describe('Prompt 73 — per-section resilience (section_errors)', () => {
     const r = assembleReport(okInputs, { period: '2026-08' });
     assert.deepEqual(r.section_errors, []);
     assert.equal(r.totals.section_errors, 0);
-    assert.equal(r.sections.length, 8);
+    assert.equal(r.sections.length, 9);
   });
 });
 
