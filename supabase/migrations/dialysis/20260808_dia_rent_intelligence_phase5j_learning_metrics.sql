@@ -1,0 +1,32 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5j — LEARNING METRICS (dia)
+-- zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5j_learning_metrics). Authoritative bodies in-DB.
+--
+-- Proof, on one panel, that the engine is getting smarter quarter over quarter:
+-- coverage-class deltas, research-backlog burn-down (tenant x state),
+-- corroboration rate, confidence-distribution drift, and derived-artifact
+-- population growth.
+--
+--   dia_rent_learning_metrics        snapshot store (snapshot_date, metric_key,
+--       value, dimension). UNIQUE (snapshot_date, metric_key).
+--   dia_capture_rent_learning_metrics(snapshot_date default CURRENT_DATE) ->
+--       captures ~64 metrics: coverage classes (cm_dia_rent_coverage_summary),
+--       derived_cap / usable_cap / implied_evidence / listing_implied_cap /
+--       bov_evidence / provenance_edges counts, timeline rows + properties,
+--       corroborated rows, confidence avg/median/ge_0_7, basis mix, open review
+--       + reconcile queues, convention refits, and research backlog by
+--       tenant x state (top 40, dimension-tagged) for burn-down.
+--   v_dia_rent_learning_panel        ONE PANEL: latest snapshot vs the prior one
+--       per metric, with delta + pct_change (QoQ). The packet / daily briefing
+--       read this view.
+--   pg_cron 'dia-rent-learning-metrics' @ 30 5 1 1,4,7,10 * (quarterly).
+--
+-- Baseline snapshot captured 2026-08-08 (64 metrics): evidence_timeline 4,466
+-- (was 4,316 pre-5f), derived_cap 148, implied_evidence 2,539, usable_cap 2,875,
+-- provenance_edges 2,688, confidence avg 0.6302 / median 0.6500, convention_refits
+-- 1, listing_cap_review open 57. Deltas populate on the next quarterly snapshot.
+--
+-- See: docs/architecture/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for the full function + panel.)

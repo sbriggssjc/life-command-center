@@ -1,0 +1,40 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5g — BOV / DILIGENCE ingest hook (dia)
+-- zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5g_bov_evidence_store +
+--  dia_rent_intelligence_phase5g_builder_consume_bov). Authoritative bodies
+-- in-DB. JS hook: api/_shared/dia-bov-evidence-hook.js.
+--
+-- When a BOV / underwriting workbook is built from diligence docs (rent roll,
+-- lease abstract), or a comps-engine run surfaces a verified rent correction,
+-- the confirmed rent/commencement/term/bumps feed the timeline as DOCUMENTED
+-- evidence (provenance = bov_id + doc ref) through the same build path. Every
+-- workflow that LEARNS a rent teaches the system.
+--
+--   rent_confidence_ladder: ('contract','bov_confirmed',0.95) — documented tier,
+--       just below a directly-executed lease, above OM/stated/implied.
+--   dia_bov_confirmed_evidence  documented-evidence store (bov_id + doc_ref).
+--   dia_build_property_rent_timeline  reads it as a 5th source (contract basis);
+--       BOV rent wins the highest-conf-per-year dedup over stated/implied/
+--       projected. An implied-source-kind='bov' provenance stamp ancestry-links
+--       the row so dia_check_ancestry catches downstream reuse.
+--   dia_ingest_bov_rent_evidence(property, date, rent, bov_id, doc_ref, channel,
+--       commencement, expiration, bump_pct, bump_interval, confidence, rebuild,
+--       batch, dry_run)  -> the entry point (ancestry-checked; rebuilds the
+--       property's timeline so the confirmed rent lands immediately).
+--   dia_revert_bov_evidence(bov_id)  reversal.
+--
+-- No BOV/diligence table exists in dia today (the BOV workflow is skill-driven,
+-- the deal spine lives in LCC Opps), so this ships the durable ENTRY POINT +
+-- documented-tier channel; grounded rows arrive when a BOV/comps run calls the
+-- hook (the SOS/SAM "mechanism-ships-first" pattern).
+--
+-- Acceptance (self-rolling-back synthetic gate, property 21868, 0 residue):
+--   year 2015 projected (rent 135,046, conf 0.70) -> after BOV ingest:
+--   basis 'contract', rent 999,111, conf 0.95, bov_confirmed=true;
+--   dia_check_ancestry(row, bov 'BOV_TEST_5G')=TRUE. Documented BOV rent beat the
+--   projection. RAISE rolled it back.
+--
+-- See: docs/architecture/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for the full functions + gate.)

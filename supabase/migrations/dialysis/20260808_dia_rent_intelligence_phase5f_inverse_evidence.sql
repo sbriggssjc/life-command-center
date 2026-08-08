@@ -1,0 +1,60 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5f — INVERSE EVIDENCE (cap -> rent). dia
+-- zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration (three parts:
+--   dia_rent_intelligence_phase5f_inverse_evidence_store
+--   dia_rent_intelligence_phase5f_builder_consume_implied
+--   dia_rent_intelligence_phase5f_extract_inverse_evidence
+-- ). Authoritative bodies in-DB; reproduce via pg_get_functiondef / _viewdef.
+--
+-- Every (price, cap) pair is a rent observation: implied rent = price x cap,
+-- entered as STATED-tier evidence BELOW documents. Feeds the timeline; the
+-- builder's highest-confidence-per-year dedup guarantees documented/higher
+-- evidence always wins — implied only anchors gap years.
+--
+-- Channels (grounded live populations):
+--   listing_creation           initial_price x initial_cap_rate   ~0.60
+--   listing_stated_cap_update  last_price x last_cap_rate          ~0.60
+--       (last_cap_rate_source='master_or_manual' AND cap changed; the
+--        backfill_*/recomputed-from-price sources are the T9d trap -> excluded)
+--   sale_cap_no_rent           sold_price x stated cap             ~0.70
+--       (rent_at_sale IS NULL; excludes OUR derived caps so a derived cap can
+--        never round-trip back to rent)
+--
+-- Ladder rows: ('stated','listing_implied',0.60), ('stated','sale_implied',0.70).
+--
+-- dia_rent_implied_evidence  append-only tiered store (NOT written to leases/
+--                            sales, which would inflate documented evidence).
+-- dia_provenance_parents     extended: an implied timeline row resolves to its
+--                            listing/sale source (provenance.implied_source_*),
+--                            so the Ancestry Rule catches downstream reuse (5a
+--                            deriving a cap from an implied rent that came from
+--                            that same sale; a listing corroborating its own
+--                            implied rent).
+-- dia_build_property_rent_timeline  reads the store as a 4th source (verbatim
+--                            Phase 2 body + one INSERT + implied provenance stamp).
+-- dia_extract_inverse_rent_evidence(dry_run default true, batch, limit) ->
+--                            set-based extraction, PSF-sanity-gated [5,200]
+--                            (out-of-band -> rent_reconcile_queue, never the
+--                            store), idempotent, reversible.
+-- dia_revert_inverse_rent_evidence(batch)  reversal.
+--
+-- T9d PRICE-ONLY REFRESH IS DELIBERATELY UNHOOKED (documented at the hook site):
+-- a price move against a CONSTANT stated cap is the broker moving cap
+-- expectations, not restating rent. listing_stated_cap_update requires the CAP
+-- to have changed from a stated source; a constant-cap reprice yields no evidence.
+--
+-- Grounded live (batch phase5f_20260808):
+--   candidate pairs 2,599 | stored 2,539 | PSF-gated 60 (-> review queue).
+--   1,608 properties affected; 150 with NO documented rent gained a real
+--   stated-anchored timeline (159 implied stated rows now live). The remaining
+--   ~1,458 (documented-rent) properties have implied evidence stored and absorb
+--   it on their next rebuild — the 5i propagation boundary.
+-- Acceptance (self-rolling-back gate, property 29984, 0 residue): rebuild landed
+--   an implied listing-sourced row (year 2011, basis 'stated', conf 0.60);
+--   dia_check_ancestry(that row, listing 10224)=TRUE -> the listing is blocked
+--   from corroborating/deriving its own implied rent. Documented DaVita evidence
+--   still won its years.
+--
+-- See: docs/architecture/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for the full functions + gates.)

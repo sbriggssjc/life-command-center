@@ -1,0 +1,38 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5h — CONVENTION AUTO-REFIT (dia)
+-- zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5h_convention_autorefit +
+--  dia_rent_intelligence_phase5h_annualized_only_compare). Authoritative bodies
+-- in-DB. Teams-note runner: api/_shared/dia-convention-refit-card.js.
+--
+-- Quarterly, re-fit tenant_lease_conventions empirically from structured
+-- lease_escalations (modal ANNUALIZED bump + median interval, n>=20). Material
+-- drift (>25 bps annualized) writes a NEW versioned row (effective_from=today) —
+-- history is NEVER mutated. The conventions stop being seeds and start being
+-- findings; FMC's flagged placeholder graduates automatically when its n clears.
+--
+-- CRITICAL: compare ANNUALIZED rates. A stored 10%/5yr annualizes to 1.92%/yr,
+-- so comparing raw bump_pct would false-trigger; the interval is folded into the
+-- annualized rate, so it is the SOLE material-change test. approved_standard rows
+-- are human-curated: a divergence is SURFACED (Teams note + refit log), NEVER
+-- auto-overridden — only empirical/fallback/generic rows get a new version.
+--
+--   dia_convention_refit_log        per-tenant refit ledger.
+--   dia_refit_tenant_conventions(dry_run default true, batch, min_n=20, drift=0.0025)
+--       -> refit_written | graduated | divergence_surfaced | no_change counts.
+--   pg_cron 'dia-convention-refit' @ 0 7 1 1,4,7,10 * (quarterly).
+--
+-- Grounded live (batch phase5h_20260808): among tenants with n>=20 structured
+-- escalations —
+--   * fresenius GRADUATED: empirical_modal 0.017/1yr (flagged, n=324) -> new
+--     empirical_refit 0.0200/1yr (n=541, flagged_low_conf=false); the 1990 row
+--     is preserved (history intact).
+--   * davita  NO CHANGE: stored 10%/5yr annualizes to 1.92% vs empirical 2.00%
+--     (7.6 bps) -> same escalation, no false trigger.
+--   * usrc    DIVERGENCE SURFACED: approved_standard 2.5% vs empirical 2.0%
+--     (50 bps) -> surfaced for human review, NOT auto-overridden.
+--
+-- Reversible: DELETE the new-vintage empirical_refit rows + the batch's log rows.
+-- See: docs/architecture/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for the full function.)
