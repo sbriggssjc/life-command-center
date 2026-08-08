@@ -2814,7 +2814,11 @@ const MIN_YEAR_BY_TEMPLATE = {
   // is the chart's subject, so scan nm_cap_rate ONLY; the market line is cropped
   // to the same window. Superseded the T1/T7-U2 "market full-range + NM overlay
   // gaps" start (which opened the chart on ~13yr of NM-less market history).
-  nm_vs_market_cap:             (rows) => firstNonNullYear(rows, ['nm_cap_rate']) ?? 2014,
+  // CM feedback item #4 — floor at 2012 (sustained modern NM era). A real but
+  // isolated pre-GFC 2008 NM cluster + a genuine 2009-2011 collapse would
+  // otherwise start the plot at ~2008; the registry display_from (2012-01-01)
+  // is the primary crop, this is the belt-and-suspenders floor.
+  nm_vs_market_cap:             (rows) => Math.max(2012, firstNonNullYear(rows, ['nm_cap_rate']) ?? 2012),
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
   // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).
