@@ -120,20 +120,67 @@ export async function domainQuery(domain, method, path, body, extraHeaders = {},
   // recordWriteFailure call never throws or blocks the caller. The opts
   // parameter lets callers pass { label, sourceRunId } for triage context.
   if (!res.ok && (method === 'POST' || method === 'PATCH' || method === 'PUT' || method === 'DELETE')) {
-    recordWriteFailure({
-      domain,
-      method,
-      path,
-      status: res.status,
-      errorDetail: data,
-      fields: body && typeof body === 'object' && !Array.isArray(body)
-        ? Object.keys(body)
-        : null,
-      label:        opts && opts.label        || null,
-      sourceRunId:  opts && opts.sourceRunId  || null,
-      callerFile:   opts && opts.callerFile   || 'domain-db.js',
-    }).catch(() => { /* recording is best-effort */ });
+    // Prompt 81: callers that fold an EXPECTED collision/FK into a dedup path
+    // (R37 dedup-respect) pass opts.suppressFailureCodes so the handled,
+    // recoverable Postgres error (e.g. 23505 duplicate, 23503 dangling FK) is
+    // NOT recorded as an ingest_write_failure — it is a normal re-ingest
+    // outcome, not a silent-corruption signal. Only genuinely unhandled
+    // failures keep polluting the failure surface.
+    const suppress = opts && Array.isArray(opts.suppressFailureCodes);
+    const pgCode = (data && typeof data === 'object' && !Array.isArray(data))
+      ? data.code
+      : (Array.isArray(data) && data[0] && typeof data[0] === 'object' ? data[0].code : null);
+    if (!(suppress && pgCode && opts.suppressFailureCodes.includes(pgCode))) {
+      recordWriteFailure({
+        domain,
+        method,
+        path,
+        status: res.status,
+        errorDetail: data,
+        fields: body && typeof body === 'object' && !Array.isArray(body)
+          ? Object.keys(body)
+          : null,
+        label:        opts && opts.label        || null,
+        sourceRunId:  opts && opts.sourceRunId  || null,
+        callerFile:   opts && opts.callerFile   || 'domain-db.js',
+      }).catch(() => { /* recording is best-effort */ });
+    }
   }
 
   return { ok: res.ok, status: res.status, data, count };
+}
+
+// ============================================================================
+// Prompt 81 (item 3): FK-parent existence guard for domain writes.
+//
+// property_documents (and other child tables) carry a FK to
+// properties(property_id). Several doc-write paths pass a property_id that was
+// bridged from an asset external_identity or a raw request body without ever
+// confirming the parent row exists — a dangling id then aborts the INSERT with
+// 23503 (property_documents_property_id_fkey), ~488 dia + 10 gov failures.
+//
+// This returns TRUE only when the parent property row is present. Callers use
+// it to SKIP the child write (and record it as an expected/recoverable
+// condition) instead of hard-aborting with an FK violation. A GET that itself
+// errors returns `null` (unknown) so the caller can choose to proceed rather
+// than silently drop a write on a transient read failure.
+//
+// Best-effort per-invocation memoisation keeps a burst of doc writes for the
+// same property from re-querying properties for every file.
+// ============================================================================
+export async function domainPropertyExists(domain, propertyId, cache) {
+  if (propertyId === null || propertyId === undefined || propertyId === '') return null;
+  const key = `${domain}:${propertyId}`;
+  if (cache && cache.has(key)) return cache.get(key);
+  let result = null;
+  try {
+    const r = await domainQuery(domain, 'GET',
+      `properties?property_id=eq.${encodeURIComponent(propertyId)}&select=property_id&limit=1`
+    );
+    if (r.ok) result = !!(r.data && r.data.length);
+    // Non-ok GET → leave result null (unknown); don't assert absence on a
+    // transient read error.
+  } catch { result = null; }
+  if (cache && result !== null) cache.set(key, result);
+  return result;
 }

@@ -35,7 +35,7 @@ import { reconcilePropertyOwnership } from './sidebar-pipeline.js';
 //   - match.domain in { 'government', 'dialysis' }
 // ============================================================================
 
-import { domainQuery } from '../_shared/domain-db.js';
+import { domainQuery, domainPropertyExists } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { emitMatchDisambiguation } from './intake-matcher.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIdentitySystem } from '../_shared/entity-link.js';
@@ -2579,6 +2579,13 @@ export async function attachEnrichDocument(domain, propertyId, { fileName, docTy
     source_url:       sourceUrl || null,
     ingestion_status: 'enriched',
   };
+  // Prompt 81 (item 3): FK-parent guard — skip cleanly on a dangling
+  // property_id rather than aborting with 23503.
+  const parentOk = await domainPropertyExists(domain, base.property_id).catch(() => null);
+  if (parentOk === false) {
+    return { ok: false, status: 409, skipped: 'missing_property', domain,
+      detail: { property_id: base.property_id } };
+  }
   const attempts = [
     { ...base, source: 'folder_feed_enrich' },  // preferred — record the channel
     base,                                        // fallback — no source column
@@ -2597,8 +2604,13 @@ export async function attachEnrichDocument(domain, propertyId, { fileName, docTy
     }
     lastErr = { status: r.status, detail: r.data };
   }
-  // Last resort: plain insert (no on_conflict) for a table without that index.
-  const plain = await domainQuery(domain, 'POST', 'property_documents', base);
+  // Prompt 81 (item 2): last resort now folds a duplicate into the
+  // (property_id, file_name) dedup path instead of a bare INSERT that aborts
+  // with 23505 (uix_prop_doc). Handled duplicate suppressed from the surface.
+  const plain = await domainQuery(domain, 'POST',
+    'property_documents?on_conflict=property_id,file_name', base,
+    { Prefer: 'return=representation,resolution=merge-duplicates' },
+    { suppressFailureCodes: ['23505'] });
   if (plain.ok) {
     const inserted = Array.isArray(plain.data) ? plain.data[0] : plain.data;
     return { ok: true, document_id: inserted?.document_id || inserted?.id || null, domain };
@@ -2783,7 +2795,12 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     effectiveMatch.property_id &&
     artifact &&
     typeof artifact.mime_type === 'string' &&
-    artifact.mime_type.toLowerCase().startsWith('text/')
+    artifact.mime_type.toLowerCase().startsWith('text/') &&
+    // Prompt 81 (item 3): the bridged effectiveMatch.property_id can point at
+    // an asset external_id with no live properties row — writing the doc then
+    // aborts with 23503. Confirm the FK parent exists first; skip the doc
+    // write cleanly when it doesn't (proceed on an unknown/null read result).
+    (await domainPropertyExists(effectiveMatch.domain, Number(effectiveMatch.property_id)).catch(() => null)) !== false
   ) {
     try {
       const artFull = await opsQuery(
