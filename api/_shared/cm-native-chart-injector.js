@@ -24,6 +24,9 @@
 // ============================================================================
 
 import JSZip from 'jszip';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 // ----------------------------------------------------------------------------
 // Excel XML namespace constants
@@ -66,41 +69,58 @@ function escapeXml(s) {
 // CM_BRAND.typeface to it (or pass brand.chartFont) ONLY once Futura PT is
 // confirmed installed on every machine that opens these workbooks, else Excel
 // silently falls back to the theme font. Single knob — nothing else changes.
-const CM_BRAND = {
+// Loaded from public/reports/cm-brand.json — DATA, not code, so a future
+// brand-guide update is a JSON change. Falls back to inline defaults if the
+// file is unreadable (keeps the injector working in minimal test contexts).
+const CM_BRAND_FALLBACK = {
   typeface: 'Open Sans',
   typefacePreferred: 'Futura PT',
   palette: {
-    primary:  '003DA5', // NM Blue — primary series, chart titles
-    deep:     '001159', // NM Blue Deep — emphasis / label text
-    accent:   '62B5E5', // Sky — secondary series
-    blue85:   '265AB2', // third blue series
-    gridline: 'E0E8F4', // NM Blue 12, 0.75-1pt
-    benchmark:'9EA9B7', // Steel — reference / constant lines (replaces orange)
-    // Tertiary (series 4+, <10% of chart)
-    peridot:    '8FC49E',
-    amethyst:   '9B88A5',
-    topaz:      '99B2DD',
-    aquamarine: '5FA3A8',
-    tourmaline: 'B6E0DA',
-    // Neutrals
-    iron:     'D8DFDF',
-    steel:    '9EA9B7',
-    slate:    '6A748C',
-    charcoal: '3D4A54',
-    ink:      '191919',
-    paper:    'FFFFFF',
+    primary: '003DA5', deep: '001159', accent: '62B5E5', blue85: '265AB2',
+    gridline: 'E0E8F4', benchmark: '9EA9B7', peridot: '8FC49E', amethyst: '9B88A5',
+    topaz: '99B2DD', aquamarine: '5FA3A8', tourmaline: 'B6E0DA', iron: 'D8DFDF',
+    steel: '9EA9B7', slate: '6A748C', charcoal: '3D4A54', ink: '191919',
+    paper: 'FFFFFF', black: '000000',
   },
-  // Text roles (color hex without '#')
-  text: {
-    title:     '003DA5', // primary, bold
-    axisLabel: '3D4A54', // charcoal, regular 9pt
-    legend:    '6A748C', // slate, 9pt
-    callout:   '3D4A54', // charcoal, value emphasized
-  },
+  series_ramp: ['003DA5', '62B5E5', '265AB2', '8FC49E', '9B88A5', '99B2DD', '5FA3A8', 'B6E0DA'],
+  text: { title: '003DA5', axisLabel: '3D4A54', legend: '6A748C', callout: '3D4A54' },
   sizes: { title: 1200, axisTitle: 900, axisLabel: 900, dataLabel: 900, legend: 900 },
-  // Retired / off-brand colors (slate 6A748C intentionally NOT banned).
-  banned: new Set(['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79']),
+  banned: ['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79'],
 };
+
+function loadCmBrand() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const cfgPath = join(here, '..', '..', 'public', 'reports', 'cm-brand.json');
+    const raw = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    return { ...CM_BRAND_FALLBACK, ...raw };
+  } catch {
+    return CM_BRAND_FALLBACK;
+  }
+}
+
+// CM_BRAND — resolved brand config. `banned` normalized to a Set for O(1)
+// lookup. Per-vertical overrides applied via cmBrandFor(vertical).
+const _CM_BRAND_RAW = loadCmBrand();
+const CM_BRAND = {
+  ..._CM_BRAND_RAW,
+  banned: new Set((_CM_BRAND_RAW.banned || []).map(h => String(h).toUpperCase())),
+};
+
+/**
+ * Resolve the brand config for a vertical, applying any `verticals[<v>]`
+ * override block from cm-brand.json (shallow-merged over the base). Returns
+ * CM_BRAND itself when there is no override.
+ */
+function cmBrandFor(vertical) {
+  const ov = _CM_BRAND_RAW.verticals && _CM_BRAND_RAW.verticals[vertical];
+  if (!ov || Object.keys(ov).length === 0) return CM_BRAND;
+  return {
+    ...CM_BRAND, ...ov,
+    palette: { ...CM_BRAND.palette, ...(ov.palette || {}) },
+    text: { ...CM_BRAND.text, ...(ov.text || {}) },
+  };
+}
 
 // Resolve the active chart font. brand.chartFont wins so the value is
 // overridable per-export without a code change.

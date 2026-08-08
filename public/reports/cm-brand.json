@@ -1,0 +1,58 @@
+{
+  "$schema_version": "1.0.0",
+  "_doc": "Capital Markets chart brand config — Briggs Brand Standards v3 / Northmarq 2024 guide. Single source of truth for CM chart typography, palette, series-ramp order, and color proportions. Loaded by api/_shared/cm-native-chart-injector.js (CM_BRAND). Per-vertical overrides live under `verticals`. This is DATA, not code — a future brand-guide update is a JSON change, not a code change.",
+  "_source": {
+    "authoritative": [
+      "Northmarq_Brand Style Guide_Final_11_2024.pdf (data-styling page)",
+      "colorproportions.png (series-ramp order + proportions)",
+      "Briggs_Brand_Standards_v3.md (tiebreaker)"
+    ],
+    "_provenance_note": "The three authoritative source files live in Scott's OneDrive (_WORKFLOW folder) and were NOT reachable from the build sandbox. Values below are taken from Scott's A1-v2 token spec (stated as derived from Briggs v3) and cross-checked against public/reports/cm_brand_tokens.json (reverse-engineered from the gov master workbook theme). ACTION: diff these hexes against the 2024 PDF data-styling page + colorproportions.png and correct any delta here — the PDF + Briggs v3 win. Log deltas in this block.",
+    "_deltas_vs_2024_pdf": []
+  },
+
+  "typeface": "Open Sans",
+  "typefacePreferred": "Futura PT",
+  "_typeface_note": "Open Sans is the Excel-safe default that renders on every machine. Flip `typeface` to Futura PT ONLY once it is confirmed installed on every machine that opens these workbooks, else Excel silently falls back to the theme font.",
+
+  "palette": {
+    "primary":    "003DA5",
+    "deep":       "001159",
+    "accent":     "62B5E5",
+    "blue85":     "265AB2",
+    "gridline":   "E0E8F4",
+    "benchmark":  "9EA9B7",
+    "peridot":    "8FC49E",
+    "amethyst":   "9B88A5",
+    "topaz":      "99B2DD",
+    "aquamarine": "5FA3A8",
+    "tourmaline": "B6E0DA",
+    "iron":       "D8DFDF",
+    "steel":      "9EA9B7",
+    "slate":      "6A748C",
+    "charcoal":   "3D4A54",
+    "ink":        "191919",
+    "paper":      "FFFFFF",
+    "black":      "000000"
+  },
+
+  "series_ramp": ["003DA5", "62B5E5", "265AB2", "8FC49E", "9B88A5", "99B2DD", "5FA3A8", "B6E0DA"],
+  "_series_ramp_note": "Per colorproportions.png: primary blues dominate; tertiary hues (peridot/amethyst/topaz/aquamarine/tourmaline) are series 4+ and should occupy <10% of any chart. Use slot N for series N.",
+
+  "text": {
+    "title":     "003DA5",
+    "axisLabel": "3D4A54",
+    "legend":    "6A748C",
+    "callout":   "3D4A54"
+  },
+
+  "sizes": { "title": 1200, "axisTitle": 900, "axisLabel": 900, "dataLabel": 900, "legend": 900 },
+
+  "banned": ["4CB582", "7E6BAD", "D97706", "D9D9D9", "595959", "1F4E79"],
+  "_banned_note": "Retired off-brand accents/grays. Slate #6A748C is intentionally NOT banned (it is the on-brand axis/legend neutral).",
+
+  "verticals": {
+    "dialysis": {},
+    "gov": {}
+  }
+}
