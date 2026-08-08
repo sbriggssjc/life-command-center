@@ -454,6 +454,20 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 90 (W9.3) landed — PR #1648 MERGED + deployed; 3 dry-run gates pending
+Three workstreams, three flags OFF: **WS1** `sf-link-assist` (80-pattern annotation pre-rank on the
+3.3k pool, metadata-only writer). **WS2** `sf-link-rescore` — smart scope cut: NO JS Fellegi-Sunter
+port (band drift risk); deterministically reproduces W4.3's exact/near-exact auto-link tier only,
+vs the refreshed 16,210-account registry (+223 since W4.3); null-guarded, splink_v2 provenance,
+reversible `w9_3_rescore_log`. Sample: 5/162 top gov no_match now exact auto-links, 0 ambiguous.
+**WS3** `sf-donor-handoff` — traced the real key gap: W9.2 reads person-level `sf_contact_id`,
+linkage lands org-level `sf_account_id` → account→contacts expansion via the SF bridge (unique
+name-match, fill-blanks). **Addressable pool measured: 2,305 blank contacts under SF-linked owners
+TODAY** (vs ~20 with keys) — W9.2's unlock is real and near. 44 tests. **Gate: 3 dry-run GETs
+(`sf-link-assist-tick` / `sf-link-rescore-tick` / `sf-donor-handoff-tick` each `?score=1`) →
+review → flip `W9_3_SF_ASSIST`/`W9_3_RESCORE`/`W9_3_DONOR_HANDOFF` → watch the donor-key count
+climb → flip W9.2.**
+
 ### W9.2 dry-run HONEST-ZERO verified; sequencing corrected → prompt 90 (W9.3) queued
 W9.2 `?score=1&n=8`: mechanics clean (pools confirmed dia 71.1%/gov 68.3%, scan_errors [], intake
 index 5,000 entries loaded) but 0 proposals both arms. **Cowork probe confirmed the zeros are
