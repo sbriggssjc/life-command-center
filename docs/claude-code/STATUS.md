@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Buildout continuation 2026-08-08 — WAVE 9 kicked off + W6.5 staged + ORE self-resolved
+Scott picked three tracks: (1) **ORE resolver — already resolved**: flag was flipped Aug 6 (after
+the audit-refresh snapshot); queue verified draining 2,064→538 in 2 days (~750/day), nothing to do.
+(2) **WAVE 9 — Data Connectedness (Scott directive)**: kickoff written
+`docs/audits/W9_CONNECTEDNESS_KICKOFF.md` with LIVE gap map — recorded→true is SOLVED (dia 1.6%
+unlinked), the chasm is downstream: **68%/73% (dia/gov) of true owners have NO contact, 71% of dia
+contacts have neither email nor phone, ~88-89% no SF link**. Five units W9.1–W9.5; recommended
+first = W9.2 internal-harvest reachability (U3-pattern verbatim-evidence proposals from
+correspondence/SF/sidebar/intake). Unit prompts to be drafted per session pickup. (3) **W6.5
+front-end decomposition**: prompt 87 queued (Stage 1: seam map + module seam + extract DC lanes
+region from ops.js; byte-identical behavior; staged follow-ups per the map doc).
+
 ### ✅ U1 FULLY PRODUCTIVE — 2026-08-08 13:16 UTC manual drain verified
 Post-85 POST: **deterministic_dismissed 100** (blanks, zero LLM), **llm_scored 20** w/ real mix
 (17 dismiss / 1 keep / 2 rename — 0.85 share, guard correctly quiet on the LLM-only denominator),
