@@ -36,6 +36,9 @@ import {
   computeScanDeadline, remainingScoreBudget, nextScanCursor,
 } from './_shared/junk-prescreen.js';
 import {
+  TM_MISPARSE_HEURISTIC, EMAIL_FANOUT_SUSPECT_THRESHOLD, isMisparseName, tmMisparseReason,
+} from './_shared/tm-misparse.js';
+import {
   DUP_PAIR_TARGETS, findDupPairTarget, dupSideRef, dupPairKey, dupPairSubjectRef,
   generateCandidatePairs, excludeKnownPairs, buildDupPairPrompt, normalizeDupPairProposal,
   parseDupPairJson, isProposablePair, dupPairDisposition, DUP_PAIR_NEEDS_HUMAN_SIM,
@@ -185,6 +188,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
+    case 'tm-misparse-seed':           return handleTmMisparseSeed(req, res);
     case 'naming-hygiene-tick':        return handleNamingHygieneTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
@@ -2029,6 +2033,113 @@ async function closeJunkScanBatch(scanBatchId, status, summary) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Prompt 89 — one-shot TrafficMetrix-misparse seeder. Writes the misparse class
+// into junk_entity_review as DETERMINISTIC dismiss proposals (heuristic
+// tm_misparse, provider 'none', evidence = the verbatim name) so a human confirms
+// in the EXISTING U1 lane (no new machinery). Value-gated on the email fan-out:
+// only person entities whose email is shared by MORE than the suspect threshold
+// (a table-as-contact-list misparse signature) AND whose NAME trips the street/
+// label detector are seeded — so a lone real person with a unique email
+// ("Chris Way", "Ladonna Street") is never swept in, and the REAL cluster members
+// ("Richard Ehmer", "James Devincenti") are excluded (their names don't trip the
+// detector). Idempotent: on_conflict=subject_ref merges, so re-runs add nothing.
+// Dry-run by default; ?apply=1 (or body.apply) writes.
+async function handleTmMisparseSeed(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const apply = req.query.apply === '1' || req.query.apply === 'true' || req.body?.apply === true || req.body?.apply === '1';
+  const sourceRunId = 'tm_misparse_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+  // 1. Fan-out emails: shared by > threshold person entities (the misparse
+  //    signature). v_lcc_person_email_merge_candidates groups person entities by
+  //    normalized email with member_count; the fan-out gate is member_count > N.
+  const fr = await opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,member_count'
+    + '&member_count=gt.' + EMAIL_FANOUT_SUSPECT_THRESHOLD + '&order=member_count.desc&limit=500');
+  if (!fr.ok) return res.status(502).json({ error: 'fanout_email_query_failed', detail: fr.data });
+  const fanoutEmails = (Array.isArray(fr.data) ? fr.data : []).map((r) => r.email).filter(Boolean);
+
+  const summary = {
+    apply, threshold: EMAIL_FANOUT_SUSPECT_THRESHOLD, fanout_email_count: fanoutEmails.length,
+    scanned: 0, misparse_hits: 0, seeded: 0, skipped_retired: 0, errors: [], sample: [],
+  };
+
+  for (const email of fanoutEmails) {
+    // 2. Every person entity carrying this fan-out email (querying entities
+    //    directly — NOT the view, which hides already junk_name_flagged members —
+    //    so flagged street rows are still seeded into the lane).
+    const er = await opsQuery('GET', 'entities?select=id,name,metadata&entity_type=eq.person'
+      + '&merged_into_entity_id=is.null&email=eq.' + pgFilterVal(email) + '&limit=200');
+    if (!er.ok) { summary.errors.push({ email, detail: er.data }); continue; }
+    const rows = Array.isArray(er.data) ? er.data : [];
+    summary.scanned += rows.length;
+    for (const row of rows) {
+      const reason = tmMisparseReason(row.name);
+      if (!reason) continue; // real cluster member (Richard Ehmer / James Devincenti class)
+      summary.misparse_hits += 1;
+      if (row.metadata && typeof row.metadata === 'object' && row.metadata.junk_retired) {
+        summary.skipped_retired += 1; continue;
+      }
+      if (summary.sample.length < 25) summary.sample.push({ id: row.id, name: row.name, signal: reason.signal });
+      if (!apply) continue;
+      const subjectRef = junkSubjectRef('lcc', 'entities', row.id);
+      const body = {
+        subject_ref: subjectRef, domain: 'lcc', table_name: 'entities', pk_value: String(row.id),
+        entity_name: row.name == null ? '' : String(row.name), heuristic: TM_MISPARSE_HEURISTIC,
+        proposed_verdict: 'dismiss', confidence: 1,
+        evidence_quote: String(reason.evidence).slice(0, 200),
+        reason: 'TrafficMetrix table-as-contact-list misparse: name is a ' + reason.signal
+          + ' ("' + String(reason.match || reason.evidence).slice(0, 60) + '") stamped with a fanned-out page email — not a real person.',
+        model_provider: 'none', model_name: null, source_run_id: sourceRunId, scan_batch_id: null,
+        status: 'proposed',
+      };
+      const ur = await opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+        { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+      if (ur.ok) summary.seeded += 1;
+      else summary.errors.push({ id: row.id, detail: ur.data });
+    }
+  }
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// Prompt 89 — un-stamp a confirmed tm_misparse phantom (Do #2). Clears the
+// fanned-out email (the person_email cluster key) so the real broker's email
+// stops binding this phantom, flags the name (immediate pool/view exclusion), and
+// detaches the conflated external_identities (the costar contact + any real SF
+// contact wrongly conflated onto it). All captured into a junk_review_batch
+// reversal row FIRST, so it is fully reversible. Returns the reversal summary.
+async function unstampMisparseMember(entityId, sourceRunId, actorId) {
+  const er = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(entityId) + '&select=id,email,metadata&limit=1');
+  const ent = (er.ok && Array.isArray(er.data)) ? er.data[0] : null;
+  if (!ent) return { ok: false, skipped: 'entity_not_found' };
+  const ir = await opsQuery('GET', 'external_identities?entity_id=eq.' + pgFilterVal(entityId) + '&select=*');
+  const idents = (ir.ok && Array.isArray(ir.data)) ? ir.data : [];
+  const meta = (ent.metadata && typeof ent.metadata === 'object') ? ent.metadata : {};
+  const reversal = {
+    kind: 'tm_misparse_unstamp', entity_id: String(entityId),
+    old_email: ent.email || null,
+    old_junk_name_flagged: (meta.junk_name_flagged !== undefined ? meta.junk_name_flagged : null),
+    deleted_identities: idents,
+  };
+  const led = await opsQuery('POST', 'junk_review_batch',
+    { batch_kind: 'apply', source_run_id: sourceRunId || 'verdict', status: 'applied',
+      domain: 'lcc', table_name: 'entities', pk_value: String(entityId), actor: actorId || null,
+      reversal, details: { unit: 'prompt_89_tm_misparse_unstamp', cleared_email: ent.email || null, deleted_identity_count: idents.length } },
+    { headers: { Prefer: 'return=representation' } });
+  const batchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+  const newMeta = Object.assign({}, meta, {
+    junk_name_flagged: true,
+    tm_misparse_unstamped: { batch_id: batchId, at: new Date().toISOString() },
+  });
+  const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(entityId), { email: null, metadata: newMeta });
+  if (!pr.ok) return { ok: false, batch_id: batchId, error: 'unstamp_patch_failed', detail: pr.data };
+  if (idents.length) {
+    await opsQuery('DELETE', 'external_identities?entity_id=eq.' + pgFilterVal(entityId)).catch(() => {});
+  }
+  return { ok: true, batch_id: batchId, cleared_email: ent.email || null, deleted_identity_count: idents.length };
+}
+
 async function handleJunkPrescreenTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const user = await authenticate(req, res);
@@ -3692,6 +3803,16 @@ async function buildFreshLinkItems(opts = {}) {
     for (const row of rows) {
       const subjectRef = personEmailSubjectRef(row.winner_id);
       if (known.has(subjectRef)) { counts.person_email.already_known += 1; continue; }
+      // Prompt 89 — U3 pool hygiene: skip clusters whose winner OR any loser name
+      // trips the TrafficMetrix misparse detector (street label / TM vocab). Those
+      // members are pending quarantine in the junk lane; do not spend LLM cycles or
+      // lane clicks adjudicating garbage. Once quarantined (email un-stamped /
+      // junk_name_flagged), the view drops them and the real cluster shows normally.
+      const clusterNames = [row.winner_name, ...(Array.isArray(row.loser_names) ? row.loser_names : [])];
+      if (clusterNames.some((n) => isMisparseName(n))) {
+        counts.person_email.misparse_excluded = (counts.person_email.misparse_excluded || 0) + 1;
+        continue;
+      }
       const gathered = gatherPersonEmailEvidenceBlocks(row);
       addSources(counts.person_email.evidence_sources, gathered.sources);
       pushErrors(LINK_POOL_PERSON_EMAIL, subjectRef, gathered.errors);
@@ -5516,10 +5637,14 @@ async function fetchFederatedSource(type, cap, opts) {
         },
       });
     }
-    // Honest count: open proposals + conflict rows (both are workable).
+    // Honest count: open proposals + conflict rows (both are workable). Prompt 89
+    // (Do #5): when BOTH count probes come back null (count header missing / a
+    // timed-out probe), report null — NOT 0 — so the lane header does not read
+    // "1 shown · 0 workable" over a workable card. Mirrors the merge_duplicate_
+    // entities null-guard. total stays a number whenever either probe succeeded.
     const u3OpenCnt = await opsCnt('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)');
     const u3ConfCnt = await opsCnt('w8_u3_link_review?status=eq.conflict');
-    out.total = (u3OpenCnt || 0) + (u3ConfCnt || 0);
+    out.total = (u3OpenCnt == null && u3ConfCnt == null) ? null : (u3OpenCnt || 0) + (u3ConfCnt || 0);
     return out;
   }
 
@@ -6878,7 +7003,18 @@ async function handleDecisionVerdict(req, res) {
       const target = findJunkTarget(parsed.domain, parsed.table);
       if (!target) return res.status(400).json({ error: 'junk_entity_review: unknown target ' + parsed.domain + ':' + parsed.table });
 
-      // FK guard only matters when a confirm could retire. Compute lazily.
+      // Prompt 89 — tm_misparse: BEFORE the FK check, un-stamp the fanned-out
+      // email + detach the conflated identities from the phantom, so the real
+      // broker's email/SF stop binding it and the (now identity-less) phantom can
+      // soft-retire cleanly. Reversible via junk_review_batch. A genuine remaining
+      // child (relationship/portfolio/cadence/opp) still routes to a conflict card.
+      let tmUnstamp = null;
+      if (humanAction === 'confirm' && review.proposed_verdict === 'dismiss'
+          && review.heuristic === TM_MISPARSE_HEURISTIC && target.domain === 'lcc') {
+        tmUnstamp = await unstampMisparseMember(review.pk_value, review.source_run_id, user.id);
+      }
+      // FK guard only matters when a confirm could retire. Compute lazily (AFTER
+      // the tm_misparse un-stamp above removed the phantom's identities).
       let fk = { referenced: false };
       if (humanAction === 'confirm' && review.proposed_verdict === 'dismiss') {
         fk = await junkFkReferenced(target, review.pk_value);
@@ -6886,6 +7022,7 @@ async function handleDecisionVerdict(req, res) {
       const plan = planJunkApply({ humanVerdict: humanAction, proposedVerdict: review.proposed_verdict, fkReferenced: fk.referenced });
       const nowIso = new Date().toISOString();
       const effects = { plan: plan.action, proposed_verdict: review.proposed_verdict, fk };
+      if (tmUnstamp) effects.tm_unstamp = tmUnstamp;
       let reversal = {};
 
       if (plan.action === 'soft_retire') {
@@ -6947,7 +7084,7 @@ async function handleDecisionVerdict(req, res) {
       const decStatus = plan.action === 'dismiss_proposal' ? 'skipped' : 'decided';
       const rr = await record(verdict, decStatus, { plan: plan.action, review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
-      return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', ...reversal });
+      return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', tm_unstamp: tmUnstamp || undefined, ...reversal });
     }
 
     // ---- reachability_harvest_review (W9.2 / Prompt 88) ----------------------

@@ -328,6 +328,19 @@ Feature-flagged (`OCR_CLOUD_*`, `OPENAI_API_KEY`); unset ⇒ honest `needs_ocr`.
   identity on the person (`api/_shared/sf-account-link.js`).
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
+- **TrafficMetrix table-as-contact-list misparse (Prompt 89).** A CoStar/sidebar capture once parsed a
+  property page's TrafficMetrix traffic-count TABLE as a contact list — street names / column labels
+  ("Collection Street", "Traffic Vol", "Made with TrafficMetrix") minted as PERSON entities, all stamped
+  with the page's one real email (fan-out) → garbage person_email clusters. Guard: `api/_shared/tm-misparse.js`
+  is the single detector (`isMisparseName` = street-suffix or TM-vocab, never a clean "First Last"). It is
+  reused by (1) the one-shot seeder `?action=tm-misparse-seed` (writes DETERMINISTIC `tm_misparse` dismiss
+  proposals into `junk_entity_review` — value-gated on the email fan-out `member_count>4`, so lone real
+  people with unique emails are never swept in); (2) the sidebar contact-extraction guard (`isJunkContactName`
+  + `planContactMinting` fan-out cap → suspects routed to a `contact_misparse_review` inbox item, never
+  minted); (3) the U3 person_email pool (clusters with a misparse member are skipped). On confirm of a
+  `tm_misparse` dismiss, the verdict path `unstampMisparseMember` clears `entities.email` + detaches the
+  conflated `external_identities` (reversible via `junk_review_batch`) so the real broker's email/SF stops
+  binding the phantom, then soft-retires it. Never hard-deletes; the seeder is idempotent (`on_conflict=subject_ref`).
 - **The SOS-direct fetcher currently yields nothing from CI** (FL/CA Cloudflare/Incapsula 403 to datacenter IPs;
   AZ portal migrated). The handlers are correct + honest-blocked; the weekly `--apply` schedule is DISABLED.
   Needs a non-datacenter egress. See **government-lease** `docs/SOS_ENDPOINT_VERIFICATION_2026-07-22.md`.
