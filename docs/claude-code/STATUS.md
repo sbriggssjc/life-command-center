@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 82 landed — PR #1634, awaiting merge; PGRST204 confirmed ZERO since cache reload
+**PGRST204 = 0 since the schema-cache reload** (Cowork-verified) — the 8,306/30d cluster is fully
+closed: 78's migrations + writer fixes + the cache reload. September U4 shows the decay.
+**82 root cause:** `staged_intake_extractions` has exactly ONE DB writer, but the 61 stamp lived
+in the per-artifact loop where the multi-artifact merge (priority-winner fields only) + a stale
+module-global `__lastAiCallInfo` could drop it — sidebar-channel + cloud-fallback rows shipped
+bare. Fix: shared idempotent `ensureProviderStamp` (routes the per-artifact stamp; re-asserted on
+mergedSnapshot at the WRITE SITE = 100% coverage; no-AI paths stamp `final_provider:'none'` so
+absence always means "old row") + structural guard against future bare writers. 25 tests.
+**Gate: merge #1634 → redeploy. Then W5.3 re-grade at ~50 fresh extractions (15 now).**
+
 ### Housekeeping 2026-08-08 (Cowork) — PGRST204 root-caused to STALE SCHEMA CACHE + prompt 82 queued
 Post-redeploy PGRST204 residue (16/3h, all `property_documents` 'source' column) was NOT code: the
 78 migrations were correct — PostgREST's schema cache hadn't reloaded. **Cowork ran
