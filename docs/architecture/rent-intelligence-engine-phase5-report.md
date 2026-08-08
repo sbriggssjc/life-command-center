@@ -152,17 +152,39 @@ properties.
 
 ---
 
+## 5b. Listing validation + capless fills — SHIPPED, applied live — batch `phase5b_20260808`
+
+Timeline rent validates broker-stated on-market caps and fills capless actives — **stated caps are
+never overwritten**, and every derivation is ancestry-checked.
+
+- **Validation:** for on-market listings (canonical `v_dia_on_market`) with a timeline rent conf≥0.7,
+  compute timeline-implied cap = `rent / asking_price`; divergence > **75 bps** → the
+  `dia_listing_cap_review` lane (`v_dia_listing_cap_review_open` is the Teams card's source). Stated
+  caps are queued, never mutated.
+- **Capless fill:** truly-capless actives (NULL across `current/last/cap/initial_cap_rate`) get an
+  implied cap in the **labeled `dia_listing_implied_cap` side tier** — never written into
+  `available_listings` (trigger-safe; a derived cap never masquerades as stated). Surfaced via
+  `v_dia_listing_cap_enriched` (`effective_cap` + `cap_tier` = `stated` | `rent_timeline_implied`) —
+  spec 5b-iii's labeled quality tier for reconstructed listing views.
+- **Teams card:** `api/_shared/dia-listing-cap-review-card.js` (`runListingCapValidation`) — a
+  non-blocking, drop-in cron/route runner that invokes the SQL validator and posts one ranked card of
+  the divergent reviews via the existing `sendTeamsAlert` pipeline.
+- **Ancestry:** a listing whose current-year timeline rent descends from its own 5f implied evidence is
+  skipped (self-validation blocked).
+
+**Grounded live:** 145 on-market with timeline rent conf≥0.7 → **57 flagged divergent** (max 432 bps),
+**1 truly-capless active filled** (candidates capless by only 2 columns carried a cap in `initial`/`cap`
+and were correctly validated instead), **10 skipped by the Ancestry Rule**. **0 stated caps
+overwritten.** Reversal: `SELECT public.dia_revert_listing_cap_fill('phase5b_20260808');`
+
+---
+
 ## Continuation — designed & grounded, in the accepted build order
 
 Remaining units ship as their own reviewed, dry-run-first, reversible increments on PR #1649, in the
-sequence: **5b → 5g → (5c/5d/5e serving-layer) → 5i → 5j**. All call `dia_check_ancestry` in every
+sequence: **5g → (5c/5d/5e serving-layer) → 5i → 5j**. All call `dia_check_ancestry` in every
 derivation/corroboration path (violations skip + log).
 
-- **5b — listing validation + fills.** (i) actives with stated caps: compute timeline-implied cap;
-  divergence > 75 bps → `listing_cap_review` queue + Teams card; **never overwrite stated**. (ii) fill
-  the capless actives via `cap_rate_method='rent_timeline'`. (iii) reconstructed listing views may use
-  as-of implied caps only as a **labeled** quality tier. Ancestry: a listing-implied cap may not
-  validate a timeline year that descends from that listing.
 - **5c — term serving.** `v_dia_property_term_at_date(property_id, as_of)` → remaining firm term,
   `lease_phase`, options remaining, expiry, basis, confidence. Wire to exporter term buckets (modeled
   terms conf≥0.7, labeled) and comps-engine TERM inputs; report resolution of the undisclosed-term

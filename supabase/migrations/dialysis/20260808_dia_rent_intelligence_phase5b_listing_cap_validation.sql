@@ -1,0 +1,34 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5b — LISTING VALIDATION + capless FILLS (dia)
+-- zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5b_listing_cap_validation +
+--  dia_rent_intelligence_phase5b_consistent_stated_cap). Authoritative bodies
+-- in-DB. Teams card runner: api/_shared/dia-listing-cap-review-card.js.
+--
+-- Timeline rent validates broker-stated on-market caps and fills capless
+-- actives, ancestry-checked. STATED caps are NEVER overwritten.
+--
+--   dia_listing_cap_review          divergence (>75 bps) review lane;
+--   v_dia_listing_cap_review_open   the Teams card's data source (open, ranked).
+--   dia_listing_implied_cap         labeled derived-cap side tier (the capless
+--       fill + as-of implied caps) — NEVER written into available_listings, so
+--       it is trigger-safe and a derived cap never masquerades as stated.
+--   v_dia_listing_cap_enriched      effective_cap + cap_tier ('stated' wins;
+--       'rent_timeline_implied' fills only where stated is absent). Reconstructed
+--       listing views read this (spec 5b-iii labeled quality tier).
+--   dia_validate_and_fill_listing_caps(dry_run default true, batch, div_bps=75, limit)
+--       -> validate (divergent -> review), fill (capless -> side tier), ancestry
+--       skip. One consistent 4-column stated-cap definition (current/last/cap/
+--       initial) across gate + view, so a listing with a cap in ANY column is
+--       validated, and a fill happens only when truly capless in all four.
+--   dia_revert_listing_cap_fill(batch)  reversal.
+--
+-- Grounded live (batch phase5b_20260808, canonical v_dia_on_market = 206):
+--   145 on-market with timeline rent conf>=0.7 -> 57 flagged divergent (max 432
+--   bps) into the review lane, 1 truly-capless active filled (labeled tier), 10
+--   skipped by the Ancestry Rule (timeline rent descended from the listing's own
+--   5f implied evidence -> self-validation blocked). 0 stated caps overwritten.
+--
+-- See: docs/architecture/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for the full functions + views.)
