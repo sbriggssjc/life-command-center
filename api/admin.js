@@ -32,6 +32,7 @@ import {
   parseJunkVerdictJson, planJunkApply, buildRetireMarker,
   applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
   junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
+  computeScanDeadline, remainingScoreBudget, nextScanCursor,
 } from './_shared/junk-prescreen.js';
 import {
   DUP_PAIR_TARGETS, findDupPairTarget, dupSideRef, dupPairKey, dupPairSubjectRef,
@@ -1532,7 +1533,6 @@ async function handleMatchDisambigAssistTick(req, res) {
 //   POST /api/junk-prescreen-tick            -> apply: scan + score + write props
 //                                               (flag-gated; no-ops while OFF)
 // ============================================================================
-const JUNK_PRESCREEN_MAX_SCAN = Math.max(2000, parseInt(process.env.JUNK_PRESCREEN_MAX_SCAN || '80000', 10));
 // Prompt 66 — bounded, resumable scoring. Scoring is ollama-latency-bound
 // (~16s/call), so both the inline dry-run (GET ?score=1) and the cron/apply POST
 // enforce a wall-clock budget, and the apply path scores at most one ollama-sized
@@ -1541,6 +1541,18 @@ const JUNK_PRESCREEN_MAX_SCAN = Math.max(2000, parseInt(process.env.JUNK_PRESCRE
 const JUNK_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.JUNK_SCORE_BUDGET_MS || '120000', 10));
 const JUNK_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.JUNK_SCORE_BATCH_SIZE || '25', 10));
 const JUNK_SCORE_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.JUNK_SCORE_INLINE_N || '6', 10));
+// Prompt 84 — windowed resumable scan (port the U5/Prompt-83 pattern back to U1).
+// The per-invocation scan is a WINDOW, not the whole 128k/7-target corpus; a keyset
+// cursor persisted in the scan-batch ledger advances the window each run so nightly
+// ticks WALK the corpus instead of rescanning it (the weight that starved scoring).
+const JUNK_SCAN_WINDOW = Math.max(1000, parseInt(process.env.JUNK_PRESCREEN_SCAN_WINDOW || '20000', 10));
+// The WHOLE-invocation wall-clock budget, split so the scan gets a bounded share
+// and scoring is GUARANTEED its slice (computeScanDeadline / remainingScoreBudget).
+const JUNK_TICK_BUDGET_MS = Math.max(5000, parseInt(process.env.JUNK_TICK_BUDGET_MS || '120000', 10));
+const JUNK_SCAN_BUDGET_MS = Math.max(2000, parseInt(process.env.JUNK_SCAN_BUDGET_MS || '60000', 10));
+// Scoring's guaranteed floor — even if the scan overran its share, scoring still
+// gets at least this much wall-clock so a nightly run never produces 0 scored.
+const JUNK_MIN_SCORE_BUDGET_MS = Math.max(2000, parseInt(process.env.JUNK_MIN_SCORE_BUDGET_MS || '20000', 10));
 // Prompt 67 — the dismiss-share above which the batch is refused as suspect.
 // Post-65 the candidate pool is pre-filtered true-junk, so a high dismiss share
 // is expected; default 0.9 refuses only the near-total all-dismiss pathology.
@@ -1578,9 +1590,14 @@ async function fetchJunkFewShot() {
 }
 
 // Page a target's (pk, name) rows and gate each with the deterministic filter.
-// The JS gate is authoritative — the pull is bounded by JUNK_PRESCREEN_MAX_SCAN
-// (a nightly ceiling; logged when hit so a truncation is never silent).
-async function pullJunkCandidatesForTarget(target) {
+// The JS gate is authoritative. Prompt 84: the per-invocation pull is a WINDOW
+// (JUNK_SCAN_WINDOW rows) advanced by a KEYSET cursor (`pkCol > startCursor`),
+// NOT the whole table via offset — so nightly runs walk the corpus in bounded
+// slices instead of rescanning ~128k rows every time (the weight that starved
+// scoring). Returns { …, nextCursor, wrapped } for the resume ledger. A wall-clock
+// `deadline` stops the scan before a page it can't afford; the cursor holds so the
+// next run resumes the exact slice.
+async function pullJunkCandidatesForTarget(target, startCursor, deadline) {
   const cols = target.pkCol + ',' + target.nameCol;
   const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
   const found = [];
@@ -1588,17 +1605,34 @@ async function pullJunkCandidatesForTarget(target) {
   // NOT U1 junk — counted per class, never enqueued.
   const namingHygiene = { known_abbreviation: 0, address_as_name: 0, total: 0 };
   const PAGE = 1000;
-  let scanned = 0;
-  let truncated = false;
-  for (let offset = 0; offset < JUNK_PRESCREEN_MAX_SCAN; offset += PAGE) {
-    const path = target.table + '?select=' + cols + mergedPred
-      + '&order=' + target.pkCol + '.asc&limit=' + PAGE + '&offset=' + offset;
+  let scanned = 0, truncated = false, reachedEnd = false, lastPk = null;
+  let cursor = startCursor != null && String(startCursor) !== '' ? String(startCursor) : null;
+  for (let pulled = 0; pulled < JUNK_SCAN_WINDOW; pulled += PAGE) {
+    // Wall-clock budget: stop BEFORE a page we can't afford; the cursor holds so
+    // the next run resumes this exact slice (never a silent partial scan).
+    if (deadline && Date.now() >= deadline) { truncated = true; break; }
+    const cursorPred = cursor != null ? '&' + target.pkCol + '=gt.' + encodeURIComponent(cursor) : '';
+    const path = target.table + '?select=' + cols + mergedPred + cursorPred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE;
     const r = target.domain === 'lcc'
       ? await opsQuery('GET', path)
       : await domainQuery(target.domain, 'GET', path);
-    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    if (!r.ok) {
+      // LOUD (Prompt 83): surface status + detail, never a silent records:0. The
+      // cursor holds (retry the same slice next run).
+      const detail = r.data && typeof r.data === 'object'
+        ? (r.data.message || r.data.error || JSON.stringify(r.data)) : String(r.data || '');
+      const err = 'HTTP ' + (r.status || '?') + (detail ? ': ' + String(detail).slice(0, 300) : '');
+      console.error('[junk-prescreen] SCAN FAILED', target.domain, target.table, err, 'path=', path);
+      return { candidates: found, scanned, truncated: false, namingHygiene, error: err,
+        status: r.status || null, nextCursor: startCursor != null ? String(startCursor) : null, wrapped: false };
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
     scanned += rows.length;
     for (const row of rows) {
+      const pk = row[target.pkCol];
+      lastPk = pk;
+      cursor = String(pk);
       const name = row[target.nameCol];
       const hit = junkCandidateReason(name);
       if (!hit) {
@@ -1610,7 +1644,6 @@ async function pullJunkCandidatesForTarget(target) {
         }
         continue;
       }
-      const pk = row[target.pkCol];
       found.push({
         domain: target.domain, table: target.table, pk: String(pk),
         entity_name: name == null ? '' : String(name),
@@ -1622,11 +1655,14 @@ async function pullJunkCandidatesForTarget(target) {
         context: { pk_col: target.pkCol, name_col: target.nameCol },
       });
     }
-    if (rows.length < PAGE) break;
-    if (offset + PAGE >= JUNK_PRESCREEN_MAX_SCAN) truncated = true;
+    if (rows.length < PAGE) { reachedEnd = true; break; }
+    if (pulled + PAGE >= JUNK_SCAN_WINDOW) truncated = true;
   }
-  if (truncated) console.warn('[junk-prescreen] scan truncated at cap', target.domain, target.table, JUNK_PRESCREEN_MAX_SCAN);
-  return { candidates: found, scanned, truncated, namingHygiene };
+  if (truncated) console.warn('[junk-prescreen] scan window bounded', target.domain, target.table, JUNK_SCAN_WINDOW);
+  // Wrap the keyset when the table end was reached OR the window under-filled, so
+  // the next run restarts from the top; otherwise advance to the last pk seen.
+  const { nextCursor, wrapped } = nextScanCursor({ reachedEnd, truncated, lastPk, startCursor });
+  return { candidates: found, scanned, truncated, namingHygiene, error: null, status: 200, nextCursor, wrapped };
 }
 
 // Scan-time batch connection check (Prompt 65). A candidate that is FK-referenced
@@ -1706,7 +1742,12 @@ async function fetchJunkScoredKeys() {
 // Deterministic scan across every target: candidates, minus already-proposed
 // (any junk_entity_review row), already-decided (lcc_decisions) subjects, and
 // already-scored (junk_prescreen_scored, keyed on name_hash so a rename re-scores).
-async function junkScanAll() {
+// Prompt 84: windowed + resumable. `cursors` (per target key) resume the keyset
+// scan where the last run stopped; `opts.deadline` bounds the whole scan so it
+// never eats the invocation budget. Returns `nextCursors` (persisted in the scan
+// ledger) + `budgetExhausted`.
+async function junkScanAll(cursors = {}, opts = {}) {
+  const deadline = Number.isFinite(opts.deadline) ? opts.deadline : null;
   const [existing, decided, scoredKeys] = await Promise.all([
     (async () => {
       const set = new Set();
@@ -1723,12 +1764,38 @@ async function junkScanAll() {
     fetchJunkScoredKeys(),
   ]);
   const perDomain = {};
+  const nextCursors = {};
   const fresh = [];
+  let budgetExhausted = false;
   for (const target of JUNK_TARGETS) {
     const key = target.domain + ':' + target.table;
+    // Whole-invocation budget: once spent, skip the remaining targets and HOLD
+    // their cursors so the next run resumes them (never a silent partial scan).
+    if (deadline && Date.now() >= deadline) {
+      budgetExhausted = true;
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      perDomain[key] = { domain: target.domain, table: target.table, skipped: 'budget_exhausted',
+        scanned: 0, candidates: 0, new: 0, excluded_connected: 0, excluded_scored: 0, enqueueable: 0,
+        naming_hygiene: { total: 0 }, truncated: false };
+      continue;
+    }
     let pull;
-    try { pull = await pullJunkCandidatesForTarget(target); }
-    catch (e) { perDomain[key] = { error: e?.message || String(e), candidates: 0, scanned: 0 }; continue; }
+    try { pull = await pullJunkCandidatesForTarget(target, cursors ? cursors[key] : null, deadline); }
+    catch (e) {
+      perDomain[key] = { domain: target.domain, table: target.table, error: e?.message || String(e), candidates: 0, scanned: 0 };
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      continue;
+    }
+    if (pull.error) {
+      // A failed scan surfaces LOUDLY with candidates:0 AND the error — never a
+      // silent zero. The cursor holds (retry the same slice next run).
+      perDomain[key] = { domain: target.domain, table: target.table, error: pull.error,
+        status: pull.status || null, scanned: 0, candidates: 0, new: 0, excluded_connected: 0,
+        excluded_scored: 0, enqueueable: 0, naming_hygiene: { total: 0 }, truncated: false };
+      nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : (cursors ? (cursors[key] || null) : null);
+      continue;
+    }
+    nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : null;
     const notProposed = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
     // Resume cursor (Prompt 66): drop candidates already scored on a prior tick
     // (unchanged name). A renamed row has a new name_hash ⇒ retained ⇒ re-scored.
@@ -1753,10 +1820,35 @@ async function junkScanAll() {
       enqueueable: enqueueable.length,
       naming_hygiene: pull.namingHygiene || { total: 0 },
       truncated: pull.truncated || false,
+      scan_cursor_from: (cursors && cursors[key]) || null, scan_cursor_to: nextCursors[key],
+      wrapped: pull.wrapped || false,
     };
     for (const c of enqueueable) fresh.push(c);
   }
-  return { perDomain, fresh };
+  return { perDomain, fresh, nextCursors, budgetExhausted };
+}
+
+// Collect per-target scan failures for LOUD surfacing (Prompt 84). A non-empty
+// list means a target returned a real HTTP error instead of rows.
+function junkScanErrors(perDomain) {
+  const out = [];
+  for (const [key, v] of Object.entries(perDomain || {})) {
+    if (v && v.error) out.push({ target: key, status: v.status || null, error: v.error });
+  }
+  return out;
+}
+
+// Read the per-target keyset cursors persisted on the most recent scan batch
+// (details.scan_cursors) — U5/U2 pattern: the ledger IS the cursor. Best-effort.
+async function fetchJunkScanCursors() {
+  try {
+    const r = await opsQuery('GET', 'junk_review_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && r.data[0].details.scan_cursors) {
+      const c = r.data[0].details.scan_cursors;
+      return c && typeof c === 'object' ? c : {};
+    }
+  } catch (_e) { /* best-effort */ }
+  return {};
 }
 
 function junkDomainRollup(perDomain) {
@@ -1775,19 +1867,20 @@ function junkDomainRollup(perDomain) {
   return roll;
 }
 
-// Per-domain naming-hygiene backlog rollup (Prompt 65) — abbrev/address counts
-// only, no rows enqueued. Its own future rename/normalize campaign, not U1.
-function junkNamingHygieneRollup(perDomain) {
-  const roll = {};
+// FLAT naming-hygiene backlog (Prompt 84) — one { total, known_abbreviation,
+// address_as_name } summed across domains. The systemic-findings reader
+// (fetchSystemicFindingsInputs) consumes `naming_hygiene_backlog.total` from the
+// latest U1 batch, so the apply batch persists this flat shape (the per-domain
+// rollup stayed nested and read as total:undefined → 0).
+function junkNamingHygieneFlat(perDomain) {
+  const flat = { total: 0, known_abbreviation: 0, address_as_name: 0 };
   for (const v of Object.values(perDomain)) {
-    const d = v.domain || 'unknown';
     const hy = v.naming_hygiene || {};
-    roll[d] = roll[d] || { total: 0, known_abbreviation: 0, address_as_name: 0 };
-    roll[d].total += hy.total || 0;
-    roll[d].known_abbreviation += hy.known_abbreviation || 0;
-    roll[d].address_as_name += hy.address_as_name || 0;
+    flat.total += hy.total || 0;
+    flat.known_abbreviation += hy.known_abbreviation || 0;
+    flat.address_as_name += hy.address_as_name || 0;
   }
-  return roll;
+  return flat;
 }
 
 async function recordJunkPrescreenHealth({ status, count, lastError, details }) {
@@ -1884,6 +1977,26 @@ async function recordJunkScored(scoredRows, sourceRunId) {
   }
 }
 
+// Close a scan-batch ledger row (Prompt 84 lifecycle): PATCH its status to a
+// terminal value and fold the honest apply bookkeeping (scored / by_verdict /
+// proposed / advanced scan_cursors) into details, so a scan row never lingers
+// 'open'. Best-effort — a failed close only leaves the row 'open' (the pre-84
+// behavior), never throws.
+async function closeJunkScanBatch(scanBatchId, status, summary) {
+  if (scanBatchId == null) return { ok: false, skipped: 'no_batch' };
+  try {
+    return await opsQuery('PATCH', 'junk_review_batch?batch_id=eq.' + encodeURIComponent(scanBatchId),
+      { status: status || 'closed', details: { summary,
+        scan_cursors: summary?.scan_cursors || {}, scan_errors: summary?.scan_errors || [],
+        naming_hygiene_backlog: summary?.naming_hygiene_backlog || { total: 0 },
+        by_verdict: summary?.by_verdict || {}, scored: summary?.scored || 0,
+        proposed: summary?.proposed || 0, closed: true } });
+  } catch (e) {
+    console.warn('[junk-prescreen] scan-batch close failed', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 async function handleJunkPrescreenTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const user = await authenticate(req, res);
@@ -1902,28 +2015,46 @@ async function handleJunkPrescreenTick(req, res) {
       return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
     }
     const sourceRunId = 'w8u1_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
-    const scan = await junkScanAll();
+    // Prompt 84 — windowed resumable scan + a budget split that GUARANTEES scoring
+    // its slice. The scan gets at most (TICK − scoring-floor) wall-clock, so a
+    // full 7-target scan can never eat the invocation budget and strand scoring
+    // (the 0-scored nightly `scan` batch this fixes). The keyset cursor resumes
+    // where the last run stopped, so nightly runs WALK the corpus.
+    const tickStart = Date.now();
+    const tickDeadline = tickStart + JUNK_TICK_BUDGET_MS;
+    const scanDeadline = computeScanDeadline(tickStart, {
+      tickBudgetMs: JUNK_TICK_BUDGET_MS, scanBudgetMs: JUNK_SCAN_BUDGET_MS,
+      minScoreBudgetMs: JUNK_MIN_SCORE_BUDGET_MS });
+    const cursors = await fetchJunkScanCursors().catch(() => ({}));
+    const scan = await junkScanAll(cursors, { deadline: scanDeadline });
+    const scanErrors = junkScanErrors(scan.perDomain);
     const fewShot = await fetchJunkFewShot();
-    // Open the scan ledger row.
+    const namingHygieneFlat = junkNamingHygieneFlat(scan.perDomain);
+    // Open the scan ledger row — carrying the ADVANCED keyset cursors so the next
+    // run resumes the corpus even if this run dies before it closes the batch.
     let scanBatchId = null;
     try {
       const br = await opsQuery('POST', 'junk_review_batch',
         { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
-          details: { per_domain: scan.perDomain, rollup: junkDomainRollup(scan.perDomain), fresh: scan.fresh.length } },
+          details: { per_domain: scan.perDomain, rollup: junkDomainRollup(scan.perDomain), fresh: scan.fresh.length,
+            scan_cursors: scan.nextCursors, scan_errors: scanErrors, scan_budget_exhausted: !!scan.budgetExhausted } },
         { headers: { Prefer: 'return=representation' } });
       if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
     } catch (_e) { /* ledger best-effort */ }
 
-    // Prompt 66 — resumable batches. Score at most one ollama-sized batch per
+    // Prompt 66/84 — resumable batches. Score at most one ollama-sized batch per
     // invocation (min of the request's limit and JUNK_SCORE_BATCH_SIZE) AND stop
-    // at the wall-clock budget, so one HTTP invocation never outruns the Railway
-    // proxy. The scored ledger is the resume cursor: the next nightly run's
-    // junkScanAll excludes what this run scored and drains the next batch.
+    // at scoring's GUARANTEED wall-clock slice, so one HTTP invocation never
+    // outruns the Railway proxy. The scored ledger is the resume cursor: the next
+    // nightly run's junkScanAll excludes what this run scored and drains the next.
     const batchSize = Math.min(limit, JUNK_SCORE_BATCH_SIZE);
+    const scoreBudgetMs = Math.min(JUNK_SCORE_BUDGET_MS,
+      remainingScoreBudget(Date.now(), tickDeadline, JUNK_MIN_SCORE_BUDGET_MS));
     const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
       per_domain: junkDomainRollup(scan.perDomain), candidates_new: scan.fresh.length,
-      batch_size: batchSize, budget_ms: JUNK_SCORE_BUDGET_MS,
-      naming_hygiene_backlog: junkNamingHygieneRollup(scan.perDomain),
+      batch_size: batchSize, budget_ms: scoreBudgetMs,
+      naming_hygiene_backlog: namingHygieneFlat,
+      scan_cursors: scan.nextCursors, scan_errors: scanErrors, scan_budget_exhausted: !!scan.budgetExhausted,
       scored: 0, proposed: 0, kept_not_enqueued: 0, failed: 0,
       budget_exhausted: false, remaining_unscored: scan.fresh.length, by_verdict: {} };
     // Phase 1 — score up to one batch (budget-bounded) with NO writes yet, so the
@@ -1941,16 +2072,19 @@ async function handleJunkPrescreenTick(req, res) {
         console.warn('[junk-prescreen] score failed', cand.subject_ref, e?.message || e);
       }
       return null;
-    }, { budgetMs: JUNK_SCORE_BUDGET_MS, maxN: batchSize });
+    }, { budgetMs: scoreBudgetMs, maxN: batchSize });
     summary.budget_exhausted = budgetRun.budget_exhausted;
     summary.remaining_unscored = Math.max(0, scan.fresh.length - scoredRows.length - summary.failed);
     // Distribution guard — a curated-table junk pre-screen should find a small
-    // MINORITY of true junk. >50% dismiss ⇒ the batch is anchoring, not judging;
+    // MINORITY of true junk. >90% dismiss ⇒ the batch is anchoring, not judging;
     // refuse to persist it (honest-counts doctrine).
     const dist = dismissDistributionGuard(scoreVerdicts, JUNK_DISMISS_GUARD_THRESHOLD);
     summary.by_verdict = scoreVerdicts;
     summary.distribution = dist;
     if (dist.suspect_distribution) {
+      // Close the scan batch even on the refusal path — cursor advanced, honest
+      // by_verdict recorded — so it never lingers 'open' (Prompt 84 lifecycle).
+      await closeJunkScanBatch(scanBatchId, 'closed', summary);
       await recordJunkPrescreenHealth({ status: 'amber', count: 0,
         lastError: 'suspect_distribution: ' + Math.round(dist.dismiss_share * 100) + '% dismiss (> ' + Math.round(dist.threshold * 100) + '%) — batch not persisted',
         details: summary });
@@ -1976,18 +2110,30 @@ async function handleJunkPrescreenTick(req, res) {
     // (Skipped on the suspect-distribution early return above, so a refused batch is
     // re-evaluated rather than silently buried.)
     await recordJunkScored(scoredRows, sourceRunId);
-    await recordJunkPrescreenHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
-      lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
+    // Close the scan batch: status lifecycle (not perpetual 'open'), with the
+    // honest apply bookkeeping (scored / by_verdict / proposed) folded in (Prompt 84).
+    await closeJunkScanBatch(scanBatchId, 'closed', summary);
+    const problems = summary.failed || scanErrors.length;
+    const healthErr = scanErrors.length ? scanErrors.length + ' target scan(s) failed: ' + scanErrors.map((e) => e.target).join(',')
+      : (summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null);
+    await recordJunkPrescreenHealth({ status: problems ? 'amber' : 'green', count: summary.proposed,
+      lastError: healthErr, details: summary });
     return res.status(200).json({ ok: true, mode: 'apply', ...summary });
   }
 
   // ---- GET dry-run: deterministic per-domain report; ?score=1 adds inline ---
-  // model proposals for sampling. NEVER writes.
-  const scan = await junkScanAll();
+  // model proposals for sampling. NEVER writes. Reads (does not advance) cursors.
+  const cursors = await fetchJunkScanCursors().catch(() => ({}));
+  const scanDeadline = computeScanDeadline(Date.now(), {
+    tickBudgetMs: JUNK_TICK_BUDGET_MS, scanBudgetMs: JUNK_SCAN_BUDGET_MS,
+    minScoreBudgetMs: JUNK_MIN_SCORE_BUDGET_MS });
+  const scan = await junkScanAll(cursors, { deadline: scanDeadline });
   const rollup = junkDomainRollup(scan.perDomain);
+  const scanErrors = junkScanErrors(scan.perDomain);
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
     per_target: scan.perDomain, per_domain: rollup, candidates_new: scan.fresh.length,
-    naming_hygiene_backlog: junkNamingHygieneRollup(scan.perDomain),
+    naming_hygiene_backlog: junkNamingHygieneFlat(scan.perDomain),
+    scan_cursors: scan.nextCursors, scan_errors: scanErrors, scan_budget_exhausted: !!scan.budgetExhausted,
     sample: scan.fresh.slice(0, 20) };
   if (req.query.score === '1' || req.query.score === 'true') {
     const fewShot = await fetchJunkFewShot();

@@ -15,6 +15,7 @@ import {
   isSpeCodedName, knownAbbrevEvidence, isAddressAsName, isAcronymOnly,
   applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
   junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
+  computeScanDeadline, remainingScoreBudget, nextScanCursor,
 } from '../api/_shared/junk-prescreen.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -485,6 +486,53 @@ describe('scoreWithBudget — size cap + wall-clock budget', () => {
   });
 });
 
+// Prompt 84 — windowed resumable scan: budget split + keyset cursor (pure).
+describe('computeScanDeadline — scan gets a bounded share, scoring keeps its slice', () => {
+  it('reserves the scoring floor: scan may use at most tick − minScore', () => {
+    // start=1000, tick=120000, scan cap 60000, reserve 20000 → scan share 60000.
+    assert.equal(computeScanDeadline(1000, { tickBudgetMs: 120000, scanBudgetMs: 60000, minScoreBudgetMs: 20000 }), 61000);
+  });
+  it('the scan-budget cap binds when it is the smaller of the two', () => {
+    // tick − reserve = 100000, scanBudget = 30000 → min is 30000.
+    assert.equal(computeScanDeadline(0, { tickBudgetMs: 120000, scanBudgetMs: 30000, minScoreBudgetMs: 20000 }), 30000);
+  });
+  it('a reserve larger than the tick clamps the scan share to 0 (scoring wins)', () => {
+    assert.equal(computeScanDeadline(500, { tickBudgetMs: 10000, scanBudgetMs: 60000, minScoreBudgetMs: 20000 }), 500);
+  });
+});
+
+describe('remainingScoreBudget — scoring ALWAYS gets its slice', () => {
+  it('returns the remaining tick budget when it exceeds the floor', () => {
+    // deadline 100000, now 40000 → 60000 remaining > 20000 floor.
+    assert.equal(remainingScoreBudget(40000, 100000, 20000), 60000);
+  });
+  it('floors at minScore even when the scan overran (remaining ≤ floor)', () => {
+    // now 95000 past a 100000 deadline leaves 5000 < 20000 → floored to 20000.
+    assert.equal(remainingScoreBudget(95000, 100000, 20000), 20000);
+    // even a NEGATIVE remaining (scan blew the whole budget) still gets the floor.
+    assert.equal(remainingScoreBudget(130000, 100000, 20000), 20000);
+  });
+});
+
+describe('nextScanCursor — resumable keyset (advance vs wrap)', () => {
+  it('advances to the last pk when the window was bounded mid-table', () => {
+    const r = nextScanCursor({ reachedEnd: false, truncated: true, lastPk: '4200', startCursor: '1000' });
+    assert.deepEqual(r, { nextCursor: '4200', wrapped: false });
+  });
+  it('wraps (null) when the table end was reached', () => {
+    const r = nextScanCursor({ reachedEnd: true, truncated: false, lastPk: '9999', startCursor: '5000' });
+    assert.deepEqual(r, { nextCursor: null, wrapped: true });
+  });
+  it('wraps when the window under-filled (not truncated) — a light table restarts', () => {
+    const r = nextScanCursor({ reachedEnd: false, truncated: false, lastPk: '30', startCursor: null });
+    assert.deepEqual(r, { nextCursor: null, wrapped: true });
+  });
+  it('holds the start cursor when a bounded window saw no rows (lastPk null)', () => {
+    const r = nextScanCursor({ reachedEnd: false, truncated: true, lastPk: null, startCursor: '7000' });
+    assert.deepEqual(r, { nextCursor: '7000', wrapped: false });
+  });
+});
+
 describe('structural wiring guards (admin.js + server.js + migration)', () => {
   const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
   const server = readFileSync(join(root, 'server.js'), 'utf8');
@@ -530,7 +578,7 @@ describe('structural wiring guards (admin.js + server.js + migration)', () => {
   });
   it('naming-hygiene backlog is counted, never enqueued', () => {
     assert.match(admin, /naming_hygiene_backlog/);
-    assert.match(admin, /junkNamingHygieneRollup/);
+    assert.match(admin, /junkNamingHygieneFlat/);
     assert.match(admin, /namingHygieneReason/);
   });
   it('keeps are never persisted — only actionable verdicts enqueue (dry-run + apply)', () => {
@@ -575,5 +623,45 @@ describe('structural wiring guards (admin.js + server.js + migration)', () => {
     assert.match(cur, /CREATE TABLE IF NOT EXISTS public\.junk_prescreen_scored/);
     assert.match(cur, /UNIQUE \(domain, table_name, pk_value, name_hash\)/);
     assert.match(cur, /scored_total/);
+  });
+
+  // Prompt 84 — windowed resumable scan + batch lifecycle wiring.
+  it('the scan is windowed by a keyset cursor, not a full-table offset scan', () => {
+    // the offset ceiling constant is gone; the window + keyset predicate are in.
+    assert.doesNotMatch(admin, /JUNK_PRESCREEN_MAX_SCAN/);
+    assert.match(admin, /JUNK_SCAN_WINDOW/);
+    assert.match(admin, /pullJunkCandidatesForTarget\(target, /);
+    assert.match(admin, /'=gt\.'/); // keyset predicate pkCol > cursor
+  });
+  it('the tick reads + advances per-target keyset cursors via the batch ledger', () => {
+    assert.match(admin, /fetchJunkScanCursors/);
+    assert.match(admin, /batch_kind=eq\.scan&order=created_at\.desc&limit=1/);
+    assert.match(admin, /scan_cursors: scan\.nextCursors/);
+  });
+  it('the budget split guarantees scoring its slice (scan can’t eat the budget)', () => {
+    assert.match(admin, /computeScanDeadline/);
+    assert.match(admin, /remainingScoreBudget/);
+    assert.match(admin, /JUNK_MIN_SCORE_BUDGET_MS/);
+    // scoring's wall-clock is the guaranteed remaining slice, not a flat constant
+    assert.match(admin, /budgetMs: scoreBudgetMs/);
+  });
+  it('the scan batch is CLOSED after scoring (status lifecycle, not perpetual open)', () => {
+    assert.match(admin, /closeJunkScanBatch/);
+    assert.match(admin, /status: status \|\| 'closed'/);
+    // closed on the happy path AND the suspect-distribution refusal path
+    assert.match(admin, /closeJunkScanBatch\(scanBatchId, 'closed', summary\)/);
+  });
+  it('the apply batch carries honest scored / by_verdict bookkeeping', () => {
+    assert.match(admin, /by_verdict: summary\?\.by_verdict/);
+    assert.match(admin, /scored: summary\?\.scored/);
+  });
+  it('the naming-hygiene backlog is persisted FLAT so the systemic reader sees a total', () => {
+    assert.match(admin, /junkNamingHygieneFlat/);
+  });
+  it('the close-status migration widens the CHECK to add closed (additive/loosening)', () => {
+    const m = readFileSync(join(root, 'supabase/migrations/20260808140000_lcc_w8_u1_scan_batch_close_status.sql'), 'utf8');
+    assert.match(m, /junk_review_batch_status_check/);
+    assert.match(m, /'open', 'closed', 'applied', 'conflict', 'reversed', 'dismissed'/);
+    assert.doesNotMatch(m, /DELETE FROM/i);
   });
 });
