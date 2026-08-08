@@ -14,6 +14,7 @@ import {
   planHygieneApply, isEnqueueableHygieneProposal, hygieneSubjectRef,
   parseHygieneSubjectRef, NAMING_HYGIENE_TARGETS, findHygieneTarget,
   ABBREV_EXPANSION, AMBIGUOUS_ABBREV,
+  addressLeadingNumber, collectAddressNumbers, matchCandidateToProperties,
 } from '../api/_shared/naming-hygiene-planner.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -138,6 +139,58 @@ describe('address normalization + link planning', () => {
   });
 });
 
+describe('Prompt 83 — batched address resolution helpers (bounding)', () => {
+  it('addressLeadingNumber extracts the prefilter key, null when none', () => {
+    assert.equal(addressLeadingNumber('3710 Fm 1889'), '3710');
+    assert.equal(addressLeadingNumber('100 Main St, Suite 4'), '100');
+    assert.equal(addressLeadingNumber('Riverside Holdings LLC'), null);
+    assert.equal(addressLeadingNumber(''), null);
+  });
+
+  it('collectAddressNumbers dedupes across a batch (one prefilter query)', () => {
+    const nums = collectAddressNumbers([
+      { entity_name: '3710 Fm 1889' }, { entity_name: '3710 Farm Road' },
+      { entity_name: '100 Main St' }, { entity_name: 'No Number Co' },
+    ]);
+    assert.deepEqual(nums.sort(), ['100', '3710']);
+  });
+
+  it('matchCandidateToProperties: exactly one normalized match resolves (+ owner)', () => {
+    const rows = [{ property_id: 42, address: '3710 FM 1889', recorded_owner_id: 7 }];
+    const owners = new Map([['7', 'Riverside Holdings LLC']]);
+    const r = matchCandidateToProperties('dia', '3710 Fm 1889', rows, owners);
+    assert.equal(r.ambiguousCount, 1);
+    assert.equal(r.resolved.property_id, 42);
+    assert.equal(r.resolved.domain, 'dia');
+    assert.equal(r.resolved.owner_name, 'Riverside Holdings LLC');
+  });
+
+  it('matchCandidateToProperties: >1 match is ambiguous (never guess)', () => {
+    const rows = [
+      { property_id: 1, address: '100 MAIN ST', recorded_owner_id: null },
+      { property_id: 2, address: '100 MAIN ST', recorded_owner_id: null },
+    ];
+    const r = matchCandidateToProperties('gov', '100 Main St', rows, new Map());
+    assert.equal(r.resolved, null);
+    assert.equal(r.ambiguousCount, 2);
+  });
+
+  it('matchCandidateToProperties: no match -> unresolved; address-owner not filled', () => {
+    assert.deepEqual(matchCandidateToProperties('dia', '999 Nowhere Rd', [], new Map()),
+      { resolved: null, ambiguousCount: 0 });
+    const rows = [{ property_id: 5, address: '3710 FM 1889', recorded_owner_id: 9 }];
+    const owners = new Map([['9', '3710 Fm 1889']]); // owner is itself an address
+    const r = matchCandidateToProperties('dia', '3710 Fm 1889', rows, owners);
+    assert.equal(r.resolved.owner_name, null); // fill-blanks only, never an address
+  });
+
+  it('matchCandidateToProperties: a non-address name never resolves', () => {
+    const rows = [{ property_id: 1, address: 'Riverside Holdings LLC', recorded_owner_id: null }];
+    const r = matchCandidateToProperties('dia', 'Riverside Holdings LLC', rows, new Map());
+    assert.equal(r.resolved, null);
+  });
+});
+
 describe('normalizeExpansionProposal (LLM guardrails)', () => {
   const cand = { entity_name: 'Cohen Cos' };
   it('keep verdict -> keep (non-event)', () => {
@@ -229,5 +282,53 @@ describe('migration structural guards (W8 doctrine)', () => {
   it('schedules the staggered nightly cron (04:25) that no-ops while OFF', () => {
     assert.match(mig, /naming-hygiene-tick/);
     assert.match(mig, /'25 4 \* \* \*'/);
+  });
+});
+
+describe('Prompt 83 — tick bounding structural guards (admin.js)', () => {
+  const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
+  const tick = admin.slice(admin.indexOf('async function handleNamingHygieneTick'),
+    admin.indexOf('W8 U2 (Prompt 63'));
+  it('crash-proof envelope: a throw yields JSON 500 with the failing stage', () => {
+    assert.match(tick, /async function handleNamingHygieneTick/);
+    assert.match(tick, /namingHygieneTickImpl\(req, res, stage\)/);
+    assert.match(tick, /if \(res\.headersSent\) return;/);
+    assert.match(tick, /res\.status\(500\)\.json\(\{ ok: false, error:[^}]*stage: stage\.at \}\)/);
+  });
+  it('whole-invocation wall-clock budget gates scan + sample/apply', () => {
+    assert.match(admin, /HYG_TICK_BUDGET_MS[\s\S]*HYGIENE_TICK_BUDGET_MS/);
+    assert.match(tick, /const deadline = tickStart \+ HYG_TICK_BUDGET_MS;/);
+    assert.match(tick, /hygieneScanAll\(cursors, \{ deadline \}\)/);
+    // both sample/apply arms share the remaining budget
+    assert.match(tick, /budgetMs: Math\.max\(0, deadline - Date\.now\(\)\)/);
+  });
+  it('GET dry-run resolves ONLY the sampled slice (full pool counted, not resolved)', () => {
+    // the non-score GET must not call the batch resolver; resolution is under ?score=1 only
+    const getBlock = tick.slice(tick.indexOf('GET dry-run'));
+    assert.match(getBlock, /req\.query\.score === '1'/);
+    assert.match(getBlock, /scan\.address\.slice\(0, inlineN\)/);
+    assert.match(getBlock, /resolveHygieneAddressBatch\(addrSample\)/);
+  });
+  it('POST apply uses resumable keyset cursors persisted on the batch ledger', () => {
+    const postBlock = tick.slice(tick.indexOf('POST apply path'), tick.indexOf('GET dry-run'));
+    assert.match(postBlock, /fetchHygieneScanCursors\(\)/);
+    assert.match(postBlock, /scan_cursors: scan\.nextCursors/);
+    assert.match(postBlock, /resolveHygieneAddressBatch\(addrBatch\)/);
+  });
+  it('the scan is keyset-cursored + window-bounded (not offset over the whole table)', () => {
+    assert.match(admin, /HYG_SCAN_WINDOW[\s\S]*NAMING_HYGIENE_SCAN_WINDOW/);
+    const pull = admin.slice(admin.indexOf('async function pullHygieneCandidatesForTarget'),
+      admin.indexOf('BATCHED address resolution'));
+    assert.match(pull, /pulled < HYG_SCAN_WINDOW/);
+    assert.match(pull, /=gt\.'/);                       // keyset predicate, not offset
+    assert.ok(!/&offset=/.test(pull), 'scan must not paginate by offset');
+    assert.match(pull, /const wrapped = reachedEnd \|\| !truncated;/);
+  });
+  it('address resolution is ONE prefilter query per domain (no per-candidate round trip)', () => {
+    const batch = admin.slice(admin.indexOf('async function resolveHygieneAddressBatch'),
+      admin.indexOf('async function hygieneScanAll'));
+    assert.match(batch, /collectAddressNumbers\(list\)/);
+    assert.match(batch, /or=\(/);                       // batched OR prefilter
+    assert.match(batch, /recorded_owners\?select=recorded_owner_id,name&recorded_owner_id=in\.\(/);
   });
 });
