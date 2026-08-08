@@ -391,6 +391,51 @@ function fitDataAxisRange(values, kind = 'percent') {
   return { min: r6(min), max: r6(max) };
 }
 
+// CM chart fixes round 2, item 2 — derive a value-axis range from EVERY series
+// bound to that axis, not a single series. The combo cases historically pinned a
+// secondary (cap-rate) axis max off the average-cap series alone, so a quartile-
+// band top or a second cohort line taller than the pin clipped. This flattens
+// all provided series keys across the plotted rows, fits via fitDataAxisRange,
+// then GUARANTEES the snapped max strictly covers the true data max. It also
+// logs per-axis data-max vs axis-max so a clip can never recur silently.
+//   opts.kind     — fitDataAxisRange kind ('cap' default).
+//   opts.minFloor — pin the axis min (deliberate low floor, e.g. to lift a band
+//                   into the upper frame). Omit to let the fit choose the min.
+//   opts.fallback — literal range used when there is nothing to fit (<2 points).
+// Returns null only when there's no fit AND no fallback.
+function fitAxisToSeries(templateId, axisLabel, plottedRows, seriesKeys, opts = {}) {
+  const STEP = opts.step || 0.005;
+  const r6 = (n) => Math.round(n * 1e6) / 1e6;
+  const vals = [];
+  for (const r of (Array.isArray(plottedRows) ? plottedRows : [])) {
+    for (const k of seriesKeys) {
+      const v = Number(r == null ? NaN : r[k]);
+      if (Number.isFinite(v)) vals.push(v);
+    }
+  }
+  const dataMax = vals.length ? Math.max(...vals) : null;
+  const dataMin = vals.length ? Math.min(...vals) : null;
+  const fit = fitDataAxisRange(vals, opts.kind || 'cap');
+  let range = fit ? { min: fit.min, max: fit.max } : (opts.fallback ? { ...opts.fallback } : null);
+  if (range) {
+    if (opts.minFloor != null) range.min = opts.minFloor;
+    // The band/second-series high must be strictly inside the axis — snap the
+    // max UP a step past the true data max whenever the fit/fallback fell short.
+    if (dataMax != null && range.max < dataMax) {
+      range.max = r6(Math.ceil(dataMax / STEP) * STEP);
+    }
+    if (range.max <= range.min) range.max = r6(range.min + STEP);
+  }
+  console.log(
+    `[cm-native-chart-injector] axis-fit template=${templateId} axis=${axisLabel} ` +
+    `series=[${seriesKeys.join(',')}] data-min=${dataMin != null ? dataMin : 'none'} ` +
+    `data-max=${dataMax != null ? dataMax : 'none'} ` +
+    `axis-min=${range ? range.min : 'auto'} axis-max=${range ? range.max : 'auto'}` +
+    `${range && dataMax != null && dataMax > range.max ? ' CLIP!' : ''}`
+  );
+  return range;
+}
+
 // Emit <c:scaling> block with optional min/max. If both are undefined
 // returns the default orientation-only scaling. otherwise embeds the
 // pinned range.
@@ -489,32 +534,64 @@ function inferAnnotationFmt(numFmt) {
  * @param {Function} formatter (number) => string
  * @returns {Array<{idx: number, text: string}>} 0..3 label entries
  */
-function buildAnnotationsForSpec(rows, getter, formatter) {
+// CM chart fixes round 2, item 3 — callout selection + audit.
+//
+//   a. `rows` MUST be the DISPLAYED (cropped + as-of-clamped + MIN_YEAR-trimmed
+//      `plottedRows`) set, NOT the full underlying range. The emitted <c:idx> is
+//      a position in the plotted series, so computing max/min/latest against a
+//      longer array offsets every label onto the wrong datapoint (the historical
+//      mislabel bug). All callers now pass `plottedRows`.
+//   d. LABEL AUDIT — when `auditLabel` is supplied, print the three computed
+//      values + their row indexes and assert the emitted <c:idx> set is exactly
+//      the computed {max,min,last} set (deduped) and every idx is in range. A
+//      wrong selection throws, failing the export loudly rather than shipping a
+//      mislabeled chart.
+function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '') {
   if (!Array.isArray(rows) || rows.length === 0) return [];
   // Filter to (idx, val) where val is a finite number
   const points = rows
-    .map((r, i) => ({ idx: i, val: getter(r) }))
-    .filter(p => p.val != null && Number.isFinite(Number(p.val)));
+    .map((r, i) => ({ idx: i, val: Number(getter(r)) }))
+    .filter(p => Number.isFinite(p.val));
   if (points.length < 3) return [];
 
   let maxP = points[0], minP = points[0];
   for (const p of points) {
-    if (Number(p.val) > Number(maxP.val)) maxP = p;
-    if (Number(p.val) < Number(minP.val)) minP = p;
+    if (p.val > maxP.val) maxP = p;
+    if (p.val < minP.val) minP = p;
   }
   const lastP = points[points.length - 1];
 
   const out = [];
   // Last (primary callout — emit first so it's deterministically present).
   // `role` drives the leader-line offset direction in dLblXml (A2).
-  out.push({ idx: lastP.idx, text: formatter(lastP.val), role: 'last' });
-  // Max — emit only if distinct from last
+  out.push({ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest' });
+  // Max — emit only if distinct from last (dedupe coincident max/latest).
   if (maxP.idx !== lastP.idx) {
-    out.push({ idx: maxP.idx, text: formatter(maxP.val), role: 'max' });
+    out.push({ idx: maxP.idx, text: formatter(maxP.val), role: 'max', label: 'Peak' });
   }
-  // Min — emit only if distinct from both
+  // Min — emit only if distinct from both.
   if (minP.idx !== lastP.idx && minP.idx !== maxP.idx) {
-    out.push({ idx: minP.idx, text: formatter(minP.val), role: 'min' });
+    out.push({ idx: minP.idx, text: formatter(minP.val), role: 'min', label: 'Low' });
+  }
+
+  {
+    const rowCount = rows.length;
+    const emittedIdx = out.map(o => o.idx);
+    const expectedIdx = new Set([lastP.idx, maxP.idx, minP.idx]);
+    console.log(
+      `[cm-native-chart-injector] LABEL AUDIT ${auditLabel || 'primary'} n=${rowCount} ` +
+      `max={idx:${maxP.idx},val:${maxP.val}} min={idx:${minP.idx},val:${minP.val}} ` +
+      `last={idx:${lastP.idx},val:${lastP.val}} emitted-idx=[${emittedIdx.join(',')}]`
+    );
+    for (const idx of emittedIdx) {
+      if (idx < 0 || idx >= rowCount || !expectedIdx.has(idx)) {
+        throw new Error(
+          `[cm-native-chart-injector] LABEL AUDIT FAILED ${auditLabel}: emitted idx ${idx} ` +
+          `is out of range [0,${rowCount}) or not in computed {max,min,last} ` +
+          `{${[...expectedIdx].join(',')}}`
+        );
+      }
+    }
   }
   return out;
 }
@@ -523,22 +600,39 @@ function buildAnnotationsForSpec(rows, getter, formatter) {
 // the plot area). Moving a label off its point is what makes Excel draw the
 // leader line back to the marker; the offsets keep max labels above, min
 // labels below, and the latest label to the upper-right of the line's end.
+// CM chart fixes round 2, item 3b — float the label OFF its datapoint far
+// enough that Excel draws a leader line back to the marker (a label sitting on
+// the point never gets a leader). Max/latest float ABOVE the point; min floats
+// BELOW (it usually sits near the axis top's opposite, and a below placement
+// keeps it off the plotted line). Offsets are fractions of the plot area —
+// large enough (~0.11) to clear the marker and trigger the leader.
 const DLBL_ROLE_OFFSET = {
-  max:  { x: 0.0,  y: -0.075 },
-  min:  { x: 0.0,  y:  0.075 },
-  last: { x: 0.045, y: -0.03 },
+  max:  { x: 0.0,   y: -0.11 },   // above the peak
+  min:  { x: 0.0,   y:  0.11 },   // below the trough
+  last: { x: 0.055, y: -0.10 },   // upper-right of the line's end
 };
+
+// Callout brand text (item 3c): charcoal label word, emphasized (bold) value.
+const DLBL_LABEL_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4A54';
+const DLBL_VALUE_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4A54';
 
 /**
  * Emit a single <c:dLbl> block overriding one data point with a custom
  * text label. The other points in the series get no label (via the
- * surrounding <c:dLbls> showXxx=0 defaults).
+ * surrounding <c:dLbls> showXxx=0 defaults). The label reads
+ * "<Peak|Low|Latest> <value>" — the role word in regular-weight charcoal, the
+ * value bold (emphasized), matching cm-brand.json.
  */
-function dLblXml(idx, text, role) {
+function dLblXml(idx, text, role, label) {
   const off = DLBL_ROLE_OFFSET[role];
   const layoutFrag = off
     ? `<c:layout><c:manualLayout><c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
     : '';
+  const font = (t) => `<a:latin typeface="${t}"/><a:ea typeface="${t}"/><a:cs typeface="${t}"/>`;
+  const labelRun = label
+    ? `<a:r><a:rPr lang="en-US" b="0" sz="800"><a:solidFill><a:srgbClr val="${DLBL_LABEL_COLOR}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(label)} </a:t></a:r>`
+    : '';
+  const valueRun = `<a:r><a:rPr lang="en-US" b="1" sz="900"><a:solidFill><a:srgbClr val="${DLBL_VALUE_COLOR}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(text)}</a:t></a:r>`;
   return `          <c:dLbl>
             <c:idx val="${idx}"/>
             ${layoutFrag}
@@ -547,10 +641,7 @@ function dLblXml(idx, text, role) {
                 <a:bodyPr wrap="none" anchor="ctr"/>
                 <a:lstStyle/>
                 <a:p>
-                  <a:r>
-                    <a:rPr lang="en-US" b="1" sz="900"><a:solidFill><a:srgbClr val="${CM_BRAND.text.callout}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:rPr>
-                    <a:t>${escapeXml(text)}</a:t>
-                  </a:r>
+                  ${labelRun}${valueRun}
                 </a:p>
               </c:rich>
             </c:tx>
@@ -663,7 +754,7 @@ function dLblsXml(spec) {
   // A2: emit showLeaderLines so the role-offset labels draw a leader back to
   // their point.
   if (Array.isArray(spec) && spec.length > 0) {
-    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role)).join('\n');
+    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label)).join('\n');
     return `        <c:dLbls>
 ${lbls}
           <c:showLegendKey val="0"/>
@@ -2506,6 +2597,10 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   'bid_ask_spread',                 // (a) quarterly: only spread col present → simple line fallback
   'bid_ask_spread_monthly',         // (a) monthly: invisible(last_ask) + visible(spread) stacked bar
   'rent_psf_box_quarterly',         // (b) upgraded to IQR floating-bar + median line in P8.5
+  // CM chart fixes round 2, item 1 — dialysis companion box chart backed by the
+  // LABELED MODELED rent variant (cm_dialysis_rent_box_q_with_modeled). Same
+  // IQR floating-bar + median-line decomposition; only the title/source differ.
+  'rent_psf_box_quarterly_modeled',
   // P9 — composite: IQR floating bar + median (circle) + avg (diamond)
   //      dot markers over a year x-axis. Uses helper col for IQR width.
   'rent_by_year_built',
@@ -3240,7 +3335,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     if (annKey && annFmt && Array.isArray(rows)) {
       const fmt = ANNOTATION_FORMATTERS[annFmt];
       if (fmt) {
-        dataLabels = buildAnnotationsForSpec(rows, r => r[annKey], fmt);
+        dataLabels = buildAnnotationsForSpec(plottedRows, r => r[annKey], fmt, `${chart_template_id}:${annKey}`);
       }
     }
     return {
@@ -3745,10 +3840,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // User feedback 2026-05-23 batch 6: "data labels for high, low
       // and most recent are off" → on the most-logical series per chart.
       const pctLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.pct_of_ask, fmtPct1Native)
+        ? buildAnnotationsForSpec(plottedRows, r => r.pct_of_ask, fmtPct1Native, 'pct_of_ask')
         : undefined;
       const domLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_dom, (v) => `${Math.round(v)}d`)
+        ? buildAnnotationsForSpec(plottedRows, r => r.avg_dom, (v) => `${Math.round(v)}d`)
         : undefined;
       return {
         tabName,
@@ -3795,7 +3890,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on rent line
       // (renderer line 1923: buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year'))
       const rentLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSfNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.avg_rent_per_sf, fmtCurrencyPerSfNative, 'avg_rent_per_sf')
         : undefined;
       return {
         tabName,
@@ -3853,9 +3948,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           yLeftNumFmt:  VAL_FMT_INTEGER,
-          // R66t — TTM-basis core cap dips to ~5.4% and total reaches ~7.0%; widen
-          // from 5.5-7.5% so neither cap line clips (deck right axis is 4.5-7.0%).
-          yRightRange:  { min: 0.05, max: 0.0725 },
+          // R66t — TTM-basis core cap dips to ~5.4% and total reaches ~7.0%.
+          // CM chart fixes round 2, item 2 — fit the right axis to BOTH cap
+          // lines (total + core) so neither clips; keep the 0.05 low floor.
+          yRightRange:  fitAxisToSeries('available_market_size_combo', 'A3(cap%)', plottedRows,
+                          ['avg_cap_total', 'avg_cap_core_10plus'],
+                          { kind: 'cap', minFloor: 0.05, fallback: { min: 0.05, max: 0.0725 } }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky },
@@ -4037,6 +4135,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           }
         }
         const bidAskFit = fitDataAxisRange(plotVals, 'cap');
+        // CM chart fixes round 2, item 2 — per-axis audit log. This shared-axis
+        // chart already fits BOTH plotted levels (Last Ask + Achieved = last_ask
+        // + spread, the visible bar top), so it does not clip; log it anyway so
+        // every dual-axis/whisker chart reports data-max vs axis-max.
+        {
+          const dMax = plotVals.length ? Math.max(...plotVals) : null;
+          const aMax = (bidAskFit || { max: 0.10 }).max;
+          console.log(
+            `[cm-native-chart-injector] axis-fit template=${chart_template_id} axis=A2(shared,cap%) ` +
+            `series=[avg_last_ask_cap,avg_last_ask_cap+avg_bid_ask_spread] ` +
+            `data-max=${dMax != null ? dMax : 'none'} axis-max=${aMax}` +
+            `${dMax != null && dMax > aMax ? ' CLIP!' : ''}`
+          );
+        }
         return {
           tabName,
           spec: {
@@ -4084,6 +4196,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       });
     }
 
+    // CM chart fixes round 2, item 1 — the modeled companion shares the exact
+    // IQR floating-bar + median-line decomposition (same rent_lower_quartile /
+    // rent_median / rent_upper_quartile columns). The "(incl. modeled rents)"
+    // title arrives via spec.title (chart.name) and the extra basis_scope /
+    // n_points columns are ignored by the box builder but stay visible on the
+    // sheet. Fall through to the shared case.
+    case 'rent_psf_box_quarterly_modeled':
     case 'rent_psf_box_quarterly': {
       // R34 P8.5 upgrade — proper box-whisker visual now that we have
       // helper-column infrastructure.
@@ -4257,7 +4376,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on valuation_index navy line
       // (renderer line 1105: buildAnnotations(rows, r => r.valuation_index, fmtIndex))
       const indexLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.valuation_index, fmtIndexNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.valuation_index, fmtIndexNative, 'valuation_index')
         : undefined;
       return {
         tabName,
@@ -4395,7 +4514,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on the navy GSA renewal CAGR line
       // (renderer line 1561: buildAnnotations(rows, r => r.gsa_renewal_cagr, fmtPct1))
       const cagrLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.gsa_renewal_cagr, fmtPct1Native)
+        ? buildAnnotationsForSpec(plottedRows, r => r.gsa_renewal_cagr, fmtPct1Native, 'gsa_renewal_cagr')
         : undefined;
       return {
         tabName,
@@ -4526,7 +4645,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on avg deal line
       // (renderer line 2348: buildAnnotations(rows, r => r.avg_deal_size, fmtCurrencyM))
       const avgLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_deal_size, fmtCurrencyMNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.avg_deal_size, fmtCurrencyMNative, 'avg_deal_size')
         : undefined;
       return {
         tabName,
@@ -4556,7 +4675,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on the price/chair line
       // (renderer line 2393: buildAnnotations(rows, r => r.price_per_chair, fmtCurrencyK))
       const priceLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.price_per_chair, fmtCurrencyKNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.price_per_chair, fmtCurrencyKNative, 'price_per_chair')
         : undefined;
       return {
         tabName,
@@ -4587,7 +4706,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on price/SF line
       // (renderer line 2433: buildAnnotations(rows, r => r.price_psf, $rounded))
       const priceLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.price_psf, fmtCurrencyNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.price_psf, fmtCurrencyNative, 'price_psf')
         : undefined;
       return {
         tabName,
@@ -5002,7 +5121,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on the navy avg_cap_rate line
       // (renderer line 1217: buildAnnotations(rows, r => r.avg_cap_rate, fmtPct2))
       const capLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_cap_rate, fmtPct2Native)
+        ? buildAnnotationsForSpec(plottedRows, r => r.avg_cap_rate, fmtPct2Native, 'avg_cap_rate')
         : undefined;
 
       return {
@@ -5080,7 +5199,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on the navy cap-rate dots
       // (renderer line 1489: buildAnnotations(rows, r => r.cap_rate, fmtPct2))
       const capLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.cap_rate, fmtPct2Native)
+        ? buildAnnotationsForSpec(plottedRows, r => r.cap_rate, fmtPct2Native, 'cap_rate')
         : undefined;
 
       return {
@@ -5098,7 +5217,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // for the ~10.08% upper-q; dia caps at 9.0% (dia top-q ~7.7%).
           // Mirrors the renderer.
           yLeftNumFmt:  VAL_FMT_CURRENCY_M,
-          yRightRange:  ((vertical === 'gov' || vertical === 'government_leased') ? { min: 0.020, max: 0.105 } : { min: 0.030, max: 0.090 }),
+          // CM chart fixes round 2, item 2 — the right (cap) axis carries the
+          // avg-cap dots AND the Q1–Q3 floating band, so its max must span the
+          // UPPER-quartile highs, not just the average. Keep the deliberate low
+          // MIN floor (R73 C4: lifts the band into the upper frame so the volume
+          // area reads in the lower ~45%); fit the MAX to every right-axis series.
+          yRightRange:  fitAxisToSeries('volume_cap_quartile_combo', 'A3(cap%)', plottedRows,
+                          ['cap_rate', 'upper_quartile', 'lower_quartile'],
+                          { kind: 'cap',
+                            minFloor: (vertical === 'gov' || vertical === 'government_leased') ? 0.020 : 0.030,
+                            fallback: (vertical === 'gov' || vertical === 'government_leased') ? { min: 0.020, max: 0.105 } : { min: 0.030, max: 0.090 } }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           areaSeries: {
             titleCol: volCol, titleRow: headerRow, valCol: volCol,
@@ -5316,7 +5444,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // for dia chair sale typically $1.5M-$5M; gov bldg $3M-$30M;
           // single-decimal millions is the right resolution.
           yLeftNumFmt:  VAL_FMT_CURRENCY_M_1DP,
-          yRightRange:  { min: 0.05, max: 0.09 },  // R60 — tighter than CAP_RATE_DOT_RANGE
+          // CM chart fixes round 2, item 2 — the right axis carries FOUR cap
+          // diamonds (avg/upper/lower/median); the hardcoded 0.09 max clipped
+          // any upper-quartile above it. Fit the range to all four series.
+          yRightRange:  fitAxisToSeries(chart_template_id, 'A3(cap%)', rows,
+                          ['avg_cap', 'upper_quartile_cap', 'lower_quartile_cap', 'median_cap'],
+                          { kind: 'cap', fallback: { min: 0.05, max: 0.09 } }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: sky },

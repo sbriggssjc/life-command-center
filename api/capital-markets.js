@@ -1388,6 +1388,52 @@ async function exportWorkbook(req, res) {
   });
   const realCharts = await Promise.all(chartFetches);
 
+  // CM chart fixes round 2, item 1 — dialysis rent-box REPORT chart reads the
+  // LABELED MODELED variant (cm_dialysis_rent_box_q_with_modeled) as an ADDITIVE
+  // companion sheet + native chart. The actuals-only Data_Rent_PSF_Box sheet is
+  // left byte-for-byte unchanged for reference. The modeled series deepens the
+  // recent-quarter sample so the box plots every n>=6 quarter since 2023 (14
+  // quarters 2023–2026), each labeled "(incl. modeled rents)".
+  if (vertical === 'dialysis') {
+    const base = realCharts.find((c) => c.chart_template_id === 'rent_psf_box_quarterly');
+    const MODELED_VIEW = 'cm_dialysis_rent_box_q_with_modeled';
+    const MODELED_MIN_PERIOD = '2023-01-01';   // display window start (14 quarters)
+    const MODELED_MIN_N = 6;                    // acceptance: plot only n>=6 quarters
+    const shape = base || { data_shape: 'time_series_quarterly_ohlc', chart_type: 'StockChart' };
+    try {
+      const r = await fetchView(MODELED_VIEW, 'period_end');
+      const raw = r.ok !== false ? (r.data || []) : [];
+      // Deterministic display window: 2023+ and n_points>=6. The modeled view
+      // carries basis_scope + n_points; the sheet keeps basis_scope visible.
+      const windowed = raw.filter((row) => {
+        const pe = row && row.period_end ? String(row.period_end).slice(0, 10) : null;
+        const n = Number(row && row.n_points);
+        return pe && pe >= MODELED_MIN_PERIOD && Number.isFinite(n) && n >= MODELED_MIN_N;
+      });
+      const rows = clampRowsToAsOf(windowed, shape, resolvedAsOf);
+      if (rows.length > 0) {
+        realCharts.push({
+          chart_template_id: 'rent_psf_box_quarterly_modeled',
+          name: 'Rent/SF — Quarterly Box (incl. modeled rents)',
+          chart_type: shape.chart_type,
+          data_shape: shape.data_shape,
+          metric_focus: base ? base.metric_focus : 'rent_per_sf',
+          cadence: base ? base.cadence : null,
+          vertical,
+          view_name: MODELED_VIEW,
+          rows,
+          fetch_failed: r.ok === false,
+        });
+      }
+      console.log(
+        `[exportWorkbook] rent-box modeled companion: view=${MODELED_VIEW} ` +
+        `raw=${raw.length} plotted=${rows.length} (period>=${MODELED_MIN_PERIOD}, n>=${MODELED_MIN_N})`
+      );
+    } catch (e) {
+      console.warn(`[exportWorkbook] rent-box modeled companion skipped: ${e?.message || e}`);
+    }
+  }
+
   // CM export audit item 2 (2026-08-07) — log the resolved display_from for
   // every realCharts-driven sheet at export time (the crop itself is applied at
   // fetch, line ~1098). Sheets whose rows are later overridden by a master_m
