@@ -454,6 +454,26 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### 84 verified live — mechanics WORK; guard livelock on blank names → prompt 85
+Manual POST post-84: windowed scan + budget split + cursors + honest bookkeeping all correct
+(20 scored, scan_errors [], budget fine). But 20/20 dismiss (the blank-name dia contacts) trips
+the 0.9 distribution guard → batch refused → and refused batches don't mark scored → **livelock**
+(nightly re-scores the same 20 blanks forever, ~5 GaryBuilt min/night for zero output).
+**Prompt 85**: blank_name/all_non_alpha/exact-token_junk become DETERMINISTIC dismiss proposals
+(no LLM call, provider 'none', mirrors U5's deterministic arm; ~100/night cap drains the 199
+fast); the dismiss-share guard measures ONLY LLM-judged verdicts (its job is catching a runaway
+MODEL, not vetoing arithmetic). Then U1 nightly goes fully productive.
+
+### Prompt 84 landed — PR #1636, migration LIVE, awaiting merge + redeploy
+Root cause CONFIRMED (U1 full-scanned 128k/invocation, scan ate the budget, scoring starved; scan
+batch stuck 'open'). Fix ports the 83 pattern: keyset-windowed scan (20k/invocation, cursors in
+the batch ledger), pure budget-split helpers guaranteeing scoring a floor slice, batch lifecycle
+('closed' terminal status — CHECK widened, migration applied live, 2 stale open batches
+backfilled), naming_hygiene_backlog persisted flat for the U4 reader. 126 U1-suite tests green;
+3 full-suite failures pre-existing. **Gate: merge #1636 → redeploy → next nightly (or manual POST)
+drains the 199 blank-name dia contacts into the junk lane.** All five units then share the house
+scan/score/budget pattern.
+
 ### First full nightly slate 2026-08-08 03:40–04:30 UTC — 4/5 units produced; U1 scan-starved → prompt 84
 **U2 +21 pairs (29 open) / U3 +1 (1 open) / U5 first batch 67 proposals / assist 12 annotations —
 all healthy.** U1 wrote only a scan batch (no apply/scoring; 0 proposals; scored-ledger unchanged) —
