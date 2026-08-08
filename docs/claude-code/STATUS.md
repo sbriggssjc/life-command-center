@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ W9.3 LIVE 2026-08-08 — all three flags flipped after clean dry-run reviews
+WS1 assist: appropriately skeptical (Orion↔Orion Bank uncertain 0.3 — no forced calls). WS2
+re-score: banding textbook (L&K/Realty Income exact→auto; Uniland article-variant→review; 90/96
+no_match). WS3 donor: 14 unique gov person-matches first window, 0 ambiguous, dia honestly 0
+(thinner bridge). **Cowork flipped `W9_3_SF_ASSIST`+`W9_3_RESCORE`+`W9_3_DONOR_HANDOFF` → on.**
+Nightly drains begin: 23,817 re-score backlog walks in batches; 3.3k lane gets assist-sorted;
+donor keys accumulate toward the 2,305 addressable pool. **W9.2 unlock watch: when
+blank-contacts-with-SF-key climbs into the hundreds, flip `W9_2_REACHABILITY_HARVEST`.** U4 gains
+sf-coverage + assist-accuracy metrics.
+
 ### Prompt 90 (W9.3) landed — PR #1648 MERGED + deployed; 3 dry-run gates pending
 Three workstreams, three flags OFF: **WS1** `sf-link-assist` (80-pattern annotation pre-rank on the
 3.3k pool, metadata-only writer). **WS2** `sf-link-rescore` — smart scope cut: NO JS Fellegi-Sunter
