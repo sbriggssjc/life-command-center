@@ -273,36 +273,67 @@ const SYNTHETIC_COMPOSERS = {
   // existing volume_ttm_by_quarter chart's row stream because it carries
   // both ttm and per-quarter fields after Round GD1 fixes.
   'quarterly_volume_bars': ({ allCharts, masterMonthlyRows }) => {
-    // Round 24 — Read from masterMonthlyRows first (has quarterly_volume
-    // + quarterly_count on every row). Fall back to volume_ttm_by_quarter
-    // when master_m isn't loaded. User reported the tab as blank again
-    // — root cause was that volume_ttm_by_quarter wrapper view returns
-    // only ttm columns (no quarterly_*), so the old find() never matched.
-    const byPeriod = new Map();
+    // A5 (CM chart feedback item #11) — the old synthetic plotted
+    // `quarterly_volume`, which master_m repeats on every month of the quarter
+    // (Oct/Nov/Dec all print the same $319.4M) so the bars looked boxy and
+    // never moved month-to-month. Rebuild as a TRAILING-3-MONTH ROLLING SUM of
+    // the TRUE monthly volume/count (master_m.monthly_volume / monthly_count),
+    // at monthly grain — same information, but it moves every month like the
+    // other charts. Computed over the FULL monthly series before the caller
+    // applies the display_from / as_of crops (so the first visible month still
+    // carries a full trailing window).
+    const monthly = [];
     if (Array.isArray(masterMonthlyRows) && masterMonthlyRows.length) {
       for (const r of masterMonthlyRows) {
-        const qv = r.quarterly_volume ?? r.volume_quarter ?? r.volume_dollars_quarterly;
-        if (qv == null) continue;
-        byPeriod.set(r.period_end, {
+        if (r.period_end == null) continue;
+        if (r.monthly_volume == null && r.monthly_count == null) continue;
+        monthly.push({
           period_end: r.period_end,
-          quarterly_volume: Number(qv),
-          quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
+          mv: r.monthly_volume == null ? null : Number(r.monthly_volume),
+          mc: r.monthly_count == null ? null : Number(r.monthly_count),
         });
       }
     }
-    if (byPeriod.size === 0) {
-      const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
-      const volRows = find('volume_ttm_by_quarter');
-      for (const r of volRows) {
-        const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
-                    ?? r.volume_dollars_quarterly;
-        if (qv == null) continue;
-        byPeriod.set(r.period_end, {
-          period_end: r.period_end,
-          quarterly_volume: Number(qv),
-          quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
+    monthly.sort((a, b) => (String(a.period_end) < String(b.period_end) ? -1 : 1));
+
+    if (monthly.length > 0) {
+      const out = [];
+      for (let i = 0; i < monthly.length; i++) {
+        // Require a full 3-month trailing window; the first two months lack
+        // enough history → null (gap-skipped by the chart), not a misleading
+        // low bar. The head is cropped by display_from anyway.
+        if (i < 2) {
+          out.push({ period_end: monthly[i].period_end, quarterly_volume: null, quarterly_count: null });
+          continue;
+        }
+        let vol = 0, cnt = 0, haveVol = false, haveCnt = false;
+        for (let j = i - 2; j <= i; j++) {
+          const m = monthly[j];
+          if (Number.isFinite(m.mv)) { vol += m.mv; haveVol = true; }
+          if (Number.isFinite(m.mc)) { cnt += m.mc; haveCnt = true; }
+        }
+        out.push({
+          period_end: monthly[i].period_end,
+          quarterly_volume: haveVol ? vol : null,
+          quarterly_count: haveCnt ? cnt : null,
         });
       }
+      return out;
+    }
+
+    // Fallback (master_m absent / no monthly cols) — keep the pre-A5 quarter
+    // behavior so the tab still renders rather than going blank.
+    const byPeriod = new Map();
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    for (const r of find('volume_ttm_by_quarter')) {
+      const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
+                  ?? r.volume_dollars_quarterly;
+      if (qv == null) continue;
+      byPeriod.set(r.period_end, {
+        period_end: r.period_end,
+        quarterly_volume: Number(qv),
+        quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
+      });
     }
     return [...byPeriod.values()].sort((a, b) =>
       String(a.period_end) < String(b.period_end) ? -1 : 1

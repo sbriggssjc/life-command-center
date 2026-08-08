@@ -366,9 +366,10 @@ const CHART_COLUMNS = {
     { key: 'yoy_change_pct',   header: 'YoY Change',          format: 'percent_one_decimal', width: 13, pruneIfEmpty: true },
   ],
   quarterly_volume_bars: [
-    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',         width: 13 },
-    { key: 'quarterly_volume',   header: 'Quarterly Volume ($)',format: 'currency_dollars',   width: 22 },
-    { key: 'quarterly_count',    header: 'Quarterly Count',     format: 'integer_count',      width: 17 },
+    // A5 — trailing-3-month rolling sum at monthly grain (was boxy quarter totals).
+    { key: 'period_end',         header: 'Month End',                 format: 'date_short',         width: 13 },
+    { key: 'quarterly_volume',   header: 'Rolling 3-Mo Volume ($)',   format: 'currency_dollars',   width: 22 },
+    { key: 'quarterly_count',    header: 'Rolling 3-Mo Count',        format: 'integer_count',      width: 17 },
   ],
   buyer_pool_monthly_count: [
     { key: 'period_end',           header: 'Month End',         format: 'date_short',         width: 13 },
@@ -1449,6 +1450,16 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // dialysis workbook never ships an ALL-NULL Expenses/NOI/NM-Listed/YoY
     // column while gov keeps the same columns (its views populate them).
     cols = pruneEmptyFlaggedColumns(cols, chart.rows);
+
+    // A4 (CM chart feedback item #8) — drop the 'Undisclosed Term' bucket from
+    // the Data_Avail_by_Term breakdown sheet + its bar chart. The undisclosed
+    // listings remain in every total-market metric (they're only removed from
+    // this per-term breakout, which is meaningless for an unknown term).
+    if (chart.chart_template_id === 'available_by_term_bucket' && Array.isArray(chart.rows)) {
+      chart.rows = chart.rows.filter(
+        (r) => String(r?.term_bucket ?? '').trim().toLowerCase() !== 'undisclosed term'
+      );
+    }
 
     // Per-tab layout when chart image is available:
     //   Rows 1-22: chart PNG (~440px tall at default row height)
