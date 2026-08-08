@@ -206,21 +206,31 @@ conf 0.70) → after BOV ingest **basis `contract`, rent 999,111, conf 0.95, `bo
 
 ---
 
+## 5c / 5d / 5e. Serving layer — SHIPPED, applied live (read-only, no mutations)
+
+- **5c — term serving.** `dia_property_term_at_date(property_id, as_of default CURRENT_DATE)` → remaining
+  firm/total term, `lease_phase`, options total/remaining, firm & final expiry, `expiry_basis`
+  (`lease_documented` | `convention_modeled`), confidence. Documented `lease_expiration` preferred, else
+  convention-modeled. `lease_phase` + `options_remaining` derive from **one effective firm anchor** so
+  all term fields are mutually coherent. Exporter term buckets + comps-engine TERM read this.
+- **5d — structure read-model.** `v_dia_lease_structure_current` (bump_pct, interval, next_bump_date,
+  options, expense_structure, basis, confidence) from the resolved tenant convention (authoritative
+  decimals — no unit ambiguity). Comps exports read it; **no write-back** of fitted structure.
+- **5e — lease comps serving.** `v_dia_lease_comps_enriched` (commencement, expiration, starting_rent,
+  rent_psf_current, structure, rent_basis, rent_confidence) → `generate_comps` / Briggs Lease Comps.
+  **Input fields only**; formula-protected columns computed downstream, untouched.
+
+**Grounded live:** `v_dia_lease_structure_current` 10,808 rows; `v_dia_lease_comps_enriched` 4,789 rows;
+**12 undisclosed-term on-market actives now carry a modeled term** via 5c. Read-only → ancestry N/A;
+reversible via `DROP`.
+
+---
+
 ## Continuation — designed & grounded, in the accepted build order
 
 Remaining units ship as their own reviewed, dry-run-first, reversible increments on PR #1649, in the
-sequence: **(5c/5d/5e serving-layer) → 5i → 5j**. All call `dia_check_ancestry` in every
-derivation/corroboration path (violations skip + log).
+sequence: **5i → 5j**. All call `dia_check_ancestry` in every derivation/corroboration path.
 
-- **5c — term serving.** `v_dia_property_term_at_date(property_id, as_of)` → remaining firm term,
-  `lease_phase`, options remaining, expiry, basis, confidence. Wire to exporter term buckets (modeled
-  terms conf≥0.7, labeled) and comps-engine TERM inputs; report resolution of the undisclosed-term
-  actives.
-- **5d — structure read-model.** `v_dia_lease_structure_current` (bump_pct, interval, next_bump_date,
-  options, basis, confidence). Comps exports read it. **No write-back** of fitted structure to
-  `leases`/`lease_escalations` — documented evidence writes back only via the Phase 3 loop.
-- **5e — lease comps serving.** `v_dia_lease_comps_enriched` → `generate_comps` / Briggs Lease Comps
-  mapping. Input fields only; formula-protected columns untouched.
 - **5h — convention auto-refit.** Quarterly job re-fits `tenant_lease_conventions` empirically (modal
   bump/interval per tenant, n≥20 structured leases), writing a **new versioned row** (`effective_from`)
   on material drift (>25 bps bump or interval change); never mutates history. FMC's flagged placeholder

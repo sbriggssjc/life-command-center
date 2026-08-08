@@ -1,0 +1,34 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5c/5d/5e — SERVING LAYER (dia)
+-- zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5cde_serving_layer +
+--  dia_rent_intelligence_phase5c_term_varconflict_fix +
+--  dia_rent_intelligence_phase5c_term_coherent_phase). Read-only views + one
+-- function over the timeline + conventions. NO mutations; NO write-back of
+-- fitted structure to leases/lease_escalations. Additive/reversible (DROP).
+--
+-- 5c  dia_property_term_at_date(property_id, as_of default CURRENT_DATE) ->
+--     remaining firm/total term, lease_phase, options_total/remaining, firm &
+--     final expiry, expiry_basis (lease_documented | convention_modeled),
+--     confidence. Documented lease_expiration preferred; else convention-modeled.
+--     lease_phase + options_remaining derive from ONE effective firm anchor so
+--     all term fields are mutually coherent (no "option_1 with 3 options
+--     remaining"). Exporter term buckets + comps-engine TERM read this.
+--     (#variable_conflict use_column — RETURNS TABLE OUT param property_id.)
+-- 5d  v_dia_lease_structure_current -> bump_pct, bump_interval_years,
+--     next_bump_date, options_total, expense_structure, basis
+--     (documented_on_convention | convention), confidence. Sourced from the
+--     resolved tenant convention (authoritative decimals; no unit ambiguity).
+--     Comps exports read it. NO write-back.
+-- 5e  v_dia_lease_comps_enriched -> commencement, expiration, starting_rent,
+--     starting_rent_psf, rent_current, rent_psf_current, structure, rent_basis,
+--     rent_confidence -> generate_comps / Briggs Lease Comps mapping (INPUT
+--     fields only; formula-protected columns computed downstream, untouched).
+--
+-- Grounded live: v_dia_lease_structure_current 10,808 rows;
+-- v_dia_lease_comps_enriched 4,789 rows; 12 undisclosed-term on-market actives
+-- now carry a modeled term via 5c. Read-only -> ancestry N/A.
+--
+-- See: docs/architecture/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for the full functions + views.)
