@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### W6.5 Stage 1 MERGED + LIVE — PR #1641 (`b94d877`)
+DC federated lanes (~1,010 lines: `_DC_FED_META`, `_fedCardHTML` + 17 branches, renderFederatedLane,
+dcFed* verdict handlers) extracted VERBATIM from ops.js → new classic-script `dc-lanes.js` loaded
+before ops.js — **byte-identity of the moved block verified against base**. Deliberate deviation
+from the prompt: classic ordered `<script>` split, NOT ES modules (repo serves SPA from root, no
+bundler; shared global scope keeps every cross-ref working with zero rewiring — documented in the
+map doc). `docs/architecture/w6-5-frontend-decomposition-map.md` = the full seam inventory +
+staged plan (Stage 2: detail.js by tab; Stage 3: app.js by route). Guards widened to read both
+files as one runtime surface (assertions unchanged) + new load-order test. 3,388 pass / 3
+pre-existing. **Scott verify: hard refresh → DC lanes render → work one junk card (119 waiting) —
+that exercises the extracted region end-to-end.**
+
 ### Buildout continuation 2026-08-08 — WAVE 9 kicked off + W6.5 staged + ORE self-resolved
 Scott picked three tracks: (1) **ORE resolver — already resolved**: flag was flipped Aug 6 (after
 the audit-refresh snapshot); queue verified draining 2,064→538 in 2 days (~750/day), nothing to do.
