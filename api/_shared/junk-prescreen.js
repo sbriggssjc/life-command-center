@@ -406,6 +406,50 @@ export function classifyName(name) {
   return null;
 }
 
+// W8 U1 deterministic-certainty bypass (Prompt 85). A sub-class of the junk pool
+// is junk with LITERAL certainty — no plausible real reading exists, so an LLM
+// call to judge it is pure waste (and a batch of 100% such rows livelocks the
+// dismiss-share guard: 20/20 dismiss on blank names reads as "model runaway" and
+// the batch is refused forever). These classes DISMISS deterministically (no
+// model call), mirroring U5's deterministic-rename arm:
+//   • blank_name    — the trimmed value is empty. Nothing to judge.
+//   • all_non_alpha — no letters at all (pure digits/punctuation, e.g. "--").
+//   • token_junk    — ONLY when the WHOLE value is an exact placeholder
+//                     ("Test Test", "Tbd", "Unknown", "N/A"), never a fuzzy hit
+//                     that merely STARTS with a junk token ("TEST company do not
+//                     use" — that keeps its LLM judgment, it may be a real name).
+// A fuzzy/gibberish class (consonant_run / no_vowel / a partial token_junk) is a
+// JUDGMENT call and stays with the LLM + the dismiss-share guard.
+//
+// The whole trimmed value must be nothing but placeholder tokens (anchored ^…$),
+// so "Test Test" matches (tests? repeated) but "Test Realty LLC" does not.
+const TOKEN_JUNK_EXACT_RE = /^\s*(tests?(?:\s+tests?)*|asdf+[a-z]*|qwerty[a-z]*|xxx+|zzz+|foo|bar|baz|sample|dummy|delete\s*me|delete|do\s*not\s*use|donotuse|do\s*not\s*delete|n\/?a|none|null|unknown|tbd|placeholder|example|temp|temporary|aaaa+)\s*$/i;
+
+// Is the WHOLE value an exact junk placeholder (not merely a fuzzy prefix hit)?
+export function isExactPlaceholder(name) {
+  const s = String(name == null ? '' : name).trim();
+  return s !== '' && TOKEN_JUNK_EXACT_RE.test(s);
+}
+
+// Deterministic-certainty dismiss detail, or null. Returns the heuristic +
+// verbatim evidence for a name that is junk with literal certainty (skips the
+// LLM). A junk candidate whose class is a JUDGMENT call returns null (stays LLM).
+export function deterministicDismissReason(name) {
+  const c = classifyName(name);
+  if (!c || c.category !== 'junk') return null;
+  if (c.heuristic === 'blank_name' || c.heuristic === 'all_non_alpha') {
+    return { heuristic: c.heuristic, evidence: c.evidence };
+  }
+  if (c.heuristic === 'token_junk' && isExactPlaceholder(name)) {
+    return { heuristic: c.heuristic, evidence: c.evidence };
+  }
+  return null;
+}
+
+export function isDeterministicJunk(name) {
+  return deterministicDismissReason(name) !== null;
+}
+
 // TRUE-junk candidate detail, or null. This is the ONLY generator that feeds the
 // U1 candidate pool — known_abbreviation / address_as_name are deliberately NOT
 // returned here (they are naming_hygiene, see namingHygieneReason). The

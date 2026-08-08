@@ -31,6 +31,7 @@ import {
   junkCandidateReason, namingHygieneReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
   parseJunkVerdictJson, planJunkApply, buildRetireMarker,
   applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
+  deterministicDismissReason,
   junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
   computeScanDeadline, remainingScoreBudget, nextScanCursor,
 } from './_shared/junk-prescreen.js';
@@ -1541,6 +1542,10 @@ async function handleMatchDisambigAssistTick(req, res) {
 const JUNK_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.JUNK_SCORE_BUDGET_MS || '120000', 10));
 const JUNK_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.JUNK_SCORE_BATCH_SIZE || '25', 10));
 const JUNK_SCORE_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.JUNK_SCORE_INLINE_N || '6', 10));
+// Prompt 85 — deterministic-certainty dismissals (blank / all-non-alpha / exact
+// placeholder) spend NO LLM call, so a much larger slice drains per invocation
+// than the LLM batch (which is ollama-latency bound). Default 100/night.
+const JUNK_DET_BATCH_SIZE = Math.max(1, parseInt(process.env.JUNK_DET_BATCH_SIZE || '100', 10));
 // Prompt 84 — windowed resumable scan (port the U5/Prompt-83 pattern back to U1).
 // The per-invocation scan is a WINDOW, not the whole 128k/7-target corpus; a keyset
 // cursor persisted in the scan-batch ledger advances the window each run so nightly
@@ -1900,6 +1905,25 @@ async function recordJunkPrescreenHealth({ status, count, lastError, details }) 
 // then applyPrescreenGuards vetoes any unsafe dismiss (acronym / abbreviation /
 // address) — the model can never retire a real entity on a name-shape hint.
 async function scoreJunkCandidate(candidate, fewShot) {
+  // Prompt 85 — deterministic-certainty bypass. blank_name / all_non_alpha / an
+  // EXACT placeholder (never a fuzzy token hit) is junk with literal certainty:
+  // dismiss it WITHOUT a model call, evidence = the verbatim value, provider
+  // 'none', confidence 1.0. Mirrors U5's deterministic-rename arm. Verdicts stay
+  // human — this is a proposal to the review lane; the FK guard at apply time is
+  // the final safety (a connected row already excluded at scan time anyway).
+  const det = deterministicDismissReason(candidate.entity_name);
+  if (det) {
+    return {
+      proposal: {
+        verdict: 'dismiss', confidence: 1,
+        evidence_quote: candidate.evidence != null ? String(candidate.evidence)
+          : (det.evidence != null ? String(det.evidence) : ''),
+        reason: 'deterministic: ' + det.heuristic,
+        guards: [],
+      },
+      provider: 'none', model: null, skipped_llm: true, deterministic: true, connected: false,
+    };
+  }
   const target = findJunkTarget(candidate.domain, candidate.table);
   let connection = { referenced: false };
   if (target) {
@@ -2056,16 +2080,47 @@ async function handleJunkPrescreenTick(req, res) {
       naming_hygiene_backlog: namingHygieneFlat,
       scan_cursors: scan.nextCursors, scan_errors: scanErrors, scan_budget_exhausted: !!scan.budgetExhausted,
       scored: 0, proposed: 0, kept_not_enqueued: 0, failed: 0,
+      deterministic_dismissed: 0, llm_scored: 0, llm_dismiss_share: 0,
       budget_exhausted: false, remaining_unscored: scan.fresh.length, by_verdict: {} };
-    // Phase 1 — score up to one batch (budget-bounded) with NO writes yet, so the
-    // verdict distribution is known before we persist anything.
+    // Prompt 85 — batch composition: deterministic-certainty junk (blank /
+    // all-non-alpha / exact placeholder) spends NO LLM call, so it is drained
+    // FIRST (cheap, up to JUNK_DET_BATCH_SIZE), then the ollama budget is spent on
+    // JUDGMENT classes only. This drains the ~199 blank-name pool fast instead of
+    // burning the whole LLM budget refusing it every night.
+    const detCands = [], llmCands = [];
+    for (const c of scan.fresh) {
+      if (deterministicDismissReason(c.entity_name)) detCands.push(c);
+      else llmCands.push(c);
+    }
+    // Phase 1 — score with NO writes yet, so the verdict distribution is known
+    // before we persist anything. `scoreVerdicts` is EVERY verdict (honest
+    // by_verdict); `llmVerdicts` is only the LLM-judged subset — the ONLY input to
+    // the dismiss-share guard, whose job is catching a runaway MODEL, not vetoing
+    // the arithmetic certainty of a blank name.
     const scoredRows = [];
     const scoreVerdicts = {};
-    const budgetRun = await scoreWithBudget(scan.fresh, async (cand) => {
+    const llmVerdicts = {};
+    // Phase 1a — deterministic dismissals first (no LLM, no budget spend).
+    for (const cand of detCands.slice(0, JUNK_DET_BATCH_SIZE)) {
       try {
         const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
         summary.scored += 1;
+        summary.deterministic_dismissed += 1;
         scoreVerdicts[proposal.verdict] = (scoreVerdicts[proposal.verdict] || 0) + 1;
+        scoredRows.push({ cand, proposal, provider, model });
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[junk-prescreen] deterministic score failed', cand.subject_ref, e?.message || e);
+      }
+    }
+    // Phase 1b — judgment classes under the ollama wall-clock budget.
+    const budgetRun = await scoreWithBudget(llmCands, async (cand) => {
+      try {
+        const { proposal, provider, model, skipped_llm, deterministic } = await scoreJunkCandidate(cand, fewShot);
+        summary.scored += 1;
+        scoreVerdicts[proposal.verdict] = (scoreVerdicts[proposal.verdict] || 0) + 1;
+        if (deterministic) summary.deterministic_dismissed += 1;
+        else if (!skipped_llm) llmVerdicts[proposal.verdict] = (llmVerdicts[proposal.verdict] || 0) + 1;
         scoredRows.push({ cand, proposal, provider, model });
       } catch (e) {
         summary.failed += 1;
@@ -2075,11 +2130,16 @@ async function handleJunkPrescreenTick(req, res) {
     }, { budgetMs: scoreBudgetMs, maxN: batchSize });
     summary.budget_exhausted = budgetRun.budget_exhausted;
     summary.remaining_unscored = Math.max(0, scan.fresh.length - scoredRows.length - summary.failed);
-    // Distribution guard — a curated-table junk pre-screen should find a small
-    // MINORITY of true junk. >90% dismiss ⇒ the batch is anchoring, not judging;
-    // refuse to persist it (honest-counts doctrine).
-    const dist = dismissDistributionGuard(scoreVerdicts, JUNK_DISMISS_GUARD_THRESHOLD);
+    // Distribution guard — measures ONLY LLM-judged verdicts. The guard exists to
+    // catch a runaway MODEL anchoring on the heuristic; deterministic dismissals
+    // are arithmetic, not judgment, so they are EXCLUDED from the denominator (a
+    // 100%-deterministic batch is therefore never "suspect" and persists — the
+    // livelock fix). >90% dismiss AMONG LLM verdicts still refuses the batch.
+    const dist = dismissDistributionGuard(llmVerdicts, JUNK_DISMISS_GUARD_THRESHOLD);
     summary.by_verdict = scoreVerdicts;
+    summary.llm_by_verdict = llmVerdicts;
+    summary.llm_scored = dist.total;
+    summary.llm_dismiss_share = dist.dismiss_share;
     summary.distribution = dist;
     if (dist.suspect_distribution) {
       // Close the scan batch even on the refusal path — cursor advanced, honest
@@ -2141,28 +2201,54 @@ async function handleJunkPrescreenTick(req, res) {
     // the Railway proxy on ollama latency (~16s/call): `n` (default 6) bounds the
     // count, JUNK_SCORE_BUDGET_MS the wall-clock; scoring stops at whichever hits.
     const inlineN = Math.min(60, Math.max(1, parseInt(req.query.n || String(JUNK_SCORE_INLINE_DEFAULT_N), 10) || JUNK_SCORE_INLINE_DEFAULT_N));
+    // Prompt 85 — mirror the apply path: deterministic dismissals first (no LLM),
+    // then the judgment classes under the ollama budget; the guard sees only the
+    // LLM subset.
+    const detCands = [], llmCands = [];
+    for (const c of scan.fresh) {
+      if (deterministicDismissReason(c.entity_name)) detCands.push(c);
+      else llmCands.push(c);
+    }
     const proposals = [];
-    const byVerdict = {};
+    const byVerdict = {};       // every verdict (honest by_verdict)
+    const llmVerdicts = {};     // LLM-judged only (guard denominator)
     let keptNotEnqueued = 0;
-    const budgetRun = await scoreWithBudget(scan.fresh, async (cand) => {
+    let deterministicDismissed = 0;
+    const pushProposal = (cand, proposal, provider, model) => {
+      byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+      const enqueueable = isEnqueueableJunkVerdict(proposal.verdict);
+      if (!enqueueable) keptNotEnqueued += 1;
+      proposals.push({ subject_ref: cand.subject_ref, domain: cand.domain, table: cand.table,
+        entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal,
+        would_enqueue: enqueueable, model_provider: provider, model_name: model });
+    };
+    for (const cand of detCands.slice(0, JUNK_DET_BATCH_SIZE)) {
       try {
         const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
-        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
-        const enqueueable = isEnqueueableJunkVerdict(proposal.verdict);
-        if (!enqueueable) keptNotEnqueued += 1;
-        proposals.push({ subject_ref: cand.subject_ref, domain: cand.domain, table: cand.table,
-          entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal,
-          would_enqueue: enqueueable, model_provider: provider, model_name: model });
+        deterministicDismissed += 1;
+        pushProposal(cand, proposal, provider, model);
+      } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
+    }
+    const budgetRun = await scoreWithBudget(llmCands, async (cand) => {
+      try {
+        const { proposal, provider, model, skipped_llm, deterministic } = await scoreJunkCandidate(cand, fewShot);
+        if (deterministic) deterministicDismissed += 1;
+        else if (!skipped_llm) llmVerdicts[proposal.verdict] = (llmVerdicts[proposal.verdict] || 0) + 1;
+        pushProposal(cand, proposal, provider, model);
       } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
       return null;
     }, { budgetMs: JUNK_SCORE_BUDGET_MS, maxN: inlineN });
-    const dist = dismissDistributionGuard(byVerdict, JUNK_DISMISS_GUARD_THRESHOLD);
+    const dist = dismissDistributionGuard(llmVerdicts, JUNK_DISMISS_GUARD_THRESHOLD);
     out.scored = proposals.length;
     out.batch_size = inlineN;
     out.budget_ms = JUNK_SCORE_BUDGET_MS;
     out.budget_exhausted = budgetRun.budget_exhausted;
     out.remaining_unscored = Math.max(0, scan.fresh.length - proposals.length);
     out.by_verdict = byVerdict;
+    out.llm_by_verdict = llmVerdicts;
+    out.deterministic_dismissed = deterministicDismissed;
+    out.llm_scored = dist.total;
+    out.llm_dismiss_share = dist.dismiss_share;
     out.kept_not_enqueued = keptNotEnqueued;
     out.would_enqueue = proposals.filter((p) => p.would_enqueue).length;
     out.distribution = dist;
