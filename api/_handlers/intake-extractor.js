@@ -18,7 +18,7 @@
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI, invokeVisionExtractionAI } from '../_shared/ai.js';
-import { buildExtractionPrompt, buildProviderStamp } from '../_shared/intake-extraction-prompt.js';
+import { buildExtractionPrompt, ensureProviderStamp } from '../_shared/intake-extraction-prompt.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
 import { isNonDealSnapshot, normalizeCapRate, firstOf } from '../_shared/intake-classify.js';
@@ -710,12 +710,10 @@ export async function processIntakeExtraction(intakeId, context = {}) {
         // (not just the raw_payload diagnostics), so W5.3-style grading can read
         // provider/fell_back straight off staged_intake_extractions.extraction_snapshot._provider
         // without a raw_payload join (which only 88/238 items carried).
-        if (typeof parsed === 'object' && globalThis.__lastAiCallInfo) {
-          parsed._provider = {
-            ...buildProviderStamp(globalThis.__lastAiCallInfo),
-            stamped_at: new Date().toISOString(),
-          };
-        }
+        // Prompt 82: route through the shared ensureProviderStamp helper — one
+        // stamp shape, no forks. This is the accurate PER-ARTIFACT stamp; the
+        // write site re-asserts it as a safety net so no snapshot ships bare.
+        ensureProviderStamp(parsed, globalThis.__lastAiCallInfo);
         diag.ai_ok = true;
         diag.document_type = parsed.document_type || null;
         extractions.push(parsed);
@@ -738,6 +736,14 @@ export async function processIntakeExtraction(intakeId, context = {}) {
 
   // 5. Write to staged_intake_extractions
   if (mergedSnapshot) {
+    // Prompt 82: guarantee every persisted snapshot carries a `_provider` stamp.
+    // The per-artifact loop above stamps the winning extraction, but a
+    // multi-artifact merge (which keeps only the priority winner's fields), a
+    // stale/null __lastAiCallInfo, or a channel that bypassed the loop stamp
+    // could otherwise write a bare snapshot. ensureProviderStamp is idempotent —
+    // it no-ops when the accurate per-artifact stamp is already present, and
+    // stamps {final_provider:'none'} only when there was genuinely no AI call.
+    ensureProviderStamp(mergedSnapshot, globalThis.__lastAiCallInfo);
     const insertResult = await opsQuery('POST', 'staged_intake_extractions', {
       intake_id: intakeId,
       extraction_snapshot: mergedSnapshot
