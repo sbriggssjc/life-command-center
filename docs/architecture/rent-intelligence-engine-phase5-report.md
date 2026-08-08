@@ -226,10 +226,30 @@ reversible via `DROP`.
 
 ---
 
-## Continuation — designed & grounded, in the accepted build order
+## 5i. Propagation job — SHIPPED, applied live (the promulgation mechanic)
 
-Remaining units ship as their own reviewed, dry-run-first, reversible increments on PR #1649, in the
-sequence: **5i → 5j**. All call `dia_check_ancestry` in every derivation/corroboration path.
+Nightly, for every property whose timeline gained a new version or a confidence (corroboration) change
+since the last run, re-derive the dependent artifacts (5a caps, 5b listing implied caps) **for that
+property only** — bounded, provenance-tracked, ancestry-checked. One new OM improves every sale,
+listing, and comp that property touches by morning.
+
+- The **5a/5b engines gained a `p_property_id` filter** (NULL = all; unscoped behaviour identical).
+- **`dia_propagate_rent_intelligence(since default last-run, dry_run, limit)`** — selects changed
+  properties, re-derives per property with per-property error isolation, logs the run to
+  `dia_rent_propagation_log`. **pg_cron `dia-rent-propagation` @ `55 6 * * *`**; a baseline log row was
+  seeded so the first run only processes changes from ship time forward (5a/5b already ran globally).
+
+**Acceptance — the flagship round-trip** (self-rolling-back gate, property 22449, 0 residue): inject an
+OM/BOV-confirmed rent → the timeline rebuilds → the next propagation run (scoped to the **1 changed
+property**) derives the sale's cap (sale 73: `cap_rate_final` NULL → **0.07000**), records **1 sale_cap
+provenance edge**, and the 2024 timeline row **ancestry-links to the BOV** (full OM → timeline → sale
+cap chain); the 5c term view updates. This is exactly the specified promulgation acceptance.
+
+---
+
+## Continuation — remaining units on PR #1649
+
+Sequence: **5h → 5j** (5j last, so its learning metrics measure the completed loop).
 
 - **5h — convention auto-refit.** Quarterly job re-fits `tenant_lease_conventions` empirically (modal
   bump/interval per tenant, n≥20 structured leases), writing a **new versioned row** (`effective_from`)
