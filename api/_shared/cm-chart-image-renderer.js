@@ -18,7 +18,7 @@
 // Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
-import { heatRampColors, fitDataAxisRange, minYearForTemplate, padSnapRange, assertPercentAxisMin } from './cm-native-chart-injector.js';
+import { heatRampColors, fitDataAxisRange, minYearForTemplate, fitPercentAxis } from './cm-native-chart-injector.js';
 
 // R2-A2 (2026-06-30) — templates whose PNG window must mirror the native
 // injector's MIN_YEAR_BY_TEMPLATE floor so both surfaces plot the identical
@@ -1014,12 +1014,12 @@ function buildChartConfig(chart, brand) {
           ? r.achieved_last_ask_cap
           : ((r.avg_last_ask_cap != null && r.avg_bid_ask_spread != null)
               ? Number(r.avg_last_ask_cap) + Number(r.avg_bid_ask_spread) : null);
-        // CM close-out item 3 (bid-ask third strike) — the PNG image artifact now
-        // shares the SAME axis math as the native XLSX injector (padSnapRange over
-        // the plotted Last-Ask + Achieved band) instead of a hardcoded {0.055,0.10}.
-        // This is what lets a computed min ≈ 0.043 (never a 0 zero-floor) apply on
-        // BOTH artifacts from one code path. Falls back to the prior literal only
-        // when there are < 2 finite points.
+        // CM close-out item 3 (bid-ask, final) — the PNG image artifact shares the
+        // SAME per-axis fit+assert as the native XLSX injector (fitPercentAxis over
+        // the cap axis's assigned series: Last-Ask + Achieved). The bid-ask SPREAD
+        // is NOT a cap-axis series here either — the gray bar is a floating high-low
+        // bar valued [last_ask, achieved], so the axis fits ~6–8% and never floors
+        // at 0. Falls back to the literal only when < 2 finite points.
         const baPlotVals = [];
         for (const r of rows) {
           const la = Number(r.avg_last_ask_cap);
@@ -1029,20 +1029,10 @@ function buildChartConfig(chart, brand) {
             if (Number.isFinite(ach)) baPlotVals.push(ach);
           }
         }
-        const baFit = padSnapRange(baPlotVals, { minAbsFloor: 0.01 }) || { min: 0.055, max: 0.10 };
-        {
-          const dMin = baPlotVals.length ? Math.min(...baPlotVals) : null;
-          const dMax = baPlotVals.length ? Math.max(...baPlotVals) : null;
-          console.log(
-            `[cm-chart-image-renderer] axis-fit template=${chart.chart_template_id || 'bid_ask'} axis=cap%(shared) ` +
-            `data-min=${dMin != null ? dMin : 'none'} data-max=${dMax != null ? dMax : 'none'} ` +
-            `axis-min=${baFit.min} axis-max=${baFit.max}`
-          );
-          assertPercentAxisMin({
-            label: `image:${chart.chart_template_id || 'bid_ask'}:bid-ask-cap%`,
-            dataMin: dMin, axisMin: baFit.min,
-          });
-        }
+        const baFit = fitPercentAxis(
+          `image:${chart.chart_template_id || 'bid_ask'}:cap%(last_ask+achieved)`,
+          baPlotVals, { minAbsFloor: 0.01 }
+        ) || { min: 0.055, max: 0.10 };
         return {
           type: 'bar',
           data: {

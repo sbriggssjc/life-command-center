@@ -35,6 +35,18 @@ whose data-min > 1% ends up pinned to a min ≤ 0. Both artifacts call it on the
 bid-ask cap axis, so a zero-floor regression fails loudly instead of shipping.
 On live data the computed min is ≈ 0.055 (dia) / ≈ 0.06 (gov) — never 0.
 
+**Final (the four-strikes root cause).** The axis MATH was always correct; the
+recurring 0 floor came from the bid-ask SPREAD series (~0.6% at min) sharing the
+cap axis, which dragged data-min below 1% and made `padSnapRange`'s near-zero
+exemption floor to 0 *legitimately*. The definitive design (the original draft):
+the spread is NEVER a cap-axis series — it is only the floating high-low bar
+geometry between the Last-Ask (bottom) and Achieved (top) cap lines. The cap axis
+is fit to ONLY its assigned series (Last-Ask + Achieved) via the single per-axis
+helper `fitPercentAxis(label, seriesValues, opts)` (exported), which fits +
+asserts in one call so the pinned range and the zero-floor check can never
+diverge. Both artifacts use it. Empirically verified on live dia data:
+`data-min=0.062 → axis 0.06–0.081`, no zero-floor. One chart, both artifacts.
+
 ### Items 4 & 7 — packet now applies the display_from crop
 `buildLivePacket` (the packet path `fetchQuarterly` feeds) never applied the
 per-series `display_from` crop that the standard export applies, so the frozen
