@@ -454,6 +454,15 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Both anomalies closed 2026-08-09 — sf-assist FIXED (20/20 written), disambig root-caused → prompt 91
+Post-CHECK-widening re-POST: sf-link-assist **proposed 20 / failed 0** ✅ (verdicts sane: 17
+uncertain / 2 merge / 1 not). Disambig-assist "0 annotated" root-caused: the 19 remaining open
+cards carry literal `candidates: []` (June-14 producer burst — matcher minted "pick one of
+nothing" instead of routing no-match; assist correctly refuses them; lane badge inflated).
+**Prompt 91** (micro): producer guard (never mint empty), one-shot sweep (~19 → skipped w/ reason,
+re-emit unresolved intakes through the no-match path), `skipped_no_candidates` counter. The 12
+real cards ARE annotated — the assist did its whole job on night one.
+
 ### Nightly 2026-08-09 — 8/9 produced; assist-write CHECK bug FIXED LIVE by Cowork
 First full 9-unit night: U1 137 open / U2 25 / U3 **10** (fixed evidence producing!) / U5 85;
 **re-score walked 400: 18 auto-links + 7 review + 375 no_match** (conservative gate holding);
