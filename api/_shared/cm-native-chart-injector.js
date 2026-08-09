@@ -4567,11 +4567,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             barSeries: [
               { titleCol: spreadCol, titleRow: headerRow, valCol: spreadCol, color: 'D8DFDF', borderColor: '9EA9B7' },
             ],
+            // CONTINUOUS lines (NOT showMarker — in the combo builder showMarker
+            // means markers-only/no line, which rendered the cap lines as scattered
+            // dashes). Two solid cap lines: sky Last-Ask (lower), navy Achieved (upper).
             lineSeries: [
-              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
-                showMarker: true, markerShape: 'dash', markerSize: 7 },
-              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                showMarker: true, markerShape: 'dash', markerSize: 7 },
+              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky },
+              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy },
             ],
             anchor: standardAnchor,
           },
