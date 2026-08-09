@@ -2456,15 +2456,19 @@ async function runEnrichOnlyPromotion(args) {
     // creating anything. emitMatchDisambiguation is idempotent on the intake
     // (subject_ref='match_disambig:'+intakeId), so this is safe even when the
     // matcher already opened the same decision on its ambiguous path.
+    // Prompt 91: emitMatchDisambiguation refuses to mint an empty-candidate card
+    // (unworkable, badge-inflating). When there are no candidates the enrich doc
+    // simply parks as enrich_unresolved (the doc is already attached as a
+    // property_document) rather than churning the lane with a "pick nothing" card.
     let emitted = false;
     try {
-      await emitMatchDisambiguation(
+      const r = await emitMatchDisambiguation(
         intakeId,
         snapshot?.address || null,
         firstOf(snapshot?.tenant_name) || null,
         Array.isArray(match?.candidates) ? match.candidates : []
       );
-      emitted = true;
+      emitted = !(r && r.emitted === false);
     } catch (err) {
       console.warn('[intake-promoter:enrich] disambiguation emit failed (non-fatal):', err?.message);
     }

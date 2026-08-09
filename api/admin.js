@@ -1508,11 +1508,19 @@ async function handleMatchDisambigAssistTick(req, res) {
   const sourceRunId = 'p80_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
   const cards = await fetchUnannotatedMatchDisambigCards(limit);
   const summary = { source_run_id: sourceRunId, open_cards: openCount, unannotated,
-    candidates: cards.length, annotated: 0, failed: 0, skipped: 0 };
+    candidates: cards.length, annotated: 0, failed: 0, skipped: 0, skipped_no_candidates: 0 };
   const scan = await scoreWithBudget(cards, async (d) => {
     try {
       const a = await annotateMatchDisambigCard(d, sourceRunId);
-      if (!a.ok) { summary.skipped += 1; return a; }
+      if (!a.ok) {
+        summary.skipped += 1;
+        // Prompt 91: surface the empty-candidate class as its own counter so this
+        // unworkable-by-construction card type is visible in the response rather
+        // than folded into a generic skip. The producer guard now prevents new
+        // empties; a non-zero count here means legacy cards still await the sweep.
+        if (a.skipped === 'no_candidates') summary.skipped_no_candidates += 1;
+        return a;
+      }
       const wr = await opsQuery('POST', 'rpc/lcc_annotate_match_disambig_assist',
         { p_decision_id: d.id, p_assist: a.assist });
       if (wr.ok) summary.annotated += 1; else summary.failed += 1;
