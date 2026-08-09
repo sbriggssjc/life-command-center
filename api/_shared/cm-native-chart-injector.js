@@ -55,6 +55,77 @@ function escapeXml(s) {
 }
 
 // ----------------------------------------------------------------------------
+// c15 leader-line extension — CONFIG-GATED, default OFF (round-3 item 2 regression)
+// ----------------------------------------------------------------------------
+// The per-dLbl c15 (Chart-2012) leader-line extension shipped in round 3 item 2
+// CORRUPTS the workbook — Excel rejects it at schema level and prompts to repair
+// / declares the file corrupt. Diagnosed causes: a <c15:layout> child inside the
+// per-dLbl <c:ext> (invalid — the plain <c:layout> already carries the offset),
+// and showLeaderLines/leaderLines emitted per-dLbl rather than at the <c:dLbls>
+// level. Until Scott's Excel-authored labelsample.xlsx supplies the exact valid
+// target XML, the c15 emission is gated behind this flag and DEFAULTS OFF, so
+// exports open clean (labels keep their valid <c:layout> float; leaders are
+// temporarily absent). Do NOT re-attempt the c15 structure until that sample
+// arrives and the emitted children are added to C15_EXT_ALLOWED_CHILDREN.
+//
+// Enable (only once a vetted structure exists) via env CM_EMIT_C15_LEADER_LINES
+// = '1' / 'true'. Read at call time so config/tests can toggle without reimport.
+function c15LeaderLinesEnabled() {
+  const v = String(process.env.CM_EMIT_C15_LEADER_LINES ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+// Vetted whitelist of c15-namespaced child element local-names permitted inside
+// a chart-part <c:ext> block. INTENTIONALLY EMPTY until the Excel-authored
+// labelsample.xlsx confirms the exact valid structure — every c15 child emitted
+// today (layout, showLeaderLines, leaderLines) is under suspicion, so the
+// validation gate (validateChartExtWhitelist) rejects ALL of them and a
+// schema-invalid chart can never ship. Add local-names here ONLY after the
+// authored sample proves them valid.
+const C15_EXT_ALLOWED_CHILDREN = new Set([]);
+
+// Regression gate (round-3 item 2): re-scan a generated chart XML part and
+// reject any c15-namespaced child element inside a <c:ext> block that is not in
+// the vetted whitelist. This is the "unknown c15 children against a vetted
+// whitelist" backstop — a schema-invalid chart extension can never ship again,
+// even if a future edit re-introduces the corrupt structure or forgets the flag.
+// Returns an array of { element, reason } violations (empty = clean).
+function validateChartExtWhitelist(xml, template = '') {
+  const out = [];
+  if (typeof xml !== 'string' || !xml) return out;
+  // Only c15 (Chart-2012) ext blocks are in scope; other extLst uris (e.g.
+  // c16) are not emitted by this module. Scan each <c:ext ...>…</c:ext>.
+  const extRe = /<c:ext\b([^>]*)>([\s\S]*?)<\/c:ext>/g;
+  let m;
+  while ((m = extRe.exec(xml)) !== null) {
+    const attrs = m[1] || '';
+    const body = m[2] || '';
+    // Restrict to the c15 (drawing/2012/chart) extension namespace.
+    if (!/xmlns:c15\s*=\s*"http:\/\/schemas\.microsoft\.com\/office\/drawing\/2012\/chart"/.test(attrs)
+        && !/\bc15:/.test(body)) {
+      continue;
+    }
+    // Collect DIRECT-child c15 element local-names (top-level only — nested
+    // descendants like c15:x live under an allowed parent). We approximate
+    // "child" by matching opening c15: tags and keeping the shallowest ones.
+    const seen = new Set();
+    for (const t of body.matchAll(/<c15:([A-Za-z][\w-]*)\b/g)) {
+      seen.add(t[1]);
+    }
+    for (const local of seen) {
+      if (!C15_EXT_ALLOWED_CHILDREN.has(local)) {
+        out.push({
+          template,
+          element: `c15:${local}`,
+          reason: `c15 child <c15:${local}> is not in the vetted whitelist (C15_EXT_ALLOWED_CHILDREN)`,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// ----------------------------------------------------------------------------
 // CM_BRAND — Briggs Brand Standards v3 / Northmarq 2024 (single source of truth)
 // ----------------------------------------------------------------------------
 // CM chart feedback item #1 (2026-08): chart text runs inherited the workbook
@@ -738,8 +809,13 @@ function dLblXml(idx, text, role, label) {
   // the c15 (Chart-2012) extension: a c15:manualLayout MIRRORING the c:layout
   // offset plus c15:showLeaderLines (and a c15:leaderLines spPr for the stroke).
   // This structure matches what desktop Excel writes when you drag a label off
-  // its point and enable leader lines. Emitted only for moved labels (off set).
-  const c15Frag = off
+  // its point and enable leader lines. Emitted only for moved labels (off set)
+  // AND only when the c15 leader-line flag is explicitly enabled — DEFAULT OFF
+  // because the current structure corrupts the workbook (see c15LeaderLinesEnabled
+  // header). With the flag off, labels keep their valid <c:layout> float and the
+  // export opens clean; leaders are temporarily absent until a vetted structure
+  // arrives.
+  const c15Frag = (off && c15LeaderLinesEnabled())
     ? `
             <c:extLst>
               <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
@@ -2564,6 +2640,18 @@ export async function injectNativeCharts(buffer, injections) {
         violations.map(v => `series #${v.series}: ${v.reason}`).join('; ')
       );
     }
+    // Round-3 item 2 regression gate — re-parse the chart part and reject any
+    // unknown c15 extension child against the vetted whitelist, so a
+    // schema-invalid chart extension (the corruption cause) can never ship.
+    const extViolations = validateChartExtWhitelist(xml, spec.tabName);
+    if (extViolations.length) {
+      throw new Error(
+        `[cm-native-chart-injector] CHART EXT WHITELIST FAILED (${spec.tabName}): ` +
+        extViolations.map(v => `${v.element}: ${v.reason}`).join('; ') +
+        ' — this schema-invalid extension corrupts the workbook; keep CM_EMIT_C15_LEADER_LINES off ' +
+        'and do not add children to C15_EXT_ALLOWED_CHILDREN until an Excel-authored sample proves them valid.'
+      );
+    }
     return xml;
   };
 
@@ -2703,6 +2791,11 @@ export {
   assertCalloutCoverage,
   lintChartSeriesXml,
   specToChartXml,
+  // Round-3 item 2 — c15 leader-line gate + ext whitelist regression guard
+  c15LeaderLinesEnabled,
+  C15_EXT_ALLOWED_CHILDREN,
+  validateChartExtWhitelist,
+  dLblXml,
 };
 
 // ----------------------------------------------------------------------------
