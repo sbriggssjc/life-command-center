@@ -994,7 +994,15 @@ function packetFlagsFromCharts(charts = [], periodEnd) {
 }
 
 async function buildLivePacket({ vertical, periodEnd, quarter, user }) {
-  const fakeReq = { query: { vertical, as_of: periodEnd, subspecialty: 'all', phase: '5' } };
+  // CM packet-export parity (2026-08-09): the packet must BACK the export, not
+  // fork it — so it has to capture the FULL registered chart set, not just the
+  // phase<=5 dashboard subset. The standard export applies no phase cap and
+  // pulls every catalog template that applies to the vertical (phases run to
+  // 31); mirror that here so the frozen packet carries the 10 higher-phase
+  // registered feeds (sold/ask cap-by-term, rent+price PSF/chair, market
+  // turnover, inventory backlog, core/avail cap dots, txn+avg-deal combo) that
+  // were previously dropped. '999' = effectively "all phases" (max is 31).
+  const fakeReq = { query: { vertical, as_of: periodEnd, subspecialty: 'all', phase: '999' } };
   let statusCode = 200;
   let payload = null;
   const fakeRes = {
