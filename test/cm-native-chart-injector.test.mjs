@@ -33,6 +33,9 @@ import {
   assertCalloutCoverage,
   lintChartSeriesXml,
   specToChartXml,
+  c15LeaderLinesEnabled,
+  C15_EXT_ALLOWED_CHILDREN,
+  validateChartExtWhitelist,
   padSnapRange,
 } from '../api/_shared/cm-native-chart-injector.js';
 
@@ -6108,10 +6111,12 @@ test('round3 item5: seller_sentiment XML carries explicit brand fills, zero lint
   assert.doesNotMatch(xml, /srgbClr val="9B88A5"/, 'amethyst removed');
 });
 
-// Item 2 — moved data labels carry the c15 (Chart-2012) extension so Excel
-// renders a leader line from the floated label back to the point on line/bar
-// charts (the plain c:layout offset alone only leaders on pie charts).
-test('round3 item2: line callouts emit the c15 leader-line extension', () => {
+// Item 2 REGRESSION — the per-dLbl c15 (Chart-2012) leader-line extension
+// corrupts the workbook (Excel schema-rejects it), so it is now CONFIG-GATED
+// and DEFAULTS OFF. Default exports must carry NO c15 extension (labels keep
+// their valid <c:layout> float); the leader emission only appears when the
+// CM_EMIT_C15_LEADER_LINES flag is explicitly enabled.
+function buildCapSpec() {
   const rows = Array.from({ length: 12 }, (_, i) => ({
     period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
     ttm_weighted_cap_rate: 0.06 + (i % 5) * 0.002,
@@ -6120,18 +6125,86 @@ test('round3 item2: line callouts emit the c15 leader-line extension', () => {
     { key: 'period_end', col: 'A' },
     { key: 'ttm_weighted_cap_rate', col: 'B' },
   ];
-  const out = buildInjectionSpec({
+  return buildInjectionSpec({
     chart_template_id: 'cap_rate_ttm_by_quarter',
     tabName: 'Data_Cap', cols, dataStart: 5, dataEnd: 16,
     brand: {}, rows, vertical: 'dialysis',
-  });
-  const xml = buildSingleLineChartXml(out.spec);
-  assert.match(xml, /CE6537A1-D6FC-4f65-9D91-7224C49458BB/, 'Chart-2012 ext uri present');
-  assert.match(xml, /<c15:showLeaderLines val="1"\/>/, 'per-label c15 leader lines enabled');
-  assert.match(xml, /<c15:manualLayout>/, 'c15 mirrors the manual layout offset');
-  assert.match(xml, /<c15:leaderLines>/, 'leader-line stroke defined');
-  // extLst must be the LAST child of c:dLbl (schema order).
-  assert.match(xml, /<c:showBubbleSize val="0"\/>\s*<c:extLst>/, 'extLst last in dLbl');
+  }).spec;
+}
+
+test('round3 item2: c15 leader-line extension is OFF by default (no corruption)', () => {
+  const prev = process.env.CM_EMIT_C15_LEADER_LINES;
+  delete process.env.CM_EMIT_C15_LEADER_LINES;
+  try {
+    assert.equal(c15LeaderLinesEnabled(), false, 'flag defaults off');
+    const xml = buildSingleLineChartXml(buildCapSpec());
+    // The valid plain-c:layout float still ships (labels still float).
+    assert.match(xml, /<c:manualLayout>/, 'plain c:layout offset still present');
+    // No c15 extension anywhere — this is what keeps Excel from repairing.
+    assert.doesNotMatch(xml, /c15:/, 'no c15 element emitted when flag off');
+    assert.doesNotMatch(xml, /CE6537A1-D6FC-4f65-9D91-7224C49458BB/, 'no Chart-2012 ext uri');
+    // And the ext whitelist gate is satisfied (nothing to reject).
+    assert.deepEqual(validateChartExtWhitelist(xml, 'Data_Cap'), []);
+  } finally {
+    if (prev === undefined) delete process.env.CM_EMIT_C15_LEADER_LINES;
+    else process.env.CM_EMIT_C15_LEADER_LINES = prev;
+  }
+});
+
+test('round3 item2: c15 flag ON re-emits the extension (opt-in only)', () => {
+  const prev = process.env.CM_EMIT_C15_LEADER_LINES;
+  process.env.CM_EMIT_C15_LEADER_LINES = '1';
+  try {
+    assert.equal(c15LeaderLinesEnabled(), true, 'flag reads on');
+    const xml = buildSingleLineChartXml(buildCapSpec());
+    assert.match(xml, /CE6537A1-D6FC-4f65-9D91-7224C49458BB/, 'Chart-2012 ext uri present');
+    assert.match(xml, /<c15:showLeaderLines val="1"\/>/, 'per-label c15 leader lines enabled');
+    assert.match(xml, /<c15:leaderLines>/, 'leader-line stroke defined');
+    // extLst must be the LAST child of c:dLbl (schema order).
+    assert.match(xml, /<c:showBubbleSize val="0"\/>\s*<c:extLst>/, 'extLst last in dLbl');
+  } finally {
+    if (prev === undefined) delete process.env.CM_EMIT_C15_LEADER_LINES;
+    else process.env.CM_EMIT_C15_LEADER_LINES = prev;
+  }
+});
+
+// Regression gate — the ext-whitelist validator rejects unknown c15 children so
+// a schema-invalid chart can never ship, even if a future edit re-introduces the
+// corrupt structure or forgets the flag. The whitelist is intentionally empty.
+test('round3 item2: validateChartExtWhitelist rejects unvetted c15 children', () => {
+  assert.equal(C15_EXT_ALLOWED_CHILDREN.size, 0, 'whitelist empty until sample vetted');
+  const bad = `<c:dLbl><c:extLst>
+    <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+      <c15:layout><c15:manualLayout><c15:x val="0.1"/></c15:manualLayout></c15:layout>
+      <c15:showLeaderLines val="1"/>
+    </c:ext></c:extLst></c:dLbl>`;
+  const v = validateChartExtWhitelist(bad, 'Data_Cap');
+  const els = v.map(x => x.element);
+  assert.ok(els.includes('c15:layout'), 'flags c15:layout');
+  assert.ok(els.includes('c15:showLeaderLines'), 'flags c15:showLeaderLines');
+  // Clean XML (no ext) passes.
+  assert.deepEqual(validateChartExtWhitelist('<c:dLbl><c:idx val="0"/></c:dLbl>', 'Data_Cap'), []);
+});
+
+// Regression gate is wired into injectNativeCharts — an injected chart bearing an
+// unvetted c15 extension is rejected before it can ship into the workbook.
+test('round3 item2: injectNativeCharts rejects a chart with unvetted c15 ext', async () => {
+  const prev = process.env.CM_EMIT_C15_LEADER_LINES;
+  process.env.CM_EMIT_C15_LEADER_LINES = '1';
+  try {
+    // The whitelist is empty, so flag-ON emission is caught by the gate.
+    const base = await buildTinyWorkbook();
+    await assert.rejects(
+      injectNativeCharts(base, [{
+        tabName: 'Data_Volume_TTM',
+        spec: buildCapSpec(),
+      }]),
+      /CHART EXT WHITELIST FAILED/,
+    );
+  } finally {
+    if (prev === undefined) delete process.env.CM_EMIT_C15_LEADER_LINES;
+    else process.env.CM_EMIT_C15_LEADER_LINES = prev;
+  }
 });
 
 // Item 1 — injectNativeCharts rewrites the workbook theme minor+major font to
