@@ -28,6 +28,11 @@ import {
   buildSingleLineChartXml,
   buildDoughnutChartXml,
   fitDataAxisRange,
+  CALLOUT_POLICY_TEMPLATES,
+  countSpecCallouts,
+  assertCalloutCoverage,
+  lintChartSeriesXml,
+  specToChartXml,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -1643,14 +1648,16 @@ test('buildInjectionSpec: seller_sentiment uses swapAxes (lines LEFT, bars RIGHT
   });
   assert.equal(out.spec.type, 'combo');
   assert.equal(out.spec.swapAxes, true, 'PDF p.35 puts lines on left, bars on right');
-  // Bars = price change % (sage + light purple)
+  // CM chart fixes round 3, item 5 — bars = price change % now use the PRIMARY
+  // brand blues (NM Blue + Sky) instead of the tertiary peridot/amethyst hues
+  // that read green/purple.
   assert.equal(out.spec.barSeries.length, 2);
   assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['C', 'E']);
-  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['8FC49E', '9B88A5']);
-  // Lines = cap rate (navy + sky)
+  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['003DA5', '62B5E5']);
+  // Lines = cap rate (Blue 85 + Steel).
   assert.equal(out.spec.lineSeries.length, 2);
   assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
-  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['003DA5', '62B5E5']);
+  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['265AB2', '9EA9B7']);
 });
 
 test('buildInjectionSpec: seller_sentiment_monthly handles different column layout', () => {
@@ -5984,4 +5991,165 @@ test('round2 item3: callout idx is plotted-space and text is label+value', () =>
   const xml = buildSingleLineChartXml(out.spec);
   assert.match(xml, /<a:t>(Peak|Low|Latest) <\/a:t>/, 'role label word present');
   assert.match(xml, /srgbClr val="3D4A54"/, 'charcoal callout text');
+});
+
+// ===========================================================================
+// CM chart fixes round 3 (2026-08-09) — items 4 (callout coverage) + 5 (lint).
+// ===========================================================================
+
+// Item 4 — the three round-3 absentees now emit peak/low/latest callouts.
+test('round3 item4: transaction_count_ttm bar emits integer callouts', () => {
+  const rows = Array.from({ length: 16 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    ttm_count: 20 + (i % 7) * 3,
+  }));
+  const cols = [{ key: 'period_end', col: 'A' }, { key: 'ttm_count', col: 'B' }];
+  const out = buildInjectionSpec({
+    chart_template_id: 'transaction_count_ttm', tabName: 'Data_Txn',
+    cols, dataStart: 5, dataEnd: 20, brand: {}, rows, vertical: 'dialysis',
+  });
+  assert.ok((out.spec.dataLabels || []).length >= 2, 'callouts produced');
+  const xml = buildSingleBarChartXml(out.spec);
+  // Integer-formatted (commas, no % or $) — not the toFixed(1) index form.
+  assert.match(xml, /<a:t>(Peak|Low|Latest) <\/a:t>/, 'role label word present');
+  assert.doesNotThrow(() => assertCalloutCoverage('transaction_count_ttm', out.spec));
+});
+
+test('round3 item4: quarterly_volume_bars emits currency callouts', () => {
+  const rows = Array.from({ length: 16 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    quarterly_volume: 100_000_000 * (1 + (i % 6) / 4),
+  }));
+  const cols = [{ key: 'period_end', col: 'A' }, { key: 'quarterly_volume', col: 'B' }];
+  const out = buildInjectionSpec({
+    chart_template_id: 'quarterly_volume_bars', tabName: 'Data_QVol',
+    cols, dataStart: 5, dataEnd: 20, brand: {}, rows, vertical: 'dialysis',
+  });
+  assert.ok((out.spec.dataLabels || []).length >= 2, 'callouts produced');
+  assert.doesNotThrow(() => assertCalloutCoverage('quarterly_volume_bars', out.spec));
+});
+
+test('round3 item4: cash_leveraged_returns labels both return lines', () => {
+  const rows = Array.from({ length: 18 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    cash_return: 0.06 + (i % 5) * 0.003,
+    leveraged_return_mid: 0.09 + (i % 6) * 0.004,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'cash_return', col: 'B' },
+    { key: 'leveraged_return_mid', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cash_leveraged_returns', tabName: 'Data_Returns',
+    cols, dataStart: 5, dataEnd: 22, brand: {}, rows, vertical: 'dialysis',
+  });
+  const labelled = out.spec.series.filter(s => Array.isArray(s.dataLabels) && s.dataLabels.length);
+  assert.equal(labelled.length, 2, 'both return lines carry callouts');
+  assert.ok(countSpecCallouts(out.spec) >= 4, 'callouts across both lines');
+  assert.doesNotThrow(() => assertCalloutCoverage('cash_leveraged_returns', out.spec));
+});
+
+test('round3 item4: assertCalloutCoverage throws for a policy chart with zero callouts', () => {
+  // A policy template but a spec stripped of callouts → export must fail.
+  assert.throws(
+    () => assertCalloutCoverage('transaction_count_ttm', { type: 'bar', dataLabels: [] }),
+    /CALLOUT COVERAGE FAILED/,
+  );
+  // Non-policy template is a no-op even with no callouts.
+  assert.doesNotThrow(() => assertCalloutCoverage('leased_inventory_by_state', { type: 'bar' }));
+  // The three named absentees are in the policy list.
+  for (const t of ['transaction_count_ttm', 'quarterly_volume_bars', 'cash_leveraged_returns']) {
+    assert.ok(CALLOUT_POLICY_TEMPLATES.has(t), `${t} in policy list`);
+  }
+});
+
+// Item 5 — theme-color-leak lint (XML level).
+test('round3 item5: lintChartSeriesXml flags theme accents and missing spPr', () => {
+  const accentXml = `<c:ser><c:idx val="0"/><c:spPr><a:solidFill><a:schemeClr val="accent6"/></a:solidFill></c:spPr></c:ser>`;
+  const v1 = lintChartSeriesXml(accentXml, 't');
+  assert.ok(v1.some(v => /schemeClr/.test(v.reason)), 'accent flagged');
+
+  const noSpPrXml = `<c:ser><c:idx val="0"/><c:val><c:numRef><c:f>x</c:f></c:numRef></c:val></c:ser>`;
+  const v2 = lintChartSeriesXml(noSpPrXml, 't');
+  assert.ok(v2.some(v => /no <c:spPr>/.test(v.reason)), 'missing spPr flagged');
+
+  const cleanXml = `<c:ser><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="003DA5"/></a:solidFill></c:spPr></c:ser>`;
+  assert.equal(lintChartSeriesXml(cleanXml, 't').length, 0, 'explicit brand fill passes');
+});
+
+test('round3 item5: seller_sentiment XML carries explicit brand fills, zero lint violations', () => {
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'pct_price_change_all', col: 'B' },
+    { key: 'pct_price_change_long_term', col: 'C' },
+    { key: 'last_ask_cap_all', col: 'D' },
+    { key: 'last_ask_cap_long_term', col: 'E' },
+  ];
+  const rows = Array.from({ length: 40 }, (_, i) => ({
+    period_end: `20${17 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    pct_price_change_all: 0.1 + (i % 5) * 0.01,
+    pct_price_change_long_term: 0.08 + (i % 4) * 0.01,
+    last_ask_cap_all: 0.06 + (i % 6) * 0.002,
+    last_ask_cap_long_term: 0.065 + (i % 5) * 0.002,
+  }));
+  const out = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment', tabName: 'Data_Sentiment',
+    cols, dataStart: 5, dataEnd: 44, brand: {}, rows, vertical: 'dialysis',
+  });
+  const xml = specToChartXml(out.spec);
+  assert.equal(lintChartSeriesXml(xml, 'seller_sentiment').length, 0, 'no theme leak');
+  // The primary brand blues are present; the tertiary peridot/amethyst are gone.
+  assert.match(xml, /srgbClr val="003DA5"/);
+  assert.match(xml, /srgbClr val="62B5E5"/);
+  assert.match(xml, /srgbClr val="265AB2"/);
+  assert.doesNotMatch(xml, /srgbClr val="8FC49E"/, 'peridot removed');
+  assert.doesNotMatch(xml, /srgbClr val="9B88A5"/, 'amethyst removed');
+});
+
+// Item 2 — moved data labels carry the c15 (Chart-2012) extension so Excel
+// renders a leader line from the floated label back to the point on line/bar
+// charts (the plain c:layout offset alone only leaders on pie charts).
+test('round3 item2: line callouts emit the c15 leader-line extension', () => {
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
+    ttm_weighted_cap_rate: 0.06 + (i % 5) * 0.002,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'ttm_weighted_cap_rate', col: 'B' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap', cols, dataStart: 5, dataEnd: 16,
+    brand: {}, rows, vertical: 'dialysis',
+  });
+  const xml = buildSingleLineChartXml(out.spec);
+  assert.match(xml, /CE6537A1-D6FC-4f65-9D91-7224C49458BB/, 'Chart-2012 ext uri present');
+  assert.match(xml, /<c15:showLeaderLines val="1"\/>/, 'per-label c15 leader lines enabled');
+  assert.match(xml, /<c15:manualLayout>/, 'c15 mirrors the manual layout offset');
+  assert.match(xml, /<c15:leaderLines>/, 'leader-line stroke defined');
+  // extLst must be the LAST child of c:dLbl (schema order).
+  assert.match(xml, /<c:showBubbleSize val="0"\/>\s*<c:extLst>/, 'extLst last in dLbl');
+});
+
+// Item 1 — injectNativeCharts rewrites the workbook theme minor+major font to
+// Open Sans so the workbook opens uniformly Open Sans (matching chart text).
+test('round3 item1: theme minor+major font rewritten to Open Sans', async () => {
+  const base = await buildTinyWorkbook();
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Volume_TTM',
+    spec: {
+      type: 'line', tabName: 'Data_Volume_TTM',
+      titleCol: 'B', titleRow: 5, catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 17, color: '003DA5',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const theme = await zip.file('xl/theme/theme1.xml').async('string');
+  const major = theme.match(/<a:majorFont>\s*<a:latin[^>]*typeface="([^"]*)"/);
+  const minor = theme.match(/<a:minorFont>\s*<a:latin[^>]*typeface="([^"]*)"/);
+  assert.ok(major && major[1] === 'Open Sans', `majorFont Open Sans (got ${major && major[1]})`);
+  assert.ok(minor && minor[1] === 'Open Sans', `minorFont Open Sans (got ${minor && minor[1]})`);
 });

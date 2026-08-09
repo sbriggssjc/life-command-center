@@ -23,7 +23,7 @@
 
 import ExcelJS from 'exceljs';
 import { summaryColumnHeaders, buildInlineSummary } from './cm-summary-table.js';
-import { NATIVE_CHART_TEMPLATES, buildInjectionSpec, scanSpecPalette } from './cm-native-chart-injector.js';
+import { NATIVE_CHART_TEMPLATES, buildInjectionSpec, scanSpecPalette, assertCalloutCoverage } from './cm-native-chart-injector.js';
 
 // Round 3d — Inline summary blocks under selected chart tabs.
 // Each entry maps a chart_template_id to a metrics array; the worksheet
@@ -1211,7 +1211,16 @@ const NAME_OVERRIDES_BY_VERTICAL = {
 
 export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance }) {
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
-  const fonts   = (brand?.fonts)   ? brand.fonts   : DEFAULT_BRAND.fonts;
+  // CM chart fixes round 3, item 1 — the workbook CELLS were rendering Calibri
+  // (the cm_brand_tokens Excel families / ExcelJS theme default) while the CHART
+  // text is Open Sans (CM_BRAND.typeface), so the file opened non-uniform.
+  // Force every styled cell to Open Sans to match the charts; injectNativeCharts
+  // additionally rewrites the workbook theme minor+major font so any unstyled
+  // cell inherits Open Sans too. Sizes/weights are preserved (title cells stay
+  // bold), so the visual hierarchy is unchanged — only the family is unified.
+  const CM_EXPORT_FONT = 'Open Sans';
+  const brandFonts = (brand?.fonts) ? brand.fonts : DEFAULT_BRAND.fonts;
+  const fonts   = { ...brandFonts, title_family: CM_EXPORT_FONT, body_family: CM_EXPORT_FONT };
   // R56 — patch chart.name based on per-vertical overrides ONCE up front.
   // chart.name is read in many places (tab title, page header, chart
   // <c:title>, index row); patching the source avoids per-callsite plumbing.
@@ -1822,6 +1831,12 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       });
       if (spec) {
         nativeInjections.push(spec);
+
+        // CM chart fixes round 3, item 4 — universal callout coverage: a
+        // callout-policy chart that emitted zero peak/low/latest labels fails
+        // the export (the module logs coverage per chart; no-op for non-policy
+        // templates).
+        assertCalloutCoverage(chart.chart_template_id, spec.spec || spec);
 
         // CM chart feedback item #1 — flag any off-brand series color in the
         // export log so a palette regression surfaces without altering output.
