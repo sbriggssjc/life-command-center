@@ -4529,25 +4529,29 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           `native:${chart_template_id}:cap%(last_ask+achieved)`,
           plotVals, { minAbsFloor: 0.01 }
         );
+        // CM close-out item 3 (bid-ask, FINAL — Excel axis floor). The prior
+        // design rendered the spread as a STACKED BAR (invisible last_ask base +
+        // visible spread) on the cap axis. In Excel a stacked BAR/column forces the
+        // value axis to include 0 (the base spans 0→last_ask), so c:min was ignored
+        // and the axis stayed 0–8% no matter what padSnapRange computed — the exact
+        // symptom in the shipped book. Line charts do NOT force a 0 baseline, so we
+        // revert to the master's R50 design: two cap LINES (Last-Ask + Achieved) on
+        // one line-only value axis that HONORS c:min (fits ~6–8%), with chart-level
+        // <c:upDownBars> drawing the gray floating high-low bar for the spread
+        // between them. The spread is bar GEOMETRY (the up/down bar gap), never a
+        // cap-axis data series. This is the user's option B.
         return {
           tabName,
           spec: {
-            type: 'combo',
+            type: 'multi-line',
             tabName,
             catCol: periodCol,
             dataStart, dataEnd,
-            barGrouping: 'stacked',
-            sharedAxis:  true,
-            barGapWidth: 60,
-            yLeftRange: bidAskFit || { min: 0.055, max: 0.10 },
-            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
-            barSeries: [
-              // invisible base lifts the visible bar to the Last Ask level
-              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: '003DA5', noFill: true },
-              // visible light-gray bar = the spread (Last Ask -> Achieved)
-              { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,  color: 'D8DFDF', borderColor: '9EA9B7' },
-            ],
-            lineSeries: [
+            yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },
+            valAxNumFmt: VAL_FMT_PERCENT_2DP,
+            // gray floating bar between Last-Ask (first) and Achieved (last) series
+            upDownBars: true,
+            series: [
               { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
                 showMarker: true, markerShape: 'dash', markerSize: 7 },
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
