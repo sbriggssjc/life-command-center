@@ -36,7 +36,7 @@
 
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { CRITICAL_SUBROUTES } from '../test/critical-subroutes.mjs';
+import { CRITICAL_SUBROUTES, CRITICAL_ROUTES_NON_OPERATIONS } from '../test/critical-subroutes.mjs';
 
 // Append a unique cache-buster so no URL-keyed cache (client/proxy/CDN) can serve
 // a stale copy. Query param is what actually defeated the cache in the incident.
@@ -164,7 +164,7 @@ async function main() {
   //    API-scoped 404 fix is live and no route falls through to index.html).
   //    Cache-busted + no-cache so a cached 200 can't mask a currently-missing
   //    route (the same masking risk the /version freshness check covers).
-  for (const route of CRITICAL_SUBROUTES) {
+  for (const route of [...CRITICAL_SUBROUTES, ...CRITICAL_ROUTES_NON_OPERATIONS]) {
     const url = `${base}/api/${route}`;
     try {
       const res = await fetchWithTimeout(
