@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Nightly 2026-08-09 — 8/9 produced; assist-write CHECK bug FIXED LIVE by Cowork
+First full 9-unit night: U1 137 open / U2 25 / U3 **10** (fixed evidence producing!) / U5 85;
+**re-score walked 400: 18 auto-links + 7 review + 375 no_match** (conservative gate holding);
+**donor handoff stamped 14 person keys — gov coverage 5→19** (the W9.2 unlock metric moving).
+Anomaly: sf-link-assist scored 20 but `failed:20` — ALL writes bounced. Root cause (74-class):
+`lcc_clean_assist_proposals_source_check` allowed only 'ollama_clean_assist'; W9.3 writes
+'w9_3_sf_assist' (planner comment even said "fits the CHECK" — for kind, missed source). **Cowork
+widened the CHECK live** (both values; verified). Scott re-POSTs the tick to confirm writes land;
+also re-POST `match-disambig-assist-tick` (0 new night 2 — verify it's just pool exhaustion vs a
+second issue). NOTE for Claude Code hygiene: record the CHECK widening as a repo migration file
+next session (applied live 2026-08-09 by Cowork).
+
 ### ✅ W9.3 LIVE 2026-08-08 — all three flags flipped after clean dry-run reviews
 WS1 assist: appropriately skeptical (Orion↔Orion Bank uncertain 0.3 — no forced calls). WS2
 re-score: banding textbook (L&K/Realty Income exact→auto; Uniland article-variant→review; 90/96
