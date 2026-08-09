@@ -37,6 +37,7 @@ import {
   validateChartExtWhitelist,
   padSnapRange,
   assertPercentAxisMin,
+  fitPercentAxis,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -6272,6 +6273,27 @@ test('closeout item3: assertPercentAxisMin flags a zero-floor on a >1% data-min 
     true,
     'a near-zero series keeps min 0 without a violation'
   );
+});
+
+// CM close-out item 3 (final) — fitPercentAxis is the single per-axis fit+assert.
+test('closeout item3: fitPercentAxis fits the cap axis to its assigned series only', () => {
+  // Cap axis assigned Last-Ask + Achieved (the spread is bar geometry, NOT a
+  // cap-axis series): live dia band 0.062–0.079 → fits ~6.0–8.1%, min > 0.
+  const capAxis = [0.06201, 0.07172, 0.06455, 0.07869];
+  const fit = fitPercentAxis('test:cap%(last_ask+achieved)', capAxis, { minAbsFloor: 0.01 });
+  assert.ok(fit && fit.min > 0.05 && fit.min <= 0.063, `cap axis min fits ~6% (got ${fit && fit.min})`);
+  assert.ok(fit.max >= 0.079, `cap axis max covers achieved top (got ${fit.max})`);
+
+  // Regression guard: IF the raw spread (~0.6%) were ever mixed onto the cap
+  // axis, data-min drops below 1% and padSnapRange floors to 0 — which is exactly
+  // the four-strikes bug. fitPercentAxis surfaces it as a real 0 min so the
+  // assertion (inside) fires; the correct design keeps the spread OFF this axis.
+  const contaminated = [0.006, 0.062, 0.079];
+  const bad = fitPercentAxis('test:cap%+spread-contaminated', contaminated, { minAbsFloor: 0.01 });
+  assert.equal(bad.min, 0, 'a spread value on the cap axis reproduces the 0 floor (guarded)');
+
+  // < 2 finite points → null (caller keeps its literal fallback).
+  assert.equal(fitPercentAxis('test:one', [0.07]), null);
 });
 
 test('round3 item3: bid_ask cap axis is pad-snapped (min>0, covers achieved)', () => {

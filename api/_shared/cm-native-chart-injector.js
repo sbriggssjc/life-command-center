@@ -680,6 +680,32 @@ function assertPercentAxisMin({ label, dataMin, axisMin, floorPct = 0.01 } = {})
   return !violated;
 }
 
+// CM close-out item 3 (bid-ask, final) — the SINGLE per-axis fit+assert entry.
+// Fits a percent axis to ONLY the series assigned to that axis (padSnapRange) AND
+// asserts the result in one call, so the pinned range and the zero-floor check can
+// never diverge. This is what "evaluate per-axis after series assignment" means:
+// the caller passes the values of the series actually drawn on THIS axis (e.g. the
+// cap axis gets [last_ask, achieved] — the spread lives only as floating-bar
+// geometry, never as a cap-axis series), and gets back the range to pin.
+//   @returns {{min,max}|null} the range to pin (null when < 2 finite points →
+//                             caller keeps its literal fallback).
+function fitPercentAxis(label, seriesValues, opts = {}) {
+  const range = padSnapRange(seriesValues, opts);
+  const vals = (Array.isArray(seriesValues) ? seriesValues : [])
+    .map(Number).filter((v) => Number.isFinite(v));
+  const dataMin = vals.length ? Math.min(...vals) : null;
+  const dataMax = vals.length ? Math.max(...vals) : null;
+  if (range) {
+    console.log(
+      `[cm-axis-fit] ${label} data-min=${dataMin} data-max=${dataMax} ` +
+      `axis-min=${range.min} axis-max=${range.max}` +
+      `${dataMax != null && dataMax > range.max ? ' MAX-CLIP!' : ''}`
+    );
+    assertPercentAxisMin({ label, dataMin, axisMin: range.min });
+  }
+  return range;
+}
+
 // Emit <c:scaling> block with optional min/max. If both are undefined
 // returns the default orientation-only scaling. otherwise embeds the
 // pinned range.
@@ -2859,6 +2885,7 @@ export {
   fitDataAxisRange,
   padSnapRange,
   assertPercentAxisMin,
+  fitPercentAxis,
   CM_BRAND,
   chartFont,
   offPaletteReason,
@@ -4481,44 +4508,27 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         // of the fixed 5.5-10% band that left the bars floating in empty space.
         // Fits to the plotted window ±0.5% snap; falls back to the prior literal
         // only when there's nothing to fit (< 2 finite points).
+        // CM close-out item 3 (bid-ask, final) — the cap axis is fit to ONLY the
+        // series assigned to it: Last-Ask + Achieved (= last_ask + spread). The
+        // bid-ask SPREAD is NEVER a cap-axis series — it exists purely as the
+        // floating-bar geometry (invisible last_ask base + visible spread height →
+        // top = achieved), so it can't drag data-min to ~0.6% and force a 0 floor.
+        // fitPercentAxis fits + asserts in ONE per-axis call, so the pinned range
+        // and the zero-floor check can never diverge. On live data (dia/gov) the
+        // cap axis fits ~6.0–8.1%; falls back to the literal only when < 2 points.
         const plotVals = [];
         for (const r of plottedRows) {
           const la = Number(r.avg_last_ask_cap);
           const sp = Number(r.avg_bid_ask_spread);
           if (Number.isFinite(la)) {
             plotVals.push(la);
-            if (Number.isFinite(sp)) plotVals.push(la + sp);
+            if (Number.isFinite(sp)) plotVals.push(la + sp);  // achieved = top of bar
           }
         }
-        // CM chart fixes round 3, item 3 — this is THE single bid-ask cap-axis
-        // authoring site. The deployed books carried an explicit min=0/max=0.085
-        // (a residual hardcode on a path fitAxisToSeries never reached) while the
-        // plotted Last-Ask/Achieved band spans ~0.0478–0.0971, so BOTH bounds
-        // were wrong. Use padSnapRange so the axis computes a real MIN (never 0
-        // when data sits well above 1%) AND a max that covers the achieved top:
-        // ≈ min 0.043 / max 0.101 for the live data.
-        const bidAskFit = padSnapRange(plotVals, { minAbsFloor: 0.01 });
-        // Per-axis audit log — data-min/data-max vs axis-min/axis-max, so a
-        // min=0 dead-zone or a clipped top can never recur silently.
-        {
-          const dMin = plotVals.length ? Math.min(...plotVals) : null;
-          const dMax = plotVals.length ? Math.max(...plotVals) : null;
-          const aMin = (bidAskFit || { min: 0.055 }).min;
-          const aMax = (bidAskFit || { max: 0.10 }).max;
-          console.log(
-            `[cm-native-chart-injector] axis-fit template=${chart_template_id} axis=A2(shared,cap%) ` +
-            `series=[avg_last_ask_cap,avg_last_ask_cap+avg_bid_ask_spread] ` +
-            `data-min=${dMin != null ? dMin : 'none'} data-max=${dMax != null ? dMax : 'none'} ` +
-            `axis-min=${aMin} axis-max=${aMax}` +
-            `${dMin != null && aMin > dMin ? ' MIN-CLIP!' : ''}` +
-            `${dMax != null && dMax > aMax ? ' MAX-CLIP!' : ''}`
-          );
-          // CM close-out item 3 — SHARED zero-floor assertion (native artifact).
-          assertPercentAxisMin({
-            label: `native:${chart_template_id}:bid-ask-cap%`,
-            dataMin: dMin, axisMin: aMin,
-          });
-        }
+        const bidAskFit = fitPercentAxis(
+          `native:${chart_template_id}:cap%(last_ask+achieved)`,
+          plotVals, { minAbsFloor: 0.01 }
+        );
         return {
           tabName,
           spec: {
