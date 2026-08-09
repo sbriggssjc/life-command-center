@@ -1244,7 +1244,7 @@ const METHODOLOGY_NOTE_BY_TEMPLATE = {
     '(nm_cap_ttm12 / market_cap_ttm12) are shown for reference only and are not charted.',
 };
 
-export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance, commentary }) {
+export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance, commentary, previewWatermark = false }) {
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
   // CM chart fixes round 3, item 1 — the workbook CELLS were rendering Calibri
   // (the cm_brand_tokens Excel families / ExcelJS theme default) while the CHART
@@ -1309,6 +1309,20 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   });
   cover.getColumn(1).width = 4;
   cover.getColumn(2).width = 80;
+
+  // INTERIM GUARD (CM packet-export parity, 2026-08-09): until the packet-backed
+  // export reaches full standard coverage, the packet build carries a loud
+  // PREVIEW banner so it can never be mistaken for the marketing deliverable.
+  // The canonical marketing export (no watermark) remains the standard export.
+  if (previewWatermark) {
+    cover.mergeCells('B1:B1');
+    cover.getCell('B1').value =
+      'PREVIEW — NOT FOR MARKETING — partial coverage. Use the standard export for the marketing deliverable.';
+    cover.getCell('B1').font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+    cover.getCell('B1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC00000' } };
+    cover.getCell('B1').alignment = { wrapText: true, vertical: 'middle', horizontal: 'left' };
+    cover.getRow(1).height = 34;
+  }
 
   const verticalLabel = vertical === 'gov' ? 'Government-Leased'
                       : vertical === 'dialysis' ? 'Dialysis'
