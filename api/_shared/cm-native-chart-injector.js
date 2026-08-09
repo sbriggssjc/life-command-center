@@ -181,6 +181,108 @@ function scanSpecPalette(injection, template) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// CM chart fixes round 3, item 4 — universal callout coverage.
+// ---------------------------------------------------------------------------
+// The peak/low/latest callout module was wired per-call-site, so several primary
+// time-series charts shipped with NO callouts (Leveraged Return Indexes,
+// Transaction Count — TTM, Rolling 3-Mo / Quarterly Volume Bars). This is the
+// POLICY LIST: every report chart whose PRIMARY series is a peak/low/latest
+// time-series and therefore MUST emit callouts. The export upgrades the label
+// audit from "emitted labels match computed" to "every policy chart EMITTED
+// labels AND they match" — a policy chart with zero labels fails the export
+// (see assertCalloutCoverage + the export-loop wiring in cm-excel-export.js).
+//
+// Charts deliberately EXCLUDED (no single peak/low/latest primary): stacked
+// bars, donuts, scatter dot plots, box-whisker (rent_psf_box*/rent_by_year_built),
+// horizontal state rankings, term-cohort multi-lines, and marker-only whisker
+// charts (bid_ask_spread*). Add a template here only when it has a labelable
+// primary series.
+const CALLOUT_POLICY_TEMPLATES = new Set([
+  'volume_ttm_by_quarter',
+  'cap_rate_ttm_by_quarter',
+  'transaction_count_ttm',        // round-3 absentee (fixed)
+  'avg_deal_size',
+  'quarterly_volume_bars',        // round-3 absentee (fixed) — the Rolling/Quarterly Volume Bars
+  'nm_vs_market_cap',
+  'dom_and_pct_of_ask',
+  'dom_and_pct_of_ask_monthly',
+  'case_for_renewal',
+  'cash_leveraged_returns',       // round-3 absentee (fixed) — Leveraged Return Indexes
+  'seller_sentiment',
+  'seller_sentiment_monthly',
+]);
+
+// Count the callout (dLbl override) entries a built spec carries across every
+// callout-bearing slot (spec.dataLabels, series[], barSeries[], lineSeries[]).
+// A callout array is the { idx, text, role } shape produced by
+// buildAnnotationsForSpec; chart-level { showVal:true } label modes are NOT
+// peak/low/latest callouts and don't count.
+function countSpecCallouts(spec) {
+  if (!spec || typeof spec !== 'object') return 0;
+  let n = 0;
+  const add = (dl) => { if (Array.isArray(dl)) n += dl.length; };
+  add(spec.dataLabels);
+  for (const key of ['series', 'barSeries', 'lineSeries']) {
+    const arr = spec[key];
+    if (Array.isArray(arr)) for (const s of arr) add(s && s.dataLabels);
+  }
+  return n;
+}
+
+// Throws when a policy-list chart emitted zero callouts. Non-policy templates
+// are a no-op. Called from the export loop with the built spec.
+function assertCalloutCoverage(template, spec) {
+  if (!CALLOUT_POLICY_TEMPLATES.has(template)) return;
+  // Callouts (peak/low/latest) need ≥3 finite plotted points to compute
+  // (buildAnnotationsForSpec returns [] below that). A chart plotting fewer than
+  // 3 rows legitimately has no callouts, so coverage only applies once the
+  // plotted window is large enough — never fail a genuinely sparse chart.
+  const plottedLen = (spec && spec.dataStart != null && spec.dataEnd != null)
+    ? (spec.dataEnd - spec.dataStart + 1)
+    : Infinity;
+  if (plottedLen < 3) return;
+  const n = countSpecCallouts(spec);
+  console.log(`[cm-native-chart-injector] CALLOUT COVERAGE ${template} emitted=${n} plotted=${plottedLen}`);
+  if (n === 0) {
+    throw new Error(
+      `[cm-native-chart-injector] CALLOUT COVERAGE FAILED: policy chart ${template} ` +
+      `emitted 0 peak/low/latest callouts. Every callout-policy chart must label ` +
+      `its primary series. Wire buildAnnotationsForSpec into this template's case.`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CM chart fixes round 3, item 5 — theme-color-leak lint (XML level).
+// ---------------------------------------------------------------------------
+// The spec-level palette lint (scanSpecPalette) only sees hex colors the spec
+// declares — it is blind to (a) a <c:ser> that carries NO <c:spPr> at all (so
+// Excel falls back to the Office theme accents, rendering off-brand green/purple)
+// and (b) an explicit <a:schemeClr val="accent*"/> inside a series. This lints
+// the GENERATED chart XML so either failure fails the export. Every data series
+// must carry an explicit srgbClr fill/line from cm-brand.json.
+function lintChartSeriesXml(xml, template = '') {
+  const out = [];
+  if (typeof xml !== 'string' || !xml) return out;
+  // Split into <c:ser>…</c:ser> blocks and check each.
+  const serRe = /<c:ser\b[\s\S]*?<\/c:ser>/g;
+  let m;
+  let idx = 0;
+  while ((m = serRe.exec(xml)) !== null) {
+    const ser = m[0];
+    if (!/<c:spPr>/.test(ser) && !/<c:spPr\s*\/>/.test(ser)) {
+      out.push({ template, series: idx, reason: 'series has no <c:spPr> (falls back to theme accents)' });
+    }
+    const accent = ser.match(/<a:schemeClr\s+val="(accent\d)"/);
+    if (accent) {
+      out.push({ template, series: idx, reason: `series uses theme <a:schemeClr val="${accent[1]}"/> instead of an explicit brand fill` });
+    }
+    idx++;
+  }
+  return out;
+}
+
 // R37 P1 — default cat-axis date format. Renders 2026-03-31 as "1Q-2026"
 // to match the PDF renderer's `Q1 '26` style (user feedback 2026-05-19:
 // "we had previously displayed the labels in year and quarter terms").
@@ -491,6 +593,7 @@ const fmtCurrencyBNative   = (v) => '$' + (Number(v) / 1_000_000_000).toFixed(2)
 const fmtCurrencyNative    = (v) => '$' + Math.round(Number(v)).toLocaleString('en-US');
 const fmtCurrencyKNative   = (v) => '$' + Math.round(Number(v) / 1000) + 'K';
 const fmtIndexNative       = (v) => Number(v).toFixed(1);
+const fmtIntegerNative     = (v) => Math.round(Number(v)).toLocaleString('en-US');
 const fmtCurrencyPerSfNative = (v) => '$' + Number(v).toFixed(2);
 
 // Map a named formatter string to its function. Used in the buildInjectionSpec
@@ -504,6 +607,7 @@ const ANNOTATION_FORMATTERS = {
   currency_k:    fmtCurrencyKNative,
   currency_psf:  fmtCurrencyPerSfNative,
   index:         fmtIndexNative,
+  integer:       fmtIntegerNative,
 };
 
 // A2 — infer the annotation formatter name from a y-axis Excel numFmt string
@@ -628,6 +732,32 @@ function dLblXml(idx, text, role, label) {
   const layoutFrag = off
     ? `<c:layout><c:manualLayout><c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
     : '';
+  // CM chart fixes round 3, item 2 — the plain c:layout offset + chart-level
+  // c:showLeaderLines only render a leader on PIE charts. On line/bar charts
+  // Excel draws the leader from a MOVED label only when the dLbl also carries
+  // the c15 (Chart-2012) extension: a c15:manualLayout MIRRORING the c:layout
+  // offset plus c15:showLeaderLines (and a c15:leaderLines spPr for the stroke).
+  // This structure matches what desktop Excel writes when you drag a label off
+  // its point and enable leader lines. Emitted only for moved labels (off set).
+  const c15Frag = off
+    ? `
+            <c:extLst>
+              <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+                <c15:layout>
+                  <c15:manualLayout>
+                    <c15:x val="${off.x}"/>
+                    <c15:y val="${off.y}"/>
+                  </c15:manualLayout>
+                </c15:layout>
+                <c15:showLeaderLines val="1"/>
+                <c15:leaderLines>
+                  <c:spPr>
+                    <a:ln w="9525" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill><a:round/></a:ln>
+                  </c:spPr>
+                </c15:leaderLines>
+              </c:ext>
+            </c:extLst>`
+    : '';
   const font = (t) => `<a:latin typeface="${t}"/><a:ea typeface="${t}"/><a:cs typeface="${t}"/>`;
   const labelRun = label
     ? `<a:r><a:rPr lang="en-US" b="0" sz="800"><a:solidFill><a:srgbClr val="${DLBL_LABEL_COLOR}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(label)} </a:t></a:r>`
@@ -650,7 +780,7 @@ function dLblXml(idx, text, role, label) {
             <c:showCatName val="0"/>
             <c:showSerName val="0"/>
             <c:showPercent val="0"/>
-            <c:showBubbleSize val="0"/>
+            <c:showBubbleSize val="0"/>${c15Frag}
           </c:dLbl>`;
 }
 
@@ -2341,10 +2471,60 @@ ${frags}
  * @param {Array}  injections   List of { tabName, spec } records
  * @returns {Promise<Buffer>}   New buffer with native charts injected
  */
+// R71 — generate chart XML for a spec via the type→builder dispatch. Module
+// level so the export loop can render + lint a spec without re-implementing the
+// dispatch. (Formerly a closure inside injectNativeCharts.)
+function specToChartXml(spec) {
+  if (spec.type === 'stacked-bar') return buildStackedBarChartXml(spec);
+  if (spec.type === 'clustered-bar') {
+    // R35 P2 — shares the builder with stacked-bar but forces
+    // grouping='clustered'. Used for inventory_backlog and
+    // pace_of_cap_rate_expansion (multi-bar single-axis charts).
+    return buildStackedBarChartXml({ ...spec, grouping: 'clustered' });
+  }
+  if (spec.type === 'bar') return buildSingleBarChartXml(spec);
+  if (spec.type === 'multi-line') return buildMultiLineChartXml(spec);
+  if (spec.type === 'combo') return buildComboChartXml(spec);
+  if (spec.type === 'bidask-dual') return buildBidAskDualAxisChartXml(spec);
+  if (spec.type === 'renewal-combo') return buildRenewalRentGrowthXml(spec);
+  if (spec.type === 'area-combo') {
+    // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
+    return buildAreaComboChartXml(spec);
+  }
+  if (spec.type === 'scatter') return buildScatterChartXml(spec);
+  if (spec.type === 'doughnut') {
+    // R36 P2 — single-ring pie/donut chart with per-segment colors.
+    return buildDoughnutChartXml(spec);
+  }
+  // 'line' (default) and any future shapes that don't have their own
+  // builder yet fall back to the line builder.
+  return buildSingleLineChartXml(spec);
+}
+
 export async function injectNativeCharts(buffer, injections) {
   if (!Array.isArray(injections) || injections.length === 0) return buffer;
 
   const zip = await JSZip.loadAsync(buffer);
+
+  // CM chart fixes round 3, item 1 — rewrite the workbook theme minor+major
+  // font to Open Sans so any cell that doesn't set an explicit font inherits it
+  // (ExcelJS defaults the theme to Calibri Light/Calibri, which made the file
+  // open non-uniform vs. the Open Sans chart text). Purely a font-family swap.
+  try {
+    const themePath = 'xl/theme/theme1.xml';
+    const themeFile = zip.file(themePath);
+    if (themeFile) {
+      let themeXml = await themeFile.async('string');
+      // Replace the latin typeface inside both <a:majorFont> and <a:minorFont>.
+      themeXml = themeXml.replace(
+        /(<a:(?:majorFont|minorFont)>\s*<a:latin[^>]*typeface=")[^"]*(")/g,
+        `$1${CM_BRAND.typeface}$2`
+      );
+      zip.file(themePath, themeXml);
+    }
+  } catch (e) {
+    console.warn('[cm-native-chart-injector] theme font rewrite skipped:', e && e.message);
+  }
 
   // Locate the workbook's sheet name → file mapping by parsing
   // xl/workbook.xml + xl/_rels/workbook.xml.rels.
@@ -2372,34 +2552,19 @@ export async function injectNativeCharts(buffer, injections) {
   // Collect content-types overrides to append
   const newOverrides = [];
 
-  // R71 — generate chart XML for a spec via the type→builder dispatch.
-  // Extracted so the multi-chart-per-sheet path (Charts aggregate tab)
-  // can reuse it.
+  // R71 — generate chart XML for a spec via the type→builder dispatch
+  // (specToChartXml, module-level). CM chart fixes round 3, item 5 — lint the
+  // generated XML for theme-accent / missing-spPr series and fail loudly.
   const renderChartXml = (spec) => {
-    if (spec.type === 'stacked-bar') return buildStackedBarChartXml(spec);
-    if (spec.type === 'clustered-bar') {
-      // R35 P2 — shares the builder with stacked-bar but forces
-      // grouping='clustered'. Used for inventory_backlog and
-      // pace_of_cap_rate_expansion (multi-bar single-axis charts).
-      return buildStackedBarChartXml({ ...spec, grouping: 'clustered' });
+    const xml = specToChartXml(spec);
+    const violations = lintChartSeriesXml(xml, spec.tabName);
+    if (violations.length) {
+      throw new Error(
+        `[cm-native-chart-injector] SERIES SPPR LINT FAILED (${spec.tabName}): ` +
+        violations.map(v => `series #${v.series}: ${v.reason}`).join('; ')
+      );
     }
-    if (spec.type === 'bar') return buildSingleBarChartXml(spec);
-    if (spec.type === 'multi-line') return buildMultiLineChartXml(spec);
-    if (spec.type === 'combo') return buildComboChartXml(spec);
-    if (spec.type === 'bidask-dual') return buildBidAskDualAxisChartXml(spec);
-    if (spec.type === 'renewal-combo') return buildRenewalRentGrowthXml(spec);
-    if (spec.type === 'area-combo') {
-      // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
-      return buildAreaComboChartXml(spec);
-    }
-    if (spec.type === 'scatter') return buildScatterChartXml(spec);
-    if (spec.type === 'doughnut') {
-      // R36 P2 — single-ring pie/donut chart with per-segment colors.
-      return buildDoughnutChartXml(spec);
-    }
-    // 'line' (default) and any future shapes that don't have their own
-    // builder yet fall back to the line builder.
-    return buildSingleLineChartXml(spec);
+    return xml;
   };
 
   // R71 — collate injections by destination tabName so each sheet gets
@@ -2532,6 +2697,12 @@ export {
   chartFont,
   offPaletteReason,
   scanSpecPalette,
+  // CM chart fixes round 3
+  CALLOUT_POLICY_TEMPLATES,
+  countSpecCallouts,
+  assertCalloutCoverage,
+  lintChartSeriesXml,
+  specToChartXml,
 };
 
 // ----------------------------------------------------------------------------
@@ -3327,6 +3498,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     let dataLabels;
     let annKey = opts.annotateKey;
     let annFmt = opts.annotateFmt;
+    // CM chart fixes round 3, item 4 — annotateKey may be an array of candidate
+    // row keys; resolve to whichever the data actually carries so a bar chart
+    // whose view uses e.g. `count` vs `ttm_count` still emits callouts.
+    if (Array.isArray(annKey)) {
+      annKey = annKey.find(k => cols.some(c => c.key === k)) || annKey[0];
+    }
     if (!annKey && type === 'line' && Array.isArray(rows)) {
       const keys = Array.isArray(valKeys) ? valKeys : [valKeys];
       annKey = keys.find(k => cols.some(c => c.key === k)) || keys[0];
@@ -3376,8 +3553,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         valAxNumFmt: VAL_FMT_PERCENT_2DP,
       });
     case 'transaction_count_ttm':
+      // CM chart fixes round 3, item 4 — this primary time-series bar was in the
+      // callout-policy list but emitted no peak/low/latest labels (annotate was
+      // never wired for the bar path). Add integer-formatted callouts.
       return singleSeries('bar', ['ttm_count', 'count'], navy, {
         valAxNumFmt: VAL_FMT_INTEGER,
+        annotateKey: ['ttm_count', 'count'],
+        annotateFmt: 'integer',
       });
     case 'avg_deal_size':
       // R2-B Unit 3 (2026-06-29) — REVERT the T10c average→dot change for THIS
@@ -3522,8 +3704,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // raw $300,000,000. Quarterly volume spans ~$100M-$1.2B; the $X.XM form
       // matches the avg_deal_size convention and keeps tick labels legible.
       // (volume_ttm_by_quarter already abbreviates in billions.)
+      // CM chart fixes round 3, item 4 — add peak/low/latest callouts (was in
+      // the policy list but the bar path never wired annotate).
       return singleSeries('bar', 'quarterly_volume', sky, {
         valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
+        annotateKey: 'quarterly_volume',
+        annotateFmt: 'currency_m',
       });
 
     // P4 — stacked bar charts
@@ -4565,6 +4751,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const cashCol    = findCol('cash_return');
       const lvgMidCol  = findCol('leveraged_return_mid');
       if (!periodCol || !cashCol || !lvgMidCol) return null;
+      // CM chart fixes round 3, item 4 — the Leveraged Return Indexes chart had
+      // NO callouts (multi-line case never wired dataLabels). Label peak/low/
+      // latest on BOTH the cash-return and leveraged-mid lines over the plotted
+      // window (percent 1dp, matching the axis).
+      const cashLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.cash_return, fmtPct1Native, 'cash_leveraged_returns:cash_return')
+        : undefined;
+      const lvgLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.leveraged_return_mid, fmtPct1Native, 'cash_leveraged_returns:leveraged_return_mid')
+        : undefined;
       return {
         tabName,
         spec: {
@@ -4579,8 +4775,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yAxisRange: (vertical === 'gov' ? { min: 0.04, max: 0.13 } : { min: 0.04, max: 0.13 }),
           valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
-            { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy },
-            { titleCol: lvgMidCol, titleRow: headerRow, valCol: lvgMidCol, color: sky  },
+            { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy, dataLabels: cashLabels },
+            { titleCol: lvgMidCol, titleRow: headerRow, valCol: lvgMidCol, color: sky,  dataLabels: lvgLabels },
           ],
           anchor: standardAnchor,
         },
@@ -4812,14 +5008,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // vertical signal — leave range auto-scale, just set formats.
           yLeftNumFmt:  VAL_FMT_PERCENT_2DP,
           yRightNumFmt: VAL_FMT_PERCENT_0DP,
+          // CM chart fixes round 3, item 5 — these series previously used the
+          // TERTIARY hues peridot (#8FC49E, reads green) + amethyst (#9B88A5,
+          // reads purple) where the PRIMARY blues belong. Per Scott's marketing
+          // review + the brand guide ("primary blues dominate; tertiary hues are
+          // series 4+ and <10% of any chart"), bars are now NM Blue + Sky and the
+          // lines are Blue-85 + Steel — all explicit cm-brand.json palette fills.
           barSeries: [
-            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '8FC49E' },  // sage
-            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '9B88A5' },  // light purple
+            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '003DA5' },  // NM Blue
+            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '62B5E5' },  // Sky
           ],
           lineSeries: [
-            { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: navy,
+            { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: '265AB2',   // Blue 85
               dataLabels: capLabels },
-            { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: sky  },
+            { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: '9EA9B7' },  // Steel
           ],
           anchor: standardAnchor,
         },
