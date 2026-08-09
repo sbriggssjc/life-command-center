@@ -876,14 +876,19 @@ function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '') {
 // of the chart area measured from the top — so it always renders in the header
 // gap above the data, with a leader line dropping down to its marker. The
 // horizontal position stays at the point (xMode defaults to "factor", x offset 0)
-// with a tiny per-role nudge so coincident points don't overlap. DLBL_TOP_Y is
-// the single tunable knob: smaller = higher; keep it in the [0.06, 0.14] band
-// (below the chart title, above the plotted series).
-const DLBL_TOP_Y = 0.09;
+// with a tiny per-role nudge so coincident points don't overlap. DLBL_TOP_Y is a
+// fraction of the CHART area from the top and must land INSIDE the plot's top
+// headroom — below the title + y-axis-max label (~top 0.10), above the tallest
+// data point. 0.09 was too high (labels overlapped the title / axis-max, "outside
+// the charted area"); 0.13 drops them into the blank headroom just above the data.
+// Bigger = lower (toward the data); smaller = higher (toward the title). The x
+// nudges are all slightly POSITIVE (rightward) so a leftmost point's label clears
+// the y-axis labels instead of colliding with them.
+const DLBL_TOP_Y = 0.13;
 const DLBL_ROLE_OFFSET = {
-  max:  { x:  0.00, y: DLBL_TOP_Y, yMode: 'edge' },   // top band, above the peak point
-  min:  { x: -0.03, y: DLBL_TOP_Y, yMode: 'edge' },   // top band (NOT below the trough)
-  last: { x:  0.03, y: DLBL_TOP_Y, yMode: 'edge' },   // top band, nudged toward the line's end
+  max:  { x: 0.01, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band, above the peak
+  min:  { x: 0.02, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band (NOT down at the trough)
+  last: { x: 0.03, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band, toward the line's end
 };
 
 // Callout brand text (item 3c): charcoal label word, emphasized (bold) value.
@@ -2970,8 +2975,14 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //       data tab naturally carries both [bottom, height] columns.
   //   (b) Render box-whisker as a multi-line quartile chart (preserves
   //       all data; drops the shaded IQR fill — user can add it manually).
-  'bid_ask_spread',                 // (a) quarterly: only spread col present → simple line fallback
-  'bid_ask_spread_monthly',         // (a) monthly: invisible(last_ask) + visible(spread) stacked bar
+  // CM close-out (bid-ask, final) — bid_ask_spread is DELIBERATELY NOT native.
+  // Excel forces a value axis to include 0 whenever a bar/updown-bar sits on it,
+  // so no native shape can show the master p.34 floating spread BAND between the
+  // Last-Ask and Achieved cap lines AND keep a ~6–8% axis (the band needs a bar;
+  // the bar drags the axis to 0). The PNG renderer (Chart.js floating bar +
+  // fitPercentAxis) does BOTH, so bid-ask renders as an image instead. Do NOT
+  // re-add it here without solving the Excel 0-floor (see the case in this file).
+  //   'bid_ask_spread', 'bid_ask_spread_monthly' → PNG (cm-chart-image-renderer.js)
   'rent_psf_box_quarterly',         // (b) upgraded to IQR floating-bar + median line in P8.5
   // CM chart fixes round 2, item 1 — dialysis companion box chart backed by the
   // LABELED MODELED rent variant (cm_dialysis_rent_box_q_with_modeled). Same

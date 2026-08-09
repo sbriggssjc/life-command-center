@@ -182,12 +182,14 @@ test('NATIVE_CHART_TEMPLATES: P7 scatter charts registered', () => {
 });
 
 test('NATIVE_CHART_TEMPLATES: P8 floating-bar / box-whisker charts registered', () => {
-  for (const id of [
-    'bid_ask_spread',
-    'bid_ask_spread_monthly',
-    'rent_psf_box_quarterly',
-  ]) {
-    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  // rent_psf_box_quarterly stays native (IQR floating-bar + median line).
+  assert.ok(NATIVE_CHART_TEMPLATES.has('rent_psf_box_quarterly'), 'rent box should be native');
+  // CM close-out (bid-ask, final): bid_ask_spread(_monthly) are DELIBERATELY NOT
+  // native — Excel forces a 0 axis whenever a bar sits on it, so the master p.34
+  // floating spread BAND between the cap lines can't keep a ~6–8% axis natively.
+  // They render as a PNG (Chart.js floating bar + fitPercentAxis) instead.
+  for (const id of ['bid_ask_spread', 'bid_ask_spread_monthly']) {
+    assert.ok(!NATIVE_CHART_TEMPLATES.has(id), `${id} renders as a PNG, not native`);
   }
   // ppsf_box_quarterly was DELETED from the runtime catalog in Round 6h
   // (supabase migration 20260601_*_round6h.sql). No view, no export rows,
@@ -5884,8 +5886,8 @@ test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => 
   // via yMode="edge" (absolute), so Peak/Low/Latest all sit above the data with a
   // leader line dropping to the marker (the "Low" label no longer lands in the
   // data). The max callout uses the edge-mode top-band y.
-  assert.match(xml, /<c:manualLayout><c:yMode val="edge"\/><c:x val="0"\/><c:y val="0\.09"\/>/,
-    'max label pinned to the top band (edge mode)');
+  assert.match(xml, /<c:manualLayout><c:yMode val="edge"\/><c:x val="0\.01"\/><c:y val="0\.13"\/>/,
+    'max label pinned to the top headroom band (edge mode)');
   // Every emitted callout uses edge-mode vertical placement (uniform top band).
   const yModeCount = (xml.match(/<c:yMode val="edge"\/>/g) || []).length;
   assert.equal(yModeCount, 3, 'all three callouts (max/min/last) pinned to the top band');
