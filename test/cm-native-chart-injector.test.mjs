@@ -1281,7 +1281,11 @@ test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sp
   assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal renders as a markerless clean line');
 });
 
-test('R73 B1: bid_ask combo suppresses the invisible noFill base bar from the legend (no duplicate Last-Ask entry)', () => {
+test('bid_ask: legend shows exactly the two cap lines (no phantom bar entry)', () => {
+  // CM close-out item 3 (final). With the line + upDownBars design there is no
+  // invisible base bar to suppress; the legend carries exactly the two cap lines
+  // (Last-Ask, Achieved). upDownBars are chart-level ornaments and get no legend
+  // entry, so there's no duplicate/phantom "Bid-Ask Spread" bar entry.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'avg_last_ask_cap',   col: 'B' },
@@ -1292,15 +1296,13 @@ test('R73 B1: bid_ask combo suppresses the invisible noFill base bar from the le
     cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis',
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
-  // barSeries[0] is the invisible (noFill) base that reuses the Last-Ask title.
-  assert.equal(out.spec.barSeries[0].noFill, true, 'base bar is noFill');
-  const xml = buildComboChartXml(out.spec);
-  // The noFill base (idx 0) gets a legend delete -> the Last-Ask label is not
-  // duplicated between the base bar and the sky marker line.
-  assert.match(xml, /<c:legendEntry><c:idx val="0"\/><c:delete val="1"\/><\/c:legendEntry>/,
-    'noFill base bar (idx 0) is deleted from the legend');
-  assert.equal((xml.match(/<c:legendEntry>/g) || []).length, 1,
-    'exactly one legend entry deleted (the single noFill base)');
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.series.length, 2, 'exactly the two cap lines');
+  const xml = buildMultiLineChartXml(out.spec);
+  // Two line series, no bar chart, no deleted legend entries needed.
+  assert.equal((xml.match(/<c:ser>/g) || []).length, 2, 'two series in the XML');
+  assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart');
+  assert.match(xml, /<c:upDownBars>/, 'up-down bars present');
 });
 
 test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart blocks + 2 axes', async () => {
@@ -3276,12 +3278,13 @@ test('T1: chart XML series references shift to the first non-null data row', asy
     'T1: val series references start at the first non-null row (53)');
 });
 
-test('buildInjectionSpec: bid_ask_spread R66l — floating-bar combo when last_ask present', () => {
-  // R66l — restructured from the R50 stacked-line/upDownBars shape to the
-  // deliverable PDF (Dialysis Market Filter p.34) floating-bar combo: a
-  // light-gray bar from Last Ask (invisible base) up to Achieved cap
-  // (last_ask + spread), with a sky dash marker at the bottom (Last Ask)
-  // and a navy dash marker at the top (Achieved) on a single cap-rate axis.
+test('buildInjectionSpec: bid_ask_spread — two cap lines + upDownBars (Excel axis honors c:min)', () => {
+  // CM close-out item 3 (final). The floating-bar-via-STACKED-BAR shape forced
+  // the Excel value axis to include 0 (the invisible base spans 0→last_ask), so
+  // c:min was ignored and the axis stayed 0–8%. The chart is now the master's
+  // R50 design: two cap LINES (Last-Ask + Achieved) on ONE line-only value axis
+  // that honors c:min, with chart-level upDownBars drawing the gray floating bar
+  // for the spread between them. No barSeries on the cap axis.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -3297,20 +3300,21 @@ test('buildInjectionSpec: bid_ask_spread R66l — floating-bar combo when last_a
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.type, 'multi-line', 'line chart, not a bar (bars force a 0 axis)');
   assert.equal(out.spec.catCol, 'A');
-  assert.equal(out.spec.barGrouping, 'stacked');
-  assert.equal(out.spec.sharedAxis, true);
-  assert.equal(out.spec.barSeries.length, 2);
-  assert.equal(out.spec.barSeries[0].valCol, 'F', 'invisible base = avg_last_ask_cap');
-  assert.equal(out.spec.barSeries[0].noFill, true);
-  assert.equal(out.spec.barSeries[1].valCol, 'D', 'visible gray bar = avg_bid_ask_spread');
-  assert.equal(out.spec.lineSeries.length, 2);
-  assert.equal(out.spec.lineSeries[0].valCol, 'F', 'sky dash marker = Last Ask');
-  assert.equal(out.spec.lineSeries[0].color, '62B5E5');
-  assert.equal(out.spec.lineSeries[1].valCol, 'G', 'navy dash marker = Achieved helper col (G)');
-  assert.equal(out.spec.lineSeries[1].color, '003DA5');
+  assert.equal(out.spec.upDownBars, true, 'spread drawn as up-down bars between the two lines');
+  assert.ok(!out.spec.barSeries, 'no bar series on the cap axis');
+  assert.equal(out.spec.series.length, 2);
+  assert.equal(out.spec.series[0].valCol, 'F', 'sky dash line = Last Ask');
+  assert.equal(out.spec.series[0].color, '62B5E5');
+  assert.equal(out.spec.series[1].valCol, 'G', 'navy dash line = Achieved helper col (G)');
+  assert.equal(out.spec.series[1].color, '003DA5');
   assert.equal(out.helperCols[0].key, 'achieved_cap');
+  // The rendered XML is a lineChart with the pinned min (never a barChart).
+  const xml = buildMultiLineChartXml(out.spec);
+  assert.match(xml, /<c:lineChart>/, 'renders as a line chart');
+  assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart (would force a 0 axis)');
+  assert.match(xml, /<c:upDownBars>/, 'emits up-down bars for the spread');
 });
 
 // QUARANTINED 2026-06-03 (QA suite-green pass): this asserts a min/max
@@ -3381,8 +3385,8 @@ test('buildInjectionSpec: bid_ask_spread (quarterly) gracefully degrades when la
   assert.equal(out.spec.valCol, 'C', 'fallback plots the spread');
 });
 
-test('buildInjectionSpec: bid_ask_spread_monthly R66l — same floating-bar combo as quarterly', () => {
-  // R66l — both cadences share the same floating-bar combo shape.
+test('buildInjectionSpec: bid_ask_spread_monthly — same two-line + upDownBars shape as quarterly', () => {
+  // Both cadences share the same line + up-down-bars shape.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -3398,14 +3402,12 @@ test('buildInjectionSpec: bid_ask_spread_monthly R66l — same floating-bar comb
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'combo');
-  assert.equal(out.spec.barGrouping, 'stacked');
-  assert.equal(out.spec.sharedAxis, true);
-  // Bars: invisible base = last_ask (F), visible gray = spread (D)
-  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['F', 'D']);
-  // Lines: sky Last Ask (F), navy Achieved helper col (G)
-  assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
-  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['62B5E5', '003DA5']);
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.upDownBars, true);
+  assert.ok(!out.spec.barSeries, 'no bar series on the cap axis');
+  // Two cap lines: sky Last Ask (F), navy Achieved helper col (G)
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
+  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5']);
 });
 
 test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axes (Tier F1)', () => {
@@ -5886,7 +5888,7 @@ test('A3: bid_ask cap axis fits the plotted Last-Ask/Achieved window', () => {
     chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
     cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
   });
-  const r = out.spec.yLeftRange;
+  const r = out.spec.yAxisRange;
   // Data max ≈ 0.079; fitted max must be close to it, NOT the old 0.10 ceiling.
   assert.ok(r.max <= 0.085 && r.max >= 0.079, `fitted max ${r.max} hugs data max`);
   assert.ok(r.min >= 0.06 && r.min <= 0.07, `fitted min ${r.min} hugs data min`);
@@ -6311,7 +6313,7 @@ test('round3 item3: bid_ask cap axis is pad-snapped (min>0, covers achieved)', (
     chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
     cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
   });
-  const r = out.spec.yLeftRange;
+  const r = out.spec.yAxisRange;
   assert.ok(r.min > 0.03, `bid-ask axis min is not a 0 dead-zone (got ${r.min})`);
   assert.ok(r.max >= 0.097, `bid-ask axis max covers the achieved top (got ${r.max})`);
 });

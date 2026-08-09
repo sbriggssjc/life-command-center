@@ -47,6 +47,18 @@ asserts in one call so the pinned range and the zero-floor check can never
 diverge. Both artifacts use it. Empirically verified on live dia data:
 `data-min=0.062 → axis 0.06–0.081`, no zero-floor. One chart, both artifacts.
 
+**Excel axis-floor (the actual shipped-book symptom).** The PNG artifact fit
+correctly, but the native XLSX book still showed a 0–8% axis: the spread was
+rendered as a floating bar via a STACKED BAR (invisible last_ask base + visible
+spread). In Excel a stacked bar/column forces the value axis to include 0 (the
+base spans 0 to last_ask), so c:min is silently ignored — the bars float right
+but the axis stays anchored at 0. Fix: the native bid-ask is now the master's
+R50 design — two cap LINES (Last-Ask + Achieved) on ONE line-only value axis
+(line charts do NOT force a 0 baseline, so c:min is honored, fitting ~6-8%),
+with chart-level upDownBars drawing the gray floating high-low bar for the
+spread between them. Verified: the built XML is a lineChart (no barChart)
+carrying c:min val="0.06" plus upDownBars.
+
 ### Items 4 & 7 — packet now applies the display_from crop
 `buildLivePacket` (the packet path `fetchQuarterly` feeds) never applied the
 per-series `display_from` crop that the standard export applies, so the frozen
