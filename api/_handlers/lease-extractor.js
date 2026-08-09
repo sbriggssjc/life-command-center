@@ -1782,11 +1782,11 @@ export async function attachLeaseDoc(a, injected = {}) {
   if (resolved.status === 'review_required') {
     let emitted = false;
     try {
-      await emitDisambig(null, subjectHint?.tenant_brand || null, subjectHint?.tenant_brand || null,
+      const r = await emitDisambig(null, subjectHint?.tenant_brand || null, subjectHint?.tenant_brand || null,
         Array.isArray(resolved.candidates) ? resolved.candidates : [],
         { subjectRef: 'folder_feed_lease:' + pathRef, workspaceId,
           context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: 'lease' } });
-      emitted = true;
+      emitted = !(r && r.emitted === false);  // Prompt 91: empty-candidate cards are not minted
     } catch (err) { console.warn('[attachLeaseDoc] disambiguation emit failed (non-fatal):', err?.message); }
     return { ok: false, attached: false, emitted_disambiguation: emitted, reason: 'ambiguous', match_status: 'review_required' };
   }
