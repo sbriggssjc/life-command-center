@@ -5884,8 +5884,8 @@ test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => 
   // via yMode="edge" (absolute), so Peak/Low/Latest all sit above the data with a
   // leader line dropping to the marker (the "Low" label no longer lands in the
   // data). The max callout uses the edge-mode top-band y.
-  assert.match(xml, /<c:manualLayout><c:yMode val="edge"\/><c:x val="0"\/><c:y val="0\.09"\/>/,
-    'max label pinned to the top band (edge mode)');
+  assert.match(xml, /<c:manualLayout><c:yMode val="edge"\/><c:x val="0\.01"\/><c:y val="0\.13"\/>/,
+    'max label pinned to the top headroom band (edge mode)');
   // Every emitted callout uses edge-mode vertical placement (uniform top band).
   const yModeCount = (xml.match(/<c:yMode val="edge"\/>/g) || []).length;
   assert.equal(yModeCount, 3, 'all three callouts (max/min/last) pinned to the top band');
