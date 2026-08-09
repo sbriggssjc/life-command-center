@@ -18,7 +18,7 @@
 // Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
-import { heatRampColors, fitDataAxisRange, minYearForTemplate } from './cm-native-chart-injector.js';
+import { heatRampColors, fitDataAxisRange, minYearForTemplate, padSnapRange, assertPercentAxisMin } from './cm-native-chart-injector.js';
 
 // R2-A2 (2026-06-30) — templates whose PNG window must mirror the native
 // injector's MIN_YEAR_BY_TEMPLATE floor so both surfaces plot the identical
@@ -1010,11 +1010,39 @@ function buildChartConfig(chart, brand) {
         // marker at the bottom (Last Ask) and a navy dash marker at the top (Achieved).
         // Now that the spread data is real (~30-284 bps; Achieved reaches ~9.8%), the
         // axis is 5.5-10% so the bar tops + top markers are visible.
-        const isGovBA = chart.vertical === 'gov' || chart.vertical === 'government_leased';
         const achievedOf = (r) => (r.achieved_last_ask_cap != null)
           ? r.achieved_last_ask_cap
           : ((r.avg_last_ask_cap != null && r.avg_bid_ask_spread != null)
               ? Number(r.avg_last_ask_cap) + Number(r.avg_bid_ask_spread) : null);
+        // CM close-out item 3 (bid-ask third strike) — the PNG image artifact now
+        // shares the SAME axis math as the native XLSX injector (padSnapRange over
+        // the plotted Last-Ask + Achieved band) instead of a hardcoded {0.055,0.10}.
+        // This is what lets a computed min ≈ 0.043 (never a 0 zero-floor) apply on
+        // BOTH artifacts from one code path. Falls back to the prior literal only
+        // when there are < 2 finite points.
+        const baPlotVals = [];
+        for (const r of rows) {
+          const la = Number(r.avg_last_ask_cap);
+          if (Number.isFinite(la)) {
+            baPlotVals.push(la);
+            const ach = Number(achievedOf(r));
+            if (Number.isFinite(ach)) baPlotVals.push(ach);
+          }
+        }
+        const baFit = padSnapRange(baPlotVals, { minAbsFloor: 0.01 }) || { min: 0.055, max: 0.10 };
+        {
+          const dMin = baPlotVals.length ? Math.min(...baPlotVals) : null;
+          const dMax = baPlotVals.length ? Math.max(...baPlotVals) : null;
+          console.log(
+            `[cm-chart-image-renderer] axis-fit template=${chart.chart_template_id || 'bid_ask'} axis=cap%(shared) ` +
+            `data-min=${dMin != null ? dMin : 'none'} data-max=${dMax != null ? dMax : 'none'} ` +
+            `axis-min=${baFit.min} axis-max=${baFit.max}`
+          );
+          assertPercentAxisMin({
+            label: `image:${chart.chart_template_id || 'bid_ask'}:bid-ask-cap%`,
+            dataMin: dMin, axisMin: baFit.min,
+          });
+        }
         return {
           type: 'bar',
           data: {
@@ -1037,7 +1065,7 @@ function buildChartConfig(chart, brand) {
           },
           options: commonOpts({
             yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-            yAxisRange:  isGovBA ? { min: 0.055, max: 0.10 } : { min: 0.055, max: 0.10 },
+            yAxisRange:  baFit,
           }),
         };
       }

@@ -654,6 +654,32 @@ function padSnapRange(values, opts = {}) {
   return { min, max };
 }
 
+// CM close-out item 3 (bid-ask third strike) — the SHARED zero-floor assertion.
+// A percent (cap-rate) axis whose plotted data sits well above 1% must NEVER be
+// pinned to a min of 0 (a "zero dead-zone" that squashes the series into the top
+// of the frame). This is the failure that recurred across three rounds because it
+// was fixed on one artifact's axis path while the other still emitted min=0. Both
+// the native XLSX injector AND the PNG image renderer call this on the bid-ask cap
+// axis so a regression fails LOUDLY in the export log instead of shipping silently.
+//   Returns true when OK; logs console.error + returns false on a zero-floor
+//   violation (dataMin > floorPct but axisMin <= 0). Never throws — the export
+//   still completes, but the log line is greppable and unmistakable.
+function assertPercentAxisMin({ label, dataMin, axisMin, floorPct = 0.01 } = {}) {
+  const dMin = Number(dataMin);
+  const aMin = Number(axisMin);
+  const violated =
+    Number.isFinite(dMin) && dMin > floorPct &&
+    (!Number.isFinite(aMin) || aMin <= 0);
+  if (violated) {
+    console.error(
+      `[cm-axis-assert] ZERO-FLOOR VIOLATION on ${label || 'percent-axis'}: ` +
+      `data-min=${dMin} (> ${floorPct}) but axis-min=${Number.isFinite(aMin) ? aMin : 'auto/0'}. ` +
+      `A percent axis with data well above 1% must compute a real min (padSnapRange), not 0.`
+    );
+  }
+  return !violated;
+}
+
 // Emit <c:scaling> block with optional min/max. If both are undefined
 // returns the default orientation-only scaling. otherwise embeds the
 // pinned range.
@@ -2832,6 +2858,7 @@ export {
   fitCapAxisRange,
   fitDataAxisRange,
   padSnapRange,
+  assertPercentAxisMin,
   CM_BRAND,
   chartFont,
   offPaletteReason,
@@ -4486,6 +4513,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             `${dMin != null && aMin > dMin ? ' MIN-CLIP!' : ''}` +
             `${dMax != null && dMax > aMax ? ' MAX-CLIP!' : ''}`
           );
+          // CM close-out item 3 — SHARED zero-floor assertion (native artifact).
+          assertPercentAxisMin({
+            label: `native:${chart_template_id}:bid-ask-cap%`,
+            dataMin: dMin, axisMin: aMin,
+          });
         }
         return {
           tabName,

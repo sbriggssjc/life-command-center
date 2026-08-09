@@ -2226,7 +2226,16 @@
           // never changes" reports. A unique _t param makes every request a new
           // URL, and cache:'no-store' forces a live render each click.
           const commentary = exportBtn.dataset.commentary || 'none';
-          const source = commentary === 'none' ? 'packet' : 'packet';
+          // CM close-out item 1 — BOTH buttons now download the canonical STANDARD
+          // export (source=live), not the watermarked PREVIEW packet. The packet
+          // path is not at parity (missing MasterPasteReady + registered feeds) and
+          // was watermarked as a preview, yet both buttons had been hardcoded to
+          // `source='packet'` — so Scott kept receiving the preview artifact. The
+          // standard export path now also carries approved commentary, so the
+          // "+ Commentary" button uses the same canonical builder. The in-tab packet
+          // PREVIEW (action=packet cards) is unchanged; only the DOWNLOAD is restored
+          // to the standard exporter until packet parity lands.
+          const source = 'live';
           const commParam = commentary === 'none' ? '' : `&commentary=${encodeURIComponent(commentary)}`;
           const url = `/api/capital-markets?action=export&source=${source}&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx${commParam}&_t=${Date.now()}`;
           const r = await fetch(url, {
