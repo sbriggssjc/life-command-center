@@ -2222,6 +2222,7 @@ const ROUTE_SLUG_TO_PAGE = {
   contacts: 'pageContacts',
   entities: 'pageEntities',
   business: 'pageBiz',
+  capmarkets: 'pageBiz',
   metrics: 'pageMetrics',
   calendar: 'pageCal',
   'sync-health': 'pageSyncHealth',
@@ -2282,14 +2283,14 @@ function _routeParseHash(rawHash) {
   try {
     let h = String(rawHash || '');
     if (h.startsWith('#')) h = h.slice(1);
-    if (!h) return { page: null, detail: null, focus: null };
+    if (!h) return { page: null, detail: null, focus: null, baseSlug: '' };
     // Legacy PWA shortcut: #page=pageMyWork
     if (h.startsWith('page=')) {
       const pid = h.slice(5);
       const canon = ROUTE_PAGE_ALIAS[pid] || pid;
-      return { page: (canon && document.getElementById(canon)) || ROUTE_PAGE_TO_SLUG[canon] ? canon : null, detail: null, focus: null };
+      return { page: (canon && document.getElementById(canon)) || ROUTE_PAGE_TO_SLUG[canon] ? canon : null, detail: null, focus: null, baseSlug: '' };
     }
-    if (!h.startsWith('/')) return { page: null, detail: null, focus: null };
+    if (!h.startsWith('/')) return { page: null, detail: null, focus: null, baseSlug: '' };
     h = h.slice(1);
     let slug = h;
     let detailToken = null;
@@ -2316,9 +2317,9 @@ function _routeParseHash(rawHash) {
       try { itemId = decodeURIComponent(subPath); } catch (_) {}
       focus = { kind: 'inbox', id: itemId };
     }
-    return { page, detail: _routeParseDetail(detailToken), focus };
+    return { page, detail: _routeParseDetail(detailToken), focus, baseSlug };
   } catch (_) {
-    return { page: null, detail: null, focus: null };
+    return { page: null, detail: null, focus: null, baseSlug: '' };
   }
 }
 
@@ -2349,10 +2350,14 @@ function _routeSameDetail(a, b) {
 // Read the hash and drive the page + detail via the existing render paths.
 // Loop-guarded: _routerApplying suppresses the WRITE side while we apply.
 function applyRoute() {
-  const { page, detail, focus } = _routeParseHash(location.hash);
+  const { page, detail, focus, baseSlug } = _routeParseHash(location.hash);
   _routerApplying = true;
   try {
     const targetPage = page || 'pageHome';
+    if (baseSlug === 'capmarkets') {
+      currentBizTab = 'dialysis';
+      currentDiaTab = 'capital-markets';
+    }
     if (!_routeIsPageActive(targetPage) && typeof navTo === 'function') {
       navTo(targetPage);
     }

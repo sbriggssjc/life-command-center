@@ -1209,7 +1209,7 @@ const NAME_OVERRIDES_BY_VERTICAL = {
   },
 };
 
-export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance }) {
+export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance, commentary }) {
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
   // CM chart fixes round 3, item 1 — the workbook CELLS were rendering Calibri
   // (the cm_brand_tokens Excel families / ExcelJS theme default) while the CHART
@@ -1407,6 +1407,36 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       });
     }
     idxRow++;
+  }
+
+  if (Array.isArray(commentary) && commentary.length > 0) {
+    const cm = wb.addWorksheet('Commentary', {
+      views: [{ state: 'frozen', ySplit: 1, showGridLines: false }],
+    });
+    try { cm.properties.tabColor = { argb: 'FF' + hex(palette.nm_navy) }; } catch {}
+    cm.columns = [
+      { header: 'page_id', key: 'page_id', width: 34 },
+      { header: 'title', key: 'title', width: 42 },
+      { header: 'status', key: 'status', width: 14 },
+      { header: 'copy', key: 'copy', width: 110 },
+    ];
+    cm.getRow(1).font = { name: fonts.title_family, size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    cm.getRow(1).eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex(palette.nm_navy) } };
+      cell.alignment = { vertical: 'middle', wrapText: true };
+    });
+    for (const row of commentary) {
+      cm.addRow({
+        page_id: row.page_id || '',
+        title: row.title || row.page_id || '',
+        status: row.status || '',
+        copy: row.copy || '',
+      });
+    }
+    for (let r = 2; r <= cm.rowCount; r++) {
+      cm.getRow(r).font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
+      cm.getRow(r).alignment = { vertical: 'top', wrapText: true };
+    }
   }
 
   // ----------------------------------------------------------------

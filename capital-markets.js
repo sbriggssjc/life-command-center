@@ -16,8 +16,10 @@
     brand: null,                  // brand tokens cache
     catalog: null,                // chart catalog cache
     subspecialties: { gov: [], dialysis: [] },
-    currentVertical: 'gov',
+    currentVertical: 'dialysis',
     currentSubspecialty: 'all',
+    currentAsOf: '',
+    currentPacket: null,
     chartInstances: new Map(),    // chart_template_id → Chart.js instance
   };
   window.__cmState = cmState;     // expose for debugging
@@ -176,10 +178,16 @@
   }
 
   async function loadQuarterly(vertical, subspecialty) {
+    const asOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
     const r = await fetchJSON(
-      `/api/capital-markets?action=quarterly&vertical=${vertical}&subspecialty=${encodeURIComponent(subspecialty)}&phase=5`
+      `/api/capital-markets?action=packet&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}&phase=5`
     );
-    return r.charts || [];
+    cmState.currentPacket = r.packet || null;
+    let charts = r.packet?.charts || [];
+    if (subspecialty && subspecialty !== 'all') {
+      charts = charts.map(c => ({ ...c, rows: (c.rows || []).filter(row => !row.subspecialty || row.subspecialty === subspecialty) }));
+    }
+    return charts;
   }
 
   // ---- Chart builders --------------------------------------------------------
@@ -1582,11 +1590,26 @@
               <div style="font-size:9pt;color:${brandColor('nm_text_muted','#666')}">${meta.metric_focus} · ${meta.chart_type}</div>
             </div>
             <div style="display:flex;gap:6px">
-              <button class="btn btn-ghost cm-stat-btn" data-template="${id}" style="font-size:9pt" title="Copy a one-line headline stat for pasting into Outlook">Copy stat</button>
+              <button class="btn btn-ghost cm-png-btn" data-template="${id}" style="font-size:9pt" title="Copy this chart as a PNG when supported">PNG</button>
               <button class="btn btn-ghost cm-export-btn" data-template="${id}" style="font-size:9pt">Copy data</button>
             </div>
           </div>
           ${bodyContainer}
+          <div class="cm-commentary" data-template="${id}" style="margin-top:12px;border-top:1px solid #E7E6E6;padding-top:10px">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px">
+              <div style="font-size:9pt;font-weight:600;color:${navy}">Commentary</div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <select class="cm-commentary-status" data-template="${id}" style="font-size:9pt;border:1px solid #E7E6E6;border-radius:4px;padding:4px">
+                  <option value="draft">draft</option>
+                  <option value="edited">edited</option>
+                  <option value="approved">approved</option>
+                </select>
+                <button class="btn btn-ghost cm-generate-commentary-btn" data-template="${id}" style="font-size:9pt">Generate</button>
+                <button class="btn btn-ghost cm-save-commentary-btn" data-template="${id}" style="font-size:9pt">Save</button>
+              </div>
+            </div>
+            <textarea class="cm-commentary-copy" data-template="${id}" rows="4" style="width:100%;box-sizing:border-box;border:1px solid #E7E6E6;border-radius:4px;padding:8px;font-family:'Open Sans',Calibri,sans-serif;font-size:9pt;resize:vertical"></textarea>
+          </div>
         </div>`;
     }).join('');
 
@@ -1606,6 +1629,13 @@
           </div>
           <div style="display:flex;gap:12px;align-items:center">
             <div>
+              <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Vertical:</label>
+              <select id="cm-vertical-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
+                <option value="dialysis"${vertical === 'dialysis' ? ' selected' : ''}>Dialysis</option>
+                <option value="gov"${vertical === 'gov' ? ' selected' : ''}>Government</option>
+              </select>
+            </div>
+            <div>
               <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Subspecialty:</label>
               <select id="cm-subspecialty-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
                 <option value="all">${vertical === 'gov' ? 'All Government-Leased' : vertical === 'dialysis' ? 'All Dialysis' : vertical === 'national_st' ? 'All Products (cross-product)' : 'All ' + vertical}</option>
@@ -1624,8 +1654,14 @@
                 ${asOfOptions()}
               </select>
             </div>
-            <button id="cm-export-workbook-btn" style="padding:8px 14px;background:${navy};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download brand-styled .xlsx with all chart data — V1 ships data tabs only; V2 will embed pre-built charts bound to these tabs">
-              ⬇ Export Workbook
+            <button id="cm-export-workbook-btn" data-commentary="none" style="padding:8px 14px;background:${navy};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download brand-styled .xlsx with chart data">
+              Charts + Data
+            </button>
+            <button id="cm-export-commentary-btn" data-commentary="approved" style="padding:8px 14px;background:${brandColor('nm_sky','#62B5E5')};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download workbook with approved commentary sheet">
+              + Commentary
+            </button>
+            <button id="cm-markdown-btn" style="padding:8px 14px;background:#fff;color:${navy};border:1px solid ${navy};border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Copy approved commentary markdown">
+              Copy Markdown
             </button>
           </div>
         </div>
@@ -1950,6 +1986,38 @@
   }
 
   // ---- Render orchestration --------------------------------------------------
+  function hydrateCommentary(charts) {
+    for (const chart of charts || []) {
+      const id = chart.chart_template_id;
+      const ta = document.querySelector(`.cm-commentary-copy[data-template="${id}"]`);
+      const sel = document.querySelector(`.cm-commentary-status[data-template="${id}"]`);
+      if (ta) ta.value = chart.commentary || '';
+      if (sel && chart.commentary_status) sel.value = chart.commentary_status;
+    }
+  }
+
+  async function saveCommentaryFor(templateId, statusOverride) {
+    const chart = (cmState.currentPacket?.charts || []).find(c => c.chart_template_id === templateId);
+    const ta = document.querySelector(`.cm-commentary-copy[data-template="${templateId}"]`);
+    const sel = document.querySelector(`.cm-commentary-status[data-template="${templateId}"]`);
+    const body = {
+      vertical: cmState.currentVertical,
+      as_of: cmState.currentAsOf || latestCompletedQuarterEndClient(),
+      page_id: templateId,
+      title: chart?.name || templateId,
+      copy: ta?.value || '',
+      status: statusOverride || sel?.value || 'edited',
+    };
+    const r = await fetch('/api/capital-markets?action=commentary', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', 'x-lcc-workspace': window.LCC?.workspaceId || '' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  }
+
   async function renderCharts(vertical, subspecialty) {
     const status = document.getElementById('cm-status');
     if (status) status.textContent = 'Loading data…';
@@ -1983,10 +2051,12 @@
           ok++;
         }
       }
+      hydrateCommentary(charts);
       if (status) {
         const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
         const asOfTxt = latestVol ? ` · latest period: ${periodEndLabel(latestVol.period_end)}` : '';
-        status.textContent = `Rendered ${ok}/${total} charts · subspecialty=${subspecialty}${asOfTxt}`;
+        const snapTxt = cmState.currentPacket?.source === 'frozen-snapshot' ? ' · frozen packet' : '';
+        status.textContent = `Rendered ${ok}/${total} charts · subspecialty=${subspecialty}${asOfTxt}${snapTxt}`;
       }
     } catch (e) {
       if (status) status.textContent = `Error loading: ${e.message}`;
@@ -2019,11 +2089,28 @@
     el.innerHTML = renderSkeleton(vertical);
 
     // Bind subspecialty selector
+    const vsel = document.getElementById('cm-vertical-select');
+    if (vsel) {
+      vsel.value = vertical;
+      vsel.addEventListener('change', (ev) => {
+        renderCapitalMarketsForVertical(ev.target.value);
+      });
+    }
+
     const sel = document.getElementById('cm-subspecialty-select');
     if (sel) {
       sel.value = cmState.currentSubspecialty;
       sel.addEventListener('change', (ev) => {
         cmState.currentSubspecialty = ev.target.value;
+        renderCharts(vertical, cmState.currentSubspecialty);
+      });
+    }
+
+    const asofSel = document.getElementById('cm-asof-select');
+    if (asofSel) {
+      cmState.currentAsOf = asofSel.value || latestCompletedQuarterEndClient();
+      asofSel.addEventListener('change', (ev) => {
+        cmState.currentAsOf = ev.target.value;
         renderCharts(vertical, cmState.currentSubspecialty);
       });
     }
@@ -2051,38 +2138,76 @@
       });
     });
 
-    // Bind copy-stat buttons — one-line headline stat for Outlook drafts
-    document.querySelectorAll('.cm-stat-btn').forEach(btn => {
+    document.querySelectorAll('.cm-png-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const tpl = btn.dataset.template;
         const orig = btn.textContent;
-        btn.textContent = '⏳';
+        btn.textContent = 'Copying';
         try {
-          const url = `/api/capital-markets?action=copilot_stat&vertical=${encodeURIComponent(vertical)}&chart_template_id=${encodeURIComponent(tpl)}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}`;
-          const r = await fetchJSON(url);
-          if (!r.ok) {
-            btn.textContent = r.error === 'recipe_not_implemented' ? 'No stat for this chart' : 'No data';
-            setTimeout(() => { btn.textContent = orig; }, 2000);
-            return;
-          }
-          await navigator.clipboard.writeText(r.stat_text);
-          btn.textContent = '✓ Stat copied';
+          const canvas = document.querySelector(`canvas[data-template="${tpl}"]`);
+          if (!canvas || !navigator.clipboard?.write) throw new Error('PNG copy unavailable for this chart');
+          const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          btn.textContent = 'Copied';
           setTimeout(() => { btn.textContent = orig; }, 1800);
         } catch (e) {
-          console.error('cm-stat-btn error:', e);
+          console.error('cm-png-btn error:', e);
           btn.textContent = 'Copy failed';
           setTimeout(() => { btn.textContent = orig; }, 2000);
         }
       });
     });
 
+    document.querySelectorAll('.cm-save-commentary-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const orig = btn.textContent;
+        btn.textContent = 'Saving';
+        try {
+          await saveCommentaryFor(btn.dataset.template);
+          btn.textContent = 'Saved';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        } catch (e) {
+          btn.textContent = 'Failed';
+          setTimeout(() => { btn.textContent = orig; }, 2000);
+        }
+      });
+    });
+
+    document.querySelectorAll('.cm-generate-commentary-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tpl = btn.dataset.template;
+        const orig = btn.textContent;
+        btn.textContent = 'Generating';
+        try {
+          const r = await fetch('/api/capital-markets?action=generate_commentary', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json', 'x-lcc-workspace': window.LCC?.workspaceId || '' },
+            body: JSON.stringify({ vertical, as_of: cmState.currentAsOf || latestCompletedQuarterEndClient(), page_id: tpl }),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          const ta = document.querySelector(`.cm-commentary-copy[data-template="${tpl}"]`);
+          const sel = document.querySelector(`.cm-commentary-status[data-template="${tpl}"]`);
+          if (ta) ta.value = data.commentary?.copy || '';
+          if (sel) sel.value = data.commentary?.status || 'draft';
+          btn.textContent = 'Generated';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        } catch (e) {
+          console.error('cm-generate-commentary error:', e);
+          btn.textContent = 'Failed';
+          setTimeout(() => { btn.textContent = orig; }, 2200);
+        }
+      });
+    });
+
     // Bind workbook export
-    const exportBtn = document.getElementById('cm-export-workbook-btn');
-    if (exportBtn) {
+    const bindWorkbookExport = (exportBtn) => {
+      if (!exportBtn) return;
       exportBtn.addEventListener('click', async () => {
         const orig = exportBtn.textContent;
         exportBtn.disabled = true;
-        exportBtn.textContent = '⏳ Generating…';
+        exportBtn.textContent = 'Generating';
         try {
           // Historical as-of: use the quarter picker. Empty → server defaults
           // to the latest completed quarter. Falls back to the latest volume
@@ -2100,7 +2225,10 @@
           // the user deleted the downloaded file — the source of the "my export
           // never changes" reports. A unique _t param makes every request a new
           // URL, and cache:'no-store' forces a live render each click.
-          const url = `/api/capital-markets?action=export&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx&_t=${Date.now()}`;
+          const commentary = exportBtn.dataset.commentary || 'none';
+          const source = commentary === 'none' ? 'packet' : 'packet';
+          const commParam = commentary === 'none' ? '' : `&commentary=${encodeURIComponent(commentary)}`;
+          const url = `/api/capital-markets?action=export&source=${source}&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx${commParam}&_t=${Date.now()}`;
           const r = await fetch(url, {
             credentials: 'include',
             cache: 'no-store',
@@ -2132,6 +2260,26 @@
           setTimeout(() => { exportBtn.textContent = orig; }, 2500);
         } finally {
           exportBtn.disabled = false;
+        }
+      });
+    };
+    bindWorkbookExport(document.getElementById('cm-export-workbook-btn'));
+    bindWorkbookExport(document.getElementById('cm-export-commentary-btn'));
+
+    const markdownBtn = document.getElementById('cm-markdown-btn');
+    if (markdownBtn) {
+      markdownBtn.addEventListener('click', async () => {
+        const orig = markdownBtn.textContent;
+        markdownBtn.textContent = 'Copying';
+        try {
+          const asOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
+          const r = await fetchJSON(`/api/capital-markets?action=marketing_markdown&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}`);
+          await navigator.clipboard.writeText(r.markdown || '');
+          markdownBtn.textContent = 'Copied';
+          setTimeout(() => { markdownBtn.textContent = orig; }, 1500);
+        } catch (e) {
+          markdownBtn.textContent = 'Failed';
+          setTimeout(() => { markdownBtn.textContent = orig; }, 2000);
         }
       });
     }

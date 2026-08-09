@@ -45,6 +45,7 @@ import { composeStat, listSupportedTemplates as listSupportedStatTemplates } fro
 import { buildVolumeCapSummary, joinVolumeCapQuartile } from './_shared/cm-summary-table.js';
 import { renderChartsToImages } from './_shared/cm-chart-image-renderer.js';
 import { buildDialysisMasterWorkbook } from './_shared/cm-template-loader.js';
+import { invokeChatProvider } from './_shared/ai.js';
 
 // ---------------------------------------------------------------------------
 // Synthetic chart_templates — composed from other templates' rows rather than
@@ -407,6 +408,10 @@ export default withErrorHandler(async function handler(req, res) {
       case 'catalog':          return listCatalog(req, res);
       case 'brand':            return getBrandTokens(req, res);
       case 'broker_patterns':  return listBrokerPatterns(req, res);
+      case 'packet_status':    return packetStatus(req, res);
+      case 'packet':           return getReportPacket(req, res, user);
+      case 'commentary':       return getCommentary(req, res);
+      case 'marketing_markdown': return marketingMarkdown(req, res);
 
       // Chart data (Phase 1 live)
       case 'chart':            return fetchChart(req, res);
@@ -424,7 +429,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, chart, quarterly, export, narrative, copilot_stat, copilot_stat_catalog'
+          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, packet_status, packet, commentary, marketing_markdown, chart, quarterly, export, narrative, copilot_stat, copilot_stat_catalog'
         });
     }
   }
@@ -438,11 +443,13 @@ export default withErrorHandler(async function handler(req, res) {
       case 'add_broker_pattern':     return addBrokerPattern(req, res);
       case 'refresh_nm_attribution': return refreshNmAttribution(req, res);
       case 'rca_import':             return rcaImport(req, res, user);
+      case 'commentary':             return saveCommentary(req, res, user);
+      case 'generate_commentary':    return generateCommentary(req, res, user, workspaceId);
       case 'save_narrative':         return res.status(501).json(PHASE_2_PENDING(action));
       case 'publish':                return res.status(501).json(PHASE_2_PENDING(action));
 
       default:
-        return res.status(400).json({ error: 'POST actions: add_broker_pattern, refresh_nm_attribution, rca_import, save_narrative, publish' });
+        return res.status(400).json({ error: 'POST actions: add_broker_pattern, refresh_nm_attribution, rca_import, commentary, generate_commentary, save_narrative, publish' });
     }
   }
 
@@ -497,6 +504,11 @@ async function listCatalog(req, res) {
 }
 
 async function getBrandTokens(req, res) {
+  const { tokens, raw } = await loadBrandTokensObject();
+  return res.status(200).json({ tokens, raw });
+}
+
+async function loadBrandTokensObject() {
   const result = await opsQuery(
     'GET',
     `cm_brand_tokens?select=token_key,token_value,category&order=category,token_key`
@@ -508,7 +520,7 @@ async function getBrandTokens(req, res) {
     if (!tokens[category]) tokens[category] = {};
     tokens[category][key || category] = row.token_value;
   }
-  return res.status(200).json({ tokens, raw: result.data || [] });
+  return { tokens, raw: result.data || [] };
 }
 
 async function listBrokerPatterns(req, res) {
@@ -906,6 +918,366 @@ export function resolveDisplayFrom(displayFromRows, chart_template_id, view_name
   return String((exact || matches[0]).display_from).slice(0, 10);
 }
 
+function normalizePacketVertical(vertical) {
+  const v = String(vertical || '').trim().toLowerCase();
+  if (v === 'dia') return 'dialysis';
+  if (v === 'government') return 'gov';
+  return v;
+}
+
+function quarterLabelFromPeriodEnd(periodEnd) {
+  const m = String(periodEnd || '').match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  return `Q${Math.ceil(Number(m[2]) / 3)}-${m[1]}`;
+}
+
+function periodEndFromQuarterLabel(label) {
+  const m = String(label || '').trim().match(/^Q([1-4])[-\s]?(\d{4})$/i);
+  if (!m) return null;
+  const q = Number(m[1]);
+  const y = Number(m[2]);
+  const month = q * 3;
+  const day = (month === 6 || month === 9) ? 30 : 31;
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function packetDomainForVertical(vertical) {
+  return VERTICAL_TO_DOMAIN[normalizePacketVertical(vertical)] || null;
+}
+
+function chartsToPages(charts = []) {
+  const pages = {};
+  for (const chart of charts || []) {
+    if (!chart?.chart_template_id) continue;
+    pages[chart.chart_template_id] = {
+      page_id: chart.chart_template_id,
+      title: chart.name || chart.chart_template_id,
+      chart_template_id: chart.chart_template_id,
+      view_name: chart.view_name || null,
+      metric_focus: chart.metric_focus || null,
+      data_shape: chart.data_shape || null,
+      chart_type: chart.chart_type || null,
+      rows: Array.isArray(chart.rows) ? chart.rows : [],
+      commentary: null,
+      commentary_status: null,
+    };
+  }
+  return pages;
+}
+
+function packetFlagsFromCharts(charts = [], periodEnd) {
+  const flags = [];
+  for (const chart of charts || []) {
+    const rows = Array.isArray(chart.rows) ? chart.rows : [];
+    if (chart.fetch_failed || chart.ok === false) {
+      flags.push({ page: chart.chart_template_id, type: 'fetch_failed', msg: chart.error || 'Chart source fetch failed.' });
+      continue;
+    }
+    if (rows.length === 0) {
+      flags.push({ page: chart.chart_template_id, type: 'null_series', msg: 'No rows returned for this chart.' });
+      continue;
+    }
+    const latest = rows.filter(r => !r?.period_end || String(r.period_end).slice(0, 10) <= periodEnd).slice(-1)[0] || rows[rows.length - 1];
+    for (const [key, value] of Object.entries(latest || {})) {
+      if (/^n($|_)|(_n$)|count/i.test(key) && value != null) {
+        const n = Number(value);
+        if (Number.isFinite(n) && n > 0 && n < 10) {
+          flags.push({ page: chart.chart_template_id, type: 'thin_sample', msg: `${key}=${n}` });
+        }
+      }
+    }
+    if (chart.chart_template_id === 'cost_of_capital' && latest?.treasury_10y_close == null && latest?.treasury_10y_avg != null) {
+      flags.push({ page: chart.chart_template_id, type: 'rate_basis', msg: '10Y Treasury close missing; quarterly average is present.' });
+    }
+  }
+  return flags;
+}
+
+async function buildLivePacket({ vertical, periodEnd, quarter, user }) {
+  const fakeReq = { query: { vertical, as_of: periodEnd, subspecialty: 'all', phase: '5' } };
+  let statusCode = 200;
+  let payload = null;
+  const fakeRes = {
+    status(code) { statusCode = code; return this; },
+    json(obj) { payload = obj; return obj; },
+  };
+  await fetchQuarterly(fakeReq, fakeRes);
+  if (statusCode >= 400) {
+    const err = new Error(payload?.error || `quarterly payload failed (${statusCode})`);
+    err.status = statusCode;
+    err.detail = payload;
+    throw err;
+  }
+  const charts = payload?.charts || [];
+  return {
+    vertical,
+    quarter,
+    fiscal_quarter: quarter,
+    period_end: periodEnd,
+    source: 'live-freeze',
+    frozen: false,
+    generated_at: new Date().toISOString(),
+    generated_by: user?.email || user?.id || 'api',
+    comparatives: {
+      prior_q: quarterEndBack(periodEnd, 1),
+      year_ago: quarterEndBack(periodEnd, 4),
+    },
+    charts,
+    pages: chartsToPages(charts),
+    flags: packetFlagsFromCharts(charts, periodEnd),
+  };
+}
+
+function quarterEndBack(periodEnd, k) {
+  const m = String(periodEnd || '').match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  const idx = Number(m[1]) * 4 + (Math.ceil(Number(m[2]) / 3) - 1) - k;
+  const y = Math.floor(idx / 4);
+  const q = (idx % 4 + 4) % 4 + 1;
+  const month = q * 3;
+  const day = (month === 6 || month === 9) ? 30 : 31;
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+async function readCommentaryRows(domain, vertical, quarter, status = null) {
+  const statusFilter = status ? `&status=eq.${encodeURIComponent(status)}` : '';
+  const r = await domainQuery(
+    domain, 'GET',
+    `cm_report_commentary?select=*&vertical=eq.${encodeURIComponent(vertical)}&fiscal_quarter=eq.${encodeURIComponent(quarter)}${statusFilter}&order=page_id.asc`
+  );
+  return r.ok !== false && Array.isArray(r.data) ? r.data : [];
+}
+
+function attachCommentaryToPacket(packet, rows) {
+  const byPage = new Map((rows || []).map(r => [r.page_id, r]));
+  const pages = { ...(packet.pages || {}) };
+  const charts = (packet.charts || []).map((chart) => {
+    const row = byPage.get(chart.chart_template_id);
+    if (!row) return chart;
+    pages[chart.chart_template_id] = {
+      ...(pages[chart.chart_template_id] || {}),
+      commentary: row.copy || '',
+      commentary_status: row.status || null,
+    };
+    return { ...chart, commentary: row.copy || '', commentary_status: row.status || null };
+  });
+  return { ...packet, pages, charts, commentary: rows || [] };
+}
+
+async function buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLive = false }) {
+  const domain = packetDomainForVertical(vertical);
+  if (!domain) {
+    const err = new Error(`Unsupported packet vertical: ${vertical}`);
+    err.status = 400;
+    throw err;
+  }
+  const v = normalizePacketVertical(vertical);
+  const q = quarter || quarterLabelFromPeriodEnd(periodEnd);
+  const pe = periodEnd || periodEndFromQuarterLabel(q);
+  if (!q || !pe) {
+    const err = new Error('quarter or as_of is required');
+    err.status = 400;
+    throw err;
+  }
+
+  if (!forceLive) {
+    const existing = await domainQuery(
+      domain, 'GET',
+      `cm_report_snapshots?select=*&vertical=eq.${encodeURIComponent(v)}&fiscal_quarter=eq.${encodeURIComponent(q)}&limit=1`
+    );
+    if (existing.ok !== false && Array.isArray(existing.data) && existing.data[0]) {
+      const row = existing.data[0];
+      const commentary = await readCommentaryRows(domain, v, q);
+      return {
+        snapshot_id: row.snapshot_id,
+        frozen: true,
+        frozen_at: row.frozen_at,
+        frozen_by: row.frozen_by,
+        packet: attachCommentaryToPacket({ ...(row.packet || {}), source: 'frozen-snapshot' }, commentary),
+      };
+    }
+    if (existing.ok === false && existing.status === 404) {
+      const err = new Error('cm_report_snapshots table is missing; apply the packet migration first.');
+      err.status = 501;
+      throw err;
+    }
+  }
+
+  const packet = await buildLivePacket({ vertical: v, periodEnd: pe, quarter: q, user });
+  const insert = await domainQuery(
+    domain,
+    'POST',
+    'cm_report_snapshots?on_conflict=vertical,fiscal_quarter',
+    {
+      vertical: v,
+      fiscal_quarter: q,
+      period_end: pe,
+      packet,
+      frozen_by: user?.email || user?.id || 'api',
+      updated_at: new Date().toISOString(),
+    },
+    { Prefer: 'resolution=merge-duplicates,return=representation' }
+  );
+  if (insert.ok === false) {
+    const err = new Error('packet_snapshot_write_failed');
+    err.status = insert.status || 500;
+    err.detail = insert.data;
+    throw err;
+  }
+  const row = Array.isArray(insert.data) ? insert.data[0] : insert.data;
+  return {
+    snapshot_id: row?.snapshot_id || null,
+    frozen: true,
+    frozen_at: row?.frozen_at || null,
+    frozen_by: row?.frozen_by || null,
+    packet: { ...packet, source: 'frozen-snapshot' },
+  };
+}
+
+async function packetStatus(req, res) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const domain = packetDomainForVertical(vertical);
+  if (!domain) return res.status(400).json({ ok: false, built: false, error: 'unsupported_vertical', vertical });
+  const r = await domainQuery(domain, 'GET', 'cm_report_snapshots?select=snapshot_id,vertical,fiscal_quarter,period_end,frozen_at&order=frozen_at.desc&limit=5');
+  if (r.ok === false) {
+    return res.status(200).json({
+      ok: true,
+      built: false,
+      vertical,
+      status: r.status,
+      detail: r.data,
+      message: 'Packet layer is not confirmed built for this domain. Apply cm_report_snapshots migration and call action=packet to freeze a quarter.',
+    });
+  }
+  return res.status(200).json({
+    ok: true,
+    built: true,
+    vertical,
+    recent_snapshots: r.data || [],
+  });
+}
+
+async function getReportPacket(req, res, user) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const asOfResolution = resolveAsOf(req.query.as_of || periodEndFromQuarterLabel(req.query.quarter));
+  if (asOfResolution.asOf === null) return res.status(400).json({ error: 'invalid_as_of_or_quarter' });
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(asOfResolution.asOf);
+  try {
+    const out = await buildOrFetchPacket({
+      vertical,
+      quarter,
+      periodEnd: asOfResolution.asOf,
+      user,
+      forceLive: req.query.live === 'true',
+    });
+    return res.status(200).json({
+      ok: true,
+      vertical,
+      quarter,
+      period_end: asOfResolution.asOf,
+      latest_completed_period_end: asOfResolution.latest,
+      live_unfrozen: req.query.live === 'true',
+      ...out,
+    });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message || 'packet_failed', detail: e.detail || null });
+  }
+}
+
+async function getCommentary(req, res) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(resolveAsOf(req.query.as_of).asOf);
+  const domain = packetDomainForVertical(vertical);
+  if (!domain || !quarter) return res.status(400).json({ error: 'vertical and quarter/as_of required' });
+  const rows = await readCommentaryRows(domain, vertical, quarter);
+  return res.status(200).json({ ok: true, vertical, quarter, commentary: rows });
+}
+
+async function saveCommentary(req, res, user) {
+  const body = req.body || {};
+  const vertical = normalizePacketVertical(body.vertical || req.query.vertical || 'dialysis');
+  const quarter = body.quarter || req.query.quarter || quarterLabelFromPeriodEnd(resolveAsOf(body.as_of || req.query.as_of).asOf);
+  const pageId = body.page_id || req.query.page_id;
+  const domain = packetDomainForVertical(vertical);
+  if (!domain || !quarter || !pageId) return res.status(400).json({ error: 'vertical, quarter/as_of, and page_id required' });
+  const status = body.status || 'edited';
+  const now = new Date().toISOString();
+  const row = {
+    vertical,
+    fiscal_quarter: quarter,
+    page_id: pageId,
+    title: body.title || pageId,
+    copy: body.copy || '',
+    status,
+    source: body.source || 'manual',
+    edited_by: user?.email || user?.id || null,
+    approved_by: status === 'approved' ? (user?.email || user?.id || null) : null,
+    approved_at: status === 'approved' ? now : null,
+    updated_at: now,
+  };
+  const r = await domainQuery(
+    domain, 'POST',
+    'cm_report_commentary?on_conflict=vertical,fiscal_quarter,page_id',
+    row,
+    { Prefer: 'resolution=merge-duplicates,return=representation' }
+  );
+  if (r.ok === false) return res.status(r.status || 500).json({ error: 'commentary_write_failed', detail: r.data });
+  return res.status(200).json({ ok: true, commentary: Array.isArray(r.data) ? r.data[0] : r.data });
+}
+
+async function generateCommentary(req, res, user, workspaceId) {
+  const body = req.body || {};
+  const vertical = normalizePacketVertical(body.vertical || 'dialysis');
+  const quarter = body.quarter || quarterLabelFromPeriodEnd(resolveAsOf(body.as_of).asOf);
+  const pageId = body.page_id;
+  if (!pageId) return res.status(400).json({ error: 'page_id required' });
+  const packetOut = await buildOrFetchPacket({ vertical, quarter, periodEnd: periodEndFromQuarterLabel(quarter), user });
+  const page = packetOut.packet?.pages?.[pageId];
+  if (!page) return res.status(404).json({ error: 'page_not_found_in_packet', page_id: pageId });
+  const prompt = [
+    'Draft Capital Markets report commentary for this chart page.',
+    'Use the capital-markets-update style: bold opening label, concise market read, figures only from the frozen packet, no placeholders.',
+    `Vertical: ${vertical}`,
+    `Quarter: ${quarter}`,
+    `Page: ${page.title || pageId}`,
+    `Flags: ${JSON.stringify((packetOut.packet.flags || []).filter(f => f.page === pageId))}`,
+    `Frozen figure rows: ${JSON.stringify((page.rows || []).slice(-12))}`,
+  ].join('\n\n');
+  const ai = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'capital_markets_commentary', vertical, quarter, page_id: pageId },
+    history: [],
+    attachments: [],
+    user,
+    workspaceId,
+  });
+  if (!ai.ok) return res.status(ai.status || 502).json({ error: 'commentary_generation_failed', detail: ai.data, provider: ai.provider });
+  const copy = ai.data?.response || ai.data?.message || ai.data?.text || '';
+  req.body = { vertical, quarter, page_id: pageId, title: page.title || pageId, copy, status: 'draft', source: `ai:${ai.provider || 'provider'}` };
+  return saveCommentary(req, res, user);
+}
+
+async function marketingMarkdown(req, res) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(resolveAsOf(req.query.as_of).asOf);
+  const domain = packetDomainForVertical(vertical);
+  if (!domain || !quarter) return res.status(400).json({ error: 'vertical and quarter/as_of required' });
+  const rows = await readCommentaryRows(domain, vertical, quarter, req.query.status || 'approved');
+  const title = `${vertical === 'dialysis' ? 'Dialysis' : 'Government'} Market Filter ${quarter} Copy Edits`;
+  const md = [
+    `# ${title}`,
+    '',
+    ...rows.flatMap(r => [
+      `## ${r.title || r.page_id}`,
+      '',
+      r.copy || '',
+      '',
+    ]),
+    rows.length ? '' : '_No approved commentary found._',
+  ].join('\n');
+  return res.status(200).json({ ok: true, vertical, quarter, markdown: md, commentary_count: rows.length });
+}
+
 /**
  * GET /api/capital-markets?action=chart&vertical=gov&chart_template_id=volume_ttm_by_quarter&subspecialty=all&from=&to=
  *   → { rows: [...], meta: { chart_template_id, vertical, view_name, ... } }
@@ -1158,6 +1530,51 @@ async function exportWorkbook(req, res) {
       supported: ['xlsx'],
       hint: 'PDF and PNG export land in V2.',
     });
+  }
+
+  if (req.query.source === 'packet') {
+    const quarter = req.query.quarter || quarterLabelFromPeriodEnd(resolvedAsOf);
+    const packetOut = await buildOrFetchPacket({ vertical, quarter, periodEnd: resolvedAsOf, user: req.user || null });
+    const commentaryMode = String(req.query.commentary || '').toLowerCase();
+    const commentary = commentaryMode
+      ? await readCommentaryRows(packetDomainForVertical(vertical), normalizePacketVertical(vertical), quarter, commentaryMode === 'all' ? null : 'approved')
+      : [];
+    const { tokens: brand } = await loadBrandTokensObject();
+    const chartImages = await renderChartsToImages({ charts: packetOut.packet.charts || [], brand }).catch(() => []);
+    const provenance = {
+      gitSha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || process.env.SOURCE_VERSION || 'unknown',
+      generatedAt: new Date().toISOString(),
+      builder: 'api/capital-markets.js::exportWorkbook(packet)',
+      snapshotId: packetOut.snapshot_id || null,
+    };
+    const wb = buildCapitalMarketsWorkbook({
+      vertical,
+      subspecialty,
+      asOf: resolvedAsOf,
+      charts: packetOut.packet.charts || [],
+      brand,
+      masterRows: null,
+      chartImages,
+      provenance,
+      commentary,
+    });
+    let buffer = await wb.xlsx.writeBuffer();
+    const injections = wb.nativeInjections || [];
+    if (injections.length > 0) {
+      try {
+        const { injectNativeCharts } = await import('./_shared/cm-native-chart-injector.js');
+        buffer = await injectNativeCharts(Buffer.from(buffer), injections);
+        res.setHeader('X-CM-Native-Charts', String(injections.length));
+      } catch (e) {
+        console.error(`[exportWorkbook:packet] native-chart injection failed: ${e?.message || e}`);
+      }
+    }
+    const filename = exportFilename({ vertical, subspecialty, asOf: resolvedAsOf }).replace(/\.xlsx$/i, '-packet.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('X-CM-Packet-Snapshot', packetOut.snapshot_id || '');
+    return res.status(200).send(Buffer.from(buffer));
   }
 
   // 1. Fetch chart catalog + data via the same dispatch logic the dashboard uses.
