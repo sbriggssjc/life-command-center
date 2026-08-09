@@ -538,6 +538,46 @@ function fitAxisToSeries(templateId, axisLabel, plottedRows, seriesKeys, opts = 
   return range;
 }
 
+// CM chart fixes round 3, item 3 — pad+snap axis fit that ALWAYS emits a
+// computed MIN (not just a computed max) so a percent/cap axis never dead-zones
+// from 0 when the data sits well above zero. This was the Bid-Ask regression:
+// the deployed books carried an explicit min=0 / max=0.085 on the cap axis while
+// the plotted Last-Ask/Achieved band spans ~0.0478–0.0971, so both bounds were
+// wrong. Rule (per marketing review): compute min = dataMin − 8% of range,
+// snapped down to `grid`, and max = dataMax + 8% of range, snapped up — but only
+// apply the computed min where dataMin is materially above zero (> minAbsFloor,
+// default 1%). Genuinely-near-zero series (e.g. Cost of Capital's treasury line)
+// and 100%-stacked charts (Buyer Pool 0–1) are EXEMPT and keep min 0 — pass
+// stacked01 or let the near-zero floor catch them.
+//   @param {number[]} values  the plotted values across every series on the axis
+//   @returns {{min,max}|null}  null when there are < 2 finite points (caller
+//                              falls back to its prior literal — no regression)
+function padSnapRange(values, opts = {}) {
+  const padFrac = opts.padFrac != null ? opts.padFrac : 0.08;
+  const grid = opts.grid || 0.001;
+  const minAbsFloor = opts.minAbsFloor != null ? opts.minAbsFloor : 0.01;
+  const vals = (Array.isArray(values) ? values : [])
+    .map(Number)
+    .filter((v) => Number.isFinite(v));
+  if (vals.length < 2) return null;
+  const r6 = (n) => Math.round(n * 1e6) / 1e6;
+  const mn = Math.min(...vals);
+  const mx = Math.max(...vals);
+  const range = (mx - mn) || Math.abs(mx) || grid;
+  const pad = padFrac * range;
+  let max = r6(Math.ceil((mx + pad) / grid) * grid);
+  let min;
+  if (opts.stacked01) {
+    min = 0;
+  } else if (mn > minAbsFloor) {
+    min = r6(Math.max(0, Math.floor((mn - pad) / grid) * grid));
+  } else {
+    min = 0; // near-zero series → keep the zero baseline (exempt)
+  }
+  if (max <= min) max = r6(min + grid);
+  return { min, max };
+}
+
 // Emit <c:scaling> block with optional min/max. If both are undefined
 // returns the default orientation-only scaling. otherwise embeds the
 // pinned range.
@@ -2693,6 +2733,7 @@ export {
   heatRampColors,
   fitCapAxisRange,
   fitDataAxisRange,
+  padSnapRange,
   CM_BRAND,
   chartFont,
   offPaletteReason,
@@ -4320,19 +4361,28 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             if (Number.isFinite(sp)) plotVals.push(la + sp);
           }
         }
-        const bidAskFit = fitDataAxisRange(plotVals, 'cap');
-        // CM chart fixes round 2, item 2 — per-axis audit log. This shared-axis
-        // chart already fits BOTH plotted levels (Last Ask + Achieved = last_ask
-        // + spread, the visible bar top), so it does not clip; log it anyway so
-        // every dual-axis/whisker chart reports data-max vs axis-max.
+        // CM chart fixes round 3, item 3 — this is THE single bid-ask cap-axis
+        // authoring site. The deployed books carried an explicit min=0/max=0.085
+        // (a residual hardcode on a path fitAxisToSeries never reached) while the
+        // plotted Last-Ask/Achieved band spans ~0.0478–0.0971, so BOTH bounds
+        // were wrong. Use padSnapRange so the axis computes a real MIN (never 0
+        // when data sits well above 1%) AND a max that covers the achieved top:
+        // ≈ min 0.043 / max 0.101 for the live data.
+        const bidAskFit = padSnapRange(plotVals, { minAbsFloor: 0.01 });
+        // Per-axis audit log — data-min/data-max vs axis-min/axis-max, so a
+        // min=0 dead-zone or a clipped top can never recur silently.
         {
+          const dMin = plotVals.length ? Math.min(...plotVals) : null;
           const dMax = plotVals.length ? Math.max(...plotVals) : null;
+          const aMin = (bidAskFit || { min: 0.055 }).min;
           const aMax = (bidAskFit || { max: 0.10 }).max;
           console.log(
             `[cm-native-chart-injector] axis-fit template=${chart_template_id} axis=A2(shared,cap%) ` +
             `series=[avg_last_ask_cap,avg_last_ask_cap+avg_bid_ask_spread] ` +
-            `data-max=${dMax != null ? dMax : 'none'} axis-max=${aMax}` +
-            `${dMax != null && dMax > aMax ? ' CLIP!' : ''}`
+            `data-min=${dMin != null ? dMin : 'none'} data-max=${dMax != null ? dMax : 'none'} ` +
+            `axis-min=${aMin} axis-max=${aMax}` +
+            `${dMin != null && aMin > dMin ? ' MIN-CLIP!' : ''}` +
+            `${dMax != null && dMax > aMax ? ' MAX-CLIP!' : ''}`
           );
         }
         return {
