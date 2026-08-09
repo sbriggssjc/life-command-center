@@ -182,12 +182,14 @@ test('NATIVE_CHART_TEMPLATES: P7 scatter charts registered', () => {
 });
 
 test('NATIVE_CHART_TEMPLATES: P8 floating-bar / box-whisker charts registered', () => {
-  for (const id of [
-    'bid_ask_spread',
-    'bid_ask_spread_monthly',
-    'rent_psf_box_quarterly',
-  ]) {
-    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
+  // rent_psf_box_quarterly stays native (IQR floating-bar + median line).
+  assert.ok(NATIVE_CHART_TEMPLATES.has('rent_psf_box_quarterly'), 'rent box should be native');
+  // CM close-out (bid-ask, final): bid_ask_spread(_monthly) are DELIBERATELY NOT
+  // native — Excel forces a 0 axis whenever a bar sits on it, so the master p.34
+  // floating spread BAND between the cap lines can't keep a ~6–8% axis natively.
+  // They render as a PNG (Chart.js floating bar + fitPercentAxis) instead.
+  for (const id of ['bid_ask_spread', 'bid_ask_spread_monthly']) {
+    assert.ok(!NATIVE_CHART_TEMPLATES.has(id), `${id} renders as a PNG, not native`);
   }
   // ppsf_box_quarterly was DELETED from the runtime catalog in Round 6h
   // (supabase migration 20260601_*_round6h.sql). No view, no export rows,

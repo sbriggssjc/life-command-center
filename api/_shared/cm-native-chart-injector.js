@@ -2975,8 +2975,14 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //       data tab naturally carries both [bottom, height] columns.
   //   (b) Render box-whisker as a multi-line quartile chart (preserves
   //       all data; drops the shaded IQR fill — user can add it manually).
-  'bid_ask_spread',                 // (a) quarterly: only spread col present → simple line fallback
-  'bid_ask_spread_monthly',         // (a) monthly: invisible(last_ask) + visible(spread) stacked bar
+  // CM close-out (bid-ask, final) — bid_ask_spread is DELIBERATELY NOT native.
+  // Excel forces a value axis to include 0 whenever a bar/updown-bar sits on it,
+  // so no native shape can show the master p.34 floating spread BAND between the
+  // Last-Ask and Achieved cap lines AND keep a ~6–8% axis (the band needs a bar;
+  // the bar drags the axis to 0). The PNG renderer (Chart.js floating bar +
+  // fitPercentAxis) does BOTH, so bid-ask renders as an image instead. Do NOT
+  // re-add it here without solving the Excel 0-floor (see the case in this file).
+  //   'bid_ask_spread', 'bid_ask_spread_monthly' → PNG (cm-chart-image-renderer.js)
   'rent_psf_box_quarterly',         // (b) upgraded to IQR floating-bar + median line in P8.5
   // CM chart fixes round 2, item 1 — dialysis companion box chart backed by the
   // LABELED MODELED rent variant (cm_dialysis_rent_box_q_with_modeled). Same

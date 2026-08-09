@@ -133,3 +133,19 @@ Visual acceptance for each:
 
 Once both books pass Scott's visual check, the round-3 closure books; the
 shared-build refactor + inversion resume after that.
+
+**Correction 2 (bid-ask → PNG floating band).** Even option A (native dual-axis)
+read as "changed the chart" because it doesn't show the master p.34 look: the
+gray spread BAND between the Last-Ask and Achieved cap lines. That look needs a
+bar between the lines, and in Excel any bar forces the axis to 0 — the two are
+mutually exclusive natively. The PNG renderer (Chart.js) does both, so
+`bid_ask_spread`/`_monthly` are removed from `NATIVE_CHART_TEMPLATES` and now
+render as an image: floating spread band between the cap lines on a correct ~6–8%
+axis (verified `data-min 0.062 → axis 0.06–0.081`). Trade-off: that one chart is
+a picture, not an editable Excel chart. The data tab keeps Last-Ask + Spread
+(+ Low/High); Achieved (= their sum) is derived in the image.
+
+**Callout labels — top band.** All Peak/Low/Latest callouts are pinned to one
+absolute top band via `yMode="edge"` (`DLBL_TOP_Y = 0.13`, a single tunable knob)
+so none sit inside the data. It's a blind estimate (no Excel to render here); nudge
+`DLBL_TOP_Y` up/down after a visual check if the band sits too high/low.
