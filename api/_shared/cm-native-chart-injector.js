@@ -4529,29 +4529,45 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           `native:${chart_template_id}:cap%(last_ask+achieved)`,
           plotVals, { minAbsFloor: 0.01 }
         );
-        // CM close-out item 3 (bid-ask, FINAL — Excel axis floor). The prior
-        // design rendered the spread as a STACKED BAR (invisible last_ask base +
-        // visible spread) on the cap axis. In Excel a stacked BAR/column forces the
-        // value axis to include 0 (the base spans 0→last_ask), so c:min was ignored
-        // and the axis stayed 0–8% no matter what padSnapRange computed — the exact
-        // symptom in the shipped book. Line charts do NOT force a 0 baseline, so we
-        // revert to the master's R50 design: two cap LINES (Last-Ask + Achieved) on
-        // one line-only value axis that HONORS c:min (fits ~6–8%), with chart-level
-        // <c:upDownBars> drawing the gray floating high-low bar for the spread
-        // between them. The spread is bar GEOMETRY (the up/down bar gap), never a
-        // cap-axis data series. This is the user's option B.
+        // CM close-out item 3 (bid-ask, FINAL — Excel axis floor, user's option A).
+        // History of the strikes: the spread was rendered on the CAP AXIS as a
+        // stacked bar (invisible base + spread), then as line + <c:upDownBars>.
+        // BOTH keep a BAR element on the cap axis, and in Excel any bar/updown-bar
+        // element forces its value axis to include 0 — so c:min was silently
+        // ignored and the axis stayed 0–8% every time (confirmed: the rendered XML
+        // DID carry <c:min val="0.06"/>, Excel just overrode it). A value axis
+        // honors c:min ONLY when nothing bar-like is plotted on it (proven by the
+        // dom_and_pct_of_ask combo, whose pinned line axis works). So: the two cap
+        // LINES (Last-Ask + Achieved) go on the LEFT cap axis alone (swapAxes) —
+        // that axis is line-only → honors c:min → fits ~6–8%. The SPREAD becomes a
+        // gray bar on a SEPARATE right-hand bps axis (0-based, fine for a bar),
+        // scaled so the bars sit low and never invade the cap-line band.
+        const maxSpread = plottedRows.reduce((m, r) => {
+          const sp = Number(r.avg_bid_ask_spread);
+          return (Number.isFinite(sp) && sp > m) ? sp : m;
+        }, 0);
+        // right (bps) axis top = ~3× the largest spread (snapped to 0.5%), floored
+        // at 2% — keeps the spread bars in the lower portion of the plot.
+        const spreadAxisMax = Math.max(0.02, Math.ceil((maxSpread * 3) / 0.005) * 0.005);
         return {
           tabName,
           spec: {
-            type: 'multi-line',
+            type: 'combo',
             tabName,
             catCol: periodCol,
             dataStart, dataEnd,
-            yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },
-            valAxNumFmt: VAL_FMT_PERCENT_2DP,
-            // gray floating bar between Last-Ask (first) and Achieved (last) series
-            upDownBars: true,
-            series: [
+            barGrouping: 'clustered',
+            barGapWidth: 40,
+            swapAxes: true,                 // bars → right (bps) axis; lines → left (cap%) axis
+            yLeftRange: bidAskFit || { min: 0.055, max: 0.10 },   // cap % — LINE-ONLY axis → honors c:min
+            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
+            yRightRange: { min: 0, max: spreadAxisMax },          // bid-ask spread (bps), 0-based bar axis
+            yRightNumFmt: VAL_FMT_PERCENT_2DP,
+            yRightAxisTitle: 'Bid-Ask Spread',
+            barSeries: [
+              { titleCol: spreadCol, titleRow: headerRow, valCol: spreadCol, color: 'D8DFDF', borderColor: '9EA9B7' },
+            ],
+            lineSeries: [
               { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
                 showMarker: true, markerShape: 'dash', markerSize: 7 },
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
