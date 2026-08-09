@@ -4518,8 +4518,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         // cap axis fits ~6.0–8.1%; falls back to the literal only when < 2 points.
         const plotVals = [];
         for (const r of plottedRows) {
-          const la = Number(r.avg_last_ask_cap);
-          const sp = Number(r.avg_bid_ask_spread);
+          const la = r.avg_last_ask_cap == null ? NaN : Number(r.avg_last_ask_cap);
+          const sp = r.avg_bid_ask_spread == null ? NaN : Number(r.avg_bid_ask_spread);
           if (Number.isFinite(la)) {
             plotVals.push(la);
             if (Number.isFinite(sp)) plotVals.push(la + sp);  // achieved = top of bar
@@ -4567,7 +4567,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               width: 18,
               getValue: (row) => {
                 const la = row.avg_last_ask_cap, sp = row.avg_bid_ask_spread;
-                return (la != null && sp != null) ? Number(la) + Number(sp) : null;
+                if (la == null || sp == null) return null;
+                const lastAsk = Number(la);
+                const spread = Number(sp);
+                return Number.isFinite(lastAsk) && Number.isFinite(spread) ? lastAsk + spread : null;
               },
             },
           ],
