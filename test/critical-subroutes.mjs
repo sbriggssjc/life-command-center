@@ -12,3 +12,17 @@ export const CRITICAL_SUBROUTES = [
   'owner-reconcile-engine-tick',
   'institution-contact-tick',
 ];
+
+// Critical routes that must be probed by the deploy gate but dispatch OUTSIDE
+// api/operations.js — so they must NOT go in CRITICAL_SUBROUTES. The dispatch
+// guard (test/operations-subroutes.test.mjs) asserts every CRITICAL_SUBROUTES
+// entry has a matching `req.query._route === '<x>'` dispatch in operations.js;
+// a route that lives in another handler would fail that assertion. The deploy
+// gate (scripts/verify-deploy.mjs) probes BOTH lists identically (GET
+// /api/<name>, assert JSON-not-HTML), since staleness is a per-route property
+// regardless of which handler serves it.
+//   - intake-sf-cis → server.js mounts it onto intakeHandler with
+//     `_route = 'sf-cis'` (dispatched by api/intake.js case 'sf-cis').
+export const CRITICAL_ROUTES_NON_OPERATIONS = [
+  'intake-sf-cis',
+];
