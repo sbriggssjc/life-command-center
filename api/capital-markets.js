@@ -1016,7 +1016,36 @@ async function buildLivePacket({ vertical, periodEnd, quarter, user }) {
     err.detail = payload;
     throw err;
   }
-  const charts = payload?.charts || [];
+  let charts = payload?.charts || [];
+
+  // CM close-out items 4 & 7 — apply the SAME per-series display_from crop the
+  // standard export applies (exportWorkbook reads cm_view_registry and crops each
+  // chart's rows; fetchQuarterly did NOT, so the frozen packet carried the FULL
+  // ungated history: Data_NM_vs_Market from 2001-01-31 and Data_Rent_PSF_Box from
+  // 1983). The registry display_from is already curated correctly (NM_m=2012,
+  // rent_box_q=2003), so cropping here brings the packet's charts to parity with
+  // the standard export without duplicating the registry. Best-effort: a missing
+  // registry / fetch failure just means no crop (prior whole-history behavior).
+  const cropDomain = VERTICAL_TO_DOMAIN[normalizePacketVertical(vertical)];
+  if (cropDomain && Array.isArray(charts) && charts.length) {
+    try {
+      const reg = await domainQuery(
+        cropDomain, 'GET',
+        `cm_view_registry?select=chart_template_id,view_name,display_from&vertical=eq.${encodeURIComponent(normalizePacketVertical(vertical))}&display_from=not.is.null`
+      );
+      const displayFromRows = (reg && reg.ok !== false && Array.isArray(reg.data))
+        ? reg.data.filter((r) => r && r.chart_template_id && r.display_from)
+        : [];
+      if (displayFromRows.length) {
+        charts = charts.map((c) => {
+          const df = resolveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name);
+          if (!df || !Array.isArray(c.rows)) return c;
+          return { ...c, rows: cropRowsToDisplayFrom(c.rows, c, df) };
+        });
+      }
+    } catch { /* registry optional — no crop on failure */ }
+  }
+
   return {
     vertical,
     quarter,
@@ -2446,6 +2475,26 @@ async function exportWorkbook(req, res) {
     res.setHeader('X-CM-Build-Sha', provenance.gitSha);
   }
 
+  // CM close-out item 1 — the standard (canonical) export now carries approved
+  // commentary too, so the "+ Commentary" button uses this full-parity builder
+  // instead of the watermarked preview packet. `commentary=approved` (default for
+  // that button) pulls approved rows; `commentary=all` pulls every row. Absent =
+  // no commentary sheet (the "Charts + Data" button). Best-effort: a commentary
+  // fetch failure never blocks the workbook.
+  let commentary = [];
+  const commentaryMode = String(req.query.commentary || '').toLowerCase();
+  if (commentaryMode) {
+    const cdomain = packetDomainForVertical(vertical);
+    if (cdomain) {
+      commentary = await readCommentaryRows(
+        cdomain,
+        normalizePacketVertical(vertical),
+        req.query.quarter || quarterLabelFromPeriodEnd(resolvedAsOf),
+        commentaryMode === 'all' ? null : 'approved'
+      ).catch(() => []);
+    }
+  }
+
   const wb = buildCapitalMarketsWorkbook({
     vertical,
     subspecialty,
@@ -2455,6 +2504,7 @@ async function exportWorkbook(req, res) {
     masterRows,
     chartImages,
     provenance,
+    commentary,
   });
 
   let buffer = await wb.xlsx.writeBuffer();

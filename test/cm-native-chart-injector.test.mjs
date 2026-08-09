@@ -36,6 +36,7 @@ import {
   C15_EXT_ALLOWED_CHILDREN,
   validateChartExtWhitelist,
   padSnapRange,
+  assertPercentAxisMin,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -6243,6 +6244,34 @@ test('round3 item3: padSnapRange computes min+max with 8% pad', () => {
   assert.equal(stacked.min, 0, 'stacked 0–1 floored at 0');
   // < 2 points → null (caller keeps its literal — no regression).
   assert.equal(padSnapRange([0.07]), null);
+});
+
+// CM close-out item 3 — the SHARED zero-floor assertion both artifacts call.
+test('closeout item3: assertPercentAxisMin flags a zero-floor on a >1% data-min axis', () => {
+  // Legit cap axis: data well above 1%, real computed min → OK (true).
+  assert.equal(
+    assertPercentAxisMin({ label: 'ok', dataMin: 0.0478, axisMin: 0.043 }),
+    true,
+    'a real min on a >1% axis passes'
+  );
+  // The bug: data ~4.8% but axis pinned to 0 → violation (false).
+  assert.equal(
+    assertPercentAxisMin({ label: 'bug', dataMin: 0.0478, axisMin: 0 }),
+    false,
+    'a 0 min on a >1% axis is flagged'
+  );
+  // Auto/undefined axis min on a >1% axis is also a violation.
+  assert.equal(
+    assertPercentAxisMin({ label: 'auto', dataMin: 0.06, axisMin: undefined }),
+    false,
+    'an undefined/auto min on a >1% axis is flagged'
+  );
+  // Near-zero series (treasury line): min 0 is legitimately exempt → OK.
+  assert.equal(
+    assertPercentAxisMin({ label: 'nearzero', dataMin: 0.004, axisMin: 0 }),
+    true,
+    'a near-zero series keeps min 0 without a violation'
+  );
 });
 
 test('round3 item3: bid_ask cap axis is pad-snapped (min>0, covers achieved)', () => {
