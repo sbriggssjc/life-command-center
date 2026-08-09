@@ -5880,9 +5880,15 @@ test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => 
   assert.deepEqual(roles, ['last', 'max', 'min'], 'three role-tagged callouts');
   const xml = buildSingleLineChartXml(out.spec);
   assert.match(xml, /<c:showLeaderLines val="1"\/>/, 'leader lines enabled');
-  // CM chart fixes round 2, item 3b — offsets enlarged (~0.11) so Excel draws a
-  // leader line from the floated label back to the datapoint.
-  assert.match(xml, /<c:manualLayout><c:x val="0"\/><c:y val="-0\.11"\/>/, 'max label offset up');
+  // CM close-out (label placement) — every callout is pinned to the SAME top band
+  // via yMode="edge" (absolute), so Peak/Low/Latest all sit above the data with a
+  // leader line dropping to the marker (the "Low" label no longer lands in the
+  // data). The max callout uses the edge-mode top-band y.
+  assert.match(xml, /<c:manualLayout><c:yMode val="edge"\/><c:x val="0"\/><c:y val="0\.09"\/>/,
+    'max label pinned to the top band (edge mode)');
+  // Every emitted callout uses edge-mode vertical placement (uniform top band).
+  const yModeCount = (xml.match(/<c:yMode val="edge"\/>/g) || []).length;
+  assert.equal(yModeCount, 3, 'all three callouts (max/min/last) pinned to the top band');
 });
 
 // A3 (CM chart feedback item #3) — bid-ask shared cap axis is data-fit, not a
