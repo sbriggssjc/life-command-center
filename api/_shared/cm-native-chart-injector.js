@@ -868,20 +868,22 @@ function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '') {
   return out;
 }
 
-// A2 (CM chart feedback item #2) — role → manual-layout offset (fractions of
-// the plot area). Moving a label off its point is what makes Excel draw the
-// leader line back to the marker; the offsets keep max labels above, min
-// labels below, and the latest label to the upper-right of the line's end.
-// CM chart fixes round 2, item 3b — float the label OFF its datapoint far
-// enough that Excel draws a leader line back to the marker (a label sitting on
-// the point never gets a leader). Max/latest float ABOVE the point; min floats
-// BELOW (it usually sits near the axis top's opposite, and a below placement
-// keeps it off the plotted line). Offsets are fractions of the plot area —
-// large enough (~0.11) to clear the marker and trigger the leader.
+// CM close-out (label placement) — ALL callout labels (Peak / Low / Latest) sit
+// in the SAME blank band above the plotted data, never inside it. The prior
+// design floated each label by an offset RELATIVE to its own point (max up, min
+// DOWN), so the "Low" label landed deep in the data near the axis floor. Now each
+// label is pinned to an ABSOLUTE vertical position via yMode="edge" — a fraction
+// of the chart area measured from the top — so it always renders in the header
+// gap above the data, with a leader line dropping down to its marker. The
+// horizontal position stays at the point (xMode defaults to "factor", x offset 0)
+// with a tiny per-role nudge so coincident points don't overlap. DLBL_TOP_Y is
+// the single tunable knob: smaller = higher; keep it in the [0.06, 0.14] band
+// (below the chart title, above the plotted series).
+const DLBL_TOP_Y = 0.09;
 const DLBL_ROLE_OFFSET = {
-  max:  { x: 0.0,   y: -0.11 },   // above the peak
-  min:  { x: 0.0,   y:  0.11 },   // below the trough
-  last: { x: 0.055, y: -0.10 },   // upper-right of the line's end
+  max:  { x:  0.00, y: DLBL_TOP_Y, yMode: 'edge' },   // top band, above the peak point
+  min:  { x: -0.03, y: DLBL_TOP_Y, yMode: 'edge' },   // top band (NOT below the trough)
+  last: { x:  0.03, y: DLBL_TOP_Y, yMode: 'edge' },   // top band, nudged toward the line's end
 };
 
 // Callout brand text (item 3c): charcoal label word, emphasized (bold) value.
@@ -897,8 +899,14 @@ const DLBL_VALUE_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4
  */
 function dLblXml(idx, text, role, label) {
   const off = DLBL_ROLE_OFFSET[role];
+  // yMode="edge" pins the label to an ABSOLUTE vertical position (fraction of the
+  // chart area from the top) so every callout sits in the same top band above the
+  // data; x stays in the default "factor" mode (offset from the point) so the
+  // label stays over its marker. Per CT_ManualLayout the mode elements precede the
+  // x/y values. When no yMode is given we fall back to the legacy factor offset.
+  const yModeFrag = off && off.yMode ? `<c:yMode val="${off.yMode}"/>` : '';
   const layoutFrag = off
-    ? `<c:layout><c:manualLayout><c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
+    ? `<c:layout><c:manualLayout>${yModeFrag}<c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
     : '';
   // CM chart fixes round 3, item 2 (DEFINITIVE) — Excel writes a per-dLbl
   // CE6537A1 extension on every custom label, and it carries ONLY
