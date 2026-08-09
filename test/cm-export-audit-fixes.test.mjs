@@ -253,3 +253,21 @@ test('Cover sheet carries the build-provenance stamp (item 5)', () => {
   const b7 = cover.getCell('B7').value;
   assert.ok(/abc123def456/.test(b7) && /2026-08-07T12:00:00/.test(b7) && /test-builder/.test(b7), `B7 stamp: ${b7}`);
 });
+
+// CM packet-export parity interim guard (2026-08-09) — the packet build must
+// carry a loud PREVIEW watermark on the Cover so it can't be mistaken for the
+// marketing deliverable until it reaches full standard coverage; the standard
+// export (no flag) must NOT carry it.
+test('previewWatermark renders a Cover banner only when requested', () => {
+  const base = {
+    vertical: 'gov', subspecialty: 'all', asOf: '2026-06-30',
+    charts: [], brand: null, masterRows: null, chartImages: [], provenance: {}, commentary: [],
+  };
+  const withWm = buildCapitalMarketsWorkbook({ ...base, previewWatermark: true });
+  const b1 = withWm.getWorksheet('Cover').getCell('B1');
+  assert.match(String(b1.value), /PREVIEW — NOT FOR MARKETING/);
+  assert.equal(b1.fill?.fgColor?.argb, 'FFC00000');
+
+  const noWm = buildCapitalMarketsWorkbook({ ...base });
+  assert.equal(noWm.getWorksheet('Cover').getCell('B1').value, null);
+});

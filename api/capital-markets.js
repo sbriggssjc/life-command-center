@@ -1557,6 +1557,11 @@ async function exportWorkbook(req, res) {
       chartImages,
       provenance,
       commentary,
+      // INTERIM GUARD: the packet export is not yet at parity with the standard
+      // export (missing MasterPasteReady + 11 registered feeds), so it MUST NOT
+      // be mistaken for the marketing deliverable. Watermark the Cover as a
+      // preview until parity lands and the standard exporter is packet-backed.
+      previewWatermark: true,
     });
     let buffer = await wb.xlsx.writeBuffer();
     const injections = wb.nativeInjections || [];
