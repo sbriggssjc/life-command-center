@@ -59,6 +59,18 @@ with chart-level upDownBars drawing the gray floating high-low bar for the
 spread between them. Verified: the built XML is a lineChart (no barChart)
 carrying c:min val="0.06" plus upDownBars.
 
+**Correction (option A — the working fix).** The line + upDownBars build still
+shipped a 0–8% axis: the rendered XML *did* carry `c:min="0.06"`, but Excel
+overrode it because `<c:upDownBars>` are bar elements, and ANY bar/updown-bar on
+a value axis makes Excel force that axis to include 0. A value axis honors c:min
+only when nothing bar-like is plotted on it (proven by the dom_and_pct_of_ask
+combo, whose pinned line axis works). Final design: the two cap LINES (Last-Ask +
+Achieved) are on the LEFT cap axis alone (`swapAxes`) — line-only → honors c:min
+→ fits ~6–8% — and the SPREAD is a gray bar on a SEPARATE right-hand bps axis
+(0-based). Verified end-to-end: left valAx (axId 2, axPos "l") carries
+`<c:min val="0.063"/>` and holds only the lineChart; the barChart is on the right
+axis (axId 3). Both the standard XLSX (native) and the packet PNG now fit ~6–8%.
+
 ### Items 4 & 7 — packet now applies the display_from crop
 `buildLivePacket` (the packet path `fetchQuarterly` feeds) never applied the
 per-series `display_from` crop that the standard export applies, so the frozen
