@@ -55,41 +55,39 @@ function escapeXml(s) {
 }
 
 // ----------------------------------------------------------------------------
-// c15 leader-line extension — CONFIG-GATED, default OFF (round-3 item 2 regression)
+// c15 (Chart-2012) data-label extension — DEFINITIVE structure (round-3 item 2)
 // ----------------------------------------------------------------------------
-// The per-dLbl c15 (Chart-2012) leader-line extension shipped in round 3 item 2
-// CORRUPTS the workbook — Excel rejects it at schema level and prompts to repair
-// / declares the file corrupt. Diagnosed causes: a <c15:layout> child inside the
-// per-dLbl <c:ext> (invalid — the plain <c:layout> already carries the offset),
-// and showLeaderLines/leaderLines emitted per-dLbl rather than at the <c:dLbls>
-// level. Until Scott's Excel-authored labelsample.xlsx supplies the exact valid
-// target XML, the c15 emission is gated behind this flag and DEFAULTS OFF, so
-// exports open clean (labels keep their valid <c:layout> float; leaders are
-// temporarily absent). Do NOT re-attempt the c15 structure until that sample
-// arrives and the emitted children are added to C15_EXT_ALLOWED_CHILDREN.
+// The round-3 item-2 c15 leader-line extension CORRUPTED the workbook: Excel
+// schema-rejected it and prompted to repair. Root cause (empirically confirmed by
+// diffing Scott's Excel-authored labelsample.xlsx after an open→drag→save round-
+// trip) was THREE invalid children emitted inside the per-dLbl <c:ext>:
+// <c15:layout>, a per-dLbl <c15:showLeaderLines>, and a <c15:leaderLines> stroke
+// block. The rest of the emission was valid — Excel preserved our per-dLbl
+// c:layout offsets and rich text unchanged.
 //
-// Enable (only once a vetted structure exists) via env CM_EMIT_C15_LEADER_LINES
-// = '1' / 'true'. Read at call time so config/tests can toggle without reimport.
-function c15LeaderLinesEnabled() {
-  const v = String(process.env.CM_EMIT_C15_LEADER_LINES ?? '').trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
-}
+// The fix mirrors exactly what Excel writes:
+//   • PER-dLbl <c:ext>  → contains ONLY <c15:showDataLabelsRange val="0"/>.
+//   • dLbls-LEVEL <c:ext> (the real leader switch) → contains ONLY
+//     <c15:showLeaderLines val="1"/>, appended as the LAST child of <c:dLbls>.
+//   • NO <c15:layout>, NO per-dLbl showLeaderLines, NO <c15:leaderLines> stroke
+//     anywhere — default leader styling renders correctly (proven in the sample).
+// This is no longer config-gated; the structure is valid, so it always emits.
 
-// Vetted whitelist of c15-namespaced child element local-names permitted inside
-// a chart-part <c:ext> block. INTENTIONALLY EMPTY until the Excel-authored
-// labelsample.xlsx confirms the exact valid structure — every c15 child emitted
-// today (layout, showLeaderLines, leaderLines) is under suspicion, so the
-// validation gate (validateChartExtWhitelist) rejects ALL of them and a
-// schema-invalid chart can never ship. Add local-names here ONLY after the
-// authored sample proves them valid.
-const C15_EXT_ALLOWED_CHILDREN = new Set([]);
+// Vetted whitelist of c15-namespaced child local-names permitted inside a
+// chart-part <c:ext> block, confirmed valid by the Excel-authored labelsample.xlsx.
+// The per-dLbl ext carries only showDataLabelsRange; the dLbls-level ext only
+// showLeaderLines. The three corrupt children (layout / leaderLines / a per-dLbl
+// showLeaderLines mixed with showDataLabelsRange) are rejected by the gate below.
+const C15_EXT_ALLOWED_CHILDREN = new Set(['showDataLabelsRange', 'showLeaderLines']);
 
 // Regression gate (round-3 item 2): re-scan a generated chart XML part and
-// reject any c15-namespaced child element inside a <c:ext> block that is not in
-// the vetted whitelist. This is the "unknown c15 children against a vetted
-// whitelist" backstop — a schema-invalid chart extension can never ship again,
-// even if a future edit re-introduces the corrupt structure or forgets the flag.
-// Returns an array of { element, reason } violations (empty = clean).
+// reject any c15-namespaced <c:ext> that (a) carries a child outside the vetted
+// whitelist, or (b) MIXES the per-dLbl child (showDataLabelsRange) with the
+// dLbls-level child (showLeaderLines) in one ext — a placement error, since each
+// CE6537A1 ext is single-purpose and lives at a distinct level. This backstops
+// the corruption cause: a schema-invalid chart extension can never ship again,
+// even if a future edit re-introduces <c15:layout>/<c15:leaderLines> or moves a
+// child to the wrong level. Returns an array of { element, reason } (empty=clean).
 function validateChartExtWhitelist(xml, template = '') {
   const out = [];
   if (typeof xml !== 'string' || !xml) return out;
@@ -105,9 +103,7 @@ function validateChartExtWhitelist(xml, template = '') {
         && !/\bc15:/.test(body)) {
       continue;
     }
-    // Collect DIRECT-child c15 element local-names (top-level only — nested
-    // descendants like c15:x live under an allowed parent). We approximate
-    // "child" by matching opening c15: tags and keeping the shallowest ones.
+    // Collect c15 element local-names appearing in this ext.
     const seen = new Set();
     for (const t of body.matchAll(/<c15:([A-Za-z][\w-]*)\b/g)) {
       seen.add(t[1]);
@@ -120,6 +116,15 @@ function validateChartExtWhitelist(xml, template = '') {
           reason: `c15 child <c15:${local}> is not in the vetted whitelist (C15_EXT_ALLOWED_CHILDREN)`,
         });
       }
+    }
+    // Placement rule — a per-dLbl ext (showDataLabelsRange) and a dLbls-level
+    // ext (showLeaderLines) must never be combined in one <c:ext>.
+    if (seen.has('showDataLabelsRange') && seen.has('showLeaderLines')) {
+      out.push({
+        template,
+        element: 'c15:showDataLabelsRange+showLeaderLines',
+        reason: 'a single CE6537A1 c:ext must not mix the per-dLbl child (showDataLabelsRange) with the dLbls-level child (showLeaderLines) — they belong at different levels',
+      });
     }
   }
   return out;
@@ -843,37 +848,21 @@ function dLblXml(idx, text, role, label) {
   const layoutFrag = off
     ? `<c:layout><c:manualLayout><c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
     : '';
-  // CM chart fixes round 3, item 2 — the plain c:layout offset + chart-level
-  // c:showLeaderLines only render a leader on PIE charts. On line/bar charts
-  // Excel draws the leader from a MOVED label only when the dLbl also carries
-  // the c15 (Chart-2012) extension: a c15:manualLayout MIRRORING the c:layout
-  // offset plus c15:showLeaderLines (and a c15:leaderLines spPr for the stroke).
-  // This structure matches what desktop Excel writes when you drag a label off
-  // its point and enable leader lines. Emitted only for moved labels (off set)
-  // AND only when the c15 leader-line flag is explicitly enabled — DEFAULT OFF
-  // because the current structure corrupts the workbook (see c15LeaderLinesEnabled
-  // header). With the flag off, labels keep their valid <c:layout> float and the
-  // export opens clean; leaders are temporarily absent until a vetted structure
-  // arrives.
-  const c15Frag = (off && c15LeaderLinesEnabled())
-    ? `
+  // CM chart fixes round 3, item 2 (DEFINITIVE) — Excel writes a per-dLbl
+  // CE6537A1 extension on every custom label, and it carries ONLY
+  // <c15:showDataLabelsRange val="0"/> (this label's text is literal, not sourced
+  // from a cell range). The corrupt round-3 children (<c15:layout>, a per-dLbl
+  // <c15:showLeaderLines>, and the <c15:leaderLines> stroke block) are GONE —
+  // they were the schema violations that made Excel repair the workbook. The
+  // actual leader-line switch lives at the dLbls level (see dLblsXml). extLst is
+  // the LAST child of <c:dLbl> per the CT_DLbl schema order. Always emitted (the
+  // structure is now valid); the plain <c:layout> above still carries the float.
+  const c15Frag = `
             <c:extLst>
               <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
-                <c15:layout>
-                  <c15:manualLayout>
-                    <c15:x val="${off.x}"/>
-                    <c15:y val="${off.y}"/>
-                  </c15:manualLayout>
-                </c15:layout>
-                <c15:showLeaderLines val="1"/>
-                <c15:leaderLines>
-                  <c:spPr>
-                    <a:ln w="9525" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill><a:round/></a:ln>
-                  </c:spPr>
-                </c15:leaderLines>
+                <c15:showDataLabelsRange val="0"/>
               </c:ext>
-            </c:extLst>`
-    : '';
+            </c:extLst>`;
   const font = (t) => `<a:latin typeface="${t}"/><a:ea typeface="${t}"/><a:cs typeface="${t}"/>`;
   const labelRun = label
     ? `<a:r><a:rPr lang="en-US" b="0" sz="800"><a:solidFill><a:srgbClr val="${DLBL_LABEL_COLOR}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(label)} </a:t></a:r>`
@@ -1001,8 +990,27 @@ function dLblsXml(spec) {
   // their point.
   if (Array.isArray(spec) && spec.length > 0) {
     const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label)).join('\n');
+    // Item 3 (recommended, from Excel's own output) — give the floated callouts a
+    // brand callout-box look so they stay legible where they sit over the plotted
+    // lines: paper (FFFFFF) fill + a Blue-12 (E0E8F4) hairline. Per CT_DLbls order
+    // spPr precedes the show* group. Sits at the dLbls level so it styles all the
+    // per-point callouts uniformly.
+    const spPrFrag = `          <c:spPr>
+            <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+            <a:ln w="9525"><a:solidFill><a:srgbClr val="E0E8F4"/></a:solidFill></a:ln>
+          </c:spPr>`;
+    // The DEFINITIVE leader-line switch — a dLbls-level CE6537A1 ext carrying ONLY
+    // <c15:showLeaderLines val="1"/>, appended as the LAST child of <c:dLbls>
+    // (after the show* group + the plain c:showLeaderLines). This is exactly what
+    // Excel writes; no <c15:leaderLines> stroke block (default styling renders).
+    const c15LevelExt = `          <c:extLst>
+            <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+              <c15:showLeaderLines val="1"/>
+            </c:ext>
+          </c:extLst>`;
     return `        <c:dLbls>
 ${lbls}
+${spPrFrag}
           <c:showLegendKey val="0"/>
           <c:showVal val="0"/>
           <c:showCatName val="0"/>
@@ -1010,6 +1018,7 @@ ${lbls}
           <c:showPercent val="0"/>
           <c:showBubbleSize val="0"/>
           <c:showLeaderLines val="1"/>
+${c15LevelExt}
         </c:dLbls>`;
   }
   // Mode 2 — R60 chart-level showVal for "label every point" mode
@@ -2688,8 +2697,9 @@ export async function injectNativeCharts(buffer, injections) {
       throw new Error(
         `[cm-native-chart-injector] CHART EXT WHITELIST FAILED (${spec.tabName}): ` +
         extViolations.map(v => `${v.element}: ${v.reason}`).join('; ') +
-        ' — this schema-invalid extension corrupts the workbook; keep CM_EMIT_C15_LEADER_LINES off ' +
-        'and do not add children to C15_EXT_ALLOWED_CHILDREN until an Excel-authored sample proves them valid.'
+        ' — this schema-invalid extension corrupts the workbook; the only vetted c15 children are ' +
+        '<c15:showDataLabelsRange> (per-dLbl) and <c15:showLeaderLines> (dLbls-level). Do not add ' +
+        'others (e.g. c15:layout / c15:leaderLines) to C15_EXT_ALLOWED_CHILDREN without a new empirical Excel test.'
       );
     }
     return xml;
@@ -2832,8 +2842,7 @@ export {
   assertCalloutCoverage,
   lintChartSeriesXml,
   specToChartXml,
-  // Round-3 item 2 — c15 leader-line gate + ext whitelist regression guard
-  c15LeaderLinesEnabled,
+  // Round-3 item 2 — c15 ext whitelist regression guard
   C15_EXT_ALLOWED_CHILDREN,
   validateChartExtWhitelist,
   dLblXml,
