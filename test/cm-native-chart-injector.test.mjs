@@ -33,6 +33,7 @@ import {
   assertCalloutCoverage,
   lintChartSeriesXml,
   specToChartXml,
+  padSnapRange,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -6152,4 +6153,42 @@ test('round3 item1: theme minor+major font rewritten to Open Sans', async () => 
   const minor = theme.match(/<a:minorFont>\s*<a:latin[^>]*typeface="([^"]*)"/);
   assert.ok(major && major[1] === 'Open Sans', `majorFont Open Sans (got ${major && major[1]})`);
   assert.ok(minor && minor[1] === 'Open Sans', `minorFont Open Sans (got ${minor && minor[1]})`);
+});
+
+// Item 3 — padSnapRange computes a real axis MIN (never 0 when data sits well
+// above ~1%) and a max that covers the top, exempting near-zero / stacked 0–1.
+test('round3 item3: padSnapRange computes min+max with 8% pad', () => {
+  // Bid-ask live band 0.0478–0.0971 → ≈ min 0.043 / max ~0.101.
+  const r = padSnapRange([0.0478, 0.062, 0.071, 0.0971], { minAbsFloor: 0.01 });
+  assert.ok(r.min >= 0.042 && r.min <= 0.044, `min hugs data (got ${r.min})`);
+  assert.ok(r.max >= 0.100 && r.max <= 0.102, `max covers achieved top (got ${r.max})`);
+  assert.ok(r.min > 0, 'min is NOT a 0 dead-zone');
+  // Near-zero series (treasury line ~0.2%–0.9%) is exempt: keeps min 0.
+  const nearZero = padSnapRange([0.002, 0.005, 0.009], { minAbsFloor: 0.01 });
+  assert.equal(nearZero.min, 0, 'near-zero series floored at 0');
+  // 100%-stacked (0–1) exempt via stacked01.
+  const stacked = padSnapRange([0.2, 0.5, 0.9], { stacked01: true });
+  assert.equal(stacked.min, 0, 'stacked 0–1 floored at 0');
+  // < 2 points → null (caller keeps its literal — no regression).
+  assert.equal(padSnapRange([0.07]), null);
+});
+
+test('round3 item3: bid_ask cap axis is pad-snapped (min>0, covers achieved)', () => {
+  const rows = Array.from({ length: 24 }, (_, i) => ({
+    period_end: `2024-${String((i % 12) + 1).padStart(2, '0')}-28`,
+    avg_last_ask_cap: 0.048 + (i % 10) * 0.005,   // 0.048–0.093
+    avg_bid_ask_spread: 0.004,                     // achieved up to ~0.097
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'avg_last_ask_cap', col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
+    cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
+  });
+  const r = out.spec.yLeftRange;
+  assert.ok(r.min > 0.03, `bid-ask axis min is not a 0 dead-zone (got ${r.min})`);
+  assert.ok(r.max >= 0.097, `bid-ask axis max covers the achieved top (got ${r.max})`);
 });

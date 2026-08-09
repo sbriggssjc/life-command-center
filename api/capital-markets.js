@@ -1805,16 +1805,20 @@ async function exportWorkbook(req, res) {
   });
   const realCharts = await Promise.all(chartFetches);
 
-  // CM chart fixes round 2, item 1 — dialysis rent-box REPORT chart reads the
-  // LABELED MODELED variant (cm_dialysis_rent_box_q_with_modeled) as an ADDITIVE
-  // companion sheet + native chart. The actuals-only Data_Rent_PSF_Box sheet is
-  // left byte-for-byte unchanged for reference. The modeled series deepens the
-  // recent-quarter sample so the box plots every n>=6 quarter since 2023 (14
-  // quarters 2023–2026), each labeled "(incl. modeled rents)".
+  // CM chart fixes round 3, item 7 — the dialysis rent-box is now ONE chart
+  // spanning the modeled series' FULL history. Marketing had two "Rent/SF —
+  // Quarterly Box" charts (the legacy actuals-only + the 2023-cropped modeled
+  // companion); this replaces both with a single chart reading
+  // cm_dialysis_rent_box_q_with_modeled across its full history (every n>=6
+  // quarter — the view begins 2010-03-31 and runs to the latest quarter),
+  // titled "Rent/SF — Quarterly Box (incl. modeled rents)", basis_scope visible
+  // on the sheet. The legacy rent_psf_box_quarterly CHART is removed from the
+  // report set (see CHART_SUPPRESSED in cm-excel-export.js) while its
+  // actuals-only Data_Rent_PSF_Box sheet remains for reference.
   if (vertical === 'dialysis') {
     const base = realCharts.find((c) => c.chart_template_id === 'rent_psf_box_quarterly');
     const MODELED_VIEW = 'cm_dialysis_rent_box_q_with_modeled';
-    const MODELED_MIN_PERIOD = '2023-01-01';   // display window start (14 quarters)
+    const MODELED_MIN_PERIOD = '2003-01-01';   // FULL history (view floor is 2010-03-31)
     const MODELED_MIN_N = 6;                    // acceptance: plot only n>=6 quarters
     const shape = base || { data_shape: 'time_series_quarterly_ohlc', chart_type: 'StockChart' };
     try {

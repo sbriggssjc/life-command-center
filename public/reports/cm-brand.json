@@ -37,9 +37,9 @@
     "black":      "000000"
   },
 
-  "series": ["003DA5", "62B5E5", "265AB2", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
-  "series_ramp": ["003DA5", "62B5E5", "265AB2", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
-  "_series_note": "Guide series order: NM Blue, Sky, Blue 85, then tertiaries IN PALETTE ORDER (Aquamarine, Peridot, Amethyst, Tourmaline, Topaz, Morganite). Primary blues dominate; tertiary hues are series 4+ and should occupy <10% of any chart. Use slot N for series N.",
+  "series": ["003DA5", "62B5E5", "265AB2", "9EA9B7", "6A748C", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
+  "series_ramp": ["003DA5", "62B5E5", "265AB2", "9EA9B7", "6A748C", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
+  "_series_note": "Report CHART series order (marketing-review decision, 8/2026 — supersedes the prior tertiary-order seeding): NM Blue (003DA5), Sky (62B5E5), Blue 85 (265AB2), Steel (9EA9B7), Slate (6A748C), THEN the tertiary ramp (Aquamarine, Peridot, Amethyst, Tourmaline, Topaz, Morganite) for the 6th+ series only. Report charts stay in the blue/neutral family; tertiary hues (peridot/amethyst/etc.) remain sanctioned for INFOGRAPHIC / tile use per the 2024 guide but are NOT the primary series colors on report charts. This decision is recorded here so it is not re-litigated from the guide text (which lists tertiaries at slot 4). Primary blues dominate; use slot N for series N.",
 
   "text": {
     "title":     "003DA5",

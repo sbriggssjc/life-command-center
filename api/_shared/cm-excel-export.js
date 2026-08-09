@@ -617,8 +617,13 @@ const CHART_COLUMNS = {
   nm_vs_market_cap: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    { key: 'nm_cap_rate',      header: 'Northmarq Cap Rate',  format: 'percent_basis_points', width: 19 },
-    { key: 'market_cap_rate',  header: 'Market Cap Rate',     format: 'percent_basis_points', width: 18 },
+    // CM chart fixes round 3, item 6 — the CHARTED series are now trailing-24-mo
+    // simple averages (see cm_{v}_nm_vs_market_m). The 12-month TTM columns are
+    // kept on the sheet as REFERENCE (uncharted) per Scott's decision.
+    { key: 'nm_cap_rate',      header: 'Northmarq Cap Rate (24-mo avg)', format: 'percent_basis_points', width: 24 },
+    { key: 'market_cap_rate',  header: 'Market Cap Rate (24-mo avg)',    format: 'percent_basis_points', width: 24 },
+    { key: 'nm_cap_ttm12',     header: 'Northmarq Cap (12-mo TTM, ref)', format: 'percent_basis_points', width: 26 },
+    { key: 'market_cap_ttm12', header: 'Market Cap (12-mo TTM, ref)',    format: 'percent_basis_points', width: 26 },
   ],
   cap_rate_by_lease_term: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -1193,8 +1198,14 @@ const GOV_MASTER_PASTE_LAYOUT = [
 // concept; dialysis says just "Lease Term"). Apply override at chart-loop
 // time so it flows into tab title + index row + chart <c:title> + page
 // header consistently.
+// CM chart fixes round 3, item 6 — the NM vs Market cap chart now plots
+// trailing-24-month simple averages (not TTM); the title says so on both
+// verticals. Applied via NAME_OVERRIDES so it flows to the tab title, index
+// row, chart <c:title>, and page header consistently.
+const NM_24MO_TITLE = 'NM vs Market — Avg Cap Rate (trailing 24-month averages)';
 const NAME_OVERRIDES_BY_VERTICAL = {
   dialysis: {
+    nm_vs_market_cap: NM_24MO_TITLE,
     // User notes 2026-05-22: "Firm term label in the dialysis chart title,
     // should just be lease term — firm term is for government only"
     available_cap_rate_dot_plot: 'Available Deals — Asking Cap vs Lease Term',
@@ -1205,8 +1216,32 @@ const NAME_OVERRIDES_BY_VERTICAL = {
     inventory_backlog: 'Market Turnover — Added vs Sold (Monthly) + Net to Market',
   },
   gov: {
+    nm_vs_market_cap: NM_24MO_TITLE,
     inventory_backlog: 'Market Turnover — Added vs Sold (Monthly) + Net to Market',
   },
+};
+
+// CM chart fixes round 3, item 6 — a visible methodology note on the sheet so
+// the trailing-24-month basis is documented in the deliverable itself (not just
+// in the view comment). Written into the subtitle line of the data sheet.
+// CM chart fixes round 3, item 7 — templates whose DATA sheet is written but
+// whose CHART is removed from the report set. dialysis rent_psf_box_quarterly:
+// the single rent-box chart is now the full-history modeled companion
+// (rent_psf_box_quarterly_modeled); the legacy actuals-only sheet stays for
+// reference but is no longer charted (native or PNG).
+const CHART_SUPPRESSED_BY_VERTICAL = {
+  dialysis: new Set(['rent_psf_box_quarterly']),
+};
+function isChartSuppressed(vertical, templateId) {
+  const set = CHART_SUPPRESSED_BY_VERTICAL[vertical];
+  return !!(set && set.has(templateId));
+}
+
+const METHODOLOGY_NOTE_BY_TEMPLATE = {
+  nm_vs_market_cap:
+    'Methodology: both plotted series are TRAILING-24-MONTH simple averages of qualifying cap rates ' +
+    '(0.04–0.12 band; Market = non-Northmarq brokered deals). The 12-month TTM columns ' +
+    '(nm_cap_ttm12 / market_cap_ttm12) are shown for reference only and are not charted.',
 };
 
 export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance, commentary }) {
@@ -1626,7 +1661,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     sheet.getCell(`A${titleRow}`).font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
     sheet.getRow(titleRow).height = 22;
 
-    sheet.getCell(`A${subRow}`).value = `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
+    const methodologyNote = METHODOLOGY_NOTE_BY_TEMPLATE[chart.chart_template_id];
+    sheet.getCell(`A${subRow}`).value = methodologyNote
+      ? `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}  —  ${methodologyNote}`
+      : `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
     sheet.getCell(`A${subRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
 
     // Historical as-of provenance stamp (2026-08-07). A reconstructed snapshot
@@ -1827,7 +1865,8 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // injectNativeCharts() to swap the PNG for a real Excel chart object
     // anchored at the same location.
     let totalColsForAutoFilter = cols.length;
-    if (NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)) {
+    if (NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)
+        && !isChartSuppressed(vertical, chart.chart_template_id)) {
       const colsWithLetter = cols.map((c, i) => ({
         ...c,
         col: String.fromCharCode(65 + i),  // 0→'A', 1→'B', ...

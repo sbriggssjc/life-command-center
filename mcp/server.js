@@ -480,6 +480,19 @@ const TOOL_DEFINITIONS = {
       }
     }
   },
+  get_capmarkets_packet: {
+    name: 'get_capmarkets_packet',
+    description: 'Freeze-or-fetch the Capital Markets report packet for a vertical and quarter. Returns the same frozen packet used by the LCC app tab and Excel export.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        vertical: { type: 'string', enum: ['dialysis', 'dia', 'gov', 'government'], description: 'Report vertical.' },
+        quarter: { type: 'string', description: 'Fiscal quarter label, e.g. Q2-2026.' },
+        as_of: { type: 'string', description: 'Optional quarter-end date YYYY-MM-DD.' }
+      },
+      required: ['vertical']
+    }
+  },
   get_property_rent_timeline: {
     name: 'get_property_rent_timeline',
     description: "Rent Intelligence Engine: the versioned, provenance-tracked rent-by-year timeline for a dialysis property. Returns per-year rent_annual, rent_psf, lease_phase, basis (contract|stated|projected|convention), confidence, and a compact provenance summary. Prefer this over ad-hoc rent_at_sale lookups for rent anchoring in cap-rate / BOV work. Current (unsuperseded) version by default; pass include_superseded for the full version history (audit).",
@@ -711,6 +724,43 @@ function compactCompsWorkbookResult(data) {
 // ── Tool handlers ─────────────────────────────────────────────────────────
 // These are the exact same async functions from the former s.tool() calls.
 export const TOOL_HANDLERS = {
+  get_capmarkets_packet: async (args = {}) => {
+    return withTiming("get_capmarkets_packet", async () => {
+      if (!LCC_API_BASE) {
+        return textResult({ error: "LCC_API_BASE is not configured on the MCP service." });
+      }
+      const params = new URLSearchParams();
+      params.set("action", "packet");
+      params.set("vertical", args.vertical || "dialysis");
+      if (args.quarter) params.set("quarter", args.quarter);
+      if (args.as_of) params.set("as_of", args.as_of);
+      const resp = await fetch(`${LCC_API_BASE.replace(/\/+$/, "")}/api/capital-markets?${params.toString()}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          ...(LCC_API_KEY ? { "X-LCC-Key": LCC_API_KEY } : {}),
+          "x-lcc-workspace": PRIMARY_WORKSPACE_ID,
+        },
+        signal: AbortSignal.timeout(120000),
+      });
+      const text = await resp.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 1000) }; }
+      if (!resp.ok) return textResult({ error: `LCC packet API returned HTTP ${resp.status}`, detail: data });
+      const packet = data.packet || {};
+      return textResult({
+        ok: true,
+        snapshot_id: data.snapshot_id || null,
+        frozen_at: data.frozen_at || null,
+        vertical: data.vertical,
+        quarter: data.quarter,
+        period_end: data.period_end,
+        flags: packet.flags || [],
+        chart_count: Array.isArray(packet.charts) ? packet.charts.length : 0,
+        packet,
+      });
+    });
+  },
   generate_comps: async (args) => {
     return withTiming("generate_comps", async () => {
       const payload = args || {};

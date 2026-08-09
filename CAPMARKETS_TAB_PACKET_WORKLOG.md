@@ -24,3 +24,7 @@ Build the LCC Capital Markets tab so app charts, Excel export data, and report c
 
 ## Progress
 - 2026-08-09: Started implementation from existing CM export stack.
+- 2026-08-09: Verified packet/tab code is present in `HEAD` for `api/capital-markets.js`, `capital-markets.js`, `app.js`, and packet/commentary migrations.
+- 2026-08-09: Added MCP `get_capmarkets_packet` wrapper in `mcp/server.js`.
+- 2026-08-09: Resolved existing conflict markers in `api/_shared/cm-excel-export.js` while preserving the methodology-note constants and the `commentary` workbook parameter.
+- 2026-08-09: Verification passed: `node --check api/capital-markets.js`, `node --check api/_shared/cm-excel-export.js`, `node --check capital-markets.js`, `node --check app.js`, `node --check mcp/server.js`, and targeted CM tests.
