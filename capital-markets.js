@@ -193,21 +193,28 @@
     return charts;
   }
 
-  async function loadPacketImages(vertical, charts) {
+  async function loadPacketImage(vertical, chartTemplateId) {
     const asOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
-    const ids = (charts || []).map(c => c.chart_template_id).filter(Boolean);
-    if (!ids.length) {
-      cmState.currentImages = new Map();
-      return cmState.currentImages;
-    }
+    if (!chartTemplateId) return null;
     const r = await fetchJSON(
-      `/api/capital-markets?action=packet_images&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}&chart_template_ids=${encodeURIComponent(ids.join(','))}`
+      `/api/capital-markets?action=packet_images&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}&chart_template_ids=${encodeURIComponent(chartTemplateId)}`
     );
-    cmState.currentImages = new Map((r.images || []).map(img => [
-      img.chart_template_id,
-      `data:${img.mime || 'image/png'};base64,${img.png_b64}`,
-    ]));
-    return cmState.currentImages;
+    const img = (r.images || []).find(x => x.chart_template_id === chartTemplateId);
+    if (!img?.png_b64) return null;
+    const src = `data:${img.mime || 'image/png'};base64,${img.png_b64}`;
+    cmState.currentImages.set(chartTemplateId, src);
+    return src;
+  }
+
+  async function mapLimit(items, limit, worker) {
+    const queue = Array.from(items || []);
+    const workers = Array.from({ length: Math.max(1, Math.min(limit, queue.length || 1)) }, async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        await worker(item);
+      }
+    });
+    await Promise.all(workers);
   }
 
   // ---- Chart builders --------------------------------------------------------
@@ -1600,13 +1607,13 @@
       // DataTable + kpi_block charts get an HTML container (no canvas); span 2 columns
       const isDataTable = meta.chart_type === 'DataTable';
       const isKpiBlock  = meta.chart_type === 'kpi_block';
-      const cardSpan = (isDataTable || isKpiBlock) ? 'grid-column: span 2;' : '';
+      const cardSpan = 'grid-column: 1 / -1;';
       const bodyContainer = isKpiBlock
         ? `<div class="cm-kpi-container" data-template="${id}"></div>`
         : isDataTable
           ? `<div class="cm-table-container" data-template="${id}" style="max-height:340px;overflow:auto;border:1px solid #E7E6E6;border-radius:4px"></div>`
-          : `<div class="cm-server-image-wrap" data-template="${id}" style="position:relative;min-height:300px;display:flex;align-items:center;justify-content:center;background:#fff">
-               <img class="cm-server-image" data-template="${id}" alt="${meta.name || id}" style="max-width:100%;width:100%;height:auto;display:none" />
+          : `<div class="cm-server-image-wrap" data-template="${id}" style="position:relative;min-height:480px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:auto">
+               <img class="cm-server-image" data-template="${id}" alt="${meta.name || id}" style="width:900px;max-width:100%;height:auto;display:none" />
                <div class="cm-server-image-loading" data-template="${id}" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')}">Loading export chart...</div>
              </div>`;
       return `
@@ -1694,7 +1701,7 @@
         </div>
         <div id="cm-status" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-bottom:8px"></div>
         ${vertical === 'national_st' ? renderRcaUploadCard() : ''}
-        <div class="cm-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${cards}</div>
+        <div class="cm-grid" style="display:grid;grid-template-columns:minmax(0, 1fr);gap:16px;max-width:960px">${cards}</div>
         <div style="margin-top:16px;padding:10px;background:${brandColor('nm_pale','#E0E8F4')};border-radius:4px;font-size:9pt;color:${brandColor('nm_text','#191919')}">
           ${vertical === 'national_st'
             ? '<strong>Source:</strong> public.cm_rca_quarterly. Includes property or portfolio sales $2.5 million or greater (RCA TrendTracker convention). Cross-product cap rate is volume-weighted; quartile metrics are simple averages across products that report them.'
@@ -2051,9 +2058,10 @@
     try {
       const charts = await loadQuarterly(vertical, subspecialty);
       const chartIds = new Set((charts || []).map(c => c.chart_template_id));
-      await loadPacketImages(vertical, charts).catch(e => console.warn('cm packet image load failed', e));
+      cmState.currentImages = new Map();
       cmState.chartInstances.forEach((c, id) => destroyChart(id));
       let total = 0, ok = 0;
+      const imageCharts = [];
       for (const tplId of chartIds) {
         const chart = charts.find(c => c.chart_template_id === tplId);
         if (!chart || chart.ok === false) continue;
@@ -2072,18 +2080,30 @@
           ok++;
           continue;
         }
+        imageCharts.push(chart);
+      }
+      await mapLimit(imageCharts, 4, async (chart) => {
+        const tplId = chart.chart_template_id;
         const img = document.querySelector(`img.cm-server-image[data-template="${tplId}"]`);
         const loading = document.querySelector(`.cm-server-image-loading[data-template="${tplId}"]`);
-        const src = cmState.currentImages.get(tplId);
+        if (loading) loading.textContent = 'Loading export chart...';
+        let src = null;
+        try {
+          src = await loadPacketImage(vertical, tplId);
+        } catch (e) {
+          console.warn(`cm packet image load failed for ${tplId}`, e);
+        }
         if (img && src) {
           img.src = src;
           img.style.display = 'block';
           if (loading) loading.style.display = 'none';
           ok++;
         } else if (loading) {
-          loading.textContent = (chart.rows || []).length ? 'Export chart image unavailable.' : 'No data available.';
+          loading.textContent = (chart.rows || []).length
+            ? 'Export chart image unavailable. Use Copy data or workbook export for this chart.'
+            : 'No data available.';
         }
-      }
+      });
       hydrateCommentary(charts);
       if (status) {
         const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
