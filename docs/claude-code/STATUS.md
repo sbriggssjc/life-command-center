@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 91 landed — PR #1655, sweep LIVE; awaiting merge + redeploy for the guard
+Root cause found: the enrich promoter passed `match?.candidates ?? []` (empty) into a mint —
+guard now at the single choke point (`emitMatchDisambiguation`), all four callers honor the
+refusal. Sweep applied live: **19 closed** (skipped, tagged `empty_candidates_p91`, reversible);
+verified NOT a silent drop — all 19 intakes correctly parked `review_required` (e.g. f8d11c87 is
+a multi_address_no_match portfolio OM). **Lane now 12 real, fully-annotated cards, 0 empty.**
+`skipped_no_candidates` counter added. Gate: merge #1655 → redeploy (guard is JS; sweep already
+live). **Still owed by Claude Code next session: repo migration file for the 08-09 CHECK widening
+on `lcc_clean_assist_proposals` (applied live by Cowork).**
+
 ### Both anomalies closed 2026-08-09 — sf-assist FIXED (20/20 written), disambig root-caused → prompt 91
 Post-CHECK-widening re-POST: sf-link-assist **proposed 20 / failed 0** ✅ (verdicts sane: 17
 uncertain / 2 merge / 1 not). Disambig-assist "0 annotated" root-caused: the 19 remaining open
