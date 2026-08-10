@@ -885,10 +885,19 @@ function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '') {
 // nudges are all slightly POSITIVE (rightward) so a leftmost point's label clears
 // the y-axis labels instead of colliding with them.
 const DLBL_TOP_Y = 0.13;
+// CM close-out (label de-collision) — two remaining issues after the top-band
+// pin: (1) the rightmost "Latest" callout sits at the last point (x≈1.0); a
+// POSITIVE x nudge pushed it past the plot's right border ("goes off the page"),
+// so `last` now nudges NEGATIVE (leftward, into the plot). (2) On a multi-series
+// chart each series emits its own Peak/Low/Latest at the SAME top-band y, so two
+// series whose peaks fall at nearby x overlap. dLblsXml/dLblXml take a
+// `bandIndex` (the series ordinal); band N drops DLBL_BAND_STEP lower, stacking
+// the series' callout rows instead of colliding. Band 0 = the base top band.
+const DLBL_BAND_STEP = 0.06;
 const DLBL_ROLE_OFFSET = {
   max:  { x: 0.01, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band, above the peak
   min:  { x: 0.02, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band (NOT down at the trough)
-  last: { x: 0.03, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band, toward the line's end
+  last: { x: -0.05, y: DLBL_TOP_Y, yMode: 'edge' },  // pull LEFT — the last point sits at the right border
 };
 
 // Callout brand text (item 3c): charcoal label word, emphasized (bold) value.
@@ -902,8 +911,13 @@ const DLBL_VALUE_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4
  * "<Peak|Low|Latest> <value>" — the role word in regular-weight charcoal, the
  * value bold (emphasized), matching cm-brand.json.
  */
-function dLblXml(idx, text, role, label) {
-  const off = DLBL_ROLE_OFFSET[role];
+function dLblXml(idx, text, role, label, bandIndex = 0) {
+  const base = DLBL_ROLE_OFFSET[role];
+  // Drop this series' callout row by band so multi-series peaks/lasts at nearby
+  // x stack vertically instead of overlapping (band 0 = the base top band).
+  const off = base && bandIndex
+    ? { ...base, y: base.y + bandIndex * DLBL_BAND_STEP }
+    : base;
   // yMode="edge" pins the label to an ABSOLUTE vertical position (fraction of the
   // chart area from the top) so every callout sits in the same top band above the
   // data; x stays in the default "factor" mode (offset from the point) so the
@@ -1049,12 +1063,13 @@ function trendlineXml(t) {
  *      (defaults to source-linked).
  *   3. Anything else → empty (no label block emitted).
  */
-function dLblsXml(spec) {
+function dLblsXml(spec, bandIndex = 0) {
   // Mode 1 — array of per-point labels (R37 P3 + A2 max/min/latest callouts).
   // A2: emit showLeaderLines so the role-offset labels draw a leader back to
-  // their point.
+  // their point. bandIndex (the series ordinal on multi-series charts) drops this
+  // series' callout row so nearby peaks/lasts stack instead of overlapping.
   if (Array.isArray(spec) && spec.length > 0) {
-    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label)).join('\n');
+    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex)).join('\n');
     // Item 3 (recommended, from Excel's own output) — give the floated callouts a
     // brand callout-box look so they stay legible where they sit over the plotted
     // lines: paper (FFFFFF) fill + a Blue-12 (E0E8F4) hairline. Per CT_DLbls order
@@ -1526,8 +1541,9 @@ function buildMultiLineChartXml(spec) {
     const dashFrag = s.dashed
       ? `<a:prstDash val="dash"/>`
       : '';
-    // R37 P3 — per-series data labels
-    const dLblsFrag = dLblsXml(s.dataLabels);
+    // R37 P3 — per-series data labels; band by series ordinal so a 2nd/3rd
+    // series' Peak/Low/Latest stacks below the first instead of overlapping.
+    const dLblsFrag = dLblsXml(s.dataLabels, i);
     // R73 B13 — optional per-series markers (line KEPT). Sparse cohorts
     // (gov state/municipal cap) have isolated non-null points between gaps
     // that a markerless line cannot draw; a small circle marker makes single
@@ -1737,8 +1753,10 @@ function buildComboChartXml(spec) {
       const borderColor = s.borderColor.replace('#', '');
       lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
     }
-    // R37 P3 — per-series data labels (combo bar)
-    const dLblsFrag = dLblsXml(s.dataLabels);
+    // R37 P3 — per-series data labels (combo bar); band by series ordinal so the
+    // bar callouts and the line callouts sit on separate rows (DOM_Ask: the DOM
+    // "Peak" bar label vs the %-of-ask line labels no longer collide).
+    const dLblsFrag = dLblsXml(s.dataLabels, i);
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -1779,8 +1797,9 @@ ${dLblsFrag}
   const lineXml = lineSeries.map((s, i) => {
     const idx = barSeries.length + i;
     const color = (s.color || '003DA5').replace('#', '');
-    // R37 P3 — per-series data labels (combo line)
-    const dLblsFrag = dLblsXml(s.dataLabels);
+    // R37 P3 — per-series data labels (combo line); band continues past the bar
+    // series so line callouts stack below the bar callouts instead of overlapping.
+    const dLblsFrag = dLblsXml(s.dataLabels, barSeries.length + i);
     if (s.showMarker) {
       const shape = s.markerShape || 'circle';
       const size = s.markerSize || 5;
