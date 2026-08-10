@@ -1294,25 +1294,39 @@ test('bid_ask: two cap lines + up/down bars spread band (native)', () => {
     { key: 'avg_last_ask_cap',   col: 'B' },
     { key: 'avg_bid_ask_spread', col: 'C' },
   ];
+  // Distinct spread values → distinct Peak(max)/Low(min)/Latest(last) points.
+  const rows = [
+    { period_end: '2020-03-31', avg_last_ask_cap: 0.070, avg_bid_ask_spread: 0.0050 },
+    { period_end: '2020-06-30', avg_last_ask_cap: 0.071, avg_bid_ask_spread: 0.0112 }, // peak
+    { period_end: '2020-09-30', avg_last_ask_cap: 0.072, avg_bid_ask_spread: 0.0030 }, // low
+    { period_end: '2020-12-31', avg_last_ask_cap: 0.073, avg_bid_ask_spread: 0.0080 },
+    { period_end: '2021-03-31', avg_last_ask_cap: 0.074, avg_bid_ask_spread: 0.0060 }, // latest
+  ];
   const out = buildInjectionSpec({
     chart_template_id: 'bid_ask_spread', tabName: 'Data_Bid_Ask',
-    cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis',
+    cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis', rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.equal(out.spec.type, 'multi-line');
-  // 3 series: Last-Ask tick, invisible LabelHost (hosts the spread callouts),
+  // 5 series: Last-Ask tick, THREE invisible single-label hosts (Peak/Latest/Low —
+  // one callout each so Excel's up/down-bar label cull can't drop Low/Latest),
   // Achieved tick. Up/down bars pair first↔last (Last-Ask↔Achieved).
-  assert.equal(out.spec.series.length, 3, 'last-ask + label-host + achieved');
-  assert.ok(out.spec.series[1].hideFromLegend, 'label-host hidden from legend');
-  assert.ok(Array.isArray(out.spec.series[1].dataLabels), 'label-host hosts the callouts array');
+  assert.equal(out.spec.series.length, 5, 'last-ask + 3 spread hosts + achieved');
+  const hosts = out.spec.series.filter(s => s.hideFromLegend);
+  assert.equal(hosts.length, 3, 'three single-label hosts (Peak/Latest/Low)');
+  for (const h of hosts) {
+    assert.ok(h.separateGroup, 'host in its own bar-free chart group');
+    assert.equal(h.lineAlpha, 0, 'host line transparent');
+    assert.equal(h.dataLabels.length, 1, 'exactly one callout per host (nothing to cull)');
+  }
+  assert.deepEqual(hosts.map(h => h.dataLabels[0].role), ['max', 'last', 'min']);
   assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
-  assert.ok(out.spec.series[1].separateGroup, 'label-host in its own chart group');
   const xml = buildMultiLineChartXml(out.spec);
-  assert.equal((xml.match(/<c:ser>/g) || []).length, 3, 'three series in the XML');
-  assert.equal((xml.match(/<c:lineChart>/g) || []).length, 2, 'two lineChart groups (host is bar-free)');
+  assert.equal((xml.match(/<c:ser>/g) || []).length, 5, 'five series in the XML');
+  assert.equal((xml.match(/<c:lineChart>/g) || []).length, 2, 'two lineChart groups (hosts are bar-free)');
   assert.match(xml, /<c:upDownBars>/, 'emits upDownBars');
-  assert.match(xml, /<c:legendEntry><c:idx val="1"\/><c:delete val="1"\/>/, 'label-host legend entry deleted');
+  assert.match(xml, /<c:legendEntry><c:idx val="1"\/><c:delete val="1"\/>/, 'first host legend entry deleted');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3301,24 +3315,35 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + up/down bars on a l
     { key: 'pct_price_change',   col: 'E' },
     { key: 'avg_last_ask_cap',   col: 'F' },
   ];
+  const rows = [
+    { period_end: '2020-03-31', avg_last_ask_cap: 0.070, avg_bid_ask_spread: 0.0050 },
+    { period_end: '2020-06-30', avg_last_ask_cap: 0.071, avg_bid_ask_spread: 0.0112 },
+    { period_end: '2020-09-30', avg_last_ask_cap: 0.072, avg_bid_ask_spread: 0.0030 },
+    { period_end: '2020-12-31', avg_last_ask_cap: 0.073, avg_bid_ask_spread: 0.0080 },
+    { period_end: '2021-03-31', avg_last_ask_cap: 0.074, avg_bid_ask_spread: 0.0060 },
+  ];
   const out = buildInjectionSpec({
     chart_template_id: 'bid_ask_spread',
     tabName: 'Data_Bid_Ask',
-    cols, dataStart: 5, dataEnd: 60,
+    cols, dataStart: 5, dataEnd: 60, rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.catCol, 'A');
-  // [Last-Ask tick (F, sky), LabelHost (G, invisible, carries callouts), Achieved tick (G, navy)]
-  assert.equal(out.spec.series.length, 3);
+  // [Last-Ask tick (F, sky), 3 single-label hosts (G, invisible), Achieved tick (G, navy)]
+  assert.equal(out.spec.series.length, 5);
   assert.equal(out.spec.series[0].valCol, 'F', 'sky tick = Last Ask');
   assert.equal(out.spec.series[0].color, '62B5E5');
-  assert.equal(out.spec.series[1].valCol, 'G', 'label-host on Achieved helper col (G)');
-  assert.ok(out.spec.series[1].hideFromLegend, 'label-host hidden from legend');
-  assert.equal(out.spec.series[1].lineAlpha, 0, 'label-host line is transparent');
-  assert.equal(out.spec.series[2].valCol, 'G', 'navy tick = Achieved helper col (G)');
-  assert.equal(out.spec.series[2].color, '003DA5');
+  const hostSeries = out.spec.series.filter(s => s.hideFromLegend);
+  assert.equal(hostSeries.length, 3, 'three single-label spread hosts');
+  for (const h of hostSeries) {
+    assert.equal(h.valCol, 'G', 'label-host on Achieved helper col (G)');
+    assert.equal(h.lineAlpha, 0, 'label-host line is transparent');
+    assert.equal(h.dataLabels.length, 1, 'one callout per host');
+  }
+  assert.equal(out.spec.series[4].valCol, 'G', 'navy tick = Achieved helper col (G)');
+  assert.equal(out.spec.series[4].color, '003DA5');
   assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series');
   assert.ok(out.spec.yAxisRange && out.spec.yAxisRange.min > 0.01, 'cap axis min is non-zero');
@@ -3409,17 +3434,24 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
     { key: 'pct_price_change',   col: 'E' },
     { key: 'avg_last_ask_cap',   col: 'F' },
   ];
+  const rows = [
+    { period_end: '2024-01-31', avg_last_ask_cap: 0.070, avg_bid_ask_spread: 0.0050 },
+    { period_end: '2024-02-29', avg_last_ask_cap: 0.071, avg_bid_ask_spread: 0.0112 },
+    { period_end: '2024-03-31', avg_last_ask_cap: 0.072, avg_bid_ask_spread: 0.0030 },
+    { period_end: '2024-04-30', avg_last_ask_cap: 0.073, avg_bid_ask_spread: 0.0080 },
+    { period_end: '2024-05-31', avg_last_ask_cap: 0.074, avg_bid_ask_spread: 0.0060 },
+  ];
   const out = buildInjectionSpec({
     chart_template_id: 'bid_ask_spread_monthly',
     tabName: 'Data_Bid_Ask_Monthly',
-    cols, dataStart: 5, dataEnd: 60,
+    cols, dataStart: 5, dataEnd: 60, rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
-  // [Last-Ask tick F, LabelHost G (invisible), Achieved tick G] + up/down bars
-  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G', 'G']);
-  assert.ok(out.spec.series[1].hideFromLegend, 'label-host hidden from legend');
+  // [Last-Ask tick F, 3 single-label hosts G (invisible), Achieved tick G] + up/down bars
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G', 'G', 'G', 'G']);
+  assert.equal(out.spec.series.filter(s => s.hideFromLegend).length, 3, 'three hosts hidden from legend');
   assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series');
 });

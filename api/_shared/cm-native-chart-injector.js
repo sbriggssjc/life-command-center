@@ -930,7 +930,7 @@ const DLBL_VALUE_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4
  * "<Peak|Low|Latest> <value>" — the role word in regular-weight charcoal, the
  * value bold (emphasized), matching cm-brand.json.
  */
-function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null, color = null) {
+function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null, color = null, yEdge = null, xNudge = null) {
   // simplePos (t/b/l/r/ctr) — place the label relative to its own point via
   // <c:dLblPos> instead of the absolute top-band manual layout. Used where each
   // series' single "Latest" label should sit at its own line end (e.g. the 4-cohort
@@ -939,9 +939,19 @@ function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null, color 
   const base = DLBL_ROLE_OFFSET[role];
   // Drop this series' callout row by band so multi-series peaks/lasts at nearby
   // x stack vertically instead of overlapping (band 0 = the base top band).
-  const off = base && bandIndex
-    ? { ...base, y: base.y + bandIndex * DLBL_BAND_STEP }
-    : base;
+  // yEdge (0..1, absolute fraction of the chart area from the top) — an explicit
+  // per-label vertical override that WINS over the role/band offset. Used by the
+  // 4-cohort cap charts to split the Latest callouts into a TOP whitespace band
+  // (the 2 highest-value cohorts) and a BOTTOM whitespace band (the 2 lowest) so
+  // no label sits over a line. Always yMode="edge"; x keeps its role/factor nudge.
+  const hasYEdge = Number.isFinite(yEdge);
+  let off = hasYEdge
+    ? { x: (base && base.x) || 0, y: yEdge, yMode: 'edge' }
+    : (base && bandIndex ? { ...base, y: base.y + bandIndex * DLBL_BAND_STEP } : base);
+  // xNudge (factor offset, +right/-left) — an explicit per-label horizontal shift
+  // that moves a callout off the plotted data into side whitespace (e.g. a Peak
+  // label sitting on top of the volume-area apex → nudged left/right).
+  if (off && Number.isFinite(xNudge)) off = { ...off, x: xNudge };
   // yMode="edge" pins the label to an ABSOLUTE vertical position (fraction of the
   // chart area from the top) so every callout sits in the same top band above the
   // data; x stays in the default "factor" mode (offset from the point) so the
@@ -1100,7 +1110,7 @@ function dLblsXml(spec, bandIndex = 0) {
   // their point. bandIndex (the series ordinal on multi-series charts) drops this
   // series' callout row so nearby peaks/lasts stack instead of overlapping.
   if (Array.isArray(spec) && spec.length > 0) {
-    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex, p.simplePos, p.color)).join('\n');
+    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex, p.simplePos, p.color, p.yEdge, p.xNudge)).join('\n');
     // Item 3 (recommended, from Excel's own output) — give the floated callouts a
     // brand callout-box look so they stay legible where they sit over the plotted
     // lines: paper (FFFFFF) fill + a Blue-12 (E0E8F4) hairline. Per CT_DLbls order
@@ -4290,20 +4300,46 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yAxisRange: cohortCapFit || capFit || cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
-          // Scott request — a LATEST-only value label at each cohort line's right
-          // end (simplePos 'r'), value-only (no "Latest" word) so the 4 labels
-          // spread by the lines' own vertical separation instead of stacking.
-          series: series.map(s => ({
-            titleCol: s.col, titleRow: headerRow,
-            valCol: s.col,
-            color: s.color,
-            dashed: !!s.dashed,
-            // Latest-only callout in the TOP whitespace band (leader to the point),
-            // color-matched to the cohort line so the 4 stacked rows stay legible.
-            dataLabels: Array.isArray(rows)
-              ? buildLatestOnlyForSpec(plottedRows, r => r[s.key], fmtPct2Native, null, s.color)
-              : undefined,
-          })),
+          // Scott request (2026-08-10) — the 4 cohort Latest labels stacked in the
+          // top-right band and HID the lines. Split them: the 2 highest-value
+          // cohorts' Latest callouts go into the TOP whitespace band, the 2 lowest
+          // into the BOTTOM whitespace band, each with a leader line to its point,
+          // so no label overlaps a line. Rank by each cohort's latest value, then
+          // assign an absolute yEdge (top: 0.10/0.17; bottom: 0.80/0.87). Text stays
+          // color-matched to the cohort line.
+          series: (() => {
+            // latest finite value per series (for ranking)
+            const latestVal = (s) => {
+              for (let i = plottedRows.length - 1; i >= 0; i--) {
+                const v = Number(plottedRows[i] && plottedRows[i][s.key]);
+                if (Number.isFinite(v)) return v;
+              }
+              return null;
+            };
+            const ranked = series
+              .map((s, i) => ({ i, v: latestVal(s) }))
+              .filter(o => o.v != null)
+              .sort((a, b) => b.v - a.v); // highest → lowest
+            // top 2 ranks → top band; the rest → bottom band
+            const TOP_EDGES = [0.10, 0.17];
+            const BOT_EDGES = [0.80, 0.87];
+            const yEdgeByIdx = {};
+            ranked.forEach((o, rank) => {
+              yEdgeByIdx[o.i] = rank < 2
+                ? TOP_EDGES[rank]
+                : BOT_EDGES[Math.min(rank - 2, BOT_EDGES.length - 1)];
+            });
+            return series.map((s, i) => ({
+              titleCol: s.col, titleRow: headerRow,
+              valCol: s.col,
+              color: s.color,
+              dashed: !!s.dashed,
+              dataLabels: Array.isArray(rows)
+                ? buildLatestOnlyForSpec(plottedRows, r => r[s.key], fmtPct2Native, null, s.color)
+                    .map(a => ({ ...a, yEdge: yEdgeByIdx[i] }))
+                : undefined,
+            }));
+          })(),
           anchor: standardAnchor,
         },
       };
@@ -4736,26 +4772,46 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // only Peak showed when the labels lived on Achieved. Hosting them on a
             // middle series (a transparent drawn line — invisible, but Excel renders
             // its manual-positioned labels at every point) restores Low + Latest.
-            series: [
-              { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
-                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-              // LabelHost — invisible middle series carrying the Achieved values,
-              // hosting the Peak/Low/Latest SPREAD callouts (bps). Transparent line
-              // (alpha 0), no marker, hidden from the legend.
-              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
-                separateGroup: true,
-                dataLabels: buildAnnotationsForSpec(
-                  plottedRows,
-                  (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
-                    ? Number(r.avg_bid_ask_spread) : NaN,
-                  (v) => `${Math.round(Number(v) * 10000)} bps`,
-                  'bid_ask:spread') },
-              // Achieved (top) dash ticks — navy, markerOnly (no line). Last series
-              // → the up/down bars' top edge.
-              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-            ],
+            series: (() => {
+              // CM close-out (bid-ask, DEFINITIVE Low/Latest fix 2026-08-10).
+              // History: hosting all 3 spread callouts (Peak/Low/Latest) on ONE
+              // invisible host series rendered ONLY "Peak" — Excel culls every
+              // data label in a series EXCEPT the one at that series' MAX value,
+              // whenever the chart carries up/down bars (the cull is chart-wide,
+              // not group-local, so a separate bar-free host group didn't help).
+              // A series with exactly ONE label has nothing to cull against, so
+              // each callout now gets its OWN invisible host series (all reading
+              // the Achieved column, alpha 0, off-legend, in the bar-free host
+              // group). Split the annotations one-per-series → all three render.
+              const spreadAnns = buildAnnotationsForSpec(
+                plottedRows,
+                (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
+                  ? Number(r.avg_bid_ask_spread) : NaN,
+                (v) => `${Math.round(Number(v) * 10000)} bps`,
+                'bid_ask:spread');
+              const hostFor = (role, band) => {
+                const a = spreadAnns.find(x => x.role === role);
+                if (!a) return null;
+                return {
+                  titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
+                  separateGroup: true,
+                  // band each callout to its own top-band row so Peak/Low/Latest
+                  // don't stack on the same y when their x are close.
+                  dataLabels: [{ ...a }],
+                };
+              };
+              const hosts = [hostFor('max'), hostFor('last'), hostFor('min')].filter(Boolean);
+              return [
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+                ...hosts,
+                // Achieved (top) dash ticks — navy, markerOnly (no line). Last
+                // NON-host series → the up/down bars' top edge.
+                { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+              ];
+            })(),
             anchor: standardAnchor,
           },
           helperCols: [
@@ -5243,15 +5299,27 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       if (!periodCol || !cntCol || !avgCol) return null;
       // R37 P3 — peak/trough/most-recent labels on avg deal line
       // (renderer line 2348: buildAnnotations(rows, r => r.avg_deal_size, fmtCurrencyM))
+      // Scott request (2026-08-10) — nudge each "Peak" callout horizontally into the
+      // side whitespace (right if the peak is in the left half of the window, else
+      // left) so it doesn't block the bars/line at the apex.
+      const nudgePeak = (anns) => {
+        if (!Array.isArray(anns)) return anns;
+        const maxAnn = anns.find(a => a.role === 'max');
+        if (maxAnn) {
+          const n = plottedRows.length || 1;
+          maxAnn.xNudge = (maxAnn.idx / n) < 0.5 ? 0.12 : -0.12;
+        }
+        return anns;
+      };
       const avgLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.avg_deal_size, fmtCurrencyMNative, 'avg_deal_size', navy)
+        ? nudgePeak(buildAnnotationsForSpec(plottedRows, r => r.avg_deal_size, fmtCurrencyMNative, 'avg_deal_size', navy))
         : undefined;
       // Peak/Low/Latest on the TTM transaction-count bars (integer), color-matched
       // to the sky bars; the avg-deal line callouts are navy — the color tells them
       // apart where they land near each other in the top band.
       const cntLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.ttm_count,
-            (v) => Math.round(Number(v)).toLocaleString('en-US'), 'txn_count:ttm_count', sky)
+        ? nudgePeak(buildAnnotationsForSpec(plottedRows, r => r.ttm_count,
+            (v) => Math.round(Number(v)).toLocaleString('en-US'), 'txn_count:ttm_count', sky))
         : undefined;
       return {
         tabName,
@@ -5876,8 +5944,21 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             borderColor: sky,    // T10b — sky edge (was navy; frees navy for the dots)
             // Peak/Low/Latest TTM-volume callouts ($M), banded to row 1 so they
             // don't collide with the cap-rate callouts (band 0) on the top band.
+            // Scott request (2026-08-10) — the "Peak $…M" callout sat on top of the
+            // volume-area apex. Nudge the Peak label horizontally into the side
+            // whitespace (right if the peak is in the left half, else left) so it
+            // clears the plotted area; Latest/Low stay put in the top band.
             dataLabels: Array.isArray(rows)
-              ? buildAnnotationsForSpec(plottedRows, r => r.volume_dollars, fmtCurrencyMNative, 'volume_cap:volume', sky)
+              ? (() => {
+                  const anns = buildAnnotationsForSpec(plottedRows, r => r.volume_dollars, fmtCurrencyMNative, 'volume_cap:volume', sky);
+                  const maxAnn = anns.find(a => a.role === 'max');
+                  if (maxAnn) {
+                    const n = plottedRows.length || 1;
+                    // peak in left half → push right into whitespace, else push left
+                    maxAnn.xNudge = (maxAnn.idx / n) < 0.5 ? 0.12 : -0.12;
+                  }
+                  return anns;
+                })()
               : undefined,
             labelBand: 1,
           },
