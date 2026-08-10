@@ -34,9 +34,22 @@
 // ============================================================================
 
 import { fetchWithTimeout } from './ops-db.js';
+import { isSfRecordLookupConfigured, lookupSfRecordsByIds } from './sf-record-lookup.js';
 
 export function isSalesforceConfigured() {
   return !!process.env.SF_LOOKUP_WEBHOOK_URL;
+}
+
+function normalizeSalesforceAccount(acct) {
+  if (!acct || typeof acct !== 'object') return null;
+  const id = acct.Id || acct.id;
+  if (!id) return null;
+  return {
+    Id: id,
+    Name: acct.Name || acct.name || null,
+    Type: acct.Type || acct.type || null,
+    Industry: acct.Industry || acct.industry || null,
+  };
 }
 
 /** Today in YYYY-MM-DD (UTC). */
@@ -297,32 +310,62 @@ export async function findSalesforceAccountByName(ownerName) {
 
 /**
  * Fetch a Salesforce Account by its 15/18-char Id, to confirm the name before
- * a manual map. Tries a `find_account_by_id` flow operation; tolerates flows
- * that don't implement it (returns ok:false so the UI can map unverified).
+ * a manual map. Tries the `find_account_by_id` lookup operation first, then
+ * falls back to the generic ID record-lookup flow if that operation is missing
+ * or returning a connector error.
  *
  * @param {string} accountId
  * @returns {Promise<{ok:boolean, account?:{Id,Name,Type,Industry}|null, reason?:string}>}
  */
-export async function getSalesforceAccountById(accountId) {
-  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+export async function getSalesforceAccountById(accountId, deps = {}) {
+  const lookupFlow = deps.lookupFlow || callSfLookupFlow;
+  const recordLookup = deps.recordLookup || lookupSfRecordsByIds;
+  const hasLookupFlow = isSalesforceConfigured() || deps.lookupFlow;
+  const hasRecordLookup = isSfRecordLookupConfigured() || deps.recordLookup;
+  if (!hasLookupFlow && !hasRecordLookup) return { ok: false, reason: 'sf_not_configured' };
   const id = String(accountId || '').trim();
   if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(id)) return { ok: false, reason: 'bad_id_shape' };
-  const result = await callSfLookupFlow({ operation: 'find_account_by_id', value: id });
-  if (!result || result.ok !== true) {
-    return { ok: false, reason: result?.reason || 'lookup_failed' };
+
+  let primary = null;
+  if (hasLookupFlow) {
+    primary = await lookupFlow({ operation: 'find_account_by_id', value: id });
+    if (primary && primary.ok === true) {
+      let acct = normalizeSalesforceAccount(primary.account);
+      if (!acct && Array.isArray(primary.candidates) && primary.candidates.length) {
+        acct = normalizeSalesforceAccount(primary.candidates[0]);
+      }
+      if (!acct) return { ok: true, account: null, reason: 'no_match' };
+      return { ok: true, account: acct };
+    }
   }
-  let acct = null;
-  if (result.account) acct = result.account;
-  else if (Array.isArray(result.candidates) && result.candidates.length) acct = result.candidates[0];
-  if (!acct || !(acct.Id || acct.id)) return { ok: true, account: null, reason: 'no_match' };
+
+  if (hasRecordLookup) {
+    const fallback = await recordLookup({
+      objectType: 'Account',
+      fields: 'Id,Name,Type,Industry',
+      ids: [id],
+      batchSize: 1,
+      requestIdSeed: 'decision-account-id',
+    });
+    if (fallback && fallback.ok) {
+      const rows = Array.isArray(fallback.records) ? fallback.records : [];
+      const acct = normalizeSalesforceAccount(rows[0]);
+      if (!acct) return { ok: true, account: null, reason: 'no_match' };
+      return { ok: true, account: acct, source: 'sf_record_lookup' };
+    }
+    return {
+      ok: false,
+      reason: fallback?.reason || 'record_lookup_failed',
+      detail: fallback?.errors?.[0]?.detail || fallback?.detail || primary?.detail || null,
+      lookup_flow: primary ? { reason: primary.reason || null, status: primary.status || null, detail: primary.detail || null } : null,
+    };
+  }
+
   return {
-    ok: true,
-    account: {
-      Id: acct.Id || acct.id,
-      Name: acct.Name || acct.name || null,
-      Type: acct.Type || acct.type || null,
-      Industry: acct.Industry || acct.industry || null,
-    },
+    ok: false,
+    reason: primary?.reason || 'lookup_failed',
+    status: primary?.status || null,
+    detail: primary?.detail || null,
   };
 }
 

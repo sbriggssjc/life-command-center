@@ -91,6 +91,7 @@ let opsInboxSourceFilter = null;   // null | 'listing_bd_trigger' (W3.5 grouped 
 let opsEntityFilter = 'all';      // all | person | organization | asset (server-side filter)
 let opsEntitySearch = '';         // backend name search term (B6, 2026-06-06)
 let opsResearchFilter = 'active'; // active | completed | all
+let opsResearchTypeFilter = '';   // '' | news_alert_development_followup
 let opsEntitiesPage = 1;
 let opsResearchPage = 1;
 let opsInboxSelected = new Set();
@@ -1901,10 +1902,11 @@ async function renderReviewConsolePage() {
   // R7 Phase 2: every lane is now a real decision lane (no more "More review
   // work" deep-links). Decision-lane counts (seeded + federated, each labeled
   // with its mode) + the SOS owner-contact count, in parallel.
-  const [decR, res, compR] = await Promise.all([
+  const [decR, res, compR, newsR] = await Promise.all([
     opsApi('/api/decisions?summary=1'),
     opsApi('/api/review-counts'),
     opsApi('/api/comp-reviews?status=open&limit=1'),
+    opsApi('/api/news-alerts?status=open&limit=1'),
   ]);
 
   let html = '<div class="ops-header"><h2>Decision Center</h2></div>';
@@ -1962,6 +1964,8 @@ async function renderReviewConsolePage() {
     compN = Object.values(compR.data.counts).reduce(function (a, b) { return a + (Number(b) || 0); }, 0);
   }
   dc['comp_review'] = compN;
+  const newsCounts = (newsR && newsR.ok && newsR.data && newsR.data.counts) ? newsR.data.counts : {};
+  dc['news_alert_review'] = Number(newsCounts.open) || 0;
 
   // Every sub-lane (decision_type) with its existing renderer — NOTHING lost.
   // Grouped into the 8 logical lanes via the Tier 3 lane map (review-shared.js).
@@ -1997,6 +2001,7 @@ async function renderReviewConsolePage() {
     { dt: 'sf_contact_account_mismatch', label: 'Salesforce contact ↔ account mismatch', open: "renderDecisionLane('sf_contact_account_mismatch')" },
     { dt: 'sos_owner_links', label: 'Owner-contact links to confirm', open: 'renderSosLinkWorklist()' },
     { dt: 'comp_review', label: 'Comp reconciliation reviews (dia+gov)', open: 'renderCompReviewLane()' },
+    { dt: 'news_alert_review', label: 'News alerts — review & promote', open: 'renderNewsAlertLane()' },
     { dt: 'implausible_value', label: 'Implausible values', open: "renderFederatedLane('implausible_value')" },
     { dt: 'llc_research_dead', label: 'LLC research dead-letters', open: "renderDecisionLane('llc_research_dead')" },
     { dt: 'availability_checker_botblock', label: 'Availability bot-blocks', open: "renderDecisionLane('availability_checker_botblock')" },
@@ -2093,7 +2098,11 @@ window.setReviewNavBadge = setReviewNavBadge;
 // operator sees how much review work is waiting without opening the page.
 async function refreshReviewNavBadge() {
   try {
-    const [r, rc] = await Promise.all([opsApi('/api/decisions?summary=1'), opsApi('/api/review-counts')]);
+    const [r, rc, nr] = await Promise.all([
+      opsApi('/api/decisions?summary=1'),
+      opsApi('/api/review-counts'),
+      opsApi('/api/news-alerts?status=open&limit=1'),
+    ]);
     // R64: the badge is ACTIONABLE verdicts only — sum the seeded (non-federated)
     // lanes + the SOS owner-contact worklist. The large federated DQ universe is
     // worked on demand and must never inflate the badge (the 999+ trap).
@@ -2105,6 +2114,7 @@ async function refreshReviewNavBadge() {
       const s = rc.data.lanes.find(function (l) { return l.key === 'sos_owner_links'; });
       if (s && typeof s.count === 'number') total += s.count;
     }
+    if (nr.ok && nr.data && nr.data.counts) total += Number(nr.data.counts.open) || 0;
     setReviewNavBadge(total);
   } catch (_e) { /* best-effort */ }
 }
@@ -2673,6 +2683,8 @@ window.dcSfPick = dcSfPick;
 async function dcSfManual(id) {
   const input = document.getElementById('dcsfid-' + id);
   const slot = document.getElementById('dcsfr-' + id);
+  const it = _dcItems[id] || {};
+  const fallbackName = (it.context && it.context.parent_name) || '';
   const sfId = _sfIdFromInput(input ? input.value : '');
   if (!sfId) { if (slot) slot.innerHTML = '<div class="dcsf-empty">That doesn’t look like a Salesforce Account ID (15 or 18 characters). Paste the ID or the record URL.</div>'; return; }
   if (slot) slot.innerHTML = '<span class="spinner"></span> validating ' + esc(sfId) + '…';
@@ -2686,9 +2698,11 @@ async function dcSfManual(id) {
   } else {
     // Flow can't confirm by-id (or doesn't implement it) — allow an explicit
     // unverified map so the user with Salesforce open in another tab isn't stuck.
-    _dcSfCand[id] = [{ Id: sfId, Name: null }];
+    _dcSfCand[id] = [{ Id: sfId, Name: fallbackName || null }];
+    const detail = (res.data && (res.data.detail || res.data.message)) || '';
     slot.innerHTML = '<div class="dcsf-empty">Couldn’t confirm the name for <b>' + esc(sfId) + '</b>'
-      + ((res.data && res.data.reason) ? ' (' + esc(res.data.reason) + ')' : '') + '. '
+      + ((res.data && res.data.reason) ? ' (' + esc(res.data.reason) + ')' : '')
+      + (detail ? ': ' + esc(String(detail).slice(0, 220)) : '') + '. '
       + '<button class="q-action" onclick="dcSfPick(' + id + ',0)">Map by ID anyway</button></div>';
   }
 }
@@ -5053,6 +5067,257 @@ async function resolveCompReview(domain, id, disposition) {
 }
 window.resolveCompReview = resolveCompReview;
 
+var _newsAlertStatus = 'open';
+
+function newsAlertCardHtml(it, isNext) {
+  var rowid = 'newsAlert_' + String(it.news_lead_id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  var title = it.article_title || it.raw_subject || it.tenant || 'News alert';
+  var place = [it.city, it.state].filter(Boolean).join(', ');
+  var conf = it.confidence != null ? Math.round(Number(it.confidence) * 100) + '% confidence' : 'unscored';
+  var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+  var extraction = meta.news_alert_extraction || null;
+  var task = meta.news_alert_tracking_task || null;
+  var badges = '<span class="q-badge">' + esc(it.status || '') + '</span>'
+    + (it.domain ? '<span class="q-badge">' + esc(it.domain) + '</span>' : '')
+    + (it.tenant ? '<span class="q-badge">' + esc(it.tenant) + '</span>' : '')
+    + '<span class="q-badge">' + esc(conf) + '</span>'
+    + (extraction ? '<span class="q-badge">assist</span>' : '')
+    + (task ? '<span class="q-badge">task</span>' : '');
+  var url = it.article_url ? '<a class="q-action" href="' + esc(it.article_url) + '" target="_blank" rel="noopener">Open article</a>' : '';
+  var actions = '';
+  if (it.status === 'dismissed' || it.status === 'converted') {
+    actions = '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'reopen\')">Reopen</button>';
+    if (task) actions += '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open Research</button>';
+  } else {
+    actions = '<button class="q-action primary" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'send_to_developer\')">Keep for developer research</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'extract_details\')">Extract details</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'create_tracking_task\')">Create tracking task</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'dismiss\')">Dismiss</button>';
+  }
+  var assistHtml = '';
+  if (extraction) {
+    var project = extraction.project || {};
+    var parties = Array.isArray(extraction.parties) ? extraction.parties : [];
+    var timeline = Array.isArray(extraction.timeline) ? extraction.timeline : [];
+    var debt = Array.isArray(extraction.debt_or_deed_signals) ? extraction.debt_or_deed_signals : [];
+    var permits = Array.isArray(extraction.permits) ? extraction.permits : [];
+    var partyText = parties.slice(0, 4).map(function (p) { return (p.role ? p.role + ': ' : '') + p.name; }).join(' · ');
+    var timelineText = timeline.slice(0, 3).map(function (t) { return [t.event, t.date_or_period].filter(Boolean).join(' - '); }).join(' · ');
+    var signalText = debt.concat(permits).slice(0, 3).map(function (s) {
+      return [s.signal_type || s.permit_type || s.permit_number, s.party || s.applicant || s.jurisdiction || s.date_or_period].filter(Boolean).join(' - ');
+    }).join(' · ');
+    assistHtml = '<div class="q-item-detail clean-assist">'
+      + '<div><span class="q-badge type">Ollama assist: ' + esc(extraction.recommended_next_step || 'uncertain') + '</span> '
+      + esc(extraction.reason || '') + '</div>'
+      + (project.description || project.address ? '<div>' + esc([project.description, project.address].filter(Boolean).join(' · ')) + '</div>' : '')
+      + (partyText ? '<div>Parties: ' + esc(partyText) + '</div>' : '')
+      + (signalText ? '<div>Signals: ' + esc(signalText) + '</div>' : '')
+      + (timelineText ? '<div>Timeline: ' + esc(timelineText) + '</div>' : '')
+      + '</div>';
+  }
+  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="' + rowid + '">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
+    + '<div class="q-item-badges">' + badges + '</div></div>'
+    + '<div class="q-item-meta">' + esc([place, it.match_kind, it.created_at ? String(it.created_at).slice(0, 10) : ''].filter(Boolean).join(' · ') || '-')
+    + '</div>'
+    + (it.summary ? '<div class="q-item-detail">' + esc(it.summary) + '</div>' : '')
+    + assistHtml
+    + '<div class="q-actions">' + url + actions + '</div></div>';
+}
+
+async function renderNewsAlertLane(status) {
+  _newsAlertStatus = status || _newsAlertStatus || 'open';
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/news-alerts?status=' + encodeURIComponent(_newsAlertStatus) + '&limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderNewsAlertLane()', 'Could not load news alerts'); return; }
+  var items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var counts = (res.data && res.data.counts) || {};
+  var chips = [
+    ['open', 'Open', Number(counts.open) || 0],
+    ['needs_review', 'Review', Number(counts.needs_review) || 0],
+    ['developer_unknown', 'Developer', Number(counts.developer_unknown) || 0],
+    ['dismissed', 'Dismissed', Number(counts.dismissed) || 0],
+    ['converted', 'Converted', Number(counts.converted) || 0],
+  ].map(function (c) {
+    return '<button class="q-action' + (_newsAlertStatus === c[0] ? ' primary' : '') + '" onclick="renderNewsAlertLane(\'' + c[0] + '\')">'
+      + esc(c[1]) + ' ' + c[2].toLocaleString() + '</button>';
+  }).join('');
+  var html = '<div class="ops-header"><h2>News Alert Review</h2>'
+    + '<div class="ops-controls">' + chips
+    + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Decision Center</button></div></div>';
+  html += '<div class="rc-intro">Google Alert and shared-news leads from the canonical OPS news_alert_leads queue. Keep worthy items in developer research; dismiss noise. Property and pursuit promotion is the next bridge after this triage lane.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No news alerts in this view. \u2713</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="newsAlertRemaining">' + items.length + '</span> shown'
+    + ' <span class="q-badge">' + (Number(counts.needs_review) || 0) + ' review</span>'
+    + ' <span class="q-badge">' + (Number(counts.developer_unknown) || 0) + ' developer</span></div>';
+  items.forEach(function (it, ix) { html += newsAlertCardHtml(it, ix === 0); });
+  el.innerHTML = html;
+}
+window.renderNewsAlertLane = renderNewsAlertLane;
+
+async function resolveNewsAlert(id, action) {
+  var res = await opsApi('/api/news-alerts', { method: 'POST', body: JSON.stringify({ news_lead_id: id, action: action }) });
+  if (res.ok && res.data && res.data.ok) {
+    if (typeof showToast === 'function') {
+      showToast(action === 'dismiss' ? 'Dismissed'
+        : action === 'reopen' ? 'Reopened'
+          : action === 'extract_details' ? 'Extracted details'
+            : action === 'create_tracking_task' ? 'Tracking task ready'
+              : 'Sent to developer research', 'success');
+    }
+    if (action === 'create_tracking_task') {
+      renderNewsAlertPursuit(res.data.item || null, res.data.research_task || null);
+      refreshReviewNavBadge();
+      return;
+    }
+    renderNewsAlertLane(_newsAlertStatus);
+    refreshReviewNavBadge();
+  } else if (typeof showToast === 'function') {
+    showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
+window.resolveNewsAlert = resolveNewsAlert;
+
+function openNewsAlertResearchQueue() {
+  if (typeof navTo === 'function') navTo('pageReviewConsole');
+  setTimeout(function () { renderNewsAlertFollowupQueue(); }, 150);
+}
+window.openNewsAlertResearchQueue = openNewsAlertResearchQueue;
+
+function openGenericNewsAlertResearchLedger() {
+  opsResearchTypeFilter = 'news_alert_development_followup';
+  opsResearchFilter = 'active';
+  opsResearchPage = 1;
+  if (typeof navTo === 'function') navTo('pageResearch');
+  setTimeout(function () { renderResearchPage(1); }, 150);
+}
+window.openGenericNewsAlertResearchLedger = openGenericNewsAlertResearchLedger;
+
+async function renderNewsAlertFollowupQueue() {
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/news-alerts?status=converted&limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderNewsAlertFollowupQueue()', 'Could not load news-alert follow-up queue'); return; }
+  var all = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var items = all.filter(function (it) {
+    var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+    return !!(meta.news_alert_tracking_task || meta.news_alert_extraction);
+  });
+  var html = '<div class="ops-header"><h2>News Alert Follow-up Queue</h2>'
+    + '<div class="ops-controls">'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'open\')">\u2190 Back to News Alert Review</button>'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">Converted Alerts</button>'
+    + '<button class="q-action" onclick="openGenericNewsAlertResearchLedger()">Research Ledger</button>'
+    + '</div></div>';
+  html += '<div class="rc-intro">Converted news-alert pursuits that need property, party, permit/deed/debt, contact, and outreach resolution.</div>';
+  if (!items.length) {
+    html += '<div class="ops-empty">No converted news-alert pursuits are queued yet.</div>'
+      + '<div class="q-actions"><button class="q-action primary" onclick="renderNewsAlertLane(\'open\')">Back to News Alert Review</button>'
+      + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">View Converted Alerts</button></div>';
+    el.innerHTML = html;
+    return;
+  }
+  html += '<div class="rc-progress"><span>' + items.length + '</span> to work</div>';
+  items.forEach(function (it, ix) {
+    var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+    var ex = meta.news_alert_extraction || {};
+    var task = meta.news_alert_tracking_task || null;
+    var project = ex.project || {};
+    var parties = Array.isArray(ex.parties) ? ex.parties : [];
+    var partyText = parties.slice(0, 3).map(function (p) { return (p.role ? p.role + ': ' : '') + p.name; }).join(' · ');
+    html += '<div class="q-item' + (ix === 0 ? ' pq-next' : '') + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.article_title || it.raw_subject || it.tenant || 'News alert') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">converted</span>'
+      + (it.domain ? '<span class="q-badge">' + esc(it.domain) + '</span>' : '')
+      + (task ? '<span class="q-badge">task</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc([it.tenant, [it.city, it.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')) + '</div>'
+      + (project.description ? '<div class="q-item-detail">' + esc(project.description) + '</div>' : (it.summary ? '<div class="q-item-detail">' + esc(it.summary) + '</div>' : ''))
+      + (partyText ? '<div class="q-item-meta">Parties: ' + esc(partyText) + '</div>' : '')
+      + '<div class="q-actions">'
+      + (it.article_url ? '<a class="q-action" href="' + esc(it.article_url) + '" target="_blank" rel="noopener">Open article</a>' : '')
+      + '<button class="q-action primary" onclick="renderNewsAlertPursuitById(' + jsStringArg(it.news_lead_id) + ')">Open pursuit</button>'
+      + '<button class="q-action" onclick="openGenericNewsAlertResearchLedger()">Research Ledger</button>'
+      + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderNewsAlertFollowupQueue = renderNewsAlertFollowupQueue;
+
+async function renderNewsAlertPursuitById(id) {
+  var res = await opsApi('/api/news-alerts?status=all&limit=200');
+  if (!res.ok || !res.data || !Array.isArray(res.data.items)) {
+    if (typeof showToast === 'function') showToast('Could not load alert pursuit', 'error');
+    return;
+  }
+  var item = res.data.items.find(function (it) { return String(it.news_lead_id) === String(id); });
+  if (!item) {
+    if (typeof showToast === 'function') showToast('Alert pursuit not found', 'error');
+    return;
+  }
+  var meta = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+  renderNewsAlertPursuit(item, meta.news_alert_tracking_task || null);
+}
+window.renderNewsAlertPursuitById = renderNewsAlertPursuitById;
+
+function renderNewsAlertPursuit(item, researchTask) {
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  item = item || {};
+  var meta = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+  var ex = meta.news_alert_extraction || {};
+  var project = ex.project || {};
+  var parties = Array.isArray(ex.parties) ? ex.parties : [];
+  var timeline = Array.isArray(ex.timeline) ? ex.timeline : [];
+  var signals = (Array.isArray(ex.debt_or_deed_signals) ? ex.debt_or_deed_signals : [])
+    .concat(Array.isArray(ex.permits) ? ex.permits : []);
+  var triggers = Array.isArray(ex.follow_up_triggers) ? ex.follow_up_triggers : [];
+  var title = item.article_title || item.raw_subject || item.tenant || 'News alert pursuit';
+  var taskId = researchTask && researchTask.id ? researchTask.id : (meta.news_alert_tracking_task && meta.news_alert_tracking_task.id) || null;
+  var partyHtml = parties.length ? parties.map(function (p) {
+    return '<div class="q-item-meta"><b>' + esc(p.role || 'party') + ':</b> ' + esc(p.name || '')
+      + (p.evidence ? ' · ' + esc(p.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No named owner/applicant/developer extracted yet.</div>';
+  var signalHtml = signals.length ? signals.map(function (s) {
+    return '<div class="q-item-meta"><b>' + esc(s.signal_type || s.permit_type || s.permit_number || 'signal') + ':</b> '
+      + esc(s.party || s.applicant || s.jurisdiction || s.date_or_period || '')
+      + (s.evidence ? ' · ' + esc(s.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No permit/deed/debt signal extracted yet.</div>';
+  var timelineHtml = timeline.length ? timeline.map(function (t) {
+    return '<div class="q-item-meta"><b>' + esc(t.event || 'event') + '</b>'
+      + (t.date_or_period ? ' · ' + esc(t.date_or_period) : '')
+      + (t.evidence ? ' · ' + esc(t.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No project timeline extracted yet.</div>';
+  var triggerHtml = triggers.length ? triggers.map(function (t) { return '<span class="q-badge">' + esc(t) + '</span>'; }).join(' ') : '<span class="q-badge">track owner/applicant</span> <span class="q-badge">watch permits/deeds</span>';
+  el.innerHTML = '<div class="ops-header"><h2>News Alert Pursuit</h2>'
+    + '<div class="ops-controls">'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'open\')">\u2190 Back to News Alert Review</button>'
+    + '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open News Alert Follow-up Queue</button>'
+    + '</div></div>'
+    + '<div class="rc-intro">Work this alert into a real prospecting path: identify the property, owner/applicant/developer, evidence, and the right contact before drafting outreach.</div>'
+    + '<div class="q-item pq-next">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span><div class="q-item-badges">'
+    + '<span class="q-badge">converted</span>' + (taskId ? '<span class="q-badge">task ' + esc(taskId) + '</span>' : '<span class="q-badge">task</span>')
+    + '</div></div>'
+    + '<div class="q-item-meta">' + esc([item.tenant, item.domain, [item.city, item.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')) + '</div>'
+    + (item.article_url ? '<div class="q-actions"><a class="q-action primary" href="' + esc(item.article_url) + '" target="_blank" rel="noopener">Open article</a></div>' : '')
+    + '</div>'
+    + '<div class="rc-lanes-grouped">'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">1. Property and project</div></div>'
+    + '<div class="q-item-detail">' + esc(project.description || item.summary || 'Confirm the property/project behind this alert.') + '</div>'
+    + '<div class="q-item-meta">' + esc([project.address, project.city || item.city, project.state || item.state].filter(Boolean).join(', ')) + '</div></div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">2. Parties to resolve</div></div>' + partyHtml + '</div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">3. Signals to track</div></div>' + signalHtml + timelineHtml + '<div style="margin-top:8px">' + triggerHtml + '</div></div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">4. Next build step</div></div>'
+    + '<div class="q-item-meta">Resolve/create the property and prospect contact, then generate an outreach draft through the BD template path.</div>'
+    + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Continue in Follow-up Queue</button>'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">View Converted Alerts</button></div></div>'
+    + '</div>';
+}
+window.renderNewsAlertPursuit = renderNewsAlertPursuit;
+
 // ── Unit 2: property metadata-backfill worklist (surfaced under Research) ──
 // A compact widget on the Research page + a full prioritized worklist page. The
 // worklist (v_property_metadata_backfill_queue) carries a suggested CoStar URL
@@ -5145,7 +5410,8 @@ async function renderResearchPage(page = opsResearchPage) {
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
-  const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}`);
+  const typeParam = opsResearchTypeFilter ? `&research_type=${encodeURIComponent(opsResearchTypeFilter)}` : '';
+  const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}`);
   if (!res.ok) {
     el.innerHTML = opsErrorState(res, 'renderResearchPage()', 'Could not load research tasks');
     perf.end();
@@ -5157,12 +5423,15 @@ async function renderResearchPage(page = opsResearchPage) {
   let html = '';
   html += `<div class="ops-header">
     <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length} tasks</span></h2>
+    ${opsResearchTypeFilter === 'news_alert_development_followup' ? `<div class="ops-controls"><button class="q-action" onclick="openNewsAlertResearchQueue()">\u2190 Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane('open');navTo('pageReviewConsole')">News Alert Review</button></div>` : ''}
   </div>`;
 
   html += '<div class="ops-filters">';
   html += `<button class="ops-filter ${opsResearchFilter === 'active' ? 'active' : ''}" onclick="opsResearchFilter='active';opsResearchPage=1;renderResearchPage()">Active</button>`;
   html += `<button class="ops-filter ${opsResearchFilter === 'completed' ? 'active' : ''}" onclick="opsResearchFilter='completed';opsResearchPage=1;renderResearchPage()">Completed</button>`;
   html += `<button class="ops-filter ${opsResearchFilter === 'all' ? 'active' : ''}" onclick="opsResearchFilter='all';opsResearchPage=1;renderResearchPage()">All</button>`;
+  html += `<button class="ops-filter ${opsResearchTypeFilter === 'news_alert_development_followup' ? 'active' : ''}" onclick="opsResearchTypeFilter=opsResearchTypeFilter==='news_alert_development_followup'?'':'news_alert_development_followup';opsResearchPage=1;renderResearchPage()">News Alert Follow-up</button>`;
+  if (opsResearchTypeFilter) html += `<button class="ops-filter" onclick="opsResearchTypeFilter='';opsResearchPage=1;renderResearchPage()">Clear type</button>`;
   html += '</div>';
 
   const filtered = opsResearchFilter === 'all' ? opsResearchData
@@ -5173,7 +5442,10 @@ async function renderResearchPage(page = opsResearchPage) {
     html += `<div class="rc-progress"><span>${filtered.length}</span> ${opsResearchFilter === 'completed' ? 'completed' : 'to work'}</div>`;
   }
   if (!filtered.length) {
-    html += '<div class="ops-empty">No research tasks match this filter</div>';
+    html += opsResearchTypeFilter === 'news_alert_development_followup'
+      ? '<div class="ops-empty">No active research-ledger tasks match this filter. Use the News Alert Follow-up queue in Decision Center for converted alert pursuits.</div>'
+        + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane(\'converted\');navTo(\'pageReviewConsole\')">Converted Alerts</button></div>'
+      : '<div class="ops-empty">No research tasks match this filter</div>';
   } else {
     filtered.forEach((item, _ix) => {
       // Self-propelling contract: elevate the first actionable task. On
@@ -5220,6 +5492,7 @@ async function renderResearchPage(page = opsResearchPage) {
   // Agency Drift below).
   const widgetsEl = el.querySelector('.lcc-research-widgets');
   if (widgetsEl) {
+    if (opsResearchTypeFilter) { widgetsEl.style.display = 'none'; perf.end(); return; }
     try {
       if (typeof renderLlcResearchQueueWidget === 'function') {
         await renderLlcResearchQueueWidget(widgetsEl);

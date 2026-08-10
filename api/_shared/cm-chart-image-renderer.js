@@ -18,7 +18,15 @@
 // Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
-import { heatRampColors, fitDataAxisRange, minYearForTemplate, fitPercentAxis } from './cm-native-chart-injector.js';
+import {
+  NATIVE_CHART_TEMPLATES,
+  buildInjectionSpec,
+  heatRampColors,
+  fitDataAxisRange,
+  minYearForTemplate,
+  fitPercentAxis,
+} from './cm-native-chart-injector.js';
+import { getChartColumnsForTemplate, getTabNameForTemplate } from './cm-excel-export.js';
 
 // R2-A2 (2026-06-30) — templates whose PNG window must mirror the native
 // injector's MIN_YEAR_BY_TEMPLATE floor so both surfaces plot the identical
@@ -400,8 +408,262 @@ const PCT_OF_ASK_RANGE = { min: 0.85, max: 1.05 };
 // Per-template Chart.js v3 config builders
 // ============================================================================
 
+function hexColor(color, fallback = '#003DA5') {
+  if (!color) return fallback;
+  const s = String(color);
+  return s.startsWith('#') ? s : `#${s}`;
+}
+
+function axisFormatFromNumFmt(numFmt) {
+  const f = String(numFmt || '');
+  if (/%/.test(f)) {
+    if (/0\.00%/.test(f)) return AXIS_FORMAT_PERCENT_2DP;
+    if (/0\.0%/.test(f)) return AXIS_FORMAT_PERCENT_1DP;
+    return AXIS_FORMAT_PERCENT_0DP;
+  }
+  if (/"\$"/.test(f) || /\$/.test(f)) return AXIS_FORMAT_CURRENCY_COMPACT;
+  if (/bps/i.test(f)) return AXIS_FORMAT_INTEGER;
+  return AXIS_FORMAT_INTEGER;
+}
+
+function buildNativeRowsAndSpec(chart, brand) {
+  if (!NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)) return null;
+  const baseCols = getChartColumnsForTemplate(chart.chart_template_id);
+  const tabName = getTabNameForTemplate(chart.chart_template_id);
+  const rows = Array.isArray(chart.rows) ? chart.rows : [];
+  if (!baseCols || !tabName || rows.length === 0) return null;
+
+  const dataStart = 5;
+  const dataEnd = dataStart + rows.length - 1;
+  const colsWithLetter = baseCols.map((c, i) => ({
+    ...c,
+    col: String.fromCharCode(65 + i),
+  }));
+  const built = buildInjectionSpec({
+    chart_template_id: chart.chart_template_id,
+    tabName,
+    cols: colsWithLetter,
+    dataStart,
+    dataEnd,
+    brand,
+    rows,
+    title: chart.name,
+    injectPeriodLabel: true,
+    vertical: chart.vertical,
+  });
+  if (!built?.spec) return null;
+
+  const helperCols = Array.isArray(built.helperCols) ? built.helperCols : [];
+  const allCols = colsWithLetter.slice();
+  const enrichedRows = rows.map((row) => ({ ...row }));
+  helperCols.forEach((helper, i) => {
+    const col = String.fromCharCode(65 + baseCols.length + i);
+    allCols.push({ ...helper, col });
+    for (const r of enrichedRows) {
+      r[helper.key] = typeof helper.getValue === 'function' ? helper.getValue(r) : r[helper.key];
+    }
+  });
+
+  const offset = Math.max(0, (Number(built.spec.dataStart) || dataStart) - dataStart);
+  const plottedRows = enrichedRows.slice(offset);
+  return { spec: built.spec, rows: plottedRows, cols: allCols };
+}
+
+function nativeValueGetter(cols, colLetter) {
+  const col = cols.find(c => c.col === colLetter);
+  if (!col) return () => null;
+  return (row) => row[col.key];
+}
+
+function nativeSeriesTitle(cols, colLetter) {
+  const col = cols.find(c => c.col === colLetter);
+  return col?.header || col?.key || colLetter;
+}
+
+function nativeLabels(rows, cols, catCol) {
+  const getCat = nativeValueGetter(cols, catCol);
+  const labels = rows.map((row) => {
+    const v = getCat(row);
+    if (v != null && v !== '') return String(v);
+    return periodEndLabel(row.period_end || row.year);
+  });
+  return labels;
+}
+
+function nativeOptions(spec, { yFormat, y1Format, legendPosition = 'bottom' } = {}) {
+  const opts = commonOpts({
+    yAxisFormat: yFormat || axisFormatFromNumFmt(spec.valAxNumFmt || spec.yLeftNumFmt),
+    yAxisRange: spec.yAxisRange || spec.yLeftRange,
+    yAxisTitle: spec.yLeftAxisTitle,
+    legendPosition,
+  });
+  if (spec.yRightRange || spec.yRightNumFmt || spec.yRightAxisTitle) {
+    opts.scales.y1 = {
+      position: 'right',
+      ticks: {
+        color: '#6A748C',
+        font: { family: 'Calibri', size: 9 },
+        ...(y1Format || axisFormatFromNumFmt(spec.yRightNumFmt)),
+      },
+      grid: { display: false },
+    };
+    if (spec.yRightRange?.min != null) opts.scales.y1.min = spec.yRightRange.min;
+    if (spec.yRightRange?.max != null) opts.scales.y1.max = spec.yRightRange.max;
+    if (spec.yRightAxisTitle) {
+      opts.scales.y1.title = {
+        display: true,
+        text: spec.yRightAxisTitle,
+        color: '#6A748C',
+        font: { family: 'Calibri', size: 10 },
+      };
+    }
+  }
+  opts.plugins.title = {
+    display: !!spec.title,
+    text: spec.title || '',
+    color: '#191919',
+    font: { family: 'Calibri', size: 16, weight: 'bold' },
+  };
+  return opts;
+}
+
+function buildNativeChartConfig(chart, brand) {
+  const native = buildNativeRowsAndSpec(chart, brand);
+  if (!native) return null;
+  const { spec, rows, cols } = native;
+  if (!rows.length) return null;
+  const labels = nativeLabels(rows, cols, spec.catCol);
+
+  const lineDataset = (s, axisId = 'y') => {
+    const getVal = nativeValueGetter(cols, s.valCol);
+    return {
+      type: 'line',
+      label: nativeSeriesTitle(cols, s.titleCol || s.valCol),
+      data: rows.map(r => getVal(r)),
+      borderColor: hexColor(s.color),
+      backgroundColor: hexColor(s.color),
+      borderDash: s.dashed ? [5, 4] : undefined,
+      fill: false,
+      tension: 0.15,
+      pointRadius: s.showMarker ? 3 : 0,
+      pointStyle: s.markerShape === 'dash' ? 'line' : 'circle',
+      borderWidth: 2,
+      yAxisID: axisId,
+    };
+  };
+
+  const barDataset = (s, axisId = 'y') => {
+    const getVal = nativeValueGetter(cols, s.valCol);
+    return {
+      type: 'bar',
+      label: nativeSeriesTitle(cols, s.titleCol || s.valCol),
+      data: rows.map(r => getVal(r)),
+      backgroundColor: s.noFill ? 'rgba(0,0,0,0)' : hexColor(s.color, '#62B5E5'),
+      borderColor: s.borderColor ? hexColor(s.borderColor) : hexColor(s.color, '#62B5E5'),
+      borderWidth: s.noFill ? 0 : 1,
+      yAxisID: axisId,
+    };
+  };
+
+  if (spec.type === 'line') {
+    return {
+      type: 'line',
+      data: { labels, datasets: [lineDataset(spec)] },
+      options: nativeOptions(spec),
+    };
+  }
+
+  if (spec.type === 'bar') {
+    return {
+      type: 'bar',
+      data: { labels, datasets: [barDataset(spec)] },
+      options: nativeOptions(spec),
+    };
+  }
+
+  if (spec.type === 'stacked-bar') {
+    return {
+      type: 'bar',
+      data: { labels, datasets: (spec.series || []).map(s => ({ ...barDataset(s), stack: 'stack' })) },
+      options: (() => {
+        const opts = nativeOptions(spec);
+        opts.scales.x.stacked = true;
+        opts.scales.y.stacked = true;
+        return opts;
+      })(),
+    };
+  }
+
+  if (spec.type === 'multi-line') {
+    const datasets = [];
+    if (spec.upDownBars && (spec.series || []).length >= 2) {
+      const lowSeries = spec.series[0];
+      const highSeries = spec.series[spec.series.length - 1];
+      const getLow = nativeValueGetter(cols, lowSeries.valCol);
+      const getHigh = nativeValueGetter(cols, highSeries.valCol);
+      datasets.push({
+        type: 'bar',
+        label: 'Bid-Ask Spread',
+        data: rows.map((r) => {
+          const low = Number(getLow(r));
+          const high = Number(getHigh(r));
+          return Number.isFinite(low) && Number.isFinite(high) ? [low, high] : null;
+        }),
+        backgroundColor: 'rgba(201,206,214,0.55)',
+        borderColor: '#C9CED6',
+        borderWidth: 1,
+        barPercentage: 0.8,
+        categoryPercentage: 0.9,
+        order: 2,
+      });
+    }
+    datasets.push(...(spec.series || []).map(s => ({ ...lineDataset(s), order: 1 })));
+    return {
+      type: 'bar',
+      data: { labels, datasets },
+      options: nativeOptions(spec),
+    };
+  }
+
+  if (spec.type === 'combo') {
+    const shared = !!spec.sharedAxis;
+    const datasets = [
+      ...(spec.barSeries || []).map(s => barDataset(s, spec.swapAxes && !shared ? 'y1' : 'y')),
+      ...(spec.lineSeries || []).map(s => lineDataset(s, shared || spec.swapAxes ? 'y' : 'y1')),
+    ];
+    const opts = nativeOptions(spec);
+    if (spec.barGrouping === 'stacked') {
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
+    }
+    return { type: 'bar', data: { labels, datasets }, options: opts };
+  }
+
+  if (spec.type === 'doughnut') {
+    const series = spec.series || [];
+    const value = series[0] || spec;
+    const getVal = nativeValueGetter(cols, value.valCol);
+    return {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          label: spec.title || chart.name,
+          data: rows.map(r => getVal(r)),
+          backgroundColor: rows.map((_, i) => paletteSeries(brand)[i % paletteSeries(brand).length]),
+        }],
+      },
+      options: nativeOptions(spec),
+    };
+  }
+
+  return null;
+}
+
 function buildChartConfig(chart, brand) {
   if (!chart || !chart.rows || chart.rows.length === 0) return null;
+  const nativeConfig = buildNativeChartConfig(chart, brand);
+  if (nativeConfig) return nativeConfig;
   const palette = paletteSeries(brand);
 
   // Crop to recent window for legibility. Annual templates (year column)

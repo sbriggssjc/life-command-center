@@ -454,6 +454,15 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Nightly 2026-08-10 — 9/9 fired, 8 healthy; sf-assist treadmill → prompt 92 (micro)
+Lanes: U1 145 / U2 43 / U3 13 / U5 157. **Re-score night 2: 800 walked, 26 auto-links (+8), 8
+review** — conservative gate steady. Donor stamped 0 (lumpy; last night's links had no unique
+bridge matches — watch not bug; gov 19 / dia 15). Disambig clean post-91. **sf-link-assist:
+cron succeeds but all 20 annotations carry LAST night's run_id — re-scores the SAME 20 nightly
+(no annotated-exclusion in the fetch; 3rd walk-the-pool miss after 83/84). Prompt 92 queued**
+(anti-join + pre-LLM skip + shared structural test candidate: every nightly LLM tick's fetch must
+exclude its own output). W5.3 volume: 17/~50 fresh extractions (slow week).
+
 ### Prompt 91 landed — PR #1655, sweep LIVE; awaiting merge + redeploy for the guard
 Root cause found: the enrich promoter passed `match?.candidates ?? []` (empty) into a mint —
 guard now at the single choke point (`emitMatchDisambiguation`), all four callers honor the

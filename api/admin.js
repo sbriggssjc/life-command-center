@@ -27,6 +27,9 @@ import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { invokeExtractionAI } from './_shared/ai.js';
 import {
+  buildNewsAlertExtractionPrompt, parseNewsAlertExtractionJson, normalizeNewsAlertExtraction,
+} from './_shared/news-alert-assist.js';
+import {
   JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
   junkCandidateReason, namingHygieneReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
   parseJunkVerdictJson, planJunkApply, buildRetireMarker,
@@ -188,6 +191,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'priority-queue':             return handlePriorityQueueList(req, res);
     case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
+    case 'news-alerts':                return handleNewsAlerts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
@@ -1160,6 +1164,195 @@ async function handleReviewCounts(req, res) {
     degraded: lanes.some((l) => l.status === 'partial'),
     lanes,
   });
+}
+
+async function handleNewsAlerts(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const selectCols = [
+    'news_lead_id', 'source', 'domain', 'tenant', 'match_kind', 'confidence',
+    'city', 'state', 'article_url', 'article_title', 'summary', 'status',
+    'dedup_key', 'source_ref', 'raw_subject', 'metadata', 'created_at', 'updated_at',
+  ].join(',');
+
+  const countStatus = async (statusPath) => {
+    const r = await opsQuery('GET', 'news_alert_leads?select=news_lead_id&' + statusPath + '&limit=1', undefined, { countMode: 'exact' });
+    return (r.ok && typeof r.count === 'number') ? r.count : 0;
+  };
+
+  if (req.method === 'GET') {
+    const status = String(req.query.status || 'open').trim().toLowerCase();
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '100', 10)));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
+    let statusFilter = 'status=in.(needs_review,developer_unknown)';
+    if (status === 'needs_review' || status === 'review') statusFilter = 'status=eq.needs_review';
+    else if (status === 'developer_unknown' || status === 'developer') statusFilter = 'status=eq.developer_unknown';
+    else if (status === 'dismissed') statusFilter = 'status=eq.dismissed';
+    else if (status === 'converted') statusFilter = 'status=eq.converted';
+    else if (status === 'all') statusFilter = '';
+    else if (status !== 'open') return res.status(400).json({ error: 'invalid status filter' });
+
+    const path = 'news_alert_leads?select=' + selectCols
+      + (statusFilter ? '&' + statusFilter : '')
+      + '&order=created_at.desc'
+      + '&limit=' + limit + '&offset=' + offset;
+    const [itemsR, openN, reviewN, devN, dismissedN, convertedN] = await Promise.all([
+      opsQuery('GET', path, undefined, { countMode: 'exact' }),
+      countStatus('status=in.(needs_review,developer_unknown)'),
+      countStatus('status=eq.needs_review'),
+      countStatus('status=eq.developer_unknown'),
+      countStatus('status=eq.dismissed'),
+      countStatus('status=eq.converted'),
+    ]);
+    if (!itemsR.ok) return res.status(502).json({ error: 'news_alert_list_failed', detail: itemsR.data });
+    return res.status(200).json({
+      ok: true,
+      status,
+      total: typeof itemsR.count === 'number' ? itemsR.count : null,
+      counts: {
+        open: openN,
+        needs_review: reviewN,
+        developer_unknown: devN,
+        dismissed: dismissedN,
+        converted: convertedN,
+      },
+      items: Array.isArray(itemsR.data) ? itemsR.data : [],
+    });
+  }
+
+  if (req.method !== 'POST') return res.status(405).json({ error: 'GET or POST only' });
+
+  let workspaceId = null;
+  try { workspaceId = req.headers['x-lcc-workspace'] || primaryWorkspace(user)?.workspace_id || null; } catch (_e) { workspaceId = null; }
+  if (!requireRole(user, 'operator', workspaceId)) return res.status(403).json({ error: 'Operator role required' });
+
+  const body = req.body || {};
+  const id = String(body.news_lead_id || body.id || '').trim();
+  const action = String(body.action || '').trim().toLowerCase();
+  if (!id) return res.status(400).json({ error: 'news_lead_id required' });
+
+  if (action === 'extract_details') {
+    const readR = await opsQuery('GET',
+      'news_alert_leads?select=' + selectCols + '&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+      undefined, { countMode: 'none' });
+    if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+    const row = Array.isArray(readR.data) ? readR.data[0] : null;
+    if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+
+    const prompt = buildNewsAlertExtractionPrompt(row);
+    const ai = await invokeExtractionAI({ prompt, surface: 'news_alert_assist' });
+    const parsed = parseNewsAlertExtractionJson(ai?.data?.response || '');
+    const now = new Date().toISOString();
+    const extraction = normalizeNewsAlertExtraction(parsed, row, {
+      model: ai?.data?.model || null,
+      provider: ai?.provider || null,
+      at: now,
+    });
+    extraction.tried = Array.isArray(ai?.tried) ? ai.tried : [];
+    extraction.ai_ok = !!ai?.ok;
+
+    const metadata = Object.assign({}, row.metadata || {});
+    metadata.news_alert_extraction = extraction;
+    const patchR = await opsQuery('PATCH',
+      'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+      { metadata, updated_at: now },
+      { headers: { Prefer: 'return=representation' } });
+    if (!patchR.ok) return res.status(502).json({ error: 'news_alert_extract_update_failed', detail: patchR.data });
+    const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+    return res.status(200).json({ ok: true, item: updated, extraction });
+  }
+
+  if (action === 'create_tracking_task') {
+    const readR = await opsQuery('GET',
+      'news_alert_leads?select=' + selectCols + '&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+      undefined, { countMode: 'none' });
+    if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+    const row = Array.isArray(readR.data) ? readR.data[0] : null;
+    if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+    const ex = row.metadata && row.metadata.news_alert_extraction ? row.metadata.news_alert_extraction : null;
+    const titleCore = row.article_title || row.raw_subject || [row.tenant, row.city, row.state].filter(Boolean).join(' - ') || 'News alert';
+    const triggers = ex && Array.isArray(ex.follow_up_triggers) ? ex.follow_up_triggers : [];
+    const instructions = [
+      row.article_url ? 'Article: ' + row.article_url : null,
+      row.summary ? 'Summary: ' + row.summary : null,
+      ex && ex.reason ? 'Assist reason: ' + ex.reason : null,
+      triggers.length ? 'Follow-up triggers: ' + triggers.join('; ') : null,
+    ].filter(Boolean).join('\n\n') || null;
+    const rt = await openResearchTask({
+      researchType: 'news_alert_development_followup',
+      title: 'News alert follow-up - ' + titleCore,
+      instructions,
+      domain: 'lcc',
+      propertyId: id,
+      sourceTable: 'news_alert_leads',
+      metadata: {
+        news_lead_id: id,
+        domain: row.domain || null,
+        tenant: row.tenant || null,
+        city: row.city || null,
+        state: row.state || null,
+        article_url: row.article_url || null,
+        extraction: ex || null,
+      },
+      workspaceId,
+    });
+    if (!rt.ok) return res.status(502).json({ error: 'news_alert_task_failed', detail: rt });
+    const now = new Date().toISOString();
+    const metadata = Object.assign({}, row.metadata || {});
+    metadata.news_alert_tracking_task = { id: rt.id || null, created: !!rt.created, duplicate: !!rt.duplicate, at: now };
+    metadata.news_alert_review = {
+      action: 'create_tracking_task',
+      previous_status: row.status || null,
+      status: 'converted',
+      note: 'Converted to research tracking task.',
+      reviewed_at: now,
+      reviewed_by: user.email || user.user_id || user.id || null,
+    };
+    const patchR = await opsQuery('PATCH',
+      'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+      { status: 'converted', metadata, updated_at: now },
+      { headers: { Prefer: 'return=representation' } });
+    if (!patchR.ok) return res.status(502).json({ error: 'news_alert_task_update_failed', detail: patchR.data, task: rt });
+    const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+    return res.status(200).json({ ok: true, item: updated, research_task: rt });
+  }
+
+  const actionStatus = {
+    dismiss: 'dismissed',
+    reopen: 'needs_review',
+    send_to_developer: 'developer_unknown',
+    mark_developer: 'developer_unknown',
+    mark_converted: 'converted',
+  };
+  const nextStatus = actionStatus[action];
+  if (!nextStatus) return res.status(400).json({ error: 'invalid action', allowed: Object.keys(actionStatus) });
+
+  const readR = await opsQuery('GET',
+    'news_alert_leads?select=news_lead_id,status,metadata&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+    undefined, { countMode: 'none' });
+  if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+  const row = Array.isArray(readR.data) ? readR.data[0] : null;
+  if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+
+  const now = new Date().toISOString();
+  const metadata = Object.assign({}, row.metadata || {});
+  metadata.news_alert_review = {
+    action,
+    previous_status: row.status || null,
+    status: nextStatus,
+    note: body.note ? String(body.note).slice(0, 1000) : null,
+    reviewed_at: now,
+    reviewed_by: user.email || user.user_id || user.id || null,
+  };
+
+  const patchR = await opsQuery('PATCH',
+    'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+    { status: nextStatus, metadata, updated_at: now },
+    { headers: { Prefer: 'return=representation' } });
+  if (!patchR.ok) return res.status(502).json({ error: 'news_alert_update_failed', detail: patchR.data });
+  const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+  return res.status(200).json({ ok: true, item: updated });
 }
 
 // ============================================================================
@@ -5127,7 +5320,7 @@ async function fetchSfAssistAnnotated() {
     for (let off = 0; ; off += PAGE) {
       const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref'
         + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
-        + '&order=id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+        + '&order=proposal_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
       if (!r.ok || !Array.isArray(r.data)) break;
       for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
       if (r.data.length < PAGE) break;
@@ -5171,12 +5364,17 @@ async function handleSfLinkAssistTick(req, res) {
   const enabled = w93FlagEnabled('W9_3_SF_ASSIST', flag);
   const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(SF_ASSIST_BATCH), 10)));
 
-  // Pull needs_review candidates (both domains) via the existing federated source,
-  // minus those already annotated (resumable).
+  // Pull needs_review candidates (both domains) via the existing federated source.
+  // Anti-join against our OWN output: exclude subject_refs this source has already
+  // annotated so the tick WALKS the ~3.3k pool instead of re-scoring the same
+  // top-N nightly (prompt 92 — the walk-the-pool miss, 3rd instance of the class).
+  // The pool is finite + verdict-consumed, so annotated-exclusion is self-healing.
   const annotated = await fetchSfAssistAnnotated();
   let src = { items: [] };
   try { src = await fetchFederatedSource('sf_link_candidate', Math.max(120, limit * 6)); } catch (e) { src = { items: [], error: e?.message || String(e) }; }
-  const fresh = (src.items || []).filter((it) => it.subject_ref && !annotated.has(it.subject_ref));
+  const laneItems = (src.items || []);
+  const alreadyAnnotatedExcluded = laneItems.filter((it) => it.subject_ref && annotated.has(it.subject_ref)).length;
+  const fresh = laneItems.filter((it) => it.subject_ref && !annotated.has(it.subject_ref));
 
   if (req.method === 'POST') {
     if (!enabled) {
@@ -5186,10 +5384,15 @@ async function handleSfLinkAssistTick(req, res) {
     }
     const sourceRunId = 'w93a_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
     const summary = { source_run_id: sourceRunId, candidates: fresh.length, annotated_existing: annotated.size,
-      proposed: 0, failed: 0, budget_exhausted: false, by_verdict: {} };
+      already_annotated_excluded: alreadyAnnotatedExcluded, proposed: 0, failed: 0, skipped: 0,
+      budget_exhausted: false, by_verdict: {} };
     const start = Date.now();
     for (const item of fresh.slice(0, limit)) {
       if (Date.now() - start >= SF_ASSIST_BUDGET_MS) { summary.budget_exhausted = true; break; }
+      // Belt + braces: skip-before-LLM if an annotation already exists for the subject
+      // (the fresh-filter already excludes these; this guards against paying ~16s to
+      // overwrite an existing annotation should the pool + set ever diverge).
+      if (annotated.has(item.subject_ref)) { summary.skipped += 1; continue; }
       try {
         const { proposal, promptHash, provider, model, tried } = await scoreSfAssistItem(item);
         summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
@@ -5205,7 +5408,8 @@ async function handleSfLinkAssistTick(req, res) {
 
   // GET dry-run (+ ?score=1 inline sample: NO writes).
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
-    lane_candidates: (src.items || []).length, annotated_existing: annotated.size, fresh: fresh.length,
+    lane_candidates: laneItems.length, annotated_existing: annotated.size,
+    already_annotated_excluded: alreadyAnnotatedExcluded, fresh: fresh.length,
     note: 'Annotation-only. The assist ranks each owner<->SF-account candidate same-party/not/uncertain with confidence + one-line evidence, stored in lcc_clean_assist_proposals (source w9_3_sf_assist). NEVER a verdict; the lane sorts easy-first and each human verdict self-measures agree/disagree.' };
   if (req.query.score === '1' || req.query.score === 'true') {
     const n = Math.min(20, Math.max(1, parseInt(req.query.n || '6', 10) || 6));

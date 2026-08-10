@@ -20,6 +20,8 @@
     currentSubspecialty: 'all',
     currentAsOf: '',
     currentPacket: null,
+    currentCharts: [],
+    currentImages: new Map(),
     chartInstances: new Map(),    // chart_template_id → Chart.js instance
   };
   window.__cmState = cmState;     // expose for debugging
@@ -187,7 +189,32 @@
     if (subspecialty && subspecialty !== 'all') {
       charts = charts.map(c => ({ ...c, rows: (c.rows || []).filter(row => !row.subspecialty || row.subspecialty === subspecialty) }));
     }
+    cmState.currentCharts = charts;
     return charts;
+  }
+
+  async function loadPacketImage(vertical, chartTemplateId) {
+    const asOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
+    if (!chartTemplateId) return null;
+    const r = await fetchJSON(
+      `/api/capital-markets?action=packet_images&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}&chart_template_ids=${encodeURIComponent(chartTemplateId)}`
+    );
+    const img = (r.images || []).find(x => x.chart_template_id === chartTemplateId);
+    if (!img?.png_b64) return null;
+    const src = `data:${img.mime || 'image/png'};base64,${img.png_b64}`;
+    cmState.currentImages.set(chartTemplateId, src);
+    return src;
+  }
+
+  async function mapLimit(items, limit, worker) {
+    const queue = Array.from(items || []);
+    const workers = Array.from({ length: Math.max(1, Math.min(limit, queue.length || 1)) }, async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        await worker(item);
+      }
+    });
+    await Promise.all(workers);
   }
 
   // ---- Chart builders --------------------------------------------------------
@@ -1552,12 +1579,13 @@
   }
   function asOfOptions() {
     const latest = latestCompletedQuarterEndClient();
+    const current = cmState.currentAsOf || latest;
     const opts = [];
     for (let k = 0; k < 12; k++) {
       const qe = quarterEndBackClient(latest, k);
       const ym = qe.match(/^(\d{4})-(\d{2})/);
       const label = ym ? `${ym[1]} Q${Math.ceil(+ym[2] / 3)} (${qe})` : qe;
-      const sel = k === 0 ? ' selected' : '';
+      const sel = qe === current ? ' selected' : '';
       const latestTag = k === 0 ? ' — latest' : '';
       opts.push(`<option value="${qe}"${sel}>${label}${latestTag}</option>`);
     }
@@ -1569,19 +1597,25 @@
     const subRows = (cmState.subspecialties[vertical] || []).map(s =>
       `<option value="${s.subspecialty_id.replace(/^[a-z]+_/, '')}">${s.label}</option>`
     ).join('');
-    const cards = PHASE_1_TEMPLATES.map(id => {
-      const meta = (cmState.catalog || []).find(t => t.chart_template_id === id);
+    const packetCharts = cmState.currentCharts && cmState.currentCharts.length
+      ? cmState.currentCharts
+      : PHASE_1_TEMPLATES.map(id => (cmState.catalog || []).find(t => t.chart_template_id === id)).filter(Boolean);
+    const cards = packetCharts.map(chartMeta => {
+      const id = chartMeta.chart_template_id;
+      const meta = (cmState.catalog || []).find(t => t.chart_template_id === id) || chartMeta;
       if (!meta) return '';
-      if (!meta.applies_to_verticals?.includes(vertical)) return '';
       // DataTable + kpi_block charts get an HTML container (no canvas); span 2 columns
       const isDataTable = meta.chart_type === 'DataTable';
       const isKpiBlock  = meta.chart_type === 'kpi_block';
-      const cardSpan = (isDataTable || isKpiBlock) ? 'grid-column: span 2;' : '';
+      const cardSpan = 'grid-column: 1 / -1;';
       const bodyContainer = isKpiBlock
         ? `<div class="cm-kpi-container" data-template="${id}"></div>`
         : isDataTable
           ? `<div class="cm-table-container" data-template="${id}" style="max-height:340px;overflow:auto;border:1px solid #E7E6E6;border-radius:4px"></div>`
-          : `<div style="position:relative;height:300px"><canvas data-template="${id}"></canvas></div>`;
+          : `<div class="cm-server-image-wrap" data-template="${id}" style="position:relative;min-height:480px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:auto">
+               <img class="cm-server-image" data-template="${id}" alt="${meta.name || id}" style="width:900px;max-width:100%;height:auto;display:none" />
+               <div class="cm-server-image-loading" data-template="${id}" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')}">Loading export chart...</div>
+             </div>`;
       return `
         <div class="cm-card" id="cm-card-${id}" style="background:#fff;border:1px solid #E7E6E6;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,0.04);${cardSpan}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
@@ -1667,7 +1701,7 @@
         </div>
         <div id="cm-status" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-bottom:8px"></div>
         ${vertical === 'national_st' ? renderRcaUploadCard() : ''}
-        <div class="cm-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${cards}</div>
+        <div class="cm-grid" style="display:grid;grid-template-columns:minmax(0, 1fr);gap:16px;max-width:960px">${cards}</div>
         <div style="margin-top:16px;padding:10px;background:${brandColor('nm_pale','#E0E8F4')};border-radius:4px;font-size:9pt;color:${brandColor('nm_text','#191919')}">
           ${vertical === 'national_st'
             ? '<strong>Source:</strong> public.cm_rca_quarterly. Includes property or portfolio sales $2.5 million or greater (RCA TrendTracker convention). Cross-product cap rate is volume-weighted; quartile metrics are simple averages across products that report them.'
@@ -2023,11 +2057,14 @@
     if (status) status.textContent = 'Loading data…';
     try {
       const charts = await loadQuarterly(vertical, subspecialty);
+      const chartIds = new Set((charts || []).map(c => c.chart_template_id));
+      cmState.currentImages = new Map();
       cmState.chartInstances.forEach((c, id) => destroyChart(id));
       let total = 0, ok = 0;
-      for (const tplId of PHASE_1_TEMPLATES) {
+      const imageCharts = [];
+      for (const tplId of chartIds) {
         const chart = charts.find(c => c.chart_template_id === tplId);
-        if (!chart || !chart.ok) continue;
+        if (!chart || chart.ok === false) continue;
         total++;
         if (chart.chart_type === 'DataTable') {
           const container = document.querySelector(`.cm-table-container[data-template="${tplId}"]`);
@@ -2043,14 +2080,30 @@
           ok++;
           continue;
         }
-        const canvas = document.querySelector(`canvas[data-template="${tplId}"]`);
-        if (!canvas) continue;
-        const inst = buildChart(canvas, chart);
-        if (inst) {
-          cmState.chartInstances.set(tplId, inst);
-          ok++;
-        }
+        imageCharts.push(chart);
       }
+      await mapLimit(imageCharts, 4, async (chart) => {
+        const tplId = chart.chart_template_id;
+        const img = document.querySelector(`img.cm-server-image[data-template="${tplId}"]`);
+        const loading = document.querySelector(`.cm-server-image-loading[data-template="${tplId}"]`);
+        if (loading) loading.textContent = 'Loading export chart...';
+        let src = null;
+        try {
+          src = await loadPacketImage(vertical, tplId);
+        } catch (e) {
+          console.warn(`cm packet image load failed for ${tplId}`, e);
+        }
+        if (img && src) {
+          img.src = src;
+          img.style.display = 'block';
+          if (loading) loading.style.display = 'none';
+          ok++;
+        } else if (loading) {
+          loading.textContent = (chart.rows || []).length
+            ? 'Export chart image unavailable. Use Copy data or workbook export for this chart.'
+            : 'No data available.';
+        }
+      });
       hydrateCommentary(charts);
       if (status) {
         const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
@@ -2076,6 +2129,8 @@
 
     try {
       await Promise.all([loadBrand(), loadCatalog(), loadSubspecialties(vertical)]);
+      cmState.currentAsOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
+      await loadQuarterly(vertical, cmState.currentSubspecialty);
     } catch (e) {
       el.innerHTML = `<div style="padding:24px;color:#c00">Failed to load Capital Markets reference data: ${e.message}</div>`;
       return '';
@@ -2102,7 +2157,7 @@
       sel.value = cmState.currentSubspecialty;
       sel.addEventListener('change', (ev) => {
         cmState.currentSubspecialty = ev.target.value;
-        renderCharts(vertical, cmState.currentSubspecialty);
+        renderCapitalMarketsForVertical(vertical);
       });
     }
 
@@ -2111,7 +2166,7 @@
       cmState.currentAsOf = asofSel.value || latestCompletedQuarterEndClient();
       asofSel.addEventListener('change', (ev) => {
         cmState.currentAsOf = ev.target.value;
-        renderCharts(vertical, cmState.currentSubspecialty);
+        renderCapitalMarketsForVertical(vertical);
       });
     }
 
@@ -2144,9 +2199,9 @@
         const orig = btn.textContent;
         btn.textContent = 'Copying';
         try {
-          const canvas = document.querySelector(`canvas[data-template="${tpl}"]`);
-          if (!canvas || !navigator.clipboard?.write) throw new Error('PNG copy unavailable for this chart');
-          const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+          const img = document.querySelector(`img.cm-server-image[data-template="${tpl}"]`);
+          if (!img?.src || !navigator.clipboard?.write) throw new Error('PNG copy unavailable for this chart');
+          const blob = await fetch(img.src).then(r => r.blob());
           await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
           btn.textContent = 'Copied';
           setTimeout(() => { btn.textContent = orig; }, 1800);

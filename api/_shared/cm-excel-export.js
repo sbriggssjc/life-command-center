@@ -1097,6 +1097,14 @@ const TAB_NAMES = {
   rent_psf_box_quarterly_modeled: 'Data_Rent_PSF_Box_Mdl',
 };
 
+export function getChartColumnsForTemplate(chartTemplateId) {
+  return CHART_COLUMNS[chartTemplateId] || null;
+}
+
+export function getTabNameForTemplate(chartTemplateId) {
+  return TAB_NAMES[chartTemplateId] || null;
+}
+
 // ============================================================================
 // Master Paste-Ready layout (gov vertical)
 //

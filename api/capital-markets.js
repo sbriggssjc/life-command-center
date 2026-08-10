@@ -410,6 +410,7 @@ export default withErrorHandler(async function handler(req, res) {
       case 'broker_patterns':  return listBrokerPatterns(req, res);
       case 'packet_status':    return packetStatus(req, res);
       case 'packet':           return getReportPacket(req, res, user);
+      case 'packet_images':    return getReportPacketImages(req, res, user);
       case 'commentary':       return getCommentary(req, res);
       case 'marketing_markdown': return marketingMarkdown(req, res);
 
@@ -429,7 +430,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, packet_status, packet, commentary, marketing_markdown, chart, quarterly, export, narrative, copilot_stat, copilot_stat_catalog'
+          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, packet_status, packet, packet_images, commentary, marketing_markdown, chart, quarterly, export, narrative, copilot_stat, copilot_stat_catalog'
         });
     }
   }
@@ -994,64 +995,15 @@ function packetFlagsFromCharts(charts = [], periodEnd) {
 }
 
 async function buildLivePacket({ vertical, periodEnd, quarter, user }) {
-  // CM packet-export parity (2026-08-09): the packet must BACK the export, not
-  // fork it — so it has to capture the FULL registered chart set, not just the
-  // phase<=5 dashboard subset. The standard export applies no phase cap and
-  // pulls every catalog template that applies to the vertical (phases run to
-  // 31); mirror that here so the frozen packet carries the 10 higher-phase
-  // registered feeds (sold/ask cap-by-term, rent+price PSF/chair, market
-  // turnover, inventory backlog, core/avail cap dots, txn+avg-deal combo) that
-  // were previously dropped. '999' = effectively "all phases" (max is 31).
-  const fakeReq = { query: { vertical, as_of: periodEnd, subspecialty: 'all', phase: '999' } };
-  let statusCode = 200;
-  let payload = null;
-  const fakeRes = {
-    status(code) { statusCode = code; return this; },
-    json(obj) { payload = obj; return obj; },
-  };
-  await fetchQuarterly(fakeReq, fakeRes);
-  if (statusCode >= 400) {
-    const err = new Error(payload?.error || `quarterly payload failed (${statusCode})`);
-    err.status = statusCode;
-    err.detail = payload;
-    throw err;
-  }
-  let charts = payload?.charts || [];
-
-  // CM close-out items 4 & 7 — apply the SAME per-series display_from crop the
-  // standard export applies (exportWorkbook reads cm_view_registry and crops each
-  // chart's rows; fetchQuarterly did NOT, so the frozen packet carried the FULL
-  // ungated history: Data_NM_vs_Market from 2001-01-31 and Data_Rent_PSF_Box from
-  // 1983). The registry display_from is already curated correctly (NM_m=2012,
-  // rent_box_q=2003), so cropping here brings the packet's charts to parity with
-  // the standard export without duplicating the registry. Best-effort: a missing
-  // registry / fetch failure just means no crop (prior whole-history behavior).
-  const cropDomain = VERTICAL_TO_DOMAIN[normalizePacketVertical(vertical)];
-  if (cropDomain && Array.isArray(charts) && charts.length) {
-    try {
-      const reg = await domainQuery(
-        cropDomain, 'GET',
-        `cm_view_registry?select=chart_template_id,view_name,display_from&vertical=eq.${encodeURIComponent(normalizePacketVertical(vertical))}&display_from=not.is.null`
-      );
-      const displayFromRows = (reg && reg.ok !== false && Array.isArray(reg.data))
-        ? reg.data.filter((r) => r && r.chart_template_id && r.display_from)
-        : [];
-      if (displayFromRows.length) {
-        charts = charts.map((c) => {
-          const df = resolveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name);
-          if (!df || !Array.isArray(c.rows)) return c;
-          return { ...c, rows: cropRowsToDisplayFrom(c.rows, c, df) };
-        });
-      }
-    } catch { /* registry optional — no crop on failure */ }
-  }
+  const payload = await assembleExportPayloadForPacket({ vertical, periodEnd, user });
+  const charts = payload?.charts || [];
 
   return {
     vertical,
     quarter,
     fiscal_quarter: quarter,
     period_end: periodEnd,
-    source: 'live-freeze',
+    source: 'export-payload-freeze',
     frozen: false,
     generated_at: new Date().toISOString(),
     generated_by: user?.email || user?.id || 'api',
@@ -1063,6 +1015,40 @@ async function buildLivePacket({ vertical, periodEnd, quarter, user }) {
     pages: chartsToPages(charts),
     flags: packetFlagsFromCharts(charts, periodEnd),
   };
+}
+
+async function assembleExportPayloadForPacket({ vertical, periodEnd, user }) {
+  const fakeReq = {
+    query: {
+      vertical,
+      as_of: periodEnd,
+      subspecialty: 'all',
+      format: 'payload',
+    },
+    user,
+  };
+  let statusCode = 200;
+  let payload = null;
+  const fakeRes = {
+    setHeader() {},
+    status(code) { statusCode = code; return this; },
+    json(obj) { payload = obj; return obj; },
+    send(obj) { payload = obj; return obj; },
+  };
+  await exportWorkbook(fakeReq, fakeRes);
+  if (statusCode >= 400) {
+    const err = new Error(payload?.error || `export payload assembly failed (${statusCode})`);
+    err.status = statusCode;
+    err.detail = payload;
+    throw err;
+  }
+  if (!payload || payload.ok === false) {
+    const err = new Error(payload?.error || 'export payload assembly returned no payload');
+    err.status = payload?.status || 500;
+    err.detail = payload;
+    throw err;
+  }
+  return payload;
 }
 
 function quarterEndBack(periodEnd, k) {
@@ -1218,6 +1204,47 @@ async function getReportPacket(req, res, user) {
     });
   } catch (e) {
     return res.status(e.status || 500).json({ error: e.message || 'packet_failed', detail: e.detail || null });
+  }
+}
+
+async function getReportPacketImages(req, res, user) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const asOfResolution = resolveAsOf(req.query.as_of || periodEndFromQuarterLabel(req.query.quarter));
+  if (asOfResolution.asOf === null) return res.status(400).json({ error: 'invalid_as_of_or_quarter' });
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(asOfResolution.asOf);
+  const ids = String(req.query.chart_template_ids || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  try {
+    const out = await buildOrFetchPacket({
+      vertical,
+      quarter,
+      periodEnd: asOfResolution.asOf,
+      user,
+      forceLive: req.query.live === 'true',
+    });
+    const idSet = ids.length ? new Set(ids) : null;
+    const charts = (out.packet?.charts || []).filter(c =>
+      c && c.chart_template_id && (!idSet || idSet.has(c.chart_template_id))
+    );
+    const { tokens: brand } = await loadBrandTokensObject();
+    const rendered = await renderChartsToImages({ charts, brand });
+    return res.status(200).json({
+      ok: true,
+      vertical,
+      quarter,
+      period_end: asOfResolution.asOf,
+      snapshot_id: out.snapshot_id || null,
+      images: rendered.map(img => ({
+        chart_template_id: img.chart_template_id,
+        name: img.name || null,
+        mime: 'image/png',
+        png_b64: Buffer.from(img.png).toString('base64'),
+      })),
+    });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message || 'packet_images_failed', detail: e.detail || null });
   }
 }
 
@@ -1560,11 +1587,11 @@ async function exportWorkbook(req, res) {
     res.setHeader('X-CM-AsOf-Defaulted', String(asOfResolution.defaulted));
   }
 
-  if (format !== 'xlsx') {
+  if (!['xlsx', 'payload'].includes(format)) {
     return res.status(400).json({
       error: 'unsupported_format',
       format,
-      supported: ['xlsx'],
+      supported: ['xlsx', 'payload'],
       hint: 'PDF and PNG export land in V2.',
     });
   }
@@ -2385,6 +2412,21 @@ async function exportWorkbook(req, res) {
   });
 
   charts = [...realCharts, ...synthCharts];
+
+  if (format === 'payload') {
+    return res.status(200).json({
+      ok: true,
+      vertical,
+      subspecialty,
+      as_of: resolvedAsOf,
+      latest_completed_period_end: asOfResolution.latest,
+      charts,
+      brand,
+      masterRows,
+      masterMonthlyRows,
+      treasuryFreshness,
+    });
+  }
 
   // 4b. Render the chart set to PNG images via QuickChart so each Data_* tab
   //     has a chart visual at the top alongside the data table below. This

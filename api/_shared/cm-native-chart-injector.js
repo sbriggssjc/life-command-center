@@ -4708,8 +4708,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         // cap axis fits ~6.0–8.1%; falls back to the literal only when < 2 points.
         const plotVals = [];
         for (const r of plottedRows) {
-          const la = Number(r.avg_last_ask_cap);
-          const sp = Number(r.avg_bid_ask_spread);
+          const la = r.avg_last_ask_cap == null ? NaN : Number(r.avg_last_ask_cap);
+          const sp = r.avg_bid_ask_spread == null ? NaN : Number(r.avg_bid_ask_spread);
           if (Number.isFinite(la)) {
             plotVals.push(la);
             if (Number.isFinite(sp)) plotVals.push(la + sp);  // achieved = top of bar
@@ -4752,13 +4752,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
             valAxNumFmt: VAL_FMT_PERCENT_2DP,
             yLeftAxisTitle: 'Cap rate',
-            // Up/down bars draw the gray spread band between the FIRST (Last-Ask)
-            // and LAST (Achieved) line at each period — the master's chart type.
-            // They are a LINE-CHART decoration (not a bar chart type), so the
-            // line-only value axis still honors c:min → the axis stays ~6-8%.
-            // Bar fill = brand `iron` / border `steel` (cm-brand.json); spread is
-            // always positive (Achieved > Last-Ask) so only up-bars show.
-            // upDownGapWidth low → wide bars that nearly touch → continuous band.
+            // CM bid-ask (Low/Latest fix, final). The gray spread band is drawn with
+            // <c:upDownBars> (the master look) between the FIRST and LAST series at
+            // each period = Last-Ask ↔ Achieved. upDownBars is a lineChart
+            // decoration (not a bar chart type), and in practice it does NOT force a
+            // 0 axis floor — the cap axis fits ~6-8% (confirmed live).
+            //
+            // Root cause of the earlier "only Peak renders" (which SURVIVED removing
+            // the up/down bars): the two series were markerOnly / lineAlpha-0 — dash
+            // ticks with NO drawn connecting line — and Excel drops every
+            // manual-positioned data label EXCEPT the one at the series max on a
+            // marker-only / invisible-line series. The up/down bars were a red
+            // herring. Rendering both series as NORMAL drawn lines (like the
+            // nm_vs_market chart, which shows all three callouts) is what makes Low
+            // and Latest render — and the up/down-bar band coexists with them.
             upDownBars: true,
             upDownGapWidth: 20,
             // Each series renders as a FLAT DASH tick (markerOnly → no connecting
@@ -4783,6 +4790,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               // each callout now gets its OWN invisible host series (all reading
               // the Achieved column, alpha 0, off-legend, in the bar-free host
               // group). Split the annotations one-per-series → all three render.
+            // Two NORMAL visible cap LINES: Last-Ask (sky, bottom) + Achieved (navy,
+            // top). The three spread callouts (Peak/Low/Latest, in bps) are hosted
+            // on the Achieved line.
+            series: (() => {
               const spreadAnns = buildAnnotationsForSpec(
                 plottedRows,
                 (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
@@ -4810,6 +4821,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                 // NON-host series → the up/down bars' top edge.
                 { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
                   showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+              return [
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
+                { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  dataLabels: spreadAnns },
               ];
             })(),
             anchor: standardAnchor,
@@ -4822,7 +4837,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               width: 18,
               getValue: (row) => {
                 const la = row.avg_last_ask_cap, sp = row.avg_bid_ask_spread;
-                return (la != null && sp != null) ? Number(la) + Number(sp) : null;
+                if (la == null || sp == null) return null;
+                const lastAsk = Number(la);
+                const spread = Number(sp);
+                return Number.isFinite(lastAsk) && Number.isFinite(spread) ? lastAsk + spread : null;
               },
             },
           ],
