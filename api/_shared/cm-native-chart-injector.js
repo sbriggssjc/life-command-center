@@ -1610,9 +1610,13 @@ ${dLblsFrag}
   const hiLowLinesFrag = spec.hiLowLines
     ? `        <c:hiLowLines><c:spPr><a:ln w="${hiLowWidth}" cap="${hiLowCap}"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill></a:ln></c:spPr></c:hiLowLines>`
     : '';
+  // gapWidth controls the up/down-bar WIDTH: lower = wider bars. Default 150
+  // (Excel default, narrow). bid-ask uses a low value so the bars nearly touch
+  // and read as a continuous gray spread band between the two cap lines.
+  const upDownGap = Number.isFinite(spec.upDownGapWidth) ? spec.upDownGapWidth : 150;
   const upDownBarsFrag = spec.upDownBars
     ? `        <c:upDownBars>
-          <c:gapWidth val="150"/>
+          <c:gapWidth val="${upDownGap}"/>
           <c:upBars><c:spPr><a:solidFill><a:srgbClr val="D8DFDF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill></a:ln></c:spPr></c:upBars>
           <c:downBars><c:spPr><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill></a:ln></c:spPr></c:downBars>
         </c:upDownBars>`
@@ -4636,14 +4640,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
             valAxNumFmt: VAL_FMT_PERCENT_2DP,
             yLeftAxisTitle: 'Cap rate',
-            // Wide gray spread band between Last-Ask and Achieved. hiLowLines is a
-            // line element (not a bar), so the axis stays ~6-8%; the wide stroke
-            // makes the per-period sticks nearly touch → reads as the up/down-bar
-            // gray band. D8DFDF matches the old up/down-bar fill. hiLowLineWidth is
-            // the single tunable knob (EMU; 50800 ≈ 4pt) — widen for a more solid
-            // band, narrow toward sticks.
-            hiLowLines: 'D8DFDF',
-            hiLowLineWidth: 50800,
+            // Up/down bars draw the gray spread band between the FIRST (Last-Ask)
+            // and LAST (Achieved) line at each period — the master's chart type.
+            // They are a LINE-CHART decoration (not a bar chart type), so the
+            // line-only value axis still honors c:min → the axis stays ~6-8%.
+            // upDownGapWidth low → wide bars that nearly touch → continuous band.
+            // upDownGapWidth is the single tunable knob (higher = narrower bars).
+            upDownBars: true,
+            upDownGapWidth: 20,
             series: [
               { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy },
