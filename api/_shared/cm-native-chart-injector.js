@@ -4656,8 +4656,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             series: [
               { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
                 showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+              // Peak / Low / Latest callouts show the SPREAD value (avg_bid_ask_spread),
+              // anchored to the Achieved (top) point of each relevant bar.
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true,
+                dataLabels: buildAnnotationsForSpec(plottedRows, r => r.avg_bid_ask_spread, fmtPct2Native, 'bid_ask:spread') },
             ],
             anchor: standardAnchor,
           },
