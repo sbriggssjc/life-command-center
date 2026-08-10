@@ -5086,6 +5086,7 @@ function newsAlertCardHtml(it, isNext) {
   var actions = '';
   if (it.status === 'dismissed' || it.status === 'converted') {
     actions = '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'reopen\')">Reopen</button>';
+    if (task) actions += '<button class="q-action primary" onclick="navTo(\'pageResearch\')">Open Research</button>';
   } else {
     actions = '<button class="q-action primary" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'send_to_developer\')">Keep for developer research</button>'
       + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'extract_details\')">Extract details</button>'

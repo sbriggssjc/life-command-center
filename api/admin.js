@@ -1301,9 +1301,17 @@ async function handleNewsAlerts(req, res) {
     const now = new Date().toISOString();
     const metadata = Object.assign({}, row.metadata || {});
     metadata.news_alert_tracking_task = { id: rt.id || null, created: !!rt.created, duplicate: !!rt.duplicate, at: now };
+    metadata.news_alert_review = {
+      action: 'create_tracking_task',
+      previous_status: row.status || null,
+      status: 'converted',
+      note: 'Converted to research tracking task.',
+      reviewed_at: now,
+      reviewed_by: user.email || user.user_id || user.id || null,
+    };
     const patchR = await opsQuery('PATCH',
       'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
-      { metadata, updated_at: now },
+      { status: 'converted', metadata, updated_at: now },
       { headers: { Prefer: 'return=representation' } });
     if (!patchR.ok) return res.status(502).json({ error: 'news_alert_task_update_failed', detail: patchR.data, task: rt });
     const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;

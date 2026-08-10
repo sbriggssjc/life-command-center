@@ -146,9 +146,11 @@ Changes made:
   - Opens/idempotently reuses a `research_tasks` row with `research_type='news_alert_development_followup'`.
   - Uses `source_table='news_alert_leads'` and `source_record_id=<news_lead_id>` so repeated clicks do not spam the queue.
   - Stores the task linkage in `metadata.news_alert_tracking_task`.
+  - Marks the alert `converted` so worked items leave the open News Alert Review lane and live under the Converted chip/audit trail.
 - Updated the Decision Center card UI:
   - New `Extract details` button.
   - New `Create tracking task` button.
+  - Converted alerts with a task show an `Open Research` button.
   - Inline assist summary showing recommended next step, parties, signals, and timeline when available.
 
 Design note:
