@@ -4656,11 +4656,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             series: [
               { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
                 showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-              // Peak / Low / Latest callouts show the SPREAD value (avg_bid_ask_spread),
-              // anchored to the Achieved (top) point of each relevant bar.
+              // Peak / Low / Latest callouts show the SPREAD in bps ("111 bps"),
+              // anchored to the Achieved (top) point of each relevant bar. The
+              // annotation is gated on the ANCHOR existing (both last_ask AND spread
+              // finite) — a period with a spread but a null Achieved point can't host
+              // a label, so Excel would silently drop it (this is why only the
+              // mid-series Peak was showing). fmtBps: decimal fraction → bps.
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
                 showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true,
-                dataLabels: buildAnnotationsForSpec(plottedRows, r => r.avg_bid_ask_spread, fmtPct2Native, 'bid_ask:spread') },
+                dataLabels: buildAnnotationsForSpec(
+                  plottedRows,
+                  (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
+                    ? Number(r.avg_bid_ask_spread) : NaN,
+                  (v) => `${Math.round(Number(v) * 10000)} bps`,
+                  'bid_ask:spread') },
             ],
             anchor: standardAnchor,
           },
