@@ -1110,15 +1110,28 @@ ${c15LevelExt}
     // firm-term-bucket combo (G23/D9) spread its 4 overlapping cap labels
     // around their diamonds instead of stacking them all above (default 't').
     const pos = ['t', 'b', 'l', 'r', 'ctr'].includes(spec.pos) ? spec.pos : 't';
+    // CM close-out — optional branded callout styling for showVal labels:
+    //   serName:true → prefix each label with the series name ("Avg Cap: 6.50%")
+    //   boxed:true   → white callout box + hairline + brand charcoal text, matching
+    //                  the Peak/Low/Latest callouts. Per CT_DLbls order spPr → txPr
+    //                  precede dLblPos, and separator sits after the show* group.
+    const boxedFrag = spec.boxed
+      ? `          <c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="E0E8F4"/></a:solidFill></a:ln></c:spPr>
+          <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="${DLBL_VALUE_COLOR}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>`
+      : '';
+    const serNameVal = spec.serName ? 1 : 0;
+    const separatorFrag = spec.serName ? `<c:separator>: </c:separator>` : '';
     return `        <c:dLbls>
           ${numFmtFrag}
+${boxedFrag}
           <c:dLblPos val="${pos}"/>
           <c:showLegendKey val="0"/>
           <c:showVal val="1"/>
           <c:showCatName val="0"/>
-          <c:showSerName val="0"/>
+          <c:showSerName val="${serNameVal}"/>
           <c:showPercent val="0"/>
           <c:showBubbleSize val="0"/>
+          ${separatorFrag}
         </c:dLbls>`;
   }
   return '';
@@ -1534,6 +1547,7 @@ function buildMultiLineChartXml(spec) {
           <c:overlay val="0"/>
         </c:title>`
     : '';
+  let mlBand = 0;   // band ordinal among LABELED series only (not raw series idx)
   const seriesXml = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // Dashed line variant (e.g. gov "Outside Firm" cohort) — Excel
@@ -1541,9 +1555,12 @@ function buildMultiLineChartXml(spec) {
     const dashFrag = s.dashed
       ? `<a:prstDash val="dash"/>`
       : '';
-    // R37 P3 — per-series data labels; band by series ordinal so a 2nd/3rd
-    // series' Peak/Low/Latest stacks below the first instead of overlapping.
-    const dLblsFrag = dLblsXml(s.dataLabels, i);
+    // R37 P3 — per-series data labels; band by LABELED-series ordinal so a 2nd
+    // labeled series' Peak/Low/Latest stacks below the first. A chart with a
+    // single labeled series (even at a high index) stays at band 0 — never pushed
+    // into the data.
+    const _hasLbl = Array.isArray(s.dataLabels) && s.dataLabels.length > 0;
+    const dLblsFrag = dLblsXml(s.dataLabels, _hasLbl ? mlBand++ : 0);
     // R73 B13 — optional per-series markers (line KEPT). Sparse cohorts
     // (gov state/municipal cap) have isolated non-null points between gaps
     // that a markerless line cannot draw; a small circle marker makes single
@@ -1737,6 +1754,11 @@ function buildComboChartXml(spec) {
   const barAxId  = (spec.sharedAxis || !spec.swapAxes) ? 2 : 3;
   const lineAxId = spec.sharedAxis ? 2 : (spec.swapAxes ? 2 : 3);
 
+  // Shared band counter across bar THEN line series — only LABELED series consume
+  // a band, so a combo with one labeled series stays at band 0 (Cost of Capital's
+  // Avg Cap line no longer pushes into the data), while a combo with two labeled
+  // series (DOM_Ask bar + line) stacks them on separate rows.
+  let comboBand = 0;
   const barXml = barSeries.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // P8.5 — `noFill` flag on bar series (invisible base for floating bars)
@@ -1753,10 +1775,11 @@ function buildComboChartXml(spec) {
       const borderColor = s.borderColor.replace('#', '');
       lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
     }
-    // R37 P3 — per-series data labels (combo bar); band by series ordinal so the
-    // bar callouts and the line callouts sit on separate rows (DOM_Ask: the DOM
-    // "Peak" bar label vs the %-of-ask line labels no longer collide).
-    const dLblsFrag = dLblsXml(s.dataLabels, i);
+    // R37 P3 — per-series data labels (combo bar); band by LABELED-series ordinal
+    // so bar callouts and line callouts sit on separate rows (DOM_Ask) without
+    // pushing a lone labeled series into the data.
+    const _hasLbl = !(s.dataLabels && s.dataLabels.showVal) && Array.isArray(s.dataLabels) && s.dataLabels.length > 0;
+    const dLblsFrag = dLblsXml(s.dataLabels, _hasLbl ? comboBand++ : 0);
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -1797,9 +1820,11 @@ ${dLblsFrag}
   const lineXml = lineSeries.map((s, i) => {
     const idx = barSeries.length + i;
     const color = (s.color || '003DA5').replace('#', '');
-    // R37 P3 — per-series data labels (combo line); band continues past the bar
-    // series so line callouts stack below the bar callouts instead of overlapping.
-    const dLblsFrag = dLblsXml(s.dataLabels, barSeries.length + i);
+    // R37 P3 — per-series data labels (combo line); band continues from the shared
+    // counter so line callouts stack below any bar callouts (array-mode labels
+    // only; showVal-mode diamond labels are positioned separately, not banded).
+    const _hasLbl = !(s.dataLabels && s.dataLabels.showVal) && Array.isArray(s.dataLabels) && s.dataLabels.length > 0;
+    const dLblsFrag = dLblsXml(s.dataLabels, _hasLbl ? comboBand++ : 0);
     if (s.showMarker) {
       const shape = s.markerShape || 'circle';
       const size = s.markerSize || 5;
@@ -3894,6 +3919,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // — a relative inventory-vs-pace indicator, not an organic on-market count;
       // it self-heals as organic page-marker capture accrues.)
       const stripUniverse = false;
+      // Peak / Low / Latest callouts on the Months-of-Supply line (user request):
+      // formatted "X.X mo" to match the right-axis number format.
+      const fmtMonths = (v) => `${Number(v).toFixed(1)} mo`;
+      const mosLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.months_of_supply, fmtMonths, 'market_turnover:months_of_supply')
+        : undefined;
       return {
         tabName,
         spec: {
@@ -3917,7 +3948,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             { titleCol: monthlyPaceCol,   titleRow: headerRow, valCol: monthlyPaceCol,   color: navy },
           ],
           lineSeries: stripUniverse ? [] : [
-            { titleCol: mosCol, titleRow: headerRow, valCol: mosCol, color: '6A748C' },
+            { titleCol: mosCol, titleRow: headerRow, valCol: mosCol, color: '6A748C', dataLabels: mosLabels },
           ],
           anchor: standardAnchor,
         },
@@ -5010,12 +5041,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // CM chart fixes round 3, item 4 — the Leveraged Return Indexes chart had
       // NO callouts (multi-line case never wired dataLabels). Label peak/low/
       // latest on BOTH the cash-return and leveraged-mid lines over the plotted
-      // window (percent 1dp, matching the axis).
+      // window. Callouts use 2dp to match the data-tab values (7.42% etc.).
       const cashLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.cash_return, fmtPct1Native, 'cash_leveraged_returns:cash_return')
+        ? buildAnnotationsForSpec(plottedRows, r => r.cash_return, fmtPct2Native, 'cash_leveraged_returns:cash_return')
         : undefined;
       const lvgLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.leveraged_return_mid, fmtPct1Native, 'cash_leveraged_returns:leveraged_return_mid')
+        ? buildAnnotationsForSpec(plottedRows, r => r.leveraged_return_mid, fmtPct2Native, 'cash_leveraged_returns:leveraged_return_mid')
         : undefined;
       return {
         tabName,
@@ -5889,7 +5920,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // labels on top of each other ("still cramped", Scott's G23/D9 note).
       // Spread them around each diamond: avg→right, upper→top, lower→bottom,
       // median→left. Four distinct positions => no overlap, axis range unchanged.
-      const capLbl = (pos) => ({ showVal: true, numFmt: VAL_FMT_PERCENT_2DP, pos });
+      // CM close-out — branded callouts WITH the metric name ("Avg Cap: 6.50%"),
+      // matching the Peak/Low/Latest callout style, instead of bare floating values.
+      const capLbl = (pos) => ({ showVal: true, numFmt: VAL_FMT_PERCENT_2DP, pos, serName: true, boxed: true });
       return {
         tabName,
         spec: {
