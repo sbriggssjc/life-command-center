@@ -5181,13 +5181,86 @@ async function resolveNewsAlert(id, action) {
 window.resolveNewsAlert = resolveNewsAlert;
 
 function openNewsAlertResearchQueue() {
+  if (typeof navTo === 'function') navTo('pageReviewConsole');
+  setTimeout(function () { renderNewsAlertFollowupQueue(); }, 150);
+}
+window.openNewsAlertResearchQueue = openNewsAlertResearchQueue;
+
+function openGenericNewsAlertResearchLedger() {
   opsResearchTypeFilter = 'news_alert_development_followup';
   opsResearchFilter = 'active';
   opsResearchPage = 1;
   if (typeof navTo === 'function') navTo('pageResearch');
   setTimeout(function () { renderResearchPage(1); }, 150);
 }
-window.openNewsAlertResearchQueue = openNewsAlertResearchQueue;
+window.openGenericNewsAlertResearchLedger = openGenericNewsAlertResearchLedger;
+
+async function renderNewsAlertFollowupQueue() {
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/news-alerts?status=converted&limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderNewsAlertFollowupQueue()', 'Could not load news-alert follow-up queue'); return; }
+  var all = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var items = all.filter(function (it) {
+    var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+    return !!(meta.news_alert_tracking_task || meta.news_alert_extraction);
+  });
+  var html = '<div class="ops-header"><h2>News Alert Follow-up Queue</h2>'
+    + '<div class="ops-controls">'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'open\')">\u2190 Back to News Alert Review</button>'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">Converted Alerts</button>'
+    + '<button class="q-action" onclick="openGenericNewsAlertResearchLedger()">Research Ledger</button>'
+    + '</div></div>';
+  html += '<div class="rc-intro">Converted news-alert pursuits that need property, party, permit/deed/debt, contact, and outreach resolution.</div>';
+  if (!items.length) {
+    html += '<div class="ops-empty">No converted news-alert pursuits are queued yet.</div>'
+      + '<div class="q-actions"><button class="q-action primary" onclick="renderNewsAlertLane(\'open\')">Back to News Alert Review</button>'
+      + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">View Converted Alerts</button></div>';
+    el.innerHTML = html;
+    return;
+  }
+  html += '<div class="rc-progress"><span>' + items.length + '</span> to work</div>';
+  items.forEach(function (it, ix) {
+    var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+    var ex = meta.news_alert_extraction || {};
+    var task = meta.news_alert_tracking_task || null;
+    var project = ex.project || {};
+    var parties = Array.isArray(ex.parties) ? ex.parties : [];
+    var partyText = parties.slice(0, 3).map(function (p) { return (p.role ? p.role + ': ' : '') + p.name; }).join(' · ');
+    html += '<div class="q-item' + (ix === 0 ? ' pq-next' : '') + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.article_title || it.raw_subject || it.tenant || 'News alert') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">converted</span>'
+      + (it.domain ? '<span class="q-badge">' + esc(it.domain) + '</span>' : '')
+      + (task ? '<span class="q-badge">task</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc([it.tenant, [it.city, it.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')) + '</div>'
+      + (project.description ? '<div class="q-item-detail">' + esc(project.description) + '</div>' : (it.summary ? '<div class="q-item-detail">' + esc(it.summary) + '</div>' : ''))
+      + (partyText ? '<div class="q-item-meta">Parties: ' + esc(partyText) + '</div>' : '')
+      + '<div class="q-actions">'
+      + (it.article_url ? '<a class="q-action" href="' + esc(it.article_url) + '" target="_blank" rel="noopener">Open article</a>' : '')
+      + '<button class="q-action primary" onclick="renderNewsAlertPursuitById(' + jsStringArg(it.news_lead_id) + ')">Open pursuit</button>'
+      + '<button class="q-action" onclick="openGenericNewsAlertResearchLedger()">Research Ledger</button>'
+      + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderNewsAlertFollowupQueue = renderNewsAlertFollowupQueue;
+
+async function renderNewsAlertPursuitById(id) {
+  var res = await opsApi('/api/news-alerts?status=all&limit=200');
+  if (!res.ok || !res.data || !Array.isArray(res.data.items)) {
+    if (typeof showToast === 'function') showToast('Could not load alert pursuit', 'error');
+    return;
+  }
+  var item = res.data.items.find(function (it) { return String(it.news_lead_id) === String(id); });
+  if (!item) {
+    if (typeof showToast === 'function') showToast('Alert pursuit not found', 'error');
+    return;
+  }
+  var meta = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+  renderNewsAlertPursuit(item, meta.news_alert_tracking_task || null);
+}
+window.renderNewsAlertPursuitById = renderNewsAlertPursuitById;
 
 function renderNewsAlertPursuit(item, researchTask) {
   var el = document.getElementById('reviewConsoleContent');
@@ -5221,7 +5294,7 @@ function renderNewsAlertPursuit(item, researchTask) {
   el.innerHTML = '<div class="ops-header"><h2>News Alert Pursuit</h2>'
     + '<div class="ops-controls">'
     + '<button class="q-action" onclick="renderNewsAlertLane(\'open\')">\u2190 Back to News Alert Review</button>'
-    + '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open News Alert Research Queue</button>'
+    + '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open News Alert Follow-up Queue</button>'
     + '</div></div>'
     + '<div class="rc-intro">Work this alert into a real prospecting path: identify the property, owner/applicant/developer, evidence, and the right contact before drafting outreach.</div>'
     + '<div class="q-item pq-next">'
@@ -5239,7 +5312,7 @@ function renderNewsAlertPursuit(item, researchTask) {
     + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">3. Signals to track</div></div>' + signalHtml + timelineHtml + '<div style="margin-top:8px">' + triggerHtml + '</div></div>'
     + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">4. Next build step</div></div>'
     + '<div class="q-item-meta">Resolve/create the property and prospect contact, then generate an outreach draft through the BD template path.</div>'
-    + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Continue in Research Queue</button>'
+    + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Continue in Follow-up Queue</button>'
     + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">View Converted Alerts</button></div></div>'
     + '</div>';
 }
@@ -5350,6 +5423,7 @@ async function renderResearchPage(page = opsResearchPage) {
   let html = '';
   html += `<div class="ops-header">
     <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length} tasks</span></h2>
+    ${opsResearchTypeFilter === 'news_alert_development_followup' ? `<div class="ops-controls"><button class="q-action" onclick="openNewsAlertResearchQueue()">\u2190 Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane('open');navTo('pageReviewConsole')">News Alert Review</button></div>` : ''}
   </div>`;
 
   html += '<div class="ops-filters">';
@@ -5368,7 +5442,10 @@ async function renderResearchPage(page = opsResearchPage) {
     html += `<div class="rc-progress"><span>${filtered.length}</span> ${opsResearchFilter === 'completed' ? 'completed' : 'to work'}</div>`;
   }
   if (!filtered.length) {
-    html += '<div class="ops-empty">No research tasks match this filter</div>';
+    html += opsResearchTypeFilter === 'news_alert_development_followup'
+      ? '<div class="ops-empty">No active research-ledger tasks match this filter. Use the News Alert Follow-up queue in Decision Center for converted alert pursuits.</div>'
+        + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane(\'converted\');navTo(\'pageReviewConsole\')">Converted Alerts</button></div>'
+      : '<div class="ops-empty">No research tasks match this filter</div>';
   } else {
     filtered.forEach((item, _ix) => {
       // Self-propelling contract: elevate the first actionable task. On
