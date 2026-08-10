@@ -3131,7 +3131,7 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // R35 P1 — 6 missed multi-line templates caught by post-R34 audit.
   //   All reuse buildMultiLineChartXml (no new builder needed).
   'cap_rate_top_bottom_quartile',   // 3-line: top_q dashed / median bold / bottom_q dashed
-  'cap_rate_by_credit',             // 3-line: Federal navy / State sky / Municipal sage
+  'cap_rate_by_credit',             // 3-line: Federal navy / State sky / Municipal dark gray
   'cpi_vs_renewal_cagr',            // 2-line: CPI sky / GSA renewal navy
   'fed_funds_vs_treasury',          // 2-line: Fed Funds navy / 10Y Treasury sky
                                     // (renderer references mortgage_30y but it's not in
@@ -5109,7 +5109,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'cap_rate_by_credit': {
-      // 3-line: Federal navy bold / State sky / Municipal sage.
+      // 3-line: Federal navy bold / State sky / Municipal dark gray.
       // R73 B13 / R76 E2 — the feed IS populated (verified live 2026-06-10:
       // cm_gov_cap_by_credit_q has federal in 101 quarters, state 76, muni 29).
       // state/muni are SPARSE, not empty. R73 put per-point markers on state +
@@ -5151,7 +5151,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // State + Municipal = marker per present quarter (sparse → each
             // available reading visible across the null gaps).
             { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '8FC49E', showMarker: true, markerSize: 4 },  // sage
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '6A748C', showMarker: true, markerSize: 4 },  // dark gray
           ],
           anchor: standardAnchor,
         },

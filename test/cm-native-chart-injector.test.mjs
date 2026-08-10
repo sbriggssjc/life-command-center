@@ -1926,7 +1926,7 @@ test('buildInjectionSpec: cap_rate_by_credit builds 3-line federal/state/municip
   assert.equal(out.spec.series.length, 3);
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
   assert.deepEqual(out.spec.series.map(s => s.color),
-    ['003DA5', '62B5E5', '8FC49E'], 'navy / sky / sage');
+    ['003DA5', '62B5E5', '6A748C'], 'navy / sky / dark gray');
 });
 
 test('buildInjectionSpec: cpi_vs_renewal_cagr builds 2-line', () => {

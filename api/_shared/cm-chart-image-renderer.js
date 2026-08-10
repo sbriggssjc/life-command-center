@@ -1919,7 +1919,7 @@ function buildChartConfig(chart, brand) {
               borderColor: PDF_COLORS.cap_mid,      backgroundColor: PDF_COLORS.cap_mid,
               tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
             { label: 'Municipal', data: rows.map(r => r.municipal_cap),
-              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: PDF_COLORS.cap_mid_long,
+              borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: PDF_COLORS.cap_outside_firm,
               tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
           ],
         },
