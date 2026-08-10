@@ -40,3 +40,44 @@ Sample messages:
 3. Successful Google Alert leads land in OPS `news_alert_leads`; follow-up queues are `v_news_alert_review_queue` for low-confidence items and `v_news_alert_developer_queue` for auto-created `developer_unknown` items.
 4. Current repo docs said those queues are surfaced by the app, but grep found no app reader. This is a product gap to fix if Scott expects an in-app follow-up lane.
 5. Email read state is owned by Power Automate/Outlook, not LCC. Updated the Google Alert flow runbook to mark the message read after a successful ingest POST.
+
+## Power Automate Export Review
+
+Export reviewed: `C:\Users\scott\Downloads\GoogleNewsAlert→LCCLeadIngest_20260810125008.zip`.
+
+Actual flow findings:
+
+- Trigger watches a specific folder id labeled `SBRIG GMAIL`, not the mailbox Inbox. Any Google Alert landing elsewhere will not fire.
+- Trigger filters `from = googlealerts-noreply@google.com`; forwarded samples still show this visible `From`, but the envelope/return path is Gmail, so verify run history to confirm the connector's `from` filter uses visible From for these forwarded messages.
+- The flow POSTs to the correct Railway endpoint: `/api/lead-ingest?action=news_alert`.
+- Payload uses `source_ref = internetMessageId` but does not send a separate `internet_message_id`. The edge handler falls back to `source_ref`, so this is workable, but it loses the clean separation between stable message key and mutable Graph id that the runbook expects.
+- `raw_body` is `body('Html_to_text')`; the runbook expects the explicit text output. Confirm from run history whether this is a string. If it is an object, LCC receives junk and the classifier degrades.
+- Parse JSON schema expects `lead_id`, but the edge response returns `news_lead_id`. This does not break the archive condition, but it is stale.
+- The flow still moves auto-classified alerts inline to an `Archive` folder when `archive = true`; current architecture expects moves to be deferred through `processing_log` / processing-complete into `Processed/Leads` or `Processed/Duplicates`.
+- Mark-as-read only runs after the inline move and only in the `archive=true` branch. Review alerts (`archive=false`) are never marked read.
+- The export contains the webhook secret inline in the HTTP action. Treat that as exposed configuration: rotate the secret and move it to a secure/environment reference.
+
+Operational fixes needed in PA:
+
+1. Confirm the trigger folder. If Google Alerts arrive in the Inbox or another folder, repoint the trigger or add the intended Google Alerts folder watch.
+2. Keep the POST, but send `{ source_ref: trigger id, internet_message_id: internetMessageId, subject, raw_body: Html_to_text text }`.
+3. Add Mark as read immediately after successful POST for both auto and review outcomes.
+4. Remove the inline Move action; let LCC processing-complete handle Processed/Leads and duplicates.
+5. Rotate the exposed webhook secret.
+
+## BD Pipeline Capability
+
+Existing capabilities:
+
+- `POST /api/operations?action=create_lead` can create domain lead rows and a LCC `bd_opportunities` prospect opportunity when a domain property id is known:
+  - gov -> `prospect_leads`
+  - dia -> `marketing_leads`
+  - LCC -> `bd_opportunities` + cadence
+- `POST /api/operations?action=open_opportunity` can open/reuse a prospect opportunity for an existing LCC entity.
+- Listing BD machinery exists for active listings and owner/contact outreach (`listing_bd_trigger` inbox items and draft consumer).
+
+Missing for news alerts:
+
+- No current UI/API reader was found for `v_news_alert_review_queue` or `v_news_alert_developer_queue`.
+- No current "review verdict -> create property/lead/opportunity" bridge was found for `news_alert_leads`.
+- News-alert rows carry only article/tenant/location hints, not a domain property id. Promotion needs a human/AI review step to resolve or create the underlying property/entity before it can safely call the existing `create_lead` / `open_opportunity` paths.
