@@ -4752,24 +4752,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
             valAxNumFmt: VAL_FMT_PERCENT_2DP,
             yLeftAxisTitle: 'Cap rate',
-            // CM bid-ask (Low/Latest fix, final — CONFIRMED trade-off). Live testing
-            // (2026-08-10) proved that <c:upDownBars> makes Excel keep ONLY the
-            // single max-value ("Peak") data label chart-wide and drop Low/Latest —
-            // even with both series as normal drawn lines. So the solid up/down-bar
-            // band and the three callouts CANNOT coexist in native Excel.
-            //
-            // This build prioritizes the three callouts (the repeated ask). The
-            // spread band is drawn with <c:hiLowLines> — a lineChart decoration that
-            // is NOT a bar, so it does NOT trigger the cull — giving thin steel
-            // vertical sticks between the two cap lines. Both series are NORMAL drawn
-            // lines. This is exactly the nm_vs_market structure, which renders all
-            // three callouts. (To go back to the SOLID band instead, set
-            // upDownBars:true here — but Low/Latest will drop to Peak-only again.)
-            hiLowLines: '#9EA9B7',
-            hiLowLineWidth: 15875,
-            // Two NORMAL visible cap LINES: Last-Ask (sky, bottom) + Achieved (navy,
-            // top). The three spread callouts (Peak/Low/Latest, in bps) are hosted
-            // on the Achieved line.
+            // CM bid-ask (final — Scott's chosen end state 2026-08-10: solid band +
+            // Peak-only callout). Live testing CONFIRMED that <c:upDownBars> makes
+            // Excel keep ONLY the single max-value ("Peak") data label chart-wide
+            // and drop Low/Latest — even with normal drawn lines. The solid
+            // up/down-bar band and all three callouts cannot coexist in native
+            // Excel, so per Scott we keep the master's solid gray band and emit ONLY
+            // the Peak callout (the one label Excel reliably renders under up/down
+            // bars — it IS the series max). Low/Latest are intentionally not emitted
+            // rather than shipped as labels Excel would silently cull.
+            upDownBars: true,
+            upDownGapWidth: 20,
+            // Master look: each series is a flat DASH tick (markerOnly, no connecting
+            // line) — Last-Ask sky (bottom), Achieved navy (top) — with the solid
+            // gray up/down-bar band filling the spread between them.
             series: (() => {
               const spreadAnns = buildAnnotationsForSpec(
                 plottedRows,
@@ -4777,10 +4773,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                   ? Number(r.avg_bid_ask_spread) : NaN,
                 (v) => `${Math.round(Number(v) * 10000)} bps`,
                 'bid_ask:spread');
+              // Peak only — the max-role callout Excel keeps under up/down bars.
+              const peakAnn = spreadAnns.filter((a) => a.role === 'max');
               return [
-                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
                 { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                  dataLabels: spreadAnns },
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true,
+                  dataLabels: peakAnn },
               ];
             })(),
             anchor: standardAnchor,
