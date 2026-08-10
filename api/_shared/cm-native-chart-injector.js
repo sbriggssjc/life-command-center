@@ -893,7 +893,7 @@ const DLBL_TOP_Y = 0.13;
 // series whose peaks fall at nearby x overlap. dLblsXml/dLblXml take a
 // `bandIndex` (the series ordinal); band N drops DLBL_BAND_STEP lower, stacking
 // the series' callout rows instead of colliding. Band 0 = the base top band.
-const DLBL_BAND_STEP = 0.06;
+const DLBL_BAND_STEP = 0.085;
 const DLBL_ROLE_OFFSET = {
   max:  { x: 0.01, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band, above the peak
   min:  { x: 0.02, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band (NOT down at the trough)
@@ -2269,6 +2269,12 @@ function buildAreaComboChartXml(spec) {
   // Area series (always index 0)
   const areaColor   = (area?.fillColor   || 'E0E8F4').replace('#', '');
   const areaBorder  = (area?.borderColor || '003DA5').replace('#', '');
+  // Optional Peak/Low/Latest callouts on the area series (e.g. TTM volume).
+  // labelBand shifts them to a lower row so they don't collide with the line
+  // series' callouts (which sit at band 0 on the same top band).
+  const areaLblFrag = area && area.dataLabels
+    ? dLblsXml(area.dataLabels, Number.isFinite(area.labelBand) ? area.labelBand : 0)
+    : '';
   const areaXml = area ? `        <c:ser>
           <c:idx val="0"/>
           <c:order val="0"/>
@@ -2277,6 +2283,7 @@ function buildAreaComboChartXml(spec) {
             <a:solidFill><a:srgbClr val="${areaColor}"/></a:solidFill>
             <a:ln w="22225"><a:solidFill><a:srgbClr val="${areaBorder}"/></a:solidFill></a:ln>
           </c:spPr>
+${areaLblFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${area.valCol}$${spec.dataStart}:$${area.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
         </c:ser>` : '';
@@ -4789,9 +4796,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               color: sky },
           ],
           lineSeries: [
-            // Median line over the band
+            // Median line over the band — Peak/Low/Latest callouts (currency/SF).
             { titleCol: medianCol, titleRow: headerRow, valCol: medianCol,
-              color: navy },
+              color: navy,
+              dataLabels: Array.isArray(rows)
+                ? buildAnnotationsForSpec(plottedRows, r => r.rent_median, fmtCurrencyPerSfNative, 'rent_psf_box:median')
+                : undefined },
           ],
           anchor: standardAnchor,
         },
@@ -5679,11 +5689,26 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const bandCol = String.fromCharCode(65 + cols.length);  // helper col letter
       const GRAY = '6A748C';  // nm_axis
 
-      // R37 P3 — peak/trough/most-recent labels on the navy avg_cap_rate line
-      // (renderer line 1217: buildAnnotations(rows, r => r.avg_cap_rate, fmtPct2))
-      const capLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.avg_cap_rate, fmtPct2Native, 'avg_cap_rate')
-        : undefined;
+      // CM close-out (Scott request) — show ONE callout series: the LOAN CONSTANT
+      // RANGE in Peak/Low/Latest format, on the gray band (instead of the avg-cap
+      // line labels). Peak/Low/Latest are chosen on the high loan constant (gated
+      // on both bounds finite so the band anchor exists); each label text is the
+      // range "lo–hi%".
+      const loanBase = Array.isArray(rows)
+        ? buildAnnotationsForSpec(
+            plottedRows,
+            (r) => (Number.isFinite(Number(r.low_loan_constant)) && Number.isFinite(Number(r.high_loan_constant)))
+              ? Number(r.high_loan_constant) : NaN,
+            (v) => v, 'cost_of_capital:loan_range')
+        : [];
+      const loanLabels = loanBase.map((a) => {
+        const row = plottedRows[a.idx] || {};
+        const lo = Number(row.low_loan_constant), hi = Number(row.high_loan_constant);
+        const txt = (Number.isFinite(lo) && Number.isFinite(hi))
+          ? `${(lo * 100).toFixed(1)}–${(hi * 100).toFixed(1)}%`
+          : `${(hi * 100).toFixed(1)}%`;
+        return { ...a, text: txt };
+      });
 
       return {
         tabName,
@@ -5702,14 +5727,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             { titleCol: lowCol,  titleRow: headerRow, valCol: lowCol,
               color: GRAY, noFill: true },
             // Visible band — pale gray fill with solid gray border
-            // (matches renderer's rgba(106,116,140,0.12) fill + #6A748C border)
+            // (matches renderer's rgba(106,116,140,0.12) fill + #6A748C border).
+            // Carries the Peak/Low/Latest loan-constant-range callouts.
             { titleCol: bandCol, titleRow: headerRow, valCol: bandCol,
-              color: GRAY, alpha: '12000', borderColor: GRAY },
+              color: GRAY, alpha: '12000', borderColor: GRAY, dataLabels: loanLabels },
           ],
           lineSeries: [
             { titleCol: treasCol, titleRow: headerRow, valCol: treasCol, color: sky  },
-            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy,
-              dataLabels: capLabels },
+            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy },
           ],
           anchor: standardAnchor,
         },
@@ -5793,6 +5818,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             titleCol: volCol, titleRow: headerRow, valCol: volCol,
             fillColor: pale,     // pale blue fill (quiet background area)
             borderColor: sky,    // T10b — sky edge (was navy; frees navy for the dots)
+            // Peak/Low/Latest TTM-volume callouts ($M), banded to row 1 so they
+            // don't collide with the cap-rate callouts (band 0) on the top band.
+            dataLabels: Array.isArray(rows)
+              ? buildAnnotationsForSpec(plottedRows, r => r.volume_dollars, fmtCurrencyMNative, 'volume_cap:volume')
+              : undefined,
+            labelBand: 1,
           },
           barSeries: [
             // Invisible base — lifts the IQR bar off 0 up to lower_quartile
