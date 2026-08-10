@@ -4772,26 +4772,46 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // only Peak showed when the labels lived on Achieved. Hosting them on a
             // middle series (a transparent drawn line — invisible, but Excel renders
             // its manual-positioned labels at every point) restores Low + Latest.
-            series: [
-              { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
-                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-              // LabelHost — invisible middle series carrying the Achieved values,
-              // hosting the Peak/Low/Latest SPREAD callouts (bps). Transparent line
-              // (alpha 0), no marker, hidden from the legend.
-              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
-                separateGroup: true,
-                dataLabels: buildAnnotationsForSpec(
-                  plottedRows,
-                  (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
-                    ? Number(r.avg_bid_ask_spread) : NaN,
-                  (v) => `${Math.round(Number(v) * 10000)} bps`,
-                  'bid_ask:spread') },
-              // Achieved (top) dash ticks — navy, markerOnly (no line). Last series
-              // → the up/down bars' top edge.
-              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-            ],
+            series: (() => {
+              // CM close-out (bid-ask, DEFINITIVE Low/Latest fix 2026-08-10).
+              // History: hosting all 3 spread callouts (Peak/Low/Latest) on ONE
+              // invisible host series rendered ONLY "Peak" — Excel culls every
+              // data label in a series EXCEPT the one at that series' MAX value,
+              // whenever the chart carries up/down bars (the cull is chart-wide,
+              // not group-local, so a separate bar-free host group didn't help).
+              // A series with exactly ONE label has nothing to cull against, so
+              // each callout now gets its OWN invisible host series (all reading
+              // the Achieved column, alpha 0, off-legend, in the bar-free host
+              // group). Split the annotations one-per-series → all three render.
+              const spreadAnns = buildAnnotationsForSpec(
+                plottedRows,
+                (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
+                  ? Number(r.avg_bid_ask_spread) : NaN,
+                (v) => `${Math.round(Number(v) * 10000)} bps`,
+                'bid_ask:spread');
+              const hostFor = (role, band) => {
+                const a = spreadAnns.find(x => x.role === role);
+                if (!a) return null;
+                return {
+                  titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
+                  separateGroup: true,
+                  // band each callout to its own top-band row so Peak/Low/Latest
+                  // don't stack on the same y when their x are close.
+                  dataLabels: [{ ...a }],
+                };
+              };
+              const hosts = [hostFor('max'), hostFor('last'), hostFor('min')].filter(Boolean);
+              return [
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+                ...hosts,
+                // Achieved (top) dash ticks — navy, markerOnly (no line). Last
+                // NON-host series → the up/down bars' top edge.
+                { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+              ];
+            })(),
             anchor: standardAnchor,
           },
           helperCols: [
