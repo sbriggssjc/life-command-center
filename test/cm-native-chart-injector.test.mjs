@@ -1284,11 +1284,11 @@ test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sp
   assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal renders as a markerless clean line');
 });
 
-test('bid_ask: two cap lines + hiLowLines spread sticks (native hi-low)', () => {
-  // CM close-out (bid-ask, native hi-low — Scott's chosen end state). The native
-  // builder plots two cap LINES (Last-Ask, Achieved) plus <c:hiLowLines> spread
-  // sticks between them on a line-only axis (honors c:min → ~6-8%). No bar, so no
-  // 0-floor and no phantom legend entry.
+test('bid_ask: two cap lines + up/down bars spread band (native)', () => {
+  // CM close-out (bid-ask). The native builder plots two cap LINES (Last-Ask,
+  // Achieved) with <c:upDownBars> drawing the gray spread band between them.
+  // upDownBars are a lineChart decoration (NOT a bar chart type), so the line-only
+  // value axis still honors c:min → ~6-8%. No <c:barChart> element.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'avg_last_ask_cap',   col: 'B' },
@@ -1301,11 +1301,11 @@ test('bid_ask: two cap lines + hiLowLines spread sticks (native hi-low)', () => 
   });
   assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.series.length, 2, 'exactly the two cap lines');
-  assert.ok(out.spec.hiLowLines, 'hiLowLines set for the spread sticks');
-  assert.ok(!out.spec.barSeries, 'no bar series (a bar would force a 0 axis)');
+  assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
+  assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
   const xml = buildMultiLineChartXml(out.spec);
   assert.equal((xml.match(/<c:ser>/g) || []).length, 2, 'two lines in the XML');
-  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines');
+  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3282,11 +3282,10 @@ test('T1: chart XML series references shift to the first non-null data row', asy
     'T1: val series references start at the first non-null row (53)');
 });
 
-test('buildInjectionSpec: bid_ask_spread — two cap lines + hiLowLines on a line-only axis', () => {
-  // CM close-out (bid-ask, native hi-low). Any bar element on a value axis makes
-  // Excel force it to include 0, so the spread is drawn as <c:hiLowLines> (a
-  // lineChart element, NOT a bar) between the two cap LINES. The line-only cap
-  // axis then honors c:min → ~6-8%.
+test('buildInjectionSpec: bid_ask_spread — two cap lines + up/down bars on a line-only axis', () => {
+  // CM close-out (bid-ask). The spread band is drawn with <c:upDownBars> — a
+  // lineChart decoration, NOT a bar chart type — between the two cap LINES. The
+  // line-only cap axis honors c:min → ~6-8%.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -3309,14 +3308,14 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + hiLowLines on a lin
   assert.equal(out.spec.series[0].color, '62B5E5');
   assert.equal(out.spec.series[1].valCol, 'G', 'navy line = Achieved helper col (G)');
   assert.equal(out.spec.series[1].color, '003DA5');
-  assert.ok(out.spec.hiLowLines, 'hiLowLines set for the spread sticks');
+  assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series');
   assert.ok(out.spec.yAxisRange && out.spec.yAxisRange.min > 0.01, 'cap axis min is non-zero');
   assert.equal(out.helperCols[0].key, 'achieved_cap');
-  // Rendered: line-only value axis carries a non-zero c:min; hiLowLines present.
+  // Rendered: line-only value axis carries a non-zero c:min; upDownBars present.
   const xml = buildMultiLineChartXml(out.spec);
   assert.match(xml, /<c:min val="0\.\d+"\/>/, 'cap axis carries a non-zero c:min');
-  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines');
+  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3407,10 +3406,10 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
   });
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
-  // Two cap lines: sky Last Ask (F), navy Achieved helper col (G) + hiLowLines
+  // Two cap lines: sky Last Ask (F), navy Achieved helper col (G) + up/down bars
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
   assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5']);
-  assert.ok(out.spec.hiLowLines, 'hiLowLines set for the spread sticks');
+  assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series');
 });
 
