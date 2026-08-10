@@ -182,6 +182,8 @@ Refinement after live UX test:
 - Added a Decision Center-owned `News Alert Follow-up Queue` backed directly by converted `news_alert_leads` rows with extraction/task metadata.
 - `Open Research` / `Continue` actions now return to that Decision Center follow-up queue first.
 - The generic Research ledger remains available as a secondary button, with a back path and explanatory empty state.
+- Added a visible Decision Center sublane: `News alerts — follow-up queue`.
+- Fixed the navigation race where `navTo('pageReviewConsole')` could render the normal Decision Center after the follow-up button click; a pending-render handoff now opens the follow-up queue after page load.
 
 Still next:
 

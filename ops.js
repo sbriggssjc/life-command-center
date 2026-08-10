@@ -692,6 +692,13 @@ async function renderTeamQueue() {
   }
 
   el.innerHTML = html;
+  if (_newsAlertPendingRenderer) {
+    var nextRenderer = _newsAlertPendingRenderer;
+    _newsAlertPendingRenderer = null;
+    setTimeout(function () {
+      try { nextRenderer(); } catch (e) { console.warn('[news-alert] pending renderer failed:', e?.message || e); }
+    }, 0);
+  }
   perf.end();
 }
 
@@ -1966,6 +1973,7 @@ async function renderReviewConsolePage() {
   dc['comp_review'] = compN;
   const newsCounts = (newsR && newsR.ok && newsR.data && newsR.data.counts) ? newsR.data.counts : {};
   dc['news_alert_review'] = Number(newsCounts.open) || 0;
+  dc['news_alert_followup'] = Number(newsCounts.converted) || 0;
 
   // Every sub-lane (decision_type) with its existing renderer — NOTHING lost.
   // Grouped into the 8 logical lanes via the Tier 3 lane map (review-shared.js).
@@ -2002,6 +2010,7 @@ async function renderReviewConsolePage() {
     { dt: 'sos_owner_links', label: 'Owner-contact links to confirm', open: 'renderSosLinkWorklist()' },
     { dt: 'comp_review', label: 'Comp reconciliation reviews (dia+gov)', open: 'renderCompReviewLane()' },
     { dt: 'news_alert_review', label: 'News alerts — review & promote', open: 'renderNewsAlertLane()' },
+    { dt: 'news_alert_followup', label: 'News alerts — follow-up queue', open: 'renderNewsAlertFollowupQueue()' },
     { dt: 'implausible_value', label: 'Implausible values', open: "renderFederatedLane('implausible_value')" },
     { dt: 'llc_research_dead', label: 'LLC research dead-letters', open: "renderDecisionLane('llc_research_dead')" },
     { dt: 'availability_checker_botblock', label: 'Availability bot-blocks', open: "renderDecisionLane('availability_checker_botblock')" },
@@ -5068,6 +5077,7 @@ async function resolveCompReview(domain, id, disposition) {
 window.resolveCompReview = resolveCompReview;
 
 var _newsAlertStatus = 'open';
+var _newsAlertPendingRenderer = null;
 
 function newsAlertCardHtml(it, isNext) {
   var rowid = 'newsAlert_' + String(it.news_lead_id || '').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -5181,8 +5191,14 @@ async function resolveNewsAlert(id, action) {
 window.resolveNewsAlert = resolveNewsAlert;
 
 function openNewsAlertResearchQueue() {
+  _newsAlertPendingRenderer = renderNewsAlertFollowupQueue;
   if (typeof navTo === 'function') navTo('pageReviewConsole');
-  setTimeout(function () { renderNewsAlertFollowupQueue(); }, 150);
+  setTimeout(function () {
+    if (_newsAlertPendingRenderer) {
+      _newsAlertPendingRenderer = null;
+      renderNewsAlertFollowupQueue();
+    }
+  }, 500);
 }
 window.openNewsAlertResearchQueue = openNewsAlertResearchQueue;
 

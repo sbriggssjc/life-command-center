@@ -65,6 +65,7 @@ var LCC_DECISION_LANE_MAP = {
   sf_contact_account_mismatch:   { lane: 'linkage',       merges: false },
   sf_link_candidate:             { lane: 'buyer_mapping', merges: false },
   news_alert_review:             { lane: 'automation',    merges: false },
+  news_alert_followup:           { lane: 'automation',    merges: false },
   sos_owner_links:               { lane: 'linkage',       merges: false },
   contact_company_link:          { lane: 'linkage',       merges: false },
   implausible_value:             { lane: 'automation',    merges: false },
