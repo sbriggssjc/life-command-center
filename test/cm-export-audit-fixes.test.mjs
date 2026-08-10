@@ -182,13 +182,10 @@ test('Data_Bid_Ask emits Low/High/Achieved when the wrapper rows carry min/max/a
   const wb = buildCapitalMarketsWorkbook({ vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts, brand: null });
   assert.equal((wb.driftWarnings || []).filter((m) => /min_last_ask_cap|max_last_ask_cap|achieved_last_ask_cap/.test(m)).length, 0);
   const h = headersOf(wb, 'Data_Bid_Ask');
-  // CM close-out (bid-ask, final): bid-ask now renders as a PNG (floating spread
-  // band between the cap lines) instead of a native chart, so the "Achieved Cap
-  // (TTM)" native-injection HELPER column is no longer added to the data tab.
-  // The sheet still carries the source columns (Last Asking Cap + Bid-Ask Spread,
-  // whose sum IS the achieved cap) plus the Low/High range columns; the PNG
-  // derives Achieved internally.
-  for (const label of ['Last Ask — Low (TTM)', 'Last Ask — High (TTM)']) {
+  // CM close-out (bid-ask, native hi-low): the native chart plots an Achieved Cap
+  // line, so the "Achieved Cap (TTM)" helper column (= Last-Ask + Spread) is added
+  // back, alongside the Low/High range columns.
+  for (const label of ['Last Ask — Low (TTM)', 'Last Ask — High (TTM)', 'Achieved Cap (TTM)']) {
     assert.ok(h.includes(label), `missing ${label}; got ${h.join(' | ')}`);
   }
 });

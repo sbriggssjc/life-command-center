@@ -3019,14 +3019,13 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //       data tab naturally carries both [bottom, height] columns.
   //   (b) Render box-whisker as a multi-line quartile chart (preserves
   //       all data; drops the shaded IQR fill — user can add it manually).
-  // CM close-out (bid-ask, final) — bid_ask_spread is DELIBERATELY NOT native.
-  // Excel forces a value axis to include 0 whenever a bar/updown-bar sits on it,
-  // so no native shape can show the master p.34 floating spread BAND between the
-  // Last-Ask and Achieved cap lines AND keep a ~6–8% axis (the band needs a bar;
-  // the bar drags the axis to 0). The PNG renderer (Chart.js floating bar +
-  // fitPercentAxis) does BOTH, so bid-ask renders as an image instead. Do NOT
-  // re-add it here without solving the Excel 0-floor (see the case in this file).
-  //   'bid_ask_spread', 'bid_ask_spread_monthly' → PNG (cm-chart-image-renderer.js)
+  // CM close-out (bid-ask, native hi-low — Scott's chosen end state 2026-08). A
+  // native FILLED band + ~6-8% axis is impossible (any bar forces the axis to 0),
+  // so the native builder draws two cap lines (Last-Ask + Achieved) + gray
+  // <c:hiLowLines> spread STICKS on a line-only axis that honors c:min (~6-8%).
+  // Native + editable, no PNG/QuickChart dependency. See the case body.
+  'bid_ask_spread',
+  'bid_ask_spread_monthly',
   'rent_psf_box_quarterly',         // (b) upgraded to IQR floating-bar + median line in P8.5
   // CM chart fixes round 2, item 1 — dialysis companion box chart backed by the
   // LABELED MODELED rent variant (cm_dialysis_rent_box_q_with_modeled). Same
@@ -4611,36 +4610,29 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         // that axis is line-only → honors c:min → fits ~6–8%. The SPREAD becomes a
         // gray bar on a SEPARATE right-hand bps axis (0-based, fine for a bar),
         // scaled so the bars sit low and never invade the cap-line band.
-        const maxSpread = plottedRows.reduce((m, r) => {
-          const sp = Number(r.avg_bid_ask_spread);
-          return (Number.isFinite(sp) && sp > m) ? sp : m;
-        }, 0);
-        // right (bps) axis top = ~3× the largest spread (snapped to 0.5%), floored
-        // at 2% — keeps the spread bars in the lower portion of the plot.
-        const spreadAxisMax = Math.max(0.02, Math.ceil((maxSpread * 3) / 0.005) * 0.005);
+        // CM close-out (bid-ask, native hi-low — user's chosen end state). Excel
+        // forces a value axis to include 0 whenever a BAR/upDownBar sits on it, so
+        // no native FILLED band can keep a ~6-8% axis. `<c:hiLowLines>` is a
+        // lineChart element (NOT a bar), so it draws a thin vertical stick between
+        // the highest and lowest series value at each period — here the spread
+        // between Last-Ask and Achieved — WITHOUT dragging the axis to 0. Result:
+        // two continuous cap lines (sky Last-Ask, navy Achieved) + gray spread
+        // sticks between them, on a line-only cap axis that honors c:min (~6-8%).
+        // Native + editable; no PNG/QuickChart dependency. (Trade-off vs the PNG:
+        // hi-low sticks instead of a solid filled band — chosen 2026-08 by Scott.)
         return {
           tabName,
           spec: {
-            type: 'combo',
+            type: 'multi-line',
             tabName,
             catCol: periodCol,
             dataStart, dataEnd,
-            barGrouping: 'clustered',
-            barGapWidth: 40,
-            swapAxes: true,                 // bars → right (bps) axis; lines → left (cap%) axis
-            yLeftRange: bidAskFit || { min: 0.055, max: 0.10 },   // cap % — LINE-ONLY axis → honors c:min
-            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
-            yRightRange: { min: 0, max: spreadAxisMax },          // bid-ask spread (bps), 0-based bar axis
-            yRightNumFmt: VAL_FMT_PERCENT_2DP,
-            yRightAxisTitle: 'Bid-Ask Spread',
-            barSeries: [
-              { titleCol: spreadCol, titleRow: headerRow, valCol: spreadCol, color: 'D8DFDF', borderColor: '9EA9B7' },
-            ],
-            // CONTINUOUS lines (NOT showMarker — in the combo builder showMarker
-            // means markers-only/no line, which rendered the cap lines as scattered
-            // dashes). Two solid cap lines: sky Last-Ask (lower), navy Achieved (upper).
-            lineSeries: [
-              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky },
+            yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
+            valAxNumFmt: VAL_FMT_PERCENT_2DP,
+            yLeftAxisTitle: 'Cap rate',
+            hiLowLines: '9EA9B7',   // gray spread sticks between Last-Ask and Achieved
+            series: [
+              { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy },
             ],
             anchor: standardAnchor,
