@@ -818,6 +818,19 @@ function inferAnnotationFmt(numFmt) {
 //      the computed {max,min,last} set (deduped) and every idx is in range. A
 //      wrong selection throws, failing the export loudly rather than shipping a
 //      mislabeled chart.
+// Latest-only annotation: a single "Latest <value>" callout at the last finite
+// point. `simplePos` (t/b/l/r) places it relative to its own line end instead of
+// the top band, so N series' Latest labels spread by the lines' natural spacing.
+function buildLatestOnlyForSpec(rows, getter, formatter, simplePos = 'r') {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const points = rows
+    .map((r, i) => ({ idx: i, val: Number(getter(r)) }))
+    .filter(p => Number.isFinite(p.val));
+  if (points.length === 0) return [];
+  const lastP = points[points.length - 1];
+  return [{ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest', simplePos }];
+}
+
 function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '') {
   if (!Array.isArray(rows) || rows.length === 0) return [];
   // Filter to (idx, val) where val is a finite number
@@ -911,7 +924,12 @@ const DLBL_VALUE_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4
  * "<Peak|Low|Latest> <value>" — the role word in regular-weight charcoal, the
  * value bold (emphasized), matching cm-brand.json.
  */
-function dLblXml(idx, text, role, label, bandIndex = 0) {
+function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null) {
+  // simplePos (t/b/l/r/ctr) — place the label relative to its own point via
+  // <c:dLblPos> instead of the absolute top-band manual layout. Used where each
+  // series' single "Latest" label should sit at its own line end (e.g. the 4-cohort
+  // cap charts) so they spread by the lines' natural vertical separation.
+  const usePos = ['t', 'b', 'l', 'r', 'ctr'].includes(simplePos);
   const base = DLBL_ROLE_OFFSET[role];
   // Drop this series' callout row by band so multi-series peaks/lasts at nearby
   // x stack vertically instead of overlapping (band 0 = the base top band).
@@ -924,9 +942,11 @@ function dLblXml(idx, text, role, label, bandIndex = 0) {
   // label stays over its marker. Per CT_ManualLayout the mode elements precede the
   // x/y values. When no yMode is given we fall back to the legacy factor offset.
   const yModeFrag = off && off.yMode ? `<c:yMode val="${off.yMode}"/>` : '';
-  const layoutFrag = off
+  const layoutFrag = (!usePos && off)
     ? `<c:layout><c:manualLayout>${yModeFrag}<c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
     : '';
+  // dLblPos sits AFTER <c:tx> and before the show* group per CT_DLbl order.
+  const dLblPosFrag = usePos ? `<c:dLblPos val="${simplePos}"/>` : '';
   // CM chart fixes round 3, item 2 (DEFINITIVE) — Excel writes a per-dLbl
   // CE6537A1 extension on every custom label, and it carries ONLY
   // <c15:showDataLabelsRange val="0"/> (this label's text is literal, not sourced
@@ -959,6 +979,7 @@ function dLblXml(idx, text, role, label, bandIndex = 0) {
                 </a:p>
               </c:rich>
             </c:tx>
+            ${dLblPosFrag}
             <c:showLegendKey val="0"/>
             <c:showVal val="0"/>
             <c:showCatName val="0"/>
@@ -1069,7 +1090,7 @@ function dLblsXml(spec, bandIndex = 0) {
   // their point. bandIndex (the series ordinal on multi-series charts) drops this
   // series' callout row so nearby peaks/lasts stack instead of overlapping.
   if (Array.isArray(spec) && spec.length > 0) {
-    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex)).join('\n');
+    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex, p.simplePos)).join('\n');
     // Item 3 (recommended, from Excel's own output) — give the floated callouts a
     // brand callout-box look so they stay legible where they sit over the plotted
     // lines: paper (FFFFFF) fill + a Blue-12 (E0E8F4) hairline. Per CT_DLbls order
@@ -4259,11 +4280,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yAxisRange: cohortCapFit || capFit || cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
+          // Scott request — a LATEST-only value label at each cohort line's right
+          // end (simplePos 'r'), value-only (no "Latest" word) so the 4 labels
+          // spread by the lines' own vertical separation instead of stacking.
           series: series.map(s => ({
             titleCol: s.col, titleRow: headerRow,
             valCol: s.col,
             color: s.color,
             dashed: !!s.dashed,
+            dataLabels: Array.isArray(rows)
+              ? buildLatestOnlyForSpec(plottedRows, r => r[s.key], fmtPct2Native, 'r').map(a => ({ ...a, label: '' }))
+              : undefined,
           })),
           anchor: standardAnchor,
         },
@@ -5207,6 +5234,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const avgLabels = Array.isArray(rows)
         ? buildAnnotationsForSpec(plottedRows, r => r.avg_deal_size, fmtCurrencyMNative, 'avg_deal_size')
         : undefined;
+      // Peak/Low/Latest on the TTM transaction-count bars (integer). The bar is
+      // series 0 → band 0 (top); the avg-deal line takes band 1 so they don't
+      // collide (combo builder bands labeled series in bar-then-line order).
+      const cntLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.ttm_count,
+            (v) => Math.round(Number(v)).toLocaleString('en-US'), 'txn_count:ttm_count')
+        : undefined;
       return {
         tabName,
         spec: {
@@ -5217,7 +5251,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // R37 P2 — left integer count, right compact currency for avg deal
           yLeftNumFmt:  VAL_FMT_INTEGER,
           yRightNumFmt: VAL_FMT_CURRENCY_M,
-          barSeries:  [{ titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky }],
+          barSeries:  [{ titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky,
+                         dataLabels: cntLabels }],
           lineSeries: [{ titleCol: avgCol, titleRow: headerRow, valCol: avgCol, color: navy,
                          dataLabels: avgLabels }],
           anchor: standardAnchor,
@@ -5351,6 +5386,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // landed well short of the true last point. plottedRows aligns idx exactly and
       // still restricts to the displayed window.
       const capLabels = buildAnnotationsForSpec(plottedRows, r => r.last_ask_cap_all, fmtPct2Native, 'seller_sentiment:last_ask_cap_all');
+      // Scott request — add Peak/Low/Latest to the SECOND asking-cap line (the
+      // 10+ yr trailing-8-qtr steel line), banded below the all-cap callouts.
+      const capLongLabels = buildAnnotationsForSpec(
+        plottedRows,
+        r => (r.last_ask_cap_long_term_8q != null ? r.last_ask_cap_long_term_8q : r.last_ask_cap_long_term),
+        fmtPct2Native, 'seller_sentiment:last_ask_cap_long');
       return {
         tabName,
         spec: {
@@ -5379,14 +5420,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // review + the brand guide ("primary blues dominate; tertiary hues are
           // series 4+ and <10% of any chart"), bars are now NM Blue + Sky and the
           // lines are Blue-85 + Steel — all explicit cm-brand.json palette fills.
+          // Scott request — 60% opacity on the price-change bars so the two cap
+          // lines + their Peak/Low/Latest callouts read clearly over the bars.
           barSeries: [
-            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '003DA5' },  // NM Blue
-            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '62B5E5' },  // Sky
+            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '003DA5', alpha: '60000' },  // NM Blue
+            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '62B5E5', alpha: '60000' },  // Sky
           ],
           lineSeries: [
             { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: '265AB2',   // Blue 85
               dataLabels: capLabels },
-            { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: '9EA9B7' },  // Steel
+            { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: '9EA9B7',   // Steel
+              dataLabels: capLongLabels },
           ],
           anchor: standardAnchor,
         },
