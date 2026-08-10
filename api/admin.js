@@ -5127,7 +5127,7 @@ async function fetchSfAssistAnnotated() {
     for (let off = 0; ; off += PAGE) {
       const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref'
         + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
-        + '&order=id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+        + '&order=proposal_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
       if (!r.ok || !Array.isArray(r.data)) break;
       for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
       if (r.data.length < PAGE) break;
@@ -5171,12 +5171,17 @@ async function handleSfLinkAssistTick(req, res) {
   const enabled = w93FlagEnabled('W9_3_SF_ASSIST', flag);
   const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(SF_ASSIST_BATCH), 10)));
 
-  // Pull needs_review candidates (both domains) via the existing federated source,
-  // minus those already annotated (resumable).
+  // Pull needs_review candidates (both domains) via the existing federated source.
+  // Anti-join against our OWN output: exclude subject_refs this source has already
+  // annotated so the tick WALKS the ~3.3k pool instead of re-scoring the same
+  // top-N nightly (prompt 92 — the walk-the-pool miss, 3rd instance of the class).
+  // The pool is finite + verdict-consumed, so annotated-exclusion is self-healing.
   const annotated = await fetchSfAssistAnnotated();
   let src = { items: [] };
   try { src = await fetchFederatedSource('sf_link_candidate', Math.max(120, limit * 6)); } catch (e) { src = { items: [], error: e?.message || String(e) }; }
-  const fresh = (src.items || []).filter((it) => it.subject_ref && !annotated.has(it.subject_ref));
+  const laneItems = (src.items || []);
+  const alreadyAnnotatedExcluded = laneItems.filter((it) => it.subject_ref && annotated.has(it.subject_ref)).length;
+  const fresh = laneItems.filter((it) => it.subject_ref && !annotated.has(it.subject_ref));
 
   if (req.method === 'POST') {
     if (!enabled) {
@@ -5186,10 +5191,15 @@ async function handleSfLinkAssistTick(req, res) {
     }
     const sourceRunId = 'w93a_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
     const summary = { source_run_id: sourceRunId, candidates: fresh.length, annotated_existing: annotated.size,
-      proposed: 0, failed: 0, budget_exhausted: false, by_verdict: {} };
+      already_annotated_excluded: alreadyAnnotatedExcluded, proposed: 0, failed: 0, skipped: 0,
+      budget_exhausted: false, by_verdict: {} };
     const start = Date.now();
     for (const item of fresh.slice(0, limit)) {
       if (Date.now() - start >= SF_ASSIST_BUDGET_MS) { summary.budget_exhausted = true; break; }
+      // Belt + braces: skip-before-LLM if an annotation already exists for the subject
+      // (the fresh-filter already excludes these; this guards against paying ~16s to
+      // overwrite an existing annotation should the pool + set ever diverge).
+      if (annotated.has(item.subject_ref)) { summary.skipped += 1; continue; }
       try {
         const { proposal, promptHash, provider, model, tried } = await scoreSfAssistItem(item);
         summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
@@ -5205,7 +5215,8 @@ async function handleSfLinkAssistTick(req, res) {
 
   // GET dry-run (+ ?score=1 inline sample: NO writes).
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
-    lane_candidates: (src.items || []).length, annotated_existing: annotated.size, fresh: fresh.length,
+    lane_candidates: laneItems.length, annotated_existing: annotated.size,
+    already_annotated_excluded: alreadyAnnotatedExcluded, fresh: fresh.length,
     note: 'Annotation-only. The assist ranks each owner<->SF-account candidate same-party/not/uncertain with confidence + one-line evidence, stored in lcc_clean_assist_proposals (source w9_3_sf_assist). NEVER a verdict; the lane sorts easy-first and each human verdict self-measures agree/disagree.' };
   if (req.query.score === '1' || req.query.score === 'true') {
     const n = Math.min(20, Math.max(1, parseInt(req.query.n || '6', 10) || 6));
