@@ -4752,22 +4752,21 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
             valAxNumFmt: VAL_FMT_PERCENT_2DP,
             yLeftAxisTitle: 'Cap rate',
-            // CM bid-ask (Low/Latest fix, final). The gray spread band is drawn with
-            // <c:upDownBars> (the master look) between the FIRST and LAST series at
-            // each period = Last-Ask ↔ Achieved. upDownBars is a lineChart
-            // decoration (not a bar chart type), and in practice it does NOT force a
-            // 0 axis floor — the cap axis fits ~6-8% (confirmed live).
+            // CM bid-ask (Low/Latest fix, final — CONFIRMED trade-off). Live testing
+            // (2026-08-10) proved that <c:upDownBars> makes Excel keep ONLY the
+            // single max-value ("Peak") data label chart-wide and drop Low/Latest —
+            // even with both series as normal drawn lines. So the solid up/down-bar
+            // band and the three callouts CANNOT coexist in native Excel.
             //
-            // Root cause of the earlier "only Peak renders" (which SURVIVED removing
-            // the up/down bars): the two series were markerOnly / lineAlpha-0 — dash
-            // ticks with NO drawn connecting line — and Excel drops every
-            // manual-positioned data label EXCEPT the one at the series max on a
-            // marker-only / invisible-line series. The up/down bars were a red
-            // herring. Rendering both series as NORMAL drawn lines (like the
-            // nm_vs_market chart, which shows all three callouts) is what makes Low
-            // and Latest render — and the up/down-bar band coexists with them.
-            upDownBars: true,
-            upDownGapWidth: 20,
+            // This build prioritizes the three callouts (the repeated ask). The
+            // spread band is drawn with <c:hiLowLines> — a lineChart decoration that
+            // is NOT a bar, so it does NOT trigger the cull — giving thin steel
+            // vertical sticks between the two cap lines. Both series are NORMAL drawn
+            // lines. This is exactly the nm_vs_market structure, which renders all
+            // three callouts. (To go back to the SOLID band instead, set
+            // upDownBars:true here — but Low/Latest will drop to Peak-only again.)
+            hiLowLines: '#9EA9B7',
+            hiLowLineWidth: 15875,
             // Two NORMAL visible cap LINES: Last-Ask (sky, bottom) + Achieved (navy,
             // top). The three spread callouts (Peak/Low/Latest, in bps) are hosted
             // on the Achieved line.

@@ -1286,7 +1286,7 @@ test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sp
 
 test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', () => {
   // CM bid-ask (Low/Latest fix 2026-08-10). The native builder plots two cap
-  // LINES (Last-Ask, Achieved) with <c:upDownBars> drawing the gray spread band
+  // LINES (Last-Ask, Achieved) with <c:hiLowLines> drawing the gray spread band
   // between them. hiLowLines is a lineChart decoration (NOT a bar), so the
   // line-only value axis still honors c:min → ~6-8% AND — unlike <c:upDownBars> —
   // it does NOT trigger Excel's chart-wide data-label cull, so all three
@@ -1321,13 +1321,14 @@ test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', ()
   assert.ok(!achieved.markerOnly, 'Achieved is a normal drawn line (not marker-only) so labels render');
   assert.equal(achieved.dataLabels.length, 3, 'Peak/Low/Latest all hosted on Achieved');
   assert.deepEqual(achieved.dataLabels.map(a => a.role).sort(), ['last', 'max', 'min']);
-  assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
-  assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
+  assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band (all 3 callouts render)');
+  assert.ok(!out.spec.upDownBars, 'no up/down bars (they cull Low/Latest to Peak-only)');
   assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
   const xml = buildMultiLineChartXml(out.spec);
   assert.equal((xml.match(/<c:ser>/g) || []).length, 2, 'two series in the XML');
   assert.equal((xml.match(/<c:lineChart>/g) || []).length, 1, 'single lineChart group');
-  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars spread band');
+  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines spread band');
+  assert.doesNotMatch(xml, /<c:upDownBars>/, 'no up/down bars');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3305,7 +3306,7 @@ test('T1: chart XML series references shift to the first non-null data row', asy
 });
 
 test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a line-only axis', () => {
-  // CM bid-ask (Low/Latest fix). The spread band is drawn with <c:upDownBars> — a
+  // CM bid-ask (Low/Latest fix). The spread band is drawn with <c:hiLowLines> — a
   // lineChart decoration, NOT a bar chart type — between the two cap LINES. The
   // line-only cap axis honors c:min → ~6-8%, and no bar element culls the callouts.
   const cols = [
@@ -3341,15 +3342,16 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a li
   assert.equal(out.spec.series[1].color, '003DA5');
   assert.ok(!out.spec.series[1].markerOnly, 'Achieved is a normal drawn line so labels render');
   assert.equal(out.spec.series[1].dataLabels.length, 3, 'Peak/Low/Latest hosted on Achieved');
-  assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
-  assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
+  assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band');
+  assert.ok(!out.spec.upDownBars, 'no up/down bars (they cull Low/Latest)');
   assert.ok(!out.spec.barSeries, 'no bar series');
   assert.ok(out.spec.yAxisRange && out.spec.yAxisRange.min > 0.01, 'cap axis min is non-zero');
   assert.equal(out.helperCols[0].key, 'achieved_cap');
-  // Rendered: line-only value axis carries a non-zero c:min; upDownBars present.
+  // Rendered: line-only value axis carries a non-zero c:min; hiLowLines present.
   const xml = buildMultiLineChartXml(out.spec);
   assert.match(xml, /<c:min val="0\.\d+"\/>/, 'cap axis carries a non-zero c:min');
-  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars spread band');
+  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines spread band');
+  assert.doesNotMatch(xml, /<c:upDownBars>/, 'no up/down bars');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3451,8 +3453,8 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
   assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
   assert.equal(out.spec.series[1].dataLabels.length, 3, 'Peak/Low/Latest hosted on Achieved');
-  assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
-  assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
+  assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band');
+  assert.ok(!out.spec.upDownBars, 'no up/down bars');
   assert.ok(!out.spec.barSeries, 'no bar series');
 });
 
