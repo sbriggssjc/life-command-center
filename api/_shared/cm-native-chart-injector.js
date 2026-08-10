@@ -5263,13 +5263,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const lineLongCol = findCol('last_ask_cap_long_term_8q', 'last_ask_cap_long_term');
       if (!periodCol || !barAllCol || !barLongCol || !lineAllCol || !lineLongCol) return null;
       // R37 P3 — peak/trough/most-recent labels on the all-cap navy line.
-      // R66cc — compute over the DISPLAYED window (>= 2017) only; the chart trims to
-      // 2017+ but the full-history peak (e.g. an ~8.2% pre-2017 value) was being
-      // stamped onto a windowed point (same idx-vs-trim bug fixed on NM-vs-Market).
-      const sentWindowRows = Array.isArray(rows)
-        ? rows.filter(r => r && r.period_end && new Date(r.period_end).getFullYear() >= 2017)
-        : [];
-      const capLabels = buildAnnotationsForSpec(sentWindowRows, r => r.last_ask_cap_all, fmtPct2Native);
+      // CM close-out FIX — compute over `plottedRows` (= fitRows, the exact rows
+      // the chart references after the MIN_YEAR crop), NOT a bespoke >=2017 filter.
+      // seller_sentiment's MIN_YEAR is the first dense-`n_all` year (~2019), so a
+      // separate >=2017 filter left the annotation indices ~8 quarters ahead of the
+      // plotted cells — the dLbl `idx` is relative to the plotted series, so "Latest"
+      // landed well short of the true last point. plottedRows aligns idx exactly and
+      // still restricts to the displayed window.
+      const capLabels = buildAnnotationsForSpec(plottedRows, r => r.last_ask_cap_all, fmtPct2Native, 'seller_sentiment:last_ask_cap_all');
       return {
         tabName,
         spec: {
@@ -5431,6 +5432,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           },
         };
       }
+      // CM close-out — Peak / Low / Latest callouts on the pace-of-cost line
+      // (user request). Values are in bps; format "+150 bps" / "-50 bps".
+      const fmtBps = (v) => `${Number(v) >= 0 ? '+' : ''}${Math.round(Number(v))} bps`;
+      const paceLabels = buildAnnotationsForSpec(plottedRows, r => r.pace_cost, fmtBps, 'pace_of_cap_rate_expansion:pace_cost');
       return {
         tabName,
         spec: {
@@ -5450,7 +5455,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           lineSeries: [
             // R56 — Cost-of-capital YoY pace, amber (matches the
             // renderer's deferred 3rd series color noted in R45/R50).
-            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: '9EA9B7' },
+            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: '9EA9B7', dataLabels: paceLabels },
           ],
           anchor: standardAnchor,
         },
