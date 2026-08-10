@@ -1578,9 +1578,13 @@ function buildMultiLineChartXml(spec) {
     // markerOnly series drops).
     const _lineColor = s.lineColor ? String(s.lineColor).replace('#', '') : color;
     const _lineWidth = Number.isFinite(s.lineWidth) ? s.lineWidth : 22225;
+    // lineAlpha (0..100000) → a DRAWN but transparent line. Used by a label-host
+    // series: Excel needs a drawn line to render manual-positioned labels at all
+    // points, but the line itself must be invisible (alpha 0).
+    const _lineAlphaFrag = Number.isFinite(s.lineAlpha) ? `<a:alpha val="${s.lineAlpha}"/>` : '';
     const lineSpFrag = s.markerOnly
       ? `<a:ln><a:noFill/></a:ln>`
-      : `<a:ln w="${_lineWidth}" cap="rnd"><a:solidFill><a:srgbClr val="${_lineColor}"/></a:solidFill>${dashFrag}<a:round/></a:ln>`;
+      : `<a:ln w="${_lineWidth}" cap="rnd"><a:solidFill><a:srgbClr val="${_lineColor}">${_lineAlphaFrag}</a:srgbClr></a:solidFill>${dashFrag}<a:round/></a:ln>`;
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -1669,6 +1673,7 @@ ${upDownBarsFrag}
     </c:plotArea>
     <c:legend>
       <c:legendPos val="b"/>
+${(spec.series || []).map((s, i) => s.hideFromLegend ? `      <c:legendEntry><c:idx val="${i}"/><c:delete val="1"/></c:legendEntry>` : '').filter(Boolean).join('\n')}
       <c:overlay val="0"/>
     </c:legend>
     <c:plotVisOnly val="1"/>
@@ -4660,25 +4665,31 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // line) marking the top/bottom of each bar, in distinct brand colors:
             // Last-Ask = sky (bottom), Achieved = navy (top). Matches the master
             // + the PNG renderer's dash markers.
+            // Series order matters: up/down bars pair the FIRST and LAST series.
+            // [Last-Ask, LabelHost, Achieved] → the bars span Last-Ask↔Achieved
+            // (LabelHost is a MIDDLE series, excluded from the pair). Excel limits
+            // data labels on an up/down-bar PAIR series to ~the max, which is why
+            // only Peak showed when the labels lived on Achieved. Hosting them on a
+            // middle series (a transparent drawn line — invisible, but Excel renders
+            // its manual-positioned labels at every point) restores Low + Latest.
             series: [
               { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
                 showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-              // Peak / Low / Latest callouts show the SPREAD in bps ("111 bps"),
-              // anchored to the Achieved (top) point of each relevant bar. This
-              // series MUST draw a line (not markerOnly) or Excel drops the first/
-              // last labels (Low/Latest) — manual-positioned labels only render at
-              // edge points on a DRAWN-line series. The line is thin `steel`
-              // (9EA9B7) so it blends with the up/down-bar top border and reads as
-              // the bar top, not a zigzag; the navy dash marker is the visible cap.
+              // LabelHost — invisible middle series carrying the Achieved values,
+              // hosting the Peak/Low/Latest SPREAD callouts (bps). Transparent line
+              // (alpha 0), no marker, hidden from the legend.
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                showMarker: true, markerShape: 'dash', markerSize: 8,
-                lineColor: '9EA9B7', lineWidth: 9525,
+                lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
                 dataLabels: buildAnnotationsForSpec(
                   plottedRows,
                   (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
                     ? Number(r.avg_bid_ask_spread) : NaN,
                   (v) => `${Math.round(Number(v) * 10000)} bps`,
                   'bid_ask:spread') },
+              // Achieved (top) dash ticks — navy, markerOnly (no line). Last series
+              // → the up/down bars' top edge.
+              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
             ],
             anchor: standardAnchor,
           },
