@@ -2673,6 +2673,8 @@ window.dcSfPick = dcSfPick;
 async function dcSfManual(id) {
   const input = document.getElementById('dcsfid-' + id);
   const slot = document.getElementById('dcsfr-' + id);
+  const it = _dcItems[id] || {};
+  const fallbackName = (it.context && it.context.parent_name) || '';
   const sfId = _sfIdFromInput(input ? input.value : '');
   if (!sfId) { if (slot) slot.innerHTML = '<div class="dcsf-empty">That doesn’t look like a Salesforce Account ID (15 or 18 characters). Paste the ID or the record URL.</div>'; return; }
   if (slot) slot.innerHTML = '<span class="spinner"></span> validating ' + esc(sfId) + '…';
@@ -2686,9 +2688,11 @@ async function dcSfManual(id) {
   } else {
     // Flow can't confirm by-id (or doesn't implement it) — allow an explicit
     // unverified map so the user with Salesforce open in another tab isn't stuck.
-    _dcSfCand[id] = [{ Id: sfId, Name: null }];
+    _dcSfCand[id] = [{ Id: sfId, Name: fallbackName || null }];
+    const detail = (res.data && (res.data.detail || res.data.message)) || '';
     slot.innerHTML = '<div class="dcsf-empty">Couldn’t confirm the name for <b>' + esc(sfId) + '</b>'
-      + ((res.data && res.data.reason) ? ' (' + esc(res.data.reason) + ')' : '') + '. '
+      + ((res.data && res.data.reason) ? ' (' + esc(res.data.reason) + ')' : '')
+      + (detail ? ': ' + esc(String(detail).slice(0, 220)) : '') + '. '
       + '<button class="q-action" onclick="dcSfPick(' + id + ',0)">Map by ID anyway</button></div>';
   }
 }
