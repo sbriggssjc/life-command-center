@@ -126,3 +126,32 @@ Still intentionally missing:
 
 - No automatic property, lead, or `bd_opportunities` creation yet.
 - The promotion bridge should be the next slice: review article -> resolve/create property/entity -> call the existing lead/opportunity machinery with provenance back to `news_alert_leads.news_lead_id`.
+
+## 2026-08-10 Follow-up: News Alert Assist + Tracking Slice
+
+Objective: use the local Ollama extraction seam as a proposal-only assistant inside the News Alert Review lane, and add a safe follow-up parking action before canonical property/BD creation.
+
+Changes made:
+
+- Added `api/_shared/news-alert-assist.js`.
+  - Builds a grounded prompt from the existing `news_alert_leads` fields.
+  - Extracts candidate project, parties, permits, timeline, debt/deed signals, and follow-up triggers.
+  - Normalizes model output into a bounded JSON annotation.
+  - Enforces the doctrine: Ollama annotates only; the human decides what becomes canonical.
+- Added `POST /api/news-alerts` action `extract_details`.
+  - Calls `invokeExtractionAI({ surface: 'news_alert_assist' })`.
+  - Stores the normalized proposal in `metadata.news_alert_extraction`.
+  - Does not change lead status or write any property/lead/opportunity data.
+- Added `POST /api/news-alerts` action `create_tracking_task`.
+  - Opens/idempotently reuses a `research_tasks` row with `research_type='news_alert_development_followup'`.
+  - Uses `source_table='news_alert_leads'` and `source_record_id=<news_lead_id>` so repeated clicks do not spam the queue.
+  - Stores the task linkage in `metadata.news_alert_tracking_task`.
+- Updated the Decision Center card UI:
+  - New `Extract details` button.
+  - New `Create tracking task` button.
+  - Inline assist summary showing recommended next step, parties, signals, and timeline when available.
+
+Design note:
+
+- This is not local-model "training" in the fine-tuning sense. It is a grounded extraction/evaluation loop. Each human review creates structured metadata that can later become an evaluation corpus for prompt/model tuning.
+- Current extraction is limited to the fields already stored from the Google Alert email: headline, snippet/summary, URL, subject, tenant/domain/location hints. Full article-page extraction can be added later by fetching/snapshotting the article text into the same prompt input.

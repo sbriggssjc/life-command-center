@@ -5073,17 +5073,45 @@ function newsAlertCardHtml(it, isNext) {
   var title = it.article_title || it.raw_subject || it.tenant || 'News alert';
   var place = [it.city, it.state].filter(Boolean).join(', ');
   var conf = it.confidence != null ? Math.round(Number(it.confidence) * 100) + '% confidence' : 'unscored';
+  var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+  var extraction = meta.news_alert_extraction || null;
+  var task = meta.news_alert_tracking_task || null;
   var badges = '<span class="q-badge">' + esc(it.status || '') + '</span>'
     + (it.domain ? '<span class="q-badge">' + esc(it.domain) + '</span>' : '')
     + (it.tenant ? '<span class="q-badge">' + esc(it.tenant) + '</span>' : '')
-    + '<span class="q-badge">' + esc(conf) + '</span>';
+    + '<span class="q-badge">' + esc(conf) + '</span>'
+    + (extraction ? '<span class="q-badge">assist</span>' : '')
+    + (task ? '<span class="q-badge">task</span>' : '');
   var url = it.article_url ? '<a class="q-action" href="' + esc(it.article_url) + '" target="_blank" rel="noopener">Open article</a>' : '';
   var actions = '';
   if (it.status === 'dismissed' || it.status === 'converted') {
     actions = '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'reopen\')">Reopen</button>';
   } else {
     actions = '<button class="q-action primary" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'send_to_developer\')">Keep for developer research</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'extract_details\')">Extract details</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'create_tracking_task\')">Create tracking task</button>'
       + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'dismiss\')">Dismiss</button>';
+  }
+  var assistHtml = '';
+  if (extraction) {
+    var project = extraction.project || {};
+    var parties = Array.isArray(extraction.parties) ? extraction.parties : [];
+    var timeline = Array.isArray(extraction.timeline) ? extraction.timeline : [];
+    var debt = Array.isArray(extraction.debt_or_deed_signals) ? extraction.debt_or_deed_signals : [];
+    var permits = Array.isArray(extraction.permits) ? extraction.permits : [];
+    var partyText = parties.slice(0, 4).map(function (p) { return (p.role ? p.role + ': ' : '') + p.name; }).join(' · ');
+    var timelineText = timeline.slice(0, 3).map(function (t) { return [t.event, t.date_or_period].filter(Boolean).join(' - '); }).join(' · ');
+    var signalText = debt.concat(permits).slice(0, 3).map(function (s) {
+      return [s.signal_type || s.permit_type || s.permit_number, s.party || s.applicant || s.jurisdiction || s.date_or_period].filter(Boolean).join(' - ');
+    }).join(' · ');
+    assistHtml = '<div class="q-item-detail clean-assist">'
+      + '<div><span class="q-badge type">Ollama assist: ' + esc(extraction.recommended_next_step || 'uncertain') + '</span> '
+      + esc(extraction.reason || '') + '</div>'
+      + (project.description || project.address ? '<div>' + esc([project.description, project.address].filter(Boolean).join(' · ')) + '</div>' : '')
+      + (partyText ? '<div>Parties: ' + esc(partyText) + '</div>' : '')
+      + (signalText ? '<div>Signals: ' + esc(signalText) + '</div>' : '')
+      + (timelineText ? '<div>Timeline: ' + esc(timelineText) + '</div>' : '')
+      + '</div>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="' + rowid + '">'
     + '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
@@ -5091,6 +5119,7 @@ function newsAlertCardHtml(it, isNext) {
     + '<div class="q-item-meta">' + esc([place, it.match_kind, it.created_at ? String(it.created_at).slice(0, 10) : ''].filter(Boolean).join(' · ') || '-')
     + '</div>'
     + (it.summary ? '<div class="q-item-detail">' + esc(it.summary) + '</div>' : '')
+    + assistHtml
     + '<div class="q-actions">' + url + actions + '</div></div>';
 }
 
@@ -5130,7 +5159,11 @@ async function resolveNewsAlert(id, action) {
   var res = await opsApi('/api/news-alerts', { method: 'POST', body: JSON.stringify({ news_lead_id: id, action: action }) });
   if (res.ok && res.data && res.data.ok) {
     if (typeof showToast === 'function') {
-      showToast(action === 'dismiss' ? 'Dismissed' : action === 'reopen' ? 'Reopened' : 'Sent to developer research', 'success');
+      showToast(action === 'dismiss' ? 'Dismissed'
+        : action === 'reopen' ? 'Reopened'
+          : action === 'extract_details' ? 'Extracted details'
+            : action === 'create_tracking_task' ? 'Tracking task ready'
+              : 'Sent to developer research', 'success');
     }
     renderNewsAlertLane(_newsAlertStatus);
     refreshReviewNavBadge();

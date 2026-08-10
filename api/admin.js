@@ -27,6 +27,9 @@ import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { invokeExtractionAI } from './_shared/ai.js';
 import {
+  buildNewsAlertExtractionPrompt, parseNewsAlertExtractionJson, normalizeNewsAlertExtraction,
+} from './_shared/news-alert-assist.js';
+import {
   JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
   junkCandidateReason, namingHygieneReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
   parseJunkVerdictJson, planJunkApply, buildRetireMarker,
@@ -1228,6 +1231,84 @@ async function handleNewsAlerts(req, res) {
   const id = String(body.news_lead_id || body.id || '').trim();
   const action = String(body.action || '').trim().toLowerCase();
   if (!id) return res.status(400).json({ error: 'news_lead_id required' });
+
+  if (action === 'extract_details') {
+    const readR = await opsQuery('GET',
+      'news_alert_leads?select=' + selectCols + '&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+      undefined, { countMode: 'none' });
+    if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+    const row = Array.isArray(readR.data) ? readR.data[0] : null;
+    if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+
+    const prompt = buildNewsAlertExtractionPrompt(row);
+    const ai = await invokeExtractionAI({ prompt, surface: 'news_alert_assist' });
+    const parsed = parseNewsAlertExtractionJson(ai?.data?.response || '');
+    const now = new Date().toISOString();
+    const extraction = normalizeNewsAlertExtraction(parsed, row, {
+      model: ai?.data?.model || null,
+      provider: ai?.provider || null,
+      at: now,
+    });
+    extraction.tried = Array.isArray(ai?.tried) ? ai.tried : [];
+    extraction.ai_ok = !!ai?.ok;
+
+    const metadata = Object.assign({}, row.metadata || {});
+    metadata.news_alert_extraction = extraction;
+    const patchR = await opsQuery('PATCH',
+      'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+      { metadata, updated_at: now },
+      { headers: { Prefer: 'return=representation' } });
+    if (!patchR.ok) return res.status(502).json({ error: 'news_alert_extract_update_failed', detail: patchR.data });
+    const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+    return res.status(200).json({ ok: true, item: updated, extraction });
+  }
+
+  if (action === 'create_tracking_task') {
+    const readR = await opsQuery('GET',
+      'news_alert_leads?select=' + selectCols + '&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+      undefined, { countMode: 'none' });
+    if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+    const row = Array.isArray(readR.data) ? readR.data[0] : null;
+    if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+    const ex = row.metadata && row.metadata.news_alert_extraction ? row.metadata.news_alert_extraction : null;
+    const titleCore = row.article_title || row.raw_subject || [row.tenant, row.city, row.state].filter(Boolean).join(' - ') || 'News alert';
+    const triggers = ex && Array.isArray(ex.follow_up_triggers) ? ex.follow_up_triggers : [];
+    const instructions = [
+      row.article_url ? 'Article: ' + row.article_url : null,
+      row.summary ? 'Summary: ' + row.summary : null,
+      ex && ex.reason ? 'Assist reason: ' + ex.reason : null,
+      triggers.length ? 'Follow-up triggers: ' + triggers.join('; ') : null,
+    ].filter(Boolean).join('\n\n') || null;
+    const rt = await openResearchTask({
+      researchType: 'news_alert_development_followup',
+      title: 'News alert follow-up - ' + titleCore,
+      instructions,
+      domain: 'lcc',
+      propertyId: id,
+      sourceTable: 'news_alert_leads',
+      metadata: {
+        news_lead_id: id,
+        domain: row.domain || null,
+        tenant: row.tenant || null,
+        city: row.city || null,
+        state: row.state || null,
+        article_url: row.article_url || null,
+        extraction: ex || null,
+      },
+      workspaceId,
+    });
+    if (!rt.ok) return res.status(502).json({ error: 'news_alert_task_failed', detail: rt });
+    const now = new Date().toISOString();
+    const metadata = Object.assign({}, row.metadata || {});
+    metadata.news_alert_tracking_task = { id: rt.id || null, created: !!rt.created, duplicate: !!rt.duplicate, at: now };
+    const patchR = await opsQuery('PATCH',
+      'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+      { metadata, updated_at: now },
+      { headers: { Prefer: 'return=representation' } });
+    if (!patchR.ok) return res.status(502).json({ error: 'news_alert_task_update_failed', detail: patchR.data, task: rt });
+    const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+    return res.status(200).json({ ok: true, item: updated, research_task: rt });
+  }
 
   const actionStatus = {
     dismiss: 'dismissed',
