@@ -4752,64 +4752,48 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
             valAxNumFmt: VAL_FMT_PERCENT_2DP,
             yLeftAxisTitle: 'Cap rate',
-            // Up/down bars draw the gray spread band between the FIRST (Last-Ask)
-            // and LAST (Achieved) line at each period — the master's chart type.
-            // They are a LINE-CHART decoration (not a bar chart type), so the
-            // line-only value axis still honors c:min → the axis stays ~6-8%.
-            // Bar fill = brand `iron` / border `steel` (cm-brand.json); spread is
-            // always positive (Achieved > Last-Ask) so only up-bars show.
-            // upDownGapWidth low → wide bars that nearly touch → continuous band.
-            upDownBars: true,
-            upDownGapWidth: 20,
-            // Each series renders as a FLAT DASH tick (markerOnly → no connecting
-            // line) marking the top/bottom of each bar, in distinct brand colors:
-            // Last-Ask = sky (bottom), Achieved = navy (top). Matches the master
-            // + the PNG renderer's dash markers.
-            // Series order matters: up/down bars pair the FIRST and LAST series.
-            // [Last-Ask, LabelHost, Achieved] → the bars span Last-Ask↔Achieved
-            // (LabelHost is a MIDDLE series, excluded from the pair). Excel limits
-            // data labels on an up/down-bar PAIR series to ~the max, which is why
-            // only Peak showed when the labels lived on Achieved. Hosting them on a
-            // middle series (a transparent drawn line — invisible, but Excel renders
-            // its manual-positioned labels at every point) restores Low + Latest.
+            // CM bid-ask (Low/Latest fix 2026-08-10 — supersedes the invisible
+            // per-callout host-series approach in #1683, which still shipped with
+            // ONLY "Peak" showing). Root cause: the spread band was drawn with
+            // <c:upDownBars>, and the presence of ANY up/down-bar element makes
+            // Excel apply a CHART-WIDE data-label cull — it keeps only the single
+            // data label at the max-value point and drops every other label across
+            // the whole chart, INCLUDING labels parked in a separate bar-free host
+            // group (which is why the host-series trick never worked). Fix: draw
+            // the spread band with <c:hiLowLines> instead. hiLowLines is a
+            // lineChart decoration (NOT a bar) that connects the min↔max series
+            // value per period — here Last-Ask ↔ Achieved, i.e. the exact spread —
+            // so it (a) keeps the line-only value axis honoring c:min (~6-8%, no
+            // forced 0 floor) AND (b) does NOT trigger the label cull. With no bar
+            // element anywhere, the Peak/Low/Latest callouts hosted on the Achieved
+            // line all render. This is the same hiLowLines pattern already used by
+            // the NM-vs-market and quartile-band charts (which show all callouts).
+            hiLowLines: '#9EA9B7',   // steel spread sticks between Last-Ask and Achieved
+            hiLowLineWidth: 19050,   // ~1.5pt, matches the quartile-band stick weight
+            // Two cap LINES rendered as flat DASH ticks: Last-Ask = sky (bottom of
+            // the spread), Achieved = navy (top). The three spread callouts
+            // (Peak/Low/Latest, in bps) are hosted directly on the Achieved line —
+            // safe now that no up/down-bar element culls labels. The Achieved series
+            // draws a transparent line (lineAlpha 0) because Excel only renders
+            // manual-positioned data labels on a series that carries a DRAWN line
+            // (a pure markerOnly / no-line series drops them); the dash markers stay
+            // visible navy while the connecting line is invisible.
             series: (() => {
-              // CM close-out (bid-ask, DEFINITIVE Low/Latest fix 2026-08-10).
-              // History: hosting all 3 spread callouts (Peak/Low/Latest) on ONE
-              // invisible host series rendered ONLY "Peak" — Excel culls every
-              // data label in a series EXCEPT the one at that series' MAX value,
-              // whenever the chart carries up/down bars (the cull is chart-wide,
-              // not group-local, so a separate bar-free host group didn't help).
-              // A series with exactly ONE label has nothing to cull against, so
-              // each callout now gets its OWN invisible host series (all reading
-              // the Achieved column, alpha 0, off-legend, in the bar-free host
-              // group). Split the annotations one-per-series → all three render.
               const spreadAnns = buildAnnotationsForSpec(
                 plottedRows,
                 (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
                   ? Number(r.avg_bid_ask_spread) : NaN,
                 (v) => `${Math.round(Number(v) * 10000)} bps`,
                 'bid_ask:spread');
-              const hostFor = (role, band) => {
-                const a = spreadAnns.find(x => x.role === role);
-                if (!a) return null;
-                return {
-                  titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                  lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
-                  separateGroup: true,
-                  // band each callout to its own top-band row so Peak/Low/Latest
-                  // don't stack on the same y when their x are close.
-                  dataLabels: [{ ...a }],
-                };
-              };
-              const hosts = [hostFor('max'), hostFor('last'), hostFor('min')].filter(Boolean);
               return [
                 { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
                   showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-                ...hosts,
-                // Achieved (top) dash ticks — navy, markerOnly (no line). Last
-                // NON-host series → the up/down bars' top edge.
+                // Achieved (top) dash ticks — navy; hosts the Peak/Low/Latest
+                // callouts. Transparent drawn line so Excel renders the labels.
                 { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+                  showMarker: true, markerShape: 'dash', markerSize: 8,
+                  lineColor: navy, lineWidth: 9525, lineAlpha: 0,
+                  dataLabels: spreadAnns },
               ];
             })(),
             anchor: standardAnchor,

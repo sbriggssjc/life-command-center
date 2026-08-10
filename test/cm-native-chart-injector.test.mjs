@@ -1284,11 +1284,13 @@ test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sp
   assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal renders as a markerless clean line');
 });
 
-test('bid_ask: two cap lines + up/down bars spread band (native)', () => {
-  // CM close-out (bid-ask). The native builder plots two cap LINES (Last-Ask,
-  // Achieved) with <c:upDownBars> drawing the gray spread band between them.
-  // upDownBars are a lineChart decoration (NOT a bar chart type), so the line-only
-  // value axis still honors c:min → ~6-8%. No <c:barChart> element.
+test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', () => {
+  // CM bid-ask (Low/Latest fix 2026-08-10). The native builder plots two cap
+  // LINES (Last-Ask, Achieved) with <c:hiLowLines> drawing the gray spread band
+  // between them. hiLowLines is a lineChart decoration (NOT a bar), so the
+  // line-only value axis still honors c:min → ~6-8% AND — unlike <c:upDownBars> —
+  // it does NOT trigger Excel's chart-wide data-label cull, so all three
+  // Peak/Low/Latest callouts (hosted on the Achieved line) render. No host series.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'avg_last_ask_cap',   col: 'B' },
@@ -1308,25 +1310,25 @@ test('bid_ask: two cap lines + up/down bars spread band (native)', () => {
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.equal(out.spec.type, 'multi-line');
-  // 5 series: Last-Ask tick, THREE invisible single-label hosts (Peak/Latest/Low —
-  // one callout each so Excel's up/down-bar label cull can't drop Low/Latest),
-  // Achieved tick. Up/down bars pair first↔last (Last-Ask↔Achieved).
-  assert.equal(out.spec.series.length, 5, 'last-ask + 3 spread hosts + achieved');
-  const hosts = out.spec.series.filter(s => s.hideFromLegend);
-  assert.equal(hosts.length, 3, 'three single-label hosts (Peak/Latest/Low)');
-  for (const h of hosts) {
-    assert.ok(h.separateGroup, 'host in its own bar-free chart group');
-    assert.equal(h.lineAlpha, 0, 'host line transparent');
-    assert.equal(h.dataLabels.length, 1, 'exactly one callout per host (nothing to cull)');
-  }
-  assert.deepEqual(hosts.map(h => h.dataLabels[0].role), ['max', 'last', 'min']);
-  assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
+  // 2 series: Last-Ask tick + Achieved tick. The Achieved line hosts all three
+  // Peak/Low/Latest spread callouts directly (no invisible host series needed now
+  // that <c:hiLowLines> — not <c:upDownBars> — draws the band, so nothing culls
+  // the labels). Clean legend: exactly Last-Ask + Achieved (no redundant hosts).
+  assert.equal(out.spec.series.length, 2, 'last-ask + achieved only');
+  assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
+  const achieved = out.spec.series[1];
+  assert.equal(achieved.color, '003DA5', 'navy Achieved tick');
+  assert.equal(achieved.lineAlpha, 0, 'Achieved draws a transparent line so labels render');
+  assert.equal(achieved.dataLabels.length, 3, 'Peak/Low/Latest all hosted on Achieved');
+  assert.deepEqual(achieved.dataLabels.map(a => a.role).sort(), ['last', 'max', 'min']);
+  assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band');
+  assert.ok(!out.spec.upDownBars, 'no up/down bars (they would cull Low/Latest labels)');
   assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
   const xml = buildMultiLineChartXml(out.spec);
-  assert.equal((xml.match(/<c:ser>/g) || []).length, 5, 'five series in the XML');
-  assert.equal((xml.match(/<c:lineChart>/g) || []).length, 2, 'two lineChart groups (hosts are bar-free)');
-  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars');
-  assert.match(xml, /<c:legendEntry><c:idx val="1"\/><c:delete val="1"\/>/, 'first host legend entry deleted');
+  assert.equal((xml.match(/<c:ser>/g) || []).length, 2, 'two series in the XML');
+  assert.equal((xml.match(/<c:lineChart>/g) || []).length, 1, 'single lineChart group');
+  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines spread band');
+  assert.doesNotMatch(xml, /<c:upDownBars>/, 'no up/down bars');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3303,10 +3305,10 @@ test('T1: chart XML series references shift to the first non-null data row', asy
     'T1: val series references start at the first non-null row (53)');
 });
 
-test('buildInjectionSpec: bid_ask_spread — two cap lines + up/down bars on a line-only axis', () => {
-  // CM close-out (bid-ask). The spread band is drawn with <c:upDownBars> — a
+test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a line-only axis', () => {
+  // CM bid-ask (Low/Latest fix). The spread band is drawn with <c:hiLowLines> — a
   // lineChart decoration, NOT a bar chart type — between the two cap LINES. The
-  // line-only cap axis honors c:min → ~6-8%.
+  // line-only cap axis honors c:min → ~6-8%, and no bar element culls the callouts.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -3331,27 +3333,25 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + up/down bars on a l
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.catCol, 'A');
-  // [Last-Ask tick (F, sky), 3 single-label hosts (G, invisible), Achieved tick (G, navy)]
-  assert.equal(out.spec.series.length, 5);
+  // [Last-Ask tick (F, sky), Achieved tick (G, navy) hosting Peak/Low/Latest]
+  assert.equal(out.spec.series.length, 2);
   assert.equal(out.spec.series[0].valCol, 'F', 'sky tick = Last Ask');
   assert.equal(out.spec.series[0].color, '62B5E5');
-  const hostSeries = out.spec.series.filter(s => s.hideFromLegend);
-  assert.equal(hostSeries.length, 3, 'three single-label spread hosts');
-  for (const h of hostSeries) {
-    assert.equal(h.valCol, 'G', 'label-host on Achieved helper col (G)');
-    assert.equal(h.lineAlpha, 0, 'label-host line is transparent');
-    assert.equal(h.dataLabels.length, 1, 'one callout per host');
-  }
-  assert.equal(out.spec.series[4].valCol, 'G', 'navy tick = Achieved helper col (G)');
-  assert.equal(out.spec.series[4].color, '003DA5');
-  assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
+  assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
+  assert.equal(out.spec.series[1].valCol, 'G', 'navy tick = Achieved helper col (G)');
+  assert.equal(out.spec.series[1].color, '003DA5');
+  assert.equal(out.spec.series[1].lineAlpha, 0, 'Achieved draws a transparent line so labels render');
+  assert.equal(out.spec.series[1].dataLabels.length, 3, 'Peak/Low/Latest hosted on Achieved');
+  assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band');
+  assert.ok(!out.spec.upDownBars, 'no up/down bars');
   assert.ok(!out.spec.barSeries, 'no bar series');
   assert.ok(out.spec.yAxisRange && out.spec.yAxisRange.min > 0.01, 'cap axis min is non-zero');
   assert.equal(out.helperCols[0].key, 'achieved_cap');
-  // Rendered: line-only value axis carries a non-zero c:min; upDownBars present.
+  // Rendered: line-only value axis carries a non-zero c:min; hiLowLines present.
   const xml = buildMultiLineChartXml(out.spec);
   assert.match(xml, /<c:min val="0\.\d+"\/>/, 'cap axis carries a non-zero c:min');
-  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars');
+  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines spread band');
+  assert.doesNotMatch(xml, /<c:upDownBars>/, 'no up/down bars');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3449,10 +3449,12 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
   });
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
-  // [Last-Ask tick F, 3 single-label hosts G (invisible), Achieved tick G] + up/down bars
-  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G', 'G', 'G', 'G']);
-  assert.equal(out.spec.series.filter(s => s.hideFromLegend).length, 3, 'three hosts hidden from legend');
-  assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
+  // [Last-Ask tick F, Achieved tick G hosting Peak/Low/Latest] + hi-low band
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
+  assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
+  assert.equal(out.spec.series[1].dataLabels.length, 3, 'Peak/Low/Latest hosted on Achieved');
+  assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band');
+  assert.ok(!out.spec.upDownBars, 'no up/down bars');
   assert.ok(!out.spec.barSeries, 'no bar series');
 });
 
