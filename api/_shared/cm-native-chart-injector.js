@@ -1571,9 +1571,16 @@ function buildMultiLineChartXml(spec) {
     // T10c — `markerOnly` suppresses the connecting line (no-fill stroke) so the
     // series renders as DOTS only (Avg Deal Size: "the average should be a dot,
     // not a bar"). The category axis + markers are kept; only the line is hidden.
+    // Optional decoupled line color/width: lets a series draw a line in a DIFFERENT
+    // color than its markers (e.g. bid-ask Achieved draws a thin `steel` line that
+    // blends with the up/down-bar top border — a DRAWN line is required for Excel to
+    // render manual-positioned data labels at the first/last points, which a no-line
+    // markerOnly series drops).
+    const _lineColor = s.lineColor ? String(s.lineColor).replace('#', '') : color;
+    const _lineWidth = Number.isFinite(s.lineWidth) ? s.lineWidth : 22225;
     const lineSpFrag = s.markerOnly
       ? `<a:ln><a:noFill/></a:ln>`
-      : `<a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>`;
+      : `<a:ln w="${_lineWidth}" cap="rnd"><a:solidFill><a:srgbClr val="${_lineColor}"/></a:solidFill>${dashFrag}<a:round/></a:ln>`;
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -4657,13 +4664,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
                 showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
               // Peak / Low / Latest callouts show the SPREAD in bps ("111 bps"),
-              // anchored to the Achieved (top) point of each relevant bar. The
-              // annotation is gated on the ANCHOR existing (both last_ask AND spread
-              // finite) — a period with a spread but a null Achieved point can't host
-              // a label, so Excel would silently drop it (this is why only the
-              // mid-series Peak was showing). fmtBps: decimal fraction → bps.
+              // anchored to the Achieved (top) point of each relevant bar. This
+              // series MUST draw a line (not markerOnly) or Excel drops the first/
+              // last labels (Low/Latest) — manual-positioned labels only render at
+              // edge points on a DRAWN-line series. The line is thin `steel`
+              // (9EA9B7) so it blends with the up/down-bar top border and reads as
+              // the bar top, not a zigzag; the navy dash marker is the visible cap.
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true,
+                showMarker: true, markerShape: 'dash', markerSize: 8,
+                lineColor: '9EA9B7', lineWidth: 9525,
                 dataLabels: buildAnnotationsForSpec(
                   plottedRows,
                   (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
