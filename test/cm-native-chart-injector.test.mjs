@@ -1317,8 +1317,8 @@ test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', ()
   assert.equal(out.spec.series.length, 2, 'last-ask + achieved only');
   assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
   const achieved = out.spec.series[1];
-  assert.equal(achieved.color, '003DA5', 'navy Achieved tick');
-  assert.equal(achieved.lineAlpha, 0, 'Achieved draws a transparent line so labels render');
+  assert.equal(achieved.color, '003DA5', 'navy Achieved line');
+  assert.ok(!achieved.markerOnly, 'Achieved is a normal drawn line (not marker-only) so labels render');
   assert.equal(achieved.dataLabels.length, 3, 'Peak/Low/Latest all hosted on Achieved');
   assert.deepEqual(achieved.dataLabels.map(a => a.role).sort(), ['last', 'max', 'min']);
   assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band');
@@ -3338,9 +3338,9 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a li
   assert.equal(out.spec.series[0].valCol, 'F', 'sky tick = Last Ask');
   assert.equal(out.spec.series[0].color, '62B5E5');
   assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
-  assert.equal(out.spec.series[1].valCol, 'G', 'navy tick = Achieved helper col (G)');
+  assert.equal(out.spec.series[1].valCol, 'G', 'navy line = Achieved helper col (G)');
   assert.equal(out.spec.series[1].color, '003DA5');
-  assert.equal(out.spec.series[1].lineAlpha, 0, 'Achieved draws a transparent line so labels render');
+  assert.ok(!out.spec.series[1].markerOnly, 'Achieved is a normal drawn line so labels render');
   assert.equal(out.spec.series[1].dataLabels.length, 3, 'Peak/Low/Latest hosted on Achieved');
   assert.equal(out.spec.hiLowLines, '#9EA9B7', 'hiLowLines draws the spread band');
   assert.ok(!out.spec.upDownBars, 'no up/down bars');

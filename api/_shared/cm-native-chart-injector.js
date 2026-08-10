@@ -4768,16 +4768,25 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // element anywhere, the Peak/Low/Latest callouts hosted on the Achieved
             // line all render. This is the same hiLowLines pattern already used by
             // the NM-vs-market and quartile-band charts (which show all callouts).
-            hiLowLines: '#9EA9B7',   // steel spread sticks between Last-Ask and Achieved
-            hiLowLineWidth: 19050,   // ~1.5pt, matches the quartile-band stick weight
-            // Two cap LINES rendered as flat DASH ticks: Last-Ask = sky (bottom of
-            // the spread), Achieved = navy (top). The three spread callouts
-            // (Peak/Low/Latest, in bps) are hosted directly on the Achieved line —
-            // safe now that no up/down-bar element culls labels. The Achieved series
-            // draws a transparent line (lineAlpha 0) because Excel only renders
-            // manual-positioned data labels on a series that carries a DRAWN line
-            // (a pure markerOnly / no-line series drops them); the dash markers stay
-            // visible navy while the connecting line is invisible.
+            // Spread band = thin steel vertical connectors between the two cap
+            // lines at each period (<c:hiLowLines> — a lineChart decoration, NOT a
+            // bar, so the line-only value axis still honors c:min ~6-8%). Same idiom
+            // as the nm_vs_market chart.
+            hiLowLines: '#9EA9B7',
+            hiLowLineWidth: 15875,
+            // Two NORMAL visible cap LINES: Last-Ask (sky, bottom) and Achieved
+            // (navy, top). The three spread callouts (Peak/Low/Latest, in bps) are
+            // hosted on the Achieved line.
+            //
+            // Root cause of the earlier "only Peak renders" (survived both the
+            // up/down-bar and the invisible-host-series attempts): the bid-ask
+            // series were markerOnly / lineAlpha-0 — dash ticks with NO drawn
+            // connecting line — and Excel drops every manual-positioned data label
+            // EXCEPT the one at the series max on a marker-only / invisible-line
+            // series. Rendering both series as normal drawn lines — exactly like the
+            // nm_vs_market chart, which shows all three callouts on real lines — is
+            // what makes Low and Latest render. It also fixes the "no visible spread
+            // band" regression: with two real lines the hiLowLines read as the band.
             series: (() => {
               const spreadAnns = buildAnnotationsForSpec(
                 plottedRows,
@@ -4786,13 +4795,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                 (v) => `${Math.round(Number(v) * 10000)} bps`,
                 'bid_ask:spread');
               return [
-                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
-                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
-                // Achieved (top) dash ticks — navy; hosts the Peak/Low/Latest
-                // callouts. Transparent drawn line so Excel renders the labels.
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
                 { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                  showMarker: true, markerShape: 'dash', markerSize: 8,
-                  lineColor: navy, lineWidth: 9525, lineAlpha: 0,
                   dataLabels: spreadAnns },
               ];
             })(),
