@@ -91,6 +91,7 @@ let opsInboxSourceFilter = null;   // null | 'listing_bd_trigger' (W3.5 grouped 
 let opsEntityFilter = 'all';      // all | person | organization | asset (server-side filter)
 let opsEntitySearch = '';         // backend name search term (B6, 2026-06-06)
 let opsResearchFilter = 'active'; // active | completed | all
+let opsResearchTypeFilter = '';   // '' | news_alert_development_followup
 let opsEntitiesPage = 1;
 let opsResearchPage = 1;
 let opsInboxSelected = new Set();
@@ -5086,7 +5087,7 @@ function newsAlertCardHtml(it, isNext) {
   var actions = '';
   if (it.status === 'dismissed' || it.status === 'converted') {
     actions = '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'reopen\')">Reopen</button>';
-    if (task) actions += '<button class="q-action primary" onclick="navTo(\'pageResearch\')">Open Research</button>';
+    if (task) actions += '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open Research</button>';
   } else {
     actions = '<button class="q-action primary" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'send_to_developer\')">Keep for developer research</button>'
       + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'extract_details\')">Extract details</button>'
@@ -5166,6 +5167,11 @@ async function resolveNewsAlert(id, action) {
             : action === 'create_tracking_task' ? 'Tracking task ready'
               : 'Sent to developer research', 'success');
     }
+    if (action === 'create_tracking_task') {
+      renderNewsAlertPursuit(res.data.item || null, res.data.research_task || null);
+      refreshReviewNavBadge();
+      return;
+    }
     renderNewsAlertLane(_newsAlertStatus);
     refreshReviewNavBadge();
   } else if (typeof showToast === 'function') {
@@ -5173,6 +5179,71 @@ async function resolveNewsAlert(id, action) {
   }
 }
 window.resolveNewsAlert = resolveNewsAlert;
+
+function openNewsAlertResearchQueue() {
+  opsResearchTypeFilter = 'news_alert_development_followup';
+  opsResearchFilter = 'active';
+  opsResearchPage = 1;
+  if (typeof navTo === 'function') navTo('pageResearch');
+  setTimeout(function () { renderResearchPage(1); }, 150);
+}
+window.openNewsAlertResearchQueue = openNewsAlertResearchQueue;
+
+function renderNewsAlertPursuit(item, researchTask) {
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  item = item || {};
+  var meta = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+  var ex = meta.news_alert_extraction || {};
+  var project = ex.project || {};
+  var parties = Array.isArray(ex.parties) ? ex.parties : [];
+  var timeline = Array.isArray(ex.timeline) ? ex.timeline : [];
+  var signals = (Array.isArray(ex.debt_or_deed_signals) ? ex.debt_or_deed_signals : [])
+    .concat(Array.isArray(ex.permits) ? ex.permits : []);
+  var triggers = Array.isArray(ex.follow_up_triggers) ? ex.follow_up_triggers : [];
+  var title = item.article_title || item.raw_subject || item.tenant || 'News alert pursuit';
+  var taskId = researchTask && researchTask.id ? researchTask.id : (meta.news_alert_tracking_task && meta.news_alert_tracking_task.id) || null;
+  var partyHtml = parties.length ? parties.map(function (p) {
+    return '<div class="q-item-meta"><b>' + esc(p.role || 'party') + ':</b> ' + esc(p.name || '')
+      + (p.evidence ? ' · ' + esc(p.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No named owner/applicant/developer extracted yet.</div>';
+  var signalHtml = signals.length ? signals.map(function (s) {
+    return '<div class="q-item-meta"><b>' + esc(s.signal_type || s.permit_type || s.permit_number || 'signal') + ':</b> '
+      + esc(s.party || s.applicant || s.jurisdiction || s.date_or_period || '')
+      + (s.evidence ? ' · ' + esc(s.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No permit/deed/debt signal extracted yet.</div>';
+  var timelineHtml = timeline.length ? timeline.map(function (t) {
+    return '<div class="q-item-meta"><b>' + esc(t.event || 'event') + '</b>'
+      + (t.date_or_period ? ' · ' + esc(t.date_or_period) : '')
+      + (t.evidence ? ' · ' + esc(t.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No project timeline extracted yet.</div>';
+  var triggerHtml = triggers.length ? triggers.map(function (t) { return '<span class="q-badge">' + esc(t) + '</span>'; }).join(' ') : '<span class="q-badge">track owner/applicant</span> <span class="q-badge">watch permits/deeds</span>';
+  el.innerHTML = '<div class="ops-header"><h2>News Alert Pursuit</h2>'
+    + '<div class="ops-controls">'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'open\')">\u2190 Back to News Alert Review</button>'
+    + '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open News Alert Research Queue</button>'
+    + '</div></div>'
+    + '<div class="rc-intro">Work this alert into a real prospecting path: identify the property, owner/applicant/developer, evidence, and the right contact before drafting outreach.</div>'
+    + '<div class="q-item pq-next">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span><div class="q-item-badges">'
+    + '<span class="q-badge">converted</span>' + (taskId ? '<span class="q-badge">task ' + esc(taskId) + '</span>' : '<span class="q-badge">task</span>')
+    + '</div></div>'
+    + '<div class="q-item-meta">' + esc([item.tenant, item.domain, [item.city, item.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')) + '</div>'
+    + (item.article_url ? '<div class="q-actions"><a class="q-action primary" href="' + esc(item.article_url) + '" target="_blank" rel="noopener">Open article</a></div>' : '')
+    + '</div>'
+    + '<div class="rc-lanes-grouped">'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">1. Property and project</div></div>'
+    + '<div class="q-item-detail">' + esc(project.description || item.summary || 'Confirm the property/project behind this alert.') + '</div>'
+    + '<div class="q-item-meta">' + esc([project.address, project.city || item.city, project.state || item.state].filter(Boolean).join(', ')) + '</div></div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">2. Parties to resolve</div></div>' + partyHtml + '</div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">3. Signals to track</div></div>' + signalHtml + timelineHtml + '<div style="margin-top:8px">' + triggerHtml + '</div></div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">4. Next build step</div></div>'
+    + '<div class="q-item-meta">Resolve/create the property and prospect contact, then generate an outreach draft through the BD template path.</div>'
+    + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Continue in Research Queue</button>'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">View Converted Alerts</button></div></div>'
+    + '</div>';
+}
+window.renderNewsAlertPursuit = renderNewsAlertPursuit;
 
 // ── Unit 2: property metadata-backfill worklist (surfaced under Research) ──
 // A compact widget on the Research page + a full prioritized worklist page. The
@@ -5266,7 +5337,8 @@ async function renderResearchPage(page = opsResearchPage) {
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
-  const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}`);
+  const typeParam = opsResearchTypeFilter ? `&research_type=${encodeURIComponent(opsResearchTypeFilter)}` : '';
+  const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}`);
   if (!res.ok) {
     el.innerHTML = opsErrorState(res, 'renderResearchPage()', 'Could not load research tasks');
     perf.end();
@@ -5284,6 +5356,8 @@ async function renderResearchPage(page = opsResearchPage) {
   html += `<button class="ops-filter ${opsResearchFilter === 'active' ? 'active' : ''}" onclick="opsResearchFilter='active';opsResearchPage=1;renderResearchPage()">Active</button>`;
   html += `<button class="ops-filter ${opsResearchFilter === 'completed' ? 'active' : ''}" onclick="opsResearchFilter='completed';opsResearchPage=1;renderResearchPage()">Completed</button>`;
   html += `<button class="ops-filter ${opsResearchFilter === 'all' ? 'active' : ''}" onclick="opsResearchFilter='all';opsResearchPage=1;renderResearchPage()">All</button>`;
+  html += `<button class="ops-filter ${opsResearchTypeFilter === 'news_alert_development_followup' ? 'active' : ''}" onclick="opsResearchTypeFilter=opsResearchTypeFilter==='news_alert_development_followup'?'':'news_alert_development_followup';opsResearchPage=1;renderResearchPage()">News Alert Follow-up</button>`;
+  if (opsResearchTypeFilter) html += `<button class="ops-filter" onclick="opsResearchTypeFilter='';opsResearchPage=1;renderResearchPage()">Clear type</button>`;
   html += '</div>';
 
   const filtered = opsResearchFilter === 'all' ? opsResearchData
@@ -5341,6 +5415,7 @@ async function renderResearchPage(page = opsResearchPage) {
   // Agency Drift below).
   const widgetsEl = el.querySelector('.lcc-research-widgets');
   if (widgetsEl) {
+    if (opsResearchTypeFilter) { widgetsEl.style.display = 'none'; perf.end(); return; }
     try {
       if (typeof renderLlcResearchQueueWidget === 'function') {
         await renderLlcResearchQueueWidget(widgetsEl);

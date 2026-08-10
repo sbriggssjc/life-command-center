@@ -157,3 +157,26 @@ Design note:
 
 - This is not local-model "training" in the fine-tuning sense. It is a grounded extraction/evaluation loop. Each human review creates structured metadata that can later become an evaluation corpus for prompt/model tuning.
 - Current extraction is limited to the fields already stored from the Google Alert email: headline, snippet/summary, URL, subject, tenant/domain/location hints. Full article-page extraction can be added later by fetching/snapshotting the article text into the same prompt input.
+
+## 2026-08-10 Follow-up: Guided News Alert Pursuit UX
+
+Scott tested the first live slice and found the generic More -> Research -> Active page did not expose a clear `news_alert_development_followup` filter; unrelated research widgets buried the created task. He also clarified the desired path:
+
+1. Click `Create tracking task`.
+2. Immediately enter a guided page for the alert.
+3. Work through property/project, parties, owner/applicant/developer, permit/deed/debt/timeline signals.
+4. Later bridge into property/contact resolution, BD pursuit creation, Outlook draft, Salesforce/LCC task/follow-up, and activity logging.
+5. When resolved, return to the relevant queue.
+
+Changes made:
+
+- Added `opsResearchTypeFilter` and a `News Alert Follow-up` filter chip on the Research page.
+- Research API calls now pass `research_type=news_alert_development_followup` when that filter is active.
+- The unrelated LLC/agency/metadata widgets are hidden while a research-type filter is active so the matching tasks are visible immediately.
+- `Create tracking task` now opens a guided `News Alert Pursuit` view inside the Decision Center instead of simply re-rendering the open alert list.
+- Converted alert cards with a task now route to the filtered News Alert Research Queue.
+
+Still next:
+
+- Replace the static guided screen with real property/entity/contact resolution controls.
+- Add the BD promotion bridge: resolved property/contact -> `bd_opportunities`/domain lead -> Outlook draft/template -> Salesforce/LCC task/follow-up logging.
