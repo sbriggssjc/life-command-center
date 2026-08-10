@@ -47,7 +47,7 @@ Export reviewed: `C:\Users\scott\Downloads\GoogleNewsAlert→LCCLeadIngest_20260
 
 Actual flow findings:
 
-- Trigger watches a specific folder id labeled `SBRIG GMAIL`, not the mailbox Inbox. Any Google Alert landing elsewhere will not fire.
+- Trigger watches a specific folder id labeled `SBRIG GMAIL`. Scott confirmed this is the correct Google Alert landing folder: `Inbox/RESEARCH/SBRIGS GMAIL`.
 - Trigger filters `from = googlealerts-noreply@google.com`; forwarded samples still show this visible `From`, but the envelope/return path is Gmail, so verify run history to confirm the connector's `from` filter uses visible From for these forwarded messages.
 - The flow POSTs to the correct Railway endpoint: `/api/lead-ingest?action=news_alert`.
 - Payload uses `source_ref = internetMessageId` but does not send a separate `internet_message_id`. The edge handler falls back to `source_ref`, so this is workable, but it loses the clean separation between stable message key and mutable Graph id that the runbook expects.
@@ -59,10 +59,10 @@ Actual flow findings:
 
 Operational fixes needed in PA:
 
-1. Confirm the trigger folder. If Google Alerts arrive in the Inbox or another folder, repoint the trigger or add the intended Google Alerts folder watch.
+1. Keep the trigger folder pointed at `Inbox/RESEARCH/SBRIGS GMAIL`.
 2. Keep the POST, but send `{ source_ref: trigger id, internet_message_id: internetMessageId, subject, raw_body: Html_to_text text }`.
 3. Add Mark as read immediately after successful POST for both auto and review outcomes.
-4. Remove the inline Move action; let LCC processing-complete handle Processed/Leads and duplicates.
+4. Prefer removing the inline Move action and let LCC processing-complete handle `Processed/Leads` and `Processed/Duplicates`; if keeping the existing Archive move short-term, move only after successful POST and read-mark, and understand this bypasses the centralized `Processed/*` cleanup/briefing design.
 5. Rotate the exposed webhook secret.
 
 ## BD Pipeline Capability
