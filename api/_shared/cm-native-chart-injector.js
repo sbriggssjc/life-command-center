@@ -1601,8 +1601,14 @@ ${dLblsFrag}
   // schema it precedes <c:upDownBars>. Default color = deck market-gray.
   const hiLowColor = (spec.hiLowLines && spec.hiLowLines !== true)
     ? String(spec.hiLowLines).replace('#', '') : 'C9CED6';
+  // Optional wide stroke (EMU; 12700 = 1pt). bid-ask uses a wide gray stroke so
+  // the per-period spread sticks nearly touch and read as a filled band between
+  // the two cap lines (the up/down-bar look) WITHOUT a bar element that would
+  // force the axis to 0. Default 0.75pt (thin drop-line connectors elsewhere).
+  const hiLowWidth = Number.isFinite(spec.hiLowLineWidth) ? spec.hiLowLineWidth : 9525;
+  const hiLowCap = hiLowWidth >= 20000 ? 'flat' : 'rnd';   // flat butt for wide band sticks
   const hiLowLinesFrag = spec.hiLowLines
-    ? `        <c:hiLowLines><c:spPr><a:ln w="9525" cap="rnd"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill><a:round/></a:ln></c:spPr></c:hiLowLines>`
+    ? `        <c:hiLowLines><c:spPr><a:ln w="${hiLowWidth}" cap="${hiLowCap}"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill></a:ln></c:spPr></c:hiLowLines>`
     : '';
   const upDownBarsFrag = spec.upDownBars
     ? `        <c:upDownBars>
@@ -3019,14 +3025,13 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //       data tab naturally carries both [bottom, height] columns.
   //   (b) Render box-whisker as a multi-line quartile chart (preserves
   //       all data; drops the shaded IQR fill — user can add it manually).
-  // CM close-out (bid-ask, final) — bid_ask_spread is DELIBERATELY NOT native.
-  // Excel forces a value axis to include 0 whenever a bar/updown-bar sits on it,
-  // so no native shape can show the master p.34 floating spread BAND between the
-  // Last-Ask and Achieved cap lines AND keep a ~6–8% axis (the band needs a bar;
-  // the bar drags the axis to 0). The PNG renderer (Chart.js floating bar +
-  // fitPercentAxis) does BOTH, so bid-ask renders as an image instead. Do NOT
-  // re-add it here without solving the Excel 0-floor (see the case in this file).
-  //   'bid_ask_spread', 'bid_ask_spread_monthly' → PNG (cm-chart-image-renderer.js)
+  // CM close-out (bid-ask, native hi-low — Scott's chosen end state 2026-08). A
+  // native FILLED band + ~6-8% axis is impossible (any bar forces the axis to 0),
+  // so the native builder draws two cap lines (Last-Ask + Achieved) + gray
+  // <c:hiLowLines> spread STICKS on a line-only axis that honors c:min (~6-8%).
+  // Native + editable, no PNG/QuickChart dependency. See the case body.
+  'bid_ask_spread',
+  'bid_ask_spread_monthly',
   'rent_psf_box_quarterly',         // (b) upgraded to IQR floating-bar + median line in P8.5
   // CM chart fixes round 2, item 1 — dialysis companion box chart backed by the
   // LABELED MODELED rent variant (cm_dialysis_rent_box_q_with_modeled). Same
@@ -4611,36 +4616,36 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         // that axis is line-only → honors c:min → fits ~6–8%. The SPREAD becomes a
         // gray bar on a SEPARATE right-hand bps axis (0-based, fine for a bar),
         // scaled so the bars sit low and never invade the cap-line band.
-        const maxSpread = plottedRows.reduce((m, r) => {
-          const sp = Number(r.avg_bid_ask_spread);
-          return (Number.isFinite(sp) && sp > m) ? sp : m;
-        }, 0);
-        // right (bps) axis top = ~3× the largest spread (snapped to 0.5%), floored
-        // at 2% — keeps the spread bars in the lower portion of the plot.
-        const spreadAxisMax = Math.max(0.02, Math.ceil((maxSpread * 3) / 0.005) * 0.005);
+        // CM close-out (bid-ask, native hi-low — user's chosen end state). Excel
+        // forces a value axis to include 0 whenever a BAR/upDownBar sits on it, so
+        // no native FILLED band can keep a ~6-8% axis. `<c:hiLowLines>` is a
+        // lineChart element (NOT a bar), so it draws a thin vertical stick between
+        // the highest and lowest series value at each period — here the spread
+        // between Last-Ask and Achieved — WITHOUT dragging the axis to 0. Result:
+        // two continuous cap lines (sky Last-Ask, navy Achieved) + gray spread
+        // sticks between them, on a line-only cap axis that honors c:min (~6-8%).
+        // Native + editable; no PNG/QuickChart dependency. (Trade-off vs the PNG:
+        // hi-low sticks instead of a solid filled band — chosen 2026-08 by Scott.)
         return {
           tabName,
           spec: {
-            type: 'combo',
+            type: 'multi-line',
             tabName,
             catCol: periodCol,
             dataStart, dataEnd,
-            barGrouping: 'clustered',
-            barGapWidth: 40,
-            swapAxes: true,                 // bars → right (bps) axis; lines → left (cap%) axis
-            yLeftRange: bidAskFit || { min: 0.055, max: 0.10 },   // cap % — LINE-ONLY axis → honors c:min
-            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
-            yRightRange: { min: 0, max: spreadAxisMax },          // bid-ask spread (bps), 0-based bar axis
-            yRightNumFmt: VAL_FMT_PERCENT_2DP,
-            yRightAxisTitle: 'Bid-Ask Spread',
-            barSeries: [
-              { titleCol: spreadCol, titleRow: headerRow, valCol: spreadCol, color: 'D8DFDF', borderColor: '9EA9B7' },
-            ],
-            // CONTINUOUS lines (NOT showMarker — in the combo builder showMarker
-            // means markers-only/no line, which rendered the cap lines as scattered
-            // dashes). Two solid cap lines: sky Last-Ask (lower), navy Achieved (upper).
-            lineSeries: [
-              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky },
+            yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
+            valAxNumFmt: VAL_FMT_PERCENT_2DP,
+            yLeftAxisTitle: 'Cap rate',
+            // Wide gray spread band between Last-Ask and Achieved. hiLowLines is a
+            // line element (not a bar), so the axis stays ~6-8%; the wide stroke
+            // makes the per-period sticks nearly touch → reads as the up/down-bar
+            // gray band. D8DFDF matches the old up/down-bar fill. hiLowLineWidth is
+            // the single tunable knob (EMU; 50800 ≈ 4pt) — widen for a more solid
+            // band, narrow toward sticks.
+            hiLowLines: 'D8DFDF',
+            hiLowLineWidth: 50800,
+            series: [
+              { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy },
             ],
             anchor: standardAnchor,
@@ -5266,13 +5271,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const lineLongCol = findCol('last_ask_cap_long_term_8q', 'last_ask_cap_long_term');
       if (!periodCol || !barAllCol || !barLongCol || !lineAllCol || !lineLongCol) return null;
       // R37 P3 — peak/trough/most-recent labels on the all-cap navy line.
-      // R66cc — compute over the DISPLAYED window (>= 2017) only; the chart trims to
-      // 2017+ but the full-history peak (e.g. an ~8.2% pre-2017 value) was being
-      // stamped onto a windowed point (same idx-vs-trim bug fixed on NM-vs-Market).
-      const sentWindowRows = Array.isArray(rows)
-        ? rows.filter(r => r && r.period_end && new Date(r.period_end).getFullYear() >= 2017)
-        : [];
-      const capLabels = buildAnnotationsForSpec(sentWindowRows, r => r.last_ask_cap_all, fmtPct2Native);
+      // CM close-out FIX — compute over `plottedRows` (= fitRows, the exact rows
+      // the chart references after the MIN_YEAR crop), NOT a bespoke >=2017 filter.
+      // seller_sentiment's MIN_YEAR is the first dense-`n_all` year (~2019), so a
+      // separate >=2017 filter left the annotation indices ~8 quarters ahead of the
+      // plotted cells — the dLbl `idx` is relative to the plotted series, so "Latest"
+      // landed well short of the true last point. plottedRows aligns idx exactly and
+      // still restricts to the displayed window.
+      const capLabels = buildAnnotationsForSpec(plottedRows, r => r.last_ask_cap_all, fmtPct2Native, 'seller_sentiment:last_ask_cap_all');
       return {
         tabName,
         spec: {
@@ -5434,6 +5440,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           },
         };
       }
+      // CM close-out — Peak / Low / Latest callouts on the pace-of-cost line
+      // (user request). Values are in bps; format "+150 bps" / "-50 bps".
+      const fmtBps = (v) => `${Number(v) >= 0 ? '+' : ''}${Math.round(Number(v))} bps`;
+      const paceLabels = buildAnnotationsForSpec(plottedRows, r => r.pace_cost, fmtBps, 'pace_of_cap_rate_expansion:pace_cost');
       return {
         tabName,
         spec: {
@@ -5453,7 +5463,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           lineSeries: [
             // R56 — Cost-of-capital YoY pace, amber (matches the
             // renderer's deferred 3rd series color noted in R45/R50).
-            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: '9EA9B7' },
+            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: '9EA9B7', dataLabels: paceLabels },
           ],
           anchor: standardAnchor,
         },

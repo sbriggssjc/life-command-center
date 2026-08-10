@@ -182,14 +182,15 @@ test('NATIVE_CHART_TEMPLATES: P7 scatter charts registered', () => {
 });
 
 test('NATIVE_CHART_TEMPLATES: P8 floating-bar / box-whisker charts registered', () => {
-  // rent_psf_box_quarterly stays native (IQR floating-bar + median line).
-  assert.ok(NATIVE_CHART_TEMPLATES.has('rent_psf_box_quarterly'), 'rent box should be native');
-  // CM close-out (bid-ask, final): bid_ask_spread(_monthly) are DELIBERATELY NOT
-  // native — Excel forces a 0 axis whenever a bar sits on it, so the master p.34
-  // floating spread BAND between the cap lines can't keep a ~6–8% axis natively.
-  // They render as a PNG (Chart.js floating bar + fitPercentAxis) instead.
-  for (const id of ['bid_ask_spread', 'bid_ask_spread_monthly']) {
-    assert.ok(!NATIVE_CHART_TEMPLATES.has(id), `${id} renders as a PNG, not native`);
+  // CM close-out (bid-ask, native hi-low): bid_ask_spread(_monthly) are native
+  // again — two cap lines + gray hiLowLines spread sticks on a line-only axis
+  // (honors c:min → ~6-8%), not a bar (which would force a 0 axis).
+  for (const id of [
+    'bid_ask_spread',
+    'bid_ask_spread_monthly',
+    'rent_psf_box_quarterly',
+  ]) {
+    assert.ok(NATIVE_CHART_TEMPLATES.has(id), `${id} should be migrated`);
   }
   // ppsf_box_quarterly was DELETED from the runtime catalog in Round 6h
   // (supabase migration 20260601_*_round6h.sql). No view, no export rows,
@@ -1283,11 +1284,11 @@ test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sp
   assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal renders as a markerless clean line');
 });
 
-test('bid_ask: legend shows exactly the two cap lines (no phantom bar entry)', () => {
-  // CM close-out item 3 (final, option A). With the dual-axis design there is no
-  // invisible base bar to suppress; the legend carries the two cap lines
-  // (Last-Ask, Achieved) plus the real spread bar — all labeled series, so
-  // there's no duplicate/phantom entry to delete.
+test('bid_ask: two cap lines + hiLowLines spread sticks (native hi-low)', () => {
+  // CM close-out (bid-ask, native hi-low — Scott's chosen end state). The native
+  // builder plots two cap LINES (Last-Ask, Achieved) plus <c:hiLowLines> spread
+  // sticks between them on a line-only axis (honors c:min → ~6-8%). No bar, so no
+  // 0-floor and no phantom legend entry.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'avg_last_ask_cap',   col: 'B' },
@@ -1298,14 +1299,14 @@ test('bid_ask: legend shows exactly the two cap lines (no phantom bar entry)', (
     cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis',
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
-  assert.equal(out.spec.type, 'combo');
-  assert.equal(out.spec.lineSeries.length, 2, 'exactly the two cap lines');
-  assert.equal(out.spec.barSeries.length, 1, 'one spread bar (on the right bps axis)');
-  const xml = buildComboChartXml(out.spec);
-  // Three series total (2 cap lines + 1 spread bar); each is a real, labeled
-  // series, so no phantom/duplicate legend entry needs deleting.
-  assert.equal((xml.match(/<c:ser>/g) || []).length, 3, 'two lines + one bar in the XML');
-  assert.doesNotMatch(xml, /<c:legendEntry>/, 'no legend entries deleted (no phantom base bar)');
+  assert.equal(out.spec.type, 'multi-line');
+  assert.equal(out.spec.series.length, 2, 'exactly the two cap lines');
+  assert.ok(out.spec.hiLowLines, 'hiLowLines set for the spread sticks');
+  assert.ok(!out.spec.barSeries, 'no bar series (a bar would force a 0 axis)');
+  const xml = buildMultiLineChartXml(out.spec);
+  assert.equal((xml.match(/<c:ser>/g) || []).length, 2, 'two lines in the XML');
+  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines');
+  assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
 test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart blocks + 2 axes', async () => {
@@ -3281,13 +3282,11 @@ test('T1: chart XML series references shift to the first non-null data row', asy
     'T1: val series references start at the first non-null row (53)');
 });
 
-test('buildInjectionSpec: bid_ask_spread — cap lines on LEFT axis, spread bar on RIGHT bps axis', () => {
-  // CM close-out item 3 (FINAL, option A). Any bar/updown-bar element on the cap
-  // axis makes Excel force that axis to include 0 (c:min silently ignored → the
-  // 0–8% axis in the shipped book). A value axis honors c:min only when nothing
-  // bar-like is plotted on it. So the two cap LINES (Last-Ask + Achieved) go on
-  // the LEFT cap axis alone (swapAxes) — line-only → honors c:min → fits ~6–8% —
-  // and the SPREAD is a bar on a SEPARATE right-hand bps axis (0-based).
+test('buildInjectionSpec: bid_ask_spread — two cap lines + hiLowLines on a line-only axis', () => {
+  // CM close-out (bid-ask, native hi-low). Any bar element on a value axis makes
+  // Excel force it to include 0, so the spread is drawn as <c:hiLowLines> (a
+  // lineChart element, NOT a bar) between the two cap LINES. The line-only cap
+  // axis then honors c:min → ~6-8%.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -3303,31 +3302,22 @@ test('buildInjectionSpec: bid_ask_spread — cap lines on LEFT axis, spread bar 
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.catCol, 'A');
-  assert.equal(out.spec.swapAxes, true, 'bars → right axis, lines → left cap axis');
-  // Cap lines on the LEFT axis (the pinned, line-only cap axis).
-  assert.equal(out.spec.lineSeries.length, 2);
-  assert.equal(out.spec.lineSeries[0].valCol, 'F', 'sky dash line = Last Ask');
-  assert.equal(out.spec.lineSeries[0].color, '62B5E5');
-  assert.equal(out.spec.lineSeries[1].valCol, 'G', 'navy dash line = Achieved helper col (G)');
-  assert.equal(out.spec.lineSeries[1].color, '003DA5');
-  // Spread bar on the RIGHT bps axis, 0-based.
-  assert.equal(out.spec.barSeries.length, 1);
-  assert.equal(out.spec.barSeries[0].valCol, 'D', 'gray spread bar = avg_bid_ask_spread');
-  assert.ok(out.spec.yLeftRange && out.spec.yLeftRange.min > 0.01, 'left cap axis min is non-zero');
-  assert.equal(out.spec.yRightRange.min, 0, 'right bps axis is 0-based (bar)');
+  assert.equal(out.spec.series.length, 2);
+  assert.equal(out.spec.series[0].valCol, 'F', 'sky line = Last Ask');
+  assert.equal(out.spec.series[0].color, '62B5E5');
+  assert.equal(out.spec.series[1].valCol, 'G', 'navy line = Achieved helper col (G)');
+  assert.equal(out.spec.series[1].color, '003DA5');
+  assert.ok(out.spec.hiLowLines, 'hiLowLines set for the spread sticks');
+  assert.ok(!out.spec.barSeries, 'no bar series');
+  assert.ok(out.spec.yAxisRange && out.spec.yAxisRange.min > 0.01, 'cap axis min is non-zero');
   assert.equal(out.helperCols[0].key, 'achieved_cap');
-  // Rendered: the LEFT cap axis (axId 2, line-only) carries c:min; the bar is on
-  // axId 3 (right), so it can't drag the cap axis to 0.
-  const xml = buildComboChartXml(out.spec);
-  const leftAx = xml.match(/<c:valAx>\s*<c:axId val="2"\/>[\s\S]*?<\/c:valAx>/)[0];
-  assert.match(leftAx, /<c:axPos val="l"\/>/, 'axId 2 is the left axis');
-  assert.match(leftAx, /<c:min val="0\.\d+"\/>/, 'left cap axis carries a non-zero c:min');
-  const lineBlock = xml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/)[0];
-  assert.match(lineBlock, /<c:axId val="2"\/>/, 'lines are on the left cap axis (axId 2)');
-  const barBlock = xml.match(/<c:barChart>[\s\S]*?<\/c:barChart>/)[0];
-  assert.match(barBlock, /<c:axId val="3"\/>/, 'spread bar is on the right axis (axId 3)');
+  // Rendered: line-only value axis carries a non-zero c:min; hiLowLines present.
+  const xml = buildMultiLineChartXml(out.spec);
+  assert.match(xml, /<c:min val="0\.\d+"\/>/, 'cap axis carries a non-zero c:min');
+  assert.match(xml, /<c:hiLowLines>/, 'emits hiLowLines');
+  assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
 // QUARANTINED 2026-06-03 (QA suite-green pass): this asserts a min/max
@@ -3416,14 +3406,12 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'combo');
-  assert.equal(out.spec.swapAxes, true);
-  // Two cap lines: sky Last Ask (F), navy Achieved helper col (G)
-  assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
-  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['62B5E5', '003DA5']);
-  // Spread bar on the right bps axis
-  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['D']);
-  assert.equal(out.spec.yRightRange.min, 0);
+  assert.equal(out.spec.type, 'multi-line');
+  // Two cap lines: sky Last Ask (F), navy Achieved helper col (G) + hiLowLines
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
+  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5']);
+  assert.ok(out.spec.hiLowLines, 'hiLowLines set for the spread sticks');
+  assert.ok(!out.spec.barSeries, 'no bar series');
 });
 
 test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axes (Tier F1)', () => {
@@ -5910,7 +5898,7 @@ test('A3: bid_ask cap axis fits the plotted Last-Ask/Achieved window', () => {
     chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
     cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
   });
-  const r = out.spec.yLeftRange;
+  const r = out.spec.yAxisRange;   // native hi-low: single line-only cap axis
   // Data max ≈ 0.079; fitted max must be close to it, NOT the old 0.10 ceiling.
   assert.ok(r.max <= 0.085 && r.max >= 0.079, `fitted max ${r.max} hugs data max`);
   assert.ok(r.min >= 0.06 && r.min <= 0.07, `fitted min ${r.min} hugs data min`);
@@ -6335,7 +6323,7 @@ test('round3 item3: bid_ask cap axis is pad-snapped (min>0, covers achieved)', (
     chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
     cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
   });
-  const r = out.spec.yLeftRange;
+  const r = out.spec.yAxisRange;   // native hi-low: single line-only cap axis
   assert.ok(r.min > 0.03, `bid-ask axis min is not a 0 dead-zone (got ${r.min})`);
   assert.ok(r.max >= 0.097, `bid-ask axis max covers the achieved top (got ${r.max})`);
 });
