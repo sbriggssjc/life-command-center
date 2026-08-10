@@ -4766,6 +4766,31 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // Master look: each series is a flat DASH tick (markerOnly, no connecting
             // line) — Last-Ask sky (bottom), Achieved navy (top) — with the solid
             // gray up/down-bar band filling the spread between them.
+            // Each series renders as a FLAT DASH tick (markerOnly → no connecting
+            // line) marking the top/bottom of each bar, in distinct brand colors:
+            // Last-Ask = sky (bottom), Achieved = navy (top). Matches the master
+            // + the PNG renderer's dash markers.
+            // Series order matters: up/down bars pair the FIRST and LAST series.
+            // [Last-Ask, LabelHost, Achieved] → the bars span Last-Ask↔Achieved
+            // (LabelHost is a MIDDLE series, excluded from the pair). Excel limits
+            // data labels on an up/down-bar PAIR series to ~the max, which is why
+            // only Peak showed when the labels lived on Achieved. Hosting them on a
+            // middle series (a transparent drawn line — invisible, but Excel renders
+            // its manual-positioned labels at every point) restores Low + Latest.
+            series: (() => {
+              // CM close-out (bid-ask, DEFINITIVE Low/Latest fix 2026-08-10).
+              // History: hosting all 3 spread callouts (Peak/Low/Latest) on ONE
+              // invisible host series rendered ONLY "Peak" — Excel culls every
+              // data label in a series EXCEPT the one at that series' MAX value,
+              // whenever the chart carries up/down bars (the cull is chart-wide,
+              // not group-local, so a separate bar-free host group didn't help).
+              // A series with exactly ONE label has nothing to cull against, so
+              // each callout now gets its OWN invisible host series (all reading
+              // the Achieved column, alpha 0, off-legend, in the bar-free host
+              // group). Split the annotations one-per-series → all three render.
+            // Two NORMAL visible cap LINES: Last-Ask (sky, bottom) + Achieved (navy,
+            // top). The three spread callouts (Peak/Low/Latest, in bps) are hosted
+            // on the Achieved line.
             series: (() => {
               const spreadAnns = buildAnnotationsForSpec(
                 plottedRows,
@@ -4775,6 +4800,27 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                 'bid_ask:spread');
               // Peak only — the max-role callout Excel keeps under up/down bars.
               const peakAnn = spreadAnns.filter((a) => a.role === 'max');
+              const hostFor = (role, band) => {
+                const a = spreadAnns.find(x => x.role === role);
+                if (!a) return null;
+                return {
+                  titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
+                  separateGroup: true,
+                  // band each callout to its own top-band row so Peak/Low/Latest
+                  // don't stack on the same y when their x are close.
+                  dataLabels: [{ ...a }],
+                };
+              };
+              const hosts = [hostFor('max'), hostFor('last'), hostFor('min')].filter(Boolean);
+              return [
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+                ...hosts,
+                // Achieved (top) dash ticks — navy, markerOnly (no line). Last
+                // NON-host series → the up/down bars' top edge.
+                { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
               return [
                 { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
                   showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },

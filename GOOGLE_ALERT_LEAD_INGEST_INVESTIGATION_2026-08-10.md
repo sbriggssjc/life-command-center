@@ -176,6 +176,13 @@ Changes made:
 - `Create tracking task` now opens a guided `News Alert Pursuit` view inside the Decision Center instead of simply re-rendering the open alert list.
 - Converted alert cards with a task now route to the filtered News Alert Research Queue.
 
+Refinement after live UX test:
+
+- The generic Research page can still be empty if a task was not created, was not active, or belongs to another workspace/user context; it is not a good primary continuation surface.
+- Added a Decision Center-owned `News Alert Follow-up Queue` backed directly by converted `news_alert_leads` rows with extraction/task metadata.
+- `Open Research` / `Continue` actions now return to that Decision Center follow-up queue first.
+- The generic Research ledger remains available as a secondary button, with a back path and explanatory empty state.
+
 Still next:
 
 - Replace the static guided screen with real property/entity/contact resolution controls.
