@@ -188,6 +188,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'priority-queue':             return handlePriorityQueueList(req, res);
     case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
+    case 'news-alerts':                return handleNewsAlerts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
@@ -1160,6 +1161,109 @@ async function handleReviewCounts(req, res) {
     degraded: lanes.some((l) => l.status === 'partial'),
     lanes,
   });
+}
+
+async function handleNewsAlerts(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const selectCols = [
+    'news_lead_id', 'source', 'domain', 'tenant', 'match_kind', 'confidence',
+    'city', 'state', 'article_url', 'article_title', 'summary', 'status',
+    'dedup_key', 'source_ref', 'raw_subject', 'metadata', 'created_at', 'updated_at',
+  ].join(',');
+
+  const countStatus = async (statusPath) => {
+    const r = await opsQuery('GET', 'news_alert_leads?select=news_lead_id&' + statusPath + '&limit=1', undefined, { countMode: 'exact' });
+    return (r.ok && typeof r.count === 'number') ? r.count : 0;
+  };
+
+  if (req.method === 'GET') {
+    const status = String(req.query.status || 'open').trim().toLowerCase();
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '100', 10)));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
+    let statusFilter = 'status=in.(needs_review,developer_unknown)';
+    if (status === 'needs_review' || status === 'review') statusFilter = 'status=eq.needs_review';
+    else if (status === 'developer_unknown' || status === 'developer') statusFilter = 'status=eq.developer_unknown';
+    else if (status === 'dismissed') statusFilter = 'status=eq.dismissed';
+    else if (status === 'converted') statusFilter = 'status=eq.converted';
+    else if (status === 'all') statusFilter = '';
+    else if (status !== 'open') return res.status(400).json({ error: 'invalid status filter' });
+
+    const path = 'news_alert_leads?select=' + selectCols
+      + (statusFilter ? '&' + statusFilter : '')
+      + '&order=created_at.desc'
+      + '&limit=' + limit + '&offset=' + offset;
+    const [itemsR, openN, reviewN, devN, dismissedN, convertedN] = await Promise.all([
+      opsQuery('GET', path, undefined, { countMode: 'exact' }),
+      countStatus('status=in.(needs_review,developer_unknown)'),
+      countStatus('status=eq.needs_review'),
+      countStatus('status=eq.developer_unknown'),
+      countStatus('status=eq.dismissed'),
+      countStatus('status=eq.converted'),
+    ]);
+    if (!itemsR.ok) return res.status(502).json({ error: 'news_alert_list_failed', detail: itemsR.data });
+    return res.status(200).json({
+      ok: true,
+      status,
+      total: typeof itemsR.count === 'number' ? itemsR.count : null,
+      counts: {
+        open: openN,
+        needs_review: reviewN,
+        developer_unknown: devN,
+        dismissed: dismissedN,
+        converted: convertedN,
+      },
+      items: Array.isArray(itemsR.data) ? itemsR.data : [],
+    });
+  }
+
+  if (req.method !== 'POST') return res.status(405).json({ error: 'GET or POST only' });
+
+  let workspaceId = null;
+  try { workspaceId = req.headers['x-lcc-workspace'] || primaryWorkspace(user)?.workspace_id || null; } catch (_e) { workspaceId = null; }
+  if (!requireRole(user, 'operator', workspaceId)) return res.status(403).json({ error: 'Operator role required' });
+
+  const body = req.body || {};
+  const id = String(body.news_lead_id || body.id || '').trim();
+  const action = String(body.action || '').trim().toLowerCase();
+  if (!id) return res.status(400).json({ error: 'news_lead_id required' });
+
+  const actionStatus = {
+    dismiss: 'dismissed',
+    reopen: 'needs_review',
+    send_to_developer: 'developer_unknown',
+    mark_developer: 'developer_unknown',
+    mark_converted: 'converted',
+  };
+  const nextStatus = actionStatus[action];
+  if (!nextStatus) return res.status(400).json({ error: 'invalid action', allowed: Object.keys(actionStatus) });
+
+  const readR = await opsQuery('GET',
+    'news_alert_leads?select=news_lead_id,status,metadata&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+    undefined, { countMode: 'none' });
+  if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+  const row = Array.isArray(readR.data) ? readR.data[0] : null;
+  if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+
+  const now = new Date().toISOString();
+  const metadata = Object.assign({}, row.metadata || {});
+  metadata.news_alert_review = {
+    action,
+    previous_status: row.status || null,
+    status: nextStatus,
+    note: body.note ? String(body.note).slice(0, 1000) : null,
+    reviewed_at: now,
+    reviewed_by: user.email || user.user_id || user.id || null,
+  };
+
+  const patchR = await opsQuery('PATCH',
+    'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+    { status: nextStatus, metadata, updated_at: now },
+    { headers: { Prefer: 'return=representation' } });
+  if (!patchR.ok) return res.status(502).json({ error: 'news_alert_update_failed', detail: patchR.data });
+  const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+  return res.status(200).json({ ok: true, item: updated });
 }
 
 // ============================================================================

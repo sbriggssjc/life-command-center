@@ -81,3 +81,48 @@ Missing for news alerts:
 - No current UI/API reader was found for `v_news_alert_review_queue` or `v_news_alert_developer_queue`.
 - No current "review verdict -> create property/lead/opportunity" bridge was found for `news_alert_leads`.
 - News-alert rows carry only article/tenant/location hints, not a domain property id. Promotion needs a human/AI review step to resolve or create the underlying property/entity before it can safely call the existing `create_lead` / `open_opportunity` paths.
+
+## 2026-08-10 Follow-up: Centralized Mover Status
+
+Scott updated the live Google Alert PA flow and confirmed a successful test. He kept the move step and pointed it to `Processed/Leads`.
+
+Code review result:
+
+- `lead-ingest?action=news_alert` correctly emits `processing_log` rows:
+  - auto/filed -> `target_folder = Processed/Leads`, `move_status = pending`
+  - duplicate -> `target_folder = Processed/Duplicates`, `move_status = pending`
+  - review -> `target_folder = null`, `move_status = skipped`
+- The documented batch GET pull-queue is not currently implemented in live `api/sync.js`.
+- `/api/webhooks/processing-complete` currently accepts only `POST`; `GET` returns 405.
+- The briefing code explicitly notes that pending moves are not cleared by a queue-drain consumer anymore.
+
+Operational conclusion:
+
+- Do **not** remove the PA move step yet.
+- The live Google Alert PA flow should keep doing the move itself after successful ingest.
+- Best short-term structure: POST -> Parse JSON -> Mark read -> if `target_folder` is not empty, Move to `target_folder` (currently `Processed/Leads` for auto leads).
+- Longer-term centralized design requires building/reinstating a real pending-move drain or having the edge/LCC path call the existing POST relay immediately.
+
+## 2026-08-10 Follow-up: News Alert Review Lane Slice 1
+
+Objective: expose the existing OPS `news_alert_leads` queue in the LCC app before building the property/pursuit promotion bridge.
+
+Changes made:
+
+- Added `GET /api/news-alerts` through `api/admin.js` and Railway `server.js`.
+  - `status=open` returns both `needs_review` and `developer_unknown`.
+  - Also supports `needs_review`, `developer_unknown`, `dismissed`, `converted`, and `all`.
+  - Response includes `counts` for the lane badge/filter chips.
+- Added `POST /api/news-alerts` for operator dispositions:
+  - `dismiss` -> `status='dismissed'`
+  - `send_to_developer` / `mark_developer` -> `status='developer_unknown'`
+  - `reopen` -> `status='needs_review'`
+  - `mark_converted` -> `status='converted'` (reserved for the future promotion bridge)
+  - Each disposition writes a `metadata.news_alert_review` audit object with previous status, action, note, reviewer, and timestamp.
+- Added a `News alerts — review & promote` sub-lane in the Decision Center.
+- Added `renderNewsAlertLane()` in `ops.js` with filter chips, article cards, open-article links, and actions to keep for developer research, dismiss, or reopen.
+
+Still intentionally missing:
+
+- No automatic property, lead, or `bd_opportunities` creation yet.
+- The promotion bridge should be the next slice: review article -> resolve/create property/entity -> call the existing lead/opportunity machinery with provenance back to `news_alert_leads.news_lead_id`.

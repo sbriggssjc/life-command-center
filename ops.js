@@ -1901,10 +1901,11 @@ async function renderReviewConsolePage() {
   // R7 Phase 2: every lane is now a real decision lane (no more "More review
   // work" deep-links). Decision-lane counts (seeded + federated, each labeled
   // with its mode) + the SOS owner-contact count, in parallel.
-  const [decR, res, compR] = await Promise.all([
+  const [decR, res, compR, newsR] = await Promise.all([
     opsApi('/api/decisions?summary=1'),
     opsApi('/api/review-counts'),
     opsApi('/api/comp-reviews?status=open&limit=1'),
+    opsApi('/api/news-alerts?status=open&limit=1'),
   ]);
 
   let html = '<div class="ops-header"><h2>Decision Center</h2></div>';
@@ -1962,6 +1963,8 @@ async function renderReviewConsolePage() {
     compN = Object.values(compR.data.counts).reduce(function (a, b) { return a + (Number(b) || 0); }, 0);
   }
   dc['comp_review'] = compN;
+  const newsCounts = (newsR && newsR.ok && newsR.data && newsR.data.counts) ? newsR.data.counts : {};
+  dc['news_alert_review'] = Number(newsCounts.open) || 0;
 
   // Every sub-lane (decision_type) with its existing renderer — NOTHING lost.
   // Grouped into the 8 logical lanes via the Tier 3 lane map (review-shared.js).
@@ -1997,6 +2000,7 @@ async function renderReviewConsolePage() {
     { dt: 'sf_contact_account_mismatch', label: 'Salesforce contact ↔ account mismatch', open: "renderDecisionLane('sf_contact_account_mismatch')" },
     { dt: 'sos_owner_links', label: 'Owner-contact links to confirm', open: 'renderSosLinkWorklist()' },
     { dt: 'comp_review', label: 'Comp reconciliation reviews (dia+gov)', open: 'renderCompReviewLane()' },
+    { dt: 'news_alert_review', label: 'News alerts — review & promote', open: 'renderNewsAlertLane()' },
     { dt: 'implausible_value', label: 'Implausible values', open: "renderFederatedLane('implausible_value')" },
     { dt: 'llc_research_dead', label: 'LLC research dead-letters', open: "renderDecisionLane('llc_research_dead')" },
     { dt: 'availability_checker_botblock', label: 'Availability bot-blocks', open: "renderDecisionLane('availability_checker_botblock')" },
@@ -2093,7 +2097,11 @@ window.setReviewNavBadge = setReviewNavBadge;
 // operator sees how much review work is waiting without opening the page.
 async function refreshReviewNavBadge() {
   try {
-    const [r, rc] = await Promise.all([opsApi('/api/decisions?summary=1'), opsApi('/api/review-counts')]);
+    const [r, rc, nr] = await Promise.all([
+      opsApi('/api/decisions?summary=1'),
+      opsApi('/api/review-counts'),
+      opsApi('/api/news-alerts?status=open&limit=1'),
+    ]);
     // R64: the badge is ACTIONABLE verdicts only — sum the seeded (non-federated)
     // lanes + the SOS owner-contact worklist. The large federated DQ universe is
     // worked on demand and must never inflate the badge (the 999+ trap).
@@ -2105,6 +2113,7 @@ async function refreshReviewNavBadge() {
       const s = rc.data.lanes.find(function (l) { return l.key === 'sos_owner_links'; });
       if (s && typeof s.count === 'number') total += s.count;
     }
+    if (nr.ok && nr.data && nr.data.counts) total += Number(nr.data.counts.open) || 0;
     setReviewNavBadge(total);
   } catch (_e) { /* best-effort */ }
 }
@@ -5056,6 +5065,80 @@ async function resolveCompReview(domain, id, disposition) {
   }
 }
 window.resolveCompReview = resolveCompReview;
+
+var _newsAlertStatus = 'open';
+
+function newsAlertCardHtml(it, isNext) {
+  var rowid = 'newsAlert_' + String(it.news_lead_id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  var title = it.article_title || it.raw_subject || it.tenant || 'News alert';
+  var place = [it.city, it.state].filter(Boolean).join(', ');
+  var conf = it.confidence != null ? Math.round(Number(it.confidence) * 100) + '% confidence' : 'unscored';
+  var badges = '<span class="q-badge">' + esc(it.status || '') + '</span>'
+    + (it.domain ? '<span class="q-badge">' + esc(it.domain) + '</span>' : '')
+    + (it.tenant ? '<span class="q-badge">' + esc(it.tenant) + '</span>' : '')
+    + '<span class="q-badge">' + esc(conf) + '</span>';
+  var url = it.article_url ? '<a class="q-action" href="' + esc(it.article_url) + '" target="_blank" rel="noopener">Open article</a>' : '';
+  var actions = '';
+  if (it.status === 'dismissed' || it.status === 'converted') {
+    actions = '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'reopen\')">Reopen</button>';
+  } else {
+    actions = '<button class="q-action primary" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'send_to_developer\')">Keep for developer research</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'dismiss\')">Dismiss</button>';
+  }
+  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="' + rowid + '">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
+    + '<div class="q-item-badges">' + badges + '</div></div>'
+    + '<div class="q-item-meta">' + esc([place, it.match_kind, it.created_at ? String(it.created_at).slice(0, 10) : ''].filter(Boolean).join(' · ') || '-')
+    + '</div>'
+    + (it.summary ? '<div class="q-item-detail">' + esc(it.summary) + '</div>' : '')
+    + '<div class="q-actions">' + url + actions + '</div></div>';
+}
+
+async function renderNewsAlertLane(status) {
+  _newsAlertStatus = status || _newsAlertStatus || 'open';
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/news-alerts?status=' + encodeURIComponent(_newsAlertStatus) + '&limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderNewsAlertLane()', 'Could not load news alerts'); return; }
+  var items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var counts = (res.data && res.data.counts) || {};
+  var chips = [
+    ['open', 'Open', Number(counts.open) || 0],
+    ['needs_review', 'Review', Number(counts.needs_review) || 0],
+    ['developer_unknown', 'Developer', Number(counts.developer_unknown) || 0],
+    ['dismissed', 'Dismissed', Number(counts.dismissed) || 0],
+    ['converted', 'Converted', Number(counts.converted) || 0],
+  ].map(function (c) {
+    return '<button class="q-action' + (_newsAlertStatus === c[0] ? ' primary' : '') + '" onclick="renderNewsAlertLane(\'' + c[0] + '\')">'
+      + esc(c[1]) + ' ' + c[2].toLocaleString() + '</button>';
+  }).join('');
+  var html = '<div class="ops-header"><h2>News Alert Review</h2>'
+    + '<div class="ops-controls">' + chips
+    + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Decision Center</button></div></div>';
+  html += '<div class="rc-intro">Google Alert and shared-news leads from the canonical OPS news_alert_leads queue. Keep worthy items in developer research; dismiss noise. Property and pursuit promotion is the next bridge after this triage lane.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No news alerts in this view. \u2713</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="newsAlertRemaining">' + items.length + '</span> shown'
+    + ' <span class="q-badge">' + (Number(counts.needs_review) || 0) + ' review</span>'
+    + ' <span class="q-badge">' + (Number(counts.developer_unknown) || 0) + ' developer</span></div>';
+  items.forEach(function (it, ix) { html += newsAlertCardHtml(it, ix === 0); });
+  el.innerHTML = html;
+}
+window.renderNewsAlertLane = renderNewsAlertLane;
+
+async function resolveNewsAlert(id, action) {
+  var res = await opsApi('/api/news-alerts', { method: 'POST', body: JSON.stringify({ news_lead_id: id, action: action }) });
+  if (res.ok && res.data && res.data.ok) {
+    if (typeof showToast === 'function') {
+      showToast(action === 'dismiss' ? 'Dismissed' : action === 'reopen' ? 'Reopened' : 'Sent to developer research', 'success');
+    }
+    renderNewsAlertLane(_newsAlertStatus);
+    refreshReviewNavBadge();
+  } else if (typeof showToast === 'function') {
+    showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
+window.resolveNewsAlert = resolveNewsAlert;
 
 // ── Unit 2: property metadata-backfill worklist (surfaced under Research) ──
 // A compact widget on the Research page + a full prioritized worklist page. The
