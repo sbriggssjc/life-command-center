@@ -1300,12 +1300,17 @@ test('bid_ask: two cap lines + up/down bars spread band (native)', () => {
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.equal(out.spec.type, 'multi-line');
-  assert.equal(out.spec.series.length, 2, 'exactly the two cap lines');
+  // 3 series: Last-Ask tick, invisible LabelHost (hosts the spread callouts),
+  // Achieved tick. Up/down bars pair first↔last (Last-Ask↔Achieved).
+  assert.equal(out.spec.series.length, 3, 'last-ask + label-host + achieved');
+  assert.ok(out.spec.series[1].hideFromLegend, 'label-host hidden from legend');
+  assert.ok(Array.isArray(out.spec.series[1].dataLabels), 'label-host hosts the callouts array');
   assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
   const xml = buildMultiLineChartXml(out.spec);
-  assert.equal((xml.match(/<c:ser>/g) || []).length, 2, 'two lines in the XML');
+  assert.equal((xml.match(/<c:ser>/g) || []).length, 3, 'three series in the XML');
   assert.match(xml, /<c:upDownBars>/, 'emits upDownBars');
+  assert.match(xml, /<c:legendEntry><c:idx val="1"\/><c:delete val="1"\/>/, 'label-host legend entry deleted');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
@@ -3303,11 +3308,15 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + up/down bars on a l
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.catCol, 'A');
-  assert.equal(out.spec.series.length, 2);
-  assert.equal(out.spec.series[0].valCol, 'F', 'sky line = Last Ask');
+  // [Last-Ask tick (F, sky), LabelHost (G, invisible, carries callouts), Achieved tick (G, navy)]
+  assert.equal(out.spec.series.length, 3);
+  assert.equal(out.spec.series[0].valCol, 'F', 'sky tick = Last Ask');
   assert.equal(out.spec.series[0].color, '62B5E5');
-  assert.equal(out.spec.series[1].valCol, 'G', 'navy line = Achieved helper col (G)');
-  assert.equal(out.spec.series[1].color, '003DA5');
+  assert.equal(out.spec.series[1].valCol, 'G', 'label-host on Achieved helper col (G)');
+  assert.ok(out.spec.series[1].hideFromLegend, 'label-host hidden from legend');
+  assert.equal(out.spec.series[1].lineAlpha, 0, 'label-host line is transparent');
+  assert.equal(out.spec.series[2].valCol, 'G', 'navy tick = Achieved helper col (G)');
+  assert.equal(out.spec.series[2].color, '003DA5');
   assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series');
   assert.ok(out.spec.yAxisRange && out.spec.yAxisRange.min > 0.01, 'cap axis min is non-zero');
@@ -3406,9 +3415,9 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
   });
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
-  // Two cap lines: sky Last Ask (F), navy Achieved helper col (G) + up/down bars
-  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
-  assert.deepEqual(out.spec.series.map(s => s.color), ['62B5E5', '003DA5']);
+  // [Last-Ask tick F, LabelHost G (invisible), Achieved tick G] + up/down bars
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G', 'G']);
+  assert.ok(out.spec.series[1].hideFromLegend, 'label-host hidden from legend');
   assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series');
 });
