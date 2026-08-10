@@ -3248,6 +3248,28 @@ function findFirstDenseYear(rows, fieldKey, minN, consecutive = 4) {
   return null;
 }
 
+function findFirstDensePeriod(rows, fieldKey, minN, consecutive = 4) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  let run = 0;
+  let runStartPeriod = null;
+  for (const r of rows) {
+    const rawPeriod = r && r.period_end ? String(r.period_end).slice(0, 10) : null;
+    const pe = rawPeriod ? new Date(`${rawPeriod}T00:00:00Z`) : null;
+    if (!pe || Number.isNaN(pe.getTime())) {
+      run = 0; runStartPeriod = null; continue;
+    }
+    const n = r[fieldKey];
+    if (n != null && Number(n) >= minN) {
+      if (run === 0) runStartPeriod = rawPeriod;
+      run++;
+      if (run >= consecutive) return runStartPeriod;
+    } else {
+      run = 0; runStartPeriod = null;
+    }
+  }
+  return null;
+}
+
 // T1 (2026-06-23) — extend the cap / returns / term sales-history charts back
 // to their first REAL data row instead of a hardcoded or over-tuned year cutoff.
 // Receipts (2026-06-23, live dia + gov): the long-history data EXISTS years
@@ -3531,6 +3553,15 @@ const MIN_YEAR_BY_TEMPLATE = {
   // for gov and risk cropping dia's other series.
 };
 
+const MIN_PERIOD_BY_TEMPLATE = {
+  // 2026-08-10 — bid-ask coverage can begin mid-year (live gov begins
+  // 2007-08-31, with 2008 the first full year). A year-only floor starts the
+  // chart at Jan-2007 and leaves blank x-axis categories before the first real
+  // plotted point. Use the exact first dense period for this chart family.
+  bid_ask_spread:         (rows) => findFirstDensePeriod(rows, 'avg_last_ask_cap', 0.0001),
+  bid_ask_spread_monthly: (rows) => findFirstDensePeriod(rows, 'avg_last_ask_cap', 0.0001),
+};
+
 // R2-A2 (2026-06-30) — single source of truth for a template's displayed
 // dataStart year, so the PNG renderer (cm-chart-image-renderer.js) can crop to
 // the IDENTICAL window the native injector plots and the two surfaces' data-fit
@@ -3566,20 +3597,26 @@ export function buildInjectionSpec(args) {
   // showing single-sample outlier-driven cap rates. The function reads
   // each row's transaction_count_ttm to find the first chronological
   // year where the underlying sample is dense enough to be honest.
+  const minPeriodEntry = MIN_PERIOD_BY_TEMPLATE[args.chart_template_id];
+  const minPeriod = typeof minPeriodEntry === 'function'
+    ? minPeriodEntry(args.rows)
+    : minPeriodEntry;
   const minYearEntry = MIN_YEAR_BY_TEMPLATE[args.chart_template_id];
   const minYear = typeof minYearEntry === 'function'
     ? minYearEntry(args.rows)
     : minYearEntry;
   let effectiveStart = args.dataStart;
   let trimOffset = 0;
-  if (minYear && Array.isArray(args.rows) && args.rows.length > 0) {
-    // Find first row at or after the cutoff year. Rows arrive in
-    // chronological order from the view; first match is the offset.
-    const cutoff = new Date(`${minYear}-01-01T00:00:00Z`).getTime();
+  const cutoffTime = minPeriod
+    ? new Date(`${String(minPeriod).slice(0, 10)}T00:00:00Z`).getTime()
+    : (minYear ? new Date(`${minYear}-01-01T00:00:00Z`).getTime() : NaN);
+  if (Number.isFinite(cutoffTime) && Array.isArray(args.rows) && args.rows.length > 0) {
+    // Find first row at or after the cutoff. Rows arrive in chronological order
+    // from the view; first match is the offset.
     let offset = 0;
     for (const r of args.rows) {
       const pe = r.period_end ? new Date(r.period_end).getTime() : NaN;
-      if (Number.isFinite(pe) && pe >= cutoff) break;
+      if (Number.isFinite(pe) && pe >= cutoffTime) break;
       offset++;
     }
     // Don't shift past the end (safety — keep at least 1 row visible)

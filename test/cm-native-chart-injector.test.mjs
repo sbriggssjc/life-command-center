@@ -3154,6 +3154,36 @@ test('R73 D-#12: bid_ask_spread floors gov at 2008 (first continuous Last-Ask), 
   assert.equal(mk(2015).spec.dataStart, 5 + 168, 'dia bid-ask self-floors at 2015 (no over-extend)');
 });
 
+test('R74: bid_ask_spread starts at the first dense period, not January of that year', () => {
+  const rows = [];
+  for (let y = 2006; y <= 2008; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const period = `${y}-${String(m).padStart(2, '0')}-28`;
+      rows.push({
+        period_end: period,
+        avg_bid_ask_spread: 0.004,
+        avg_last_ask_cap: (y > 2007 || (y === 2007 && m >= 8)) ? 0.07 : null,
+      });
+    }
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread',
+    tabName: 'Data_Bid_Ask',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_bid_ask_spread', col: 'C' },
+      { key: 'avg_last_ask_cap', col: 'D' },
+    ],
+    dataStart: 5,
+    dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // 2006-01..2007-07 = 19 rows before the first dense month.
+  assert.equal(spec.spec.dataStart, 5 + 19);
+});
+
 test('R73 D-#19: net_lease_spread floors at 2002 (earliest consistent treasury)', () => {
   const rows = [];
   for (let y = 2001; y <= 2024; y++) for (let m = 1; m <= 12; m++) {
