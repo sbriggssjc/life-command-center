@@ -1307,8 +1307,10 @@ test('bid_ask: two cap lines + up/down bars spread band (native)', () => {
   assert.ok(Array.isArray(out.spec.series[1].dataLabels), 'label-host hosts the callouts array');
   assert.ok(out.spec.upDownBars, 'upDownBars set for the spread band');
   assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
+  assert.ok(out.spec.series[1].separateGroup, 'label-host in its own chart group');
   const xml = buildMultiLineChartXml(out.spec);
   assert.equal((xml.match(/<c:ser>/g) || []).length, 3, 'three series in the XML');
+  assert.equal((xml.match(/<c:lineChart>/g) || []).length, 2, 'two lineChart groups (host is bar-free)');
   assert.match(xml, /<c:upDownBars>/, 'emits upDownBars');
   assert.match(xml, /<c:legendEntry><c:idx val="1"\/><c:delete val="1"\/>/, 'label-host legend entry deleted');
   assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');

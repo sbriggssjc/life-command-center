@@ -1548,7 +1548,7 @@ function buildMultiLineChartXml(spec) {
         </c:title>`
     : '';
   let mlBand = 0;   // band ordinal among LABELED series only (not raw series idx)
-  const seriesXml = spec.series.map((s, i) => {
+  const _perSeries = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // Dashed line variant (e.g. gov "Outside Firm" cohort) — Excel
     // renders <a:prstDash val="dash"/> as a regular dashed stroke.
@@ -1585,7 +1585,7 @@ function buildMultiLineChartXml(spec) {
     const lineSpFrag = s.markerOnly
       ? `<a:ln><a:noFill/></a:ln>`
       : `<a:ln w="${_lineWidth}" cap="rnd"><a:solidFill><a:srgbClr val="${_lineColor}">${_lineAlphaFrag}</a:srgbClr></a:solidFill>${dashFrag}<a:round/></a:ln>`;
-    return `        <c:ser>
+    const xml = `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
@@ -1598,7 +1598,24 @@ ${dLblsFrag}
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
         </c:ser>`;
-  }).join('\n');
+    return { xml, sep: !!s.separateGroup };
+  });
+  // A label-host series (separateGroup) goes in its OWN lineChart group so it is
+  // NOT affected by the up/down bars in the main group — Excel suppresses all but
+  // the max data label across a lineChart group that carries up/down bars, so the
+  // host must live in a bar-free group to render Peak/Low/Latest.
+  const seriesXml = _perSeries.filter(p => !p.sep).map(p => p.xml).join('\n');
+  const hostSeriesXml = _perSeries.filter(p => p.sep).map(p => p.xml).join('\n');
+  const hostGroupFrag = hostSeriesXml
+    ? `      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${hostSeriesXml}
+        <c:marker val="1"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:lineChart>`
+    : '';
 
   // R50 — optional stacked grouping + chart-level up-down bars.
   // upDownBars is a child of <c:lineChart> AFTER all <c:ser> blocks and
@@ -1650,6 +1667,7 @@ ${upDownBarsFrag}
         <c:axId val="1"/>
         <c:axId val="2"/>
       </c:lineChart>
+${hostGroupFrag}
       <c:catAx>
         <c:axId val="1"/>
         <c:scaling><c:orientation val="minMax"/></c:scaling>
@@ -4680,6 +4698,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               // (alpha 0), no marker, hidden from the legend.
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
                 lineColor: navy, lineWidth: 9525, lineAlpha: 0, hideFromLegend: true,
+                separateGroup: true,
                 dataLabels: buildAnnotationsForSpec(
                   plottedRows,
                   (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
