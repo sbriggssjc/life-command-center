@@ -1310,6 +1310,9 @@ test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', ()
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.equal(out.spec.type, 'multi-line');
+  // 2 series: Last-Ask dash tick + Achieved dash tick, solid up/down-bar band
+  // between them. Scott's chosen end state = solid band + Peak-ONLY callout
+  // (Excel culls Low/Latest under up/down bars, so only the max/Peak is emitted).
   // 5 series: Last-Ask tick, THREE invisible single-label hosts (Peak/Latest/Low —
   // one callout each so Excel's up/down-bar label cull can't drop Low/Latest),
   // Achieved tick. Up/down bars pair first↔last (Last-Ask↔Achieved).
@@ -1336,11 +1339,11 @@ test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', ()
   assert.equal(out.spec.series.length, 2, 'last-ask + achieved only');
   assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
   const achieved = out.spec.series[1];
-  assert.equal(achieved.color, '003DA5', 'navy Achieved line');
-  assert.ok(!achieved.markerOnly, 'Achieved is a normal drawn line (not marker-only) so labels render');
-  assert.equal(achieved.dataLabels.length, 3, 'Peak/Low/Latest all hosted on Achieved');
-  assert.deepEqual(achieved.dataLabels.map(a => a.role).sort(), ['last', 'max', 'min']);
-  assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
+  assert.equal(achieved.color, '003DA5', 'navy Achieved tick');
+  assert.ok(achieved.markerOnly, 'Achieved is a dash tick (markerOnly)');
+  assert.equal(achieved.dataLabels.length, 1, 'Peak only under up/down bars');
+  assert.equal(achieved.dataLabels[0].role, 'max', 'the one callout is Peak (max)');
+  assert.ok(out.spec.upDownBars, 'upDownBars draws the solid spread band');
   assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
   assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
   const xml = buildMultiLineChartXml(out.spec);
@@ -3324,7 +3327,7 @@ test('T1: chart XML series references shift to the first non-null data row', asy
 });
 
 test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a line-only axis', () => {
-  // CM bid-ask (Low/Latest fix). The spread band is drawn with <c:upDownBars> — a
+  // CM bid-ask (final: solid band + Peak-only). Spread band drawn with <c:upDownBars> — a
   // lineChart decoration, NOT a bar chart type — between the two cap LINES. The
   // line-only cap axis honors c:min → ~6-8%, and no bar element culls the callouts.
   const cols = [
@@ -3351,6 +3354,7 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a li
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.catCol, 'A');
+  // [Last-Ask tick (F, sky), Achieved tick (G, navy) hosting the Peak callout]
   // [Last-Ask tick (F, sky), 3 single-label hosts (G, invisible), Achieved tick (G, navy)]
   assert.equal(out.spec.series.length, 5);
   assert.equal(out.spec.series[0].valCol, 'F', 'sky tick = Last Ask');
@@ -3370,10 +3374,11 @@ test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a li
   assert.equal(out.spec.series[0].valCol, 'F', 'sky tick = Last Ask');
   assert.equal(out.spec.series[0].color, '62B5E5');
   assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
-  assert.equal(out.spec.series[1].valCol, 'G', 'navy line = Achieved helper col (G)');
+  assert.equal(out.spec.series[1].valCol, 'G', 'navy tick = Achieved helper col (G)');
   assert.equal(out.spec.series[1].color, '003DA5');
-  assert.ok(!out.spec.series[1].markerOnly, 'Achieved is a normal drawn line so labels render');
-  assert.equal(out.spec.series[1].dataLabels.length, 3, 'Peak/Low/Latest hosted on Achieved');
+  assert.ok(out.spec.series[1].markerOnly, 'Achieved is a dash tick (markerOnly)');
+  assert.equal(out.spec.series[1].dataLabels.length, 1, 'Peak only under up/down bars');
+  assert.equal(out.spec.series[1].dataLabels[0].role, 'max', 'the one callout is Peak (max)');
   assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
   assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
   assert.ok(!out.spec.barSeries, 'no bar series');
@@ -3480,6 +3485,7 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
   });
   assert.ok(out, 'should produce a spec');
   assert.equal(out.spec.type, 'multi-line');
+  // [Last-Ask tick F, Achieved tick G hosting the Peak callout] + up/down band
   // [Last-Ask tick F, 3 single-label hosts G (invisible), Achieved tick G] + up/down bars
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G', 'G', 'G', 'G']);
   assert.equal(out.spec.series.filter(s => s.hideFromLegend).length, 3, 'three hosts hidden from legend');
@@ -3487,7 +3493,7 @@ test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as qua
   // [Last-Ask tick F, Achieved tick G hosting Peak/Low/Latest] + hi-low band
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
   assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
-  assert.equal(out.spec.series[1].dataLabels.length, 3, 'Peak/Low/Latest hosted on Achieved');
+  assert.equal(out.spec.series[1].dataLabels.length, 1, 'Peak only under up/down bars');
   assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
   assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
   assert.ok(!out.spec.barSeries, 'no bar series');
