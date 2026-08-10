@@ -4752,22 +4752,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
             valAxNumFmt: VAL_FMT_PERCENT_2DP,
             yLeftAxisTitle: 'Cap rate',
-            // CM bid-ask (Low/Latest fix, final). The gray spread band is drawn with
-            // <c:upDownBars> (the master look) between the FIRST and LAST series at
-            // each period = Last-Ask ↔ Achieved. upDownBars is a lineChart
-            // decoration (not a bar chart type), and in practice it does NOT force a
-            // 0 axis floor — the cap axis fits ~6-8% (confirmed live).
-            //
-            // Root cause of the earlier "only Peak renders" (which SURVIVED removing
-            // the up/down bars): the two series were markerOnly / lineAlpha-0 — dash
-            // ticks with NO drawn connecting line — and Excel drops every
-            // manual-positioned data label EXCEPT the one at the series max on a
-            // marker-only / invisible-line series. The up/down bars were a red
-            // herring. Rendering both series as NORMAL drawn lines (like the
-            // nm_vs_market chart, which shows all three callouts) is what makes Low
-            // and Latest render — and the up/down-bar band coexists with them.
+            // CM bid-ask (final — Scott's chosen end state 2026-08-10: solid band +
+            // Peak-only callout). Live testing CONFIRMED that <c:upDownBars> makes
+            // Excel keep ONLY the single max-value ("Peak") data label chart-wide
+            // and drop Low/Latest — even with normal drawn lines. The solid
+            // up/down-bar band and all three callouts cannot coexist in native
+            // Excel, so per Scott we keep the master's solid gray band and emit ONLY
+            // the Peak callout (the one label Excel reliably renders under up/down
+            // bars — it IS the series max). Low/Latest are intentionally not emitted
+            // rather than shipped as labels Excel would silently cull.
             upDownBars: true,
             upDownGapWidth: 20,
+            // Master look: each series is a flat DASH tick (markerOnly, no connecting
+            // line) — Last-Ask sky (bottom), Achieved navy (top) — with the solid
+            // gray up/down-bar band filling the spread between them.
             // Each series renders as a FLAT DASH tick (markerOnly → no connecting
             // line) marking the top/bottom of each bar, in distinct brand colors:
             // Last-Ask = sky (bottom), Achieved = navy (top). Matches the master
@@ -4800,6 +4798,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                   ? Number(r.avg_bid_ask_spread) : NaN,
                 (v) => `${Math.round(Number(v) * 10000)} bps`,
                 'bid_ask:spread');
+              // Peak only — the max-role callout Excel keeps under up/down bars.
+              const peakAnn = spreadAnns.filter((a) => a.role === 'max');
               const hostFor = (role, band) => {
                 const a = spreadAnns.find(x => x.role === role);
                 if (!a) return null;
@@ -4822,9 +4822,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                 { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
                   showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
               return [
-                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
                 { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                  dataLabels: spreadAnns },
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true,
+                  dataLabels: peakAnn },
               ];
             })(),
             anchor: standardAnchor,
