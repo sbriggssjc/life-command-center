@@ -821,17 +821,17 @@ function inferAnnotationFmt(numFmt) {
 // Latest-only annotation: a single "Latest <value>" callout at the last finite
 // point. `simplePos` (t/b/l/r) places it relative to its own line end instead of
 // the top band, so N series' Latest labels spread by the lines' natural spacing.
-function buildLatestOnlyForSpec(rows, getter, formatter, simplePos = 'r') {
+function buildLatestOnlyForSpec(rows, getter, formatter, simplePos = 'r', color = null) {
   if (!Array.isArray(rows) || rows.length === 0) return [];
   const points = rows
     .map((r, i) => ({ idx: i, val: Number(getter(r)) }))
     .filter(p => Number.isFinite(p.val));
   if (points.length === 0) return [];
   const lastP = points[points.length - 1];
-  return [{ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest', simplePos }];
+  return [{ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest', simplePos, color }];
 }
 
-function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '') {
+function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '', color = null) {
   if (!Array.isArray(rows) || rows.length === 0) return [];
   // Filter to (idx, val) where val is a finite number
   const points = rows
@@ -849,14 +849,14 @@ function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '') {
   const out = [];
   // Last (primary callout — emit first so it's deterministically present).
   // `role` drives the leader-line offset direction in dLblXml (A2).
-  out.push({ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest' });
+  out.push({ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest', color });
   // Max — emit only if distinct from last (dedupe coincident max/latest).
   if (maxP.idx !== lastP.idx) {
-    out.push({ idx: maxP.idx, text: formatter(maxP.val), role: 'max', label: 'Peak' });
+    out.push({ idx: maxP.idx, text: formatter(maxP.val), role: 'max', label: 'Peak', color });
   }
   // Min — emit only if distinct from both.
   if (minP.idx !== lastP.idx && minP.idx !== maxP.idx) {
-    out.push({ idx: minP.idx, text: formatter(minP.val), role: 'min', label: 'Low' });
+    out.push({ idx: minP.idx, text: formatter(minP.val), role: 'min', label: 'Low', color });
   }
 
   {
@@ -906,11 +906,17 @@ const DLBL_TOP_Y = 0.13;
 // series whose peaks fall at nearby x overlap. dLblsXml/dLblXml take a
 // `bandIndex` (the series ordinal); band N drops DLBL_BAND_STEP lower, stacking
 // the series' callout rows instead of colliding. Band 0 = the base top band.
-const DLBL_BAND_STEP = 0.085;
+const DLBL_BAND_STEP = 0.06;
+// All callouts sit in the TOP whitespace headroom (above the plotted data) with a
+// leader line down to their point — never over the data. Peak/Low share the top
+// row; Latest is nudged LEFT so the last-point label clears the right border. On a
+// multi-series chart each series' row is offset by DLBL_BAND_STEP (small, so the
+// rows stay in the top headroom, not pushed into the data), AND its text is
+// color-matched to the series line so overlapping rows stay decipherable.
 const DLBL_ROLE_OFFSET = {
-  max:  { x: 0.01, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band, above the peak
-  min:  { x: 0.02, y: DLBL_TOP_Y, yMode: 'edge' },   // top headroom band (NOT down at the trough)
-  last: { x: -0.05, y: DLBL_TOP_Y, yMode: 'edge' },  // pull LEFT — the last point sits at the right border
+  max:  { x: 0.01, y: DLBL_TOP_Y, yMode: 'edge' },   // top row, above the peak
+  min:  { x: 0.02, y: DLBL_TOP_Y, yMode: 'edge' },   // top row (NOT down at the trough)
+  last: { x: -0.05, y: DLBL_TOP_Y, yMode: 'edge' },  // top row, pulled LEFT off the right border
 };
 
 // Callout brand text (item 3c): charcoal label word, emphasized (bold) value.
@@ -924,7 +930,7 @@ const DLBL_VALUE_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4
  * "<Peak|Low|Latest> <value>" — the role word in regular-weight charcoal, the
  * value bold (emphasized), matching cm-brand.json.
  */
-function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null) {
+function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null, color = null) {
   // simplePos (t/b/l/r/ctr) — place the label relative to its own point via
   // <c:dLblPos> instead of the absolute top-band manual layout. Used where each
   // series' single "Latest" label should sit at its own line end (e.g. the 4-cohort
@@ -963,10 +969,14 @@ function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null) {
               </c:ext>
             </c:extLst>`;
   const font = (t) => `<a:latin typeface="${t}"/><a:ea typeface="${t}"/><a:cs typeface="${t}"/>`;
+  // Optional per-series color so a multi-series chart's callouts are color-matched
+  // to their line (disambiguates which label belongs to which series).
+  const _lblColor = color ? String(color).replace('#', '') : DLBL_LABEL_COLOR;
+  const _valColor = color ? String(color).replace('#', '') : DLBL_VALUE_COLOR;
   const labelRun = label
-    ? `<a:r><a:rPr lang="en-US" b="0" sz="800"><a:solidFill><a:srgbClr val="${DLBL_LABEL_COLOR}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(label)} </a:t></a:r>`
+    ? `<a:r><a:rPr lang="en-US" b="0" sz="800"><a:solidFill><a:srgbClr val="${_lblColor}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(label)} </a:t></a:r>`
     : '';
-  const valueRun = `<a:r><a:rPr lang="en-US" b="1" sz="900"><a:solidFill><a:srgbClr val="${DLBL_VALUE_COLOR}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(text)}</a:t></a:r>`;
+  const valueRun = `<a:r><a:rPr lang="en-US" b="1" sz="900"><a:solidFill><a:srgbClr val="${_valColor}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(text)}</a:t></a:r>`;
   return `          <c:dLbl>
             <c:idx val="${idx}"/>
             ${layoutFrag}
@@ -1090,7 +1100,7 @@ function dLblsXml(spec, bandIndex = 0) {
   // their point. bandIndex (the series ordinal on multi-series charts) drops this
   // series' callout row so nearby peaks/lasts stack instead of overlapping.
   if (Array.isArray(spec) && spec.length > 0) {
-    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex, p.simplePos)).join('\n');
+    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex, p.simplePos, p.color)).join('\n');
     // Item 3 (recommended, from Excel's own output) — give the floated callouts a
     // brand callout-box look so they stay legible where they sit over the plotted
     // lines: paper (FFFFFF) fill + a Blue-12 (E0E8F4) hairline. Per CT_DLbls order
@@ -4288,8 +4298,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             valCol: s.col,
             color: s.color,
             dashed: !!s.dashed,
+            // Latest-only callout in the TOP whitespace band (leader to the point),
+            // color-matched to the cohort line so the 4 stacked rows stay legible.
             dataLabels: Array.isArray(rows)
-              ? buildLatestOnlyForSpec(plottedRows, r => r[s.key], fmtPct2Native, 'r').map(a => ({ ...a, label: '' }))
+              ? buildLatestOnlyForSpec(plottedRows, r => r[s.key], fmtPct2Native, null, s.color)
               : undefined,
           })),
           anchor: standardAnchor,
@@ -4317,8 +4329,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // T11 floor clamp lowered the start to 2001 (market context) — it would stamp
       // a label index from the 2020+ subset onto the 2001-based plotted series.
       const nmLabelRows = plottedRows;
-      const nmLabels  = buildAnnotationsForSpec(nmLabelRows, r => r.nm_cap_rate, fmtPct2Native);
-      const mktLabels = buildAnnotationsForSpec(nmLabelRows, r => r.market_cap_rate, fmtPct2Native);
+      const nmLabels  = buildAnnotationsForSpec(nmLabelRows, r => r.nm_cap_rate, fmtPct2Native, 'nm_cap', sky);
+      const mktLabels = buildAnnotationsForSpec(nmLabelRows, r => r.market_cap_rate, fmtPct2Native, 'market_cap', '8A8F98');
       return {
         tabName,
         spec: {
@@ -5144,10 +5156,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // latest on BOTH the cash-return and leveraged-mid lines over the plotted
       // window. Callouts use 2dp to match the data-tab values (7.42% etc.).
       const cashLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.cash_return, fmtPct2Native, 'cash_leveraged_returns:cash_return')
+        ? buildAnnotationsForSpec(plottedRows, r => r.cash_return, fmtPct2Native, 'cash_leveraged_returns:cash_return', navy)
         : undefined;
       const lvgLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.leveraged_return_mid, fmtPct2Native, 'cash_leveraged_returns:leveraged_return_mid')
+        ? buildAnnotationsForSpec(plottedRows, r => r.leveraged_return_mid, fmtPct2Native, 'cash_leveraged_returns:leveraged_return_mid', sky)
         : undefined;
       return {
         tabName,
@@ -5229,14 +5241,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on avg deal line
       // (renderer line 2348: buildAnnotations(rows, r => r.avg_deal_size, fmtCurrencyM))
       const avgLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.avg_deal_size, fmtCurrencyMNative, 'avg_deal_size')
+        ? buildAnnotationsForSpec(plottedRows, r => r.avg_deal_size, fmtCurrencyMNative, 'avg_deal_size', navy)
         : undefined;
-      // Peak/Low/Latest on the TTM transaction-count bars (integer). The bar is
-      // series 0 → band 0 (top); the avg-deal line takes band 1 so they don't
-      // collide (combo builder bands labeled series in bar-then-line order).
+      // Peak/Low/Latest on the TTM transaction-count bars (integer), color-matched
+      // to the sky bars; the avg-deal line callouts are navy — the color tells them
+      // apart where they land near each other in the top band.
       const cntLabels = Array.isArray(rows)
         ? buildAnnotationsForSpec(plottedRows, r => r.ttm_count,
-            (v) => Math.round(Number(v)).toLocaleString('en-US'), 'txn_count:ttm_count')
+            (v) => Math.round(Number(v)).toLocaleString('en-US'), 'txn_count:ttm_count', sky)
         : undefined;
       return {
         tabName,
@@ -5382,13 +5394,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // plotted cells — the dLbl `idx` is relative to the plotted series, so "Latest"
       // landed well short of the true last point. plottedRows aligns idx exactly and
       // still restricts to the displayed window.
-      const capLabels = buildAnnotationsForSpec(plottedRows, r => r.last_ask_cap_all, fmtPct2Native, 'seller_sentiment:last_ask_cap_all');
+      const capLabels = buildAnnotationsForSpec(plottedRows, r => r.last_ask_cap_all, fmtPct2Native, 'seller_sentiment:last_ask_cap_all', '265AB2');
       // Scott request — add Peak/Low/Latest to the SECOND asking-cap line (the
-      // 10+ yr trailing-8-qtr steel line), banded below the all-cap callouts.
+      // 10+ yr trailing-8-qtr steel line), color-matched (steel) so it's distinct.
       const capLongLabels = buildAnnotationsForSpec(
         plottedRows,
         r => (r.last_ask_cap_long_term_8q != null ? r.last_ask_cap_long_term_8q : r.last_ask_cap_long_term),
-        fmtPct2Native, 'seller_sentiment:last_ask_cap_long');
+        fmtPct2Native, 'seller_sentiment:last_ask_cap_long', '9EA9B7');
       return {
         tabName,
         spec: {
@@ -5826,7 +5838,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on the navy cap-rate dots
       // (renderer line 1489: buildAnnotations(rows, r => r.cap_rate, fmtPct2))
       const capLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(plottedRows, r => r.cap_rate, fmtPct2Native, 'cap_rate')
+        ? buildAnnotationsForSpec(plottedRows, r => r.cap_rate, fmtPct2Native, 'cap_rate', navy)
         : undefined;
 
       return {
@@ -5862,7 +5874,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // Peak/Low/Latest TTM-volume callouts ($M), banded to row 1 so they
             // don't collide with the cap-rate callouts (band 0) on the top band.
             dataLabels: Array.isArray(rows)
-              ? buildAnnotationsForSpec(plottedRows, r => r.volume_dollars, fmtCurrencyMNative, 'volume_cap:volume')
+              ? buildAnnotationsForSpec(plottedRows, r => r.volume_dollars, fmtCurrencyMNative, 'volume_cap:volume', sky)
               : undefined,
             labelBand: 1,
           },
