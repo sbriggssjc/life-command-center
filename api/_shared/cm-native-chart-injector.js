@@ -1601,8 +1601,14 @@ ${dLblsFrag}
   // schema it precedes <c:upDownBars>. Default color = deck market-gray.
   const hiLowColor = (spec.hiLowLines && spec.hiLowLines !== true)
     ? String(spec.hiLowLines).replace('#', '') : 'C9CED6';
+  // Optional wide stroke (EMU; 12700 = 1pt). bid-ask uses a wide gray stroke so
+  // the per-period spread sticks nearly touch and read as a filled band between
+  // the two cap lines (the up/down-bar look) WITHOUT a bar element that would
+  // force the axis to 0. Default 0.75pt (thin drop-line connectors elsewhere).
+  const hiLowWidth = Number.isFinite(spec.hiLowLineWidth) ? spec.hiLowLineWidth : 9525;
+  const hiLowCap = hiLowWidth >= 20000 ? 'flat' : 'rnd';   // flat butt for wide band sticks
   const hiLowLinesFrag = spec.hiLowLines
-    ? `        <c:hiLowLines><c:spPr><a:ln w="9525" cap="rnd"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill><a:round/></a:ln></c:spPr></c:hiLowLines>`
+    ? `        <c:hiLowLines><c:spPr><a:ln w="${hiLowWidth}" cap="${hiLowCap}"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill></a:ln></c:spPr></c:hiLowLines>`
     : '';
   const upDownBarsFrag = spec.upDownBars
     ? `        <c:upDownBars>
@@ -4630,7 +4636,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
             valAxNumFmt: VAL_FMT_PERCENT_2DP,
             yLeftAxisTitle: 'Cap rate',
-            hiLowLines: '9EA9B7',   // gray spread sticks between Last-Ask and Achieved
+            // Wide gray spread band between Last-Ask and Achieved. hiLowLines is a
+            // line element (not a bar), so the axis stays ~6-8%; the wide stroke
+            // makes the per-period sticks nearly touch → reads as the up/down-bar
+            // gray band. D8DFDF matches the old up/down-bar fill. hiLowLineWidth is
+            // the single tunable knob (EMU; 50800 ≈ 4pt) — widen for a more solid
+            // band, narrow toward sticks.
+            hiLowLines: 'D8DFDF',
+            hiLowLineWidth: 50800,
             series: [
               { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky },
               { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy },
