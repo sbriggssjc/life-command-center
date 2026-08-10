@@ -268,6 +268,43 @@ describe('structural guards — annotation-never-verdict', () => {
   });
 });
 
+describe('structural guards — nightly LLM tick anti-joins its OWN output (walk-the-pool)', () => {
+  // prompt 92: the sf-link-assist tick MUST exclude subject_refs it has already
+  // annotated so it walks the ~3.3k pool instead of re-scoring the same top-N nightly
+  // (3rd instance of this class — U1 prompt-84 scan, U5 prompt-83 window). This shared
+  // assertion pins the anti-join for the assist tick; reuse it for any future nightly
+  // LLM tick that upserts into a table it also reads candidates from.
+  function assertTickAntiJoinsOwnOutput({ src, tickHandler, dedupeHelper }) {
+    // (a) the dedupe helper reads back this source's own annotations, correctly ordered
+    //     by the REAL pk column (proposal_id — an invalid `id` column silently 500s
+    //     PostgREST and returns an empty set, which is exactly the treadmill this fixes).
+    const hs = src.indexOf('async function ' + dedupeHelper);
+    assert.ok(hs > 0, dedupeHelper + ' helper missing');
+    const hbody = src.slice(hs, hs + 900);
+    assert.match(hbody, /decision_type=eq\.sf_link_candidate&source=eq\.'\s*\+\s*SA\.SF_ASSIST_SOURCE/);
+    assert.match(hbody, /order=proposal_id\.asc/, 'anti-join read must order by the real PK (proposal_id), not id');
+    assert.ok(!/order=id\.asc/.test(hbody), 'ordering by a non-existent `id` column silently empties the exclusion set');
+    // (b) the tick fetches candidates, then filters out the already-annotated set.
+    const ts = src.indexOf('async function ' + tickHandler);
+    const te = src.indexOf('async function ', ts + 10);
+    const tbody = src.slice(ts, te > ts ? te : ts + 6000);
+    assert.match(tbody, new RegExp('const annotated = await ' + dedupeHelper + '\\(\\)'));
+    assert.match(tbody, /\.filter\(\(it\) => it\.subject_ref && !annotated\.has\(it\.subject_ref\)\)/,
+      'tick must anti-join the fetched candidates against its own annotated set');
+    // (c) belt + braces: a per-item skip-before-LLM guard inside the scoring loop.
+    assert.match(tbody, /if \(annotated\.has\(item\.subject_ref\)\) \{ summary\.skipped \+= 1; continue; \}/,
+      'tick must skip-before-LLM if an annotation already exists for the item');
+    // (d) the exclusion count is surfaced honestly in the response.
+    assert.match(tbody, /already_annotated_excluded/, 'the excluded count must be surfaced');
+  }
+
+  it('handleSfLinkAssistTick excludes fetchSfAssistAnnotated() and surfaces the count', () => {
+    assertTickAntiJoinsOwnOutput({
+      src: adminJs, tickHandler: 'handleSfLinkAssistTick', dedupeHelper: 'fetchSfAssistAnnotated',
+    });
+  });
+});
+
 describe('structural guards — re-score writes are conservative + reversible', () => {
   it('auto-link owner write is null-guarded (never overwrites)', () => {
     assert.match(adminJs, /sfCol \+ '=is\.null'/); // PATCH filter re-asserts null
