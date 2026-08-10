@@ -31,3 +31,16 @@ Investigate three consecutive Railway deployment failures for tranquil-delight /
 
 - Root cause is PR #1686, with PR #1687 preserving the parse error.
 - Minimal repair: edit `api/_shared/cm-native-chart-injector.js` so the bid-ask `series` IIFE has exactly one return path matching the intended latest chart behavior, then run `node --check api/_shared/cm-native-chart-injector.js` and the focused `cm-native-chart-injector` test.
+
+## Fix Applied
+
+- Removed the stale five-series host branch and duplicate `return [` from `api/_shared/cm-native-chart-injector.js`.
+- Kept the intended final bid-ask behavior: two dash-tick series, solid `upDownBars` spread band, and Peak-only data label on Achieved.
+- Cleaned stale five-series expectations from `test/cm-native-chart-injector.test.mjs`.
+
+## Verification
+
+- `node --check api/_shared/cm-native-chart-injector.js` passed.
+- `node --check test/cm-native-chart-injector.test.mjs` passed.
+- `node scripts/check-boot.mjs` passed: all 208 server/API files parse and `server.js` imports cleanly.
+- `node --test test/cm-native-chart-injector.test.mjs` passed: 208 pass, 1 skipped, 0 failed.
