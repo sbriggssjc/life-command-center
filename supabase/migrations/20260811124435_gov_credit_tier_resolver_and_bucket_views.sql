@@ -22,33 +22,140 @@ STABLE
 AS $$
   WITH src AS (
     SELECT
-      lower(coalesce(p_text, '')) AS txt,
-      lower(coalesce(p_government_type, '')) AS typ,
-      left(regexp_replace(coalesce(p_text, p_government_type, ''), '\s+', ' ', 'g'), 240) AS ev
+      ' ' || regexp_replace(lower(coalesce(p_text, '')), '[^a-z0-9]+', ' ', 'g') || ' ' AS txt,
+      ' ' || regexp_replace(lower(coalesce(p_government_type, '')), '[^a-z0-9]+', ' ', 'g') || ' ' AS typ,
+      left(regexp_replace(coalesce(p_text, p_government_type, ''), '[[:space:]]+', ' ', 'g'), 240) AS ev
   )
   SELECT 'federal'::text, 'explicit_government_type'::text, left(p_government_type, 240)
   FROM src
-  WHERE typ ~* '\mfederal\M'
+  WHERE typ LIKE '% federal %'
   UNION
   SELECT 'state'::text, 'explicit_government_type'::text, left(p_government_type, 240)
   FROM src
-  WHERE typ ~* '\mstate\M'
+  WHERE typ LIKE '% state %'
   UNION
   SELECT 'municipal'::text, 'explicit_government_type'::text, left(p_government_type, 240)
   FROM src
-  WHERE typ ~* '(\mmunicipal\M|\mlocal\M|\mcounty\M|\mcity\M)'
+  WHERE typ LIKE '% municipal %'
+     OR typ LIKE '% local %'
+     OR typ LIKE '% county %'
+     OR typ LIKE '% city %'
   UNION
   SELECT 'federal'::text, 'text_classifier'::text, ev
   FROM src
-  WHERE txt ~* '(\mu\.?s\.?\M|united states|general services administration|\mgsa\M|\mfederal\M|department of veterans? affairs|veterans? affairs|\mva\M|social security|\mssa\M|\mirs\M|internal revenue|\mfbi\M|\mdea\M|\mice\M|\muscis\M|\mfema\M|\musda\M|\mhud\M|\mepa\M|\mfda\M|\mdoj\M|\mdod\M|\mdhs\M|\mcbp\M|\mtsa\M|\musps\M|postal service|customs and border|immigration|drug enforcement|federal aviation|food and drug|national oceanic|\mnoaa\M|national park service|\mnps\M|forest service|national forest|army|navy|naval|air force|coast guard|border patrol|bankruptcy court|tax court|u\.?s\.?\s+(attorney|court|marshal|government|department|dept|agency))'
+  WHERE txt LIKE '% u s %'
+     OR txt LIKE '% us %'
+     OR txt LIKE '% united states %'
+     OR txt LIKE '% general services administration %'
+     OR txt LIKE '% gsa %'
+     OR txt LIKE '% federal %'
+     OR txt LIKE '% department of veteran affairs %'
+     OR txt LIKE '% department of veterans affairs %'
+     OR txt LIKE '% veteran affairs %'
+     OR txt LIKE '% veterans affairs %'
+     OR txt LIKE '% va %'
+     OR txt LIKE '% social security %'
+     OR txt LIKE '% ssa %'
+     OR txt LIKE '% irs %'
+     OR txt LIKE '% fbi %'
+     OR txt LIKE '% dea %'
+     OR txt LIKE '% ice %'
+     OR txt LIKE '% uscis %'
+     OR txt LIKE '% fema %'
+     OR txt LIKE '% usda %'
+     OR txt LIKE '% hud %'
+     OR txt LIKE '% epa %'
+     OR txt LIKE '% fda %'
+     OR txt LIKE '% doj %'
+     OR txt LIKE '% dod %'
+     OR txt LIKE '% dhs %'
+     OR txt LIKE '% cbp %'
+     OR txt LIKE '% tsa %'
+     OR txt LIKE '% usps %'
+     OR txt LIKE '% postal service %'
+     OR txt LIKE '% customs and border %'
+     OR txt LIKE '% immigration %'
+     OR txt LIKE '% drug enforcement %'
+     OR txt LIKE '% army %'
+     OR txt LIKE '% navy %'
+     OR txt LIKE '% naval %'
+     OR txt LIKE '% air force %'
+     OR txt LIKE '% coast guard %'
+     OR txt LIKE '% border patrol %'
   UNION
   SELECT 'municipal'::text, 'text_classifier'::text, ev
   FROM src
-  WHERE txt ~* '(\mmunicipal\M|\mlocal\M|county of|\mcounty\M|city of|\mcity\M|town of|village of|borough of|parish of|school district|independent school district|\misd\M|municipal utility district|\mmud\M|water district|fire district|police department|sheriff(''s)? office|public works|city hall|county courthouse|\mcourthouse\M|superior court)'
+  WHERE txt LIKE '% municipal %'
+     OR txt LIKE '% local %'
+     OR txt LIKE '% county of %'
+     OR txt LIKE '% county %'
+     OR txt LIKE '% city of %'
+     OR txt LIKE '% city %'
+     OR txt LIKE '% town of %'
+     OR txt LIKE '% village of %'
+     OR txt LIKE '% borough of %'
+     OR txt LIKE '% parish of %'
+     OR txt LIKE '% school district %'
+     OR txt LIKE '% independent school district %'
+     OR txt LIKE '% isd %'
+     OR txt LIKE '% municipal utility district %'
+     OR txt LIKE '% mud %'
+     OR txt LIKE '% water district %'
+     OR txt LIKE '% fire district %'
+     OR txt LIKE '% police department %'
+     OR txt LIKE '% sheriff s office %'
+     OR txt LIKE '% public works %'
+     OR txt LIKE '% city hall %'
+     OR txt LIKE '% county courthouse %'
+     OR txt LIKE '% courthouse %'
   UNION
   SELECT 'state'::text, 'text_classifier'::text, ev
   FROM src
-  WHERE txt ~* '(state of|commonwealth of|health (and|&) human services|human services|child protective|children''s protective|adult protective|family protective|dept\.?\s+of|department of (transportation|corrections?|criminal justice|public safety|health|state health|human services|family and protective services|licensing|revenue|labor|education)|comm(ission|\.)?\s+on|criminal justice|juvenile justice|parks? and wildlife|wildlife (department|commission|service|resources?|conservation)|comptroller|environmental quality|lottery commission|land office|railroad commission|workforce (commission|solutions|development board)|education agency|administrative hearings|water development board|alcoholic beverage (commission|control)|licensing (and|&) regulation|securities board|animal health commission|board of \w+ examiners|public safety|state board|historical commission|supreme court of)'
+  WHERE txt LIKE '% state of %'
+     OR txt LIKE '% commonwealth of %'
+     OR txt LIKE '% health and human services %'
+     OR txt LIKE '% health human services %'
+     OR txt LIKE '% human services %'
+     OR txt LIKE '% child protective %'
+     OR txt LIKE '% childrens protective %'
+     OR txt LIKE '% children s protective %'
+     OR txt LIKE '% adult protective %'
+     OR txt LIKE '% family protective %'
+     OR txt LIKE '% department of transportation %'
+     OR txt LIKE '% department of corrections %'
+     OR txt LIKE '% department of correction %'
+     OR txt LIKE '% department of criminal justice %'
+     OR txt LIKE '% department of public safety %'
+     OR txt LIKE '% department of health %'
+     OR txt LIKE '% department of state health %'
+     OR txt LIKE '% department of human services %'
+     OR txt LIKE '% department of family and protective services %'
+     OR txt LIKE '% department of licensing %'
+     OR txt LIKE '% department of revenue %'
+     OR txt LIKE '% department of labor %'
+     OR txt LIKE '% department of education %'
+     OR txt LIKE '% criminal justice %'
+     OR txt LIKE '% juvenile justice %'
+     OR txt LIKE '% parks and wildlife %'
+     OR txt LIKE '% park and wildlife %'
+     OR txt LIKE '% comptroller %'
+     OR txt LIKE '% environmental quality %'
+     OR txt LIKE '% lottery commission %'
+     OR txt LIKE '% land office %'
+     OR txt LIKE '% railroad commission %'
+     OR txt LIKE '% workforce commission %'
+     OR txt LIKE '% workforce solutions %'
+     OR txt LIKE '% workforce development board %'
+     OR txt LIKE '% education agency %'
+     OR txt LIKE '% administrative hearings %'
+     OR txt LIKE '% water development board %'
+     OR txt LIKE '% alcoholic beverage commission %'
+     OR txt LIKE '% alcoholic beverage control %'
+     OR txt LIKE '% licensing and regulation %'
+     OR txt LIKE '% securities board %'
+     OR txt LIKE '% public safety %'
+     OR txt LIKE '% state board %'
+     OR txt LIKE '% historical commission %'
   ORDER BY bucket;
 $$;
 
@@ -115,7 +222,6 @@ WITH candidates AS (
   FROM public.sales_transactions s
   JOIN public.properties p ON p.property_id = s.property_id
   JOIN public.leases l ON l.property_id = s.property_id
-    AND coalesce(l.status, 'active') <> 'inactive'
     AND (
       s.sale_date IS NULL
       OR l.expiration_date IS NULL

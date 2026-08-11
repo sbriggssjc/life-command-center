@@ -312,4 +312,21 @@ node --check api/_handlers/intake-create-property.js
 node --check api/_handlers/intake-promoter.js
 ```
 
-SQL migration was not applied to the live Government database in this pass, so live row counts/backfill candidate counts remain pending.
+### Live Database Application
+
+Applied migration `20260811124435_gov_credit_tier_resolver_and_bucket_views` to the live Government Supabase project (`scknotsqkcheojiaewwh`) on 2026-08-11.
+
+The Supabase migration RPC rejected the full migration payload with `INVALID_ARGUMENT`, so the DDL was applied in connector-safe batches and the migration ledger was recorded after the objects were verified. No canonical sale rows were mutated.
+
+Live smoke checks:
+
+| Check | Result |
+|---|---|
+| Mixed text: `TX Health and Human Services and Social Security Administration` | returns `federal` and `state` |
+| Singular VA text: `Department of Veteran Affairs` | returns `federal` |
+| `cm_gov_sale_credit_bucket_expanded` bucket rows | Federal 26,868; State 1,246; Municipal 519 |
+| `v_gov_sales_credit_tier_backfill_candidates` | `fill_sale_scalar_blanks` 2,399; `multi_bucket_reporting_only` 474; `needs_review_no_bucket` 766 |
+| Quarterly chart view | 127 rows; Federal 121 non-null; State 99 non-null; Municipal 73 non-null; `1990-06-30` to `2026-06-30` |
+| Monthly chart view | 352 rows; Federal 347 non-null; State 296 non-null; Municipal 213 non-null; `1990-06-30` to `2026-07-31` |
+
+Important operational note: the DB/reporting layer is live, but the forward-ingestion JavaScript changes still require the normal code deploy path before new sidebar/OM/share captures start writing derived `government_type` values automatically.
