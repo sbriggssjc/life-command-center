@@ -97,7 +97,7 @@ bucketed AS (
       WHEN b.total_term_years <= 20 THEN 2090
       ELSE 9990
     END AS sort_bucket,
-    count(*)::int AS bucket_count
+    count(*) AS bucket_count
   FROM windows w
   JOIN base b
     ON b.lease_effective >= w.start_date
