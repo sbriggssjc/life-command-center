@@ -1,6 +1,6 @@
 # Healthcare ASC and Fixed-Site IDTF Private Run Authorization v0.1
 
-**Status:** Design and synthetic contract complete; official runs remain unauthorized  
+**Status:** Design, synthetic contract, and release-template preflight complete; official runs remain unauthorized
 **Scope:** ASC and fixed-site IDTF source acquisition, private profiling, and 50-property review  
 **Execution boundary:** No official artifact download, sample draw, database write, or CRM promotion
 
@@ -99,5 +99,25 @@ requirements, complete second-review triggers, bounded retention, privacy receip
 distinction between `draft_unapproved` and `authorized`.
 
 This checkpoint intentionally contains no real release dates, real artifact hashes, credentials, downloads,
-row-level review data, or execution command. The next decision is whether to authorize preparation of the two
-real, still-unapproved release packets. Preparation is not authorization to draw either sample.
+row-level review data, or execution command.
+
+## 9. Release-template preflight
+
+`scripts/healthcare-discovery/release-packet-preflight.mjs` and the two frozen lane templates add a mechanically
+separate planning state: `template_incomplete`. Each template pins the four required source keys and an official
+CMS catalog or program page, but requires the exact artifact URL, release date, byte size, whole-file hash, and
+header hash to remain null in the repository. The catalog references are discovery anchors, not frozen artifact
+identities and not download authority.
+
+The preflight validator:
+
+- rejects non-CMS catalog references, missing or extra source keys, embedded release metadata, and weakened
+  download/sample/production-write controls;
+- requires two independent hash verifiers and two later execution approvals;
+- emits an aggregate receipt with all remaining blockers; and
+- can materialize only a validated `draft_unapproved` packet after a separately authorized private staging
+  process supplies every exact release field.
+
+Template preparation does not authorize downloading, drawing a sample, accessing a production system, or
+promoting a record. The next decision is whether to authorize a private artifact-staging procedure that records
+exact CMS release identities and independently recomputes hashes for one lane at a time.
