@@ -297,6 +297,9 @@ Before authorization, prove:
 The immediate authorized work remains Phase A design/code preparation only. No download, live schema creation,
 row-level extraction, or production ingestion is implied by this package.
 
+The local-only implementation sequence, receipt contract, synthetic-fixture rules and Phase A acceptance gate
+are defined in `ONCOLOGY-INFUSION-PHASE-A-BUILD-PLAN-v0.1.md`.
+
 ## 8. Current platform basis
 
 - CMS NPPES downloadable files and companion reference files: `https://download.cms.gov/nppes/NPI_Files.html`
