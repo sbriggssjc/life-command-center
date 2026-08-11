@@ -46,6 +46,16 @@ const RENDER_DEFAULT_WIDTH  = 900;
 const RENDER_DEFAULT_HEIGHT = 480;
 const RENDER_TIMEOUT_MS     = 15_000;
 
+// Marketing chart-formatting feedback (2026-08, ChartEdits.docx) — keep the
+// PNG/QuickChart fallback consistent with the native Excel charts: Futura PT
+// typeface, NM-Blue bold title. (QuickChart falls back to a default face if
+// Futura PT is not installed server-side; the native Excel charts are the
+// authoritative branded surface.) Kept as constants here so the two renderers
+// stay in sync — mirror any change to public/reports/cm-brand.json.
+const CM_PNG_FONT       = 'Futura PT';
+const CM_PNG_TITLE_HEX  = '#003DA5'; // NM Blue
+const CM_PNG_TITLE_SIZE = 14;
+
 // Recent-window crop. User wants charts back to ~2001. Original Round 1
 // bumped to 100/288/24, Round D4 to 104/312/26 after extending dialysis
 // master_m to 2001-01-01.
@@ -170,7 +180,7 @@ function buildAnnotations(rows, getter, labelFn, xKey = 'period_end') {
   const labelStyle = (bgColor) => ({
     backgroundColor: bgColor,
     color: PDF_COLORS.annotation_text,
-    font: { size: 10, family: 'Calibri', weight: 'bold' },
+    font: { size: 10, family: CM_PNG_FONT, weight: 'bold' },
     padding: { top: 2, bottom: 2, left: 5, right: 5 },
     borderRadius: 3,
     z: 100,  // above everything
@@ -297,7 +307,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
     plugins: {
       legend: {
         position: legendPosition,
-        labels: { color: '#191919', font: { family: 'Calibri', size: 11 } },
+        labels: { color: '#191919', font: { family: CM_PNG_FONT, size: 11 } },
       },
       // Round 6c — QuickChart v4 ships chartjs-plugin-datalabels enabled
       // by default, drawing a label on every data point. That's the
@@ -318,7 +328,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
       x: {
         ticks: {
           color: '#6A748C',
-          font: { family: 'Calibri', size: 9 },
+          font: { family: CM_PNG_FONT, size: 9 },
           maxTicksLimit: xMaxTicks,
           autoSkip: true,
         },
@@ -327,7 +337,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
       y: {
         ticks: {
           color: '#6A748C',
-          font: { family: 'Calibri', size: 9 },
+          font: { family: CM_PNG_FONT, size: 9 },
           ...(yAxisFormat || {}),
         },
         grid: { color: '#E7E6E6' },
@@ -342,7 +352,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
   if (yAxisTitle) {
     opts.scales.y.title = {
       display: true, text: yAxisTitle,
-      color: '#6A748C', font: { family: 'Calibri', size: 10 },
+      color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 },
     };
   }
   return opts;
@@ -363,7 +373,7 @@ function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12, yLeftRange, yRig
     position: 'right',
     ticks: {
       color: '#6A748C',
-      font: { family: 'Calibri', size: 9 },
+      font: { family: CM_PNG_FONT, size: 9 },
       ...(yRightFormat || {}),
     },
     grid: { display: false },
@@ -502,7 +512,7 @@ function nativeOptions(spec, { yFormat, y1Format, legendPosition = 'bottom' } = 
       position: 'right',
       ticks: {
         color: '#6A748C',
-        font: { family: 'Calibri', size: 9 },
+        font: { family: CM_PNG_FONT, size: 9 },
         ...(y1Format || axisFormatFromNumFmt(spec.yRightNumFmt)),
       },
       grid: { display: false },
@@ -514,15 +524,15 @@ function nativeOptions(spec, { yFormat, y1Format, legendPosition = 'bottom' } = 
         display: true,
         text: spec.yRightAxisTitle,
         color: '#6A748C',
-        font: { family: 'Calibri', size: 10 },
+        font: { family: CM_PNG_FONT, size: 10 },
       };
     }
   }
   opts.plugins.title = {
     display: !!spec.title,
     text: spec.title || '',
-    color: '#191919',
-    font: { family: 'Calibri', size: 16, weight: 'bold' },
+    color: CM_PNG_TITLE_HEX,
+    font: { family: CM_PNG_FONT, size: CM_PNG_TITLE_SIZE, weight: 'bold' },
   };
   return opts;
 }
@@ -2464,7 +2474,7 @@ function buildChartConfig(chart, brand) {
               type: 'label',
               backgroundColor: bg,
               color: PDF_COLORS.annotation_text,
-              font: { size: 10, family: 'Calibri', weight: 'bold' },
+              font: { size: 10, family: CM_PNG_FONT, weight: 'bold' },
               padding: { top: 2, bottom: 2, left: 5, right: 5 },
               borderRadius: 3,
               z: 100,
@@ -2561,7 +2571,7 @@ function buildChartConfig(chart, brand) {
           o.scales.x = {
             type: 'time',
             time: { unit: 'year' },
-            ticks: { color: '#191919', font: { family: 'Calibri', size: 9 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 9 } },
             grid: { display: false },
           };
           return o;
@@ -2634,8 +2644,8 @@ function buildChartConfig(chart, brand) {
             position: 'bottom',
             min: xMin,
             max: xMax,
-            title: { display: true, text: axisTitle, color: '#6A748C', font: { family: 'Calibri', size: 10 } },
-            ticks: { color: '#191919', font: { family: 'Calibri', size: 9 } },
+            title: { display: true, text: axisTitle, color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 9 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;
@@ -3094,8 +3104,8 @@ function buildChartConfig(chart, brand) {
           o.scales.x = {
             type: 'linear', position: 'bottom', min: xMin, max: xMax,
             title: { display: true, text: 'Firm Lease Term Remaining at Sale (Years)',
-                     color: '#6A748C', font: { family: 'Calibri', size: 10 } },
-            ticks: { color: '#191919', font: { family: 'Calibri', size: 9 } },
+                     color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 9 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;

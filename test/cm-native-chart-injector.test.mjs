@@ -72,6 +72,7 @@ test('injectNativeCharts: line chart on Data_Volume_TTM tab', async () => {
         catCol: 'A', valCol: 'B',
         dataStart: 6, dataEnd: 17,
         color: '003DA5',
+        title: 'Volume (TTM)',
         anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
       },
     },
@@ -94,7 +95,17 @@ test('injectNativeCharts: line chart on Data_Volume_TTM tab', async () => {
   // Assert drawing XML + its rels present
   assert.ok(zip.file('xl/drawings/drawing1.xml'), 'drawing1.xml created');
   const drawingXml = await zip.file('xl/drawings/drawing1.xml').async('string');
-  assert.match(drawingXml, /<xdr:twoCellAnchor/, 'drawing has twoCellAnchor');
+  // Marketing feedback (2026-08): charts carry a FIXED size via a oneCellAnchor
+  // with an explicit EMU extent (non-donut 10.00"W × 4.25"H).
+  assert.match(drawingXml, /<xdr:oneCellAnchor/, 'drawing has fixed-size oneCellAnchor');
+  assert.match(drawingXml, /<xdr:ext cx="9144000" cy="3886200"\/>/, 'non-donut chart is 10.00in x 4.25in');
+
+  // Marketing feedback: Chart Area No Fill / No Line + 8pt Futura PT default font.
+  assert.match(chartXml, /<c:spPr><a:noFill\/><a:ln><a:noFill\/><\/a:ln><\/c:spPr>\s*<c:txPr>/, 'chart area no fill / no line');
+  assert.match(chartXml, /<c:txPr>[\s\S]*sz="800"[\s\S]*Futura PT/, 'chart area default font 8pt Futura PT');
+  // Marketing feedback: title 14pt Futura PT Bold NM Blue; x-axis interval unit 1.
+  assert.match(chartXml, /sz="1400" b="1">\s*<a:solidFill><a:srgbClr val="003DA5"/, 'title 14pt bold NM Blue');
+  assert.match(chartXml, /<c:tickLblSkip val="1"\/><c:tickMarkSkip val="1"\/>/, 'x-axis label interval unit = 1');
 
   const drawingRels = await zip.file('xl/drawings/_rels/drawing1.xml.rels').async('string');
   assert.match(drawingRels, /chart1\.xml/, 'drawing rels references chart1.xml');
@@ -933,8 +944,11 @@ test('injectNativeCharts: bar + 4-scatter composite renders diamond markers acro
   const diamondCount = (chartXml.match(/<c:symbol val="diamond"\/>/g) || []).length;
   assert.equal(diamondCount, 4, '4 diamond markers');
   // No connecting lines on the marker series — each line has <a:noFill/>
-  // on its <a:ln> (one per line-with-marker series)
-  const noFillLineCount = (chartXml.match(/<a:ln><a:noFill\/><\/a:ln>/g) || []).length;
+  // on its <a:ln> (one per line-with-marker series). Scope to <c:plotArea>
+  // so the chart-area-level spPr (No Fill/No Line, marketing 2026-08) doesn't
+  // count.
+  const plotArea37 = chartXml.match(/<c:plotArea>[\s\S]*<\/c:plotArea>/)[0];
+  const noFillLineCount = (plotArea37.match(/<a:ln><a:noFill\/><\/a:ln>/g) || []).length;
   assert.equal(noFillLineCount, 4, '4 markers-only line series (no connecting lines)');
 
   // Global lineChart marker toggle is ON
@@ -1871,8 +1885,10 @@ test('injectNativeCharts: clustered-bar dispatch produces grouping=clustered XML
   assert.match(chartXml, /<c:overlap val="-20"\/>/, 'clustered overlap=-20');
   // 2 series
   assert.equal((chartXml.match(/<c:ser>/g) || []).length, 2);
-  // Both visible (no noFill markers)
-  assert.ok(!/<a:noFill\/>/.test(chartXml), 'no invisible base in clustered-bar');
+  // Both visible (no noFill markers). Scope to <c:plotArea> so the chart-area
+  // No Fill/No Line spPr (marketing 2026-08) doesn't count as an invisible base.
+  const plotArea65 = chartXml.match(/<c:plotArea>[\s\S]*<\/c:plotArea>/)[0];
+  assert.ok(!/<a:noFill\/>/.test(plotArea65), 'no invisible base in clustered-bar');
 });
 
 test('injectNativeCharts: combo line series respect dashed flag (R35 P2)', async () => {
@@ -4705,8 +4721,8 @@ test('R38 A: chart emits <c:title> when spec.title is provided', async () => {
     'title text rendered');
   assert.match(chartXml, /<c:autoTitleDeleted val="0"\/>/,
     'autoTitleDeleted is 0 when title is set (auto-title is allowed since we have a title)');
-  // Title style: 12pt bold navy
-  assert.match(chartXml, /sz="1200"[^/]*b="1"/, '12pt bold');
+  // Title style: 14pt bold navy (marketing feedback 2026-08)
+  assert.match(chartXml, /sz="1400"[^/]*b="1"/, '14pt bold');
   // Color is navy 003DA5
   assert.match(chartXml, /<c:title>[\s\S]*?<a:srgbClr val="003DA5"\/>/, 'navy color');
 });
@@ -5787,8 +5803,8 @@ test('R71: injectNativeCharts emits ONE drawing.xml per sheet when multiple char
 
   // Drawing XML contains two anchors
   const drawingXml = await zip.file(drawingFiles[0]).async('string');
-  const anchorCount = (drawingXml.match(/<xdr:twoCellAnchor/g) || []).length;
-  assert.equal(anchorCount, 2, 'R71: drawing.xml has 2 twoCellAnchor blocks');
+  const anchorCount = (drawingXml.match(/<xdr:oneCellAnchor/g) || []).length;
+  assert.equal(anchorCount, 2, 'R71: drawing.xml has 2 fixed-size oneCellAnchor blocks');
 
   // cNvPr ids are unique (2 and 3) within the drawing
   const ids = Array.from(drawingXml.matchAll(/<xdr:cNvPr\s+id="(\d+)"/g)).map(m => m[1]);
@@ -5835,7 +5851,7 @@ test('R71: single-chart path preserves legacy drawing.xml byte shape', async () 
   // Legacy single-chart drawings used cNvPr id=2, name="Chart 1"
   assert.match(drawingXml, /<xdr:cNvPr id="2" name="Chart 1"\/>/,
     'R71: single-chart path keeps legacy cNvPr id=2, name="Chart 1"');
-  const anchorCount = (drawingXml.match(/<xdr:twoCellAnchor/g) || []).length;
+  const anchorCount = (drawingXml.match(/<xdr:oneCellAnchor/g) || []).length;
   assert.equal(anchorCount, 1, 'R71: single-chart drawing has exactly 1 anchor');
 });
 
@@ -6387,8 +6403,9 @@ test('round3 item2: injectNativeCharts ships the definitive c15 structure cleanl
 });
 
 // Item 1 — injectNativeCharts rewrites the workbook theme minor+major font to
-// Open Sans so the workbook opens uniformly Open Sans (matching chart text).
-test('round3 item1: theme minor+major font rewritten to Open Sans', async () => {
+// the CM chart typeface (Futura PT, per marketing 2026-08) so the workbook
+// opens uniformly in that face (matching chart text).
+test('round3 item1: theme minor+major font rewritten to the CM chart typeface', async () => {
   const base = await buildTinyWorkbook();
   const result = await injectNativeCharts(base, [{
     tabName: 'Data_Volume_TTM',
@@ -6403,8 +6420,9 @@ test('round3 item1: theme minor+major font rewritten to Open Sans', async () => 
   const theme = await zip.file('xl/theme/theme1.xml').async('string');
   const major = theme.match(/<a:majorFont>\s*<a:latin[^>]*typeface="([^"]*)"/);
   const minor = theme.match(/<a:minorFont>\s*<a:latin[^>]*typeface="([^"]*)"/);
-  assert.ok(major && major[1] === 'Open Sans', `majorFont Open Sans (got ${major && major[1]})`);
-  assert.ok(minor && minor[1] === 'Open Sans', `minorFont Open Sans (got ${minor && minor[1]})`);
+  // Marketing feedback (2026-08): CM chart typeface is Futura PT (cm-brand.json).
+  assert.ok(major && major[1] === 'Futura PT', `majorFont Futura PT (got ${major && major[1]})`);
+  assert.ok(minor && minor[1] === 'Futura PT', `minorFont Futura PT (got ${minor && minor[1]})`);
 });
 
 // Item 3 — padSnapRange computes a real axis MIN (never 0 when data sits well
