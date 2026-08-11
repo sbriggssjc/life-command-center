@@ -11,9 +11,9 @@
     "_deltas_vs_2024_pdf": []
   },
 
-  "typeface": "Open Sans",
+  "typeface": "Futura PT",
   "typefacePreferred": "Futura PT",
-  "_typeface_note": "Open Sans is the Excel-safe default that renders on every machine. Flip `typeface` to Futura PT ONLY once it is confirmed installed on every machine that opens these workbooks, else Excel silently falls back to the theme font.",
+  "_typeface_note": "Set to Futura PT per marketing chart-formatting feedback (2026-08, ChartEdits.docx) so the exports match the marketing/website/PDF editing process. Body text = Futura PT (Book weight is the regular face; b=\"0\"); titles use b=\"1\" (Futura PT Bold/Heavy). ⚠️ If a machine that OPENS/edits these workbooks lacks Futura PT installed, Excel silently falls back to the theme font — keep Futura PT installed on every editor's machine, or flip this back to `Open Sans` (the Excel-safe universal face) here (one value, no code change).",
 
   "palette": {
     "primary":    "003DA5",
@@ -49,7 +49,16 @@
   },
   "_text_note": "Chart axis/category labels are Rich Black 191919 regular (2024 guide category/label rule) — supersedes charcoal for CHART labels; charcoal (3D4A54) stays for worksheet body cells per Briggs §2. Callout numbers: one color per chart, NM Blue default (use Sky 62B5E5 where the series itself is NM Blue, for contrast). Superscript $/+ and the '$5B+' convention apply to the report's KPI tiles, NOT Excel chart data labels (n/a for dLbls).",
 
-  "sizes": { "title": 1200, "axisTitle": 900, "axisLabel": 900, "dataLabel": 900, "legend": 900 },
+  "sizes": { "title": 1400, "axisTitle": 900, "axisLabel": 900, "dataLabel": 900, "legend": 900, "chartArea": 800 },
+  "_sizes_note": "Font sizes in OOXML hundredths-of-a-point (1400 = 14pt). Per marketing feedback (2026-08 ChartEdits.docx): chart TITLE 14pt Futura PT Bold NM-Blue (the doc wrote 'Size: 140' — read as 14.0pt; a literal 140pt title overflows a 4-inch chart); chart-AREA default text (`chartArea`) 8pt Futura PT Book (the whole-chart Format-Chart-Area font). Change either here (no code change).",
+
+  "chartSize": {
+    "widthIn": 10.0,
+    "heightIn": 4.25,
+    "donutWidthIn": 4.25,
+    "donutHeightIn": 4.25,
+    "_note": "Fixed chart-object (Chart Area) size in inches per marketing feedback (2026-08 ChartEdits.docx): non-donut charts 4.25\"H × 10.00\"W; donut charts 4.25\" × 4.25\" square. Emitted as an explicit-size oneCellAnchor in cm-native-chart-injector.js (1 inch = 914400 EMU). NOTE: the same feedback doc also listed 'entire chart Size: H 3.55\" × W 10.12\"'; that conflicts with the 4.25×10.00 'Chart area size' line, so the explicit 'Chart area size' values were taken as authoritative. To use the 3.55×10.12 values instead, edit heightIn/widthIn here."
+  },
 
   "banned": ["4CB582", "7E6BAD", "D97706", "D9D9D9", "595959", "1F4E79"],
   "_banned_note": "Retired off-brand accents/grays. Slate #6A748C is intentionally NOT banned (it is the on-brand axis/legend neutral).",
