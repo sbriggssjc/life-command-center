@@ -36,6 +36,39 @@ injector / exporter), B (views / data), C (verified-correct, document only).
 | **7 — Active cap quartiles "too consistent"** | ✅ documented | True per-period quartiles of the disclosed-cap active cohort; flat 4–10-month runs reflect slow inventory turnover (~470-day avg DOM), not the formula. Registry note added. |
 | **9 — Available market size avg caps** | ✅ documented | Point-in-time active-cohort avg (changes 37 of 38 periods); smoothness = slow turnover. Registry note added. |
 
+## Marketing chart-object formatting pass (`ChartEdits.docx`, 2026-08-11)
+
+Corporate marketing sent a chart-formatting checklist to align our Capital
+Markets Excel exports with their website/PDF editing process. Applied to **all**
+charts in **both** the dialysis and government exports, driven by `cm-brand.json`
+(data, not code) so any value is a one-line change:
+
+| Edit | Where | Value |
+|---|---|---|
+| Chart Area: No Fill + No Line | native injector `applyChartAreaBranding()` (chartSpace `<c:spPr>`) | transparent / no outline |
+| Chart Area default font | `cm-brand.json.typeface` + `sizes.chartArea`; chartSpace `<c:txPr>` | Futura PT Book, 8 pt |
+| Chart Title | `chartTitleXml()` reads `sizes.title` + `text.title` + `typeface` | Futura PT **Bold**, **14 pt**, NM Blue `#003DA5` |
+| X-axis label Interval Unit = 1 | `applyChartAreaBranding()` catAx `tickLblSkip`/`tickMarkSkip` | every label/tick |
+| Fixed chart size (non-donut) | `cm-brand.json.chartSize` → oneCellAnchor explicit EMU ext | 4.25″H × 10.00″W |
+| Fixed chart size (donut) | same | 4.25″ × 4.25″ square |
+| Typeface | `cm-brand.json.typeface` (was Open Sans) | **Futura PT** |
+| PNG/QuickChart fallback | `cm-chart-image-renderer.js` (`CM_PNG_FONT`/`CM_PNG_TITLE_*`) | Futura PT, 14 pt bold NM-Blue title |
+
+**Interpretation calls (documented so they're not re-litigated):**
+- Title "Size: 140" in the doc → read as **14.0 pt** (a literal 140 pt title
+  overflows a ~4″ chart). Change `sizes.title` in `cm-brand.json` to override.
+- Two conflicting size lines ("entire chart 3.55″×10.12″" vs "Chart area size
+  4.25″×10.00″") → the explicit **Chart area size** was taken as authoritative.
+  Change `chartSize` in `cm-brand.json` to use 3.55×10.12 instead.
+- **Futura PT** is now the default typeface. ⚠️ If a machine that opens/edits an
+  exported workbook lacks Futura PT installed, Excel silently falls back to the
+  theme font — keep it installed on editors' machines, or flip `typeface` back to
+  `Open Sans`.
+
+Brand-standard docs updated so this is durable for future projects:
+`docs/brand/NORTHMARQ_BRAND.md` §2A (byte-identical in the Dialysis + government
+repos), and the Brand Standards section of each repo's `CLAUDE.md`.
+
 ## Blocking inputs from Scott / marketing
 
 1. **Chart font** — provide the exact style-guide font name (and confirm installed on every machine that opens these workbooks); flip `cm-brand.json.typeface` from Open Sans.

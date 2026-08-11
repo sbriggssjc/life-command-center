@@ -149,7 +149,7 @@ function validateChartExtWhitelist(xml, template = '') {
 // brand-guide update is a JSON change. Falls back to inline defaults if the
 // file is unreadable (keeps the injector working in minimal test contexts).
 const CM_BRAND_FALLBACK = {
-  typeface: 'Open Sans',
+  typeface: 'Futura PT',
   typefacePreferred: 'Futura PT',
   palette: {
     primary: '003DA5', deep: '001159', accent: '62B5E5', blue85: '265AB2',
@@ -161,7 +161,8 @@ const CM_BRAND_FALLBACK = {
   series: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
   series_ramp: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
   text: { title: '003DA5', axisLabel: '191919', legend: '6A748C', callout: '003DA5' },
-  sizes: { title: 1200, axisTitle: 900, axisLabel: 900, dataLabel: 900, legend: 900 },
+  sizes: { title: 1400, axisTitle: 900, axisLabel: 900, dataLabel: 900, legend: 900, chartArea: 800 },
+  chartSize: { widthIn: 10.0, heightIn: 4.25, donutWidthIn: 4.25, donutHeightIn: 4.25 },
   banned: ['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79'],
 };
 
@@ -210,6 +211,63 @@ function chartFont(brand) {
 function fontRunFrag(brand) {
   const f = escapeXml(chartFont(brand));
   return `<a:latin typeface="${f}"/><a:ea typeface="${f}"/><a:cs typeface="${f}"/>`;
+}
+
+// ----------------------------------------------------------------------------
+// Marketing chart-formatting feedback (2026-08, ChartEdits.docx) — applied to
+// EVERY chart the injector emits, driven by cm-brand.json so a future spec
+// change is a JSON edit, not code:
+//   • Chart Area: NO fill, NO border line (Format Chart Area → No Fill / No Line)
+//   • Chart Area default font: Futura PT Book, 8pt (CM_BRAND.sizes.chartArea)
+//   • Chart title: Futura PT Bold, CM_BRAND.sizes.title (14pt), NM Blue — in chartTitleXml()
+//   • X (category) axis: label Interval Unit = 1 (tickLblSkip/tickMarkSkip = 1)
+//   • Chart object size fixed in inches (CM_BRAND.chartSize) — in the drawing anchor
+// ----------------------------------------------------------------------------
+
+const EMU_PER_INCH = 914400;
+
+// Fixed chart-object (Chart Area) size in EMU. Donuts are square per marketing.
+function chartSizeEmu(type) {
+  const cs = CM_BRAND.chartSize || {};
+  const isDonut = type === 'doughnut';
+  const wIn = isDonut ? (cs.donutWidthIn ?? 4.25) : (cs.widthIn ?? 10.0);
+  const hIn = isDonut ? (cs.donutHeightIn ?? 4.25) : (cs.heightIn ?? 4.25);
+  return { cx: Math.round(wIn * EMU_PER_INCH), cy: Math.round(hIn * EMU_PER_INCH) };
+}
+
+// chartSpace-level <c:spPr> (No Fill / No Line) + <c:txPr> (default chart-area
+// font). These are children of <c:chartSpace> and, per the CT_ChartSpace schema
+// sequence, come AFTER </c:chart> and BEFORE </c:chartSpace>.
+function chartAreaSpPrTxPr() {
+  const f = escapeXml(CM_BRAND.typeface);
+  const sz = (CM_BRAND.sizes && CM_BRAND.sizes.chartArea) || 800;
+  return `  <c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>
+  <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${sz}" b="0"><a:latin typeface="${f}"/><a:ea typeface="${f}"/><a:cs typeface="${f}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>`;
+}
+
+// Category-axis label Interval Unit = 1 (marketing: x-axis → Labels → Specify
+// Interval Unit 1). tickLblSkip/tickMarkSkip live near the end of CT_CatAx
+// (before extLst), so inserting just before </c:catAx> is schema-correct.
+const CAT_AX_INTERVAL_UNIT_FRAG = '<c:tickLblSkip val="1"/><c:tickMarkSkip val="1"/>';
+
+// Post-process a generated chartSpace XML string to apply the marketing
+// chart-area edits uniformly across every builder (single choke point so no
+// builder can miss them). Idempotent — guards against double application.
+function applyChartAreaBranding(xml) {
+  if (typeof xml !== 'string' || !xml) return xml;
+  let out = xml;
+  // 1. Category-axis interval unit = 1 (only for a <c:catAx> that lacks it).
+  out = out.replace(/<c:catAx>([\s\S]*?)<\/c:catAx>/g, (full, body) => {
+    if (/<c:tickLblSkip\b/.test(body)) return full;
+    return `<c:catAx>${body}${CAT_AX_INTERVAL_UNIT_FRAG}</c:catAx>`;
+  });
+  // 2. Chart Area No Fill / No Line + default font, inserted between </c:chart>
+  //    and </c:chartSpace>. Keyed off the </c:chart> tail so it is inserted
+  //    exactly once (a second pass finds spPr/txPr already sitting there).
+  out = out.replace(/(<\/c:chart>)(\s*)(<\/c:chartSpace>)/, (m, a, ws, b) =>
+    `${a}\n${chartAreaSpPrTxPr()}\n${b}`
+  );
+  return out;
 }
 
 // On-brand hex set (uppercase, no '#') for off-palette detection.
@@ -1036,16 +1094,16 @@ function chartTitleXml(text) {
           <a:lstStyle/>
           <a:p>
             <a:pPr algn="ctr">
-              <a:defRPr sz="1200" b="1" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
-                <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
+              <a:defRPr sz="${CM_BRAND.sizes.title}" b="1" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
+                <a:solidFill><a:srgbClr val="${CM_BRAND.text.title}"/></a:solidFill>
                 <a:latin typeface="${CM_BRAND.typeface}"/>
                 <a:ea typeface="${CM_BRAND.typeface}"/>
                 <a:cs typeface="${CM_BRAND.typeface}"/>
               </a:defRPr>
             </a:pPr>
             <a:r>
-              <a:rPr lang="en-US" sz="1200" b="1">
-                <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
+              <a:rPr lang="en-US" sz="${CM_BRAND.sizes.title}" b="1">
+                <a:solidFill><a:srgbClr val="${CM_BRAND.text.title}"/></a:solidFill>
                 <a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/>
               </a:rPr>
               <a:t>${escapeXml(text)}</a:t>
@@ -2729,17 +2787,19 @@ ${cagrLine}
  * `nvIdx` (default 2) sets the `<xdr:cNvPr>` id; must be unique within
  * the parent drawing.xml. Sequence id+1 per chart on the same sheet.
  */
-function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
+function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2, type }) {
   const a = anchor || { col0: 0, row0: 0, col1: 13, row1: 21 };
-  return `  <xdr:twoCellAnchor editAs="oneCell">
+  // Marketing feedback (2026-08): every chart carries a FIXED Chart-Area size
+  // (CM_BRAND.chartSize) — non-donut 4.25"H × 10.00"W, donut 4.25" square.
+  // A oneCellAnchor pins the top-left to the anchor's (col0,row0) and gives an
+  // explicit EMU extent, so the chart no longer resizes with the spanned cells.
+  const { cx, cy } = chartSizeEmu(type);
+  return `  <xdr:oneCellAnchor>
     <xdr:from>
       <xdr:col>${a.col0}</xdr:col><xdr:colOff>0</xdr:colOff>
       <xdr:row>${a.row0}</xdr:row><xdr:rowOff>0</xdr:rowOff>
     </xdr:from>
-    <xdr:to>
-      <xdr:col>${a.col1}</xdr:col><xdr:colOff>0</xdr:colOff>
-      <xdr:row>${a.row1}</xdr:row><xdr:rowOff>0</xdr:rowOff>
-    </xdr:to>
+    <xdr:ext cx="${cx}" cy="${cy}"/>
     <xdr:graphicFrame macro="">
       <xdr:nvGraphicFramePr>
         <xdr:cNvPr id="${nvIdx}" name="Chart ${nvIdx - 1}"/>
@@ -2747,7 +2807,7 @@ function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
       </xdr:nvGraphicFramePr>
       <xdr:xfrm>
         <a:off x="0" y="0"/>
-        <a:ext cx="0" cy="0"/>
+        <a:ext cx="${cx}" cy="${cy}"/>
       </xdr:xfrm>
       <a:graphic>
         <a:graphicData uri="${NS_CHART}">
@@ -2756,7 +2816,7 @@ function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
       </a:graphic>
     </xdr:graphicFrame>
     <xdr:clientData/>
-  </xdr:twoCellAnchor>`;
+  </xdr:oneCellAnchor>`;
 }
 
 /**
@@ -2768,10 +2828,10 @@ function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
  * single-chart path so existing tests (and callers that emit a single
  * chart per sheet) work unchanged.
  */
-function buildDrawingXml({ chartRelId, anchor }) {
+function buildDrawingXml({ chartRelId, anchor, type }) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
-${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2 })}
+${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2, type })}
 </xdr:wsDr>`;
 }
 
@@ -2786,7 +2846,7 @@ ${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2 })}
  */
 function buildMultiChartDrawingXml(entries) {
   const frags = entries.map((e, i) =>
-    buildDrawingAnchorFrag({ chartRelId: e.chartRelId, anchor: e.anchor, nvIdx: 2 + i })
+    buildDrawingAnchorFrag({ chartRelId: e.chartRelId, anchor: e.anchor, nvIdx: 2 + i, type: e.type })
   ).join('\n');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
@@ -2807,6 +2867,13 @@ ${frags}
 // level so the export loop can render + lint a spec without re-implementing the
 // dispatch. (Formerly a closure inside injectNativeCharts.)
 function specToChartXml(spec) {
+  return applyChartAreaBranding(_specToChartXmlRaw(spec));
+}
+
+// Type→builder dispatch. Wrapped by specToChartXml so the marketing chart-area
+// edits (No Fill/No Line + default font + x-axis interval unit) apply uniformly
+// to every chart type from one choke point.
+function _specToChartXmlRaw(spec) {
   if (spec.type === 'stacked-bar') return buildStackedBarChartXml(spec);
   if (spec.type === 'clustered-bar') {
     // R35 P2 — shares the builder with stacked-bar but forces
@@ -2962,6 +3029,7 @@ export async function injectNativeCharts(buffer, injections) {
         chartFile,
         chartRelId: `rId${i + 1}`,  // sequenced within this sheet's drawing rels
         anchor: spec.anchor,
+        type: spec.type,
       });
     }
 
@@ -2969,7 +3037,7 @@ export async function injectNativeCharts(buffer, injections) {
     //    its byte-for-byte output is unchanged (preserving existing
     //    snapshot-style assertions); multi-chart path tiles N anchors.
     const drawingXml = chartEntries.length === 1
-      ? buildDrawingXml({ chartRelId: chartEntries[0].chartRelId, anchor: chartEntries[0].anchor })
+      ? buildDrawingXml({ chartRelId: chartEntries[0].chartRelId, anchor: chartEntries[0].anchor, type: chartEntries[0].type })
       : buildMultiChartDrawingXml(chartEntries);
     zip.file(drawingFile, drawingXml);
 

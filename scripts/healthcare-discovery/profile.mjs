@@ -11,8 +11,10 @@ export async function runProfile(manifestPath, outputPath, options = {}) {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const nppesSource = manifest.sources.find((source) => source.name === 'nppes_v2_monthly');
   const taxonomySource = manifest.sources.find((source) => source.name === 'nucc_taxonomy');
+  const secondarySource = manifest.sources.find((source) => source.name === 'nppes_secondary_locations');
   const nppesPath = resolvePrivateSourcePath(manifestPath, nppesSource.object_path, options);
   const taxonomyPath = resolvePrivateSourcePath(manifestPath, taxonomySource.object_path, options);
+  const secondaryPath = resolvePrivateSourcePath(manifestPath, secondarySource.object_path, options);
   const taxonomyAssertions = await validateNuccTaxonomyFile(taxonomyPath);
   const taxonomyFingerprint = createHash('sha256').update(canonicalJson(taxonomyAssertions)).digest('hex');
   const receipt = await profileNppesFile(nppesPath, {
@@ -20,6 +22,7 @@ export async function runProfile(manifestPath, outputPath, options = {}) {
     manifestSha256: validation.manifest_sha256,
     taxonomyFingerprint,
     transformVersion: manifest.transform_version,
+    secondaryPath,
   });
   const destination = path.resolve(outputPath);
   const temporary = `${destination}.tmp-${process.pid}`;

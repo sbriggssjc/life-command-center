@@ -204,13 +204,13 @@ oncology/infusion is a scalable net-lease lane; discovery volume alone is not a 
 
 - A0 is complete on `main`: six fail-closed command contracts, synthetic fixtures and private-path exclusion.
 - A1/A2 are implemented against synthetic fixtures: manifest/source integrity and the three-code NUCC gate.
-- A3 is implemented against synthetic fixtures for the primary practice-location file: dynamic header mapping,
-  row-streamed parsing, versioned address normalization, deterministic fingerprints and aggregate-only receipts.
-- The NPPES secondary-practice-location reference file still requires a manifest-contract extension before A3
-  is complete for both location roles; it must not be silently treated as part of the primary monthly file.
+- A3.1/A4 are implemented against synthetic fixtures. Manifest contract `1.1` requires the separate CMS
+  secondary-practice-location source and joins it through a domain-separated NPI hash.
+- Primary and secondary roles are counted separately; canonical receipt bytes reproduce across identical runs.
+- Privacy scans reject record identifiers and address content, and candidate fingerprint state has an explicit
+  fail-closed ceiling. The focused Phase A suite passes 16 tests.
 - No real CMS/NUCC artifact, provider record, database connection or production write mode has been added.
 
-The next bounded checkpoint is A3.1/A4: add the separate secondary-location source contract, join it by NPI
-without emitting provider identifiers, and add reproducibility/privacy/resource acceptance tests. Keep the
-implementation synthetic until A3/A4 acceptance tests pass. After Phase A, compare the observed
-oncology/infusion feasibility results under the cross-lane matrix before authorizing a production-bound model.
+The next bounded checkpoint is to close the generated-volume resource test, freeze a machine-readable Phase A
+acceptance receipt, and define source manifests for ASC and fixed-site IDTF discovery without downloading data.
+No real CMS release should be acquired or profiled until that source step is explicitly authorized.

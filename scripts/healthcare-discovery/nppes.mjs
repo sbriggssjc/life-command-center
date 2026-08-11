@@ -44,6 +44,16 @@ const MODALITY = Object.freeze({
   '261QX0203X': 'radiation_oncology',
 });
 
+export const SECONDARY_COLUMNS = Object.freeze({
+  npi: 'NPI',
+  line1: 'Provider Secondary Practice Location Address- Address Line 1',
+  line2: 'Provider Secondary Practice Location Address-  Address Line 2',
+  city: 'Provider Secondary Practice Location Address - City Name',
+  state: 'Provider Secondary Practice Location Address - State Name',
+  postalCode: 'Provider Secondary Practice Location Address - Postal Code',
+  country: 'Provider Secondary Practice Location Address - Country Code (If outside U.S.)',
+});
+
 function increment(bucket, key, amount = 1) {
   bucket[key] = (bucket[key] || 0) + amount;
 }
@@ -89,7 +99,8 @@ function validateHeaders(headers) {
 }
 
 export async function profileNppesFile(filePath, options) {
-  const { freezeDate, manifestSha256, taxonomyFingerprint, transformVersion } = options;
+  const { freezeDate, manifestSha256, taxonomyFingerprint, transformVersion, secondaryPath } = options;
+  const maxCandidateFingerprints = options.maxCandidateFingerprints || MAX_CANDIDATE_FINGERPRINTS;
   const counts = {
     source_rows: 0,
     parsed_rows: 0,
@@ -97,6 +108,8 @@ export async function profileNppesFile(filePath, options) {
     candidate_locations: 0,
     excluded: 0,
     malformed: 0,
+    primary_source_rows: 0,
+    secondary_source_rows: 0,
   };
   const breakdowns = {
     modality: {}, state: {}, location_role: {}, exclusion_reason: {}, collision_class: {},
@@ -104,6 +117,7 @@ export async function profileNppesFile(filePath, options) {
   const organizations = new Set();
   const candidates = new Map();
   const observations = new Set();
+  const eligibleByNpi = new Map();
   let headerInfo;
 
   const parser = createReadStream(filePath).pipe(parse({
@@ -120,6 +134,7 @@ export async function profileNppesFile(filePath, options) {
   try {
     for await (const row of parser) {
       counts.source_rows += 1;
+      counts.primary_source_rows += 1;
       const taxonomyCodes = headerInfo.taxonomyColumns.map((column) => row[column]).filter(Boolean);
       const approvedCodes = [...new Set(taxonomyCodes.filter((code) => APPROVED_SEED_CODES.includes(code)))];
       let exclusionReason = null;
@@ -153,6 +168,7 @@ export async function profileNppesFile(filePath, options) {
       }
       observations.add(observationHash);
       const organizationHash = fingerprint('organization', [row[NPPES_COLUMNS.npi]]);
+      eligibleByNpi.set(organizationHash, approvedCodes);
       organizations.add(organizationHash);
       increment(breakdowns.state, address.state);
       increment(breakdowns.location_role, 'primary');
@@ -164,12 +180,49 @@ export async function profileNppesFile(filePath, options) {
         const prior = candidates.get(candidateHash);
         if (prior && prior !== organizationHash) increment(breakdowns.collision_class, 'multi_npi_same_candidate');
         candidates.set(candidateHash, prior || organizationHash);
-        if (candidates.size > MAX_CANDIDATE_FINGERPRINTS) throw new Error('Candidate fingerprint safety ceiling exceeded');
+        if (candidates.size > maxCandidateFingerprints) throw new Error('Candidate fingerprint safety ceiling exceeded');
       }
     }
   } catch (error) {
     if (error.code === 'CSV_RECORD_INCONSISTENT_COLUMNS') throw new Error('Malformed NPPES CSV row: inconsistent column count');
     throw error;
+  }
+
+  if (secondaryPath) {
+    const required = [SECONDARY_COLUMNS.npi, SECONDARY_COLUMNS.line1, SECONDARY_COLUMNS.city, SECONDARY_COLUMNS.state, SECONDARY_COLUMNS.postalCode];
+    const secondaryParser = createReadStream(secondaryPath).pipe(parse({
+      bom: true,
+      columns(headers) {
+        const missing = required.filter((name) => !headers.includes(name));
+        if (missing.length) throw new Error(`NPPES secondary source is missing required column(s): ${missing.join(', ')}`);
+        return headers;
+      },
+      relax_column_count: false, skip_empty_lines: true, trim: true,
+    }));
+    for await (const row of secondaryParser) {
+      counts.source_rows += 1;
+      counts.secondary_source_rows += 1;
+      const organizationHash = fingerprint('organization', [row[SECONDARY_COLUMNS.npi]]);
+      const approvedCodes = eligibleByNpi.get(organizationHash);
+      if (!approvedCodes) { counts.excluded += 1; increment(breakdowns.exclusion_reason, 'secondary_without_eligible_primary'); continue; }
+      const country = String(row[SECONDARY_COLUMNS.country] || 'US').trim().toUpperCase() || 'US';
+      const address = normalizeAddress({ line1: row[SECONDARY_COLUMNS.line1], line2: row[SECONDARY_COLUMNS.line2], city: row[SECONDARY_COLUMNS.city], state: row[SECONDARY_COLUMNS.state], postalCode: row[SECONDARY_COLUMNS.postalCode], country });
+      if (country !== 'US' || !address.complete) { counts.excluded += 1; increment(breakdowns.exclusion_reason, country !== 'US' ? 'non_us_location' : 'incomplete_address'); continue; }
+      const addressHash = addressFingerprint(address);
+      const observationHash = rowFingerprint({ npi: organizationHash, addressHash, taxonomyCodes: approvedCodes, locationRole: 'secondary' });
+      if (observations.has(observationHash)) { increment(breakdowns.collision_class, 'duplicate_observation'); continue; }
+      observations.add(observationHash);
+      counts.parsed_rows += 1;
+      increment(breakdowns.state, address.state); increment(breakdowns.location_role, 'secondary');
+      for (const code of approvedCodes) {
+        const modality = MODALITY[code]; increment(breakdowns.modality, modality);
+        const candidateHash = candidateFingerprint({ addressHash, modality });
+        const prior = candidates.get(candidateHash);
+        if (prior && prior !== organizationHash) increment(breakdowns.collision_class, 'multi_npi_same_candidate');
+        candidates.set(candidateHash, prior || organizationHash);
+        if (candidates.size > maxCandidateFingerprints) throw new Error('Candidate fingerprint safety ceiling exceeded');
+      }
+    }
   }
 
   counts.eligible_organizations = organizations.size;

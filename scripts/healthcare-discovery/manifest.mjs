@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const MANIFEST_VERSION = '1.0';
+export const MANIFEST_VERSION = '1.1';
 export const APPROVED_SEED_CODES = Object.freeze([
   '261QX0200X',
   '261QI0500X',
@@ -27,6 +27,7 @@ const PARAMETER_KEYS = new Set([
 ]);
 const OFFICIAL_SOURCE_HOSTS = Object.freeze({
   nppes_v2_monthly: new Set(['download.cms.gov']),
+  nppes_secondary_locations: new Set(['download.cms.gov']),
   nucc_taxonomy: new Set(['taxonomy.nucc.org', 'www.nucc.org']),
 });
 const HEX_64 = /^[a-f0-9]{64}$/;
@@ -52,7 +53,7 @@ export function assertManifestContract(value) {
     if (!Object.hasOwn(value, key)) throw new Error(`Missing manifest key: ${key}`);
   }
   if (value.manifest_version !== MANIFEST_VERSION) throw new Error('Unsupported manifest_version');
-  if (!Array.isArray(value.sources) || value.sources.length !== 2) throw new Error('Manifest requires two sources');
+  if (!Array.isArray(value.sources) || value.sources.length !== 3) throw new Error('Manifest requires three sources');
   assertIsoDate(value.freeze_date, 'freeze_date');
   if (!CLEAN_TRANSFORM.test(value.transform_version) || /^git:0{40}$/.test(value.transform_version)) {
     throw new Error('transform_version must be a non-placeholder git SHA');
@@ -78,8 +79,8 @@ export function assertManifestContract(value) {
       throw new Error(`${source.name}.header_sha256 is invalid or placeholder`);
     }
   }
-  if (names.size !== 2 || !names.has('nppes_v2_monthly') || !names.has('nucc_taxonomy')) {
-    throw new Error('Manifest must contain NPPES and NUCC sources');
+  if (names.size !== 3 || !names.has('nppes_v2_monthly') || !names.has('nppes_secondary_locations') || !names.has('nucc_taxonomy')) {
+    throw new Error('Manifest must contain primary NPPES, secondary-location NPPES, and NUCC sources');
   }
 
   assertExactKeys(value.parameters, PARAMETER_KEYS, 'parameter');
