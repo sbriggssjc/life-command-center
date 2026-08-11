@@ -21,6 +21,11 @@ scripts/availability-checker-samples.results.json
 # (linked project ref, CLI version cache) and shouldn't be in git.
 supabase/.temp/
 
+# Local production integration exports. Power Automate packages may contain
+# tenant, endpoint, connection-reference, or secret metadata. Keep the raw
+# packages beside the architecture docs for local AI review, but never commit.
+/private/power-automate/
+
 
 # QA-32: prevent truncation-investigation artifacts from leaking back
 audit/lcc-*-test*.txt
