@@ -22,6 +22,7 @@ import { authenticate } from './api/_shared/auth.js';
 import { opsQuery } from './api/_shared/ops-db.js';
 import { mountLccMcp } from './mcp/server.js';
 import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
+import { makeDealRosterRoute } from './mcp/deal-roster.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
 import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
 
@@ -70,6 +71,11 @@ const PRIMARY_WORKSPACE_ID =
   || 'a0000000-0000-0000-0000-000000000001';
 const enc = (v) => encodeURIComponent(String(v));
 const opportunitySyncRoutes = makeOpportunitySyncRoute({
+  opsQuery,
+  enc,
+  WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
+});
+const dealRosterRoutes = makeDealRosterRoute({
   opsQuery,
   enc,
   WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
@@ -328,6 +334,8 @@ app.all('/api/pipeline/match-deal-emails-cron', requireLccAuth(handleDealEmailMa
 app.all('/api/deal-comms-propagate-tick', requireLccAuth(handleDealCommsPropagateTick));
 app.post('/api/pipeline/ingest-opportunity', requireLccAuth(opportunitySyncRoutes.ingest));
 app.post('/api/pipeline/ingest-opportunities', requireLccAuth(opportunitySyncRoutes.ingestBatch));
+app.post('/api/pipeline/ingest-deal-parties', requireLccAuth(dealRosterRoutes.ingestParties));
+app.post('/api/pipeline/ingest-deal-contacts', requireLccAuth(dealRosterRoutes.ingestContactRoles));
 // SPEC Part B2 — external listing/property webpage crawl worker (cron:
 // lcc-listing-page-crawl every 30m via lcc_cron_post).
 app.all('/api/listing-page-crawl', (req, res) => handleListingPageCrawl(req, res));

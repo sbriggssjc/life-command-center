@@ -125,6 +125,11 @@ flows:
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-team-roster__SF-Deal-Team-LCC-Roster__9879c0fd-2dc0-4304-a82b-d68de3fcc991__2026-08-11.zip
     sha256: 89d62b1133c9ce99a9bbbaf082536c16832fdf2efca5b849797c93349c078930
     runbook: docs/os/architecture/deal-party-roster-source.md
+    route_triage_2026_08_11:
+      verified_from: retained_export_and_read_only_live_probe
+      exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-parties"
+      finding: "Alias host returned text/html 404 for /version and route probe; canonical host returned JSON 404 before route mount fix."
+      remediation: "After Railway deploy of server.js route mount, change flow host to tranquil-delight-production-633f.up.railway.app."
   - logical_id: sf-deal-contact-roster
     display_name: "SF Deal Contacts → LCC Roster"
     flow_guid: a50d3f56-3891-4d8f-8636-b9b09e58c2ee
@@ -138,6 +143,11 @@ flows:
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-contact-roster__SF-Deal-Contacts-LCC-Roster__a50d3f56-3891-4d8f-8636-b9b09e58c2ee__2026-08-11.zip
     sha256: ac2c177ffb4fa7f85ab8c5a03f588cb190e0bc7f389d336d6672e2dfcdf0eb1a
     runbook: docs/os/architecture/deal-party-roster-source.md
+    route_triage_2026_08_11:
+      verified_from: retained_export_and_read_only_live_probe
+      exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-contacts"
+      finding: "Alias host returned text/html 404 for /version and route probe; canonical host returned JSON 404 before route mount fix."
+      remediation: "After Railway deploy of server.js route mount, change flow host to tranquil-delight-production-633f.up.railway.app."
   - logical_id: sf-activity-sync
     display_name: "Sync SF Activities to Supabase"
     flow_guid: 2b145cca-031e-43ba-bf42-db976cf380ed
