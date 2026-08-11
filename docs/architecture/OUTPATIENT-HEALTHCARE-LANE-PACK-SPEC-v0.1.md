@@ -136,7 +136,9 @@ cannot support broker workflow or reporting.
 1. Name the business sponsor and select the oncology/infusion cohort.
 2. Approve the first controlled taxonomy values and ownership of taxonomy changes.
 3. Resolve the canonical LCC person/contact ID transition.
-4. Complete Salesforce describe metadata for the five mirrored object families and the activity/contact surfaces.
+4. Complete the Tier 1 Salesforce metadata supplement defined in
+   `SALESFORCE-METADATA-GAP-MATRIX-2026-08-11.md`; the retained schema catalog already covers object names,
+   field names/types and the core relationship graph.
 5. Classify the three potential duplicate/legacy Power Automate flows by GUID before cleanup.
 6. Complete the Power Automate security-remediation gate for embedded credentials and permissive request triggers.
 7. Decide the LCC-owned endpoint location for shared Salesforce file/object routing now hosted through specialty infrastructure.
@@ -146,3 +148,13 @@ cannot support broker workflow or reporting.
 The lane is operational only when its taxonomy, source adapters, contracts, review workflow, projections, tests,
 runbooks, authority assignments, security controls and cost measurements are all versioned in the LCC repository.
 Source code alone is not a completed lane pack.
+
+## 11. Linked next-stage specifications
+
+- `SALESFORCE-METADATA-GAP-MATRIX-2026-08-11.md` narrows the remaining Salesforce request to picklists,
+  record types, validation rules, writability and connection-user permissions.
+- `ONCOLOGY-INFUSION-PILOT-COHORT-SPEC-v0.1.md` defines the recommended 200-property cohort, scoring,
+  exception handling, review sample and read-only profiling step.
+- `ONCOLOGY-INFUSION-READ-ONLY-PROFILE-RESULT-2026-08-11.md` records the failed existing-source sufficiency gate.
+- `ONCOLOGY-INFUSION-NPPES-SOURCE-ADAPTER-SPEC-v0.1.md` defines the bounded national facility seed required
+  before cohort selection.
