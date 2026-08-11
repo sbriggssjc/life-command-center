@@ -2627,7 +2627,9 @@ function renderLeaseStructuresTab({ wb, tabName, chart, palette, fonts, subspeci
   sheet.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: navy } };
   sheet.getRow(1).height = 22;
 
-  sheet.getCell('A2').value = `Lease-structure distribution — three rolling-period windows (subspecialty=${subspecialty})`;
+  sheet.getCell('A2').value =
+    `New / new-replacing GSA lease commencements — pct_building >= 50; ` +
+    `three rolling-period windows (subspecialty=${subspecialty})`;
   sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
 
   // Build pivot: term_bucket → { current_quarter: {count, pct}, ttm: {...}, last_5_years: {...} }
@@ -2746,6 +2748,7 @@ function renderLeaseStructuresTab({ wb, tabName, chart, palette, fonts, subspeci
   const footRow = rowIdx + 1;
   sheet.getCell(`A${footRow}`).value =
     'Lease-structure distribution by term bucket across three rolling windows (current quarter / last 12 months / last 5 years). ' +
+    'Cohort is GSA latest_action New or New/Replacing with pct_building >= 50, to represent single-tenant or primarily GSA-tenanted assets. ' +
     'Bucket label format "X, Y" = X-year total term with Y-year firm period.';
   sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
   sheet.getCell(`A${footRow}`).alignment = { wrapText: true };

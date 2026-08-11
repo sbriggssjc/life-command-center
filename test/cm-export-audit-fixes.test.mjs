@@ -278,6 +278,28 @@ test('Data_Ask_Cap_by_Term n headers state the 24-mo distinct basis (item 4)', (
   assert.ok(!h.includes('12+ n'), 'bare "12+ n" header must be relabeled');
 });
 
+test('Data_Lease_Terms labels the gov majority-building new-commencement cohort', () => {
+  const charts = [{
+    chart_template_id: 'lease_structures',
+    name: 'Most Common Lease Structures',
+    chart_type: 'DataTable',
+    data_shape: 'lookup_table',
+    view_name: 'cm_gov_lease_structures',
+    vertical: 'gov',
+    rows: [
+      { period_label: 'current_quarter', term_bucket: '10, 5', bucket_count: 1, pct_of_total: 1 },
+      { period_label: 'ttm', term_bucket: '10, 5', bucket_count: 2, pct_of_total: 1 },
+      { period_label: 'last_5_years', term_bucket: '10, 5', bucket_count: 3, pct_of_total: 1 },
+    ],
+  }];
+  const wb = buildCapitalMarketsWorkbook({
+    vertical: 'gov', subspecialty: 'all', asOf: '2026-06-30', charts, brand: null,
+  });
+  const sheet = wb.getWorksheet('Data_Lease_Terms');
+  assert.match(String(sheet.getCell('A2').value), /New \/ new-replacing GSA lease commencements/);
+  assert.match(String(sheet.getCell('A2').value), /pct_building >= 50/);
+});
+
 test('Cover sheet carries the build-provenance stamp (item 5)', () => {
   const wb = buildCapitalMarketsWorkbook({
     vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts: [], brand: null,
