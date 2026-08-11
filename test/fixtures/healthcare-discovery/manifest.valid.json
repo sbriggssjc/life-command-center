@@ -1,24 +1,24 @@
 {
   "manifest_version": "1.0",
   "freeze_date": "2000-01-31",
-  "transform_version": "git:0000000000000000000000000000000000000000",
+  "transform_version": "git:1111111111111111111111111111111111111111",
   "sources": [
     {
       "name": "nppes_v2_monthly",
       "release_date": "2000-01-01",
-      "url": "https://download.cms.gov/synthetic-fixture",
-      "object_path": "test/fixtures/healthcare-discovery/nppes-v2-synthetic.csv",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "byte_size": 1,
-      "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      "url": "https://download.cms.gov/nppes/NPI_Files.html",
+      "object_path": "nppes-v2-synthetic.csv",
+      "sha256": "a66e2af21cff6396565b5b069ec360a60f2af36ee0e9a10ba6e16decb6bc1591",
+      "byte_size": 139,
+      "header_sha256": "f86439469b6b30a02f3f7a030ce25638e53fdb3d48a48776652b010eaeeb0f4c"
     },
     {
       "name": "nucc_taxonomy",
       "release_date": "2000-01-01",
-      "url": "https://taxonomy.nucc.org/synthetic-fixture",
-      "object_path": "test/fixtures/healthcare-discovery/nucc-synthetic.csv",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "byte_size": 1,
+      "url": "https://taxonomy.nucc.org/",
+      "object_path": "nucc-synthetic.csv",
+      "sha256": "d3a6197e3f85479a631d4808d73c28cd75dc57a8c0f24521302871991a8e7cec",
+      "byte_size": 509,
       "approved_seed_codes": ["261QX0200X", "261QI0500X", "261QX0203X"]
     }
   ],
