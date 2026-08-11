@@ -3200,7 +3200,7 @@ test('R73 D-#2: dom_and_pct_of_ask floors dia at 2016 when n_sales is dense', ()
   assert.equal(spec.spec.dataStart, 5 + 180, 'dia dom floors at first 2016 row');
 });
 
-test('gov dom_and_pct_of_ask uses verified 2011 floor when n_sales is absent', () => {
+test('dom_and_pct_of_ask uses neutral 2018 fallback when n_sales is absent', () => {
   const rows = mkRows(1997, 2026, 'avg_dom');
   for (const r of rows) r.pct_of_ask = 0.93;
   const spec = buildInjectionSpec({
@@ -3218,8 +3218,35 @@ test('gov dom_and_pct_of_ask uses verified 2011 floor when n_sales is absent', (
     rows,
     vertical: 'gov',
   });
+  // 1997-01 .. 2017-12 = 252 rows before 2018-01.
+  assert.equal(spec.spec.dataStart, 5 + 252, 'DOM/% ask falls back at first 2018 row without n_sales');
+});
+
+test('gov dom_and_pct_of_ask uses DB-backed n_sales density for the 2011 floor', () => {
+  const rows = mkRows(1997, 2026, 'avg_dom');
+  for (const r of rows) {
+    const year = Number(String(r.period_end).slice(0, 4));
+    r.pct_of_ask = 0.93;
+    r.n_sales = year < 2011 ? 12 : 15;
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask',
+    tabName: 'Data_DOM_Ask',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_dom',      col: 'C' },
+      { key: 'pct_of_ask',   col: 'D' },
+      { key: 'n_sales',      col: 'E' },
+    ],
+    dataStart: 5,
+    dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+    vertical: 'gov',
+  });
   // 1997-01 .. 2010-12 = 168 rows before 2011-01.
-  assert.equal(spec.spec.dataStart, 5 + 168, 'gov dom floors at first 2011 row');
+  assert.equal(spec.spec.dataStart, 5 + 168, 'gov DOM/% ask floors at first dense 2011 row');
 });
 
 test('R73 D-#12: bid_ask_spread floors gov at 2008 (first continuous Last-Ask), dia self-floors later', () => {

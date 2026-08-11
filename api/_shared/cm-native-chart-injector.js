@@ -3555,15 +3555,11 @@ const MIN_YEAR_BY_TEMPLATE = {
   // after the n>=10 gate; deck's DOM chart also starts 2018. With the gate+smoothing
   // the 2018+ window lands DOM 168-290 (0-300 axis) / % ask 86.9-95.8% (84-96% axis).
   // R73 D-list — dom_and_pct_of_ask was a static 2018 for both verticals.
-  // Now per-vertical density-gated: dia carries n_sales (TTM) per row, so the
-  // floor drops to the first year with 4 consecutive months of n>=15 — dia
-  // reaches 2016 (n 14/16/30 in 2015/16/17; 2014 n=10 + 2013 4-mo partial held
-  // back as the thin edge). R74 gov audit (2026-08-11): the live gov view still
-  // has no n_sales column, but source sales density supports a 2011 floor
-  // (minimum TTM samples in every 2011 month: DOM 25, % ask 15). Use that only
-  // for gov fallback; views with n_sales still self-floor from the data.
-  dom_and_pct_of_ask:           (rows, ctx) => findFirstDenseYear(rows, 'n_sales', 15) ?? (String(ctx?.vertical || '').toLowerCase() === 'gov' ? 2011 : 2018),
-  dom_and_pct_of_ask_monthly:   (rows, ctx) => findFirstDenseYear(rows, 'n_sales', 15) ?? (String(ctx?.vertical || '').toLowerCase() === 'gov' ? 2011 : 2018),
+  // Now density-gated where the source exposes n_sales (TTM). Gov's 2011 floor
+  // moved into cm_view_registry + cm_gov_dom_pct_ask_m/_q n_sales, so there is
+  // no hidden gov-only code fallback here anymore.
+  dom_and_pct_of_ask:           (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
+  dom_and_pct_of_ask_monthly:   (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
   // R73 D-#12 — per-vertical bid-ask floor. The view has no sample-count
   // column, but a real Last-Ask cap (~0.05-0.10) is only present once listing/
   // ask data begins, so "4 consecutive months of a non-null avg_last_ask_cap"
