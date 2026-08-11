@@ -8,9 +8,9 @@
       "release_date": "2000-01-01",
       "url": "https://download.cms.gov/nppes/NPI_Files.html",
       "object_path": "nppes-v2-synthetic.csv",
-      "sha256": "a66e2af21cff6396565b5b069ec360a60f2af36ee0e9a10ba6e16decb6bc1591",
-      "byte_size": 139,
-      "header_sha256": "f86439469b6b30a02f3f7a030ce25638e53fdb3d48a48776652b010eaeeb0f4c"
+      "sha256": "f04bc006b9796dcbfc2291b02f77ff6af000ace80b9bee0b4539efe3c4c25290",
+      "byte_size": 1064,
+      "header_sha256": "5bbb6fbe13d24e02fcf654cabecf7f87a8757b06552667e79cc7063bd92af7e3"
     },
     {
       "name": "nucc_taxonomy",
