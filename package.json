@@ -30,7 +30,8 @@
     "healthcare:nppes:sample": "node scripts/healthcare-discovery/cli.mjs sample",
     "healthcare:nppes:verify": "node scripts/healthcare-discovery/cli.mjs verify",
     "healthcare:lane:profile": "node scripts/healthcare-discovery/lane-profile-cli.mjs",
-    "healthcare:property-review:test": "node --test test/healthcare-property-review.test.mjs"
+    "healthcare:property-review:test": "node --test test/healthcare-property-review.test.mjs",
+    "healthcare:run-authorization:test": "node --test test/healthcare-run-authorization.test.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

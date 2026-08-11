@@ -124,8 +124,9 @@ are now implemented. The review contract freezes ordered strata, deterministic s
 coverage, research minutes, Wilson intervals, and all five hard-gate calculations. It does not turn source
 coverage into a brokerage inference; the gates remain unresolved until a governed property review is completed.
 
-The next checkpoint should define the private release/run authorization packet and frozen reviewer evidence
-dictionary without downloading data. That packet must identify exact official artifacts, release dates and
-checksums, private storage target, reviewer roles, second-review triggers, row-level retention, privacy receipt,
-and the stop conditions for each lane. Do not download an official release or draw either 50-property sample
-until that packet has been reviewed and separately authorized.
+The private release/run authorization contract and frozen reviewer evidence dictionary are now implemented in
+`HEALTHCARE-ASC-IDTF-PRIVATE-RUN-AUTHORIZATION-v0.1.md`, with a fail-closed synthetic validator and aggregate
+receipt. The next checkpoint is preparation of separate real ASC and fixed-site IDTF packets: identify the exact
+official artifacts, stage them privately, independently verify release metadata and checksums, and leave both
+packets `draft_unapproved` for review. Do not draw either 50-property sample until its packet receives separate
+execution authorization.
