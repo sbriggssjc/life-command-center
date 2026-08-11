@@ -52,6 +52,7 @@ import { isMisparseName, planContactMinting } from '../_shared/tm-misparse.js';
 import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 export { deriveListingDate };
 import { cleanLenderName } from '../_shared/lender-name.js';
+import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -1210,6 +1211,43 @@ function selectPrimaryTenant(metadata, domain) {
     || unwrapTenantValue(metadata.tenant_name)
     || extractTenantFromSalesHistoryComments(metadata.sales_history)
     || null;
+}
+
+function tenantNamesFromMetadata(metadata = {}) {
+  const names = [];
+  const push = (v) => {
+    const name = unwrapTenantValue(v);
+    if (name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+  };
+  push(metadata.tenant_name);
+  push(metadata.primary_tenant);
+  if (Array.isArray(metadata.tenants)) {
+    for (const t of metadata.tenants) {
+      if (t && typeof t === 'object') push(t.name);
+      else push(t);
+    }
+  }
+  return names;
+}
+
+function deriveGovCreditForMetadata(metadata = {}, extra = {}) {
+  return deriveGovernmentCreditTier({
+    government_type: metadata.government_type,
+    agency: metadata.agency,
+    agency_full_name: metadata.agency_full_name,
+    tenant_name: metadata.tenant_name,
+    primary_tenant: metadata.primary_tenant,
+    tenantNames: tenantNamesFromMetadata(metadata),
+    sale_notes_raw: metadata.sale_notes_raw,
+    saleNotes: Array.isArray(metadata.sales_history)
+      ? metadata.sales_history
+          .map((s) => s && (s.sale_notes_raw || s.comments || s.notes))
+          .filter(Boolean)
+      : null,
+    source_text: metadata.marketing_description || metadata.description || null,
+    lease_number: metadata.lease_number,
+    ...extra,
+  });
 }
 
 // ── Junk tenant filter (module-level; shared by the leases writer and the
@@ -4185,6 +4223,13 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   const primaryTenant = (rawTenant && rawTenant.length > 2 && !INVALID_TENANT_VALUES.test(rawTenant))
     ? canonicalizeTenant(cleanTenantValue(rawTenant))
     : null;
+  const govCredit = domain === 'government'
+    ? deriveGovCreditForMetadata(metadata, {
+        agency: primaryTenant || metadata.agency || null,
+        agency_full_name: primaryTenant || metadata.agency_full_name || null,
+      })
+    : null;
+  const derivedGovType = govCredit?.primaryType || null;
   // Round 76ek.i: filter out federal-government anti-pattern owner candidates
   // when a private alternative exists (e.g. CoStar surfacing "U S A" because
   // ICE has personal property recorded at the address — not the real owner).
@@ -4193,7 +4238,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   // (means there was no private alternative; the data may need manual review).
   if (ownerContact && isFederalOwnerAntiPattern(ownerContact.name)) {
     console.warn(
-      `[upsertDomainProperty] property ${propertyId || '<new>'} ` +
+      '[upsertDomainProperty] ' +
       `recorded_owner_name="${ownerContact.name}" — federal anti-pattern accepted ` +
       `(no private alternative). Verify this is actually federally-owned.`
     );
@@ -4351,6 +4396,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
       sf_leased:         isHistoricalCompCapture ? null : parseSF(metadata.sf_leased),
       agency:            isHistoricalCompCapture ? null : (primaryTenant || null),
       agency_full_name:  isHistoricalCompCapture ? null : (primaryTenant || null),
+      government_type:   isHistoricalCompCapture ? null : derivedGovType,
       // Mirror latest deed / sale from sales_history — these columns live
       // on the gov properties row independently of sales_transactions.
       latest_deed_date:  latestDeedDate,
@@ -6110,6 +6156,16 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const govSaleNotesFields = (domain === 'government' && isMostRecentSale)
       ? govSaleNotesTermFields(saleNotesExtracted)
       : {};
+    const govCreditForSale = domain === 'government'
+      ? deriveGovCreditForMetadata(metadata, {
+          agency: primaryTenant || metadata.agency || null,
+          agency_full_name: metadata.agency_full_name || primaryTenant || null,
+          tenant_name: primaryTenant || metadata.tenant_name || null,
+          sale_notes_raw: sale.sale_notes_raw || saleNotesRaw || null,
+          saleNotes: [sale.comments, sale.notes, sale.sale_notes_extracted, saleNotesRaw].filter(Boolean),
+        })
+      : null;
+    const govTypeForSale = govCreditForSale?.primaryType || null;
 
     const domainSaleFields = domain === 'government'
       ? {
@@ -6122,7 +6178,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           city:             entity.city    || null,
           state:            entity.state   || null,
           agency:           primaryTenant  || null,
-          government_type:  metadata.government_type || null,
+          government_type:  govTypeForSale,
           // Compute sold_price_psf when both price and SF are known.
           // QA1: a nulled portfolio-aggregate price yields no per-SF figure.
           sold_price_psf:   (writeSoldPrice && parsedSF && parsedSF > 0)
@@ -10309,13 +10365,17 @@ async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
   const rentPsf     = parseCurrency(metadata.rent_per_sf);
   const commence    = parseDate(metadata.lease_commencement)?.split('T')[0] || null;
   const expire      = parseDate(metadata.lease_expiration)?.split('T')[0] || null;
-  const govType     = metadata.government_type || null;
   const expense     = metadata.expense_structure || metadata.lease_type || null;
   const renewal     = metadata.renewal_options || null;
 
   let writes = 0;
   for (const t of tenantInputs) {
     const tenantAgency = t.name;
+    const govType = deriveGovCreditForMetadata(metadata, {
+      agency: tenantAgency,
+      agency_full_name: tenantAgency,
+      tenant_name: tenantAgency,
+    }).primaryType;
 
     // Look up an existing costar_sidebar-sourced row keyed on
     // (property_id, data_source='costar_sidebar', tenant_agency,

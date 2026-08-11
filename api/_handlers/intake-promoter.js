@@ -50,6 +50,7 @@ import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { registerCreProperty } from '../_shared/cre-registry.js';
+import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
 import {
   LISTING_DOCUMENT_TYPES,
   isExplicitNonListingType,
@@ -61,6 +62,17 @@ import {
 } from '../_shared/intake-classify.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
+
+function deriveGovTypeFromSnapshot(snapshot = {}) {
+  return deriveGovernmentCreditTier({
+    government_type: snapshot.government_type || snapshot.credit_tier || null,
+    agency: firstOf(snapshot.tenant_agency) || firstOf(snapshot.tenant_name) || null,
+    agency_full_name: snapshot.agency_full_name || null,
+    tenant_name: snapshot.tenant_name || null,
+    primary_tenant: snapshot.primary_tenant || null,
+    source_text: snapshot.government_type_evidence || snapshot.confidence_notes || null,
+  }).primaryType;
+}
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.1, 2026-04-25)
@@ -1239,7 +1251,7 @@ async function promoteProspectLead(domain, propertyId, snapshot, match, listingI
   const fields = {
     tenant_agency:        firstOf(snapshot.tenant_agency) || firstOf(snapshot.tenant_name) || null,
     agency_full_name:     snapshot.agency_full_name || null,
-    government_type:      snapshot.government_type || 'federal',
+    government_type:      deriveGovTypeFromSnapshot(snapshot),
     source_listing_id:    listingId || null,
     listing_status:       'active',
     listing_date:         snapshot.listing_date || today,

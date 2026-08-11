@@ -36,6 +36,10 @@ export const EXTRACTION_SCHEMA_KEYS = [
   'zip_code',
   'tenant_name',
   'tenant_guarantor',
+  'agency_full_name',
+  'government_type',
+  'credit_tier',
+  'government_type_evidence',
   'property_type',
   'building_sf',
   'lot_sf',
@@ -213,6 +217,9 @@ FIELD NOTES
 - "noi": the IN-PLACE / current net operating income the document states (number only).
 - "cap_rate": the current/asking cap (decimal fraction).
 - "financial_projections": if the document tabulates a MULTI-YEAR rent/expense/NOI schedule, return a JSON array [{"year": 2025, "gross_rent": null, "expenses": null, "noi": null}, …], numbers only, null per-field when not stated. Return null (not []) when there is no multi-year schedule. Do NOT fabricate or interpolate years — include only years explicitly tabulated.
+- "agency_full_name": for government leases, the full tenant agency name as stated. Otherwise null.
+- "government_type" / "credit_tier": for government leases only, return "federal", "state", or "municipal" when explicitly stated or clearly derivable from agency text (examples: GSA/US/VA/FBI = federal; State of/Texas Dept/TX Health and Human Services = state; City of/County of/School District/Municipal Utility District = municipal). If multiple government tenants from different buckets are present, return a JSON array of the bucket names. If unclear, return null. Do not default to federal.
+- "government_type_evidence": the short source phrase that supports "government_type" / "credit_tier", or null.
 - Responsibility fields ("roof_responsibility", "hvac_responsibility", "structure_responsibility", "parking_responsibility"): return "tenant", "landlord", or "shared" from the lease language (keywords: repair/replace/maintain/responsible near roof / HVAC-heating-cooling / structural-foundation-walls / parking-lot-striping). In an OM these live in the lease-abstract section. Return null only when the document truly does not state responsibility — do NOT drop these keys.
 - "confidence_notes": a short free-text note on anything ambiguous or low-confidence (or null).`;
 }

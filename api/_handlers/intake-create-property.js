@@ -163,6 +163,8 @@ export async function createPropertyFromIntake(intakeId, ctx = {}) {
       zip_code:           snapshot.zip_code || null,
       tenant_name:        tenant,
       primary_tenant:     tenant,
+      agency_full_name:   snapshot.agency_full_name || tenant || null,
+      government_type:    snapshot.government_type || snapshot.credit_tier || null,
       square_footage:     snapshot.building_sf || null,
       sf_leased:          snapshot.sf_leased || null,
       year_built:         snapshot.year_built || null,
@@ -191,7 +193,7 @@ export async function createPropertyFromIntake(intakeId, ctx = {}) {
     out.created.push({ address: pair.address, domain, property_id: String(propertyId), ok: true });
 
     const provFields = domain === 'government'
-      ? { address: pair.address, city: snapshot.city || null, state, agency: tenant, rba: snapshot.building_sf || null }
+      ? { address: pair.address, city: snapshot.city || null, state, agency: tenant, government_type: snapshot.government_type || snapshot.credit_tier || null, rba: snapshot.building_sf || null }
       : { address: pair.address, city: snapshot.city || null, state, tenant, building_size: snapshot.building_sf || null };
     await recordCreateProvenance(
       { workspaceId, intakeId, domain, propertyId, actorId: ctx.actorId || null },
