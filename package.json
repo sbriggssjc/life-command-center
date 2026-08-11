@@ -22,7 +22,13 @@
     "test": "node --test test/*.test.js test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.js test/*.test.mjs",
     "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs",
-    "spec:chatgpt": "node scripts/generate-chatgpt-spec.mjs"
+    "spec:chatgpt": "node scripts/generate-chatgpt-spec.mjs",
+    "healthcare:nppes:manifest": "node scripts/healthcare-discovery/cli.mjs manifest",
+    "healthcare:nppes:validate": "node scripts/healthcare-discovery/cli.mjs validate",
+    "healthcare:nppes:profile": "node scripts/healthcare-discovery/cli.mjs profile",
+    "healthcare:nppes:load": "node scripts/healthcare-discovery/cli.mjs load",
+    "healthcare:nppes:sample": "node scripts/healthcare-discovery/cli.mjs sample",
+    "healthcare:nppes:verify": "node scripts/healthcare-discovery/cli.mjs verify"
   },
   "engines": {
     "node": ">=20.0.0"

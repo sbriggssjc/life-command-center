@@ -1,0 +1,33 @@
+{
+  "manifest_version": "1.0",
+  "freeze_date": "2000-01-31",
+  "transform_version": "git:0000000000000000000000000000000000000000",
+  "sources": [
+    {
+      "name": "nppes_v2_monthly",
+      "release_date": "2000-01-01",
+      "url": "https://download.cms.gov/synthetic-fixture",
+      "object_path": "test/fixtures/healthcare-discovery/nppes-v2-synthetic.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "byte_size": 1,
+      "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "nucc_taxonomy",
+      "release_date": "2000-01-01",
+      "url": "https://taxonomy.nucc.org/synthetic-fixture",
+      "object_path": "test/fixtures/healthcare-discovery/nucc-synthetic.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "byte_size": 1,
+      "approved_seed_codes": ["261QX0200X", "261QI0500X", "261QX0203X"]
+    }
+  ],
+  "parameters": {
+    "entity_type_code": 2,
+    "country_code": "US",
+    "include_deactivated": false,
+    "candidate_minimum": 400,
+    "sample_size": 50,
+    "random_seed": 0
+  }
+}

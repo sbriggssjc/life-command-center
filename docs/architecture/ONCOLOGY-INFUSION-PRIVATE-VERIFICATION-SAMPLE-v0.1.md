@@ -35,6 +35,13 @@ For each candidate record:
 - check closure/relocation conflicts and radiation-license evidence when applicable;
 - adjudicate LCC property resolution as correct, incorrect, ambiguous or no match;
 - assign error labels and a concise disposition note.
+- classify real-estate form as `stnl_confirmed`, `dominant_user_confirmed`, `dominant_user_probable`,
+  `minority_mob`, `health_system_campus`, `operator_owned` or `unknown_form`;
+- record building RBA, user occupied SF, denominator type, evidence tier and calculated healthcare-user share;
+- resolve record owner, true owner/sponsor, operator affiliation and third-party-landlord addressability;
+- inventory available volume, capacity, reimbursement, revenue, profit, rent and coverage evidence without
+  fabricating missing values; and
+- record research minutes for clinical, property, ownership and economics review separately.
 
 Two reviewers independently inspect the 10 highest-risk records. Disagreements remain `needs_review` until
 resolved; they are not averaged away.
@@ -49,6 +56,10 @@ Report Wilson 95% confidence intervals alongside point estimates for:
 - unique property-resolution precision;
 - correct operator/parent role mapping;
 - physician-office, hospital-campus, duplicate and stale-address error rates.
+- STNL/dominant-user/minority-MOB/campus/operator-owned distribution;
+- third-party-landlord addressability among qualifying real estate;
+- bounded economics-model coverage and source confidence; and
+- median and 90th-percentile research minutes by review family.
 
 ## 5. Pass/fail gates
 
@@ -60,6 +71,13 @@ Proceed to a larger non-production discovery run only when:
 - zero ambiguous matches were automatically promoted;
 - every `service_corroborated` row has a qualifying source and retrieval date;
 - no systematic cell falls below 80% precision without a documented rule change and retest.
+- property form is classifiable for at least 80% of the sample;
+- at least 50% of classifiable facilities are confirmed STNL or confirmed dominant-user assets;
+- at least 60% of qualifying assets have a confirmed or probably resolvable third-party landlord path; and
+- at least 50% of qualifying assets support a bounded low/base/high facility-economics model.
+
+The last four are business-feasibility gates, not clinical-source-quality gates. Report them separately so a
+clinically valid lane can be narrowed, repositioned or rejected without corrupting the discovery assessment.
 
 Failing a gate changes the taxonomy, normalization, corroboration or matching rule first. Do not solve a
 quality failure by silently dropping difficult geographies or operators.
