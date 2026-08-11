@@ -1,6 +1,9 @@
+Warning: truncated output (original token count: 28319)
+Total output lines: 1037
+
 # Power Automate Flow Changes Log
 
-Last updated: 2026-05-14
+Last updated: 2026-08-11
 Purpose: authoritative ledger of flow changes, risks, validation evidence, and rollback notes.
 
 ## Required Entry Fields
@@ -336,7 +339,7 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   ```
 - Affected endpoints/tables/connectors:
   - No new endpoint coupling. Existing endpoints kept: `/api/prepare-upload`, Supabase Storage PUT, `/api/stage-om`, `/api/intake-extract`.
-  - X-LCC-Key plaintext exposure noted in run header (`2e046e98d331df549b23a8f15a5a07de7ab16737c5...` truncated) — folded into Task 8 for secret rotation post-promote.
+  - X-LCC-Key plaintext exposure noted in run header (`[REDACTED]`) — folded into Task 8 for secret rotation post-promote.
 - Security impact: None new. Pre-existing X-LCC-Key plaintext-in-run-history finding documented for rotation phase.
 - Validation evidence:
   - Failed prod run inspected: `08584242178017804502392990635CU06` (Apr 28 2026, 10:11 AM Local) — Call extract returned 400, URI evaluated to `?intake_id=` with empty value.
@@ -527,243 +530,7 @@ Purpose: authoritative ledger of flow changes, risks, validation evidence, and r
   - **Both business flows are healthy** as of May 13. Both showed 10+ consecutive Succeeded runs on May 13 03:13-03:58 PM with sub-second durations. The 36 historical failures (20+16) are no longer recurring; they were apparently a brief transient that self-resolved (likely a temporary Microsoft To-Do connector issue).
   - The root issue surfaced by the audit doc — duplicate variant drift — is real: **both flows fire on the same `When an email is flagged (V3)` trigger AND both write to the same Microsoft To-Do list ("Flagged Emails")**. Every flagged email therefore produced 2 ToDo tasks.
 - Field-by-field comparison (proves Flow 1 is strictly superior):
-  - To-do List: same ("Flagged Emails") in both.
-  - Title: Subject in both.
-  - Due Date: Flow 1 has `addDays(...)` dynamic; Flow 2 is empty.
-  - Importance: Flow 1 has `if(...)` mapped from email importance; Flow 2 hardcodes `high` (every task arrives as "high" — degrades the priority signal).
-  - Status: Flow 1 sets `notStarted`; Flow 2 leaves blank.
-  - Body Content: Flow 1 structured (From/Received/Preview); Flow 2 is a single `concat(...)` blob.
-- Action taken: turned `Flagged Email to To Do Task` to **Off** via the flow detail page's ... menu → Turn off. No definitions modified.
-- Validation: 
-  - The next flagged email will fire only Flow 1 (canonical), producing a single rich ToDo task in "Flagged Emails" list.
-  - Reversible — the disabled flow's definition is intact; Turn on again from the same menu if needed.
-- Affected endpoints/tables/connectors:
-  - Office 365 Outlook (`When an email is flagged (V3)` trigger) — unchanged.
-  - Microsoft To-Do `Add a to-do (V3)` action — only Flow 1 calls it now.
-- Security impact: none.
-- Rollback action:
-  - Navigate to flow detail page for `Flagged Email to To Do Task` (Flow ID `2116af42-659e-416b-bce6-1d74e8daa480`), open ... menu, click `Turn on`. Restores duplicate-task behavior.
-- Architectural notes:
-  - The lean Flow 2 was clearly a template that never got upgraded. Recommend a quarterly "duplicate variant sweep" pass to catch similar leftovers across the portfolio.
-- Owner: LCC architecture/audit track (Scott Briggs).
-
-## Task #5 Summary (Flagged-Email-to-ToDo Variant Consolidation)
-- Original framing: 3 overlapping flagged-email-to-ToDo flows; ~36 failures across 2 of them per the 2026-05-06 alert.
-- Diagnostic finding 2026-05-13: both business-side flows ARE healthy now; the failures self-resolved. The actual remaining issue is **duplicate task creation** — both fire on the same trigger and write to the same Microsoft To-Do list, producing 2 ToDo tasks per flagged email.
-- Repair: turned off `Flagged Email to To Do Task` (Flow ID `2116af42-...`). Kept `Flagged Email to To Do` (Flow ID `9071662c-...`) as canonical — has Due Date, dynamic Importance, structured Body, Status=notStarted. Kept `Flagged Personal Email to To Do` untouched (different mailbox scope).
-- Validation: deferred to next organic flagged-email event; rollback is a single click.
-- Documentation: this changes-log entry; main audit doc status updates.
-
-### 2026-05-13 — HTTP-Switch SOQL Injection Finding (Task #6, DIAGNOSED — fix deferred)
-- Flow name: `Http -> Switch,Get Account records,Respond (account),Get Contact re...`
-- Flow ID: `c3744e93-5e95-4b6f-a839-d4308389d21f`
-- Current status: Active, intermittently failing (~4 failures/hour mixed with successes as of 2026-05-13 evening).
-- Risk tier: **P0 security finding** (SOQL injection) + ongoing P1 availability impact.
-- Root cause (confirmed 2026-05-13 from prod run `08584228893996009240717504805CU28`):
-  - Failed action: `SoqlAccount` (Switch action's Case 1, routed when `operation == 'find_account_by_name'`).
-  - Full Salesforce error: `Salesforce failed to complete task: Message: Group Pinnacle Fin'l Partners ($1.7m alloc'd)%' ORDER BY Name ^ ERROR at Row:1:Column:114 unexpected token: '$'`.
-  - **The flow's SOQL query is constructed by concatenating the user-supplied account name directly into a `WHERE Name LIKE '...'` clause**. When the name contains a single quote (e.g., `Pinnacle Fin'l Partners`), the SOQL string terminates prematurely. The subsequent `$1.7m alloc'd)%'` characters then parse as unexpected SOQL tokens, causing a syntax error.
-  - This is a **SOQL injection vulnerability**: a maliciously-crafted account name could escape the WHERE clause and read/modify other Salesforce records (e.g., `Acme' OR Id != null OR Name LIKE 'x` would return every Account).
-- Why this is intermittent: most account names don't contain `'` or `$`, so the flow succeeds. But CRE deal account names frequently contain apostrophes (`Fin'l`, `O'Neill`, etc.) and dollar signs (`($1.7m alloc'd)`), so failures cluster around real-world client names.
-- Fix design (deferred to next session for careful application):
-  1. In each Switch case branch that builds a SOQL query (likely Case 1: SoqlAccount, Case 2: probably SoqlContact, and any other lookup cases), insert a Compose action upstream that does `replace(triggerBody()?['accountName'], '''', '\\''')` — replacing every single-quote with backslash-single-quote (Salesforce SOQL's escape syntax).
-  2. Also escape `\\` itself (because `\\` becomes `\\\\` in SOQL strings — backslash needs escaping too).
-  3. Alternatively, switch from raw `SoqlAccount` to the connector's "Get records" action which uses parameterized filter expressions and handles escaping safely.
-  4. Test with names: `Apostrophe's Co`, `Big$ Holdings LLC`, `Group Pinnacle Fin'l Partners ($1.7m alloc'd)`, normal `Apple Inc`. All should succeed.
-- Why deferred: this is a security-sensitive fix that deserves careful, fresh-eyes engineering rather than late-session haste. The flow is still mostly working for normal account names. The proper fix path is straightforward but takes ~45 min including careful testing across the Switch's multiple cases.
-- Affected endpoints/tables/connectors: Salesforce connector (`shared_salesforce`), `Account` and `Contact` objects (and possibly others — need to inspect all Switch cases).
-- Pre-existing P1 governance work folded into this task: schema validation, request auth, and audit/correlation tracking on the SF mutation flows (`CompleteSFTask`, `GovLeaseLeadSync`, `LogActivitytoSFfromLCC`) was the original scope of Task #6. That work is also deferred to the next session — diagnostic-first inspection should confirm those flows are also affected by SOQL escaping in their lookup steps before adding new governance layers.
-- Owner: LCC architecture/audit track (Scott Briggs). Next session priority.
-
-### 2026-05-13 — HTTP-Switch SOQL Fix Attempt (Task #6, blocked at editor input — no prod state changed)
-- Flow: HTTP-Switch (`c3744e93-5e95-4b6f-a839-d4308389d21f`).
-- Attempted fix: wrap `triggerBody()?['value']` with `replace(..., '''', '\'''')` inline in the SoqlAccount action's SOQL Query field.
-- Blocker encountered: the new designer's expression editor (Monaco) auto-completes opening characters with closing characters and double-quote escaping interacts badly with backslash-quote literals. Each attempt produced extra trailing `'` and `)` characters that PA's expression parser rejected with "This expression has a problem."
-- Tried variants:
-  1. `replace(triggerBody()?['value'], '''', '\''')` — auto-complete added `)` (rejected)
-  2. `replace(triggerBody()?['value'],'''','\''')` (no spaces) — same auto-complete issue
-  3. `replace(triggerBody()?['value'],'''',concat('\',''''))` — Monaco split the literal across lines, adding stray chars
-- Resolution: removed all draft edits via multiple Ctrl+Z presses, then navigated away from the editor without saving. Verified the prod definition's `Modified` timestamp is unchanged (Apr 23 08:42 AM) — the flow is in the same state as before the attempt.
-- Recommended path for next session:
-  1. **Compose-action approach**: insert a `Compose` action between the Switch trigger evaluation and SoqlAccount. The Compose's Inputs field is a clean text/expression area with no surrounding string context, so Monaco's auto-completion behaves better.
-  2. In the Compose, set Inputs to: `replace(triggerBody()?['value'], '''', concat('\', ''''))`. Test by saving the action (PA will validate the expression).
-  3. Rename the Compose to `EscapeAccountName` for readability.
-  4. In SoqlAccount's SOQL Query, replace the `triggerBody()?['value']` chip with a Dynamic content reference to `outputs('EscapeAccountName')`.
-  5. Repeat the Compose-and-replace pattern for SoqlContact (Case 2) using `EscapeContactName`.
-  6. Save the whole flow. Test with a real account name containing a `'` (e.g., `Group Pinnacle Fin'l Partners`).
-- Pre-existing P1 governance work for SF mutation flows (CompleteSFTask, GovLeaseLeadSync, LogActivitytoSFfromLCC) — schema/auth/audit controls — was the second half of Task #6's original scope and is also deferred to the next session.
-- Owner: LCC architecture/audit track (Scott Briggs). Top priority for next session.
-
-### 2026-05-13 — HTTP-Switch SOQL Injection FIXED + VALIDATED (Task #6, SOQL portion COMPLETE)
-- Flow name: `Http -> Switch,Get Account records,Respond (account),Get Contact re...`
-- Flow ID: `c3744e93-5e95-4b6f-a839-d4308389d21f`
-- Status: Active, On throughout the change (HTTP-triggered flow, never disabled).
-- Risk tier: **P0 security (SOQL injection) + P1 availability** — both closed by this change.
-- Change summary: closed the SOQL injection vulnerability in both `SoqlAccount` (Case 1) and `SoqlContact` (Case 2) by inserting an escape-Compose action ahead of each SOQL query and re-pointing the queries at the escaped value.
-- Exact steps performed:
-  1. **Case 1**: inserted a `Compose` action between Case 1's start and `SoqlAccount`, renamed to `EscapeAccountName`. Set its Inputs to the expression `replace(triggerBody()?['value'], '''', concat(uriComponentToString('%5C'), ''''))`.
-  2. Edited `SoqlAccount`'s SOQL Query: removed the raw `triggerBody()?['value']` chip and rebuilt the query as `SELECT Id, Name, Type, Industry FROM Account WHERE Name LIKE '%` + `outputs('EscapeAccountName')` chip + `%' ORDER BY Name LIMIT 50`.
-  3. Saved (checkpoint).
-  4. **Case 2**: inserted a `Compose` action between Case 2's start and `SoqlContact`, renamed to `EscapeContactEmail`. Same Inputs expression as step 1.
-  5. Edited `SoqlContact`'s SOQL Query: removed the raw `value` chip and rebuilt as `SELECT Id, Name, Email, AccountId, Title FROM Contact WHERE Email = '` + `outputs('EscapeContactEmail')` chip + `' LIMIT 2`.
-  6. Saved. Banner: "Your flow is ready to go."
-- The escape expression explained:
-  - `replace(triggerBody()?['value'], '''', concat(uriComponentToString('%5C'), ''''))`
-  - `''''` (4 quotes in PA expression source) = a single literal `'` character — the search target.
-  - `concat(uriComponentToString('%5C'), '''')` = `\` + `'` = the SOQL-escaped form `\'`.
-  - `uriComponentToString('%5C')` is the workaround for producing a literal backslash. **PA's expression language cannot cleanly represent a lone backslash in a single-quoted string literal** — `'\'` is parsed ambiguously and PA rejects it. `%5C` is the URL-encoding of backslash; `uriComponentToString` decodes it to a real `\` without any backslash appearing in a literal. (This was the editor blocker from the earlier 2026-05-13 attempt; the uriComponentToString form is what PA accepts.)
-  - Net effect: every `'` in the user-supplied value becomes `\'` before it's interpolated into the SOQL string literal. Salesforce treats it as a literal apostrophe inside the search text rather than a string terminator.
-- Editor mechanics note: PA's new-designer Monaco expression editor adds spurious closing chars when you TYPE backslash/quote-heavy expressions. The reliable method (used here): set the OS clipboard via `navigator.clipboard.writeText(...)` from a JS console call, then Ctrl+A / Delete / Ctrl+V in the expression textbox. Paste bypasses the keystroke auto-completion entirely.
-- Validation evidence (live, against real Salesforce):
-  - POSTed to the flow's HTTP trigger: `{"operation": "find_account_by_name", "value": "Test O'Brien Holdings ($1.2m alloc'd)"}` — contains 2 apostrophes and a `$`, the exact character set that caused the original `unexpected token: '$'` failure.
-  - Response: **HTTP 200**, body `{"ok":true,"operation":"find_account_by_name","candidates":[],"total_matches":0,"reason":"no_match"}`, duration 1211 ms.
-  - Pre-fix behaviour on the same payload: `SoqlAccount` failed with `Salesforce failed to complete task: ... unexpected token: '$'`.
-  - Post-fix: Salesforce parsed the escaped SOQL correctly, ran the query, and returned a clean no-match result (correct — the test account name doesn't exist). The flow no longer fails on special-character names, and injection attempts (e.g. `x' OR Id != null OR Name LIKE 'y`) are now neutralised because every `'` is escaped to `\'`.
-- Affected endpoints/tables/connectors: Salesforce connector (`shared_salesforce`), `ExecuteSoqlQuery` operation against `Account` and `Contact` objects. No new coupling. Flow's HTTP trigger URL unchanged.
-- Security impact: **POSITIVE** — closes a P0 SOQL injection hole. No new exposure.
-- Rollback action: open editor, in each of `SoqlAccount` / `SoqlContact` swap the `outputs('Escape...')` chip back to `triggerBody()?['value']`, then delete the two `EscapeAccountName` / `EscapeContactEmail` Compose actions. Save. (Restores the vulnerable behaviour — only do this if the escape causes an unforeseen regression.)
-- Remaining Task #6 scope: SF mutation flow governance (`CompleteSFTask`, `GovLeaseLeadSync`, `LogActivitytoSFfromLCC`) — schema validation, request auth, audit/correlation. Still pending; these flows should be checked for the same SOQL-escaping issue in any lookup steps before adding governance layers.
-- Owner: LCC architecture/audit track (Scott Briggs).
-
-## Task #6 Summary (HTTP-Switch SOQL Injection — SOQL portion COMPLETE)
-- Original symptom: HTTP-Switch flow failing intermittently (~4 failures/hr mixed with successes) — every Salesforce lookup whose account name or contact email contained a `'` or `$`.
-- Real root cause: classic SOQL injection / escaping bug. `SoqlAccount` and `SoqlContact` built raw SOQL by interpolating `triggerBody()?['value']` directly into `WHERE ... '...'` clauses via the `ExecuteSoqlQuery` operation. A `'` in the value terminated the SOQL string early; a maliciously-crafted value could escape the WHERE clause and read/modify other records.
-- Fix: per-case escape-Compose (`EscapeAccountName`, `EscapeContactEmail`) running `replace(value, ''', '\'')` (expressed via `uriComponentToString('%5C')` to satisfy PA's expression parser), with the SOQL queries re-pointed at `outputs('Escape...')`.
-- Validation: live POST with an apostrophe+dollar-sign payload returned HTTP 200 + clean no-match (pre-fix this crashed with `unexpected token: '$'`).
-- Repair time: ~45 min, most of it spent working around PA's Monaco expression editor (the clipboard-paste method is the reliable one).
-- **Remaining Task #6 work**: SF mutation flow governance (CompleteSFTask, GovLeaseLeadSync, LogActivitytoSFfromLCC) — diagnostic survey now complete, see next entry.
-
-### 2026-05-13 — Task #6 Part B: SF Mutation Flow Diagnostic Survey (complete; fixes scoped, not yet applied)
-- Surveyed all 3 SF mutation flows in the Part B scope. Captured flow IDs, health, structure, and injection-risk assessment for each. No definitions changed — inspection only.
-- **Complete SF Task** — Flow ID `06b7b1dc-f917-4970-b075-7dd7fcef56c1`
-  - Status: On. **0 runs in trailing 28 days** (manual HTTP-trigger flow; nothing has called it recently — not an active fire).
-  - Structure: `manual` (HTTP trigger) → `Get records` (Salesforce, object: Tasks) → `Condition` (2 cases).
-  - Injection finding: the `Get records` Filter Query is `WhoId eq '<triggerBody value: sf_contact_id>' and Subject eq '<triggerBody value: subject>' and Status ne 'Completed'`. Two user-supplied values (`sf_contact_id`, `subject`) are interpolated directly into OData filter string literals. A task subject containing an apostrophe (e.g. `Review O'Brien deal`) would break the filter — same injection class as HTTP-Switch.
-- **GovLease Lead Sync** — Flow ID `227bd734-6f65-4b33-9d2c-1ab19e2ff7e9`
-  - Status: On. **0 runs in trailing 28 days.**
-  - Structure: `manual` (HTTP trigger) → `Get records` (Salesforce, object: Prospects) → `Condition` (2 cases) → `Response`.
-  - Injection finding: the `Get records` Filter Query is `Company eq '<triggerBody value: agency>'`. The user-supplied `agency` value is interpolated directly into the OData filter string literal. Government agency names frequently contain apostrophes (`Veterans' Affairs`, `Comptroller's Office`) — same injection class.
-- **Log Activity to SF from LCC** — Flow ID `6700bdfc-3bbd-4c85-a85c-e9660042aab1`
-  - Status: On. **0 runs in trailing 28 days.**
-  - Structure: `manual` (HTTP trigger) → `Create record` (Salesforce — a true write/mutation) → `Response`.
-  - Injection finding: NO Filter Query / lookup step — it writes directly via `Create record`. No SOQL/OData injection vector. The governance gap here is different: an unauthenticated HTTP trigger that performs a Salesforce write with no request-auth check, no schema validation, and no audit/correlation record.
-- IMPORTANT escaping nuance discovered: the `Get records` Filter Query uses OData filter syntax (`eq`, `ne` operators), NOT raw SOQL. **OData string-literal escaping doubles the single quote (`'` → `''`)**, it does NOT use the SOQL backslash escape (`'` → `\'`) that the HTTP-Switch fix used. So the fix for Complete SF Task / GovLease Lead Sync needs a DIFFERENT escape expression than Part A:
-  - Part A (raw SOQL, HTTP-Switch): `replace(value, ''', '\'')` — via `uriComponentToString('%5C')`.
-  - Part B (OData Filter Query): `replace(triggerBody()?['<field>'], '''', '''''')` — replaces `'` with `''` (the 6-quote replacement arg = literal `''`).
-  - **BUT**: it is not yet confirmed whether the PA Salesforce connector's `Get records` Filter Query auto-escapes embedded values or passes them through raw like `ExecuteSoqlQuery` does. This must be verified (with a test payload containing an apostrophe) BEFORE applying an escape — double-escaping would be as broken as not escaping. This verification step is the first action for the next session.
-- Why fixes were NOT applied this session: (1) none of the 3 flows are actively failing — zero runs in 28d means no fires; (2) the OData-vs-SOQL escaping difference plus the unverified connector-escaping behaviour means a blind fix on flows that read-from / write-to Salesforce carries real data-integrity risk; (3) responsible sequencing is verify → fix → test, and the verify step needs a constructed test payload per flow. This is a focused, bounded next-session task, not a late-session rush.
-- Recommended next-session sequence for Part B:
-  1. For Complete SF Task: construct a test payload with `subject` = `Test O'Brien Task`, POST to the trigger, inspect whether `Get records` succeeds or fails. If it fails → connector does NOT auto-escape → apply the OData `replace(value, ''', '''')` Compose-escape pattern (same structure as Part A's EscapeAccountName). If it succeeds → connector handles escaping → no escape fix needed, move to governance.
-  2. Repeat the verification for GovLease Lead Sync with `agency` = `Veterans' Affairs Test`.
-  3. Governance layer for all 3: add a request-auth check at the top of each flow (validate an `X-LCC-Key` header against a stored secret, terminate-with-403 on mismatch), add a `schema_version` field check, and add an audit Compose action capturing `correlation_id` + `source` + before/after for the mutation. `Log Activity to SF from LCC` especially needs this since it's an unauthenticated write endpoint.
-- Owner: LCC architecture/audit track (Scott Briggs). Part B is the focused next-session item; diagnostic groundwork is done.
-
-### 2026-05-12 — Full ZIP Coverage Completion (All Provided Exports)
-- Flow name:
-  - `Outlook Calendar - Life Command Center Sync`
-  - `LCC - Personal Calendar Sync`
-  - `Sync SF Tasks to Supabase`
-  - `Sync SF Activities to Supabase`
-  - `Sync Flagged Emails to Supabase` (two export variants)
-  - `Unflag Completed Email Tasks`
-  - `Recovery - Reflag Completed Emails`
-  - `Button -> Send an HTTP request`
-  - `Flagged Personal Email to To Do`
-  - `Log Activity to SF from LCC`
-- Flow version/export artifact:
-  - `OutlookCalendar-LifeCommandCenterSync_20260512134742.zip`
-  - `LCC-PersonalCalendarSync_20260512134721.zip`
-  - `SyncSFTaskstoSupabase_20260512134655.zip`
-  - `SyncSFActivitiestoSupabase_20260512134632.zip`
-  - `SyncFlaggedEmailstoSupabase_20260512135136.zip`
-  - `SyncFlaggedEmailstoSupabase_20260512135251.zip`
-  - `UnflagCompletedEmailTasks_20260512135227.zip`
-  - `Recovery-ReflagCompletedEmails_20260512135202.zip`
-  - `Button-SendanHTTPrequest_20260512135816.zip`
-  - `FlaggedPersonalEmailtoToDo_20260512135719.zip`
-  - `LogActivitytoSFfromLCC_20260512135623.zip`
-- Risk tier: `P1` (duplicate variant drift, write governance), `P2` (documentation completeness)
-- Change summary:
-  - Completed per-flow documentation coverage for all ZIP exports provided in this thread.
-  - Expanded master registry inventory/dependencies and added one-by-one execution order.
-- Exact steps changed:
-  - Added 10 new per-flow markdown sheets.
-  - Updated `power-automate-flow-audit.md` with remaining flow entries and gap updates.
-- Affected endpoints/tables/connectors:
-  - Connectors: `shared_outlook`, `shared_todoconsumer`, `shared_salesforce`, `shared_todo`, `shared_office365`, `shared_onedriveforbusiness`
-  - Planned governance target: Supabase integration observability/dead-letter tables
-- Security impact:
-  - No new secret extraction performed in this pass beyond prior findings; P0 secret rotation remains open.
-- Validation evidence:
-  - Parsed each provided ZIP `definition.json` for display name, trigger, action count, and connector usage.
-- Rollback action:
-  - Documentation-only change, revert markdown files if needed.
-- Owner: LCC architecture/audit track.
-
-### 2026-05-13 — Task #6 Part B.1: Complete SF Task — OData injection + null-handling FIXED
-- Flow name: `Complete SF Task`
-- Flow ID: `06b7b1dc-f917-4970-b075-7dd7fcef56c1`
-- Risk tier: `P1` (OData injection on a Salesforce read; null-handling crash)
-- Status before/after: On / On. 0 runs in trailing 28d (manual HTTP-trigger flow, not actively called) — fix is preventive hardening, not an active-fire repair.
-- Change summary: closed the OData Filter Query injection vector on the `Get records` action and made the downstream `Condition` null-safe.
-- Exact steps changed:
-  - **Bug A (OData injection)** — inserted a `Compose` action named `EscapeSubject` between `manual` and `Get records`. Inputs expression: `replace(triggerBody()?['subject'], '''', '''''')` — doubles every single quote per OData string-literal escaping rules. Then rewired the `Get records` Filter Query from
-    `WhoId eq '<triggerBody subject chip>' ...` to use the escaped value:
-    final `$filter` = `WhoId eq '@{triggerBody()?['sf_contact_id']}' and Subject eq '@{outputs('EscapeSubject')}' and Status ne 'Completed'`.
-    `runAfter` confirms `EscapeSubject: [SUCCEEDED]` precedes `Get records`.
-  - **Bug B (null-handling)** — the post-`Get records` `Condition` evaluated `length(body('Get_records')?['records'])`, which throws when `records` is null (no match). Changed to `length(coalesce(body('Get_records')?['records'], json('[]')))` so a no-match result evaluates as length 0 instead of crashing the run.
-- Escaping nuance confirmed: PA Salesforce connector `Get records` uses OData Filter Query syntax — the correct escape is `'` → `''` (quote-doubling), NOT the SOQL backslash escape used in the HTTP-Switch Part A fix. `sf_contact_id` is a Salesforce 15/18-char alphanumeric ID with no quote-injection surface, so only `subject` (free-text) is escaped.
-- Affected endpoints/tables/connectors: Salesforce connector (`shared_salesforce`), `Get records` (GetItems) against the `Task` object. HTTP trigger URL unchanged. No new coupling.
-- Security impact: **POSITIVE** — closes an OData injection hole on a Salesforce read path. No new exposure.
-- Validation evidence: verified via Code view that `$filter` resolves to the escaped form and `runAfter` chains `EscapeSubject → Get records`. Flow saved cleanly ("Your flow is ready to go"). Canvas confirms structure `manual → EscapeSubject → Get records → Condition`. No live mutation test run — flow has 0 callers in 28d and a live test would complete a real Salesforce Task; structural verification via Code view is the proportionate evidence here.
-- Rollback action: open editor, in `Get records` swap the `outputs('EscapeSubject')` chip back to the `subject` trigger chip, delete the `EscapeSubject` Compose, and revert the `Condition` expression to `length(body('Get_records')?['records'])`. Save.
-- Remaining Task #6 Part B scope: `GovLease Lead Sync` (same OData escape pattern on `Company eq '<agency>'`), then governance layer (request-auth + schema check + audit Compose) on all 3, especially `Log Activity to SF from LCC` (unauthenticated SF write).
-- Owner: LCC architecture/audit track (Scott Briggs).
-
-### 2026-05-13 — Task #6 Part B.1 ADDENDUM: Complete SF Task — Bug B re-applied + key-name correction
-- Flow name: `Complete SF Task` (Flow ID `06b7b1dc-f917-4970-b075-7dd7fcef56c1`)
-- Risk tier: `P1`
-- Why this addendum: the earlier Part B.1 entry recorded Bug B as fixed "via clicked Update". On re-verification (Code view) it had NOT committed. Discovered a PA new-designer editor quirk: **the "Update" button on an *existing* expression chip silently fails to commit; only the "Add" button on a freshly-inserted (deleted-then-re-added) chip commits.** All subsequent expression edits in this session use the delete-chip → fx → paste → Add pattern.
-- Re-applied Bug B correctly. Also corrected a latent key-name bug found during re-verification:
-  - The Condition originally read `length(body('Get_records')?['records'])`. The PA Salesforce `Get records` action (operationId `GetItems`) returns its rows under `body(...)?['value']`, NOT `?['records']` — so the original expression was reading a key that is always null. `length(null)` throws, meaning this Condition would have crashed on *every* run regardless of match state (masked only because the flow has 0 runs in 28d).
-  - Final committed expression (verified in Code view): `@length(coalesce(body('Get_records')?['value'], json('[]')))` — fixes both the wrong key and the null-handling crash in one edit.
-- Verified: Code view shows the corrected expression; flow saved cleanly ("Your flow is ready to go").
-- **Residual audit item (NOT a regression, pre-existing):** the Switch-case branches inside the Condition's true path (the actual `complete` / `reopen` action handlers, ~lines 28-140 of the action JSON) could not be exhaustively read through PA's virtualized Monaco code viewer this session. They should be audited for the same `?['records']` vs `?['value']` key-name inconsistency — if a branch does `first(body('Get_records')?['records'])?['Id']` to resolve the SF Task Id for an Update, it would resolve null and the update would fail. Recommend: open each Switch case in the new-designer canvas and check any `first(body('Get_records')...)` reference. Low urgency (0 runs/28d) but should be closed before this flow is put into active use.
-- Owner: LCC architecture/audit track (Scott Briggs).
-
-### 2026-05-13 — Task #6 Part B.2: GovLease Lead Sync — OData injection + null-handling FIXED
-- Flow name: `GovLease Lead Sync`
-- Flow ID: `227bd734-6f65-4b33-9d2c-1ab19e2ff7e9`
-- Risk tier: `P1` (OData injection on a Salesforce read; null-handling crash)
-- Status before/after: On / On. 0 runs in trailing 28d (manual HTTP-trigger flow, not actively called) — preventive hardening, not an active-fire repair.
-- Structure: `manual` (HTTP trigger) → `EscapeAgency` (Compose, NEW) → `Get records` (Salesforce, object: Lead) → `Condition` → `Response`.
-- Change summary: closed the OData Filter Query injection vector on `Get records` and made the `Condition` null-safe.
-- Exact steps changed:
-  - **Bug A (OData injection)** — inserted a `Compose` action named `EscapeAgency` between `manual` and `Get records`. Inputs expression: `replace(triggerBody()?['agency'], '''', '''''')` (doubles every single quote per OData string-literal escaping). Rewired the `Get records` Filter Query from `Company eq '<triggerBody agency chip>'` to `Company eq '@{outputs('EscapeAgency')}'`. `runAfter` confirms `EscapeAgency: [SUCCEEDED]` precedes `Get records`. Government agency names frequently contain apostrophes (`Veterans' Affairs`, `Comptroller's Office`) — exactly the break/injection vector this closes.
-  - **Bug B (null-handling)** — the post-`Get records` `Condition` evaluated `length(body('Get_records')?['value'])`, which throws when `value` is null (no match). Changed to `length(coalesce(body('Get_records')?['value'], json('[]')))` via the delete-chip → Add pattern. (Note: this flow correctly used `?['value']` already — unlike Complete SF Task — so only the coalesce wrap was needed.)
-- Affected endpoints/tables/connectors: Salesforce connector (`shared_salesforce`), `Get records` (GetItems) against the `Lead` object. HTTP trigger URL unchanged. No new coupling.
-- Security impact: **POSITIVE** — closes an OData injection hole on a Salesforce read path. No new exposure.
-- Validation evidence: verified via Code view that `$filter` resolves to `Company eq '@{outputs('EscapeAgency')}'`, `runAfter` chains `EscapeAgency → Get records`, and the Condition expression committed as `@length(coalesce(body('Get_records')?['value'], json('[]')))`. Flow saved cleanly ("Your flow is ready to go"). No live mutation test — 0 callers in 28d and a live test would create/patch a real Salesforce Lead; structural Code-view verification is the proportionate evidence.
-- Rollback action: open editor, in `Get records` swap the `outputs('EscapeAgency')` chip back to the `agency` trigger chip, delete the `EscapeAgency` Compose, and revert the `Condition` chip to `length(body('Get_records')?['value'])`. Save.
-- Remaining Task #6 Part B scope: governance layer on `Log Activity to SF from LCC` (unauthenticated SF `Create record` write — no injection vector, needs request-auth + schema check + audit/correlation).
-- Owner: LCC architecture/audit track (Scott Briggs).
-
-### 2026-05-13 — Task #6 Part B.3: Log Activity to SF from LCC — trigger schema added (fixes broken action + schema-validation governance)
-- Flow name: `Log Activity to SF from LCC`
-- Flow ID: `6700bdfc-3bbd-4c85-a85c-e9660042aab1`
-- Risk tier: `P1` (a broken/unvalidatable Salesforce write endpoint)
-- Status before/after: On / On. 0 runs in trailing 28d.
-- Structure: `manual` (HTTP Request trigger) → `Create record` (Salesforce, object: Task — a true write/mutation) → `Response`.
-- Bug found: the `Create record` action was flagged **"⚠ Invalid parameters"** on the canvas. Root cause — the HTTP Request trigger had **no Request Body JSON Schema defined** (`inputs` was just `{"triggerAuthenticationType":"All"}`). With no schema, PA cannot resolve the `triggerBody()['sf_contact_id']` / `['sf_company_id']` / `['activity_type']` / `['activity_date']` / `['ref_id']` references the Create record action depends on, so the whole action was in an invalid/unvalidatable state.
-- Change applied: defined a Request Body JSON Schema on the trigger via PA's native "Use sample payload to generate schema" generator. Schema declares the six contract fields as typed strings:
-  `schema_version`, `sf_contact_id`, `sf_company_id`, `activity_type`, `activity_date`, `ref_id`.
-  Added `schema_version` as an explicit contract-versioning field (governance plan item). Used the sample-payload generator rather than hand-pasting the schema because the new-designer's plain schema textarea silently discards pasted content on tab-switch — the generator commits through PA's own handler reliably.
-- Result verified: Code view of the trigger now shows the `schema` object under `inputs`; the **"Invalid parameters" warning on `Create record` cleared**; canvas shows the flow clean (`manual → Create record → Response`, no error badges). Flow saved cleanly ("Your flow is ready to go").
-- Governance value delivered: (1) fixes a genuinely broken action, (2) documents the request contract in the flow definition itself, (3) gives PA a schema to shape-validate incoming payloads against.
-- **Remaining governance items for this flow (documented, not yet applied — deferred deliberately):**
-  1. **Strict required-field enforcement** — PA's sample generator did not emit a `required` array, so the schema types fields but doesn't reject payloads missing them. To enforce, add `"required": ["sf_contact_id","activity_type","activity_date"]` to the trigger schema (these three are the fields `Create record` cannot function without). Recommend doing this via the schema textarea with a deliberate blur, or by editing the exported package and re-importing.
-  2. **Request-auth check** — the trigger is `triggerAuthenticationType: "All"` + "Anyone" can trigger; the only gate is the SAS signature in the URL. Defense-in-depth: insert a `Condition` immediately after the trigger that compares an `X-LCC-Key` request header (`triggerOutputs()?['headers']?['X-LCC-Key']`) against a stored secret, with a `Response` 403 + `Terminate` on mismatch. This is the single most important control for an unauthenticated SF write endpoint.
-  3. **Audit/correlation Compose** — add a `Compose` capturing `correlation_id` (`guid()`), `source`, and the inbound payload before the `Create record`, so every SF write is traceable. Pair with a dead-letter write on `Create record` failure (Configure run after → has failed/timed out).
+  - To-do L…8319 tokens truncated… `correlation_id` (`guid()`), `source`, and the inbound payload before the `Create record`, so every SF write is traceable. Pair with a dead-letter write on `Create record` failure (Configure run after → has failed/timed out).
   - These three were deferred this session because (a) the flow has 0 runs/28d so there is no active fire, and (b) the new-designer editor exhibited repeated silent commit failures on multi-step edits this session — a 3-action governance build (Condition + Response + Terminate + Compose) carries real risk of partial/broken commits. Recommend applying them in a focused follow-up, ideally via export-edit-reimport to bypass the flaky in-browser editor.
 - Affected endpoints/tables/connectors: Salesforce connector (`shared_salesforce`), `Create record` (PostItem_V2) against the `Task` object. HTTP trigger URL unchanged.
 - Security impact: **POSITIVE** (schema now documents + shape-validates the contract). Note: request-auth hardening still outstanding — see remaining item 2.
@@ -1011,3 +778,27 @@ Round 3 audit finding **R3-M-3d**. The coverage sweep (R3-M-3c) confirmed the 20
 - Rollback action: documentation-only — revert the 6 markdown files. No live flow to roll back (none built).
 - Build sequencing: Flow 1 (Processing Complete → Move Message) first; then Flows 2–3 (intake triggers); then Flows 4–5 (retention sweep + briefing line).
 - Owner: LCC architecture/audit track (Scott Briggs).
+### 2026-08-11 — Production baseline export retained and reconciled
+
+- Scope: 16 requested Salesforce/Outlook backbone flows plus the supplemental HTTP-Switch Salesforce lookup.
+- Result: all 17 packages parsed successfully; no requested package is missing.
+- Evidence retained: Git-excluded packages under `private/power-automate/exports/production/2026-08-11/`.
+- Registry: populated deployed definition GUIDs, exact display names, triggers, connectors, endpoint families,
+  package paths, export times, and SHA-256 checksums in `docs/os/FLOW-REGISTRY.yaml`.
+- Catalog: added `docs/os/POWER-AUTOMATE-DEPLOYED-CATALOG.md`.
+- Corrected naming/identity drift: package resource-folder IDs were not treated as deployed flow IDs; the
+  exported definition `name` was used as the immutable GUID. The deployed names for file discovery and
+  on-demand file backfill differ from prior planning labels and are now recorded.
+- Security: ten packages contain literal JWT-like or signed credential material; the queue drainer includes a
+  signed direct-trigger URL. Four request-triggered flows require deployed request-auth verification. No values
+  are copied into repository documentation.
+- Endpoint drift: the two roster flows target `life-command-center-production`; other Railway-backed baseline
+  flows target `tranquil-delight-production-633f`. Verify health/alias intent before consolidation.
+- Remaining metadata: owner, on/off state, production last-modified timestamp, last successful run, and solution
+  membership are not reliable package fields and require one inventory-screen/admin capture, not re-export.
+- Definition changes: none. Documentation and evidence retention only.
+# 2026-08-11 - Baseline ownership verified
+
+- Scott Briggs confirmed that he owns each of the 17 flows retained in the 2026-08-11 production baseline.
+- Recorded once in `docs/os/FLOW-REGISTRY.yaml` as operator-verified metadata.
+- No package re-export is required for ownership evidence unless ownership changes.

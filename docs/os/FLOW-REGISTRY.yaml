@@ -1,0 +1,308 @@
+schema_version: "1.3"
+registry_status: baseline_verified_owner_confirmed
+owner: LCC control plane
+last_updated: "2026-08-11"
+operator_verified_metadata:
+  verified_at: "2026-08-11"
+  verified_by: "Scott Briggs"
+  evidence: "Direct owner confirmation"
+  applies_to: all_17_baseline_flows
+  flow_owner: "Scott Briggs"
+environment:
+  name: Northmarq production default
+  id: Default-fccf69d3-58a4-4c10-a59d-14937a5f5d3f
+raw_export_root: private/power-automate/exports/production
+export_policy: docs/os/POWER-AUTOMATE-EXPORT-AND-RETENTION.md
+catalog: docs/os/POWER-AUTOMATE-DEPLOYED-CATALOG.md
+baseline:
+  export_date: "2026-08-11"
+  package_count: 17
+  requested_flow_count: 16
+  additional_flow_count: 1
+  integrity: all_packages_parseable
+  metadata_not_in_packages:
+    - enabled_state
+    - production_last_modified_at
+    - last_successful_run_at
+    - solution_membership
+inventory_screenshot_evidence:
+  captured_at: "2026-08-11"
+  source: "Power Automate My flows screenshots supplied by operator"
+  environment_name: "NorthMarq Capital, LLC..."
+  environment_id: Default-fccf69d3-58a4-4c10-a59d-14937a5f5d3f
+  proves:
+    - flow_display_name_visible_in_my_flows
+    - relative_modified_age_at_capture
+    - trigger_category
+  does_not_prove:
+    - owner
+    - enabled_state
+    - exact_production_last_modified_at
+    - last_successful_run_at
+    - solution_membership
+  baseline_rows_observed:
+    sf-object-sync: {display_name: "SF -> LCC: Object Sync", modified: "1 mo ago", type: Scheduled}
+    sf-property-promotion: {display_name: "SF -> LCC: Property Promotion", modified: "2 mo ago", type: Scheduled}
+    sf-deal-team-roster: {display_name: "SF Deal Team -> LCC Roster", modified: "1 wk ago", type: Scheduled}
+    sf-deal-contact-roster: {display_name: "SF Deal Contacts -> LCC Roster", modified: "1 wk ago", type: Instant}
+    sf-activity-sync: {display_name: "Sync SF Activities to Supabase", modified: "3 wk ago", type: Scheduled}
+    sf-queue-drainer: {display_name: "LCC -> SF Queue Drainer", modified: "1 wk ago", type: Scheduled}
+    sf-retry-dead-letter: {display_name: "SF -> LCC: Retry & Dead-letter", modified: "2 mo ago", type: Scheduled}
+    sf-file-discovery-move: {display_name: "LCC — SF File Discovery", modified: "1 wk ago", type: Scheduled}
+    sf-daily-file-backfill: {display_name: "SF -> LCC: Daily Bulk File Backfill", modified: "1 wk ago", type: Scheduled}
+    sf-on-demand-file: {display_name: "SF -> LCC: On-demand File Backfill", modified: "2 mo ago", type: Instant}
+    sf-on-demand-backfill: {display_name: "SF -> LCC: On-demand Backfill", modified: "2 mo ago", type: Instant}
+    outlook-intake-hardened: {display_name: "LCC - Outlook Intake to Teams (Hardened)", modified: "1 wk ago", type: Automated}
+    outlook-processing-complete: {display_name: "LCC Processing Complete -> Move Message", modified: "3 wk ago", type: Automated}
+    outlook-todo-completion-poll: {display_name: "LCC To Do Completion Poll", modified: "1 wk ago", type: Scheduled}
+    outlook-flagged-email-intake: {display_name: "LCC Flagged Email Intake", modified: "2 mo ago", type: Automated}
+    sf-http-switch-lookup: {display_name: "Http -> Switch,Get Account records,Respond (account)...", modified: "1 wk ago", type: Automated}
+  not_located_unambiguously:
+    - sf-opportunity-sync
+  possible_duplicate_or_legacy_rows:
+    - {display_name: "SF -> LCC: Daily Bulk File Backfill", modified: "2 mo ago", type: Scheduled}
+    - {display_name: "SF -> LCC: File Discovery & Move", modified: "2 mo ago", type: Scheduled}
+    - {display_name: "SF -> LCC: Activity Sync", modified: "Activity suspended", type: Scheduled}
+allowed_states:
+  - verified_from_export
+  - documented_not_exported
+  - export_requested
+  - built_pending_apply
+  - retired
+  - historical
+
+flows:
+  - logical_id: sf-object-sync
+    display_name: "SF -> LCC: Object Sync"
+    flow_guid: 503d5519-221e-4014-bde8-c483b6a8ef10
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: "recurrence: every 1 hour"
+    connectors: [salesforce]
+    endpoint_families: [dialysis-intake-salesforce, lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:00:40Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-object-sync__SF-LCC-Object-Sync__503d5519-221e-4014-bde8-c483b6a8ef10__2026-08-11.zip
+    sha256: 67b46ac8ddb103d4f5cb8d49bb580204267eba70b97cd3c752134ab8d011089b
+    runbook: docs/architecture/salesforce_nm_authoritative_sync.md
+  - logical_id: sf-property-promotion
+    display_name: "SF -> LCC: Property Promotion"
+    flow_guid: c06b207e-b077-43a8-a483-39f2fb8c4243
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: "recurrence: every 1 day"
+    connectors: []
+    endpoint_families: [dialysis-sf-promotion-worker, lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:05:33Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-property-promotion__SF-LCC-Property-Promotion__c06b207e-b077-43a8-a483-39f2fb8c4243__2026-08-11.zip
+    sha256: 77d61ed04c990879da877db67661f903ba54cc44400ef8b90ae692aa571137b6
+    runbook: docs/architecture/flows/FLOW_CHANGES_LOG.md
+  - logical_id: sf-opportunity-sync
+    display_name: "SF Deal -> LCC Opportunity Sync"
+    deployed_display_name: "SF Deal → LCC Opportunity Sync"
+    flow_guid: 7657a3bc-8761-4d2e-b385-ed112411bc42
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: "recurrence: every 30 minutes"
+    connectors: [salesforce]
+    endpoint_families: [railway-pipeline-ingest-opportunities]
+    exported_at: "2026-08-11T03:07:10Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-opportunity-sync__SF-Deal-LCC-Opportunity-Sync__7657a3bc-8761-4d2e-b385-ed112411bc42__2026-08-11.zip
+    sha256: 67b610a174c32ea3ebb03c0c1ba63c4924ae9fed2ed320711923628c8c865dc0
+    runbook: docs/os/architecture/BUILD-01B-sf-deal-sync-flow.md
+  - logical_id: sf-deal-team-roster
+    display_name: "SF Deal Team → LCC Roster"
+    flow_guid: 9879c0fd-2dc0-4304-a82b-d68de3fcc991
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: "recurrence: every 1 day"
+    connectors: [salesforce]
+    endpoint_families: [railway-pipeline-ingest-deal-parties]
+    exported_at: "2026-08-11T03:08:06Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-team-roster__SF-Deal-Team-LCC-Roster__9879c0fd-2dc0-4304-a82b-d68de3fcc991__2026-08-11.zip
+    sha256: 89d62b1133c9ce99a9bbbaf082536c16832fdf2efca5b849797c93349c078930
+    runbook: docs/os/architecture/deal-party-roster-source.md
+  - logical_id: sf-deal-contact-roster
+    display_name: "SF Deal Contacts → LCC Roster"
+    flow_guid: a50d3f56-3891-4d8f-8636-b9b09e58c2ee
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: request
+    connectors: [salesforce]
+    endpoint_families: [railway-pipeline-ingest-deal-contacts]
+    exported_at: "2026-08-11T03:08:50Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-contact-roster__SF-Deal-Contacts-LCC-Roster__a50d3f56-3891-4d8f-8636-b9b09e58c2ee__2026-08-11.zip
+    sha256: ac2c177ffb4fa7f85ab8c5a03f588cb190e0bc7f389d336d6672e2dfcdf0eb1a
+    runbook: docs/os/architecture/deal-party-roster-source.md
+  - logical_id: sf-activity-sync
+    display_name: "Sync SF Activities to Supabase"
+    flow_guid: 2b145cca-031e-43ba-bf42-db976cf380ed
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: "recurrence: every 4 hours"
+    connectors: [salesforce]
+    endpoint_families: [dialysis-ai-copilot-activity-sync, lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:09:55Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-activity-sync__Sync-SF-Activities-to-Supabase__2b145cca-031e-43ba-bf42-db976cf380ed__2026-08-11.zip
+    sha256: 72914b710c3de5d93dd6a0d7f48b967e552ca85f3c5b03174965bcb835305430
+    runbook: docs/architecture/flows/sync-sf-activities-to-supabase.md
+  - logical_id: sf-queue-drainer
+    display_name: "LCC → SF Queue Drainer"
+    flow_guid: 2d5a0bb0-3948-4d14-9282-056ea923781e
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: "recurrence: every 5 minutes"
+    connectors: [salesforce]
+    endpoint_families: [lcc-sf-sync-queue, lcc-unified-contacts, power-automate-direct-trigger]
+    exported_at: "2026-08-11T03:10:38Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-queue-drainer__LCC-SF-Queue-Drainer__2d5a0bb0-3948-4d14-9282-056ea923781e__2026-08-11.zip
+    sha256: 314dcfe4765129f2fb4837bbd653f7581f5cd01ed897ebac68db7ef70b4ec7a9
+    runbook: docs/os/architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md
+  - logical_id: sf-retry-dead-letter
+    display_name: "SF -> LCC: Retry & Dead-letter"
+    flow_guid: f7e7bc07-6cbe-4638-b4c6-09a5f3206930
+    group: salesforce-backbone
+    priority: A
+    state: verified_from_export
+    trigger: "recurrence: every 1 week"
+    connectors: [salesforce]
+    endpoint_families: [dialysis-intake-salesforce, dialysis-intake-salesforce-files, lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:11:33Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-retry-dead-letter__SF-LCC-Retry-Dead-letter__f7e7bc07-6cbe-4638-b4c6-09a5f3206930__2026-08-11.zip
+    sha256: 5952cb25f65652b0898e2307f29e5b0f784f7ab4a217c598dd4f8bdb658c454e
+    runbook: docs/architecture/flows/dead-letter-fault-branch-runbook.md
+  - logical_id: sf-file-discovery-move
+    display_name: "SF -> LCC: File Discovery & Move"
+    deployed_display_name: "LCC — SF File Discovery"
+    flow_guid: c7b21a66-0222-4b92-a2ae-d7410e500e05
+    group: salesforce-files
+    priority: B
+    state: verified_from_export
+    trigger: "recurrence: every 1 week"
+    connectors: [salesforce]
+    endpoint_families: [dialysis-intake-salesforce-files]
+    exported_at: "2026-08-11T03:12:25Z"
+    package_path: private/power-automate/exports/production/2026-08-11/02-salesforce-files/sf-file-discovery-move__LCC-SF-File-Discovery__c7b21a66-0222-4b92-a2ae-d7410e500e05__2026-08-11.zip
+    sha256: 8bd08fc8aced7b35815f583a6c77df5d935f9c074fd2de545e07db80f85a051a
+    runbook: docs/flows/FLOW_sf_file_discovery.md
+  - logical_id: sf-daily-file-backfill
+    display_name: "SF -> LCC: Daily Bulk File Backfill"
+    flow_guid: 3d8be768-cfe7-41c9-81f4-e6b6f024ee5e
+    group: salesforce-files
+    priority: B
+    state: verified_from_export
+    trigger: "recurrence: every 1 day"
+    connectors: [salesforce]
+    endpoint_families: [dialysis-intake-salesforce-files, lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:13:08Z"
+    package_path: private/power-automate/exports/production/2026-08-11/02-salesforce-files/sf-daily-file-backfill__SF-LCC-Daily-Bulk-File-Backfill__3d8be768-cfe7-41c9-81f4-e6b6f024ee5e__2026-08-11.zip
+    sha256: 8881b82d18a910738a89de625393073bb945e9a339add1b106593a54dc927722
+    runbook: docs/architecture/sf_daily_bulk_backfill_RUNBOOK.md
+  - logical_id: sf-on-demand-file
+    display_name: "SF -> LCC: On-demand File Backfill"
+    flow_guid: aaa452c0-7eb5-4c98-bfe2-f6d872d80639
+    group: salesforce-files
+    priority: B
+    state: verified_from_export
+    trigger: request
+    connectors: [salesforce]
+    endpoint_families: [dialysis-intake-salesforce-files, lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:14:51Z"
+    package_path: private/power-automate/exports/production/2026-08-11/02-salesforce-files/sf-on-demand-file__SF-LCC-On-demand-File-Backfill__aaa452c0-7eb5-4c98-bfe2-f6d872d80639__2026-08-11.zip
+    sha256: ce9913c56603288c7102254eda2101a3072c7a90481bfc02278e84cf90a2a71c
+    runbook: docs/architecture/sf_file_backfill_flow6_next_steps.md
+  - logical_id: sf-on-demand-backfill
+    display_name: "SF -> LCC: On-demand Backfill"
+    flow_guid: 4ffa81bd-c8af-4883-bd8b-c292e6b9346d
+    group: salesforce-files
+    priority: B
+    state: verified_from_export
+    trigger: request
+    connectors: [salesforce]
+    endpoint_families: [dialysis-intake-salesforce, lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:14:05Z"
+    package_path: private/power-automate/exports/production/2026-08-11/02-salesforce-files/sf-on-demand-backfill__SF-LCC-On-demand-Backfill__4ffa81bd-c8af-4883-bd8b-c292e6b9346d__2026-08-11.zip
+    sha256: 0bb719eae82f40ddfc9e164196b17900f6eb2aa1a721fedd16580a9e57b22f0a
+    runbook: docs/architecture/salesforce_nm_authoritative_sync.md
+  - logical_id: outlook-intake-hardened
+    display_name: "LCC - Outlook Intake to Teams (Hardened)"
+    flow_guid: 45faffcc-a96c-4ca3-a62d-c2fa150386ed
+    group: outlook-task-loop
+    priority: C
+    state: verified_from_export
+    trigger: office365-flagged-email-v3
+    connectors: [office365, teams]
+    endpoint_families: [railway-outlook-intake, railway-intake-summary, railway-processing-complete]
+    exported_at: "2026-08-11T03:15:40Z"
+    package_path: private/power-automate/exports/production/2026-08-11/03-outlook-task-loop/outlook-intake-hardened__LCC-Outlook-Intake-to-Teams-Hardened__45faffcc-a96c-4ca3-a62d-c2fa150386ed__2026-08-11.zip
+    sha256: bed5f3d88c0cd09f6cb2e69474a7f8693fcde1bbe13f8dc4102cb12eb25646c8
+    runbook: docs/os/architecture/scott-pa-flows-reference.md
+  - logical_id: outlook-processing-complete
+    display_name: "LCC Processing Complete → Move Message"
+    flow_guid: 4e51f33d-dc56-47d0-8065-66e9a6e82961
+    group: outlook-task-loop
+    priority: C
+    state: verified_from_export
+    trigger: request
+    connectors: [office365]
+    endpoint_families: [office365-message-update]
+    exported_at: "2026-08-11T03:17:06Z"
+    package_path: private/power-automate/exports/production/2026-08-11/03-outlook-task-loop/outlook-processing-complete__LCC-Processing-Complete-Move-Message__4e51f33d-dc56-47d0-8065-66e9a6e82961__2026-08-11.zip
+    sha256: 0b38f7aa9b0b57406969561da4ec1696b1be1d95d6198c29cddced3fe370cc97
+    runbook: docs/architecture/flows/processing-complete-move-message.md
+  - logical_id: outlook-todo-completion-poll
+    display_name: "LCC To Do Completion Poll"
+    flow_guid: a77e7a00-9ae0-4b7e-a8c1-b6a1685e2f98
+    group: outlook-task-loop
+    priority: C
+    state: verified_from_export
+    trigger: "recurrence: every 30 minutes"
+    connectors: [office365, todo]
+    endpoint_families: [railway-todo-completion-poll, office365-message-update]
+    exported_at: "2026-08-11T03:17:55Z"
+    package_path: private/power-automate/exports/production/2026-08-11/03-outlook-task-loop/outlook-todo-completion-poll__LCC-To-Do-Completion-Poll__a77e7a00-9ae0-4b7e-a8c1-b6a1685e2f98__2026-08-11.zip
+    sha256: f13e78e8961f8265187a7b2dc181a9e36f14bad1b80504b0df4450ce92d25466
+    runbook: docs/architecture/flows/todo-completion-poll.md
+  - logical_id: outlook-flagged-email-intake
+    display_name: "LCC Flagged Email Intake"
+    flow_guid: 44227dbb-3c8b-46b2-9a6a-6c46130a6beb
+    group: outlook-task-loop
+    priority: C
+    state: verified_from_export
+    trigger: office365-flagged-email-v3
+    connectors: [office365]
+    endpoint_families: [railway-intake-prepare-upload, railway-intake, lcc-flow-failure-ledger, office365-message-update]
+    exported_at: "2026-08-11T03:18:37Z"
+    package_path: private/power-automate/exports/production/2026-08-11/03-outlook-task-loop/outlook-flagged-email-intake__LCC-Flagged-Email-Intake__44227dbb-3c8b-46b2-9a6a-6c46130a6beb__2026-08-11.zip
+    sha256: d3208a2c05f84e33b5f336aa8438e4a67f0b68e0e29dfac977430fd81dcb3093
+    runbook: docs/architecture/flows/lcc-flagged-email-intake.md
+  - logical_id: sf-http-switch-lookup
+    display_name: "HTTP Switch Salesforce Lookup"
+    deployed_display_name: "Http -> Switch,Get Account records,Respond (account),Get Contact re..."
+    flow_guid: c3744e93-5e95-4b6f-a839-d4308389d21f
+    group: salesforce-backbone
+    priority: supplemental
+    state: verified_from_export
+    trigger: request
+    connectors: [salesforce]
+    endpoint_families: [lcc-flow-failure-ledger]
+    exported_at: "2026-08-11T03:16:18Z"
+    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__c3744e93-5e95-4b6f-a839-d4308389d21f__2026-08-11.zip
+    sha256: dc6c0785aa18924fa135fd0d99ab29767045a76bb8d984f1efcd1b8429336708
+    runbook: docs/architecture/flows/http-switch-salesforce-lookup.md
+
+retired_flows:
+  - logical_id: retired-todo-lcc-sync
+    display_name: "To Do - Life Command Center Sync"
+    flow_guid: fee2a0fe-21fa-4e28-b230-f83189d4b20b
+    state: retired
+  - logical_id: retired-unflag-completed
+    display_name: "Unflag Completed Email Tasks"
+    flow_guid: null
+    state: retired
