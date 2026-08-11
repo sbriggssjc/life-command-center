@@ -1694,6 +1694,36 @@ test('buildInjectionSpec: seller_sentiment uses swapAxes (lines LEFT, bars RIGHT
   assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['265AB2', '9EA9B7']);
 });
 
+test('buildInjectionSpec: seller_sentiment prefers _8q columns only when the sheet actually contains them', () => {
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'pct_price_change_all', col: 'B' },
+    { key: 'pct_price_change_long_term', col: 'C' },
+    { key: 'last_ask_cap_all', col: 'D' },
+    { key: 'last_ask_cap_long_term', col: 'E' },
+    { key: 'pct_price_change_long_term_8q', col: 'F' },
+    { key: 'last_ask_cap_long_term_8q', col: 'G' },
+  ];
+  const with8q = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment',
+    tabName: 'Data_Sentiment',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.deepEqual(with8q.spec.barSeries.map(s => s.valCol), ['B', 'F']);
+  assert.deepEqual(with8q.spec.lineSeries.map(s => s.valCol), ['D', 'G']);
+
+  const govCols = cols.filter((c) => !c.key.endsWith('_8q'));
+  const gov = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment',
+    tabName: 'Data_Sentiment',
+    cols: govCols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.deepEqual(gov.spec.barSeries.map(s => s.valCol), ['B', 'C']);
+  assert.deepEqual(gov.spec.lineSeries.map(s => s.valCol), ['D', 'E']);
+});
+
 test('buildInjectionSpec: seller_sentiment_monthly handles different column layout', () => {
   // Monthly schema has cols in different positions than quarterly
   const cols = [

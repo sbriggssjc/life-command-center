@@ -167,6 +167,31 @@ test('buildCapitalMarketsWorkbook: no drift warning when every template column i
   assert.equal((wb.driftWarnings || []).length, 0);
 });
 
+test('buildCapitalMarketsWorkbook: gov seller_sentiment binds to populated 6+ fields, not dialysis _8q columns', () => {
+  const charts = [{
+    chart_template_id: 'seller_sentiment',
+    name: 'Seller Sentiment',
+    chart_type: 'combo',
+    data_shape: 'time_series_quarterly_combo',
+    view_name: 'cm_gov_seller_sentiment_m',
+    vertical: 'gov',
+    rows: [{
+      period_end: '2025-12-31', subspecialty: 'all',
+      n_all: 24, n_long_term: 11,
+      pct_price_change_all: 0.05, pct_price_change_long_term: 0.07,
+      last_ask_cap_all: 0.0725, last_ask_cap_long_term: 0.0685,
+    }],
+  }];
+  const wb = buildCapitalMarketsWorkbook({
+    vertical: 'gov', subspecialty: 'all', asOf: '2025-12-31', charts, brand: null,
+  });
+  assert.equal((wb.driftWarnings || []).filter((m) => /long_term_8q/.test(m)).length, 0);
+  const h = headersOf(wb, 'Data_Sentiment');
+  assert.ok(h.includes('Price Chg % (6+ yr)'), `headers: ${h.join(' | ')}`);
+  assert.ok(h.includes('Last Ask Cap (6+ yr)'), `headers: ${h.join(' | ')}`);
+  assert.ok(!h.some((v) => /trailing 8-qtr/.test(v)), `gov should not emit _8q headers: ${h.join(' | ')}`);
+});
+
 test('Data_DOM_Ask column headers state the % of Original List basis (audit item E)', () => {
   const charts = [{
     chart_template_id: 'dom_and_pct_of_ask',

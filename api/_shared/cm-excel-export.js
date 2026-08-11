@@ -358,6 +358,15 @@ function selectCohortColumns(cols, chartTemplateId, vertical, rows) {
   });
 }
 
+function selectSellerSentimentColumns(cols, vertical) {
+  if (!Array.isArray(cols) || vertical !== 'gov') return cols;
+  return cols
+    .filter((c) => !String(c?.key || '').endsWith('_8q'))
+    .map((c) => String(c?.key || '').includes('_long_term')
+      ? { ...c, header: c.header.replace('10+ yr', '6+ yr') }
+      : c);
+}
+
 const CHART_COLUMNS = {
   volume_ttm_by_quarter: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -1550,15 +1559,13 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     let cols      = CHART_COLUMNS[chart.chart_template_id];
     if (!tabName || !cols) continue;
 
-    // R73 #22 — seller_sentiment's long-term cohort is vertical-specific: gov is
-    // now the 6+ firm-yr CORE (Round 73), dia stays 10+. CHART_COLUMNS headers
-    // are the static "10+ yr"; relabel the gov copy to "6+ yr" so the data-sheet
-    // headers AND the injector chart series titles (which reference these header
-    // cells) match the gov cohort. Non-mutating copy; dia keeps "10+ yr".
+    // R73 #22 / 2026-08-11 — seller_sentiment's long-term cohort is
+    // vertical-specific: gov is the 6+ firm-yr CORE, dia stays 10+. Also keep
+    // gov off the dialysis-only trailing `_8q` columns; if those blank columns
+    // exist, the native chart's findCol() binds the core series to them before
+    // the populated gov `*_long_term` fields.
     if (chart.chart_template_id === 'seller_sentiment' && vertical === 'gov') {
-      cols = cols.map(c => /_long_term$/.test(c.key)
-        ? { ...c, header: c.header.replace('10+ yr', '6+ yr') }
-        : c);
+      cols = selectSellerSentimentColumns(cols, vertical);
     }
 
     // R76 Layer A1 — prune the cap-by-term tabs to this vertical's canonical
@@ -2907,6 +2914,7 @@ export function getExportBundleSchema() {
     // R76 Layer A1 — vertical-aware cohort-column pruner for the cap-by-term
     // tabs (exported for regression coverage of the empty-column fix).
     selectCohortColumns,
+    selectSellerSentimentColumns,
     // item 3 — pruneIfEmpty column remover (exported for regression coverage).
     pruneEmptyFlaggedColumns,
     periodSummaryTemplates: PERIOD_SUMMARY_TEMPLATES,
