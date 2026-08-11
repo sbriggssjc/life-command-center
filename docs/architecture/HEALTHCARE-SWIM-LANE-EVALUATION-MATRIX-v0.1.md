@@ -119,6 +119,11 @@ Phase A1–A4 is complete against synthetic data. The next authorized design che
 - `HEALTHCARE-ASC-IDTF-LCC-INTEGRATION-CONTRACT-v0.1.md`; and
 - `HEALTHCARE-ASC-IDTF-ECONOMICS-AND-SAMPLING-v0.1.md`.
 
-Implement the reusable manifest command/tests with synthetic ASC and IDTF fixtures next. Do not download an
-official release or draw either 50-property sample until the source artifact list, private storage target, and
-run receipt have been separately reviewed and authorized.
+The reusable lane manifests and aggregate-only synthetic profiler are now implemented. The profiler can
+establish discovery eligibility and source coverage, but it cannot infer STNL/dominant-user form, landlord
+addressability, site economics, or research cost; those gates remain explicitly `not_evaluated`.
+
+Implement a shared synthetic sampling-frame and property-review receipt next. It should freeze stratification,
+randomization, reviewer evidence fields, missingness, research minutes, and hard-gate calculations without
+drawing a live sample. Do not download an official release or draw either 50-property sample until the source
+artifact list, private storage target, and run receipt have been separately reviewed and authorized.

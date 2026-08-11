@@ -1,2 +1,5 @@
 enrollment_id,npi,specialty,organization_name,practice_address,location_type
 ENR000002,9000000202,IDTF,Synthetic Imaging LLC,200 Test Road,fixed
+ENR000003,9000000203,IDTF,Synthetic Mobile Imaging LLC,300 Test Road,mobile_unit
+ENR000004,9000000204,IDTF,Synthetic Unknown Imaging LLC,400 Test Road,unknown
+ENR000005,9000000205,IDTF,Synthetic Office Imaging LLC,500 Test Road,physician_office

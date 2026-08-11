@@ -1,2 +1,3 @@
 enrollment_id,npi,organization_name,practice_address,enrollment_status
 ENR000001,9000000101,Synthetic ASC LLC,100 Test Road,approved
+ENR000003,9000000103,Synthetic Other ASC LLC,999 Other Road,approved

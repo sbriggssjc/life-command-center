@@ -1,6 +1,6 @@
 # Healthcare ASC and Fixed-Site IDTF Source Manifest Contracts v0.1
 
-**Status:** Design contract with synthetic validator/fixture implementation; no download, ingestion, or production access authorized
+**Status:** Design contract with synthetic validator and aggregate-profiler implementation; no download, ingestion, or production access authorized
 
 **Date:** 2026-08-11
 
@@ -129,6 +129,14 @@ The repository now implements the common envelope and exact required-source poli
 origin allowlists, immutable checksums, header contracts, safe relative paths, aggregate-only outputs, bounded
 limits, and the IDTF fixed/mobile exclusion rule. All fixture identities and observations are synthetic.
 
-This checkpoint does not implement a downloader, parse row-level production data, qualify a property, or
-authorize a database/CRM write. The next implementation boundary is an aggregate-only lane profiler and
-eligibility classifier using expanded synthetic fixtures.
+The repository also implements the aggregate-only eligibility classifier in
+`scripts/healthcare-discovery/lane-profile.mjs`, exposed by `npm run healthcare:lane:profile`. Expanded
+synthetic fixtures prove ASC active/quality/enrollment corroboration and IDTF fixed, excluded, and unproven
+site-form handling. Receipts are deterministic, atomically written, bounded by the manifest row ceiling, and
+contain no record-level identifiers.
+
+The classifier deliberately returns `not_evaluated` for property form, landlord addressability, facility
+economics, and research cost. CMS source coverage cannot establish those brokerage gates. This checkpoint
+does not implement a downloader, parse row-level production data, qualify a property, or authorize a
+database/CRM write. The next boundary is the synthetic sampling-frame and review-receipt contract that will
+measure those four gates consistently before any official source run is authorized.

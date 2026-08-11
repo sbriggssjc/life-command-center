@@ -1,2 +1,4 @@
 certification_number,facility_name,address,state,status
 ASC000001,Synthetic Surgery Center,100 Test Road,OK,active
+ASC000002,Synthetic Closed Center,200 Test Road,TX,inactive
+ASC000003,Synthetic Unmatched Center,300 Test Road,FL,active
