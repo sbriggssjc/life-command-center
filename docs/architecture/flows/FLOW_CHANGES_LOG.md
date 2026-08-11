@@ -802,3 +802,38 @@ Round 3 audit finding **R3-M-3d**. The coverage sweep (R3-M-3c) confirmed the 20
 - Scott Briggs confirmed that he owns each of the 17 flows retained in the 2026-08-11 production baseline.
 - Recorded once in `docs/os/FLOW-REGISTRY.yaml` as operator-verified metadata.
 - No package re-export is required for ownership evidence unless ownership changes.
+
+### 2026-08-11 — Power Automate API/HTML route triage and roster route patch
+
+- Flow name:
+  - `SF Deal Team → LCC Roster`
+  - `SF Deal Contacts → LCC Roster`
+- Flow version/export artifact:
+  - Retained 2026-08-11 production exports in `private/power-automate/exports/production/2026-08-11/`
+- Risk tier: `P0`
+- Change summary:
+  - Diagnosed the two roster flows as both alias-drift and route-mount failures.
+  - The retained definitions call `life-command-center-production.up.railway.app`; read-only probes showed that host returns `text/html` 404 for `/version` and the roster route.
+  - The canonical host returns JSON API 404s, but `/api/pipeline/ingest-deal-parties` and `/api/pipeline/ingest-deal-contacts` were not mounted in Railway `server.js`.
+  - Patched the repository to mount the existing `mcp/deal-roster.js` handlers in `server.js` and added both paths to the critical non-operations route list.
+- Exact steps changed:
+  - Added `makeDealRosterRoute` import and `dealRosterRoutes` initialization in `server.js`.
+  - Added authenticated POST mounts for `/api/pipeline/ingest-deal-parties` and `/api/pipeline/ingest-deal-contacts`.
+  - Added both paths to `CRITICAL_ROUTES_NON_OPERATIONS`.
+  - Added a test assertion that every critical non-operations route is mounted by `server.js`.
+- Affected endpoints/tables/connectors:
+  - `POST /api/pipeline/ingest-deal-parties`
+  - `POST /api/pipeline/ingest-deal-contacts`
+  - Power Automate roster flows above.
+- Security impact:
+  - No credentials changed or exposed.
+  - Routes use the existing `requireLccAuth` wrapper and therefore expect the same `X-LCC-Key`/auth posture as opportunity sync.
+- Validation evidence:
+  - `node --check server.js` passed.
+  - `node --test test/operations-subroutes.test.mjs` passed.
+  - Read-only live probes, 2026-08-11: canonical `/version` returned JSON with git-pinned version `14da2f55c5e3`; alias `/version` returned `text/html` 404; canonical unknown API route returned JSON 404.
+  - Full `npm run verify:deploy` is intentionally deferred until after merge/Railway redeploy, because this branch is not live yet.
+- Rollback action:
+  - Revert the `server.js`, `test/critical-subroutes.mjs`, and `test/operations-subroutes.test.mjs` changes.
+  - Do not edit live Power Automate hostnames until the replacement routes have deployed and passed acceptance.
+- Owner: LCC architecture/audit track (Scott Briggs).

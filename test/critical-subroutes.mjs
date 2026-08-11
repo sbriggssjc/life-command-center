@@ -25,4 +25,6 @@ export const CRITICAL_SUBROUTES = [
 //     `_route = 'sf-cis'` (dispatched by api/intake.js case 'sf-cis').
 export const CRITICAL_ROUTES_NON_OPERATIONS = [
   'intake-sf-cis',
+  'pipeline/ingest-deal-parties',
+  'pipeline/ingest-deal-contacts',
 ];
