@@ -1173,6 +1173,53 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     return n;
   }
 
+  function parseHistoryDate(str) {
+    if (!str || typeof str !== 'string') return null;
+    const s = str.trim();
+    const m = s.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{1,2}-\d{1,2}\b/i);
+    if (!m) return null;
+    const d = new Date(m[0]);
+    return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : null;
+  }
+
+  function parsePercentRate(str) {
+    if (!str || typeof str !== 'string') return null;
+    const m = str.match(/\b(\d+(?:\.\d+)?)\s*%/);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) && n >= 2 && n <= 15 ? Math.round((n / 100) * 10000) / 10000 : null;
+  }
+
+  function parseDollarAmountInText(str) {
+    if (!str || typeof str !== 'string') return null;
+    const m = str.match(/\$[\d,]+(?:\.\d+)?\s*[KMB]?\b/i);
+    return m ? parseDollarAmount(m[0]) : null;
+  }
+
+  function parseListingPriceHistory(lines, startIdx) {
+    const rows = [];
+    const stopRe = /^(property|building|land|market|tenants?|seller|buyer|contacts?|sale|sales?\s+history|public\s+record|listing\s+broker|documents?|tax|assessment|loan|lease)\b/i;
+    for (let j = startIdx; j < Math.min(lines.length, startIdx + 90); j++) {
+      const line = String(lines[j] || '').trim();
+      if (!line) continue;
+      if (j > startIdx + 2 && stopRe.test(line) && !/price/i.test(line)) break;
+
+      const windowText = [line, lines[j + 1] || '', lines[j + 2] || ''].join(' ');
+      const change_date = parseHistoryDate(windowText);
+      const price = parseDollarAmountInText(windowText);
+      if (!change_date || !price || price < 25000) continue;
+
+      const cap_rate = parsePercentRate(windowText);
+      const prior = rows[rows.length - 1];
+      if (!prior || prior.change_date !== change_date || Math.round(prior.price) !== Math.round(price)) {
+        rows.push({ change_date, price, cap_rate });
+      }
+    }
+    return rows
+      .sort((a, b) => String(a.change_date).localeCompare(String(b.change_date)))
+      .slice(0, 25);
+  }
+
   // ── Property field extraction ─────────────────────────────────────────
 
   function extractFields(lines, pageUrl) {
@@ -1203,6 +1250,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // labels inside the public-record body.
       if (/^(sales?\s+history|prior\s+sales?|transaction\s+history|transaction\s+details|last\s+sale|last\s+loan|sale[\s\/]*loan\s+history)$/i.test(line)) {
         inSalesHistorySection = true;
+      }
+
+      if (!data.price_change_history && /^(listing\s+)?price\s+history$/i.test(line)) {
+        const hist = parseListingPriceHistory(lines, i + 1);
+        if (hist.length) {
+          data.price_change_history = hist;
+          const first = hist[0];
+          const last = hist[hist.length - 1];
+          data.original_price = first.price;
+          data.list_price = first.price;
+          if (first.cap_rate != null) data.original_cap_rate = first.cap_rate;
+          if (last.change_date) data.last_price_change = last.change_date;
+          if (!data.asking_price && last.price) data.asking_price = `$${Math.round(last.price).toLocaleString()}`;
+          if (!data.cap_rate && last.cap_rate != null) data.cap_rate = `${(last.cap_rate * 100).toFixed(2)}%`;
+        }
       }
 
       if (!data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {

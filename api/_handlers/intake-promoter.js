@@ -220,6 +220,14 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
   // gov stores cap rate as decimal (0.0644 = 6.44%). The extractor emits BOTH
   // decimal (0.055) and percent (7.75) — normalizeCapRate detects which.
   const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
+  const currentAsk = Number(snapshot.asking_price) > 0 ? Number(snapshot.asking_price) : null;
+  const originalAsk = Number(snapshot.original_price || snapshot.list_price) > 0
+    ? Number(snapshot.original_price || snapshot.list_price)
+    : null;
+  const originalCapRate = normalizeCapRate(snapshot.original_cap_rate);
+  const hadPriceChange = originalAsk != null && currentAsk != null
+    ? Math.round(originalAsk) !== Math.round(currentAsk)
+    : null;
 
   // Round 76u (2026-04-27): infer OM date from lease metadata when the OM
   // doesn't have its own date. close_listing_on_sale uses listing_date <=
@@ -280,11 +288,20 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
     city:               snapshot.city || null,
     state:              state || null,
     square_feet:        snapshot.building_sf != null ? Math.round(snapshot.building_sf) : null,
-    asking_price:       snapshot.asking_price || null,
+    asking_price:       currentAsk,
     asking_cap_rate:    capRateDecimal,
-    asking_price_psf:   (snapshot.asking_price && snapshot.building_sf)
-                          ? Math.round((snapshot.asking_price / snapshot.building_sf) * 100) / 100
+    asking_price_psf:   (currentAsk && snapshot.building_sf)
+                          ? Math.round((currentAsk / snapshot.building_sf) * 100) / 100
                           : snapshot.price_per_sf || null,
+    original_price:     originalAsk,
+    original_price_source: originalAsk ? 'om_extraction' : null,
+    original_cap_rate:  originalCapRate,
+    initial_price:      originalAsk,
+    initial_cap_rate:   originalCapRate,
+    last_price:         currentAsk,
+    current_cap_rate:   capRateDecimal,
+    last_price_change:  snapshot.last_price_change || null,
+    price_change_count: hadPriceChange === true ? 1 : null,
     tenant_agency:      firstOf(snapshot.tenant_name) || null,
     annual_rent:        snapshot.annual_rent || null,
     lease_expiration:   snapshot.lease_expiration || null,

@@ -821,9 +821,15 @@ function parseCurrency(val) {
   // — Bug Z follow-up #8, 2026-04-27).
   if (typeof val === 'number') return Number.isFinite(val) ? val : null;
   if (typeof val !== 'string') return null;
-  const cleaned = val.replace(/[$,\s]/g, '');
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
+  const m = val.trim().match(/^\$?\s*([\d,]+(?:\.\d+)?)\s*([KMB])?\b/i);
+  if (!m) return null;
+  let num = parseFloat(m[1].replace(/,/g, ''));
+  if (isNaN(num)) return null;
+  const suffix = (m[2] || '').toUpperCase();
+  if (suffix === 'K') num *= 1e3;
+  else if (suffix === 'M') num *= 1e6;
+  else if (suffix === 'B') num *= 1e9;
+  return num;
 }
 
 /** Parse SF string: "8,750 SF" → 8750 */
@@ -858,6 +864,63 @@ function parseCapRateDecimal(val) {
   // would otherwise be stored as a bogus cap rate. Out-of-band → null.
   if (dec < 0.005 || dec > 0.30) return null;
   return dec;
+}
+
+function normalizePriceChangeHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const price = parseCurrency(row.price);
+    const date = parseDate(row.change_date || row.date || row.changed_at)?.split('T')[0] || null;
+    if (!price || price < 25000 || !date) continue;
+    out.push({
+      change_date: date,
+      price,
+      cap_rate: parseCapRateDecimal(row.cap_rate),
+      change_reason: row.change_reason || row.reason || 'vendor_price_history',
+    });
+  }
+  return out
+    .sort((a, b) => String(a.change_date).localeCompare(String(b.change_date)))
+    .filter((row, idx, arr) => {
+      const prior = arr[idx - 1];
+      return !prior || prior.change_date !== row.change_date || Math.round(prior.price) !== Math.round(row.price);
+    })
+    .slice(0, 25);
+}
+
+export function deriveListingAskHistory(metadata = {}) {
+  const history = normalizePriceChangeHistory(metadata.price_change_history);
+  const first = history[0] || null;
+  const last = history[history.length - 1] || null;
+  const originalPrice = parseCurrency(metadata.original_price)
+    || parseCurrency(metadata.list_price)
+    || first?.price
+    || null;
+  const currentPrice = parseCurrency(metadata.asking_price)
+    || parseCurrency(metadata.last_price)
+    || last?.price
+    || null;
+  const originalCap = parseCapRateDecimal(metadata.original_cap_rate)
+    || first?.cap_rate
+    || null;
+  const currentCap = parseCapRateDecimal(metadata.current_cap_rate)
+    || parseCapRateDecimal(metadata.asking_cap_rate)
+    || parseCapRateDecimal(metadata.cap_rate)
+    || last?.cap_rate
+    || null;
+  const lastPriceChange = parseDate(metadata.last_price_change)?.split('T')[0]
+    || (history.length > 1 ? last?.change_date : null);
+  return {
+    history,
+    originalPrice,
+    currentPrice,
+    originalCap,
+    currentCap,
+    lastPriceChange,
+    priceChangeCount: Math.max(0, history.length - 1),
+  };
 }
 
 /** Parse acres string: "0.54 AC" → 0.54 */
@@ -6127,13 +6190,18 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // guard + manual_override below keep curated values from being clobbered.
     const govListingHistory = {};
     if (domain === 'government' && isMostRecentSale) {
-      const lastAsk  = parseCurrency(metadata.asking_price);
-      const origAsk  = parseCurrency(metadata.list_price);
+      const askHistory = deriveListingAskHistory(metadata);
+      const lastAsk  = askHistory.currentPrice;
+      const origAsk  = askHistory.originalPrice;
+      const lastAskCap = askHistory.currentCap;
+      const origAskCap = askHistory.originalCap;
       const onMarket = parseDate(metadata.listing_date)?.split('T')[0] || null;
       const domRaw   = parseInt(metadata.days_on_market, 10);
       const domDays  = Number.isFinite(domRaw) ? domRaw : null;
       if (lastAsk != null && lastAsk > 0) govListingHistory.last_price = lastAsk;
       if (origAsk != null && origAsk > 0) govListingHistory.initial_price = origAsk;
+      if (lastAskCap != null) govListingHistory.last_cap_rate = lastAskCap;
+      if (origAskCap != null) govListingHistory.initial_cap_rate = origAskCap;
       if (onMarket && onMarket <= datePart) govListingHistory.on_market_date = onMarket;
       if (domDays != null && domDays >= 0 && domDays <= 1825) govListingHistory.days_on_market = domDays;
       const ip = govListingHistory.initial_price ?? null;
@@ -6144,6 +6212,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       if (ip != null && ip > 0 && soldPrice != null && soldPrice > 0) {
         const pct = soldPrice / ip;
         if (pct >= 0.5 && pct <= 1.05) govListingHistory.pct_of_initial = Math.round(pct * 10000) / 10000;
+      }
+      if (lastAskCap != null && capRateVal != null && Math.abs(capRateVal - lastAskCap) <= 0.05) {
+        govListingHistory.bid_ask_spread = Math.round((capRateVal - lastAskCap) * 10000) / 10000;
       }
     }
 
@@ -11639,8 +11710,9 @@ async function upsertDialysisListings(propertyId, metadata) {
  *        create a new Active listing. If none exist, INSERT.
  */
 async function upsertGovListings(propertyId, entity, metadata) {
+  const askHistory = deriveListingAskHistory(metadata);
   // Trigger guard
-  const hasAskingPrice = !!metadata.asking_price;
+  const hasAskingPrice = !!metadata.asking_price || askHistory.currentPrice != null || askHistory.originalPrice != null;
   const hasCurrentSale = Array.isArray(metadata.sales_history)
     && metadata.sales_history.some(s => s.is_current === true);
   if (!hasAskingPrice && !hasCurrentSale) return { count: 0, insertedListingId: null };
@@ -11688,8 +11760,8 @@ async function upsertGovListings(propertyId, entity, metadata) {
   const rawGovPricePsf = parseCurrency(metadata.price_per_sf);
   const govPricePsf = (rawGovPricePsf && rawGovPricePsf >= 50 && rawGovPricePsf <= 2000)
     ? rawGovPricePsf : null;
-  const computedGovPricePsf = (!govPricePsf && parseCurrency(metadata.asking_price) && sfInt)
-    ? Math.round(parseCurrency(metadata.asking_price) / sfInt * 100) / 100
+  const computedGovPricePsf = (!govPricePsf && askHistory.currentPrice && sfInt)
+    ? Math.round(askHistory.currentPrice / sfInt * 100) / 100
     : null;
   const safeGovPricePsf = govPricePsf || computedGovPricePsf || null;
 
@@ -11706,7 +11778,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
   // a historical sale's sold_cap_rate or calculated_cap_rate. Named
   // distinctly from the sales-context capRate to keep the source
   // unambiguous in code review.
-  const listingCapRate = parseCapRateDecimal(metadata.cap_rate);
+  const listingCapRate = askHistory.currentCap;
 
   const record = stripNulls({
     property_id: propertyId,
@@ -11715,9 +11787,18 @@ async function upsertGovListings(propertyId, entity, metadata) {
     city: entity.city || null,
     state: entity.state || null,
     square_feet: sfInt != null ? Math.round(sfInt) : null,
-    asking_price: parseCurrency(metadata.asking_price),
+    asking_price: askHistory.currentPrice,
     asking_cap_rate: listingCapRate,
     asking_price_psf: safeGovPricePsf,
+    original_price: askHistory.originalPrice,
+    original_price_source: askHistory.originalPrice ? 'costar_sidebar_price_history' : null,
+    original_cap_rate: askHistory.originalCap,
+    initial_price: askHistory.originalPrice,
+    initial_cap_rate: askHistory.originalCap,
+    last_price: askHistory.currentPrice,
+    current_cap_rate: askHistory.currentCap,
+    last_price_change: askHistory.lastPriceChange,
+    price_change_count: askHistory.priceChangeCount || null,
     listing_date: listingDate,
     on_market_date: om.on_market_date,
     on_market_date_source: om.source,
@@ -11738,6 +11819,18 @@ async function upsertGovListings(propertyId, entity, metadata) {
   // Always keep property_id and listing_status even after stripNulls
   record.property_id = propertyId;
   record.listing_status = 'Active';
+
+  const preserveExistingAskHistory = (patchData, existing = {}) => {
+    const next = { ...patchData };
+    for (const key of ['original_price', 'original_price_source', 'original_cap_rate', 'initial_price', 'initial_cap_rate']) {
+      if (existing[key] != null) delete next[key];
+    }
+    if (existing.last_price_change != null && next.last_price_change == null) delete next.last_price_change;
+    if (existing.price_change_count != null && Number(existing.price_change_count) > 0 && !next.price_change_count) {
+      delete next.price_change_count;
+    }
+    return next;
+  };
 
   // Dedup: the 2026-04-23 migration adds a partial unique index on
   // (property_id, listing_source, listing_status, listing_date). Use
@@ -11761,14 +11854,15 @@ async function upsertGovListings(propertyId, entity, metadata) {
   const activeLookup = await domainQuery('government', 'GET',
     `available_listings?property_id=eq.${propertyId}` +
     `&is_active=eq.true` +
-    `&select=listing_id&order=listing_date.desc.nullslast&limit=1`
+    `&select=listing_id,original_price,original_price_source,original_cap_rate,initial_price,initial_cap_rate,last_price_change,price_change_count&order=listing_date.desc.nullslast&limit=1`
   );
   if (activeLookup.ok && activeLookup.data?.length) {
-    const existingId = activeLookup.data[0].listing_id;
+    const existingRow = activeLookup.data[0];
+    const existingId = existingRow.listing_id;
     const { property_id: _pid, ...patchData } = record;
     await domainPatch('government',
       `available_listings?listing_id=eq.${existingId}`,
-      patchData, 'upsertGovListings:updateActive'
+      preserveExistingAskHistory(patchData, existingRow), 'upsertGovListings:updateActive'
     );
     // Fall through to the auto-close-on-sale check below so a fresh sale
     // still flips this row to Sold in one round of work.
@@ -11799,17 +11893,48 @@ async function upsertGovListings(propertyId, entity, metadata) {
       const raceLookup = await domainQuery('government', 'GET',
         `available_listings?property_id=eq.${propertyId}` +
         `&is_active=eq.true` +
-        `&select=listing_id&order=listing_date.desc.nullslast&limit=1`
+        `&select=listing_id,original_price,original_price_source,original_cap_rate,initial_price,initial_cap_rate,last_price_change,price_change_count&order=listing_date.desc.nullslast&limit=1`
       );
       if (raceLookup.ok && raceLookup.data?.length) {
+        const raceRow = raceLookup.data[0];
         const { property_id: _pidRace, ...patchRace } = record;
         result = await domainPatch('government',
-          `available_listings?listing_id=eq.${raceLookup.data[0].listing_id}`,
-          patchRace, 'upsertGovListings:raceMerge');
+          `available_listings?listing_id=eq.${raceRow.listing_id}`,
+          preserveExistingAskHistory(patchRace, raceRow), 'upsertGovListings:raceMerge');
       }
     }
   }
   if (!result.ok) return { count: 0, insertedListingId: null };
+
+  let effectiveListingId = (typeof _existingActiveId !== 'undefined' && _existingActiveId) ? _existingActiveId : null;
+  if (!effectiveListingId) {
+    if (Array.isArray(result.data) && result.data.length && result.data[0].listing_id != null) {
+      effectiveListingId = result.data[0].listing_id;
+    } else if (result.data?.listing_id != null) {
+      effectiveListingId = result.data.listing_id;
+    }
+  }
+  if (effectiveListingId && askHistory.history.length) {
+    const existingHist = await domainQuery('government', 'GET',
+      `listing_price_history?listing_id=eq.${encodeURIComponent(effectiveListingId)}` +
+      `&select=change_date,price&limit=100`
+    );
+    const seen = new Set((existingHist.ok && Array.isArray(existingHist.data) ? existingHist.data : [])
+      .map((r) => `${String(r.change_date).slice(0, 10)}|${Math.round(Number(r.price) || 0)}`));
+    const rows = askHistory.history
+      .filter((r) => !seen.has(`${r.change_date}|${Math.round(r.price)}`))
+      .map((r) => ({
+        listing_id: effectiveListingId,
+        price: r.price,
+        cap_rate: r.cap_rate,
+        change_date: r.change_date,
+        change_reason: r.change_reason || 'vendor_price_history',
+      }));
+    if (rows.length) {
+      await domainQuery('government', 'POST', 'listing_price_history', rows,
+        { Prefer: 'return=minimal' }, { label: 'upsertGovListings:priceHistory' });
+    }
+  }
 
   // Post-insert check: if a closed sale already exists for this property
   // within the last 2 years, immediately close the listing so we don't

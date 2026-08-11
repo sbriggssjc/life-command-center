@@ -50,3 +50,30 @@ Next Capture Fix Track:
 - Preserve `list_price` / `original_price` separately from current `asking_price` through sidepanel normalization.
 - Update `upsertGovListings` and OM/listing importers to write `original_price`/`original_cap_rate` write-once, `last_price`/current ask separately, and upsert dated price history entries when supplied.
 - Promote listing history to sold gov rows fill-blank only, guarded by sale-linked listing preference and `on_market_date <= sale_date`.
+
+Implementation Pass:
+- `extension/content/costar.js`
+  - Added conservative parsing for CoStar `Listing Price History` rows.
+  - Emits `price_change_history`, `original_price` / `list_price`, `original_cap_rate`, and `last_price_change` when the panel is present.
+- `extension/sidepanel.js`
+  - Preserves `list_price` and `original_price` separately instead of aliasing `list_price` into `asking_price`.
+  - Threads original ask fields and `price_change_history` into extension metadata and OM staging seed data.
+  - Upgraded asking-price sanitation to understand abbreviated CoStar values such as `$10.13M`.
+- `api/_handlers/sidebar-pipeline.js`
+  - Added `deriveListingAskHistory()` to normalize original/current ask, original/current ask cap, last price-change date, and vendor history rows.
+  - Gov sale propagation now fills `initial_price`, `last_price`, `initial_cap_rate`, `last_cap_rate`, `had_price_change`, `pct_of_initial`, and `bid_ask_spread` from real captured ask history when available.
+  - Gov active listing writer now stores original/current ask fields, protects existing original ask fields on PATCH, and inserts non-duplicate rows into `listing_price_history`.
+  - Server currency parsing now handles K/M/B suffixes.
+- `api/_handlers/intake-promoter.js`
+  - Gov OM listings now write distinct original/current ask fields when extraction/seed data provides an original/list ask.
+- `test/gov-listing-ask-history.test.mjs`
+  - Added focused coverage for ask-history normalization, dedupe, cap rates, and no-fabrication behavior.
+
+Implementation Verification:
+- `node --test test\gov-listing-ask-history.test.mjs` — pass, 3/3.
+- `node --test test\gov-sale-notes-ingestion.test.mjs` — pass, 10/10.
+- `node --test test\pgrst204-schema-drift.test.mjs` — pass, 16/16.
+- `node --test test\w3-7-om-comp-resolver.test.mjs` — pass, 24/24.
+- `node --test test\sidebar-sales-writer.test.mjs` — pass, 9/9.
+- `node --check extension\content\costar.js` — pass.
+- `node --check extension\sidepanel.js` — pass.

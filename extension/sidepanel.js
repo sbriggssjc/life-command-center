@@ -1728,7 +1728,9 @@ function renderCompareTable(ctx, lccEntity, sourceLabel) {
     sale_price: ['sale_price', 'last_sale_price'],
     sale_date: ['sale_date', 'last_sale_date'],
     cap_rate: ['cap_rate'],
-    asking_price: ['asking_price', 'list_price'],
+    asking_price: ['asking_price'],
+    list_price: ['list_price'],
+    original_price: ['original_price', 'list_price'],
     noi: ['noi', 'net_operating_income'],
     tenant_name: ['tenant_name', 'tenant', 'primary_tenant'],
     owner_name: ['owner_name', 'owner', 'recorded_owner'],
@@ -1996,7 +1998,9 @@ function renderLccFields(entity, data, ctx) {
     occupancy:      ['occupancy', 'occupancy_percent', 'gov_occupancy_pct'],
     cap_rate:       ['cap_rate', 'asking_cap_rate', 'current_cap_rate'],
     noi:            ['noi', 'net_operating_income'],
-    asking_price:   ['asking_price', 'list_price'],
+    asking_price:   ['asking_price'],
+    list_price:     ['list_price'],
+    original_price: ['original_price', 'list_price'],
     tenant_name:    ['tenant_name', 'tenant', 'primary_tenant', 'agency', 'agency_full_name'],
     lease_expiration: ['lease_expiration', 'lease_exp'],
     lease_term:     ['lease_term'],
@@ -2460,6 +2464,19 @@ function buildMetadata(ctx, domain) {
     if (v == null || v === '') return null;
     return /\d/.test(String(v)) ? v : null;
   };
+  const parseMoneyLike = (v) => {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    const m = String(v).trim().match(/^\$?\s*([\d,]+(?:\.\d+)?)\s*([KMB])?\b/i);
+    if (!m) return null;
+    let n = Number(m[1].replace(/,/g, ''));
+    if (!Number.isFinite(n)) return null;
+    const suffix = (m[2] || '').toUpperCase();
+    if (suffix === 'K') n *= 1e3;
+    else if (suffix === 'M') n *= 1e6;
+    else if (suffix === 'B') n *= 1e9;
+    return n;
+  };
   // Round 76ej.w (2026-05-05): a real CRE asking price for any
   // building with measurable SF is in the hundreds of thousands or
   // millions. Sub-$5k values are always price-per-SF leaks ($8,286 /
@@ -2472,10 +2489,10 @@ function buildMetadata(ctx, domain) {
   const sanitizeAskingPrice = (v, ctxNoi) => {
     if (v == null || v === '') return null;
     if (!/\d/.test(String(v))) return null;
-    const numeric = Number(String(v).replace(/[^0-9.]/g, ''));
+    const numeric = parseMoneyLike(v);
     if (!Number.isFinite(numeric) || numeric < 25000) return null;
     if (ctxNoi) {
-      const noiNumeric = Number(String(ctxNoi).replace(/[^0-9.]/g, ''));
+      const noiNumeric = parseMoneyLike(ctxNoi);
       if (Number.isFinite(noiNumeric) && noiNumeric > 0
           && Math.abs(numeric - noiNumeric) / Math.max(numeric, noiNumeric) < 0.01) {
         return null;
@@ -2491,6 +2508,11 @@ function buildMetadata(ctx, domain) {
     extracted_at: new Date().toISOString(),
     // Financials
     asking_price: sanitizeAskingPrice(ctx.asking_price, ctx.noi),
+    list_price: sanitizeAskingPrice(ctx.list_price, ctx.noi),
+    original_price: sanitizeAskingPrice(ctx.original_price || ctx.list_price, ctx.noi),
+    original_cap_rate: sanitizeNumericField(ctx.original_cap_rate),
+    last_price_change: ctx.last_price_change || null,
+    price_change_history: Array.isArray(ctx.price_change_history) ? ctx.price_change_history : null,
     cap_rate: sanitizeNumericField(ctx.cap_rate),
     noi: sanitizeNumericField(ctx.noi),
     price_per_sf: sanitizeNumericField(ctx.price_per_sf),
@@ -2793,6 +2815,11 @@ async function wireStageListingButton(ctx) {
           state: ctx.state || null,
           tenant_name: ctx.tenant_name || null,
           asking_price: ctx.asking_price || null,
+          list_price: ctx.list_price || null,
+          original_price: ctx.original_price || ctx.list_price || null,
+          original_cap_rate: ctx.original_cap_rate || null,
+          last_price_change: ctx.last_price_change || null,
+          price_change_history: Array.isArray(ctx.price_change_history) ? ctx.price_change_history : null,
           cap_rate: ctx.cap_rate || null,
           lease_expiration: ctx.lease_expiration || null,
           // Round 76ej.l: marketing-description-mined lease facts so the
@@ -2897,6 +2924,11 @@ async function wireStageListingButton(ctx) {
             state: ctx.state || null,
             tenant_name: ctx.tenant_name || null,
             asking_price: ctx.asking_price || null,
+            list_price: ctx.list_price || null,
+            original_price: ctx.original_price || ctx.list_price || null,
+            original_cap_rate: ctx.original_cap_rate || null,
+            last_price_change: ctx.last_price_change || null,
+            price_change_history: Array.isArray(ctx.price_change_history) ? ctx.price_change_history : null,
             cap_rate: ctx.cap_rate || null,
             lease_expiration: ctx.lease_expiration || null,
             // Round 76ej.l: marketing-description-mined lease facts.
