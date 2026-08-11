@@ -837,3 +837,65 @@ Round 3 audit finding **R3-M-3d**. The coverage sweep (R3-M-3c) confirmed the 20
   - Revert the `server.js`, `test/critical-subroutes.mjs`, and `test/operations-subroutes.test.mjs` changes.
   - Do not edit live Power Automate hostnames until the replacement routes have deployed and passed acceptance.
 - Owner: LCC architecture/audit track (Scott Briggs).
+
+### 2026-08-11 — Roster flow updated exports verified
+
+- Flow name:
+  - `SF Deal Team → LCC Roster`
+  - `SF Deal Contacts → LCC Roster`
+- Flow version/export artifact:
+  - `C:\Users\scott\life-command-center\private\power-automate\exports\production\2026-08-11\SFDealTeam→LCCRoster_20260811160520.zip`
+  - `C:\Users\scott\life-command-center\private\power-automate\exports\production\2026-08-11\SFDealContacts→LCCRoster_20260811160810.zip`
+- Risk tier: `P0` remediation verification.
+- Change summary:
+  - Verified the updated exports now point the single `HTTP` action in each flow at the canonical Railway host.
+  - Methods, body expressions, header names, and chunked runtime configuration were preserved.
+- Exact steps changed:
+  - `SF Deal Team → LCC Roster`: URI changed to `https://tranquil-delight-production-633f.up.railway.app/api/pipeline/ingest-deal-parties`.
+  - `SF Deal Contacts → LCC Roster`: URI changed to `https://tranquil-delight-production-633f.up.railway.app/api/pipeline/ingest-deal-contacts`.
+- Affected endpoints/tables/connectors:
+  - `POST /api/pipeline/ingest-deal-parties`
+  - `POST /api/pipeline/ingest-deal-contacts`
+- Security impact:
+  - No credential values inspected or recorded.
+  - Header names only were verified. The team flow export includes `Authorization`; the contacts flow export includes `Authorization` and `Content-Type`.
+- Validation evidence:
+  - SHA-256 checksums:
+    - team roster export: `3e6495930c9b370e8fddb6b4772ed73cdefd165424a2dd7e3e1de291159f261e`
+    - contacts roster export: `fd2ce647c05e3e67cf71d137f4e8e4ad875d6191d0fb9df6524781a7633b390e`
+  - Read-only route probe after export verification: unauthenticated empty POST to both canonical roster routes returned JSON `401`, not HTML.
+  - Scott triggered one run of each flow; latest run result remains owner-side evidence pending review.
+- Rollback action:
+  - Restore the prior retained export if the canonical run fails for a non-auth/routing reason.
+  - Do not switch back to `life-command-center-production.up.railway.app`; that alias returned `text/html` 404s and is not a valid LCC app alias.
+- Owner: Scott Briggs.
+
+### 2026-08-11 — Roster flow triggered-run evidence reviewed
+
+- Flow name:
+  - `SF Deal Team → LCC Roster`
+  - `SF Deal Contacts → LCC Roster`
+- Flow version/export artifact:
+  - Updated 2026-08-11 exports listed in the prior entry.
+- Risk tier: `P0` route/auth acceptance; `P1` contact-roster business-state follow-up.
+- Change summary:
+  - Scott triggered one run of each edited flow and supplied the HTTP action run-history output.
+  - Both calls reached canonical Railway and returned HTTP 200 `application/json`.
+  - Team-roster flow is healthy and idempotent: 200 submitted rows matched Team Briggs users and existing deal-party edges.
+  - Contact-roster flow is now transport-healthy but a business no-op: all 7,213 submitted contact-role rows skipped because no submitted deal resolved to the LCC deal backbone.
+  - Source-query review explains the difference: the team flow is scoped to Team Briggs `OpportunityTeamMember` rows, while the contacts flow pulls all non-deleted `OpportunityContactRole` rows.
+- Exact steps changed:
+  - No additional flow definition edits in this entry.
+- Affected endpoints/tables/connectors:
+  - `POST /api/pipeline/ingest-deal-parties`
+  - `POST /api/pipeline/ingest-deal-contacts`
+  - `entity_relationships` deal-party edges.
+- Security impact:
+  - No secrets recorded. Run-history header and payload details were summarized only.
+- Validation evidence:
+  - `SF Deal Team → LCC Roster`: 2026-08-11 11:03:59-11:04:41 local, status `Succeeded`, HTTP 200 JSON, `ok=true`, `total=200`, `tb_members=200`, `edges_existing=200`, `skipped_no_deal=0`.
+  - `SF Deal Contacts → LCC Roster`: 2026-08-11 11:08:33-11:08:34 local, status `Succeeded`, HTTP 200 JSON, `ok=true`, `total=7213`, `resolved=0`, `edges_created=0`, `edges_existing=0`, `skipped_no_deal=7213`, `skipped_no_contact=0`.
+- Rollback action:
+  - None for the route fix; do not revert to the alias host.
+  - For the contacts flow, pause or rescope the source query if repeated no-op runs create unnecessary load/noise.
+- Owner: Scott Briggs.

@@ -130,6 +130,19 @@ flows:
       exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-parties"
       finding: "Alias host returned text/html 404 for /version and route probe; canonical host returned JSON 404 before route mount fix."
       remediation: "After Railway deploy of server.js route mount, change flow host to tranquil-delight-production-633f.up.railway.app."
+      remediated_export:
+        verified_at: "2026-08-11T16:08:10-05:00"
+        absolute_path: "C:\\Users\\scott\\life-command-center\\private\\power-automate\\exports\\production\\2026-08-11\\SFDealTeam→LCCRoster_20260811160520.zip"
+        sha256: 3e6495930c9b370e8fddb6b4772ed73cdefd165424a2dd7e3e1de291159f261e
+        endpoint: "POST https://tranquil-delight-production-633f.up.railway.app/api/pipeline/ingest-deal-parties"
+        route_probe: "POST without credentials returned JSON 401, confirming route is mounted and auth-gated."
+      run_history_2026_08_11:
+        evidence_time_local: "2026-08-11 11:03:59-11:04:41"
+        status: Succeeded
+        http_status: 200
+        content_type: "application/json; charset=utf-8"
+        redacted_outcome: "ok=true total=200 tb_members=200 edges_existing=200 skipped_no_deal=0"
+        assessment: "Accepted: route, auth, and team-roster business contract are healthy; run was idempotent."
   - logical_id: sf-deal-contact-roster
     display_name: "SF Deal Contacts → LCC Roster"
     flow_guid: a50d3f56-3891-4d8f-8636-b9b09e58c2ee
@@ -148,6 +161,19 @@ flows:
       exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-contacts"
       finding: "Alias host returned text/html 404 for /version and route probe; canonical host returned JSON 404 before route mount fix."
       remediation: "After Railway deploy of server.js route mount, change flow host to tranquil-delight-production-633f.up.railway.app."
+      remediated_export:
+        verified_at: "2026-08-11T16:08:10-05:00"
+        absolute_path: "C:\\Users\\scott\\life-command-center\\private\\power-automate\\exports\\production\\2026-08-11\\SFDealContacts→LCCRoster_20260811160810.zip"
+        sha256: fd2ce647c05e3e67cf71d137f4e8e4ad875d6191d0fb9df6524781a7633b390e
+        endpoint: "POST https://tranquil-delight-production-633f.up.railway.app/api/pipeline/ingest-deal-contacts"
+        route_probe: "POST without credentials returned JSON 401, confirming route is mounted and auth-gated."
+      run_history_2026_08_11:
+        evidence_time_local: "2026-08-11 11:08:33-11:08:34"
+        status: Succeeded
+        http_status: 200
+        content_type: "application/json; charset=utf-8"
+        redacted_outcome: "ok=true total=7213 resolved=0 edges_created=0 edges_existing=0 skipped_no_deal=7213 skipped_no_contact=0"
+        assessment: "Transport fixed, but business-state no-op: contact-role OpportunityIds did not resolve to LCC bd_opportunities."
   - logical_id: sf-activity-sync
     display_name: "Sync SF Activities to Supabase"
     flow_guid: 2b145cca-031e-43ba-bf42-db976cf380ed
