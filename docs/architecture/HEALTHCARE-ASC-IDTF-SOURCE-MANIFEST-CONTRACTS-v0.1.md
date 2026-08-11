@@ -1,6 +1,6 @@
 # Healthcare ASC and Fixed-Site IDTF Source Manifest Contracts v0.1
 
-**Status:** Design contract; no download, ingestion, or production access authorized
+**Status:** Design contract with synthetic validator/fixture implementation; no download, ingestion, or production access authorized
 
 **Date:** 2026-08-11
 
@@ -121,3 +121,14 @@ database tables, drawing the 50-property samples, and promoting any fact into LC
 - [CMS Physician and Other Practitioners methodology](https://data.cms.gov/resources/medicare-physician-other-practitioners-methodology-2022)
 - [CMS IDTF enrollment guidance](https://www.cms.gov/Medicare/Provider-Enrollment-and-Certification/MedicareProviderSupEnroll/Downloads/National_Provider_Enrollment_Conference_Enrollment_of_Independent_Diagnostic_Testing_Facilities.pdf)
 - [Supabase Data API security guidance](https://supabase.com/docs/guides/api/securing-your-api)
+
+## 8. Synthetic implementation checkpoint
+
+The repository now implements the common envelope and exact required-source policies in
+`scripts/healthcare-discovery/lane-manifest.mjs`. Frozen ASC and fixed-site IDTF manifests exercise official
+origin allowlists, immutable checksums, header contracts, safe relative paths, aggregate-only outputs, bounded
+limits, and the IDTF fixed/mobile exclusion rule. All fixture identities and observations are synthetic.
+
+This checkpoint does not implement a downloader, parse row-level production data, qualify a property, or
+authorize a database/CRM write. The next implementation boundary is an aggregate-only lane profiler and
+eligibility classifier using expanded synthetic fixtures.
