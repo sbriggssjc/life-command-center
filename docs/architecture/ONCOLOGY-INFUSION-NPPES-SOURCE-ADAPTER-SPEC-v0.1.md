@@ -142,3 +142,6 @@ linkage; do not silently narrow to arbitrary states or operators.
 The next gate is an implementation-readiness review of the exact taxonomy codes, source checksums, private
 storage path, proposed DDL/privileges and dry-run executable package. No production schema or data load is
 authorized by these documents.
+
+That review package is now defined in
+`ONCOLOGY-INFUSION-IMPLEMENTATION-READINESS-PACKAGE-v0.1.md`; its status remains design-only.

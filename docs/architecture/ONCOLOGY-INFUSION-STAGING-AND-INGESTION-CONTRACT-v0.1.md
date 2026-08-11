@@ -94,3 +94,6 @@ source history.
 Before creating the schema, approve: target Supabase project, private-storage location, service identity,
 retention period, exact DDL, privilege matrix and rollback test. Run database security/performance advisors after
 the migration and verify access using both the ingestion identity and an unprivileged identity.
+
+Implementation-readiness package:
+`ONCOLOGY-INFUSION-IMPLEMENTATION-READINESS-PACKAGE-v0.1.md`.
