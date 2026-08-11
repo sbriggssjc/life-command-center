@@ -922,6 +922,21 @@ export function resolveDisplayFrom(displayFromRows, chart_template_id, view_name
   return String((exact || matches[0]).display_from).slice(0, 10);
 }
 
+const CURATED_DISPLAY_FROM = {
+  gov: {
+    // Gov on-market/listing inventory is not robust before the 2012 coverage
+    // era. The live gov cm_view_registry does not yet expose display_from, so
+    // keep this export-side floor until the registry migration catches up.
+    market_turnover: '2012-01-01',
+  },
+};
+
+export function resolveEffectiveDisplayFrom(displayFromRows, chart_template_id, view_name, vertical) {
+  return resolveDisplayFrom(displayFromRows, chart_template_id, view_name)
+    || CURATED_DISPLAY_FROM[String(vertical || '').toLowerCase()]?.[chart_template_id]
+    || null;
+}
+
 function normalizePacketVertical(vertical) {
   const v = String(vertical || '').trim().toLowerCase();
   if (v === 'dia') return 'dialysis';
@@ -1850,7 +1865,7 @@ async function exportWorkbook(req, res) {
           : cropRowsToDisplayFrom(
               clampRowsToAsOf(baseRows, tmpl, resolvedAsOf),
               tmpl,
-              resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, view_name)
+              resolveEffectiveDisplayFrom(displayFromRows, tmpl.chart_template_id, view_name, vertical)
             ),
         // Round 68-E (G8): distinguish a real fetch failure (after the
         // fetchView retry pass) from a legitimately empty view, so the tab
@@ -1934,7 +1949,7 @@ async function exportWorkbook(req, res) {
   // make sheet->display_from fully visible in the deploy logs so a missing crop
   // (Bid-Ask started 2001) can never silently recur.
   for (const c of realCharts) {
-    const df = resolveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name);
+    const df = resolveEffectiveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name, vertical);
     console.log(
       `[exportWorkbook] display_from sheet=${c.chart_template_id} ` +
       `view=${c.view_name} display_from=${df || 'none'} rows=${Array.isArray(c.rows) ? c.rows.length : 0}`
@@ -2324,7 +2339,7 @@ async function exportWorkbook(req, res) {
         // instead of its registered display_from. Re-apply BOTH transforms to
         // the mapped output so a master_m-driven sheet crops exactly like a
         // realCharts-driven one.
-        const df = resolveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name);
+        const df = resolveEffectiveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name, vertical);
         c.rows = cropRowsToDisplayFrom(
           clampRowsToAsOf(mapper(masterMonthlyRows), c, resolvedAsOf),
           c,
@@ -2384,7 +2399,7 @@ async function exportWorkbook(req, res) {
     // masterMonthlyRows, which run to the latest completed quarter regardless of
     // the requested as_of. clampRowsToAsOf drops rows with period_end > as_of on
     // the same time-series shapes the realCharts path already clamps.
-    const df = resolveDisplayFrom(displayFromRows, tmpl.chart_template_id, tmpl.view_name_template);
+    const df = resolveEffectiveDisplayFrom(displayFromRows, tmpl.chart_template_id, tmpl.view_name_template, vertical);
     rows = cropRowsToDisplayFrom(clampRowsToAsOf(rows, tmpl, resolvedAsOf), tmpl, df);
     return {
       chart_template_id: tmpl.chart_template_id,

@@ -2,7 +2,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCapitalMarketsWorkbook } from '../api/_shared/cm-excel-export.js';
-import { cropRowsToDisplayFrom, resolveDisplayFrom, buildAnnualBuyerShare } from '../api/capital-markets.js';
+import {
+  cropRowsToDisplayFrom,
+  resolveDisplayFrom,
+  resolveEffectiveDisplayFrom,
+  buildAnnualBuyerShare,
+} from '../api/capital-markets.js';
 
 test('resolveDisplayFrom prefers the registry row matching the exported view_name', () => {
   const rows = [
@@ -20,12 +25,38 @@ test('resolveDisplayFrom falls back to any row when the view_name does not match
   assert.equal(resolveDisplayFrom([], 'market_turnover', 'x'), null);
 });
 
+test('resolveEffectiveDisplayFrom applies the curated gov market_turnover crop when registry has no display_from', () => {
+  assert.equal(
+    resolveEffectiveDisplayFrom([], 'market_turnover', 'cm_gov_market_turnover_m', 'gov'),
+    '2012-01-01'
+  );
+  assert.equal(
+    resolveEffectiveDisplayFrom([], 'market_turnover', 'cm_dialysis_market_turnover_m', 'dialysis'),
+    null
+  );
+});
+
 test('cropRowsToDisplayFrom accepts a resolved date string (the production path)', () => {
   const rows = [{ period_end: '2015-06-30' }, { period_end: '2017-06-30' }];
   const tmpl = { chart_template_id: 'market_turnover', data_shape: 'monthly_ttm' };
   assert.deepEqual(
     cropRowsToDisplayFrom(rows, tmpl, '2016-10-31').map((r) => r.period_end),
     ['2017-06-30']
+  );
+});
+
+test('gov market_turnover curated crop removes unreliable pre-2012 on-market rows', () => {
+  const rows = [
+    { period_end: '2006-06-30', active_count: 3, months_of_supply: 0.2 },
+    { period_end: '2011-12-31', active_count: 6, months_of_supply: 0.4 },
+    { period_end: '2012-01-31', active_count: 9, months_of_supply: 0.7 },
+    { period_end: '2026-06-30', active_count: 107, months_of_supply: 16.9 },
+  ];
+  const tmpl = { chart_template_id: 'market_turnover', data_shape: 'monthly_ttm' };
+  const df = resolveEffectiveDisplayFrom([], 'market_turnover', 'cm_gov_market_turnover_m', 'gov');
+  assert.deepEqual(
+    cropRowsToDisplayFrom(rows, tmpl, df).map((r) => r.period_end),
+    ['2012-01-31', '2026-06-30']
   );
 });
 
