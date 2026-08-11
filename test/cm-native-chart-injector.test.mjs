@@ -5810,6 +5810,26 @@ test('R68-E D13: quarterly_volume_bars y-axis uses abbreviated currency (million
   assert.ok(!/formatCode="\$#,##0_\)/.test(xml), 'no raw $#,##0 currency axis');
 });
 
+test('quarterly_volume_bars switches y-axis and callouts to billions for large plotted values', () => {
+  const rows = Array.from({ length: 16 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    quarterly_volume: 1_100_000_000 + i * 75_000_000,
+  }));
+  const out = buildInjectionSpec({
+    chart_template_id: 'quarterly_volume_bars',
+    tabName: 'Data_Volume_Quarterly',
+    cols: [
+      { key: 'period_end',       col: 'A' },
+      { key: 'quarterly_volume', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 20,
+    brand: { palette: {} },
+    rows,
+  });
+  assert.match(out.spec.valAxNumFmt, /,,,\"B\"/, 'spec carries abbreviated billions format');
+  assert.ok((out.spec.dataLabels || []).some((l) => /\$[0-9.]+B/.test(l.text)), 'callouts use $XB labels');
+});
+
 test('R68-E G11: sources_of_capital horizontal bar — category labels nextTo + centered', () => {
   const out = buildInjectionSpec({
     chart_template_id: 'sources_of_capital',

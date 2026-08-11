@@ -796,6 +796,16 @@ function inferAnnotationFmt(numFmt) {
   return null;
 }
 
+function currencyScaleForValues(values) {
+  const maxAbs = (values || [])
+    .map((v) => Math.abs(Number(v)))
+    .filter(Number.isFinite)
+    .reduce((m, v) => Math.max(m, v), 0);
+  return maxAbs >= 1_000_000_000
+    ? { valAxNumFmt: VAL_FMT_CURRENCY_B, annotateFmt: 'currency_b' }
+    : { valAxNumFmt: VAL_FMT_CURRENCY_M_1DP, annotateFmt: 'currency_m' };
+}
+
 /**
  * Given an array of rows + a value-extraction function, return the
  * indices and formatted labels for the max, min, and last data points.
@@ -4090,16 +4100,19 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       };
     }
     case 'quarterly_volume_bars':
-      // R68-E (D13): abbreviate the currency y-axis ($300M, $1.2B) instead of
-      // raw $300,000,000. Quarterly volume spans ~$100M-$1.2B; the $X.XM form
-      // matches the avg_deal_size convention and keeps tick labels legible.
-      // (volume_ttm_by_quarter already abbreviates in billions.)
+      // R68-E (D13) + CM gov feedback: abbreviate the currency y-axis and
+      // callouts using the plotted scale. Smaller rotations use $XM; charts
+      // with billion-dollar bars use $XB so the labels don't read as huge
+      // million figures.
       // CM chart fixes round 3, item 4 — add peak/low/latest callouts (was in
       // the policy list but the bar path never wired annotate).
+      const qVolScale = currencyScaleForValues(
+        Array.isArray(plottedRows) ? plottedRows.map((r) => r.quarterly_volume) : []
+      );
       return singleSeries('bar', 'quarterly_volume', sky, {
-        valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
+        valAxNumFmt: qVolScale.valAxNumFmt,
         annotateKey: 'quarterly_volume',
-        annotateFmt: 'currency_m',
+        annotateFmt: qVolScale.annotateFmt,
       });
 
     // P4 — stacked bar charts

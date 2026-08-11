@@ -55,6 +55,45 @@ import { invokeChatProvider } from './_shared/ai.js';
 // composer({ vertical, subspecialty, asOf, allCharts }) → row array
 // allCharts is the array of fully-fetched, non-synthetic charts in this batch.
 // ---------------------------------------------------------------------------
+function buildRolling3MonthVolumeBars(masterMonthlyRows) {
+  const monthly = [];
+  if (Array.isArray(masterMonthlyRows) && masterMonthlyRows.length) {
+    for (const r of masterMonthlyRows) {
+      if (r.period_end == null) continue;
+      if (r.monthly_volume == null && r.monthly_count == null) continue;
+      monthly.push({
+        period_end: r.period_end,
+        mv: r.monthly_volume == null ? null : Number(r.monthly_volume),
+        mc: r.monthly_count == null ? null : Number(r.monthly_count),
+      });
+    }
+  }
+  monthly.sort((a, b) => (String(a.period_end) < String(b.period_end) ? -1 : 1));
+
+  const out = [];
+  for (let i = 0; i < monthly.length; i++) {
+    if (i < 2) {
+      out.push({ period_end: monthly[i].period_end, quarterly_volume: null, quarterly_count: null });
+      continue;
+    }
+    let vol = 0;
+    let cnt = 0;
+    let haveVol = false;
+    let haveCnt = false;
+    for (let j = i - 2; j <= i; j++) {
+      const m = monthly[j];
+      if (Number.isFinite(m.mv)) { vol += m.mv; haveVol = true; }
+      if (Number.isFinite(m.mc)) { cnt += m.mc; haveCnt = true; }
+    }
+    out.push({
+      period_end: monthly[i].period_end,
+      quarterly_volume: haveVol ? vol : null,
+      quarterly_count: haveCnt ? cnt : null,
+    });
+  }
+  return out;
+}
+
 const SYNTHETIC_COMPOSERS = {
   'volume_cap_summary': ({ asOf, allCharts }) => {
     const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
@@ -283,44 +322,8 @@ const SYNTHETIC_COMPOSERS = {
     // other charts. Computed over the FULL monthly series before the caller
     // applies the display_from / as_of crops (so the first visible month still
     // carries a full trailing window).
-    const monthly = [];
-    if (Array.isArray(masterMonthlyRows) && masterMonthlyRows.length) {
-      for (const r of masterMonthlyRows) {
-        if (r.period_end == null) continue;
-        if (r.monthly_volume == null && r.monthly_count == null) continue;
-        monthly.push({
-          period_end: r.period_end,
-          mv: r.monthly_volume == null ? null : Number(r.monthly_volume),
-          mc: r.monthly_count == null ? null : Number(r.monthly_count),
-        });
-      }
-    }
-    monthly.sort((a, b) => (String(a.period_end) < String(b.period_end) ? -1 : 1));
-
-    if (monthly.length > 0) {
-      const out = [];
-      for (let i = 0; i < monthly.length; i++) {
-        // Require a full 3-month trailing window; the first two months lack
-        // enough history → null (gap-skipped by the chart), not a misleading
-        // low bar. The head is cropped by display_from anyway.
-        if (i < 2) {
-          out.push({ period_end: monthly[i].period_end, quarterly_volume: null, quarterly_count: null });
-          continue;
-        }
-        let vol = 0, cnt = 0, haveVol = false, haveCnt = false;
-        for (let j = i - 2; j <= i; j++) {
-          const m = monthly[j];
-          if (Number.isFinite(m.mv)) { vol += m.mv; haveVol = true; }
-          if (Number.isFinite(m.mc)) { cnt += m.mc; haveCnt = true; }
-        }
-        out.push({
-          period_end: monthly[i].period_end,
-          quarterly_volume: haveVol ? vol : null,
-          quarterly_count: haveCnt ? cnt : null,
-        });
-      }
-      return out;
-    }
+    const rolling = buildRolling3MonthVolumeBars(masterMonthlyRows);
+    if (rolling.length > 0) return rolling;
 
     // Fallback (master_m absent / no monthly cols) — keep the pre-A5 quarter
     // behavior so the tab still renders rather than going blank.
@@ -2114,25 +2117,12 @@ async function exportWorkbook(req, res) {
         yoy_change_pct: r.yoy_change_pct,
       })),
       // Round 3b — Quarterly_Volume_Bars (PDF dialysis p.21 bottom).
-      // master_m carries `quarterly_volume` on every monthly anchor; we
-      // dedupe to the last day of each quarter so the rendered bars are
-      // truly quarterly (not 12 monthly snapshots of the same number).
+      // master_m carries repeated quarter totals on every monthly anchor.
+      // Use the TRUE monthly volume/count and calculate a rolling 3-month
+      // sum so the bars move each month while preserving quarterly volume
+      // economics.
       quarterly_volume_bars: (rows) => {
-        const byQuarter = new Map();
-        for (const r of rows) {
-          if (r.quarterly_volume == null && r.quarterly_count == null) continue;
-          // period_end is YYYY-MM-DD; quarter-end months are 03/06/09/12
-          const m = String(r.period_end).slice(5, 7);
-          if (m !== '03' && m !== '06' && m !== '09' && m !== '12') continue;
-          byQuarter.set(r.period_end, {
-            period_end: r.period_end,
-            quarterly_volume: Number(r.quarterly_volume) || 0,
-            quarterly_count: r.quarterly_count != null ? Number(r.quarterly_count) : null,
-          });
-        }
-        return [...byQuarter.values()].sort((a, b) =>
-          String(a.period_end) < String(b.period_end) ? -1 : 1
-        );
+        return buildRolling3MonthVolumeBars(rows);
       },
       cap_rate_yoy_change: (rows) => rows.map(r => ({
         period_end: r.period_end,
