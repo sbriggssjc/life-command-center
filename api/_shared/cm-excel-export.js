@@ -252,7 +252,7 @@ const CHART_FOOTER_CAPTIONS = {
   sources_of_capital:
     'Top buyer-state sources of capital by 15-year volume.',
   case_for_renewal:
-    'Annual GSA new-lease commencements (bars) vs. average rent / SF (line).',
+    'Monthly TTM GSA new-lease commencements from gsa_leases.latest_action=New (bars) vs. trimmed average rent / SF (line).',
   pace_of_cap_rate_expansion:
     'Nominal year-over-year change (in basis points) of the TTM avg cap rate — all cohort (navy) and the core cohort (sky; gov 6+ / dia 12+ firm-term yr). Bars above zero = expansion (cap rates rising); below zero = compression. Use to spot the rate-cycle inflection.',
 };
@@ -839,10 +839,11 @@ const CHART_COLUMNS = {
     { key: 'n_leases', header: 'N Leases', format: 'integer_count', width: 12 },
   ],
   case_for_renewal: [
-    { key: 'year', header: 'Year', format: 'integer_count', width: 8 },
-    { key: 'commencement_count', header: 'Lease Commencements', format: 'integer_count', width: 22 },
-    { key: 'avg_rent_per_sf', header: 'Avg Rent / SF', format: 'currency_per_sf', width: 16 },
+    { key: 'period_end', header: 'Month End', format: 'date_short', width: 13 },
+    { key: 'commencement_count', header: 'New Lease Commencements (TTM)', format: 'integer_count', width: 30 },
+    { key: 'avg_rent_per_sf', header: 'Avg Rent / SF (trimmed)', format: 'currency_per_sf', width: 24 },
     { key: 'total_lsf', header: 'Total LSF', format: 'integer_count', width: 16 },
+    { key: 'rent_sample_count', header: 'Rent Sample Count', format: 'integer_count', width: 18 },
   ],
   renewal_rent_growth: [
     { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },

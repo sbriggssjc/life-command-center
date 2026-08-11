@@ -4505,12 +4505,15 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'case_for_renewal': {
-      // X-axis is `year` (integer), not period_end.
+      // Monthly TTM view uses period_end. Keep year fallback for old fixtures or
+      // pre-migration exports.
       // Bar: commencement_count (sky), Line: avg_rent_per_sf (navy).
+      const periodCol = findCol('period_end');
       const yearCol = findCol('year');
+      const catCol = periodCol || yearCol;
       const cntCol  = findCol('commencement_count');
       const rentCol = findCol('avg_rent_per_sf');
-      if (!yearCol || !cntCol || !rentCol) return null;
+      if (!catCol || !cntCol || !rentCol) return null;
       // R37 P3 — peak/trough/most-recent labels on rent line
       // (renderer line 1923: buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year'))
       const rentLabels = Array.isArray(rows)
@@ -4521,10 +4524,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         spec: {
           type: 'combo',
           tabName,
-          catCol: yearCol,
+          catCol,
           dataStart, dataEnd,
-          // R37 P1 — year x-axis (integer 2020), not quarter date.
-          catAxNumFmt: '0',
+          catAxNumFmt: periodCol ? 'mmm-yy' : '0',
           // R37 P2 — left = lease count integers, right = rent currency.
           // Renderer auto-pins right around the rent data ±10% — auto-scale
           // is acceptable here since the rent range varies per dataset.

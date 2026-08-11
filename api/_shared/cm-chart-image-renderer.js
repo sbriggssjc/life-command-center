@@ -2350,14 +2350,14 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'case_for_renewal': {
-      // Bar: commencement_count by year + line: avg_rent_per_sf.
+      // Bar: TTM commencement_count by month + line: avg_rent_per_sf.
       //
       // Round 6c — user feedback 2026-05-09: "outlier commencements in
       // 2026 and 2019 that need to be investigated and the y-axis needs
       // to be adjusted to show the movement in the average rent figure.
       // Let's add low high and most recent labels too." Outliers were
-      // bulk-import sentinel dates in gsa_lease_events — fixed in the
-      // _y view via Round 6e sentinel filter. Renderer-side: tighten
+      // bulk-import sentinel dates in gsa_lease_events. The source is now
+      // gsa_leases.latest_action='New' monthly TTM; renderer-side: tighten
       // right-axis around the rent line + 3-point annotations.
       const rentVals = rows.map(r => Number(r.avg_rent_per_sf)).filter(Number.isFinite);
       const rentMin = rentVals.length ? Math.min(...rentVals) : null;
@@ -2369,7 +2369,7 @@ function buildChartConfig(chart, brand) {
       return {
         type: 'bar',
         data: {
-          labels: rows.map(r => String(r.year)),
+          labels: rows.map(r => r.period_end ? periodEndLabel(r.period_end) : String(r.year)),
           datasets: [
             { type: 'bar',  label: 'New Lease Commencements',
               data: rows.map(r => r.commencement_count),
@@ -2388,8 +2388,12 @@ function buildChartConfig(chart, brand) {
             yRightFormat: AXIS_FORMAT_CURRENCY,
             yRightRange:  rentRange,  // tighter so rent movement is visible
           });
-          // Annotations on rent series (year axis, not period_end).
-          const ann = buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year');
+          const ann = buildAnnotations(
+            rows,
+            r => r.avg_rent_per_sf,
+            fmtCurrencyPerSf,
+            rows.some(r => r.period_end) ? 'period_end' : 'year'
+          );
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
         })(),

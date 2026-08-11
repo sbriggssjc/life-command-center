@@ -2374,6 +2374,27 @@ test('buildInjectionSpec: case_for_renewal uses year as x-axis', () => {
   assert.equal(out.spec.lineSeries[0].valCol, 'C', 'line = avg_rent_per_sf');
 });
 
+test('buildInjectionSpec: case_for_renewal prefers monthly period_end when present', () => {
+  const cols = [
+    { key: 'period_end',          col: 'A' },
+    { key: 'commencement_count',  col: 'B' },
+    { key: 'avg_rent_per_sf',     col: 'C' },
+    { key: 'total_lsf',           col: 'D' },
+    { key: 'rent_sample_count',   col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'case_for_renewal',
+    tabName: 'Data_Case_For_Renewal',
+    cols, dataStart: 5, dataEnd: 30,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.catCol, 'A', 'x-axis is monthly period_end when available');
+  assert.equal(out.spec.catAxNumFmt, 'mmm-yy', 'monthly axis gets month-year format');
+  assert.equal(out.spec.barSeries[0].valCol, 'B', 'bar = commencement_count');
+  assert.equal(out.spec.lineSeries[0].valCol, 'C', 'line = avg_rent_per_sf');
+});
+
 test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line combo', () => {
   const cols = [
     { key: 'period_end',           col: 'A' },
