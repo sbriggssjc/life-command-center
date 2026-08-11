@@ -36,6 +36,17 @@ test('resolveEffectiveDisplayFrom applies the curated gov market_turnover crop w
   );
 });
 
+test('resolveEffectiveDisplayFrom applies the curated gov rent_and_price_psf crop until registry is live', () => {
+  assert.equal(
+    resolveEffectiveDisplayFrom([], 'rent_and_price_psf', 'cm_gov_rent_price_psf_q', 'gov'),
+    '1997-06-30'
+  );
+  assert.equal(
+    resolveEffectiveDisplayFrom([], 'rent_and_price_psf', 'cm_dialysis_rent_price_psf_q', 'dialysis'),
+    null
+  );
+});
+
 test('cropRowsToDisplayFrom accepts a resolved date string (the production path)', () => {
   const rows = [{ period_end: '2015-06-30' }, { period_end: '2017-06-30' }];
   const tmpl = { chart_template_id: 'market_turnover', data_shape: 'monthly_ttm' };
@@ -57,6 +68,21 @@ test('gov market_turnover curated crop removes unreliable pre-2012 on-market row
   assert.deepEqual(
     cropRowsToDisplayFrom(rows, tmpl, df).map((r) => r.period_end),
     ['2012-01-31', '2026-06-30']
+  );
+});
+
+test('gov rent_and_price_psf curated crop removes unreliable pre-1997 rows', () => {
+  const rows = [
+    { period_end: '1996-12-31', rent_psf: null, price_psf: 528 },
+    { period_end: '1997-03-31', rent_psf: null, price_psf: 510 },
+    { period_end: '1997-06-30', rent_psf: 14.25, price_psf: 420 },
+    { period_end: '2003-03-31', rent_psf: 16.5, price_psf: 455 },
+  ];
+  const tmpl = { chart_template_id: 'rent_and_price_psf', data_shape: 'time_series_quarterly' };
+  const df = resolveEffectiveDisplayFrom([], 'rent_and_price_psf', 'cm_gov_rent_price_psf_q', 'gov');
+  assert.deepEqual(
+    cropRowsToDisplayFrom(rows, tmpl, df).map((r) => r.period_end),
+    ['1997-06-30', '2003-03-31']
   );
 });
 

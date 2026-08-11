@@ -928,6 +928,10 @@ const CURATED_DISPLAY_FROM = {
     // era. The live gov cm_view_registry does not yet expose display_from, so
     // keep this export-side floor until the registry migration catches up.
     market_turnover: '2012-01-01',
+    // Gov Rent & Price / SF has sparse/discontinuous pre-1997 history. The
+    // source-level registry migration sets this same floor; keep the fallback
+    // so exports crop correctly until that migration is live.
+    rent_and_price_psf: '1997-06-30',
   },
 };
 
