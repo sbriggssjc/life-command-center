@@ -67,6 +67,12 @@ Discovery stays in private `healthcare_discovery`. Existing LCC property, organi
 ownership, comp, dossier and Salesforce-promotion contracts remain authoritative. Specialty adapters may propose
 evidence and mappings but cannot create duplicate core entities or write Salesforce before promotion gates pass.
 
+Detailed next-stage contracts:
+
+- `HEALTHCARE-ASC-IDTF-SOURCE-MANIFEST-CONTRACTS-v0.1.md`
+- `HEALTHCARE-ASC-IDTF-LCC-INTEGRATION-CONTRACT-v0.1.md`
+- `HEALTHCARE-ASC-IDTF-ECONOMICS-AND-SAMPLING-v0.1.md`
+
 ## Official sources reviewed
 
 - CMS Provider Data Catalog ASC facility and quality-reporting datasets.

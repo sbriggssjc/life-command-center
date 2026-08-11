@@ -1,0 +1,2 @@
+npi,service_year,hcpcs,service_count,allowed_amount,payment_amount,suppressed
+9000000202,2000,70000,10,1000.00,800.00,false

@@ -1,0 +1,74 @@
+{
+  "manifest_version": "2.0",
+  "lane": "idtf_fixed_site",
+  "release_id": "e886f6067736a0ec16361c7e7699975c24116853251df7ceb25b15cfcacb1e7b",
+  "created_at": "2000-01-31T00:00:00Z",
+  "adapter_version": "idtf_adapter:1.0",
+  "normalization_version": "address_normalizer:1.0",
+  "eligibility_rule_version": "idtf_eligibility:1.0",
+  "sources": [
+    {
+      "source_key": "cms_ffs_enrollment_idtf",
+      "landing_page_url": "https://data.cms.gov/provider-characteristics/medicare-provider-supplier-enrollment",
+      "artifact_url": "https://data.cms.gov/synthetic/idtf-enrollment.csv",
+      "publisher": "CMS",
+      "release_date": "2000-01-01",
+      "retrieved_at": "2000-01-31T00:00:00Z",
+      "object_path": "idtf-enrollment-synthetic.csv",
+      "byte_size": 145,
+      "sha256": "23f0ac110bcaf94053487584ae71343cab46819b6fb6f053f0963f23cbcb6db6",
+      "header_sha256": "ffe6739cb2b2a75bb2f1166530c89ebcd0d9ac5790a79e6349682a35114de677",
+      "required_columns": ["enrollment_id", "npi", "specialty", "organization_name", "practice_address", "location_type"],
+      "allowed_use": "facility_identity"
+    },
+    {
+      "source_key": "cms_nppes_org_location",
+      "landing_page_url": "https://download.cms.gov/nppes/NPI_Files.html",
+      "artifact_url": "https://download.cms.gov/nppes/synthetic/idtf-nppes.csv",
+      "publisher": "CMS",
+      "release_date": "2000-01-01",
+      "retrieved_at": "2000-01-31T00:00:00Z",
+      "object_path": "idtf-nppes-synthetic.csv",
+      "byte_size": 102,
+      "sha256": "10f293c4088656c7436d0037395cb758cfbd5db4dced05e79f326270a1923099",
+      "header_sha256": "8a54f90dba6b686bcbfbc7bfe3f4ded1eb3b0ac1989d76fa9667d814a0b124c9",
+      "required_columns": ["npi", "entity_type", "taxonomy", "practice_address", "location_role"],
+      "allowed_use": "corroboration"
+    },
+    {
+      "source_key": "cms_physician_supplier_utilization",
+      "landing_page_url": "https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners",
+      "artifact_url": "https://data.cms.gov/synthetic/idtf-utilization.csv",
+      "publisher": "CMS",
+      "release_date": "2000-01-01",
+      "retrieved_at": "2000-01-31T00:00:00Z",
+      "object_path": "idtf-utilization-synthetic.csv",
+      "byte_size": 124,
+      "sha256": "c37b5b794dfcb1301384d53cf857fd2d5afa7c7107a525e7bbc9835b5e3f4a62",
+      "header_sha256": "c6135f45e278ed3febed05f034527cbc4203a5483e0c68f48574f9baf07027d5",
+      "required_columns": ["npi", "service_year", "hcpcs", "service_count", "allowed_amount", "payment_amount", "suppressed"],
+      "allowed_use": "economics_observation"
+    },
+    {
+      "source_key": "cms_pfs_reference",
+      "landing_page_url": "https://www.cms.gov/medicare/payment/fee-schedules/physician",
+      "artifact_url": "https://www.cms.gov/synthetic/idtf-pfs.csv",
+      "publisher": "CMS",
+      "release_date": "2000-01-01",
+      "retrieved_at": "2000-01-31T00:00:00Z",
+      "object_path": "idtf-pfs-synthetic.csv",
+      "byte_size": 74,
+      "sha256": "b1dcd3828f15e8166497a1083dfc5178a2af468bd788884a33128c9b68e8ff26",
+      "header_sha256": "9935e5a2fe908ad28f8ff3190f760a384ee4fbab597f666aa8110f14a4fddd5b",
+      "required_columns": ["calendar_year", "hcpcs", "component_indicator", "national_rate"],
+      "allowed_use": "economics_reference"
+    }
+  ],
+  "expected_outputs": [{"name": "source_sufficiency", "classification": "aggregate_receipt"}],
+  "limits": {"max_bytes_per_source": 1048576, "max_rows": 1000, "max_candidate_fingerprints": 1000, "max_heap_mib": 128, "max_error_rate": 0.01},
+  "site_form_rules": {
+    "default_status": "fixed_site_unproven",
+    "qualifying_status": "fixed_site_confirmed",
+    "excluded_forms": ["mobile_unit", "portable_xray", "physician_office", "hospital_department", "warehouse", "equipment_base"]
+  }
+}

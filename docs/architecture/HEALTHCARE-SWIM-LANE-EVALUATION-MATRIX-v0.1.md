@@ -113,7 +113,12 @@ cadence or operator-facing task.
 
 ## 8. Immediate recommendation
 
-Finish A1/A2, then build A3 for oncology/infusion because its source contract is already bounded. In parallel
-at the design level, prepare source-sufficiency cards for ambulatory surgery and diagnostic imaging; both are
-strong candidates for the next comparison because facility identity, specialized improvements and site-level
-operating metrics may align better with net-lease brokerage than generic outpatient office use.
+Phase A1–A4 is complete against synthetic data. The next authorized design checkpoint is now defined by:
+
+- `HEALTHCARE-ASC-IDTF-SOURCE-MANIFEST-CONTRACTS-v0.1.md`;
+- `HEALTHCARE-ASC-IDTF-LCC-INTEGRATION-CONTRACT-v0.1.md`; and
+- `HEALTHCARE-ASC-IDTF-ECONOMICS-AND-SAMPLING-v0.1.md`.
+
+Implement the reusable manifest command/tests with synthetic ASC and IDTF fixtures next. Do not download an
+official release or draw either 50-property sample until the source artifact list, private storage target, and
+run receipt have been separately reviewed and authorized.
