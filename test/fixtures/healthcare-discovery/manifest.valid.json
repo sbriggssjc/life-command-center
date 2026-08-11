@@ -1,5 +1,5 @@
 {
-  "manifest_version": "1.0",
+  "manifest_version": "1.1",
   "freeze_date": "2000-01-31",
   "transform_version": "git:1111111111111111111111111111111111111111",
   "sources": [
@@ -11,6 +11,15 @@
       "sha256": "f04bc006b9796dcbfc2291b02f77ff6af000ace80b9bee0b4539efe3c4c25290",
       "byte_size": 1064,
       "header_sha256": "5bbb6fbe13d24e02fcf654cabecf7f87a8757b06552667e79cc7063bd92af7e3"
+    },
+    {
+      "name": "nppes_secondary_locations",
+      "release_date": "2000-01-01",
+      "url": "https://download.cms.gov/nppes/NPI_Files.html",
+      "object_path": "nppes-secondary-synthetic.csv",
+      "sha256": "373ea0212d35e7cd395610b7984a426946e37993135505abdff1866654f4d735",
+      "byte_size": 553,
+      "header_sha256": "5cc14f5e72e04317f61276ee709aa0b1649f2bd4aa6005c5369d9074ae9e8776"
     },
     {
       "name": "nucc_taxonomy",

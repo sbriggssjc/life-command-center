@@ -32,7 +32,7 @@ test('load is fail-closed to dry-run mode', () => {
 test('synthetic manifest freezes the approved seed-code contract', async () => {
   const manifest = JSON.parse(await readFile(fixtureUrl, 'utf8'));
   assert.equal(assertManifestContract(manifest), true);
-  assert.deepEqual(manifest.sources[1].approved_seed_codes, APPROVED_SEED_CODES);
+  assert.deepEqual(manifest.sources.find((source) => source.name === 'nucc_taxonomy').approved_seed_codes, APPROVED_SEED_CODES);
 });
 
 test('manifest contract rejects unknown top-level keys', async () => {

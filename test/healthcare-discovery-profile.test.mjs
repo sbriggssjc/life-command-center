@@ -25,7 +25,7 @@ test('streaming NPPES profile emits aggregate-only deterministic results', async
   });
   assert.deepEqual(receipt.counts, {
     source_rows: 8, parsed_rows: 3, eligible_organizations: 3, candidate_locations: 3,
-    excluded: 5, malformed: 0,
+    excluded: 5, malformed: 0, primary_source_rows: 8, secondary_source_rows: 0,
   });
   assert.deepEqual(receipt.breakdowns.modality, { oncology: 2, infusion_therapy: 1, radiation_oncology: 1 });
   assert.equal(receipt.breakdowns.collision_class.multi_npi_same_candidate, 1);
@@ -39,6 +39,10 @@ test('profile command validates inputs and writes canonical receipt atomically',
   const output = path.join(temp, 'receipt.json');
   const receipt = await runProfile(path.join(fixtureRoot, 'manifest.valid.json'), output, { fixtureRoot });
   assert.equal(await readFile(output, 'utf8'), canonicalJson(receipt));
+  assert.equal(receipt.counts.secondary_source_rows, 3);
+  assert.equal(receipt.breakdowns.location_role.secondary, 2);
+  assert.equal(receipt.counts.candidate_locations, 6);
+  assert.doesNotMatch(await readFile(output, 'utf8'), /9000000001|Synthetic Clinic|Testville/i);
 });
 
 test('missing required NPPES headers fail closed', async () => {

@@ -13,7 +13,7 @@ const manifestUrl = new URL('manifest.valid.json', fixtureRoot);
 test('A1 validates the frozen synthetic source bundle', async () => {
   const receipt = await validateManifestFile(manifestUrl, { fixtureRoot: fixtureRoot.pathname });
   assert.equal(receipt.status, 'pass');
-  assert.deepEqual(receipt.source_fingerprints.map((source) => source.name), ['nppes_v2_monthly', 'nucc_taxonomy']);
+  assert.deepEqual(receipt.source_fingerprints.map((source) => source.name), ['nppes_v2_monthly', 'nppes_secondary_locations', 'nucc_taxonomy']);
   assert.doesNotMatch(JSON.stringify(receipt), /NPI|street|object_path/i);
 });
 
