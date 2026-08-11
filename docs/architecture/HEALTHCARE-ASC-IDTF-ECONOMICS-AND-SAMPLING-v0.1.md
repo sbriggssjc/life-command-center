@@ -1,6 +1,6 @@
 # Healthcare ASC and IDTF Economics and Sampling Plan v0.1
 
-**Status:** Comparative design; no row-level sample or financial conclusion yet
+**Status:** Synthetic sampling and aggregate-review contract implemented; no real row-level sample or financial conclusion yet
 
 **Date:** 2026-08-11
 
@@ -142,3 +142,24 @@ The final decision is one of:
 - `stop` — unreliable identity, poor addressability, or uneconomic research burden.
 
 No lane advances from this plan without an observed sample.
+
+## 8. Implemented sampling and review contract
+
+`scripts/healthcare-discovery/property-review.mjs` now enforces the reviewed boundary with synthetic inputs:
+
+- exactly 50 unique candidate fingerprints from one frozen lane release;
+- a stable, non-secret seed and deterministic ordering within ordered, nonoverlapping cells;
+- quotas totaling exactly 50, with fail-closed behavior when a frozen cell is underfilled;
+- exact-once review coverage of every selected fingerprint;
+- separate denominators for clinical precision, property classification, qualifying property share,
+  landlord addressability, and bounded economics coverage;
+- 95% Wilson intervals plus median and 90th-percentile total research minutes; and
+- aggregate-only serialization that removes the selected fingerprint roster.
+
+The implemented contract deliberately does not infer brokerage suitability from CMS evidence. Property form,
+ownership, landlord/client addressability, economics coverage, and research time become measurable only from
+the governed property review. The raw sampling frame and row-level scorecards remain private review artifacts;
+only the aggregate receipt is eligible for architectural review or later governed promotion.
+
+Current acceptance is synthetic only. A real 50-property run still requires separate authorization for the
+frozen private release, source acquisition, reviewer access, and any database persistence.
