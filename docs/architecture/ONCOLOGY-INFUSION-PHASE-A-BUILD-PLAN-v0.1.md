@@ -204,8 +204,13 @@ oncology/infusion is a scalable net-lease lane; discovery volume alone is not a 
 
 - A0 is complete on `main`: six fail-closed command contracts, synthetic fixtures and private-path exclusion.
 - A1/A2 are implemented against synthetic fixtures: manifest/source integrity and the three-code NUCC gate.
+- A3 is implemented against synthetic fixtures for the primary practice-location file: dynamic header mapping,
+  row-streamed parsing, versioned address normalization, deterministic fingerprints and aggregate-only receipts.
+- The NPPES secondary-practice-location reference file still requires a manifest-contract extension before A3
+  is complete for both location roles; it must not be silently treated as part of the primary monthly file.
 - No real CMS/NUCC artifact, provider record, database connection or production write mode has been added.
 
-The next bounded checkpoint is A3: streaming NPPES parsing, versioned normalization and aggregate profiling.
-Keep the implementation synthetic until A3/A4 acceptance tests pass. After Phase A, compare the observed
+The next bounded checkpoint is A3.1/A4: add the separate secondary-location source contract, join it by NPI
+without emitting provider identifiers, and add reproducibility/privacy/resource acceptance tests. Keep the
+implementation synthetic until A3/A4 acceptance tests pass. After Phase A, compare the observed
 oncology/infusion feasibility results under the cross-lane matrix before authorizing a production-bound model.

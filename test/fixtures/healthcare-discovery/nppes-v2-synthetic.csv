@@ -1,2 +1,9 @@
-NPI,Entity Type Code,Provider Business Practice Location Address State Name,Healthcare Provider Taxonomy Code_1
-1000000001,2,OK,261QX0200X
+NPI,Entity Type Code,Provider Business Practice Location Address First Line,Provider Business Practice Location Address Second Line,Provider Business Practice Location Address City Name,Provider Business Practice Location Address State Name,Provider Business Practice Location Address Postal Code,Provider Business Practice Location Address Country Code (If outside U.S.),NPI Deactivation Date,NPI Reactivation Date,Healthcare Provider Taxonomy Code_1,Healthcare Provider Taxonomy Code_2
+9000000001,2,100 Synthetic Clinic Road,,Testville,OK,74101,US,,,261QX0200X,
+9000000002,2,200 Fixture Avenue,Suite 10,Example City,TX,75001,US,,,261QI0500X,261QX0203X
+9000000003,1,300 Sample Street,,Testville,OK,74102,US,,,261QX0200X,
+9000000004,2,400 Inactive Drive,,Testville,OK,74103,US,1999-01-01,,261QX0200X,
+9000000005,2,500 Foreign Road,,Toronto,ON,M5V2T6,CA,,,261QX0200X,
+9000000006,2,,,Testville,OK,74104,US,,,261QX0200X,
+9000000007,2,700 General Boulevard,,Testville,OK,74105,US,,,261Q00000X,
+9000000008,2,100 Synthetic Clinic Rd,,Testville,OK,74101,US,,,261QX0200X,

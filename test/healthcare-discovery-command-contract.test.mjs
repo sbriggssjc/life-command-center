@@ -7,10 +7,10 @@ import { APPROVED_SEED_CODES, assertManifestContract } from '../scripts/healthca
 
 const fixtureUrl = new URL('./fixtures/healthcare-discovery/manifest.valid.json', import.meta.url);
 
-test('all six commands expose network-free help', () => {
+test('all six commands expose network-free help', async () => {
   for (const command of ['manifest', 'validate', 'profile', 'load', 'sample', 'verify']) {
     const output = [];
-    assert.equal(run([command, '--help'], { log: (x) => output.push(x), error: (x) => output.push(x) }), 0);
+    assert.equal(await run([command, '--help'], { log: (x) => output.push(x), error: (x) => output.push(x) }), 0);
     assert.match(output.join('\n'), new RegExp(`healthcare:nppes:${command}`));
   }
 });

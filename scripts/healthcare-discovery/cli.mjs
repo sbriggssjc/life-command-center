@@ -2,6 +2,8 @@
 
 import { pathToFileURL } from 'node:url';
 
+import { runProfile } from './profile.mjs';
+
 export const COMMANDS = Object.freeze({
   manifest: { required: ['release', 'private-root'], optional: [] },
   validate: { required: ['manifest'], optional: [] },
@@ -44,7 +46,7 @@ export function parseArgs(command, argv) {
   return { help: false, values };
 }
 
-export function run(argv = process.argv.slice(2), io = console) {
+export async function run(argv = process.argv.slice(2), io = console) {
   const [command, ...args] = argv;
   try {
     const parsed = parseArgs(command, args);
@@ -52,7 +54,12 @@ export function run(argv = process.argv.slice(2), io = console) {
       io.log(usage(command));
       return 0;
     }
-    io.error(`healthcare:nppes:${command} is contract-only in Phase A0; execution is not implemented`);
+    if (command === 'profile') {
+      await runProfile(parsed.values.manifest, parsed.values.output);
+      io.log('Healthcare discovery profile receipt written');
+      return 0;
+    }
+    io.error(`healthcare:nppes:${command} is not implemented in the current Phase A checkpoint`);
     return 2;
   } catch (error) {
     io.error(error.message);
@@ -61,4 +68,4 @@ export function run(argv = process.argv.slice(2), io = console) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) process.exitCode = run();
+if (import.meta.url === pathToFileURL(process.argv[1]).href) process.exitCode = await run();
