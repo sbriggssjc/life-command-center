@@ -3114,8 +3114,7 @@ test('R66aa: dom_and_pct_of_ask trims to 2018', () => {
 });
 
 // ── R73 Layer D — x-axis reach (density-gated floors) ───────────────────────
-// The above R66aa test now also proves the GOV path of dom_and_pct_of_ask:
-// gov rows carry no n_sales, so the per-vertical function falls back to 2018.
+// The above R66aa test still proves the no-context fallback path.
 
 test('R73 D-#2: dom_and_pct_of_ask floors dia at 2016 when n_sales is dense', () => {
   // dia carries n_sales (TTM). Thin (<15) through 2015, dense (>=15) from 2016
@@ -3132,6 +3131,28 @@ test('R73 D-#2: dom_and_pct_of_ask floors dia at 2016 when n_sales is dense', ()
   });
   // 2001-01 .. 2015-12 = 180 rows before 2016-01.
   assert.equal(spec.spec.dataStart, 5 + 180, 'dia dom floors at first 2016 row');
+});
+
+test('gov dom_and_pct_of_ask uses verified 2011 floor when n_sales is absent', () => {
+  const rows = mkRows(1997, 2026, 'avg_dom');
+  for (const r of rows) r.pct_of_ask = 0.93;
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask',
+    tabName: 'Data_DOM_Ask',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_dom',      col: 'C' },
+      { key: 'pct_of_ask',   col: 'D' },
+    ],
+    dataStart: 5,
+    dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+    vertical: 'gov',
+  });
+  // 1997-01 .. 2010-12 = 168 rows before 2011-01.
+  assert.equal(spec.spec.dataStart, 5 + 168, 'gov dom floors at first 2011 row');
 });
 
 test('R73 D-#12: bid_ask_spread floors gov at 2008 (first continuous Last-Ask), dia self-floors later', () => {

@@ -3490,11 +3490,12 @@ const MIN_YEAR_BY_TEMPLATE = {
   // Now per-vertical density-gated: dia carries n_sales (TTM) per row, so the
   // floor drops to the first year with 4 consecutive months of n>=15 — dia
   // reaches 2016 (n 14/16/30 in 2015/16/17; 2014 n=10 + 2013 4-mo partial held
-  // back as the thin edge). The gov view has NO n_sales column, so
-  // findFirstDenseYear returns null and gov falls back to 2018 unchanged
-  // (gov dom density not separately confirmed this round). Density-gated.
-  dom_and_pct_of_ask:           (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
-  dom_and_pct_of_ask_monthly:   (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
+  // back as the thin edge). R74 gov audit (2026-08-11): the live gov view still
+  // has no n_sales column, but source sales density supports a 2011 floor
+  // (minimum TTM samples in every 2011 month: DOM 25, % ask 15). Use that only
+  // for gov fallback; views with n_sales still self-floor from the data.
+  dom_and_pct_of_ask:           (rows, ctx) => findFirstDenseYear(rows, 'n_sales', 15) ?? (String(ctx?.vertical || '').toLowerCase() === 'gov' ? 2011 : 2018),
+  dom_and_pct_of_ask_monthly:   (rows, ctx) => findFirstDenseYear(rows, 'n_sales', 15) ?? (String(ctx?.vertical || '').toLowerCase() === 'gov' ? 2011 : 2018),
   // R73 D-#12 — per-vertical bid-ask floor. The view has no sample-count
   // column, but a real Last-Ask cap (~0.05-0.10) is only present once listing/
   // ask data begins, so "4 consecutive months of a non-null avg_last_ask_cap"
@@ -3578,9 +3579,9 @@ const MIN_PERIOD_BY_TEMPLATE = {
 // axes stay in step. Resolves the MIN_YEAR_BY_TEMPLATE entry (a static year or a
 // rows→year function) and returns a finite year or null (no floor). Pass the
 // FULL row set (the function-floors scan it for first-dense / first-non-null).
-export function minYearForTemplate(templateId, rows) {
+export function minYearForTemplate(templateId, rows, context = {}) {
   const entry = MIN_YEAR_BY_TEMPLATE[templateId];
-  const year = typeof entry === 'function' ? entry(rows) : entry;
+  const year = typeof entry === 'function' ? entry(rows, context) : entry;
   return Number.isFinite(year) ? year : null;
 }
 
@@ -3613,7 +3614,7 @@ export function buildInjectionSpec(args) {
     : minPeriodEntry;
   const minYearEntry = MIN_YEAR_BY_TEMPLATE[args.chart_template_id];
   const minYear = typeof minYearEntry === 'function'
-    ? minYearEntry(args.rows)
+    ? minYearEntry(args.rows, args)
     : minYearEntry;
   let effectiveStart = args.dataStart;
   let trimOffset = 0;
