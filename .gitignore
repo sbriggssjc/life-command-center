@@ -25,6 +25,7 @@ supabase/.temp/
 # tenant, endpoint, connection-reference, or secret metadata. Keep the raw
 # packages beside the architecture docs for local AI review, but never commit.
 /private/power-automate/
+/private/healthcare-discovery/
 
 
 # QA-32: prevent truncation-investigation artifacts from leaking back
