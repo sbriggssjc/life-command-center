@@ -9,7 +9,7 @@
     "start:railway": "NODE_ENV=production node server.js",
     "dev": "node server.js",
     "verify:deploy": "node scripts/verify-deploy.mjs",
-  "check:boot": "node scripts/check-boot.mjs",
+    "check:boot": "node scripts/check-boot.mjs",
     "lint": "eslint api/ --ext .js",
     "ai:routing": "node scripts/print-ai-chat-routing.mjs",
     "ai:status": "node scripts/ai-rollout-status.mjs",
@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "csv-parse": "^6.1.0",
     "exceljs": "^4.4.0",
     "express": "^4.19.0",
     "pdf-parse": "^1.1.1",

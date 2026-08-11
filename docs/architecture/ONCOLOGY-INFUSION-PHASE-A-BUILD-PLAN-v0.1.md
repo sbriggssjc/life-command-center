@@ -6,6 +6,8 @@
 
 **Business feasibility companion:** `HEALTHCARE-REAL-ESTATE-AND-ECONOMICS-BUSINESS-PLAN-v0.1.md`
 
+**Cross-lane comparison:** `HEALTHCARE-SWIM-LANE-EVALUATION-MATRIX-v0.1.md`
+
 ## 1. Outcome
 
 Phase A should produce a deterministic, local-only adapter that can validate a frozen NPPES/NUCC source bundle,
@@ -198,8 +200,12 @@ The private verification sample must also measure property form, healthcare-user
 affiliation, third-party-landlord addressability and economics-source coverage. These results determine whether
 oncology/infusion is a scalable net-lease lane; discovery volume alone is not a business-feasibility result.
 
-## 8. Immediate recommendation
+## 8. Current implementation status and immediate recommendation
 
-Authorize A0 only as the next implementation checkpoint. A0 is small, entirely synthetic and establishes the
-guardrails that every later step depends on. Review its command surface, ignored private path and fixture
-contract before adding the CSV dependency or parser logic in A1–A3.
+- A0 is complete on `main`: six fail-closed command contracts, synthetic fixtures and private-path exclusion.
+- A1/A2 are implemented against synthetic fixtures: manifest/source integrity and the three-code NUCC gate.
+- No real CMS/NUCC artifact, provider record, database connection or production write mode has been added.
+
+The next bounded checkpoint is A3: streaming NPPES parsing, versioned normalization and aggregate profiling.
+Keep the implementation synthetic until A3/A4 acceptance tests pass. After Phase A, compare the observed
+oncology/infusion feasibility results under the cross-lane matrix before authorizing a production-bound model.
