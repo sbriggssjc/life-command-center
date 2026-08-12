@@ -211,10 +211,16 @@ time gets 403/expired and the bytes never land (this stranded ~86% of `property_
 Fix: capture the durable copy **while authenticated**, into each domain's `property-documents` bucket
 (`fetchDocBytes` already prefers `storage_path` over `source_url`). Two paths, both domains, best-effort/additive:
 
-- **Server re-fetch (Build 1, `sidebar-pipeline.js::captureDocumentBytesAtIngest`)** — works only for
-  non-session-bound (public county / CDN) links. Kept as the fallback + the **backfill** worker
-  `POST /api/intake?_route=doc-bytes-backfill&domain=dia|gov&limit=` (bounded; counts session-bound/dead links
-  separately — never silently "done").
+- **Server re-fetch (Build 1, `sidebar-pipeline.js::captureDocumentBytesAtIngest`)** — works for non-session-bound
+  (public county / CDN) links AND **SharePoint-filed docs** (`fetchAndStoreDocBytes` detects a server-relative
+  `/sites/…` `source_url` and fetches via the Power-Automate "Get Artifact" flow `SHAREPOINT_FETCH_URL` instead of
+  HTTP — honest no-op `sharepoint_fetch_unset` when that PA flow isn't configured). Kept as the fallback + the
+  **backfill** worker `POST /api/intake?_route=doc-bytes-backfill&domain=dia|gov&limit=&before=<cursor>&source=sharepoint|http`
+  (keyset-cursor so an un-capturable backlog terminates; counts `bytes_captured`/`sharepoint_captured`/
+  `session_bound_or_dead` separately — never silently "done"). Verify the SharePoint flow is live via
+  `GET /api/diag?kind=env` (`sharepoint_fetch_url_set`). The url-only backlog is dominated by **SharePoint** lease/
+  DD/OM docs (724 dia+gov, zero text) that this branch drains; the rest are non-session-bound CoStar (recovered)
+  + non-document broker pages (unrecoverable).
 - **Extension in-session capture (the durable forward fix)** — the extension fetches each captured doc's bytes
   **in the authenticated CoStar tab** (`background.js::fetchDocBytesViaTab`, the only way to reach a
   session-bound link) and POSTs them to `POST /api/intake?_route=capture-doc-bytes` (`{domain, source_url,
