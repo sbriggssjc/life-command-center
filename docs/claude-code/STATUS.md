@@ -10,6 +10,15 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Scheduled check 2026-08-12 (~22:00Z) — W9.4 display-name capture: NOT WORKING yet
+Post-PA-flow-change verification on LCC Opps `activity_events`: 9 new correspondence rows since
+16:00Z (7 `outlook`, 2 `outlook_inbound`, 0 `outlook_sent`). New code confirmed live (rows stamp
+`metadata.from_name`/`to_names` keys) but **all 9 null** — including bridge `outlook` rows whose
+FROM name was expected code-only (e.g. `dcrowley@fdstonewater.com`, `smartin@northmarq.com` arrive
+bare). **Needs Scott:** check the flagged-inbound + Sent-Items PA flows' run histories for
+Select/Join action errors; also verify the bridge payload still carries Graph `{name,address}`.
+No sent-mail traffic yet to test the outlook_sent path.
+
 ## This session — reconcile 2026-08-04 (prompts 31–35 processed)
 Responses reviewed from `responses/`; prompts + responses moved to `done/`. Canon re-rendered to **v1.2.2**
 (0 drift) — the 35 naming doctrine had been written to the non-render `canon/*.md`; ported into `canon/blocks/`

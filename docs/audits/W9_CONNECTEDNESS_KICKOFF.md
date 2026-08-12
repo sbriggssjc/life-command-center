@@ -139,3 +139,4 @@ future prompt.
   `sos_registry` with no LCC fsp row). **Scott's live steps: install proxy on GaryBuilt (runbook,
   gov repo), add tunnel hostname + new token, re-verify FL/CA adapters side-by-side, dry-run →
   Cowork flips `W9_1_SOS_DIRECT`, rotate BOTH service tokens.**
+- 2026-08-12 (scheduled check, ~22:00Z): **display-name capture NOT WORKING yet post-PA-change** — 9 new correspondence rows since 16:00Z (7 `outlook`, 2 `outlook_inbound`, 0 `outlook_sent`); new code IS live (rows stamp the `from_name`/`to_names` keys) but **all 9 are null**, including bridge `outlook` rows that should carry FROM names code-only. Scott: check both PA flows' run histories for Select/Join errors; no sent-flow traffic yet to test that path.
