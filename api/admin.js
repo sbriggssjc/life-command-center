@@ -2270,6 +2270,9 @@ async function handleTmMisparseSeed(req, res) {
   const summary = {
     apply, threshold: EMAIL_FANOUT_SUSPECT_THRESHOLD, fanout_email_count: fanoutEmails.length,
     scanned: 0, misparse_hits: 0, seeded: 0, skipped_retired: 0, errors: [], sample: [],
+    // Prompt 95 — would-seed counts by detector class (street_suffix / tm_vocab /
+    // doc_label / bare_title / sentence_fragment) so the dry-run reports the mix.
+    by_class: {},
   };
 
   for (const email of fanoutEmails) {
@@ -2285,6 +2288,7 @@ async function handleTmMisparseSeed(req, res) {
       const reason = tmMisparseReason(row.name);
       if (!reason) continue; // real cluster member (Richard Ehmer / James Devincenti class)
       summary.misparse_hits += 1;
+      summary.by_class[reason.signal] = (summary.by_class[reason.signal] || 0) + 1;
       if (row.metadata && typeof row.metadata === 'object' && row.metadata.junk_retired) {
         summary.skipped_retired += 1; continue;
       }

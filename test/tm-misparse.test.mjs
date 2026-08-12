@@ -62,6 +62,51 @@ describe('tmMisparseReason — class detector', () => {
   });
 });
 
+// Prompt 95 — sentence-fragment / doc-label / bare-title arms (verbatim examples
+// from Scott's U3 lane review, 2026-08-11). Same disease, new vocabulary.
+describe('tmMisparseReason — Prompt 95 fragment/label/title arms', () => {
+  it('flags OM/sale-record field labels via the doc_label arm', () => {
+    for (const name of [
+      'Income & Expenses', 'Expenses', 'Sale Notes', 'Buyer information not available',
+      'Seller information', 'Renewal Options', 'Lease Notes', 'Property Description',
+    ]) {
+      assert.ok(isMisparseName(name), `expected doc_label misparse: "${name}"`);
+      assert.equal(tmMisparseReason(name).signal, 'doc_label', `wrong signal for "${name}"`);
+    }
+  });
+  it('flags bare job titles (no personal-name token) via the bare_title arm', () => {
+    for (const name of [
+      'Senior Managing Director Investments', 'Associate Director Investments',
+      'Executive Vice President', 'Managing Director', 'Associate Advisor',
+    ]) {
+      assert.ok(isMisparseName(name), `expected bare_title misparse: "${name}"`);
+      assert.equal(tmMisparseReason(name).signal, 'bare_title', `wrong signal for "${name}"`);
+    }
+  });
+  it('flags sentence-shaped fragments via the sentence_fragment arm', () => {
+    for (const name of [
+      'The deed was unavailable at the time of publication',
+      'The sale price RBA were verified with listing broker on the phone',
+    ]) {
+      assert.ok(isMisparseName(name), `expected sentence_fragment misparse: "${name}"`);
+      assert.equal(tmMisparseReason(name).signal, 'sentence_fragment', `wrong signal for "${name}"`);
+    }
+  });
+  it('NEVER flags a clean real person — the guarantee holds for the new arms', () => {
+    for (const person of [
+      'Jane G. Polen', 'Richard Ehmer', 'James Devincenti', 'John Smith',
+      'Victor Vice', 'Robert Baker', 'Mary Sales', 'Dale Partners',
+    ]) {
+      assert.equal(isMisparseName(person), false, `real person wrongly flagged: "${person}"`);
+    }
+  });
+  it('does not flag ordinary firm names as fragments/labels/titles', () => {
+    for (const ok of ['Marcus & Millichap', 'Fresenius Medical Care', 'Cohen Cos', 'CBRE Group']) {
+      assert.equal(isMisparseName(ok), false, `should be clean: "${ok}"`);
+    }
+  });
+});
+
 describe('planContactMinting — sidebar guard (misparse + fan-out cap)', () => {
   it('routes the verbatim 16+ TrafficMetrix roster to review, mints none', () => {
     const contacts = [...JUNK_MEMBERS, ...REAL_MEMBERS].map((name) => ({
