@@ -454,6 +454,14 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Extended misparse sweep APPLIED 2026-08-12 — 38 seeded (by_class: street 18 / tm_vocab 5 /
+doc_label 2 / bare_title 8 / sentence_fragment 5); dry-run reviewed clean (no real people).
+Junk lane now holds 38 tm_misparse deterministic dismisses (the original 23 were still unconfirmed
+— idempotently refreshed, no dupes) within 110 total open. Each tm_misparse confirm soft-retires +
+un-stamps fanned emails. Note: PS 5.1 `Invoke-RestMethod` nullrefs on this endpoint's larger
+responses — use the curl.exe pattern for seeder calls. Prompt 96 with Claude Code (response
+pending).
+
 ### Reconcile 2026-08-12 (prompts 94 & 95 merged+deployed; U3 lane CLEARED) → prompt 96 queued
 
 | Item | State |
