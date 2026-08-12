@@ -208,6 +208,7 @@ app.all('/api/dup-pair-tick', (req, res) => { req.query._route = 'dup-pair-tick'
 app.all('/api/link-propagation-tick', (req, res) => { req.query._route = 'link-propagation-tick'; adminHandler(req, res); });
 app.all('/api/reachability-harvest-tick', (req, res) => { req.query._route = 'reachability-harvest-tick'; adminHandler(req, res); });
 app.all('/api/systemic-findings-tick', (req, res) => { req.query._route = 'systemic-findings-tick'; adminHandler(req, res); });
+app.all('/api/link-coverage-tick', (req, res) => { req.query._route = 'link-coverage-tick'; adminHandler(req, res); });
 app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
 app.all('/api/sf-link-assist-tick',        (req, res) => { req.query._route = 'sf-link-assist-tick';        adminHandler(req, res); });
 app.all('/api/sf-link-rescore-tick',       (req, res) => { req.query._route = 'sf-link-rescore-tick';       adminHandler(req, res); });

@@ -69,6 +69,11 @@ scans, budget floors from day one — new units START with the house pattern).
 reuses U3's proven pattern), then W9.1 (external chain on the value-ranked remainder), W9.4
 (continuous), W9.3 (parallel, review-paced), W9.5 (measure, last).
 
+**Build-out status: 4 of 5 done.** W9.2/W9.3/W9.4 built (flag-gated, awaiting Cowork flip);
+**W9.5 LIVE** (2026-08-12, Prompt 97 — the standing measure). W9.1 (external contact-acquisition
+on the value-ranked no-contact owners; SOS-egress design question) is the remaining unit — its own
+future prompt.
+
 ## Status
 - 2026-08-08: kickoff written; ORE layer verified self-draining; gap counts grounded live.
 - 2026-08-12: **W9.4 comms-harvest arm BUILT** (Prompt 94) as the THIRD arm of the W9.2 tick
@@ -92,3 +97,14 @@ reuses U3's proven pattern), then W9.1 (external chain on the value-ranked remai
   `W9_2_REACHABILITY_HARVEST` (three arms live). Second starvation finding confirmed ORTHOGONAL:
   correspondents are parties/deals, not owner LLCs — a linkage-design follow-on (candidate W9.5
   input), not a names issue.
+- 2026-08-12 (later still): **W9.5 propagation-integrity tick LIVE** (Prompt 97). Read-only cross-DB
+  link-coverage measure (NO LLM — pure counts): `v_{dia,gov}_w9_5_chain_coverage` + `v_lcc_w9_5_link_coverage`
+  + a tick-computed owner→ops-mirror row, UNIFIED by `GET/POST /api/link-coverage-tick` into one per-link
+  table (link_name, domain, total, linked, pct), snapshotted monthly (`lcc_w9_5_link_coverage_snapshot`,
+  MoM deltas) on the **U4 cron POST** (no second cron). Reports INTO U4 via a new **Connectedness section**
+  (`buildConnectednessSection`) — severity = **any link whose pct DROPS month-over-month** (propagation
+  regressing) → high + a fix-unit stub naming the failing producer. Grounded baselines captured live (chain
+  true→contact dia 32.1% / gov 27.0%; true→SF dia 16.9% / gov 11.8%; mirror conformance 100% / 0 dangling /
+  0 banned; **correspondence→owner-LLC 2.5% = 6/241**, the prompt-96 split baseline for the linkage
+  follow-on). Tests `test/link-coverage.test.mjs` (18) + `test/systemic-findings.test.mjs` (updated).
+  Wave-9 build-out now **4 of 5** — W9.1 (external acquisition) is the remaining unit.
