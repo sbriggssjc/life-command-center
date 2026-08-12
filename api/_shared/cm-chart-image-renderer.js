@@ -328,7 +328,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
       x: {
         ticks: {
           color: '#6A748C',
-          font: { family: CM_PNG_FONT, size: 9 },
+          font: { family: CM_PNG_FONT, size: 7 },
           maxTicksLimit: xMaxTicks,
           autoSkip: true,
         },
@@ -337,7 +337,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
       y: {
         ticks: {
           color: '#6A748C',
-          font: { family: CM_PNG_FONT, size: 9 },
+          font: { family: CM_PNG_FONT, size: 7 },
           ...(yAxisFormat || {}),
         },
         grid: { color: '#E7E6E6' },
@@ -373,7 +373,7 @@ function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12, yLeftRange, yRig
     position: 'right',
     ticks: {
       color: '#6A748C',
-      font: { family: CM_PNG_FONT, size: 9 },
+      font: { family: CM_PNG_FONT, size: 7 },
       ...(yRightFormat || {}),
     },
     grid: { display: false },
@@ -512,7 +512,7 @@ function nativeOptions(spec, { yFormat, y1Format, legendPosition = 'bottom' } = 
       position: 'right',
       ticks: {
         color: '#6A748C',
-        font: { family: CM_PNG_FONT, size: 9 },
+        font: { family: CM_PNG_FONT, size: 7 },
         ...(y1Format || axisFormatFromNumFmt(spec.yRightNumFmt)),
       },
       grid: { display: false },
@@ -2571,7 +2571,7 @@ function buildChartConfig(chart, brand) {
           o.scales.x = {
             type: 'time',
             time: { unit: 'year' },
-            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 9 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 7 } },
             grid: { display: false },
           };
           return o;
@@ -2645,7 +2645,7 @@ function buildChartConfig(chart, brand) {
             min: xMin,
             max: xMax,
             title: { display: true, text: axisTitle, color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 } },
-            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 9 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 7 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;
@@ -3105,7 +3105,7 @@ function buildChartConfig(chart, brand) {
             type: 'linear', position: 'bottom', min: xMin, max: xMax,
             title: { display: true, text: 'Firm Lease Term Remaining at Sale (Years)',
                      color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 } },
-            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 9 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 7 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;
