@@ -2188,11 +2188,15 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     const useNativePath = eligibleNative.length > 0;
 
     if (useNativePath) {
-      const skipped = orphanedPngs.length;
+      const embeddedOrphans = orphanedPngs.filter(o => o && o.png).length;
+      const noImageOrphans = orphanedPngs.length - embeddedOrphans;
       chartsSheet.getCell('B3').value =
-        `${eligibleNative.length} native Excel charts — fully editable, live-linked to the Data_* tabs.` +
-        (skipped > 0
-          ? ` ${skipped} additional chart${skipped === 1 ? '' : 's'} ${skipped === 1 ? 'is' : 'are'} only available on the per-tab Data_* sheet${skipped === 1 ? '' : 's'} (template${skipped === 1 ? '' : 's'} not yet migrated to native).`
+        `${eligibleNative.length} native Excel charts (fully editable, live-linked to the Data_* tabs)` +
+        (embeddedOrphans > 0
+          ? ` + ${embeddedOrphans} image chart${embeddedOrphans === 1 ? '' : 's'} (rendered snapshots of templates not yet migrated to native) — every chart in one place.`
+          : ' — every chart in one place.') +
+        (noImageOrphans > 0
+          ? ` ${noImageOrphans} data-table view${noImageOrphans === 1 ? '' : 's'} ${noImageOrphans === 1 ? 'is' : 'are'} on ${noImageOrphans === 1 ? 'its' : 'their'} own Data_* tab${noImageOrphans === 1 ? '' : 's'}.`
           : '');
     } else {
       chartsSheet.getCell('B3').value =
@@ -2206,12 +2210,22 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // Each tile gets a header row + 25 data rows (≈ 480px tall)
     let cursor = 5;
     if (useNativePath) {
-      // Native path: emit a twin injection per native-eligible chart;
-      // skip orphaned PNGs (their data tab is authoritative).
+      // Native path: emit a native twin per native-eligible chart AND embed
+      // every remaining (non-native) chart as its PNG image in the SAME
+      // injector drawing — so the Charts tab is a complete single-page view of
+      // EVERY chart, not just the migrated ones. (Previously the orphaned PNGs
+      // were dropped from this tab; charts without a native builder went
+      // missing here — the gap Scott flagged, esp. on the gov export.)
+      // NOTE: images are pushed as `{ image: { png, anchor } }` injections so
+      // the native-chart injector embeds them as <xdr:pic> in the one drawing
+      // it builds for this sheet. We must NOT use ExcelJS `addImage` on the
+      // Charts sheet — that creates a second drawing and Excel allows only one
+      // <drawing> per sheet.
+      const titleFont = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
       for (const { img, spec } of eligibleNative) {
         const titleCell = chartsSheet.getCell(`B${cursor}`);
         titleCell.value = img.name || img.chart_template_id;
-        titleCell.font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
+        titleCell.font = titleFont;
         chartsSheet.getRow(cursor).height = 20;
         nativeInjections.push({
           tabName: 'Charts',
@@ -2226,6 +2240,23 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
           },
         });
         cursor += 27; // header + 25 chart rows + 1 spacer
+      }
+      // Embed each non-native chart's PNG (skip any without a rendered image).
+      for (const img of orphanedPngs) {
+        if (!img || !img.png) continue;
+        const titleCell = chartsSheet.getCell(`B${cursor}`);
+        titleCell.value = img.name || img.chart_template_id;
+        titleCell.font = titleFont;
+        chartsSheet.getRow(cursor).height = 20;
+        nativeInjections.push({
+          tabName: 'Charts',
+          image: {
+            png: img.png,
+            ext: 'png',
+            anchor: { col0: 1, row0: cursor },
+          },
+        });
+        cursor += 27;
       }
     } else {
       // Legacy path: pure-PNG (no native chart was queued for any

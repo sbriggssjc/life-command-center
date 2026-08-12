@@ -106,6 +106,12 @@ test('injectNativeCharts: line chart on Data_Volume_TTM tab', async () => {
   // Marketing feedback: title 14pt Futura PT Bold NM Blue; x-axis interval unit 1.
   assert.match(chartXml, /sz="1400" b="1">\s*<a:solidFill><a:srgbClr val="003DA5"/, 'title 14pt bold NM Blue');
   assert.match(chartXml, /<c:tickLblSkip val="1"\/><c:tickMarkSkip val="1"\/>/, 'x-axis label interval unit = 1');
+  // Marketing follow-up (2026-08): BOTH axis tick labels are 7pt.
+  const catAx1 = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  const valAx1 = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(catAx1, /<c:txPr>[\s\S]*?sz="700"/, 'x-axis (catAx) labels 7pt');
+  assert.match(valAx1, /<c:txPr>[\s\S]*?sz="700"/, 'y-axis (valAx) labels 7pt');
+  assert.ok(valAx1.indexOf('<c:txPr>') < valAx1.indexOf('<c:crossAx'), 'valAx txPr precedes crossAx (schema order)');
 
   const drawingRels = await zip.file('xl/drawings/_rels/drawing1.xml.rels').async('string');
   assert.match(drawingRels, /chart1\.xml/, 'drawing rels references chart1.xml');
@@ -5848,6 +5854,46 @@ test('R71: injectNativeCharts emits ONE drawing.xml per sheet when multiple char
   const sheetXml = await zip.file('xl/worksheets/sheet2.xml').async('string');
   const drawingTagCount = (sheetXml.match(/<drawing\s+r:id=/g) || []).length;
   assert.equal(drawingTagCount, 1, 'R71: sheet XML has exactly one <drawing/> element');
+});
+
+test('Charts tab: mixes native charts + embedded PNG images in ONE drawing', async () => {
+  // Single-page Charts view must include EVERY chart — native twins as chart
+  // objects AND non-native templates as embedded PNG images — sharing one
+  // drawing.xml (Excel allows only one <drawing> per sheet).
+  const png = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489' +
+    '0000000d49444154789c6360000002000100ffff03000006000557bfabd4000000' +
+    '0049454e44ae426082', 'hex');
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'X';
+  wb.addWorksheet('Charts');
+  const d = wb.addWorksheet('Data_M');
+  d.getCell('B5').value = 'S';
+  for (let i = 0; i < 6; i++) { d.getCell(`A${6 + i}`).value = new Date(2025, i, 28); d.getCell(`B${6 + i}`).value = 100 + i; }
+  const buf = await injectNativeCharts(await wb.xlsx.writeBuffer(), [
+    { tabName: 'Charts', spec: { type: 'line', tabName: 'Data_M', titleCol: 'B', titleRow: 5, catCol: 'A', valCol: 'B', dataStart: 6, dataEnd: 11, color: '003DA5', title: 'Native', anchor: { col0: 1, row0: 5, col1: 14, row1: 30 } } },
+    { tabName: 'Charts', image: { png, ext: 'png', anchor: { col0: 1, row0: 32 } } },
+    { tabName: 'Charts', image: { png, ext: 'png', anchor: { col0: 1, row0: 59 } } },
+  ]);
+  const zip = await JSZip.loadAsync(buf);
+  const drawingFiles = Object.keys(zip.files).filter(n => /^xl\/drawings\/drawing\d+\.xml$/.test(n));
+  assert.equal(drawingFiles.length, 1, 'exactly ONE drawing for the Charts sheet');
+  const dxml = await zip.file(drawingFiles[0]).async('string');
+  assert.equal((dxml.match(/<xdr:graphicFrame/g) || []).length, 1, '1 native chart graphicFrame');
+  assert.equal((dxml.match(/<xdr:pic>/g) || []).length, 2, '2 embedded image pics');
+  const ids = Array.from(dxml.matchAll(/<xdr:cNvPr\s+id="(\d+)"/g)).map(m => m[1]);
+  assert.deepEqual([...new Set(ids)].sort(), ['2', '3', '4'], 'unique cNvPr ids across charts + images');
+  // Two PNGs embedded as media
+  const media = Object.keys(zip.files).filter(n => /^xl\/media\/image\d+\.png$/.test(n));
+  assert.equal(media.length, 2, '2 media PNGs embedded');
+  // Drawing rels: 1 chart + 2 image relationships
+  const relsFile = Object.keys(zip.files).find(n => /^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/.test(n));
+  const rels = await zip.file(relsFile).async('string');
+  assert.equal((rels.match(/relationships\/chart"/g) || []).length, 1, '1 chart relationship');
+  assert.equal((rels.match(/relationships\/image"/g) || []).length, 2, '2 image relationships');
+  // Content-types declares the PNG default so images resolve
+  const ct = await zip.file('[Content_Types].xml').async('string');
+  assert.match(ct, /<Default Extension="png"/i, 'png content-type default present');
 });
 
 test('R71: single-chart path preserves legacy drawing.xml byte shape', async () => {

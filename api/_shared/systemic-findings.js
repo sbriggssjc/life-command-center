@@ -22,6 +22,8 @@
 // and passes raw section inputs in; timestamps are injected.
 // ============================================================================
 
+import { buildConnectednessSection } from './link-coverage.js';
+
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
@@ -406,6 +408,9 @@ export function assembleReport(inputs, { period, now = null, prevSections = null
     ['match_assist', () => buildMatchAssistSection(inputs.match_assist, prevBy.match_assist)],
     ['naming_hygiene', () => buildNamingHygieneSection(inputs.naming_hygiene, prevBy.naming_hygiene)],
     ['extraction', () => buildExtractionSection(inputs.extraction, prevBy.extraction)],
+    // W9.5 — cross-DB propagation integrity. inputs.connectedness is the unified
+    // link-coverage object (or null when the tick could not compute it).
+    ['connectedness', () => buildConnectednessSection(inputs.connectedness, prevBy.connectedness)],
   ];
   const sections = [];
   const sectionErrors = [];
