@@ -165,6 +165,42 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleCreDocTextTick } = await import('./_handlers/cre-doc-text.js');
       return handleCreDocTextTick(req, res);
     }
+    case 'capture-doc-bytes': {
+      // Capture-at-ingest (durable copy): the extension fetched a document's
+      // bytes IN the authenticated CoStar tab (the only way to reach a
+      // session-bound CDN link) and POSTs them here to store on the just-upserted
+      // property_documents row, keyed by (domain, source_url). Best-effort.
+      const { storeClientDocBytes } = await import('./_handlers/sidebar-pipeline.js');
+      const body = req.body || {};
+      const domain = /^(dia|dialysis)$/i.test(String(body.domain)) ? 'dia'
+                   : /^(gov|government)$/i.test(String(body.domain)) ? 'gov' : null;
+      if (!domain) return res.status(400).json({ ok: false, error: 'domain must be dia|gov' });
+      try {
+        const r = await storeClientDocBytes(domain, {
+          source_url: body.source_url, content_base64: body.content_base64, mime_type: body.mime_type,
+        });
+        return res.status(r.ok ? 200 : 200).json(r); // best-effort: non-ok is not an HTTP error
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: 'capture_failed', detail: e?.message?.slice(0, 200) });
+      }
+    }
+    case 'doc-bytes-backfill': {
+      // Bounded server-side re-fetch backfill for url-only docs (public/CDN links
+      // that are NOT session-bound). Session-bound CoStar links honestly stay
+      // url-only and are counted. ?domain=dia|gov&limit=&document_type=
+      const { backfillDocBytes } = await import('./_handlers/sidebar-pipeline.js');
+      const domain = /^(dia|dialysis)$/i.test(String(req.query.domain)) ? 'dia'
+                   : /^(gov|government)$/i.test(String(req.query.domain)) ? 'gov' : null;
+      if (!domain) return res.status(400).json({ ok: false, error: 'domain must be dia|gov' });
+      try {
+        const r = await backfillDocBytes(domain, {
+          limit: req.query.limit, documentType: req.query.document_type || null,
+        });
+        return res.status(200).json(r);
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: 'backfill_failed', detail: e?.message?.slice(0, 200) });
+      }
+    }
     case 'bov-extract': {
       // R58 Unit 4 (2B) — build the reviewable BOV record from text sidecars.
       const { handleBovExtract } = await import('./_handlers/bov-extract.js');

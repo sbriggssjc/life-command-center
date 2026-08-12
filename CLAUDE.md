@@ -203,6 +203,29 @@ Requires `OPENAI_API_KEY`. Per-artifact diagnostics record `ai_chain`/`ai_fell_b
 The `document-text-tick` worker drains scanned deeds; `lease-extractor.js` OCRs thin-text scanned leases.
 Feature-flagged (`OCR_CLOUD_*`, `OPENAI_API_KEY`); unset ⇒ honest `needs_ocr`.
 
+#### Durable document capture-at-ingest (store the bytes, don't defer the fetch)
+
+A captured CoStar doc that stores only a `source_url` (CDN link) becomes **unprocessable later** — CoStar
+CDN/signed links are **bound to the browser session**, so a server-side (Railway datacenter) re-fetch at OCR
+time gets 403/expired and the bytes never land (this stranded ~86% of `property_documents` across dia+gov).
+Fix: capture the durable copy **while authenticated**, into each domain's `property-documents` bucket
+(`fetchDocBytes` already prefers `storage_path` over `source_url`). Two paths, both domains, best-effort/additive:
+
+- **Server re-fetch (Build 1, `sidebar-pipeline.js::captureDocumentBytesAtIngest`)** — works only for
+  non-session-bound (public county / CDN) links. Kept as the fallback + the **backfill** worker
+  `POST /api/intake?_route=doc-bytes-backfill&domain=dia|gov&limit=` (bounded; counts session-bound/dead links
+  separately — never silently "done").
+- **Extension in-session capture (the durable forward fix)** — the extension fetches each captured doc's bytes
+  **in the authenticated CoStar tab** (`background.js::fetchDocBytesViaTab`, the only way to reach a
+  session-bound link) and POSTs them to `POST /api/intake?_route=capture-doc-bytes` (`{domain, source_url,
+  content_base64, mime_type}` → `storeClientDocBytes`). Keyed by `(domain, source_url)` — the row already
+  exists (`process_sidebar_extraction` awaits `upsertDocumentLinks` before responding), so **bytes never touch
+  `entity.metadata`**. Idempotent (a row with `storage_path` is a no-op). Offering material is skipped (it
+  already routes through the OM live-tab path). Triggered fire-and-forget after a successful extraction
+  (`sidepanel.js` → `CAPTURE_DOC_BYTES_BATCH`). **Requires reloading the unpacked extension after deploy**
+  (manifest bumped to 1.0.39). Closes the gov firm-term "Gate 1" byte-fetch blocker
+  (government-lease `docs/RUNBOOK_firm_term_coverage_ops_gates.md`).
+
 ---
 
 ## Domain-DB invariants
