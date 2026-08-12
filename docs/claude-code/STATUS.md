@@ -454,6 +454,23 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Nightly 2026-08-11 + FULL REVIEW — 92 verified, W5.3 RE-GRADE DELIVERED, prompt 93 queued
+
+**92 verified from behavior** (two run_ids × 20 — the assist pool walks; response docx never
+landed in responses/ — Scott to re-drop for the archive). Lanes worked hard by Scott: U1 145→95,
+U2 43→14, U5 157→41; U3 grew to 21 (chain proposals flowing). **Re-score cumulative: 1,200
+walked, 32 auto-links, 8 review** — steady conservative ratio.
+
+**W5.3 RE-GRADE (addendum written into the W5_3 report): the 61 hardening WORKED.** Post-61
+OM-class coverage: NOI 89 / cap 89 / tenant 79 / SF 95 / responsibilities 79 (vs 4/33/6/41/absent
+pre-61). **Verdict upgraded: hardened prompt VALIDATED, keep ollama-primary; revert
+recommendation retired.** Caveats → prompt 93B: an Aug-10 bulk path (63/72 rows) still bypasses
+the stamp; sold_* key drift on 2/4 stamped rows.
+
+**Prompt 93 queued (two micros):** (A) donor-handoff treadmill — 4th walk-the-pool instance
+(stamped 14 night one, 0 since; fixed 480-row window, no cursor) + build the SHARED structural
+helper if 92 didn't; (B) trace + stamp the Aug-10 bulk writer, extend the 82 guard.
+
 ### Nightly 2026-08-10 — 9/9 fired, 8 healthy; sf-assist treadmill → prompt 92 (micro)
 Lanes: U1 145 / U2 43 / U3 13 / U5 157. **Re-score night 2: 800 walked, 26 auto-links (+8), 8
 review** — conservative gate steady. Donor stamped 0 (lumpy; last night's links had no unique

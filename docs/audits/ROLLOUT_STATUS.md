@@ -5,6 +5,14 @@
 
 ## Wave 9 — Data connectedness (owner → contact → SF → Outlook; kickoff `docs/audits/W9_CONNECTEDNESS_KICKOFF.md`)
 
+> **Progress ledger (2026-08-11, Cowork):** W9.3 LIVE 3 nights — re-score walked 1,200 of 23,817
+> (32 auto-links, 8 review; conservative ratio steady); sf-assist walking the 3.3k pool 20/night
+> post-92; donor handoff stamped 14 night one then stalled on a fixed scan window (→ prompt 93A).
+> Donor-key coverage: gov 19 / dia 15 of the 2,305 addressable. W9.2 stays gated on that count
+> climbing. **W5.3 re-grade (08-11): the hardened extraction prompt VALIDATED at production
+> quality (OM NOI 89% vs pre-61 4%) — ollama-primary intake confirmed; attribution caveat →
+> prompt 93B.**
+
 Doctrine (inherited): value-gate everything (rank_value order); fill-blanks only; provenance + fsp rows in-migration; reversible; never fabricate a contact; human lanes for judgment; honest per-source counts; new units START with the house pattern (windowed scans, budget floors, crash-proof envelopes, batched lookups, loud per-source errors).
 
 | Unit | What | Status | Notes |

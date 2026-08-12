@@ -92,3 +92,23 @@ Qualitative (spot sample, 12 highest-text ollama extractions):
 
 **Needs Scott:** the interim revert is an env/flag flip on Railway (`AI_EXTRACTION_PROVIDER` /
 `OLLAMA_EXTRACTION`) — Scott's call whether to revert now or ride until the tune lands.
+
+---
+
+## RE-GRADE ADDENDUM — 2026-08-11 (post-61 hardened prompt, 102 fresh extractions)
+
+**Verdict: the prompt-61 hardening WORKED — extraction quality is fixed.** OM-class field
+coverage across the post-61 fleet: NOI **89%**, cap 89%, tenant 79%, SF 95%, responsibilities 79%
+(vs the pre-61 ollama window's 4/33/6/41/absent). The original revert-to-cloud recommendation is
+retired; ollama-primary intake is VALIDATED at production quality.
+
+**Caveats (open, small):**
+1. **Attribution still incomplete post-82:** daily stamp coverage — Aug 7: 4/15 (pre-82), Aug 10:
+   **9/72** (a bulk burst, 63 unstamped — a batch/re-extract path still bypasses
+   `ensureProviderStamp`), Aug 11: 11/13 (85%). Every stamped row is ollama; zero cloud fallbacks
+   recorded. A clean ollama/cloud split remains impossible until the bulk path stamps → prompt 93.
+2. **sale_key_drift: 2 of 4** stamped-ollama OM rows carry `sold_*` keys (the no-sale-keys rule
+   leaking on a small sample) — watch; re-check after attribution is complete.
+
+Wave 5 remains CLOSED; this addendum upgrades the W5.3 verdict from "tune + interim revert" to
+**"hardened prompt validated; keep ollama-primary"** with the two caveats tracked.
