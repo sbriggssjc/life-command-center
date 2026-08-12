@@ -221,6 +221,59 @@ test('buildCapitalMarketsWorkbook: gov seller_sentiment binds to populated 6+ fi
   assert.ok(!h.some((v) => /trailing 8-qtr/.test(v)), `gov should not emit _8q headers: ${h.join(' | ')}`);
 });
 
+test('dia seller_sentiment cap header relabeled "Last Cap Rate", keeps 10+ cohort + _8q columns', () => {
+  const charts = [{
+    chart_template_id: 'seller_sentiment',
+    name: 'Seller Sentiment',
+    chart_type: 'combo',
+    data_shape: 'time_series_quarterly_combo',
+    view_name: 'cm_dialysis_seller_sentiment_m',
+    vertical: 'dialysis',
+    rows: [{
+      period_end: '2025-12-31', subspecialty: 'all',
+      n_all: 136, n_long_term: 13,
+      pct_price_change_all: 0.05, pct_price_change_long_term: 0.07,
+      last_ask_cap_all: 0.0712, last_ask_cap_long_term: 0.0663,
+      pct_price_change_long_term_8q: 0.06, last_ask_cap_long_term_8q: 0.067,
+    }],
+  }];
+  const wb = buildCapitalMarketsWorkbook({
+    vertical: 'dialysis', subspecialty: 'all', asOf: '2025-12-31', charts, brand: null,
+  });
+  const h = headersOf(wb, 'Data_Sentiment');
+  // 2026-08-12 — dia cap line broadened past the linked-listing ask cap too.
+  assert.ok(h.includes('Last Cap Rate (10+ yr)'), `headers: ${h.join(' | ')}`);
+  assert.ok(!h.some((v) => /Last Ask Cap/.test(v)), `dia cap header relabeled: ${h.join(' | ')}`);
+  // dia keeps its 10+ cohort labels and the trailing 8-qtr columns.
+  assert.ok(h.some((v) => /10\+ yr/.test(v)), `dia keeps 10+ cohort: ${h.join(' | ')}`);
+  assert.ok(h.some((v) => /trailing 8-qtr/.test(v)), `dia keeps _8q columns: ${h.join(' | ')}`);
+});
+
+test('seller_sentiment recent-tail coverage guard warns when latest n_all collapses', () => {
+  const mk = (n_all) => ({
+    chart_template_id: 'seller_sentiment',
+    name: 'Seller Sentiment',
+    chart_type: 'combo',
+    data_shape: 'time_series_quarterly_combo',
+    view_name: 'cm_gov_seller_sentiment_m',
+    vertical: 'gov',
+    rows: [
+      { period_end: '2025-09-30', subspecialty: 'all', n_all: 40, last_ask_cap_all: 0.073 },
+      { period_end: '2025-12-31', subspecialty: 'all', n_all, last_ask_cap_all: 0.074 },
+    ],
+  });
+  const low = buildCapitalMarketsWorkbook({
+    vertical: 'gov', subspecialty: 'all', asOf: '2025-12-31', charts: [mk(4)], brand: null,
+  });
+  assert.ok((low.driftWarnings || []).some((m) => /recent-tail coverage low/.test(m)),
+    `expected coverage warning; got: ${(low.driftWarnings || []).join(' | ')}`);
+  const ok = buildCapitalMarketsWorkbook({
+    vertical: 'gov', subspecialty: 'all', asOf: '2025-12-31', charts: [mk(50)], brand: null,
+  });
+  assert.ok(!(ok.driftWarnings || []).some((m) => /recent-tail coverage low/.test(m)),
+    `healthy tail should not warn; got: ${(ok.driftWarnings || []).join(' | ')}`);
+});
+
 test('Data_DOM_Ask column headers state the % of Original List basis (audit item E)', () => {
   const charts = [{
     chart_template_id: 'dom_and_pct_of_ask',
