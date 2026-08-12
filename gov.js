@@ -199,6 +199,47 @@ async function govQueryAll(table, select, params = {}) {
 }
 
 // ============================================================================
+// Bounded-concurrency runners (incident 2026-08-12)
+// ============================================================================
+// The Overview + Phase-2 loads each fired ~9 heavy reads at once (a single
+// Promise.all / Promise.allSettled). Against the gov DB's low connection
+// ceiling, those simultaneous full/wide scans — multiplied across every open
+// dashboard — held PostgREST's pool and helped wedge the origin (uniform 522s).
+// These runners cap in-flight requests so ONE dashboard never opens more than
+// `limit` connections at a time. Result order is preserved (positional
+// destructuring downstream is unchanged). Concurrency 4 matches the long-noted
+// target in govQueryAll's QA-33 comment.
+async function _runLimit(thunks, limit) {
+  const results = new Array(thunks.length);
+  let next = 0;
+  async function worker() {
+    while (next < thunks.length) {
+      const i = next++;
+      results[i] = await thunks[i]();
+    }
+  }
+  const n = Math.max(1, Math.min(limit || 4, thunks.length || 1));
+  await Promise.all(Array.from({ length: n }, worker));
+  return results;
+}
+// Promise.all semantics (rejects on first error), but ≤`limit` in flight.
+function throttleAll(thunks, limit = 4) { return _runLimit(thunks, limit); }
+// Promise.allSettled semantics (never rejects), ≤`limit` in flight.
+function throttleSettled(thunks, limit = 4) {
+  return _runLimit(
+    thunks.map(function (t) {
+      return function () {
+        return Promise.resolve().then(t).then(
+          function (value) { return { status: 'fulfilled', value: value }; },
+          function (reason) { return { status: 'rejected', reason: reason }; }
+        );
+      };
+    }),
+    limit
+  );
+}
+
+// ============================================================================
 // QA-28 (2026-05-18): private "Federal" name detector
 // ============================================================================
 // ~826 properties had agency values like "Campco Federal Credit Union",
@@ -348,17 +389,17 @@ async function loadGovData() {
     // leave the "Loading detailed data…" banner spinning forever. Each result
     // is extracted defensively; every downstream tile already has a null/empty
     // fallback, so the queries that succeed still land.
-    var _govSettled = await Promise.allSettled([
+    var _govSettled = await throttleSettled([
       // PERF (2026-05-31): was govQueryAll (unbounded serial pagination of all
       // ~11.5k leads -> the 14.6s Gov-tab freeze). The leads array is a
       // prioritized WORKING SET (pipeline already caps at 1,000 via atCap), not
       // the authoritative total. Load the top-1,000 by priority_score in ONE
       // bounded call; the same call returns the exact DB count for true totals.
-      govQuery('prospect_leads',
+      () => govQuery('prospect_leads',
         'lead_id, lease_number, location_code, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
         { order: 'priority_score.desc', limit: 1000 }
       ),
-      _loadPaginatedQuery('properties',
+      () => _loadPaginatedQuery('properties',
         // Identifier + research handles + financials + intel signals.
         // Intel card needs all of these; the auto-resolve sweep keys on
         // intel_status + the no-handle bucket. Round 76em.
@@ -375,8 +416,8 @@ async function loadGovData() {
         // RBA so properties missing a value still rank by rent/size.
         { order: 'estimated_value.desc.nullslast,gross_rent.desc.nullslast,rba.desc.nullslast' }
       ),
-      govQuery('properties', 'property_id', { limit: 0 }),
-      govQueryAll('available_listings',
+      () => govQuery('properties', 'property_id', { limit: 0 }),
+      () => govQueryAll('available_listings',
         // Embed the matched property row via FK so the UI can show
         // year_built / land_acres / assessed_owner without a second
         // round-trip. PostgREST resource-embed syntax (properties is
@@ -400,16 +441,16 @@ async function loadGovData() {
       // On-Market tile and the Listings tab filter govData.listings by this
       // listing_id membership, so neither computes its own filter and both
       // reconcile with the CM available count. Light (~278 rows).
-      govQuery('v_gov_on_market', 'listing_id', { limit: 1000 }),
+      () => govQuery('v_gov_on_market', 'listing_id', { limit: 1000 }),
       // ── Data-Health tiles: read the ONE canonical view per metric on the
       // Overview load (mirrors dia), so they render SYNCHRONOUSLY and the
       // re-render can't strand them on "loading…". All small (aggregated / a
       // bounded page — gov listings-confirm ~67, prospect top-250).
-      govQuery('v_ownership_coverage', '*', { limit: 1 }),
-      govQuery('v_llc_research_queue_health', '*', { limit: 50 }),
-      govQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000 }),
-      govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
-    ]);
+      () => govQuery('v_ownership_coverage', '*', { limit: 1 }),
+      () => govQuery('v_llc_research_queue_health', '*', { limit: 50 }),
+      () => govQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000 }),
+      () => govQuery('v_prospect_targets', 'true_owner_id,name,prop_count,state,entity_type', { order: 'prop_count.desc.nullslast', limit: 250 })
+    ], 4);
     // Extract each result defensively — a rejected query becomes null and the
     // tile it feeds falls back to its own empty/error state (never a page-wide
     // strand). NOTE: portfolioPropsRes comes from _loadPaginatedQuery (returns
@@ -494,46 +535,53 @@ async function _loadGovPhase2(startTime) {
   try {
     var [ownershipRes, contactsRes, gsaEventsRes, researchOutcomesRes,
          gsaSnapshotsRes, frppRes, loansRes, countyAuthRes, salesCompsRes
-    ] = await Promise.all([
-      govQueryAll('ownership_history',
+    ] = await throttleAll([
+      () => govQueryAll('ownership_history',
         'ownership_id, property_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
         { order: 'estimated_value.desc' }
       ),
-      govQueryAll('contacts',
+      () => govQueryAll('contacts',
         'contact_id, name, contact_type, total_volume, phone, email',
         {}
       ),
-      govQuery('gsa_lease_events',
+      () => govQuery('gsa_lease_events',
         'lease_number, location_code, event_type, event_date, annual_rent, lease_rsf, lessor_name, changed_fields',
         { order: 'event_date.desc', limit: 500, count: false }
       ),
-      govQuery('research_queue_outcomes',
+      () => govQuery('research_queue_outcomes',
         'queue_type, status, notes, assigned_at, created_at, assigned_to, selected_property_id, clinic_id',
         { order: 'assigned_at.desc', limit: 500, count: false }
       ),
-      govQuery('gsa_snapshots',
+      () => govQuery('gsa_snapshots',
         'snapshot_date, lease_number, address, city, state, lease_rsf, annual_rent, lessor_name, lease_effective, lease_expiration, field_office_name',
         { order: 'snapshot_date.desc', limit: 500, count: false }
       ),
-      govQuery('frpp_records',
+      // limit:1000 — PostgREST caps every response at 1000 rows regardless of
+      // the requested limit, so the old `limit: 5000` silently returned only
+      // 1000 anyway (the documented truncation footgun) while asking the DB to
+      // plan a 5000-row scan. Cap explicitly at the real page size so the
+      // request is honest and no cheaper. (This is a bounded working set for the
+      // city→FRPP lookup, not an authoritative full pull; a full sweep would be
+      // govQueryAll, which we deliberately avoid here to keep the load low.)
+      () => govQuery('frpp_records',
         'using_agency, using_bureau, street_address, city_name, state_name, square_feet, annual_rent_to_lessor, lease_expiration_date, property_type',
-        { limit: 5000, count: false }
+        { limit: 1000, count: false }
       ),
-      govQuery('loans',
+      () => govQuery('loans',
         'property_id, index_name, loan_amount, loan_type, status',
         { limit: 500, count: false }
       ),
-      _loadPaginatedQuery('county_authorities',
+      () => _loadPaginatedQuery('county_authorities',
         'county_name, state_code, netronline_url, assessor_url, recorder_url, treasurer_url, tax_url, gis_url, clerk_url, other_urls'
       ),
-      _loadPaginatedQuery('sales_transactions',
+      () => _loadPaginatedQuery('sales_transactions',
         '*',
         // Value-weighted sort (Item #9 Phase A, 2026-05-17): biggest comps
         // surface first. Tiebreaker on sale_date keeps recency where prices
         // are equal/null.
         { order: 'sold_price.desc.nullslast,sale_date.desc.nullslast' }
       )
-    ]);
+    ], 4);
 
     govData.ownership = ownershipRes.data || [];
     govData.contacts = contactsRes.data || [];

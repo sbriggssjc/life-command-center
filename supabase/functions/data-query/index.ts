@@ -754,8 +754,23 @@ Deno.serve(async (req: Request) => {
   if (offset !== null) url.searchParams.set("offset", offset);
 
   try {
-    const wantCount = params.get("count") !== "false";
-    const isHeavyView = table === "v_crm_client_rollup" || table === "v_sf_tasks_contact_rollup";
+    // Count strategy (incident 2026-08-12): an EXACT count forces PostgREST to
+    // run a full-table COUNT on every request. The gov dashboard fires several
+    // count tiles over large tables (properties, contacts, ownership_history,
+    // frpp_records, gsa_lease_events…) concurrently on load; those full scans
+    // held PostgREST's pool and helped wedge the gov origin (uniform 522s).
+    // Large tables/heavy views now default to a PLANNER estimate (no scan).
+    // Callers may still force accuracy by passing count=exact, or select
+    // count=planned / count=estimated explicitly; count=false skips it.
+    const countParam = (params.get("count") || "").toLowerCase();
+    const wantCount = countParam !== "false";
+    const HEAVY_COUNT = new Set([
+      "v_crm_client_rollup", "v_sf_tasks_contact_rollup",
+      "properties", "contacts", "ownership_history", "sales_transactions",
+      "prospect_leads", "available_listings", "frpp_records", "frpp_annual_snapshots",
+      "gsa_lease_events", "gsa_snapshots", "gsa_inventory_snapshot_lines",
+      "v_sales_comps", "leases", "lease_escalations",
+    ]);
 
     const fetchHeaders: Record<string, string> = {
       apikey: dbKey,
@@ -763,7 +778,11 @@ Deno.serve(async (req: Request) => {
       "Content-Type": "application/json",
     };
     if (wantCount) {
-      fetchHeaders["Prefer"] = isHeavyView ? "count=planned" : "count=exact";
+      const explicit = (countParam === "exact" || countParam === "planned" || countParam === "estimated")
+        ? countParam
+        : null;
+      const mode = explicit ?? (HEAVY_COUNT.has(table) ? "planned" : "exact");
+      fetchHeaders["Prefer"] = `count=${mode}`;
     }
 
     const response = await fetch(url.toString(), {
