@@ -214,7 +214,10 @@ test('buildCapitalMarketsWorkbook: gov seller_sentiment binds to populated 6+ fi
   assert.equal((wb.driftWarnings || []).filter((m) => /long_term_8q/.test(m)).length, 0);
   const h = headersOf(wb, 'Data_Sentiment');
   assert.ok(h.includes('Price Chg % (6+ yr)'), `headers: ${h.join(' | ')}`);
-  assert.ok(h.includes('Last Ask Cap (6+ yr)'), `headers: ${h.join(' | ')}`);
+  // 2026-08-12 — gov cap line broadened past pure asking cap (ask -> derived ->
+  // sold), so the gov header reads "Last Cap Rate", not "Last Ask Cap".
+  assert.ok(h.includes('Last Cap Rate (6+ yr)'), `headers: ${h.join(' | ')}`);
+  assert.ok(!h.some((v) => /Last Ask Cap/.test(v)), `gov cap header relabeled: ${h.join(' | ')}`);
   assert.ok(!h.some((v) => /trailing 8-qtr/.test(v)), `gov should not emit _8q headers: ${h.join(' | ')}`);
 });
 
