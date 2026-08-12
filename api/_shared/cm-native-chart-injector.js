@@ -3619,10 +3619,25 @@ const MIN_YEAR_BY_TEMPLATE = {
   // never interpolated. Superseded the R67/R76-A3 2015/2019 floors (which clipped
   // a decade of real cohort history). The dot-plot variants stay on capByTermFloor
   // (they are recent-window dispersion views, a different chart purpose).
-  cap_rate_by_lease_term:       (rows) => firstNonNullYear(rows, [
-    'cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm',
-    'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless', 'cap_5to10',
-  ]),
+  // 2026-08-12 — gov "Outside Firm" cohort was redefined from unknown-term
+  // (firm_rem IS NULL) to genuinely-past-firm (firm_rem <= 0) in
+  // cm_gov_cap_by_term_m (migration 20260812_cm_gov_cap_by_term_outside_firm_
+  // semantics.sql). With the corrected 4 cohorts, gov is pinned to 2011 — the
+  // earliest year where ALL FOUR lines are continuously populated (n>=5 every
+  // month) AND the "longer firm term = lower cap" head-to-tail message holds
+  // every month through today (grounded live: 2007-2010 are too thin for the
+  // past-firm/10+ cohorts to be continuous; 2011 forward is clean). "As far
+  // back as we can while keeping a consistent message" (Scott 2026-08-12).
+  // dia keeps the data-driven first-non-null start (its cohorts differ).
+  cap_rate_by_lease_term:       (rows) => {
+    const isDia = Array.isArray(rows) && rows.some((r) => r &&
+      (r.cap_8to12 != null || r.cap_5orless != null));
+    if (!isDia) return 2011;   // gov — fixed consistent-message floor
+    return firstNonNullYear(rows, [
+      'cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm',
+      'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless', 'cap_5to10',
+    ]);
+  },
   // T1 (2026-06-23) — NM-vs-Market: plot the MARKET line full-range (it runs
   // 12/12 from 2001) and let the NM overlay begin where NM sales become
   // non-trivial (~2014). Scanning BOTH series' first non-null makes the range
