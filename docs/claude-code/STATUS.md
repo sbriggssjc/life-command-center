@@ -454,6 +454,21 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### W9.1 queued as TWO prompts (98 Stage 1 + 99 Stage 2) — Scott sanctioned the SOS egress design
+**Prompt 98 (Stage 1, internal-only):** value-ranked no-contact owner engine, stages in cost order
+w/ stop-at-first-success — 1a cross-reference ATTACH (existing contacts under other entities,
+institution contacts for the REIT class), 1b deed mining (grantee mailing addr deterministic +
+signatory names via LLM-verbatim, reuses W5.1 GLiNER where fits), 1c broker-of-record (typed
+`broker_of_record`, never conflated with owner's people). Pluggable stage runner = the Stage-2
+seam. Flag `W9_1_CONTACT_ACQUISITION`, cron ~4:55.
+**Prompt 99 (Stage 2, Scott-approved 2026-08-12):** locked-down fetch proxy ON the GaryBuilt box —
+compiled-in state-SOS domain allowlist, GET-only, human-like rate limits + daily caps, NEW CF
+Access hostname/policy/token (separate blast radius from ollama), kill switches both ends, Windows
+install runbook for Scott; SOS adapters re-verified per state through residential egress
+(side-by-side 403-vs-200 proof), wired as 98's SOS stage (registered-agent/officer proposals,
+`sos_registry` provenance, lane-only). CF token rotation (§3C) folds into the same Zero Trust
+session. Flag `W9_1_SOS_DIRECT`. **Send 98 first; 99 after or parallel (98's runner is the seam).**
+
 ### Prompt 97 (W9.5) landed — PR #1694; WAVE 9 BUILD-OUT 4/5, the measurement loop is CLOSED
 Read-only integrity tick per spec: pure planner `link-coverage.js`, `GET/POST /api/link-coverage-tick`
 unifying dia/gov chain views + ops mirror/correspondence/conformance view, monthly snapshot rides
