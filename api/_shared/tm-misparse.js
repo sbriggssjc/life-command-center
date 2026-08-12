@@ -41,6 +41,75 @@ const TM_VOCAB_RE = /(Traffic\s*Vol|Last\s*Measured|Cross\s*Street|Collection\s*
 // "Jack Kerouac Aly SE", "Stevens Aly N").
 const STREET_SUFFIX_RE = /\b(St|Str|Street|Ave|Aven|Avenue|Blvd|Boulevard|Hwy|Highway|Pkwy|Parkway|Aly|Alley|Walk|Dr|Drive|Ln|Lane|Rd|Road|Pl|Place|Ct|Court|Way|Ter|Terrace|Cir|Circle|Sq|Square|Loop|Trl|Trail)\.?(?:\s+(?:N|S|E|W|NE|NW|SE|SW))?\.?$/i;
 
+// Prompt 95 — three new arms for sentence-fragment / doc-label / bare-title
+// "names" (Scott's U3 lane review, 2026-08-11). Same disease as the TrafficMetrix
+// misparse (a table/field/sentence minted as a PERSON), different vocabulary.
+// Live examples that must flag: "The deed was unavailable at the time of
+// publication", "Income & Expenses", "Expenses", "Buyer information not
+// available", "Sale Notes", "Senior Managing Director Investments" (bare title),
+// "Associate Director Investments". Real people ("Jane G. Polen", "Richard
+// Ehmer") must NOT flag — the never-flag-clean-"First Last" guarantee is preserved.
+
+// (a) sentence_fragment — clause/verb markers that a real name never carries.
+// Only ever fires alongside the >5-word length gate below, so a short name that
+// merely contains one of these words in isolation is not swept in.
+const SENTENCE_MARKER_RE = /\b(was|were|is|are|been|being|the|of|at|with|not\s+available|verified|unavailable|published|publication)\b/i;
+
+// (b) doc_label — OM / sale-record field labels minted as a contact. Anchored,
+// exact-or-near-exact (optional trailing "not available" / ":" / "."). These are
+// document section headers, never a person's name.
+const DOC_LABEL_RE = new RegExp(
+  '^(?:'
+  + 'income\\s*(?:&|and)\\s*expenses'
+  + '|expenses?'
+  + '|expense\\s+recoveries'
+  + '|sale\\s+notes?'
+  + '|lease\\s+notes?'
+  + '|buyer\\s+information'
+  + '|seller\\s+information'
+  + '|renewal\\s+options?'
+  + '|property\\s+description'
+  + '|lease\\s+abstract'
+  + '|rent\\s+roll'
+  + '|tenant\\s+information'
+  + '|financials?'
+  + '|demographics'
+  + '|highlights?'
+  + '|remarks?'
+  + '|notes?'
+  + '|description'
+  + '|zoning'
+  + '|parking'
+  + ')(?:\\s+not\\s+available)?\\s*[:.]?$',
+  'i',
+);
+
+// (c) bare_title — the "name" is ONLY a job title, with no personal-name token.
+// A word is title-ish if it is a title word or a pure connector; a bare_title
+// requires a CORE title word AND that EVERY alphabetic token be title-ish. A real
+// person always contributes at least one non-title token, so is never swept in.
+const TITLE_WORDS = new Set([
+  'senior', 'managing', 'director', 'executive', 'vice', 'president', 'associate',
+  'advisor', 'adviser', 'investment', 'investments', 'principal', 'partner',
+  'chairman', 'chairwoman', 'chair', 'broker', 'analyst', 'officer', 'ceo', 'cfo',
+  'coo', 'cio', 'evp', 'svp', 'first', 'national', 'regional', 'sales', 'leasing',
+  'capital', 'markets', 'group', 'team', 'specialist', 'representative', 'agent',
+  'consultant', 'coordinator', 'manager', 'head', 'services', 'division',
+  // pure connectors that may appear between title words
+  'of', 'and', 'the', 'for', '&',
+]);
+const CORE_TITLE_RE = /\b(director|president|advisor|adviser|associate|managing|vice|principal|partner|chairman|chairwoman|broker|analyst|officer|evp|svp|specialist|manager|investments?)\b/i;
+
+function isBareTitle(s) {
+  if (!CORE_TITLE_RE.test(s)) return false;
+  const tokens = s.split(/\s+/).map((t) => t.replace(/^[^A-Za-z&]+|[^A-Za-z&]+$/g, '')).filter(Boolean);
+  if (tokens.length < 2) return false; // a single generic word ("Director") is left to doc_label / other arms
+  for (const t of tokens) {
+    if (!TITLE_WORDS.has(t.toLowerCase())) return false; // a non-title (personal-name) token — real contact
+  }
+  return true;
+}
+
 // The misparse class detail, or null for a name that reads as a real contact.
 // `evidence` is the VERBATIM name (doctrine: every proposal is evidence-grounded);
 // `signal` records which arm fired; `match` is the offending token.
@@ -54,6 +123,18 @@ export function tmMisparseReason(name) {
   const st = s.match(STREET_SUFFIX_RE);
   if (st) {
     return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'street_suffix', match: st[0] };
+  }
+  const dl = s.match(DOC_LABEL_RE);
+  if (dl) {
+    return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'doc_label', match: dl[0] };
+  }
+  if (isBareTitle(s)) {
+    return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'bare_title', match: s.slice(0, 60) };
+  }
+  const wordCount = s.split(/\s+/).filter(Boolean).length;
+  const sm = s.match(SENTENCE_MARKER_RE);
+  if (wordCount > 5 && sm) {
+    return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'sentence_fragment', match: sm[0] };
   }
   return null;
 }
