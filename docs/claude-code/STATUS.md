@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### 2026-08-12 midday — PA flows edited by Scott (natural-traffic test), nightly green, prompt 97 queued
+Scott applied the Select+Join change to BOTH flows (no synthetic client emails — testing on real
+traffic). **Scheduled task `check-outlook-name-capture` fires 5PM CT today**: queries new
+correspondence rows for from_name/to_names, verdict WORKING/NOT WORKING/NO TRAFFIC, auto-logs to
+kickoff + STATUS. Nightly Aug-12: all 9 green; **donor cursor fix WORKING — +5 keys, gov 19→24**;
+assist 60/3.3k annotated across 3 runs; lanes U1 110 / U2 27 / U3 5 / U5 111. **Prompt 97 queued
+= W9.5 propagation-integrity tick**: pure-counts cross-DB link-coverage audit
+(`v_lcc_w9_5_link_coverage` + snapshot deltas), new U4 "Connectedness" section (severity = any
+link pct DROPPING MoM), read-only on-demand tick, measures the parties-vs-owner-LLC split as the
+96-finding baseline. After 97: Wave 9 = 4/5 built; W9.1 (external acquisition + SOS-egress design)
+is the last unit.
+
 ### Prompt 96 landed — PR #1693 MERGED + deployed; the W9.4 unlock is IN
 Root cause: FOUR Outlook writers flattened Graph {name,address}→bare email. Shared parser
 `outlook-recipients.js` (never fabricates an address); forward-only `metadata.from_name`/
