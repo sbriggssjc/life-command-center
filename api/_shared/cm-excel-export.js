@@ -362,9 +362,22 @@ function selectSellerSentimentColumns(cols, vertical) {
   if (!Array.isArray(cols) || vertical !== 'gov') return cols;
   return cols
     .filter((c) => !String(c?.key || '').endsWith('_8q'))
-    .map((c) => String(c?.key || '').includes('_long_term')
-      ? { ...c, header: c.header.replace('10+ yr', '6+ yr') }
-      : c);
+    .map((c) => {
+      // gov long-term cohort is the 6+ firm-yr CORE (dia stays 10+).
+      let header = String(c?.key || '').includes('_long_term')
+        ? c.header.replace('10+ yr', '6+ yr')
+        : c.header;
+      // 2026-08-12 — gov's cm_gov_seller_sentiment_m cap line no longer keys
+      // solely on the asking cap (last_cap_rate is captured on ~16% of sales,
+      // near-zero on recent CoStar comps, which collapsed the recent tail to
+      // n~6). It now uses an effective cap: true ask -> authoritative derived
+      // (cap_rate_history) -> achieved sold cap. Relabel "Last Ask Cap" ->
+      // "Last Cap Rate" so the gov header matches what the series actually is.
+      if (String(c?.key || '').startsWith('last_ask_cap')) {
+        header = header.replace('Last Ask Cap', 'Last Cap Rate');
+      }
+      return header === c.header ? c : { ...c, header };
+    });
 }
 
 const CHART_COLUMNS = {
