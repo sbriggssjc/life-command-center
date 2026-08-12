@@ -63,6 +63,8 @@ const _DC_FED_META = {
     intro: 'W8 U5 hygiene. A deterministic filter flagged entity names that are ABBREVIATED (Prtnrs, Mgmt, Hldgs…) or an ADDRESS mis-entered as a name. Two fixes: a RENAME expands the abbreviation (deterministic dictionary expansions are unambiguous and one-click bulk-confirmable; ambiguous tokens were judged by Ollama in context), or a LINK attaches an address-named entity to its property (with a fill-blanks display name from the property owner). PROPOSES only — you decide. Confirm applies the rename (reversible ledger + provenance; a canonical-name collision routes to a conflict, never a silent clobber) or the property link; Keep leaves the row untouched. Every verdict is recorded (won’t re-ask).' },
   reachability_harvest_review: { title: 'Contact reachability — internal harvest',
     intro: 'W9.2 data-connectedness. Domain contacts (dia 71% / gov 68%) are missing an email AND a phone; this lane fills the blank from sources LCC ALREADY HOLDS. A DETERMINISTIC fill (arm=deterministic) is arithmetic — the SAME person\'s synced SF record (matched by identity key, not name-fuzz) carries the value, confidence 1.0, one-click bulk-confirmable. An LLM fill (arm=llm) was attributed from an intake snapshot naming this person, and carries a VERBATIM quote containing the value (a value not in the quote is dropped). PROPOSES only — you decide. Confirm runs the fill-blanks writer (domain contacts email/phone + provenance, reversible; a now-populated field routes to a conflict, never a clobber); Keep leaves it untouched. External acquisition (SOS/deed) is W9.1, not this lane.' },
+  contact_acquisition_review: { title: 'Contact acquisition — owner outreach',
+    intro: 'W9.1 data-connectedness (Stage 1, internal sources). A value-ranked owner with NO contact on file. The engine ran the sanctioned chain — cross-reference (the same person already a contact under a related owner), institution registry, the owner\'s own deed signatory, and the OM listing broker-of-record — stopping at the first hit. An ATTACH links an EXISTING person; a CREATE mints a lane-only contact from a deed signatory or a broker (a broker is typed broker-of-record, NEVER the owner\'s own contact). PROPOSES only — you decide. Confirm resolves it into the graph (associated_with edge + a value-gated cadence, reversible via the ledger); Reject keeps the owner untouched. Stage 2 (SOS-direct) is a separate lane. Every verdict is recorded (won\'t re-ask).' },
   w8_u3_link_review: { title: 'Ownership links — Ollama proposals',
     intro: 'W8 U3 connection-propagation. Ollama proposed an ownership link from a real signal: a CHAIN proposal fills a missing owner→parent/developer edge for a property (source = a deed/OM/registry evidence quote), or a DIFFERENT-PEOPLE finding flags that two email-sharing person records are NOT the same person (a shared mailbox). Each card shows the proposed link + role, the confidence, and the VERBATIM evidence quote + its source. Ollama PROPOSES only — you decide. Confirm runs the deterministic edge writer (entity_relationships + provenance, recorded in w8_u3_link_apply_log so it is reversible; a same-person email proposal routes to the resolver, never auto-merged); Reject keeps the records untouched. Every verdict is recorded (won’t re-ask).' },
   agency_risk_action: { title: 'Agency risk → disposition',
@@ -606,6 +608,35 @@ function _fedCardHTML(it, i, isNext) {
         + ' (reversible; a now-populated field routes to a conflict), or keep untouched.</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — fill ' + esc(c.field || 'value') + '</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — leave blank</button>';
+  } else if (_dcFedType === 'contact_acquisition_review') {
+    // W9.1: a contact-acquisition proposal for a contactless owner. ATTACH links an
+    // EXISTING person already known under a related owner (cross-reference /
+    // institution registry); MINT creates a lane-only contact from a deed signatory
+    // or the OM listing broker-of-record (a broker is typed distinctly, NEVER the
+    // owner's own contact). Confirm resolves it into the graph (reversible); Reject keeps it.
+    const attach = (c.proposed_kind === 'attach');
+    const isBroker = (c.stage === 'broker_of_record');
+    const conf = (c.confidence != null && isFinite(Number(c.confidence))) ? Number(c.confidence) : null;
+    const stageLabel = c.stage === 'crossref' ? 'cross-reference'
+      : c.stage === 'institution' ? 'institution registry'
+      : c.stage === 'deed_signatory' ? 'deed signatory'
+      : c.stage === 'broker_of_record' ? 'broker of record' : (c.stage || '');
+    const badges = '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge type">' + (attach ? 'attach' : 'create') + '</span>'
+      + '<span class="q-badge">' + esc(stageLabel) + '</span>'
+      + (isBroker ? '<span class="q-badge">broker of record</span>' : '')
+      + (conf != null ? '<span class="q-badge">conf ' + conf.toFixed(2) + '</span>' : '') + '</div>';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(c.owner_name || 'owner'))
+      + ' <span style="opacity:.6">&larr;</span> ' + esc(String(c.candidate_name || '?')) + '</span>' + badges + '</div>'
+      + (c.candidate_title ? '<div class="q-item-meta">' + esc(String(c.candidate_title)) + '</div>' : '')
+      + (c.evidence_quote ? '<div class="q-item-meta">Evidence: <b>' + esc(String(c.evidence_quote)) + '</b>'
+          + (c.evidence_source ? ' <span style="opacity:.6">— ' + esc(String(c.evidence_source)) + '</span>' : '') + '</div>'
+          : (c.evidence_source ? '<div class="q-item-meta" style="opacity:.7">Source: ' + esc(String(c.evidence_source)) + '</div>' : ''))
+      + (c.reason ? '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.reason)) + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.7">Proposes only — confirm to '
+        + (attach ? 'attach this contact to the owner' : 'create this ' + (isBroker ? 'broker-of-record' : 'contact')) + ' (reversible), or reject.</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — ' + (attach ? 'attach' : 'create') + '</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject</button>';
   } else if (_dcFedType === 'w8_u3_link_review' && c.conflict) {
     // Prompt 77: an ambiguous_entity_match conflict — the deterministic writer
     // found ≥2 existing entities sharing the proposed canonical name and refused
@@ -779,12 +810,53 @@ async function renderFederatedLane(type, view) {
         + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkReachabilityFills()">Confirm all ' + detFills + ' deterministic fill' + (detFills === 1 ? '' : 's') + '</button></div></div>';
     }
   }
+  // W9.1 (Prompt 98): bulk-confirm the cheap deterministic ATTACH proposals
+  // (cross-reference / institution — link an existing known person). Mints stay per-card.
+  if (type === 'contact_acquisition_review') {
+    var attachN = items.filter(function (it) { var c = it.context || {}; return c.proposed_kind === 'attach'; }).length;
+    if (attachN > 0) {
+      html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Deterministic attaches (existing known contact)</span>'
+        + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkContactAttach()">Confirm all ' + attachN + ' attach' + (attachN === 1 ? '' : 'es') + '</button></div></div>';
+    }
+  }
   _dcFedType = type;
   _dcFedArr = items.slice();
   items.forEach(function (it, ix) { html += _fedCardHTML(it, ix, ix === 0); });
   el.innerHTML = html;
 }
 window.renderFederatedLane = renderFederatedLane;
+
+// W9.1 contact_acquisition_review lane. Bulk-confirm the deterministic ATTACH cards
+// (an existing known person linked to the owner) — reversible via the ledger. MINT
+// cards (deed signatory / broker) keep their per-card gate.
+async function dcFedBulkContactAttach() {
+  if (_dcFedType !== 'contact_acquisition_review') return;
+  var pending = (_dcFedArr || []).map(function (it, ix) { return { it: it, ix: ix }; })
+    .filter(function (p) {
+      var c = p.it.context || {};
+      if (c.proposed_kind !== 'attach') return false;
+      var r = document.getElementById('dc-f' + p.ix); return r && !r.classList.contains('resolved');
+    });
+  if (!pending.length) { showToast('No attach proposals to confirm', 'info'); return; }
+  var ok = (typeof lccConfirm === 'function')
+    ? await lccConfirm('Confirm ' + pending.length + ' contact attach' + (pending.length === 1 ? '' : 'es') + '?\n\nEach links an EXISTING known person to the contactless owner. Reversible via the ledger.')
+    : (typeof confirm === 'function' ? confirm('Confirm ' + pending.length + ' attaches?') : true);
+  if (!ok) return;
+  var done = 0, failed = 0;
+  for (var k = 0; k < pending.length; k++) {
+    var p = pending[k];
+    var res = await opsApi('/api/decision-verdict', {
+      method: 'POST', body: JSON.stringify({ type: 'contact_acquisition_review', subject: p.it, verdict: 'confirm', payload: {} }),
+    });
+    var row = document.getElementById('dc-f' + p.ix);
+    if (res.ok && res.data && res.data.ok) { done++; if (row) { row.classList.add('resolved'); row.style.opacity = '0'; } }
+    else { failed++; }
+  }
+  document.querySelectorAll('#reviewConsoleContent .q-item.resolved[id^="dc-f"]').forEach(function (n) { if (n.parentNode) n.remove(); });
+  _dcAdvanceFed();
+  showToast('Attached: ' + done + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+}
+window.dcFedBulkContactAttach = dcFedBulkContactAttach;
 
 // W8 owner_reconcile seeder chip: filter the shown cards to a single seeder
 // (client-side, by each card's data-seeder attribute). Empty kind = show all.

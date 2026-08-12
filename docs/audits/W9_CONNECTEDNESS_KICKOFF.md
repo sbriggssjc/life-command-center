@@ -108,3 +108,17 @@ future prompt.
   0 banned; **correspondence→owner-LLC 2.5% = 6/241**, the prompt-96 split baseline for the linkage
   follow-on). Tests `test/link-coverage.test.mjs` (18) + `test/systemic-findings.test.mjs` (updated).
   Wave-9 build-out now **4 of 5** — W9.1 (external acquisition) is the remaining unit.
+- 2026-08-12 (later still): **W9.1 contact-acquisition engine — STAGE 1 BUILT** (Prompt 98).
+  Internal-sources-only stage runner over the value-ranked no-contact pool
+  (`v_owner_contact_worklist`; 3,151 · 300 ≥ $1M): pluggable, cost-ordered, stop-at-first-success
+  stages — 1a cross-reference/institution ATTACH, 1b deed-signatory MINT (verbatim-quoted), 1c
+  OM broker-of-record MINT (typed distinctly). Proposal-only → new Decision Center lane
+  `contact_acquisition_review` (fully 75-wired); a human verdict resolves into the ops entity
+  graph (reversible). Migration `20260812130000` applied live (flag `W9_1_CONTACT_ACQUISITION`
+  OFF, cron `55 4 UTC`, no fsp drift). New route `/api/contact-acquisition-engine-tick` (distinct
+  from the R16 SF worker). **Grounded honest:** top-100 → ~6% crossref attaches; institution/deed
+  input-thin today (deed signatory lives in `property_documents`, not the deed row) — same
+  input-starved-but-correct posture as W9.2/W9.4. Stage 2 (SOS-direct, non-datacenter egress) is
+  a separate prompt; the stage list is the seam. Tests 21 + guards 74/74. Dry-run:
+  `docs/audits/W9_1_contact_acquisition_dryrun_2026-08-12.md`. **Wave 9 build-out now 5 of 5**
+  (all flag-gated / measure-live; W9.1 awaiting the `?score=1` review → Cowork flip).

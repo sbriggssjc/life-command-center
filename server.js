@@ -313,6 +313,9 @@ app.all('/api/preassemble', (req, res) => { req.query._route = 'context'; req.qu
 app.all('/api/context', (req, res) => { req.query._route = 'context'; operationsHandler(req, res); });
 app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.query.action = 'weekly-intelligence-report'; operationsHandler(req, res); });
 app.all('/api/contact-acquisition-tick', (req, res) => { req.query._route = 'contact-acquisition-tick'; operationsHandler(req, res); });
+// W9.1 (Prompt 98) — contact-acquisition ENGINE tick (Stage 1: internal sources).
+// Distinct from the R16 contact-acquisition-tick above (that is the live SF worker).
+app.all('/api/contact-acquisition-engine-tick', (req, res) => { req.query._route = 'contact-acquisition-engine-tick'; operationsHandler(req, res); });
 app.all('/api/sf-contact-resolve-tick', (req, res) => { req.query._route = 'sf-contact-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/sf-link-reconcile-tick', (req, res) => { req.query._route = 'sf-link-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'owner-contact-enrich-tick'; operationsHandler(req, res); });
