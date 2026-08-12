@@ -454,6 +454,15 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Reconcile 2026-08-12 (prompts 94 & 95 merged+deployed; U3 lane CLEARED) → prompt 96 queued
+
+| Item | State |
+|---|---|
+| 94 (W9.4) | ✅ PR #1692. Comms arm built as THIRD arm of the harvest tick (one flag/lane/cron). Caught its own nuance: signature values are LLM-only, never arithmetic. Privacy-scoped (visibility<>private, grounded live). Migration live, 2 name-field fsp rows, 35 tests. **Honest finding: input-starved — 0/7,751 rows carry header display names (Outlook ingestion flattens Graph {name,address}→bare email) + 0 correspondence entities map to true_owners. Flag stays OFF.** |
+| 95 | ✅ PR #1691. Shared detector extended: doc_label / bare_title / sentence_fragment classes ("Jane G. Polen"-class negatives fixtured — real people survive); seeder reports by_class; U3 pool + sidebar guard inherit via the shared module. 19 tests. **Operator step: re-run the seeder dry-run (`?_route=tm-misparse-seed`, now with by_class) → review → `&apply=1`.** |
+| U3 lane | ✅ CLEARED by Scott: 18 applied / 5 rejected / 1 conflict; +11 distinct labels to the corpus. |
+| 96 | **QUEUED — the W9.4 unlock:** trace + fix the Outlook display-name flattening (forward-only `metadata.from_name`/`to_names`; PA-flow steps documented if the flow is the flattener), probe the true_owner attribution gap. Its acceptance → non-zero comms_counts → **flip `W9_2_REACHABILITY_HARVEST` (one flag, three arms)**. |
+
 ### U3 lane guidance 2026-08-11 + NEW junk class found by Scott → prompt 95
 Lane worked live: different_people confirms = distinct labels (resolver hard negatives, no data
 changes); link-proposal confirms = route-to-resolver (never auto-merge — safest click). **Scott
