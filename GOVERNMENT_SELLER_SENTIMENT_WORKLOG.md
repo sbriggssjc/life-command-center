@@ -77,3 +77,44 @@ Implementation Verification:
 - `node --test test\sidebar-sales-writer.test.mjs` — pass, 9/9.
 - `node --check extension\content\costar.js` — pass.
 - `node --check extension\sidepanel.js` — pass.
+
+## 2026-08-12 — Broaden the seller-sentiment cap / N basis (recent-tail collapse)
+
+Trigger: Scott flagged the exported Supply-Side "Seller Sentiment & Confidence"
+chart (gov, file dated 2026-06-30) as "missing a handful of quarters" and
+"jumps from strong numbers to nothing in sequential periods."
+
+Diagnosis (grounded live vs gov `scknotsqkcheojiaewwh`):
+1. **"Missing quarters" = the pre-fix export binding bug, already resolved.**
+   The 2026-06-30 file predates commit `3273c27` (2026-08-11, now live on
+   `main`), which stops gov binding the long-term cohort to the blank
+   dialysis-only `_8q` columns. A fresh export already renders all four series.
+   The `cm_gov_seller_sentiment_m` view is complete/smooth 2018→present.
+2. **"Jumps to nothing" = the recent-tail collapse (real, current).** The view
+   keyed N and the cap line ONLY on `sales_transactions.last_cap_rate` (asking
+   cap). Recent CoStar comps rarely carry it: in the TTM ending 2026-06-30, 139
+   gov sales closed but only 8 had `last_cap_rate` → n≈6-8 at the newest edge,
+   while 74-84 of those 139 had a real in-band cap (derived / sold). The stored
+   `had_price_change` column is a near-constant false (43 of 6,453 true), so the
+   price-change bars can only use the derived last≠sold signal — genuinely
+   ask-history-limited, left honest.
+
+Fix (Scott chose "Broaden cap basis"):
+- Migration `government-lease/sql/20260812_cm_gov_seller_sentiment_broaden_cap_basis.sql`
+  (applied live). `cm_gov_seller_sentiment_m` now uses an effective cap
+  `eff_cap = COALESCE(last_cap_rate, derived in-band cap_rate_history [high>med>low],
+  sold_cap_rate)` for both the N counts and the smoothed cap line. Every other
+  facet preserved verbatim: firm_term≥6 cohort, comp_scope/off-universe filter,
+  ≥5 sample gates, 7-month smoothing window, price-change bars.
+- `api/_shared/cm-excel-export.js::selectSellerSentimentColumns` relabels the gov
+  cap header "Last Ask Cap" → "Last Cap Rate" (dia workbook unchanged).
+
+Result (verified live): 2026-Q2 `n_all` 6→50, `n_long_term` 3→23; the 6+yr cap
+line no longer NULLs at the edge and trends 7.24%→7.90% into 2026-Q2. Reversible
+(re-create the R66n gate-smooth body). Tests: `node --test
+test/cm-export-audit-fixes.test.mjs test/cm-native-chart-injector.test.mjs` —
+240 pass / 1 skipped.
+
+Next: regenerate the gov Capital Markets export (view change is live immediately,
+no deploy needed for data; the header relabel ships on the next Railway redeploy
+of merged `main`).
