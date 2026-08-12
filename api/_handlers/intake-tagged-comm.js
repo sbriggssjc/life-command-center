@@ -30,6 +30,7 @@ import { deriveNextStep } from '../_shared/next-step-ai.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { advanceOutboundTodos, findCrossPathDuplicate } from '../_shared/outbound-advance.js';
 import { maybeAttachActionSummary, touchedActionLabels } from '../_shared/action-summary.js';
+import { parseAddress, parseAddressList } from '../_shared/outlook-recipients.js';
 
 const PA_WEBHOOK_SECRET = process.env.PA_WEBHOOK_SECRET;
 function authenticateWebhook(req) {
@@ -175,6 +176,10 @@ export async function handleTaggedComm(req, res) {
   const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
   const fromAddr = (String(firstNonEmpty(p.from, p.sender, '') || '').match(EMAIL_RE) || [])[0]?.toLowerCase() || null;
   const toAddrs = [...new Set((String(firstNonEmpty(p.to, p.to_recipients, p.recipients, '') || '').match(EMAIL_RE) || []).map((e) => e.toLowerCase()))];
+  // Prompt 96 — preserve display names for the comms-harvest header-pair arm.
+  const fromName = parseAddress(firstNonEmpty(p.from, p.sender, null)).name || null;
+  const toNames = parseAddressList(firstNonEmpty(p.to, p.to_recipients, p.recipients, null))
+    .filter((x) => x.name).map((x) => ({ name: x.name, email: x.email }));
 
   // Category gate — a message with no LCC category is a mis-fire; ignore quietly.
   const { tagged, hint } = parseLccCategoryHint(p.categories ?? p.category);
@@ -220,7 +225,9 @@ export async function handleTaggedComm(req, res) {
   const metadata = {
     direction,
     from: fromAddr,
+    from_name: fromName || null,
     to: toAddrs.length ? toAddrs : null,
+    to_names: toNames.length ? toNames : null,
     via: 'outlook_tagged',
     categories: Array.isArray(p.categories) ? p.categories : (p.categories ? [p.categories] : null),
     hint: hint || null,

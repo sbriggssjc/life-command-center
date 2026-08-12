@@ -205,7 +205,12 @@ export async function logInboundCorrespondenceDualAnchor({
     metadata: {
       direction:       'inbound',
       from,
+      // Prompt 96 — preserve the sender/recipient DISPLAY names (feedstock for
+      // the W9.4 comms-harvest header-pair arm). Fill-blanks: only present when
+      // the ingestion payload actually carried a name.
+      from_name:       ctx.from_name || null,
       to:              ctx.to || null,
+      to_names:        Array.isArray(ctx.to_names) && ctx.to_names.length ? ctx.to_names : null,
       via:             'outlook_inbound',
       conversation_id: conversationId,
       party_entity_id: partyEntityId,

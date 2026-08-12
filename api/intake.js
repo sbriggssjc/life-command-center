@@ -27,6 +27,7 @@ import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler }
 import { logInboundCorrespondenceDualAnchor, logManualCallNote } from './_shared/intake-correspondence.js';
 import { getAiConfig, invokeExtractionAI } from './_shared/ai.js';
 import { findCrossPathDuplicate } from './_shared/outbound-advance.js';
+import { parseAddress, parseAddressList } from './_shared/outlook-recipients.js';
 import { maybeAttachActionSummary, touchedActionLabels } from './_shared/action-summary.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -364,16 +365,28 @@ async function handleOutlookSent(req, res) {
 
   const subject = firstNonEmpty(payload.subject, '(No subject)');
   const sentAtIso = isoOrNow(firstNonEmpty(payload.sent_date_time, payload.sentDateTime, payload.received_date_time, null));
-  const fromAddr = normalizeSender(firstNonEmpty(payload.from, payload.sender, null)).email;
+  const fromParsed = parseAddress(firstNonEmpty(payload.from, payload.sender, null));
+  const fromAddr = fromParsed.email || normalizeSender(firstNonEmpty(payload.from, payload.sender, null)).email;
+  const fromName = fromParsed.name || null;
   const bodySnippet = (firstNonEmpty(payload.body_preview, payload.bodyPreview, payload.body_text, payload.body, '') || '').toString().slice(0, 500) || null;
   const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
 
+  // Prompt 96 — preserve display names. Parse the RICH recipient shapes (Graph
+  // object arrays or 'Name <email>' delimited strings) so `to_names` carries the
+  // name↔email pairs the comms-harvest arm binds on. Falls back to bare-email
+  // extraction below so behavior is unchanged when PA sends only addresses.
+  const toPairs = [
+    ...parseAddressList(firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, payload.recipients, '')),
+    ...parseAddressList(firstNonEmpty(payload.cc_recipients, payload.ccRecipients, payload.cc, '')),
+  ].filter((p) => p.email && !p.email.includes('northmarq'));
   const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
   const rawTo = String(firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, payload.recipients, '') || '');
   const rawCc = String(firstNonEmpty(payload.cc_recipients, payload.ccRecipients, payload.cc, '') || '');
   const recips = [...new Set((rawTo.match(EMAIL_RE) || []).concat(rawCc.match(EMAIL_RE) || []).map(e => e.toLowerCase()))]
     .filter(e => !e.includes('northmarq'));
   if (recips.length === 0) return res.status(200).json({ ok: true, logged: false, reason: 'no_external_recipient' });
+  // Named recipient pairs (fill-blanks: only rows where a name was actually sent).
+  const toNames = toPairs.filter((p) => p.name).map((p) => ({ name: p.name, email: p.email }));
 
   // Resolve the DEAL via the contact resolver (prefers the asset/deal over the person via the city bridge);
   // fall back to the most-recent correspondent entity when the resolver finds no deal.
@@ -432,6 +445,8 @@ async function handleOutlookSent(req, res) {
     external_url: webLink,
     visibility: 'shared',
     metadata: { direction: 'outbound', from: fromAddr, to: recips, via: 'outlook_sent',
+                from_name: fromName || null,
+                to_names: toNames.length ? toNames : null,
                 conversation_id: conversationId,
                 party_entity_id: partyEntityId, deal_entity_id: dealEntityId },
   };
@@ -644,7 +659,14 @@ async function handleOutlookMessage(req, res) {
     received_at: receivedAtIso,
     received_at_raw: receivedAtRaw,
     from: sender?.email || null,
+    // Prompt 96 — carry the sender/recipient DISPLAY names so the correspondence
+    // logger can preserve them (metadata.from_name / to_names). `sender` already
+    // parses the Graph {name,address} shape; `to_names` parses whatever richer
+    // recipient shape PA sends (bare-email lists simply yield no names).
+    from_name: sender?.name || null,
     to: firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null),
+    to_names: parseAddressList(firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null))
+      .filter((p) => p.name).map((p) => ({ name: p.name, email: p.email })),
     // W7.1 — carry the Outlook conversation id so the dual-anchor logger can
     // apply thread continuity (a reply inherits its thread's deal stamp).
     conversation_id: firstNonEmpty(payload.conversation_id, payload.conversationId, null),
