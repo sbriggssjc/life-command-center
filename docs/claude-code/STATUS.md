@@ -454,6 +454,19 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 97 (W9.5) landed — PR #1694; WAVE 9 BUILD-OUT 4/5, the measurement loop is CLOSED
+Read-only integrity tick per spec: pure planner `link-coverage.js`, `GET/POST /api/link-coverage-tick`
+unifying dia/gov chain views + ops mirror/correspondence/conformance view, monthly snapshot rides
+the U4 cron (no second cron), new U4 **Connectedness section** (report now 10 sections; severity =
+any link pct DROPPING MoM → high + fix-unit stub naming the producer; low-but-stable = known work,
+not regression). Migrations applied live to all 3 DBs (counts-only/no-PII views). **Grounded
+baselines:** true→contact dia 32.1% / gov 27.0%; true→SF dia 16.9% / gov 11.8% (up from 11/12% —
+W9.3 measurably moving it); mirror conformance 100%, 0 dangling, 0 banned spellings;
+**correspondence→owner-LLC 2.5% (6/241)** — the 96 finding now baselined for the follow-on unit.
+18 tests + guards. **Remaining Wave 9 unit: W9.1 external acquisition (SOS-egress design) — its
+own future prompt.** Gate: merge #1694 → redeploy → optional `GET /api/link-coverage-tick` sanity;
+Sept 1 U4 carries Connectedness baselines automatically.
+
 ### 2026-08-12 midday — PA flows edited by Scott (natural-traffic test), nightly green, prompt 97 queued
 Scott applied the Select+Join change to BOTH flows (no synthetic client emails — testing on real
 traffic). **Scheduled task `check-outlook-name-capture` fires 5PM CT today**: queries new
