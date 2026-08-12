@@ -1,5 +1,32 @@
 # Document capture-at-ingest & OCR — status + the one open loop
 
+> **⚠️ RECONCILED 2026-08-12 (evening session) — the "open loop" below was grounded and is
+> mostly CLOSED. The premise "lease OCR is config-gated / unconfigured" was WRONG:**
+>
+> - **Railway already carries the full OCR_CLOUD_* config and it WORKS.** `OCR_CLOUD_OCR_URL`
+>   points at the `docai-ocr` edge fn on LCC Opps (v18, `GET` health = `ready:true`,
+>   GCP SA + processor configured), the shared secret passes (Railway POSTs reach Document AI),
+>   and the **gpt-4o last resort is enabled and observed firing** (folder_feed_seen id 2848
+>   enriched 2026-08-12 21:57Z with `ocr_tier:'cloud'`; El Paso 5566 / Walterboro 2835 carry
+>   `cloud_cheap` from June). No env change was needed. `feature_flags_registry` row
+>   `OCR_CLOUD_DOCAI` added (state=on).
+> - **Why scanned leases still parked `needs_ocr`:** per-document limits, not config.
+>   The `needs_ocr` queue was 10 rows = **9 xlsx/doc/docx "Lease Abstract" files** (Document AI
+>   is PDF/image-only — these produced today's `docai_400` "PDF corrupted"/`entity_types` errors)
+>   **+ 1 real PDF** (Richardson 2840: 15.6 MB > `INTAKE_OCR_MAX_BYTES` 12 MB default → `over_ocr_cap`
+>   before any cloud call; 40 pages > the DocAI sync ~15-page cap anyway; image-only, rotated 270°).
+> - **Richardson 2840 is DONE** via the designed free tier (off-box tesseract + OSD rotation →
+>   `POST ?_route=lease-backfill&id=2840` with `ocr_text`) → `enriched`, dia property 37674,
+>   matched existing lease 21748, fills 0 / conflicts 0 (row already curated), `ocr_tier:'free_external'`.
+> - **Remaining:** ~214 pending eligible leases drain via repeated capped
+>   `POST /api/intake?_route=lease-backfill&limit=15` (scanned PDFs ≤12 MB/≤15 pages self-OCR via
+>   DocAI; bigger ones fall to gpt-4o where feasible, else park for the free tier). The only true
+>   build gap is the **xlsx/docx office-text extractor** (see "Not built" below) — the whole
+>   remaining `needs_ocr` queue is that format tail.
+> - Optional knobs (NOT set, deliberate): `INTAKE_OCR_MAX_BYTES=20000000` would let 12–20 MB PDFs
+>   reach the cloud tiers (they'd still hit the 15-page DocAI sync cap → gpt-4o, whose verbatim
+>   transcription degrades/truncates on very long docs — big scans are better served off-box).
+
 **Session 2026-08-12.** Handoff for the document byte-capture + OCR pipeline that
 feeds owner data (deeds) and firm-term coverage (leases). Sister docs: gov
 `docs/RUNBOOK_firm_term_coverage_ops_gates.md`; LCC `CLAUDE.md` → "OCR / document-text
@@ -77,6 +104,30 @@ Relevant env (from the code comments):
   tunnel (`OLLAMA_URL`, live per LCC `feature_flags_registry.OLLAMA_EXTRACTION`); a potential
   free vision-OCR tier for the `webhook` seam.
 - **gpt-4o vision** — already proven working for deeds (`OPENAI_API_KEY` set).
+
+## SCOPE (2026-08-12) — the xlsx/docx office-text extractor (the real remaining gap)
+
+The entire remaining lease `needs_ocr` queue (~11 rows) is office files. Scope, not built:
+
+- **Where:** new `api/_shared/office-text.js`, wired into `runLeaseExtraction` (lease-extractor)
+  and `extractDocumentText` (document-text) BEFORE the OCR branch, keyed on content-type /
+  extension (`.docx`, `.xlsx`; `.doc` best-effort). Replaces the current lossy ASCII
+  `binary_decode` salvage for these types. No new api/*.js; no OCR spend for these docs.
+- **How (zero new deps):** `.docx`/`.xlsx` are ZIPs — a ~50-line local-file-header reader +
+  `zlib.inflateRawSync` extracts `word/document.xml` (docx: strip tags, keep `<w:p>` breaks) and
+  `xl/sharedStrings.xml` + `xl/worksheets/sheet*.xml` (xlsx: emit rows as `label: value` lines,
+  resolving shared strings + inline strings; numbers/dates via cell `t`/`s` attrs, dates
+  best-effort). Output feeds the SAME `extractLeaseFromText` AI prompt — abstracts are
+  term-dense, so extraction quality should exceed scanned-PDF OCR.
+- **Legacy `.doc` (OLE/CFB, e.g. Pearland Estoppel.doc):** not worth a parser — route through the
+  existing off-box `ocr_text` resubmit seam (LibreOffice/Word on the workstation), or leave as a
+  1-2 doc human tail.
+- **Marks:** success → `source:'office_text'`, `text_len`; a office file that yields no text →
+  terminal `enrich_unprocessable:office_no_text` (NOT `needs_ocr` — OCR can never fix it; stops
+  these rows re-peppering the OCR queue and being POSTed to Document AI, which 400s on them).
+- **Size:** ~150 LOC + unit tests (fixture docx/xlsx). One Railway deploy (both services per the
+  deploy map). Interim workaround: the off-box seam already works for these (extract locally,
+  POST `ocr_text`).
 
 ## Not built (surfaced, deliberate follow-ups)
 - **xlsx / docx lease abstracts** — the OCR path is PDF/image-only, so spreadsheet/Word
