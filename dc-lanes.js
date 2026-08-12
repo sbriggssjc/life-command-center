@@ -564,6 +564,25 @@ function _fedCardHTML(it, i, isNext) {
       actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — rename</button>'
         + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Keep — leave name</button>';
     }
+  } else if (_dcFedType === 'reachability_harvest_review' && (c.kind === 'create_contact' || c.target_kind === 'owner')) {
+    // W9.4: a CREATE-CONTACT proposal — a thread participant attributable to an owner
+    // with no contact on file. Confirm MINTS the contact (name + email [+ phone]);
+    // Keep discards. Never auto-minted.
+    const conf = (c.confidence != null && isFinite(Number(c.confidence))) ? Number(c.confidence) : null;
+    const badges = '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge type">create contact</span>'
+      + (c.arm === 'deterministic' ? '<span class="q-badge">header</span>' : '<span class="q-badge">signature</span>')
+      + (conf != null ? '<span class="q-badge">conf ' + conf.toFixed(2) + '</span>' : '') + '</div>';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(c.contact_name || '(unnamed)'))
+      + ' <span style="opacity:.6">&middot;</span> ' + esc(String(c.proposed_value || '?'))
+      + (c.proposed_phone ? ' <span style="opacity:.6">&middot;</span> ' + esc(String(c.proposed_phone)) : '') + '</span>' + badges + '</div>'
+      + (c.owner_name ? '<div class="q-item-meta">New contact for owner: <b>' + esc(String(c.owner_name)) + '</b></div>' : '')
+      + (c.evidence_quote ? '<div class="q-item-meta">Evidence: <b>' + esc(String(c.evidence_quote)) + '</b>'
+          + (c.evidence_source ? ' <span style="opacity:.6">— ' + esc(String(c.evidence_source)) + '</span>' : '') + '</div>' : '')
+      + (c.reason ? '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.reason)) + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.7">Proposes only — confirm to CREATE this contact for the owner (reversible via the ledger), or discard.</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — create contact</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Discard</button>';
   } else if (_dcFedType === 'reachability_harvest_review') {
     // W9.2: a contact-reachability fill proposal. Deterministic (arm=deterministic,
     // arithmetic exact-identity, confidence 1.0) or LLM-attributed (verbatim quote).
@@ -754,7 +773,7 @@ async function renderFederatedLane(type, view) {
   // W9.2 (Prompt 88): bulk-confirm the DETERMINISTIC (arm=deterministic, arithmetic
   // exact-identity, confidence 1.0) reachability fills only — never the LLM cards.
   if (type === 'reachability_harvest_review') {
-    var detFills = items.filter(function (it) { var c = it.context || {}; return c.arm === 'deterministic'; }).length;
+    var detFills = items.filter(function (it) { var c = it.context || {}; return c.arm === 'deterministic' && c.target_kind !== 'owner'; }).length;
     if (detFills > 0) {
       html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Deterministic exact-identity fills (arithmetic)</span>'
         + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkReachabilityFills()">Confirm all ' + detFills + ' deterministic fill' + (detFills === 1 ? '' : 's') + '</button></div></div>';
@@ -867,7 +886,9 @@ async function dcFedBulkReachabilityFills() {
   var pending = (_dcFedArr || []).map(function (it, ix) { return { it: it, ix: ix }; })
     .filter(function (p) {
       var c = p.it.context || {};
-      if (c.arm !== 'deterministic') return false;
+      // deterministic FILLS only — never a create-contact (target_kind='owner'),
+      // which is a mint, always a per-card human decision.
+      if (c.arm !== 'deterministic' || c.target_kind === 'owner') return false;
       var r = document.getElementById('dc-f' + p.ix); return r && !r.classList.contains('resolved');
     });
   if (!pending.length) { showToast('No deterministic fills to confirm', 'info'); return; }
