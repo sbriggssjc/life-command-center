@@ -69,6 +69,30 @@ Brand-standard docs updated so this is durable for future projects:
 `docs/brand/NORTHMARQ_BRAND.md` §2A (byte-identical in the Dialysis + government
 repos), and the Brand Standards section of each repo's `CLAUDE.md`.
 
+## Charts tab now shows EVERY chart (2026-08-12)
+
+Scott flagged that charts on the per-tab Data_* sheets were missing from the
+aggregate "Charts" tab — especially on the government export. Root cause: the
+Charts tab went **pure-native** and **dropped every chart template without a
+native builder** (`orphanedPngs`), because Excel allows only one `<drawing>`
+per sheet and mixing ExcelJS `addImage` with the native-chart injector on the
+same sheet conflicts.
+
+Inventory (from `cm_chart_catalog.json` vs `NATIVE_CHART_TEMPLATES`):
+- **gov: 11 of 23** templates were dropped from the Charts tab (incl. the
+  `top_buyers_table` / `top_sellers_table` DataTables).
+- **dia: 12 of 24** dropped.
+
+Fix: the native-chart injector (`cm-native-chart-injector.js`) now also embeds
+**PNG picture anchors** (`<xdr:pic>`) in the **same drawing** it builds for a
+sheet — so the Charts tab hosts native chart objects AND rendered-image charts
+together in one `<drawing>`. `cm-excel-export.js` pushes each non-native chart's
+PNG as an `{ image: { png, anchor } }` injection instead of dropping it. Result:
+the Charts tab is a complete single-page view of every chart. Data-table
+templates (no rendered chart image) stay on their own Data_* tabs; the tab
+caption notes this. Images are sized to the same 10.00″×4.25″ tile as the native
+charts so the stack lines up.
+
 ## Blocking inputs from Scott / marketing
 
 1. **Chart font** — provide the exact style-guide font name (and confirm installed on every machine that opens these workbooks); flip `cm-brand.json.typeface` from Open Sans.

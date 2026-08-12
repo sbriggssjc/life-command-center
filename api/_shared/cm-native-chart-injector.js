@@ -42,6 +42,7 @@ const CT_DRAWING = 'application/vnd.openxmlformats-officedocument.drawing+xml';
 
 const REL_DRAWING = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing';
 const REL_CHART = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart';
+const REL_IMAGE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
 const REL_SHEET = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet';
 
 // ----------------------------------------------------------------------------
@@ -2839,6 +2840,40 @@ function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2, type }) {
 }
 
 /**
+ * Generate one `<xdr:oneCellAnchor>` block hosting an embedded PNG image
+ * (a `<xdr:pic>`), used on the aggregate Charts tab for chart templates that
+ * do NOT have a native builder — so every chart appears in the single-page
+ * view. Same fixed-size sizing as native charts (CM_BRAND.chartSize, non-donut)
+ * so tiles line up. `imageRelId` is a drawing-rels rId pointing at the media.
+ */
+function buildPicAnchorFrag({ imageRelId, anchor, nvIdx = 2 }) {
+  const a = anchor || { col0: 0, row0: 0 };
+  const { cx, cy } = chartSizeEmu('image'); // non-donut default (10.00" x 4.25")
+  return `  <xdr:oneCellAnchor>
+    <xdr:from>
+      <xdr:col>${a.col0}</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>${a.row0}</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:from>
+    <xdr:ext cx="${cx}" cy="${cy}"/>
+    <xdr:pic>
+      <xdr:nvPicPr>
+        <xdr:cNvPr id="${nvIdx}" name="Image ${nvIdx - 1}"/>
+        <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
+      </xdr:nvPicPr>
+      <xdr:blipFill>
+        <a:blip xmlns:r="${NS_REL}" r:embed="${imageRelId}"/>
+        <a:stretch><a:fillRect/></a:stretch>
+      </xdr:blipFill>
+      <xdr:spPr>
+        <a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+      </xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>`;
+}
+
+/**
  * Generate a drawing.xml that anchors a single chart to a cell range.
  * Anchor: top-left at (col0, row0), bottom-right at (col1, row1) — both
  * zero-indexed.
@@ -2855,6 +2890,18 @@ ${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2, type })}
 }
 
 /**
+ * Picture-anchor builder for the single embedded PNG case (kept parallel to
+ * buildDrawingXml). Rarely used alone — the Charts tab mixes charts + images
+ * via buildMultiChartDrawingXml.
+ */
+function buildImageDrawingXml({ imageRelId, anchor }) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
+${buildPicAnchorFrag({ imageRelId, anchor, nvIdx: 2 })}
+</xdr:wsDr>`;
+}
+
+/**
  * R71 — generate a drawing.xml that anchors N charts on the same sheet.
  * Each entry in `entries` is `{ chartRelId, anchor }`. Used when a
  * single sheet (e.g. the aggregate "Charts" tab) hosts multiple native
@@ -2865,7 +2912,9 @@ ${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2, type })}
  */
 function buildMultiChartDrawingXml(entries) {
   const frags = entries.map((e, i) =>
-    buildDrawingAnchorFrag({ chartRelId: e.chartRelId, anchor: e.anchor, nvIdx: 2 + i, type: e.type })
+    e.kind === 'image'
+      ? buildPicAnchorFrag({ imageRelId: e.relId || e.chartRelId, anchor: e.anchor, nvIdx: 2 + i })
+      : buildDrawingAnchorFrag({ chartRelId: e.relId || e.chartRelId, anchor: e.anchor, nvIdx: 2 + i, type: e.type })
   ).join('\n');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
@@ -2964,11 +3013,23 @@ export async function injectNativeCharts(buffer, injections) {
   // Find next available numeric IDs for new chart/drawing files
   const existingCharts = Object.keys(zip.files).filter(n => /^xl\/charts\/chart\d+\.xml$/.test(n));
   const existingDrawings = Object.keys(zip.files).filter(n => /^xl\/drawings\/drawing\d+\.xml$/.test(n));
+  const existingMedia = Object.keys(zip.files).filter(n => /^xl\/media\/image\d+\.(png|jpe?g)$/i.test(n));
   let nextChartId = existingCharts.length + 1;
   let nextDrawingId = existingDrawings.length + 1;
+  let nextImageId = existingMedia.length + 1;
 
   // Collect content-types overrides to append
   const newOverrides = [];
+
+  // Ensure [Content_Types].xml declares a PNG default so embedded chart images
+  // (aggregate Charts tab) resolve. Added once, up front, if absent.
+  let ctXmlLocal = ctXml;
+  if (!/<Default\s+Extension="png"/i.test(ctXmlLocal)) {
+    ctXmlLocal = ctXmlLocal.replace(
+      /(<Types[^>]*>)/,
+      `$1<Default Extension="png" ContentType="image/png"/>`
+    );
+  }
 
   // R71 — generate chart XML for a spec via the type→builder dispatch
   // (specToChartXml, module-level). CM chart fixes round 3, item 5 — lint the
@@ -3034,36 +3095,61 @@ export async function injectNativeCharts(buffer, injections) {
     const drawingRels = `xl/drawings/_rels/drawing${nextDrawingId}.xml.rels`;
     const sheetRels   = cleanSheetPath.replace(/^(xl\/worksheets\/)([^.]+)\.xml$/, '$1_rels/$2.xml.rels');
 
-    // Generate each chart's XML and collect drawing-rels entries.
-    // Reserve chart numeric ids and per-drawing-rels rIds in lockstep.
+    // Generate each entry's part (native chart XML, or an embedded PNG image
+    // for a non-native chart template) and collect drawing-rels entries.
+    // Reserve chart/image numeric ids and per-drawing-rels rIds in lockstep.
+    // An entry with `inj.image` (a { png, anchor } pair) is embedded as a
+    // <xdr:pic>; otherwise `inj.spec` is a native chart. This lets the Charts
+    // tab host BOTH in one drawing so EVERY chart appears in the single-page
+    // view (charts that lack a native builder ride in as their PNG).
     const chartEntries = [];
     for (let i = 0; i < sheetInjections.length; i++) {
-      const { spec } = sheetInjections[i];
-      const chartId = nextChartId++;
-      const chartFile = `xl/charts/chart${chartId}.xml`;
-      zip.file(chartFile, renderChartXml(spec));
-      newOverrides.push(`<Override PartName="/${chartFile}" ContentType="${CT_CHART}"/>`);
-      chartEntries.push({
-        chartId,
-        chartFile,
-        chartRelId: `rId${i + 1}`,  // sequenced within this sheet's drawing rels
-        anchor: spec.anchor,
-        type: spec.type,
-      });
+      const inj = sheetInjections[i];
+      const relId = `rId${i + 1}`; // sequenced within this sheet's drawing rels
+      if (inj && inj.image && inj.image.png) {
+        const ext = (inj.image.ext || 'png').toLowerCase();
+        const imageId = nextImageId++;
+        const mediaFile = `xl/media/image${imageId}.${ext}`;
+        zip.file(mediaFile, inj.image.png);
+        chartEntries.push({
+          kind: 'image',
+          imageId,
+          ext,
+          relId,
+          anchor: inj.image.anchor,
+        });
+      } else {
+        const { spec } = inj;
+        const chartId = nextChartId++;
+        const chartFile = `xl/charts/chart${chartId}.xml`;
+        zip.file(chartFile, renderChartXml(spec));
+        newOverrides.push(`<Override PartName="/${chartFile}" ContentType="${CT_CHART}"/>`);
+        chartEntries.push({
+          kind: 'chart',
+          chartId,
+          chartFile,
+          relId,
+          anchor: spec.anchor,
+          type: spec.type,
+        });
+      }
     }
 
-    // 2. Drawing XML — single-chart path uses the legacy builder so
-    //    its byte-for-byte output is unchanged (preserving existing
-    //    snapshot-style assertions); multi-chart path tiles N anchors.
-    const drawingXml = chartEntries.length === 1
-      ? buildDrawingXml({ chartRelId: chartEntries[0].chartRelId, anchor: chartEntries[0].anchor, type: chartEntries[0].type })
+    // 2. Drawing XML — single native-chart path uses the legacy builder so its
+    //    byte-for-byte output is unchanged (preserving existing snapshot-style
+    //    assertions); every other case (multi, or any image) tiles N anchors.
+    const soleChart = chartEntries.length === 1 && chartEntries[0].kind === 'chart';
+    const drawingXml = soleChart
+      ? buildDrawingXml({ chartRelId: chartEntries[0].relId, anchor: chartEntries[0].anchor, type: chartEntries[0].type })
       : buildMultiChartDrawingXml(chartEntries);
     zip.file(drawingFile, drawingXml);
 
-    // 3. Drawing rels — one Relationship per chart on this sheet
+    // 3. Drawing rels — one Relationship per entry (chart OR embedded image).
     const drawingRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-${chartEntries.map(e => `  <Relationship Id="${e.chartRelId}" Type="${REL_CHART}" Target="../charts/chart${e.chartId}.xml"/>`).join('\n')}
+${chartEntries.map(e => e.kind === 'image'
+    ? `  <Relationship Id="${e.relId}" Type="${REL_IMAGE}" Target="../media/image${e.imageId}.${e.ext}"/>`
+    : `  <Relationship Id="${e.relId}" Type="${REL_CHART}" Target="../charts/chart${e.chartId}.xml"/>`).join('\n')}
 </Relationships>`;
     zip.file(drawingRels, drawingRelsXml);
 
@@ -3097,9 +3183,12 @@ ${chartEntries.map(e => `  <Relationship Id="${e.chartRelId}" Type="${REL_CHART}
     nextDrawingId++;
   }
 
-  // 6. Update [Content_Types].xml with all new overrides at once
-  if (newOverrides.length) {
-    const updatedCt = ctXml.replace('</Types>', `${newOverrides.join('')}</Types>`);
+  // 6. Update [Content_Types].xml with all new overrides at once (on the copy
+  //    that already carries the PNG Default for embedded images).
+  const updatedCt = newOverrides.length
+    ? ctXmlLocal.replace('</Types>', `${newOverrides.join('')}</Types>`)
+    : ctXmlLocal;
+  if (updatedCt !== ctXml) {
     zip.file('[Content_Types].xml', updatedCt);
   }
 
