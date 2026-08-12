@@ -2868,17 +2868,25 @@ export async function storeClientDocBytes(domain, { source_url, content_base64, 
  * authenticated egress) and are counted, never silently "done". Value-ranked
  * (usable-cap / recent first via document_id desc), bounded, idempotent.
  */
-export async function backfillDocBytes(domain, { limit = 25, documentType = null } = {}, deps = {}) {
+export async function backfillDocBytes(domain, { limit = 25, documentType = null, before = null } = {}, deps = {}) {
   const q = deps.domainQuery || domainQuery;
   const cap = Math.max(1, Math.min(200, Number(limit) || 25));
+  // KEYSET CURSOR on document_id (descending): each call walks strictly OLDER
+  // rows than `before`, so the backlog is traversed exactly ONCE and the caller
+  // terminates deterministically — even when a row can't be captured (the common
+  // case: session-bound CoStar links). Without this, an un-capturable row is
+  // re-selected forever and a `while scanned>0` loop never ends.
   let filter = `storage_path=is.null&source_url=not.is.null`;
   if (documentType) filter += `&document_type=eq.${encodeURIComponent(documentType)}`;
+  if (before != null && Number.isFinite(Number(before))) filter += `&document_id=lt.${Number(before)}`;
   const sel = await q(domain, 'GET',
     `property_documents?${filter}&select=document_id,property_id,source_url,document_type,file_name&order=document_id.desc&limit=${cap}`);
   if (!sel.ok) return { ok: false, outcome: 'scan_failed', status: sel.status };
   const rows = Array.isArray(sel.data) ? sel.data : [];
-  const out = { ok: true, domain, scanned: rows.length, bytes_captured: 0, session_bound_or_dead: 0, skipped: 0, reasons: {} };
+  const out = { ok: true, domain, scanned: rows.length, bytes_captured: 0, session_bound_or_dead: 0, skipped: 0,
+                reasons: {}, next_cursor: null, done: rows.length < cap };
   for (const row of rows) {
+    if (row.document_id != null) out.next_cursor = row.document_id; // smallest id (rows are desc)
     let r;
     try {
       r = await captureDocumentBytesAtIngest(domain, {

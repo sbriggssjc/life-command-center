@@ -91,6 +91,37 @@ describe('backfillDocBytes (server re-fetch, honest about session-bound failures
     assert.equal(r.scanned, 2);
     assert.equal(r.bytes_captured, 1);
     assert.equal(r.session_bound_or_dead, 1);
+    assert.equal(r.done, true);            // scanned < limit ⇒ backlog exhausted
+    assert.equal(r.next_cursor, 2);        // smallest document_id in the batch
+  });
+
+  it('advances a keyset cursor so an un-capturable backlog terminates (no infinite loop)', async () => {
+    // 3 rows, all un-capturable (fetch 403). A cursor-driven caller must converge.
+    const all = [
+      { document_id: 30, property_id: 3, source_url: 'https://cdn/s.pdf', document_type: 'lease', file_name: 'c.pdf' },
+      { document_id: 20, property_id: 2, source_url: 'https://cdn/s.pdf', document_type: 'lease', file_name: 'b.pdf' },
+      { document_id: 10, property_id: 1, source_url: 'https://cdn/s.pdf', document_type: 'lease', file_name: 'a.pdf' },
+    ];
+    const deps = {
+      getDomainCredentials: () => CREDS,
+      fetchImpl: async () => ({ ok: false, status: 403, headers: { get: () => null } }),
+      uploadImpl: async () => ({ ok: true }),
+      domainQuery: async (domain, method, path) => {
+        if (method !== 'GET') return { ok: true };
+        const m = /document_id=lt\.(\d+)/.exec(path);
+        const before = m ? Number(m[1]) : Infinity;
+        return { ok: true, data: all.filter(r => r.document_id < before).slice(0, 2) }; // limit 2
+      },
+    };
+    let cursor = null, iters = 0, totalScanned = 0;
+    while (iters++ < 20) {
+      const r = await backfillDocBytes('gov', { limit: 2, before: cursor }, deps);
+      totalScanned += r.scanned;
+      if (r.scanned === 0 || r.done) break;
+      cursor = r.next_cursor;
+    }
+    assert.equal(totalScanned, 3);  // each of the 3 rows visited exactly once
+    assert.ok(iters < 20);          // terminated (no infinite loop)
   });
 });
 
