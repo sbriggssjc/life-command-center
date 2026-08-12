@@ -359,20 +359,25 @@ function selectCohortColumns(cols, chartTemplateId, vertical, rows) {
 }
 
 function selectSellerSentimentColumns(cols, vertical) {
-  if (!Array.isArray(cols) || vertical !== 'gov') return cols;
+  if (!Array.isArray(cols)) return cols;
+  const isGov = vertical === 'gov';
   return cols
-    .filter((c) => !String(c?.key || '').endsWith('_8q'))
+    // gov only: drop the dialysis-only trailing `_8q` columns so the native
+    // chart's findCol() doesn't bind the gov core series to blank columns.
+    .filter((c) => !(isGov && String(c?.key || '').endsWith('_8q')))
     .map((c) => {
+      let header = c.header;
       // gov long-term cohort is the 6+ firm-yr CORE (dia stays 10+).
-      let header = String(c?.key || '').includes('_long_term')
-        ? c.header.replace('10+ yr', '6+ yr')
-        : c.header;
-      // 2026-08-12 — gov's cm_gov_seller_sentiment_m cap line no longer keys
-      // solely on the asking cap (last_cap_rate is captured on ~16% of sales,
-      // near-zero on recent CoStar comps, which collapsed the recent tail to
-      // n~6). It now uses an effective cap: true ask -> authoritative derived
-      // (cap_rate_history) -> achieved sold cap. Relabel "Last Ask Cap" ->
-      // "Last Cap Rate" so the gov header matches what the series actually is.
+      if (isGov && String(c?.key || '').includes('_long_term')) {
+        header = header.replace('10+ yr', '6+ yr');
+      }
+      // 2026-08-12 — BOTH verticals' seller-sentiment cap line no longer keys
+      // solely on the asking cap: it now uses an effective cap (true ask ->
+      // authoritative derived cap_rate ledger -> achieved sold cap) because
+      // the asking cap is captured on only a small minority of recent sales
+      // (which collapsed the recent tail to n~2-6). Relabel "Last Ask Cap" ->
+      // "Last Cap Rate" so the header matches the series. findCol() binds by
+      // column KEY, not header, so this relabel is cosmetic-only.
       if (String(c?.key || '').startsWith('last_ask_cap')) {
         header = header.replace('Last Ask Cap', 'Last Cap Rate');
       }
@@ -1584,7 +1589,7 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // gov off the dialysis-only trailing `_8q` columns; if those blank columns
     // exist, the native chart's findCol() binds the core series to them before
     // the populated gov `*_long_term` fields.
-    if (chart.chart_template_id === 'seller_sentiment' && vertical === 'gov') {
+    if (chart.chart_template_id === 'seller_sentiment') {
       cols = selectSellerSentimentColumns(cols, vertical);
     }
 
@@ -1890,6 +1895,30 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         const msg =
           `[cm-export] schema drift on ${tabName} (view=${chart.view_name}, ` +
           `vertical=${vertical}): template columns absent from view → ${drifted.join(', ')}`;
+        console.warn(msg);
+        if (Array.isArray(driftWarnings)) driftWarnings.push(msg);
+      }
+    }
+
+    // 2026-08-12 — recent-tail coverage guard for seller_sentiment. The cap
+    // line + N once collapsed at the newest edge (gov n~6, dia n~2) because
+    // the views keyed only on the asking cap, which recent sales rarely carry.
+    // The views are now broadened to an effective cap, but this guard catches
+    // any regression (a view reverted to ask-only, or the cap source dried up)
+    // AT EXPORT TIME — surfaced in driftWarnings — instead of by eye on the
+    // rendered chart. Rows are period_end-ascending, so the last row is the
+    // latest completed period.
+    if (chart.chart_template_id === 'seller_sentiment'
+        && Array.isArray(chart.rows) && chart.rows.length > 0) {
+      const SENTIMENT_MIN_RECENT_N = 10;
+      const latest = chart.rows[chart.rows.length - 1];
+      const nAll = Number(latest?.n_all);
+      if (Number.isFinite(nAll) && nAll < SENTIMENT_MIN_RECENT_N) {
+        const msg =
+          `[cm-export] seller_sentiment recent-tail coverage low ` +
+          `(view=${chart.view_name}, vertical=${vertical}): latest period ` +
+          `${latest?.period_end} n_all=${nAll} < ${SENTIMENT_MIN_RECENT_N} — ` +
+          `cap line/N may be collapsing; check the effective-cap coverage`;
         console.warn(msg);
         if (Array.isArray(driftWarnings)) driftWarnings.push(msg);
       }

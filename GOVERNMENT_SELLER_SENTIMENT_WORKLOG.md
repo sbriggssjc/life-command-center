@@ -118,3 +118,35 @@ test/cm-export-audit-fixes.test.mjs test/cm-native-chart-injector.test.mjs` —
 Next: regenerate the gov Capital Markets export (view change is live immediately,
 no deploy needed for data; the header relabel ships on the next Railway redeploy
 of merged `main`).
+
+## 2026-08-12 (follow-up) — mirror the fix to dia + recent-tail coverage guard
+
+After the gov fix merged/deployed, checked whether the same latent collapse
+exists elsewhere. It does, in the dia sister chart.
+
+- **dia `cm_dialysis_seller_sentiment_m` had the identical collapse, worse.** It
+  keyed N and the cap line only on the ASK cap of a linked non-synthetic listing
+  (`available_listings.last_cap_rate` via `sale_transaction_id`). Recent dia sales
+  almost never have such a linked listing: TTM ending 2026-06-30 = 179 sales but
+  only 2 with a linked-listing ask cap → n≈2 at the newest edge, while 114 of the
+  179 carried a real in-band cap on the sale row itself.
+- **Fix (Dialysis_DB migration `20260812_cm_dia_seller_sentiment_broaden_cap_basis.sql`,
+  applied live).** `eff_cap = COALESCE(linked-listing ask cap, cap_rate_final,
+  calculated_cap_rate, cap_rate, stated_cap_rate)` for the N counts and the cap
+  line (main agg + the trailing-24-mo `_8q` core). Everything else preserved:
+  firm_term≥10 cohort (dia stays 10+), exclude-from-market filter, ≥5 gates,
+  smoothing, price-change bars. dia has no `income_confidence` on
+  `cap_rate_history`, so it uses the per-sale `cap_rate_final` (authoritative
+  derived) directly. Result (live): 2026-Q2 `n_all` 2→119, `n_long_term` 0→7,
+  and the dia 10+ cohort cap line no longer NULLs at the edge.
+- **Export relabel now vertical-agnostic.** `selectSellerSentimentColumns` relabels
+  "Last Ask Cap"→"Last Cap Rate" for BOTH verticals (the cohort `_8q`/6+ logic
+  stays gov-only). `findCol()` binds by column KEY not header, so the relabel is
+  cosmetic-only and cannot break series binding.
+- **Regression guard (durability).** The CM export now emits a `driftWarning` when
+  a `seller_sentiment` sheet's latest completed period `n_all` falls below a floor
+  (10) — so any future collapse (a view reverted to ask-only, or the effective-cap
+  coverage drying up) surfaces AT EXPORT TIME instead of by eye on the chart.
+- Tests: `node --test test/cm-export-audit-fixes.test.mjs
+  test/cm-native-chart-injector.test.mjs` — 242 pass / 1 skipped (added dia
+  relabel + coverage-guard regressions).
