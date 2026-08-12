@@ -344,6 +344,13 @@ Feature-flagged (`OCR_CLOUD_*`, `OPENAI_API_KEY`); unset ⇒ honest `needs_ocr`.
 - **The SOS-direct fetcher currently yields nothing from CI** (FL/CA Cloudflare/Incapsula 403 to datacenter IPs;
   AZ portal migrated). The handlers are correct + honest-blocked; the weekly `--apply` schedule is DISABLED.
   Needs a non-datacenter egress. See **government-lease** `docs/SOS_ENDPOINT_VERIFICATION_2026-07-22.md`.
+  → **W9.1 Stage 2 (Prompt 99) BUILDS that egress:** the GaryBuilt residential fetch proxy
+  (**government-lease** `sos-proxy/` + `docs/RUNBOOK_sos_proxy_garybuilt.md`). Set `SOS_PROXY_URL`
+  (+ dedicated `SOS_PROXY_CF_ACCESS_CLIENT_ID/SECRET`, **never** the ollama token) and both the gov
+  Python fetcher and the LCC contact-acquisition SOS stage route through it. The SOS stage (`STAGE_SOS`,
+  `api/_handlers/contact-acquisition-engine.js`) is flag-gated `W9_1_SOS_DIRECT`, proposal-only
+  (`contact_acquisition_review` — confirm never auto), and no-ops honest-blocked while off. Adapter
+  re-verification through the proxy + the flag flip are Scott's live post-install steps.
 
 ---
 
