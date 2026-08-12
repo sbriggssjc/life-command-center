@@ -161,7 +161,7 @@ const CM_BRAND_FALLBACK = {
   series: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
   series_ramp: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
   text: { title: '003DA5', axisLabel: '191919', legend: '6A748C', callout: '003DA5' },
-  sizes: { title: 1400, axisTitle: 900, axisLabel: 900, dataLabel: 900, legend: 900, chartArea: 800 },
+  sizes: { title: 1400, axisTitle: 900, axisLabel: 700, dataLabel: 900, legend: 900, chartArea: 800 },
   chartSize: { widthIn: 10.0, heightIn: 4.25, donutWidthIn: 4.25, donutHeightIn: 4.25 },
   banned: ['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79'],
 };
@@ -250,6 +250,18 @@ function chartAreaSpPrTxPr() {
 // (before extLst), so inserting just before </c:catAx> is schema-correct.
 const CAT_AX_INTERVAL_UNIT_FRAG = '<c:tickLblSkip val="1"/><c:tickMarkSkip val="1"/>';
 
+// Value-axis (y-axis; also the scatter x-axis) tick-label text run. Marketing
+// follow-up (2026-08): axis labels are 7pt (CM_BRAND.sizes.axisLabel). The
+// category (x) axis carries its own txPr (CAT_AX_VERTICAL_TXT, same size); the
+// value axis had none, so it inherited the 8pt chart-area default — this gives
+// it an explicit sized run. In CT_ValAx the txPr sits after spPr, before
+// crossAx, so it is injected immediately before <c:crossAx>.
+function valAxLabelTxPr() {
+  const f = escapeXml(CM_BRAND.typeface);
+  const sz = (CM_BRAND.sizes && CM_BRAND.sizes.axisLabel) || 700;
+  return `<c:txPr><a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${sz}" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${f}"/><a:ea typeface="${f}"/><a:cs typeface="${f}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>`;
+}
+
 // Post-process a generated chartSpace XML string to apply the marketing
 // chart-area edits uniformly across every builder (single choke point so no
 // builder can miss them). Idempotent — guards against double application.
@@ -260,6 +272,13 @@ function applyChartAreaBranding(xml) {
   out = out.replace(/<c:catAx>([\s\S]*?)<\/c:catAx>/g, (full, body) => {
     if (/<c:tickLblSkip\b/.test(body)) return full;
     return `<c:catAx>${body}${CAT_AX_INTERVAL_UNIT_FRAG}</c:catAx>`;
+  });
+  // 1b. Value-axis tick-label font size (marketing 2026-08: 7pt). Inject a
+  //     txPr before <c:crossAx> in each <c:valAx> that lacks one.
+  out = out.replace(/<c:valAx>([\s\S]*?)<\/c:valAx>/g, (full, body) => {
+    if (/<c:txPr>/.test(body)) return full;
+    const injected = body.replace(/(<c:crossAx\b)/, `${valAxLabelTxPr()}$1`);
+    return `<c:valAx>${injected}</c:valAx>`;
   });
   // 2. Chart Area No Fill / No Line + default font, inserted between </c:chart>
   //    and </c:chartSpace>. Keyed off the </c:chart> tail so it is inserted
@@ -471,7 +490,7 @@ const CAT_AX_TICK_LBL_POS = '<c:tickLblPos val="low"/>';
 const CAT_AX_VERTICAL_TXT = `<c:txPr>
           <a:bodyPr rot="-5400000" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
           <a:lstStyle/>
-          <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+          <a:p><a:pPr><a:defRPr sz="${CM_BRAND.sizes.axisLabel}" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
         </c:txPr>`;
 // R66 — retained alias so call sites read naturally; R63's "horizontal"
 // naming was a misnomer once the master parity was confirmed.

@@ -106,6 +106,12 @@ test('injectNativeCharts: line chart on Data_Volume_TTM tab', async () => {
   // Marketing feedback: title 14pt Futura PT Bold NM Blue; x-axis interval unit 1.
   assert.match(chartXml, /sz="1400" b="1">\s*<a:solidFill><a:srgbClr val="003DA5"/, 'title 14pt bold NM Blue');
   assert.match(chartXml, /<c:tickLblSkip val="1"\/><c:tickMarkSkip val="1"\/>/, 'x-axis label interval unit = 1');
+  // Marketing follow-up (2026-08): BOTH axis tick labels are 7pt.
+  const catAx1 = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  const valAx1 = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(catAx1, /<c:txPr>[\s\S]*?sz="700"/, 'x-axis (catAx) labels 7pt');
+  assert.match(valAx1, /<c:txPr>[\s\S]*?sz="700"/, 'y-axis (valAx) labels 7pt');
+  assert.ok(valAx1.indexOf('<c:txPr>') < valAx1.indexOf('<c:crossAx'), 'valAx txPr precedes crossAx (schema order)');
 
   const drawingRels = await zip.file('xl/drawings/_rels/drawing1.xml.rels').async('string');
   assert.match(drawingRels, /chart1\.xml/, 'drawing rels references chart1.xml');
