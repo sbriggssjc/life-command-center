@@ -18,7 +18,7 @@
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI, invokeVisionExtractionAI } from '../_shared/ai.js';
-import { buildExtractionPrompt, ensureProviderStamp } from '../_shared/intake-extraction-prompt.js';
+import { buildExtractionPrompt, ensureProviderStamp, stripNonSaleKeys } from '../_shared/intake-extraction-prompt.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
 import { isNonDealSnapshot, normalizeCapRate, firstOf } from '../_shared/intake-classify.js';
@@ -743,6 +743,10 @@ export async function processIntakeExtraction(intakeId, context = {}) {
     // could otherwise write a bare snapshot. ensureProviderStamp is idempotent —
     // it no-ops when the accurate per-artifact stamp is already present, and
     // stamps {final_provider:'none'} only when there was genuinely no AI call.
+    // Prompt 93: deterministic no-sale-keys strip at the SAME write site — an
+    // on-market doctype (om/flyer/brochure/listing_agreement/valuation_proposal)
+    // never carries a closed-sale sold_price/sold_cap_rate (model drift guard).
+    stripNonSaleKeys(mergedSnapshot);
     ensureProviderStamp(mergedSnapshot, globalThis.__lastAiCallInfo);
     const insertResult = await opsQuery('POST', 'staged_intake_extractions', {
       intake_id: intakeId,

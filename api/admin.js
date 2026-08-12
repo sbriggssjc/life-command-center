@@ -5438,17 +5438,49 @@ const DONOR_OWNER_BATCH = 120;    // owners processed per tick
 const DONOR_BUDGET_MS = 55000;
 
 // Blank owner-linked contacts missing a person key (the fill targets), one domain.
-async function fetchDonorBlankContacts(dom, limit) {
+// Prompt 93: KEYSET-CURSORED (order by pkCol asc, pkCol > startCursor) so nightly
+// runs WALK the full blank-contact pool instead of re-scanning a fixed top-slice
+// forever. The old fixed `order by owner_id desc` window meant that once night one
+// stamped that slice's unique matches, the permanently-unmatchable rows (ambiguous
+// / no owner SF key / no bridge contact) occupied the window and every later night
+// stamped 0 (gov stuck 19, dia 15). Same walk-the-pool class as prompts 83/84/92 —
+// this reuses the shared `nextScanCursor` keyset primitive (junk-prescreen.js).
+async function fetchDonorBlankContacts(dom, limit, startCursor) {
   const c = DH.donorContactCols(dom);
   const sel = c.pkCol + ',' + c.nameCol + ',sf_contact_id,true_owner_id,recorded_owner_id';
+  const cursorPred = (startCursor != null && String(startCursor) !== '')
+    ? '&' + c.pkCol + '=gt.' + encodeURIComponent(startCursor) : '';
   const r = await domainQuery(dom, 'GET',
     'contacts?select=' + sel + '&sf_contact_id=is.null&' + c.emailCol + '=is.null&' + c.phoneCol + '=is.null'
     + '&or=(true_owner_id.not.is.null,recorded_owner_id.not.is.null)'
-    + '&order=true_owner_id.desc.nullslast,recorded_owner_id.desc.nullslast&limit=' + limit);
+    + cursorPred
+    + '&order=' + c.pkCol + '.asc&limit=' + limit);
   return (r.ok && Array.isArray(r.data)) ? r.data.map((row) => ({
     contact_id: row[c.pkCol], name: row[c.nameCol], sf_contact_id: row.sf_contact_id,
     true_owner_id: row.true_owner_id || null, recorded_owner_id: row.recorded_owner_id || null,
   })) : [];
+}
+
+// Prompt 93: read the keyset position + wrap count the last donor run walked to,
+// per domain — the coverage-log row IS the cursor (U5/U2 ledger pattern). A missing
+// cursor just restarts from the top of the pool.
+async function fetchDonorScanCursors() {
+  const out = {};
+  for (const dom of RESCORE_DOMAINS) out[dom] = { cursor: null, wrapped: 0 };
+  try {
+    for (const dom of RESCORE_DOMAINS) {
+      const r = await opsQuery('GET',
+        'lcc_w9_3_donor_coverage_log?domain=eq.' + dom
+        + '&select=scan_cursor_to,windows_wrapped&order=recorded_at.desc&limit=1', undefined, { countMode: 'none' });
+      if (r.ok && Array.isArray(r.data) && r.data[0]) {
+        out[dom] = {
+          cursor: r.data[0].scan_cursor_to != null ? String(r.data[0].scan_cursor_to) : null,
+          wrapped: Number(r.data[0].windows_wrapped) || 0,
+        };
+      }
+    }
+  } catch (_e) { /* best-effort — a missing cursor just restarts from the top */ }
+  return out;
 }
 
 // The blank-contact coverage metric (acceptance metric): total blank contacts vs
@@ -5527,6 +5559,10 @@ async function handleSfDonorHandoffTick(req, res) {
   }
 
   const sourceRunId = 'w93d_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  // Prompt 93: resume the pool walk from where the last run stopped (keyset cursor).
+  const DONOR_WINDOW = DONOR_OWNER_BATCH * 4;   // blank-contact slice scanned per tick
+  const cursors = await fetchDonorScanCursors();
+
   const summary = { source_run_id: sourceRunId, batch_tag: batchTag, mode: apply ? 'apply' : 'dry_run',
     enabled, flag_state: flag?.state || 'missing', by_domain: {}, coverage: {}, sample: [], scan_errors: [] };
 
@@ -5536,10 +5572,30 @@ async function handleSfDonorHandoffTick(req, res) {
     const cov = await donorCoverage(dom);
     summary.coverage[dom] = cov;
 
+    // Keyset-cursored slice: resume past the last contact_id this domain walked to.
+    const startCursor = cursors[dom]?.cursor ?? null;
+    const priorWrapped = cursors[dom]?.wrapped || 0;
     let blanks = [];
-    try { blanks = await fetchDonorBlankContacts(dom, DONOR_OWNER_BATCH * 4); }
+    try { blanks = await fetchDonorBlankContacts(dom, DONOR_WINDOW, startCursor); }
     catch (e) { summary.scan_errors.push(dom + ':contacts:' + (e?.message || e)); summary.by_domain[dom] = perDom; continue; }
     perDom.blank_contacts = blanks.length;
+
+    // Advance (or wrap) the keyset cursor over the slice we SCANNED this run.
+    // reachedEnd = the slice under-filled (pool tail) -> wrap to the top so the
+    // next run re-checks from the start (re-score can mint new owner->SF links
+    // that create matches in already-scanned windows); else advance to the last
+    // contact_id seen. `nextScanCursor` is the shared keyset primitive.
+    const lastPk = blanks.length ? blanks[blanks.length - 1].contact_id : null;
+    const reachedEnd = blanks.length < DONOR_WINDOW;
+    const { nextCursor, wrapped } = nextScanCursor({
+      reachedEnd, truncated: !reachedEnd, lastPk, startCursor,
+    });
+    const windowsWrapped = priorWrapped + (wrapped ? 1 : 0);
+    perDom.scan_cursor_from = startCursor;
+    perDom.scan_cursor_to = nextCursor;
+    perDom.window_filled = blanks.length;
+    perDom.wrapped = wrapped;
+    perDom.windows_wrapped = windowsWrapped;
 
     // Resolve each blank contact's owner -> sf account id (batched by table).
     const trueIds = [...new Set(blanks.filter((b) => b.true_owner_id).map((b) => String(b.true_owner_id)))];
@@ -5620,6 +5676,9 @@ async function handleSfDonorHandoffTick(req, res) {
           domain: dom, blank_contacts_total: cov.total,
           blank_with_sf_key: (cov.withKey != null ? cov.withKey + perDom.stamped : null),
           stamped_this_run: perDom.stamped, batch_tag: batchTag, source_run_id: sourceRunId,
+          // Prompt 93: persist the keyset position + wrap count so the next run
+          // resumes the full-pool walk (fetchDonorScanCursors reads this back).
+          scan_cursor_to: perDom.scan_cursor_to, windows_wrapped: perDom.windows_wrapped,
         }, { headers: { Prefer: 'return=minimal' } });
       } catch (_e) { /* best-effort */ }
     }
@@ -5632,7 +5691,7 @@ async function handleSfDonorHandoffTick(req, res) {
       { status: totalFailed ? 'amber' : 'green', count: totalStamped,
         lastError: totalFailed ? totalFailed + ' write(s) failed in ' + sourceRunId : null, details: summary });
   }
-  summary.note = "Account->contacts expansion. For an owner linked to SF account A, unique-name-match A's SF contacts (gov sf_contacts_import / dia salesforce_contacts) against the owner's blank domain contacts and FILL-BLANKS stamp the person-level sf_contact_id (W9.2's donor key). Ambiguous name matches skipped (never guessed). Coverage = blank contacts carrying an SF key (the acceptance metric, rising = W9.2 unlock)." + (dryScore ? ' NO writes in dry-run.' : '');
+  summary.note = "Account->contacts expansion. For an owner linked to SF account A, unique-name-match A's SF contacts (gov sf_contacts_import / dia salesforce_contacts) against the owner's blank domain contacts and FILL-BLANKS stamp the person-level sf_contact_id (W9.2's donor key). Ambiguous name matches skipped (never guessed). Coverage = blank contacts carrying an SF key (the acceptance metric, rising = W9.2 unlock). Prompt 93: keyset-cursored (per-domain scan_cursor_to/windows_wrapped in each by_domain entry) so nightly runs WALK the full blank-contact pool instead of re-scanning a fixed slice; on wrap (pool tail reached) it restarts from the top." + (dryScore ? ' NO writes in dry-run.' : '');
   return res.status(200).json({ ok: true, ...summary });
 }
 

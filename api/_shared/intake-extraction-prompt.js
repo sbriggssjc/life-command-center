@@ -175,6 +175,67 @@ export function ensureProviderStamp(snapshot, aiCallInfo, nowIso) {
   return snapshot;
 }
 
+// On-market document types (no closed-sale economics). The SALE-RECORD GUARD in
+// the prompt tells the model to leave sold_price/sold_cap_rate null for these, but
+// the model still drifts (grounded 2026-08-12: 7 on-market rows carried sold_*).
+const ON_MARKET_DOC_TYPES = new Set([
+  'om', 'flyer', 'marketing_brochure', 'brochure', 'listing_agreement', 'valuation_proposal',
+]);
+
+/**
+ * Deterministic no-sale-keys strip at the persist site (Prompt 93). When the
+ * snapshot's document_type is an ON-MARKET doctype, a closed-sale price/cap is a
+ * hallucination — null `sold_price` / `sold_cap_rate` so the drift never reaches
+ * the comps engine. Conservative: only strips for a KNOWN on-market doctype; a
+ * null/unknown/comp/psa doctype is left untouched (a real comp keeps its sold_*).
+ * Idempotent, mutates in place, returns the same snapshot.
+ *
+ * @param {object|null} snapshot
+ * @returns {object|null}
+ */
+export function stripNonSaleKeys(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  const dt = String(snapshot.document_type || '').toLowerCase();
+  if (!ON_MARKET_DOC_TYPES.has(dt)) return snapshot;
+  if (snapshot.sold_price != null) snapshot.sold_price = null;
+  if (snapshot.sold_cap_rate != null) snapshot.sold_cap_rate = null;
+  return snapshot;
+}
+
+/**
+ * Reconstruct a `_provider` stamp from an intake's PERSISTED per-artifact
+ * diagnostics (Prompt 93). Every extractor run persists ai_final_provider /
+ * ai_final_model / ai_fell_back / ai_chain onto staged_intake_items.raw_payload
+ * .extraction_result.diagnostics — the exact __lastAiCallInfo data the write-site
+ * stamp would have captured. When a snapshot escaped the at-write stamp (e.g. the
+ * Aug-10 burst that wrote before the Prompt-82 write-site deploy landed), this
+ * rebuilds an ACCURATE stamp from the row's own provenance. Distinct
+ * `reconstructed_from:'diagnostics'` marker so a rebuilt stamp is never confused
+ * with a genuine at-write stamp. Returns null when no diagnostic names a provider.
+ *
+ * @param {Array<object>|null} diagnostics  raw_payload.extraction_result.diagnostics
+ * @param {string} [nowIso]
+ * @returns {object|null}  a `_provider` object, or null when unreconstructable.
+ */
+export function reconstructProviderStampFromDiagnostics(diagnostics, nowIso) {
+  if (!Array.isArray(diagnostics) || !diagnostics.length) return null;
+  // Winning diagnostic: a successful one that names a provider (prefer ai_ok).
+  const withProvider = diagnostics.filter((d) => d && d.ai_final_provider);
+  if (!withProvider.length) return null;
+  const win = withProvider.find((d) => d.ai_ok) || withProvider[0];
+  const chain = Array.isArray(win.ai_chain)
+    ? win.ai_chain.map((c) => c && c.stage).filter(Boolean)
+    : [];
+  return {
+    final_provider: win.ai_final_provider || null,
+    final_model:    win.ai_final_model || null,
+    fell_back:      Boolean(win.ai_fell_back),
+    chain,
+    stamped_at:        nowIso || new Date().toISOString(),
+    reconstructed_from: 'diagnostics',
+  };
+}
+
 /**
  * Build the full extraction prompt.
  *
