@@ -1071,7 +1071,7 @@ async function handleReviewCounts(req, res) {
   // five folded seeders (mirrors fetchFederatedSource('owner_reconcile').total),
   // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
   const [
-    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open,
+    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open, w91Open,
   ] = await Promise.all([
     withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
     withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
@@ -1085,6 +1085,8 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(opsCount('naming_hygiene_review?status=eq.proposed')),
     // W9.2 (Prompt 88): open contact-reachability proposals (deterministic + LLM).
     withLaneTimeout(opsCount('reachability_harvest_review?status=eq.proposed')),
+    // W9.1 (Prompt 98): open contact-acquisition proposals (attach + mint).
+    withLaneTimeout(opsCount('contact_acquisition_review?status=eq.proposed')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -1159,6 +1161,10 @@ async function handleReviewCounts(req, res) {
     { key: 'reachability_harvest_review', label: 'Contact reachability — internal harvest',
       count: sum(w92Open), parts: { open_proposals: val(w92Open) },
       count_mode: 'exact', status: laneStatus(w92Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach',
+      count: sum(w91Open), parts: { open_proposals: val(w91Open) },
+      count_mode: 'exact', status: laneStatus(w91Open),
       href: 'pageDataQuality', tone: '' },
   ];
 
@@ -6458,6 +6464,11 @@ const FEDERATED_DECISION_TYPES = new Set([
   // arithmetic exact-identity) or an LLM-attributed fill with a VERBATIM quote.
   // Confirm runs the deterministic fill-blanks writer (domain contacts email/phone).
   'reachability_harvest_review',
+  // W9.1 (Prompt 98): contact-acquisition engine (Stage 1) proposals. Source =
+  // v_contact_acquisition_review_open; an ATTACH (cross-reference / institution) or
+  // a MINT (deed signatory / OM broker-of-record, VERBATIM-quoted). Confirm resolves
+  // into the ops entity graph via the shared contact-attach helpers (reversible).
+  'contact_acquisition_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
@@ -6611,6 +6622,7 @@ function federatedSubjectRef(type, s) {
     case 'w8_u3_link_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'naming_hygiene_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'reachability_harvest_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'contact_acquisition_review': return s.subject_ref ? String(s.subject_ref) : null;
   }
   return null;
 }
@@ -6890,6 +6902,37 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = await opsCnt('reachability_harvest_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'contact_acquisition_review') {
+    // W9.1: open contact-acquisition proposals. Attach (cross-reference / institution)
+    // rank first (cheap/deterministic), then by owner $ value / confidence.
+    const r = await opsQuery('GET', 'v_contact_acquisition_review_open?select=review_id,subject_ref,'
+      + 'stage,proposed_kind,domain,owner_entity_id,owner_name,rank_value,candidate_entity_id,'
+      + 'candidate_name,candidate_role,candidate_title,proposed_contact_role,evidence_quote,'
+      + 'evidence_source,source_pointer,confidence,reason,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: row.owner_entity_id,
+      // attach proposals rank first (like the view), then by confidence + $ value.
+      rank_value: (row.proposed_kind === 'attach' ? 1e12 : 0) + (Number(row.confidence) || 0) * 1e6 + (Number(row.rank_value) || 0),
+      context: {
+        review_id: row.review_id, stage: row.stage, proposed_kind: row.proposed_kind, domain: row.domain,
+        owner_entity_id: row.owner_entity_id, owner_name: row.owner_name, rank_value: row.rank_value,
+        candidate_entity_id: row.candidate_entity_id, candidate_name: row.candidate_name,
+        candidate_role: row.candidate_role, candidate_title: row.candidate_title,
+        proposed_contact_role: row.proposed_contact_role, evidence_quote: row.evidence_quote,
+        evidence_source: row.evidence_source, source_pointer: row.source_pointer,
+        confidence: row.confidence, reason: row.reason,
+        model_provider: row.model_provider, model_name: row.model_name,
+        kind: row.proposed_kind === 'attach' ? 'attach_contact' : 'create_contact',
+      },
+    }));
+    out.total = await opsCnt('contact_acquisition_review?status=eq.proposed');
     return out;
   }
 
@@ -8619,6 +8662,107 @@ async function handleDecisionVerdict(req, res) {
       const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: 'filled', field: col, review_id: review.review_id });
+    }
+
+    // ---- contact_acquisition_review (W9.1 / Prompt 98) -----------------------
+    // The human verdict on a contact-acquisition proposal. confirm ->
+    //   attach : link the EXISTING person entity to the owner (associated_with + role);
+    //   mint   : create the person entity (ensureEntityLink) then link.
+    //   Then seed a value-gated prospecting cadence (stampContactOnActiveCadence).
+    //   All recorded in contact_acquisition_apply_log (reversal captured FIRST) so it
+    //   is reversible. reject -> the row is marked rejected (kept as rubric fuel). A
+    //   broker_of_record contact is linked with role broker_of_record — NEVER the
+    //   owner's own prospecting contact. NEVER auto-writes without this verdict.
+    if (decision.decision_type === 'contact_acquisition_review') {
+      const revR = await opsQuery('GET', 'contact_acquisition_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'contact_acquisition_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'attach', 'mint']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'contact_acquisition_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { stage: review.stage, kind: review.proposed_kind, owner_entity_id: review.owner_entity_id };
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'contact_acquisition_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // confirm: resolve into the ops entity graph. Fetch the owner's workspace.
+      const ownerId = review.owner_entity_id;
+      const ownerR = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(ownerId) + '&select=workspace_id&limit=1');
+      const ownerRow = (ownerR.ok && Array.isArray(ownerR.data)) ? ownerR.data[0] : null;
+      const workspaceId = ownerRow ? ownerRow.workspace_id : null;
+      const role = review.proposed_contact_role || 'prospecting_contact';
+      const { linkPersonToEntity, stampContactOnActiveCadence } = await import('./_shared/contact-attach.js');
+
+      // Ledger FIRST (reversal exists before any mutation).
+      const led = await opsQuery('POST', 'contact_acquisition_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { kind: review.proposed_kind, owner_entity_id: ownerId, contact_entity_id: null, minted_entity_id: null },
+          details: { stage: review.stage, candidate_name: review.candidate_name, role } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      // Resolve the contact entity: attach = the existing person; mint = create one.
+      let contactEntityId = review.candidate_entity_id || null;
+      let mintedEntityId = null;
+      if (review.proposed_kind === 'mint' || !contactEntityId) {
+        const { ensureEntityLink } = await import('./_shared/entity-link.js');
+        const sp = review.source_pointer && typeof review.source_pointer === 'object' ? review.source_pointer : {};
+        // A lane-only research contact (deed signatory / OM broker), not a domain-identity binding.
+        const srcSystem = review.stage === 'broker_of_record' ? 'costar' : 'email_intake';
+        const el = await ensureEntityLink({
+          workspaceId, userId: user.id,
+          sourceSystem: srcSystem, sourceType: 'Contact', externalId: 'w91:' + review.subject_ref,
+          domain: 'lcc',
+          seedFields: { name: review.candidate_name, title: review.candidate_title || undefined },
+          metadata: { via: 'contact_acquisition_w9_1', stage: review.stage, source_pointer: sp },
+        });
+        if (!el || !el.ok || !el.entity || !el.entity.id) {
+          if (applyLogId != null) await opsQuery('PATCH', 'contact_acquisition_apply_log?apply_id=eq.' + applyLogId,
+            { status: 'conflict', details: { error: 'mint_failed', detail: el && el.reason } }).catch(() => {});
+          await opsQuery('PATCH', 'contact_acquisition_review?review_id=eq.' + review.review_id,
+            { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+          return res.status(502).json({ error: 'contact_acquisition_review: mint_failed', detail: el && el.reason });
+        }
+        contactEntityId = el.entity.id;
+        mintedEntityId = review.proposed_kind === 'mint' ? el.entity.id : null;
+      }
+
+      // Link person -> owner (associated_with + role). broker_of_record stays distinct.
+      const link = await linkPersonToEntity({
+        workspaceId, entityId: ownerId, contactEntityId, role, via: 'contact_acquisition_w9_1',
+      });
+      // Seed a value-gated prospecting cadence so the freshly-contacted owner surfaces
+      // in the focus session (cadence-safe; onlyContactless never clobbers a pick).
+      let seedInfo = null;
+      try {
+        seedInfo = await stampContactOnActiveCadence({
+          entityId: ownerId, contactEntityId, onlyContactless: true, seedIfValuable: true,
+        });
+      } catch (_e) { /* cadence seed best-effort */ }
+
+      if (applyLogId != null) await opsQuery('PATCH', 'contact_acquisition_apply_log?apply_id=eq.' + applyLogId,
+        { reversal: { kind: review.proposed_kind, owner_entity_id: ownerId, contact_entity_id: contactEntityId,
+            minted_entity_id: mintedEntityId, relationship: (link && link.linked) ? 'created' : 'existed',
+            cadence_seeded: !!(seedInfo && seedInfo.seeded) } }).catch(() => {});
+      await opsQuery('PATCH', 'contact_acquisition_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      // Staleness: the owner just became reachable — refresh the queue cache.
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+      effects.contact_entity_id = contactEntityId; effects.minted = !!mintedEntityId; effects.apply_log_id = applyLogId;
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict,
+        action: review.proposed_kind === 'mint' ? 'minted_and_attached' : 'attached',
+        contact_entity_id: contactEntityId, review_id: review.review_id });
     }
 
     // ---- naming_hygiene_review (W8 U5 / Prompt 79) ---------------------------

@@ -195,6 +195,14 @@ export default withErrorHandler(async function handler(req, res) {
     return handleContactAcquisitionTick(req, res);
   }
 
+  // W9.1 (Prompt 98) — contact-acquisition ENGINE (Stage 1: internal sources).
+  // Proposal-only tick; distinct from the R16 SF worker above. GET=dry-run
+  // (?score=1&n= inline sample) / POST=apply (flag-gated W9_1_CONTACT_ACQUISITION).
+  if (req.query._route === 'contact-acquisition-engine-tick') {
+    const { handleContactAcquisitionEngineTick } = await import('./_handlers/contact-acquisition-engine.js');
+    return handleContactAcquisitionEngineTick(req, res);
+  }
+
   // CONNECTIVITY #3 — Salesforce link-store reconcile (via vercel.json
   // _route=sf-link-reconcile-tick). GET=dry-run / POST=drain. Mirrors domain
   // owner SF Account links onto the bridged entity; surfaces conflicts/
