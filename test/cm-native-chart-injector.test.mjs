@@ -1278,7 +1278,7 @@ test('R73 C4: volume_cap cap (right) axis lowered per vertical to lift the band 
     'dia cap axis 3.0-9.0% (band 5.70-7.70% lifts to the upper frame)');
 });
 
-test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sparse State/Municipal', () => {
+test('2026-08-12: cap_rate_by_credit — all three are clean flush lines (no markers), blue-family ramp', () => {
   const cols = [
     { key: 'period_end',   col: 'A' },
     { key: 'federal_cap',  col: 'B' },
@@ -1292,16 +1292,20 @@ test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sp
   });
   assert.equal(out.spec.type, 'multi-line');
   const [fed, state, muni] = out.spec.series;
-  // R2-B Unit 5 (Scott) — markers belong only where they ADD value: the SPARSE
-  // State + Municipal series (isolated points a markerless line cannot draw
-  // across the gaps). Federal is dense → a CLEAN line with NO per-point markers.
+  // 2026-08-12 (Scott): State/Municipal densified enough (99/73 quarters) to drop
+  // markers and match Federal's flush line. All three render markerless.
   assert.ok(!fed.showMarker, 'federal is a clean line (no markers)');
-  assert.ok(state.showMarker, 'state carries a marker per present quarter');
-  assert.ok(muni.showMarker, 'municipal carries a marker per present quarter');
-  // XML: federal renders markerless; state/muni render circle markers.
+  assert.ok(!state.showMarker, 'state is now a clean flush line (no markers)');
+  assert.ok(!muni.showMarker, 'municipal is now a clean flush line (no markers)');
+  // Federal is drawn heavier to lead the ramp and stay distinct from Municipal blue.
+  assert.equal(fed.lineWidth, 28575, 'federal line emphasized (2.25pt)');
+  // Colors mesh into the brand blue family: NM Blue / Sky / Blue-85 (slots 1/2/3).
+  assert.deepEqual([fed.color, state.color, muni.color], ['003DA5', '62B5E5', '265AB2'],
+    'NM Blue / Sky / Blue-85 credit ramp');
+  // XML: no circle markers anywhere; every series is a markerless line.
   const xml = buildMultiLineChartXml(out.spec);
-  assert.match(xml, /<c:marker><c:symbol val="circle"\/>/, 'circle markers emitted for the sparse cohorts');
-  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal renders as a markerless clean line');
+  assert.ok(!/<c:marker><c:symbol val="circle"\/>/.test(xml), 'no per-point circle markers emitted');
+  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'series render as markerless clean lines');
 });
 
 test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', () => {
@@ -1978,7 +1982,7 @@ test('buildInjectionSpec: cap_rate_by_credit builds 3-line federal/state/municip
   assert.equal(out.spec.series.length, 3);
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
   assert.deepEqual(out.spec.series.map(s => s.color),
-    ['003DA5', '62B5E5', '6A748C'], 'navy / sky / dark gray');
+    ['003DA5', '62B5E5', '265AB2'], 'NM Blue / Sky / Blue-85 (brand blue-family ramp)');
 });
 
 test('buildInjectionSpec: cpi_vs_renewal_cagr builds 2-line', () => {

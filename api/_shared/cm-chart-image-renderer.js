@@ -1904,19 +1904,19 @@ function buildChartConfig(chart, brand) {
       // 5%–26% (with outliers); typical band is 5.5%–9.5%. Use the
       // standard CAP_RATE_RANGE (5%–10%) for headroom without letting
       // outliers dominate the visual.
-      // R76 E2 (2026-06-10) — state + municipal ARE present now (303 / 81
-      // eligible sales → 76 / 29 charted quarters); the stale "0 state" note
-      // is retired. They are just SPARSE (muni ~<1 sale/quarter).
-      // R2-B Unit 5 (2026-06-29, Scott) — markers on the DENSE Federal line read
-      // as clutter ("now has dots in the lines"); markers belong only where they
-      // ADD value — the SPARSE State + Municipal series, whose isolated points a
-      // markerless line cannot draw across the surrounding null gaps. Federal is
-      // a CLEAN line (pointRadius 0); State + Municipal carry a circle marker on
-      // every present quarter so each available reading shows. spanGaps:false
-      // keeps real gaps broken (never fabricate a connection across a hole). The
-      // genuine State/Municipal scarcity is annotated honestly in the worksheet
-      // caption (CHART_CAPTIONS.cap_rate_by_credit) — gaps read as real scarcity,
-      // not a broken pull; no points are fabricated.
+      // R76 E2 (2026-06-10) — state + municipal ARE present now; formerly SPARSE.
+      // 2026-08-12 (Scott) — the gov credit-tier resolver + classifier widening
+      // densified them (verified live: State 99 quarters, Municipal 73, of
+      // Federal's 121; only 2 State + 1 Municipal isolated 1-quarter points). The
+      // sparse-series premise for markers is gone, so ALL THREE now render as
+      // clean flush lines (pointRadius 0) — matching Federal and the brand line
+      // spec (Scott: "state and municipal include markers while federal is flush
+      // — match them"). spanGaps:false keeps real gaps broken (never fabricate a
+      // connection across a hole); the 3 isolated islands are a negligible,
+      // honest loss, still annotated in CHART_CAPTIONS.cap_rate_by_credit.
+      // Colors mesh into the brand BLUE family (Scott: "mesh with our color
+      // schemes"): Federal = NM Blue (heavier), State = Sky, Municipal = Blue-85
+      // (#265AB2) — replacing the off-family Slate gray.
       return {
         type: 'line',
         data: {
@@ -1924,13 +1924,13 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { label: 'Federal',   data: rows.map(r => r.federal_cap),
               borderColor: PDF_COLORS.cap_short,    backgroundColor: PDF_COLORS.cap_short,
-              tension: 0.3, borderWidth: 2.5, pointRadius: 0, spanGaps: false },
+              tension: 0.3, borderWidth: 3, pointRadius: 0, spanGaps: false },
             { label: 'State',     data: rows.map(r => r.state_cap),
               borderColor: PDF_COLORS.cap_mid,      backgroundColor: PDF_COLORS.cap_mid,
-              tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
+              tension: 0.3, borderWidth: 2.5, pointRadius: 0, spanGaps: false },
             { label: 'Municipal', data: rows.map(r => r.municipal_cap),
-              borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: PDF_COLORS.cap_outside_firm,
-              tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
+              borderColor: '#265AB2', backgroundColor: '#265AB2',
+              tension: 0.3, borderWidth: 2.5, pointRadius: 0, spanGaps: false },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE, yAxisTitle: 'Cap rate' }),   // R76 E4

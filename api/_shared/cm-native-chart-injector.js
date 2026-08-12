@@ -5300,25 +5300,29 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // 3-line: Federal navy bold / State sky / Municipal dark gray.
       // R73 B13 / R76 E2 — the feed IS populated (verified live 2026-06-10:
       // cm_gov_cap_by_credit_q has federal in 101 quarters, state 76, muni 29).
-      // state/muni are SPARSE, not empty. R73 put per-point markers on state +
-      // muni only — but that makes them read as a different SERIES TYPE than
-      // federal's clean line (Scott R76 E2: "line type different for municipal
-      // and state — fix … same line style as federal, not a different one").
-      // T6 (CM final closeout, 2026-06-28) — E2 removed ALL native markers,
-      // which made the sparse State/Municipal points INVISIBLE in the editable
-      // Excel chart (a markerless line cannot draw an isolated point between
-      // null gaps). T6 then put a uniform circle marker on ALL THREE series.
-      // R2-B Unit 5 (2026-06-29, Scott) — markers on the DENSE Federal line read
-      // as clutter ("now has dots in the lines"); markers belong only where they
-      // ADD value — the SPARSE State + Municipal series, whose isolated points a
-      // markerless line cannot draw across the surrounding null gaps. So Federal
-      // renders as a CLEAN line (no per-point dots) while State + Municipal carry
-      // a circle marker on every present quarter, so each available reading shows.
-      // dispBlanksAs='gap' + NO spanGaps keeps real holes honest. The genuine
-      // State/Municipal scarcity (state → ~2025-11, municipal → isolated single
-      // sales after ~2023-03, n>=2 TTM gate unmet) is annotated in the worksheet
-      // caption (CHART_CAPTIONS.cap_rate_by_credit) — gaps read as real scarcity,
-      // not a broken pull; no points are fabricated.
+      // state/muni WERE sparse (R73/T6 era: state 76q, muni 29q), which forced
+      // per-point markers so isolated readings could draw across null gaps. That
+      // made State/Municipal read as a different SERIES TYPE than Federal's clean
+      // line (Scott R76 E2 / 2026-08-12: "the state and municipal lines include
+      // markers while the federal version is a flush line — match them").
+      // 2026-08-12 (Scott, this round): the gov credit-tier resolver (migration
+      // 20260811124435) + classifier widening (20260812120000) densified the
+      // series — verified live: State now 99 quarters, Municipal 73 (of Federal's
+      // 121), with only 2 State + 1 Municipal ISOLATED points across a 36-year
+      // span. The sparse-series premise for markers is gone, so ALL THREE now
+      // render as clean flush lines (no markers), matching Federal and the brand
+      // "data styling" line spec. Trade-off (accepted, honest): the 3 isolated
+      // 1-quarter islands don't draw on a markerless line — a negligible loss vs
+      // the ~270 drawn points, and the genuine State/Municipal scarcity is still
+      // annotated in the worksheet caption (CHART_CAPTIONS.cap_rate_by_credit).
+      // dispBlanksAs='gap' + NO spanGaps keeps real holes honest; nothing fabricated.
+      //
+      // Colors mesh into the brand BLUE family (Scott: "mesh with our color
+      // schemes") as a Federal→Municipal credit ramp using sanctioned report-ramp
+      // slots (cm-brand.json series_ramp 1/2/3): Federal = NM Blue (003DA5, slot 1,
+      // drawn HEAVIER as the dominant/highest-credit line), State = Sky (62B5E5,
+      // slot 2), Municipal = Blue-85 (265AB2, slot 3) — replacing the prior off-
+      // family Slate gray (6A748C) that read as a different scheme in the export.
       const periodCol = findCol('period_end');
       const fedCol    = findCol('federal_cap');
       const stateCol  = findCol('state_cap');
@@ -5334,12 +5338,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: [
-            // Federal = clean line (dense, ~100 quarters → no markers).
-            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy },
-            // State + Municipal = marker per present quarter (sparse → each
-            // available reading visible across the null gaps).
-            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '6A748C', showMarker: true, markerSize: 4 },  // dark gray
+            // All three = clean flush lines (dense enough → no markers).
+            // Federal drawn heavier (2.25pt) to lead the blue credit ramp and stay
+            // distinct from the Municipal blue.
+            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy,     lineWidth: 28575 },
+            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky      },
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '265AB2' },  // brand Blue-85 (slot 3)
           ],
           anchor: standardAnchor,
         },
