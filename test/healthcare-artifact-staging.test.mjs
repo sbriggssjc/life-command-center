@@ -48,13 +48,23 @@ test('fails closed on a missing source or path escape', async () => {
   await assert.rejects(stageAscArtifacts({ template: input.template, approvedRoot: input.root, artifacts: input.artifacts, verifierAttestations: input.verifierAttestations }), /escapes/);
 });
 
-test('fails closed on duplicate source records and symlink artifacts', async () => {
+test('fails closed on duplicate source records', async () => {
   const duplicate = await setup();
   duplicate.artifacts.push({ ...duplicate.artifacts[0] });
   await assert.rejects(stageAscArtifacts({ template: duplicate.template, approvedRoot: duplicate.root, artifacts: duplicate.artifacts, verifierAttestations: duplicate.verifierAttestations }), /exactly four/);
+});
 
+test('fails closed on symlink artifacts when the platform permits symlink fixtures', async (t) => {
   const linked = await setup();
-  await symlink(join(linked.root, linked.artifacts[0].local_path), join(linked.root, 'linked.csv'));
+  try {
+    await symlink(join(linked.root, linked.artifacts[0].local_path), join(linked.root, 'linked.csv'));
+  } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+      t.skip(`platform cannot create the symlink fixture (${error.code})`);
+      return;
+    }
+    throw error;
+  }
   linked.artifacts[0].local_path = 'linked.csv';
   await assert.rejects(stageAscArtifacts({ template: linked.template, approvedRoot: linked.root, artifacts: linked.artifacts, verifierAttestations: linked.verifierAttestations }), /non-symlink/);
 });
