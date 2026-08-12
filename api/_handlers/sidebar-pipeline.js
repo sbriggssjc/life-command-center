@@ -1045,7 +1045,71 @@ export function parseSaleNotes(text) {
     extracted.lease_type = leaseMatch[2];
   }
 
+  // Lease TERM + COMMENCEMENT — the common gov phrasing that carries the term
+  // without a "N years remaining" clause: "a new 15-year lease commencing in
+  // September 2024", "under a 20 year lease that commenced March 1, 2019".
+  // Captured so the at-sale remaining term can be derived (commencement + term
+  // − sale_date) when no explicit "remaining" figure is stated.
+  const termYrsMatch = text.match(/(\d+)[-\s]year\s+lease/i) ||
+                       text.match(/lease\s+(?:for|of|with)\s+(?:a\s+)?(?:term\s+of\s+)?(\d+)\s+years?/i);
+  if (termYrsMatch && extracted.lease_term_years == null) {
+    extracted.lease_term_years = parseInt(termYrsMatch[1]);
+  }
+  const commenceMatch =
+    text.match(/commenc(?:ing|ed|es|ement)\s+(?:in\s+|on\s+|as\s+of\s+)?([A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i) ||
+    text.match(/commenc(?:ing|ed|es|ement)\s+(?:in\s+|on\s+)?([A-Z][a-z]+\.?\s+\d{4})/i);
+  if (commenceMatch) {
+    const iso = normalizeNoteDate(commenceMatch[1]);
+    if (iso) extracted.lease_commencement_iso = iso;
+  }
+
   return extracted;
+}
+
+// Normalize a free-text month/date ("September 2024", "March 1, 2019", "Sep. 2024")
+// to an ISO date. Month-only defaults to the first of the month. Returns null on
+// anything unparseable (never fabricates).
+export function normalizeNoteDate(s) {
+  if (!s) return null;
+  // Collapse punctuation ("Sep." / commas) to spaces. "Month YYYY" → "Month 1 YYYY"
+  // so Date parses it as the first of the month; "Month DD YYYY" parses as-is.
+  const t = String(s).replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  const monthYearOnly = /^[A-Za-z]+\s+\d{4}$/.test(t);
+  const d = new Date(`${monthYearOnly ? `${t.split(' ')[0]} 1 ${t.split(' ')[1]}` : t} UTC`);
+  if (isNaN(d.getTime())) return null;
+  const y = d.getUTCFullYear();
+  if (y < 1970 || y > 2100) return null;
+  return `${y}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Derive the at-event remaining lease term (years) from a parsed Sale-Notes
+ * object, preferring the most explicit signal. Priority:
+ *   1. an explicit "N years remaining" figure (extracted.years_remaining)
+ *   2. commencement + total term − event date (from the narrative)
+ *   3. the structured lease_expiration − event date (CoStar usually carries this)
+ * Bounded to (0, 25]; returns null when nothing plausible is available (never
+ * fabricates). Pure — takes ISO date strings, no DB/clock access.
+ */
+export function deriveSaleNotesYearsRemaining({ extracted, saleDateISO, leaseExpirationISO } = {}) {
+  const x = extracted || {};
+  const bound = (y) => (typeof y === 'number' && isFinite(y) && y > 0 && y <= 25
+    ? Math.round(y * 10000) / 10000 : null);
+  if (typeof x.years_remaining === 'number') {
+    const b = bound(x.years_remaining);
+    if (b != null) return b;
+  }
+  const saleMs = saleDateISO ? new Date(saleDateISO).getTime() : NaN;
+  if (x.lease_commencement_iso && typeof x.lease_term_years === 'number' && !isNaN(saleMs)) {
+    const endMs = new Date(x.lease_commencement_iso).getTime() + x.lease_term_years * 365.25 * 86400000;
+    const b = bound((endMs - saleMs) / (365.25 * 86400000));
+    if (b != null) return b;
+  }
+  if (leaseExpirationISO && !isNaN(saleMs)) {
+    const b = bound((new Date(leaseExpirationISO).getTime() - saleMs) / (365.25 * 86400000));
+    if (b != null) return b;
+  }
+  return null;
 }
 
 // ── Sale-Notes → gov enrichment helpers (pure; unit-tested) ─────────────────
@@ -6224,8 +6288,23 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // views (which COALESCE it first) can use it. Fill-blank only — the gov
     // term-reconcile pass (firm_term_locked) stays authoritative (the PATCH
     // branch strips this when the existing row is locked or already set).
+    // Derive the at-sale remaining term from the narrative when CoStar's
+    // structured fields omit it: an explicit "N years remaining" figure, else
+    // commencement + term from the "new 15-year lease commencing <date>"
+    // phrasing, else the structured lease_expiration − sale_date (mirrors the
+    // dia derivation below). Only the most-recent sale — the one the current
+    // lease describes. Seeds firm_term_years_at_sale (source costar_sale_notes),
+    // which the gov firm-term resolver/trigger OVERRIDES the moment a covering
+    // lease/GSA/FRPP row exists, and which survives (fill-blank) for the
+    // off-inventory tail that has no federal-register lease.
     const govSaleNotesFields = (domain === 'government' && isMostRecentSale)
-      ? govSaleNotesTermFields(saleNotesExtracted)
+      ? govSaleNotesTermFields({
+          years_remaining: deriveSaleNotesYearsRemaining({
+            extracted: saleNotesExtracted,
+            saleDateISO: datePart,
+            leaseExpirationISO: parseDate(metadata.lease_expiration)?.split('T')[0] || null,
+          }),
+        })
       : {};
     const govCreditForSale = domain === 'government'
       ? deriveGovCreditForMetadata(metadata, {

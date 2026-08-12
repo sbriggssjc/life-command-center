@@ -15,6 +15,8 @@ import {
   pickConfirmedSaleNoi,
   shouldWriteConfirmedSaleNoi,
   govSaleNotesTermFields,
+  normalizeNoteDate,
+  deriveSaleNotesYearsRemaining,
 } from '../api/_handlers/sidebar-pipeline.js';
 
 // The exact narrative from the 13663 Mono Way (Sonora, CA — VA clinic) sale.
@@ -90,5 +92,69 @@ describe('govSaleNotesTermFields — at-sale firm term seed', () => {
     assert.deepEqual(govSaleNotesTermFields({ years_remaining: 0 }), {});
     assert.deepEqual(govSaleNotesTermFields({ years_remaining: 99 }), {});
     assert.deepEqual(govSaleNotesTermFields(null), {});
+  });
+});
+
+describe('parseSaleNotes — "new N-year lease commencing <date>" phrasing', () => {
+  const MODESTO =
+    'California Gold Development sold this single-tenant VA outpatient clinic, ' +
+    'leased to the U.S. Department of Veterans Affairs under a new 15-year lease ' +
+    'commencing in September 2024, to Bhojwani Holdings for $14.5M.';
+  it('captures the lease term and commencement (no explicit "remaining" clause)', () => {
+    const x = parseSaleNotes(MODESTO);
+    assert.equal(x.lease_term_years, 15, '15-year lease');
+    assert.equal(x.lease_commencement_iso, '2024-09-01', 'commencing September 2024');
+    assert.equal(x.years_remaining, undefined, 'no explicit remaining figure');
+  });
+  it('captures "commenced March 1, 2019" day-precision', () => {
+    const x = parseSaleNotes('Leased under a 20 year lease that commenced March 1, 2019.');
+    assert.equal(x.lease_term_years, 20);
+    assert.equal(x.lease_commencement_iso, '2019-03-01');
+  });
+});
+
+describe('normalizeNoteDate', () => {
+  it('parses month-year to first-of-month and full dates as-is', () => {
+    assert.equal(normalizeNoteDate('September 2024'), '2024-09-01');
+    assert.equal(normalizeNoteDate('Sep. 2024'), '2024-09-01');
+    assert.equal(normalizeNoteDate('March 1, 2019'), '2019-03-01');
+  });
+  it('returns null for unparseable / implausible input', () => {
+    assert.equal(normalizeNoteDate('sometime soon'), null);
+    assert.equal(normalizeNoteDate(''), null);
+    assert.equal(normalizeNoteDate(null), null);
+  });
+});
+
+describe('deriveSaleNotesYearsRemaining — priority + bounds', () => {
+  it('prefers an explicit remaining figure', () => {
+    assert.equal(
+      deriveSaleNotesYearsRemaining({ extracted: { years_remaining: 11.5 }, saleDateISO: '2026-01-01' }),
+      11.5);
+  });
+  it('derives from commencement + term when no explicit remaining', () => {
+    // 15-year lease commencing 2024-09-01, sold 2026-07-18 → ~13.13 yr remaining
+    const y = deriveSaleNotesYearsRemaining({
+      extracted: { lease_term_years: 15, lease_commencement_iso: '2024-09-01' },
+      saleDateISO: '2026-07-18',
+    });
+    assert.ok(y > 13.0 && y < 13.3, `~13.1 remaining, got ${y}`);
+  });
+  it('falls back to structured lease_expiration − sale_date', () => {
+    const y = deriveSaleNotesYearsRemaining({
+      extracted: {}, saleDateISO: '2026-01-01', leaseExpirationISO: '2036-01-01',
+    });
+    assert.ok(y > 9.9 && y < 10.1, `~10 remaining, got ${y}`);
+  });
+  it('returns null when nothing plausible / out of (0,25] bound', () => {
+    assert.equal(deriveSaleNotesYearsRemaining({ extracted: {}, saleDateISO: '2026-01-01' }), null);
+    // commencement long past → firm remaining negative → null
+    assert.equal(deriveSaleNotesYearsRemaining({
+      extracted: { lease_term_years: 10, lease_commencement_iso: '2000-01-01' }, saleDateISO: '2026-01-01',
+    }), null);
+    // absurd expiration → >25yr → null
+    assert.equal(deriveSaleNotesYearsRemaining({
+      extracted: {}, saleDateISO: '2026-01-01', leaseExpirationISO: '2060-01-01',
+    }), null);
   });
 });
