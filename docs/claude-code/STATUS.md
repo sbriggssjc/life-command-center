@@ -454,6 +454,16 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### U3 lane guidance 2026-08-11 + NEW junk class found by Scott → prompt 95
+Lane worked live: different_people confirms = distinct labels (resolver hard negatives, no data
+changes); link-proposal confirms = route-to-resolver (never auto-merge — safest click). **Scott
+spotted a NEW misparse class in the clusters: sentence-fragments/doc-labels as person names**
+("The deed was unavailable at the time of publication", "Income & Expenses", "Buyer information
+not available", bare titles). Guidance: REJECT clusters containing them (avoid corpus pollution).
+**Prompt 95** extends the shared 89 detector (sentence_fragment/doc_label/bare_title classes) —
+seeder re-run flows them to the junk lane; U3 pool + sidebar guard inherit via the shared module.
+Prompt 94 (W9.4 comms arm) sent to Claude Code, response pending.
+
 ### Prompt 93 landed — PR #1690 MERGED + deployed; W9.4 queued as prompt 94
 
 93 both micros verified from response: (A) donor tick keyset-cursored w/ wrap-and-recheck
