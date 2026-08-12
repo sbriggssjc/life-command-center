@@ -122,3 +122,20 @@ future prompt.
   a separate prompt; the stage list is the seam. Tests 21 + guards 74/74. Dry-run:
   `docs/audits/W9_1_contact_acquisition_dryrun_2026-08-12.md`. **Wave 9 build-out now 5 of 5**
   (all flag-gated / measure-live; W9.1 awaiting the `?score=1` review → Cowork flip).
+- 2026-08-12 (evening): **W9.1 BOTH STAGES BUILT — WAVE 9 BUILD-OUT 5/5 COMPLETE.**
+  Stage 1 (Prompt 98, PR #1698 merged): cost-ordered pluggable stage runner on the value-ranked
+  no-contact pool — 1a cross-reference ATTACH (+institution), 1b deed-signatory MINT
+  (verbatim-validated), 1c broker_of_record MINT (typed, never conflated). New
+  `contact_acquisition_review` DC lane; tick `/api/contact-acquisition-engine-tick` (RENAMED from
+  the prompt's suggestion — the original name was the live R16 SF worker; clobber avoided). Flag
+  `W9_1_CONTACT_ACQUISITION` OFF, cron 4:55. Honest yield grounding: cross-ref ~6% of top-100
+  (17/300); institution registry thin; **deed stage input-thin — signatories live in
+  property_documents not deed_records payloads (0/5,771 gov) → signatory/OCR backfill = new
+  backlog unit**; broker tail from 2,830 broker-bearing sales.
+  Stage 2 (Prompt 99, gov PR #371 + LCC PR #1700 merged): sos-proxy service (allowlisted, GET-only,
+  rate-capped, NEW CF Access hostname/token, kill switches) + gov transport seam
+  (`SOS_PROXY_URL`; unset ⇒ honest-blocked) + STAGE_SOS in the runner (`W9_1_SOS_DIRECT` OFF,
+  weekly cadence) + migration fixing a REAL provenance drift found in recon (gov wrote
+  `sos_registry` with no LCC fsp row). **Scott's live steps: install proxy on GaryBuilt (runbook,
+  gov repo), add tunnel hostname + new token, re-verify FL/CA adapters side-by-side, dry-run →
+  Cowork flips `W9_1_SOS_DIRECT`, rotate BOTH service tokens.**

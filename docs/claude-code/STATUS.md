@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ WAVE 9 BUILD-OUT COMPLETE (5/5) — prompts 98 & 99 merged + deployed 2026-08-12
+
+| # | Outcome | Gate |
+|---|---|---|
+| 98 (Stage 1) | PR #1698. Stage runner (cross-ref ATTACH / deed-signatory MINT / broker_of_record) + `contact_acquisition_review` lane. **Production-safety catch: route renamed to `/api/contact-acquisition-engine-tick`** — the prompt's suggested name was the live R16 SF worker. Honest yields: cross-ref ~6% top-100; **deed stage input-thin (signatories in property_documents, not deed payloads — 0/5,771 gov) → signatory/OCR backfill = NEW BACKLOG UNIT**; institution thin; broker tail 2,830. | Scott: `GET /api/contact-acquisition-engine-tick?score=1&n=10` → review attach sample → Cowork flips `W9_1_CONTACT_ACQUISITION`. |
+| 99 (Stage 2) | gov PR #371 (proxy service + transport + runbook) + LCC PR #1700 (STAGE_SOS wiring + migration — which also FIXED a real fsp drift: gov wrote `sos_registry` with no LCC ladder row). Transport honest-blocked when unset; proposal-only; weekly cadence. | **Scott's hands-on infra**: install proxy on GaryBuilt per the gov-repo runbook → 2nd tunnel hostname + NEW CF token → FL/CA side-by-side re-verification → dry-run → Cowork flips `W9_1_SOS_DIRECT` → **rotate both service tokens** (the §3C debt clears here). |
+
+**All five W9 units now built.** Live: W9.3 (3 flags) + W9.5. Gated: W9.2 (mail-name accrual),
+W9.1-S1 (dry-run), W9.1-S2 (GaryBuilt install), W9.4 (rides W9.2's flag). The 5PM name-capture
+task verdict pending.
+
 ### W9.1 queued as TWO prompts (98 Stage 1 + 99 Stage 2) — Scott sanctioned the SOS egress design
 **Prompt 98 (Stage 1, internal-only):** value-ranked no-contact owner engine, stages in cost order
 w/ stop-at-first-success — 1a cross-reference ATTACH (existing contacts under other entities,
