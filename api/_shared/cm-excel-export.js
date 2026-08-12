@@ -626,13 +626,18 @@ const CHART_COLUMNS = {
   nm_vs_market_cap: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    // CM chart fixes round 3, item 6 — the CHARTED series are now trailing-24-mo
-    // simple averages (see cm_{v}_nm_vs_market_m). The 12-month TTM columns are
-    // kept on the sheet as REFERENCE (uncharted) per Scott's decision.
-    { key: 'nm_cap_rate',      header: 'Northmarq Cap Rate (24-mo avg)', format: 'percent_basis_points', width: 24 },
-    { key: 'market_cap_rate',  header: 'Market Cap Rate (24-mo avg)',    format: 'percent_basis_points', width: 24 },
+    // 2026-08-29 (gov) — the CHARTED series (nm_cap_rate/market_cap_rate, cols
+    // C/D) are single-pass trailing-24-mo SIMPLE averages of CONFIRMED caps only
+    // (projected-rent 'rolled_forward_escalated' caps are excluded at the view).
+    // The dollar-weighted, 12-mo TTM, and Team Briggs columns are kept on the
+    // sheet as REFERENCE (uncharted). See cm_gov_nm_vs_market_m.
+    { key: 'nm_cap_rate',      header: 'Northmarq Cap Rate (24-mo avg, confirmed)', format: 'percent_basis_points', width: 26 },
+    { key: 'market_cap_rate',  header: 'Market Cap Rate (24-mo avg, confirmed)',    format: 'percent_basis_points', width: 26 },
+    { key: 'nm_cap_wtd',       header: 'Northmarq Cap ($-weighted, ref)', format: 'percent_basis_points', width: 26 },
+    { key: 'market_cap_wtd',   header: 'Market Cap ($-weighted, ref)',    format: 'percent_basis_points', width: 26 },
     { key: 'nm_cap_ttm12',     header: 'Northmarq Cap (12-mo TTM, ref)', format: 'percent_basis_points', width: 26 },
     { key: 'market_cap_ttm12', header: 'Market Cap (12-mo TTM, ref)',    format: 'percent_basis_points', width: 26 },
+    { key: 'briggs_cap_ew',    header: 'Team Briggs Cap (24-mo avg, ref)', format: 'percent_basis_points', width: 26 },
   ],
   cap_rate_by_lease_term: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -1257,9 +1262,11 @@ function isChartSuppressed(vertical, templateId) {
 
 const METHODOLOGY_NOTE_BY_TEMPLATE = {
   nm_vs_market_cap:
-    'Methodology: both plotted series are TRAILING-24-MONTH simple averages of qualifying cap rates ' +
-    '(0.04–0.12 band; Market = non-Northmarq brokered deals). The 12-month TTM columns ' +
-    '(nm_cap_ttm12 / market_cap_ttm12) are shown for reference only and are not charted.',
+    'Methodology: both plotted series are single-pass TRAILING-24-MONTH simple averages of ' +
+    'CONFIRMED transaction cap rates (0.04–0.12 band; Market = non-Northmarq brokered deals). ' +
+    'Projected-rent-derived caps (rolled_forward_escalated) and implausible/unverified caps are ' +
+    'excluded so the lines reflect true confirmed cap rates, not rents. The dollar-weighted, ' +
+    '12-month TTM, and Team Briggs columns are shown for reference only and are not charted.',
 };
 
 export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance, commentary, previewWatermark = false }) {
