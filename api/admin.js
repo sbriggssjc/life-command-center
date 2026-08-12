@@ -4277,6 +4277,9 @@ const HARVEST_LLM_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_LLM_BATC
 const HARVEST_DET_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_DET_BATCH_SIZE || '100', 10));
 const HARVEST_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.HARVEST_INLINE_N || '6', 10));
 const HARVEST_INTAKE_INDEX_CAP = Math.max(500, parseInt(process.env.HARVEST_INTAKE_INDEX_CAP || '5000', 10));
+// W9.4 comms-harvest — bounded scan of the correspondence spine (activity_events).
+const HARVEST_COMMS_INDEX_CAP = Math.max(500, parseInt(process.env.HARVEST_COMMS_INDEX_CAP || '8000', 10));
+const HARVEST_CREATE_CONTACT_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_CREATE_CONTACT_BATCH_SIZE || '40', 10));
 const HARVEST_MIN_CONF = (() => {
   const v = parseFloat(process.env.HARVEST_MIN_CONFIDENCE || String(RH.HARVEST_MIN_CONFIDENCE));
   return Number.isFinite(v) && v > 0 && v <= 1 ? v : RH.HARVEST_MIN_CONFIDENCE;
@@ -4487,6 +4490,163 @@ async function harvestBuildIntakeIndex() {
   return { index, errors, count: scanned };
 }
 
+// W9.4 — Build the COMMS index (ARM 3 feedstock) from the correspondence spine.
+// ONE bounded, paged scan of activity_events restricted to BUSINESS-ATTRIBUTED,
+// NON-PRIVATE correspondence (privacy-scope doctrine). Extracts, per row:
+//   * header pairs — parseHeaderAddress over from/to/cc (metadata.from/to strings +
+//     mailbox-mirror from_email/to_emails/cc_emails arrays). A display NAME bound to
+//     a valid, non-internal, non-generic EMAIL → nameIndex[normName] (deterministic
+//     class + also LLM evidence).
+//   * signature phones — extractSignaturePhones over the body's signature region →
+//     attached to the row's header names as LLM evidence (the verbatim validator
+//     gates them).
+//   * owner participants — every external {name?,email,phone?} keyed by the row's
+//     ops entity anchors, for the create-contact arm (resolved to owners-without-
+//     contacts downstream).
+// NEVER per-row DB work. Returns { nameIndex, ownerParticipants, counts, errors }.
+async function harvestBuildCommsIndex() {
+  const nameIndex = new Map();          // normName -> [{name,email,phone,quote,message_id,source_type}]
+  const ownerParticipants = new Map();  // ops entity id -> [{name,email,phone,quote,message_id,source_type}]
+  const errors = [];
+  const counts = { scanned: 0, harvestable: 0, skipped_private: 0, skipped_unattributed: 0,
+    header_name_pairs: 0, signature_phones: 0, participants: 0 };
+  const PAGE = 1000;
+  const SOURCES = ['email_intake', 'outlook_inbound', 'outlook_sent', 'outlook_tagged', 'outlook', 'dossier_seed'];
+  // kind: 'header' = a clean name↔value bind from a header token (deterministic-
+  // eligible); 'signature' = a phone parsed from the body signature (LLM-only —
+  // fuzzy attribution, MUST pass the verbatim validator, never an arithmetic fill).
+  const addName = (name, email, phone, quote, mid, st, kind) => {
+    const nm = RH.normalizeForMatch(name);
+    if (!nm || nm.length < 4) return;
+    const okEmail = email && RH.looksLikeEmail(email) && !RH.isInternalEmail(email) && !RH.isGenericInbox(email);
+    const okPhone = phone && RH.looksLikePhone(phone);
+    if (!okEmail && !okPhone) return;
+    const arr = nameIndex.get(nm) || [];
+    arr.push({ name: String(name), email: okEmail ? RH.normalizeEmail(email) : null,
+      phone: okPhone ? RH.normalizePhone(phone) : null, quote, message_id: mid, source_type: st,
+      kind: kind || 'header' });
+    nameIndex.set(nm, arr);
+    if (okEmail || okPhone) counts.header_name_pairs += 1;
+  };
+  const addParticipant = (anchors, name, email, phone, quote, mid, st) => {
+    const okEmail = email && RH.looksLikeEmail(email) && !RH.isInternalEmail(email) && !RH.isGenericInbox(email);
+    if (!okEmail) return; // a create-contact needs a real, external, personal email
+    const rec = { name: name ? String(name) : null, email: RH.normalizeEmail(email),
+      phone: phone && RH.looksLikePhone(phone) ? RH.normalizePhone(phone) : null,
+      quote, message_id: mid, source_type: st };
+    for (const a of anchors) {
+      const arr = ownerParticipants.get(a) || [];
+      arr.push(rec);
+      ownerParticipants.set(a, arr);
+    }
+    if (anchors.length) counts.participants += 1;
+  };
+  try {
+    for (let off = 0; off < HARVEST_COMMS_INDEX_CAP; off += PAGE) {
+      const q = 'activity_events?select=external_id,source_type,visibility,entity_id,body,metadata,occurred_at'
+        + '&category=in.(email,call)&visibility=neq.private'
+        + '&source_type=in.(' + SOURCES.join(',') + ')'
+        + '&order=occurred_at.desc.nullslast&limit=' + PAGE + '&offset=' + off;
+      const r = await opsQuery('GET', q);
+      if (!r.ok) { errors.push({ source: 'comms', status: r.status || null, detail: _harvestErrDetail(r.data) }); break; }
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const row of rows) {
+        counts.scanned += 1;
+        if (String(row.visibility || '').toLowerCase() === 'private') { counts.skipped_private += 1; continue; }
+        if (!RH.commsRowHarvestable(row)) { counts.skipped_unattributed += 1; continue; }
+        counts.harvestable += 1;
+        const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const mid = row.external_id || md.internet_message_id || null;
+        const st = row.source_type || null;
+        const anchors = RH.commsRowEntityAnchors(row);
+        // ---- header pairs (name+email) ----
+        const rawHeaders = [];
+        if (typeof md.from === 'string') rawHeaders.push(md.from);
+        if (typeof md.to === 'string') rawHeaders.push(md.to);
+        if (typeof md.from_email === 'string') rawHeaders.push(md.from_email);
+        for (const k of ['to_emails', 'cc_emails']) {
+          if (Array.isArray(md[k])) for (const v of md[k]) if (typeof v === 'string') rawHeaders.push(v);
+        }
+        const sigPhones = RH.extractSignaturePhones(RH.signatureRegion(row.body));
+        if (sigPhones.length) counts.signature_phones += sigPhones.length;
+        for (const raw of rawHeaders) {
+          const { name, email } = RH.parseHeaderAddress(raw);
+          if (email && (RH.isInternalEmail(email) || RH.isGenericInbox(email))) continue;
+          if (name) {
+            const quote = raw.slice(0, 300);
+            addName(name, email, null, quote, mid, st, 'header');
+            // signature phones ride as LLM evidence tied to this named sender (fuzzy)
+            for (const p of sigPhones) addName(name, null, p.phone, p.span, mid, st, 'signature');
+            addParticipant(anchors, name, email, sigPhones[0] ? sigPhones[0].phone : null, quote, mid, st);
+          } else if (email) {
+            // no display name → cannot key a fill, but a bare external email on an
+            // owner-attributed thread is a create-contact candidate (name null).
+            addParticipant(anchors, null, email, sigPhones[0] ? sigPhones[0].phone : null, raw.slice(0, 300), mid, st);
+          }
+        }
+      }
+      if (rows.length < PAGE) break;
+    }
+  } catch (e) { errors.push({ source: 'comms', detail: e?.message || String(e) }); }
+  return { nameIndex, ownerParticipants, counts, errors };
+}
+
+// W9.4 — resolve which owner ENTITY ids (ops) map to a domain true_owner that has
+// ZERO domain contact rows (the create-contact target set). Batched: one
+// external_identities lookup (entity_id -> {source_system, true_owner_id}) then one
+// contacts probe per domain over the candidate true_owner ids. Returns
+// Map(ownerEntityId -> { domain, true_owner_id, owner_name }). NEVER per-row.
+async function harvestResolveOwnersWithoutContacts(ownerEntityIds) {
+  const out = new Map();
+  const errors = [];
+  const ids = [...new Set((ownerEntityIds || []).map((x) => String(x)).filter(Boolean))];
+  if (!ids.length) return { owners: out, errors };
+  const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
+  // 1. ops entity -> domain true_owner via external_identities.
+  const byEntity = new Map(); // entityId -> {domain, true_owner_id}
+  const byDomain = { dia: new Set(), gov: new Set() };
+  for (const c of chunk(ids, 150)) {
+    try {
+      const inList = c.map((v) => pgFilterVal(v)).join(',');
+      const r = await opsQuery('GET', 'external_identities?select=entity_id,source_system,external_id'
+        + '&source_type=eq.true_owner&source_system=in.(dia,gov)&entity_id=in.(' + inList + ')&limit=1000');
+      if (r.ok && Array.isArray(r.data)) {
+        for (const row of r.data) {
+          const dom = RH.normDomain(row.source_system);
+          if ((dom === 'dia' || dom === 'gov') && row.entity_id && row.external_id) {
+            byEntity.set(String(row.entity_id), { domain: dom, true_owner_id: String(row.external_id) });
+            byDomain[dom].add(String(row.external_id));
+          }
+        }
+      } else if (!r.ok) { errors.push({ source: 'owner_extid', status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+    } catch (e) { errors.push({ source: 'owner_extid', detail: e?.message || String(e) }); }
+  }
+  // 2. per domain: which true_owner ids ALREADY have ≥1 contact + fetch owner name.
+  const hasContact = { dia: new Set(), gov: new Set() };
+  const ownerName = new Map(); // domain:true_owner_id -> name
+  for (const dom of ['dia', 'gov']) {
+    const owners = [...byDomain[dom]];
+    for (const c of chunk(owners, 150)) {
+      try {
+        const inList = c.map((v) => pgFilterVal(v)).join(',');
+        const r = await domainQuery(dom, 'GET', 'contacts?select=true_owner_id&true_owner_id=in.(' + inList + ')&limit=1000');
+        if (r.ok && Array.isArray(r.data)) for (const row of r.data) if (row.true_owner_id) hasContact[dom].add(String(row.true_owner_id));
+      } catch (e) { errors.push({ source: 'owner_contacts_' + dom, detail: e?.message || String(e) }); }
+      try {
+        const inList = c.map((v) => pgFilterVal(v)).join(',');
+        const rn = await domainQuery(dom, 'GET', 'true_owners?select=true_owner_id,name&true_owner_id=in.(' + inList + ')&limit=1000');
+        if (rn.ok && Array.isArray(rn.data)) for (const row of rn.data) if (row.true_owner_id) ownerName.set(dom + ':' + row.true_owner_id, row.name || null);
+      } catch (_e) { /* name is best-effort */ }
+    }
+  }
+  for (const [entityId, info] of byEntity.entries()) {
+    if (hasContact[info.domain].has(info.true_owner_id)) continue; // owner already reachable
+    out.set(entityId, { domain: info.domain, true_owner_id: info.true_owner_id,
+      owner_name: ownerName.get(info.domain + ':' + info.true_owner_id) || null });
+  }
+  return { owners: out, errors };
+}
+
 // Build the fresh scored-ready item pool for one tick. Deterministic proposals
 // (arm=deterministic) are built directly (arithmetic, no LLM); LLM items (arm=llm)
 // carry assembled evidence for scoring. Value-gated, resumable, excludes known /
@@ -4500,10 +4660,14 @@ async function buildFreshHarvestItems(opts = {}) {
     targets: { dia: 0, gov: 0, total: 0 },
     deterministic: { candidates: 0, donors_found: 0, proposed: 0, no_donor: 0, already_known: 0 },
     llm: { candidates: 0, with_evidence: 0, no_evidence: 0, fresh: 0, already_known: 0 },
-    evidence_sources: { sf_contact_id: 0, salesforce_id: 0, intake: 0 },
+    // W9.4 comms arm counters (kept separate so per-source yields are honest).
+    comms: { header_fills: 0, signature_evidence: 0, create_contact: 0, already_known: 0,
+      index_names: 0, index_participants: 0 },
+    evidence_sources: { sf_contact_id: 0, salesforce_id: 0, intake: 0, comms_names: 0 },
   };
   const deterministic = [];
   const llmItems = [];
+  const createContact = [];   // W9.4 target_kind='owner' — minted only via the lane
   const scanErrors = [];
   const skipMarkers = [];
   const pushErrors = (errs) => { for (const e of (errs || [])) scanErrors.push(e); };
@@ -4528,7 +4692,16 @@ async function buildFreshHarvestItems(opts = {}) {
   pushErrors(intake.errors);
   counts.evidence_sources.intake = intake.count;
 
-  // 4. Per target × missing field: deterministic-first, else LLM, else no_evidence.
+  // 3b. W9.4 comms index (ARM 3) — ONE bounded scan of the correspondence spine.
+  const comms = await harvestBuildCommsIndex();
+  pushErrors(comms.errors);
+  counts.comms.index_names = comms.nameIndex.size;
+  counts.comms.index_participants = comms.ownerParticipants.size;
+  counts.evidence_sources.comms_names = comms.counts.header_name_pairs;
+  counts.comms_scan = comms.counts;
+
+  // 4. Per target × missing field: deterministic-first (SF donor → comms header),
+  //    else LLM (intake + comms signature evidence), else no_evidence.
   for (const t of allTargets) {
     for (const field of t.missing_fields) {
       // -- ARM 1: deterministic exact-identity donor. --
@@ -4559,7 +4732,36 @@ async function buildFreshHarvestItems(opts = {}) {
       }
       counts.deterministic.no_donor += 1;
 
-      // -- ARM 2: LLM attribution from the intake index (by name). --
+      // -- ARM 3a: deterministic COMMS header. A correspondence header bound a
+      //    display NAME to a valid, non-internal, non-generic value that matches
+      //    THIS contact's name exactly. Arithmetic (provider none) but OBSERVED in
+      //    mail → provenance comms_observed. Routes through the deterministic arm.
+      const nmKey = RH.normalizeForMatch(t.contact_name || '');
+      const commsHits = nmKey ? (comms.nameIndex.get(nmKey) || []) : [];
+      let commsHeader = null;
+      for (const h of commsHits) {
+        // deterministic-eligible ONLY when the value came from a clean header bind
+        // (kind='header'); a signature-derived phone must go through the LLM validator.
+        if (h.kind === 'header' && h[field]) { commsHeader = h; break; }
+      }
+      if (commsHeader) {
+        const subjectRef = RH.contactSubjectRef(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field);
+        if (known.has(subjectRef)) { counts.comms.already_known += 1; continue; }
+        const prop = RH.buildCommsHeaderProposal(field, { value: commsHeader[field],
+          message_id: commsHeader.message_id, quote: commsHeader.quote, source_type: commsHeader.source_type });
+        if (prop) {
+          const evHash = RH.evidenceHash(null, 'comms:' + (commsHeader.message_id || '') + ':' + prop.value);
+          const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field, evHash);
+          if (!markers.has(marker)) {
+            counts.comms.header_fills += 1;
+            deterministic.push({ arm: RH.HARVEST_ARM_DETERMINISTIC, subjectRef, target: t, field, proposal: prop,
+              evHash, marker, domain: t.domain, provenanceSource: RH.HARVEST_SOURCE_COMMS });
+          }
+          continue; // a deterministic comms fill wins — do not also LLM this field
+        }
+      }
+
+      // -- ARM 2: LLM attribution from the intake index + comms signatures (by name). --
       counts.llm.candidates += 1;
       const subjectRef = RH.contactSubjectRef(RH.HARVEST_ARM_LLM, t.domain, t.target_contact_id, field);
       if (known.has(subjectRef)) { counts.llm.already_known += 1; continue; }
@@ -4571,6 +4773,13 @@ async function buildFreshHarvestItems(opts = {}) {
         if (field === 'email' && !h.email) continue;
         if (field === 'phone' && !h.phone) continue;
         blocks.push({ source: 'intake', ref: h.intake_id, text: h.quote });
+      }
+      // W9.4: comms signature/header evidence for THIS name + field (LLM-verified).
+      for (const h of commsHits) {
+        if (field === 'email' && !h.email) continue;
+        if (field === 'phone' && !h.phone) continue;
+        if (blocks.length) counts.comms.signature_evidence += 1;
+        blocks.push({ source: 'comms', ref: h.message_id, text: h.quote });
       }
       const assembled = RH.assembleEvidence(blocks);
       const evHash = RH.evidenceHash(assembled, field + '|' + (t.contact_name || ''));
@@ -4586,7 +4795,49 @@ async function buildFreshHarvestItems(opts = {}) {
     }
   }
 
-  return { deterministic, llmItems, counts, scan_errors: scanErrors, skip_markers: skipMarkers };
+  // 5. W9.4 CREATE-CONTACT arm — thread participants attributable to an owner that
+  //    has NO contact row yet. Resolve the comms participant owners → domain owners
+  //    without contacts (batched), then propose ONE create-contact per (owner, email)
+  //    with a NAME + email (+ signature phone). Minted ONLY via a human verdict.
+  const participantEntityIds = [...comms.ownerParticipants.keys()];
+  if (participantEntityIds.length) {
+    const { owners, errors: ownerErrs } = await harvestResolveOwnersWithoutContacts(participantEntityIds);
+    pushErrors(ownerErrs);
+    const seenCreate = new Set();
+    for (const [entityId, info] of owners.entries()) {
+      const parts = comms.ownerParticipants.get(entityId) || [];
+      for (const p of parts) {
+        // Value-gate: a create-contact needs a real external email AND a name (gov
+        // contacts.name is NOT NULL; never fabricate a nameless contact).
+        if (!p.email || !p.name) continue;
+        const subjectRef = RH.commsNewContactSubjectRef(info.domain, info.true_owner_id, p.email);
+        if (seenCreate.has(subjectRef)) continue;
+        seenCreate.add(subjectRef);
+        if (known.has(subjectRef)) { counts.comms.already_known += 1; continue; }
+        // Header-name+email is deterministic; a signature-only attribution is llm.
+        const arm = p.quote && RH.quoteVerbatimInEvidence(p.quote, p.quote) && p.name ? RH.HARVEST_ARM_DETERMINISTIC : RH.HARVEST_ARM_LLM;
+        counts.comms.create_contact += 1;
+        createContact.push({
+          arm, subjectRef, domain: info.domain, target_kind: 'owner',
+          target_owner_id: info.true_owner_id, owner_name: info.owner_name,
+          contact_name: p.name, field: 'email', value: p.email,
+          proposal: {
+            verdict: 'fill_proposal', field: 'email', value: RH.normalizeEmail(p.email),
+            confidence: arm === RH.HARVEST_ARM_DETERMINISTIC ? 1.0 : 0.7,
+            evidence_quote: p.quote ? String(p.quote).slice(0, 400) : null,
+            evidence_source: p.message_id ? ('comms:' + p.message_id) : 'comms_participant',
+            reason: 'Thread participant attributable to owner ' + (info.owner_name || info.true_owner_id) + ' with no contact on file.',
+            source_pointer: { create_contact: true, name: p.name, email: RH.normalizeEmail(p.email),
+              phone: p.phone || null, domain: info.domain, true_owner_id: info.true_owner_id,
+              message_id: p.message_id || null, source_type: p.source_type || null },
+          },
+          provenanceSource: RH.HARVEST_SOURCE_COMMS,
+        });
+      }
+    }
+  }
+
+  return { deterministic, llmItems, createContact, counts, scan_errors: scanErrors, skip_markers: skipMarkers };
 }
 
 // Cheap pool counts for the plain dry-run (no evidence assembly): the reachability
@@ -4643,12 +4894,19 @@ async function logHarvestDropped(item, proposal, drop, sourceRunId) {
 }
 
 async function upsertHarvestProposal(item, proposal, meta) {
-  const t = item.target;
-  const provSource = item.arm === RH.HARVEST_ARM_DETERMINISTIC ? RH.HARVEST_SOURCE_DETERMINISTIC : RH.HARVEST_SOURCE_LLM;
+  const t = item.target || null;
+  const isCreate = item.target_kind === 'owner';
+  // provenance: comms fills/creates stamp comms_observed even when arithmetic; a
+  // non-comms deterministic (SF exact-identity) stamps w9_2_internal_harvest.
+  const provSource = item.provenanceSource
+    || (item.arm === RH.HARVEST_ARM_DETERMINISTIC ? RH.HARVEST_SOURCE_DETERMINISTIC : RH.HARVEST_SOURCE_LLM);
   const body = {
-    subject_ref: item.subjectRef, arm: item.arm, domain: item.domain, target_kind: 'contact',
-    target_contact_id: t.target_contact_id, target_owner_id: t.true_owner_id || null,
-    owner_name: t.owner_name || null, contact_name: t.contact_name || null,
+    subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+    target_kind: isCreate ? 'owner' : 'contact',
+    target_contact_id: isCreate ? null : (t ? t.target_contact_id : null),
+    target_owner_id: isCreate ? (item.target_owner_id || null) : (t ? (t.true_owner_id || null) : null),
+    owner_name: isCreate ? (item.owner_name || null) : (t ? (t.owner_name || null) : null),
+    contact_name: isCreate ? (item.contact_name || null) : (t ? (t.contact_name || null) : null),
     field: item.field, proposed_value: proposal.value,
     proposed_verdict: 'fill_proposal',
     evidence_quote: proposal.evidence_quote || null,
@@ -4657,7 +4915,7 @@ async function upsertHarvestProposal(item, proposal, meta) {
     source_pointer: proposal.source_pointer || {},
     confidence: proposal.confidence,
     reason: proposal.reason || null,
-    rank_value: Number(t.rank_value) || null,
+    rank_value: t ? (Number(t.rank_value) || null) : (item.rank_value != null ? Number(item.rank_value) : null),
     seeder: 'w9_2_reachability_harvest', provenance_source: provSource,
     model_provider: meta.provider || null, model_name: meta.model || null,
     source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
@@ -4697,34 +4955,45 @@ async function handleReachabilityHarvestTick(req, res) {
     const sourceRunId = 'w92_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
     const known = await fetchHarvestKnownSubjects();
     const markers = await fetchHarvestScoredMarkers();
-    const { deterministic, llmItems, counts, scan_errors: scanErrors, skip_markers: skipMarkers } = await buildFreshHarvestItems({ known, markers });
+    const { deterministic, llmItems, createContact, counts, scan_errors: scanErrors, skip_markers: skipMarkers } = await buildFreshHarvestItems({ known, markers });
+    const createBatchArr = Array.isArray(createContact) ? createContact : [];
     let scanBatchId = null;
     try {
       const br = await opsQuery('POST', 'reachability_harvest_batch',
         { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
-          details: { counts, deterministic: deterministic.length, llm_fresh: llmItems.length, scan_errors: scanErrors } },
+          details: { counts, deterministic: deterministic.length, llm_fresh: llmItems.length, create_contact_fresh: createBatchArr.length, scan_errors: scanErrors } },
         { headers: { Prefer: 'return=representation' } });
       if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
     } catch (_e) { /* ledger best-effort */ }
 
     const detBatch = Math.min(HARVEST_DET_BATCH_SIZE, deterministic.length);
+    const createBatch = Math.min(HARVEST_CREATE_CONTACT_BATCH_SIZE, createBatchArr.length);
     const llmBatch = Math.min(limit, HARVEST_LLM_BATCH_SIZE);
     const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId, pool_counts: counts,
       evidence_sources: counts.evidence_sources, scan_errors: scanErrors,
-      deterministic_fresh: deterministic.length, llm_fresh: llmItems.length,
-      det_batch: detBatch, llm_batch: llmBatch, budget_ms: HARVEST_SCORE_BUDGET_MS, min_confidence: HARVEST_MIN_CONF,
-      det_proposed: 0, det_failed: 0, scored: 0, proposed: 0, no_evidence_found: 0,
+      deterministic_fresh: deterministic.length, llm_fresh: llmItems.length, create_contact_fresh: createBatchArr.length,
+      det_batch: detBatch, llm_batch: llmBatch, create_batch: createBatch, budget_ms: HARVEST_SCORE_BUDGET_MS, min_confidence: HARVEST_MIN_CONF,
+      det_proposed: 0, det_failed: 0, create_proposed: 0, create_failed: 0, scored: 0, proposed: 0, no_evidence_found: 0,
       dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
       budget_exhausted: false, remaining_unscored: llmItems.length, by_verdict: {} };
     const newMarkers = [];
 
-    // -- ARM 1: deterministic proposals (arithmetic, no LLM). --
+    // -- ARM 1: deterministic proposals (arithmetic, no LLM: SF + comms-header fills). --
     for (const item of deterministic.slice(0, detBatch)) {
       try {
         const wr = await upsertHarvestProposal(item, item.proposal, { provider: 'none', model: null, sourceRunId, scanBatchId });
         newMarkers.push(item.marker);
         if (wr.ok) summary.det_proposed += 1; else summary.det_failed += 1;
       } catch (e) { summary.det_failed += 1; console.warn('[reachability-harvest] det write failed', item?.subjectRef, e?.message || e); }
+    }
+
+    // -- ARM 3 (create-contact): PROPOSAL-only rows (target_kind=owner). A human
+    //    verdict mints the contact; never auto. No LLM (the evidence is the pointer). --
+    for (const item of createBatchArr.slice(0, createBatch)) {
+      try {
+        const wr = await upsertHarvestProposal(item, item.proposal, { provider: 'none', model: null, sourceRunId, scanBatchId });
+        if (wr.ok) summary.create_proposed += 1; else summary.create_failed += 1;
+      } catch (e) { summary.create_failed += 1; console.warn('[reachability-harvest] create-contact write failed', item?.subjectRef, e?.message || e); }
     }
 
     // -- ARM 2: LLM-attributed proposals (validated). --
@@ -4757,12 +5026,12 @@ async function handleReachabilityHarvestTick(req, res) {
         const merged = Array.from(new Set([...markers, ...newMarkers, ...(skipMarkers || [])])).slice(-8000);
         await opsQuery('PATCH', 'reachability_harvest_batch?batch_id=eq.' + scanBatchId,
           { details: { counts, deterministic: deterministic.length, llm_fresh: llmItems.length,
-            scored_markers: merged, scan_errors: scanErrors, summary } });
+            create_contact_fresh: createBatchArr.length, scored_markers: merged, scan_errors: scanErrors, summary } });
       } catch (_e) { /* best-effort */ }
     }
-    const totalProposed = summary.det_proposed + summary.proposed;
-    await recordHarvestHealth({ status: (summary.failed || summary.det_failed) ? 'amber' : 'green', count: totalProposed,
-      lastError: (summary.failed || summary.det_failed) ? (summary.failed + summary.det_failed) + ' write(s) failed in ' + sourceRunId : null, details: summary });
+    const totalProposed = summary.det_proposed + summary.proposed + summary.create_proposed;
+    await recordHarvestHealth({ status: (summary.failed || summary.det_failed || summary.create_failed) ? 'amber' : 'green', count: totalProposed,
+      lastError: (summary.failed || summary.det_failed || summary.create_failed) ? (summary.failed + summary.det_failed + summary.create_failed) + ' write(s) failed in ' + sourceRunId : null, details: summary });
     return res.status(200).json({ ok: true, mode: 'apply', total_proposed: totalProposed, ...summary });
   }
 
@@ -4771,20 +5040,35 @@ async function handleReachabilityHarvestTick(req, res) {
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing', pool_counts: poolCounts };
   if (req.query.score === '1' || req.query.score === 'true') {
     const inlineN = Math.min(30, Math.max(1, parseInt(req.query.n || String(HARVEST_INLINE_DEFAULT_N), 10) || HARVEST_INLINE_DEFAULT_N));
-    const { deterministic, llmItems, counts, scan_errors: scanErrors } = await buildFreshHarvestItems({ cap: Math.max(HARVEST_MAX_TARGETS, inlineN * 6) });
+    const { deterministic, llmItems, createContact, counts, scan_errors: scanErrors } = await buildFreshHarvestItems({ cap: Math.max(HARVEST_MAX_TARGETS, inlineN * 6) });
+    const createArr = Array.isArray(createContact) ? createContact : [];
     out.scan_counts = counts;
     out.evidence_sources = counts.evidence_sources;
+    out.comms_scan = counts.comms_scan || null;
+    out.comms_counts = counts.comms;
     out.scan_errors = scanErrors;
     out.deterministic_fresh = deterministic.length;
     out.llm_fresh = llmItems.length;
+    out.create_contact_fresh = createArr.length;
     const proposals = [];
-    // Deterministic sample (arithmetic — exact source pointers).
+    // Deterministic sample (arithmetic — exact source pointers; SF + comms-header).
     for (const item of deterministic.slice(0, inlineN)) {
       proposals.push({ subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+        provenance_source: item.provenanceSource || (item.arm === 'deterministic' ? 'w9_2_internal_harvest' : 'comms_observed'),
         target_contact_id: item.target.target_contact_id, contact_name: item.target.contact_name,
         field: item.field, proposed_value: item.proposal.value, confidence: item.proposal.confidence,
         evidence_source: item.proposal.evidence_source, source_pointer: item.proposal.source_pointer,
         reason: item.proposal.reason, disposition: 'propose', would_propose: true, quote_verbatim: null });
+    }
+    // Create-contact sample (target_kind=owner — clearly shaped; minted only via lane).
+    for (const item of createArr.slice(0, inlineN)) {
+      proposals.push({ subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+        target_kind: 'owner', kind: 'create_contact', target_owner_id: item.target_owner_id,
+        owner_name: item.owner_name, contact_name: item.contact_name, field: item.field,
+        proposed_value: item.proposal.value, proposed_phone: item.proposal.source_pointer?.phone || null,
+        confidence: item.proposal.confidence, evidence_quote: item.proposal.evidence_quote,
+        evidence_source: item.proposal.evidence_source, source_pointer: item.proposal.source_pointer,
+        reason: item.proposal.reason, disposition: 'create_contact', would_propose: true });
     }
     // LLM sample (verbatim-quoted).
     const byVerdict = {};
@@ -4815,7 +5099,7 @@ async function handleReachabilityHarvestTick(req, res) {
     out.dropped_below_conf = droppedBelowConf;
     out.would_propose = proposals.filter((p) => p.would_propose).length;
     out.proposals = proposals;
-    out.note = 'dry-run scoring — NO rows written. Deterministic proposals carry an exact source pointer (donor identity key + contact_id); every LLM would-propose carries a VERBATIM evidence_quote (quote_verbatim=true, the harvested value is a substring of the assembled evidence); a value not in the quote is DROPPED (→ reachability_harvest_dropped_log). no_evidence_found is honest/counted. Review, then POST (with the flag ON).'
+    out.note = 'dry-run scoring — NO rows written. THREE arms: (1) deterministic fills carry an exact source pointer — an SF exact-identity donor OR a correspondence header binding name+value (provenance comms_observed); (2) LLM fills (intake + comms signatures) carry a VERBATIM evidence_quote (quote_verbatim=true, the value is a substring of the assembled evidence); a value not in the quote is DROPPED (→ reachability_harvest_dropped_log); (3) create_contact proposals (target_kind=owner) shape a NEW contact for an owner with none on file — minted ONLY via a human verdict, never auto. no_evidence_found is honest/counted. Review, then POST (with the flag ON).'
       + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + HARVEST_SCORE_BUDGET_MS + 'ms budget.' : '');
   }
   return res.status(200).json(out);
@@ -6388,7 +6672,10 @@ async function fetchFederatedSource(type, cap, opts) {
         evidence_source: row.evidence_source, source_pointer: row.source_pointer,
         confidence: row.confidence, reason: row.reason, rank_value: row.rank_value,
         provenance_source: row.provenance_source, model_provider: row.model_provider, model_name: row.model_name,
-        kind: row.arm === 'deterministic' ? 'deterministic_fill' : 'llm_fill',
+        kind: row.target_kind === 'owner' ? 'create_contact'
+          : (row.arm === 'deterministic' ? 'deterministic_fill' : 'llm_fill'),
+        // create-contact carries the proposed name/phone in source_pointer.
+        proposed_phone: (row.source_pointer && row.source_pointer.phone) || null,
       },
     }));
     out.total = await opsCnt('reachability_harvest_review?status=eq.proposed');
@@ -7968,6 +8255,87 @@ async function handleDecisionVerdict(req, res) {
         const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
         if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
         return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // --- confirm (W9.4 create-contact): target_kind='owner' → MINT a new domain
+      //     contact for the owner (name + email + phone) with provenance. Never auto;
+      //     idempotent (skip if a contact with this email already exists for the owner).
+      if (review.target_kind === 'owner') {
+        const dom = review.domain === 'gov' ? 'gov' : 'dia';
+        const sp = review.source_pointer && typeof review.source_pointer === 'object' ? review.source_pointer : {};
+        const ownerId = review.target_owner_id || sp.true_owner_id || null;
+        const name = review.contact_name || sp.name || null;
+        const email = review.proposed_value || sp.email || null;
+        const phone = sp.phone || null;
+        const emailCol = RH.domainContactColumn(dom, 'email');
+        const phoneCol = RH.domainContactColumn(dom, 'phone');
+        const nameCol = RH.domainContactNameColumn(dom);
+        const fspTable = dom === 'dia' ? 'dia.contacts' : 'gov.contacts';
+        if (!ownerId || !name || !email || !RH.looksLikeEmail(email)) {
+          return res.status(400).json({ error: 'reachability_harvest_review: incomplete create-contact proposal' });
+        }
+        // Idempotency / no-dup: a contact with this email under this owner already exists?
+        const dupR = await domainQuery(dom, 'GET', 'contacts?select=contact_id&true_owner_id=eq.' + pgFilterVal(ownerId)
+          + '&' + emailCol + '=eq.' + pgFilterVal(RH.normalizeEmail(email)) + '&limit=1');
+        const dup = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
+        if (dup) {
+          const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+            { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+              status: 'conflict', actor: user.id || null, reversal: {},
+              details: { reason: 'contact_already_exists', existing_contact_id: dup.contact_id } },
+            { headers: { Prefer: 'return=representation' } });
+          const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+          await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+            { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+          const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'contact_already_exists' });
+          if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+          return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'contact_already_exists', review_id: review.review_id });
+        }
+        // Ledger FIRST (reversal exists before the mutation), then INSERT the contact.
+        const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+            status: 'applied', actor: user.id || null,
+            reversal: { target_database: dom, target_table: 'contacts', record_id: null, field: '__create__', prior_value: null, provenance_ids: [] },
+            details: { arm: review.arm, create_contact: true, owner_id: ownerId, name, email: RH.normalizeEmail(email), phone } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+        const insertBody = { [nameCol]: name, [emailCol]: RH.normalizeEmail(email), true_owner_id: ownerId,
+          normalized_name: RH.normalizeForMatch(name), data_source: 'comms_observed' };
+        if (phone && RH.looksLikePhone(phone)) insertBody[phoneCol] = RH.normalizePhone(phone);
+        const ins = await domainQuery(dom, 'POST', 'contacts', insertBody, { Prefer: 'return=representation' });
+        const created = (ins.ok && Array.isArray(ins.data) && ins.data[0]) ? ins.data[0] : null;
+        if (!ins.ok || !created) {
+          if (applyLogId != null) await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+            { status: 'conflict', details: { error: 'contact_insert_failed', detail: ins.data } }).catch(() => {});
+          await recordEffectFailure({ ...effects, error: 'contact_insert_failed', detail: ins.data });
+          return res.status(502).json({ error: 'contact_insert_failed', detail: ins.data });
+        }
+        const newContactId = created.contact_id;
+        // Provenance stamps (name + email + phone) on the NEW contact.
+        const provIds = [];
+        for (const [fld, colName, val] of [['name', nameCol, name], ['email', emailCol, RH.normalizeEmail(email)], ['phone', phoneCol, insertBody[phoneCol]]]) {
+          if (val == null) continue;
+          try {
+            const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
+              p_workspace_id: decision.workspace_id || null, p_target_database: dom, p_target_table: fspTable,
+              p_record_pk: String(newContactId), p_field_name: colName,
+              p_value: JSON.stringify(val), p_source: 'comms_observed',
+              p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
+              p_recorded_by: user.id || null,
+            });
+            if (pv.ok && Array.isArray(pv.data) && pv.data[0] && pv.data[0].provenance_id) provIds.push(pv.data[0].provenance_id);
+          } catch (_e) { /* provenance best-effort; the insert + ledger are the record */ }
+        }
+        if (applyLogId != null) await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { target_database: dom, target_table: 'contacts', record_id: newContactId, field: '__create__', prior_value: null, provenance_ids: provIds } }).catch(() => {});
+        await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+        effects.created_contact = { contact_id: newContactId, name, email: RH.normalizeEmail(email), phone: insertBody[phoneCol] || null };
+        effects.apply_log_id = applyLogId;
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'created_contact', contact_id: newContactId, review_id: review.review_id });
       }
 
       // --- confirm: the deterministic fill-blanks writer. ---

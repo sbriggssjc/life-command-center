@@ -71,3 +71,14 @@ reuses U3's proven pattern), then W9.1 (external chain on the value-ranked remai
 
 ## Status
 - 2026-08-08: kickoff written; ORE layer verified self-draining; gap counts grounded live.
+- 2026-08-12: **W9.4 comms-harvest arm BUILT** (Prompt 94) as the THIRD arm of the W9.2 tick
+  (correspondence `activity_events` → header pairs/deterministic, signature phones/llm-verbatim,
+  create-contact/`target_kind=owner` never-auto; privacy-scoped to business-attributed,
+  `visibility<>private` threads). Migration `20260827120000` applied live (2 NAME-field
+  `comms_observed@40` fsp rows, drift 0; flag notes → 3 arms; no new table). Tests 34/34.
+  **⚠ Grounded input-starved TODAY:** 7,751 attributed rows but 0 header display names (Outlook
+  ingestion flattens Graph `{name,address}`→bare email) and 0 correspondence entities map to a
+  `true_owner`, so all three sub-arms yield 0 until the unlock lands — **preserve header display
+  names at Outlook ingestion** (`metadata.from_name`/`to_names`, forward-only). Flag stays OFF;
+  flip after the unlock + a non-zero `?score=1` dry-run. Dry-run:
+  `docs/audits/W9_4_comms_harvest_dryrun_2026-08-12.md`.

@@ -16,6 +16,10 @@ import {
   buildReachabilityPrompt, parseHarvestJson, normalizeHarvestProposal,
   validateHarvestProposal, isProposableHarvest, HARVEST_MIN_CONFIDENCE,
   buildDeterministicProposal, scoreHarvestWithBudget,
+  // W9.4 comms-harvest arm
+  HARVEST_SOURCE_COMMS, parseHeaderAddress, isInternalEmail, isGenericInbox,
+  commsRowHarvestable, commsRowEntityAnchors, extractSignaturePhones, signatureRegion,
+  commsNewContactSubjectRef, buildCommsHeaderProposal,
 } from '../api/_shared/reachability-harvest-planner.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +27,7 @@ const repoRoot = join(__dirname, '..');
 const adminJs = readFileSync(join(repoRoot, 'api/admin.js'), 'utf8');
 const migration = readFileSync(join(repoRoot, 'supabase/migrations/20260826120000_lcc_w9_2_reachability_harvest.sql'), 'utf8');
 const plannerJs = readFileSync(join(repoRoot, 'api/_shared/reachability-harvest-planner.js'), 'utf8');
+const dcLanesJs = readFileSync(join(repoRoot, 'dc-lanes.js'), 'utf8');
 
 // ---------------------------------------------------------------------------
 test('domain column mapping + subject_ref are domain-aware and stable', () => {
@@ -245,6 +250,129 @@ test('migration registers the flag OFF + a staggered cron + reversible ledgers',
 test('deterministic + llm arms both wired into the review CHECK + provenance_source CHECK', () => {
   assert.match(migration, /arm IN \('deterministic', 'llm'\)/);
   assert.match(migration, /provenance_source IN \('w9_2_internal_harvest', 'comms_observed'\)/);
+});
+
+// ===========================================================================
+// W9.4 — comms-harvest arm
+// ===========================================================================
+test('parseHeaderAddress: display-name+email, quoted name, bare email, name-only', () => {
+  assert.deepEqual(parseHeaderAddress('John Doe <j@x.com>'), { name: 'John Doe', email: 'j@x.com' });
+  assert.deepEqual(parseHeaderAddress('"Doe, John" <J@X.com>'), { name: 'Doe, John', email: 'j@x.com' });
+  assert.deepEqual(parseHeaderAddress('j@x.com'), { name: null, email: 'j@x.com' });
+  // a "name" that is itself the email is not a display name
+  assert.deepEqual(parseHeaderAddress('j@x.com <j@x.com>'), { name: null, email: 'j@x.com' });
+  assert.deepEqual(parseHeaderAddress('Jane Roe'), { name: 'Jane Roe', email: null });
+  assert.deepEqual(parseHeaderAddress(''), { name: null, email: null });
+});
+
+test('internal + generic-inbox guards reject non-BD / non-personal emails', () => {
+  assert.ok(isInternalEmail('klargent@northmarq.com'));
+  assert.ok(isInternalEmail('sbriggs@stanjohnsonco.com'));
+  assert.ok(!isInternalEmail('doug@cushwake.com'));
+  assert.ok(isGenericInbox('no-reply@alerts.costar.com'));
+  assert.ok(isGenericInbox('info-passovgroup@shared1.ccsend.com'));
+  assert.ok(isGenericInbox('sales@x.com'));
+  assert.ok(!isGenericInbox('doug.longyear@cushwake.com'));
+});
+
+test('privacy-scope exclusion: private rows + unattributed rows are NOT harvestable', () => {
+  const attributed = { visibility: 'shared', entity_id: 'e1', metadata: {} };
+  const byMeta = { visibility: 'shared', metadata: { party_entity_id: 'p1' } };
+  const byLinked = { visibility: 'shared', metadata: { linked_entity_ids: ['e9'] } };
+  const priv = { visibility: 'private', entity_id: 'e1', metadata: { party_entity_id: 'p1' } };
+  const unattributed = { visibility: 'shared', metadata: {} };
+  assert.ok(commsRowHarvestable(attributed));
+  assert.ok(commsRowHarvestable(byMeta));
+  assert.ok(commsRowHarvestable(byLinked));
+  assert.ok(!commsRowHarvestable(priv), 'private is excluded even when attributed');
+  assert.ok(!commsRowHarvestable(unattributed), 'no attribution → excluded');
+});
+
+test('commsRowEntityAnchors dedups deal/party/linked ops entity ids', () => {
+  const anchors = commsRowEntityAnchors({ entity_id: 'a', metadata: { party_entity_id: 'b', deal_entity_id: 'a', linked_entity_ids: ['c', 'b'] } });
+  assert.deepEqual([...anchors].sort(), ['a', 'b', 'c']);
+});
+
+test('phone regex extracts signature phones with a verbatim span; rejects non-phones', () => {
+  const body = 'Best,\nDOUG LONGYEAR\nEXECUTIVE DIRECTOR\n+1 415 705 9655\nDOUG.LONGYEAR@CUSHWAKE.COM';
+  const phones = extractSignaturePhones(signatureRegion(body));
+  assert.equal(phones.length, 1);
+  assert.equal(phones[0].digits, '4157059655');
+  // the span is a verbatim substring of the body containing the phone (validator floor)
+  assert.ok(quoteVerbatimInEvidence(phones[0].span, body));
+  assert.ok(valueInQuote('phone', phones[0].phone, phones[0].span));
+  // a year-like digit run is not a phone
+  assert.equal(extractSignaturePhones('founded in 2019, revenue up').length, 0);
+});
+
+test('buildCommsHeaderProposal: deterministic name-bound fill; drops internal/generic/invalid', () => {
+  const p = buildCommsHeaderProposal('email', { value: 'Doug@Cushwake.com', message_id: 'AAA', quote: 'Doug Longyear <doug@cushwake.com>' });
+  assert.equal(p.verdict, 'fill_proposal');
+  assert.equal(p.value, 'doug@cushwake.com');
+  assert.equal(p.confidence, 1.0);
+  assert.equal(p.evidence_source, 'comms:AAA');
+  assert.equal(p.source_pointer.via, 'comms_header');
+  assert.equal(buildCommsHeaderProposal('email', { value: 'klargent@northmarq.com', message_id: 'B' }), null); // internal
+  assert.equal(buildCommsHeaderProposal('email', { value: 'sales@x.com', message_id: 'B' }), null);            // generic
+  assert.equal(buildCommsHeaderProposal('phone', { value: '12' }), null);                                      // invalid
+  // comms deterministic still stamps the comms_observed provenance band
+  assert.equal(HARVEST_SOURCE_COMMS, 'comms_observed');
+});
+
+test('commsNewContactSubjectRef is stable + email-keyed + domain-normalized', () => {
+  assert.equal(commsNewContactSubjectRef('dialysis', 'own1', 'A@B.com'), 'rhc:dia:own1:a@b.com');
+  assert.equal(commsNewContactSubjectRef('gov', 'own2', null), 'rhc:gov:own2:noemail');
+});
+
+// --- structural guards over the tick + verdict + lane (the U3/U5 pattern) ---
+test('comms index is ONE bounded scan of the correspondence spine — no per-target fan-out', () => {
+  assert.match(adminJs, /harvestBuildCommsIndex/);
+  assert.match(adminJs, /HARVEST_COMMS_INDEX_CAP/);
+  assert.match(adminJs, /visibility=neq\.private/);           // privacy scope enforced in the query
+  assert.match(adminJs, /category=in\.\(email,call\)/);
+  // no activity_events read inside the per-target loop
+  assert.ok(!/for \(const t of allTargets\)[\s\S]{0,600}activity_events\?/.test(adminJs),
+    'must not query activity_events per target');
+});
+
+test('comms arm routes deterministic-first: a comms header short-circuits the LLM arm', () => {
+  assert.match(adminJs, /a deterministic comms fill wins — do not also LLM this field/);
+  assert.match(adminJs, /provenanceSource: RH\.HARVEST_SOURCE_COMMS/);
+});
+
+test('create-contact is proposal-only + minted ONLY via the verdict (never auto)', () => {
+  // the tick writes create-contact PROPOSALS (target_kind owner), never inserts a contact
+  const tickBody = adminJs.slice(adminJs.indexOf('async function handleReachabilityHarvestTick'),
+    adminJs.indexOf('// W8 U4 (Prompt 70) — Systemic-findings monthly report tick.'));
+  assert.ok(!/domainQuery\([^)]*'POST', 'contacts'/.test(tickBody), 'the tick must not INSERT a domain contact');
+  // the create-contact INSERT lives in the verdict branch, gated on target_kind='owner'
+  const branch = adminJs.slice(adminJs.indexOf("decision.decision_type === 'reachability_harvest_review'"),
+    adminJs.indexOf('// ---- naming_hygiene_review (W8 U5 / Prompt 79)'));
+  assert.match(branch, /review\.target_kind === 'owner'/);
+  assert.match(branch, /domainQuery\(dom, 'POST', 'contacts'/);      // the mint
+  assert.match(branch, /contact_already_exists/);                    // idempotency / no-dup
+  assert.match(branch, /reachability_harvest_apply_log/);            // reversible ledger FIRST
+  assert.match(branch, /created_contact/);
+});
+
+test('signature-derived phones are LLM-only (never an arithmetic deterministic fill)', () => {
+  // body-signature phones are tagged kind='signature'; the deterministic comms-header
+  // path accepts ONLY kind='header' (a clean name↔value header bind).
+  assert.match(adminJs, /addName\(name, null, p\.phone, p\.span, mid, st, 'signature'\)/);
+  assert.match(adminJs, /h\.kind === 'header' && h\[field\]/);
+});
+
+test('bulk-confirm excludes create-contact (owner) rows — mints are per-card only', () => {
+  assert.match(dcLanesJs, /c\.arm !== 'deterministic' \|\| c\.target_kind === 'owner'/);
+  assert.match(dcLanesJs, /kind === 'create_contact' \|\| c\.target_kind === 'owner'/);
+});
+
+test('W9.4 migration adds NAME-field comms_observed fsp rows (drift stays 0) — no schema fork', () => {
+  const w94 = readFileSync(join(repoRoot, 'supabase/migrations/20260827120000_lcc_w9_4_comms_harvest.sql'), 'utf8');
+  assert.match(w94, /'dia\.contacts', 'contact_name', 'comms_observed', 40/);
+  assert.match(w94, /'gov\.contacts', 'name',\s+'comms_observed', 40/);
+  assert.match(w94, /W9_2_REACHABILITY_HARVEST/);       // rides the SAME flag
+  assert.ok(!/CREATE TABLE/.test(w94), 'W9.4 forks no new table — extends W9.2');
 });
 
 test('planner never calls the network / imports nothing (pure brain)', () => {

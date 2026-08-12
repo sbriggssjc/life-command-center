@@ -30,6 +30,9 @@ export const HARVEST_ARM_LLM = 'llm';
 // The provenance source each arm stamps (registered in field_source_priority).
 export const HARVEST_SOURCE_DETERMINISTIC = 'w9_2_internal_harvest';
 export const HARVEST_SOURCE_LLM = 'comms_observed';
+// W9.4: a comms header/signature/create-contact fill is OBSERVED in real mail — it
+// stamps comms_observed (same trust band as the LLM arm), even when arithmetic.
+export const HARVEST_SOURCE_COMMS = 'comms_observed';
 
 export function normDomain(domain) {
   const d = String(domain || '').toLowerCase();
@@ -341,6 +344,152 @@ export function buildDeterministicProposal(field, donor) {
 // Bounded scorer (pure, injectable clock) — mirrors U3's scoreLinksWithBudget so a
 // single HTTP invocation never outruns the Railway proxy on ollama latency.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// W9.4 (Prompt 94) — Comms-harvest arm. A THIRD input source for the SAME two-arm
+// split: correspondence LCC already ingests (activity_events). It yields (a) header
+// name+email pairs (deterministic class — routed through the deterministic arm,
+// provenance comms_observed since it is OBSERVED in real mail), (b) signature-block
+// phones (LLM class — the verbatim-quote validator gates them), and (c) thread
+// participants attributable to an owner who has NO contact row yet (create-contact
+// shape — target_kind 'owner', minted ONLY via a human verdict, never auto).
+//
+// Doctrine: harvest ONLY from business-attributed, non-private threads
+// (correspondence-privacy scoping); never fabricate; every fill/create is a
+// PROPOSAL a human confirms. These helpers are pure (the live scan lives in admin.js).
+// ---------------------------------------------------------------------------
+
+// The internal / self domain — mail from these senders is not a BD counterparty
+// and never seeds a contact fill or a new contact.
+export function isInternalEmail(email) {
+  const e = normalizeEmail(email);
+  if (!e) return false;
+  return /@(?:[^@]*\.)?northmarq\.com$/.test(e) || /@(?:[^@]*\.)?stanjohnsonco\.com$/.test(e);
+}
+
+// A role/functional inbox is never a person's reachable contact detail.
+const GENERIC_LOCALPARTS = new Set([
+  'no-reply', 'noreply', 'no_reply', 'donotreply', 'do-not-reply', 'info', 'sales',
+  'support', 'admin', 'hello', 'contact', 'notifications', 'notification', 'alerts',
+  'alert', 'help', 'team', 'office', 'mail', 'marketing', 'newsletter', 'news',
+  'updates', 'billing', 'accounts', 'accounting', 'careers', 'jobs', 'webmaster',
+  'postmaster', 'service', 'services', 'inquiries', 'enquiries', 'privacy', 'legal',
+]);
+export function isGenericInbox(email) {
+  const e = normalizeEmail(email);
+  if (!e) return true;
+  const local = e.split('@')[0].replace(/\+.*$/, '');
+  if (GENERIC_LOCALPARTS.has(local)) return true;
+  // bare functional prefixes like "info-passovgroup" / "no-reply.foo"
+  const head = local.split(/[.\-_]/)[0];
+  return GENERIC_LOCALPARTS.has(head);
+}
+
+// Parse ONE address token into { name, email }. Handles Graph/RFC forms:
+//   'John Doe <j@x.com>'  → { name:'John Doe', email:'j@x.com' }
+//   '"Doe, John" <j@x.com>'→ { name:'Doe, John', email:'j@x.com' }
+//   'j@x.com'             → { name:null, email:'j@x.com' }
+// A token that carries no valid email yields { name, email:null }. Never throws.
+export function parseHeaderAddress(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { name: null, email: null };
+  const m = s.match(/^(.*?)<\s*([^<>]+?)\s*>\s*$/);
+  if (m) {
+    let name = m[1].trim().replace(/^["']|["']$/g, '').trim();
+    const email = looksLikeEmail(m[2]) ? normalizeEmail(m[2]) : null;
+    // A "name" that is itself the email (no real display name) is not a name.
+    if (name && looksLikeEmail(name)) name = '';
+    return { name: name || null, email };
+  }
+  if (looksLikeEmail(s)) return { name: null, email: normalizeEmail(s) };
+  return { name: s.replace(/^["']|["']$/g, '').trim() || null, email: null };
+}
+
+// A correspondence row is HARVESTABLE only when it is BUSINESS-ATTRIBUTED and NOT
+// private-scoped (correspondence-privacy doctrine). Attribution = a deal/party/entity
+// anchor exists (entity_id, metadata.party_entity_id/deal_entity_id, or linked
+// entity ids). visibility='private' is ALWAYS excluded regardless of attribution.
+export function commsRowHarvestable(row) {
+  const r = row && typeof row === 'object' ? row : {};
+  if (String(r.visibility || '').toLowerCase() === 'private') return false;
+  const md = r.metadata && typeof r.metadata === 'object' ? r.metadata : {};
+  const linked = Array.isArray(md.linked_entity_ids) ? md.linked_entity_ids : [];
+  return !!(r.entity_id || md.party_entity_id || md.deal_entity_id || linked.length > 0);
+}
+
+// The owner/entity anchors a harvestable row attributes to (ops entity ids). Used
+// both to gate the fill arms and to seed create-contact candidates. Deduped.
+export function commsRowEntityAnchors(row) {
+  const r = row && typeof row === 'object' ? row : {};
+  const md = r.metadata && typeof r.metadata === 'object' ? r.metadata : {};
+  const out = new Set();
+  if (r.entity_id) out.add(String(r.entity_id));
+  if (md.party_entity_id) out.add(String(md.party_entity_id));
+  if (md.deal_entity_id) out.add(String(md.deal_entity_id));
+  for (const e of (Array.isArray(md.linked_entity_ids) ? md.linked_entity_ids : [])) if (e) out.add(String(e));
+  return [...out];
+}
+
+// US-style phone extractor over a text span (the signature region). Returns unique
+// candidates as { phone (verbatim as written), digits, span (a ±window quote that
+// contains the phone, for the verbatim validator) }. Rejects year-like / non-phone
+// digit runs via looksLikePhone.
+const PHONE_TOKEN_RE = /(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/g;
+export const SIGNATURE_TAIL_CHARS = 900;
+export function signatureRegion(body, tail = SIGNATURE_TAIL_CHARS) {
+  const s = String(body == null ? '' : body);
+  const n = Number.isFinite(tail) ? Math.max(80, tail) : SIGNATURE_TAIL_CHARS;
+  return s.length <= n ? s : s.slice(s.length - n);
+}
+export function extractSignaturePhones(text, spanChars = 80) {
+  const s = String(text == null ? '' : text);
+  if (!s) return [];
+  const out = [];
+  const seen = new Set();
+  let m;
+  PHONE_TOKEN_RE.lastIndex = 0;
+  while ((m = PHONE_TOKEN_RE.exec(s)) !== null) {
+    const tok = m[0];
+    if (!looksLikePhone(tok)) continue;
+    const digits = phoneDigits(tok).slice(-10);
+    if (seen.has(digits)) continue;
+    seen.add(digits);
+    const start = Math.max(0, m.index - spanChars);
+    const end = Math.min(s.length, m.index + tok.length + spanChars);
+    out.push({ phone: normalizePhone(tok), digits, span: normalizeWhitespace(s.slice(start, end)) });
+  }
+  return out;
+}
+
+// A stable subject_ref for a create-contact proposal (target_kind='owner'): one
+// card per (domain, owner, proposed email) so a re-scan is idempotent.
+export function commsNewContactSubjectRef(domain, ownerId, email) {
+  const key = normalizeEmail(email) || 'noemail';
+  return `rhc:${normDomain(domain)}:${ownerId}:${key}`;
+}
+
+// The deterministic COMMS header proposal — arithmetic, NO LLM. A header carried a
+// display NAME bound to a VALID, non-internal, non-generic EMAIL that matches a
+// blank contact's normalized name. confidence 1.0, provider 'none', provenance
+// comms_observed (observed in real mail), source pointer = the message id.
+export function buildCommsHeaderProposal(field, donor) {
+  const d = donor && typeof donor === 'object' ? donor : {};
+  if (field !== 'email' && field !== 'phone') return null;
+  const value = d.value;
+  if (!value || !harvestValueValid(field, value)) return null;
+  if (field === 'email' && (isInternalEmail(value) || isGenericInbox(value))) return null;
+  const mid = d.message_id != null ? String(d.message_id) : null;
+  return {
+    verdict: 'fill_proposal',
+    field,
+    value: harvestValueNormalized(field, value),
+    confidence: 1.0,
+    evidence_quote: d.quote != null ? String(d.quote).slice(0, 400) : null,
+    evidence_source: mid ? ('comms:' + mid) : 'comms_header',
+    reason: 'Correspondence header binds this ' + field + ' to this contact by name.',
+    source_pointer: { via: 'comms_header', message_id: mid, source_type: d.source_type || null },
+  };
+}
+
 export async function scoreHarvestWithBudget(items, scoreOne, opts = {}) {
   const list = Array.isArray(items) ? items : [];
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
