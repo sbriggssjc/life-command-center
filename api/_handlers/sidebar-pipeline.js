@@ -2780,16 +2780,119 @@ export async function fetchAndStoreDocBytes(domain, { docId, propertyId, sourceU
   if (!buffer.length) return { ok: false, reason: 'empty' };
   if (buffer.length > DOC_BYTES_MAX) return { ok: false, reason: 'too_large', detail: `bytes=${buffer.length}` };
 
+  return uploadDocBuffer(domain, creds, {
+    docId, propertyId, documentType, fileName, sourceUrl, buffer,
+    mimeType: res.headers?.get?.('content-type') || 'application/pdf',
+  }, deps);
+}
+
+/**
+ * Upload an already-in-hand document buffer to the domain `property-documents`
+ * bucket and return the storage descriptor. Shared by the server-side re-fetch
+ * (fetchAndStoreDocBytes) AND the client-provided-bytes path (storeClientDocBytes,
+ * where the EXTENSION fetched the bytes in the authenticated CoStar tab — the only
+ * way to get a session-bound CDN link). Does NOT write property_documents.
+ */
+export async function uploadDocBuffer(domain, creds, { docId, propertyId, documentType, fileName, sourceUrl, buffer, mimeType }, deps = {}) {
+  if (!buffer || !buffer.length) return { ok: false, reason: 'empty' };
+  if (buffer.length > DOC_BYTES_MAX) return { ok: false, reason: 'too_large', detail: `bytes=${buffer.length}` };
   const objectPath = documentObjectPath({ domain, documentType, propertyId, docId, fileName, sourceUrl });
   const upload = deps.uploadImpl || uploadArtifactToStorage;
   const up = await upload({
     opsUrl: creds.url, opsKey: creds.key, bucket: PROPERTY_DOC_BUCKET,
-    objectPath, mimeType: res.headers?.get?.('content-type') || 'application/pdf', buffer,
+    objectPath, mimeType: mimeType || 'application/pdf', buffer,
     fetchImpl: deps.uploadFetchImpl || ((u, o) => fetchWithTimeout(u, o, DOC_BYTES_TIMEOUT)),
   });
   if (!up.ok) return { ok: false, reason: 'upload_failed', status: up.status || 0, detail: up.detail };
-
   return { ok: true, storage_path: objectPath, storage_bucket: PROPERTY_DOC_BUCKET, bytes: buffer.length };
+}
+
+const CLIENT_DOC_B64_MAX = Number(process.env.DOC_CAPTURE_MAX_BYTES || 25_000_000);
+
+/**
+ * Store CLIENT-provided document bytes (base64 fetched in the authenticated
+ * browser tab by the extension) onto the already-upserted property_documents row
+ * for `source_url`. This is the durable capture path for session-bound CoStar CDN
+ * links that a server-side re-fetch (fetchAndStoreDocBytes) can never reach.
+ *
+ * Keyed on (domain, source_url) so the extension needs no domain property_id
+ * (resolved server-side). The row already exists — processSidebarExtraction awaits
+ * upsertDocumentLinks before responding, so the extension calls this AFTER that 200.
+ * Idempotent (a row that already carries storage_path is a no-op). Best-effort:
+ * never throws; a bad row is reported, never fatal. Bytes NEVER touch entity.metadata.
+ *
+ * @returns {Promise<{ok:boolean, outcome:string, ...}>}
+ */
+export async function storeClientDocBytes(domain, { source_url, content_base64, mime_type }, deps = {}) {
+  if (!source_url || !/^https?:\/\//i.test(String(source_url))) return { ok: false, outcome: 'no_absolute_url' };
+  if (!content_base64 || typeof content_base64 !== 'string') return { ok: false, outcome: 'no_bytes' };
+  const getCreds = deps.getDomainCredentials || getDomainCredentials;
+  const creds = getCreds(domain);
+  if (!creds) return { ok: false, outcome: 'domain_db_not_configured' };
+
+  let buffer;
+  try { buffer = Buffer.from(content_base64, 'base64'); }
+  catch { return { ok: false, outcome: 'decode_failed' }; }
+  if (!buffer.length) return { ok: false, outcome: 'empty' };
+  if (buffer.length > CLIENT_DOC_B64_MAX) return { ok: false, outcome: 'too_large', bytes: buffer.length };
+
+  const q = deps.domainQuery || domainQuery;
+  // Find the just-upserted row for this source_url (newest wins if duplicated).
+  const sel = await q(domain, 'GET',
+    `property_documents?source_url=eq.${encodeURIComponent(source_url)}` +
+    `&select=document_id,property_id,document_type,file_name,storage_path&order=document_id.desc&limit=1`);
+  if (!sel.ok) return { ok: false, outcome: 'lookup_failed', status: sel.status };
+  const row = Array.isArray(sel.data) ? sel.data[0] : sel.data;
+  if (!row || row.document_id == null) return { ok: false, outcome: 'row_not_found' };
+  if (row.storage_path) return { ok: true, outcome: 'already_stored', document_id: row.document_id };
+
+  const stored = await uploadDocBuffer(domain, creds, {
+    docId: row.document_id, propertyId: row.property_id, documentType: row.document_type,
+    fileName: row.file_name, sourceUrl: source_url, buffer,
+    mimeType: mime_type || 'application/pdf',
+  }, deps);
+  if (!stored.ok) return { ok: false, outcome: 'upload_failed', reason: stored.reason, detail: stored.detail };
+
+  const patch = await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+    { storage_path: stored.storage_path, storage_bucket: stored.storage_bucket, ingestion_status: 'bytes_captured' },
+    { Prefer: 'return=minimal' });
+  if (!patch.ok) return { ok: false, outcome: 'patch_failed', status: patch.status, storage_path: stored.storage_path };
+  return { ok: true, outcome: 'bytes_captured', document_id: row.document_id, storage_path: stored.storage_path, bytes: stored.bytes };
+}
+
+/**
+ * Backfill worker — re-capture bytes for url-only property_documents (no
+ * storage_path) via the SERVER-SIDE re-fetch. Handles the re-fetchable subset
+ * (public county/CDN links that are not session-bound). Session-bound CoStar
+ * links honestly stay url-only (they need the extension re-capture / an
+ * authenticated egress) and are counted, never silently "done". Value-ranked
+ * (usable-cap / recent first via document_id desc), bounded, idempotent.
+ */
+export async function backfillDocBytes(domain, { limit = 25, documentType = null } = {}, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const cap = Math.max(1, Math.min(200, Number(limit) || 25));
+  let filter = `storage_path=is.null&source_url=not.is.null`;
+  if (documentType) filter += `&document_type=eq.${encodeURIComponent(documentType)}`;
+  const sel = await q(domain, 'GET',
+    `property_documents?${filter}&select=document_id,property_id,source_url,document_type,file_name&order=document_id.desc&limit=${cap}`);
+  if (!sel.ok) return { ok: false, outcome: 'scan_failed', status: sel.status };
+  const rows = Array.isArray(sel.data) ? sel.data : [];
+  const out = { ok: true, domain, scanned: rows.length, bytes_captured: 0, session_bound_or_dead: 0, skipped: 0, reasons: {} };
+  for (const row of rows) {
+    let r;
+    try {
+      r = await captureDocumentBytesAtIngest(domain, {
+        document_id: row.document_id, property_id: row.property_id, source_url: row.source_url,
+        document_type: row.document_type, file_name: row.file_name, storage_path: null,
+      }, deps);
+    } catch (e) { r = { ok: false, outcome: 'threw', reason: e?.message?.slice(0, 120) }; }
+    if (r.ok && r.outcome === 'bytes_captured') out.bytes_captured++;
+    else if (r.reason === 'fetch_non_ok' || r.reason === 'fetch_threw') out.session_bound_or_dead++;
+    else out.skipped++;
+    const key = r.reason || r.outcome || 'unknown';
+    out.reasons[key] = (out.reasons[key] || 0) + 1;
+  }
+  return out;
 }
 
 /**
