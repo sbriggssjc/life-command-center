@@ -1351,6 +1351,24 @@ async function loadPropertyTab(opts) {
       // or wrote nothing returns pipeline_failed=true — surface it, don't toast
       // "success".
       const pipelineFailed = !!result.data?.pipeline_failed;
+
+      // Durable document capture: the extraction just upserted url_captured
+      // property_documents rows; fetch each doc's bytes in THIS authenticated tab
+      // and store a durable copy server-side (keyed by domain+source_url), so a
+      // later OCR never has to re-authenticate to CoStar. Fire-and-forget.
+      if (result.ok && !pipelineFailed) {
+        try {
+          const capDomain = result.data?.summary?.domain || result.data?.domain || ctx?.domain;
+          const docLinks = Array.isArray(ctx?.document_links) ? ctx.document_links : [];
+          if (capDomain && docLinks.length) {
+            chrome.runtime.sendMessage(
+              { type: 'CAPTURE_DOC_BYTES_BATCH', domain: capDomain, docs: docLinks },
+              () => void (chrome.runtime && chrome.runtime.lastError),
+            );
+          }
+        } catch { /* best-effort */ }
+      }
+
       if (result.ok && !pipelineFailed) {
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';

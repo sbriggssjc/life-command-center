@@ -559,6 +559,40 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     return true; // async response
   }
 
+  // ── Durable document capture-at-ingest ──────────────────────────────────────
+  // After a sidebar extraction upserts url_captured property_documents rows, fetch
+  // each doc's bytes IN THIS AUTHENTICATED TAB (fetchDocBytesViaTab — the only way
+  // to reach a session-bound CoStar CDN link) and POST them to the server, which
+  // stores a durable copy keyed by (domain, source_url). Best-effort, non-blocking:
+  // any failure leaves the url_captured row exactly as before. Offering material is
+  // skipped (it already routes through the OM live-tab path).
+  if (msg.type === 'CAPTURE_DOC_BYTES_BATCH') {
+    (async () => {
+      const domain = /^(dia|dialysis)$/i.test(String(msg.domain)) ? 'dia'
+                   : /^(gov|government)$/i.test(String(msg.domain)) ? 'gov' : null;
+      const docs = Array.isArray(msg.docs) ? msg.docs : [];
+      if (!domain || !docs.length) { respond({ ok: false, reason: 'no_domain_or_docs' }); return; }
+      const MAX_RAW = 20_000_000; // base64 < server 30mb JSON body limit
+      let captured = 0, failed = 0, skipped = 0;
+      for (const d of docs) {
+        const url = d && d.url;
+        if (!url || d.is_offering_material || d.type === 'marketing_brochure') { skipped++; continue; }
+        try {
+          const tab = await fetchDocBytesViaTab(url);
+          if (!tab || !tab.ok || !tab.base64) { failed++; continue; }
+          if (tab.sizeBytes && tab.sizeBytes > MAX_RAW) { skipped++; continue; }
+          const r = await callLCCApi('/api/intake?_route=capture-doc-bytes', {
+            domain, source_url: url, content_base64: tab.base64, mime_type: tab.mimeType,
+          });
+          // The endpoint returns HTTP 200 with a best-effort body; success is data.ok.
+          if (r && r.ok && r.data && r.data.ok) captured++; else failed++;
+        } catch { failed++; }
+      }
+      respond({ ok: true, captured, failed, skipped });
+    })();
+    return true; // async response
+  }
+
   if (msg.type === 'TEST_CONNECTION') {
     testConnection().then(respond);
     return true;

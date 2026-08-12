@@ -89,9 +89,17 @@ sheet — so the Charts tab hosts native chart objects AND rendered-image charts
 together in one `<drawing>`. `cm-excel-export.js` pushes each non-native chart's
 PNG as an `{ image: { png, anchor } }` injection instead of dropping it. Result:
 the Charts tab is a complete single-page view of every chart. Data-table
-templates (no rendered chart image) stay on their own Data_* tabs; the tab
-caption notes this. Images are sized to the same 10.00″×4.25″ tile as the native
-charts so the stack lines up.
+templates (no rendered chart image) stay on their own Data_* tabs. Images are
+sized to the same 10.00″×4.25″ tile as the native charts so the stack lines up.
+
+**Embed ONLY genuinely-non-native templates.** A template that IS in
+`NATIVE_CHART_TEMPLATES` but ends up orphaned is either deliberately suppressed
+for the vertical (dia `rent_psf_box_quarterly` — superseded by the modeled
+variant `rent_psf_box_quarterly_modeled`) or a native chart that failed to
+queue; in both cases the native chart is the source of truth, so we must NOT
+embed a stale QuickChart PNG of it (Scott flagged the suppressed dia rent box
+reappearing as a duplicate PNG). The embed filter therefore excludes any
+`NATIVE_CHART_TEMPLATES` member and anything `isChartSuppressed(vertical, …)`.
 
 ## Blocking inputs from Scott / marketing
 
