@@ -20,6 +20,7 @@ import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreet
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship, fetchWithTimeout } from '../_shared/ops-db.js';
 import { uploadArtifactToStorage } from '../_shared/artifact-storage.js';
+import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { getCadenceState, entityHasBdSignal } from '../_shared/cadence-engine.js';
@@ -2755,12 +2756,35 @@ export function documentObjectPath({ domain, documentType, propertyId, docId, fi
  * @returns {Promise<{ok:true, storage_path, storage_bucket, bytes}
  *                  | {ok:false, reason, status?, detail?}>}
  */
+/** A server-relative SharePoint ref (`/sites/TeamBriggs20/...`), not an http URL. */
+function isSharepointRef(u) {
+  return typeof u === 'string' && /^\/(sites|personal)\//i.test(u.trim());
+}
+
 export async function fetchAndStoreDocBytes(domain, { docId, propertyId, sourceUrl, documentType, fileName }, deps = {}) {
   if (docId == null) return { ok: false, reason: 'no_doc_id' };
-  if (!sourceUrl || !/^https?:\/\//i.test(String(sourceUrl))) return { ok: false, reason: 'no_absolute_url' };
   const getCreds = deps.getDomainCredentials || getDomainCredentials;
   const creds = getCreds(domain);
   if (!creds) return { ok: false, reason: 'domain_db_not_configured' };
+
+  // SharePoint-filed docs carry a server-relative source_url (no http host). They
+  // are fetched via the Power Automate "Get Artifact" flow (SHAREPOINT_FETCH_URL),
+  // NOT an HTTP GET — the source_url IS the server_relative_url. Honest no-op when
+  // the PA flow isn't configured (mirrors the SAM/SOS credential-gated pattern).
+  if (isSharepointRef(sourceUrl)) {
+    const spFetch = deps.fetchSharepointBytes || fetchSharepointBytes;
+    const sp = await spFetch({ storageRef: sourceUrl, fetchImpl: deps.spFetchImpl });
+    if (!sp.ok) {
+      const unset = /SHAREPOINT_FETCH_URL unset|missing storage_ref/i.test(sp.detail || '');
+      return { ok: false, reason: unset ? 'sharepoint_fetch_unset' : 'sharepoint_fetch_failed', detail: sp.detail };
+    }
+    return uploadDocBuffer(domain, creds, {
+      docId, propertyId, documentType, fileName, sourceUrl, buffer: sp.buffer,
+      mimeType: sp.contentType || 'application/pdf',
+    }, deps);
+  }
+
+  if (!sourceUrl || !/^https?:\/\//i.test(String(sourceUrl))) return { ok: false, reason: 'no_absolute_url' };
 
   const doFetch = deps.fetchImpl || ((u, o) => fetchWithTimeout(u, o, DOC_BYTES_TIMEOUT));
   let res;
@@ -2868,7 +2892,7 @@ export async function storeClientDocBytes(domain, { source_url, content_base64, 
  * authenticated egress) and are counted, never silently "done". Value-ranked
  * (usable-cap / recent first via document_id desc), bounded, idempotent.
  */
-export async function backfillDocBytes(domain, { limit = 25, documentType = null, before = null } = {}, deps = {}) {
+export async function backfillDocBytes(domain, { limit = 25, documentType = null, before = null, source = null } = {}, deps = {}) {
   const q = deps.domainQuery || domainQuery;
   const cap = Math.max(1, Math.min(200, Number(limit) || 25));
   // KEYSET CURSOR on document_id (descending): each call walks strictly OLDER
@@ -2878,12 +2902,18 @@ export async function backfillDocBytes(domain, { limit = 25, documentType = null
   // re-selected forever and a `while scanned>0` loop never ends.
   let filter = `storage_path=is.null&source_url=not.is.null`;
   if (documentType) filter += `&document_type=eq.${encodeURIComponent(documentType)}`;
+  // `source` targets a URL class so a run can drain one kind without re-walking
+  // the others: 'sharepoint' = server-relative /sites/ docs (fetched via the PA
+  // flow); 'http' = absolute CDN/web links (the CoStar re-fetch subset).
+  if (source === 'sharepoint') filter += `&source_url=like./sites/*`;
+  else if (source === 'http') filter += `&source_url=like.http*`;
   if (before != null && Number.isFinite(Number(before))) filter += `&document_id=lt.${Number(before)}`;
   const sel = await q(domain, 'GET',
     `property_documents?${filter}&select=document_id,property_id,source_url,document_type,file_name&order=document_id.desc&limit=${cap}`);
   if (!sel.ok) return { ok: false, outcome: 'scan_failed', status: sel.status };
   const rows = Array.isArray(sel.data) ? sel.data : [];
-  const out = { ok: true, domain, scanned: rows.length, bytes_captured: 0, session_bound_or_dead: 0, skipped: 0,
+  const out = { ok: true, domain, source: source || 'all', scanned: rows.length, bytes_captured: 0,
+                sharepoint_captured: 0, session_bound_or_dead: 0, skipped: 0,
                 reasons: {}, next_cursor: null, done: rows.length < cap };
   for (const row of rows) {
     if (row.document_id != null) out.next_cursor = row.document_id; // smallest id (rows are desc)
@@ -2894,7 +2924,10 @@ export async function backfillDocBytes(domain, { limit = 25, documentType = null
         document_type: row.document_type, file_name: row.file_name, storage_path: null,
       }, deps);
     } catch (e) { r = { ok: false, outcome: 'threw', reason: e?.message?.slice(0, 120) }; }
-    if (r.ok && r.outcome === 'bytes_captured') out.bytes_captured++;
+    if (r.ok && r.outcome === 'bytes_captured') {
+      out.bytes_captured++;
+      if (isSharepointRef(row.source_url)) out.sharepoint_captured++;
+    }
     else if (r.reason === 'fetch_non_ok' || r.reason === 'fetch_threw') out.session_bound_or_dead++;
     else out.skipped++;
     const key = r.reason || r.outcome || 'unknown';

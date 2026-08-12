@@ -5,7 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  storeClientDocBytes, backfillDocBytes, uploadDocBuffer,
+  storeClientDocBytes, backfillDocBytes, uploadDocBuffer, fetchAndStoreDocBytes,
 } from '../api/_handlers/sidebar-pipeline.js';
 
 const CREDS = { url: 'https://x.supabase.co', key: 'k' };
@@ -122,6 +122,43 @@ describe('backfillDocBytes (server re-fetch, honest about session-bound failures
     }
     assert.equal(totalScanned, 3);  // each of the 3 rows visited exactly once
     assert.ok(iters < 20);          // terminated (no infinite loop)
+  });
+});
+
+describe('SharePoint-filed docs (server-relative /sites/ source_url)', () => {
+  it('fetches via the PA flow (not http) and stores the bytes', async () => {
+    const deps = makeDeps({ row: { document_id: 5, property_id: 3, document_type: 'lease', file_name: 'L.pdf', storage_path: null } });
+    // A SharePoint-ref backfill row goes through captureDocumentBytesAtIngest.
+    deps.fetchSharepointBytes = async ({ storageRef }) => {
+      assert.match(storageRef, /^\/sites\//);      // the source_url IS the server_relative_url
+      return { ok: true, buffer: Buffer.from('%PDF sp'), contentType: 'application/pdf' };
+    };
+    deps.fetchImpl = async () => { throw new Error('http fetch must NOT be used for a /sites/ ref'); };
+    const r = await backfillDocBytes('gov', { limit: 5, source: 'sharepoint' }, {
+      ...deps,
+      domainQuery: async (d, m, path) => {
+        if (m === 'GET' && /property_documents\?storage_path=is.null/.test(path)) {
+          assert.match(path, /source_url=like\.\/sites\/\*/);   // the source filter is applied
+          return { ok: true, data: [{ document_id: 5, property_id: 3, source_url: '/sites/TeamBriggs20/Shared Documents/x.pdf', document_type: 'lease', file_name: 'L.pdf' }] };
+        }
+        return { ok: true };
+      },
+    });
+    assert.equal(r.bytes_captured, 1);
+    assert.equal(r.sharepoint_captured, 1);
+    assert.equal(r.done, true);
+  });
+
+  it('honest no-op when SHAREPOINT_FETCH_URL is unset (credential-gated, not fatal)', async () => {
+    const deps = {
+      getDomainCredentials: () => CREDS,
+      fetchSharepointBytes: async () => ({ ok: false, detail: 'SHAREPOINT_FETCH_URL unset' }),
+      uploadImpl: async () => ({ ok: true }),
+      domainQuery: async () => ({ ok: true }),
+    };
+    const r = await fetchAndStoreDocBytes('gov', { docId: 1, propertyId: 1, sourceUrl: '/sites/TeamBriggs20/x.pdf', documentType: 'lease', fileName: 'x.pdf' }, deps);
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'sharepoint_fetch_unset');
   });
 });
 

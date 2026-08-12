@@ -195,7 +195,7 @@ export default withErrorHandler(async function handler(req, res) {
       try {
         const r = await backfillDocBytes(domain, {
           limit: req.query.limit, documentType: req.query.document_type || null,
-          before: req.query.before || null,
+          before: req.query.before || null, source: req.query.source || null,
         });
         return res.status(200).json(r);
       } catch (e) {
