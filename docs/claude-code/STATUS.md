@@ -454,6 +454,18 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 96 landed — PR #1693 MERGED + deployed; the W9.4 unlock is IN
+Root cause: FOUR Outlook writers flattened Graph {name,address}→bare email. Shared parser
+`outlook-recipients.js` (never fabricates an address); forward-only `metadata.from_name`/
+`to_names[]` on all four writers; comms index binds the pairs. **FROM names capture immediately;
+TO/CC needs Scott's ONE-TIME PA flow change** (Select+Join click-steps in
+`docs/audits/W9_4_display_name_capture_2026-08-12.md`). 15 tests; full suite green. Second
+starvation finding confirmed orthogonal (correspondents = parties/deals, not owner LLCs — W9.5
+candidate input, flagged not scoped). **Flip path: (1) Scott applies the PA change; (2) a few
+days' mail accrual; (3) `reachability-harvest-tick?score=1&n=10` shows non-zero
+header_name_pairs; (4) Cowork flips `W9_2_REACHABILITY_HARVEST` — three arms live.** Kickoff
+status updated.
+
 ### Extended misparse sweep APPLIED 2026-08-12 — 38 seeded (by_class: street 18 / tm_vocab 5 /
 doc_label 2 / bare_title 8 / sentence_fragment 5); dry-run reviewed clean (no real people).
 Junk lane now holds 38 tm_misparse deterministic dismisses (the original 23 were still unconfirmed
