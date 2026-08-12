@@ -24,6 +24,7 @@
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { appendActivityEvent } from './activity-events.js';
 import { growCadenceFromOutreach } from './cadence-engine.js';
+import { parseAddress, parseAddressList } from './outlook-recipients.js';
 
 // ---- shared helpers --------------------------------------------------------
 
@@ -81,6 +82,14 @@ export async function handleOutlookMessageExtract(job) {
   const toEmails  = extractRecipients(p.toRecipients);
   const ccEmails  = extractRecipients(p.ccRecipients);
   const allParties = [fromEmail, ...toEmails, ...ccEmails].filter(Boolean);
+  // Prompt 96 — preserve display names alongside the flattened addresses so the
+  // canonical activity_events row (comms-harvest feedstock) carries name↔email
+  // pairs, not just bare emails. Graph delivers { emailAddress:{ name,address } }.
+  const fromName = parseAddress(p.from).name || null;
+  const toNames  = [
+    ...parseAddressList(p.toRecipients),
+    ...parseAddressList(p.ccRecipients),
+  ].filter((x) => x.name).map((x) => ({ name: x.name, email: x.email }));
 
   if (!allParties.length) return { ok: true, result: { skipped: 'no_parties' } };
 
@@ -169,7 +178,9 @@ export async function handleOutlookMessageExtract(job) {
         conversation_id:     p.conversationId || null,
         is_sent:             isSent,
         from_email:          fromEmail,
+        from_name:           fromName,
         to_emails:           toEmails,
+        to_names:            toNames.length ? toNames : null,
         cc_emails:           ccEmails,
         has_attachments:     !!p.hasAttachments,
         linked_unified_ids:  tracked.map(c => c.unified_id),

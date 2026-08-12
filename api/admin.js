@@ -4569,6 +4569,31 @@ async function harvestBuildCommsIndex() {
         }
         const sigPhones = RH.extractSignaturePhones(RH.signatureRegion(row.body));
         if (sigPhones.length) counts.signature_phones += sigPhones.length;
+        // ---- Prompt 96 — structured name↔email pairs (from_name / to_names[]) ----
+        // Forward-only feedstock: the loggers now preserve Graph display names.
+        // A pair binds a display NAME to its address directly (no header string to
+        // parse), so it is the cleanest header-pair source when present.
+        const structuredPairs = [];
+        {
+          const fromEmailForName = (typeof md.from === 'string' && md.from) || (typeof md.from_email === 'string' && md.from_email) || null;
+          if (typeof md.from_name === 'string' && md.from_name.trim() && fromEmailForName) {
+            structuredPairs.push({ name: md.from_name.trim(), email: fromEmailForName });
+          }
+          if (Array.isArray(md.to_names)) {
+            for (const p of md.to_names) {
+              if (p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim() && typeof p.email === 'string' && p.email) {
+                structuredPairs.push({ name: p.name.trim(), email: p.email });
+              }
+            }
+          }
+        }
+        for (const p of structuredPairs) {
+          if (RH.isInternalEmail(p.email) || RH.isGenericInbox(p.email)) continue;
+          const quote = `${p.name} <${p.email}>`;
+          addName(p.name, p.email, null, quote, mid, st, 'header');
+          for (const sp of sigPhones) addName(p.name, null, sp.phone, sp.span, mid, st, 'signature');
+          addParticipant(anchors, p.name, p.email, sigPhones[0] ? sigPhones[0].phone : null, quote, mid, st);
+        }
         for (const raw of rawHeaders) {
           const { name, email } = RH.parseHeaderAddress(raw);
           if (email && (RH.isInternalEmail(email) || RH.isGenericInbox(email))) continue;
