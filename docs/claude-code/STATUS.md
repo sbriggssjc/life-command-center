@@ -454,6 +454,17 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅ W9.1 STAGE 1 LIVE 2026-08-12 — flag flipped after clean dry-run
+Sheet reviewed: 5/40 proposals on the top-value window (crossref 2, broker 3), 35 honest
+no_source, scan_errors [], value-ranked correctly. Quality graded: Acquest attach = textbook;
+**two watch-classes flagged for lane attention** — (1) naming-core false-bridge risk (PCCP ←
+"Pacific Coast Properties LP" — possibly distinct firms; REJECT in lane if read as distinct);
+(2) firm-as-person broker candidates ("FD Stonewater"). If lane accept-rates show these classes
+noisy, a tune prompt tightens the crossref matcher + adds a firm-name guard to broker mints.
+**Cowork flipped `W9_1_CONTACT_ACQUISITION` → on** — nightly 4:55 cron walks the no-contact pool.
+Remaining W9 gates: harvest (mail accrual), SOS (Scott's GaryBuilt install per gov runbook +
+token rotations).
+
 ### ✅ WAVE 9 BUILD-OUT COMPLETE (5/5) — prompts 98 & 99 merged + deployed 2026-08-12
 
 | # | Outcome | Gate |
