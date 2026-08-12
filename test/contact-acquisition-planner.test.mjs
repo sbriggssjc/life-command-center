@@ -198,3 +198,53 @@ test('the verdict writer records the reversal ledger BEFORE the mutation', () =>
   assert.ok(ledgerAt > 0 && linkCallAt > ledgerAt, 'ledger written before the attach/mint');
   assert.match(branch, /status: 'rejected'/); // reject path keeps the row
 });
+
+// ── W9.1 Stage 2 — SOS-direct stage (proposal builder + order + typing) ───────
+import {
+  STAGE_2_ORDER, resolveStageOrder, buildSosProposal,
+} from '../api/_shared/contact-acquisition-planner.js';
+
+test('STAGE_2_ORDER appends SOS last; resolveStageOrder gates it on the flag', () => {
+  assert.deepEqual(STAGE_2_ORDER, [STAGE_CROSSREF, STAGE_INSTITUTION, STAGE_DEED, STAGE_BROKER, STAGE_SOS]);
+  assert.equal(STAGE_2_ORDER[STAGE_2_ORDER.length - 1], STAGE_SOS);
+  assert.deepEqual(resolveStageOrder(false), STAGE_1_ORDER);
+  assert.deepEqual(resolveStageOrder(true), STAGE_2_ORDER);
+});
+
+test('STAGE_SOS routes to a managing_member MINT', () => {
+  assert.equal(stageProposedKind(STAGE_SOS), 'mint');
+  assert.equal(stageContactRole(STAGE_SOS), 'managing_member');
+  assert.equal(STAGE_META[STAGE_SOS].role, 'managing_member');
+});
+
+test('buildSosProposal mints a managing_member from a sanitized SOS hit', () => {
+  const p = buildSosProposal(
+    { entity_id: 'o1', owner_name: 'ACME HOLDINGS LLC' },
+    { ok: true, state_resolved: 'fl', person_name: 'Jane Q Smith', role: 'managing_member' }
+  );
+  assert.equal(p.stage, STAGE_SOS);
+  assert.equal(p.proposed_kind, 'mint');
+  assert.equal(p.candidate_name, 'Jane Q Smith');
+  assert.equal(p.proposed_contact_role, 'managing_member');
+  assert.equal(p.evidence_source, 'sos_registry:FL');
+  assert.equal(p.source_pointer.source, 'sos_registry');
+  assert.equal(p.source_pointer.state, 'FL');
+});
+
+test('buildSosProposal returns null on an unresolved / junk / firm result', () => {
+  assert.equal(buildSosProposal({}, { ok: false, reason: 'unconfigured' }), null);
+  assert.equal(buildSosProposal({}, { ok: true, person_name: '' }), null);
+  // a firm-suffix "name" is not a plausible human → rejected by the person guard.
+  assert.equal(buildSosProposal({}, { ok: true, person_name: 'Cogency Global Inc', role: 'agent' }), null);
+});
+
+test('finalizeProposal stamps a managing_member role for a SOS proposal', () => {
+  const p = buildSosProposal(
+    { entity_id: 'o9', owner_name: 'X LLC', primary_domain: 'gov' },
+    { ok: true, state_resolved: 'CA', person_name: 'Sam Real Person', role: 'managing_member' }
+  );
+  const row = finalizeProposal({ entity_id: 'o9', owner_name: 'X LLC', primary_domain: 'gov' }, p);
+  assert.equal(row.stage, STAGE_SOS);
+  assert.equal(row.proposed_contact_role, 'managing_member');
+  assert.ok(row.subject_ref.startsWith('ca:sos_direct:o9:'));
+});

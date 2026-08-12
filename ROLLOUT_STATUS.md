@@ -5,6 +5,14 @@ shipped, where it lives, and the operator switch (if any) that lights it up.
 
 ---
 
+## Wave 9 — Contact acquisition & the no-contact gap
+
+| Unit | State | Summary |
+|---|---|---|
+| **W9.1 Stage 2** SOS-direct via residential fetch proxy | **BUILT — flag off** (`W9_1_SOS_DIRECT`) | The residential-egress lever the SOS handlers have needed since 2026-07-22 (FL Cloudflare / CA Incapsula 403 to datacenter IPs). `government-lease/sos-proxy/` — a locked-down zero-dep Node fetch proxy for public SOS/registry hosts (host allowlist, GET/JSON-POST, ~2MB cap, timeout, human-like min-interval + per-host daily cap, JSONL log, `/health`), exposed only via the cloudflared tunnel + a **NEW** CF Access Service Auth policy/token (never the ollama token), localhost bind, 16 node --test cases. Transport option `SOS_PROXY_URL` (+ dedicated `SOS_PROXY_CF_ACCESS_CLIENT_ID/SECRET`) in the gov Python fetcher (`ProxyHttpClient`) AND the LCC engine's SOS webhook seam — unset ⇒ direct + honest-blocked as today; a proxy decline/unreachable ⇒ HostBlocked (never silent success). SOS stage (`STAGE_SOS`) appended to the contact-acquisition runner when the flag is on (weekly cadence, capped `CONTACT_ACQ_SOS_MAX`), **proposal-only into `contact_acquisition_review` — confirm never auto**. Migration `20260812140000` (flag row + `sos_registry` field_source_priority ladder). Install + tunnel + CF Access + rollout gate: `government-lease/docs/RUNBOOK_sos_proxy_garybuilt.md`. **Live steps (Scott):** install the proxy, re-verify FL/CA adapters through it (side-by-side vs Railway-direct 403), sample-sheet review, then Cowork flips `W9_1_SOS_DIRECT`. Rotate BOTH the new sos-proxy token AND the ollama `lcc-railway` token while in the Zero Trust dashboard. |
+
+---
+
 ## Wave 7 — Comms-driven context propagation
 Plan: `docs/architecture/WAVE7_COMMS_CONTEXT_PROPAGATION_PLAN.md`
 

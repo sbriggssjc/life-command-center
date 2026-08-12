@@ -35,6 +35,17 @@ export const STAGE_SOS = 'sos_direct'; // Stage 2 — reserved (not run in Stage
 // at the first stage that yields a proposal. Stage 2 appends STAGE_SOS here later.
 export const STAGE_1_ORDER = [STAGE_CROSSREF, STAGE_INSTITUTION, STAGE_DEED, STAGE_BROKER];
 
+// Stage-2 order — the SOS-direct fetch (registered agent / managing-member from a
+// state registry) is the LAST, most expensive resort: only reached for an owner no
+// internal source could name. Gated behind W9_1_SOS_DIRECT (registry data moves slowly
+// → weekly cadence) + the residential fetch proxy (W9.1 Stage 2). Unset ⇒ Stage-1 order.
+export const STAGE_2_ORDER = [STAGE_CROSSREF, STAGE_INSTITUTION, STAGE_DEED, STAGE_BROKER, STAGE_SOS];
+
+// Pick the runner order for a tick — appends STAGE_SOS only when Stage 2 is enabled.
+export function resolveStageOrder(sosEnabled) {
+  return sosEnabled ? STAGE_2_ORDER : STAGE_1_ORDER;
+}
+
 export const PROPOSED_KIND_ATTACH = 'attach';
 export const PROPOSED_KIND_MINT = 'mint';
 
@@ -46,6 +57,9 @@ export const STAGE_META = {
   [STAGE_INSTITUTION]:{ kind: PROPOSED_KIND_ATTACH, role: 'prospecting_contact' },
   [STAGE_DEED]:       { kind: PROPOSED_KIND_MINT,   role: 'deed_signatory' },
   [STAGE_BROKER]:     { kind: PROPOSED_KIND_MINT,   role: 'broker_of_record' },
+  // SOS-direct: the managing-member / registered-agent on the owner's own state
+  // registry filing — a MINT typed managing_member (the sanitized SOS role).
+  [STAGE_SOS]:        { kind: PROPOSED_KIND_MINT,   role: 'managing_member' },
 };
 
 export function stageProposedKind(stage) { return (STAGE_META[stage] || {}).kind || null; }
@@ -260,6 +274,36 @@ export function buildBrokerProposal(owner, broker) {
     source_pointer: { via: 'broker_of_record', sale_id: b.sale_id || null, listing_id: b.listing_id || null, property_id: b.property_id || null, domain: b.domain ? normDomain(b.domain) : null, broker_firm: b.broker_firm || null },
     confidence: 0.65,
     reason: 'Listing broker of record on the sale that conveyed this asset to the owner.',
+  };
+}
+
+// Stage 2 — SOS-direct: the managing-member / registered-agent named on the owner's
+// own Secretary-of-State registry filing, fetched (through the residential proxy) by
+// the sos-lookup adapter. `sosResult` is the SANITIZED adapter output
+// ({ ok, state_resolved, person_name, role }); we re-apply the person guard (belt +
+// suspenders) and MINT a lane-only contact typed managing_member. Provenance
+// `sos_registry` (the fsp/authority ladder ranks it, the SOS-official tier).
+export function buildSosProposal(owner, sosResult) {
+  const r = sosResult && typeof sosResult === 'object' ? sosResult : {};
+  if (!r.ok || !r.person_name) return null;
+  const name = normalizeWhitespace(r.person_name);
+  if (!looksLikePersonName(name)) return null;
+  const state = r.state_resolved ? String(r.state_resolved).toUpperCase() : null;
+  const role = r.role || 'managing_member';
+  return {
+    stage: STAGE_SOS,
+    proposed_kind: PROPOSED_KIND_MINT,
+    candidate_entity_id: null,
+    candidate_name: name,
+    candidate_role: role,
+    candidate_title: null,
+    proposed_contact_role: 'managing_member',
+    evidence_quote: null,
+    evidence_source: 'sos_registry' + (state ? ':' + state : ''),
+    source_pointer: { via: 'sos_direct', source: 'sos_registry', state, role },
+    confidence: 0.7,
+    reason: 'Managing member / registered agent on the owner\'s '
+      + (state ? state + ' ' : '') + 'Secretary-of-State registry filing.',
   };
 }
 

@@ -34,10 +34,12 @@ import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import {
-  STAGE_1_ORDER, STAGE_CROSSREF, STAGE_INSTITUTION, STAGE_DEED, STAGE_BROKER,
-  valueGateOwners, runStagesForOwner, finalizeProposal, normDomain,
+  STAGE_CROSSREF, STAGE_INSTITUTION, STAGE_DEED, STAGE_BROKER, STAGE_SOS,
+  valueGateOwners, runStagesForOwner, finalizeProposal, normDomain, resolveStageOrder,
   buildCrossrefProposal, buildInstitutionProposal, buildDeedSignatoryProposal, buildBrokerProposal,
+  buildSosProposal,
 } from '../_shared/contact-acquisition-planner.js';
+import { buildSosLookupAdapter } from '../_shared/sos-lookup.js';
 
 function envFlagOn(name) {
   const v = String(process.env[name] || '').toLowerCase();
@@ -52,6 +54,41 @@ async function fetchFlagRow() {
     'feature_flags_registry?flag=eq.W9_1_CONTACT_ACQUISITION&select=flag,state&limit=1',
     undefined, { countMode: 'none' });
   return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+}
+
+// W9.1 Stage 2 — SOS-direct. Enabled ⇒ the runner appends the STAGE_SOS fetch (via
+// the residential proxy). Off ⇒ the order is Stage-1 only (honest-blocked, no fetch).
+export function sosDirectEnabled(flagRow) {
+  if (envFlagOn('W9_1_SOS_DIRECT')) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+async function fetchSosFlagRow() {
+  const r = await opsQuery('GET',
+    'feature_flags_registry?flag=eq.W9_1_SOS_DIRECT&select=flag,state&limit=1',
+    undefined, { countMode: 'none' });
+  return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+}
+
+// The SOS fetch seam — POSTs to OWNER_ENRICH_SOS_URL (which fronts the fetch+parse
+// service; that service reaches the SOS site through the GaryBuilt residential proxy).
+// Attaches the DEDICATED CF Access service-token headers (never the ollama token) so
+// the request passes the proxy hostname's Access policy. Unset URL ⇒ the sos-lookup
+// adapter returns `unconfigured` and STAGE_SOS no-ops (honest-blocked).
+export function sosWebhookFetcher() {
+  const url = process.env.OWNER_ENRICH_SOS_URL;
+  if (!url) return undefined;
+  return async function postSos(adapter, name, state) {
+    const headers = { 'content-type': 'application/json' };
+    if (process.env.SOS_PROXY_CF_ACCESS_CLIENT_ID && process.env.SOS_PROXY_CF_ACCESS_CLIENT_SECRET) {
+      headers['CF-Access-Client-Id'] = process.env.SOS_PROXY_CF_ACCESS_CLIENT_ID;
+      headers['CF-Access-Client-Secret'] = process.env.SOS_PROXY_CF_ACCESS_CLIENT_SECRET;
+    }
+    if (process.env.SOS_PROXY_TOKEN) headers['authorization'] = 'Bearer ' + process.env.SOS_PROXY_TOKEN;
+    const body = JSON.stringify({ args: [{ state: adapter && adapter.state, name, search_hint: adapter && adapter.search_hint }, name, state] });
+    const resp = await fetch(url, { method: 'POST', headers, body });
+    if (!resp.ok) throw new Error('OWNER_ENRICH_SOS_URL ' + resp.status);
+    return await resp.json();
+  };
 }
 
 // ── HTTP entrypoint ─────────────────────────────────────────────────────────
@@ -75,14 +112,22 @@ export async function handleContactAcquisitionEngineTick(req, res) {
 
   const flagRow = await fetchFlagRow();
   const enabled = contactAcquisitionEnabled(flagRow);
+  const sosFlagRow = await fetchSosFlagRow();
+  const sosEnabled = sosDirectEnabled(sosFlagRow);
+  // SOS is the expensive last resort — cap live fetches per tick (weekly cadence; the
+  // cron POSTs weekly). Bounded per the house pattern; 0 ⇒ effectively off.
+  const SOS_MAX = sosEnabled ? Math.max(0, parseInt(process.env.CONTACT_ACQ_SOS_MAX || '15', 10)) : 0;
+  let sosAttempts = 0;
 
   const result = {
     mode: dryRun ? 'dry_run' : 'apply',
     flag_state: String(flagRow?.state || 'off'),
     flag_enabled: enabled,
+    sos_flag_state: String(sosFlagRow?.state || 'off'),
+    sos_enabled: sosEnabled,
     scanned_owners: 0,
     owners_with_proposal: 0,
-    stages: { crossref: 0, institution: 0, deed_signatory: 0, broker_of_record: 0 },
+    stages: { crossref: 0, institution: 0, deed_signatory: 0, broker_of_record: 0, sos_direct: 0 },
     proposed: 0,
     dropped: 0,
     already_proposed_excluded: 0,
@@ -137,6 +182,13 @@ export async function handleContactAcquisitionEngineTick(req, res) {
   const brokerByOwner = await buildBrokerMap(propMap, result.scan_errors);
   const deedByOwner = await buildDeedMap(propMap, result.scan_errors);
 
+  // Stage-2 SOS adapter (built ONCE per tick when enabled). It reuses the sos-lookup
+  // framework's state inference + person guards; the fetch seam carries the CF Access
+  // headers to the residential proxy. Unconfigured (no OWNER_ENRICH_SOS_URL or no
+  // enabled adapter) ⇒ returns { ok:false, reason:'unconfigured' } and STAGE_SOS no-ops.
+  const stageOrder = resolveStageOrder(sosEnabled);
+  const sosLookup = sosEnabled ? buildSosLookupAdapter({ fetch: sosWebhookFetcher() }) : null;
+
   // ── Per-owner stage runner: cost-ordered, STOP AT FIRST SUCCESS. Stage fns are
   // pure map lookups (deed/broker) or a cheap per-owner RPC (crossref/institution).
   const droppedRows = [];
@@ -173,9 +225,19 @@ export async function handleContactAcquisitionEngineTick(req, res) {
         if (!b) return null;
         return buildBrokerProposal(o, b);
       },
+      // Stage 2 — SOS-direct (only present when enabled; the runner reaches it only
+      // if every internal stage returned null). Bounded by SOS_MAX live fetches/tick.
+      ...(sosLookup ? { [STAGE_SOS]: async (o) => {
+        if (sosAttempts >= SOS_MAX) return null;
+        sosAttempts++;
+        try {
+          const res = await sosLookup({ owner_name: o.owner_name, owner_state: o.owner_state, state_of_incorporation: o.state_of_incorporation });
+          return buildSosProposal(o, res);
+        } catch (e) { result.scan_errors.push({ stage: 'sos_direct', owner: o.entity_id, error: String(e && e.message || e) }); return null; }
+      } } : {}),
     };
     // eslint-disable-next-line no-await-in-loop
-    const outcome = await runStagesForOwner(owner, stageFns, STAGE_1_ORDER);
+    const outcome = await runStagesForOwner(owner, stageFns, stageOrder);
     if (!outcome.proposal) { result.no_source++; continue; }
     const row = finalizeProposal(owner, outcome.proposal);
     finalized.push(row);
