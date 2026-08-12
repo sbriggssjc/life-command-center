@@ -59,6 +59,9 @@ import {
   validateFigures, renderFindingsDoc, renderFixUnitStubs,
 } from './_shared/systemic-findings.js';
 import {
+  assembleCoverage, renderCoverageDoc, coveragePct as w95CoveragePct,
+} from './_shared/link-coverage.js';
+import {
   buildMatchDisambigPrompt, parseAssistJson, normalizeAssistRanking,
   cardFromDecision, assistAgreement,
 } from './_shared/match-disambig-assist.js';
@@ -201,6 +204,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
     case 'reachability-harvest-tick':  return handleReachabilityHarvestTick(req, res);
     case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
+    case 'link-coverage-tick':         return handleLinkCoverageTick(req, res);
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
     case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
     case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
@@ -5131,6 +5135,175 @@ async function handleReachabilityHarvestTick(req, res) {
 }
 
 // ============================================================================
+// W9.5 (Prompt 97) — Propagation-integrity: the link-coverage tick.
+//   GET  /api/link-coverage-tick   -> the full unified cross-DB coverage table
+//                                     (computed, read-only, no flag). Honest zeros
+//                                     / n/a where a source is unreachable.
+//   POST /api/link-coverage-tick   -> ALSO persist the monthly snapshot (delta
+//                                     source). Read-only unit: writes ONLY its own
+//                                     snapshot row. Deterministic — NO LLM.
+// The monthly snapshot is normally written by the U4 cron POST path (no second
+// cron); this route lets an operator compute on-demand and snapshot explicitly.
+// ============================================================================
+
+// Each domain chain view exposes (link_name, total, linked, pct); we stamp the
+// domain + group. Failure of one source ⇒ that source's rows are simply absent
+// (measured:false downstream), never a thrown tick.
+async function fetchDomainChainCoverage(dom) {
+  const view = 'v_' + dom + '_w9_5_chain_coverage';
+  try {
+    const r = await domainQuery(dom, 'GET', view + '?select=link_name,total,linked');
+    if (r.ok && Array.isArray(r.data)) {
+      return r.data.map((row) => ({
+        link_name: row.link_name, domain: dom, group: 'chain',
+        total: Number(row.total) || 0, linked: Number(row.linked) || 0,
+      }));
+    }
+    return { error: dom + '_chain: ' + JSON.stringify(r.data || r.status) };
+  } catch (e) { return { error: dom + '_chain: ' + (e?.message || e) }; }
+}
+
+// The LCC-Opps mirror/correspondence rows (already unified in one view).
+async function fetchLccMirrorCoverage() {
+  try {
+    const r = await opsQuery('GET', 'v_lcc_w9_5_link_coverage?select=link_name,domain,group_name,total,linked');
+    if (r.ok && Array.isArray(r.data)) {
+      return r.data.map((row) => ({
+        link_name: row.link_name, domain: row.domain || 'lcc', group: row.group_name || 'mirror',
+        total: Number(row.total) || 0, linked: Number(row.linked) || 0,
+      }));
+    }
+    return { error: 'lcc_mirror: ' + JSON.stringify(r.data || r.status) };
+  } catch (e) { return { error: 'lcc_mirror: ' + (e?.message || e) }; }
+}
+
+// Domain-owner → ops-entity MIRROR coverage: a cross-DB join done in the tick.
+// total = the domain's true_owner count (from the chain view's true_to_contact
+// row); linked = the ops external_identities true_owner identities for that
+// source_system. A domain owner with no ops identity is un-mirrored — the gap
+// the mirror measures. Best-effort; a missing side ⇒ the row is omitted.
+async function fetchMirrorRows(domainChainRows) {
+  const rows = [];
+  let error = null;
+  // Ops side: per-source-system domain-owner identity counts.
+  const opsCounts = {};
+  try {
+    for (const ss of ['dia', 'gov']) {
+      const r = await opsQuery('GET',
+        'external_identities?source_type=eq.true_owner&source_system=eq.' + ss + '&select=external_id&limit=1',
+        undefined, { countMode: 'exact' });
+      opsCounts[ss] = (typeof r.count === 'number') ? r.count : 0;
+    }
+  } catch (e) { error = 'mirror_ops: ' + (e?.message || e); }
+  for (const ss of ['dia', 'gov']) {
+    const chain = (domainChainRows[ss] || []).find((x) => x.link_name === 'true_to_contact');
+    const total = chain ? chain.total : null;   // domain true_owner count
+    if (total == null) continue;                 // domain unreachable ⇒ skip honestly
+    rows.push({
+      link_name: 'owner_to_ops_mirror', domain: ss, group: 'mirror',
+      total, linked: opsCounts[ss] || 0,
+      note: 'domain true_owners with an ops external_identity mirror',
+    });
+  }
+  return { rows, error };
+}
+
+// Assemble the full unified coverage table for a period. Pure planner does the
+// math; this fn only gathers the cross-DB counts + prior snapshot. Read-only.
+async function computeLinkCoverage(period, now) {
+  const scanErrors = [];
+  const [dia, gov, lcc] = await Promise.all([
+    fetchDomainChainCoverage('dia'),
+    fetchDomainChainCoverage('gov'),
+    fetchLccMirrorCoverage(),
+  ]);
+  const domainChainRows = {};
+  const rawRows = [];
+  for (const [dom, res] of [['dia', dia], ['gov', gov]]) {
+    if (Array.isArray(res)) { domainChainRows[dom] = res; rawRows.push(...res); }
+    else if (res && res.error) scanErrors.push(res.error);
+  }
+  if (Array.isArray(lcc)) rawRows.push(...lcc);
+  else if (lcc && lcc.error) scanErrors.push(lcc.error);
+
+  const mirror = await fetchMirrorRows(domainChainRows);
+  if (mirror.error) scanErrors.push(mirror.error);
+  rawRows.push(...mirror.rows);
+
+  const prevLinks = await fetchPrevLinkCoverage(period);
+  const coverage = assembleCoverage(rawRows, { period, now: now ? now.toISOString() : null, prevLinks });
+  coverage.scan_errors = scanErrors;
+  return coverage;
+}
+
+async function recordLinkCoverageHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'link_coverage', p_check_name: 'w9_5_link_coverage',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function fetchPrevLinkCoverage(period) {
+  try {
+    const r = await opsQuery('GET', 'lcc_w9_5_link_coverage_snapshot?select=period,links&period=lt.'
+      + encodeURIComponent(period) + '&order=period.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && Array.isArray(r.data[0].links)) return r.data[0].links;
+  } catch (_e) { /* best-effort */ }
+  return null;
+}
+
+// Persist the per-period unified snapshot (upsert on period). Read-only unit's
+// ONLY write. Returns the snapshot id (or null). Best-effort — a failed snapshot
+// never breaks the tick response.
+async function snapshotLinkCoverage(coverage, sourceRunId) {
+  try {
+    const up = await opsQuery('POST', 'lcc_w9_5_link_coverage_snapshot?on_conflict=period', {
+      period: coverage.period, computed_at: coverage.generated_at || new Date().toISOString(),
+      source_run_id: sourceRunId, links: coverage.links, totals: coverage.totals,
+    }, { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+    if (up.ok && Array.isArray(up.data) && up.data[0]) return up.data[0].snapshot_id;
+  } catch (e) { console.warn('[link-coverage] snapshot upsert failed', e?.message || e); }
+  return null;
+}
+
+async function handleLinkCoverageTick(req, res) {
+  try {
+    if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+    const user = await authenticate(req, res);
+    if (!user) return;
+    const now = new Date();
+    const period = req.query.period || req.body?.period || currentPeriod(now);
+    const coverage = await computeLinkCoverage(period, now);
+
+    if (req.method === 'POST') {
+      const sourceRunId = 'w95_' + now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+      const snapshotId = await snapshotLinkCoverage(coverage, sourceRunId);
+      await recordLinkCoverageHealth({ status: coverage.scan_errors.length ? 'amber' : 'green',
+        count: coverage.totals.measured || 0,
+        lastError: coverage.scan_errors.length ? coverage.scan_errors.length + ' source(s) unreachable' : null,
+        details: { period, snapshot_id: snapshotId, totals: coverage.totals,
+          scan_errors: coverage.scan_errors, source_run_id: sourceRunId } });
+      return res.status(200).json({ ok: true, mode: 'apply', period, source_run_id: sourceRunId,
+        snapshot_id: snapshotId, totals: coverage.totals, scan_errors: coverage.scan_errors,
+        coverage, doc_markdown: renderCoverageDoc(coverage, { generatedAt: now.toISOString() }) });
+    }
+
+    return res.status(200).json({ ok: true, mode: 'dry_run', period, coverage,
+      scan_errors: coverage.scan_errors,
+      doc_markdown: renderCoverageDoc(coverage, { generatedAt: now.toISOString() }),
+      note: 'W9.5 propagation-integrity: cross-DB link coverage computed deterministically (counts only, no LLM). '
+        + 'Read-only: no rows written. POST additionally persists the monthly snapshot (the MoM delta source the '
+        + 'U4 Connectedness section reads). The U4 monthly cron POST also writes this snapshot — no second cron.' });
+  } catch (e) {
+    if (res.headersSent) return;
+    return res.status(500).json({ ok: false, error: (e && e.message) ? e.message : String(e), section: 'handler' });
+  }
+}
+
+// ============================================================================
 // W8 U4 (Prompt 70) — Systemic-findings monthly report tick.
 //   GET  /api/systemic-findings-tick            -> dry-run: the full COMPUTED
 //                                                  findings JSON (honest zeros).
@@ -5164,7 +5337,7 @@ function currentPeriod(d) {
 // Each read is best-effort — a failed source yields an honest empty/zero, never a
 // thrown tick. Naming-hygiene backlog is read from the latest U1 apply snapshot
 // (junk_review_batch.details.naming_hygiene_backlog); null when U1 has not applied.
-async function fetchSystemicFindingsInputs() {
+async function fetchSystemicFindingsInputs(period, now) {
   const rows = async (path) => {
     try { const r = await opsQuery('GET', path); return (r.ok && Array.isArray(r.data)) ? r.data : []; }
     catch (_e) { return []; }
@@ -5205,8 +5378,15 @@ async function fetchSystemicFindingsInputs() {
     }
   } catch (_e) { /* honest null */ }
 
+  // W9.5 — cross-DB propagation-integrity coverage (best-effort; a failed compute
+  // yields null → the Connectedness section renders an honest "uncounted" note).
+  let connectedness = null;
+  try { connectedness = await computeLinkCoverage(period || currentPeriod(now || new Date()), now || new Date()); }
+  catch (_e) { connectedness = null; }
+
   return {
     ingest_clusters: ingestClusters, flow_clusters: flowClusters, windows: windows || {},
+    connectedness,
     provenance: { unranked: provUnranked, conflicts: provConflicts },
     chain: { ...(chainRollup || {}), gaps: chainGaps, u3: u3d },
     precision: { deal_dropped: dealDropped, u3_dropped: u3Dropped,
@@ -5302,7 +5482,7 @@ async function systemicFindingsTickImpl(req, res) {
   const now = new Date();
   const period = req.query.period || req.body?.period || currentPeriod(now);
 
-  const inputs = await fetchSystemicFindingsInputs();
+  const inputs = await fetchSystemicFindingsInputs(period, now);
   const prevSections = await fetchPrevSnapshotSections(period);
   const report = assembleReport(inputs, { period, now: now.toISOString(), prevSections });
 
@@ -5334,6 +5514,12 @@ async function systemicFindingsTickImpl(req, res) {
       }, { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
       if (up.ok && Array.isArray(up.data) && up.data[0]) snapshotId = up.data[0].snapshot_id;
     } catch (e) { console.warn('[systemic-findings] snapshot upsert failed', e?.message || e); }
+
+    // W9.5 — the monthly link-coverage snapshot rides THIS cron POST (no second
+    // cron). inputs.connectedness is the coverage object already computed above.
+    if (inputs.connectedness && inputs.connectedness.period) {
+      await snapshotLinkCoverage(inputs.connectedness, sourceRunId).catch(() => null);
+    }
 
     // The doc IS the consumer — open ONE research_task pointing at it (no new lane).
     // Idempotent on (research_type, domain, source_table, source_record_id=period).
