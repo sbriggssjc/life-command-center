@@ -112,3 +112,8 @@ retired; ollama-primary intake is VALIDATED at production quality.
 
 Wave 5 remains CLOSED; this addendum upgrades the W5.3 verdict from "tune + interim revert" to
 **"hardened prompt validated; keep ollama-primary"** with the two caveats tracked.
+
+**Addendum correction (2026-08-11, post-93):** stamp reconstruction from diagnostics revealed the
+Aug-10 burst DID include cloud fallbacks — 18 rows openai (edge 400 → gpt-4o-mini, the pre-82
+window). Post-82 stamp coverage now 100% (87/87 backfilled); "zero cloud fallbacks" above is
+superseded. sold_* strip live (7 drift rows corrected).

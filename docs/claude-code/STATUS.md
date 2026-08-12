@@ -454,6 +454,21 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Prompt 93 landed — PR #1690 MERGED + deployed; W9.4 queued as prompt 94
+
+93 both micros verified from response: (A) donor tick keyset-cursored w/ wrap-and-recheck
+(re-score can mint links in scanned windows — a full wrap re-checks); root cause was
+permanently-unmatchable rows squatting the fixed window. (B) Aug-10 burst root-caused (pre-82
+deploy window, openai-fallback branch); **stamps RECONSTRUCTED from per-row diagnostics — post-82
+coverage now 100% (87/87)**, 18 rows honestly openai (W5_3 addendum corrected — "zero cloud
+fallbacks" superseded), 48 non-deal rows marked none; `sold_*` strip live (7 drift rows); 82 guard
+extended to edge fns. **Prompt 94 queued = W9.4 comms-harvest as a THIRD ARM of the existing
+harvest tick** (header pairs deterministic / signature phones via LLM+verbatim / create-contact
+shape lane-only; privacy-scoped; comms_observed@40 already registered) — **its dry-run pass is
+the W9.2 flip trigger** (one flag, three arms). U3 lane = "Ownership links — Ollama proposals"
+in the DC (21 cards; post-77 conflicts return as pick-the-survivor). Archive debts: 92 response
+docx still missing from done/; CHECK-widening migration file still owed by Claude Code.
+
 ### Nightly 2026-08-11 + FULL REVIEW — 92 verified, W5.3 RE-GRADE DELIVERED, prompt 93 queued
 
 **92 verified from behavior** (two run_ids × 20 — the assist pool walks; response docx never
