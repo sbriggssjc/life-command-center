@@ -2187,17 +2187,27 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     }
     const useNativePath = eligibleNative.length > 0;
 
+    // Which orphaned PNGs are safe to embed on the Charts tab: only GENUINELY
+    // non-native templates. A template that IS in NATIVE_CHART_TEMPLATES but
+    // ended up orphaned is either (a) deliberately suppressed for this vertical
+    // (e.g. dia `rent_psf_box_quarterly` — superseded by the modeled variant),
+    // or (b) a native chart that failed to queue. In both cases its native
+    // chart is the source of truth — embedding a stale QuickChart PNG would
+    // duplicate/contradict it, so exclude it. (Scott flagged the suppressed dia
+    // rent box reappearing as a PNG.)
+    const embeddableOrphans = orphanedPngs.filter(o =>
+      o && o.png
+      && !NATIVE_CHART_TEMPLATES.has(o.chart_template_id)
+      && !isChartSuppressed(vertical, o.chart_template_id)
+    );
+
     if (useNativePath) {
-      const embeddedOrphans = orphanedPngs.filter(o => o && o.png).length;
-      const noImageOrphans = orphanedPngs.length - embeddedOrphans;
+      const embeddedOrphans = embeddableOrphans.length;
       chartsSheet.getCell('B3').value =
         `${eligibleNative.length} native Excel charts (fully editable, live-linked to the Data_* tabs)` +
         (embeddedOrphans > 0
           ? ` + ${embeddedOrphans} image chart${embeddedOrphans === 1 ? '' : 's'} (rendered snapshots of templates not yet migrated to native) — every chart in one place.`
-          : ' — every chart in one place.') +
-        (noImageOrphans > 0
-          ? ` ${noImageOrphans} data-table view${noImageOrphans === 1 ? '' : 's'} ${noImageOrphans === 1 ? 'is' : 'are'} on ${noImageOrphans === 1 ? 'its' : 'their'} own Data_* tab${noImageOrphans === 1 ? '' : 's'}.`
-          : '');
+          : ' — every chart in one place.');
     } else {
       chartsSheet.getCell('B3').value =
         `LEGACY SNAPSHOT — auto-rendered via QuickChart from ${chartImages.length} chart configs ` +
@@ -2241,9 +2251,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
         });
         cursor += 27; // header + 25 chart rows + 1 spacer
       }
-      // Embed each non-native chart's PNG (skip any without a rendered image).
-      for (const img of orphanedPngs) {
-        if (!img || !img.png) continue;
+      // Embed each genuinely-non-native chart's PNG (suppressed / native-but-
+      // -orphaned templates are excluded above so no stale PNG duplicates a
+      // native chart).
+      for (const img of embeddableOrphans) {
         const titleCell = chartsSheet.getCell(`B${cursor}`);
         titleCell.value = img.name || img.chart_template_id;
         titleCell.font = titleFont;
