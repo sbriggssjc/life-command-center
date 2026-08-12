@@ -131,3 +131,9 @@ reports all blockers in an aggregate receipt. The next checkpoint requires separ
 stage one lane's exact official artifacts, independently verify release metadata and checksums, and leave the
 resulting packet `draft_unapproved`. Do not draw either 50-property sample until its packet receives separate
 execution authorization.
+
+The ASC-first staging contract is now implemented and tested without a downloader or storage integration. It
+validates files already present inside an explicitly approved private root, requires a matching independent
+attestation for all four artifacts, and emits only an aggregate `staged_verified_draft_only` receipt. The next
+checkpoint is an authorized ASC staging run that supplies the exact official releases and private storage
+boundary. IDTF staging, sample selection, database writes, and CRM promotion remain out of scope.

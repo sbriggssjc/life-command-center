@@ -1,6 +1,6 @@
 # Healthcare ASC and Fixed-Site IDTF Private Run Authorization v0.1
 
-**Status:** Design, synthetic contract, and release-template preflight complete; official runs remain unauthorized
+**Status:** Design, synthetic contract, release-template preflight, and ASC staging contract complete; official runs remain unauthorized
 **Scope:** ASC and fixed-site IDTF source acquisition, private profiling, and 50-property review  
 **Execution boundary:** No official artifact download, sample draw, database write, or CRM promotion
 
@@ -121,3 +121,24 @@ The preflight validator:
 Template preparation does not authorize downloading, drawing a sample, accessing a production system, or
 promoting a record. The next decision is whether to authorize a private artifact-staging procedure that records
 exact CMS release identities and independently recomputes hashes for one lane at a time.
+
+## 10. ASC-first artifact-staging contract
+
+`scripts/healthcare-discovery/artifact-staging.mjs` implements the local verification boundary without adding a
+downloader or storage client. It accepts only the frozen ASC template, an explicit absolute private staging
+root, the exact four-source bundle, and a separate verifier attestation for every artifact. It then:
+
+- rejects absolute, escaping, alias/root, missing, empty, and non-file artifact paths;
+- requires direct official CMS HTTPS artifact URLs and exact release dates;
+- independently computes byte size, whole-file SHA-256, and first-header SHA-256;
+- requires the supplied second-verifier values to match every computed value;
+- freezes deterministic release metadata; and
+- emits an aggregate-only receipt without local paths, object coordinates, signed URLs, or row identifiers.
+
+The receipt status is `staged_verified_draft_only`; both execution and sample draw remain false. The module
+does not download a source, upload an object, create a bucket, materialize approvals, draw a sample, or write to
+Supabase, LCC, or Salesforce. IDTF staging remains intentionally disabled until the ASC procedure is reviewed.
+
+The next authorization decision is whether to run this contract against four exact ASC artifacts already
+placed in an approved private staging root. That decision must identify the storage boundary and run operator;
+it is not implied by this repository checkpoint.
