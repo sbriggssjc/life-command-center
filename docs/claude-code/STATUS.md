@@ -10,6 +10,48 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-13 (Cowork, later) — prompt 103 reconciled; W9.6 FLIPPED LIVE; folder cleaned
+
+**Prompt 103 (W9.6 Path-B precision + fsp hygiene) reviewed, verified live post-redeploy, and W9.6 flipped ON.**
+All PRs merged + Railway redeploy live (Scott).
+
+- **Part A — Path-B precision (the flip gate): SHIPPED + verified live.** Three deterministic guards (no LLM):
+  (1) internal-team exclusion — reused the exported `INTERNAL_DOMAINS` (`northmarq.com`/`stanjohnsonco.com`)
+  from `voice-corpus-clean.js`, so Scott/Toby are never an owner-attribution subject; (2) brokerage-target
+  guard — new deterministic `isBrokerageOwnerName` / `lcc_is_brokerage_owner_name` stoplist drops brokerages
+  mislabeled `true_owner` (logged as a KNOWN upstream ORE labeling issue, NOT fixed here); (3) tie-tightening —
+  `relationship` tier now accepts only ownership/employment roles (`works_at`/`contact_at` or `metadata->>'role'`
+  in the owner/manager set), keeping `active_contact` via `owner_contact_pivot`. RPC gained `rel_role`,
+  `drop_reason`, and a `p_include_dropped` param (direct calls noise-free by default; the tick pulls tagged
+  noise for honest per-reason drop counts). **Verified live:** Path B clean **28** survivors, **0 internal /
+  0 brokerage**, all 5 key owners survive (Boyd Watterson, Kingsbarn, Realty Income, Easterly); dropped-when-
+  included **13** (brokerage 10 / internal 2 / loose 1). Path A unchanged (3, always clean). 20 tests green.
+- **Part B — `folder_feed_lease` fsp hygiene: SHIPPED + verified.** fsp rows registered for the drift fields at
+  the established `folder_feed_lease@45 warn` rank (14 dia.leases fields total). **Drift 39 → 34 baseline;
+  `folder_feed_lease` now 0 in `v_field_provenance_unranked`.**
+- **W9.6 FLIPPED ON (Cowork, this session)** after the live re-review of the tightened sample met the flip gate.
+  `W9_6_COMMS_OWNER_ATTRIBUTION` state=on, off_since cleared. Nightly cron 05:05 UTC now proposes owner-
+  attribution edges (Path A property bridges + tightened Path B) into the `comms_owner_attribution_review`
+  lane — proposal-only, human-gated, reversible. It lifts W9.5's `correspondence_entity_owner_llc` (2.5%
+  baseline) as verdicts confirm, and each confirmed bridge also feeds the reachability create-contact arm.
+- **Migration bookkeeping note:** MCP `apply_migration` records under apply-time versions
+  (`20260813120707 lcc_w9_6_pathb_precision` + `20260813120838 ..._loose_edge`), NOT the repo filename version
+  (`20260830120000`). Same pattern as every prior migration this campaign; effects verified live, repo file is
+  the durable source. A future `db push` re-applying the repo file is safe (CREATE OR REPLACE + ON CONFLICT).
+- **Folder cleanup:** prompts 100–103 → `prompts/done/`; responses 100/102/103 → new `responses/done/`.
+  `responses/` now holds only README + `done/`.
+- **⚠ DOC RECONCILE (Cowork, this session):** planning to flip the "remaining dark" Wave 9 units, I found
+  **W9.3 (all 3 flags) has been LIVE since 2026-08-08 and W9.1 Stage 1 since 2026-08-12** — the ROLLOUT_STATUS
+  rows falsely still said "BUILT — flag OFF." Corrected all rows + the W9 kickoff summary. **Live health
+  verified, all conservative:** W9.3 re-score gov 2,000 / dia 2,000 scored → ~72 exact-unique auto-links
+  applied (gov 52 / dia 20), **1 conflict correctly guarded (not overwritten)**, 12 → needs_review;
+  W9.3 SF-assist 80 annotation-only pre-ranks (zero curated writes); W9.3 donor-handoff slow unique-match
+  SF-key fills (gov 5 last night, input-thin as designed); W9.1 green, 5 proposals night one, human-gated.
+  **Net: every INTERNAL Wave 9 unit is now LIVE and producing** (W9.1/W9.2/W9.3/W9.4/W9.5/W9.6); only
+  W9.1-Stage-2 SOS-direct stays walled (external, `W9_1_SOS_DIRECT` off).
+
+---
+
 ## Session 2026-08-13 (Cowork) — prompts 100 + 102 reconciled; harvest's first live night verified
 
 **Both responses reviewed against live LCC Opps and reconciled. Nothing to re-open; two findings logged.**

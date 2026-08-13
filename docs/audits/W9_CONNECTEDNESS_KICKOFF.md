@@ -73,12 +73,17 @@ reuses U3's proven pattern), then W9.1 (external chain on the value-ranked remai
 - **W9.2/W9.4 reachability harvest LIVE** (flag `W9_2_REACHABILITY_HARVEST` on 2026-08-13 after the
   `unified_contacts` name-accelerator; first cron 04:40 UTC produced 4 real owner-email proposals, health green).
 - **W9.5 LIVE** (2026-08-12, Prompt 97 — the standing measure).
-- **W9.3** built (SF linkage drain/re-score), flag-gated.
-- **W9.1** Stage 1 built; **Stage 2 SOS-egress walled at the source** (residential proxy still 403'd by
-  the state portals) — flag `W9_1_SOS_DIRECT` stays OFF, machinery inert-but-correct.
-- **W9.6 correspondence→owner-LLC attribution** (Prompt 102) BUILT + applied live, flag
-  `W9_6_COMMS_OWNER_ATTRIBUTION` OFF — the last internal linkage gap (raises W9.5's 2.5% owner-attribution
-  metric as verdicts confirm). Awaiting Railway redeploy → dry-run → flip.
+- **W9.3 LIVE since 2026-08-08** (all 3 flags on; verified healthy 2026-08-13). Re-score ~72 exact-unique
+  auto-links applied over 5 nights (1 conflict guarded, 12→needs_review — conservative); SF assist 80 pre-ranks
+  (annotation-only); donor handoff accruing slowly (input-thin, grows with re-score).
+- **W9.1 Stage 1 LIVE since 2026-08-12** (flag on; green, 5 proposals night one, human-gated). **Stage 2
+  SOS-egress walled at the source** (residential proxy still 403'd by the state portals) — flag
+  `W9_1_SOS_DIRECT` stays OFF, machinery inert-but-correct.
+- **W9.6 correspondence→owner-LLC attribution** (Prompts 102/103) **LIVE 2026-08-13** — flag
+  `W9_6_COMMS_OWNER_ATTRIBUTION` ON after Prompt 103's Path-B precision pass (internal-team + brokerage-target
+  guards + tie-tightening; clean Path B = 28, 0 noise). The last internal linkage gap — raises W9.5's 2.5%
+  owner-attribution metric as verdicts confirm; each confirmed bridge also feeds the reachability create-contact
+  arm. Nightly cron 05:05 UTC, proposal-only, human-gated.
 
 ## Status
 - 2026-08-08: kickoff written; ORE layer verified self-draining; gap counts grounded live.
