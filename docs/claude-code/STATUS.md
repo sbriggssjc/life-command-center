@@ -479,6 +479,19 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### Wave 10 SPEC written 2026-08-13 — Voice & Drafting (Scott's corpus → grounded BD drafts)
+`docs/audits/W10_VOICE_AND_DRAFTING_KICKOFF.md`. 4 staged: (1) voice PROFILE via setup-writing-style
+over the REAL sent corpus — cheap, no training, ship first; (2) RAG-grounded drafting (retrieve
+Scott's nearest past examples + deal facts → draft in his voice, to Outlook Drafts, never sent);
+(3) template library from clustered draft-types; (4) optional GaryBuilt LoRA only if few-shot
+insufficient. Doctrine: never auto-send, never fabricate facts (voice=how, spine=what), strategy
+stays verbal (offer-submission), corpus-cleaning is a data-quality step first, ON-PREM via ollama
+(privacy win). Recommended AFTER Wave 9 flips settle. Live coverage snapshot this session (dia/gov):
+recorded→true 98.4/99.7% ✅; true→contact 32.1/27.0%; contact→reachable 29.1/32.2%; true→SF
+16.9/11.8% (climbing); contact→SF-person 6.5/5.8% (thinnest). Remaining gaps ranked: harvest flip
+(top lever) → person-SF linkage → correspondence→owner-LLC attribution → deed-signatory OCR →
+Wave 6 → key rotations.
+
 ### GaryBuilt/SOS session reviewed 2026-08-13 — honest accounting (2 corrections + 1 fix)
 Scott's report: "everything completed but the SOS websites had issues we couldn't work around."
 Grounded review from Cowork (LCC side only — gov repo + GaryBuilt box not visible here):
