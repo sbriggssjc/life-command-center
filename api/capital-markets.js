@@ -94,6 +94,10 @@ function buildRolling3MonthVolumeBars(masterMonthlyRows) {
   return out;
 }
 
+// Exported for regression tests (cm-quarterly-volume-bars.test.mjs) — locks the
+// rolling-3-month behavior so it can't silently regress to the boxy quarter-repeat.
+export { buildRolling3MonthVolumeBars };
+
 const SYNTHETIC_COMPOSERS = {
   'volume_cap_summary': ({ asOf, allCharts }) => {
     const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
@@ -312,7 +316,7 @@ const SYNTHETIC_COMPOSERS = {
   // already computes quarterly_volume + quarterly_count). We pull from the
   // existing volume_ttm_by_quarter chart's row stream because it carries
   // both ttm and per-quarter fields after Round GD1 fixes.
-  'quarterly_volume_bars': ({ allCharts, masterMonthlyRows }) => {
+  'quarterly_volume_bars': ({ allCharts, masterMonthlyRows, volumeMonthlyRows }) => {
     // A5 (CM chart feedback item #11) — the old synthetic plotted
     // `quarterly_volume`, which master_m repeats on every month of the quarter
     // (Oct/Nov/Dec all print the same $319.4M) so the bars looked boxy and
@@ -322,24 +326,43 @@ const SYNTHETIC_COMPOSERS = {
     // other charts. Computed over the FULL monthly series before the caller
     // applies the display_from / as_of crops (so the first visible month still
     // carries a full trailing window).
-    const rolling = buildRolling3MonthVolumeBars(masterMonthlyRows);
+    //
+    // Prefer `volumeMonthlyRows` — a SLIM (period_end, monthly_volume,
+    // monthly_count) projection the export path re-fetches when the full
+    // 39-column master_m select fails PostgREST serialization (Round 6b).
+    // That failure is what silently dropped gov exports to the boxy fallback
+    // below (351 monthly bars each stamped with the repeated quarter total).
+    const rolling = buildRolling3MonthVolumeBars(volumeMonthlyRows || masterMonthlyRows);
     if (rolling.length > 0) return rolling;
 
-    // Fallback (master_m absent / no monthly cols) — keep the pre-A5 quarter
-    // behavior so the tab still renders rather than going blank.
-    const byPeriod = new Map();
+    // Fallback (monthly volume genuinely unavailable) — collapse to QUARTER
+    // grain (ONE bar per quarter) instead of repeating the quarter total on
+    // every monthly anchor. `volume_ttm_by_quarter` is fetched from the
+    // MONTHLY view (cm_{vertical}_volume_ttm_m), so its rows are monthly and
+    // each carries the same `quarterly_volume` three times; keying by period_end
+    // (as the pre-A5 code did) kept all three and produced the boxy artifact.
+    // One quarterly bar per quarter is honest and still moves quarter-to-quarter.
+    const byQuarter = new Map();
     const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
     for (const r of find('volume_ttm_by_quarter')) {
       const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
                   ?? r.volume_dollars_quarterly;
-      if (qv == null) continue;
-      byPeriod.set(r.period_end, {
-        period_end: r.period_end,
-        quarterly_volume: Number(qv),
-        quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
-      });
+      if (qv == null || r.period_end == null) continue;
+      const d = new Date(r.period_end);
+      if (Number.isNaN(d.getTime())) continue;
+      const qKey = `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3)}`;
+      const prev = byQuarter.get(qKey);
+      // Keep the LATEST period_end in the quarter (the quarter-end month) as the
+      // single anchor for that quarter's bar.
+      if (!prev || String(r.period_end) > String(prev.period_end)) {
+        byQuarter.set(qKey, {
+          period_end: r.period_end,
+          quarterly_volume: Number(qv),
+          quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
+        });
+      }
     }
-    return [...byPeriod.values()].sort((a, b) =>
+    return [...byQuarter.values()].sort((a, b) =>
       String(a.period_end) < String(b.period_end) ? -1 : 1
     );
   },
@@ -369,6 +392,9 @@ const SYNTHETIC_COMPOSERS = {
     );
   },
 };
+
+// Exported for regression tests — see cm-quarterly-volume-bars.test.mjs.
+export { SYNTHETIC_COMPOSERS };
 
 function syntheticRecipeFor(template) {
   const t = template?.view_name_template || '';
@@ -2064,6 +2090,9 @@ async function exportWorkbook(req, res) {
   //     2026… we want to ensure the newest reported period as already
   //     passed."
   let masterMonthlyRows = null;
+  // Slim (period_end, monthly_volume, monthly_count) projection used only by the
+  // Quarterly Volume Bars composer — see the slim re-fetch below.
+  let volumeMonthlyRows = null;
   if (domain && (vertical === 'dialysis' || vertical === 'gov')) {
     const monthlyView = vertical === 'dialysis'
       ? 'cm_dialysis_market_quarterly_master_m'
@@ -2091,6 +2120,33 @@ async function exportWorkbook(req, res) {
         `skipped, charts will fall back to per-view quarterly data. ` +
         `error=${JSON.stringify(monthlyResult.data)?.slice(0, 200)}`
       );
+    }
+    // The Quarterly Volume Bars composer needs only the monthly volume/count
+    // columns. The full 39-column master_m select above intermittently fails
+    // PostgREST serialization in prod (Round 6b) — and when it returns 0 rows,
+    // that composer used to drop to a boxy quarterly fallback (repeated quarter
+    // totals on every monthly anchor). A SLIM 3-column projection sidesteps the
+    // serialization issue so the rolling-3-month bars survive even when the full
+    // fetch fails. Only re-fetch when the full set lacks usable monthly volume.
+    const fullHasMonthlyVol = Array.isArray(masterMonthlyRows)
+      && masterMonthlyRows.some((r) => r && r.monthly_volume != null);
+    if (!fullHasMonthlyVol) {
+      try {
+        const slimPath =
+          `${monthlyView}?select=period_end,monthly_volume,monthly_count` +
+          `&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+        const slim = domain
+          ? await domainQuery(domain, 'GET', slimPath)
+          : await opsQuery('GET', slimPath);
+        if (slim.ok !== false && Array.isArray(slim.data) && slim.data.length) {
+          volumeMonthlyRows = slim.data;
+          console.log(
+            `[exportWorkbook] slim volume master_m fetch recovered ` +
+            `${slim.data.length} rows for ${monthlyView} ` +
+            `(full fetch lacked monthly_volume).`
+          );
+        }
+      } catch { /* best-effort; composer's quarterly fallback still applies */ }
     }
   }
 
@@ -2387,6 +2443,7 @@ async function exportWorkbook(req, res) {
         vertical, subspecialty, asOf: resolvedAsOf,
         allCharts: realCharts,
         masterMonthlyRows,
+        volumeMonthlyRows,
       }) || [];
     } catch { /* swallow — synthetic comp must not fail the workbook */ }
     // If any realChart this composer reads has cadence='monthly', the
