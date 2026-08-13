@@ -4166,16 +4166,22 @@ function _udResolveEconomics(r, fin, fe) {
   const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v);
   let revenue = null, profit = null, method = null, source = null;
 
-  // 1) v_property_rankings / medicare_clinics denorm — corrected clinic economics
+  // 1) v_property_rankings / medicare_clinics denorm — the ONE reconciled truth figure.
+  //    Since 2026-08-13 this carries the unified per-(clinic,year) reconciliation
+  //    (model dialysis_econ_reconciled_v1 → medicare_clinics.revenue_calc_method='reconciled_truth_v1'):
+  //    HCRIS-anchored treatments+cost, payer-mix-weighted (MA-corrected) reimbursement,
+  //    plausibility-gated. estimated_annual_revenue/_profit ARE that figure for reconciled clinics.
   let rev1 = num(r.estimated_annual_revenue); if (rev1 == null) rev1 = num(r.ttm_revenue);
   let prof1 = num(r.estimated_annual_profit); if (prof1 == null) prof1 = num(r.ttm_operating_profit);
   if (rev1 != null && prof1 != null && rev1 > 0) {
     revenue = rev1; profit = prof1;
     method = r.revenue_calc_method || 'hcris_actual';
-    source = 'Corrected clinic economics';
+    source = (method === 'reconciled_truth_v1')
+      ? 'Reconciled economics (HCRIS-anchored)'
+      : 'Corrected clinic economics';
   }
 
-  // 2) clinic_financial_estimates primary estimate
+  // 2) clinic_financial_estimates primary estimate (fallback for clinics not yet reconciled)
   if (revenue == null || profit == null) {
     const rev2 = num(fin.estimated_annual_revenue);
     let prof2 = num(fin.estimated_annual_profit); if (prof2 == null) prof2 = num(fin.estimated_operating_profit);
@@ -4186,7 +4192,8 @@ function _udResolveEconomics(r, fin, fe) {
     }
   }
 
-  // 3) facility_economics HCRIS (compute from per-treatment economics)
+  // 3) facility_economics HCRIS last-resort compute. NOTE: facility_economics is EMPTY in prod
+  //    (0 rows) — the reconciliation (tier 1) supersedes it; retained only as a defensive fallback.
   if (revenue == null) {
     const rpt = num(fe.revenue_per_treatment), tx = num(fe.total_treatments), cost = num(fe.total_costs);
     if (rpt != null && tx != null && tx > 0) {
@@ -4198,7 +4205,13 @@ function _udResolveEconomics(r, fin, fe) {
 
   const margin = (revenue != null && profit != null && revenue > 0) ? (profit / revenue) * 100 : null;
   const basis = (revenue != null && profit != null && revenue > 0) ? 'corrected' : 'not_on_file';
-  return { revenue: revenue, profit: profit, margin: margin, method: method, source: source, basis: basis };
+  // Reconciled per-year trend (volume-driven; rates held at CY2024) + confidence, from v_property_rankings.
+  const revYoY = num(r.reconciled_revenue_yoy_pct);
+  const revCagr = num(r.reconciled_revenue_cagr_pct);
+  const reconciledConfidence = r.reconciled_confidence_tier || null;
+  const isReconciled = (method === 'reconciled_truth_v1');
+  return { revenue: revenue, profit: profit, margin: margin, method: method, source: source, basis: basis,
+           revYoY: revYoY, revCagr: revCagr, reconciledConfidence: reconciledConfidence, isReconciled: isReconciled };
 }
 
 function _udTabOperations() {
@@ -4556,15 +4569,19 @@ function _udTabOperations() {
   // regardless of the underlying cause.
   const cmsLinked = !!(r && (r.medicare_id || r.linked_medicare_facility_id || r.ccn));
 
-  // Revenue KPI
+  // Revenue KPI — reconciled truth figure + volume-driven trend + confidence
   const estRevenue = correctedRevenue;
+  const _reconInfo = _econ.isReconciled
+    ? ('Reconciled (HCRIS-anchored, payer-mix-weighted)' + (_econ.reconciledConfidence ? ' · ' + _econ.reconciledConfidence + ' confidence' : ''))
+    : (_econ.source || 'Corrected clinic economics');
   kpis.push({
     label: 'Est. Annual Revenue',
     value: estRevenue ? '$' + _fmtCompact(estRevenue) : 'Not on file',
     color: estRevenue ? '' : 'var(--text3)',
+    trend: (estRevenue && _econ.revYoY != null) ? _trendArrow(_econ.revYoY, 'YoY') : undefined,
     info: estRevenue
-      ? 'Revenue from corrected clinic economics'
-      : (cmsLinked ? 'Corrected clinic economics not on file; property-denorm revenue is retired' : 'No CMS link — match the property to a Medicare facility to populate')
+      ? (_reconInfo + (_econ.revCagr != null ? ' · ' + (_econ.revCagr >= 0 ? '+' : '') + _econ.revCagr + '%/yr CAGR' : ''))
+      : (cmsLinked ? 'Reconciled economics not on file; property-denorm revenue is retired' : 'No CMS link — match the property to a Medicare facility to populate')
   });
 
   // Operating Margin KPI
