@@ -11294,7 +11294,7 @@ async function handleAutoScrapeListings(req, res) {
       ? `is_active=eq.true`
       : `listing_status=in.(active,under_contract)`;
     const dateCol = dom === 'dialysis' ? 'listing_date' : 'listing_date';
-    const select = `listing_id,property_id,${dateCol},verification_due_at,consecutive_check_failures`;
+    const select = `listing_id,property_id,${dateCol},on_market_date,verification_due_at,consecutive_check_failures`;
 
     // gov.available_listings has an exclude_from_listing_metrics flag for
     // listings that shouldn't influence dashboard counts — e.g. test rows,
@@ -11373,13 +11373,23 @@ async function handleAutoScrapeListings(req, res) {
         let checkResult = 'inferred_active';
         let offMarketReason = null;
         let notes = 'auto-scrape: no sale evidence in 3y window, timer advanced';
+        let matchedSaleDate = null;
 
         if (l.property_id && l[dateCol]) {
           const listingMs = Date.parse(l[dateCol]);
-          if (Number.isFinite(listingMs)) {
+          // Floor the sale window at the listing's MARKET-ENTRY date
+          // (on_market_date, fallback listing_date) so a same-property sale
+          // that PREDATES the listing — a prior owner's deal — can never be
+          // mis-attributed as this listing's exit. This was the root cause of
+          // the June-2026 dia off_market backdating incident: the old lower
+          // bound (listing_date - 3y) matched pre-listing sales, and the RPC
+          // then stamped off_market_date = run date, collapsing years of
+          // exits into one month. Upper bound keeps the 3y recency headroom.
+          const entryMs = Date.parse(l.on_market_date || l[dateCol]);
+          if (Number.isFinite(listingMs) && Number.isFinite(entryMs)) {
             const windowDays = 3 * 365 + 1;
-            const lower = new Date(listingMs - windowDays * 86400000).toISOString().slice(0, 10);
-            const upper = new Date(listingMs + windowDays * 86400000).toISOString().slice(0, 10);
+            const lower = new Date(entryMs).toISOString().slice(0, 10);
+            const upper = new Date(entryMs + windowDays * 86400000).toISOString().slice(0, 10);
 
             // Pull all candidate sales in the window and pick the best in JS
             // — limit=10 is enough headroom for any realistic property
@@ -11412,6 +11422,7 @@ async function handleAutoScrapeListings(req, res) {
               if (best) {
                 checkResult = 'sold';
                 offMarketReason = 'sold';
+                matchedSaleDate = best.sale_date;
                 notes = `auto-scrape: matched sales_transactions sale_id=${best.sale_id} on ${best.sale_date}`;
               }
             }
@@ -11435,6 +11446,10 @@ async function handleAutoScrapeListings(req, res) {
           p_off_market_reason: offMarketReason,
           p_notes: notes,
           p_verified_by: user.id || null,
+          // Stamp off_market_date from the MATCHED sale's true date, not the
+          // RPC's "today" default — the June-2026 backdating fix. Only set on
+          // a sold match; the inferred_active timer advance leaves it null.
+          ...(matchedSaleDate ? { p_effective_at: matchedSaleDate } : {}),
         }, { label: 'autoScrapeListings:recordCheck' });
         if (!rpcRes.ok) {
           summary.errors.push({
