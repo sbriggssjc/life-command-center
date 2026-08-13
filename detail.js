@@ -5433,10 +5433,17 @@ const NMQ_BRAND = {
   border:     '#D8DFDF',  // NM Iron — borders, dividers
   // Futura PT (Adobe) is the brand face: Light (300) for the page header,
   // Book (400) for body & sub-headers, Bold (700) for emphasis. Falls back to a
-  // locally-installed Futura PT, then Century Gothic (metrically close), then the
-  // web-loaded Open Sans / Arial so the export never renders in a serif.
-  headingFont: "'futura-pt', 'Futura PT', 'Century Gothic', 'Open Sans', Arial, sans-serif",
-  bodyFont:    "'futura-pt', 'Futura PT', 'Century Gothic', 'Open Sans', Arial, sans-serif",
+  // locally-installed Futura PT, then the web-loaded Open Sans, then Arial so the
+  // export never renders in a serif.
+  // NOTE: Century Gothic was deliberately removed from the ladder (2026-08). It is
+  // installed by default on Windows, so on a local "Print to PDF" it won out over
+  // the un-loaded Futura and rendered its geometric single-stroke lowercase "l"
+  // (indistinguishable from I/1) in an over-emphasized way. The brand's sanctioned
+  // digital fallback is Open Sans (which we actually <link>-load), so we drop
+  // straight to it — matching the Northmarq brand fallback ladder (Futura → Arial
+  // print / Open Sans digital).
+  headingFont: "'futura-pt', 'Futura PT', 'Open Sans', Arial, sans-serif",
+  bodyFont:    "'futura-pt', 'Futura PT', 'Open Sans', Arial, sans-serif",
   logoUrl:     'https://www.northmarq.com/themes/custom/northmarq/logo.svg',
 };
 
