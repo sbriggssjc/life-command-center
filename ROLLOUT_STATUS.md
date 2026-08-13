@@ -5,6 +5,15 @@ shipped, where it lives, and the operator switch (if any) that lights it up.
 
 ---
 
+## Wave 10 — Voice & Drafting (Scott's authored corpus → grounded drafts)
+Kickoff: `docs/audits/W10_VOICE_AND_DRAFTING_KICKOFF.md`
+
+| Unit | State | Summary |
+|---|---|---|
+| **W10.1** Voice PROFILE from the sent corpus (no training) | **BUILT — profile shipped, awaiting Scott's read** | Stage 1 of Wave 10: a prompt-injectable `BRIGGS-WRITING-VOICE.md` distilled from Scott's authored *sent* mail — no fine-tune, reversible (it's a versioned doc). **Corpus located live (LCC Opps 2026-08-13):** ~**926 distinct** Scott-authored sent emails (`activity_events` outlook/outlook_sent + `email_bodies`, dedup by internet-message-id, from `sabriggs@/teambriggs@northmarq.com` + the Stan-Johnson-era addresses; family `hbriggs/ellentbriggs` excluded), Nov 2022→Aug 2026. **⚠️ Honest cap finding:** the store keeps Graph's `bodyPreview` (~255-char cap) — `body_text/body_html` are empty — so the signal is Scott's email *openings* (~31 words each), great for greeting/opening voice, weak for sign-offs/long-form (marked LOW-confidence in the doc). **Context mix (493 distinct from activity_events):** internal reply 219 · external reply 180 · internal new 75 · **cold BD outreach just 14 (THIN — flagged, not faked)** — 81% replies. **Cleaning module** `api/_shared/voice-corpus-clean.js` (pure, no-LLM): strips reply chains (`____ From: … / On … wrote:`), the inline Briggs sig block, disclaimers, forwarded headers, mobile sigs; drops recall-notice/URL boilerplate; deterministic `classifyDraftType` bucketing. Tests `test/voice-corpus-clean.test.mjs` (19, green). **On-prem distiller** `scripts/voice-distill.mjs` calls **ollama DIRECTLY** (REFUSES to run if `OLLAMA_URL` unset) so the decade of client mail never egresses to a cloud model — writes `docs/os/voice/briggs-voice-attributes.json`. **Stage-1 v1 profile was authored from deterministic SQL analysis + a small anonymized opening sample (no LLM read the prose)**; the ollama script deepens it on the box. Profile carries the overall voice + per-context variants (each evidenced with anonymized excerpts) + the U4 draft-vs-sent edit-distance hook for Stage 2. **NO drafting surface changed** (Stage 1 only). **Live step (Scott):** read `BRIGGS-WRITING-VOICE.md` — does it sound like you? — then it installs as the `my-writing-style` / Cowork voice source. Stages 2 (RAG drafting) / 3 (templates) / 4 (optional LoRA) are later prompts. |
+
+---
+
 ## Wave 9 — Contact acquisition & the no-contact gap
 
 | Unit | State | Summary |

@@ -83,5 +83,10 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
 - Where drafts surface: Outlook Drafts (like offer-submission), Cowork, or an LCC lane?
 
 ## Status
-- 2026-08-13: kickoff written. Not yet started. Recommended after the Wave 9 flips settle
-  (harvest flip + a few days' lane-work) so the corpus-cleaning stage grounds on stable comms data.
+- 2026-08-13: kickoff written.
+- 2026-08-13: **Stage 1 (Prompt 100) SHIPPED.** Corpus located live (~926 distinct Scott-authored
+  sent emails; honest ~255-char `bodyPreview` cap surfaced). Pure cleaning module
+  `api/_shared/voice-corpus-clean.js` + 19 tests, on-prem `scripts/voice-distill.mjs` (ollama-only,
+  no cloud egress), and `BRIGGS-WRITING-VOICE.md` (overall voice + per-context variants, evidenced,
+  cold-BD bucket flagged THIN). No drafting surface changed. **Awaiting Scott's read** of the profile
+  before Stage 2 (RAG drafting). See ROLLOUT_STATUS Wave 10.
