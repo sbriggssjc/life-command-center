@@ -161,8 +161,8 @@ const CM_BRAND_FALLBACK = {
   },
   series: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
   series_ramp: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
-  text: { title: '003DA5', axisLabel: '191919', legend: '6A748C', callout: '003DA5' },
-  sizes: { title: 1400, axisTitle: 900, axisLabel: 700, dataLabel: 900, legend: 900, chartArea: 800 },
+  text: { title: '62B5E5', axisLabel: '6A748C', legend: '6A748C', callout: '003DA5' },
+  sizes: { title: 1200, axisTitle: 900, axisLabel: 700, dataLabel: 900, legend: 900, chartArea: 800 },
   chartSize: { widthIn: 10.0, heightIn: 4.25, donutWidthIn: 4.25, donutHeightIn: 4.25 },
   banned: ['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79'],
 };
@@ -220,7 +220,8 @@ function fontRunFrag(brand) {
 // change is a JSON edit, not code:
 //   • Chart Area: NO fill, NO border line (Format Chart Area → No Fill / No Line)
 //   • Chart Area default font: Futura PT Book, 8pt (CM_BRAND.sizes.chartArea)
-//   • Chart title: Futura PT Bold, CM_BRAND.sizes.title (14pt), NM Blue — in chartTitleXml()
+//   • Chart title: Futura PT NOT-bold, ALL CAPS, CM_BRAND.sizes.title (12pt), Sky 62B5E5 — in chartTitleXml() (ChartEdits 2026-08-12)
+//   • X/Y axis tick labels: 7pt, Slate 6A748C (CM_BRAND.sizes.axisLabel / text.axisLabel)
 //   • X (category) axis: label Interval Unit = 1 (tickLblSkip/tickMarkSkip = 1)
 //   • Chart object size fixed in inches (CM_BRAND.chartSize) — in the drawing anchor
 // ----------------------------------------------------------------------------
@@ -496,6 +497,16 @@ const CAT_AX_VERTICAL_TXT = `<c:txPr>
 // R66 — retained alias so call sites read naturally; R63's "horizontal"
 // naming was a misnomer once the master parity was confirmed.
 const CAT_AX_HORIZONTAL_TXT = CAT_AX_VERTICAL_TXT;
+
+// A GENUINELY horizontal cat-axis txPr (rot="0"). Opt-in per chart via
+// spec.horizontalCatLabels for charts whose category labels are short enough to
+// read horizontally (marketing ChartEdits 2026-08-12: "Available – Avg Price by
+// Term Bucket" x-axis Text Direction = Horizontal). Same 7pt slate label style.
+const CAT_AX_TRUE_HORIZONTAL_TXT = `<c:txPr>
+          <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p><a:pPr><a:defRPr sz="${CM_BRAND.sizes.axisLabel}" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+        </c:txPr>`;
 
 // ----------------------------------------------------------------------------
 // R37 P2 — value-axis range pinning + number format
@@ -1107,6 +1118,9 @@ function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null, color 
 // cm-excel-export.js (`titleRow` line ~1250).
 function chartTitleXml(text) {
   if (!text) return '<c:autoTitleDeleted val="1"/>';
+  // Marketing ChartEdits 2026-08-12: chart titles are NOT bold (b="0"), ALL CAPS,
+  // 12pt, Sky 62B5E5. Size + color come from CM_BRAND; caps applied here.
+  const titleText = String(text).toUpperCase();
   return `<c:title>
       <c:tx>
         <c:rich>
@@ -1114,7 +1128,7 @@ function chartTitleXml(text) {
           <a:lstStyle/>
           <a:p>
             <a:pPr algn="ctr">
-              <a:defRPr sz="${CM_BRAND.sizes.title}" b="1" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
+              <a:defRPr sz="${CM_BRAND.sizes.title}" b="0" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
                 <a:solidFill><a:srgbClr val="${CM_BRAND.text.title}"/></a:solidFill>
                 <a:latin typeface="${CM_BRAND.typeface}"/>
                 <a:ea typeface="${CM_BRAND.typeface}"/>
@@ -1122,11 +1136,11 @@ function chartTitleXml(text) {
               </a:defRPr>
             </a:pPr>
             <a:r>
-              <a:rPr lang="en-US" sz="${CM_BRAND.sizes.title}" b="1">
+              <a:rPr lang="en-US" sz="${CM_BRAND.sizes.title}" b="0">
                 <a:solidFill><a:srgbClr val="${CM_BRAND.text.title}"/></a:solidFill>
                 <a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/>
               </a:rPr>
-              <a:t>${escapeXml(text)}</a:t>
+              <a:t>${escapeXml(titleText)}</a:t>
             </a:r>
           </a:p>
         </c:rich>
@@ -1334,7 +1348,7 @@ ${dLblsFrag}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1605,7 +1619,7 @@ ${seriesXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1804,7 +1818,7 @@ ${hostGroupFrag}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1940,6 +1954,10 @@ function buildComboChartXml(spec) {
     let lineFrag = '';
     if (s.noFill) {
       lineFrag = `<a:ln><a:noFill/></a:ln>`;
+    } else if (s.noBorder) {
+      // Explicit "No Line" on a visible-fill bar (marketing ChartEdits
+      // 2026-08-12: quartile-band series border = No Line).
+      lineFrag = `<a:ln><a:noFill/></a:ln>`;
     } else if (s.borderColor) {
       const borderColor = s.borderColor.replace('#', '');
       lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
@@ -2068,7 +2086,7 @@ ${lineXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -2184,7 +2202,7 @@ function buildDoughnutChartXml(spec) {
           <c:txPr>
             <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
             <a:lstStyle/>
-            <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+            <a:p><a:pPr><a:defRPr sz="1000" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
           </c:txPr>
           <!-- R68-E (D14): dLblPos is ILLEGAL under c:doughnutChart per ECMA-376;
                its presence made Excel classify chart31/chart32 as corrupt and
@@ -2525,7 +2543,7 @@ ${lineXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -2616,7 +2634,7 @@ ${markerSer(spec.rightCol, (spec.rightColor || '003DA5').replace('#',''), 1, 1, 
         <c:axPos val="b"/>
         ${catAxNumFmtFrag(spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT)}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -2763,7 +2781,7 @@ ${cagrLine}
         <c:axPos val="b"/>
         ${catAxNumFmtFrag(spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT)}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -4318,7 +4336,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const qVolScale = currencyScaleForValues(
         Array.isArray(plottedRows) ? plottedRows.map((r) => r.quarterly_volume) : []
       );
-      return singleSeries('bar', 'quarterly_volume', sky, {
+      // Bar color NM Blue #003DA5 per marketing ChartEdits 2026-08-12 (was sky).
+      return singleSeries('bar', 'quarterly_volume', navy, {
         valAxNumFmt: qVolScale.valAxNumFmt,
         annotateKey: 'quarterly_volume',
         annotateFmt: qVolScale.annotateFmt,
@@ -6202,15 +6221,17 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             // Invisible base — lifts the IQR bar off 0 up to lower_quartile
             { titleCol: lowerCol, titleRow: headerRow, valCol: lowerCol,
               color: amethyst, noFill: true },
-            // Visible IQR band — T10b: amethyst 30% alpha w/ solid amethyst
-            // border (distinct from the sky volume area + the navy dots).
+            // Visible IQR band ("Quartile Range Width" series) — marketing
+            // ChartEdits 2026-08-12: fill transparency 30% (alpha 70% opacity =
+            // val 70000) and border = No Line (was solid amethyst border).
             { titleCol: iqrCol, titleRow: headerRow, valCol: iqrCol,
-              color: amethyst, alpha: '30000', borderColor: amethyst },
+              color: amethyst, alpha: '70000', noBorder: true },
           ],
           lineSeries: [
-            // Avg cap rate dots — navy circle markers, no connecting line
+            // Avg cap rate dots ("TTM Cap (avg)") — navy circle markers, no
+            // connecting line. Marker size 4 per marketing ChartEdits 2026-08-12.
             { titleCol: capCol, titleRow: headerRow, valCol: capCol,
-              color: navy, showMarker: true, markerShape: 'circle', markerSize: 5,
+              color: navy, showMarker: true, markerShape: 'circle', markerSize: 4,
               dataLabels: capLabels },
           ],
           anchor: standardAnchor,
@@ -6405,6 +6426,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           type: 'combo',
           tabName,
           catCol: termCol,
+          // Marketing ChartEdits 2026-08-12: term-bucket labels read horizontally
+          // (short "Sub 5 / 5-8 / 8-12 / 12+" buckets), not rotated -90°.
+          horizontalCatLabels: true,
           dataStart, dataEnd: bucketDataEnd,   // T10 — Undisclosed bar trimmed
           // R64 — left axis "$X.XM" per user batch 5: "lets adjust the
           // number formatting of the x-axis to show $x.xM". Avg Price

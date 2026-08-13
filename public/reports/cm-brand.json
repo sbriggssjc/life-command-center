@@ -42,15 +42,15 @@
   "_series_note": "Report CHART series order (marketing-review decision, 8/2026 — supersedes the prior tertiary-order seeding): NM Blue (003DA5), Sky (62B5E5), Blue 85 (265AB2), Steel (9EA9B7), Slate (6A748C), THEN the tertiary ramp (Aquamarine, Peridot, Amethyst, Tourmaline, Topaz, Morganite) for the 6th+ series only. Report charts stay in the blue/neutral family; tertiary hues (peridot/amethyst/etc.) remain sanctioned for INFOGRAPHIC / tile use per the 2024 guide but are NOT the primary series colors on report charts. This decision is recorded here so it is not re-litigated from the guide text (which lists tertiaries at slot 4). Primary blues dominate; use slot N for series N.",
 
   "text": {
-    "title":     "003DA5",
-    "axisLabel": "191919",
+    "title":     "62B5E5",
+    "axisLabel": "6A748C",
     "legend":    "6A748C",
     "callout":   "003DA5"
   },
-  "_text_note": "Chart axis/category labels are Rich Black 191919 regular (2024 guide category/label rule) — supersedes charcoal for CHART labels; charcoal (3D4A54) stays for worksheet body cells per Briggs §2. Callout numbers: one color per chart, NM Blue default (use Sky 62B5E5 where the series itself is NM Blue, for contrast). Superscript $/+ and the '$5B+' convention apply to the report's KPI tiles, NOT Excel chart data labels (n/a for dLbls).",
+  "_text_note": "Chart TITLE = Sky 62B5E5, not-bold, ALL CAPS (marketing ChartEdits 2026-08-12). Chart axis/category labels = Slate 6A748C (marketing ChartEdits 2026-08-12; supersedes the prior Rich Black 191919). Charcoal (3D4A54) stays for worksheet body cells per Briggs §2. Callout numbers: one color per chart, NM Blue default (use Sky 62B5E5 where the series itself is NM Blue, for contrast). Superscript $/+ and the '$5B+' convention apply to the report's KPI tiles, NOT Excel chart data labels (n/a for dLbls).",
 
-  "sizes": { "title": 1400, "axisTitle": 900, "axisLabel": 700, "dataLabel": 900, "legend": 900, "chartArea": 800 },
-  "_sizes_note": "Font sizes in OOXML hundredths-of-a-point (1400 = 14pt). Per marketing feedback (2026-08 ChartEdits.docx): chart TITLE 14pt Futura PT Bold NM-Blue (the doc wrote 'Size: 140' — read as 14.0pt; a literal 140pt title overflows a 4-inch chart); chart-AREA default text (`chartArea`) 8pt Futura PT Book (the whole-chart Format-Chart-Area font); BOTH axis labels (`axisLabel`, x/category + y/value tick labels) 7pt (marketing follow-up 2026-08). Change any here (no code change).",
+  "sizes": { "title": 1200, "axisTitle": 900, "axisLabel": 700, "dataLabel": 900, "legend": 900, "chartArea": 800 },
+  "_sizes_note": "Font sizes in OOXML hundredths-of-a-point (1200 = 12pt). Per marketing feedback (ChartEdits 2026-08-12): chart TITLE 12pt Futura PT NOT-bold, ALL CAPS, Sky 62B5E5 (rendered via chartTitleXml with b=\"0\" + toUpperCase); chart-AREA default text (`chartArea`) 8pt Futura PT Book (the whole-chart Format-Chart-Area font); BOTH axis labels (`axisLabel`, x/category + y/value tick labels) 7pt, color Slate 6A748C. Change any here (no code change).",
 
   "chartSize": {
     "widthIn": 10.0,

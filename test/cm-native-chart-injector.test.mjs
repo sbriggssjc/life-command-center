@@ -103,8 +103,8 @@ test('injectNativeCharts: line chart on Data_Volume_TTM tab', async () => {
   // Marketing feedback: Chart Area No Fill / No Line + 8pt Futura PT default font.
   assert.match(chartXml, /<c:spPr><a:noFill\/><a:ln><a:noFill\/><\/a:ln><\/c:spPr>\s*<c:txPr>/, 'chart area no fill / no line');
   assert.match(chartXml, /<c:txPr>[\s\S]*sz="800"[\s\S]*Futura PT/, 'chart area default font 8pt Futura PT');
-  // Marketing feedback: title 14pt Futura PT Bold NM Blue; x-axis interval unit 1.
-  assert.match(chartXml, /sz="1400" b="1">\s*<a:solidFill><a:srgbClr val="003DA5"/, 'title 14pt bold NM Blue');
+  // Marketing ChartEdits 2026-08-12: title 12pt Futura PT NOT-bold Sky; x-axis interval unit 1.
+  assert.match(chartXml, /sz="1200" b="0">\s*<a:solidFill><a:srgbClr val="62B5E5"/, 'title 12pt not-bold Sky');
   assert.match(chartXml, /<c:tickLblSkip val="1"\/><c:tickMarkSkip val="1"\/>/, 'x-axis label interval unit = 1');
   // Marketing follow-up (2026-08): BOTH axis tick labels are 7pt.
   const catAx1 = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
@@ -1235,8 +1235,11 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.equal(out.spec.barSeries[0].valCol, 'F', 'base = lower_quartile');
   assert.equal(out.spec.barSeries[0].noFill, true);
   assert.equal(out.spec.barSeries[1].valCol, 'G', 'band = iqr_width helper');
-  assert.equal(out.spec.barSeries[1].alpha, '30000', 'T10b — amethyst 30% alpha');
-  assert.equal(out.spec.barSeries[1].borderColor, '9B88A5', 'T10b — amethyst border (was sky)');
+  // Marketing ChartEdits 2026-08-12: fill transparency 30% (alpha 70000 opacity)
+  // and border = No Line (noBorder), superseding the T10b 30%-alpha + amethyst border.
+  assert.equal(out.spec.barSeries[1].alpha, '70000', '30% transparency = 70% opacity');
+  assert.equal(out.spec.barSeries[1].noBorder, true, 'quartile band border = No Line');
+  assert.ok(!out.spec.barSeries[1].borderColor, 'no explicit border color');
 
   // Line series: cap_rate dots (navy circles — the lone navy element)
   assert.equal(out.spec.lineSeries.length, 1);
@@ -1244,6 +1247,7 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.equal(out.spec.lineSeries[0].color, '003DA5');
   assert.equal(out.spec.lineSeries[0].showMarker, true);
   assert.equal(out.spec.lineSeries[0].markerShape, 'circle');
+  assert.equal(out.spec.lineSeries[0].markerSize, 4, 'marker size 4 (ChartEdits 2026-08-12)');
 
   // Helper col: iqr_width = upper - lower
   assert.equal(out.helperCols.length, 1);
@@ -4790,14 +4794,15 @@ test('R38 A: chart emits <c:title> when spec.title is provided', async () => {
   const zip = await JSZip.loadAsync(result);
   const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
   assert.match(chartXml, /<c:title>/, '<c:title> block emitted');
-  assert.match(chartXml, /<a:t>Cap Rate — TTM Weighted Avg by Quarter<\/a:t>/,
-    'title text rendered');
+  // Marketing ChartEdits 2026-08-12: titles are ALL CAPS.
+  assert.match(chartXml, /<a:t>CAP RATE — TTM WEIGHTED AVG BY QUARTER<\/a:t>/,
+    'title text rendered (uppercased)');
   assert.match(chartXml, /<c:autoTitleDeleted val="0"\/>/,
     'autoTitleDeleted is 0 when title is set (auto-title is allowed since we have a title)');
-  // Title style: 14pt bold navy (marketing feedback 2026-08)
-  assert.match(chartXml, /sz="1400"[^/]*b="1"/, '14pt bold');
-  // Color is navy 003DA5
-  assert.match(chartXml, /<c:title>[\s\S]*?<a:srgbClr val="003DA5"\/>/, 'navy color');
+  // Title style: 12pt NOT-bold Sky (marketing ChartEdits 2026-08-12)
+  assert.match(chartXml, /sz="1200"[^/]*b="0"/, '12pt not-bold');
+  // Color is Sky 62B5E5
+  assert.match(chartXml, /<c:title>[\s\S]*?<a:srgbClr val="62B5E5"\/>/, 'sky color');
 });
 
 test('R38 A: chart omits <c:title> when spec.title is missing (backward compat)', async () => {
@@ -6238,7 +6243,8 @@ test('round2 item1: rent_psf_box_quarterly_modeled is a native box chart with th
   assert.equal(out.spec.barSeries.length, 2, 'invisible base + visible IQR band');
   assert.equal(out.spec.lineSeries.length, 1, 'median line');
   const xml = buildComboChartXml(out.spec);
-  assert.match(xml, /incl\. modeled rents/, 'title text embedded in chart XML');
+  // Titles render ALL CAPS (ChartEdits 2026-08-12).
+  assert.match(xml, /INCL\. MODELED RENTS/, 'title text embedded in chart XML (uppercased)');
 });
 
 // Item 2 — the volume_cap_quartile_combo right (cap) axis spans the quartile
