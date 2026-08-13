@@ -158,6 +158,19 @@ def build_credit_tab(wb):
         ("Unit Economics",          "Franchise vs. Corporate"),
         ("Unit Economics",          "Local Market Performance"),
         (None, None),
+        # Facility-level reconciled economics for THIS clinic (dialysis deals).
+        # Distinct from the corporate-guarantor Financial Summary above — this is the
+        # subject facility's own performance (CMS HCRIS-anchored reconciliation), which
+        # drives rent coverage. Populated from tenants[0].credit.recon_* when present.
+        ("Facility Performance (CMS-Reconciled)", "Clinic Revenue — Reconciled (FY)"),
+        ("Facility Performance (CMS-Reconciled)", "Clinic Operating Profit — Reconciled"),
+        ("Facility Performance (CMS-Reconciled)", "Clinic EBITDA — Reconciled"),
+        ("Facility Performance (CMS-Reconciled)", "Clinic EBITDA Margin"),
+        ("Facility Performance (CMS-Reconciled)", "Operating Margin"),
+        ("Facility Performance (CMS-Reconciled)", "Rent Coverage (EBITDAR / Rent)"),
+        ("Facility Performance (CMS-Reconciled)", "Reconciled Fiscal Year"),
+        ("Facility Performance (CMS-Reconciled)", "Data Confidence"),
+        (None, None),
         ("Guaranty",                "Guarantor Name"),
         ("Guaranty",                "Guarantor Type (Corporate / Personal)"),
         ("Guaranty",                "Guaranty Type (Full / Partial / Springing / Burn-off)"),
