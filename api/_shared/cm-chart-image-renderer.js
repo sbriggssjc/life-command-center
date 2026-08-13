@@ -555,8 +555,13 @@ function buildNativeChartConfig(chart, brand) {
       borderDash: s.dashed ? [5, 4] : undefined,
       fill: false,
       tension: 0.15,
-      pointRadius: s.showMarker ? 3 : 0,
-      pointStyle: s.markerShape === 'dash' ? 'line' : 'circle',
+      pointRadius: s.showMarker ? (s.markerSize || 3) : 0,
+      // markerOnly → dot/scatter overlay (no connecting line), mirroring the
+      // native Excel chart. markerShape 'diamond' maps to Chart.js 'rectRot'.
+      showLine: s.markerOnly ? false : undefined,
+      pointStyle: s.markerShape === 'dash' ? 'line'
+                : s.markerShape === 'diamond' ? 'rectRot'
+                : 'circle',
       borderWidth: 2,
       yAxisID: axisId,
     };
@@ -1650,6 +1655,53 @@ function buildChartConfig(chart, brand) {
             { label: 'Institutional', data: rows.map(r => r.institutional_pct),
               backgroundColor: palette[3], stack: 'pool',
               datalabels: { color: '#191919' } },           // pale bg → dark
+          ],
+        },
+        options: opts,
+      };
+    }
+
+    case 'clinic_econ_revenue_census': {
+      // dia annual reconciled economics, avg per clinic (2011-2024).
+      // Stacked bars (left axis): operating cost (navy) + operating profit
+      // (sky) = average revenue per clinic. Dot overlay (right axis): average
+      // patient census per clinic (slate diamonds, no connecting line).
+      const yearLabels = rows.map(r => String(r.year));
+      const censusVals = rows
+        .map(r => Number(r.avg_patient_census_per_clinic))
+        .filter(v => Number.isFinite(v));
+      const cMin = censusVals.length ? Math.min(...censusVals) : 0;
+      const cMax = censusVals.length ? Math.max(...censusVals) : 100;
+      const censusRange = {
+        min: Math.max(0, Math.floor((cMin - 5) / 10) * 10),
+        max: Math.ceil((cMax + 5) / 10) * 10,
+      };
+      const opts = comboOpts({
+        yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
+        yRightFormat: AXIS_FORMAT_INTEGER,
+        yRightRange:  censusRange,
+      });
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
+      return {
+        type: 'bar',
+        data: {
+          labels: yearLabels,
+          datasets: [
+            { type: 'bar', label: 'Avg Operating Cost / Clinic',
+              data: rows.map(r => r.avg_operating_cost_per_clinic),
+              backgroundColor: palette[0], stack: 'econ',
+              borderRadius: 2, yAxisID: 'y', order: 2 },
+            { type: 'bar', label: 'Avg Operating Profit / Clinic',
+              data: rows.map(r => r.avg_operating_profit_per_clinic),
+              backgroundColor: palette[1], stack: 'econ',
+              borderRadius: 2, yAxisID: 'y', order: 2 },
+            { type: 'scatter', label: 'Avg Patient Census / Clinic',
+              data: rows.map((r, i) => ({ x: i, y: r.avg_patient_census_per_clinic })),
+              backgroundColor: PDF_COLORS.cap_outside_firm,
+              borderColor: PDF_COLORS.cap_outside_firm,
+              pointRadius: 6, pointStyle: 'rectRot',
+              showLine: false, yAxisID: 'y1', order: 0 },
           ],
         },
         options: opts,

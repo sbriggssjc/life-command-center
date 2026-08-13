@@ -3359,6 +3359,7 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   'pace_of_cap_rate_expansion',     // 2 bars: pace_all (navy) + pace_core (sky)
   // R35 P3 — final 2 simple-shape missed templates from audit.
   'buyer_class_pct_by_year',        // annual stacked bar (Private / REIT / Cross-Border / Institutional)
+  'clinic_econ_revenue_census',     // dia annual combo: stacked cost+profit bars (=revenue) + census dots (2nd axis)
   'renewal_rent_growth',            // single-bar Renewal Rent / SF
   // R35 P4 — final 2 complex composites.
   'cost_of_capital',                // 2 lines + floating gray range bar (sharedAxis combo)
@@ -5311,6 +5312,65 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             },
           },
         ],
+      };
+    }
+
+    case 'clinic_econ_revenue_census': {
+      // dia annual reconciled economics, avg per clinic (2011-2024).
+      //   • Stacked bars (LEFT / primary axis): operating cost (navy) +
+      //     operating profit (sky). They sum to average revenue per clinic —
+      //     the bar total IS the revenue-per-clinic figure.
+      //   • Dot overlay (RIGHT / secondary axis): average patient census per
+      //     clinic (slate diamonds, no connecting line).
+      // Year x-axis is categorical (integer). barGrouping='stacked' WITHOUT
+      // sharedAxis, so the census line-series lands on the secondary (right)
+      // axis automatically — dollars left, census right.
+      const yearCol   = findCol('year');
+      const costCol    = findCol('avg_operating_cost_per_clinic');
+      const profitCol  = findCol('avg_operating_profit_per_clinic');
+      const censusCol  = findCol('avg_patient_census_per_clinic');
+      if (!yearCol || !costCol || !profitCol || !censusCol) return null;
+
+      // Fit the census (right) axis snugly around the observed range so the
+      // dots read as a trend, padded to a round decade and floored at 0.
+      const censusVals = plottedRows
+        .map((r) => Number(r.avg_patient_census_per_clinic))
+        .filter((v) => Number.isFinite(v));
+      const cMin = censusVals.length ? Math.min(...censusVals) : 0;
+      const cMax = censusVals.length ? Math.max(...censusVals) : 100;
+      const censusRange = {
+        min: Math.max(0, Math.floor((cMin - 5) / 10) * 10),
+        max: Math.ceil((cMax + 5) / 10) * 10,
+      };
+
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: yearCol,
+          dataStart, dataEnd,
+          // Year x-axis (integer 2011, 2012, ...), not a quarter date.
+          catAxNumFmt: '0',
+          yLeftNumFmt:  VAL_FMT_CURRENCY,
+          yLeftAxisTitle:  'Avg Revenue / Clinic',
+          yRightRange:  censusRange,
+          yRightNumFmt: VAL_FMT_INTEGER,
+          yRightAxisTitle: 'Avg Patient Census / Clinic',
+          barGrouping: 'stacked',
+          barSeries: [
+            // Operating cost — bottom of the stack (navy)
+            { titleCol: costCol,   titleRow: headerRow, valCol: costCol,   color: navy },
+            // Operating profit — top of the stack (sky). cost + profit = revenue.
+            { titleCol: profitCol, titleRow: headerRow, valCol: profitCol, color: sky },
+          ],
+          lineSeries: [
+            // Patient census — slate diamond markers, no connecting line, right axis
+            { titleCol: censusCol, titleRow: headerRow, valCol: censusCol,
+              color: '6A748C', showMarker: true, markerShape: 'diamond', markerSize: 7, markerOnly: true },
+          ],
+          anchor: standardAnchor,
+        },
       };
     }
 
