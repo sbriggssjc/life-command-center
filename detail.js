@@ -4138,6 +4138,69 @@ function _udTabLease() {
 
 // ─── OPERATIONS TAB ──────────────────────────────────────────────────────────
 
+/**
+ * Resolve a clinic's "corrected clinic economics" (annual revenue, operating
+ * profit, margin) from the data the operations tab already loads.
+ *
+ * BUGFIX (2026-08): both the Operations tab and the client export used to read
+ * these figures ONLY from `ext.facilityEconomics` (the `facility_economics`
+ * HCRIS table). That table has NO estimated_annual_revenue / ttm_revenue /
+ * estimated_operating_profit columns at all, so revenue, operating profit and
+ * margin rendered "Not on file" / N/A for EVERY facility — even though the
+ * corrected HCRIS-actual figures are present on `v_property_rankings`
+ * (medicare_clinics denorm) for 7,631 of 7,655 clinics and are exactly what the
+ * report's Comparative Benchmarking revenue rank already uses. The N/A headline
+ * therefore contradicted its own revenue percentile.
+ *
+ * Source ladder (revenue & profit are always taken as a matched pair from the
+ * SAME source so the derived margin stays consistent):
+ *   1. v_property_rankings / medicare_clinics denorm (`r`) — the corrected
+ *      clinic economics (revenue_calc_method = hcris_actual), the same source
+ *      the benchmarking rank reads. Keeps the headline and the rank in agreement.
+ *   2. clinic_financial_estimates primary row (`fin`) — the modeled estimate.
+ *   3. facility_economics HCRIS (`fe`) — computed revenue_per_treatment ×
+ *      total_treatments, profit = revenue − total_costs.
+ */
+function _udResolveEconomics(r, fin, fe) {
+  r = r || {}; fin = fin || {}; fe = fe || {};
+  const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v);
+  let revenue = null, profit = null, method = null, source = null;
+
+  // 1) v_property_rankings / medicare_clinics denorm — corrected clinic economics
+  let rev1 = num(r.estimated_annual_revenue); if (rev1 == null) rev1 = num(r.ttm_revenue);
+  let prof1 = num(r.estimated_annual_profit); if (prof1 == null) prof1 = num(r.ttm_operating_profit);
+  if (rev1 != null && prof1 != null && rev1 > 0) {
+    revenue = rev1; profit = prof1;
+    method = r.revenue_calc_method || 'hcris_actual';
+    source = 'Corrected clinic economics';
+  }
+
+  // 2) clinic_financial_estimates primary estimate
+  if (revenue == null || profit == null) {
+    const rev2 = num(fin.estimated_annual_revenue);
+    let prof2 = num(fin.estimated_annual_profit); if (prof2 == null) prof2 = num(fin.estimated_operating_profit);
+    if (rev2 != null && prof2 != null && rev2 > 0) {
+      revenue = rev2; profit = prof2;
+      method = fin.estimate_source || fin.revenue_calc_method || 'estimated';
+      source = fin.estimate_source ? ('Estimate · ' + fin.estimate_source) : 'Clinic financial estimate';
+    }
+  }
+
+  // 3) facility_economics HCRIS (compute from per-treatment economics)
+  if (revenue == null) {
+    const rpt = num(fe.revenue_per_treatment), tx = num(fe.total_treatments), cost = num(fe.total_costs);
+    if (rpt != null && tx != null && tx > 0) {
+      revenue = rpt * tx;
+      if (profit == null && cost != null) profit = revenue - cost;
+      method = 'hcris_facility'; source = 'HCRIS cost report';
+    }
+  }
+
+  const margin = (revenue != null && profit != null && revenue > 0) ? (profit / revenue) * 100 : null;
+  const basis = (revenue != null && profit != null && revenue > 0) ? 'corrected' : 'not_on_file';
+  return { revenue: revenue, profit: profit, margin: margin, method: method, source: source, basis: basis };
+}
+
 function _udTabOperations() {
   const db = _udCache.db;
   const rankings = _udCache.rankings;
@@ -4464,14 +4527,16 @@ function _udTabOperations() {
   // ── Reconcile operating margin ──
   // Always prefer computing margin from profit / revenue for consistency,
   // since ttm_operating_margin may be stored as a raw ratio (0.008) instead of a percentage (0.8)
-  const correctedRevenue = facilityEconomics.estimated_annual_revenue || facilityEconomics.ttm_revenue || null;
-  const correctedProfit = facilityEconomics.estimated_annual_profit || facilityEconomics.estimated_operating_profit || facilityEconomics.ttm_operating_profit || null;
+  // Corrected clinic economics — resolved from v_property_rankings / medicare_clinics
+  // (the denorm the benchmarking rank uses), falling back to the primary estimate
+  // and then computed HCRIS. See _udResolveEconomics for why facilityEconomics
+  // alone can never populate these (missing columns).
+  const _econ = _udResolveEconomics(r, finDetail, facilityEconomics);
+  const correctedRevenue = _econ.revenue;
+  const correctedProfit = _econ.profit;
   const bestProfit = correctedProfit;
   const bestRevenue = correctedRevenue;
-  let margin = null;
-  if (bestProfit && bestRevenue && Number(bestRevenue) > 0) {
-    margin = (Number(bestProfit) / Number(bestRevenue)) * 100;
-  }
+  const margin = _econ.margin;
 
   // ── Export Toolbar ──
   html += '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">';
@@ -4660,7 +4725,7 @@ function _udTabOperations() {
   html += '<div class="detail-section-title">Financial Summary</div>';
 
   // Source badge
-  const revSource = estRevenue ? (facilityEconomics.estimate_source || facilityEconomics.revenue_calc_method || 'Corrected clinic economics') : 'Not on file';
+  const revSource = estRevenue ? (_econ.source || 'Corrected clinic economics') : 'Not on file';
   html += '<div style="margin-bottom:10px"><span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;background:var(--purple);color:#fff;font-weight:600;letter-spacing:0.3px">' + esc(revSource) + '</span></div>';
 
   html += '<div class="detail-grid">';
@@ -5222,18 +5287,29 @@ function _udTabOperations() {
 }
 
 /** Northmarq brand constants — extracted from northmarq.com live site */
+// Northmarq brand tokens for the client-deliverable export.
+// Palette + type rules per marketing's export-branding review (2026-08) and the
+// Northmarq Brand Style Guide (Nov 2024); hexes mirror public/reports/cm-brand.json.
 const NMQ_BRAND = {
-  blue:       '#003DA5',  // primary — links, CTA bg, header accents
-  navy:       '#001159',  // deep navy — dark headers, hover states
-  lightBlue:  '#62B5E5',  // secondary accent
-  blueTint:   '#E0E8F4',  // light blue background tint
-  warmWhite:  '#FAF9F5',  // warm off-white background
-  bodyText:   '#3D4A54',  // body copy
-  darkText:   '#191919',  // headings
-  muted:      '#6A748C',  // secondary text
-  border:     '#D8DFDF',  // borders, dividers
-  headingFont: "'futura-pt', 'Trebuchet MS', 'Arial', sans-serif",
-  bodyFont:    "'Open Sans', 'Segoe UI', system-ui, sans-serif",
+  blue:       '#003DA5',  // NM Blue — primary: header/footer bars, page header, CTA
+  navy:       '#001159',  // deep navy — reserved dark accent
+  lightBlue:  '#62B5E5',  // NM Sky — rule lines, section-header text
+  blueTint:   '#E0E8F4',  // NM Blue 12 — callout / card-header / table-head fills
+  iron:       '#D8DFDF',  // NM Iron — tile fills, row shading, borders
+  warmWhite:  '#D8DFDF',  // (was warm gray #FAF9F5) → NM Iron per marketing notes
+  bodyText:   '#191919',  // Rich Black / Ink — body & table copy (was charcoal)
+  darkText:   '#191919',  // Rich Black — headings
+  muted:      '#6A748C',  // NM Slate — table left-column labels, secondary text
+  slate:      '#6A748C',  // NM Slate
+  steel:      '#9EA9B7',  // NM Steel — alt address / muted accent
+  addressBlue:'#265AB2',  // NM Blue 85 — subtitle / address line
+  border:     '#D8DFDF',  // NM Iron — borders, dividers
+  // Futura PT (Adobe) is the brand face: Light (300) for the page header,
+  // Book (400) for body & sub-headers, Bold (700) for emphasis. Falls back to a
+  // locally-installed Futura PT, then Century Gothic (metrically close), then the
+  // web-loaded Open Sans / Arial so the export never renders in a serif.
+  headingFont: "'futura-pt', 'Futura PT', 'Century Gothic', 'Open Sans', Arial, sans-serif",
+  bodyFont:    "'futura-pt', 'Futura PT', 'Century Gothic', 'Open Sans', Arial, sans-serif",
   logoUrl:     'https://www.northmarq.com/themes/custom/northmarq/logo.svg',
 };
 
@@ -5266,21 +5342,15 @@ function _udExportOperations() {
   // nonsensical margin (e.g. $7.6M est. revenue ÷ $522k HCRIS profit = 6.9%, and
   // $1,156/treatment). Prefer HCRIS actuals (reflect real treatment volume); else
   // the estimated model kept internally consistent (its own revenue + profit).
-  const _estRev = (facilityEconomics.estimated_annual_revenue != null) ? Number(facilityEconomics.estimated_annual_revenue)
-        : (facilityEconomics.ttm_revenue != null) ? Number(facilityEconomics.ttm_revenue) : null;
-  const _estProfit = (facilityEconomics.estimated_operating_profit != null) ? Number(facilityEconomics.estimated_operating_profit)
-        : (facilityEconomics.estimated_annual_profit != null) ? Number(facilityEconomics.estimated_annual_profit)
-        : (facilityEconomics.ttm_operating_profit != null) ? Number(facilityEconomics.ttm_operating_profit) : null;
-  let finBasis, estRevenue, bestProfit, margin;
-  if (_estRev != null && _estProfit != null && _estRev > 0) {
-    finBasis = 'estimated';
-    estRevenue = _estRev; bestProfit = _estProfit; margin = (_estProfit / _estRev) * 100;
-  } else {
-    finBasis = 'not_on_file';
-    estRevenue = null;
-    bestProfit = null;
-    margin = null;
-  }
+  // Corrected clinic economics resolved from the data the tab already loads.
+  // Revenue & profit come from ONE matched source (see _udResolveEconomics) so
+  // the margin is internally consistent, and the headline agrees with the
+  // Comparative Benchmarking revenue rank (both read v_property_rankings).
+  const _econ = _udResolveEconomics(r, finDetail, facilityEconomics);
+  const finBasis = _econ.basis === 'corrected' ? 'estimated' : 'not_on_file';
+  const estRevenue = _econ.revenue;
+  const bestProfit = _econ.profit;
+  const margin = _econ.margin;
   const latestSnapshotPt = patientHistory.length > 0 ? Number(patientHistory[patientHistory.length - 1].total_patients || 0) : 0;
   const clinicPatientCount = clinicProfile.latest_estimated_patients != null
     ? Number(clinicProfile.latest_estimated_patients)
@@ -5448,7 +5518,7 @@ function _udExportOperations() {
 
   const doc = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${facilityName} \u2014 Net-Lease Asset Profile | Northmarq</title>
-<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
 <style>
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -5456,17 +5526,17 @@ function _udExportOperations() {
     .page-break { page-break-before: always; }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: ${B.bodyFont}; color: ${B.bodyText}; max-width: 860px; margin: 0 auto; padding: 0; line-height: 1.55; background: #fff; }
+  body { font-family: ${B.bodyFont}; font-weight: 300; color: ${B.bodyText}; max-width: 860px; margin: 0 auto; padding: 0; line-height: 1.55; background: #fff; }
 
   /* ── Header bar ── */
-  .nmq-header { background: ${B.navy}; color: #fff; padding: 24px 40px; display: flex; align-items: center; justify-content: space-between; }
+  .nmq-header { background: ${B.blue}; color: #fff; padding: 24px 40px; display: flex; align-items: center; justify-content: space-between; }
   .nmq-header img { height: 28px; filter: brightness(0) invert(1); }
-  .nmq-header .report-type { font-family: ${B.headingFont}; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.8; }
+  .nmq-header .report-type { font-family: ${B.headingFont}; font-weight: 400; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.85; }
 
   /* ── Title section ── */
-  .title-section { padding: 28px 40px 20px; border-bottom: 3px solid ${B.blue}; }
-  .title-section h1 { font-family: ${B.headingFont}; font-size: 26px; font-weight: 700; color: ${B.navy}; margin: 0 0 4px; letter-spacing: -0.3px; }
-  .title-section .subtitle { font-size: 14px; color: ${B.muted}; }
+  .title-section { padding: 28px 40px 20px; border-bottom: 3px solid ${B.lightBlue}; }
+  .title-section h1 { font-family: ${B.headingFont}; font-size: 26px; font-weight: 300; color: ${B.blue}; margin: 0 0 4px; letter-spacing: -0.3px; }
+  .title-section .subtitle { font-family: ${B.bodyFont}; font-weight: 400; font-size: 14px; color: ${B.addressBlue}; }
 
   /* ── Content area ── */
   .content { padding: 0 40px 32px; }
@@ -5474,25 +5544,25 @@ function _udExportOperations() {
   /* ── KPI banner ── */
   .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0; }
   .kpi { background: ${B.warmWhite}; border-radius: 6px; padding: 16px; text-align: center; border: 1px solid ${B.border}; }
-  .kpi-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: ${B.muted}; margin-bottom: 6px; font-weight: 600; }
-  .kpi-value { font-family: ${B.headingFont}; font-size: 22px; font-weight: 700; color: ${B.navy}; }
+  .kpi-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: ${B.slate}; margin-bottom: 6px; font-weight: 700; }
+  .kpi-value { font-family: ${B.headingFont}; font-size: 22px; font-weight: 700; color: ${B.blue}; }
 
-  /* ── Section headers ── */
-  h2 { font-family: ${B.headingFont}; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: ${B.blue}; border-bottom: 2px solid ${B.blueTint}; padding-bottom: 6px; margin: 28px 0 14px; font-weight: 700; }
+  /* ── Section headers ── (Futura, NM Blue title; Sky rule beneath — marketing notes) */
+  h2 { font-family: ${B.headingFont}; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: ${B.blue}; border-bottom: 2px solid ${B.lightBlue}; padding-bottom: 6px; margin: 28px 0 14px; font-weight: 700; }
 
-  /* ── Data tables ── */
+  /* ── Data tables ── (Futura PT Light body, Slate left-column labels) */
   .data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
-  .data-table tr:nth-child(even) { background: ${B.warmWhite}; }
-  .data-table td { padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
-  .data-table td:first-child { color: ${B.muted}; font-weight: 600; width: 210px; }
-  .data-table td:last-child { color: ${B.darkText}; font-weight: 500; }
+  .data-table tr:nth-child(even) { background: ${B.iron}; }
+  .data-table td { padding: 8px 14px; border-bottom: 1px solid ${B.border}; font-weight: 300; }
+  .data-table td:first-child { color: ${B.slate}; font-weight: 600; width: 210px; }
+  .data-table td:last-child { color: ${B.darkText}; font-weight: 400; }
 
   /* ── Methodology box ── */
   .methodology { background: ${B.blueTint}; border-left: 4px solid ${B.blue}; border-radius: 0 6px 6px 0; padding: 18px 20px; font-size: 12px; color: ${B.bodyText}; line-height: 1.7; margin-top: 24px; }
-  .methodology strong { color: ${B.navy}; }
+  .methodology strong { color: ${B.blue}; }
 
   /* ── Footer ── */
-  .nmq-footer { margin-top: 32px; padding: 20px 40px; background: ${B.navy}; color: rgba(255,255,255,0.7); font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+  .nmq-footer { margin-top: 32px; padding: 20px 40px; background: ${B.blue}; color: rgba(255,255,255,0.78); font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
   .nmq-footer strong { color: #fff; }
   .nmq-footer .sources { font-size: 10px; max-width: 50%; text-align: right; }
 
@@ -5507,9 +5577,9 @@ function _udExportOperations() {
   /* ── Net-lease export additions ── */
   .snap { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 22px 0 8px; }
   .sk { background: ${B.warmWhite}; border: 1px solid ${B.border}; border-radius: 6px; padding: 13px 14px; }
-  .sk .l { font-size: 8.5px; text-transform: uppercase; letter-spacing: .9px; color: ${B.muted}; font-weight: 700; margin-bottom: 5px; }
-  .sk .v { font-family: ${B.headingFont}; font-size: 19px; font-weight: 700; color: ${B.navy}; line-height: 1.1; }
-  .sk .v small { font-size: 11px; font-weight: 600; color: ${B.muted}; }
+  .sk .l { font-size: 8.5px; text-transform: uppercase; letter-spacing: .9px; color: ${B.slate}; font-weight: 700; margin-bottom: 5px; }
+  .sk .v { font-family: ${B.headingFont}; font-size: 19px; font-weight: 700; color: ${B.blue}; line-height: 1.1; }
+  .sk .v small { font-size: 11px; font-weight: 400; color: ${B.slate}; }
   .sk.accent { background: ${B.blue}; border-color: ${B.blue}; }
   .sk.accent .l { color: rgba(255,255,255,.8); }
   .sk.accent .v { color: #fff; }
@@ -5517,7 +5587,7 @@ function _udExportOperations() {
   h2 .note { float: right; text-transform: none; letter-spacing: 0; font-size: 10.5px; color: ${B.muted}; font-weight: 600; font-family: ${B.bodyFont}; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .card { border: 1px solid ${B.border}; border-radius: 6px; overflow: hidden; margin-bottom: 6px; }
-  .card .ch { background: ${B.blueTint}; color: ${B.navy}; font-family: ${B.headingFont}; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
+  .card .ch { background: ${B.blueTint}; color: ${B.blue}; font-family: ${B.headingFont}; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
   .card .data-table { margin: 0; }
   .card .data-table td:first-child { width: 140px; }
   .bar { display: inline-block; width: 120px; height: 9px; background: ${B.border}; border-radius: 5px; overflow: hidden; vertical-align: middle; margin-right: 8px; }
@@ -5528,12 +5598,12 @@ function _udExportOperations() {
   .pill.bad  { background: #FBE6E4; color: #B3261E; }
   .pill.neutral { background: ${B.blueTint}; color: ${B.blue}; }
   .callout { background: ${B.blueTint}; border-left: 4px solid ${B.blue}; border-radius: 0 6px 6px 0; padding: 12px 16px; font-size: 12.5px; margin: 10px 0 4px; }
-  .callout b { color: ${B.navy}; }
+  .callout b { color: ${B.blue}; }
   .rank-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; font-size: 12.5px; }
   .rank-row .rl { width: 74px; flex-shrink: 0; color: ${B.muted}; font-weight: 600; }
   .rank-track { flex: 1; height: 18px; background: ${B.warmWhite}; border: 1px solid ${B.border}; border-radius: 4px; position: relative; overflow: hidden; }
   .rank-track i { position: absolute; left: 0; top: 0; bottom: 0; background: ${B.lightBlue}; opacity: .55; }
-  .rank-track span { position: absolute; left: 8px; top: 0; line-height: 18px; font-size: 11px; color: ${B.navy}; font-weight: 600; }
+  .rank-track span { position: absolute; left: 8px; top: 0; line-height: 18px; font-size: 11px; color: ${B.blue}; font-weight: 600; }
   .rank-pct { width: 120px; flex-shrink: 0; text-align: right; color: ${B.bodyText}; font-weight: 600; font-size: 11.5px; }
   .risk-wrap { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: center; }
   .rcmp { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; }
@@ -5542,7 +5612,7 @@ function _udExportOperations() {
   .rcmp .rct i { display: block; height: 100%; }
   .rcmp .rcv { width: 26px; text-align: right; font-weight: 700; }
   .comp-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
-  .comp-table th { background: ${B.blueTint}; color: ${B.navy}; border-bottom: 2px solid ${B.blue}; padding: 8px 12px; }
+  .comp-table th { background: ${B.blueTint}; color: ${B.blue}; border-bottom: 2px solid ${B.lightBlue}; padding: 8px 12px; }
   .comp-table td { padding: 6px 12px; border-bottom: 1px solid ${B.border}; }
 </style></head><body>
 
