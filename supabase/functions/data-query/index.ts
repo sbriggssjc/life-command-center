@@ -156,8 +156,12 @@ const DIA_READ_TABLES = new Set([
   "v_property_detail", "v_lease_detail", "v_ownership_current",
   "v_ownership_chain", "v_property_rankings",
   // Reconciled clinic economics (model dialysis_econ_reconciled_v1): current-year
-  // rollup + full per-(clinic, fiscal_year) series for revenue/profit/EBITDA trends.
+  // rollup + full per-(clinic, fiscal_year) series for revenue/profit/EBITDA trends,
+  // + market-education aggregates (scale curve, operator benchmark, market summary,
+  // per-clinic value crosswalk).
   "v_clinic_econ_current", "v_clinic_econ_series",
+  "v_dia_econ_scale_curve", "v_dia_econ_operator_benchmark",
+  "v_dia_econ_market_summary", "v_dia_econ_value_crosswalk",
   // Ownership Research workbench (Layer H.5 frontend for the canonical
   // cleanup series).
   "v_recorded_owner_canonical_clusters", "v_ownership_research_backlog",

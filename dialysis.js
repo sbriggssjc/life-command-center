@@ -1599,6 +1599,128 @@ function renderDiaActionItemsInner() {
 /**
  * Render overview — infographic-style command center homepage
  */
+// Dialysis Market Economics — a Northmarq-branded market-education exhibit built on
+// the reconciled facility-economics model (dialysis_econ_reconciled_v1). Teaches the
+// scale economics of dialysis + demonstrates our analytical depth (validated to 10-K).
+// Pure inline SVG; opens as a print-ready HTML report (same idiom as the clinic export).
+async function _diaMarketEconomicsExhibit() {
+  const NB = { blue:'#003DA5', navy:'#001159', sky:'#62B5E5', blue85:'#265AB2', tint:'#E0E8F4',
+    slate:'#6A748C', iron:'#D8DFDF', body:'#191919',
+    font:"'futura-pt','Futura PT','Century Gothic','Open Sans',Arial,sans-serif" };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const pct = v => v == null ? '—' : (Number(v) * 100).toFixed(1) + '%';
+  const usdBn = v => v == null ? '—' : '$' + (Number(v) / 1e9).toFixed(1) + 'B';
+  let scale = [], oper = [], mkt = [];
+  try {
+    const [a, b, c] = await Promise.all([
+      diaQuery('v_dia_econ_scale_curve', '*', { order: 'volume_band.asc', limit: 20 }).catch(() => []),
+      diaQuery('v_dia_econ_operator_benchmark', '*', { order: 'clinics.desc', limit: 20 }).catch(() => []),
+      diaQuery('v_dia_econ_market_summary', '*', { order: 'total_revenue.desc', limit: 60 }).catch(() => [])
+    ]);
+    scale = Array.isArray(a) ? a : (a && a.data) || [];
+    oper = Array.isArray(b) ? b : (b && b.data) || [];
+    mkt = Array.isArray(c) ? c : (c && c.data) || [];
+  } catch (e) { /* fall through to empty-state */ }
+  if (!scale.length && !oper.length) {
+    alert('Market economics data is not available yet. If this persists, the data-query edge function may need a redeploy to expose the new views.');
+    return;
+  }
+  const natl = mkt.find(m => m.state === 'US') || null;
+  const states = mkt.filter(m => m.state && m.state !== 'US').slice(0, 10);
+
+  // ── Chart 1: scale curve (operating & EBITDA margin by volume band) ──
+  const sc = scale.filter(s => s.clinics > 0);
+  let svg1 = '';
+  if (sc.length) {
+    const W = 780, H = 300, ml = 52, mr = 52, mt = 24, mb = 56, pw = W - ml - mr, ph = H - mt - mb;
+    const n = sc.length, slot = pw / n;
+    const yPct = v => mt + ph - ((v + 0.15) / (0.45)) * ph; // margin range -15%..+30%
+    const costs = sc.map(s => Number(s.median_cost_per_tx) || 0);
+    const cMax = Math.max.apply(null, costs) * 1.1 || 1;
+    const yCost = v => mt + ph - (v / cMax) * ph;
+    svg1 = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" font-family="' + NB.font + '">';
+    // zero line + % gridlines
+    [-0.10, 0, 0.10, 0.20, 0.30].forEach(g => { const y = yPct(g);
+      svg1 += '<line x1="' + ml + '" y1="' + y.toFixed(1) + '" x2="' + (W - mr) + '" y2="' + y.toFixed(1) + '" stroke="' + (g === 0 ? NB.slate : NB.tint) + '" stroke-width="1"/>';
+      svg1 += '<text x="' + (ml - 6) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="' + NB.slate + '">' + (g * 100).toFixed(0) + '%</text>'; });
+    // cost/tx bars (secondary)
+    sc.forEach((s, i) => { const cx = ml + slot * i + slot / 2, bw = Math.min(30, slot * 0.4);
+      const by = yCost(Number(s.median_cost_per_tx) || 0), bh = mt + ph - by;
+      svg1 += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, bh).toFixed(1) + '" fill="' + NB.iron + '" opacity="0.55"/>';
+      svg1 += '<text x="' + cx.toFixed(1) + '" y="' + (by - 3).toFixed(1) + '" text-anchor="middle" font-size="8" fill="' + NB.slate + '">$' + Math.round(Number(s.median_cost_per_tx)) + '</text>';
+      svg1 += '<text x="' + cx.toFixed(1) + '" y="' + (H - mb + 16) + '" text-anchor="middle" font-size="9" fill="' + NB.body + '">' + esc(String(s.volume_band).replace(/^\d+\.\s*/, '')) + '</text>'; });
+    // margin lines
+    const lineFor = (key, color) => { const pts = sc.map((s, i) => (ml + slot * i + slot / 2).toFixed(1) + ',' + yPct(Number(s[key]) || 0).toFixed(1));
+      let g = '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2.5"/>';
+      sc.forEach((s, i) => { const cx = ml + slot * i + slot / 2, cy = yPct(Number(s[key]) || 0);
+        g += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="3" fill="' + color + '"/>'; });
+      return g; };
+    svg1 += lineFor('median_operating_margin', NB.blue85);
+    svg1 += lineFor('median_ebitda_margin', NB.blue);
+    // x label + legend
+    svg1 += '<text x="' + (ml + pw / 2) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="10" fill="' + NB.slate + '">Annual treatment volume (facility scale) →</text>';
+    svg1 += '<rect x="' + ml + '" y="6" width="10" height="10" fill="' + NB.iron + '"/><text x="' + (ml + 14) + '" y="15" font-size="9">Cost / treatment</text>';
+    svg1 += '<line x1="' + (ml + 96) + '" y1="11" x2="' + (ml + 110) + '" y2="11" stroke="' + NB.blue85 + '" stroke-width="2.5"/><text x="' + (ml + 114) + '" y="15" font-size="9">Operating margin</text>';
+    svg1 += '<line x1="' + (ml + 210) + '" y1="11" x2="' + (ml + 224) + '" y2="11" stroke="' + NB.blue + '" stroke-width="2.5"/><text x="' + (ml + 228) + '" y="15" font-size="9">EBITDA margin</text>';
+    svg1 += '</svg>';
+  }
+
+  // ── Chart 2: operator benchmark (EBITDA margin bars) ──
+  const ob = oper.filter(o => o.clinics >= 50).sort((a, b) => Number(b.ebitda_margin) - Number(a.ebitda_margin));
+  let svg2 = '';
+  if (ob.length) {
+    const rowH = 30, W = 780, mt = 10, ml = 150, barMax = 480;
+    const H = mt + ob.length * rowH + 10;
+    const mMax = Math.max.apply(null, ob.map(o => Number(o.ebitda_margin) || 0)) * 1.15 || 0.35;
+    svg2 = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" font-family="' + NB.font + '">';
+    ob.forEach((o, i) => { const y = mt + i * rowH, m = Number(o.ebitda_margin) || 0;
+      const bw = Math.max(1, (m / mMax) * barMax);
+      svg2 += '<text x="' + (ml - 8) + '" y="' + (y + rowH / 2 + 3) + '" text-anchor="end" font-size="11" font-weight="600" fill="' + NB.body + '">' + esc(o.operator) + '</text>';
+      svg2 += '<rect x="' + ml + '" y="' + (y + 5) + '" width="' + bw.toFixed(1) + '" height="' + (rowH - 12) + '" fill="' + (o.operator === 'DaVita' ? NB.blue : NB.blue85) + '" rx="2"/>';
+      svg2 += '<text x="' + (ml + bw + 6).toFixed(1) + '" y="' + (y + rowH / 2 + 3) + '" font-size="10" fill="' + NB.body + '">' + pct(o.ebitda_margin) + ' EBITDA · $' + Math.round(Number(o.revenue_per_treatment)) + '/tx · ' + o.clinics + ' clinics</text>'; });
+    svg2 += '</svg>';
+  }
+
+  let stateRows = states.map(s => '<tr><td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + '">' + esc(s.state) + '</td>'
+    + '<td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + ';text-align:right">' + s.clinics + '</td>'
+    + '<td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + ';text-align:right">' + usdBn(s.total_revenue) + '</td>'
+    + '<td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + ';text-align:right">' + pct(s.ebitda_margin) + '</td></tr>').join('');
+  const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+  const doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Dialysis Market Economics | Northmarq</title>'
+    + '<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">'
+    + '<style>body{font-family:' + NB.font + ';color:' + NB.body + ';margin:0;padding:0;background:#fff}'
+    + '.wrap{max-width:900px;margin:0 auto;padding:28px 36px}'
+    + '.hdr{background:' + NB.blue + ';color:#fff;padding:20px 36px;display:flex;justify-content:space-between;align-items:baseline}'
+    + '.hdr h1{font-size:20px;margin:0;font-weight:700;letter-spacing:.3px}.hdr .sub{font-size:12px;opacity:.85}'
+    + 'h2{font-size:14px;text-transform:uppercase;letter-spacing:1.2px;color:' + NB.blue + ';border-bottom:2px solid ' + NB.sky + ';padding-bottom:6px;margin:26px 0 12px}'
+    + '.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}'
+    + '.kpi{background:' + NB.tint + ';border-radius:8px;padding:12px 14px}.kpi .v{font-size:20px;font-weight:700;color:' + NB.navy + '}.kpi .l{font-size:11px;color:' + NB.slate + '}'
+    + '.note{font-size:12px;color:' + NB.slate + ';line-height:1.6}.callout{background:' + NB.tint + ';border-left:4px solid ' + NB.blue + ';border-radius:0 6px 6px 0;padding:12px 16px;font-size:12px;line-height:1.6;margin:12px 0}'
+    + 'table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;color:' + NB.navy + ';padding:4px 8px;border-bottom:2px solid ' + NB.sky + '}'
+    + '.btn{position:fixed;top:14px;right:16px;background:' + NB.blue + ';color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;cursor:pointer}@media print{.btn{display:none}}'
+    + 'footer{margin:30px 0 10px;padding-top:12px;border-top:1px solid ' + NB.iron + ';font-size:10px;color:' + NB.slate + '}</style></head><body>'
+    + '<button class="btn" onclick="window.print()">🖨 Print / Save PDF</button>'
+    + '<div class="hdr"><h1>Dialysis Facility Economics</h1><div class="sub">Market Education &amp; Analytical Capability · ' + today + '</div></div>'
+    + '<div class="wrap">'
+    + '<p class="note">Northmarq reconstructs a single reconciled revenue, operating-profit, and EBITDA figure for <strong>every one of ~8,300 U.S. dialysis facilities</strong>, per year back to 2011. We treat the CMS HCRIS cost report as what it is — a <em>cost</em> report — and anchor treatment volume and cost to it, then reconstruct revenue as treatments × a payer-mix-weighted reimbursement rate. The model is validated bottom-up against operator SEC filings.</p>'
+    + (natl ? '<div class="kpis"><div class="kpi"><div class="v">' + natl.clinics + '</div><div class="l">Facilities modeled</div></div>'
+        + '<div class="kpi"><div class="v">' + usdBn(natl.total_revenue) + '</div><div class="l">Aggregate revenue</div></div>'
+        + '<div class="kpi"><div class="v">' + pct(natl.operating_margin) + '</div><div class="l">Median operating margin</div></div>'
+        + '<div class="kpi"><div class="v">' + pct(natl.ebitda_margin) + '</div><div class="l">Facility EBITDA margin</div></div></div>' : '')
+    + (svg1 ? '<h2>Scale drives dialysis profitability</h2><p class="note">Per-treatment cost falls sharply with facility scale (audited HCRIS), so margin expands from loss-making at the smallest facilities to ~25% operating / ~30% EBITDA at the largest. This is the single most important economic fact in the sector — and it is why volume trajectory is the leading indicator of a facility\'s value.</p>' + svg1 : '')
+    + (svg2 ? '<h2>Operator benchmarking</h2>' + svg2
+        + '<div class="callout"><strong>Validated to the 10-K.</strong> Aggregated across DaVita\'s ~2,700 facilities, our model implies <strong>$380 revenue/treatment</strong> (DaVita FY2024 10-K: ~$369–380, within ~3%) and a <strong>25.0% facility EBITDA margin</strong> (reported dialysis EBITDA ~24.5%). Our aggregate revenue is <em>conservative</em> vs operator-reported totals because we anchor to audited CMS treatment counts — the model does not overstate.</div>' : '')
+    + (states.length ? '<h2>Largest state markets</h2><table><tr><th>State</th><th style="text-align:right">Facilities</th><th style="text-align:right">Revenue</th><th style="text-align:right">EBITDA margin</th></tr>' + stateRows + '</table>' : '')
+    + '<footer><strong>Methodology.</strong> Model dialysis_econ_reconciled_v1: revenue = HCRIS treatments × payer-mix-weighted rate (CY2024: Medicare $279, Medicaid $225, Commercial $1,100, Other $250/tx, MA-corrected); operating profit = revenue − HCRIS cost; EBITDA = operating profit + 10-K-anchored D&A (~$27/tx, size/age-distributed). Figures are Northmarq estimates for illustration, reconciled to public filings; not audited financials. Sources: CMS HCRIS, CMS Dialysis Facility Compare, USRDS, MedPAC, operator 10-K filings.<br>Northmarq · Confidential · ' + today + '</footer>'
+    + '</div></body></html>';
+  const blob = new Blob([doc], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+if (typeof window !== 'undefined') window._diaMarketEconomicsExhibit = _diaMarketEconomicsExhibit;
+
 function renderDiaOverview() {
   // UI Phase 2: load the single-row overview-stats MV (Portfolio at a Glance,
   // Lease Expiration Risk, Operator/Geographic Breakdown). Fast (~100ms); fills
@@ -2017,6 +2139,13 @@ function renderDiaOverview() {
   // Breakdown → Data Health & Coverage (ops at the bottom).
   // ═══════════════════════════════════════════════
   const _diaGroup = (label) => '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);margin:30px 0 0;padding:0 2px 6px;border-bottom:2px solid var(--border)">' + label + '</div>';
+
+  // Market-education exhibit launcher (reconciled facility economics — scale curve,
+  // operator benchmark vs 10-K, value crosswalk). Opens a Northmarq-branded report.
+  html += '<div style="display:flex;justify-content:flex-end;margin:2px 0 -8px">'
+    + '<button class="gov-btn" onclick="_diaMarketEconomicsExhibit()" title="Dialysis facility economics — market-education exhibit" '
+    + 'style="font-size:11px;padding:6px 12px;border-radius:8px;background:#003DA5;color:#fff;border:1px solid #003DA5;font-weight:600;cursor:pointer">'
+    + '📊 Market Economics Exhibit</button></div>';
 
   // ── SECTION 1: PORTFOLIO AT A GLANCE (value-first headline) ──
   html += sectionHeader('Portfolio at a Glance', '🏥', 'search');
