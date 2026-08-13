@@ -463,6 +463,32 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### GaryBuilt/SOS session reviewed 2026-08-13 — honest accounting (2 corrections + 1 fix)
+Scott's report: "everything completed but the SOS websites had issues we couldn't work around."
+Grounded review from Cowork (LCC side only — gov repo + GaryBuilt box not visible here):
+
+1. **REAL GAP FOUND + FIXED:** the LCC Stage-2 migration
+   `20260812140000_lcc_w9_1_stage2_sos_direct.sql` was on main (PR #1700 merged) but **never
+   applied to LCC Opps** — deploy-ordering slip (JS shipped, DB migration didn't run). Cowork
+   applied it live: `W9_1_SOS_DIRECT` flag now registered (OFF), 10 `sos_registry` fsp rows added.
+2. **CORRECTION to my earlier claim:** I asserted the unranked-drift tick 33→34 was the missing
+   sos_registry ladder. **Wrong** — the 34 unranked rows are ALL the pre-existing W6.6 baseline
+   classes (costar_sidebar/om_extraction/rca_sidebar/salesforce/ops_asset_metadata_loan on
+   sales_transactions/loans/properties/deal_provenance); zero are sos_registry. The +1 is a new
+   baseline-class row, NOT SOS. The fsp rows are correct to have but weren't clearing a live drift.
+3. **SOS outcome (per Scott):** the proxy + tunnel + adapters were BUILT and installed, but the
+   FL/CA registry sites remained unreachable even through residential egress — bot-detection
+   defeated the workaround. **This is an environmental wall at the source, not a build gap.**
+   `W9_1_SOS_DIRECT` correctly stays OFF (flipping = honest-blocked no-ops against sites that
+   don't serve). Same class as the July 2026 SOS finding, now confirmed NOT solved by residential
+   IP alone.
+
+**Verdict: Wave 9 BUILD is 5/5 complete; the SOS EXTERNAL-FETCH capability is blocked at the
+source** (documented, honest, reversible — the machinery is inert-but-correct if the sites ever
+become reachable or an API alternative lands, e.g. OpenCorporates re-price ~Aug 28). Gov-repo
+Part A state (proxy install verification, per-state adapter results, token rotations) is NOT
+visible from this session — needs Scott's confirmation or the gov-repo verification doc to close.
+
 ### ✅ W9.1 STAGE 1 LIVE 2026-08-12 — flag flipped after clean dry-run
 Sheet reviewed: 5/40 proposals on the top-value window (crossref 2, broker 3), 35 honest
 no_source, scan_errors [], value-ranked correctly. Quality graded: Acquest attach = textbook;

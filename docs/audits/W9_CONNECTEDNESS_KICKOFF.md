@@ -140,3 +140,22 @@ future prompt.
   gov repo), add tunnel hostname + new token, re-verify FL/CA adapters side-by-side, dry-run →
   Cowork flips `W9_1_SOS_DIRECT`, rotate BOTH service tokens.**
 - 2026-08-12 (scheduled check, ~22:00Z): **display-name capture NOT WORKING yet post-PA-change** — 9 new correspondence rows since 16:00Z (7 `outlook`, 2 `outlook_inbound`, 0 `outlook_sent`); new code IS live (rows stamp the `from_name`/`to_names` keys) but **all 9 are null**, including bridge `outlook` rows that should carry FROM names code-only. Scott: check both PA flows' run histories for Select/Join errors; no sent-flow traffic yet to test that path.
+- 2026-08-13: **W9.1 Stage 2 SOS — honest close.** GaryBuilt session (Scott): proxy/tunnel/adapters
+  built + installed, but **FL/CA SOS sites remained unreachable even via residential egress**
+  (bot-detection beat the proxy) — an environmental wall at the source, not a build gap. Same class
+  as the July-2026 SOS finding, now confirmed residential-IP is NOT the fix. `W9_1_SOS_DIRECT`
+  stays OFF (machinery inert-but-correct; revisit if sites become reachable or OpenCorporates API
+  re-prices ~Aug 28). **Cowork found + fixed a real deploy-ordering slip:** the Stage-2 migration
+  (`20260812140000_lcc_w9_1_stage2_sos_direct.sql`, in PR #1700) had never been applied to LCC Opps
+  — applied live (flag OFF + 10 sos_registry fsp rows). Correction to a prior Cowork claim: the
+  unranked-drift 33→34 tick is NOT sos_registry (all 34 are pre-existing W6.6 baseline classes).
+  Gov-repo Part A verification (proxy /health, per-state adapter re-check, CF token rotations) not
+  visible from Cowork — needs Scott's confirmation or the gov verification doc.
+
+## WAVE 9 — FINAL STATE (2026-08-13)
+Build: **5/5 units complete.** Live: W9.1-Stage1, W9.3(×3), W9.5. Gated-on-accrual: W9.2+W9.4
+(Outlook name capture — flow edits done, mail accruing). Blocked-at-source: W9.1-Stage2 SOS
+(external sites unreachable; internal stages 1a/1b/1c carry the load). The connectedness chain is
+built end-to-end; the remaining gap (68-73% no-contact owners) is now attacked by every INTERNAL
+avenue (cross-ref, deed, broker, comms-harvest, SF drain) — the one EXTERNAL avenue (SOS) is
+walled off by the registries themselves.
