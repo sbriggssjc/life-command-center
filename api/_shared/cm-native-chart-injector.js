@@ -3619,10 +3619,25 @@ const MIN_YEAR_BY_TEMPLATE = {
   // never interpolated. Superseded the R67/R76-A3 2015/2019 floors (which clipped
   // a decade of real cohort history). The dot-plot variants stay on capByTermFloor
   // (they are recent-window dispersion views, a different chart purpose).
-  cap_rate_by_lease_term:       (rows) => firstNonNullYear(rows, [
-    'cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm',
-    'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless', 'cap_5to10',
-  ]),
+  // 2026-08-12 — gov "Outside Firm" cohort was redefined from unknown-term
+  // (firm_rem IS NULL) to genuinely-past-firm (firm_rem <= 0) in
+  // cm_gov_cap_by_term_m (migration 20260812_cm_gov_cap_by_term_outside_firm_
+  // semantics.sql). With the corrected 4 cohorts, gov is pinned to 2011 — the
+  // earliest year where ALL FOUR lines are continuously populated (n>=5 every
+  // month) AND the "longer firm term = lower cap" head-to-tail message holds
+  // every month through today (grounded live: 2007-2010 are too thin for the
+  // past-firm/10+ cohorts to be continuous; 2011 forward is clean). "As far
+  // back as we can while keeping a consistent message" (Scott 2026-08-12).
+  // dia keeps the data-driven first-non-null start (its cohorts differ).
+  cap_rate_by_lease_term:       (rows) => {
+    const isDia = Array.isArray(rows) && rows.some((r) => r &&
+      (r.cap_8to12 != null || r.cap_5orless != null));
+    if (!isDia) return 2011;   // gov — fixed consistent-message floor
+    return firstNonNullYear(rows, [
+      'cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm',
+      'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless', 'cap_5to10',
+    ]);
+  },
   // T1 (2026-06-23) — NM-vs-Market: plot the MARKET line full-range (it runs
   // 12/12 from 2001) and let the NM overlay begin where NM sales become
   // non-trivial (~2014). Scanning BOTH series' first non-null makes the range
@@ -3640,6 +3655,9 @@ const MIN_YEAR_BY_TEMPLATE = {
   // isolated pre-GFC 2008 NM cluster + a genuine 2009-2011 collapse would
   // otherwise start the plot at ~2008; the registry display_from (2012-01-01)
   // is the primary crop, this is the belt-and-suspenders floor.
+  // 2026-08-12 — SUPERSEDED for the crop by the month-granular MIN_PERIOD_BY_TEMPLATE
+  // entry (which trims the ~11-month market-only lead-in to the NM line's first
+  // datum). Kept as the year-granular fallback for minYearForTemplate() consumers.
   nm_vs_market_cap:             (rows) => Math.max(2012, firstNonNullYear(rows, ['nm_cap_rate']) ?? 2012),
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
@@ -3743,6 +3761,24 @@ const MIN_PERIOD_BY_TEMPLATE = {
   // plotted point. Use the exact first dense period for this chart family.
   bid_ask_spread:         (rows) => findFirstDensePeriod(rows, 'avg_last_ask_cap', 0.0001),
   bid_ask_spread_monthly: (rows) => findFirstDensePeriod(rows, 'avg_last_ask_cap', 0.0001),
+  // 2026-08-12 — NM-vs-Market value-prop chart: start the x-axis EXACTLY at the
+  // Northmarq (blue) line's first plotted point, not the Jan-of-that-year floor.
+  // The MIN_YEAR entry floors at the YEAR of the first non-null nm_cap_rate
+  // (gov = 2013), so the plot opens at Jan-2013 while the NM line's first datum
+  // is 2013-12 — leaving ~11 months of MARKET-ONLY (gray) line at the left before
+  // the blue line begins. A month-granular first-non-null crop trims that lead-in
+  // so both lines start together (Scott: "adjust the x-axis to the start of the
+  // NM line"). MIN_PERIOD takes precedence over MIN_YEAR in buildInjectionSpec.
+  // consecutive=3 (not 1) so an isolated early single print can't anchor the
+  // start; clamped to >= 2012-01 — the same belt-and-suspenders guard the
+  // MIN_YEAR entry carried against an isolated pre-GFC NM cluster. nm_cap_rate
+  // already carries the view-level n>=3 gate, so a non-null value is already
+  // dense. Applies to both verticals (dia's NM line begins ~2012).
+  nm_vs_market_cap: (rows) => {
+    const p = findFirstDensePeriod(rows, 'nm_cap_rate', 0.0001, 3);
+    if (!p) return null;
+    return p < '2012-01-01' ? '2012-01-01' : p;
+  },
 };
 
 // R2-A2 (2026-06-30) — single source of truth for a template's displayed
