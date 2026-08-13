@@ -189,6 +189,31 @@ test('buildVolumeCapSummary: empty series returns empty array', () => {
   assert.deepEqual(buildVolumeCapSummary({ volumeRows: [], capRows: [], quartileRows: [] }), []);
 });
 
+test('buildVolumeCapSummary: as_of a quarter AHEAD of the data snaps the anchor down (no blank current-Q / trailing avgs)', () => {
+  // 64 quarters of data ending 2024-03-31, but the report is requested as of
+  // 2024-06-30 (one quarter ahead — the mid-quarter export bug). Every column,
+  // including the 5/10/15-yr trailing averages, must still populate off the
+  // latest available quarter rather than blanking.
+  const volumeRows   = makeQuarterly(2008, 2, 64, 'volume_dollars',        (i) => 1e9 + i * 1e8);
+  const capRows      = makeQuarterly(2008, 2, 64, 'ttm_weighted_cap_rate', (i) => 0.06 + i * 0.0002);
+  const quartileRows = makeQuarterly(2008, 2, 64, 'top_quartile',          (i) => 0.05 + i * 0.0002);
+  for (let i = 0; i < quartileRows.length; i++) quartileRows[i].bottom_quartile = 0.07 + i * 0.0002;
+  // Data runs 2008-06-30 .. 2024-03-31 (64 quarters); request is a quarter ahead.
+  assert.equal(volumeRows[volumeRows.length - 1].period_end, '2024-03-31');
+
+  const summary = buildVolumeCapSummary({ volumeRows, capRows, quartileRows, asOf: '2024-06-30' });
+  assert.equal(summary.length, 4);
+  // Anchor snapped to 2024-03-31 → columns reflect that quarter.
+  assert.equal(summary[0].as_of, '2024-03-31');
+  for (const row of summary) {
+    for (const k of ['current_q', 'prior_q', 'yoy_q', 'prior_cycle_q', 'avg_5yr', 'avg_10yr', 'avg_15yr']) {
+      assert.ok(typeof row[k] === 'number', `${row.metric}.${k} should be a number, got ${row[k]}`);
+    }
+  }
+  // current_q = last row (i=63)
+  assert.equal(summary[0].current_q, 1e9 + 63 * 1e8);
+});
+
 test('summaryColumnHeaders: produces YYYY-Qn for each period column', () => {
   const headers = summaryColumnHeaders('2024-06-30');
   assert.equal(headers[0], '2024-Q2');
