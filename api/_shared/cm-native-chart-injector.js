@@ -3269,6 +3269,9 @@ export {
  * to native chart XML. See task #16 for the full migration plan.
  */
 export const NATIVE_CHART_TEMPLATES = new Set([
+  // Reconciled facility economics (dialysis_econ_reconciled_v1) — categorical snapshots
+  'dia_facility_scale_curve',
+  'dia_operator_ebitda_benchmark',
   // P2 (R34) — first migration
   'volume_ttm_by_quarter',
   // P3 — simple single-series line + bar charts
@@ -4153,6 +4156,60 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
   };
 
   switch (chart_template_id) {
+    // ────────────────────────────────────────────────────────────────
+    // Reconciled facility economics (dialysis_econ_reconciled_v1) —
+    // categorical snapshots (no time axis). Category = volume band / operator.
+    // ────────────────────────────────────────────────────────────────
+    case 'dia_facility_scale_curve': {
+      // Vertical categorical bar: median EBITDA margin by treatment-volume band
+      // (bands ordered small -> large), showing margin rising with facility scale.
+      // The Data tab also carries cost/treatment + operating margin for reference.
+      // (Text category axis — mirrors the proven leased_inventory_by_state path.)
+      const bandCol = findCol('volume_band');
+      const ebCol   = findCol('median_ebitda_margin');
+      if (!bandCol || !ebCol) return null;
+      const marginLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.median_ebitda_margin, fmtPct1Native, 'scale_ebitda')
+        : undefined;
+      return {
+        tabName,
+        spec: {
+          type: 'bar', tabName,
+          titleCol: ebCol, titleRow: headerRow,
+          catCol: bandCol, valCol: ebCol,
+          dataStart, dataEnd,
+          color: navy,
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
+          dataLabels: marginLabels,
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'dia_operator_ebitda_benchmark': {
+      // Horizontal bar: reconciled EBITDA margin by operator (DaVita/Fresenius
+      // reconcile to their 10-K). Category axis = operator, value = ebitda_margin.
+      const opCol     = findCol('operator');
+      const marginCol = findCol('ebitda_margin');
+      if (!opCol || !marginCol) return null;
+      const opLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.ebitda_margin, fmtPct1Native, 'oper_ebitda')
+        : undefined;
+      return {
+        tabName,
+        spec: {
+          type: 'bar', tabName,
+          titleCol: marginCol, titleRow: headerRow,
+          catCol: opCol, valCol: marginCol,
+          dataStart, dataEnd,
+          color: navy, horizontal: true,
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
+          dataLabels: opLabels,
+          anchor: standardAnchor,
+        },
+      };
+    }
+
     // P2 — first migration
     case 'volume_ttm_by_quarter':
       // master_m mapper renames ttm_volume → volume_dollars in some places.

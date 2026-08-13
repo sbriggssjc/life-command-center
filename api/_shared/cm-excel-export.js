@@ -388,6 +388,21 @@ function selectSellerSentimentColumns(cols, vertical) {
 }
 
 const CHART_COLUMNS = {
+  // Reconciled facility economics (dialysis_econ_reconciled_v1) — categorical snapshots.
+  dia_facility_scale_curve: [
+    { key: 'volume_band',            header: 'Annual Treatment Volume', width: 20 },
+    { key: 'median_cost_per_tx',     header: 'Median Cost / Treatment', format: 'currency_dollars',   width: 20 },
+    { key: 'median_ebitda_margin',   header: 'Median EBITDA Margin',    format: 'percent_one_decimal', width: 20 },
+    { key: 'median_operating_margin',header: 'Median Operating Margin', format: 'percent_one_decimal', width: 22 },
+    { key: 'clinics',                header: 'Facilities',              format: 'integer_count',       width: 12 },
+  ],
+  dia_operator_ebitda_benchmark: [
+    { key: 'operator',             header: 'Operator',              width: 20 },
+    { key: 'ebitda_margin',        header: 'EBITDA Margin',         format: 'percent_one_decimal', width: 16 },
+    { key: 'operating_margin',     header: 'Operating Margin',      format: 'percent_one_decimal', width: 17 },
+    { key: 'revenue_per_treatment',header: 'Revenue / Treatment',   format: 'currency_dollars',    width: 19 },
+    { key: 'clinics',              header: 'Facilities',            format: 'integer_count',       width: 12 },
+  ],
   volume_ttm_by_quarter: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
@@ -437,6 +452,20 @@ const CHART_COLUMNS = {
     { key: 'operator',      header: 'Operator / Chain',                              width: 32 },
     { key: 'clinic_count',  header: 'U.S. Clinics',      format: 'integer_count',    width: 14 },
     { key: 'pct_of_market', header: '% of U.S. Clinics', format: 'percent_one_decimal', width: 16 },
+  ],
+  // Unit-level (per-clinic) operating statistics by operator — reconciled model.
+  dia_operator_unit_economics: [
+    { key: 'rank',                     header: '#',                      format: 'integer_count',       width: 5 },
+    { key: 'operator',                 header: 'Operator / Chain',                                      width: 22 },
+    { key: 'clinics',                  header: 'U.S. Clinics',           format: 'integer_count',       width: 12 },
+    { key: 'avg_treatments_per_clinic',header: 'Avg Treatments / Clinic',format: 'integer_count',       width: 20 },
+    { key: 'avg_patients_per_clinic',  header: 'Avg Patients / Clinic',  format: 'integer_count',       width: 18 },
+    { key: 'avg_revenue_per_clinic',   header: 'Avg Revenue / Clinic',   format: 'currency_dollars',    width: 20 },
+    { key: 'avg_ebitda_per_clinic',    header: 'Avg EBITDA / Clinic',    format: 'currency_dollars',    width: 20 },
+    { key: 'revenue_per_treatment',    header: 'Revenue / Treatment',    format: 'currency_dollars',    width: 18 },
+    { key: 'cost_per_treatment',       header: 'Cost / Treatment',       format: 'currency_dollars',    width: 16 },
+    { key: 'operating_margin',         header: 'Operating Margin',       format: 'percent_one_decimal', width: 16 },
+    { key: 'ebitda_margin',            header: 'EBITDA Margin',          format: 'percent_one_decimal', width: 14 },
   ],
   top_sellers_table: [
     { key: 'rank',       header: '#',                   format: 'integer_count',    width: 5 },
@@ -1041,6 +1070,9 @@ const PERIOD_SUMMARY_TEMPLATES = new Set([
 
 // Tab name per chart (kept short — Excel limits to 31 chars)
 const TAB_NAMES = {
+  dia_facility_scale_curve:      'Data_Facility_Scale',
+  dia_operator_ebitda_benchmark: 'Data_Operator_Bench',
+  dia_operator_unit_economics:   'Data_Operator_Unit_Econ',
   volume_ttm_by_quarter:        'Data_Volume_TTM',
   quarterly_volume_bars:        'Data_Volume_Quarterly',
   buyer_pool_monthly_count:     'Data_Buyer_Pool_M',
