@@ -155,6 +155,9 @@ const DIA_READ_TABLES = new Set([
   "sale_brokers", "brokers", "broker_companies", "loans", "property_intel",
   "v_property_detail", "v_lease_detail", "v_ownership_current",
   "v_ownership_chain", "v_property_rankings",
+  // Reconciled clinic economics (model dialysis_econ_reconciled_v1): current-year
+  // rollup + full per-(clinic, fiscal_year) series for revenue/profit/EBITDA trends.
+  "v_clinic_econ_current", "v_clinic_econ_series",
   // Ownership Research workbench (Layer H.5 frontend for the canonical
   // cleanup series).
   "v_recorded_owner_canonical_clusters", "v_ownership_research_backlog",
