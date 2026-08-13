@@ -251,6 +251,9 @@ app.all('/api/state-lease-consume',        (req, res) => { req.query._route = 's
 app.all('/api/agency-risk-consume',        (req, res) => { req.query._route = 'agency-risk-consume';        adminHandler(req, res); });
 app.all('/api/npi-consume',                (req, res) => { req.query._route = 'npi-consume';                adminHandler(req, res); });
 
+// W9.4 accelerator (Prompt 101) — Outlook display-name backfill (GET dry-run / POST apply / POST ?reverse=1&batch=).
+app.all('/api/outlook-name-backfill',      (req, res) => { req.query._route = 'outlook-name-backfill';      adminHandler(req, res); });
+
 // edge-data rewrites (formerly data-proxy)
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
 app.all('/api/gov-write', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-write'; adminHandler(req, res); });
