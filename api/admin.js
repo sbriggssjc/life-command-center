@@ -2679,6 +2679,15 @@ async function pullHygieneCandidatesForTarget(target, startCursor, deadline) {
   const wantDomain = target.table === 'entities';
   const cols = [target.pkCol, target.nameCol].concat(wantDomain ? ['domain'] : []).join(',');
   const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
+  // W8 U5 fix (2026-08-13): NEVER scan `asset` entities. An LCC asset entity is
+  // named by its street address BY CONVENTION (the property anchor). The
+  // address_as_name classifier would otherwise flag every one as a mis-entered
+  // name and propose a bogus "link to property + rename to the owner" — but the
+  // asset is already the property's identity holder, so the link is a no-op and
+  // the rename would corrupt the asset's name. Exclude assets at the source
+  // (address_as_name only ever applies to owner/contact rows).
+  const assetPred = (target.domain === 'lcc' && target.table === 'entities')
+    ? '&entity_type=neq.asset' : '';
   const found = [];
   const perClass = { known_abbreviation: 0, address_as_name: 0, actionable_abbrev: 0, actionable_address: 0 };
   const PAGE = 1000;
@@ -2689,7 +2698,7 @@ async function pullHygieneCandidatesForTarget(target, startCursor, deadline) {
     // the next run resumes this exact slice.
     if (deadline && Date.now() >= deadline) { truncated = true; break; }
     const cursorPred = cursor != null ? '&' + target.pkCol + '=gt.' + encodeURIComponent(cursor) : '';
-    const path = target.table + '?select=' + cols + mergedPred + cursorPred
+    const path = target.table + '?select=' + cols + mergedPred + assetPred + cursorPred
       + '&order=' + target.pkCol + '.asc&limit=' + PAGE;
     const r = target.domain === 'lcc'
       ? await opsQuery('GET', path)
@@ -9147,6 +9156,35 @@ async function handleDecisionVerdict(req, res) {
           const rr1 = await record(verdict, 'skipped', { plan: 'link_not_applicable', review_id: review.review_id }, effects);
           if (!rr1.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr1.data });
           return res.status(200).json({ ok: true, verdict, action: 'link_not_applicable', review_id: review.review_id });
+        }
+        // W8 U5 fix (2026-08-13): guard against the asset false-positive. An
+        // `asset` entity is named by its street address BY CONVENTION and is
+        // already the property's identity holder — the "link" is a no-op and the
+        // owner-name fill would corrupt the asset name. If the subject entity is
+        // an asset (or already carries the exact (domain, asset, property_id)
+        // identity), close as already_linked instead of attempting a write that
+        // (a) does nothing useful and (b) surfaced as hygiene_link_failed.
+        const subjR = await opsQuery('GET', 'entities?select=id,entity_type&id=eq.'
+          + pgFilterVal(review.pk_value) + '&limit=1');
+        const subjEntity = (subjR.ok && Array.isArray(subjR.data)) ? subjR.data[0] : null;
+        let alreadyLinked = false;
+        if (subjEntity) {
+          const eiR = await opsQuery('GET', 'external_identities?select=id&entity_id=eq.'
+            + pgFilterVal(review.pk_value)
+            + '&source_system=eq.' + pgFilterVal(prop.domain)
+            + '&source_type=eq.asset&external_id=eq.' + pgFilterVal(String(prop.property_id)) + '&limit=1');
+          alreadyLinked = eiR.ok && Array.isArray(eiR.data) && eiR.data.length > 0;
+        }
+        if (subjEntity && (subjEntity.entity_type === 'asset' || alreadyLinked)) {
+          await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+            { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+          const rrA = await record(verdict, 'skipped',
+            { plan: 'already_property_anchor', review_id: review.review_id,
+              entity_type: subjEntity.entity_type, already_linked: alreadyLinked },
+            { ...effects, skipped: 'asset_already_property_anchor' });
+          if (!rrA.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rrA.data });
+          return res.status(200).json({ ok: true, verdict, action: 'already_property_anchor',
+            already_linked: alreadyLinked, review_id: review.review_id });
         }
         let ws = null; try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
         const seedFields = {};
