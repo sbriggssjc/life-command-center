@@ -2301,42 +2301,39 @@ test('buildInjectionSpec: cap_rate_by_lease_term — dia 4-cohort detection', ()
   assert.ok(out.spec.series.every(s => !s.dashed), 'no dashed series on dia');
 });
 
-test('buildInjectionSpec: cap_rate_by_lease_term — gov 4-cohort with dashed Outside', () => {
+test('buildInjectionSpec: cap_rate_by_lease_term — gov value-of-firm-term 3-bucket', () => {
   const cols = [
-    { key: 'period_end',       col: 'A' },
-    { key: 'subspecialty',     col: 'B' },
-    { key: 'cap_10plus',       col: 'C' },
-    { key: 'cap_6to10',        col: 'D' },
-    { key: 'cap_less5',        col: 'E' },
-    { key: 'cap_outside_firm', col: 'F' },
-    { key: 'cap_12plus',       col: 'G' },
-    { key: 'cap_8to12',        col: 'H' },
-    { key: 'cap_6to8',         col: 'I' },
-    { key: 'cap_5orless',      col: 'J' },
+    { key: 'period_end',  col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'cap_6plus',   col: 'C' },
+    { key: 'cap_1_5to6',  col: 'D' },
+    { key: 'cap_sub1_5',  col: 'E' },
+    { key: 'cap_12plus',  col: 'G' },
+    { key: 'cap_8to12',   col: 'H' },
+    { key: 'cap_6to8',    col: 'I' },
+    { key: 'cap_5orless', col: 'J' },
   ];
-  // Gov-shaped data row → picks the 10+/6-10/<5/Outside branch
+  // Gov-shaped data row (no dia cohort keys) → picks the 3-bucket firm-term branch
   const out = buildInjectionSpec({
     chart_template_id: 'cap_rate_by_lease_term',
     tabName: 'Data_Cap_by_Term',
     cols, dataStart: 5, dataEnd: 50,
     brand: { palette: {} },
-    rows: [{ cap_10plus: 0.062, cap_6to10: 0.068, cap_less5: 0.075, cap_outside_firm: 0.085 }],
+    rows: [{ cap_6plus: 0.0746, cap_1_5to6: 0.0763, cap_sub1_5: 0.0800 }],
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.series.length, 4, '4 gov cohorts');
+  assert.equal(out.spec.series.length, 3, '3 gov firm-term buckets');
   assert.deepEqual(
     out.spec.series.map(s => s.valCol),
-    ['C', 'D', 'E', 'F'],
-    'series point at gov cohort columns'
+    ['C', 'D', 'E'],
+    'series point at the 3-bucket firm-term columns'
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['9B88A5', '8FC49E', '003DA5', '6A748C'],
-    'colors: purple / sage / navy / gray'
+    ['9B88A5', '8FC49E', '003DA5'],
+    'colors: purple (6+) / sage (1.5–6) / navy (sub-1.5)'
   );
-  // Outside Firm (last series, gray) is dashed
-  assert.equal(out.spec.series[3].dashed, true, 'Outside Firm series is dashed');
-  assert.ok(out.spec.series.slice(0, 3).every(s => !s.dashed), 'first 3 series solid');
+  assert.ok(out.spec.series.every(s => !s.dashed), 'all 3 series solid (no Outside Firm line)');
 });
 
 test('buildInjectionSpec: sold_cap_by_term_dot_plot — gov uses cap_5to10 (not cap_6to10)', () => {
@@ -3130,10 +3127,9 @@ test('cap_rate_by_lease_term: gov pins to the 2011 consistent-message floor', ()
       const has = y >= 2005;
       rows.push({
         period_end: `${y}-${String(m).padStart(2, '0')}-28`,
-        cap_10plus:       has ? 0.062 : null,
-        cap_6to10:        has ? 0.068 : null,
-        cap_less5:        has ? 0.075 : null,
-        cap_outside_firm: has ? 0.085 : null,
+        cap_6plus:  has ? 0.0746 : null,
+        cap_1_5to6: has ? 0.0763 : null,
+        cap_sub1_5: has ? 0.0800 : null,
       });
     }
   }
@@ -3142,8 +3138,8 @@ test('cap_rate_by_lease_term: gov pins to the 2011 consistent-message floor', ()
     tabName: 'Data_Cap_by_Term',
     cols: [
       { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
-      { key: 'cap_10plus', col: 'C' }, { key: 'cap_6to10', col: 'D' },
-      { key: 'cap_less5', col: 'E' }, { key: 'cap_outside_firm', col: 'F' },
+      { key: 'cap_6plus', col: 'C' }, { key: 'cap_1_5to6', col: 'D' },
+      { key: 'cap_sub1_5', col: 'E' },
       { key: 'cap_12plus', col: 'G' }, { key: 'cap_8to12', col: 'H' },
       { key: 'cap_6to8', col: 'I' }, { key: 'cap_5orless', col: 'J' },
     ],

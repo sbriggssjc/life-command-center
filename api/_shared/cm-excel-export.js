@@ -307,7 +307,9 @@ const hex = (color) => (color || '').replace('#', '').toUpperCase();
 // Non-cohort columns (period_end / subspecialty / counts on non-cap keys) are
 // never touched.
 const DIA_COHORT_KEYS = new Set(['cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless']);
-const GOV_COHORT_KEYS = new Set(['cap_10plus', 'cap_6to10', 'cap_5to10', 'cap_less5', 'cap_outside_firm']);
+// gov: the new 3-bucket value-of-firm-term scheme (cap_rate_by_lease_term) PLUS
+// the legacy 4-cohort keys the sold_/asking dot plots still emit.
+const GOV_COHORT_KEYS = new Set(['cap_6plus', 'cap_1_5to6', 'cap_sub1_5', 'cap_10plus', 'cap_6to10', 'cap_5to10', 'cap_less5', 'cap_outside_firm']);
 const COHORT_CAP_TEMPLATES = new Set([
   'cap_rate_by_lease_term',
   'sold_cap_by_term_dot_plot',
@@ -660,12 +662,13 @@ const CHART_COLUMNS = {
   cap_rate_by_lease_term: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    // Legacy gov-style cohorts (10+/6-10/<6/outside) — used by gov vertical
-    // and kept on dialysis for backward compatibility. T9 — <5 boundary -> <6.
-    { key: 'cap_10plus',       header: '10+ Year Cap',        format: 'percent_basis_points', width: 14 },
-    { key: 'cap_6to10',        header: '6–10 Year Cap',       format: 'percent_basis_points', width: 16 },
-    { key: 'cap_less5',        header: '< 6 Year Cap',        format: 'percent_basis_points', width: 14 },
-    { key: 'cap_outside_firm', header: 'Outside Firm Cap',    format: 'percent_basis_points', width: 18 },
+    // Gov value-of-firm-term THREE-BUCKET scheme (2026-08-13): 6+ / 1.5–6 /
+    // sub-1.5 yr. Cleanly monotonic + continuous across the trailing window and
+    // folds the old thin, jagged "Outside Firm" holdover cohort into sub-1.5.
+    // Reads cm_gov_cap_by_term_m.{cap_6plus,cap_1_5to6,cap_sub1_5}.
+    { key: 'cap_6plus',        header: '6+ Year Firm Cap',    format: 'percent_basis_points', width: 16 },
+    { key: 'cap_1_5to6',       header: '1.5–6 Year Firm Cap', format: 'percent_basis_points', width: 18 },
+    { key: 'cap_sub1_5',       header: 'Sub-1.5 Year Firm Cap', format: 'percent_basis_points', width: 20 },
     // Round 3 PDF-aligned dialysis cohorts (12+/8-12/6-8/≤5). NULL on gov
     // because gov master_m never carried these fields.
     { key: 'cap_12plus',       header: '12+ Year Cap',        format: 'percent_basis_points', width: 14 },
