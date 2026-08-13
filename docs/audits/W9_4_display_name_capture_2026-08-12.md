@@ -11,8 +11,17 @@ Of 7,751 business-attributed correspondence rows, **0 carried a header display
 name**. The Outlook ingestion loggers FLATTENED Graph's `{ name, address }`
 recipient objects to the bare email string, so `activity_events.metadata.from`/`to`
 held only addresses. The harvest header-pair arm keys on the display name → 0
-proposals. `email_bodies.from_name` was already stored, but the canonical
-`activity_events` spine (what `harvestBuildCommsIndex` reads) was not.
+proposals. ~~`email_bodies.from_name` was already stored, but the canonical
+`activity_events` spine (what `harvestBuildCommsIndex` reads) was not.~~
+
+> **CORRECTION (2026-08-13, prompt 101 grounding):** the claim above is FALSE —
+> `email_bodies.from_name` is NULL on ALL 23,071 rows; no structured historical
+> display name exists in email_bodies OR the activity_events spine. The real
+> structured name store is **`unified_contacts`** (17,527 named). Prompt 101's
+> accelerator reconstructs each row's display name by looking up the emails
+> already on the row in `unified_contacts` (Prompt-93 reconstruction pattern),
+> provenance-marked `source:'unified_contacts'`. Do NOT rely on email_bodies for
+> names.
 
 ## The flattening points (all four correspondence writers) — now fixed
 

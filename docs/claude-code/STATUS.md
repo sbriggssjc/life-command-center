@@ -479,6 +479,33 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### ✅✅ W9.2/W9.4 HARVEST LIVE 2026-08-13 — the "who do I call" gap is closing
+Post-backfill `?score=1` PASSED spectacularly: **header_name_pairs 0→9,278, signature_phones 3,516,
+7,778/7,854 rows harvestable**. Sample proposals are REAL owner contacts from Scott's own mail:
+Eric Dowling→Boyd Watterson Global, Philip Sharrow (ph 215.302.4401)→2 owners, Oscar Peterson (ph
+816-682-8097)→UIRC — all owners that had ZERO contact on file, evidence-quoted, create_contact
+(human-verdict gated). **Cowork flipped `W9_2_REACHABILITY_HARVEST` → on** (all three arms —
+deterministic SF, LLM intake/signature, comms create-contact). Nightly 4:40 cron now mints
+owner-contact proposals into the reachability lane. **This is the campaign payoff**: reconciliation
++ backfill + harvest → previously-unreachable owners now have names + numbers. Send order continues:
+**102 (W9.6 correspondence→owner) → 100 (voice).**
+
+### Prompt 101 landed — accelerator WORKED via a corrected source; premise refuted + doc fixed
+**My prompt-101 premise (inherited from the 96 doc) was WRONG:** `email_bodies.from_name` is NULL
+on ALL 23,071 rows — no structured historical name in email_bodies OR the activity_events spine.
+Claude Code grounded before trusting it and found the REAL source: **`unified_contacts` (17,527
+named)** — reconstructs each row's display name from the emails already on the row (Prompt-93
+pattern), provenance `source:'unified_contacts'`. **The false claim in
+`W9_4_display_name_capture_2026-08-12.md` is now CORRECTED** (struck + correction note).
+**Live result (Cowork-verified):** activity_events from_name 30→**2,298**, to_names ~7→**2,469**
+(4,795 backfill-log rows); harvest header_name_pairs simulated ~6,050 (was 0). Applied live batch
+`nb_sql_20260813` (reversible via `POST /api/outlook-name-backfill?reverse=1&batch=`). PR #1713
+(JS route re-affirms idempotently on redeploy). New `outlook-name-backfill.js` + route + ledger
+migration + RPC `lcc_names_for_emails`; 13+68 tests. **Prompts 102 (W9.6) + 100 (voice) do NOT
+depend on the refuted premise — no adjustment needed.**
+**Gate: Scott runs `GET /api/reachability-harvest-tick?score=1&n=10` → review the now-populated
+header_name_pairs sample → Cowork flips `W9_2_REACHABILITY_HARVEST` on real historical yield.**
+
 ### 2026-08-13 — ACCELERATE + interim build queued (Scott: "scale the unlock, accelerate")
 Grounded finding: harvest accruing SLOWLY (7 new outlook rows since flow fix; 30/6,977 with names)
 — organic mail would take weeks. **ACCELERATOR FOUND: `email_bodies.from_name` was already stored
