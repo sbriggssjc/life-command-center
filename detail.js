@@ -1366,10 +1366,15 @@ async function _udRenderOperationsAsync(bodyEl) {
       } else {
         promises.push(Promise.resolve([]));
       }
+      // Reconciled clinic economics (model dialysis_econ_reconciled_v1): full per-year
+      // series (revenue/profit/EBITDA over time) + the value crosswalk (rent coverage,
+      // implied value). Both already allowlisted; degrade gracefully (edge redeploy activates).
+      promises.push(diaQuery('v_clinic_econ_series', '*', { filter: mFilter, order: 'fiscal_year.asc', limit: 100 }).catch(() => []));
+      promises.push(diaQuery('v_dia_econ_value_crosswalk', '*', { filter: mFilter, limit: 1 }).catch(() => []));
     }
-    const [patientHistory, trends, quality, financialDetail, facilityEconomics, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData, demographicData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, facilityEconomics, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData, demographicData, econSeriesData, valueCrosswalkData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], [], [], [], [], [], [], [], []];
 
     // R50 — geographic BD bundle (nearby owners / sales / distance competitors).
     // Heavy haversine scan stays in the dia DB; soft-fails to null.
@@ -1406,11 +1411,13 @@ async function _udRenderOperationsAsync(bodyEl) {
       hours: (hoursData || [])[0] || null,
       competitors: (competitorData || []).filter(c => c.medicare_id !== clinicId),
       demographics: (demographicData || [])[0] || null,
+      econSeries: (econSeriesData || []),
+      valueCrosswalk: (valueCrosswalkData || [])[0] || null,
       geo: _geo,
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, facilityEconomics: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], demographics: null, geo: null };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, facilityEconomics: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], demographics: null, econSeries: [], valueCrosswalk: null, geo: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -5345,6 +5352,137 @@ const NMQ_BRAND = {
 };
 
 /** Export Operations tab as a Northmarq-branded client-deliverable HTML report */
+// Facility Financial Performance & Value exhibit (client export). Pure inline SVG
+// (no chart library), Northmarq-branded. Reads the reconciled per-year series
+// (ext.econSeries) + value crosswalk (ext.valueCrosswalk). Degrades gracefully.
+function _udBuildPerfExhibit(ext, econ, r, B) {
+  ext = ext || {}; econ = econ || {};
+  const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v);
+  const fmtUsd = v => { const n = num(v); if (n == null) return '—';
+    const a = Math.abs(n); return (n < 0 ? '-' : '') + (a >= 1e6 ? '$' + (a/1e6).toFixed(2) + 'M' : a >= 1e3 ? '$' + Math.round(a/1e3) + 'K' : '$' + Math.round(a)); };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const series = (ext.econSeries || []).map(s => ({
+    fy: num(s.fiscal_year), rev: num(s.reconciled_revenue), op: num(s.reconciled_operating_profit),
+    ebitda: num(s.reconciled_ebitda), dna: num(s.reconciled_d_and_a), cost: num(s.cost),
+    margin: num(s.operating_margin), tier: s.confidence_tier
+  })).filter(s => s.fy && s.rev > 0).sort((a, b) => a.fy - b.fy);
+
+  // Nothing to show (edge not yet redeployed / clinic unreconciled) -> honest note.
+  if (!series.length) {
+    if (econ.revenue == null) return '';
+    return '<div class="section"><h2>Facility Financial Performance</h2>'
+      + '<p style="font-size:12px;color:' + B.slate + '">Reconciled current-year economics: revenue '
+      + fmtUsd(econ.revenue) + ', operating profit ' + fmtUsd(econ.profit)
+      + (econ.ebitda != null ? ', EBITDA ' + fmtUsd(econ.ebitda) : '')
+      + '. Multi-year trend chart populates once the reconciled series feed is enabled for this facility.</p></div>';
+  }
+
+  const last = series[series.length - 1];
+  const W = 720, H = 250, ml = 64, mr = 16, mt = 20, mb = 34;
+  const plotW = W - ml - mr, plotH = H - mt - mb;
+  const maxRev = Math.max.apply(null, series.map(s => s.rev));
+  const yMax = maxRev * 1.12 || 1;
+  const yOf = v => mt + plotH - (v / yMax) * plotH;
+  const n = series.length;
+  const slot = plotW / n, barW = Math.min(38, slot * 0.5);
+
+  // ---- Chart 1: revenue bars + EBITDA line, over time ----
+  let c1 = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" font-family="' + B.bodyFont + '" role="img">';
+  // y gridlines / labels ($M)
+  for (let i = 0; i <= 4; i++) {
+    const val = yMax * i / 4, y = yOf(val);
+    c1 += '<line x1="' + ml + '" y1="' + y.toFixed(1) + '" x2="' + (W - mr) + '" y2="' + y.toFixed(1) + '" stroke="' + B.blueTint + '" stroke-width="1"/>';
+    c1 += '<text x="' + (ml - 6) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="' + B.slate + '">$' + (val/1e6).toFixed(1) + 'M</text>';
+  }
+  series.forEach((s, i) => {
+    const cx = ml + slot * i + slot / 2;
+    const bx = cx - barW / 2, by = yOf(s.rev), bh = mt + plotH - by;
+    c1 += '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(0, bh).toFixed(1) + '" fill="' + B.lightBlue + '" rx="1.5"/>';
+    c1 += '<text x="' + cx.toFixed(1) + '" y="' + (H - mb + 14) + '" text-anchor="middle" font-size="9" fill="' + B.slate + '">' + s.fy + '</text>';
+  });
+  // EBITDA line + dots
+  const pts = series.map((s, i) => (ml + slot * i + slot / 2).toFixed(1) + ',' + yOf(Math.max(0, s.ebitda || 0)).toFixed(1));
+  c1 += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + B.blue + '" stroke-width="2"/>';
+  series.forEach((s, i) => { const cx = ml + slot * i + slot / 2, cy = yOf(Math.max(0, s.ebitda || 0));
+    c1 += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="2.6" fill="' + B.blue + '"/>'; });
+  // legend
+  c1 += '<rect x="' + ml + '" y="4" width="10" height="10" fill="' + B.lightBlue + '"/><text x="' + (ml + 14) + '" y="13" font-size="9" fill="' + B.bodyText + '">Revenue</text>';
+  c1 += '<line x1="' + (ml + 78) + '" y1="9" x2="' + (ml + 92) + '" y2="9" stroke="' + B.blue + '" stroke-width="2"/><text x="' + (ml + 96) + '" y="13" font-size="9" fill="' + B.bodyText + '">EBITDA</text>';
+  c1 += '</svg>';
+
+  // ---- Chart 2: build-up waterfall (latest year) ----
+  const rev = last.rev, cost = last.cost != null ? last.cost : (rev - (last.op || 0));
+  const op = last.op != null ? last.op : (rev - cost);
+  const dna = last.dna != null ? last.dna : ((last.ebitda != null && op != null) ? last.ebitda - op : null);
+  const ebitda = last.ebitda != null ? last.ebitda : (op != null && dna != null ? op + dna : null);
+  let c2 = '';
+  if (op != null && ebitda != null) {
+    const steps = [
+      { label: 'Revenue', val: rev, base: 0, color: B.lightBlue, kind: 'total' },
+      { label: 'Operating cost', val: -cost, base: rev, color: B.slate, kind: 'delta' },
+      { label: 'Operating profit', val: op, base: 0, color: B.blue85, kind: 'total' },
+      { label: 'D&A add-back', val: dna || 0, base: op, color: B.iron, kind: 'delta' },
+      { label: 'EBITDA', val: ebitda, base: 0, color: B.blue, kind: 'total' }
+    ];
+    const WW = 720, HH = 210, wml = 64, wmr = 16, wmt = 16, wmb = 40;
+    const wpW = WW - wml - wmr, wpH = HH - wmt - wmb;
+    const wMax = Math.max(rev, ebitda) * 1.1 || 1;
+    const wY = v => wmt + wpH - (v / wMax) * wpH;
+    const sw = wpW / steps.length, sbw = Math.min(64, sw * 0.6);
+    c2 = '<svg width="100%" viewBox="0 0 ' + WW + ' ' + HH + '" font-family="' + B.bodyFont + '" role="img">';
+    c2 += '<line x1="' + wml + '" y1="' + wY(0).toFixed(1) + '" x2="' + (WW - wmr) + '" y2="' + wY(0).toFixed(1) + '" stroke="' + B.iron + '" stroke-width="1"/>';
+    steps.forEach((st, i) => {
+      const cx = wml + sw * i + sw / 2, bx = cx - sbw / 2;
+      const top = st.kind === 'total' ? st.val : (st.val >= 0 ? st.base + st.val : st.base);
+      const bot = st.kind === 'total' ? 0 : (st.val >= 0 ? st.base : st.base + st.val);
+      const y = wY(top), h = Math.max(1, wY(bot) - wY(top));
+      c2 += '<rect x="' + bx.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + sbw.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="' + st.color + '" rx="1.5"/>';
+      c2 += '<text x="' + cx.toFixed(1) + '" y="' + (y - 4).toFixed(1) + '" text-anchor="middle" font-size="9" font-weight="700" fill="' + B.bodyText + '">' + fmtUsd(st.kind === 'total' ? st.val : Math.abs(st.val)) + '</text>';
+      c2 += '<text x="' + cx.toFixed(1) + '" y="' + (HH - wmb + 14) + '" text-anchor="middle" font-size="9" fill="' + B.slate + '">' + esc(st.label) + '</text>';
+    });
+    c2 += '</svg>';
+  }
+
+  // ---- Block 3: value crosswalk (rent coverage -> implied value) ----
+  const xw = ext.valueCrosswalk || {};
+  const rent = num(xw.annual_rent), cov = num(xw.rent_coverage_x), ebitdar = num(xw.ebitdar);
+  let c3 = '';
+  if (rent > 0 && cov != null) {
+    const rows = [
+      ['EBITDA (net of rent)', fmtUsd(num(xw.reconciled_ebitda))],
+      ['+ Contract rent', fmtUsd(rent)],
+      ['= EBITDAR (rent coverage basis)', fmtUsd(ebitdar)],
+      ['Rent coverage', cov.toFixed(2) + '×'],
+      ['Rent as % of EBITDAR', (num(xw.rent_to_ebitdar) != null ? (num(xw.rent_to_ebitdar) * 100).toFixed(1) + '%' : '—')]
+    ];
+    let tbl = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    rows.forEach((rw, i) => { tbl += '<tr' + (i === 3 ? ' style="font-weight:700;color:' + B.blue + '"' : '') + '><td style="padding:4px 8px;border-bottom:1px solid ' + B.blueTint + '">' + rw[0] + '</td><td style="padding:4px 8px;border-bottom:1px solid ' + B.blueTint + ';text-align:right">' + rw[1] + '</td></tr>'; });
+    tbl += '</table>';
+    // implied value grid at a cap band
+    const caps = [['6.00%', xw.value_at_600bps], ['6.50%', xw.value_at_650bps], ['7.00%', xw.value_at_700bps], ['7.50%', xw.value_at_750bps]];
+    let grid = '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px"><tr style="background:' + B.blueTint + '">';
+    caps.forEach(cp => grid += '<th style="padding:4px 6px;color:' + B.navy + ';font-weight:700">' + cp[0] + '</th>');
+    grid += '</tr><tr>';
+    caps.forEach(cp => grid += '<td style="padding:5px 6px;text-align:center;border:1px solid ' + B.blueTint + '">' + fmtUsd(num(cp[1])) + '</td>');
+    grid += '</tr></table>';
+    c3 = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">'
+      + '<div>' + tbl + '</div>'
+      + '<div><div style="font-size:11px;color:' + B.slate + ';margin-bottom:4px">Implied real-estate value = contract rent ÷ cap rate</div>' + grid
+      + '<div style="font-size:10px;color:' + B.slate + ';margin-top:6px">Coverage of <strong>' + cov.toFixed(2) + '×</strong> means facility cash flow (before rent) covers the rent ' + cov.toFixed(1) + ' times over — a measure of tenant durability supporting the cap rate.</div></div>'
+      + '</div>';
+  }
+
+  // ---- Assemble ----
+  const tierNote = last.tier ? ' · ' + esc(last.tier) + ' confidence' : '';
+  let out = '<div class="section page-break"><h2>Facility Financial Performance</h2>';
+  out += '<div style="font-size:11px;color:' + B.slate + ';margin:-4px 0 8px">Reconciled per-year economics (model dialysis_econ_reconciled_v1) — HCRIS-anchored volume &amp; cost, payer-mix-weighted revenue, validated against operator 10-K filings' + tierNote + '. Trend is volume-driven (rates held at CY2024).</div>';
+  out += '<div style="font-weight:700;font-size:12px;color:' + B.navy + ';margin:4px 0">Revenue &amp; EBITDA over time</div>' + c1;
+  if (c2) out += '<div style="font-weight:700;font-size:12px;color:' + B.navy + ';margin:12px 0 4px">How the number is built — FY' + last.fy + '</div>' + c2;
+  if (c3) out += '<div style="font-weight:700;font-size:12px;color:' + B.navy + ';margin:12px 0 4px">Real-estate value crosswalk — rent coverage</div>' + c3;
+  out += '</div>';
+  return out;
+}
+
 function _udExportOperations() {
   const rankings = _udCache.rankings;
   const cmsLink = _udCache.cms || null;
@@ -5543,6 +5681,7 @@ function _udExportOperations() {
     return n.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SF (' + (n / 43560).toFixed(2) + ' acres)';
   };
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const perfExhibitHtml = _udBuildPerfExhibit(ext, _econ, r, B);
 
   const doc = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${facilityName} \u2014 Net-Lease Asset Profile | Northmarq</title>
@@ -5754,6 +5893,8 @@ ${(function(){ var geoComps = (ext.geo && ext.geo.subject_geocoded && Array.isAr
   <tr><td>Property Type</td><td>${_esc(property.property_type || buildingType || 'N/A')}</td></tr>
   <tr><td>Year Built</td><td>${yearBuilt ? _esc(String(yearBuilt)) + (yearReno ? ' (renovated ' + _esc(String(yearReno)) + ')' : '') : 'N/A'}</td></tr>
 </table>
+
+${perfExhibitHtml}
 
 <div class="methodology">
   <strong>Methodology & Data Sources</strong><br><br>
