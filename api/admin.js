@@ -1073,7 +1073,7 @@ async function handleReviewCounts(req, res) {
   // five folded seeders (mirrors fetchFederatedSource('owner_reconcile').total),
   // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
   const [
-    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open, w91Open,
+    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open, w91Open, w96Open,
   ] = await Promise.all([
     withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
     withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
@@ -1089,6 +1089,8 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(opsCount('reachability_harvest_review?status=eq.proposed')),
     // W9.1 (Prompt 98): open contact-acquisition proposals (attach + mint).
     withLaneTimeout(opsCount('contact_acquisition_review?status=eq.proposed')),
+    // W9.6 (Prompt 102): open correspondence→owner attribution proposals.
+    withLaneTimeout(opsCount('comms_owner_attribution_review?status=eq.proposed')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -1167,6 +1169,10 @@ async function handleReviewCounts(req, res) {
     { key: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach',
       count: sum(w91Open), parts: { open_proposals: val(w91Open) },
       count_mode: 'exact', status: laneStatus(w91Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution',
+      count: sum(w96Open), parts: { open_proposals: val(w96Open) },
+      count_mode: 'exact', status: laneStatus(w96Open),
       href: 'pageDataQuality', tone: '' },
   ];
 
@@ -6602,6 +6608,12 @@ const FEDERATED_DECISION_TYPES = new Set([
   // a MINT (deed signatory / OM broker-of-record, VERBATIM-quoted). Confirm resolves
   // into the ops entity graph via the shared contact-attach helpers (reversible).
   'contact_acquisition_review',
+  // W9.6 (Prompt 102): correspondence → owner-LLC attribution proposals. Source =
+  // v_comms_owner_attribution_review_open; Path A (property_bridge, arithmetic
+  // owns-edge) or Path B (person_match, verbatim). Confirm appends the owner ops
+  // entity to the correspondence rows' metadata.linked_entity_ids (reversible) —
+  // feeds owner-record history + the harvest create-contact arm. NEVER auto-writes.
+  'comms_owner_attribution_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
@@ -6756,6 +6768,7 @@ function federatedSubjectRef(type, s) {
     case 'naming_hygiene_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'reachability_harvest_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'contact_acquisition_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'comms_owner_attribution_review': return s.subject_ref ? String(s.subject_ref) : null;
   }
   return null;
 }
@@ -7066,6 +7079,37 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = await opsCnt('contact_acquisition_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'comms_owner_attribution_review') {
+    // W9.6: open correspondence→owner-LLC attribution proposals. Path A
+    // (property_bridge, arithmetic) ranks first, then by owner $ value / confidence.
+    const r = await opsQuery('GET', 'v_comms_owner_attribution_review_open?select=review_id,subject_ref,'
+      + 'path,domain,corr_entity_id,owner_entity_id,target_owner_id,owner_name,corr_entity_name,tie_kind,'
+      + 'correspondent_name,correspondent_email,thread_count,sample_activity_id,evidence_quote,evidence_source,'
+      + 'confidence,reason,rank_value&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: row.owner_entity_id,
+      // property_bridge (arithmetic) ranks first, then by confidence + owner $ value.
+      rank_value: (row.path === 'property_bridge' ? 1e12 : 0) + (Number(row.confidence) || 0) * 1e6 + (Number(row.rank_value) || 0),
+      context: {
+        review_id: row.review_id, path: row.path, domain: row.domain,
+        corr_entity_id: row.corr_entity_id, owner_entity_id: row.owner_entity_id,
+        target_owner_id: row.target_owner_id, owner_name: row.owner_name,
+        corr_entity_name: row.corr_entity_name, tie_kind: row.tie_kind,
+        correspondent_name: row.correspondent_name, correspondent_email: row.correspondent_email,
+        thread_count: row.thread_count, sample_activity_id: row.sample_activity_id,
+        evidence_quote: row.evidence_quote, evidence_source: row.evidence_source,
+        confidence: row.confidence, reason: row.reason, rank_value: row.rank_value,
+        kind: row.path === 'property_bridge' ? 'property_bridge' : 'person_match',
+      },
+    }));
+    out.total = await opsCnt('comms_owner_attribution_review?status=eq.proposed');
     return out;
   }
 
@@ -8795,6 +8839,91 @@ async function handleDecisionVerdict(req, res) {
       const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({ ok: true, verdict, action: 'filled', field: col, review_id: review.review_id });
+    }
+
+    // ---- comms_owner_attribution_review (W9.6 / Prompt 102) ------------------
+    // The human verdict on a correspondence→owner-LLC attribution proposal. confirm
+    // -> the DETERMINISTIC writer appends the owner ops entity to the correspondence
+    // rows' metadata.linked_entity_ids (dedup, fill-append — never a clobber) for
+    // EVERY activity_events row the corr entity attributes to, stamps field_provenance
+    // (comms_owner_bridge), all recorded in comms_owner_attribution_apply_log (reversal
+    // FIRST) so it is reversible. This one anchor feeds BOTH consumers: the owner-record
+    // correspondence history AND the W9.2/W9.4 reachability create-contact arm. reject
+    // -> the row is kept (rubric fuel). NEVER auto-writes; NEVER fabricated.
+    if (decision.decision_type === 'comms_owner_attribution_review') {
+      const revR = await opsQuery('GET', 'comms_owner_attribution_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'comms_owner_attribution_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'attribute']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'comms_owner_attribution_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { path: review.path, domain: review.domain, owner_entity_id: review.owner_entity_id, corr_entity_id: review.corr_entity_id };
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'comms_owner_attribution_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // confirm: attribute the thread. Fetch every correspondence row the corr entity
+      // attributes to that does NOT already carry the owner (fill-append, dedup).
+      const ownerEid = String(review.owner_entity_id);
+      const corrEid = String(review.corr_entity_id);
+      const aeR = await opsQuery('GET', 'activity_events?entity_id=eq.' + pgFilterVal(corrEid) + '&select=id,metadata&limit=1000');
+      const aeRows = (aeR.ok && Array.isArray(aeR.data)) ? aeR.data : [];
+      const toPatch = [];
+      for (const row of aeRows) {
+        const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const cur = Array.isArray(md.linked_entity_ids) ? md.linked_entity_ids.map(String) : [];
+        if (cur.includes(ownerEid)) continue;
+        toPatch.push({ id: row.id, metadata: { ...md, linked_entity_ids: cur.concat([ownerEid]) } });
+      }
+      // Ledger FIRST (reversal exists before the mutation).
+      const led = await opsQuery('POST', 'comms_owner_attribution_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { owner_entity_id: ownerEid, activity_event_ids: toPatch.map((x) => x.id), provenance_ids: [] },
+          details: { path: review.path, domain: review.domain, corr_entity_id: corrEid, target_owner_id: review.target_owner_id, threads: toPatch.length } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      let patched = 0;
+      for (const p of toPatch) {
+        const wr = await opsQuery('PATCH', 'activity_events?id=eq.' + pgFilterVal(p.id),
+          { metadata: p.metadata }, { headers: { Prefer: 'return=minimal' } });
+        if (wr.ok) patched += 1;
+      }
+      // Provenance stamp on the representative row (attribution edge; source ranked
+      // comms_owner_bridge@45 so v_field_provenance_unranked stays 0).
+      const provIds = [];
+      const sampleId = review.sample_activity_id || (toPatch[0] && toPatch[0].id) || null;
+      if (sampleId) {
+        try {
+          const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
+            p_workspace_id: decision.workspace_id || null, p_target_database: 'lcc',
+            p_target_table: 'public.activity_events', p_record_pk: String(sampleId),
+            p_field_name: 'linked_entity_ids', p_value: JSON.stringify(ownerEid),
+            p_source: 'comms_owner_bridge', p_source_run_id: review.source_run_id || 'verdict',
+            p_confidence: Number(review.confidence) || null, p_recorded_by: user.id || null,
+          });
+          if (pv.ok && Array.isArray(pv.data) && pv.data[0] && pv.data[0].provenance_id) provIds.push(pv.data[0].provenance_id);
+        } catch (_e) { /* provenance best-effort; the append + ledger are the record */ }
+      }
+      if (applyLogId != null) {
+        await opsQuery('PATCH', 'comms_owner_attribution_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { owner_entity_id: ownerEid, activity_event_ids: toPatch.map((x) => x.id), provenance_ids: provIds } }).catch(() => {});
+      }
+      await opsQuery('PATCH', 'comms_owner_attribution_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      effects.attributed_threads = patched; effects.apply_log_id = applyLogId;
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: 'attributed', threads: patched, review_id: review.review_id });
     }
 
     // ---- contact_acquisition_review (W9.1 / Prompt 98) -----------------------

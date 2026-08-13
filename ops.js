@@ -1891,6 +1891,12 @@ var _DC_FEDERATED = new Set([
   // v_contact_acquisition_review_open; confirm attaches/mints in the ops entity
   // graph (reversible contact_acquisition_apply_log).
   'contact_acquisition_review',
+  // W9.6 (Prompt 102): correspondence → owner-LLC attribution proposals. Source =
+  // v_comms_owner_attribution_review_open; confirm appends the owner ops entity to
+  // the correspondence rows' metadata.linked_entity_ids (reversible
+  // comms_owner_attribution_apply_log). Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'comms_owner_attribution_review',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1969,6 +1975,8 @@ async function renderReviewConsolePage() {
     if (w92Lane && typeof w92Lane.count === 'number') dc['reachability_harvest_review'] = w92Lane.count;
     const w91Lane = res.data.lanes.find(function (l) { return l.key === 'contact_acquisition_review'; });
     if (w91Lane && typeof w91Lane.count === 'number') dc['contact_acquisition_review'] = w91Lane.count;
+    const w96Lane = res.data.lanes.find(function (l) { return l.key === 'comms_owner_attribution_review'; });
+    if (w96Lane && typeof w96Lane.count === 'number') dc['comms_owner_attribution_review'] = w96Lane.count;
   }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
@@ -2005,6 +2013,7 @@ async function renderReviewConsolePage() {
     { dt: 'naming_hygiene_review', label: 'Naming hygiene — rename / link', open: "renderFederatedLane('naming_hygiene_review')" },
     { dt: 'reachability_harvest_review', label: 'Contact reachability — internal harvest', open: "renderFederatedLane('reachability_harvest_review')" },
     { dt: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach', open: "renderFederatedLane('contact_acquisition_review')" },
+    { dt: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution', open: "renderFederatedLane('comms_owner_attribution_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },

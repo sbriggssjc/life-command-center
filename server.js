@@ -25,6 +25,7 @@ import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
 import { makeDealRosterRoute } from './mcp/deal-roster.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
 import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
+import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -339,6 +340,9 @@ app.all('/api/sf-record-sync-tick', (req, res) => { req.query._route = 'sf-recor
 app.all('/api/pipeline/match-deal-emails-cron', requireLccAuth(handleDealEmailMatchCron));
 // W7.2 — deal-comms propagation tick (X-LCC-Key auth; scheduled by pg_cron lcc-deal-comms-propagate).
 app.all('/api/deal-comms-propagate-tick', requireLccAuth(handleDealCommsPropagateTick));
+// W9.6 (Prompt 102) — correspondence → owner-LLC attribution tick (X-LCC-Key /
+// session auth; scheduled by pg_cron comms-owner-attribution-tick 05:05 UTC).
+app.all('/api/comms-owner-attribution-tick', requireLccAuth(handleCommsOwnerAttributionTick));
 app.post('/api/pipeline/ingest-opportunity', requireLccAuth(opportunitySyncRoutes.ingest));
 app.post('/api/pipeline/ingest-opportunities', requireLccAuth(opportunitySyncRoutes.ingestBatch));
 app.post('/api/pipeline/ingest-deal-parties', requireLccAuth(dealRosterRoutes.ingestParties));

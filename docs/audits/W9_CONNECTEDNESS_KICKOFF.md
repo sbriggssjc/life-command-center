@@ -152,6 +152,25 @@ future prompt.
   Gov-repo Part A verification (proxy /health, per-state adapter re-check, CF token rotations) not
   visible from Cowork — needs Scott's confirmation or the gov verification doc.
 
+- 2026-08-13 (later): **W9.6 correspondence → owner-LLC attribution BUILT** (Prompt 102) — the
+  linkage follow-on the prompt-96 second finding flagged (correspondents are parties/deals, not
+  owner LLCs). Closes the last major INTERNAL gap: correspondence→owner-LLC = 2.5% (6/241). Two
+  deterministic-first paths — **Path A property_bridge** (corr entity → asset → single current
+  true_owner via the ops `owns` edge; arithmetic, value-ranked) and **Path B person_match** (corr
+  person tied to a single owner via `owner_contact_pivot` / an unambiguous person→owner edge;
+  VERBATIM correspondent header; shared-token bridge rejected). Tick
+  `/api/comms-owner-attribution-tick` (`?score=1` dry-run; POST flag-gated `W9_6_COMMS_OWNER_ATTRIBUTION`
+  OFF; cron 05:05). New DC lane `comms_owner_attribution_review` (fully 75-wired); confirm appends
+  the owner ops entity to correspondence `metadata.linked_entity_ids` (reversible + provenance
+  `comms_owner_bridge`) — ONE anchor feeds BOTH the owner-record history AND the W9.2/W9.4
+  reachability create-contact arm (**the arms compound**). W9.5 `correspondence_entity_owner_llc`
+  extended to count owner bridges (baseline held at 2.5%; rises as attributions confirm). Migration
+  `20260829120000` applied live. **Grounded dry-run:** Path A 3, Path B 40 unambiguous — high-value
+  real owners lead (Boyd Watterson rank 1175, Kingsbarn), some pre-existing brokerage-as-owner noise
+  ranks last for the human to reject. Tests 14 + lane guards green. Dry-run:
+  `docs/audits/W9_6_comms_owner_attribution_dryrun_2026-08-13.md`. Live step: `?score=1` review →
+  Cowork flips the flag.
+
 ## WAVE 9 — FINAL STATE (2026-08-13)
 Build: **5/5 units complete.** Live: W9.1-Stage1, W9.3(×3), W9.5. Gated-on-accrual: W9.2+W9.4
 (Outlook name capture — flow edits done, mail accruing). Blocked-at-source: W9.1-Stage2 SOS
