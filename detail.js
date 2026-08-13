@@ -4545,7 +4545,21 @@ function _udTabOperations() {
   const latestSnapshotPt = patientHistory.length > 0
     ? Number(patientHistory[patientHistory.length - 1].total_patients || patientHistory[patientHistory.length - 1].patient_count || 0)
     : 0;
-  const bestPatientCount = clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null);
+  // Reconciled point-in-time census (dialysis_econ_reconciled_v1) — HCRIS-treatment
+  // anchored, the SAME volume basis as revenue/cost/profit. This is the single
+  // accurate census: it replaces the facility_patient_counts throughput series
+  // (patients_last_year etc. = annual patients SERVED, ~4.7x a concurrent census and
+  // physically impossible on the chair count for ~89% of clinics) for the current
+  // headline, the historical trend, and the projections. Falls back to the CMS
+  // latest-census / snapshot only when a clinic has no reconciled HCRIS series.
+  const _num0 = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v);
+  const reconCensusCurrent = _num0(r.reconciled_census_current);
+  const reconCensusLast    = _num0(r.reconciled_census_last_year);
+  const reconCensus3yr     = _num0(r.reconciled_census_3yr_avg);
+  const hasReconCensus     = reconCensusCurrent != null;
+  const bestPatientCount = hasReconCensus
+    ? reconCensusCurrent
+    : (clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null));
 
   // ── Reconcile operating margin ──
   // Always prefer computing margin from profit / revenue for consistency,
@@ -5018,8 +5032,17 @@ function _udTabOperations() {
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Patient Census & Trends</div>';
 
-  // Sparkline chart from patient history
-  if (patientHistory.length >= 2) {
+  // Sparkline — prefer the reconciled point-in-time census series (HCRIS-treatment
+  // anchored, same basis as the headline & revenue) over the facility_patient_counts
+  // throughput series so the history and the current figure read on ONE basis.
+  const reconCensusSeries = hasReconCensus
+    ? (ext.econSeries || [])
+        .filter(s => s && s.reconciled_census != null && isFinite(Number(s.reconciled_census)) && Number(s.reconciled_census) > 0)
+        .map(s => ({ total_patients: Number(s.reconciled_census), snapshot_date: (s.fiscal_year != null ? String(s.fiscal_year) + '-12-31' : null) }))
+    : [];
+  if (reconCensusSeries.length >= 2) {
+    html += _opsSparkline(reconCensusSeries);
+  } else if (patientHistory.length >= 2) {
     html += _opsSparkline(patientHistory);
   }
 
@@ -5030,11 +5053,37 @@ function _udTabOperations() {
   if (trendConf) html += '<span class="t-meta3">Confidence: ' + esc(String(trendConf)) + '</span>';
   html += '</div>';
 
+  // Legacy throughput projections (from clinic_trends) — only used on the
+  // non-reconciled fallback path (both the patient rows and the revenue projection below).
+  const projPt1 = trends.projected_patients_1yr != null ? Math.round(Number(trends.projected_patients_1yr)) : null;
+  const projPt3 = trends.projected_patients_3yr != null ? Math.round(Number(trends.projected_patients_3yr)) : null;
+
   html += '<div class="detail-grid">';
   html += _row('Current Patients', bestPatientCount ? fmtN(bestPatientCount) : null);
-  if (r.patients_last_year) html += _rowTrend('Last Year', fmtN(r.patients_last_year), r.patient_yoy_pct);
-  if (r.patients_two_years_ago) html += _row('Two Years Ago', fmtN(r.patients_two_years_ago));
-  if (r.patient_3yr_avg) html += _rowTrend('3-Year Average', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
+  if (hasReconCensus) {
+    // Reconciled point-in-time census trend — one basis with revenue/cost/profit.
+    // YoY / CAGR reuse the reconciled_revenue_* rates (identical: reconciled revenue is
+    // proportional to the HCRIS treatment volume the census is derived from), so patient
+    // counts and dollars move together. Projected patients use the same YoY/CAGR as the
+    // reconciled revenue projection below.
+    if (reconCensusLast != null) html += _rowTrend('Last Year', fmtN(reconCensusLast), _econ.revYoY);
+    if (reconCensus3yr != null) {
+      const vs3 = reconCensus3yr > 0 ? ((reconCensusCurrent - reconCensus3yr) / reconCensus3yr * 100) : null;
+      html += _rowTrend('3-Year Average', fmtN(reconCensus3yr), vs3 != null ? Number(vs3.toFixed(1)) : null);
+    }
+    if (_econ.revCagr != null) {
+      const cg = Number(_econ.revCagr);
+      const cgColor = cg > 0 ? 'var(--green)' : cg < 0 ? 'var(--red)' : 'var(--text3)';
+      html += _rowHtml('Annualized Growth (CAGR)', '<span style="color:' + cgColor + ';font-weight:600">' + (cg > 0 ? '+' : '') + cg.toFixed(1) + '%</span>');
+    }
+    if (_econ.revYoY != null) html += _row('Projected Patients (1yr)', fmtN(Math.round(reconCensusCurrent * (1 + Number(_econ.revYoY) / 100))));
+    if (_econ.revCagr != null) html += _row('Projected Patients (3yr)', fmtN(Math.round(reconCensusCurrent * Math.pow(1 + Number(_econ.revCagr) / 100, 3))));
+  } else {
+  // Fallback basis (no reconciled HCRIS series): facility_patient_counts values are ANNUAL
+  // patients SERVED, not a point-in-time census — labelled so they never read as concurrent.
+  if (r.patients_last_year) html += _rowTrend('Patients Served/Yr (prior)', fmtN(r.patients_last_year), r.patient_yoy_pct);
+  if (r.patients_two_years_ago) html += _row('Patients Served/Yr (2yr prior)', fmtN(r.patients_two_years_ago));
+  if (r.patient_3yr_avg) html += _rowTrend('Patients Served/Yr (3yr avg)', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
 
   // Annualized growth rate (CAGR)
   const cagr = trends.annualized_growth_rate;
@@ -5050,12 +5099,9 @@ function _udTabOperations() {
   if (trends.regression_r_squared != null) {
     html += _row('R\u00B2', Number(trends.regression_r_squared).toFixed(3));
   }
-  // Projections — recalculate revenue from projected patients × per-patient revenue
-  // (database projected_revenue can be inconsistent with flat/declining patient trends)
-  const projPt1 = trends.projected_patients_1yr != null ? Math.round(Number(trends.projected_patients_1yr)) : null;
-  const projPt3 = trends.projected_patients_3yr != null ? Math.round(Number(trends.projected_patients_3yr)) : null;
-  if (projPt1 != null) html += _row('Projected Patients (1yr)', fmtN(projPt1));
-  if (projPt3 != null) html += _row('Projected Patients (3yr)', fmtN(projPt3));
+  if (projPt1 != null) html += _row('Projected Patients Served (1yr)', fmtN(projPt1));
+  if (projPt3 != null) html += _row('Projected Patients Served (3yr)', fmtN(projPt3));
+  }
   // Revenue projections — anchored to the single reconciled truth figure.
   // For a reconciled clinic, project the reconciled revenue forward with the reconciled
   // YoY (1yr) and CAGR (3yr) the truth model itself produced (dialysis_econ_reconciled_v1;
@@ -5564,7 +5610,13 @@ function _udExportOperations() {
   const clinicPatientCount = clinicProfile.latest_estimated_patients != null
     ? Number(clinicProfile.latest_estimated_patients)
     : (r.latest_estimated_patients != null ? Number(r.latest_estimated_patients) : null);
-  const bestPatientCount = clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null);
+  // Reconciled point-in-time census (dialysis_econ_reconciled_v1) — the single accurate
+  // census, HCRIS-treatment anchored (same basis as revenue/cost/profit). Prefer it for
+  // the headline and trend so the export never shows the facility_patient_counts throughput
+  // figure (annual patients served) as a concurrent census.
+  const reconCensusCurrentX = (r.reconciled_census_current != null && isFinite(Number(r.reconciled_census_current))) ? Number(r.reconciled_census_current) : null;
+  const reconCensus3yrX = (r.reconciled_census_3yr_avg != null && isFinite(Number(r.reconciled_census_3yr_avg))) ? Number(r.reconciled_census_3yr_avg) : null;
+  const bestPatientCount = reconCensusCurrentX != null ? reconCensusCurrentX : (clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null));
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
   const ccn = r.medicare_id
     || (cmsLink && cmsLink.medicare_id)
@@ -5618,7 +5670,8 @@ function _udExportOperations() {
   // chairs / utilization / treatments. The CMS annual snapshot count is a
   // cumulative facility figure kept separate to avoid the 158-vs-31 contradiction
   // the prior export shipped.
-  const concurrentCensus = (clinicProfile.latest_estimated_patients != null) ? Number(clinicProfile.latest_estimated_patients)
+  const concurrentCensus = (reconCensusCurrentX != null) ? reconCensusCurrentX
+        : (clinicProfile.latest_estimated_patients != null) ? Number(clinicProfile.latest_estimated_patients)
         : (r.latest_estimated_patients != null) ? Number(r.latest_estimated_patients)
         : (finDetail.patient_count != null ? Number(finDetail.patient_count) : null);
   const cmsAnnualPatients = latestSnapshotPt > 0 ? latestSnapshotPt : null;
@@ -5675,10 +5728,14 @@ function _udExportOperations() {
     if (!(prev > 0) || cur > prev * 4 || cur < prev / 4) return null;
     return { pct: ((cur - prev) / prev) * 100, curYear: years[i], prevYear: years[i-1] };
   }
+  // Prefer the reconciled census 3-yr trend (current vs reconciled 3-yr avg) — same basis
+  // as the headline and revenue; fall back to the legacy throughput trend only when absent.
+  const reconCensusTrend3 = (reconCensusCurrentX != null && reconCensus3yrX != null && reconCensus3yrX > 0)
+    ? ((reconCensusCurrentX - reconCensus3yrX) / reconCensus3yrX) * 100 : null;
   const trend3yr = (r.patient_trend_3yr != null && isFinite(Number(r.patient_trend_3yr))) ? Number(r.patient_trend_3yr) : null;
   const annualYoY = _annualSnapshotYoY(patientHistory);
-  const censusTrendPct = (trend3yr != null) ? trend3yr : (annualYoY ? annualYoY.pct : null);
-  const censusTrendLabel = (trend3yr != null) ? 'over 3 yr' : (annualYoY ? 'YoY' : '');
+  const censusTrendPct = (reconCensusTrend3 != null) ? reconCensusTrend3 : (trend3yr != null) ? trend3yr : (annualYoY ? annualYoY.pct : null);
+  const censusTrendLabel = (reconCensusTrend3 != null) ? 'over 3 yr' : (trend3yr != null) ? 'over 3 yr' : (annualYoY ? 'YoY' : '');
   const trendDirClean = (censusTrendPct == null)
     ? String(trends.trend_direction || trendDir || 'stable').toLowerCase()
     : (censusTrendPct > 2 ? 'growth' : censusTrendPct < -2 ? 'decline' : 'stable');
