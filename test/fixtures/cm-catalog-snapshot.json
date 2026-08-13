@@ -434,7 +434,6 @@
       "chart_template_id": "sold_cap_by_term_dot_plot",
       "chart_type": "ScatterChart",
       "applies_to_verticals": [
-        "gov",
         "dialysis"
       ],
       "phase": 28
