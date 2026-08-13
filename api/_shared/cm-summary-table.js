@@ -74,12 +74,40 @@ function quartersBefore(as_of, n) {
 }
 
 /**
+ * Latest period_end present in `rows` that is <= cap. Rows are assumed sorted
+ * ASC by period_end but this scans defensively so an unsorted array is fine.
+ * Returns null when no row is at or before the cap.
+ */
+function latestPeriodAtOrBefore(rows, cap) {
+  if (!Array.isArray(rows) || !cap) return null;
+  const capStr = String(cap).slice(0, 10);
+  let best = null;
+  for (const r of rows) {
+    const pe = r?.period_end ? String(r.period_end).slice(0, 10) : null;
+    if (!pe || pe > capStr) continue;
+    if (best == null || pe > best) best = pe;
+  }
+  return best;
+}
+
+/**
  * Compute trailing-N-quarter average ending at as_of (inclusive).
  * Skips nulls. Returns null if no valid samples.
+ *
+ * The anchor index is the row AT `asOfPeriod` when present, otherwise the last
+ * row whose period_end is <= asOfPeriod. Anchoring on the nearest preceding
+ * quarter (rather than requiring an exact match) keeps the trailing averages
+ * populated when the requested as-of quarter runs a quarter ahead of the
+ * latest data row — the bug that blanked the 5/10/15-yr columns.
  */
 function trailingAvg(rows, asOfPeriod, nQuarters, fieldKeys) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  const idx = rows.findIndex((r) => r.period_end === asOfPeriod);
+  let idx = rows.findIndex((r) => r.period_end === asOfPeriod);
+  if (idx < 0) {
+    const anchor = latestPeriodAtOrBefore(rows, asOfPeriod);
+    if (anchor == null) return null;
+    idx = rows.findIndex((r) => String(r.period_end).slice(0, 10) === anchor);
+  }
   if (idx < 0) return null;
   const start = Math.max(0, idx - nQuarters + 1);
   let sum = 0, count = 0;
@@ -117,6 +145,26 @@ export function buildVolumeCapSummary({ volumeRows = [], capRows = [], quartileR
   // The cap-rate gate filters out partial-quarter rows that have a few sales
   // but not enough to publish a representative cap rate.
   let resolved = asOf;
+  // When an explicit as_of is supplied but no source series carries a row at
+  // that exact quarter (e.g. the report quarter runs a quarter ahead of the
+  // latest published data), snap the anchor DOWN to the latest available
+  // period <= as_of. Without this the current-Q column AND all 5/10/15-yr
+  // trailing averages come up blank while prior/YoY/cycle (which happen to land
+  // on real rows) fill in — the reported "missing averages" symptom.
+  if (resolved) {
+    const cap = String(resolved).slice(0, 10);
+    const hasExact =
+      volumeRows.some((r) => String(r.period_end).slice(0, 10) === cap) ||
+      capRows.some((r) => String(r.period_end).slice(0, 10) === cap) ||
+      quartileRows.some((r) => String(r.period_end).slice(0, 10) === cap);
+    if (!hasExact) {
+      resolved =
+        latestPeriodAtOrBefore(volumeRows, cap) ||
+        latestPeriodAtOrBefore(capRows, cap) ||
+        latestPeriodAtOrBefore(quartileRows, cap) ||
+        resolved;
+    }
+  }
   if (!resolved) {
     const capPeriods = new Set(
       capRows.filter((r) => pickValue(r, FIELD_KEYS.cap_rate) != null).map((r) => r.period_end)

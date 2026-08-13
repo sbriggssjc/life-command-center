@@ -2377,7 +2377,14 @@ async function exportWorkbook(req, res) {
       // a non-existent `buyer_pool_breakdown` chart_template_id; this
       // gives the composer the master_m rows it really needs.
       rows = composer({
-        vertical, subspecialty, asOf: as_of,
+        // Anchor synthetic composers on the RESOLVED as-of (snapped to the
+        // latest completed quarter), NOT the raw request. The realChart rows
+        // these composers read are clamped to resolvedAsOf, so passing the raw
+        // as_of (which can run a quarter ahead) made the volume_cap_summary
+        // composer anchor on a quarter with no row — blanking the current-Q
+        // column and every 5/10/15-yr trailing average. Everything else in the
+        // export already uses resolvedAsOf for consistency.
+        vertical, subspecialty, asOf: resolvedAsOf,
         allCharts: realCharts,
         masterMonthlyRows,
       }) || [];
