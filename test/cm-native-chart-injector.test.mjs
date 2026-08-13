@@ -3114,10 +3114,12 @@ test('T1: cap_rate_ttm_by_quarter with continuous data from 2001 is NOT trimmed 
     'T1: continuous-from-2001 cap data plots from row 5');
 });
 
-test('T1: cap_rate_by_lease_term extends to the first cohort observation (not the 2015/2019 floor)', () => {
-  // Cohorts NULL 2001-2004, present from 2005 → range starts at the first row
-  // ANY cohort has data (2005). Each bucket gaps until its own first
-  // observation (e.g. a late-appearing ≤5yr bucket), never interpolated.
+test('cap_rate_by_lease_term: gov pins to the 2011 consistent-message floor', () => {
+  // 2026-08-12 — after the "Outside Firm" cohort was corrected to genuinely
+  // past-firm (firm_rem <= 0), gov is pinned to 2011: the earliest year all
+  // four cohorts are continuously present AND the "longer firm term = lower
+  // cap" ordering holds every month. gov rows carry NO dia-exclusive cohort
+  // columns (cap_8to12 / cap_5orless), so the floor applies to gov only.
   const rows = [];
   for (let y = 2001; y <= 2024; y++) {
     for (let m = 1; m <= 12; m++) {
@@ -3143,9 +3145,43 @@ test('T1: cap_rate_by_lease_term extends to the first cohort observation (not th
     ],
     dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
   });
+  // 2001-01 .. 2010-12 = 120 rows before the 2011-01 floor → dataStart 125.
+  assert.equal(spec.spec.dataStart, 5 + 120,
+    'gov cap-by-term pins to 2011');
+});
+
+test('cap_rate_by_lease_term: dia keeps the data-driven first-cohort start', () => {
+  // dia rows carry the dia-exclusive cohort columns (cap_8to12 / cap_5orless),
+  // so the vertical-aware floor uses first-non-null, NOT the gov 2011 pin.
+  // Cohorts NULL 2001-2004, present from 2005 → starts at 2005.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const has = y >= 2005;
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        cap_12plus: has ? 0.058 : null,
+        cap_8to12:  has ? 0.064 : null,
+        cap_6to8:   has ? 0.070 : null,
+        cap_5orless: has ? 0.078 : null,
+      });
+    }
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_lease_term',
+    tabName: 'Data_Cap_by_Term',
+    cols: [
+      { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
+      { key: 'cap_10plus', col: 'C' }, { key: 'cap_6to10', col: 'D' },
+      { key: 'cap_less5', col: 'E' }, { key: 'cap_outside_firm', col: 'F' },
+      { key: 'cap_12plus', col: 'G' }, { key: 'cap_8to12', col: 'H' },
+      { key: 'cap_6to8', col: 'I' }, { key: 'cap_5orless', col: 'J' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+  });
   // 2001-01 .. 2004-12 = 48 all-NULL-cohort rows trimmed → dataStart 53.
   assert.equal(spec.spec.dataStart, 5 + 48,
-    'T1: cap-by-term starts at the first cohort observation (2005)');
+    'dia cap-by-term starts at the first cohort observation (2005)');
 });
 
 test('R47: bid_ask_spread trims to 2014 (TRUE-gap)', () => {

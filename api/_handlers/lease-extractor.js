@@ -26,6 +26,7 @@ import { isReportedField } from '../_shared/extraction-field-policy.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { ocrPdfToTextTiered, meaningfulTextLen, DOC_TEXT_MIN_CHARS } from '../_shared/document-text.js';
+import { sniffOfficeKind, extractOfficeText } from '../_shared/office-text.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout, insertEntityRelationship } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
@@ -970,6 +971,30 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   if (!storageRef) throw new Error('runLeaseExtraction: storage_ref required (or raw)');
   const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
   if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
+
+  // Office branch (2026-08-12) — docx/xlsx "Lease Abstract" files. Detected from
+  // BYTES (the PA flow's contentType is unreliable — xlsx bytes used to be
+  // treated as PDF, fail pdf-parse, and get POSTed to Document AI → docai_400 +
+  // a wasted gpt-4o fallback). A readable office doc feeds the SAME lease prompt
+  // as PDF text; an unreadable one (legacy .doc / corrupt zip / empty) is a
+  // TERMINAL office_unreadable — OCR can never fix an office file, so it must
+  // never enter the OCR tier or the needs_ocr queue again.
+  const officeKind = sniffOfficeKind(sp.buffer, storageRef);
+  if (officeKind) {
+    const office = extractOfficeText({ buffer: sp.buffer, fileName: storageRef });
+    if (office.ok && meaningfulTextLen(office.text) >= 40) {
+      const t = office.text.slice(0, 120000);
+      return {
+        normalized: await extractLeaseFromText(t),
+        source: 'office_text', text_len: t.length, office_kind: officeKind,
+      };
+    }
+    return {
+      normalized: null, office_unreadable: true, office_kind: officeKind,
+      reason: office.reason || 'office_no_text', source: 'office_unreadable',
+    };
+  }
+
   let text = await textFromBytes(sp.buffer, sp.contentType || mediaType);
   // UW#5: most scanned executed leases are NOT zero-text — they carry a thin junk
   // text layer (a recording stamp, a page number, OCR bleed) that is well under the
@@ -1583,6 +1608,16 @@ export async function attachLeaseDoc(a, injected = {}) {
     // it skipped/needs_ocr, never an error/500).
     if (ext.needs_ocr) {
       return { ok: true, attached: false, needs_ocr: true, reason: 'needs_ocr', match_status: 'needs_ocr' };
+    }
+    // Office file with no recoverable text (legacy .doc / corrupt zip / empty
+    // workbook) — DETERMINISTIC, OCR can never fix it. `enrich_unprocessable`
+    // makes the backfill mark it terminal (out of the needs_ocr/OCR lane);
+    // `parked` makes the folder-feed record it skipped with the reason.
+    if (ext.office_unreadable) {
+      return {
+        ok: true, attached: false, enrich_unprocessable: true, parked: true,
+        reason: `office_no_text:${ext.office_kind || 'office'}`, match_status: 'office_unreadable',
+      };
     }
     ({ normalized } = ext);
     extTextLen = ext.text_len ?? null;   // drives the scanned-thin-text re-route below
