@@ -4210,8 +4210,11 @@ function _udResolveEconomics(r, fin, fe) {
   const revCagr = num(r.reconciled_revenue_cagr_pct);
   const reconciledConfidence = r.reconciled_confidence_tier || null;
   const isReconciled = (method === 'reconciled_truth_v1');
+  const ebitda = num(r.reconciled_ebitda);
+  const ebitdaMargin = (ebitda != null && revenue != null && revenue > 0) ? (ebitda / revenue) * 100 : null;
   return { revenue: revenue, profit: profit, margin: margin, method: method, source: source, basis: basis,
-           revYoY: revYoY, revCagr: revCagr, reconciledConfidence: reconciledConfidence, isReconciled: isReconciled };
+           revYoY: revYoY, revCagr: revCagr, reconciledConfidence: reconciledConfidence, isReconciled: isReconciled,
+           ebitda: ebitda, ebitdaMargin: ebitdaMargin };
 }
 
 function _udTabOperations() {
@@ -4594,6 +4597,17 @@ function _udTabOperations() {
       ? (margin > 12 ? 'Healthy' : margin >= 5 ? 'Caution' : 'Below target')
       : (cmsLinked ? 'No CMS cost report on file for this facility' : 'No CMS link')
   });
+
+  // EBITDA KPI — operating profit + 10-K-anchored D&A (size/age-distributed)
+  if (_econ.ebitda != null) {
+    kpis.push({
+      label: 'Est. EBITDA',
+      value: '$' + _fmtCompact(_econ.ebitda),
+      color: '',
+      info: 'Operating profit + estimated D&A (10-K-anchored, size/age-adjusted)'
+            + (_econ.ebitdaMargin != null ? ' · ' + _econ.ebitdaMargin.toFixed(1) + '% margin' : '')
+    });
+  }
 
   // Patient Census KPI — use reconciled best count
   kpis.push({
@@ -5278,7 +5292,7 @@ function _udTabOperations() {
   html += '<span>&#x25B6;</span> Methodology & Data Sources</div>';
   html += '<div style="display:none;margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6">';
 
-  html += '<p style="margin:0 0 8px">Revenue estimates use a 4-payer blended rate (~$357/tx): Medicare $279/tx, Medicaid $225/tx, Commercial $1,100/tx, Other $250/tx, at 156 treatments/year (3x/week). Chair-based model (chairs × 3 shifts × 5.5 days × 52 wks × 65% utilization) is primary where station data is available (validated median 1.00x vs TTM, n=7,115). Concurrent-ratio model (annual patients × 0.245 × 156 tx/yr) used as fallback. TTM-reported and 10-K filing data preferred over modeled estimates.</p>';
+  html += '<p style="margin:0 0 8px">Revenue &amp; operating profit are one reconciled figure per facility per year (model dialysis_econ_reconciled_v1): treatments and cost are anchored to audited HCRIS cost-report actuals; revenue = treatments × a payer-mix-weighted rate (Medicare $279, Medicaid $225, Commercial $1,100, Other $250/tx), with the reported private-payer share MA-corrected (only a calibrated fraction priced at the commercial rate) so the sector operating margin (~16%) is reproduced; operating profit = revenue − HCRIS cost. EBITDA = operating profit + 10-K-anchored D&amp;A (~$27/tx), distributed by facility size and age. Validated vs DaVita&rsquo;s FY2024 10-K (revenue/treatment within ~3%; facility EBITDA margin ~25%); aggregate revenue is conservative, not overstated. Each facility carries a high/medium/low confidence tier; the trend is volume-driven (rates held at CY2024).</p>';
 
   html += '<p style="margin:0 0 8px"><strong class="t-muted2">Risk Score Components:</strong></p>';
   html += '<p style="margin:0 0 4px;padding-left:8px"><strong class="t-muted2">Patient Trend (30%):</strong> Measures YoY patient growth/decline and regression trend direction. Declining census signals potential revenue erosion and operator dissatisfaction.</p>';
@@ -5353,16 +5367,13 @@ function _udExportOperations() {
   const B = NMQ_BRAND;
 
   // Derive key values (same logic as _udTabOperations)
-  // Financial basis — present ONE consistent basis. The prior export mixed
-  // estimated_annual_revenue (a chair-CAPACITY model that overstates revenue for
-  // under-utilized clinics) with the HCRIS actual operating profit, producing a
-  // nonsensical margin (e.g. $7.6M est. revenue ÷ $522k HCRIS profit = 6.9%, and
-  // $1,156/treatment). Prefer HCRIS actuals (reflect real treatment volume); else
-  // the estimated model kept internally consistent (its own revenue + profit).
-  // Corrected clinic economics resolved from the data the tab already loads.
-  // Revenue & profit come from ONE matched source (see _udResolveEconomics) so
-  // the margin is internally consistent, and the headline agrees with the
-  // Comparative Benchmarking revenue rank (both read v_property_rankings).
+  // Financial basis — present ONE consistent basis. Since 2026-08-13 revenue AND
+  // profit are the single reconciled truth figure (dia model dialysis_econ_reconciled_v1,
+  // revenue_calc_method='reconciled_truth_v1'): HCRIS-anchored treatments+cost, payer-mix-
+  // weighted (MA-corrected) reimbursement, validated vs operator 10-Ks. This retired the
+  // prior chair-CAPACITY overstatement. Revenue & profit come from ONE matched source
+  // (see _udResolveEconomics) so the margin is internally consistent, and the headline
+  // agrees with the Comparative Benchmarking revenue rank (both read v_property_rankings).
   const _econ = _udResolveEconomics(r, finDetail, facilityEconomics);
   const finBasis = _econ.basis === 'corrected' ? 'estimated' : 'not_on_file';
   const estRevenue = _econ.revenue;
@@ -5746,10 +5757,14 @@ ${(function(){ var geoComps = (ext.geo && ext.geo.subject_geocoded && Array.isAr
 
 <div class="methodology">
   <strong>Methodology & Data Sources</strong><br><br>
-  <strong style="color:${B.navy}">Revenue Estimation</strong><br>
-  Revenue estimates are derived from a 4-payer blended reimbursement model applied to estimated annual treatment volume. Payer-specific rates reflect current CMS reimbursement schedules: Medicare ~$279/treatment, Medicaid ~$225/treatment, Commercial/Private ~$1,100/treatment, and Other ~$250/treatment. The blended average is approximately $357/treatment. Treatment volume assumes 156 treatments per patient per year (3x weekly, 52 weeks).<br><br>
+  <strong style="color:${B.navy}">Revenue &amp; Operating Profit (Reconciled Truth Model)</strong><br>
+  Revenue and operating profit are a single reconciled figure per facility per fiscal year (model <em>dialysis_econ_reconciled_v1</em>), rebuilt from first principles rather than a modeled-estimate-vs-actual either/or. The audited CMS HCRIS cost report is treated as what it actually is &mdash; a <em>cost</em> report (it books allowable cost as &ldquo;revenue,&rdquo; so revenue equals cost on every filing) &mdash; and therefore as a reliable anchor for <strong>treatment volume</strong> (Worksheet S) and <strong>operating cost</strong> (Worksheet D), but not for top-line revenue. Revenue is reconstructed as <strong>treatments &times; a payer-mix-weighted reimbursement rate</strong> (CY2024 schedules: Medicare ~$279, Medicaid ~$225, Commercial ~$1,100, Other ~$250/treatment); operating profit = revenue &minus; HCRIS cost. Because a facility&rsquo;s reported private-payer share conflates Medicare Advantage (which pays roughly Medicare rates) with true commercial, only a calibrated fraction of that share is priced at the commercial rate &mdash; calibrated so the national blend reproduces the observed sector operating margin (~16%). Legacy internal estimates are blended in only when they fall within a plausibility band of the payer-weighted rate; implausible values are excluded. Each facility carries a confidence tier (high/medium/low) based on the strength of its underlying HCRIS and payer-mix data.<br><br>
+  <strong style="color:${B.navy}">Validation against public filings</strong><br>
+  Aggregated bottom-up across all ~8,300 facilities, the model reconciles to operator SEC filings: for DaVita facilities the implied revenue-per-treatment (~$380) matches DaVita&rsquo;s FY2024 10-K (~$369&ndash;380/treatment) within ~3%, and the facility-level EBITDA margin (~25%) aligns with DaVita&rsquo;s reported dialysis EBITDA. Aggregate revenue is <em>conservative</em> relative to operator-reported totals (our treatment counts are audited CMS figures, which run below operator-reported treatments that include hospital/acute settings) &mdash; the model does not overstate.<br><br>
+  <strong style="color:${B.navy}">EBITDA</strong><br>
+  EBITDA = operating profit + estimated depreciation &amp; amortization. D&amp;A is anchored to operator 10-K disclosures (~$27/treatment) and distributed to each facility by <strong>size</strong> (treatment volume) and <strong>age</strong> (a plant/equipment depreciation curve from the facility&rsquo;s CMS certification age), bounded to a sane share of revenue. EBITDA is reported only where operating profit is available; it is never a fabricated add-back.<br><br>
   <strong style="color:${B.navy}">Treatment Volume</strong><br>
-  Annual treatment counts follow a data-priority hierarchy: (1) HCRIS cost report actuals, (2) XGBoost primary financial model estimates, (3) CMS-reported trailing twelve month totals, (4) modeled from patient census (patients \u00D7 156). The chair-based capacity model (stations \u00D7 3 shifts \u00D7 5.5 days \u00D7 52 weeks \u00D7 65% utilization) has been validated against reported figures with a median accuracy of 1.00x across 7,115 facilities.<br><br>
+  Annual treatment counts are anchored to HCRIS cost-report actuals (Worksheet S); where a facility has no HCRIS filing, volume falls back to the CMS trailing-twelve-month total, then to patient census &times; 156 (3&times; weekly, 52 weeks). The app&rsquo;s treatment counts reconcile to HCRIS at a median ratio of 1.00 across ~7,500 facilities.<br><br>
   <strong style="color:${B.navy}">Capacity Utilization</strong><br>
   Capacity Utilization is a modeled estimate of treatment volume against the facility's estimated operating capacity (stations &times; shifts &times; operating days &times; a standard utilization factor) &mdash; <em>not</em> a real-time occupancy reading. A figure near 90% indicates the facility is modeled to run close to its practical chair throughput; it does not mean that share of chairs is filled at any single moment.<br><br>
   <strong style="color:${B.navy}">Patient Counts</strong><br>
@@ -5757,9 +5772,9 @@ ${(function(){ var geoComps = (ext.geo && ext.geo.subject_geocoded && Array.isAr
   <strong style="color:${B.navy}">Comparative Benchmarking</strong><br>
   Percentile rank among CMS-certified dialysis facilities by estimated patient volume and revenue, within the state and nationally (higher percentile = larger facility). County-level ranking is omitted where the facility is the only one in its county.<br><br>
   <strong style="color:${B.navy}">Operating Costs & Margins</strong><br>
-  Operating costs are sourced from: (1) CMS HCRIS facility cost reports (actual facility-level data), or (2) derived from revenue minus operating profit where HCRIS data is unavailable or reflects known Medicare-only allocation quirks. Margins are calculated as operating profit divided by revenue.<br><br>
-  <strong style="color:${B.navy}">Revenue Projections</strong><br>
-  Projected revenue uses a growth-rate approach: current revenue is scaled by the ratio of projected-to-current patient census, plus 3% annual inflation compounding. This avoids per-patient revenue inflation caused by multi-modality census counts (in-center HD, home HD, peritoneal dialysis) that differ in reimbursement rates. Patient projections are derived from regression analysis of historical CMS enrollment snapshots.<br><br>
+  Operating cost is the audited HCRIS facility cost-report total (Worksheet D, all-payer, the same figure that anchors the reconciled model above); the median is ~$303/treatment and falls with facility scale (~$428/treatment at the smallest facilities to ~$278 at the largest). Margin is operating profit divided by revenue. Because cost is the audited per-facility figure rather than a flat assumption, genuinely sub-scale facilities can show a thin or negative operating margin &mdash; a real, audited signal, not a data gap.<br><br>
+  <strong style="color:${B.navy}">Revenue &amp; Profit Trend</strong><br>
+  Year-over-year and multi-year CAGR are computed from the facility&rsquo;s reconciled per-year series (FY2011&ndash;present), applying one figure per fiscal year with an order-of-magnitude outlier guard so definition mismatches cannot corrupt the trend. Reimbursement rates are held at the current (CY2024) schedule across all years, so the trend is <strong>volume-driven</strong> &mdash; it reflects the facility&rsquo;s treatment-volume trajectory (the signal that most drives value), not rate inflation.<br><br>
   <strong style="color:${B.navy}">Quality & Risk Metrics</strong><br>
   Quality data sourced from CMS Dialysis Facility Compare. Mortality, hospitalization, and readmission rates are per 100 patient-years, benchmarked against national averages (mortality ~15, hospitalization ~150, readmission ~25). The composite lease renewal risk score (0\u2013100) weights five factors: Patient Trend (30%), Financial Health (25%), Quality Metrics (20%), Lease Expiration (15%), and Market Conditions (10%).<br><br>
   <strong style="color:${B.navy}">Competitive Landscape</strong><br>
