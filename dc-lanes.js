@@ -65,6 +65,8 @@ const _DC_FED_META = {
     intro: 'W9.2 data-connectedness. Domain contacts (dia 71% / gov 68%) are missing an email AND a phone; this lane fills the blank from sources LCC ALREADY HOLDS. A DETERMINISTIC fill (arm=deterministic) is arithmetic — the SAME person\'s synced SF record (matched by identity key, not name-fuzz) carries the value, confidence 1.0, one-click bulk-confirmable. An LLM fill (arm=llm) was attributed from an intake snapshot naming this person, and carries a VERBATIM quote containing the value (a value not in the quote is dropped). PROPOSES only — you decide. Confirm runs the fill-blanks writer (domain contacts email/phone + provenance, reversible; a now-populated field routes to a conflict, never a clobber); Keep leaves it untouched. External acquisition (SOS/deed) is W9.1, not this lane.' },
   contact_acquisition_review: { title: 'Contact acquisition — owner outreach',
     intro: 'W9.1 data-connectedness (Stage 1, internal sources). A value-ranked owner with NO contact on file. The engine ran the sanctioned chain — cross-reference (the same person already a contact under a related owner), institution registry, the owner\'s own deed signatory, and the OM listing broker-of-record — stopping at the first hit. An ATTACH links an EXISTING person; a CREATE mints a lane-only contact from a deed signatory or a broker (a broker is typed broker-of-record, NEVER the owner\'s own contact). PROPOSES only — you decide. Confirm resolves it into the graph (associated_with edge + a value-gated cadence, reversible via the ledger); Reject keeps the owner untouched. Stage 2 (SOS-direct) is a separate lane. Every verdict is recorded (won\'t re-ask).' },
+  comms_owner_attribution_review: { title: 'Correspondence → owner attribution',
+    intro: 'W9.6 data-connectedness. Correspondence is stamped with the deal / party / property entity the resolver found — brokers, buyers, seller contacts — NOT the owning LLC, so an email about a property never surfaces against the owner you\'re trying to reach. This lane closes that gap. PATH A (property bridge) is arithmetic: the thread\'s entity resolves to an ASSET, and the ops graph owns-links it to a single current true_owner — one-click bulk-confirmable. PATH B (person match) attributes a thread whose correspondent is a PERSON tied to a single owner (the owner\'s active contact, or an unambiguous person→owner edge); it carries the correspondent\'s VERBATIM header name/email and a shared-token-only name bridge is rejected. PROPOSES only — you decide. Confirm attributes the thread to the owner (appends the owner ops entity to the correspondence rows\' anchors, reversible) so the owner\'s record shows its correspondence AND the reachability harvester can mint owner contacts from it; Reject keeps it untouched. Every verdict is recorded (won\'t re-ask).' },
   w8_u3_link_review: { title: 'Ownership links — Ollama proposals',
     intro: 'W8 U3 connection-propagation. Ollama proposed an ownership link from a real signal: a CHAIN proposal fills a missing owner→parent/developer edge for a property (source = a deed/OM/registry evidence quote), or a DIFFERENT-PEOPLE finding flags that two email-sharing person records are NOT the same person (a shared mailbox). Each card shows the proposed link + role, the confidence, and the VERBATIM evidence quote + its source. Ollama PROPOSES only — you decide. Confirm runs the deterministic edge writer (entity_relationships + provenance, recorded in w8_u3_link_apply_log so it is reversible; a same-person email proposal routes to the resolver, never auto-merged); Reject keeps the records untouched. Every verdict is recorded (won’t re-ask).' },
   agency_risk_action: { title: 'Agency risk → disposition',
@@ -636,6 +638,29 @@ function _fedCardHTML(it, i, isNext) {
       + '<div class="q-item-meta" style="opacity:.7">Proposes only — confirm to '
         + (attach ? 'attach this contact to the owner' : 'create this ' + (isBroker ? 'broker-of-record' : 'contact')) + ' (reversible), or reject.</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — ' + (attach ? 'attach' : 'create') + '</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject</button>';
+  } else if (_dcFedType === 'comms_owner_attribution_review') {
+    // W9.6: a correspondence→owner attribution. Path A (property_bridge, arithmetic
+    // owns-edge) or Path B (person_match, verbatim correspondent header). Confirm
+    // attributes the thread to the owner; Reject keeps it untouched.
+    const bridge = (c.path === 'property_bridge');
+    const conf = (c.confidence != null && isFinite(Number(c.confidence))) ? Number(c.confidence) : null;
+    const tieLabel = c.tie_kind === 'owns_edge' ? 'owns edge'
+      : c.tie_kind === 'active_contact' ? 'active contact'
+      : c.tie_kind === 'relationship' ? 'person→owner edge' : (c.tie_kind || '');
+    const badges = '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge type">' + (bridge ? 'property bridge' : 'person match') + '</span>'
+      + (tieLabel ? '<span class="q-badge">' + esc(tieLabel) + '</span>' : '')
+      + (c.thread_count ? '<span class="q-badge">' + esc(String(c.thread_count)) + ' thread' + (Number(c.thread_count) === 1 ? '' : 's') + '</span>' : '')
+      + (conf != null ? '<span class="q-badge">conf ' + conf.toFixed(2) + '</span>' : '') + '</div>';
+    const src = bridge ? (c.corr_entity_name || 'this property/deal') : (c.correspondent_name || 'this correspondent');
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(src))
+      + ' <span style="opacity:.6">&rarr;</span> ' + esc(String(c.owner_name || 'owner')) + '</span>' + badges + '</div>'
+      + (c.correspondent_email ? '<div class="q-item-meta">Correspondent: ' + esc(String(c.correspondent_email)) + '</div>' : '')
+      + (c.evidence_quote ? '<div class="q-item-meta">Evidence: <b>' + esc(String(c.evidence_quote)) + '</b></div>' : '')
+      + (c.reason ? '<div class="q-item-meta" style="opacity:.7">' + esc(String(c.reason)) + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.7">Proposes only — confirm to attribute this correspondence to the owner (reversible), or reject.</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — attribute to owner</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject</button>';
   } else if (_dcFedType === 'w8_u3_link_review' && c.conflict) {
     // Prompt 77: an ambiguous_entity_match conflict — the deterministic writer
