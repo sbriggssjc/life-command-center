@@ -4,6 +4,22 @@
 Connects the INBOX to the OWNER GRAPH (the reverse direction of the Outlook↔LCC bridge).
 Flag `W9_6_COMMS_OWNER_ATTRIBUTION` stays off until Scott reviews the `?score=1` sample.
 
+> **⚠ COWORK REVIEW FINDING (2026-08-13, from the live RPCs) — DO NOT FLIP YET; Path B needs a
+> precision pass first (→ Prompt 103).** Ran `lcc_w9_6_path_a_candidates` / `lcc_w9_6_path_b_candidates`
+> live. **Path A (3, property_bridge) is clean** — real property→owner bridges (Kingsbarn 5247 Airways
+> Blvd, Palestra, Atwater/El Cerrito), safe to flip on its own. **Path B (40: 24 relationship + 16
+> active_contact) carries ~9 noise rows (~23%):** (1) **2 internal-team correspondents** — Scott Briggs
+> (**828** correspondence rows) and Toby Scrivner (**128**) proposed as owner-contacts of **"Stan Johnson
+> Co"** (his former firm) via a `relationship` tie — by row-volume these would be the LOUDEST lane cards,
+> the classic "noise trains the operator to ignore the surface" failure. (2) **7 brokerage-as-owner
+> targets** — Avison Young / Newmark / Kidder Mathews / Transwestern / Coldwell Banker mis-modeled as
+> `true_owner`, so a broker at that firm is attributed to it (one, Kidder, even has a name/email mismatch:
+> `Matthew Dodson` ↔ `David.gellner@kidder.com`). Human-gated, so nothing auto-writes — but the lane
+> quality is below the flip bar. **Required before flip (Prompt 103):** exclude internal NorthMarq/Stan-
+> Johnson team correspondents; guard brokerage/advisor entities out of the owner-attribution TARGET set;
+> restrict/drop the loose `relationship` tie (keep `active_contact` via `owner_contact_pivot`). Path A may
+> ship first if desired.
+
 ## The gap (grounded live via W9.5)
 
 `correspondence_entity_owner_llc` = **6 / 241 = 2.5%** (distinct entities correspondence

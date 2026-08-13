@@ -29,8 +29,21 @@
   75-wired. 27 tests green. Confirm-writer appends the owner ops entity to `metadata.linked_entity_ids`
   — that one anchor feeds BOTH the owner-record history AND the reachability create-contact arm (arms
   compound). Pushed to `claude/comms-owner-attribution-6flfnt` (PR #1714).
-- **Live gate (unchanged):** Railway redeploy of merged main → `GET /api/comms-owner-attribution-tick?score=1&n=20`
-  → Cowork flips the flag. DB layer already live (additive-first).
+- **Live gate — REVISED after Cowork's live dry-run (2026-08-13): DO NOT FLIP YET.** Ran the Path-A/Path-B
+  RPCs directly. **Path A (property_bridge, 3) is clean + flip-ready.** **Path B (person_match, 40) carries
+  ~9 noise rows (~23%):** 2 internal-team correspondents (Scott 828 rows / Toby 128 → "Stan Johnson Co" via a
+  loose `relationship` tie — the loudest cards by volume) + 7 brokerage-as-owner targets (Avison Young/Newmark/
+  Kidder/Transwestern/Coldwell mis-modeled as `true_owner`). Human-gated so no bad writes, but below the flip
+  bar (the "noise trains the operator to ignore the lane" anti-pattern). → **Prompt 103 drafted** (Path-B
+  precision: drop internal-team, guard brokerage targets, tighten the tie) — flip after that lands + redeploy.
+  Finding recorded in the dry-run doc.
+
+**Next Claude Code prompt queued: 103** (`docs/claude-code/prompts/103-w9-6-pathb-precision-and-fsp-hygiene.md`)
+— **Part A** W9.6 Path-B precision (the flip gate); **Part B** register `folder_feed_lease` fsp rows for the 5
+dia.leases responsibility fields (clears last night's drift 39→~34). One PR.
+
+**Deploy still pending Scott:** merge PRs #1714 (W9.6) + #1715 (voice) → Railway redeploy of merged main. W9.6's
+tick/cron and the name-backfill route are not in production until then (DB layers already live).
 
 **Prompt 100 — W10 Stage 1 voice profile (SHIPPED, no surface changed, awaiting Scott's read).**
 - `BRIGGS-WRITING-VOICE.md` + pure `api/_shared/voice-corpus-clean.js` (19 tests) + on-prem
