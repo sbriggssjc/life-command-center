@@ -69,10 +69,16 @@ scans, budget floors from day one — new units START with the house pattern).
 reuses U3's proven pattern), then W9.1 (external chain on the value-ranked remainder), W9.4
 (continuous), W9.3 (parallel, review-paced), W9.5 (measure, last).
 
-**Build-out status: 4 of 5 done.** W9.2/W9.3/W9.4 built (flag-gated, awaiting Cowork flip);
-**W9.5 LIVE** (2026-08-12, Prompt 97 — the standing measure). W9.1 (external contact-acquisition
-on the value-ranked no-contact owners; SOS-egress design question) is the remaining unit — its own
-future prompt.
+**Build-out status: all 5 core units built + W9.6 addendum; harvest LIVE.**
+- **W9.2/W9.4 reachability harvest LIVE** (flag `W9_2_REACHABILITY_HARVEST` on 2026-08-13 after the
+  `unified_contacts` name-accelerator; first cron 04:40 UTC produced 4 real owner-email proposals, health green).
+- **W9.5 LIVE** (2026-08-12, Prompt 97 — the standing measure).
+- **W9.3** built (SF linkage drain/re-score), flag-gated.
+- **W9.1** Stage 1 built; **Stage 2 SOS-egress walled at the source** (residential proxy still 403'd by
+  the state portals) — flag `W9_1_SOS_DIRECT` stays OFF, machinery inert-but-correct.
+- **W9.6 correspondence→owner-LLC attribution** (Prompt 102) BUILT + applied live, flag
+  `W9_6_COMMS_OWNER_ATTRIBUTION` OFF — the last internal linkage gap (raises W9.5's 2.5% owner-attribution
+  metric as verdicts confirm). Awaiting Railway redeploy → dry-run → flip.
 
 ## Status
 - 2026-08-08: kickoff written; ORE layer verified self-draining; gap counts grounded live.

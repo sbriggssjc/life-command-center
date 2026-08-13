@@ -10,7 +10,55 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
-## Session 2026-08-12 (Cowork, late) — OCR loop CLOSED: DocAI fixed + office-text extractor + drains
+## Session 2026-08-13 (Cowork) — prompts 100 + 102 reconciled; harvest's first live night verified
+
+**Both responses reviewed against live LCC Opps and reconciled. Nothing to re-open; two findings logged.**
+
+**Prompt 102 — W9.6 correspondence→owner-LLC attribution (BUILT, verified live, flag OFF).**
+- Closes the last major internal linkage gap: correspondence is stamped with the deal/party/property
+  entity the resolver found (brokers/buyers/sellers), never the owning LLC → W9.5 measured
+  correspondence→owner-LLC at 2.5% (6/241). Two deterministic-first paths: **A** property→owner
+  bridge (asset entity → its single current `true_owner`, conf 1.0, unambiguous-only, value-ranked);
+  **B** correspondent-person→owner (`owner_contact_pivot` active contact or unambiguous person→owner
+  edge; shared-token bridges rejected — the W9.1 false-bridge lesson).
+- **Verified live:** migration `20260829120000` applied; flag `W9_6_COMMS_OWNER_ATTRIBUTION` = **off**
+  (off_since 2026-08-13); fsp row registered on `public.activity_events.linked_entity_ids @ priority 45
+  record_only` (provenance `comms_owner_bridge`); **W9.5 baseline held at exactly 6/241 = 2.5%** (the
+  owner-restricted union did NOT dilute the denominator — confirmed against `v_lcc_w9_5_link_coverage`).
+  Path-A 3 candidates / Path-B 40 unambiguous live. New DC lane `comms_owner_attribution_review` fully
+  75-wired. 27 tests green. Confirm-writer appends the owner ops entity to `metadata.linked_entity_ids`
+  — that one anchor feeds BOTH the owner-record history AND the reachability create-contact arm (arms
+  compound). Pushed to `claude/comms-owner-attribution-6flfnt` (PR #1714).
+- **Live gate (unchanged):** Railway redeploy of merged main → `GET /api/comms-owner-attribution-tick?score=1&n=20`
+  → Cowork flips the flag. DB layer already live (additive-first).
+
+**Prompt 100 — W10 Stage 1 voice profile (SHIPPED, no surface changed, awaiting Scott's read).**
+- `BRIGGS-WRITING-VOICE.md` + pure `api/_shared/voice-corpus-clean.js` (19 tests) + on-prem
+  `scripts/voice-distill.mjs` (ollama-only, refuses to run if `OLLAMA_URL` unset — corpus never egresses).
+- **Honest cap finding preserved:** the correspondence store keeps only Graph `bodyPreview` (~255-char cap);
+  `body_text`/`body_html` empty. So the signal is Scott's email *openings* (~31 words) — strong for
+  greeting/opening voice, LOW-confidence for sign-offs/long-form (flagged, not faked). Corpus ~926 distinct
+  Scott-authored sent emails (Nov 2022→Aug 2026); cold-BD bucket THIN (14). No LLM read the prose in v1
+  (deterministic SQL + small anonymized sample); the ollama distiller is the operator's on-prem enrichment
+  step (same "mechanism built, heavy pass is Scott's" pattern as SOS/SAM). Pushed to
+  `claude/voice-profile-scott-corpus-qofank` (PR #1715).
+- **Scott's step:** read `BRIGGS-WRITING-VOICE.md` — does it sound like you? — before any Stage 2 (RAG drafting).
+
+**Last night's runs (checked live):**
+- ✅ **Reachability harvest's FIRST live cron fired 04:40 UTC 2026-08-13** — 1 batch, **4 open deterministic
+  proposals**, health **green** (`v_lcc_reachability_harvest_health`: proposals_24h 4, open 4, dropped 0,
+  LLM 0, applied 0, flag on). All 4 are real owner-email fills for owners with no contact on file, exactly
+  matching the dry-run: **Boyd Watterson Global** (Eric Dowling `edowling@boydwatterson.com`; Philip Sharrow
+  `philip.sharrow@scopecre.com`), **UIRC** (Oscar Peterson `opeterson@uirc.com`), **BLOOMINGTON IRS LLC**
+  (Philip Sharrow). Awaiting Scott's lane verdicts — the harvest is now *growing the callable owner pool*.
+- ⚠️ **New provenance drift (34→39):** last night a `folder_feed_lease` lease-ingest wrote 5 dia.leases
+  responsibility fields (`guaranty_scope`, `hvac/parking/structure/roof_responsibility`, 02:4x UTC) with
+  **no `field_source_priority` rows** → `v_field_provenance_unranked` flags them. Not from W9.6 (that source
+  is properly ranked). Fix = register 5 fsp rows for `folder_feed_lease` on those dia.leases fields (additive,
+  reversible) — folded into next-steps below, not silently applied (its authority rank vs om_extraction/costar
+  needs Scott's call).
+
+
 - **Google Document AI is live end-to-end** (was silently broken since ~07-17: the `GOOGLE_DOCAI_PROCESSOR`
   edge secret pointed at a Custom Extractor → `entity_types` 400 → ALL OCR fell to gpt-4o at 6–14×). Fixed
   by repointing to OCR processor `projects/108926230693/locations/us/processors/5ecc6339861c88e1`; verified
