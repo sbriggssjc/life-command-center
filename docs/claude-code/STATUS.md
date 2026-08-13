@@ -479,6 +479,21 @@ post-61 sample).
 **Queued: prompt 63** (W8 U2 — duplicate candidate pairs → resolver review pool → entity_match_labels
 fuel; reuses U1 shapes; flag `W8_U2_DUP_PAIRS` OFF).
 
+### 2026-08-13 — ACCELERATE + interim build queued (Scott: "scale the unlock, accelerate")
+Grounded finding: harvest accruing SLOWLY (7 new outlook rows since flow fix; 30/6,977 with names)
+— organic mail would take weeks. **ACCELERATOR FOUND: `email_bodies.from_name` was already stored
+historically** (per the 96 root-cause doc) — a one-time backfill into the 7,751 name-less
+activity_events rows flips the harvest NOW instead of waiting. → **Prompt 101** (fill-blanks,
+reversible, reuses outlook-recipients parser, backfilled-marker provenance; re-check harvest
+dry-run → flip W9.2).
+**Interim build = Prompt 102 (W9.6 correspondence→owner attribution)** — the last major internal
+linkage gap (W9.5 baseline 2.5%, 6/241). Two paths: A property→true_owner bridge (deterministic),
+B correspondent-is-owner-person (LLM-verbatim, false-bridge guarded). Feeds BOTH the owner record
+(comms history) AND the harvest's create-contact arm (compounding). Flag `W9_6_COMMS_OWNER_ATTRIBUTION`,
+cron 5:05.
+**Prompt 100 (W10 Stage 1 voice profile)** also queued — on-prem corpus distill → BRIGGS-WRITING-VOICE.md.
+Send order to accelerate: **101 (unlocks harvest now) → 102 (new linkage) → 100 (voice, after flips settle).**
+
 ### Wave 10 SPEC written 2026-08-13 — Voice & Drafting (Scott's corpus → grounded BD drafts)
 `docs/audits/W10_VOICE_AND_DRAFTING_KICKOFF.md`. 4 staged: (1) voice PROFILE via setup-writing-style
 over the REAL sent corpus — cheap, no training, ship first; (2) RAG-grounded drafting (retrieve
