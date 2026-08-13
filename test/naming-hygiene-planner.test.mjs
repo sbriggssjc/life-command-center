@@ -331,4 +331,26 @@ describe('Prompt 83 — tick bounding structural guards (admin.js)', () => {
     assert.match(batch, /or=\(/);                       // batched OR prefilter
     assert.match(batch, /recorded_owners\?select=recorded_owner_id,name&recorded_owner_id=in\.\(/);
   });
+  it('the entities scan EXCLUDES asset entities (asset name==address is the convention)', () => {
+    const pull = admin.slice(admin.indexOf('async function pullHygieneCandidatesForTarget'),
+      admin.indexOf('BATCHED address resolution'));
+    // asset predicate is built for the lcc/entities target and folded into the scan path
+    assert.match(pull, /const assetPred = \(target\.domain === 'lcc' && target\.table === 'entities'\)\s*\n?\s*\? '&entity_type=neq\.asset' : '';/);
+    assert.match(pull, /'\?select=' \+ cols \+ mergedPred \+ assetPred \+ cursorPred/);
+  });
+});
+
+describe('apply-link asset guard (2026-08-13 false-positive fix, admin.js)', () => {
+  const admin = readFileSync(join(root, 'api/admin.js'), 'utf8');
+  const applyLink = admin.slice(admin.indexOf("} else if (plan.action === 'apply_link')"),
+    admin.indexOf("// dismiss_proposal (reject, or confirmed keep/uncertain)"));
+  it('an asset (or already-linked) subject closes as already_property_anchor, never a write', () => {
+    // the guard queries the subject entity type + its (domain,asset,property_id) identity
+    assert.match(applyLink, /external_identities\?select=id&entity_id=eq\./);
+    assert.match(applyLink, /subjEntity\.entity_type === 'asset' \|\| alreadyLinked/);
+    assert.match(applyLink, /action: 'already_property_anchor'/);
+    // the guard sits BEFORE the ensureEntityLink write
+    assert.ok(applyLink.indexOf("already_property_anchor") < applyLink.indexOf('ensureEntityLink('),
+      'asset guard must run before the ensureEntityLink write');
+  });
 });
