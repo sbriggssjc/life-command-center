@@ -246,6 +246,10 @@ Deno.serve(async (req: Request) => {
   if (req.method === "GET") {
     // Health probe — no GCP call, no spend.
     return json({ ok: true, engine: "google_docai", ready: configured, configured,
+      // 2026-08-12 diag: expose WHICH processor is configured (resource name is not a
+      // secret) — an `entity_types` INVALID_ARGUMENT on documents:process means this
+      // points at a Custom Extractor, not the Enterprise Document OCR processor.
+      processor: resourceName || null,
       missing: configured ? [] : [
         ...(sa ? [] : ["GOOGLE_DOCAI_SA_KEY"]),
         ...(resourceName ? [] : ["GOOGLE_DOCAI_PROCESSOR (or PROJECT_ID+PROCESSOR_ID)"]),
@@ -291,7 +295,7 @@ Deno.serve(async (req: Request) => {
 
   if (!dResp.ok) {
     const detail = await dResp.text().catch(() => "");
-    console.error(`[docai-ocr] Document AI ${dResp.status}:`, detail.slice(0, 300));
+    console.error(`[docai-ocr] Document AI ${dResp.status} (processor=${resourceName}):`, detail.slice(0, 800));
     // PAGE_LIMIT_EXCEEDED comes back 400 — surface it distinctly so the tiered
     // seam can fall through to the gpt-4o last resort on a too-big scan.
     const reason = /PAGE_LIMIT_EXCEEDED|exceeds the limit/i.test(detail) ? "over_page_cap" : `docai_${dResp.status}`;

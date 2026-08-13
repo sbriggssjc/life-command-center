@@ -26,6 +26,19 @@
 > - Optional knobs (NOT set, deliberate): `INTAKE_OCR_MAX_BYTES=20000000` would let 12–20 MB PDFs
 >   reach the cloud tiers (they'd still hit the 15-page DocAI sync cap → gpt-4o, whose verbatim
 >   transcription degrades/truncates on very long docs — big scans are better served off-box).
+>
+> **⚠️ LATER SAME SESSION — the DocAI tier is BROKEN AT GCP (found during the cron gate ticks):**
+> every `docai-ocr` POST 400s with `entity_types: "Must have at least one entity type"` — the
+> configured processor (`projects/modular-conduit-450617-h5/locations/us/processors/e1904ab5a10ddf4c`,
+> now visible on the fn's GET health probe, v19) is a **Custom Extractor, NOT the Enterprise
+> Document OCR processor**. It worked in June; broken since ~2026-07-17 (the docai-diag debugging
+> day). Consequence: **ALL cloud OCR silently falls to gpt-4o** (`ocr_tier:'cloud'`), 6–14× the
+> cost. **FIX (Scott, GCP + Supabase dashboard):** in GCP project `modular-conduit-450617-h5` →
+> Document AI → use/create an **Enterprise Document OCR** processor (type OCR_PROCESSOR, location
+> us) → set the LCC Opps edge secret `GOOGLE_DOCAI_PROCESSOR` (or `GOOGLE_DOCAI_PROCESSOR_ID`) to
+> it. Verify: `GET /functions/v1/docai-ocr` shows the new processor; next deed tick shows
+> `ocr_engine:'google_docai'`. Crons 160/167/169 were flipped ACTIVE 2026-08-12 (gate ticks clean:
+> 3 deeds parsed, sale verified + parties filled; gpt-4o tier carrying OCR until the processor fix).
 
 **Session 2026-08-12.** Handoff for the document byte-capture + OCR pipeline that
 feeds owner data (deeds) and firm-term coverage (leases). Sister docs: gov

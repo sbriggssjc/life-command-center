@@ -24,6 +24,7 @@
 import { createRequire } from 'module';
 import { fetchSharepointBytes } from './storage-adapter.js';
 import { invokeVisionExtractionAI } from './ai.js';
+import { sniffOfficeKind, extractOfficeText } from './office-text.js';
 
 // pdf-parse 1.1.1 runs a debug block at import time that throws under pure ESM;
 // createRequire defers the require to call time and sidesteps it (the exact
@@ -364,6 +365,23 @@ export async function extractDocumentText(
   const fetchedVia = fetched.via || null;
   const buffer = fetched.buffer;
   const ct = (fetched.contentType || mediaType || '').toLowerCase();
+  // Office docs FIRST, sniffed from BYTES (2026-08-12): the SharePoint PA flow
+  // often reports application/pdf for xlsx/docx, which used to route office
+  // bytes into the PDF branch → pdf-parse miss → the OCR tiers (Document AI
+  // 400s on non-PDF bytes + a wasted gpt-4o fallback). A PK/OLE buffer can
+  // never be a PDF, so this pre-branch is safe regardless of contentType.
+  const officeKindEarly = sniffOfficeKind(buffer, sourceUrl || storageRef || '');
+  if (officeKindEarly) {
+    const office = extractOfficeText({ buffer, fileName: sourceUrl || storageRef || '' });
+    if (office.ok && office.text) {
+      return { ok: true, text: office.text, method: 'office_text', text_len: office.text.length, ocr_attempted: false, via: fetchedVia };
+    }
+    return {
+      ok: true, text: '', method: null, text_len: 0, ocr_attempted: false,
+      needs_ocr: true, reason: office.reason || 'office_unreadable',
+    };
+  }
+
   const isPdf = /pdf/i.test(ct) || (buffer && buffer[0] === 0x25 && buffer[1] === 0x50); // %P
   const isText = /^text\//i.test(ct) || ct === 'message/rfc822';
 
@@ -376,7 +394,8 @@ export async function extractDocumentText(
     text = Buffer.from(buffer).toString('utf8').trim();
     method = 'text_decode';
   } else {
-    // Unknown binary (docx/xlsx): best-effort ASCII salvage (matches lease-extractor).
+    // Unknown binary: best-effort ASCII salvage (matches lease-extractor).
+    // (docx/xlsx never reach here — the office pre-branch above returns first.)
     text = Buffer.from(buffer).toString('utf8').replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ' ').trim();
     method = text ? 'binary_decode' : null;
   }
