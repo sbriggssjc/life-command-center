@@ -106,3 +106,25 @@ reappearing as a duplicate PNG). The embed filter therefore excludes any
 1. **Chart font** — provide the exact style-guide font name (and confirm installed on every machine that opens these workbooks); flip `cm-brand.json.typeface` from Open Sans.
 2. **cm-brand.json vs 2024 PDF** — diff the token hexes against the 2024 guide data-styling page + `colorproportions.png` (both live in OneDrive `_WORKFLOW`, not reachable from the build sandbox); correct any delta in `cm-brand.json._source._deltas_vs_2024_pdf`.
 3. **Rent comps** — to actually fill the 2023+ rent box, route the processed CoStar lease exports into `leases` (the ingestion path above).
+
+## Marketing ChartEdits 2026-08-12 (gov + dialysis CM exports)
+
+Second marketing pass (`ChartEdits081226.docx`). All applied in
+`api/_shared/cm-native-chart-injector.js` + `public/reports/cm-brand.json` +
+`public/reports/cm_brand_tokens.json` (single source of truth — no per-vertical
+divergence, both spaces share the injector).
+
+| # | Element | Change | Where |
+|---|---|---|---|
+| Global | X/Y axis labels | Color Slate `#6A748C`, 7pt | `cm-brand.json` `text.axisLabel` (7pt already) |
+| Global | Chart titles | NOT bold, ALL CAPS, 12pt, Sky `#62B5E5` | `cm-brand.json` `sizes.title`/`text.title` + `chartTitleXml` (`b="0"` + `toUpperCase()`); web path in `cm_brand_tokens.json` `type_scale.chart_title` |
+| Vol+Cap Quartile Band | "Quartile Range Width" series | Border = No Line; Fill transparency 30% (alpha `70000`) | `volume_cap_quartile_combo` barSeries[1] → `noBorder:true`, `alpha:'70000'` (+ new `noBorder` flag in combo bar renderer) |
+| Vol+Cap Quartile Band | "TTM Cap (avg)" series | Marker size 4 (was 5) | `volume_cap_quartile_combo` lineSeries[0] `markerSize` |
+| Quarterly Volume Bars | Bar color | NM Blue `#003DA5` (was Sky) | `quarterly_volume_bars` `singleSeries('bar', …, navy)` |
+| Buyer Pool – Annual % of Volume | Data labels 9pt; Private %/Public REIT % labels white | Already compliant (`buildStackedBarChartXml` sz=900; case `segmentLabelColor:'FFFFFF'`) — no change |
+| Available – Avg Price by Term Bucket | X-axis labels Text Direction = Horizontal | new `CAT_AX_TRUE_HORIZONTAL_TXT` (rot=0) + opt-in `spec.horizontalCatLabels`; set on `available_by_term_summary`/`available_by_firm_term_summary` |
+| Available by Tenant Count/Volume Donuts | Data labels white, 10pt (was 9pt) | `buildDoughnutChartXml` segment-label `sz="1000"` (color `FFFFFF` already) |
+
+Tests updated to the new spec in `test/cm-native-chart-injector.test.mjs`
+(title 12pt/not-bold/Sky/ALL-CAPS; quartile band alpha 70000 + noBorder + marker
+size 4). Full suite green.
