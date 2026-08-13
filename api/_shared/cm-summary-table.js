@@ -100,6 +100,25 @@ function latestPeriodAtOrBefore(rows, cap) {
  * populated when the requested as-of quarter runs a quarter ahead of the
  * latest data row — the bug that blanked the 5/10/15-yr columns.
  */
+/**
+ * Detect the cadence of a period-ordered row stream and return the number of
+ * rows per year. Quarterly streams → 4, monthly streams → 12. Cadence is
+ * inferred from the gap between the last two period_end dates (< ~60 days apart
+ * ⇒ monthly). Defaults to quarterly (4) when the stream is too short to tell.
+ * The trailing-average window then = years × stride, so a labeled 5/10/15-yr
+ * column spans the right number of calendar years regardless of row grain.
+ */
+function detectStride(rows) {
+  let stride = 4; // quarterly default
+  if (Array.isArray(rows) && rows.length >= 2) {
+    const t1 = new Date(rows[rows.length - 1].period_end).getTime();
+    const t0 = new Date(rows[rows.length - 2].period_end).getTime();
+    const days = Math.abs(t1 - t0) / 86400000;
+    if (days > 0 && days < 60) stride = 12; // monthly
+  }
+  return stride;
+}
+
 function trailingAvg(rows, asOfPeriod, nQuarters, fieldKeys) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   let idx = rows.findIndex((r) => r.period_end === asOfPeriod);
@@ -195,6 +214,15 @@ export function buildVolumeCapSummary({ volumeRows = [], capRows = [], quartileR
     const prq = rowAt(sourceRows, periods.prior_q);
     const yoy = rowAt(sourceRows, periods.yoy_q);
     const cyc = rowAt(sourceRows, periods.prior_cycle_q);
+    // Trailing 5/10/15-yr averages must span the labeled window in CALENDAR
+    // years, not in row-count. The source views feeding this table are the
+    // MONTHLY `cm_{vertical}_*_ttm_m` streams (period_end steps one month per
+    // row), so a 5-yr window is 60 rows, not 20. Detect cadence off the row gap
+    // and multiply — mirroring the sibling `buildInlineSummary` — so a monthly
+    // stream uses 12× (60/120/180) and a quarterly stream uses 4× (20/40/60).
+    // Without this the columns under-count the window 3× (the "5-Yr Avg reads
+    // low" bug: it was really a trailing ~1.7-year mean).
+    const stride = detectStride(sourceRows);
     return {
       metric: label,
       format,
@@ -202,9 +230,9 @@ export function buildVolumeCapSummary({ volumeRows = [], capRows = [], quartileR
       prior_q:       pickValue(prq, fieldKeys),
       yoy_q:         pickValue(yoy, fieldKeys),
       prior_cycle_q: pickValue(cyc, fieldKeys),
-      avg_5yr:       trailingAvg(sourceRows, resolved, 20, fieldKeys),
-      avg_10yr:      trailingAvg(sourceRows, resolved, 40, fieldKeys),
-      avg_15yr:      trailingAvg(sourceRows, resolved, 60, fieldKeys),
+      avg_5yr:       trailingAvg(sourceRows, resolved, 5  * stride, fieldKeys),
+      avg_10yr:      trailingAvg(sourceRows, resolved, 10 * stride, fieldKeys),
+      avg_15yr:      trailingAvg(sourceRows, resolved, 15 * stride, fieldKeys),
     };
   };
 
@@ -359,13 +387,7 @@ export function buildInlineSummary({ rows = [], metrics = [], asOf = null }) {
   // monthly master_m we use a 12× multiplier so 5-yr = 60 monthly samples;
   // for quarterly streams we use 4× so 5-yr = 20 quarterly samples. We
   // detect cadence by scanning the period_end gap between the last two rows.
-  let stride = 4;  // quarterly default
-  if (rows.length >= 2) {
-    const t1 = new Date(rows[rows.length - 1].period_end).getTime();
-    const t0 = new Date(rows[rows.length - 2].period_end).getTime();
-    const days = Math.abs(t1 - t0) / 86400000;
-    if (days > 0 && days < 60) stride = 12;  // monthly
-  }
+  const stride = detectStride(rows);
 
   return metrics.map((m) => {
     const cur = rowAt(rows, periods.current_q);

@@ -131,6 +131,47 @@ test('buildVolumeCapSummary: 4 rows × 7 columns with correct period anchoring',
   assert.ok(Math.abs(vol.avg_15yr - 4.35e9) < 1e7, `15yr avg should be ~$4.35B, got ${vol.avg_15yr}`);
 });
 
+// ----- MONTHLY cadence: the live cm_*_ttm_m views are monthly, so the
+//       trailing 5/10/15-yr windows must be 60/120/180 rows, not 20/40/60.
+//       This is the "5-Yr Avg reads low" regression guard. -----
+
+function makeMonthly(start_year, start_month, count, fieldName, valueFn) {
+  const rows = [];
+  let totalM = start_year * 12 + (start_month - 1);
+  for (let i = 0; i < count; i++) {
+    const y = Math.floor(totalM / 12);
+    const m = (totalM % 12) + 1;
+    // last day of month (good enough: use 28 for Feb, 30/31 otherwise)
+    const day = m === 2 ? 28 : ([4, 6, 9, 11].includes(m) ? 30 : 31);
+    rows.push({
+      period_end: `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+      subspecialty: 'all',
+      [fieldName]: valueFn(i),
+    });
+    totalM++;
+  }
+  return rows;
+}
+
+test('buildVolumeCapSummary: monthly stream uses 60/120/180-row trailing windows (5-Yr Avg not low)', () => {
+  // 192 months = 16 years, ending 2024-06-30. Linear ramp value(i) = i.
+  const volumeRows   = makeMonthly(2008, 7, 192, 'volume_dollars',        (i) => i);
+  const capRows      = makeMonthly(2008, 7, 192, 'ttm_weighted_cap_rate', (i) => i);
+  const quartileRows = makeMonthly(2008, 7, 192, 'top_quartile',          (i) => i);
+  for (let i = 0; i < quartileRows.length; i++) quartileRows[i].bottom_quartile = i;
+
+  const summary = buildVolumeCapSummary({ volumeRows, capRows, quartileRows, asOf: '2024-06-30' });
+  const vol = summary[0];
+
+  // Anchor i=191. A true 5-yr window = 60 monthly rows (i=132..191), mean = 161.5.
+  // The pre-fix code averaged only 20 rows (i=172..191), mean = 181.5 — the bug.
+  assert.ok(Math.abs(vol.avg_5yr  - 161.5) < 1e-6, `5yr (60mo) mean should be 161.5, got ${vol.avg_5yr}`);
+  // 10-yr = 120 rows (i=72..191), mean = 131.5.
+  assert.ok(Math.abs(vol.avg_10yr - 131.5) < 1e-6, `10yr (120mo) mean should be 131.5, got ${vol.avg_10yr}`);
+  // 15-yr = 180 rows (i=12..191), mean = 101.5.
+  assert.ok(Math.abs(vol.avg_15yr - 101.5) < 1e-6, `15yr (180mo) mean should be 101.5, got ${vol.avg_15yr}`);
+});
+
 test('buildVolumeCapSummary: gov field-name divergence (uses ttm_weighted_cap_rate / top_quartile)', () => {
   const volumeRows   = makeQuarterly(2024, 1, 2, 'volume_dollars',         () => 1e9);
   const capRows      = makeQuarterly(2024, 1, 2, 'ttm_weighted_cap_rate',  () => 0.07);
