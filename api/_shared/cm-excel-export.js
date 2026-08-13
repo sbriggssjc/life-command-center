@@ -156,6 +156,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Per-quarter transaction volume (NOT TTM). Companion to YoY Change — bars show the quarter-by-quarter pulse; TTM line in Data_Volume_TTM smooths it.',
   buyer_pool_monthly_count:
     'Stacked monthly buyer count by classification: Private (Individual) navy, Institutional/Fund sky, REIT sage. Read alongside Data_Buyer_Pool (annual %-stacked) for the full picture.',
+  clinic_econ_revenue_census:
+    'Average clinic economics per fiscal year: the stacked bar is average revenue per clinic, split into operating cost (navy) + operating profit (sky); the dots track average patient census per clinic on the right axis. Reconciled-truth basis (HCRIS treatments × payer-weighted rate less cost); full-population fiscal years only.',
   on_market_snapshot:
     'Side-by-side comparison of Total Market vs 10+ Year Term active-listing metrics: count, avg price, avg/upper/lower/median cap, DOM, price-change rate. ↑/↓/→ marks year-over-year direction of change.',
   available_by_tenant_count_donut:
@@ -731,6 +733,19 @@ const CHART_COLUMNS = {
     { key: 'cross_border_pct',      header: 'Cross-Border %',      format: 'percent_zero_decimal', width: 15 },
     { key: 'institutional_pct',     header: 'Institutional %',     format: 'percent_zero_decimal', width: 16 },
   ],
+  // Dialysis reconciled economics — annual avg per clinic. Stacked bars
+  // (operating cost + operating profit = revenue) on the primary axis + a
+  // patient-census dot overlay on the secondary axis. HCRIS reconciled-truth
+  // basis; full-population fiscal years only (2011-2024).
+  clinic_econ_revenue_census: [
+    { key: 'year',                             header: 'Year',                       width: 10 },
+    { key: 'subspecialty',                     header: 'Subspecialty',               width: 14 },
+    { key: 'clinic_count',                     header: 'Clinics (n)',                format: 'integer_count',     width: 12 },
+    { key: 'avg_operating_cost_per_clinic',    header: 'Avg Operating Cost / Clinic',   format: 'currency_dollars',  width: 24 },
+    { key: 'avg_operating_profit_per_clinic',  header: 'Avg Operating Profit / Clinic', format: 'currency_dollars',  width: 26 },
+    { key: 'avg_revenue_per_clinic',           header: 'Avg Revenue / Clinic',          format: 'currency_dollars',  width: 22 },
+    { key: 'avg_patient_census_per_clinic',    header: 'Avg Patient Census / Clinic',   format: 'number_one_decimal',width: 24 },
+  ],
   dom_and_pct_of_ask: [
     { key: 'period_end',          header: 'Quarter End',           format: 'date_short',          width: 13 },
     { key: 'subspecialty',        header: 'Subspecialty',          width: 14 },
@@ -1099,6 +1114,7 @@ const TAB_NAMES = {
   // Phase 2b additions
   yoy_volume_change:            'Data_YoY_Change',
   buyer_class_pct_by_year:      'Data_Buyer_Pool',
+  clinic_econ_revenue_census:   'Data_Rev_Cost_Profit',
   // Round 18 — 3 new charts (one applies to both verticals, one is gov-only)
   core_cap_rate_dot_plot:           'Data_Core_Cap_Dot',
   available_cap_rate_dot_plot:      'Data_Avail_Cap_Dot',

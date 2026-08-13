@@ -632,6 +632,26 @@
       ],
       "view_name": "cm_{vertical}_dom_price_adj",
       "phase": 2
+    },
+    {
+      "id": "clinic_econ_revenue_census",
+      "name": "Revenue, Cost & Profit per Clinic",
+      "chart_type": "BarChart",
+      "data_shape": "stacked_bar_yearly",
+      "metric_focus": "revenue_cost_profit",
+      "y_axis_series": [
+        "avg_operating_cost_per_clinic",
+        "avg_operating_profit_per_clinic"
+      ],
+      "y_axis_secondary": "avg_patient_census_per_clinic",
+      "y_format": "currency_dollars",
+      "applies_to_verticals": [
+        "dialysis"
+      ],
+      "subspecialty_friendly": false,
+      "view_name": "cm_{vertical}_clinic_econ_trend_y",
+      "phase": 5,
+      "_notes": "Dialysis-only. Stacked bars = operating cost + operating profit (= average revenue per clinic) on the primary axis; patient-census dots on the secondary axis. HCRIS reconciled-truth basis (dialysis_econ_reconciled_v1), annual — no monthly series exists. Full-population fiscal years only (n>=1000 gate drops the incomplete 2025/2026 early-filer tail)."
     }
   ],
   "phases": {
