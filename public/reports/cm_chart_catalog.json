@@ -261,9 +261,9 @@
       "metric_focus": "cap_rate",
       "dim": "lease_term_bucket",
       "dim_values": [
-        "10+ Year",
-        "6-10 Year",
-        "Less than 5 Year"
+        "6+ Year Firm",
+        "1.5–6 Year Firm",
+        "Sub-1.5 Year Firm"
       ],
       "applies_to_verticals": [
         "gov",
@@ -271,7 +271,7 @@
       ],
       "subspecialty_friendly": true,
       "source_charts": [
-        "GOV/All Charts cols O,P,Q (10+ Year Cap, 6 to 10 Year Cap, Less than 5 Year Cap)"
+        "gov: value-of-firm-term 3-bucket recut (cap_6plus / cap_1_5to6 / cap_sub1_5) — 2026-08-13. dialysis keeps its own cohort scheme."
       ],
       "view_name": "cm_{vertical}_cap_by_term_m",
       "phase": 1,

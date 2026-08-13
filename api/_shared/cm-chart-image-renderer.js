@@ -1175,18 +1175,18 @@ function buildChartConfig(chart, brand) {
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
       ] : [
-        { label: '10+ Year',       data: rows.map(r => r.cap_10plus),
+        // Gov value-of-firm-term THREE-BUCKET scheme (2026-08-13): 6+ / 1.5–6 /
+        // sub-1.5 yr — monotonic, continuous, and folds the old thin/jagged
+        // "Outside Firm" holdover line into sub-1.5. Reads cm_gov_cap_by_term_m.
+        { label: '6+ Year Firm',      data: rows.map(r => r.cap_6plus),
           borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
-        { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
+        { label: '1.5–6 Year Firm',   data: rows.map(r => r.cap_1_5to6),
           borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
-        { label: '< 6 Year',       data: rows.map(r => r.cap_less5),    // T9 — bucket boundary 5->6 (contiguous 10+/6-10/<6)
+        { label: 'Sub-1.5 Year Firm', data: rows.map(r => r.cap_sub1_5),
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
-        { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
-          borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
-          stepped: 'before', pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
       ];
       return {
         type: 'line',

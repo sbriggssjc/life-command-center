@@ -4516,11 +4516,23 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         ? 'cap_5to10'
         : 'cap_6to10';
 
+      // Gov "Cap Rate by Remaining Lease Term" recut to the value-of-firm-term
+      // THREE-BUCKET scheme (2026-08-13): 6+ / 1.5–6 / sub-1.5 yr. Cleanly
+      // monotonic + continuous, and folds the old thin/jagged "Outside Firm"
+      // holdover line into sub-1.5. Only the cap_rate_by_lease_term template
+      // (which reads cm_gov_cap_by_term_m) gets the 3-bucket columns; the
+      // sold_/asking_cap_by_term dot plots read different views that still
+      // expose the legacy 4-cohort keys, so they keep those.
+      const govThreeBucket = chart_template_id === 'cap_rate_by_lease_term';
       const seriesDefs = hasDialysisCohorts ? [
         { key: 'cap_12plus',  color: '9B88A5' },                       // 12+ purple
         { key: 'cap_8to12',   color: '8FC49E' },                       // 8-12 sage
         { key: 'cap_6to8',    color: '62B5E5' },                       // 6-8 sky
         { key: 'cap_5orless', color: '003DA5' },                       // ≤5 navy
+      ] : govThreeBucket ? [
+        { key: 'cap_6plus',   color: '9B88A5' },                       // 6+ purple  (most firm term → lowest cap)
+        { key: 'cap_1_5to6',  color: '8FC49E' },                       // 1.5–6 sage
+        { key: 'cap_sub1_5',  color: '003DA5' },                       // sub-1.5 navy (least firm term → highest cap)
       ] : [
         { key: 'cap_10plus',       color: '9B88A5' },                  // 10+ purple
         { key: govSixToTenKey,     color: '8FC49E' },                  // 6-10 sage
