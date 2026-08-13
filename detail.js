@@ -4941,10 +4941,37 @@ function _udTabOperations() {
   }
   html += '</div>';
 
-  // HCRIS Modeled vs Actual comparison callout
+  // Reconciliation basis vs HCRIS cost anchor.
+  //
+  // ⚠️ 2026-08-13: HCRIS is a COST report — facility_cost_reports.total_patient_revenue is set
+  // EQUAL to total_costs on every row (see dia model dialysis_econ_reconciled_v1). The reconciled
+  // truth figure (revenue_calc_method='reconciled_truth_v1') is revenue = HCRIS treatments ×
+  // payer-weighted (MA-corrected) reimbursement = cost + operating margin BY CONSTRUCTION. So for a
+  // reconciled clinic the reconciled-vs-HCRIS gap IS the modeled operating profit, not model error —
+  // rendering it as a red "overestimating revenue" alarm was misleading and contradicted the single
+  // reconciled truth figure. Show it instead as an honest reconciliation basis (revenue vs the HCRIS
+  // cost anchor → implied operating profit/margin). The legacy divergence WARNING is retained ONLY
+  // for non-reconciled fallback estimates, where an unanchored model genuinely can diverge.
   if (costRpt && costRpt.total_patient_revenue && estRevenue) {
-    const actual = Number(costRpt.total_patient_revenue);
     const modeled = Number(estRevenue);
+    const hcrisCost = Number(costRpt.total_costs != null ? costRpt.total_costs : costRpt.total_patient_revenue);
+    const fyLabel = costRpt.fiscal_year_end
+      ? String(costRpt.fiscal_year_end).trim().slice(-4)
+      : (costRpt.fiscal_year || '?');
+    if (_econ.isReconciled) {
+      const impliedProfit = (correctedProfit != null) ? Number(correctedProfit) : (modeled - hcrisCost);
+      const impliedMargin = (impliedProfit != null && modeled > 0) ? (impliedProfit / modeled * 100) : null;
+      html += '<div style="margin-top:14px;padding:10px 12px;background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.2);border-radius:8px">';
+      html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">&#x1F4CA; Reconciliation basis (FY' + esc(String(fyLabel)) + ')</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">';
+      html += '<div class="t-muted3">Reconciled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
+      html += '<div class="t-muted3">HCRIS Cost Anchor</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(hcrisCost) + '</div>';
+      html += '<div class="t-muted3">Implied Operating Profit</div><div style="text-align:right;font-weight:600;color:var(--green)">$' + _fmtCompact(impliedProfit) + (impliedMargin != null ? ' <span style="color:var(--text3);font-weight:400">(' + impliedMargin.toFixed(1) + '%)</span>' : '') + '</div>';
+      html += '</div>';
+      html += '<div style="margin-top:8px;padding:8px 10px;background:rgba(59,130,246,0.04);border-radius:6px;font-size:11px;color:var(--text2);line-height:1.5">Reconciled revenue = HCRIS treatments × payer-weighted reimbursement (MA-corrected). HCRIS is a cost report (booked revenue = cost), so the amount above the HCRIS cost anchor is the modeled operating profit — not a model-vs-actual discrepancy.</div>';
+      html += '</div>';
+    } else {
+    const actual = Number(costRpt.total_patient_revenue);
     const absVar = Math.abs(((modeled - actual) / actual * 100));
     const variance = ((modeled - actual) / actual * 100).toFixed(1);
     const isLargeGap = absVar >= 25;
@@ -4952,10 +4979,10 @@ function _udTabOperations() {
     const bgColor = isLargeGap ? 'rgba(239,68,68,0.06)' : (absVar >= 10 ? 'rgba(251,191,36,0.06)' : 'rgba(59,130,246,0.08)');
     const varColor = absVar < 10 ? 'var(--green)' : (absVar < 25 ? 'var(--yellow)' : '#ef4444');
     html += '<div style="margin-top:14px;padding:10px 12px;background:' + bgColor + ';border:1px solid ' + borderColor + ';border-radius:8px">';
-    html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">' + (isLargeGap ? '&#x26A0;&#xFE0F;' : '&#x1F4CA;') + ' Modeled vs. HCRIS Actual (FY' + (costRpt.fiscal_year || '?') + ')</div>';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">' + (isLargeGap ? '&#x26A0;&#xFE0F;' : '&#x1F4CA;') + ' Modeled vs. HCRIS cost (FY' + esc(String(fyLabel)) + ')</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">';
     html += '<div class="t-muted3">Modeled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
-    html += '<div class="t-muted3">HCRIS Actual</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
+    html += '<div class="t-muted3">HCRIS Cost</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
     html += '<div class="t-muted3">Variance</div><div style="text-align:right;font-weight:600;color:' + varColor + '">' + (variance > 0 ? '+' : '') + variance + '%</div>';
     html += '</div>';
     if (isLargeGap) {
@@ -4979,6 +5006,7 @@ function _udTabOperations() {
       html += '</div>';
     }
     html += '</div>';
+    }
   }
 
   html += '</div>';
@@ -5028,21 +5056,36 @@ function _udTabOperations() {
   const projPt3 = trends.projected_patients_3yr != null ? Math.round(Number(trends.projected_patients_3yr)) : null;
   if (projPt1 != null) html += _row('Projected Patients (1yr)', fmtN(projPt1));
   if (projPt3 != null) html += _row('Projected Patients (3yr)', fmtN(projPt3));
-  // Revenue projections: derive from patient growth rate applied to current revenue (+ 3% annual inflation)
-  // CAUTION: bestPatientCount is total CMS census (all modalities), not just in-center.
-  // Using revenue / patients directly inflates per-patient cost if many patients are home/PD.
-  // Instead, apply the patient growth RATE to current revenue for more stable projections.
-  if (estRevenue && bestPatientCount && bestPatientCount > 0) {
+  // Revenue projections — anchored to the single reconciled truth figure.
+  // For a reconciled clinic, project the reconciled revenue forward with the reconciled
+  // YoY (1yr) and CAGR (3yr) the truth model itself produced (dialysis_econ_reconciled_v1;
+  // volume-driven, rates held at CY2024). This replaces the old projected-patients ÷
+  // current-patients ratio, which exploded whenever latest_estimated_patients was on a
+  // different basis than the trend series (e.g. 81 latest vs a 363 census base → a 4×
+  // ratio and a nonsensical ~$17M projection off a ~$3.9M base).
+  if (estRevenue && _econ.isReconciled && (_econ.revYoY != null || _econ.revCagr != null)) {
     const rev = Number(estRevenue);
-    if (projPt1 != null && projPt1 > 0) {
-      const growthRate1 = projPt1 / bestPatientCount;
-      const projRev1 = rev * growthRate1 * 1.03;
-      html += _rowMoney('Projected Revenue (1yr)', projRev1);
+    if (_econ.revYoY != null) {
+      html += _rowMoney('Projected Revenue (1yr)', rev * (1 + Number(_econ.revYoY) / 100));
+    }
+    if (_econ.revCagr != null) {
+      html += _rowMoney('Projected Revenue (3yr)', rev * Math.pow(1 + Number(_econ.revCagr) / 100, 3));
+    }
+  } else if (estRevenue && bestPatientCount && bestPatientCount > 0 && projPt1 != null) {
+    // Legacy fallback (non-reconciled clinics): patient growth RATE applied to revenue
+    // (+3% inflation). Base the rate on the census-trend base (patients_last_year) rather
+    // than bestPatientCount so a latest-vs-trend basis mismatch can't inflate it; clamp to a
+    // sane band and skip the row rather than print an implausible figure.
+    const rev = Number(estRevenue);
+    const baseCensus = (r.patients_last_year && Number(r.patients_last_year) > 0)
+      ? Number(r.patients_last_year) : bestPatientCount;
+    if (projPt1 > 0) {
+      const growthRate1 = projPt1 / baseCensus;
+      if (growthRate1 > 0 && growthRate1 < 3) html += _rowMoney('Projected Revenue (1yr)', rev * growthRate1 * 1.03);
     }
     if (projPt3 != null && projPt3 > 0) {
-      const growthRate3 = projPt3 / bestPatientCount;
-      const projRev3 = rev * growthRate3 * Math.pow(1.03, 3);
-      html += _rowMoney('Projected Revenue (3yr)', projRev3);
+      const growthRate3 = projPt3 / baseCensus;
+      if (growthRate3 > 0 && growthRate3 < 3) html += _rowMoney('Projected Revenue (3yr)', rev * growthRate3 * Math.pow(1.03, 3));
     }
   }
   html += '</div>';
