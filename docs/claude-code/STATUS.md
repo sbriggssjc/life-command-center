@@ -10,6 +10,22 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-12 (Cowork, late) — OCR loop CLOSED: DocAI fixed + office-text extractor + drains
+- **Google Document AI is live end-to-end** (was silently broken since ~07-17: the `GOOGLE_DOCAI_PROCESSOR`
+  edge secret pointed at a Custom Extractor → `entity_types` 400 → ALL OCR fell to gpt-4o at 6–14×). Fixed
+  by repointing to OCR processor `projects/108926230693/locations/us/processors/5ecc6339861c88e1`; verified
+  (deed tick: 8 pages `google_docai`/`cloud_cheap`). docai-ocr edge fn v19 now echoes the processor on GET.
+- **NEW `api/_shared/office-text.js`** (zero-dep docx/xlsx text; byte-sniffed — PA flow lies about mime) wired
+  into `runLeaseExtraction` + `extractDocumentText` BEFORE the OCR tiers; unreadable office → terminal
+  `office_no_text` (never re-queues to OCR). 15 tests + fixtures; commit `62e4aef5`, merged + deployed.
+- **Crons 160/167/169 reactivated** (deed + CRE doc-text, 30-min ticks). Office needs_ocr queue (11) fully
+  drained; Richardson 2840 (15.6MB/40pp rotated scan) OCR'd off-box → enriched. Lease corpus (~214 pending)
+  draining via temp cron 217 + self-cleanup cron 218 (auto-unschedules both at eligible=0).
+- **Registry:** `feature_flags_registry.OCR_CLOUD_DOCAI` (on, notes current). Docs updated:
+  `docs/architecture/document-capture-and-ocr-status.md` (FINAL STATE box = the durable runbook),
+  `CLAUDE.md` OCR section, `docs/UW4_LEASE_OCR.md` banner. **Do not re-provision OCR from scratch.**
+- Optional knobs left unset: `AI_OCR_MODEL=gpt-4o-mini`, `INTAKE_OCR_MAX_BYTES=20000000`.
+
 ## Scheduled check 2026-08-12 (~22:00Z) — W9.4 display-name capture: NOT WORKING yet
 Post-PA-flow-change verification on LCC Opps `activity_events`: 9 new correspondence rows since
 16:00Z (7 `outlook`, 2 `outlook_inbound`, 0 `outlook_sent`). New code confirmed live (rows stamp

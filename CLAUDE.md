@@ -201,7 +201,25 @@ Requires `OPENAI_API_KEY`. Per-artifact diagnostics record `ai_chain`/`ai_fell_b
 (`DOC_TEXT_MIN_CHARS`, exported) falls back to tiered OCR: free OSS (workstation) → **Google Document AI**
 (`docai-ocr` edge fn on LCC Opps, cheap-cloud primary, ~$1.5/1k pages) → gpt-4o vision (last resort, flagged).
 The `document-text-tick` worker drains scanned deeds; `lease-extractor.js` OCRs thin-text scanned leases.
-Feature-flagged (`OCR_CLOUD_*`, `OPENAI_API_KEY`); unset ⇒ honest `needs_ocr`.
+
+**LIVE + VERIFIED 2026-08-12 — do NOT re-provision or recommend a new OCR provider from scratch.**
+The full chain works end-to-end: Railway `OCR_CLOUD_OCR_URL`/`OCR_CLOUD_OCR_KEY` → `docai-ocr` edge fn
+(v19; GET = no-spend health probe echoing the processor) → Enterprise Document OCR processor
+`projects/108926230693/locations/us/processors/5ecc6339861c88e1` (GCP project `modular-conduit-450617-h5`).
+Registry: `feature_flags_registry.OCR_CLOUD_DOCAI`. Crons 160/167/169 ACTIVE. Full state + runbook:
+`docs/architecture/document-capture-and-ocr-status.md` (FINAL STATE box).
+- **Footgun (bit us 2026-07→08):** if the edge secret `GOOGLE_DOCAI_PROCESSOR` points at a *Custom
+  Extractor* instead of an OCR-type processor, DocAI 400s (`entity_types`) and EVERY scan silently
+  falls to gpt-4o at 6–14× cost while receipts still read `enriched`. Symptom: `ocr_tier:'cloud'`
+  where `cloud_cheap` is expected → check the health probe's `processor` + the fn's error log.
+  The secret is the BARE resource name (no `https://`, no `:process`).
+- **Office docs (docx/xlsx) NEVER go to OCR** — `api/_shared/office-text.js` (zero-dep zip+XML)
+  extracts them in-process, sniffed from BYTES (the SharePoint PA flow misreports mime as pdf —
+  never trust contentType). Legacy OLE `.doc` → terminal `office_no_text:legacy_doc`. Wired in both
+  `runLeaseExtraction` and `extractDocumentText` BEFORE the OCR tiers; no config, byte-sniff only.
+- **Caps:** DocAI sync ~15 pages (`over_page_cap` → gpt-4o last resort), `INTAKE_OCR_MAX_BYTES` 12MB
+  default; bigger scans go off-box via the `ocr_text` resubmit seam
+  (`POST /api/intake?_route=lease-backfill&id=<id>`). Optional: `AI_OCR_MODEL=gpt-4o-mini`.
 
 #### Durable document capture-at-ingest (store the bytes, don't defer the fetch)
 

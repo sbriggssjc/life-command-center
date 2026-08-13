@@ -1,5 +1,44 @@
 # Document capture-at-ingest & OCR — status + the one open loop
 
+> # ✅ FINAL STATE 2026-08-12 — THE WHOLE OCR LOOP IS CLOSED AND LIVE. READ THIS, DON'T REBUILD.
+>
+> Everything below this box is the historical narrative of how it got here. The durable
+> operating state (also in `CLAUDE.md` → "OCR / document-text foundation"):
+>
+> - **Google Document AI is the live cheap OCR tier, end-to-end verified.** Chain:
+>   `ocrPdfToTextTiered` (`api/_shared/document-text.js`) → `ocrCloudCheap` → **`docai-ocr`
+>   edge fn on LCC Opps** (v19; GET = no-spend health probe that echoes the processor) →
+>   **Enterprise Document OCR processor `projects/108926230693/locations/us/processors/5ecc6339861c88e1`**
+>   (GCP project `modular-conduit-450617-h5`). Verified live: deed tick → 2 docs, 8 pages,
+>   `ocr_tier:'cloud_cheap'`, `engine:'google_docai'`, ~95% confidence class. ~$1.50/1k pages.
+> - **Railway env was ALREADY set and needs nothing:** `OCR_CLOUD_OCR_URL` (→ the edge fn),
+>   `OCR_CLOUD_OCR_KEY` (== edge `DOCAI_SHARED_SECRET`), gpt-4o last resort enabled,
+>   `LEASE_EXTRACT_OCR` default-on. **Do NOT re-provision, re-wire, or recommend Azure/other
+>   OCR from scratch — the seam exists, is configured, and works.** Registry row:
+>   `feature_flags_registry.OCR_CLOUD_DOCAI` (state=on, kept current).
+> - **The 2026-07→08 outage root cause (for pattern-matching future breaks):** the edge secret
+>   `GOOGLE_DOCAI_PROCESSOR` pointed at a **Custom Extractor** (DocAI 400
+>   `entity_types: Must have at least one entity type`), so every call silently fell to gpt-4o
+>   (6–14× cost) while receipts still said "enriched". Fixed by repointing the secret to the
+>   OCR-type processor above. **Symptom→check:** `ocr_tier:'cloud'` (gpt-4o) showing up where
+>   `cloud_cheap` is expected ⇒ `GET /functions/v1/docai-ocr` and eyeball the processor; the
+>   fn logs the full DocAI error + processor name on failure.
+> - **Office files (docx/xlsx) never OCR** — `api/_shared/office-text.js` (zero-dep) extracts
+>   them in-process, sniffed from BYTES (the SharePoint PA flow lies about mime). Legacy OLE
+>   `.doc` → terminal `office_no_text:legacy_doc`. No selection knob; it's automatic.
+> - **Crons 160/167/169 ACTIVE** (deed + CRE doc-text drains, every 30 min, tiered OCR).
+> - **The lease corpus drain ran 2026-08-12 night** via temp cron 217 (+ self-cleanup cron 218
+>   that unschedules both at eligible=0). Office `needs_ocr` queue fully cleared. End-state
+>   outcomes live in `folder_feed_seen.subject_hint->'lease_backfill'`; `ambiguous` rows are
+>   the human disambiguation queue; conflicts sit in the Decision Center.
+> - **Known caps (deliberate):** DocAI *sync* ~15 pages (`over_page_cap` → gpt-4o last resort);
+>   server `INTAKE_OCR_MAX_BYTES` 12 MB default; big/over-cap scans go off-box via the
+>   `ocr_text` resubmit seam (`POST /api/intake?_route=lease-backfill&id=<id>`; Richardson 2840
+>   pattern: pdftoppm + tesseract w/ `--psm 0` rotation detect). Optional knobs (unset):
+>   `INTAKE_OCR_MAX_BYTES=20000000`, `AI_OCR_MODEL=gpt-4o-mini` (cheapens the gpt-4o tail).
+>   Future long-doc unlock, only if the tail grows: DocAI **batch** processing (async, 500 pp,
+>   needs GCS buckets) — an edge-fn extension, not a new provider.
+
 > **⚠️ RECONCILED 2026-08-12 (evening session) — the "open loop" below was grounded and is
 > mostly CLOSED. The premise "lease OCR is config-gated / unconfigured" was WRONG:**
 >
@@ -27,7 +66,7 @@
 >   reach the cloud tiers (they'd still hit the 15-page DocAI sync cap → gpt-4o, whose verbatim
 >   transcription degrades/truncates on very long docs — big scans are better served off-box).
 >
-> **⚠️ LATER SAME SESSION — the DocAI tier is BROKEN AT GCP (found during the cron gate ticks):**
+> **⚠️ LATER SAME SESSION (historical — FIXED, see the FINAL STATE box at top) — the DocAI tier was BROKEN AT GCP:**
 > every `docai-ocr` POST 400s with `entity_types: "Must have at least one entity type"` — the
 > configured processor (`projects/modular-conduit-450617-h5/locations/us/processors/e1904ab5a10ddf4c`,
 > now visible on the fn's GET health probe, v19) is a **Custom Extractor, NOT the Enterprise

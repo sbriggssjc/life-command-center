@@ -1,5 +1,12 @@
 # UW#4 — Free-first OCR for scanned lease PDFs
 
+> **✅ LIVE STATE 2026-08-12: this design is fully deployed and verified — Document AI is the working
+> cheap tier (processor `projects/108926230693/locations/us/processors/5ecc6339861c88e1`), office
+> docx/xlsx extract in-process via `api/_shared/office-text.js` (never OCR'd), crons 160/167/169 are
+> active. Current state + footguns: `docs/architecture/document-capture-and-ocr-status.md` (FINAL
+> STATE box) and `CLAUDE.md` → 'OCR / document-text foundation'. Don't re-provision from this doc —
+> it is the original design/runbook, kept for reference.**
+
 > The unlock for the unlock. UW#2 activated the lease-document extractor (the #1
 > free lever for escalation %, guarantor, renewal, expiration, expense
 > structure). But **~54% of executed lease PDFs are scanned image-only** →
