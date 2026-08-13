@@ -79,7 +79,9 @@ async function fetchCandidates(cap) {
     else if (!r.ok) errors.push({ source: 'path_a', status: r.status || null, detail: errDetail(r.data) });
   } catch (e) { errors.push({ source: 'path_a', detail: e?.message || String(e) }); }
   try {
-    const r = await opsQuery('POST', 'rpc/lcc_w9_6_path_b_candidates', { p_limit: cap });
+    // p_include_dropped: pull the noise rows too (drop_reason set) so the tick can
+    // surface honest per-reason drop counts; only drop_reason IS NULL rows propose.
+    const r = await opsQuery('POST', 'rpc/lcc_w9_6_path_b_candidates', { p_limit: cap, p_include_dropped: true });
     if (r.ok && Array.isArray(r.data)) b = r.data;
     else if (!r.ok) errors.push({ source: 'path_b', status: r.status || null, detail: errDetail(r.data) });
   } catch (e) { errors.push({ source: 'path_b', detail: e?.message || String(e) }); }
@@ -91,7 +93,11 @@ async function fetchCandidates(cap) {
 function buildProposals({ a, b }, known, meta) {
   const counts = {
     path_a: { candidates: a.length, proposed: 0, already_known: 0, dropped: 0 },
-    path_b: { candidates: b.length, proposed: 0, already_known: 0, dropped: 0, false_bridge_rejected: 0 },
+    path_b: {
+      candidates: b.length, proposed: 0, already_known: 0, dropped: 0,
+      false_bridge_rejected: 0, internal_team_skipped: 0,
+      brokerage_target_skipped: 0, loose_tie_skipped: 0,
+    },
   };
   const proposals = [];
   for (const c of COA.valueGateCandidates(a)) {
@@ -102,6 +108,17 @@ function buildProposals({ a, b }, known, meta) {
     proposals.push(p);
   }
   for (const c of COA.valueGateCandidates(b)) {
+    // Precision drops (Prompt 103). The SQL RPC tags each noise row with a
+    // drop_reason (internal_team | brokerage_target | loose_tie) when include-
+    // dropped; count it honestly and never propose. Fall back to the planner's
+    // own predicates (defense-in-depth) if the RPC didn't tag it.
+    const dr = c && c.drop_reason
+      ? String(c.drop_reason)
+      : (COA.isInternalTeamEmail(c && c.correspondent_email) ? 'internal_team'
+        : (COA.isBrokerageOwnerName(c && c.owner_name) ? 'brokerage_target' : null));
+    if (dr === 'internal_team') { counts.path_b.internal_team_skipped += 1; continue; }
+    if (dr === 'brokerage_target') { counts.path_b.brokerage_target_skipped += 1; continue; }
+    if (dr === 'loose_tie') { counts.path_b.loose_tie_skipped += 1; continue; }
     const p = COA.buildPathBProposal(c, meta);
     if (!p) {
       // a null from Path B is either a missing field or a false-bridge rejection;
