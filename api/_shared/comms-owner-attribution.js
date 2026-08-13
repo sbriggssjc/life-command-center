@@ -34,6 +34,7 @@
 import {
   normDomain, normalizeForMatch, normalizeWhitespace, normalizeEmail, looksLikeEmail,
 } from './reachability-harvest-planner.js';
+import { INTERNAL_DOMAINS } from './voice-corpus-clean.js';
 
 export { normDomain, normalizeForMatch, normalizeEmail, looksLikeEmail };
 
@@ -51,6 +52,60 @@ export const COA_PROVENANCE_SOURCE = 'comms_owner_bridge';
 export const COA_CONF_PROPERTY_BRIDGE = 1.0;
 export const COA_CONF_PERSON_PIVOT = 0.9;
 export const COA_CONF_PERSON_RELATIONSHIP = 0.7;
+
+// ---------------------------------------------------------------------------
+// W9.6 Path-B PRECISION guards (Prompt 103, deterministic — NO LLM). The live
+// dry-run showed Path B carried ~23% noise whose loudest cards were the worst:
+//   1. INTERNAL-TEAM correspondents (Scott Briggs 828 rows, Toby Scrivner 128)
+//      proposed as an owner-contact of "Stan Johnson Co" — a NorthMarq/SJC deal-
+//      team member is NEVER an owner-attribution subject.
+//   2. BROKERAGE/advisor entities mis-modeled as `true_owner` upstream (Avison
+//      Young, Newmark, Kidder Mathews, Transwestern, Coldwell Banker …) — a
+//      broker at that firm gets attributed to it. That is an owner-graph LABELING
+//      bug (these should not be `true_owner` at all — flagged for a future ORE
+//      cleanup unit; NOT fixed here), but we must not surface it in the lane.
+// Both are dropped in the planner with an honest per-reason count. The SQL RPC
+// mirrors these predicates so a direct RPC call is clean too (drop_reason column).
+// ---------------------------------------------------------------------------
+
+// Reuse the ONE own-firm domain allowlist (voice-corpus-clean.js). A correspondent
+// whose email is on a teammate domain is never an owner-attribution subject.
+export function isInternalTeamEmail(email) {
+  if (!looksLikeEmail(email)) return false;
+  const e = normalizeEmail(email);
+  return INTERNAL_DOMAINS.some((d) => e.endsWith('@' + d) || e.endsWith('.' + d));
+}
+
+// Deterministic brokerage/advisor-name guard. No structured brokerage flag exists
+// on ops `entities` (owner LLCs and brokerages are both `organization`), so this is
+// a conservative, documented stoplist of the majors + a few brokerage TOKEN tells.
+// KNOWN upstream data-modeling issue: these entities carry a `true_owner` identity
+// they should not — a future ORE unit should re-classify them. Deliberately does
+// NOT stoplist "realty"/"commercial"/"capital"/"partners" alone (real owners use
+// them — Kingsbarn Realty, Elliott Bay Healthcare Realty, Cook Commercial Partners,
+// Anchor Point Capital, Government Investment Partners all survive).
+const BROKERAGE_NAME_TOKENS = [
+  'cbre', 'jll', 'cushman', 'wakefield', 'avison young', 'colliers', 'newmark',
+  'knight frank', 'nmrk', 'kidder mathews', 'transwestern', 'coldwell banker',
+  'stan johnson', 'marcus & millichap', 'marcus and millichap', 'savills',
+  'lee & associates', 'lee and associates', 'sperry', 'svn', 'keller williams',
+  'real estate investment services', 'realty advisors', 'brokerage',
+];
+export function isBrokerageOwnerName(name) {
+  const n = normalizeWhitespace(String(name || '')).toLowerCase();
+  if (!n) return false;
+  if (n.includes('®')) return true; // a registered-mark firm name (e.g. "Coldwell Banker Commercial®")
+  return BROKERAGE_NAME_TOKENS.some((tok) => n.includes(tok));
+}
+
+// The single drop-reason resolver (mirrors the SQL RPC's drop_reason). Precedence:
+// internal_team → brokerage_target. Returns null when the candidate is clean.
+export function pathBDropReason(c) {
+  if (!c) return null;
+  if (isInternalTeamEmail(c.correspondent_email)) return 'internal_team';
+  if (isBrokerageOwnerName(c.owner_name)) return 'brokerage_target';
+  return null;
+}
 
 // A stable subject_ref: coa:<path>:<domain>:<corrEntityId>:<ownerEntityId>. ONE
 // card / one decision per (attributed correspondence entity, owner) so a re-scan
@@ -181,6 +236,10 @@ export function buildPathBProposal(c, meta = {}) {
   const domain = normDomain(c.owner_domain);
   if (domain !== 'dia' && domain !== 'gov') return null;
   const tieKind = c.tie_kind === 'active_contact' ? 'active_contact' : 'relationship';
+  // W9.6 precision guards (Prompt 103) — drop internal-team correspondents and
+  // brokerage-target owners deterministically (also enforced in the SQL RPC).
+  if (isInternalTeamEmail(c.correspondent_email)) return null;
+  if (isBrokerageOwnerName(c.owner_name)) return null;
   // false-bridge guard: a relationship-tier bridge with NO corroborating email
   // AND only a shared-token name overlap is a coincidence → reject in lane.
   const hasEmail = looksLikeEmail(c.correspondent_email);

@@ -139,7 +139,10 @@ export function isMostlyBoilerplate(cleaned, { minChars = 12 } = {}) {
   return false;
 }
 
-const INTERNAL_DOMAINS = ['northmarq.com', 'stanjohnsonco.com'];
+// The firm's own / teammate email domains. Exported so other modules (e.g. the
+// W9.6 comms→owner attribution guard) share ONE own-firm domain allowlist rather
+// than re-declaring it. NorthMarq + the legacy Stan Johnson Co domain.
+export const INTERNAL_DOMAINS = ['northmarq.com', 'stanjohnsonco.com'];
 
 /**
  * Deterministic draft-type bucketing from cheap signals (subject prefix,

@@ -100,6 +100,60 @@ describe('buildPathBProposal (person_match, verbatim + guard)', () => {
   });
 });
 
+describe('W9.6 P103 precision guards', () => {
+  const base = {
+    corr_entity_id: 'person-1', owner_entity_id: 'owner-9', owner_true_owner_id: 'to-9',
+    owner_domain: 'gov', owner_name: 'Boyd Watterson Asset Management, LLC',
+    corr_row_count: 2, sample_activity_id: 'ae-9', rank_value: 5, tie_kind: 'relationship',
+  };
+  it('isInternalTeamEmail flags own-firm / teammate domains only', () => {
+    assert.equal(COA.isInternalTeamEmail('sabriggs@northmarq.com'), true);
+    assert.equal(COA.isInternalTeamEmail('tscrivner@northmarq.com'), true);
+    assert.equal(COA.isInternalTeamEmail('someone@stanjohnsonco.com'), true);
+    assert.equal(COA.isInternalTeamEmail('jcapra@boydwatterson.com'), false);
+    assert.equal(COA.isInternalTeamEmail(null), false);
+  });
+  it('isBrokerageOwnerName flags majors + token tells + registered mark, spares real owners', () => {
+    for (const n of ['Avison Young', 'Newmark Knight Frank', 'Kidder Mathews', 'Transwestern',
+      'Coldwell Banker Commercial®', 'Cushman & Wakefield', 'Stan Johnson Co', 'Colliers',
+      'Matthews Real Estate Investment Services', 'Marcus & Millichap']) {
+      assert.equal(COA.isBrokerageOwnerName(n), true, n);
+    }
+    for (const n of ['Boyd Watterson Asset Management, LLC', 'Kingsbarn Realty', 'Realty Income',
+      'Easterly Partners', 'Cook Commercial Partners', 'Anchor Point Capital, Inc',
+      'Elliott Bay Healthcare Realty Llc']) {
+      assert.equal(COA.isBrokerageOwnerName(n), false, n);
+    }
+    assert.equal(COA.isBrokerageOwnerName(''), false);
+  });
+  it('drops an INTERNAL-TEAM correspondent (Scott Briggs → Stan Johnson Co)', () => {
+    const p = COA.buildPathBProposal({ ...base, owner_name: 'Stan Johnson Co',
+      correspondent_name: 'Scott Briggs', correspondent_email: 'sabriggs@northmarq.com' });
+    assert.equal(p, null);
+    assert.equal(COA.pathBDropReason({ correspondent_email: 'sabriggs@northmarq.com', owner_name: 'Stan Johnson Co' }), 'internal_team');
+  });
+  it('drops a BROKERAGE-TARGET owner (broker → Avison Young)', () => {
+    const p = COA.buildPathBProposal({ ...base, owner_name: 'Avison Young', tie_kind: 'active_contact',
+      correspondent_name: 'Keith Kropfl', correspondent_email: 'keith.kropfl@avisonyoung.com' });
+    assert.equal(p, null);
+    assert.equal(COA.pathBDropReason({ correspondent_email: 'keith.kropfl@avisonyoung.com', owner_name: 'Avison Young' }), 'brokerage_target');
+  });
+  it('a genuine owner-LLC active_contact still passes (Metro Group Finance)', () => {
+    const p = COA.buildPathBProposal({ ...base, owner_name: 'Metro Group Finance', tie_kind: 'active_contact',
+      correspondent_name: 'Patrick Ward', correspondent_email: 'pward@metrogroupfinance.com' });
+    assert.ok(p);
+    assert.equal(p.tie_kind, 'active_contact');
+    assert.equal(p.correspondent_email, 'pward@metrogroupfinance.com');
+    assert.equal(COA.pathBDropReason(p), null);
+  });
+  it('a genuine owner-LLC relationship (Boyd Watterson) survives with verbatim evidence', () => {
+    const p = COA.buildPathBProposal({ ...base, correspondent_name: 'Joseph Capra',
+      correspondent_email: 'jcapra@boydwatterson.com' });
+    assert.ok(p);
+    assert.equal(p.evidence_quote, 'Joseph Capra <jcapra@boydwatterson.com>');
+  });
+});
+
 describe('commsHeaderEvidence', () => {
   it('formats Name <email>, email-only, or name-only', () => {
     assert.equal(COA.commsHeaderEvidence('Jane Roe', 'jane@x.com'), 'Jane Roe <jane@x.com>');

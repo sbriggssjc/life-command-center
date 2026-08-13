@@ -56,12 +56,59 @@ Path B (verbatim evidence = the correspondent's header `Name <email>`):
 | Christopher Hamilton | Magaurn Bemidji, LLC | active_contact | hamilton@paulbunyan.net | 0 |
 | Patrick Ward | Metro Group Finance | active_contact | pward@metrogroupfinance.com | 0 |
 
-**Honest grounding — some Path-B "owners" are brokerages mislabeled `true_owner` upstream**
-(Newmark, Avison Young, Kidder Mathews, Transwestern appear as owner entities). That is a
-pre-existing owner-graph labeling issue, NOT a join bug. They carry `rank_value = 0` (own no
-assets), so the value-gate ranks them LAST and the real property owners (Boyd Watterson rank
-1175, Kingsbarn) lead. Per doctrine, ambiguity/noise goes to the **human confirm lane** — never
-auto-attributed. A confirm only ever runs on a human verdict.
+## Path-B precision pass (Prompt 103, 2026-08-13) — FLIP-READY
+
+The first dry-run's Path B (40) carried ~23% noise; the loudest cards were the worst
+(internal-team correspondents mis-filed as owner-contacts, and brokerages mislabeled
+`true_owner` upstream). A human-gated lane whose loudest card is a broker's own 828 emails
+mis-filed to his old firm trains the operator to ignore the lane — the anti-pattern the
+doctrine forbids. Prompt 103 tightened Path B **deterministically (NO LLM)**:
+
+1. **Tie-tightening** — the `relationship` tier is restricted to ownership/employment roles
+   (`works_at`/`contact_at` edges, or `metadata->>'role'` ∈ owner/manager set), pruning
+   prospecting/buyer/seller ties before the unambiguous-single-owner disambiguation. The
+   surviving real owners all tie via `works_at`, so the tightening keeps them.
+2. **Internal-team guard** — a correspondent on an own-firm domain (`northmarq.com` /
+   `stanjohnsonco.com`, the shared `voice-corpus-clean.js` allowlist) is never an
+   owner-attribution subject.
+3. **Brokerage-target guard** — an owner name matching a conservative brokerage stoplist/token
+   set is dropped (KNOWN upstream owner-graph LABELING issue — these should not carry a
+   `true_owner` identity at all; **flagged for a future ORE cleanup, NOT fixed here**).
+
+The SQL RPC `lcc_w9_6_path_b_candidates(p_limit, p_include_dropped)` tags each noise row with
+`drop_reason` and returns only clean rows by default (a direct RPC call is noise-free); the tick
+pulls `p_include_dropped=true` to surface honest per-reason drop counts. The planner
+(`comms-owner-attribution.js`) mirrors the internal-team + brokerage predicates (defense-in-depth
++ unit-tested). **Path A is unchanged.**
+
+### Post-fix Path-B counts (live, 2026-08-13)
+
+| bucket | count |
+|---|---|
+| **clean (proposed)** | **28** |
+| dropped: `brokerage_target` | 10 |
+| dropped: `internal_team` | 2 |
+| dropped: `loose_tie` (loose-role relationship ties pruned) | 1 |
+
+- Path B no longer contains ANY internal-team correspondent or brokerage-target row
+  (verified `clean_has_brokerage=0`, `clean_has_internal=0`).
+- Real owner contacts SURVIVE: Boyd Watterson (Joseph Capra), Kingsbarn Realty (Jeff Pori),
+  Realty Income, Easterly Partners, Torrey Financial, Global Medical Reit, Metro Group Finance,
+  Magaurn Bemidji, … (28 total).
+- **Path A was always clean** (3 `property_bridge` rows, arithmetic owns-edge) — this pass did
+  not touch it.
+
+**FLIP-READY:** after the Railway redeploy, Cowork re-reviews the tightened `?score=1` and flips
+`W9_6_COMMS_OWNER_ATTRIBUTION` on.
+
+---
+
+**Original finding (pre-Prompt-103, retained for history):** some Path-B "owners" were
+brokerages mislabeled `true_owner` upstream (Newmark, Avison Young, Kidder Mathews, Transwestern).
+That is a pre-existing owner-graph labeling issue, NOT a join bug — now gated out of the lane by
+the brokerage-target guard (and flagged for a future ORE cleanup). Per doctrine, ambiguity/noise
+goes to the **human confirm lane** — never auto-attributed. A confirm only ever runs on a human
+verdict.
 
 ## What confirm does (the write)
 
