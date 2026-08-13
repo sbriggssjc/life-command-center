@@ -89,6 +89,7 @@ import * as DH from './_shared/sf-donor-handoff-planner.js';
 import * as SA from './_shared/sf-link-assist-planner.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
 import { handleSfSellerOwner } from './_handlers/sf-seller-owner.js';
+import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetadata, recipientEmailsFromMetadata, isHarvestableParty } from './_shared/outlook-name-backfill.js';
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
@@ -220,6 +221,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'state-lease-consume':        return handleStateLeaseConsume(req, res);
     case 'agency-risk-consume':        return handleAgencyRiskConsume(req, res);
     case 'npi-consume':                return handleNpiConsume(req, res);
+    case 'outlook-name-backfill':      return handleOutlookNameBackfill(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -4268,6 +4270,137 @@ async function handleLinkPropagationTick(req, res) {
       + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + LINK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
   }
   return res.status(200).json(out);
+}
+
+// ============================================================================
+// W9.4 accelerator (Prompt 101) — Outlook display-name BACKFILL.
+//   GET  /api/outlook-name-backfill[?limit=&after=<id>]   -> dry-run report (no writes)
+//   POST /api/outlook-name-backfill[?limit=&after=<id>]   -> apply ONE batch (cursored)
+//   POST /api/outlook-name-backfill?reverse=1&batch=<tag> -> reverse a batch
+// Reconstructs activity_events.metadata.from_name / to_names on historical
+// correspondence rows from the curated unified_contacts store (the ONLY structured
+// historical name source — email_bodies.from_name is empty; see
+// api/_shared/outlook-name-backfill.js header). Fill-blanks, provenance-marked
+// (metadata.name_backfill), reversible (in-row marker + lcc_outlook_name_backfill_log),
+// idempotent, cursored/resumable (id keyset). Unlocks harvestBuildCommsIndex's
+// header-name-pairs arm without waiting weeks for organic mail accrual.
+// ============================================================================
+// The email_intake path stores the sender in metadata.from (bare address) rather
+// than from_email; senderEmailFromMetadata handles both, so it is included.
+const NAME_BACKFILL_SOURCES = ['outlook', 'outlook_inbound', 'outlook_sent', 'outlook_tagged', 'email_intake'];
+const NAME_BACKFILL_MAX_LIMIT = Math.max(50, parseInt(process.env.NAME_BACKFILL_MAX_LIMIT || '2000', 10));
+
+// Batched, case-insensitive email -> display name over unified_contacts (RPC;
+// PostgREST in.() is case-sensitive and uc.email is not reliably lowercased).
+async function namesForEmails(emails) {
+  const map = new Map();
+  const uniq = [...new Set((emails || []).map((e) => String(e || '').toLowerCase()).filter(Boolean))];
+  if (!uniq.length) return map;
+  const CHUNK = 300;
+  for (let i = 0; i < uniq.length; i += CHUNK) {
+    const c = uniq.slice(i, i + CHUNK);
+    try {
+      const r = await opsQuery('POST', 'rpc/lcc_names_for_emails', { p_emails: c });
+      if (r.ok && Array.isArray(r.data)) {
+        for (const row of r.data) if (row && row.email_lower && row.full_name) map.set(String(row.email_lower), row.full_name);
+      }
+    } catch (_e) { /* best-effort per chunk */ }
+  }
+  return map;
+}
+
+async function handleOutlookNameBackfill(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const isPost = req.method === 'POST';
+  const q = req.query || {};
+
+  // ---- reverse mode ----
+  if (isPost && ['1', 'true', 'yes'].includes(String(q.reverse || '').toLowerCase())) {
+    const batch = String(q.batch || '').trim();
+    if (!batch) return res.status(400).json({ error: 'reverse requires batch=<tag>' });
+    const ids = [];
+    try {
+      const lr = await opsQuery('GET', 'lcc_outlook_name_backfill_log?select=activity_event_id&batch_tag=eq.' + pgFilterVal(batch) + '&limit=100000');
+      if (lr.ok && Array.isArray(lr.data)) for (const x of lr.data) if (x.activity_event_id) ids.push(String(x.activity_event_id));
+    } catch (_e) { /* fall through to marker scan */ }
+    let reverted = 0; const errors = [];
+    // Reverse by the in-row marker (authoritative), over the logged ids when we
+    // have them, else a bounded marker scan.
+    const targets = ids.length ? ids : null;
+    if (targets) {
+      for (const id of targets) {
+        try {
+          const gr = await opsQuery('GET', 'activity_events?select=id,metadata&id=eq.' + pgFilterVal(id) + '&limit=1');
+          const row = gr.ok && Array.isArray(gr.data) ? gr.data[0] : null;
+          if (!row) continue;
+          const rev = reverseNameBackfillPatch(row.metadata, batch);
+          if (!rev) continue;
+          const pr = await opsQuery('PATCH', 'activity_events?id=eq.' + pgFilterVal(id), { metadata: rev.metadata });
+          if (pr.ok) reverted += 1; else errors.push({ id, detail: _harvestErrDetail(pr.data) });
+        } catch (e) { errors.push({ id, detail: e?.message || String(e) }); }
+      }
+    }
+    return res.status(200).json({ mode: 'reverse', batch, logged_rows: ids.length, reverted, errors });
+  }
+
+  // ---- dry-run (GET) / apply (POST) ----
+  const limit = Math.min(NAME_BACKFILL_MAX_LIMIT, Math.max(1, parseInt(q.limit || (isPost ? '500' : '1000'), 10) || 500));
+  const after = q.after ? String(q.after) : null;
+  const batchTag = isPost ? ('nb_' + new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)) : null;
+  const stamp = { batch: batchTag, at: new Date().toISOString() };
+
+  let sel = 'activity_events?select=id,source_type,metadata'
+    + '&category=in.(email,call)&source_type=in.(' + NAME_BACKFILL_SOURCES.join(',') + ')'
+    + '&order=id.asc&limit=' + limit;
+  if (after) sel += '&id=gt.' + pgFilterVal(after);
+  const r = await opsQuery('GET', sel);
+  if (!r.ok) return res.status(502).json({ error: 'scan_failed', detail: _harvestErrDetail(r.data) });
+  const rows = Array.isArray(r.data) ? r.data : [];
+  const nextCursor = rows.length ? String(rows[rows.length - 1].id) : after;
+  const done = rows.length < limit;
+
+  // Collect every candidate email in the page (fill-blanks candidates only), then
+  // ONE batched name resolve. NEVER per-row DB work in the scan.
+  const emailSet = new Set();
+  for (const row of rows) {
+    const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    if (_harvestBlank(md.from_name)) { const fe = senderEmailFromMetadata(md); if (fe && isHarvestableParty(fe)) emailSet.add(fe); }
+    if (md.to_names == null) { for (const e of recipientEmailsFromMetadata(md)) if (isHarvestableParty(e)) emailSet.add(e); }
+  }
+  const nameMap = await namesForEmails([...emailSet]);
+
+  const counts = { scanned: rows.length, candidates: 0, fill_from_name: 0, fill_to_names: 0, rows_written: 0, distinct_names: nameMap.size, write_errors: 0 };
+  const sample = [];
+  const ledger = [];
+  for (const row of rows) {
+    const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const built = buildNameBackfillPatch(md, nameMap, stamp);
+    if (!built) continue;
+    counts.candidates += 1;
+    if (built.filled_from_name) counts.fill_from_name += 1;
+    if (built.filled_to_names) counts.fill_to_names += built.filled_to_names;
+    if (sample.length < 10) sample.push({ id: row.id, source_type: row.source_type, from_name: built.metadata.from_name || null, to_names: built.metadata.to_names || null });
+    if (isPost) {
+      try {
+        const pr = await opsQuery('PATCH', 'activity_events?id=eq.' + pgFilterVal(row.id), { metadata: built.metadata });
+        if (pr.ok) { counts.rows_written += 1; ledger.push({ batch_tag: batchTag, activity_event_id: row.id, filled_from_name: !!built.filled_from_name, filled_to_names: built.filled_to_names || 0, source: 'unified_contacts' }); }
+        else counts.write_errors += 1;
+      } catch (_e) { counts.write_errors += 1; }
+    }
+  }
+  if (isPost && ledger.length) {
+    try { await opsQuery('POST', 'lcc_outlook_name_backfill_log', ledger); } catch (_e) { /* audit best-effort */ }
+  }
+
+  return res.status(200).json({
+    mode: isPost ? 'apply' : 'dry_run',
+    batch: batchTag,
+    limit, after: after || null, next_cursor: nextCursor, done,
+    counts, sample,
+    note: 'Source: unified_contacts (email_bodies.from_name is empty live — see handler header). Resume with after=next_cursor until done=true.',
+  });
 }
 
 // ============================================================================
