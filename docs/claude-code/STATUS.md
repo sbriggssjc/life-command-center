@@ -10,6 +10,22 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Milestone 2026-08-14 — W9.6 lane fully worked; the last connectedness link is now CONSUMED
+
+Scott worked all **22** W9.6 owner-attribution proposals → **22 confirmed / 0 rejected**, 22
+`comms_owner_attribution_apply_log` writes landed, lane empty. **Payoff (the metric this unit existed to
+raise): `v_lcc_w9_5_link_coverage.correspondence_entity_owner_llc` moved 2.5% (6/241) → 9.3% (24/259).**
+Real owner LLCs now carry their correspondence history (ADM Camarillo, Anchor Point Capital, Atwater
+Enterprises, Boyd Watterson, DaVita Healthcare Partners, Easterly Partners, …). Each confirmed bridge also
+feeds the W9.2 reachability create-contact arm owner-linked threads it couldn't see before (the arms compound).
+- **One observability nuance (not a data issue):** `field_provenance` shows **0** `comms_owner_bridge` rows —
+  the confirm appends the owner entity to `activity_events.metadata.linked_entity_ids` (a jsonb-array append,
+  tracked reversibly by the apply_log), and the provenance ledger (built for scalar curated-field writes) isn't
+  stamping the array append. The reversible record (apply_log) is intact and the metric moved correctly; only
+  the provenance *visibility* of these bridges is missing. Candidate tiny follow-up if we want them in the ledger.
+- **Twin assist (106):** first cron run is 05:45 UTC **2026-08-15** (flag flipped after today's run window), so
+  the property_twin lane will be pre-ranked/sorted tomorrow morning (0 annotations now is expected).
+
 ## Session 2026-08-14 — Prompt 107 (W10 Stage 2): retrieval-grounded drafting `/api/draft-assist` SHIPPED
 
 **New endpoint `/api/draft-assist` — a Scott-voiced DRAFT generator grounded in his real sent-email corpus + the deal spine. Flag `DRAFT_ASSIST` OFF; GET dry-run is live for review.**
