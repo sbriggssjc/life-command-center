@@ -10,6 +10,24 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Prompt 106 (2026-08-14) — property_twin lane: deterministic pre-rank + Ollama assist (annotation-only)
+
+**Built the two-layer assist that pre-ranks + sorts the dia property_twin review lane (~1,245 pending) so
+Scott clears the 792 same-operator merges fast and spends judgment on the conflict/ambiguous residue.** The
+assist ANNOTATES + SORTS — it NEVER merges (the dia `dia_merge_property_reversible` stays a human, reversible
+verdict). Layer 1 = a NO-LLM deterministic classifier (`api/_shared/property-twin-assist-planner.js`, reuses
+`nameSimilarity`); Layer 2 = Ollama on the uncertain residue with a verbatim-evidence-quote precision floor
+and the co-located-plaza footgun few-shot. Store = existing `lcc_clean_assist_proposals` (source
+`property_twin_assist`). Tick `GET/POST /api/property-twin-assist-tick` (dry-run `?score=1&n=`; flag-gated
+apply; per-class/per-suggest honest counts; `scan_errors`; budget floor). Lane shows the suggestion + evidence,
+sorts easy-first, bulk-confirms deterministic merges only (each a human verdict). Migration `20260814130000`
+applied live to LCC Opps (source CHECK widened, flag `PROPERTY_TWIN_ASSIST` OFF, U4 self-measure table/RPC/
+view, cron `property-twin-assist-tick` 05:45 UTC jobid 220). Tests `test/property-twin-assist.test.mjs` (31
+pass) incl. the deterministic classifier, verbatim validator, annotation-never-verdict structural guard, and
+the co-located footgun fixture. **Live steps:** redeploy → `?score=1` review → Cowork flips
+`PROPERTY_TWIN_ASSIST`.
+
+
 ## Session 2026-08-14 (Cowork) — END-TO-END CONNECTEDNESS AUDIT (verdict→write→consumer, all lanes)
 
 **Traced every lane from Scott's manual verdict → the write → the downstream consumer, live. The loop is

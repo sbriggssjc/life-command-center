@@ -446,6 +446,19 @@ with a competing clinical identity to review). LCC surfaces the review lane:
 - **Footgun avoided:** co-located ≠ twin (a Fresenius and a DaVita share one plaza), so
   the lane exists precisely for the human call the auto-pass refuses to make. Merge stays
   reversible; never hard-delete without the snapshot.
+- **Prompt 106 — deterministic pre-rank + Ollama assist (annotation-only):** the lane is
+  pre-ranked/sorted by a two-layer assist that ANNOTATES but NEVER merges. Layer 1 (NO LLM,
+  `api/_shared/property-twin-assist-planner.js::classifyTwinDeterministic`, reuses
+  `dup-pair-planner.nameSimilarity`) decides the bulk (same-op/near-identical-name → merge,
+  bulk-confirmable; diff-op/`same_norm_address:false`/single-anchor → not_twin) and NEVER
+  deterministically not_twins a same-address operator change; Layer 2 (Ollama, `invokeExtractionAI`
+  surface `property_twin_assist`) scores the residue with a VERBATIM evidence quote (dropped if not
+  a substring of the evidence). Annotations reuse `lcc_clean_assist_proposals` (source
+  `property_twin_assist`, keyed `twin:dia:<review_id>`). Tick `GET/POST /api/property-twin-assist-tick`
+  (flag `PROPERTY_TWIN_ASSIST`, cron 05:45 UTC, no-op while off). The tick NEVER calls
+  `dia_merge_property_reversible` — the merge stays a HUMAN verdict; dc-lanes bulk-confirm targets
+  deterministic merges only. Self-measure → `v_lcc_property_twin_assist_accuracy`. Migration
+  `20260814130000`.
 
 ## Pointers to canonical docs
 
