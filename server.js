@@ -56,6 +56,7 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 import queryCompsHandler from './api/query-comps.js';
+import draftAssistHandler from './api/draft-assist.js';
 import { handleListingPageCrawl } from './api/_handlers/listing-page-crawl.js';
 
 // Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
@@ -363,6 +364,11 @@ app.all('/api/comps', compsHandler);
 // Comps QUERY (Deal Agent QueryComps/SynthesizeComps → shared engine on GOV_API_URL/MCP; key stays server-side)
 app.all('/api/query-comps', queryCompsHandler);
 app.all('/api/synthesize-comps', queryCompsHandler);
+
+// W10 Stage 2 (Prompt 107) — retrieval-grounded drafting. GET = dry-run (assemble
+// a Scott-voiced draft + retrieval + facts, writes nothing); POST = save to
+// Outlook Drafts (flag DRAFT_ASSIST). NEVER sends. On-prem generation, fail-closed.
+app.all('/api/draft-assist', draftAssistHandler);
 
 // Prompt 68 — Copilot-namespaced comps routes. These set _copilot_path so the
 // shared authenticate() M365 passthrough applies (same as briefing/queue and the

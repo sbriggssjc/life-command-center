@@ -99,3 +99,10 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
   cap honestly; U4 edit-distance hook left wired. Prompt `docs/claude-code/prompts/107-w10-2-rag-drafting.md`.
   **Deferred to a future unit:** fuller email-body ingestion (past the ~255-char `bodyPreview` cap) — the
   shared enabler for long-form drafting + the voice profile's sign-off fidelity + the harvest signature arm.
+- 2026-08-14: **Stage 2 (Prompt 107) SHIPPED.** `/api/draft-assist` built (core `api/_shared/draft-assist-core.js`,
+  handler `api/draft-assist.js`, on-prem seam `invokeOnPremGeneration`/`invokeOnPremEmbeddings` in `api/_shared/ai.js`,
+  mounted in `server.js`, flag migration `20260901120000_lcc_w10_2_draft_assist_flag.sql`, 21 tests). GET dry-run
+  live; POST Outlook-draft save gated on `DRAFT_ASSIST` (OFF). Structural guards proven by test: never-send,
+  fact-validator strips a planted fabricated figure, Ollama-unreachable fails closed (no cloud egress), retrieval =
+  Scott-authored outbound only, flag-off ⇒ dry-run, voice-profile injection present. Sample sheet
+  `docs/audits/W10_STAGE2_SAMPLE_DRAFTS.md`. Prompt → `done/`.
