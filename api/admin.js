@@ -74,6 +74,7 @@ import {
   collectAddressNumbers, matchCandidateToProperties,
 } from './_shared/naming-hygiene-planner.js';
 import * as RH from './_shared/reachability-harvest-planner.js';
+import { pickBestBody as pickBestCommsBody } from './_shared/voice-corpus-clean.js';
 import { isBrokerageContact as coaIsBrokerageContact, buildOwnerBridgeProvenanceArgs } from './_shared/comms-owner-attribution.js';
 import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
@@ -4965,7 +4966,13 @@ async function harvestBuildCommsIndex() {
         for (const k of ['to_emails', 'cc_emails']) {
           if (Array.isArray(md[k])) for (const v of md[k]) if (typeof v === 'string') rawHeaders.push(v);
         }
-        const sigPhones = RH.extractSignaturePhones(RH.signatureRegion(row.body));
+        // Prompt 110: a full body (when the PA flow forwarded body_text/body_html
+        // into metadata) exposes the WHOLE signature block, not just the ~255-char
+        // preview tail — more signature phones become visible. Falls back to the
+        // preview body cleanly while bodies are still empty. The verbatim-quote
+        // validator downstream is unchanged.
+        const commsBody = pickBestCommsBody({ body_text: md.body_text, body_html: md.body_html, body: row.body });
+        const sigPhones = RH.extractSignaturePhones(RH.signatureRegion(commsBody));
         if (sigPhones.length) counts.signature_phones += sigPhones.length;
         // ---- Prompt 96 — structured name↔email pairs (from_name / to_names[]) ----
         // Forward-only feedstock: the loggers now preserve Graph display names.

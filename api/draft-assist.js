@@ -37,7 +37,7 @@ import path from 'node:path';
 
 import { handleCors, authenticate } from './_shared/auth.js';
 import { opsQuery, isOpsConfigured } from './_shared/ops-db.js';
-import { cleanEmailBody, isMostlyBoilerplate, classifyDraftType } from './_shared/voice-corpus-clean.js';
+import { cleanEmailBody, isMostlyBoilerplate, classifyDraftType, pickBestBody } from './_shared/voice-corpus-clean.js';
 import { invokeOnPremGeneration, invokeOnPremEmbeddings } from './_shared/ai.js';
 import { buildDealPacket } from './_handlers/entities-handler.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
@@ -88,7 +88,7 @@ async function loadCorpus() {
       `&source_type=in.(outlook,outlook_sent,outlook_tagged)` +
       `&body=not.is.null&order=occurred_at.desc&offset=${o}&limit=${l}`),
     pageAll((o, l) =>
-      `email_bodies?select=id,body_preview,subject,from_email,to_emails,sent_at,received_at,internet_message_id` +
+      `email_bodies?select=id,body_preview,body_text,body_html,subject,from_email,to_emails,sent_at,received_at,internet_message_id` +
       `&body_preview=not.is.null&order=received_at.desc&offset=${o}&limit=${l}`),
   ]);
 
@@ -106,10 +106,15 @@ async function loadCorpus() {
   };
   for (const r of ae) {
     const m = r.metadata || {};
-    push(r.id, m.internet_message_id, r.body, r.title, m.from_email, m.to_emails || [], r.occurred_at);
+    // Prompt 110: prefer a full body when the flow forwarded one into metadata
+    // (body_text / body_html); fall back to the ~255-char body snippet.
+    const raw = pickBestBody({ body_text: m.body_text, body_html: m.body_html, body: r.body });
+    push(r.id, m.internet_message_id, raw, r.title, m.from_email, m.to_emails || [], r.occurred_at);
   }
   for (const r of eb) {
-    push(r.id, r.internet_message_id, r.body_preview, r.subject, r.from_email, r.to_emails || [], r.sent_at || r.received_at);
+    // Prompt 110: full body_text → tag-stripped body_html → capped body_preview.
+    const raw = pickBestBody({ body_text: r.body_text, body_html: r.body_html, body_preview: r.body_preview });
+    push(r.id, r.internet_message_id, raw, r.subject, r.from_email, r.to_emails || [], r.sent_at || r.received_at);
   }
   return rows;
 }

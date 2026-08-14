@@ -34,6 +34,12 @@ signal is Scott's **email openings**, not full threads.
 - **What the cap costs us:** reliable **sign-offs** (cut off in longer notes) and **full
   paragraph shape**. Greeting + opening-sentence voice is captured *well*; closings and
   long-form structure are captured *weakly* and are marked LOW-confidence below.
+- **Upgrade path (Prompt 110, 2026-08-14):** the ~255-char cap is a Power-Automate flow
+  limitation, not a storage one — `email_bodies.body_text/body_html` and the consumers are
+  now wired for FULL bodies (`docs/audits/W10_FULL_BODY_INGESTION_2026-08-14.md`). Once Scott
+  applies the "Get email (V3)" flow change and full bodies accrue, **re-run
+  `scripts/voice-distill.mjs`** to lift the LOW-confidence sign-off / long-form buckets to real
+  fidelity, and let draft-assist's `voice_confidence` note reflect full-body coverage.
 - **Cleaning is mandatory:** previews routinely bleed into the quoted chain
   (`________ From: … Sent: …`) and end with the inline signature ("Scott Briggs / Senior Vice
   President · Northmarq / D (918) 794-9787 …") because Outlook top-posts the sig. The

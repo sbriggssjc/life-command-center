@@ -6,14 +6,23 @@
 // and drops the quoted reply chain, the Briggs signature block, forwarded
 // headers, legal disclaimers, and mobile-client sig lines.
 //
-// GROUNDING (live forensics, LCC Opps 2026-08-13): the correspondence store
-// keeps Graph's `bodyPreview` (~255-char cap) in `activity_events.body` /
-// `email_bodies.body_preview`. In practice each Scott preview is a short opening
-// that frequently (a) bleeds into the quoted chain (`________ From: … Sent: …`)
-// and (b) ends with the inline signature ("Scott Briggs Senior Vice President ·
-// Northmarq D (918) 794-9787 | E sabriggs@northmarq.com"), because Outlook
-// top-posts the signature. Both MUST be stripped or the profile learns the
-// footer, not the voice. No LLM here — regex only, so nothing leaves the box.
+// GROUNDING (live forensics, LCC Opps 2026-08-13): historically the
+// correspondence store kept ONLY Graph's `bodyPreview` (~255-char cap) in
+// `activity_events.body` / `email_bodies.body_preview`. Each Scott preview is a
+// short opening that frequently (a) bleeds into the quoted chain (`________
+// From: … Sent: …`) and (b) ends with the inline signature ("Scott Briggs
+// Senior Vice President · Northmarq D (918) 794-9787 | E sabriggs@northmarq.com"),
+// because Outlook top-posts the signature. Both MUST be stripped or the profile
+// learns the footer, not the voice.
+//
+// PROMPT 110 (2026-08-14) — full-body ingestion: once the Power-Automate flows
+// forward a "Get email (V3)" body, rows carry the FULL body in
+// `email_bodies.body_text` / `body_html` (and inbound metadata). The cleaner
+// matters MORE on a full body (there is a real reply chain + signature to cut),
+// so consumers now prefer full body → tag-stripped html → preview via
+// `pickBestBody`, falling back cleanly while bodies are still empty. The
+// deterministic cleaning below is unchanged — it already handles both lengths.
+// No LLM here — regex only, so nothing leaves the box.
 
 const REPLY_MARKERS = [
   /_{4,}/,                                   // Outlook horizontal rule before quote
@@ -51,6 +60,55 @@ export function normalizeRaw(raw) {
   return String(raw == null ? '' : raw)
     .replace(/^﻿/, '')
     .replace(/\r\n?/g, '\n');
+}
+
+// Dependency-free HTML → text. Drops <script>/<style>, turns block/break tags
+// into newlines so the reply-chain + signature markers survive on their own
+// lines (the cleaner keys on line-anchored markers), strips remaining tags, and
+// decodes the handful of entities Outlook emits. On-prem only — no parser dep,
+// nothing egresses.
+export function htmlToText(html) {
+  let s = String(html == null ? '' : html);
+  if (!s) return '';
+  s = s
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<\/?(?:p|div|tr|table|ul|ol|h[1-6]|blockquote)\b[^>]*>/gi, '\n')
+    .replace(/<(?:br|hr|li)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'");
+  return normalizeRaw(s);
+}
+
+/**
+ * Pick the richest available raw body, forward-compatible with the Prompt-110
+ * full-body ingestion: full `body_text` → tag-stripped `body_html` → the capped
+ * `body_preview`/`body`. Returns '' when nothing is present. This is the single
+ * resolver every corpus/harvest consumer calls so the fallback stays identical
+ * across surfaces while bodies are still accruing.
+ */
+export function pickBestBody({ body_text, body_html, body_preview, body } = {}) {
+  const text = String(body_text == null ? '' : body_text).trim();
+  if (text) return String(body_text);
+  const html = String(body_html == null ? '' : body_html).trim();
+  if (html) {
+    const stripped = htmlToText(body_html).trim();
+    if (stripped) return stripped;
+  }
+  const preview = firstNonBlank(body_preview, body);
+  return preview == null ? '' : String(preview);
+}
+
+function firstNonBlank(...vals) {
+  for (const v of vals) {
+    if (v != null && String(v).trim() !== '') return v;
+  }
+  return null;
 }
 
 /** Cut everything from the FIRST reply/forward marker onward. */

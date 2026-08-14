@@ -97,8 +97,13 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
   generation → a DRAFT to Outlook Drafts / Cowork, NEVER sent. Structural never-send + fact-validator +
   fail-closed-if-no-Ollama guards; flag `DRAFT_ASSIST` OFF; `voice_confidence` note surfaces the opening-only
   cap honestly; U4 edit-distance hook left wired. Prompt `docs/claude-code/prompts/107-w10-2-rag-drafting.md`.
-  **Deferred to a future unit:** fuller email-body ingestion (past the ~255-char `bodyPreview` cap) — the
-  shared enabler for long-form drafting + the voice profile's sign-off fidelity + the harvest signature arm.
+  ~~**Deferred to a future unit:** fuller email-body ingestion (past the ~255-char `bodyPreview` cap).~~
+  **DONE (Prompt 110, 2026-08-14):** fuller email-body ingestion — the shared enabler for long-form drafting
+  + the voice profile's sign-off fidelity + the harvest signature arm. The intake endpoint already accepted
+  `body_text`/`body_html`; the consumers (draft-assist RAG, voice cleaner, harvest signature arm) now PREFER
+  the full body via `pickBestBody` and fall back to the preview cleanly. The actual unlock is a forward-only
+  Power-Automate "Get email (V3)" flow change (Scott's step) + a scoped historical backfill (future unit).
+  See `docs/audits/W10_FULL_BODY_INGESTION_2026-08-14.md`.
 - 2026-08-14: **Stage 2 (Prompt 107) SHIPPED.** `/api/draft-assist` built (core `api/_shared/draft-assist-core.js`,
   handler `api/draft-assist.js`, on-prem seam `invokeOnPremGeneration`/`invokeOnPremEmbeddings` in `api/_shared/ai.js`,
   mounted in `server.js`, flag migration `20260901120000_lcc_w10_2_draft_assist_flag.sql`, 21 tests). GET dry-run
@@ -106,3 +111,10 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
   fact-validator strips a planted fabricated figure, Ollama-unreachable fails closed (no cloud egress), retrieval =
   Scott-authored outbound only, flag-off ⇒ dry-run, voice-profile injection present. Sample sheet
   `docs/audits/W10_STAGE2_SAMPLE_DRAFTS.md`. Prompt → `done/`.
+- 2026-08-14: **Full-body ingestion (Prompt 110) SHIPPED (consumer code + doc).** The intake endpoint was
+  already ready (`api/intake.js` accepts/clamps/prefers `body_text`/`body_html`); the fields are empty only
+  because the PA flows post `bodyPreview` only. Wired the consumers (draft-assist `loadCorpus`, harvest
+  signature arm) to prefer the full body via the new `pickBestBody`/`htmlToText` in `voice-corpus-clean.js`,
+  falling back to the preview cleanly. The actual unlock is a forward-only PA "Get email (V3)" flow change
+  (Scott's step, documented) + a scoped historical backfill (future unit, recommended: PA loop keyed on
+  `internet_message_id`). Doc: `docs/audits/W10_FULL_BODY_INGESTION_2026-08-14.md`. Prompt → `done/`.
