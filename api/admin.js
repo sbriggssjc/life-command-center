@@ -88,6 +88,7 @@ import { planSfLinkVerdict, sfLinkColumn, sfLinkTarget, parseConflictExistingId 
 import * as RS from './_shared/sf-link-rescore-planner.js';
 import * as DH from './_shared/sf-donor-handoff-planner.js';
 import * as SA from './_shared/sf-link-assist-planner.js';
+import * as PT from './_shared/property-twin-assist-planner.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
 import { handleSfSellerOwner } from './_handlers/sf-seller-owner.js';
 import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetadata, recipientEmailsFromMetadata, isHarvestableParty } from './_shared/outlook-name-backfill.js';
@@ -208,6 +209,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
     case 'link-coverage-tick':         return handleLinkCoverageTick(req, res);
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
+    case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
     case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
     case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
     case 'sf-donor-handoff-tick':      return handleSfDonorHandoffTick(req, res);
@@ -1758,6 +1760,238 @@ async function handleMatchDisambigAssistTick(req, res) {
     lastError: summary.failed ? `${summary.failed} annotation(s) failed in ${sourceRunId}` : null,
     details: summary,
   });
+  return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+}
+
+// ============================================================================
+// Prompt 106 — property_twin lane deterministic pre-rank + Ollama assist.
+//
+// Two layers, deterministic-first (mirrors W9.3 sf-link-assist):
+//   1. A NO-LLM classifier decides the bulk from the dia_property_twin_review
+//      row's OWN `detail` fields (same-op/near-identical-name -> merge;
+//      different-op/distinct-address -> not_twin). Bulk-confirmable.
+//   2. The genuine-judgment residue (same-address operator change, multiple
+//      anchors, same-op name divergence, blank shadow) is scored by Ollama with
+//      a VERBATIM evidence quote (dropped if not a substring of the evidence).
+// The annotation lands in lcc_clean_assist_proposals (source property_twin_assist),
+// keyed by subject_ref 'twin:dia:<review_id>'. It NEVER merges and NEVER PATCHes
+// the review row's status — the reversible merge stays a HUMAN verdict (the
+// dia merge RPC), the annotation-never-verdict guard.
+//
+//   GET  /api/property-twin-assist-tick            -> dry-run counts (per-class)
+//   GET  /api/property-twin-assist-tick?score=1&n= -> dry-run + inline sample
+//                                                     (NO writes)
+//   POST /api/property-twin-assist-tick            -> apply: annotate one bounded
+//                                                     resumable batch (flag-gated)
+// ============================================================================
+const PT_ASSIST_BATCH = Math.max(1, parseInt(process.env.PROPERTY_TWIN_ASSIST_BATCH || '40', 10));
+const PT_ASSIST_BUDGET_MS = Math.max(5000, parseInt(process.env.PROPERTY_TWIN_ASSIST_BUDGET_MS || '110000', 10));
+const PT_ASSIST_INLINE_N = Math.max(1, parseInt(process.env.PROPERTY_TWIN_ASSIST_INLINE_N || '20', 10));
+
+// subject_refs that already carry a property_twin_assist annotation (resumable
+// cursor). A verdict-consumed row leaves the pending slice, so the pool is finite
+// and annotated-exclusion is self-healing.
+async function fetchTwinAssistAnnotated() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref'
+        + '&decision_type=eq.' + PT.PT_ASSIST_DECISION_TYPE + '&source=eq.' + PT.PT_ASSIST_SOURCE
+        + '&order=proposal_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok || !Array.isArray(r.data)) break;
+      for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
+      if (r.data.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// Pending twin review rows (closest-first), with the `detail` the classifier reads.
+async function fetchPendingTwinRows(limit) {
+  const r = await domainQuery('dia', 'GET',
+    'dia_property_twin_review?select=id,classification,distance_miles,detail'
+    + '&status=eq.pending&order=distance_miles.asc,id.asc&limit=' + Math.max(1, limit));
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+// Merge the row's top-level classification/distance into the detail so the planner
+// (which reads a single object) sees the full picture.
+function twinDetailOf(row) {
+  const d = (row && row.detail && typeof row.detail === 'object') ? row.detail : {};
+  return { ...d, classification: row?.classification ?? d.classification ?? null,
+    distance_miles: row?.distance_miles ?? d.distance_miles ?? null };
+}
+
+// Run the two layers for one row. Deterministic-decisive rows spend NO LLM; the
+// residue calls Ollama and validates the verbatim quote.
+async function annotateTwinRow(row, sourceRunId) {
+  const detail = twinDetailOf(row);
+  const det = PT.classifyTwinDeterministic(detail);
+  let proposal;
+  let promptHash = null;
+  let provider = null;
+  let model = null;
+  let tried = [];
+  if (!det.needs_llm) {
+    proposal = PT.buildProposalFromLayers(detail, null); // deterministic decisive
+  } else {
+    const prompt = PT.buildTwinAssistPrompt(detail);
+    promptHash = createHash('sha256').update(prompt).digest('hex');
+    const ai = await invokeExtractionAI({ prompt, surface: 'property_twin_assist' });
+    provider = ai?.provider || null;
+    model = ai?.data?.model || null;
+    tried = ai?.tried || [];
+    const parsed = PT.parseTwinAssistJson(ai?.data?.response || '');
+    proposal = PT.buildProposalFromLayers(detail, parsed || {});
+    proposal.parsed_ok = !!parsed;
+  }
+  return { subject_ref: 'twin:dia:' + row.id, review_id: row.id,
+    classification: row.classification, proposal, promptHash, provider, model, tried };
+}
+
+async function upsertTwinAssist(a, meta) {
+  const p = a.proposal;
+  return opsQuery('POST',
+    'lcc_clean_assist_proposals?on_conflict=decision_type,subject_ref,proposal_kind,source',
+    {
+      source: PT.PT_ASSIST_SOURCE, source_run_id: meta.sourceRunId, decision_id: null,
+      decision_type: PT.PT_ASSIST_DECISION_TYPE, subject_ref: a.subject_ref,
+      subject_domain: 'dia', subject_property_id: null, subject_entity_id: null,
+      proposal_kind: PT.PT_ASSIST_KIND, verdict: p.verdict, reason: p.reason,
+      confidence: p.confidence,
+      proposed_link: { layer: p.layer, evidence_quote: p.evidence_quote || null,
+        dropped: !!p.dropped, drop_reason: p.drop_reason || null, classification: a.classification || null },
+      conflict_summary: null, model_provider: meta.provider || null, model_name: meta.model || null,
+      ai_tried: Array.isArray(meta.tried) ? meta.tried : [], prompt_hash: meta.promptHash, status: 'proposed',
+    },
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+// Attach each property_twin lane item's latest property_twin_assist annotation
+// (verdict + confidence + reason + evidence + layer) onto context.assist so the
+// lane can order easy-first and dc-lanes can render the suggestion. Read-only;
+// returns the same items. NEVER a verdict.
+async function attachPropertyTwinAssist(items) {
+  const refs = [...new Set((items || []).map((it) => it.subject_ref).filter(Boolean))].slice(0, 200);
+  if (!refs.length) return items;
+  try {
+    const inList = '("' + refs.map((r) => String(r).replace(/"/g, '\\"')).join('","') + '")';
+    const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref,verdict,confidence,reason,proposed_link'
+      + '&decision_type=eq.' + PT.PT_ASSIST_DECISION_TYPE + '&source=eq.' + PT.PT_ASSIST_SOURCE
+      + '&subject_ref=in.' + encodeURIComponent(inList) + '&order=proposal_id.desc', undefined, { countMode: 'none' });
+    if (!r.ok || !Array.isArray(r.data)) return items;
+    const by = new Map();
+    for (const row of r.data) if (!by.has(row.subject_ref)) by.set(row.subject_ref, row); // desc => first = latest
+    return items.map((it) => {
+      const a = by.get(it.subject_ref);
+      if (!a) return it;
+      const link = (a.proposed_link && typeof a.proposed_link === 'object') ? a.proposed_link : {};
+      const assist = { verdict: a.verdict, confidence: a.confidence, reason: a.reason,
+        layer: link.layer || null, evidence_quote: link.evidence_quote || null, dropped: !!link.dropped };
+      return { ...it, context: { ...(it.context || {}), assist } };
+    });
+  } catch (_e) { return items; }
+}
+
+async function recordTwinAssistHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'property_twin_assist', p_check_name: 'property_twin_assist',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handlePropertyTwinAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchW93Flag('PROPERTY_TWIN_ASSIST');
+  const enabled = w93FlagEnabled('PROPERTY_TWIN_ASSIST', flag);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(PT_ASSIST_BATCH), 10)));
+
+  const scanErrors = [];
+  const annotated = await fetchTwinAssistAnnotated();
+  const pendingCntR = await domainQuery('dia', 'GET', 'dia_property_twin_review?select=id&status=eq.pending&limit=1',
+    undefined, { Prefer: 'count=exact' });
+  const pendingCount = (pendingCntR.ok && typeof pendingCntR.count === 'number') ? pendingCntR.count : null;
+
+  // Pull a working slice, drop already-annotated (resumable cursor).
+  let rows = [];
+  try { rows = await fetchPendingTwinRows(Math.max(limit, 200)); }
+  catch (e) { scanErrors.push('fetch_pending: ' + (e?.message || String(e))); }
+  const fresh = rows.filter((r) => !annotated.has('twin:dia:' + r.id));
+
+  // Deterministic pre-classify EVERY fresh row in-memory (no LLM) for honest counts.
+  const byClass = {}; const bySuggest = { merge: 0, not: 0, uncertain: 0 };
+  let detDecisive = 0; let llmResidue = 0; let bulkConfirmableMerges = 0;
+  for (const r of fresh) {
+    const det = PT.classifyTwinDeterministic(twinDetailOf(r));
+    byClass[r.classification || 'unknown'] = (byClass[r.classification || 'unknown'] || 0) + 1;
+    if (det.needs_llm) { llmResidue += 1; }
+    else { detDecisive += 1; bySuggest[det.suggest] = (bySuggest[det.suggest] || 0) + 1;
+      if (det.suggest === 'merge') bulkConfirmableMerges += 1; }
+  }
+
+  // ---- GET dry-run --------------------------------------------------------
+  if (req.method === 'GET') {
+    const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing', limit,
+      surface: 'property_twin_assist', pending: pendingCount, annotated_existing: annotated.size,
+      fresh: fresh.length, deterministic_decisive: detDecisive, llm_residue: llmResidue,
+      bulk_confirmable_merges: bulkConfirmableMerges, by_class: byClass, by_suggest: bySuggest,
+      scan_errors: scanErrors,
+      note: 'Annotation-only. Deterministic classifier decides the bulk (NO LLM); the residue is scored by Ollama with a verbatim evidence quote. NEVER merges — the merge RPC is only ever a HUMAN verdict.' };
+    if (!(req.query.score === '1' || req.query.score === 'true')) return res.status(200).json(out);
+    const n = Math.min(limit, Math.max(1, parseInt(req.query.n || String(PT_ASSIST_INLINE_N), 10) || PT_ASSIST_INLINE_N));
+    const samples = [];
+    const start = Date.now();
+    for (const r of fresh.slice(0, n)) {
+      if (Date.now() - start >= PT_ASSIST_BUDGET_MS) break;
+      try {
+        const a = await annotateTwinRow(r, 'p106dry');
+        samples.push({ subject_ref: a.subject_ref, classification: a.classification,
+          suggest: a.proposal.verdict, confidence: a.proposal.confidence, layer: a.proposal.layer,
+          reason: a.proposal.reason, evidence_quote: a.proposal.evidence_quote || null,
+          dropped: !!a.proposal.dropped, drop_reason: a.proposal.drop_reason || null });
+      } catch (e) { samples.push({ subject_ref: 'twin:dia:' + r.id, error: e?.message || String(e) }); }
+    }
+    out.samples = samples;
+    out.note += ' NO writes in dry-run.';
+    return res.status(200).json(out);
+  }
+
+  // ---- POST apply (flag-gated) --------------------------------------------
+  if (!enabled) {
+    await recordTwinAssistHealth({ status: 'amber', count: 0,
+      lastError: 'PROPERTY_TWIN_ASSIST feature flag is off',
+      details: { enabled: false, flag_state: flag?.state || 'missing', pending: pendingCount, fresh: fresh.length } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, pending: pendingCount, fresh: fresh.length });
+  }
+
+  const sourceRunId = 'p106_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  const summary = { source_run_id: sourceRunId, pending: pendingCount, annotated_existing: annotated.size,
+    fresh: fresh.length, candidates: 0, annotated_new: 0, deterministic: 0, llm: 0, dropped: 0,
+    failed: 0, budget_exhausted: false, by_suggest: { merge: 0, not: 0, uncertain: 0 }, scan_errors: scanErrors };
+  const start = Date.now();
+  for (const r of fresh.slice(0, limit)) {
+    // Deterministic rows are ~free; only pay the LLM-budget check for the residue.
+    const needsLlm = PT.classifyTwinDeterministic(twinDetailOf(r)).needs_llm;
+    if (needsLlm && Date.now() - start >= PT_ASSIST_BUDGET_MS) { summary.budget_exhausted = true; break; }
+    summary.candidates += 1;
+    try {
+      const a = await annotateTwinRow(r, sourceRunId);
+      if (a.proposal.layer === 'deterministic') summary.deterministic += 1; else summary.llm += 1;
+      if (a.proposal.dropped) summary.dropped += 1;
+      summary.by_suggest[a.proposal.verdict] = (summary.by_suggest[a.proposal.verdict] || 0) + 1;
+      const wr = await upsertTwinAssist(a, { sourceRunId, promptHash: a.promptHash, provider: a.provider, model: a.model, tried: a.tried });
+      if (wr.ok) summary.annotated_new += 1; else summary.failed += 1;
+    } catch (e) { summary.failed += 1; scanErrors.push('annotate twin:dia:' + r.id + ': ' + (e?.message || String(e))); }
+  }
+  await recordTwinAssistHealth({ status: summary.failed ? 'amber' : 'green', count: summary.annotated_new,
+    lastError: summary.failed ? summary.failed + ' annotation(s) failed in ' + sourceRunId : null, details: summary });
   return res.status(200).json({ ok: true, mode: 'apply', ...summary });
 }
 
@@ -7482,6 +7716,17 @@ async function fetchFederatedSource(type, cap, opts) {
         },
       };
     });
+    // Prompt 106: attach the property_twin_assist annotation (deterministic/LLM
+    // suggest + confidence + evidence) and sort easy-first so the operator clears
+    // the confident merges fast and spends judgment on the residue. Read-only; the
+    // merge stays a HUMAN verdict.
+    out.items = await attachPropertyTwinAssist(out.items);
+    out.items.sort((x, y) => {
+      const kx = PT.twinAssistSortKey(x.context && x.context.assist);
+      const ky = PT.twinAssistSortKey(y.context && y.context.assist);
+      if (ky !== kx) return ky - kx;
+      return (y.rank_value || 0) - (x.rank_value || 0);
+    });
     const cnt = await domCnt('dia', 'dia_property_twin_review?status=eq.pending');
     out.total = (cnt == null) ? null : cnt;
     return out;
@@ -10557,6 +10802,28 @@ async function handleDecisionVerdict(req, res) {
       }
       const dropId = parseInt(row.shadow_property_id, 10);
       const keepId = parseInt(row.anchor_property_id, 10);
+
+      // Prompt 106: self-measure the assist. If a property_twin_assist annotation
+      // exists for this row, compare its verdict (merge/not) to the human verdict
+      // (merge/not_twin) and append a measurement. Best-effort, metadata-only —
+      // NEVER blocks or alters the verdict.
+      try {
+        const ar = await opsQuery('GET', 'lcc_clean_assist_proposals?select=verdict,confidence,proposed_link'
+          + '&decision_type=eq.' + PT.PT_ASSIST_DECISION_TYPE + '&source=eq.' + PT.PT_ASSIST_SOURCE
+          + '&subject_ref=eq.' + encodeURIComponent('twin:dia:' + reviewId) + '&order=proposal_id.desc&limit=1',
+          undefined, { countMode: 'none' });
+        const assist = (ar.ok && Array.isArray(ar.data)) ? ar.data[0] : null;
+        if (assist) {
+          const agr = PT.twinAssistAgreement(assist.verdict, verdict);
+          const layer = (assist.proposed_link && typeof assist.proposed_link === 'object') ? (assist.proposed_link.layer || null) : null;
+          await opsQuery('POST', 'rpc/lcc_record_property_twin_assist_agreement', {
+            p_subject_ref: 'twin:dia:' + reviewId, p_assist_verdict: assist.verdict,
+            p_assist_layer: layer, p_assist_conf: assist.confidence != null ? Number(assist.confidence) : null,
+            p_human_verdict: verdict, p_agreed: agr.measured ? agr.agreed : null,
+            p_decided_by: user.id || null,
+          });
+        }
+      } catch (_e) { /* measurement is best-effort */ }
 
       if (verdict === 'not_twin') {
         const pr = await domainQuery('dia', 'PATCH',

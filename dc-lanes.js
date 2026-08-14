@@ -164,6 +164,21 @@ function _fedCardHTML(it, i, isNext) {
       + '<div class="q-item-meta">Anchor (CCN ' + esc(c.anchor_medicare_id || '?') + '): <b>' + esc(c.anchor_address || ('#' + c.anchor_property_id)) + '</b>'
         + (c.anchor_tenant ? ' — ' + esc(c.anchor_tenant) : '') + '</div>'
       + '<div class="q-item-meta" style="opacity:.7">Same building, or distinct co-located clinics? Merge folds the shadow into the CCN anchor (reversible).</div>';
+    // Prompt 106: the property_twin_assist annotation (deterministic pre-rank or
+    // Ollama residue). Suggestion + confidence + reason + verbatim evidence. It
+    // ANNOTATES only — you still decide.
+    var pta = c.assist;
+    if (pta && pta.verdict) {
+      var sugLabel = { merge: 'likely twin — merge', not: 'likely distinct — not a twin', uncertain: 'needs judgment' };
+      var sugTone = pta.verdict === 'merge' ? 'type' : (pta.verdict === 'not' ? 'pri-high' : '');
+      var conf = (pta.confidence != null) ? (' · ' + Math.round(Number(pta.confidence) * 100) + '%') : '';
+      var layerTxt = pta.layer === 'deterministic' ? 'deterministic' : (pta.layer === 'llm' ? 'assist' : '');
+      body += '<div class="q-item-meta" style="margin-top:4px">'
+        + '<span class="q-badge ' + sugTone + '">' + esc(sugLabel[pta.verdict] || pta.verdict) + conf + '</span> '
+        + (layerTxt ? '<span class="q-badge">' + esc(layerTxt) + '</span> ' : '')
+        + (pta.reason ? esc(pta.reason) : '') + '</div>'
+        + (pta.evidence_quote ? '<div class="q-item-meta" style="opacity:.7">evidence: <i>' + esc(pta.evidence_quote) + '</i></div>' : '');
+    }
     actions = '<button class="q-action primary" title="Fold the shadow into the CCN anchor via the reversible wrapper (undoable via dia_unmerge_property)." onclick="dcFed(' + i + ',\'merge\')">Merge into anchor →</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_twin\')">Not a twin</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
@@ -869,6 +884,19 @@ async function renderFederatedLane(type, view) {
         + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkContactAttach()">Confirm all ' + attachN + ' attach' + (attachN === 1 ? '' : 'es') + '</button></div></div>';
     }
   }
+  // Prompt 106: bulk-confirm the DETERMINISTIC MERGE suggestions only (same
+  // operator + near-identical name — the safest, mechanical twins). Never bulks
+  // the LLM/uncertain cards (they keep their per-card gate). Each confirm still
+  // routes through the HUMAN verdict path (reversible dia_merge_property_reversible).
+  if (type === 'property_twin') {
+    var detMerges = items.filter(function (it) {
+      var a = (it.context || {}).assist; return a && a.verdict === 'merge' && a.layer === 'deterministic';
+    }).length;
+    if (detMerges > 0) {
+      html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Deterministic merges (same operator, near-identical name)</span>'
+        + '<div class="triage-actions"><button class="q-action primary" onclick="dcFedBulkTwinMerges()">Confirm all ' + detMerges + ' deterministic merge' + (detMerges === 1 ? '' : 's') + '</button></div></div>';
+    }
+  }
   _dcFedType = type;
   _dcFedArr = items.slice();
   items.forEach(function (it, ix) { html += _fedCardHTML(it, ix, ix === 0); });
@@ -907,6 +935,40 @@ async function dcFedBulkContactAttach() {
   showToast('Attached: ' + done + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
 }
 window.dcFedBulkContactAttach = dcFedBulkContactAttach;
+
+// Prompt 106 property_twin lane. Bulk-confirm the DETERMINISTIC MERGE cards only
+// (same operator + near-identical name — the assist's safest suggestion). Each
+// merge rides the reversible wrapper (dia_merge_property_reversible; undoable via
+// dia_unmerge_property). LLM/uncertain cards are NEVER bulked — they keep their
+// per-card gate. This is a HUMAN one-click confirm, not an auto-merge.
+async function dcFedBulkTwinMerges() {
+  if (_dcFedType !== 'property_twin') return;
+  var pending = (_dcFedArr || []).map(function (it, ix) { return { it: it, ix: ix }; })
+    .filter(function (p) {
+      var a = (p.it.context || {}).assist;
+      if (!(a && a.verdict === 'merge' && a.layer === 'deterministic')) return false;
+      var r = document.getElementById('dc-f' + p.ix); return r && !r.classList.contains('resolved');
+    });
+  if (!pending.length) { showToast('No deterministic merges to confirm', 'info'); return; }
+  var ok = (typeof lccConfirm === 'function')
+    ? await lccConfirm('Merge ' + pending.length + ' deterministic twin' + (pending.length === 1 ? '' : 's') + '?\n\nEach is a same-operator, near-identical-name pair — the same building captured twice. The shadow folds into the CCN anchor. Reversible per-row via dia_unmerge_property.')
+    : (typeof confirm === 'function' ? confirm('Merge ' + pending.length + ' deterministic twins?') : true);
+  if (!ok) return;
+  var done = 0, failed = 0;
+  for (var k = 0; k < pending.length; k++) {
+    var p = pending[k];
+    var res = await opsApi('/api/decision-verdict', {
+      method: 'POST', body: JSON.stringify({ type: 'property_twin', subject: p.it, verdict: 'merge', payload: {} }),
+    });
+    var row = document.getElementById('dc-f' + p.ix);
+    if (res.ok && res.data && res.data.ok) { done++; if (row) { row.classList.add('resolved'); row.style.opacity = '0'; } }
+    else { failed++; }
+  }
+  document.querySelectorAll('#reviewConsoleContent .q-item.resolved[id^="dc-f"]').forEach(function (n) { if (n.parentNode) n.remove(); });
+  _dcAdvanceFed();
+  showToast('Merged: ' + done + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+}
+window.dcFedBulkTwinMerges = dcFedBulkTwinMerges;
 
 // W8 owner_reconcile seeder chip: filter the shown cards to a single seeder
 // (client-side, by each card's data-seeder attribute). Empty kind = show all.

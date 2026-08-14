@@ -211,6 +211,7 @@ app.all('/api/reachability-harvest-tick', (req, res) => { req.query._route = 're
 app.all('/api/systemic-findings-tick', (req, res) => { req.query._route = 'systemic-findings-tick'; adminHandler(req, res); });
 app.all('/api/link-coverage-tick', (req, res) => { req.query._route = 'link-coverage-tick'; adminHandler(req, res); });
 app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
+app.all('/api/property-twin-assist-tick',  (req, res) => { req.query._route = 'property-twin-assist-tick';  adminHandler(req, res); });
 app.all('/api/sf-link-assist-tick',        (req, res) => { req.query._route = 'sf-link-assist-tick';        adminHandler(req, res); });
 app.all('/api/sf-link-rescore-tick',       (req, res) => { req.query._route = 'sf-link-rescore-tick';       adminHandler(req, res); });
 app.all('/api/sf-donor-handoff-tick',      (req, res) => { req.query._route = 'sf-donor-handoff-tick';      adminHandler(req, res); });
