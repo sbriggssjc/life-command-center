@@ -1043,8 +1043,8 @@ function packetFlagsFromCharts(charts = [], periodEnd) {
   return flags;
 }
 
-async function buildLivePacket({ vertical, periodEnd, quarter, user }) {
-  const payload = await assembleExportPayloadForPacket({ vertical, periodEnd, user });
+async function buildLivePacket({ vertical, periodEnd, quarter, user, onlyTemplates = null }) {
+  const payload = await assembleExportPayloadForPacket({ vertical, periodEnd, user, onlyTemplates });
   const charts = payload?.charts || [];
 
   return {
@@ -1066,13 +1066,16 @@ async function buildLivePacket({ vertical, periodEnd, quarter, user }) {
   };
 }
 
-async function assembleExportPayloadForPacket({ vertical, periodEnd, user }) {
+async function assembleExportPayloadForPacket({ vertical, periodEnd, user, onlyTemplates = null }) {
   const fakeReq = {
     query: {
       vertical,
       as_of: periodEnd,
       subspecialty: 'all',
       format: 'payload',
+      ...(Array.isArray(onlyTemplates) && onlyTemplates.length
+        ? { only_templates: onlyTemplates.join(',') }
+        : {}),
     },
     user,
   };
@@ -1278,12 +1281,80 @@ async function buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLiv
  * request-path rebuild that stranded the tab on 2026-08-14. Intended to be called
  * by a scheduler (see .github/workflows/cm-packet-refresh.yml), not the browser.
  */
+/**
+ * Chunked merge refresh — rebuild only `batchIds` charts (a small subset, so the
+ * request stays fast) and merge their fresh rows into the EXISTING snapshot. A
+ * chart is only replaced when the fresh build populated it; if the fresh build
+ * came back empty, the existing (populated) chart is kept — so a merge can never
+ * regress the snapshot. This is how fresh data lands on the heavy gov packet
+ * without a single slow full-build request (which exceeds Railway's HTTP window).
+ */
+async function mergeRefreshPacket({ domain, v, q, pe, user, batchIds }) {
+  const existingRow = await fetchSnapshotRow(domain, v, q);
+  if (!existingRow) {
+    const err = new Error('no_existing_snapshot_to_merge — run a full refresh first');
+    err.status = 409;
+    throw err;
+  }
+  const subset = await buildLivePacket({
+    vertical: v, periodEnd: pe, quarter: q, user, onlyTemplates: batchIds,
+  });
+  const freshById = new Map((subset.charts || []).map(c => [c.chart_template_id, c]));
+  const oldCharts = existingRow.packet?.charts || [];
+  const hasRows = (c) => c && Array.isArray(c.rows) && c.rows.length > 0;
+
+  const merged = oldCharts.map((c) => {
+    const fresh = freshById.get(c.chart_template_id);
+    return hasRows(fresh) ? fresh : c; // take fresh only when populated, else keep old
+  });
+  // Charts requested that weren't in the snapshot yet — append when populated.
+  const oldIds = new Set(oldCharts.map(c => c.chart_template_id));
+  for (const id of batchIds) {
+    if (!oldIds.has(id) && hasRows(freshById.get(id))) merged.push(freshById.get(id));
+  }
+
+  const mergedPacket = { ...(existingRow.packet || {}), charts: merged };
+  const insert = await domainQuery(
+    domain, 'POST', 'cm_report_snapshots?on_conflict=vertical,fiscal_quarter',
+    {
+      vertical: v, fiscal_quarter: q, period_end: pe, packet: mergedPacket,
+      frozen_by: user?.email || user?.id || 'api', updated_at: new Date().toISOString(),
+    },
+    { Prefer: 'resolution=merge-duplicates,return=representation' }
+  );
+  if (insert.ok === false) {
+    const err = new Error('merge_upsert_failed');
+    err.status = insert.status || 500;
+    err.detail = insert.data;
+    throw err;
+  }
+  return {
+    refreshed: batchIds.filter(id => hasRows(freshById.get(id))),
+    still_empty: batchIds.filter(id => !hasRows(freshById.get(id))),
+    total_charts: merged.length,
+  };
+}
+
 async function refreshPacket(req, res, user) {
   const vertical = normalizePacketVertical(req.query.vertical || 'gov');
   const asOfRes = resolveAsOf(req.query.as_of);
   if (asOfRes.asOf === null) return res.status(400).json({ error: 'invalid_as_of' });
   const periodEnd = asOfRes.asOf;
   const quarter = quarterLabelFromPeriodEnd(periodEnd);
+
+  // Chunked merge mode: refresh only these charts and merge into the snapshot.
+  const batchIds = String(req.query.chart_template_ids || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  if (batchIds.length) {
+    const domain = packetDomainForVertical(vertical);
+    const v = normalizePacketVertical(vertical);
+    try {
+      const out = await mergeRefreshPacket({ domain, v, q: quarter, pe: periodEnd, user, batchIds });
+      return res.status(200).json({ ok: true, mode: 'merge', vertical, quarter, period_end: periodEnd, ...out });
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message || 'merge_failed', detail: e.detail || null });
+    }
+  }
   // Default 1 build per call so each HTTP request stays short — the scheduled
   // workflow loops the calls and retries on !persisted. A caller may pass a higher
   // `attempts` to retry within one (longer) request.
@@ -1852,7 +1923,21 @@ async function exportWorkbook(req, res) {
     'GET',
     `cm_chart_catalog?select=*&applies_to_verticals=cs.{${vertical}}${phaseFilter}&order=phase,chart_template_id`
   );
-  const templates = cat.data || [];
+  let templates = cat.data || [];
+
+  // Chunked-refresh support: `only_templates` (CSV of chart_template_ids) restricts
+  // the build to a small subset so each request stays well under the HTTP timeout.
+  // The full gov build (~45 parallel view fetches) can exceed Railway's response
+  // window; refresh_packet drives this a few charts at a time and merges the fresh
+  // rows into the existing snapshot. Synthetic (composed) templates depend on other
+  // charts' rows, so they are only built in a FULL build — a subset build restricts
+  // to real (view-backed) templates and leaves synthetics to the merge.
+  const onlyTemplates = String(req.query.only_templates || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const onlySet = onlyTemplates.length ? new Set(onlyTemplates) : null;
+  if (onlySet) {
+    templates = templates.filter((t) => onlySet.has(t.chart_template_id) && !syntheticRecipeFor(t));
+  }
 
   // Split into real (view-backed) vs synthetic (composed) templates so the
   // synthetic ones can read the freshly-fetched real-chart rows.
