@@ -252,7 +252,20 @@ const CHART_FOOTER_CAPTIONS = {
   rent_heat_map:
     'Top states by average rent / SF.',
   sources_of_capital:
-    'Top buyer-state sources of capital by 15-year volume.',
+    'Top buyer-state sources of capital by 15-year volume. Buyer state is taken ' +
+    'from the sale record and, where blank, recovered from the linked buyer ' +
+    'contact. Buyers whose state could not be identified are excluded and the ' +
+    '% column is normalized over identified-state volume, so the shares sum to ' +
+    '100% of identified-state capital.',
+  value_proposition_results:
+    'TTM average NOI, cap rate, and sale price with NM vs. Non-NM splits on the ' +
+    'cap and price tiles. Same-address portfolio comps within a TTM window are ' +
+    'collapsed to one deal (summed price, volume-weighted cap) so a single ' +
+    'transaction split across parcels is not multi-counted. The NM gov comp ' +
+    'sample is small (~4 deals/quarter) and skews to smaller private-capital ' +
+    'trades, which sit at wider caps than the large institutional deals in the ' +
+    'Non-NM set — so the single-quarter NM/Non-NM cap split can read near-parity ' +
+    'or invert; lean on the multi-year NM-vs-Market trend for the durable story.',
   case_for_renewal:
     'Monthly TTM GSA new-lease commencements from gsa_leases.latest_action=New (bars) vs. trimmed average rent / SF (line).',
   pace_of_cap_rate_expansion:
