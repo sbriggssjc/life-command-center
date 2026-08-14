@@ -675,7 +675,7 @@ function buildNativeChartConfig(chart, brand) {
   return null;
 }
 
-function buildChartConfig(chart, brand) {
+export function buildChartConfig(chart, brand) {
   if (!chart || !chart.rows || chart.rows.length === 0) return null;
   const nativeConfig = buildNativeChartConfig(chart, brand);
   if (nativeConfig) return nativeConfig;
