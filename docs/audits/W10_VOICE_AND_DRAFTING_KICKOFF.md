@@ -88,5 +88,14 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
   sent emails; honest ~255-char `bodyPreview` cap surfaced). Pure cleaning module
   `api/_shared/voice-corpus-clean.js` + 19 tests, on-prem `scripts/voice-distill.mjs` (ollama-only,
   no cloud egress), and `BRIGGS-WRITING-VOICE.md` (overall voice + per-context variants, evidenced,
-  cold-BD bucket flagged THIN). No drafting surface changed. **Awaiting Scott's read** of the profile
-  before Stage 2 (RAG drafting). See ROLLOUT_STATUS Wave 10.
+  cold-BD bucket flagged THIN). No drafting surface changed. Scott read + approved the profile
+  ("a good start, accurate representation", 2026-08-13). See ROLLOUT_STATUS Wave 10.
+- 2026-08-14: **Stage 2 (Prompt 107) DRAFTED — Scott chose to proceed on the current capped corpus** (rather
+  than gate on fuller-body ingestion first). Spec: `/api/draft-assist` — RAG retrieval over the cleaned sent
+  corpus (embedding-KNN via on-prem Ollama embed if available, else deterministic bucket+recipient+recency) +
+  deal-spine facts (never invented, "Not on file" for gaps) + the Stage-1 voice profile → on-prem Ollama
+  generation → a DRAFT to Outlook Drafts / Cowork, NEVER sent. Structural never-send + fact-validator +
+  fail-closed-if-no-Ollama guards; flag `DRAFT_ASSIST` OFF; `voice_confidence` note surfaces the opening-only
+  cap honestly; U4 edit-distance hook left wired. Prompt `docs/claude-code/prompts/107-w10-2-rag-drafting.md`.
+  **Deferred to a future unit:** fuller email-body ingestion (past the ~255-char `bodyPreview` cap) — the
+  shared enabler for long-form drafting + the voice profile's sign-off fidelity + the harvest signature arm.
