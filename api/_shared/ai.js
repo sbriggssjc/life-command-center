@@ -654,6 +654,106 @@ async function invokeOllamaExtraction({ prompt }) {
   }
 }
 
+/**
+ * ON-PREM-ONLY generation (W10 Stage 2 — draft-assist, Prompt 107).
+ *
+ * Unlike invokeExtractionAI, this has NO cloud fallback: it talks to the local
+ * GaryBuilt Ollama (OLLAMA_URL) and, on any missing-config / failure / timeout,
+ * FAILS CLOSED with an honest error. Scott's writing corpus + deal facts must
+ * NEVER egress to a cloud model, so the draft-assist generate pass uses this
+ * seam instead of invokeExtractionAI's local-primary-then-cloud chain.
+ *
+ * Returns { ok, status, provider:'ollama', text, error? }.
+ * @param {object}  o
+ * @param {string}  o.prompt              the full generation prompt
+ * @param {number} [o.temperature=0.4]    prose wants a touch more variety than extraction
+ * @param {boolean}[o.json=false]         force response_format json_object (off for prose)
+ */
+export async function invokeOnPremGeneration({ prompt, temperature = 0.4, json = false } = {}) {
+  const base = String(process.env.OLLAMA_URL || '').trim().replace(/\/+$/, '');
+  if (!base) {
+    return { ok: false, status: 503, provider: 'ollama', text: '', error: 'OLLAMA_URL unset — on-prem generation unavailable (fail-closed, no cloud fallback for this surface).' };
+  }
+  const model = String(process.env.OLLAMA_MODEL || 'qwen2.5:14b').trim();
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 45_000);
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+        ...(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+          ? { 'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID, 'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET }
+          : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: String(prompt || '') }],
+        temperature,
+        stream: false,
+        ...(json ? { response_format: { type: 'json_object' } } : {}),
+      }),
+      signal: controller.signal,
+    });
+    let data = null;
+    try { data = await res.json(); } catch { data = { error: 'Invalid Ollama response' }; }
+    const text = data?.choices?.[0]?.message?.content || '';
+    if (!res.ok) {
+      return { ok: false, status: res.status, provider: 'ollama', text: '', error: `Ollama returned ${res.status}`, model };
+    }
+    return { ok: true, status: 200, provider: 'ollama', text, model };
+  } catch (err) {
+    const aborted = err && err.name === 'AbortError';
+    return { ok: false, status: 0, provider: 'ollama', text: '', error: aborted ? 'Ollama timed out' : ('Ollama request failed: ' + (err?.message || String(err))) };
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+/**
+ * ON-PREM embedding (W10 Stage 2 — optional RAG retrieval upgrade).
+ * Best-effort: returns null on any missing-config / failure so callers fall
+ * back to the deterministic ranker. Never egresses to a cloud model.
+ * @param {string[]} texts
+ * @returns {Promise<number[][]|null>} one vector per input text, or null.
+ */
+export async function invokeOnPremEmbeddings(texts = []) {
+  const base = String(process.env.OLLAMA_URL || '').trim().replace(/\/+$/, '');
+  if (!base) return null;
+  const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t || ''));
+  if (list.length === 0) return [];
+  const model = String(process.env.DRAFT_ASSIST_EMBED_MODEL || 'nomic-embed-text').trim();
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 45_000);
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    // Ollama native embeddings endpoint accepts a batch via `input`.
+    const res = await fetch(`${base}/api/embed`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+        ...(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+          ? { 'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID, 'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET }
+          : {}),
+      },
+      body: JSON.stringify({ model, input: list }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const vecs = data?.embeddings;
+    if (!Array.isArray(vecs) || vecs.length !== list.length) return null;
+    return vecs;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(to);
+  }
+}
+
 export async function invokeExtractionAI({ prompt, surface } = {}) {
   const cfg = getAiConfig();
   const tried = [];

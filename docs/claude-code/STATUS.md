@@ -10,6 +10,17 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-14 — Prompt 107 (W10 Stage 2): retrieval-grounded drafting `/api/draft-assist` SHIPPED
+
+**New endpoint `/api/draft-assist` — a Scott-voiced DRAFT generator grounded in his real sent-email corpus + the deal spine. Flag `DRAFT_ASSIST` OFF; GET dry-run is live for review.**
+
+- **What.** `GET /api/draft-assist?purpose=&intent=&recipient=&entity_id=` assembles a draft and returns it + the retrieved exemplar ids + the facts used (+ "Not on file" gaps) + a `voice_confidence` note — **writes nothing**. `POST` (flag-gated on `DRAFT_ASSIST`, `save=true`) saves the draft to Outlook Drafts via the offer-submission `createOutlookDraftViaPA` seam. **NEVER sends.**
+- **Doctrine, enforced structurally (not just by prompt):** (1) never-send — the only outbound call on the path is the save-not-send draft seam; (2) never fabricate — facts come from `buildDealPacket`→`extractDealFacts` ("Not on file" for gaps) and the generated draft is run through `validateDraftFacts`, which **strips any number/date not grounded in the facts or the retrieved exemplars** and flags ungrounded names; (3) strategy stays verbal (prompt forbids it); (4) **on-prem generation only — `invokeOnPremGeneration` fails CLOSED, no cloud fallback**, so Scott's corpus never egresses; (5) honest `voice_confidence` about the opening-only (~255-char) corpus cap.
+- **Retrieval.** `loadCorpus` reads `activity_events` + `email_bodies`, gates on the `SCOTT_FROM` from-address set (**outbound-only**), cleans via `voice-corpus-clean`, buckets via `classifyDraftType`. Ranks with on-prem Ollama embedding-KNN (`nomic-embed-text`) when reachable, else a deterministic bucket+recipient+recency ranker (serviceable on opening-length text).
+- **Files.** Core (pure/testable) `api/_shared/draft-assist-core.js`; handler `api/draft-assist.js`; on-prem seam added to `api/_shared/ai.js` (`invokeOnPremGeneration` + `invokeOnPremEmbeddings`, both fail-closed); mounted in `server.js`; migration `20260901120000_lcc_w10_2_draft_assist_flag.sql` (registers `DRAFT_ASSIST`); tests `test/draft-assist.test.mjs` (**21 pass**); sample sheet `docs/audits/W10_STAGE2_SAMPLE_DRAFTS.md`.
+- **U4 hook** left wired (draft-vs-sent edit-distance); send-side capture is a documented TODO seam (not built — it's heavy).
+- **Operator step:** redeploy → run a couple of `GET /api/draft-assist?...` and read the sample drafts ("does this sound like me?") → flip `DRAFT_ASSIST`→on (Cowork) to enable Outlook-draft saves. On-prem generation needs `OLLAMA_URL` set on the Railway service; without it GET honestly 502s "failing closed".
+
 ## Session 2026-08-14 (Cowork, later) — 105 + 106 reviewed & reconciled; CRLF class fixed repo-wide
 
 **Both responses reviewed, verified live, docs reconciled, folder cleaned. Tree fully synced (`main...origin/main`).**
