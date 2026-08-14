@@ -3165,6 +3165,71 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'market_share_pie_ttm': {
+      // Broker/firm market-share breakdown for the latest reported period.
+      // Rows span many periods × many buckets (period_end, bucket_label,
+      // volume_dollars, deal_count, share_pct, rank); pick the newest period,
+      // rank by volume, keep the top 8 and fold the tail into "Other". Use the
+      // uncropped chart.rows (recentRows would clip this non-time-series shape).
+      const allRows = chart.rows || [];
+      if (!allRows.length) return null;
+      const latest = allRows.reduce(
+        (mx, r) => (String(r.period_end || '') > mx ? String(r.period_end || '') : mx), '');
+      const periodRows = allRows
+        .filter(r => String(r.period_end || '') === latest)
+        .sort((a, b) => (Number(b.volume_dollars) || 0) - (Number(a.volume_dollars) || 0));
+      if (!periodRows.length) return null;
+      const TOP_N = 8;
+      const head = periodRows.slice(0, TOP_N);
+      const tail = periodRows.slice(TOP_N);
+      const segments = head.map(r => ({
+        label: r.bucket_label || 'Unknown',
+        value: Number(r.volume_dollars) || 0,
+      }));
+      const tailVol = tail.reduce((s, r) => s + (Number(r.volume_dollars) || 0), 0);
+      if (tailVol > 0) segments.push({ label: 'Other', value: tailVol });
+      const totalValue = segments.reduce((s, seg) => s + seg.value, 0);
+      const preLabels = segments.map((seg) => {
+        if (!seg.value || !totalValue) return '';
+        const share = (seg.value / totalValue) * 100;
+        if (share < 4) return '';
+        const mm = seg.value / 1_000_000;
+        const lbl = mm >= 1000 ? `$${(mm / 1000).toFixed(1)}B` : `$${mm.toFixed(1)}M`;
+        return `${lbl}\n${share.toFixed(1)}%`;
+      });
+      const pieColors = paletteSeries(brand);
+      return {
+        type: 'doughnut',
+        data: {
+          labels: segments.map(seg => seg.label),
+          datasets: [{
+            label: 'Volume by Firm',
+            data: segments.map(seg => seg.value),
+            dataLabels: preLabels,
+            backgroundColor: segments.map((_, i) => pieColors[i % pieColors.length]),
+            borderColor: '#FFFFFF',
+            borderWidth: 2,
+          }],
+        },
+        options: {
+          plugins: {
+            legend: { position: 'right', labels: { font: { size: 11 } } },
+            title: {
+              display: true,
+              text: `Market Share by Firm — ${periodEndLabel(latest)}`,
+              font: { size: 14, weight: 'bold' },
+              color: PDF_COLORS.cap_short,
+            },
+            datalabels: {
+              color: '#FFFFFF',
+              font: { family: CM_PNG_FONT, size: 9, weight: 'bold' },
+              formatter: (_v, ctx) => ctx.dataset.dataLabels?.[ctx.dataIndex] ?? '',
+            },
+          },
+        },
+      };
+    }
+
     default:
       return null;
   }
