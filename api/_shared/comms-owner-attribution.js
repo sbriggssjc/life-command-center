@@ -47,6 +47,33 @@ export const COA_PATHS = [PATH_A, PATH_B];
 // in the W9.6 migration so v_field_provenance_unranked stays 0.
 export const COA_PROVENANCE_SOURCE = 'comms_owner_bridge';
 
+// The observed curated field for the attribution edge. The owner id is appended
+// to activity_events.metadata.linked_entity_ids; provenance is keyed on that field.
+export const COA_PROVENANCE_TARGET_DATABASE = 'lcc_opps';
+export const COA_PROVENANCE_TARGET_TABLE = 'public.activity_events';
+export const COA_PROVENANCE_FIELD = 'linked_entity_ids';
+
+// Build the rpc/lcc_merge_field argument object for an owner-bridge attribution.
+// p_value is the RAW owner-entity id — the RPC param is jsonb and casts it, so it
+// must NOT be JSON.stringify'd (that double-encodes into '"\"<id>\""'). This is the
+// single builder both the live confirm writer and the regression test consume, so
+// the correct p_value shape can't silently drift back to the double-encoded form.
+export function buildOwnerBridgeProvenanceArgs({ sampleId, ownerEid, sourceRunId, confidence, workspaceId, recordedBy } = {}) {
+  if (!sampleId || !ownerEid) return null;
+  return {
+    p_workspace_id: workspaceId || null,
+    p_target_database: COA_PROVENANCE_TARGET_DATABASE,
+    p_target_table: COA_PROVENANCE_TARGET_TABLE,
+    p_record_pk: String(sampleId),
+    p_field_name: COA_PROVENANCE_FIELD,
+    p_value: String(ownerEid),
+    p_source: COA_PROVENANCE_SOURCE,
+    p_source_run_id: sourceRunId || 'verdict',
+    p_confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+    p_recorded_by: recordedBy || null,
+  };
+}
+
 // Path A is arithmetic (the owns edge is a fact) → confidence 1.0. Path B rests on
 // a curated tie (pivot) or an unambiguous relationship edge — high but not 1.0.
 export const COA_CONF_PROPERTY_BRIDGE = 1.0;
