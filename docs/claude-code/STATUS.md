@@ -24,13 +24,19 @@
   box; both generated on-prem (`qwen2.5:14b`, GaryBuilt reachable). **Voice is accurate** — terse, "Stay tuned",
   "Got it" (echoing his real retrieved exemplars); **never-fabricate proven** — a non-existent `entity_id` yielded
   ALL "Not on file" + `fact_validation.clean=true`, zero invented facts. Corpus 434, deterministic retrieval
-  (embedding model not installed → fell back as designed), `voice_confidence` honest about the ~255-char cap. Flag
-  `DRAFT_ASSIST` flipped **on** — POST save-to-Outlook-Drafts is enabled (needs `PA_OUTLOOK_DRAFT_URL` on Railway
-  for the actual save; GET dry-run works regardless).
-  - **Small follow-up candidate (not blocking):** the fact-validator false-positived on draft A — it flagged
-    **"Quick Check"** (from the subject "Quick Check-In") as an ungrounded `proper_name`. It only FLAGS names (doesn't
-    strip them — numbers/dates are stripped), so it's noise not risk, but the Title-Cased-subject-word detection is
-    too eager. A tiny precision fix would stop it crying wolf on benign capitalized phrases.
+  (embedding model not installed → fell back as designed), `voice_confidence` honest about the ~255-char cap. GET dry-run is live and works well.
+  **⚠ CORRECTION (later 2026-08-14): registry flip alone does NOT enable POST-save.** A live POST returned
+  `saved:false / save_skipped: DRAFT_ASSIST flag is OFF` even with `feature_flags_registry.DRAFT_ASSIST='on'`,
+  because **`api/draft-assist.js:260` gates ONLY on `process.env.DRAFT_ASSIST`** — it has NO registry fallback,
+  unlike every cron tick (W9.6/harvest/twin check env-OR-`feature_flags_registry.state`, which is why THOSE
+  registry flips genuinely worked — verified by their output). So draft-assist is the lone inconsistency.
+  **→ Prompt 109 drafted** (`docs/claude-code/prompts/109-draft-assist-flag-consistency-and-validator.md`):
+  **Part A** make the save gate honor env-OR-registry via the shared `w93FlagEnabled` helper (then the already-on
+  registry row enables saves on redeploy — no env var needed); **Part B** the fact-validator false-positive —
+  it flagged **"Quick Check"** (subject "Quick Check-In") as an ungrounded `proper_name` (only flags, doesn't
+  strip; noise not risk), tighten so benign Title-Case phrases don't trip it. **Immediate option:** set the
+  Railway env var `DRAFT_ASSIST=on` on the tranquil-delight service to enable saves now (also needs
+  `PA_OUTLOOK_DRAFT_URL` for the actual PA save).
 
 ## Milestone 2026-08-14 — W9.6 lane fully worked; the last connectedness link is now CONSUMED
 
