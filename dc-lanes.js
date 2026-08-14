@@ -73,6 +73,8 @@ const _DC_FED_META = {
     intro: 'W5.2. A gov agency risk composite (spending decline / footprint reduction / RIF signals) with tracked portfolio exposure, value-ranked. A high-risk agency on properties we track is a disposition signal — reach the owners. Pursue disposition (BD outreach on the tracked portfolio), monitor (keep watching), or dismiss (stops asking). No domain write — this is a BD signal.' },
   npi_dedup_review: { title: 'NPI duplicates → review',
     intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate flagged as a genuine data error needing human eyes. Confirm duplicate marks the cluster for the resolver/worker to collapse; Not a duplicate records them distinct. NEVER a silent auto-collapse — you decide.' },
+  property_twin: { title: 'Property address twins (dia)',
+    intro: 'A geocoded dia property with NO Medicare CCN sitting on top of a CMS-anchored clinic — the same building captured twice (the shadow carries the CRE/deal data; the anchor carries the census). The blank-operator husks already auto-merged; these have a competing identity (operator conflict, a distinct clinic name, or multiple anchors), so YOU decide. Merge folds the shadow into the CCN anchor via the REVERSIBLE wrapper (snapshot-before-delete, undoable). Not a twin = distinct co-located clinics (e.g. a Fresenius and a DaVita in one plaza). Research sends it out for confirmation.' },
   npi_dedup_autoapprove: { title: 'NPI duplicates → approve',
     intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate scored auto-resolvable — a proposed survivor is shown. A human APPROVES the deterministic survivor (fill-blanks / never-guess applies to destructive dedup too), or rejects it. Approval spawns the reconcile task; the actual merge stays human/worker-driven — NEVER a silent auto-collapse.' },
 };
@@ -141,6 +143,29 @@ function _fedCardHTML(it, i, isNext) {
       ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(pid)) + '}, {}, \'Overview\')">Compare &amp; merge →</button>' : '';
     actions = openDetail
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_duplicate\')">Not a duplicate</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'property_twin') {
+    // dia geospatial address twin awaiting a human verdict. keep = the CCN anchor,
+    // drop = the shadow; both are derived server-side on merge (reversible).
+    const dist = (c.distance_miles != null) ? (Number(c.distance_miles).toFixed(3) + ' mi apart') : '';
+    const clsLabel = { review_conflict: 'operator conflict', review_name: 'clinic name differs',
+      review_ambiguous: 'multiple anchors', review_blank_far: 'blank tenant, farther' };
+    const clsTone = (c.classification === 'review_conflict' || c.classification === 'review_ambiguous') ? 'pri-high' : 'type';
+    const title = c.anchor_address || c.shadow_address || ('Property ' + c.shadow_property_id);
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">dia</span>'
+      + '<span class="q-badge ' + clsTone + '">' + esc(clsLabel[c.classification] || c.classification || '') + '</span>'
+      + (dist ? '<span class="q-badge">' + esc(dist) + '</span>' : '')
+      + (c.anchor_chairs != null ? '<span class="q-badge">' + esc(String(c.anchor_chairs)) + ' chairs</span>' : '')
+      + '</div></div>'
+      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + '</div>'
+      + '<div class="q-item-meta">Shadow (no CCN): <b>' + esc(c.shadow_address || ('#' + c.shadow_property_id)) + '</b>'
+        + (c.shadow_tenant ? ' — ' + esc(c.shadow_tenant) : ' — (blank tenant)') + '</div>'
+      + '<div class="q-item-meta">Anchor (CCN ' + esc(c.anchor_medicare_id || '?') + '): <b>' + esc(c.anchor_address || ('#' + c.anchor_property_id)) + '</b>'
+        + (c.anchor_tenant ? ' — ' + esc(c.anchor_tenant) : '') + '</div>'
+      + '<div class="q-item-meta" style="opacity:.7">Same building, or distinct co-located clinics? Merge folds the shadow into the CCN anchor (reversible).</div>';
+    actions = '<button class="q-action primary" title="Fold the shadow into the CCN anchor via the reversible wrapper (undoable via dia_unmerge_property)." onclick="dcFed(' + i + ',\'merge\')">Merge into anchor →</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_twin\')">Not a twin</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'resolve_ownership') {
     const pid = c.property_id;

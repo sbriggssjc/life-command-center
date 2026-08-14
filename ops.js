@@ -1844,6 +1844,10 @@ window.renderOpsHealthPage = renderOpsHealthPage;
 // FEDERATED_DECISION_TYPES in api/admin.js — the two define the same partition.
 var _DC_FEDERATED = new Set([
   'intake_disposition', 'property_merge', 'provenance_conflict', 'pending_update',
+  // dia geospatial address-twin review (2026-08-14). Source = the pending slice of
+  // dia_property_twin_review; merge rides the REVERSIBLE dia_merge_property_reversible.
+  // Keep in sync with admin.js FEDERATED_DECISION_TYPES (decision-center-partition test).
+  'property_twin',
   'cms_link_suspect', 'implausible_value', 'merge_duplicate_entities',
   'caprate_review', 'bad_rent_lease', 'resolve_owner_parent',
   // Ownership-resolution consolidation (2026-06-30): ONE property-keyed lane
@@ -2015,6 +2019,7 @@ async function renderReviewConsolePage() {
     { dt: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach', open: "renderFederatedLane('contact_acquisition_review')" },
     { dt: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution', open: "renderFederatedLane('comms_owner_attribution_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
+    { dt: 'property_twin', label: 'Property address twins (dia)', open: "renderFederatedLane('property_twin')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },
     { dt: 'caprate_review', label: 'Cap-rate review — suspect movers', open: "renderFederatedLane('caprate_review')" },
