@@ -98,6 +98,40 @@ export function isBrokerageOwnerName(name) {
   return BROKERAGE_NAME_TOKENS.some((tok) => n.includes(tok));
 }
 
+// Prompt 104 — brokerage/advisor EMAIL-DOMAIN guard (create_contact precision).
+// The reachability harvest's create_contact arm must never mint a broker/advisor
+// as an owner's OWN contact (the Philip Sharrow <philip.sharrow@scopecre.com>
+// class — a CRE advisory corresponding on two unrelated owners' deals). Reuses
+// the brokerage NAME stoplist above and adds a documented brokerage/advisory
+// DOMAIN stoplist. Grep-first: no existing EXPORTED brokerage-domain constant
+// covers scopecre.com (sidebar-pipeline's BROKERAGE_EMAIL_DOMAIN_RE is the
+// national majors only and is not exported), so this is the single documented
+// list. Kept conservative — only firm domains, never a name-token that real
+// owners share (see the note on the name stoplist above).
+const BROKERAGE_EMAIL_DOMAINS = [
+  'scopecre.com',
+  'cbre.com', 'jll.com', 'us.jll.com', 'colliers.com', 'nmrk.com', 'newmark.com',
+  'cushwake.com', 'cushmanwakefield.com', 'avisonyoung.com', 'kidder.com',
+  'transwestern.com', 'coldwellbanker.com', 'marcusmillichap.com', 'matthews.com',
+  'savills.com', 'savills-na.com', 'lee-associates.com', 'svn.com',
+  'kellerwilliams.com', 'kw.com',
+];
+export function isBrokerageEmail(email) {
+  if (!looksLikeEmail(email)) return false;
+  const e = normalizeEmail(email);
+  const domain = e.split('@')[1] || '';
+  if (!domain) return false;
+  return BROKERAGE_EMAIL_DOMAINS.some((d) => domain === d || domain.endsWith('.' + d));
+}
+
+// The create_contact brokerage-contact guard: a candidate whose NAME reads as a
+// brokerage OR whose evidence EMAIL is a brokerage/advisory domain is a deal
+// party, never the owner's own principal. Used by the reachability harvest mint
+// arm (admin.js) to DROP such a create_contact.
+export function isBrokerageContact(name, email) {
+  return isBrokerageOwnerName(name) || isBrokerageEmail(email);
+}
+
 // The single drop-reason resolver (mirrors the SQL RPC's drop_reason). Precedence:
 // internal_team → brokerage_target. Returns null when the candidate is clean.
 export function pathBDropReason(c) {

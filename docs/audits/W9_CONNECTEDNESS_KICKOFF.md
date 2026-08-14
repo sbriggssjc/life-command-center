@@ -72,6 +72,17 @@ reuses U3's proven pattern), then W9.1 (external chain on the value-ranked remai
 **Build-out status: all 5 core units built + W9.6 addendum; harvest LIVE.**
 - **W9.2/W9.4 reachability harvest LIVE** (flag `W9_2_REACHABILITY_HARVEST` on 2026-08-13 after the
   `unified_contacts` name-accelerator; first cron 04:40 UTC produced 4 real owner-email proposals, health green).
+  - **Prompt 104 (2026-08-14) create_contact PRECISION pass** — the connectedness audit's gap #3: the
+    header-pair harvest mis-attributed deal advisors/brokers as an owner's OWN contact (Philip Sharrow
+    `@scopecre.com` proposed for TWO unrelated owners — Boyd Watterson AND Bloomington IRS; both correctly
+    rejected). TWO deterministic guards now sit on the `create_contact` mint arm ONLY (the deterministic
+    fill-blanks arm is untouched): **(1) fan-out cap** — a contact (keyed by email, else name) proposed for
+    ≥ `HARVEST_MINT_FANOUT_MAX` (=2) distinct owners is suppressed (`fanout_suppressed`), mirroring
+    `planContactMinting`/TrafficMetrix; **(2) brokerage/advisor guard** — a contact whose NAME reads as a
+    brokerage (reusing the W9.6 `isBrokerageOwnerName` stoplist) OR whose evidence EMAIL is on a
+    brokerage/advisory domain (new `isBrokerageEmail`, incl. `scopecre.com`) is dropped
+    (`brokerage_contact_suppressed`). Per-reason counts surfaced in the tick; proposal-only + reversible
+    unchanged. Planner-only (no migration); `test/reachability-harvest-planner.test.mjs` extended.
 - **W9.5 LIVE** (2026-08-12, Prompt 97 — the standing measure).
 - **W9.3 LIVE since 2026-08-08** (all 3 flags on; verified healthy 2026-08-13). Re-score ~72 exact-unique
   auto-links applied over 5 nights (1 conflict guarded, 12→needs_review — conservative); SF assist 80 pre-ranks

@@ -490,6 +490,60 @@ export function buildCommsHeaderProposal(field, donor) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// W9.2/W9.4 create_contact PRECISION (Prompt 104) — fan-out cap (deterministic,
+// NO LLM). A candidate contact — keyed by its normalized EMAIL (a person's own
+// address is the strongest identity), falling back to normalized NAME when no
+// email — that would be create_contact'd for >= HARVEST_MINT_FANOUT_MAX DISTINCT
+// owners is almost never a genuine owner principal: it is a broker/advisor/shared
+// mailbox spreading across unrelated deals (the Philip Sharrow class — one email
+// bound to two unrelated owners by the header-pair harvest). Mirrors the
+// planContactMinting fan-out cap (tm-misparse.js) + the TrafficMetrix
+// one-email-across-many-subjects lesson. Pure counting over the candidate set.
+// ---------------------------------------------------------------------------
+export const HARVEST_MINT_FANOUT_MAX = 2;
+
+// Stable contact identity key. Email wins (normalized); else the normalized name.
+export function createContactKey(name, email) {
+  const e = normalizeEmail(email);
+  if (e && looksLikeEmail(e)) return 'e:' + e;
+  const n = normalizeForMatch(name || '');
+  return n ? 'n:' + n : '';
+}
+
+// The distinct-owner key a create-contact candidate attributes to (domain-scoped).
+export function createContactOwnerKey(cand) {
+  const c = cand && typeof cand === 'object' ? cand : {};
+  const id = c.target_owner_id != null ? String(c.target_owner_id) : '';
+  if (!id) return '';
+  return normDomain(c.domain) + ':' + id;
+}
+
+// Map each contact-key → the Set of distinct owners it would be minted for.
+export function createContactFanoutMap(candidates) {
+  const map = new Map();
+  for (const c of (Array.isArray(candidates) ? candidates : [])) {
+    const key = createContactKey(c && c.contact_name, c && c.value);
+    if (!key) continue;
+    const owner = createContactOwnerKey(c);
+    if (!owner) continue;
+    let set = map.get(key);
+    if (!set) { set = new Set(); map.set(key, set); }
+    set.add(owner);
+  }
+  return map;
+}
+
+// The set of contact-keys whose distinct-owner count >= max (→ suppress as
+// fan-out). max defaults to HARVEST_MINT_FANOUT_MAX (>= 2 distinct owners).
+export function createContactFanoutSuppressed(candidates, max = HARVEST_MINT_FANOUT_MAX) {
+  const cap = Number.isFinite(max) ? Math.max(2, max) : HARVEST_MINT_FANOUT_MAX;
+  const map = createContactFanoutMap(candidates);
+  const out = new Set();
+  for (const [key, owners] of map.entries()) if (owners.size >= cap) out.add(key);
+  return out;
+}
+
 export async function scoreHarvestWithBudget(items, scoreOne, opts = {}) {
   const list = Array.isArray(items) ? items : [];
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
