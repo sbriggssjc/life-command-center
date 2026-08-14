@@ -74,6 +74,7 @@ import {
   collectAddressNumbers, matchCandidateToProperties,
 } from './_shared/naming-hygiene-planner.js';
 import * as RH from './_shared/reachability-harvest-planner.js';
+import { isBrokerageContact as coaIsBrokerageContact } from './_shared/comms-owner-attribution.js';
 import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -4845,7 +4846,7 @@ async function buildFreshHarvestItems(opts = {}) {
     llm: { candidates: 0, with_evidence: 0, no_evidence: 0, fresh: 0, already_known: 0 },
     // W9.4 comms arm counters (kept separate so per-source yields are honest).
     comms: { header_fills: 0, signature_evidence: 0, create_contact: 0, already_known: 0,
-      index_names: 0, index_participants: 0 },
+      index_names: 0, index_participants: 0, fanout_suppressed: 0, brokerage_contact_suppressed: 0 },
     evidence_sources: { sf_contact_id: 0, salesforce_id: 0, intake: 0, comms_names: 0 },
   };
   const deterministic = [];
@@ -4986,17 +4987,37 @@ async function buildFreshHarvestItems(opts = {}) {
   if (participantEntityIds.length) {
     const { owners, errors: ownerErrs } = await harvestResolveOwnersWithoutContacts(participantEntityIds);
     pushErrors(ownerErrs);
-    const seenCreate = new Set();
+    // Build the RAW create-contact candidate set first so the fan-out cap can be
+    // computed GLOBALLY (a contact fanning across owners is only visible across
+    // the whole scan), then apply the Prompt-104 precision guards on the way out.
+    const createRaw = [];
     for (const [entityId, info] of owners.entries()) {
       const parts = comms.ownerParticipants.get(entityId) || [];
       for (const p of parts) {
         // Value-gate: a create-contact needs a real external email AND a name (gov
         // contacts.name is NOT NULL; never fabricate a nameless contact).
         if (!p.email || !p.name) continue;
+        createRaw.push({ info, p });
+      }
+    }
+    // Prompt-104 guard 1 (the strongest signal): fan-out cap. A contact (keyed by
+    // email, else name) proposed for >= HARVEST_MINT_FANOUT_MAX distinct owners is
+    // a broker/advisor/shared mailbox spreading across deals (the Sharrow class).
+    const fanoutSuppressed = RH.createContactFanoutSuppressed(
+      createRaw.map((r) => ({ contact_name: r.p.name, value: r.p.email,
+        domain: r.info.domain, target_owner_id: r.info.true_owner_id })),
+      RH.HARVEST_MINT_FANOUT_MAX);
+    const seenCreate = new Set();
+    for (const { info, p } of createRaw) {
         const subjectRef = RH.commsNewContactSubjectRef(info.domain, info.true_owner_id, p.email);
         if (seenCreate.has(subjectRef)) continue;
         seenCreate.add(subjectRef);
         if (known.has(subjectRef)) { counts.comms.already_known += 1; continue; }
+        // Prompt-104 guard 2: a brokerage/advisor NAME or EMAIL-DOMAIN is a deal
+        // party, never the owner's own principal — drop from the mint arm.
+        if (coaIsBrokerageContact(p.name, p.email)) { counts.comms.brokerage_contact_suppressed += 1; continue; }
+        // Prompt-104 guard 1: fan-out cap (one contact → many owners).
+        if (fanoutSuppressed.has(RH.createContactKey(p.name, p.email))) { counts.comms.fanout_suppressed += 1; continue; }
         // Header-name+email is deterministic; a signature-only attribution is llm.
         const arm = p.quote && RH.quoteVerbatimInEvidence(p.quote, p.quote) && p.name ? RH.HARVEST_ARM_DETERMINISTIC : RH.HARVEST_ARM_LLM;
         counts.comms.create_contact += 1;
@@ -5016,7 +5037,6 @@ async function buildFreshHarvestItems(opts = {}) {
           },
           provenanceSource: RH.HARVEST_SOURCE_COMMS,
         });
-      }
     }
   }
 
@@ -5156,6 +5176,7 @@ async function handleReachabilityHarvestTick(req, res) {
       evidence_sources: counts.evidence_sources, scan_errors: scanErrors,
       deterministic_fresh: deterministic.length, llm_fresh: llmItems.length, create_contact_fresh: createBatchArr.length,
       det_batch: detBatch, llm_batch: llmBatch, create_batch: createBatch, budget_ms: HARVEST_SCORE_BUDGET_MS, min_confidence: HARVEST_MIN_CONF,
+      create_fanout_suppressed: counts.comms.fanout_suppressed, create_brokerage_suppressed: counts.comms.brokerage_contact_suppressed,
       det_proposed: 0, det_failed: 0, create_proposed: 0, create_failed: 0, scored: 0, proposed: 0, no_evidence_found: 0,
       dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
       budget_exhausted: false, remaining_unscored: llmItems.length, by_verdict: {} };
@@ -5233,6 +5254,8 @@ async function handleReachabilityHarvestTick(req, res) {
     out.deterministic_fresh = deterministic.length;
     out.llm_fresh = llmItems.length;
     out.create_contact_fresh = createArr.length;
+    out.create_fanout_suppressed = counts.comms.fanout_suppressed;
+    out.create_brokerage_suppressed = counts.comms.brokerage_contact_suppressed;
     const proposals = [];
     // Deterministic sample (arithmetic — exact source pointers; SF + comms-header).
     for (const item of deterministic.slice(0, inlineN)) {

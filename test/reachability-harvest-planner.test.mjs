@@ -20,7 +20,13 @@ import {
   HARVEST_SOURCE_COMMS, parseHeaderAddress, isInternalEmail, isGenericInbox,
   commsRowHarvestable, commsRowEntityAnchors, extractSignaturePhones, signatureRegion,
   commsNewContactSubjectRef, buildCommsHeaderProposal,
+  // Prompt 104 — create_contact precision (fan-out cap)
+  HARVEST_MINT_FANOUT_MAX, createContactKey, createContactOwnerKey,
+  createContactFanoutMap, createContactFanoutSuppressed,
 } from '../api/_shared/reachability-harvest-planner.js';
+import {
+  isBrokerageEmail, isBrokerageContact, isBrokerageOwnerName,
+} from '../api/_shared/comms-owner-attribution.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
@@ -380,4 +386,91 @@ test('planner never calls the network / imports nothing (pure brain)', () => {
   assert.ok(!/fetch\(|require\(/.test(plannerJs), 'planner must not do I/O');
   assert.equal(HARVEST_ARM_DETERMINISTIC, 'deterministic');
   assert.equal(HARVEST_ARM_LLM, 'llm');
+});
+
+// ---------------------------------------------------------------------------
+// Prompt 104 — W9.2/W9.4 create_contact PRECISION (kill the shared-broker fan-out)
+// ---------------------------------------------------------------------------
+
+test('createContactKey: email wins, name fallback, empty when neither', () => {
+  assert.equal(createContactKey('Philip Sharrow', 'Philip.Sharrow@ScopeCRE.com'), 'e:philip.sharrow@scopecre.com');
+  assert.equal(createContactKey('Jane Owner', ''), 'n:jane owner');
+  assert.equal(createContactKey('', 'not-an-email'), '');
+  assert.equal(createContactKey('', ''), '');
+});
+
+test('createContactOwnerKey: domain-scoped owner id; empty when no owner', () => {
+  assert.equal(createContactOwnerKey({ domain: 'dialysis', target_owner_id: 'o1' }), 'dia:o1');
+  assert.equal(createContactOwnerKey({ domain: 'gov', target_owner_id: 5 }), 'gov:5');
+  assert.equal(createContactOwnerKey({ domain: 'gov' }), '');
+});
+
+test('fan-out cap: one contact across 2 distinct owners is suppressed (the Sharrow class)', () => {
+  // Philip Sharrow (scopecre.com) proposed for TWO unrelated owners.
+  const cands = [
+    { contact_name: 'Philip Sharrow', value: 'philip.sharrow@scopecre.com', domain: 'dia', target_owner_id: 'boyd-watterson' },
+    { contact_name: 'Philip Sharrow', value: 'philip.sharrow@scopecre.com', domain: 'dia', target_owner_id: 'bloomington-irs' },
+    // A genuine single-owner owner contact — must NOT be suppressed.
+    { contact_name: 'Jane Principal', value: 'jane@ownerllc.com', domain: 'gov', target_owner_id: 'owner-x' },
+  ];
+  const map = createContactFanoutMap(cands);
+  assert.equal(map.get('e:philip.sharrow@scopecre.com').size, 2);
+  assert.equal(map.get('e:jane@ownerllc.com').size, 1);
+  const suppressed = createContactFanoutSuppressed(cands);
+  assert.equal(HARVEST_MINT_FANOUT_MAX, 2);
+  assert.ok(suppressed.has('e:philip.sharrow@scopecre.com'), 'the 2-owner fan-out is suppressed');
+  assert.ok(!suppressed.has('e:jane@ownerllc.com'), 'the genuine single-owner contact passes');
+});
+
+test('fan-out cap: the SAME owner twice is NOT a fan-out (distinct-owner count = 1)', () => {
+  const cands = [
+    { contact_name: 'Bob', value: 'bob@ownerllc.com', domain: 'gov', target_owner_id: 'o1' },
+    { contact_name: 'Bob', value: 'bob@ownerllc.com', domain: 'gov', target_owner_id: 'o1' },
+  ];
+  assert.equal(createContactFanoutSuppressed(cands).size, 0);
+});
+
+test('fan-out cap: tunable max raises the threshold', () => {
+  const cands = [
+    { contact_name: 'X', value: 'x@a.com', domain: 'gov', target_owner_id: 'o1' },
+    { contact_name: 'X', value: 'x@a.com', domain: 'gov', target_owner_id: 'o2' },
+  ];
+  assert.ok(createContactFanoutSuppressed(cands, 2).has('e:x@a.com'));
+  assert.equal(createContactFanoutSuppressed(cands, 3).size, 0, 'raising max to 3 spares the 2-owner spread');
+});
+
+test('brokerage-email guard: scopecre.com-class advisory domains dropped; owner domains pass', () => {
+  assert.ok(isBrokerageEmail('philip.sharrow@scopecre.com'));
+  assert.ok(isBrokerageEmail('broker@cbre.com'));
+  assert.ok(isBrokerageEmail('agent@sub.jll.com'), 'subdomain of a brokerage domain still matches');
+  assert.ok(!isBrokerageEmail('jane@ownerllc.com'));
+  assert.ok(!isBrokerageEmail('not-an-email'));
+});
+
+test('brokerage-contact guard: name OR email domain trips it; genuine owner contact passes', () => {
+  assert.ok(isBrokerageContact('Philip Sharrow', 'philip.sharrow@scopecre.com'), 'advisory email trips it');
+  assert.ok(isBrokerageContact('CBRE Capital Markets', 'someone@genericllc.com'), 'brokerage name trips it');
+  assert.ok(!isBrokerageContact('Jane Principal', 'jane@ownerllc.com'), 'a genuine owner contact passes');
+  // reuse, not fork: the name guard is the SAME W9.6 predicate
+  assert.equal(isBrokerageContact('Newmark', 'x@ownerllc.com'), isBrokerageOwnerName('Newmark'));
+});
+
+test('tick wires both create_contact guards into the mint arm + honest per-reason counts', () => {
+  // fan-out computed globally over the raw candidate set BEFORE minting
+  assert.match(adminJs, /RH\.createContactFanoutSuppressed\(/);
+  assert.match(adminJs, /coaIsBrokerageContact\(p\.name, p\.email\)/);
+  // honest per-reason counters, surfaced
+  assert.match(adminJs, /counts\.comms\.brokerage_contact_suppressed \+= 1/);
+  assert.match(adminJs, /counts\.comms\.fanout_suppressed \+= 1/);
+  assert.match(adminJs, /create_fanout_suppressed: counts\.comms\.fanout_suppressed/);
+  assert.match(adminJs, /out\.create_brokerage_suppressed = counts\.comms\.brokerage_contact_suppressed/);
+});
+
+test('create_contact guards do NOT touch the deterministic fill-blanks arm', () => {
+  // the guards live only in the create-contact (step 5) loop, keyed on p.name/p.email —
+  // the SF-donor deterministic arm (bySf/bySalesforce) is untouched.
+  const detArm = adminJs.slice(adminJs.indexOf('-- ARM 1: deterministic exact-identity donor'),
+    adminJs.indexOf('-- ARM 3a: deterministic COMMS header'));
+  assert.ok(!/coaIsBrokerageContact|createContactFanoutSuppressed/.test(detArm),
+    'the deterministic fill-blanks arm carries no create_contact precision guard');
 });
