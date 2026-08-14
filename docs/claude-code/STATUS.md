@@ -10,6 +10,28 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-14 (Cowork, latest) — draft-assist LIVE + 108 backfill verified
+
+- **Prompt 108 (comms_owner_bridge provenance) reviewed + verified live.** Backfill landed: `field_provenance`
+  `comms_owner_bridge` **0 → 22**, all 22 in `v_field_provenance_current`; `v_field_provenance_unranked` adds 0
+  (fsp row pre-existed — no new drift). Root cause matched the diagnosis (swallowed catch + `JSON.stringify(ownerEid)`
+  double-encoded into the `jsonb` param); the response also corrected `p_target_database` `'lcc'`→`'lcc_opps'`
+  (the ops-local convention) and factored an RPC-args builder + regression test (23 pass). **⚠ The WRITER fix is on
+  PR #1746, NOT yet merged** — the old double-encoding is still live in `admin.js`, so FUTURE W9.6 confirms won't
+  stamp provenance until #1746 merges + Railway redeploys. The lane is empty now (all 22 worked) so nothing is
+  pending; merge #1746 to make the fix durable.
+- **W10 Stage 2 draft-assist REVIEWED LIVE + FLIPPED ON.** Scott ran two `GET /api/draft-assist` dry-runs on his
+  box; both generated on-prem (`qwen2.5:14b`, GaryBuilt reachable). **Voice is accurate** — terse, "Stay tuned",
+  "Got it" (echoing his real retrieved exemplars); **never-fabricate proven** — a non-existent `entity_id` yielded
+  ALL "Not on file" + `fact_validation.clean=true`, zero invented facts. Corpus 434, deterministic retrieval
+  (embedding model not installed → fell back as designed), `voice_confidence` honest about the ~255-char cap. Flag
+  `DRAFT_ASSIST` flipped **on** — POST save-to-Outlook-Drafts is enabled (needs `PA_OUTLOOK_DRAFT_URL` on Railway
+  for the actual save; GET dry-run works regardless).
+  - **Small follow-up candidate (not blocking):** the fact-validator false-positived on draft A — it flagged
+    **"Quick Check"** (from the subject "Quick Check-In") as an ungrounded `proper_name`. It only FLAGS names (doesn't
+    strip them — numbers/dates are stripped), so it's noise not risk, but the Title-Cased-subject-word detection is
+    too eager. A tiny precision fix would stop it crying wolf on benign capitalized phrases.
+
 ## Milestone 2026-08-14 — W9.6 lane fully worked; the last connectedness link is now CONSUMED
 
 Scott worked all **22** W9.6 owner-attribution proposals → **22 confirmed / 0 rejected**, 22
@@ -22,7 +44,7 @@ feeds the W9.2 reachability create-contact arm owner-linked threads it couldn't 
   the confirm appends the owner entity to `activity_events.metadata.linked_entity_ids` (a jsonb-array append,
   tracked reversibly by the apply_log), and the provenance ledger (built for scalar curated-field writes) isn't
   stamping the array append. The reversible record (apply_log) is intact and the metric moved correctly; only
-  the provenance *visibility* of these bridges is missing. Candidate tiny follow-up if we want them in the ledger.
+  the provenance *visibility* of these bridges is missing. **→ Prompt 108 drafted** (`docs/claude-code/prompts/108-comms-owner-bridge-provenance.md`): root cause pinned to the confirm writer's `lcc_merge_field` call passing `p_value: JSON.stringify(ownerEid)` (double-encoded) into a `jsonb` param, inside a SWALLOWED catch (admin.js ~9243/9251) — fix the encoding, make the failure loud, backfill the 22 confirmed bridges from the apply_log.
 - **Twin assist (106):** first cron run is 05:45 UTC **2026-08-15** (flag flipped after today's run window), so
   the property_twin lane will be pre-ranked/sorted tomorrow morning (0 annotations now is expected).
 
