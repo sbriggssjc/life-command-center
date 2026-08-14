@@ -10,6 +10,30 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-14 (Cowork, later) — 105 + 106 reviewed & reconciled; CRLF class fixed repo-wide
+
+**Both responses reviewed, verified live, docs reconciled, folder cleaned. Tree fully synced (`main...origin/main`).**
+
+- **Prompt 105 — repo line-ending normalization: SHIPPED to all THREE repos** (each own branch/commit/PR:
+  life-command-center **#1738**, Dialysis **#7376**, government-lease **#381**). Root `.gitattributes`
+  (`* text=auto eol=lf`, explicit LF text types, `eol=crlf` for `.ps1/.bat/.cmd`, binary block; Dialysis got
+  `*.xls binary` for its 34 .xls) + a single `git add --renormalize .` commit per repo — verified pure CRLF→LF
+  (zero content changes, no binaries touched, no Windows scripts flipped). **`.gitattributes` confirmed present
+  in the LCC tree.** The CRLF-churn class that blocked syncs 3× is now fixed at the repo level; the commit body
+  documents the one-time `git rm --cached -r . && git reset --hard` fallback for any Windows checkout still
+  showing churn after re-pull.
+- **Prompt 106 — property_twin assist: VERIFIED LIVE (flag OFF, ready for review→flip).** Confirmed against
+  LCC Opps: flag `PROPERTY_TWIN_ASSIST` = **off**, migration `20260814130000` applied, `lcc_clean_assist_proposals`
+  source CHECK widened (accepts `property_twin_assist`), cron `property-twin-assist-tick` scheduled (05:45 UTC,
+  jobid 220, no-op while off). Planner `api/_shared/property-twin-assist-planner.js` in tree. See the dedicated
+  106 entry below for the full build. **Flip gate (same as 104):** the `?score=1` dry-run needs the authed tick,
+  so live per-class counts confirm at the next cron run or a manual tick call — I'll confirm then.
+- **Docs reconciled:** ROLLOUT_STATUS gained the property_twin-assist entry (106's own branch edit to it was
+  dropped in a merge; re-added). STATUS 104→SHIPPED and the 106 entry already landed via the merges.
+- **Folder cleaned:** prompt 105 → `prompts/done/` (104/106 already there); responses 105/106 → `responses/done/`.
+
+---
+
 ## Prompt 106 (2026-08-14) — property_twin lane: deterministic pre-rank + Ollama assist (annotation-only)
 
 **Built the two-layer assist that pre-ranks + sorts the dia property_twin review lane (~1,245 pending) so

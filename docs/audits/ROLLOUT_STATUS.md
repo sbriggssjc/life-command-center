@@ -48,6 +48,20 @@ Doctrine (inherited): never auto-send (every output is a DRAFT for Scott's edit)
 | 3 | Template library (the "automatic templates" ask) | ⬜ | Future prompt. Cluster the corpus by draft-type; synthesize a Scott-voiced parameterized template + the trigger that offers it (new listing → announcement draft; LOI → offer-submission already fires). |
 | 4 | LoRA fine-tune on GaryBuilt (optional, playbook phase 3) | ⬜ | Last resort — only if Stage 1–2 few-shot voice isn't tight enough. Profile+RAG likely suffices; fully reversible. |
 
+## Decision Center lane assists (Ollama pre-rank, annotation-only)
+
+| Lane | What | Status | Notes |
+|---|---|---|---|
+| property_twin | dia address-twin assist (Prompt 106) | 🟡 **BUILT + applied live — flag `PROPERTY_TWIN_ASSIST` OFF, awaiting `?score=1` review → Cowork flip.** | Claude Code + Cowork gating. Pre-ranks + sorts the dia `dia_property_twin_review` lane (~1,245 pending: review_name 792 / review_conflict 274 / review_ambiguous 95 / review_blank_far 84) so Scott clears the same-operator merges fast and spends judgment on the conflict/ambiguous residue. **ANNOTATES + SORTS — never merges** (`dia_merge_property_reversible` stays a human, reversible verdict; the tick asserts it never calls the merge RPC). **Layer 1 (NO LLM)** `api/_shared/property-twin-assist-planner.js` `classifyTwinDeterministic` (reuses `nameSimilarity`, floor 0.88): same-operator + near-identical name → `merge` (bulk-confirmable); different-operator + `same_norm_address:false` + single anchor → `not_twin`; the residue (same-address operator change, n_anchors>1, same-op name divergence, blank shadow) → `uncertain`. NEVER deterministically not_twins a same-address operator change. **Layer 2 (Ollama, annotation-only)** scores the residue `same_facility`/`distinct_colocated`/`uncertain` with a **verbatim evidence quote** (fabricated quote → dropped to uncertain, the precision floor); the co-located-plaza footgun is few-shot. Store = existing `lcc_clean_assist_proposals` (source `property_twin_assist`; verdict CHECK already allowed merge/not/uncertain/research). Tick `GET/POST /api/property-twin-assist-tick` (dry-run `?score=1&n=`, flag-gated apply, per-class/per-suggest honest counts, `scan_errors`, budget floor); reads dia via `domainQuery` (no edge-allowlist change). Lane (dc-lanes.js) shows suggestion + confidence + evidence, sorts easy-first (mirrors `attachSfLinkAssist`), bulk-confirms deterministic `merge`s only (`dcFedBulkTwinMerges`, each still a human verdict). Migration `20260814130000` applied live to LCC Opps (source CHECK widened, flag `PROPERTY_TWIN_ASSIST` OFF, U4 self-measure table/RPC/view, cron 05:45 UTC jobid 220 no-op while off). Tests `test/property-twin-assist.test.mjs` (31): deterministic classifier, verbatim validator, annotation-never-verdict guard, cursor/bounded, flag-off + cron, co-located footgun fixture (DaVita vs Fresenius same coords → NOT auto-merged). PR #1739. **Operator step before flip:** redeploy → GET `/api/property-twin-assist-tick?score=1&n=20` → review → flip `PROPERTY_TWIN_ASSIST`→on. |
+
+## Repo hygiene
+
+- **Line-ending normalization (Prompt 105, 2026-08-14) — ✅ SHIPPED to all 3 repos.** Root `.gitattributes`
+  (`* text=auto eol=lf` + binary block; `.ps1/.bat/.cmd` kept CRLF) + a one-time `git add --renormalize .` commit
+  per repo (life-command-center PR #1738, Dialysis #7376, government-lease #381). Pure CRLF→LF (zero content
+  changes, binaries untouched). Fixes the repo-wide CRLF churn that had blocked syncs 3×; git now stores/checks
+  out LF on every platform.
+
 ## Wave 8 — Ollama data-hygiene campaign (Scott's directive; kickoff `docs/audits/W53_AND_OLLAMA_HYGIENE_KICKOFF.md` Part 2)
 
 Doctrine: Ollama PROPOSES; a deterministic gate or a human lane DECIDES. No LLM in auditable gates. Evidence-grounded (verbatim quote). Never hard-delete; never retire an FK-referenced row. Reversible ledgers, flag-gated. Four units, sequenced (U1 → U4), each its own prompt.
