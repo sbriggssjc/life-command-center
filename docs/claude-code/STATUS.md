@@ -31,6 +31,17 @@
 - **Docs reconciled:** ROLLOUT_STATUS gained the property_twin-assist entry (106's own branch edit to it was
   dropped in a merge; re-added). STATUS 104→SHIPPED and the 106 entry already landed via the merges.
 - **Folder cleaned:** prompt 105 → `prompts/done/` (104/106 already there); responses 105/106 → `responses/done/`.
+- **106 FLIPPED LIVE (Cowork, 2026-08-14) after a clean `?score=1` review.** Dry-run (200 fresh of 1,245
+  pending): deterministic decisive 81 (20 bulk-confirmable merges + 61 co-located `not`), LLM residue 119,
+  `scan_errors:[]`; verbatim validator dropped non-verbatim LLM quotes (`quote_not_verbatim`), same-address
+  operator-change pairs → `uncertain`, Ollama responding. `PROPERTY_TWIN_ASSIST` = on; cron 05:45 UTC now
+  annotates + sorts the lane (never merges).
+- **104 `?score=1` reviewed — healthy, no flip needed (flag `W9_2_REACHABILITY_HARVEST` already ON).** The
+  bounded 120-target window produced 0 `create_contact` candidates, so `create_fanout_suppressed` /
+  `create_brokerage_suppressed` are honestly 0 (nothing to suppress in-window — NOT a defect; the guard is
+  deployed + unit-tested against the Sharrow fan-out fixture, and fires in production when a fan-out/brokerage
+  create_contact candidate appears). Harvest pool still large (dia 4,238 / gov 10,633 unreachable); comms index
+  healthy (9,278 header name-pairs, 3,543 signature phones) — the arm walks the pool nightly.
 
 ---
 
