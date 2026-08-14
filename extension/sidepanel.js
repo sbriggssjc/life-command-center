@@ -2621,6 +2621,13 @@ function buildMetadata(ctx, domain) {
     loans: ctx.loans || [],
     // Sale notes & document links from CoStar comp detail pages
     sale_notes_raw: ctx.sale_notes_raw || null,
+    // Sale/Investment Highlights bullets (content/costar.js). On a property
+    // Summary page these often carry the ONLY government/operator tenant signal
+    // (USDA/FSA/GSA prose), and the server classifyDomain() reads
+    // metadata.investment_highlights — MUST be whitelisted here or the captured
+    // text is silently dropped and the property drops to no_domain (same class
+    // as the loans/portfolio_properties drops above). 2026-08-14.
+    investment_highlights: ctx.investment_highlights || null,
     document_links: ctx.document_links || [],
     documents: ctx.documents || [],
     // Listing broker (from OM extraction)

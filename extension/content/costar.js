@@ -364,6 +364,38 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       if (noteLines.length) data.sale_notes_raw = noteLines.join(' ');
     }
 
+    // ── Extract "Sale Highlights" / "Investment Highlights" bullets ─────
+    // 2026-08-14: On a property Summary page CoStar frequently carries the ONLY
+    // government/operator tenant signal inside the "Sale Highlights" (or
+    // "Investment Highlights" / "Property Highlights") bullet list — e.g. 3428
+    // Interstate 20 (Stanton TX) whose highlights read "Long-term federal
+    // tenancy with USDA and FSA occupancy…", "Current GSA lease renewed in April
+    // 2025…". There is no captured tenant on that page (Property Contacts shows
+    // only the recorded owner + sale broker, and the Tenant tab is separate), so
+    // without this the server classifier saw only property_type="Office" and
+    // dropped the capture to no_domain ("Promote failed — no_domain"). The
+    // server classifyDomain() already reads metadata.investment_highlights; this
+    // fills it. Fill-blanks only — never clobber a value already captured
+    // elsewhere. Deliberately NOT sale-specific (stays top-level on comp pages).
+    // Tolerate a trailing chevron/arrow — CoStar renders the heading as
+    // "Sale Highlights »" and getPageLines may keep the glyph on the line.
+    const HL_HEADING_RE = /^(sale|investment|property|key|location|tenant)\s+highlights\s*[»>›→]*\s*$/i;
+    const HL_TERMINATOR_RE = /^(building|land\b|market(\s+conditions)?|property\s+contacts|public\s+record|demographics|traffic|documents|my\s+notes|sources|income\s+&\s+expenses|tenants?\b|lease|leasing|financials?|changes|loan|analytics|peers|images|map|news|verification|©\s*\d{4}|by\s+using\s+this)/i;
+    const hlIdx = lines.findIndex(l => HL_HEADING_RE.test(l.trim()));
+    if (hlIdx > -1) {
+      const hlLines = [];
+      for (let i = hlIdx + 1; i < lines.length && hlLines.length < 20; i++) {
+        const t = lines[i].trim();
+        if (!t) continue;
+        if (HL_TERMINATOR_RE.test(t)) break;
+        hlLines.push(t);
+      }
+      if (hlLines.length && !data.investment_highlights) {
+        data.investment_highlights = hlLines.join(' ');
+        console.log('[LCC CoStar] captured highlights →', data.investment_highlights.substring(0, 120));
+      }
+    }
+
     // ── Extract "Documents" section links (deeds, OMs, brochures) ─────
     data.document_links = extractDocumentLinks();
 
