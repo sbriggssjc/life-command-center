@@ -43,7 +43,7 @@ import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-
 import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
 import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
 import { buildVolumeCapSummary, joinVolumeCapQuartile } from './_shared/cm-summary-table.js';
-import { renderChartsToImages } from './_shared/cm-chart-image-renderer.js';
+import { renderChartsToImages, buildChartConfig } from './_shared/cm-chart-image-renderer.js';
 import { buildDialysisMasterWorkbook } from './_shared/cm-template-loader.js';
 import { invokeChatProvider } from './_shared/ai.js';
 
@@ -477,9 +477,10 @@ export default withErrorHandler(async function handler(req, res) {
       case 'generate_commentary':    return generateCommentary(req, res, user, workspaceId);
       case 'save_narrative':         return res.status(501).json(PHASE_2_PENDING(action));
       case 'publish':                return res.status(501).json(PHASE_2_PENDING(action));
+      case 'refresh_packet':         return refreshPacket(req, res, user);
 
       default:
-        return res.status(400).json({ error: 'POST actions: add_broker_pattern, refresh_nm_attribution, rca_import, commentary, generate_commentary, save_narrative, publish' });
+        return res.status(400).json({ error: 'POST actions: add_broker_pattern, refresh_nm_attribution, rca_import, commentary, generate_commentary, save_narrative, publish, refresh_packet' });
     }
   }
 
@@ -1135,6 +1136,67 @@ function attachCommentaryToPacket(packet, rows) {
   return { ...packet, pages, charts, commentary: rows || [] };
 }
 
+/**
+ * Set of chart_template_ids that carry ≥1 data row in a packet. This is the
+ * "completeness fingerprint" used by the regression guard below.
+ */
+export function packetPopulatedIds(packet) {
+  const s = new Set();
+  for (const c of (packet?.charts || [])) {
+    if (c && c.chart_template_id && Array.isArray(c.rows) && c.rows.length > 0) {
+      s.add(c.chart_template_id);
+    }
+  }
+  return s;
+}
+
+/**
+ * Charts that were populated in `oldPacket` but are missing/empty in `newPacket`.
+ *
+ * The gov live packet build re-runs the full export assembly (dozens of parallel
+ * PostgREST fetches); under load an individual fetchView can time out and return
+ * empty, which silently drops that chart. Freezing such a degraded packet over a
+ * good one is what stranded the Capital Markets tab (2026-08-14). A rebuild is
+ * only allowed to REPLACE an existing snapshot when it regresses nothing — it may
+ * add newly-populated charts (improvement) or change values (freshness), but it
+ * must never turn a populated chart empty. A non-empty return = reject the rebuild.
+ */
+export function packetRegressions(newPacket, oldPacket) {
+  const oldIds = packetPopulatedIds(oldPacket);
+  const newIds = packetPopulatedIds(newPacket);
+  const lost = [];
+  for (const id of oldIds) if (!newIds.has(id)) lost.push(id);
+  return lost;
+}
+
+async function fetchSnapshotRow(domain, v, q) {
+  const existing = await domainQuery(
+    domain, 'GET',
+    `cm_report_snapshots?select=*&vertical=eq.${encodeURIComponent(v)}&fiscal_quarter=eq.${encodeURIComponent(q)}&limit=1`
+  );
+  if (existing.ok === false && existing.status === 404) {
+    const err = new Error('cm_report_snapshots table is missing; apply the packet migration first.');
+    err.status = 501;
+    throw err;
+  }
+  if (existing.ok !== false && Array.isArray(existing.data) && existing.data[0]) {
+    return existing.data[0];
+  }
+  return null;
+}
+
+async function serveSnapshotRow(domain, v, q, row, extra = {}) {
+  const commentary = await readCommentaryRows(domain, v, q);
+  return {
+    snapshot_id: row.snapshot_id,
+    frozen: true,
+    frozen_at: row.frozen_at,
+    frozen_by: row.frozen_by,
+    packet: attachCommentaryToPacket({ ...(row.packet || {}), source: 'frozen-snapshot' }, commentary),
+    ...extra,
+  };
+}
+
 async function buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLive = false }) {
   const domain = packetDomainForVertical(vertical);
   if (!domain) {
@@ -1151,30 +1213,28 @@ async function buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLiv
     throw err;
   }
 
-  if (!forceLive) {
-    const existing = await domainQuery(
-      domain, 'GET',
-      `cm_report_snapshots?select=*&vertical=eq.${encodeURIComponent(v)}&fiscal_quarter=eq.${encodeURIComponent(q)}&limit=1`
-    );
-    if (existing.ok !== false && Array.isArray(existing.data) && existing.data[0]) {
-      const row = existing.data[0];
-      const commentary = await readCommentaryRows(domain, v, q);
-      return {
-        snapshot_id: row.snapshot_id,
-        frozen: true,
-        frozen_at: row.frozen_at,
-        frozen_by: row.frozen_by,
-        packet: attachCommentaryToPacket({ ...(row.packet || {}), source: 'frozen-snapshot' }, commentary),
-      };
-    }
-    if (existing.ok === false && existing.status === 404) {
-      const err = new Error('cm_report_snapshots table is missing; apply the packet migration first.');
-      err.status = 501;
-      throw err;
-    }
+  // Always look up the existing snapshot: it's what we serve when not rebuilding,
+  // and it's the baseline the regression guard protects when we do rebuild.
+  const existingRow = await fetchSnapshotRow(domain, v, q);
+
+  if (!forceLive && existingRow) {
+    return serveSnapshotRow(domain, v, q, existingRow);
   }
 
   const packet = await buildLivePacket({ vertical: v, periodEnd: pe, quarter: q, user });
+
+  // Regression guard — never overwrite a good snapshot with a degraded rebuild.
+  const regressed = existingRow ? packetRegressions(packet, existingRow.packet) : [];
+  if (existingRow && regressed.length > 0) {
+    // Keep (and serve) the existing good snapshot; report what the rebuild dropped
+    // so a caller (refresh_packet) can retry.
+    return serveSnapshotRow(domain, v, q, existingRow, {
+      persisted: false,
+      rebuild_rejected: true,
+      regressed,
+    });
+  }
+
   const insert = await domainQuery(
     domain,
     'POST',
@@ -1202,7 +1262,65 @@ async function buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLiv
     frozen_at: row?.frozen_at || null,
     frozen_by: row?.frozen_by || null,
     packet: { ...packet, source: 'frozen-snapshot' },
+    persisted: true,
+    regressed: [],
   };
+}
+
+/**
+ * POST action=refresh_packet — the reliable OFF-request packet rebuild.
+ *
+ * Runs the (heavy) live packet build up to `attempts` times. The regression guard
+ * inside buildOrFetchPacket means a degraded build (a chart dropped by a transient
+ * fetch timeout) is REJECTED — the existing good snapshot is preserved — so the
+ * loop simply retries until a complete, non-regressing build lands and sticks.
+ * This is what safely gets fresh (e.g. Q2) data into the frozen packet without the
+ * request-path rebuild that stranded the tab on 2026-08-14. Intended to be called
+ * by a scheduler (see .github/workflows/cm-packet-refresh.yml), not the browser.
+ */
+async function refreshPacket(req, res, user) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'gov');
+  const asOfRes = resolveAsOf(req.query.as_of);
+  if (asOfRes.asOf === null) return res.status(400).json({ error: 'invalid_as_of' });
+  const periodEnd = asOfRes.asOf;
+  const quarter = quarterLabelFromPeriodEnd(periodEnd);
+  // Default 1 build per call so each HTTP request stays short — the scheduled
+  // workflow loops the calls and retries on !persisted. A caller may pass a higher
+  // `attempts` to retry within one (longer) request.
+  const maxAttempts = Math.max(1, Math.min(Number(req.query.attempts) || 1, 6));
+
+  const attempts = [];
+  let finalOut = null;
+  for (let i = 0; i < maxAttempts; i++) {
+    let out;
+    try {
+      out = await buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLive: true });
+    } catch (e) {
+      attempts.push({ attempt: i + 1, error: e?.message || String(e) });
+      continue;
+    }
+    finalOut = out;
+    attempts.push({
+      attempt: i + 1,
+      persisted: !!out.persisted,
+      regressed: out.regressed || [],
+      populated: packetPopulatedIds(out.packet).size,
+    });
+    // Stop as soon as a clean, complete build is persisted.
+    if (out.persisted && !(out.regressed || []).length) break;
+  }
+
+  return res.status(200).json({
+    ok: true,
+    vertical,
+    quarter,
+    period_end: periodEnd,
+    persisted: !!finalOut?.persisted,
+    regressed: finalOut?.regressed || [],
+    populated_charts: finalOut ? packetPopulatedIds(finalOut.packet).size : 0,
+    total_charts: finalOut?.packet?.charts?.length || 0,
+    attempts,
+  });
 }
 
 async function packetStatus(req, res) {
@@ -1278,6 +1396,33 @@ async function getReportPacketImages(req, res, user) {
     );
     const { tokens: brand } = await loadBrandTokensObject();
     const rendered = await renderChartsToImages({ charts, brand });
+
+    // Per-chart failure diagnostics: classify every requested chart that did NOT
+    // produce a PNG. no_data = the packet carries no rows for it (fix upstream in
+    // the view/build); no_renderer = buildChartConfig returns null for its
+    // chart_template_id (missing switch branch); render_error = a config was built
+    // but QuickChart failed (network/timeout/payload). Logged every call, and
+    // returned in the body when ?debug=true so the 30/45 gap is enumerable.
+    const renderedIds = new Set(rendered.map(img => img.chart_template_id));
+    const failures = [];
+    for (const c of charts) {
+      if (renderedIds.has(c.chart_template_id)) continue;
+      let reason;
+      if (!Array.isArray(c.rows) || c.rows.length === 0) reason = 'no_data';
+      else {
+        let cfg = null;
+        try { cfg = buildChartConfig(c, brand); } catch { cfg = null; }
+        reason = cfg ? 'render_error' : 'no_renderer';
+      }
+      failures.push({ chart_template_id: c.chart_template_id, chart_type: c.chart_type || null, reason });
+    }
+    if (failures.length) {
+      console.warn(
+        `[cm packet_images] ${vertical}/${quarter} ${failures.length} chart(s) unrendered: ` +
+        failures.map(f => `${f.chart_template_id}:${f.reason}`).join(', ')
+      );
+    }
+
     return res.status(200).json({
       ok: true,
       vertical,
@@ -1290,6 +1435,7 @@ async function getReportPacketImages(req, res, user) {
         mime: 'image/png',
         png_b64: Buffer.from(img.png).toString('base64'),
       })),
+      ...(req.query.debug === 'true' ? { failures } : {}),
     });
   } catch (e) {
     return res.status(e.status || 500).json({ error: e.message || 'packet_images_failed', detail: e.detail || null });
