@@ -1151,17 +1151,7 @@ async function buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLiv
     throw err;
   }
 
-  // The latest COMPLETED quarter is still "live": its underlying views keep
-  // moving as new sales land and the gov master_m mat is refreshed, so a packet
-  // frozen mid-quarter goes stale (this is what stamped Q1 data under a Q2 title,
-  // and left in-app charts rendering old numbers). Only PRIOR quarters are truly
-  // immutable and safe to serve from the frozen snapshot. So never serve a cached
-  // snapshot for the current latest-completed quarter — always rebuild it live
-  // (the upsert below still keeps a fresh snapshot row around for other readers).
-  const isCurrentQuarter = String(pe) === latestCompletedQuarterEnd();
-  const serveFrozen = !forceLive && !isCurrentQuarter;
-
-  if (serveFrozen) {
+  if (!forceLive) {
     const existing = await domainQuery(
       domain, 'GET',
       `cm_report_snapshots?select=*&vertical=eq.${encodeURIComponent(v)}&fiscal_quarter=eq.${encodeURIComponent(q)}&limit=1`
