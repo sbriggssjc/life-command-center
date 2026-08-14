@@ -200,6 +200,34 @@ const DATE_TOKEN = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\
 // sentence-start single words. Conservative: only multi-word runs are flagged.
 const NAME_TOKEN = /\b([A-Z][a-z]+(?:\s+(?:[A-Z][a-z]+|[A-Z]&|LLC|LP|Inc\.?|Co\.?|Corp\.?|Group|Partners|Capital|Realty|Properties)){1,4})\b/g;
 
+// Common capitalized English words that legitimately appear Title-Cased in email
+// subjects/openings ("Quick Check-In", "Following Up", "Touch Base") — NOT person
+// or company names. A multi-word run made up ENTIRELY of these is benign boilerplate
+// and must not be flagged as an ungrounded proper name (the false-positive that made
+// fact_validation.clean falsely false on nearly every draft). A run with even one
+// non-stopword token ("Boyd Watterson", "Kingsbarn Capital") is still flagged.
+const NAME_STOPWORDS = new Set([
+  'quick', 'check', 'checking', 'follow', 'following', 'followup', 'up', 'touch', 'base',
+  'best', 'thanks', 'thank', 'regards', 'cheers', 're', 'fwd', 'fw',
+  'hi', 'hello', 'hey', 'dear', 'good', 'morning', 'afternoon', 'evening',
+  'the', 'a', 'an', 'and', 'or', 'to', 'on', 'in', 'of', 'for', 'with', 'at', 'by',
+  'your', 'our', 'my', 'we', 'you', 'us', 'me', 'i',
+  'just', 'please', 'let', 'know', 'here', 'there', 'next', 'week', 'today', 'tomorrow',
+  'call', 'meeting', 'update', 'note', 'quick', 'reminder', 'intro', 'introduction',
+  'great', 'sounds', 'sorry', 'welcome', 'congrats', 'congratulations', 'happy',
+  'new', 'year', 'looking', 'forward', 'circling', 'back', 'catching', 'reaching', 'out',
+]);
+
+/** A NAME_TOKEN run is boilerplate iff EVERY alphabetic word in it is a stopword. */
+function isBoilerplateNameRun(run) {
+  const words = String(run || '')
+    .split(/[\s-]+/)
+    .map((w) => w.replace(/[^A-Za-z&]/g, '').toLowerCase())
+    .filter(Boolean);
+  if (words.length === 0) return true;
+  return words.every((w) => NAME_STOPWORDS.has(w));
+}
+
 function normForMatch(s) {
   return String(s || '').toLowerCase().replace(/[\s,$]/g, '');
 }
@@ -246,6 +274,9 @@ export function validateDraftFacts(draftText, { facts = {}, exemplars = [], extr
     if (seen.has(tok) || grounded(tok)) continue;
     // Skip common non-name capitalized runs that legitimately appear in prose.
     if (/^(I |Best Regards|Thank You|Team|Not On File|Best Regards,)/i.test(tok)) continue;
+    // Skip Title-Cased boilerplate ("Quick Check-In", "Following Up", "Touch Base")
+    // where every word is a common capitalized English word, not a person/company.
+    if (isBoilerplateNameRun(tok)) continue;
     seen.add(tok);
     flagged.push({ type: 'proper_name', token: tok });
   }
@@ -316,4 +347,4 @@ export function bucketForPurpose(purpose, { subject = '', toEmails = [] } = {}) 
   return classifyDraftType({ subject, toEmails }).bucket;
 }
 
-export const _internals = { NUM_TOKEN, DATE_TOKEN, NAME_TOKEN, unwrap, pct, normForMatch };
+export const _internals = { NUM_TOKEN, DATE_TOKEN, NAME_TOKEN, NAME_STOPWORDS, isBoilerplateNameRun, unwrap, pct, normForMatch };

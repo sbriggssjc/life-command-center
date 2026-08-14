@@ -10,6 +10,26 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-14 (Prompt 109) — draft-assist flag consistency + fact-validator precision
+
+- **Part A — flag gate now honors env OR registry (the bug).** `api/draft-assist.js` POST-save gate read
+  `flagOn(process.env.DRAFT_ASSIST)` ONLY, with no registry fallback — so Cowork flipping the
+  `feature_flags_registry` row to `on` (done 2026-08-14) did NOT enable saves; the endpoint still reported
+  `save_skipped: DRAFT_ASSIST flag is OFF`. Fixed to the house env-OR-registry pattern via a NEW shared resolver
+  `api/_shared/feature-flag.js` (`flagEnabled` + `fetchFeatureFlag`) mirroring `comms-owner-attribution-tick.js`
+  / admin.js `w93FlagEnabled`. Precedence: an explicitly-set `DRAFT_ASSIST` env var wins (on OR off — ops
+  override); else the registry `state='on'` enables it. **So the already-flipped registry row enables POST-save on
+  the next redeploy with no Railway env var.** GET dry-run unchanged (always on).
+- **Part B — fact-validator proper-name false-positive.** `validateDraftFacts` flagged **"Quick Check"** (from
+  the subject "Quick Check-In") as an ungrounded `proper_name`. Tightened the Title-Case detector with a
+  `NAME_STOPWORDS` set (Quick/Check/Follow/Up/Touch/Base/…): a multi-word run made up ENTIRELY of common
+  capitalized English words is benign boilerplate and is NOT flagged; a run with any non-stopword token
+  ("Kingsbarn Capital", "Boyd Watterson") is still flagged; ungrounded numbers/dates are still STRIPPED
+  (cardinal-sin guard intact).
+- **Tests:** `test/draft-assist.test.mjs` — the flag structural test now asserts the shared env-or-registry
+  resolver (not `process.env` alone) + a unit test for the resolver's precedence; 7 new Part-B name-validator
+  cases. **29 pass.** Additive, reversible, one PR.
+
 ## Session 2026-08-14 (Cowork, latest) — draft-assist LIVE + 108 backfill verified
 
 - **Prompt 108 (comms_owner_bridge provenance) reviewed + verified live.** Backfill landed: `field_provenance`
