@@ -44,6 +44,12 @@ describe('costar.js STREET_RE address-suffix coverage', () => {
     '4500 N Sam Houston Tpke',
     '12 Veterans Byp',
     '88 Railroad Xing',
+    // 2026-08-14: interstate / I-NN / IH-NN highway addresses. "3428 Interstate
+    // 20" (Stanton TX, USDA/GSA office) parsed to null and dropped the sidebar
+    // into its empty "unsupported site" state — the property was never captured.
+    '3428 Interstate 20',
+    '3428 I-20',
+    '3428 IH-20',
   ];
 
   // Plain text / non-addresses must still be rejected by both patterns.
@@ -52,6 +58,7 @@ describe('costar.js STREET_RE address-suffix coverage', () => {
     'Office - South Side Submarket',
     'Corpus Christi, TX 78411',
     '1 of 2,000 Records',
+    '1 Interstate Realty Group',  // company name, not "Interstate <route#>"
   ];
 
   // Mirror parseAddress's real gate: a segment is a street address only when
