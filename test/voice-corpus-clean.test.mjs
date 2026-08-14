@@ -11,6 +11,8 @@ import {
   stripTrailingSignoff,
   isMostlyBoilerplate,
   classifyDraftType,
+  htmlToText,
+  pickBestBody,
 } from '../api/_shared/voice-corpus-clean.js';
 
 const SIG = 'Scott Briggs\nSenior Vice President · Northmarq\nD (918) 794-9787 | E sabriggs@northmarq.com';
@@ -110,5 +112,56 @@ describe('classifyDraftType', () => {
   it('routes an external reply to external_follow_up', () => {
     const r = classifyDraftType({ subject: 'Re: questionnaire', toEmails: ['broker@cbre.com'], cleaned: 'Here’s that questionnaire.' });
     assert.equal(r.bucket, 'external_follow_up');
+  });
+});
+
+// Prompt 110 — full-body ingestion helpers.
+describe('htmlToText', () => {
+  it('strips tags and turns block/break tags into newlines', () => {
+    const html = '<div>Hi Jane,</div><p>Thanks for the call.</p><br>Talk soon';
+    const t = htmlToText(html);
+    assert.match(t, /Hi Jane,/);
+    assert.match(t, /Thanks for the call\./);
+    assert.ok(!/[<>]/.test(t.replace(/[<>]/g, '')) || !/<[a-z]/i.test(t));
+  });
+  it('drops script/style and decodes entities', () => {
+    const html = '<style>.x{color:red}</style>A &amp; B &lt;test&gt;<script>alert(1)</script>';
+    const t = htmlToText(html);
+    assert.match(t, /A & B <test>/);
+    assert.ok(!/alert/.test(t));
+    assert.ok(!/color:red/.test(t));
+  });
+  it('empty/null → empty string', () => {
+    assert.equal(htmlToText(null), '');
+    assert.equal(htmlToText(''), '');
+  });
+});
+
+describe('pickBestBody', () => {
+  it('prefers full body_text when present', () => {
+    assert.equal(
+      pickBestBody({ body_text: 'FULL TEXT', body_html: '<p>html</p>', body_preview: 'preview' }),
+      'FULL TEXT');
+  });
+  it('falls to tag-stripped body_html when text is blank', () => {
+    const r = pickBestBody({ body_text: '  ', body_html: '<p>Hello there</p>', body_preview: 'preview' });
+    assert.match(r, /Hello there/);
+    assert.ok(!/<p>/.test(r));
+  });
+  it('falls to body_preview when text+html are empty', () => {
+    assert.equal(pickBestBody({ body_text: '', body_html: '', body_preview: 'just the preview' }), 'just the preview');
+  });
+  it('accepts a snippet `body` key (activity_events shape)', () => {
+    assert.equal(pickBestBody({ body: 'snippet only' }), 'snippet only');
+  });
+  it('empty input → empty string', () => {
+    assert.equal(pickBestBody({}), '');
+    assert.equal(pickBestBody(), '');
+  });
+  it('a full body still cleans down to Scott prose (chain+sig stripped)', () => {
+    const full = 'Alright, I think I did it. Let me know.\n' + SIG +
+      '\n________________________________\nFrom: Sarah <smartin@northmarq.com>\nSent: Thursday';
+    const raw = pickBestBody({ body_text: full });
+    assert.equal(cleanEmailBody(raw).trim(), 'Alright, I think I did it. Let me know.');
   });
 });

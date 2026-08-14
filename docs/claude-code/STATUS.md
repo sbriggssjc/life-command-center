@@ -10,6 +10,35 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-14 (Prompt 110) — fuller email-body ingestion (past the ~255-char bodyPreview cap)
+
+- **Finding.** The correspondence store keeps only Graph's `bodyPreview` (~255 chars);
+  `email_bodies.body_text/body_html` are empty on ~all rows — capping draft-assist RAG (openings, not full
+  precedent), the voice profile's sign-off/long-form fidelity (Stage-1 LOW-confidence), and the harvest
+  signature-phone arm (can't see full signatures).
+- **Key discovery — the ingestion CODE was already ready.** `api/intake.js` already reads
+  `payload.body_text`/`body_html`, clamps them (100K/200K), and prefers them over `bodyPreview`; the bridge
+  writer already fills `email_bodies.body_text/body_html`. The fields are empty only because the PA flows post
+  `bodyPreview` only. **Forward-only flow change + small consumer wiring — NOT a rebuild.**
+- **Part A (Scott's step, documented).** Copy-paste PA click-path (mirrors the W9.4 doc): add a "Get email
+  (V3)" action after the trigger (Message Id = trigger id, Include Attachments = No), then add
+  `"body_html": <Get email V3 → Body>` to the "POST to LCC" body on the flagged-inbound / Sent-Items / bridge
+  flows. No LCC redeploy for the endpoint. Verification query on `email_bodies` (text_len/html_len ≫ 255).
+- **Part B (code, this PR).** New shared `pickBestBody`/`htmlToText` in `api/_shared/voice-corpus-clean.js`
+  (full `body_text` → tag-stripped `body_html` → capped preview → `''`; on-prem regex only, nothing egresses).
+  `api/draft-assist.js` `loadCorpus` selects + prefers full bodies (email_bodies + activity_events metadata);
+  `api/admin.js` harvest signature arm reads the full body from metadata before the preview. Forward-compatible
+  — falls back to the preview cleanly. Cap comment updated; deterministic cleaning unchanged. Guardrail:
+  same corpus-hygiene doctrine (Scott's outbound; strip quoted chains; on-prem only).
+- **Part C (scoped, NOT built).** ~23K historical rows have empty bodies; `internet_message_id` is stored.
+  Recommended: a bounded/resumable PA "Get email (V3) by message-id" backfill loop keyed on
+  `internet_message_id`, forward-only-first — its own future unit. (Graph server-side fetch is the fragile
+  alternative — delegated auth, likely not reachable from Railway.)
+- **Tests.** `test/voice-corpus-clean.test.mjs` (+9 for the helpers), `test/draft-assist.test.mjs` (29),
+  `test/reachability-harvest-planner.test.mjs` (50), `test/outlook-recipients.test.mjs` — all green.
+- **Docs.** `docs/audits/W10_FULL_BODY_INGESTION_2026-08-14.md` (Part A click-path + Part C feasibility),
+  ROLLOUT_STATUS W10.3 line, W10 kickoff "deferred" note retired, `BRIGGS-WRITING-VOICE.md` upgrade-path note.
+
 ## Session 2026-08-14 (Prompt 109) — draft-assist flag consistency + fact-validator precision
 
 - **Part A — flag gate now honors env OR registry (the bug).** `api/draft-assist.js` POST-save gate read
