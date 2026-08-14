@@ -154,6 +154,34 @@ describe('W9.6 P103 precision guards', () => {
   });
 });
 
+describe('buildOwnerBridgeProvenanceArgs (Prompt 108 — provenance stamp shape)', () => {
+  it('passes p_value as the RAW owner id (never JSON.stringify — regression guard vs double-encoding)', () => {
+    const a = COA.buildOwnerBridgeProvenanceArgs({
+      sampleId: 'ae-1', ownerEid: '2059eb52-0ffb-4887-bba1-5827a0683cbb',
+      sourceRunId: 'r1', confidence: 0.9, workspaceId: 'ws-1', recordedBy: 'u-1',
+    });
+    // The RPC param is jsonb and casts the arg — the value must be the bare id,
+    // NOT a JSON-encoded (quoted) string.
+    assert.equal(a.p_value, '2059eb52-0ffb-4887-bba1-5827a0683cbb');
+    assert.notEqual(a.p_value, JSON.stringify('2059eb52-0ffb-4887-bba1-5827a0683cbb'));
+    assert.ok(!a.p_value.startsWith('"'), 'p_value must not be a double-encoded quoted string');
+  });
+  it('stamps the registered field/source/target so v_field_provenance_unranked stays 0', () => {
+    const a = COA.buildOwnerBridgeProvenanceArgs({ sampleId: 'ae-1', ownerEid: 'o-1' });
+    assert.equal(a.p_target_database, 'lcc_opps');
+    assert.equal(a.p_target_table, 'public.activity_events');
+    assert.equal(a.p_field_name, 'linked_entity_ids');
+    assert.equal(a.p_source, COA.COA_PROVENANCE_SOURCE);
+    assert.equal(a.p_record_pk, 'ae-1');
+    assert.equal(a.p_source_run_id, 'verdict'); // default when none supplied
+  });
+  it('returns null when the representative id or owner id is missing (never a malformed stamp)', () => {
+    assert.equal(COA.buildOwnerBridgeProvenanceArgs({ sampleId: null, ownerEid: 'o-1' }), null);
+    assert.equal(COA.buildOwnerBridgeProvenanceArgs({ sampleId: 'ae-1', ownerEid: null }), null);
+    assert.equal(COA.buildOwnerBridgeProvenanceArgs(), null);
+  });
+});
+
 describe('commsHeaderEvidence', () => {
   it('formats Name <email>, email-only, or name-only', () => {
     assert.equal(COA.commsHeaderEvidence('Jane Roe', 'jane@x.com'), 'Jane Roe <jane@x.com>');
