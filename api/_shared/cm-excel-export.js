@@ -1310,6 +1310,12 @@ const NAME_OVERRIDES_BY_VERTICAL = {
   gov: {
     nm_vs_market_cap: NM_24MO_TITLE,
     inventory_backlog: 'Market Turnover — Added vs Sold (Monthly) + Net to Market',
+    // The gov view now keys the x-axis to EFFECTIVE VINTAGE
+    // (GREATEST(year_built, year_renovated, build-to-suit lease-commencement
+    // year)), so an extensive retrofit or a new BTS award counts at the
+    // retrofit/delivery year — the title says "/ Renovated" to match. gov-only;
+    // the dia chart is year_built and keeps the catalog default.
+    rent_by_year_built: 'Rent by Year Built / Renovated',
   },
 };
 
