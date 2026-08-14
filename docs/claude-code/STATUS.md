@@ -10,6 +10,53 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-14 (Cowork) — END-TO-END CONNECTEDNESS AUDIT (verdict→write→consumer, all lanes)
+
+**Traced every lane from Scott's manual verdict → the write → the downstream consumer, live. The loop is
+CLOSED in every category. Scott worked a large batch over ~36h; here is what landed and what didn't.**
+
+### ✅ Working end-to-end (verified live)
+- **Hygiene lanes — highest throughput, fully closed.** Junk-entity: **203 confirmed → 207 `junk_review_batch`
+  reversible ledger rows** (entities soft-retired, FK-referenced → conflict not delete). Naming-hygiene: **350
+  confirmed → 368 `naming_hygiene_batch` rows → 40 `field_provenance` `w8_u5_naming_hygiene` writes** (name
+  fields stamped; canonical collisions → conflict). Every verdict reversible + provenance-tagged.
+- **Resolver-training loop closed.** Owner-reconcile/dup lane → **48 `entity_match_labels` in 36h**
+  (w8_u2_ollama_pair 41 `distinct` + 2 `same_party`; w8_u3_shared_email 5 `distinct`) → feeds the W4.4 nightly
+  retrain corpus. The "reject is productive" design is real: 41 hard-negatives captured.
+- **BD-payoff arm delivering (the point of the whole campaign).** Reachability harvest: **2 confirmed →
+  `reachability_harvest_apply_log` status=applied → 2 owners that had ZERO contacts now have a reachable one**
+  (Eric Dowling `edowling@boydwatterson.com`→Boyd Watterson; Oscar Peterson `opeterson@uirc.com` +816-682-8097
+  →UIRC). Contact-acquisition: **4 confirmed → applied** (2 broker_of_record: Bob Safai / AJ Belt; 2 crossref
+  attaches: Nigel Hebborn / Christine Russi Couture) into the entity graph.
+- **W9.3 auto-writers landing provenance-stamped.** Re-score `splink_v2` 22 writes; donor-handoff
+  `sf_account_contact_expansion` 13 writes (SF keys onto blank contacts) — both in `field_provenance`, last 36h.
+- **W9.6 producing.** First cron run 05:05 UTC minted **22 owner-attribution proposals** into
+  `comms_owner_attribution_review` (Path A + tightened Path B). Fill-blanks guards healthy repo-wide
+  (`folder_feed_lease` 12 `conflict` decisions correctly recorded, not clobbered — now that we fsp-ranked it).
+
+### ⚠ Not landing yet / gaps (honest)
+1. **W9.6 lane is the one un-consumed link.** 22 proposals sit at **0 decided**, so `v_lcc_w9_5_link_coverage`
+   `correspondence_entity_owner_llc` is still **2.5% (6/241)** — it only rises once Scott works the lane. This
+   is the single highest-leverage next action (it also feeds the reachability harvester more owner contacts).
+2. **Precision signal is near-zero on the hygiene lanes.** Junk 203 confirm / **0 reject**; naming 350 confirm /
+   **0 reject**. Deterministic renames are safe to bulk-confirm, but ~0 rejects means we're not learning where
+   the proposer errs on those two lanes (contrast the resolver lane's healthy 41/43 negatives). Recommend
+   spot-rejecting a few genuinely-wrong cards to keep the precision floor honest — or accept if the pre-filter
+   is truly clean (the batch ledgers make any over-confirm reversible).
+3. **Reachability create_contact could tighten.** 2 of the first 4 harvest cards were **rejected** (shared-broker
+   `create_contact` — e.g. a broker appearing under multiple owners), the same brokerage/shared-contact noise we
+   fixed in W9.6 Path B. The human gate caught them, but a W9.2 create_contact precision pass (reuse the
+   `isBrokerageOwnerName` guard) would cut the noise. Candidate follow-up prompt.
+4. **owner_reconcile scale.** 43 worked vs a **3,416** open pool — drain rate is slow relative to the pile (not a
+   defect; needs sustained work or a bulk-assist). ORE-native seeder pairs (vs the dup-pair subset) are the bulk.
+
+### Net
+Every category is connected verdict→write→consumer with reversible ledgers + provenance. The chain now visibly
+*produces value* (2 new reachable owners, 4 graph attaches, 43 resolver labels, 575 hygiene fixes in a day). The
+only link waiting on a human pass is W9.6 owner-attribution. Docs updated (this entry + ROLLOUT connectedness note).
+
+---
+
 ## Session 2026-08-13 (Cowork, later) — prompt 103 reconciled; W9.6 FLIPPED LIVE; folder cleaned
 
 **Prompt 103 (W9.6 Path-B precision + fsp hygiene) reviewed, verified live post-redeploy, and W9.6 flipped ON.**

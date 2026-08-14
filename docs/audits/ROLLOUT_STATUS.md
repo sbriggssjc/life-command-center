@@ -13,6 +13,17 @@
 > quality (OM NOI 89% vs pre-61 4%) — ollama-primary intake confirmed; attribution caveat →
 > prompt 93B.**
 
+> **Connectedness audit (2026-08-14, Cowork) — the loop is CLOSED end-to-end in every category.** Traced
+> Scott's ~36h of manual verdicts → writes → consumers live: hygiene junk **203→207 ledger rows**, naming
+> **350→368 rows + 40 `w8_u5` provenance writes**; resolver **48 `entity_match_labels`** (43 hard-negatives) →
+> W4.4 retrain; reachability **2 confirmed → 2 owners now reachable** (Boyd Watterson, UIRC); contact-acq **4
+> applied** (2 broker_of_record + 2 crossref); W9.3 **splink_v2 22 + sf_account_contact_expansion 13** provenance
+> writes; W9.6 first run **22 proposals** minted. **Gaps:** (a) W9.6 lane 0/22 worked → `correspondence_entity_
+> owner_llc` still 2.5% (the one un-consumed link — highest-leverage next action); (b) hygiene lanes ~0 rejects
+> (bulk-confirm — safe but no precision signal); (c) reachability create_contact 2/4 rejected on shared-broker
+> noise → candidate W9.2 precision pass (reuse `isBrokerageOwnerName`); (d) owner_reconcile 43 worked vs 3,416
+> pool. Full trace in `docs/claude-code/STATUS.md` 2026-08-14 entry.
+
 Doctrine (inherited): value-gate everything (rank_value order); fill-blanks only; provenance + fsp rows in-migration; reversible; never fabricate a contact; human lanes for judgment; honest per-source counts; new units START with the house pattern (windowed scans, budget floors, crash-proof envelopes, batched lookups, loud per-source errors).
 
 | Unit | What | Status | Notes |
