@@ -41,6 +41,7 @@ import { cleanEmailBody, isMostlyBoilerplate, classifyDraftType } from './_share
 import { invokeOnPremGeneration, invokeOnPremEmbeddings } from './_shared/ai.js';
 import { buildDealPacket } from './_handlers/entities-handler.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
+import { flagEnabled, fetchFeatureFlag } from './_shared/feature-flag.js';
 import {
   SCOTT_FROM, VALID_PURPOSES,
   bucketForPurpose, extractDealFacts, rankExemplarsDeterministic, rankExemplarsByEmbedding,
@@ -257,8 +258,13 @@ export default async function draftAssistHandler(req, res) {
     return;
   }
 
-  if (!flagOn(process.env.DRAFT_ASSIST)) {
-    res.status(200).json({ ...payload, mode: 'dry_run', saved: false, save_skipped: 'DRAFT_ASSIST flag is OFF — dry-run only. Enable the flag to save drafts to Outlook.' });
+  // Flag gate: env var OR feature_flags_registry.state — the same env-or-registry
+  // resolver every other flag-gated LCC surface uses, so flipping the registry
+  // row (from Cowork) enables POST-save with no Railway env var required. An
+  // explicitly-set DRAFT_ASSIST env var (on OR off) still wins as an ops override.
+  const draftAssistFlagRow = await fetchFeatureFlag('DRAFT_ASSIST');
+  if (!flagEnabled('DRAFT_ASSIST', draftAssistFlagRow)) {
+    res.status(200).json({ ...payload, mode: 'dry_run', saved: false, save_skipped: `DRAFT_ASSIST flag is OFF (env unset/off and registry state=${draftAssistFlagRow?.state || 'missing'}) — dry-run only. Enable the flag (env var or registry) to save drafts to Outlook.` });
     return;
   }
   if (!flagOn(src.save)) {

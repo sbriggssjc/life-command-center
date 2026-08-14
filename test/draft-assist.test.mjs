@@ -70,6 +70,47 @@ describe('fact validator strips a planted fabricated figure (doctrine 2)', () =>
   });
 });
 
+describe('proper-name validator: benign Title-Case boilerplate is NOT flagged (Prompt 109 B)', () => {
+  it('the "Quick Check-In" relationship_touch subject validates clean', () => {
+    const r = validateDraftFacts('Quick Check-In', { facts: {}, exemplars: [], extra: 'check in with a past client relationship_touch' });
+    assert.equal(r.clean, true, 'no false proper-name flag on benign Title-Case subject');
+    assert.equal(r.flagged.some((f) => f.type === 'proper_name'), false);
+  });
+
+  it('the "Following Up on BOV" follow_up subject validates clean', () => {
+    const r = validateDraftFacts('Following Up on BOV', { facts: {}, exemplars: [], extra: 'follow up on the BOV we sent' });
+    assert.equal(r.clean, true);
+    assert.equal(r.flagged.some((f) => f.type === 'proper_name'), false);
+  });
+
+  it('"Touch Base" and "Follow Up" openings are not flagged', () => {
+    const r = validateDraftFacts('Wanted to Touch Base and Follow Up soon.', { facts: {}, exemplars: [] });
+    assert.equal(r.flagged.some((f) => f.type === 'proper_name'), false);
+  });
+
+  it('a genuinely ungrounded company name is STILL flagged', () => {
+    const r = validateDraftFacts('I connected with Kingsbarn Capital about the deal.', { facts: {}, exemplars: [], extra: 'follow up' });
+    assert.ok(r.flagged.some((f) => f.type === 'proper_name' && /Kingsbarn/.test(f.token)), 'ungrounded company name must be flagged');
+  });
+
+  it('a genuinely ungrounded person name is STILL flagged', () => {
+    const r = validateDraftFacts('Spoke with Boyd Watterson yesterday.', { facts: {}, exemplars: [] });
+    assert.ok(r.flagged.some((f) => f.type === 'proper_name' && /Boyd Watterson/.test(f.token)));
+  });
+
+  it('a grounded name (in facts) is not flagged even though it is a real name', () => {
+    const r = validateDraftFacts('Following up for Acme Realty.', { facts: { parties: 'seller: Acme Realty' }, exemplars: [] });
+    assert.equal(r.flagged.some((f) => f.type === 'proper_name'), false);
+  });
+
+  it('still STRIPS a fabricated figure alongside the name tightening (cardinal-sin guard intact)', () => {
+    const r = validateDraftFacts('Quick Check-In — the price is $99,000,000.', { facts: {}, exemplars: [], extra: 'relationship_touch' });
+    assert.equal(r.text.includes('99,000,000'), false, 'fabricated figure still stripped');
+    assert.match(r.text, /\[Not on file\]/);
+    assert.equal(r.flagged.some((f) => f.type === 'proper_name'), false, 'no false name flag');
+  });
+});
+
 describe('never fabricate facts — extractDealFacts (doctrine 2)', () => {
   it('renders "Not on file" for every absent fact and never invents', () => {
     const f = extractDealFacts(null);
@@ -144,12 +185,35 @@ describe('retrieval loads only Scott-authored OUTBOUND (doctrine 5 / Stage-1 cor
 });
 
 describe('flag-off ⇒ POST is dry-run only (mechanics)', () => {
-  it('the handler gates the Outlook save on the DRAFT_ASSIST flag', () => {
+  it('the handler gates the Outlook save on the SHARED env-or-registry resolver, not process.env alone', () => {
     const src = read('api/draft-assist.js');
-    assert.match(src, /flagOn\(process\.env\.DRAFT_ASSIST\)/);
+    const code = stripComments(src);
+    // Must use the shared env-OR-registry resolver (so a registry flip enables saves).
+    assert.match(src, /from '\.\/_shared\/feature-flag\.js'/);
+    assert.match(code, /fetchFeatureFlag\('DRAFT_ASSIST'\)/);
+    assert.match(code, /flagEnabled\('DRAFT_ASSIST'/);
     assert.match(src, /DRAFT_ASSIST flag is OFF/);
+    // The POST-save gate must NOT be the old process.env-only check.
+    assert.equal(/flagOn\(process\.env\.DRAFT_ASSIST\)/.test(code), false, 'gate must not read process.env alone');
     // GET is always a dry-run that writes nothing.
     assert.match(src, /GET is always a dry-run/);
+  });
+
+  it('the shared resolver honors env OR registry, with an explicit env var as the ops override', async () => {
+    const { flagEnabled } = await import('../api/_shared/feature-flag.js');
+    const KEY = 'DRAFT_ASSIST_TEST_FLAG';
+    const before = process.env[KEY];
+    delete process.env[KEY];
+    // No env var: the registry state decides.
+    assert.equal(flagEnabled(KEY, { state: 'on' }), true, 'registry on ⇒ enabled');
+    assert.equal(flagEnabled(KEY, { state: 'off' }), false, 'registry off ⇒ disabled');
+    assert.equal(flagEnabled(KEY, null), false, 'missing registry row ⇒ disabled');
+    // Explicit env var wins over the registry, in BOTH directions.
+    process.env[KEY] = 'on';
+    assert.equal(flagEnabled(KEY, { state: 'off' }), true, 'env on overrides registry off');
+    process.env[KEY] = 'off';
+    assert.equal(flagEnabled(KEY, { state: 'on' }), false, 'env off overrides registry on (ops override)');
+    if (before === undefined) delete process.env[KEY]; else process.env[KEY] = before;
   });
 
   it('the flag is registered in a migration (visible in Dormant Capabilities)', () => {
