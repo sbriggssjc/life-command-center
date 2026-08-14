@@ -50,13 +50,12 @@
   because **`api/draft-assist.js:260` gates ONLY on `process.env.DRAFT_ASSIST`** — it has NO registry fallback,
   unlike every cron tick (W9.6/harvest/twin check env-OR-`feature_flags_registry.state`, which is why THOSE
   registry flips genuinely worked — verified by their output). So draft-assist is the lone inconsistency.
-  **→ Prompt 109 drafted** (`docs/claude-code/prompts/109-draft-assist-flag-consistency-and-validator.md`):
-  **Part A** make the save gate honor env-OR-registry via the shared `w93FlagEnabled` helper (then the already-on
-  registry row enables saves on redeploy — no env var needed); **Part B** the fact-validator false-positive —
-  it flagged **"Quick Check"** (subject "Quick Check-In") as an ungrounded `proper_name` (only flags, doesn't
-  strip; noise not risk), tighten so benign Title-Case phrases don't trip it. **Immediate option:** set the
-  Railway env var `DRAFT_ASSIST=on` on the tranquil-delight service to enable saves now (also needs
-  `PA_OUTLOOK_DRAFT_URL` for the actual PA save).
+  **→ Prompt 109 SHIPPED + merged to origin/main** (verified in tree: `api/_shared/feature-flag.js` +
+  draft-assist.js now calls `fetchFeatureFlag('DRAFT_ASSIST')`+`flagEnabled`): **Part A** the save gate now honors
+  env-OR-registry via the shared resolver, so the already-on registry row enables POST-save on the next Railway
+  redeploy — no env var needed (explicit env still overrides); **Part B** `NAME_STOPWORDS` — benign Title-Case
+  phrases ("Quick Check-In", "Following Up") no longer false-flagged, real names + fabricated figures still caught.
+  29 tests. **Remaining for actual saves:** redeploy origin/main + `PA_OUTLOOK_DRAFT_URL` set on the service.
 
 ## Milestone 2026-08-14 — W9.6 lane fully worked; the last connectedness link is now CONSUMED
 
@@ -70,10 +69,7 @@ feeds the W9.2 reachability create-contact arm owner-linked threads it couldn't 
   the confirm appends the owner entity to `activity_events.metadata.linked_entity_ids` (a jsonb-array append,
   tracked reversibly by the apply_log), and the provenance ledger (built for scalar curated-field writes) isn't
   stamping the array append. The reversible record (apply_log) is intact and the metric moved correctly; only
-<<<<<<< HEAD
-  the provenance *visibility* of these bridges is missing. **→ Prompt 108 drafted** (`docs/claude-code/prompts/108-comms-owner-bridge-provenance.md`): root cause pinned to the confirm writer's `lcc_merge_field` call passing `p_value: JSON.stringify(ownerEid)` (double-encoded) into a `jsonb` param, inside a SWALLOWED catch (admin.js ~9243/9251) — fix the encoding, make the failure loud, backfill the 22 confirmed bridges from the apply_log.
-=======
-  the provenance *visibility* of these bridges is missing. Candidate tiny follow-up if we want them in the ledger.
+  the provenance *visibility* of these bridges is missing.
   - **RESOLVED — Prompt 108 (W9.6 provenance follow-up, 2026-08-14):** the 0-rows was NOT the array-append shape
     — the confirm writer DID call `lcc_merge_field`, but (a) inside a swallowed `catch (_e) {}` that hid the
     failure and (b) passed `p_value: JSON.stringify(ownerEid)`, double-encoding the jsonb param. Fixed both:
@@ -86,7 +82,6 @@ feeds the W9.2 reachability create-contact arm owner-linked threads it couldn't 
     = 22 write rows, all 22 in `v_field_provenance_current`; `v_field_provenance_unranked` adds 0 for
     `comms_owner_bridge` (fsp row already registered — no new drift).** Regression guard: 3 tests in
     `test/comms-owner-attribution.test.mjs` assert `p_value` is the bare id (never `JSON.stringify`).
->>>>>>> 1884179550a02654a2561915a8ae2429fd423a22
 - **Twin assist (106):** first cron run is 05:45 UTC **2026-08-15** (flag flipped after today's run window), so
   the property_twin lane will be pre-ranked/sorted tomorrow morning (0 annotations now is expected).
 
