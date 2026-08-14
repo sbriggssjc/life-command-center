@@ -421,6 +421,32 @@ looks identical to a healthy quiet pipeline* — this table is the single source
 - **`state`/`off_since` are operator-curated** — flip a flag's row to `on` (or update `off_since`) when
   you actually enable it in the Railway env; `updated_at` auto-touches on UPDATE.
 
+## dia property "address twins" — Decision Center lane `property_twin` (2026-08-14)
+
+The dia repo ships a geospatial address-twin detector + REVERSIBLE merge (dia
+`dia_find_property_twins` / `dia_merge_property_reversible` / `dia_unmerge_property` /
+`dia_property_twin_review`; auto-merges only blank-operator husks, routes everything
+with a competing clinical identity to review). LCC surfaces the review lane:
+
+- **Federated Decision Center lane `property_twin`** (registered in `api/admin.js`
+  `FEDERATED_DECISION_TYPES`, `ops.js` `_DC_FEDERATED` + the lane-tile list,
+  `dc-lanes.js` `_DC_FED_META` + card renderer, `review-shared.js` lane map). Source =
+  the pending slice of dia `dia_property_twin_review` (closest-first). Verdicts:
+  **merge** (→ `rpc/dia_merge_property_reversible`, keep = the CCN anchor, drop = the
+  shadow, both taken server-side from the row; stamps `status='merged'` + `backup_id`,
+  reversible via `dia_unmerge_property`), **not_twin** (`status='rejected'`), **research**
+  (spawns a `research_task`). Badge folded into the `merges_dupes` review-counts lane.
+- **No edge-allowlist change / no `data-query` redeploy** — the lane is server-mediated
+  via `domainQuery` (direct domain PostgREST with the service key), which bypasses the
+  `DIA_READ_TABLES`/`DIA_WRITE_TABLES` edge allowlist. That allowlist only gates
+  browser-side `diaQuery` tiles. The one live prerequisite is the dia GRANTs
+  (`supabase/migrations/20260814_dia_property_twin_review_grants.sql`, applied to
+  `zqzrriwuavgrquhisnoa`) so the service_role PostgREST can read/write the lane + call
+  the RPCs.
+- **Footgun avoided:** co-located ≠ twin (a Fresenius and a DaVita share one plaza), so
+  the lane exists precisely for the human call the auto-pass refuses to make. Merge stays
+  reversible; never hard-delete without the snapshot.
+
 ## Pointers to canonical docs
 
 - **Architecture start:** `LCC-OS.md` → `docs/os/README.md`; canon in `docs/os/canon/`; consolidation map

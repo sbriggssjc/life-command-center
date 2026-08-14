@@ -1040,7 +1040,7 @@ async function handleReviewCounts(req, res) {
     provConflicts, staleIdentities, unlinkedEntities,
     diaResearch, govOwnershipQueue, diaLlc, govLlc,
     govDupAddr, govPending, govSosLinks, stagedIntakeReview,
-    govSfLink, diaSfLink,
+    govSfLink, diaSfLink, diaTwins,
   ] = await Promise.all([
     opsLane('data_conflicts',    'v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
     opsLane('stale_identities',  'v_stale_identities'),
@@ -1064,6 +1064,10 @@ async function handleReviewCounts(req, res) {
     // sublane badge — the lane is mint-at-verdict, NOT a 3,452-row lcc_decisions mint.
     withLaneTimeout(domCount('gov', 'v_sf_link_review_queue')),
     withLaneTimeout(domCount('dia', 'v_sf_link_review_queue')),
+    // dia geospatial property "address twins" awaiting a human verdict (the
+    // pending slice of dia_property_twin_review; auto_blank husks already merged
+    // by the dia_merge_twins auto pass). Folded into the merges_dupes lane below.
+    withLaneTimeout(domCount('dia', 'dia_property_twin_review?status=eq.pending')),
   ]);
 
   // W8 (Prompt 75): live badge counts for the two W8-touched federated lanes.
@@ -1122,8 +1126,9 @@ async function handleReviewCounts(req, res) {
       count_mode: 'cached', status: laneStatus(provConflicts),
       href: 'pageDataQuality', tone: 'yellow' },
     { key: 'merges_dupes', label: 'Property merges & duplicates',
-      count: sum(govDupAddr), parts: { gov_dup_address: val(govDupAddr) },
-      count_mode: 'exact', status: laneStatus(govDupAddr),
+      count: sum(govDupAddr, diaTwins),
+      parts: { gov_dup_address: val(govDupAddr), dia_address_twins: val(diaTwins) },
+      count_mode: 'exact', status: laneStatus(govDupAddr, diaTwins),
       href: 'pageDataQuality', tone: 'yellow' },
     { key: 'pending_updates', label: 'Pending updates (Gov)',
       count: sum(govPending), parts: { pending: val(govPending) },
@@ -6647,6 +6652,13 @@ const FEDERATED_DECISION_TYPES = new Set([
   // feeds owner-record history + the harvest create-contact arm. NEVER auto-writes.
   'comms_owner_attribution_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
+  // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
+  // auto-merges only blank-operator husks; every twin with a competing clinical
+  // identity (operator conflict / distinct clinic name / multiple anchors) lands in
+  // the pending slice of dia_property_twin_review. Merge rides the REVERSIBLE wrapper
+  // dia_merge_property_reversible (snapshot-before-hard-delete). keep = the CCN
+  // anchor; drop = the shadow. Verdicts: merge / not_twin / research.
+  'property_twin',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
   // 430 auto_mergeable groups was drained live; new auto_mergeable groups
@@ -6745,6 +6757,7 @@ function federatedSubjectRef(type, s) {
   switch (type) {
     case 'intake_disposition': return s.intake_id ? 'intake:' + s.intake_id : null;
     case 'property_merge':     return (s.domain && s.property_id != null) ? 'merge:' + s.domain + ':' + s.property_id : null;
+    case 'property_twin':      return s.review_id != null ? 'twin:dia:' + s.review_id : null;
     case 'provenance_conflict':return s.provenance_id != null ? 'prov:' + s.provenance_id
                                      : (s.record_id != null ? 'prov:dia_xref:' + s.record_id : null);
     case 'pending_update':     return s.pending_id != null ? 'pending:gov:' + s.pending_id : null;
@@ -7425,6 +7438,52 @@ async function fetchFederatedSource(type, cap, opts) {
     ]);
     out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  if (type === 'property_twin') {
+    // dia geospatial address-twin review lane (2026-08-14). Source is the pending
+    // slice of dia_property_twin_review — every twin the dia_merge_twins engine
+    // classified as needing a human (operator conflict / distinct clinic name /
+    // multiple anchors / blank-but-far). Value-ranked closest-first (a tighter
+    // co-location is a stronger twin signal). auto_blank husks are already merged
+    // and never appear here (status<>'pending').
+    const r = await domainQuery('dia', 'GET',
+      'dia_property_twin_review?select=id,shadow_property_id,anchor_property_id,classification,distance_miles,detail'
+      + '&status=eq.pending&order=distance_miles.asc,id.asc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // Batch-enrich with addresses/tenants for a legible card (one lookup, not N).
+    const ids = Array.from(new Set(rows.flatMap((x) => [x.shadow_property_id, x.anchor_property_id]).filter((v) => v != null)));
+    const addr = {};
+    if (ids.length) {
+      const pr = await domainQuery('dia', 'GET',
+        'properties?select=property_id,address,city,state,tenant,medicare_id,total_chairs&property_id=in.(' + ids.join(',') + ')');
+      if (pr.ok && Array.isArray(pr.data)) for (const p of pr.data) addr[p.property_id] = p;
+    }
+    out.items = rows.map((row) => {
+      const a = addr[row.anchor_property_id] || {};
+      const s = addr[row.shadow_property_id] || {};
+      const d = row.detail || {};
+      return {
+        subject_ref: 'twin:dia:' + row.id,
+        subject_domain: 'dia', subject_property_id: String(row.shadow_property_id), subject_entity_id: null,
+        // closer twins rank higher: invert distance into a positive rank
+        rank_value: (row.distance_miles != null) ? (1 / (Number(row.distance_miles) + 0.001)) : 0,
+        context: {
+          domain: 'dia', review_id: row.id, classification: row.classification,
+          distance_miles: row.distance_miles,
+          shadow_property_id: row.shadow_property_id, anchor_property_id: row.anchor_property_id,
+          shadow_address: s.address || null, anchor_address: a.address || null,
+          city: a.city || s.city || null, state: a.state || s.state || null,
+          shadow_tenant: s.tenant ?? d.shadow_tenant ?? null, anchor_tenant: a.tenant ?? d.anchor_tenant ?? null,
+          shadow_operator: d.shadow_operator || null, anchor_operator: d.anchor_operator || null,
+          anchor_medicare_id: a.medicare_id || null, anchor_chairs: a.total_chairs ?? null,
+          n_anchors: d.n_anchors ?? null, same_norm_address: d.same_norm_address ?? null,
+        },
+      };
+    });
+    const cnt = await domCnt('dia', 'dia_property_twin_review?status=eq.pending');
+    out.total = (cnt == null) ? null : cnt;
     return out;
   }
 
@@ -10469,6 +10528,78 @@ async function handleDecisionVerdict(req, res) {
             + ' (' + (c.address || '') + ') is a duplicate to be merged, or a distinct property.' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- property_twin (federated) -----------------------------------------
+    // dia geospatial address twin. merge rides the REVERSIBLE wrapper
+    // dia_merge_property_reversible (snapshot-before-hard-delete); keep/drop are
+    // taken from the review row server-side (never trusted from the client). Merge
+    // marks the row status='merged' + stamps backup_id (reversible via
+    // dia_unmerge_property). not_twin/research are non-destructive.
+    if (decision.decision_type === 'property_twin') {
+      const reviewId = parseInt(c.review_id, 10);
+      if (!Number.isFinite(reviewId)) {
+        return res.status(400).json({ error: 'property_twin requires context.review_id' });
+      }
+      // Authoritative re-fetch: keep = anchor (CCN bearer), drop = shadow.
+      const rr = await domainQuery('dia', 'GET',
+        'dia_property_twin_review?select=id,shadow_property_id,anchor_property_id,status&id=eq.' + reviewId + '&limit=1');
+      const row = (rr.ok && Array.isArray(rr.data) && rr.data[0]) ? rr.data[0] : null;
+      if (!row) return res.status(404).json({ error: 'twin_review_row_not_found', review_id: reviewId });
+      if (row.status !== 'pending') {
+        // Already worked (e.g. auto-merged / rejected). Record + drop from lane.
+        await record(verdict, 'decided', null, { twin: 'already_' + row.status });
+        return res.status(200).json({ ok: true, verdict, note: 'already_' + row.status });
+      }
+      const dropId = parseInt(row.shadow_property_id, 10);
+      const keepId = parseInt(row.anchor_property_id, 10);
+
+      if (verdict === 'not_twin') {
+        const pr = await domainQuery('dia', 'PATCH',
+          'dia_property_twin_review?id=eq.' + reviewId,
+          { status: 'rejected', resolved_at: new Date().toISOString(),
+            resolution_note: 'Decision Center: not a twin' });
+        if (!pr.ok) { await recordEffectFailure({ patch: false, error: pr.data }); return res.status(502).json({ error: 'twin_reject_failed', detail: pr.data }); }
+        await record('not_twin', 'decided', null, { twin: 'rejected' });
+        return res.status(200).json({ ok: true, verdict: 'not_twin' });
+      }
+
+      if (verdict === 'merge') {
+        if (!Number.isFinite(keepId) || !Number.isFinite(dropId) || keepId === dropId) {
+          return res.status(400).json({ error: 'twin row missing distinct anchor/shadow ids' });
+        }
+        const mr = await domainQuery('dia', 'POST', 'rpc/dia_merge_property_reversible',
+          { p_keep_id: keepId, p_drop_id: dropId, p_batch_tag: 'dc_twin_verdict' });
+        if (!mr.ok) { await recordEffectFailure({ merge: false, error: mr.data }); return res.status(502).json({ error: 'twin_merge_failed', detail: mr.data }); }
+        // Function returns the backup_id (scalar bigint); PostgREST may wrap it.
+        const backupId = (typeof mr.data === 'number') ? mr.data
+          : (Array.isArray(mr.data) ? Number(mr.data[0]) : Number(mr.data));
+        const pr = await domainQuery('dia', 'PATCH',
+          'dia_property_twin_review?id=eq.' + reviewId,
+          { status: 'merged', backup_id: Number.isFinite(backupId) ? backupId : null,
+            resolved_at: new Date().toISOString(),
+            resolution_note: 'merged via Decision Center (reversible; backup_id=' + backupId + ')' });
+        if (!pr.ok) { await recordEffectFailure({ patch: false, error: pr.data }); /* merge already done; still report ok */ }
+        await record('merge', 'decided', { keep_id: keepId, drop_id: dropId, backup_id: backupId }, { twin: 'merged' });
+        return res.status(200).json({ ok: true, verdict: 'merge', keep_id: keepId, drop_id: dropId, backup_id: backupId });
+      }
+
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'property_twin',
+          title: 'Confirm address twin: ' + (c.shadow_address || c.shadow_property_id || ''),
+          instructions: 'Decision Center: is dia property ' + (c.shadow_property_id || '') + ' ('
+            + (c.shadow_address || '') + ', tenant ' + (c.shadow_tenant || '—') + ') the SAME building as CCN-anchored '
+            + (c.anchor_property_id || '') + ' (' + (c.anchor_address || '') + ', tenant ' + (c.anchor_tenant || '—')
+            + '), or a distinct co-located clinic? Distance ' + (c.distance_miles ?? '?') + ' mi.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await domainQuery('dia', 'PATCH', 'dia_property_twin_review?id=eq.' + reviewId,
+          { status: 'research', resolved_at: new Date().toISOString(),
+            resolution_note: 'Decision Center: sent to research (task ' + rid + ')' });
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
         return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
       }

@@ -54,6 +54,7 @@ var LCC_DECISION_LANE_MAP = {
   owner_reconcile:               { lane: 'entity_merge',  merges: 'entity' },
   junk_entity_name:              { lane: 'entity_merge',  merges: 'entity' },
   property_merge:                { lane: 'property_merge', merges: 'property' },
+  property_twin:                 { lane: 'property_merge', merges: 'property' },
   provenance_conflict:           { lane: 'provenance',    merges: false },
   pending_update:                { lane: 'provenance',    merges: false },
   caprate_review:                { lane: 'provenance',    merges: false },
