@@ -16,10 +16,10 @@
   `comms_owner_bridge` **0 → 22**, all 22 in `v_field_provenance_current`; `v_field_provenance_unranked` adds 0
   (fsp row pre-existed — no new drift). Root cause matched the diagnosis (swallowed catch + `JSON.stringify(ownerEid)`
   double-encoded into the `jsonb` param); the response also corrected `p_target_database` `'lcc'`→`'lcc_opps'`
-  (the ops-local convention) and factored an RPC-args builder + regression test (23 pass). **⚠ The WRITER fix is on
-  PR #1746, NOT yet merged** — the old double-encoding is still live in `admin.js`, so FUTURE W9.6 confirms won't
-  stamp provenance until #1746 merges + Railway redeploys. The lane is empty now (all 22 worked) so nothing is
-  pending; merge #1746 to make the fix durable.
+  (the ops-local convention) and factored an RPC-args builder + regression test (23 pass). **✅ Writer fix MERGED + LIVE (PR #1746, redeploy live 2026-08-14)** —
+  `origin/main` carries `buildOwnerBridgeProvenanceArgs` + `p_value` as the raw id (double-encoding gone), so
+  FUTURE W9.6 confirms now stamp `comms_owner_bridge` provenance correctly. Durable. (Note: Scott's LOCAL checkout
+  was briefly behind — `ahead 1 / behind 2` — a sync/pull brings it current; production was never affected.)
 - **W10 Stage 2 draft-assist REVIEWED LIVE + FLIPPED ON.** Scott ran two `GET /api/draft-assist` dry-runs on his
   box; both generated on-prem (`qwen2.5:14b`, GaryBuilt reachable). **Voice is accurate** — terse, "Stay tuned",
   "Got it" (echoing his real retrieved exemplars); **never-fabricate proven** — a non-existent `entity_id` yielded
