@@ -21,8 +21,9 @@
 > writes; W9.6 first run **22 proposals** minted. **Gaps:** (a) W9.6 lane 0/22 worked → `correspondence_entity_
 > owner_llc` still 2.5% (the one un-consumed link — highest-leverage next action); (b) hygiene lanes ~0 rejects
 > (bulk-confirm — safe but no precision signal); (c) reachability create_contact 2/4 rejected on shared-broker
-> noise → candidate W9.2 precision pass (reuse `isBrokerageOwnerName`); (d) owner_reconcile 43 worked vs 3,416
-> pool. Full trace in `docs/claude-code/STATUS.md` 2026-08-14 entry.
+> noise (Philip Sharrow @scopecre.com fanned across 2 owners) → **Prompt 104 drafted** (fan-out cap +
+> brokerage-contact guard on the create_contact arm; reuses `isBrokerageOwnerName` + W9.1 broker_of_record
+> typing); (d) owner_reconcile 43 worked vs 3,416 pool. Full trace in `docs/claude-code/STATUS.md` 2026-08-14 entry.
 
 Doctrine (inherited): value-gate everything (rank_value order); fill-blanks only; provenance + fsp rows in-migration; reversible; never fabricate a contact; human lanes for judgment; honest per-source counts; new units START with the house pattern (windowed scans, budget floors, crash-proof envelopes, batched lookups, loud per-source errors).
 

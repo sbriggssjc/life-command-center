@@ -44,9 +44,13 @@ CLOSED in every category. Scott worked a large batch over ~36h; here is what lan
    spot-rejecting a few genuinely-wrong cards to keep the precision floor honest — or accept if the pre-filter
    is truly clean (the batch ledgers make any over-confirm reversible).
 3. **Reachability create_contact could tighten.** 2 of the first 4 harvest cards were **rejected** (shared-broker
-   `create_contact` — e.g. a broker appearing under multiple owners), the same brokerage/shared-contact noise we
-   fixed in W9.6 Path B. The human gate caught them, but a W9.2 create_contact precision pass (reuse the
-   `isBrokerageOwnerName` guard) would cut the noise. Candidate follow-up prompt.
+   `create_contact` — both were **Philip Sharrow `<philip.sharrow@scopecre.com>` fanned across Boyd Watterson AND
+   BLOOMINGTON IRS**), the same brokerage/shared-contact noise we fixed in W9.6 Path B. The human gate caught
+   them. **→ Prompt 104 drafted** (`docs/claude-code/prompts/104-w9-2-create-contact-precision.md`): two
+   deterministic guards on the create_contact arm — a **fan-out cap** (a contact minted for ≥2 distinct owners →
+   suppress, catches Sharrow) and a **brokerage/advisor-contact guard** (reuse `isBrokerageOwnerName` + an
+   email-domain check → never mint an advisor as the owner's own contact; drop or type `broker_of_record` per
+   the W9.1 pattern). Deterministic fill-blanks arm untouched. Reuse-don't-rebuild.
 4. **owner_reconcile scale.** 43 worked vs a **3,416** open pool — drain rate is slow relative to the pile (not a
    defect; needs sustained work or a bulk-assist). ORE-native seeder pairs (vs the dup-pair subset) are the bulk.
 
