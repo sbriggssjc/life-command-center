@@ -23,6 +23,18 @@ feeds the W9.2 reachability create-contact arm owner-linked threads it couldn't 
   tracked reversibly by the apply_log), and the provenance ledger (built for scalar curated-field writes) isn't
   stamping the array append. The reversible record (apply_log) is intact and the metric moved correctly; only
   the provenance *visibility* of these bridges is missing. Candidate tiny follow-up if we want them in the ledger.
+  - **RESOLVED — Prompt 108 (W9.6 provenance follow-up, 2026-08-14):** the 0-rows was NOT the array-append shape
+    — the confirm writer DID call `lcc_merge_field`, but (a) inside a swallowed `catch (_e) {}` that hid the
+    failure and (b) passed `p_value: JSON.stringify(ownerEid)`, double-encoding the jsonb param. Fixed both:
+    the catch now logs loudly (`console.warn` on non-ok / thrown), and `p_value` is the RAW owner id (the RPC
+    casts to jsonb) via the new single builder `buildOwnerBridgeProvenanceArgs` (`api/_shared/comms-owner-attribution.js`),
+    stamping `p_target_database='lcc_opps'` (the ops-local convention). **Backfilled all 22 historical bridges**
+    (migration `20260814140000_lcc_w9_6_comms_owner_bridge_provenance_backfill.sql`, applied live — one
+    provenance row per bridge keyed on each review's `sample_activity_id`, idempotent, reversible by
+    `source_run_id='w9_6_provenance_backfill:2026-08-14'`). **Verified live: `field_provenance` `comms_owner_bridge`
+    = 22 write rows, all 22 in `v_field_provenance_current`; `v_field_provenance_unranked` adds 0 for
+    `comms_owner_bridge` (fsp row already registered — no new drift).** Regression guard: 3 tests in
+    `test/comms-owner-attribution.test.mjs` assert `p_value` is the bare id (never `JSON.stringify`).
 - **Twin assist (106):** first cron run is 05:45 UTC **2026-08-15** (flag flipped after today's run window), so
   the property_twin lane will be pre-ranked/sorted tomorrow morning (0 annotations now is expected).
 

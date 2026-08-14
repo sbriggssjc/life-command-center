@@ -74,7 +74,7 @@ import {
   collectAddressNumbers, matchCandidateToProperties,
 } from './_shared/naming-hygiene-planner.js';
 import * as RH from './_shared/reachability-harvest-planner.js';
-import { isBrokerageContact as coaIsBrokerageContact } from './_shared/comms-owner-attribution.js';
+import { isBrokerageContact as coaIsBrokerageContact, buildOwnerBridgeProvenanceArgs } from './_shared/comms-owner-attribution.js';
 import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
@@ -9239,16 +9239,29 @@ async function handleDecisionVerdict(req, res) {
       const provIds = [];
       const sampleId = review.sample_activity_id || (toPatch[0] && toPatch[0].id) || null;
       if (sampleId) {
+        // Provenance stamp. p_value is a jsonb param: pass the raw owner-entity id
+        // (the RPC casts it to jsonb) — do NOT JSON.stringify it, which would
+        // double-encode into '"\"<id>\""'. p_target_database='lcc_opps' matches the
+        // ops-local convention (sf-promotion-worker, availability-checker). Loud on
+        // failure — a provenance miss must surface in logs, not vanish (the append +
+        // ledger remain the reversible record either way).
         try {
-          const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
-            p_workspace_id: decision.workspace_id || null, p_target_database: 'lcc',
-            p_target_table: 'public.activity_events', p_record_pk: String(sampleId),
-            p_field_name: 'linked_entity_ids', p_value: JSON.stringify(ownerEid),
-            p_source: 'comms_owner_bridge', p_source_run_id: review.source_run_id || 'verdict',
-            p_confidence: Number(review.confidence) || null, p_recorded_by: user.id || null,
+          const provArgs = buildOwnerBridgeProvenanceArgs({
+            sampleId, ownerEid, sourceRunId: review.source_run_id,
+            confidence: review.confidence, workspaceId: decision.workspace_id, recordedBy: user.id,
           });
-          if (pv.ok && Array.isArray(pv.data) && pv.data[0] && pv.data[0].provenance_id) provIds.push(pv.data[0].provenance_id);
-        } catch (_e) { /* provenance best-effort; the append + ledger are the record */ }
+          const pv = await opsQuery('POST', 'rpc/lcc_merge_field', provArgs,
+            { headers: { Prefer: 'return=representation' } });
+          if (pv.ok && Array.isArray(pv.data) && pv.data[0] && pv.data[0].provenance_id) {
+            provIds.push(pv.data[0].provenance_id);
+          } else {
+            console.warn('[comms_owner_bridge] provenance stamp did not land',
+              { review_id: review.review_id, sample_id: sampleId, status: pv.status, detail: pv.data });
+          }
+        } catch (e) {
+          console.warn('[comms_owner_bridge] provenance stamp failed',
+            { review_id: review.review_id, sample_id: sampleId, error: e && e.message });
+        }
       }
       if (applyLogId != null) {
         await opsQuery('PATCH', 'comms_owner_attribution_apply_log?apply_id=eq.' + applyLogId,
