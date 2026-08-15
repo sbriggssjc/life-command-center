@@ -207,10 +207,26 @@ correspondence + files + OM for the dossier now, backfill Medicare when the prop
 **Phase 0 — Data truth (unblocks the "polluted DB" complaints; connects to owner-reconciliation engine)**
 - P0.1 Diagnose the exact owner-display fallback; render **"Owner: unresolved"** when no reconciled
   owner evidence (stop showing the operator). *(display + query)*
-- P0.2 Own-deal buyer → owner feeder: for closed `bd_opportunities`, record the buyer as owner evidence
-  (high weight) and reconcile. *(engine feeder)*
-- P0.3 County/deed/assessor/tax-mailing owner feeder (external — connector-dependent; design now, wire
-  when the data source is available). *(engine feeder)*
+- ~~P0.2 Own-deal buyer → owner feeder~~ — **MEASURED AND SKIPPED 2026-08-15 (Prompt 113): data-thin.**
+  Only **70** assets carry a closed-won `bd_opportunity`, **40** were unresolved, **17** had a buyer party
+  edge — below the 50-asset floor set for this decision. After P0.3 the residue is **34 / 15**. The canonical
+  Finding-A case (Fresenius – Woodland Hills) would **not** have been fixed by this feeder: its closed-won SF
+  deal is anchored to a *duplicate* asset entity and carries **zero** party edges, and dia
+  `sales_transactions.buyer_name` for the sale is NULL. The real blockers there are an asset-entity merge and
+  deal-party edges, not an owner feeder. Full evidence: `connectivity-and-open-threads.md` §4b BREAK-3.
+- **P0.3 — SHIPPED 2026-08-15 (Prompt 113): `35.9% → 49.2%` of assets carry a reconciled owner** (1,396 →
+  1,910 of 3,886; owner entities 690 → 1,118). Not the "external, connector-dependent" build this row
+  anticipated — **no new data was acquired**. The domain DBs already held the owner
+  (`properties.true_owner_id`); only the owner's *identity* was missing from the mirror. The portfolio views
+  now expose the owner IDs, `lcc_ingest_domain_owner_evidence()` (dry-run default, batch-reversible) promotes
+  the domain true owner by **ID** via `external_identities` — never by name — at weight 5.0, above
+  `rel_purchase`. **The operator guard mattered more than the win:** 815 assets were blocked from being
+  stamped with their TENANT (DaVita 348, Fresenius 334), using the same
+  `dia.true_owners.is_operator_not_owner` flag P0.1 reads. Ambiguity → `lcc_domain_owner_ambiguous` (2 rows),
+  never guessed. *(engine feeder)*
+  - **Still open, sized:** 876 assets have evidence but fail the 0.55 confidence gate because the resolver
+    scores an ownership CHAIN as competing claims; a strict-latest-purchase supersession tier would resolve
+    **465** more. Consumer change, not a feeder — see BREAK-3.
 - P0.4 Lease reconciliation at source: dedupe per premises, actual-lease-preferred, normalize tenant
   identity; rent schedule from actual lease + amendments. *(ingestion + DB)*
 - P0.5 Recompute cap from reconciled in-place rent (validates against OM). *(follows P0.4)*
@@ -335,6 +351,13 @@ the operator-as-owner fallback was so pervasive and why the home screen shows �
 need research.” Open deals: **31/40 have owner evidence** (also the point-person source for My Work), 9
 do not. Conclusion: the display fix (P0.1) stops the *misinformation* now; the **owner feeders**
 (P0.2 own-deal buyer, P0.3 county deed) are what actually *populate* the 98% — highest-leverage next.
+
+> **Update 2026-08-15 (Prompt 113).** Coverage is now **1,910 of 3,886 assets (49.2%)**, up from 35.9%,
+> via P0.3 above. The audit's framing — "the owner feeders are what populate the 98%" — held, but the
+> feeder that mattered needed **no external connector**: the owners were already in the domain DBs and
+> only their *identity* was missing from the LCC mirror. P0.2 was measured at ≤40 assets and skipped.
+> The next lever is not a feeder at all — it is the resolver's treatment of an ownership CHAIN as
+> competing claims (876 assets have evidence and still don't resolve; a supersession tier is worth 465).
 
 **My Work / Team Queue scoping (new, from Scott's screenshot): foundation built + verified.** See
 `access-scoping-and-my-work.md`. Root cause: deal to-dos are system-owned, not scoped to the deal

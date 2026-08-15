@@ -316,6 +316,14 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   broker edge is `third_party`/"unverified role" until our systems confirm; conflicts go to
   `lcc_deal_conflict` (surfaced, never auto-resolved); absent → "Not on file". SF Opportunity resolve/
   `sf_deal_id` stamp + Outlook thread + Sharefile roster fill are gated on those live connectors.
+- **Property-owner feeders → `lcc_property_owner_evidence` → `lcc_reconcile_property_owner`.** Authority
+  ladder (`property-owner-source-authority-and-doctrine.md`, registered in `field_source_priority` as
+  `lcc.lcc_property_owner/owner_entity_id`): `manual`(8.0) > **`domain_true_owner`(5.0)** > `rel_purchase`(4.0)
+  > `sf_seller`(3.5) > `rel_owns`(3.0). `domain_true_owner` (P113, `lcc_ingest_domain_owner_evidence`,
+  dry-run default, batch-reversible via `lcc_domain_owner_evidence_log`) outranks `rel_purchase` because it
+  is the domain's curated CURRENT owner-of-record, whereas a purchase edge is ONE historical transaction.
+  Dry-run surface `v_lcc_domain_owner_candidates`; ambiguity lane `lcc_domain_owner_ambiguous`. Fill-blanks:
+  it only ever touches assets with no resolved owner.
 - **Ownership Resolution Engine (ORE):** multi-signal authority-weighted reconciliation
   (`lcc_reconcile_owner`, `lcc_signal_authority`, `lcc_reconcile_config.match_threshold`), owner-address
   observations store (append-only, never-collapse), SOS/deed/institution-registry enrichment. Full design:
@@ -437,6 +445,31 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   acronym matching must read initials from the **unsorted** name, because `strictOwnerCore` sorts tokens;
   and a strict token SUBSET is NOT an abbreviation (**"Government Properties Trust"** ⊄ **"Easterly
   Government Properties"** — different REITs), so require equal token counts and leave subsets undecided.
+- **The domain `true_owner` is often the OPERATOR — never promote it to owner without the flag check
+  (P113).** dia files the tenant in the owner slot at scale: **7,926 of 11,783** dia properties point at a
+  `true_owners` row flagged `is_operator_not_owner`, and on the assets that lacked a reconciled owner the top
+  domain "owner" names were DaVita Inc. (348), Fresenius Medical Care (334), DaVita Kidney Care (67). The
+  owner feeder `lcc_ingest_domain_owner_evidence` blocked **815 assets** on that flag — more than the 809 it
+  promoted. **Use the existing flag** (`dia.true_owners.is_operator_not_owner`, surfaced on
+  `v_property_owner_facts_portfolio.true_owner_is_operator` and read by the P0.1 display guard as
+  `own.true_owner_is_operator`); never write a second name-based operator test, or the two definitions drift
+  and the panel and the feeder disagree. gov has no such conflation (the tenant is a federal agency) — its
+  view returns constant `false` so one guard serves both domains.
+- **Resolve a domain owner to an LCC entity by ID, never by name.** `external_identities(source_system=
+  'dia'|'gov', source_type='true_owner', external_id = properties.true_owner_id::text)` is the canonical
+  join and it follows entity merges for free (227 of 15,481 identities already point at a merge survivor).
+  The mirror `lcc_property_owner_facts` carries `true_owner_effective_id` (one `merged_into_true_owner_id`
+  hop applied domain-side) for exactly this. **`lcc_mirror_tick`'s `select=` list for the
+  `property_owner_facts` leg must keep those columns** — `lcc_apply_property_owner_facts_page` writes NULL
+  for any key absent from the payload, so dropping one silently NULLs the mirrored column on the next
+  incremental page, starving the feeder AND disarming the operator guard.
+- **`lcc_reconcile_property_owner` scores an ownership CHAIN as competing claims (known, sized, unfixed).**
+  It sums evidence weight with a recency decay **floored at 0.25**, so a building sold three times yields
+  three near-equal candidates and confidence lands at 0.33–0.50, under the 0.55 gate. Measured 2026-08-15:
+  **876** assets have evidence and still read "Unresolved"; a strict-latest-purchase supersession tier
+  (the later purchase SUPERSEDES the earlier — that is what "current owner" means) would resolve **465**
+  of them and correctly abstain on the 360 that tie on date. Adding evidence does not fix this class —
+  don't reach for another feeder first.
 - **`dup-pair-planner.ownerCore` / `nameSimilarity` are for FUZZY PAIRING, never for IDENTITY.** They
   strip a generic-CRE **stoplist** (realty, capital, income, group, holdings, properties, partners,
   services…) on top of legal forms, which is right when scoring a candidate pair and catastrophic when
