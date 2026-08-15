@@ -148,7 +148,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // de-anonymization climax + prospecting feed) -> activity. Ownership & CRM moved
   // after Deal History so the user understands the economics before resolving who
   // owns it. Dispatch is a name-keyed switch (_udRenderTab), so order is display-only.
-  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership & CRM', 'Documents', 'Activity Log'];
+  // Renamed 'Ownership & CRM' -> 'Ownership' (redesign 2026-08-15 §2): the
+  // '& CRM' was the licence under which the whole contact stack colonised a
+  // property tab. Legacy callers + DB-sourced rail chips still pass the old
+  // string; _udMapLegacyTab maps it.
+  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership', 'Documents', 'Activity Log'];
   const mappedInitialTab = initialTab ? _udMapLegacyTab(initialTab) : null;
   const activeTab = (mappedInitialTab && tabs.includes(mappedInitialTab)) ? mappedInitialTab : tabs[0];
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
@@ -486,7 +490,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     _udEnrichOwnershipSignals().then(function () {
       try {
         var _bodyEl = document.getElementById('detailBody');
-        if (_bodyEl && typeof activeTab !== 'undefined' && activeTab === 'Ownership & CRM') _bodyEl.innerHTML = _udRenderTab('Ownership & CRM');
+        if (_bodyEl && typeof activeTab !== 'undefined' && activeTab === 'Ownership') _bodyEl.innerHTML = _udRenderTab('Ownership');
       } catch (_e) {}
       try { _udRenderNextStep(); } catch (_e) {}
     });
@@ -604,9 +608,10 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
             🔗 Consolidate
           </button>
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
-          <button class="detail-close" onclick="closeDetail()">&times;</button>
+          ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls('primary') : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}
         </div>`;
     }
+    if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
 
     // Render active tab (preserve on refresh) or default to Overview
     const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
@@ -923,7 +928,7 @@ function _udMapLegacyTab(name) {
   switch (n.toLowerCase()) {
     case 'property':         return 'Overview';
     case 'lease':            return 'Rent Roll';
-    case 'ownership':        return 'Ownership & CRM';
+    case 'ownership':        return 'Ownership';
     // Round 76bj (2026-04-28): clicking a row in Sales/Avail dashboard tables
     // used to land on Deal History tab. Scott wants Overview as the default
     // landing tab regardless of which dashboard table the click came from —
@@ -936,7 +941,7 @@ function _udMapLegacyTab(name) {
     case 'overview':         return 'Overview';
     case 'rent roll':        return 'Rent Roll';
     case 'operations':       return 'Operations';
-    case 'ownership & crm':  return 'Ownership & CRM';
+    case 'ownership & crm':  return 'Ownership';   // legacy / DB rail chips
     case 'deal history':     return 'Deal History';
     case 'intel':            return 'Overview';
     case 'activity log':     return 'Activity Log';
@@ -1518,8 +1523,12 @@ function _udRenderCompletenessRail() {
   // is positionally aligned to the field catalog rather than dense). Filter
   // them out — they would crash the chip renderer on f.key.
   missing = missing.filter(f => f && typeof f === 'object' && f.key);
-  // Top 6 highest-weight missing fields (already weight-sorted by the view).
-  const top = missing.slice(0, 6);
+  // Top 4 highest-weight missing fields (already weight-sorted by the view).
+  // Redesign 2026-08-15 (§2.1): was 6, which wrapped to two rows above the fold
+  // and pushed the Next-step card — the thing the layout is supposed to be
+  // driving you toward — off screen. Four fits one row at every panel width;
+  // the rest roll into "+N more".
+  const top = missing.slice(0, 4);
 
   const parts = [];
   parts.push('<div class="cr-summary">');
@@ -1592,8 +1601,8 @@ window._udCompletenessChipClick = _udCompletenessChipClick;
 // Map a gap_type to the detail panel tab where the action is best executed.
 function _udNextActionTabForGap(gapType) {
   const t = String(gapType || '');
-  if (t === 'missing_recorded_owner') return 'Ownership & CRM';
-  if (t === 'llc_research_pending')   return 'Ownership & CRM';
+  if (t === 'missing_recorded_owner') return 'Ownership';
+  if (t === 'llc_research_pending')   return 'Ownership';
   if (t === 'lease_tenant_drift')     return 'Rent Roll';
   if (t === 'orphan_sale_owner')      return 'Deal History';
   if (t === 'stale_active_listing')   return 'Overview';
@@ -2032,7 +2041,8 @@ function _udRenderTab(tab) {
     case 'Overview':        return _udTabOverview();
     case 'Rent Roll':       return _udTabRentRoll();
     case 'Operations':      return _udTabOperations();
-    case 'Ownership & CRM': return _udTabOwnership();
+    case 'Ownership': return _udTabOwnership();
+    case 'Ownership & CRM': return _udTabOwnership();  // legacy alias
     case 'Deal History':    return _udTabDealHistory();
     case 'Activity Log':    return _udTabActivityLog();
     default: return '<div class="detail-empty">Unknown tab</div>';
@@ -2566,6 +2576,10 @@ function _udTabOverview() {
     extra += '<div class="overview-ai-research" style="display:none">';
     extra += _udAssistantSection('intel', 'Research Assistant', 'Turn the current notes and property context into a clean analyst summary and recommended next actions.');
     extra += _udResearchIntakeSection();
+    // Research Notes relocated here from the Ownership tab (redesign §2.2).
+    // They are ASSET evidence — they only lived on Ownership for historical
+    // reasons, and they are what the Research Assistant above reads.
+    extra += _udResearchNotesSection();
     extra += '</div></div>';
   }
 
@@ -6619,11 +6633,35 @@ function _udOwnershipLadder(own, db) {
   const conf = _udCache.ownerConf || null;
   const divergence = _udCache.ownerDivergence || null;
   const _sfAccId = own.sf_account_id || own.sf_company_id;
+
+  // Redesign 2026-08-15 (§0 corollary): never render the same name twice on one
+  // screen. When the deed owner and the decision-maker resolve to the SAME
+  // party, the two-card "recorded → true" ladder just prints the name again
+  // right under the Current Owner card (Scott's screenshot showed one owner name
+  // four times). Collapse to a single card with an explicit agreement note; the
+  // ladder only earns its two cards when there is genuinely a shell in front of
+  // a parent. Comparison is on the normalized core so casing / legal-suffix
+  // variants ("Rem Management" vs "REM Management LLC") still collapse.
+  const _norm = function(s) {
+    return String(s || '').toLowerCase()
+      .replace(/[.,]/g, ' ')
+      .replace(/\b(llc|l\.l\.c|inc|incorporated|corp|corporation|co|company|lp|llp|ltd|limited|trust|dst|reit)\b/g, ' ')
+      .replace(/[^a-z0-9]+/g, '');
+  };
+  // Require a substantive residue: the normalizer strips legal forms and
+  // punctuation, so two unrelated names that reduce to '' (or to one or two
+  // characters) must NOT be reported as the same party.
+  const _recCore = _norm(recDisplay);
+  const _ownersAgree = !!(recDisplay && trueResolved && _recCore.length >= 4 && _recCore === _norm(trueDisplay));
+
   let h = '';
-  h += '<div style="display:grid;grid-template-columns:1fr 26px 1fr;gap:0;align-items:stretch;margin-bottom:12px">';
+  h += _ownersAgree
+    ? '<div style="margin-bottom:12px">'
+    : '<div style="display:grid;grid-template-columns:1fr 26px 1fr;gap:0;align-items:stretch;margin-bottom:12px">';
   // Recorded owner
   h += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">';
-  h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">Recorded Owner (deed)</div>';
+  h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">'
+    + (_ownersAgree ? 'Owner &mdash; deed &amp; decision maker' : 'Recorded Owner (deed)') + '</div>';
   if (recDisplay) {
     h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(recDisplay, _ownerCtxFromCurrent(own, db, 'recorded')) + '</div>';
     if (own.recorded_owner_type || own.owner_type) h += '<div style="font-size:11px;color:var(--text2)">' + esc(own.recorded_owner_type || own.owner_type) + '</div>';
@@ -6649,7 +6687,20 @@ function _udOwnershipLadder(own, db) {
     h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— not on file —</div>';
     h += '<div class="t-meta3">No recorded owner. Pull from county deed / CoStar / RCA.</div>';
   }
+  // Collapsed branch: deed owner == decision maker. Print the agreement + the
+  // confidence signal inline instead of a second card repeating the same name.
+  if (_ownersAgree) {
+    const _agreeBits = ['Recorded deed owner and decision maker are the same party.'];
+    if (own.owner_source === 'lcc_property_owner' && own.lcc_property_owner && own.lcc_property_owner.confidence != null) {
+      _agreeBits.push('Resolved from ownership graph \u00b7 ' + Math.round(Number(own.lcc_property_owner.confidence) * 100) + '%');
+    } else if (conf && conf.value != null) {
+      _agreeBits.push('Confidence ' + Math.round(conf.value * 100) + '%' + (conf.role ? ' \u00b7 ' + esc(conf.role) : ''));
+    }
+    if (own.true_owner_sec_cik) h += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px">SEC filings \u2192</a>';
+    h += '<div style="margin-top:8px;font-size:11px;color:var(--text3);border-top:1px solid var(--border);padding-top:7px">' + _agreeBits.join(' \u00b7 ') + '</div>';
+  }
   h += '</div>';
+  if (!_ownersAgree) {
   h += '<div style="display:flex;align-items:center;justify-content:center;color:var(--purple);font-size:18px">→</div>';
   // True owner
   const trueStepBg = trueResolved
@@ -6694,6 +6745,7 @@ function _udOwnershipLadder(own, db) {
     h += '<div class="t-meta3">Beneficial owner not yet identified. Queue LLC / SoS research.</div>';
   }
   h += '</div>';
+  }
   h += '</div>';
   if (divergence) {
     const label = divergence.kind === 'assessor' ? 'Assessor disagrees' : 'Recorded vs true differ';
@@ -6724,11 +6776,11 @@ function _udBandClass(band) {
 }
 function _udResearchCta(researchType) {
   const t = String(researchType || '');
-  if (t.indexOf('missing_recorded_owner') !== -1) return { label: 'Pull recorded owner →', tab: 'Ownership & CRM' };
-  if (t.indexOf('llc') !== -1 || t.indexOf('true_owner') !== -1) return { label: 'Resolve true owner →', tab: 'Ownership & CRM' };
+  if (t.indexOf('missing_recorded_owner') !== -1) return { label: 'Pull recorded owner →', tab: 'Ownership' };
+  if (t.indexOf('llc') !== -1 || t.indexOf('true_owner') !== -1) return { label: 'Resolve true owner →', tab: 'Ownership' };
   if (t.indexOf('lease') !== -1) return { label: 'Confirm lease →', tab: 'Rent Roll' };
   if (t.indexOf('sale') !== -1) return { label: 'Review sale →', tab: 'Deal History' };
-  return { label: 'Take action →', tab: 'Ownership & CRM' };
+  return { label: 'Take action →', tab: 'Ownership' };
 }
 function _udResearchTitle(r) {
   const t = String(r.research_type || '');
@@ -6882,7 +6934,7 @@ function _udRenderNextStep() {
       onclick: 'navTo(&quot;pageReviewConsole&quot;);setTimeout(renderSosLinkWorklist,400)' };
   } else if (!trueResolved) {
     step = { label: 'Resolve the true owner', sub: 'Recorded owner known; decision-maker not resolved.', cta: 'Open Ownership \u2192',
-      onclick: 'switchUnifiedTab(&quot;Ownership &amp; CRM&quot;)' };
+      onclick: 'switchUnifiedTab(&quot;Ownership&quot;)' };
   } else if (band && (band.priority_band === 'P0.4' || band.reason === 'resolve_ownership_control') && band.resolve_is_connected === false) {
     // R6: the owner is resolved but the control structure isn't CONNECTED yet
     // (no Salesforce account / contact). Doctrine: connect first \u2014 the lead is
@@ -6891,7 +6943,7 @@ function _udRenderNextStep() {
       sub: band.resolve_true_owner_name
         ? ('True owner: ' + band.resolve_true_owner_name + ' \u2014 link a Salesforce account / contact before opening a lead.')
         : 'Identify the true owner/parent and link a CRM account / contact before opening a lead.',
-      cta: 'Open Ownership \u2192', onclick: 'switchUnifiedTab(&quot;Ownership &amp; CRM&quot;)' };
+      cta: 'Open Ownership \u2192', onclick: 'switchUnifiedTab(&quot;Ownership&quot;)' };
   } else if (needsLead) {
     step = { label: 'Create the lead', sub: 'Owner resolved' + (linked ? ' & CRM-linked' : '') + '. Open a BD opportunity.', cta: 'Create lead',
       onclick: '_udBtnGuard(this,_udCreateLeadFromProperty)' };
@@ -7413,14 +7465,70 @@ window._udOwnershipLadder = _udOwnershipLadder;
 // prominently as a clickable chip that opens the owner sidebar, with provenance +
 // last-verified. Domain-generic. Renders only when we have a resolved owner (never the
 // operator). See docs/architecture/property-owner-subsystem.md.
-function _udCurrentOwnerCard(own, db) {
-  if (!own) return '';
+/**
+ * The resolved owner of THIS asset, as a { name, id } reference.
+ * Single source for the Current Owner card, the hand-off CTA and the ladder
+ * de-duplication — so the three can never disagree about who the owner is.
+ * Never returns the operator/tenant (the P0.1 guard).
+ */
+function _udResolvedOwnerRef(own) {
+  if (!own) return null;
   const po = own.lcc_property_owner || null;
   const name = (po && po.owner_name)
     || (own.true_owner && !own.true_owner_is_operator ? (own.true_owner_canonical || own.true_owner) : null)
     || null;
+  if (!name) return null;
+  return { name: name, id: (po && po.owner_entity_id) || own.owner_entity_id || null };
+}
+
+/**
+ * "Work this owner →" — the seam between the property ladder and the owner
+ * ladder (redesign 2026-08-15 §4). Opens the owner in the companion dock when
+ * there's room, otherwise the full owner panel. `size:'hero'` renders the
+ * primary button inside the Current Owner card; `size:'footer'` renders the
+ * lighter repeat at the bottom of a long tab.
+ */
+function _udWorkOwnerCta(ref, size) {
+  if (!ref) return '';
+  // Names carry apostrophes ("O'Brien Holdings LLC"). esc() turns ' into &#39;,
+  // which the HTML parser decodes back to a raw ' INSIDE the onclick source —
+  // breaking the string literal. Chaining .replace(/'/g,"\\'") after esc() does
+  // nothing because there is no ' left to match. Round-trip through
+  // encodeURIComponent instead (the pattern used elsewhere in this file).
+  const open = ref.id
+    ? `_openEntitySmart(decodeURIComponent('${encodeURIComponent(String(ref.id))}'))`
+    : `_openEntityByNameSmart(decodeURIComponent('${encodeURIComponent(ref.name)}'))`;
+  const hero = size === 'hero';
+  const btn = `<button onclick="${open}" title="Open the owner panel — calls, emails, cadence, contacts"`
+    + ` style="padding:${hero ? '9px 16px' : '7px 14px'};border-radius:8px;font-size:${hero ? '13px' : '12px'};font-weight:600;cursor:pointer;`
+    + `border:1px solid var(--accent);background:${hero ? 'var(--accent)' : 'transparent'};color:${hero ? '#fff' : 'var(--accent)'}">`
+    + `Work this owner &rarr;</button>`;
+  return `<div style="margin-top:${hero ? '10px' : '4px'};display:flex;align-items:center;gap:10px;flex-wrap:wrap">${btn}`
+    + `<span style="font-size:11px;color:var(--text3)">Calls, emails, cadence and contact records live on the owner panel.</span></div>`;
+}
+
+/** Footer repeat of the hand-off; also the empty-state pointer when unresolved. */
+function _udOwnerHandoffCard(own, db) {
+  const ref = _udResolvedOwnerRef(own);
+  let h = '<div class="detail-section" style="border-top:1px solid var(--border);padding-top:14px">';
+  if (ref) {
+    h += `<div style="font-size:12px;color:var(--text2);margin-bottom:2px">Owner: <strong style="color:var(--text)">${esc(ref.name)}</strong></div>`;
+    h += _udWorkOwnerCta(ref, 'footer');
+  } else {
+    h += '<div style="font-size:12px;color:var(--text2)">No owner resolved for this asset yet — fill in <strong>Resolve Ownership</strong> above, '
+      + 'then the owner panel (calls, emails, cadence, contacts) becomes reachable from here.</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function _udCurrentOwnerCard(own, db) {
+  if (!own) return '';
+  const po = own.lcc_property_owner || null;
+  const _ref = _udResolvedOwnerRef(own);
+  const name = _ref && _ref.name;
   if (!name) return '';
-  const id = (po && po.owner_entity_id) || own.owner_entity_id || null;
+  const id = _ref.id;
   // With a resolved owner_entity_id, open it directly (entity type uses the id);
   // else fall back to name resolution (owner type).
   const chip = entityLink(name, id ? 'entity' : 'owner', id, db);
@@ -7461,11 +7569,15 @@ function _udCurrentOwnerCard(own, db) {
     if (eng.length) h += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${eng.join(' · ')}</div>`;
   } else if (ps && ps.prospecting === false) {
     // Not prospected — P3.3 suggestion (research the owner / connect in SF).
-    const safe = esc(name).replace(/'/g, "\\'");
+    // Same apostrophe fix as _udWorkOwnerCta: encodeURIComponent round-trip.
+    const safe = "decodeURIComponent('" + encodeURIComponent(name) + "')";
     h += `<div style="margin-top:8px;font-size:12px;color:var(--text2)">Not yet prospected · ` +
       `<span style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" ` +
-      `onclick="_openEntityByNameSmart('${safe}')" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
+      `onclick="_openEntityByNameSmart(${safe})" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
   }
+  // The hand-off (redesign §2.5.1) — the card ends in the one CTA that carries
+  // the user from "this asset's owner is X" to actually working X.
+  h += _udWorkOwnerCta(_ref, 'hero');
   h += '</div>';
   return h;
 }
@@ -7497,6 +7609,10 @@ function _udTabOwnership() {
   // ── DATA GAP INDICATOR ──────────────────────────────────────────────
   // Each gap badge is a one-click resolver that focuses the relevant input
   // or triggers a lookup action.
+  // Redesign 2026-08-15 (§2.5.3): ASSET-ownership gaps only. Contact email /
+  // phone / name and the Salesforce link are gaps in the PARTY record — they
+  // moved to the owner panel's Contacts tab. Resolving them from a property page
+  // is how one owner's phone number ended up stamped on a building.
   const gaps = [];
   if (!own) gaps.push({ label: 'ownership record', action: 'focus:udOwnRecorded' });
   else {
@@ -7505,17 +7621,6 @@ function _udTabOwnership() {
     // gives false confidence that the row is researched.
     const _trueOwnerTrusted = own.true_owner && !own.true_owner_is_operator;
     if (!_trueOwnerTrusted && !own.recorded_owner) gaps.push({ label: 'owner name', action: 'focus:udOwnRecorded' });
-    // Contact fields: offer one-click Add Contact inline (writes to
-    // unified_contacts scoped to this owner) instead of just focusing a
-    // form field that's downstream of the Resolve Ownership flow.
-    if (!own.contact_email) gaps.push({ label: 'contact email', action: 'add-contact' });
-    if (!own.contact_phone) gaps.push({ label: 'contact phone', action: 'add-contact' });
-    if (!own.contact_name && !own.contact_1_name) gaps.push({ label: 'contact name', action: 'add-contact' });
-    // Salesforce link: resolve sf_account_id on the fly; if still unknown,
-    // offer to create the SF Account inline.
-    if (!own.sf_contact_id && !own.salesforce_id && !own.sf_account_id && !own.sf_company_id) {
-      gaps.push({ label: 'Salesforce link', action: 'sf-lookup' });
-    }
     if (db === 'gov' && !_trueOwnerTrusted) gaps.push({ label: 'true owner (behind LLC)', action: 'focus:udOwnTrue' });
     if (db === 'gov' && !own.true_owner_state) gaps.push({ label: 'true owner state', action: 'focus:udOwnState' });
   }
@@ -7538,7 +7643,8 @@ function _udTabOwnership() {
     html += '</div></div></div>';
   }
 
-  html += _udAssistantSection('ownership', 'Ownership Assistant', 'Summarize the ownership picture, identify the likely owner or decision-maker, and suggest the next research steps.');
+  // Ownership Assistant REMOVED (redesign 2026-08-15 §2.5) — it researches the
+  // PARTY, not the asset, so it now lives on the owner panel Overview.
 
   // ── CURRENT OWNERSHIP ──────────────────────────────────────────────
   if (!own) {
@@ -7556,7 +7662,6 @@ function _udTabOwnership() {
   } else {
     html += '<div class="detail-section">';
     html += '<div class="detail-section-title">Current Ownership</div>';
-    html += '<div class="detail-grid">';
 
     // ── SIDE-BY-SIDE OWNER CARDS ──────────────────────────────────────
     // true_owner_is_operator is set by 20260513_dia_purge_cms_operator_owner_pollution
@@ -7574,26 +7679,20 @@ function _udTabOwnership() {
     // Inc"). Prefer canonical in display contexts; the Resolve Ownership
     // form below keeps the raw deed text so edits preserve verbatim names.
     // (display vars now computed inside _udOwnershipLadder — PR1)
-    html += '</div></div>'; // close detail-grid opened above — we'll use cards instead
+    // (No wrapper grid: the ladder below emits its own layout. The stray
+    // '</div></div>' that used to close a never-populated .detail-grid here left
+    // one unmatched close tag in the section — removed 2026-08-15.)
     html += _udOwnershipLadder(own, db);
 
-    // Additional details below cards
+    // Redesign 2026-08-15 (\u00a70/\u00a72.5): the contact roster (Contact 1/2, email,
+    // phone) and the party's CRM attributes (priority, developer tier, total
+    // properties owned, is-prospect) moved to the OWNER panel. They answer "who
+    // do I call", not "what is this asset" \u2014 and Total Properties / Current
+    // Count duplicated the owner card's portfolio line one screen above.
+    // Only the asset-scoped ownership qualifier stays here.
     html += '<div class="detail-grid" style="margin-bottom:0">';
-    if (db === 'dia') {
-      html += _rowHtml('Contact 1', own.contact_1_name && own.contact_1_id ? entityLink(own.contact_1_name, 'contact', own.contact_1_id, db) : esc(own.contact_1_name || ''));
-      html += _rowHtml('Contact 2', own.contact_2_name && own.contact_2_id ? entityLink(own.contact_2_name, 'contact', own.contact_2_id, db) : esc(own.contact_2_name || ''));
-      html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
-      html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
-      html += _row('Priority', own.priority_level);
-      html += _row('Developer', own.developer_flag ? 'Yes' + (own.developer_tier ? ' \u00b7 Tier ' + own.developer_tier : '') : null);
-      html += _row('Total Properties', own.total_properties_owned ? fmtN(own.total_properties_owned) : null);
-      html += _row('Current Count', own.current_property_count ? fmtN(own.current_property_count) : null);
-      html += _row('Is Prospect', own.is_prospect ? 'Yes' : 'No');
-    } else {
-      html += _rowHtml('Contact', own.contact_name && own.contact_id ? entityLink(own.contact_name, 'contact', own.contact_id, db) : esc(own.contact_name || ''));
-      html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
-      html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
-    }
+    html += _row('Ownership Type', own.ownership_type || own.owner_type);
+    html += _row('State of Incorporation', own.state_of_incorporation || own.recorded_owner_state || own.true_owner_state);
     html += '</div></div>';
 
     // ── SALESFORCE + SYSTEM LINKS ──────────────────────────────────────────
@@ -7620,7 +7719,12 @@ function _udTabOwnership() {
   html += `<input id="udOwnTrue" type="text" value="${esc(own?.true_owner || '')}" placeholder="Parent entity, developer, fund" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '</div>';
 
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">';
+  // Redesign 2026-08-15 (§2.5.4): Contact Name / Phone / Email inputs REMOVED.
+  // Those write the party's `unified_contacts` record; editing them from a
+  // property panel is what keyed contact data to a building. Add or edit a
+  // contact on the owner panel's Contacts tab. `_udSaveOwnership` reads these
+  // ids with optional chaining, so their absence is a clean no-op.
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
   html += '<div><label class="t-label">Owner Type</label>';
   html += '<select id="udOwnType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
   html += '<option value="">—</option>';
@@ -7628,15 +7732,6 @@ function _udTabOwnership() {
     html += `<option value="${t}" ${own?.owner_type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`;
   });
   html += '</select></div>';
-  html += '<div><label class="t-label">Contact Name</label>';
-  html += `<input id="udOwnContact" type="text" value="${esc(own?.contact_1_name || own?.contact_name || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
-  html += '<div><label class="t-label">Contact Phone</label>';
-  html += `<input id="udOwnPhone" type="tel" value="${esc(own?.contact_phone || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
-  html += '</div>';
-
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label class="t-label">Contact Email</label>';
-  html += `<input id="udOwnEmail" type="email" value="${esc(own?.contact_email || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '<div><label class="t-label">State of Incorporation</label>';
   html += `<input id="udOwnState" type="text" value="${esc(own?.recorded_owner_state || own?.true_owner_state || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '</div>';
@@ -7766,39 +7861,11 @@ function _udTabOwnership() {
         if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
         if (h.ownership_source) html += `<div class="t-meta3">Source: ${esc(h.ownership_source)}</div>`;
         if (h._merged_count > 1) html += `<div style="margin-top:4px"><span class="detail-badge" style="background:var(--s3);color:var(--text2)">${h._merged_count} entries merged</span></div>`;
-        // CRM coverage bar — shows what intel we have on this owner
-        {
-          const checks = [];
-          checks.push({ label: 'Identified', ok: !!h.true_owner_id });
-          checks.push({ label: 'Salesforce', ok: !!h.salesforce_id });
-          checks.push({ label: 'Prospecting', ok: !!h.prospecting_status });
-          checks.push({ label: 'Contacted', ok: !!h.last_contact_date });
-          const covered = checks.filter(c => c.ok).length;
-          const pct = Math.round((covered / checks.length) * 100);
-          const barColor = pct >= 75 ? 'var(--green,#34d399)' : pct >= 50 ? 'var(--yellow,#fbbf24)' : pct >= 25 ? '#f59e0b' : 'var(--red,#ef4444)';
-          html += '<div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--border,#2a2a2a)">';
-          html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
-          html += '<span style="font-size:10px;color:var(--text3);font-weight:600">CRM Coverage</span>';
-          html += `<span style="font-size:9px;color:${barColor};font-weight:700">${pct}%</span>`;
-          html += '</div>';
-          html += '<div style="display:flex;gap:1px;height:4px;border-radius:2px;overflow:hidden;background:var(--s3,#1a1a1a)">';
-          checks.forEach(c => {
-            html += `<div style="flex:1;background:${c.ok ? barColor : 'transparent'}" title="${esc(c.label)}: ${c.ok ? 'Yes' : 'Missing'}"></div>`;
-          });
-          html += '</div>';
-          html += '<div style="display:flex;gap:8px;margin-top:3px;flex-wrap:wrap">';
-          checks.forEach(c => {
-            html += `<span style="font-size:9px;color:${c.ok ? 'var(--text2)' : 'var(--text3,#555)'}">${c.ok ? '\u2713' : '\u2717'} ${c.label}</span>`;
-          });
-          html += '</div>';
-          // "Sync & Begin Prospecting" button when owner lacks SF link
-          if (!h.salesforce_id && h.true_owner_id) {
-            const ownerName = h.true_owner_name || h.recorded_owner_name || h.to_owner || 'this owner';
-            const escapedName = esc(ownerName).replace(/'/g, "\\'");
-            html += `<button onclick="_udOwnerBeginProspecting('${esc(h.true_owner_id)}', '${escapedName}')" style="margin-top:6px;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid #a55eea;background:rgba(165,94,234,0.1);color:#a55eea;width:100%">\u2192 Sync &amp; Begin Prospecting</button>`;
-          }
-          html += '</div>';
-        }
+        // Redesign 2026-08-15 (§2.5.5): the per-row CRM-coverage bar and the
+        // "Sync & Begin Prospecting" button are OWNER-record actions and moved
+        // to the owner panel. The row's owner chip (the title above) is the route
+        // to them. What stays here is the asset-scoped transfer economics plus
+        // the read-only Current / prospecting-status badges on the date line.
         html += '</div>';
         html += '</div>';
       }
@@ -7807,134 +7874,28 @@ function _udTabOwnership() {
   }
   html += '</div>';
 
-  // ── RECENT TOUCHPOINTS (loaded async) ─────────────────────────────
-  html += '<div id="udTouchpoints"><div style="text-align:center;padding:16px;color:var(--text3)"><span class="spinner"></span> Loading touchpoints...</div></div>';
+  // ══════════════════════════════════════════════════════════════════════
+  // MOVED TO THE OWNER PANEL — redesign 2026-08-15 §2.5 / §3.3
+  // ══════════════════════════════════════════════════════════════════════
+  // Removed from this tab (every destination already exists and is wired):
+  //   Recent Touchpoints        → owner panel · Activity tab timeline
+  //   Salesforce Activity Feed  → owner panel · Activity tab timeline (SF-badged)
+  //   Log Call / Activity form  → owner panel · header "☎ Log call" + Activity
+  //   Draft Email + templates   → owner panel · Activity cadence cockpit
+  //                               ("Draft touchpoint email" → _entityDraftAndLog,
+  //                                the closed loop that also logs SF + advances
+  //                                cadence — strictly better than the old form)
+  //   Research Notes            → property Overview · AI Research (asset evidence)
+  // A touchpoint is logged against a PARTY, not a building; logging it here
+  // attributed activity to whatever string the owner field happened to hold.
+  // The async loaders (_loadTouchpoints / _loadActivityFeed / _loadEmailTemplates)
+  // are intentionally NOT called — they were the only callers on this tab.
 
-  // ── SALESFORCE ACTIVITY FEED (loaded async) ────────────────────────
-  html += '<div id="udActivityFeed"><div style="text-align:center;padding:24px;color:var(--text3)"><span class="spinner"></span> Loading activity feed...</div></div>';
+  // ── HAND-OFF ──────────────────────────────────────────────────────────
+  // The single seam between the property ladder ("make this asset workable")
+  // and the owner ladder ("make this party contactable and touched").
+  html += _udOwnerHandoffCard(own, db);
 
-  // ── INLINE LOG CALL FORM ──────────────────────────────────────────────
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Log Call / Activity</div>';
-
-  const sfCid = own?.salesforce_id || own?.sf_contact_id || '';
-  const sfCoId = own?.sf_company_id || '';
-  const ownerName = own?.true_owner_canonical || own?.true_owner || own?.recorded_owner_canonical || own?.recorded_owner || own?.contact_1_name || '';
-
-  html += '<div class="detail-form" id="udLogCallForm">';
-  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:8px">Logging for: <strong>${esc(ownerName || 'Unknown')}</strong></div>`;
-
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  html += '<div>';
-  html += '<label>Activity Type</label>';
-  html += '<select id="udLogType">';
-  html += '<option value="Client Outreach">Client Outreach</option>';
-  html += '<option value="Introduction Call">Introduction Call</option>';
-  html += '<option value="Follow-up">Follow-up</option>';
-  html += '<option value="Property Discussion">Property Discussion</option>';
-  html += '<option value="Email Correspondence">Email Correspondence</option>';
-  html += '<option value="Market Update">Market Update</option>';
-  html += '</select>';
-  html += '</div>';
-
-  html += '<div>';
-  html += '<label>Outcome</label>';
-  html += '<select id="udLogOutcome">';
-  html += '<option value="connected">Connected</option>';
-  html += '<option value="voicemail">Voicemail</option>';
-  html += '<option value="no_answer">No Answer</option>';
-  html += '<option value="email_sent">Email Sent</option>';
-  html += '<option value="meeting_set">Meeting Set</option>';
-  html += '</select>';
-  html += '</div>';
-  html += '</div>';
-
-  html += '<label>Date</label>';
-  html += `<input type="date" id="udLogDate" value="${new Date().toISOString().split('T')[0]}">`;
-
-  html += '<label>Notes</label>';
-  html += '<textarea id="udLogNotes" placeholder="Call notes, key takeaways, next steps..." style="min-height:80px"></textarea>';
-
-  html += '<div style="display:flex;gap:8px;margin-top:12px">';
-  html += `<button class="act-btn primary" id="udLogSubmit" onclick="_udSubmitLogCall(decodeURIComponent('${encodeURIComponent(sfCid)}'),decodeURIComponent('${encodeURIComponent(sfCoId)}'))">&#x260E; Log Activity</button>`;
-  if (own?.contact_phone) html += `<a href="tel:${encodeURIComponent(own.contact_phone)}" class="act-btn">&#x1F4DE; Call</a>`;
-  if (own?.contact_email) html += `<a href="mailto:${encodeURIComponent(own.contact_email)}" class="act-btn">&#x2709; Quick Email</a>`;
-  html += '</div>';
-  html += '</div></div>';
-
-  // ── DRAFT EMAIL SECTION (LCC Template Engine) ──────────────────────
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Draft Email</div>';
-  html += '<div class="detail-form">';
-
-  // Template selector + Draft button row
-  html += '<div style="display:flex;gap:8px;align-items:flex-end">';
-  html += '<div style="flex:1">';
-  html += '<label>Template</label>';
-  html += '<select id="udDraftTemplate">';
-  html += '<option value="auto">Auto-select best template</option>';
-  html += '<option value="T-001">First Touch (intro + report + BOV offer)</option>';
-  html += '<option value="T-002">Follow-Up (cadence touchpoint)</option>';
-  html += '<option value="T-003">Capital Markets Update (quarterly)</option>';
-  html += '<option value="T-013">GSA Lease Award Congratulations</option>';
-  html += '</select>';
-  html += '</div>';
-  html += '<button class="act-btn primary" id="udDraftBtn" onclick="_udGenerateDraft()" style="white-space:nowrap;height:36px">Draft Email</button>';
-  html += '</div>';
-
-  // Draft preview area (hidden until generated)
-  html += '<div id="udDraftPreview" style="display:none;margin-top:16px">';
-  html += '<label>Subject</label>';
-  html += '<input type="text" id="udDraftSubject" style="font-size:13px;width:100%;margin-bottom:8px">';
-  html += '<label>Body <span class="t-meta3">(editable — your changes will be tracked for template improvement)</span></label>';
-  html += '<textarea id="udDraftBody" style="font-size:12px;min-height:240px;line-height:1.6;font-family:inherit;width:100%"></textarea>';
-  html += '<div style="font-size:11px;color:var(--text3);margin-top:4px" id="udDraftMeta"></div>';
-  html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">';
-  if (own?.contact_email) {
-    html += `<button class="act-btn primary" onclick="_udSendDraft()">Open in Email Client</button>`;
-  }
-  html += '<button class="act-btn" onclick="_udActionBtnGuard(this, _udCopyDraft)">Copy to Clipboard</button>';
-  html += '<button class="act-btn" onclick="_udRecordDraftSend()" id="udRecordSendBtn" style="display:none">Log as Sent</button>';
-  html += '</div>';
-  html += '</div>';
-
-  // Legacy template fallback (hidden, loads from Dia DB)
-  html += '<div id="udLegacyTemplates" style="margin-top:16px;display:none">';
-  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Legacy templates (Dialysis DB)</div>';
-  html += '<select id="udTemplateSelect" onchange="_udPreviewTemplate()" style="font-size:12px">';
-  html += '<option value="">— Select —</option>';
-  html += '</select>';
-  html += '<div id="udTemplatePreview" style="display:none;margin-top:8px">';
-  html += '<div id="udTemplateSubject" style="font-size:12px;padding:6px 10px;background:var(--s2);border-radius:6px;color:var(--text);margin-bottom:6px"></div>';
-  html += '<div id="udTemplateBody" style="font-size:11px;padding:10px;background:var(--s2);border-radius:6px;color:var(--text2);max-height:160px;overflow-y:auto;line-height:1.4"></div>';
-  html += '<div style="display:flex;gap:8px;margin-top:8px">';
-  html += '<button class="act-btn" style="font-size:11px" onclick="_udSendTemplate()">Open in Client</button>';
-  html += '<button class="act-btn" style="font-size:11px" onclick="_udActionBtnGuard(this, _udCopyTemplate)">Copy</button>';
-  html += '</div></div></div>';
-
-  html += '</div></div>';
-
-  // ── RESEARCH NOTES (moved from Intel tab) ────────────────────────────────
-  const _ownPropertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
-  if (_ownPropertyId) {
-    html += '<div class="detail-section">';
-    html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-notes\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Research Notes</div>';
-    html += '<div class="intel-notes" style="display:none">';
-    html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-    html += '<div><label class="t-label">Source / Date</label>';
-    html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    html += '<div><label class="t-label">Date Found</label>';
-    html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    html += '</div>';
-    html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
-    html += '</div></div>';
-  }
-
-  // Async loads after DOM renders
-  _loadEmailTemplates(own);
-  _loadTouchpoints(own);
-  _loadActivityFeed(own);
 
   return html;
 }
@@ -10679,26 +10640,53 @@ function _qlActionBtn(label, onclick, icon, color) {
 
 /** Research Quick Links — property-level research shortcuts */
 /** Action buttons for advancing records through the pipeline */
+/**
+ * Property research notes (free-form asset evidence + source/date).
+ * Relocated from the Ownership tab to Overview › AI Research (redesign §2.2) —
+ * extracted verbatim so the ids `intelResearchNotes` / `intelResearchSource` /
+ * `intelResearchDate` that `_intelSaveNotes` reads are unchanged.
+ */
+function _udResearchNotesSection() {
+  const pid = _udCache?.ids?.property_id || _udCache?.property?.property_id;
+  if (!pid) return '';
+  let html = '<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">';
+  html += '<div class="t-label" style="margin-bottom:6px">Research Notes</div>';
+  html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div><label class="t-label">Source / Date</label>';
+  html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label class="t-label">Date Found</label>';
+  html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
+  html += '</div>';
+  return html;
+}
+
 function _udActionButtons() {
   if (!_udCache) return '';
   const db = _udCache.db;
   const fb = _udCache.fallback || {};
   const p = _udCache.property || {};
 
+  // Redesign 2026-08-15 (§2.2): "Log Touchpoint" REMOVED. A touchpoint is logged
+  // against a PARTY, not a building — here it attributed activity to whatever
+  // string the owner field happened to hold. It now lives on the owner panel
+  // (header "☎ Log call" + the Activity cadence cockpit), reachable from the
+  // Ownership tab's "Work this owner →".
   let html = '<div class="detail-section">';
   html += '<div class="detail-section-title">Actions</div>';
   html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">';
 
   if (db === 'gov') {
     html += `<button class="q-action primary" onclick="_udActionBtnGuard(this, _udAction, 'add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Add to Pipeline</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
     html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
   } else if (db === 'dia') {
     html += `<button class="q-action primary" onclick="_udActionBtnGuard(this, _udAction, 'mark_lead')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Mark as Lead</button>`;
     html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Add to Pipeline</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
     html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
   }
+  html += `<button class="q-action" onclick="switchUnifiedTab('Ownership')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer" title="Owner, ownership chain, and the hand-off to the owner panel">Owner &amp; contacts &rarr;</button>`;
 
   html += '</div></div>';
   return html;
@@ -12164,6 +12152,13 @@ async function _udSaveOwnership(options = {}) {
   const recordedOwner = document.getElementById('udOwnRecorded')?.value?.trim() || null;
   const trueOwner = document.getElementById('udOwnTrue')?.value?.trim() || null;
   const ownerType = document.getElementById('udOwnType')?.value || null;
+  // Redesign 2026-08-15 §2.5.4 removed these three inputs from the Ownership
+  // tab (contact data belongs to the party, not the asset). `_contactFormPresent`
+  // distinguishes "the field exists and the user cleared it" from "the field is
+  // not on this form at all" — WITHOUT it, `contactName` would read null on
+  // every save and the true_owners PATCH below would CLOBBER an existing
+  // `contact_1_name` to null. Never-clobber / fill-blanks doctrine.
+  const _contactFormPresent = !!document.getElementById('udOwnContact');
   const contactName = document.getElementById('udOwnContact')?.value?.trim() || null;
   const contactPhone = document.getElementById('udOwnPhone')?.value?.trim() || null;
   const contactEmail = document.getElementById('udOwnEmail')?.value?.trim() || null;
@@ -12270,9 +12265,12 @@ async function _udSaveOwnership(options = {}) {
       const trueOwnerPayload = {
         name: trueOwner,
         owner_type: ownerType || null,
-        contact_1_name: contactName || null,
         notes: notes || null
       };
+      // Only send contact_1_name when the contact form is actually rendered;
+      // otherwise omit the key entirely so the PATCH cannot null out a
+      // curated value (see _contactFormPresent above).
+      if (_contactFormPresent) trueOwnerPayload.contact_1_name = contactName || null;
 
       if (trueOwnerId) {
         // PATCH existing via mutation service
@@ -13375,7 +13373,8 @@ async function openEntityDetail(entityId, initialTab) {
         </button>
         <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
       </div>
-      <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+      ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls('primary') : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}`;
+    if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
 
     // Render tabs (property-detail grammar) — role-driven set.
     if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
@@ -14145,11 +14144,306 @@ function _entityFmtMoney(n) {
 // (no re-fetch, no escaping-in-onclick, no failure mode). "Open full ↗" promotes
 // it to the main detail panel (the existing zoom path). On screens too narrow for
 // two panels it falls back to the full single-panel open (existing behavior).
-const DUAL_DOCK_MIN_WIDTH = 980;
+// Raised 980 → 1180 with the 2026-08-15 width bump (primary 520→720,
+// companion 480→620): two panels at the new widths need the extra room, and
+// below it we fall back to a single full-width panel exactly as before.
+const DUAL_DOCK_MIN_WIDTH = 1180;
 let _companionState = null;
 
 function _dualCapable() {
   return typeof window !== 'undefined' && window.innerWidth >= DUAL_DOCK_MIN_WIDTH;
+}
+
+// ── Panel shell: width / resize / swap / minimize tray ───────────────────────
+// docs/architecture/property-owner-panel-redesign-2026-08.md §1.
+// Widths live as CSS custom properties (--panel-primary-w / --panel-companion-w)
+// so .companion-panel and the resizer strips offset off the primary and track it
+// automatically. Persisted per workstation so the layout is sticky.
+const _PANEL_W = {
+  primary:   { varName: '--panel-primary-w',   def: 720, min: 420, max: 1100, key: 'lcc.panelw.primary' },
+  companion: { varName: '--panel-companion-w', def: 620, min: 360, max: 900,  key: 'lcc.panelw.companion' },
+};
+
+// Clamp to the panel's own bounds AND to what the viewport can actually hold.
+// Without the viewport term the two independent maxima (1100 + 900) let a layout
+// saved on a 2560px monitor push the companion's left edge off-screen when the
+// same widths are restored on a 1400px one.
+function _panelClampWidth(which, px) {
+  const cfg = _PANEL_W[which];
+  if (!cfg) return null;
+  const n = Number(px);
+  let out = isFinite(n) ? Math.round(n) : cfg.def;
+  const vw = (typeof window !== 'undefined' && window.innerWidth) || 0;
+  let viewportMax = cfg.max;
+  if (vw > 0) {
+    // Leave the other panel its minimum plus a 120px sliver of the app behind.
+    const other = which === 'primary' ? _PANEL_W.companion.min : _PANEL_W.primary.min;
+    viewportMax = Math.min(cfg.max, Math.max(cfg.min, vw - other - 120));
+  }
+  return Math.max(cfg.min, Math.min(viewportMax, out));
+}
+
+function _panelSetWidth(which, px, persist) {
+  const cfg = _PANEL_W[which];
+  if (!cfg || typeof document === 'undefined') return;
+  const w = _panelClampWidth(which, px);
+  document.documentElement.style.setProperty(cfg.varName, w + 'px');
+  if (persist) { try { localStorage.setItem(cfg.key, String(w)); } catch (_e) {} }
+}
+window._panelSetWidth = _panelSetWidth;
+
+function _panelGetWidth(which) {
+  const cfg = _PANEL_W[which];
+  if (!cfg || typeof document === 'undefined') return 0;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(cfg.varName);
+  const n = parseInt(String(raw).trim(), 10);
+  return isFinite(n) && n > 0 ? n : cfg.def;
+}
+
+function _panelRestoreWidths() {
+  Object.keys(_PANEL_W).forEach(function(which) {
+    let stored = null;
+    try { stored = localStorage.getItem(_PANEL_W[which].key); } catch (_e) {}
+    if (stored != null) _panelSetWidth(which, stored, false);
+  });
+}
+
+// Drag a grab strip. The strip sits on the LEFT edge of its panel, so the panel
+// width is (viewport right edge − cursor x) minus everything to its right.
+function _panelInitResizers() {
+  if (typeof document === 'undefined') return;
+  [['panelResizerPrimary', 'primary'], ['panelResizerCompanion', 'companion']].forEach(function(pair) {
+    const el = document.getElementById(pair[0]);
+    const which = pair[1];
+    if (!el || el._pwBound) return;
+    el._pwBound = true;
+    el.addEventListener('dblclick', function() { _panelSetWidth(which, _PANEL_W[which].def, true); });
+    el.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      el.classList.add('dragging');
+      document.body.classList.add('panel-resizing');
+      const offsetRight = which === 'companion' ? _panelGetWidth('primary') : 0;
+      const move = function(e) {
+        _panelSetWidth(which, window.innerWidth - e.clientX - offsetRight, false);
+      };
+      const up = function() {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        el.classList.remove('dragging');
+        document.body.classList.remove('panel-resizing');
+        _panelSetWidth(which, _panelGetWidth(which), true); // persist final
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  });
+}
+
+// Resizers are only grabbable when their panel is actually open.
+function _panelSyncResizers() {
+  if (typeof document === 'undefined') return;
+  const primaryOpen = !!(document.getElementById('detailPanel') && document.getElementById('detailPanel').style.display === 'block');
+  const compEl = document.getElementById('companionPanel');
+  const companionOpen = !!(compEl && compEl.classList.contains('open'));
+  const rp = document.getElementById('panelResizerPrimary');
+  const rc = document.getElementById('panelResizerCompanion');
+  if (rp) rp.classList.toggle('open', primaryOpen && _dualCapable());
+  if (rc) rc.classList.toggle('open', companionOpen && _dualCapable());
+}
+window._panelSyncResizers = _panelSyncResizers;
+
+// ── Minimize tray ────────────────────────────────────────────────────────────
+// Any number of parked panels. Each entry is a re-open recipe, not a DOM
+// snapshot, so restoring re-renders from live data.
+// { kind:'property'|'entity', label, db?, ids?, entityId?, slot:'primary'|'companion' }
+let _panelParked = [];
+
+function _panelTrayRender() {
+  const tray = document.getElementById('panelTray');
+  if (!tray) return;
+  if (!_panelParked.length) { tray.classList.remove('open'); tray.innerHTML = ''; return; }
+  tray.classList.add('open');
+  tray.innerHTML = _panelParked.map(function(p, i) {
+    const icon = p.kind === 'property' ? '&#127970;' : '&#128100;';
+    return '<div class="panel-tray-chip" onclick="_panelTrayRestore(' + i + ')" title="Restore ' + esc(p.label || '') + '">'
+      + '<span class="ptc-kind">' + icon + '</span>'
+      + '<span class="ptc-label">' + esc(p.label || (p.kind === 'property' ? 'Property' : 'Contact')) + '</span>'
+      + '<span class="ptc-close" onclick="event.stopPropagation();_panelTrayDrop(' + i + ')" title="Discard">&times;</span>'
+      + '</div>';
+  }).join('');
+}
+
+// Stable identity for a parked subject. MUST cover both descriptor shapes:
+// the primary carries { ids:{property_id} } while the companion carries
+// { propertyId } — keying on `ids` alone collapsed every dock-parked property
+// to the same signature ("property:dia:{}"), so parking a second one silently
+// evicted the first.
+function _panelParkSig(p) {
+  if (!p) return '';
+  if (p.kind === 'entity') return 'entity:' + String(p.entityId || '');
+  const pid = (p.ids && p.ids.property_id != null ? p.ids.property_id : p.propertyId);
+  return 'property:' + (p.db || '') + ':' + String(pid != null ? pid : '');
+}
+
+function _panelTrayPark(entry) {
+  if (!entry) return;
+  // De-dupe: parking the same subject twice just refreshes the chip.
+  const sig = _panelParkSig(entry);
+  _panelParked = _panelParked.filter(function(p) { return _panelParkSig(p) !== sig; });
+  _panelParked.push(entry);
+  _panelTrayRender();
+}
+window._panelTrayPark = _panelTrayPark;
+
+function _panelTrayDrop(i) {
+  _panelParked.splice(i, 1);
+  _panelTrayRender();
+}
+window._panelTrayDrop = _panelTrayDrop;
+
+// Is the PRIMARY slide-over actually on screen right now? `_activePrimaryKind`
+// is only ever set, never cleared by closeDetail/closeCompanion, so on its own
+// it is stale after a close — restoring a tray chip would then dock a lone
+// companion at right:720px with no panel beside it. Same test the resizer sync
+// uses, so the two can never disagree.
+function _panelPrimaryOpen() {
+  const el = typeof document !== 'undefined' && document.getElementById('detailPanel');
+  return !!(el && el.style.display === 'block');
+}
+
+function _panelTrayRestore(i) {
+  const p = _panelParked[i];
+  if (!p) return;
+  _panelParked.splice(i, 1);
+  _panelTrayRender();
+  // Dock it beside the primary only when a primary of the OTHER kind is
+  // genuinely open; otherwise promote it to the full panel.
+  const canDockBeside = function(kind) {
+    return p.slot === 'companion' && _dualCapable() && _panelPrimaryOpen() && _activePrimaryKind === kind;
+  };
+  if (p.kind === 'entity') {
+    if (canDockBeside('property')) openCompanionEntity(p.entityId);
+    else if (typeof openEntityDetail === 'function') openEntityDetail(p.entityId);
+  } else {
+    const pid = (p.ids && p.ids.property_id != null) ? p.ids.property_id : p.propertyId;
+    if (canDockBeside('entity')) openCompanionProperty(p.db, pid, _panelPropertySummary(p));
+    else if (typeof openUnifiedDetail === 'function') openUnifiedDetail(p.db, p.ids || { property_id: pid });
+  }
+}
+window._panelTrayRestore = _panelTrayRestore;
+
+// A property descriptor coming FROM the primary has no `summary` (the dock's
+// header/body are built from one), so synthesize a minimal card from what the
+// descriptor does carry — otherwise the dock renders "(property)" / "No details."
+function _panelPropertySummary(d) {
+  if (!d) return {};
+  if (d.summary && (d.summary.address || d.summary.tenant)) return d.summary;
+  return Object.assign({}, d.summary || {}, {
+    address: (d.summary && d.summary.address) || d.label || null,
+    city: (d.summary && d.summary.city) || d.city || null,
+    state: (d.summary && d.summary.state) || d.state || null,
+  });
+}
+
+// What is currently in the PRIMARY panel, as a re-open recipe.
+function _panelPrimaryDescriptor() {
+  if (_activePrimaryKind === 'entity') {
+    const c = (typeof _entityDetailCache !== 'undefined' && _entityDetailCache) || {};
+    const id = c.entityId || (c.entity && c.entity.id) || null;
+    if (!id) return null;
+    return { kind: 'entity', entityId: String(id), label: (c.entity && c.entity.name) || 'Contact', slot: 'primary' };
+  }
+  if (_activePrimaryKind === 'property') {
+    const c = (typeof _udCache !== 'undefined' && _udCache) || {};
+    if (!c.ids && !c.db) return null;
+    const p = c.property || c.fallback || {};
+    const label = p.address || p.facility_name || 'Property';
+    return {
+      kind: 'property', db: c.db, ids: c.ids || {}, label: label, slot: 'primary',
+      // Carry a dock-renderable summary so a swap/park→restore into the
+      // companion shows the real address, not "(property)".
+      summary: { address: p.address || label, city: p.city || null, state: p.state || null,
+                 tenant: p.tenant || p.operator_name || p.agency_short || null },
+    };
+  }
+  return null;
+}
+
+// What is currently in the COMPANION dock, as a re-open recipe.
+function _panelCompanionDescriptor() {
+  const s = _companionState;
+  if (!s) return null;
+  if (s.kind === 'entity') return { kind: 'entity', entityId: s.entityId, label: s.label || 'Contact', slot: 'companion' };
+  return { kind: 'property', db: s.db, propertyId: s.propertyId, summary: s.summary || {}, label: s.label || 'Property', slot: 'companion' };
+}
+
+// ⇄ Swap — promote the companion into the wide primary slot and demote the
+// primary into the dock. This is the "move the panels around" affordance:
+// you work in the wide slot, whichever subject that is.
+function _panelSwap() {
+  const prim = _panelPrimaryDescriptor();
+  const comp = _panelCompanionDescriptor();
+  if (!prim || !comp) { if (typeof showToast === 'function') showToast('Open two panels to swap', 'info'); return; }
+  closeCompanion();
+  const openPrimary = function(d) {
+    if (d.kind === 'entity') openEntityDetail(d.entityId);
+    else if (typeof openUnifiedDetail === 'function') openUnifiedDetail(d.db, d.ids || { property_id: d.propertyId });
+  };
+  openPrimary(comp);
+  // Let the primary settle (it sets _activePrimaryKind) before docking the other.
+  setTimeout(function() {
+    if (prim.kind === 'entity') openCompanionEntity(prim.entityId);
+    else openCompanionProperty(prim.db, (prim.ids && prim.ids.property_id != null) ? prim.ids.property_id : prim.propertyId, _panelPropertySummary(prim));
+  }, 260);
+}
+window._panelSwap = _panelSwap;
+
+// Park the PRIMARY panel into the tray. When a companion is docked it is
+// PROMOTED into the wide slot rather than being torn down with the primary —
+// that is the "minimize one while opening another" workflow: park the property,
+// keep working the owner, restore the property from the tray when you're done.
+function minimizePrimary() {
+  const prim = _panelPrimaryDescriptor();
+  const comp = _panelCompanionDescriptor();
+  if (prim) _panelTrayPark(prim);
+  // closeDetail() also tears down the companion (it is anchored to the primary),
+  // so re-open the companion's subject as the new primary afterwards.
+  if (typeof closeDetail === 'function') closeDetail();
+  else {
+    const panel = document.getElementById('detailPanel');
+    const ov = document.getElementById('detailOverlay');
+    if (panel) { panel.style.display = 'none'; panel.classList.remove('open'); }
+    if (ov) ov.classList.remove('open');
+    closeCompanion();
+  }
+  if (comp) {
+    if (comp.kind === 'entity') openEntityDetail(comp.entityId);
+    else if (typeof openUnifiedDetail === 'function') openUnifiedDetail(comp.db, comp.ids || { property_id: comp.propertyId });
+  } else {
+    // Nothing left on screen — make sure the stale primary-kind can't route a
+    // later tray restore into an orphaned dock.
+    _setPrimaryKind(null);
+  }
+  _panelSyncResizers();
+}
+window.minimizePrimary = minimizePrimary;
+
+// The shared header control cluster: ⇄ swap · – minimize · × close.
+function _panelHeaderControls(scope) {
+  const min = scope === 'primary' ? 'minimizePrimary()' : 'minimizeCompanion()';
+  const close = scope === 'primary' ? 'closeDetail()' : 'closeCompanion()';
+  return '<button class="detail-close" title="Swap panels" onclick="_panelSwap()" style="margin:0 2px">&#8646;</button>'
+    + '<button class="detail-close" title="Minimize to tray" onclick="' + min + '" style="margin:0 2px">&#8211;</button>'
+    + '<button class="detail-close" title="Close" onclick="' + close + '">&times;</button>';
+}
+window._panelHeaderControls = _panelHeaderControls;
+
+if (typeof window !== 'undefined') {
+  _panelRestoreWidths();
+  const _panelBoot = function() { _panelInitResizers(); _panelSyncResizers(); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _panelBoot);
+  else _panelBoot();
+  window.addEventListener('resize', _panelSyncResizers);
 }
 
 // Drill a property clicked INSIDE a contact/owner panel. `source` selects the
@@ -14184,18 +14478,18 @@ function openCompanionProperty(db, propertyId, summary = {}) {
   if (minTab) minTab.classList.remove('open');
   panel.classList.add('open');
   panel.style.display = 'block';
-  _companionState = { db, propertyId };
 
   const addr = summary.address || '(property)';
   const loc = (summary.city || '') + (summary.city && summary.state ? ', ' : '') + (summary.state || '');
   const badge = db.toUpperCase();
+  _companionState = { kind: 'property', db, propertyId, summary, label: addr };
+  _panelSyncResizers();
   header.innerHTML =
     '<div class="detail-header-info" style="width:100%">'
     + '<div style="flex:1;min-width:0"><div class="detail-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(addr) + '</div>'
     + '<div class="detail-subtitle">' + esc(loc) + '</div></div>'
     + '<span class="detail-badge" style="background:' + (db === 'gov' ? 'var(--gov-green)' : 'var(--purple)') + ';color:#fff">' + esc(badge) + '</span>'
-    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
-    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
+    + _panelHeaderControls('companion')
     + '</div>';
 
   const rows = [];
@@ -14221,19 +14515,22 @@ function _companionOpenFull() {
 }
 window._companionOpenFull = _companionOpenFull;
 
+// Park the companion into the tray (multiple panels can be parked at once) and
+// free the dock so another subject can be opened beside the primary.
 function minimizeCompanion() {
   const panel = document.getElementById('companionPanel');
-  const minTab = document.getElementById('companionMin');
-  if (panel) panel.classList.remove('open');
-  if (minTab && _companionState) minTab.classList.add('open');
+  const d = _panelCompanionDescriptor();
+  if (panel) { panel.classList.remove('open'); panel.style.display = 'none'; }
+  if (d) _panelTrayPark(d);
+  _companionState = null;
+  _panelSyncResizers();
 }
 window.minimizeCompanion = minimizeCompanion;
 
+// Legacy entry point (the old single vertical restore tab). Restores the most
+// recently parked panel so any stale caller still does the sensible thing.
 function restoreCompanion() {
-  const panel = document.getElementById('companionPanel');
-  const minTab = document.getElementById('companionMin');
-  if (minTab) minTab.classList.remove('open');
-  if (panel && _companionState) { panel.classList.add('open'); panel.style.display = 'block'; }
+  if (_panelParked.length) _panelTrayRestore(_panelParked.length - 1);
 }
 window.restoreCompanion = restoreCompanion;
 
@@ -14243,6 +14540,7 @@ function closeCompanion() {
   if (panel) { panel.classList.remove('open'); panel.style.display = 'none'; }
   if (minTab) minTab.classList.remove('open');
   _companionState = null;
+  _panelSyncResizers();
 }
 window.closeCompanion = closeCompanion;
 
@@ -14288,12 +14586,12 @@ function openCompanionEntity(entityId) {
   if (minTab) minTab.classList.remove('open');
   panel.classList.add('open');
   panel.style.display = 'block';
-  _companionState = { kind: 'entity', entityId };
+  _companionState = { kind: 'entity', entityId, label: 'Contact' };
+  _panelSyncResizers();
   header.innerHTML =
     '<div class="detail-header-info" style="width:100%">'
     + '<div style="flex:1;min-width:0"><div class="detail-title">Loading…</div></div>'
-    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
-    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
+    + _panelHeaderControls('companion')
     + '</div>';
   body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span></div>';
   _entityApiFetch('/api/entities?action=contact360&id=' + encodeURIComponent(entityId))
@@ -14323,6 +14621,10 @@ function _renderCompanionEntity(c360, entityId) {
   const rm = (typeof _entityRoleMeta === 'function') ? _entityRoleMeta(role) : { label: role, color: 'var(--accent)' };
   const nm = e.name || '(contact)';
   const loc = (e.city || '') + (e.city && e.state ? ', ' : '') + (e.state || '');
+  // Carry the real name onto the dock state so the tray chip and the swap
+  // descriptor label it correctly (the old restore tab was hard-coded "Property"
+  // even when the dock held an owner).
+  if (_companionState && _companionState.entityId === entityId) _companionState.label = nm;
   header.innerHTML =
     '<div class="detail-header-info" style="width:100%">'
     + '<div style="flex:1;min-width:0"><div class="detail-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(nm) + '</div>'
@@ -14330,8 +14632,7 @@ function _renderCompanionEntity(c360, entityId) {
     + '</div>'
     + '<span class="detail-badge" style="background:' + rm.color + ';color:#fff">' + esc(rm.label) + '</span>'
     + '<button class="detail-close" title="Enlarge to full panel" onclick="_companionEnlargeEntity()" style="margin:0 2px">&#8599;</button>'
-    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
-    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
+    + _panelHeaderControls('companion')
     + '</div>';
 
   let html = '';
@@ -14881,17 +15182,20 @@ function _dealSection(title, body, count) {
     + (count != null ? ' <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:6px">' + Number(count) + '</span>' : '')
     + '</div>' + body + '</div>';
 }
+/**
+ * O-5 (redesign 2026-08-15 §3.1): a ONE-LINE pointer, not a second snapshot.
+ * This used to repeat tenant · guarantor · term · SF — the exact four fields the
+ * Property tab already shows two clicks away, on the same panel. A property
+ * fact now renders once, on the surface that owns it; the Deal tab names the
+ * asset and links across.
+ */
 function _dealPropertyRef(packet) {
   const meta = packet?.meta || {};
-  const tenancy = packet?.tenancy_lease || {};
   const ident = packet?.identity || {};
-  const bits = [
-    _dealText(tenancy.tenant, ''),
-    _dealText(tenancy.guarantor, ''),
-    _dealText(tenancy.term_remaining_years, ''),
-    _dealText(ident.building_sf, '') ? _dealText(ident.building_sf, '') + ' SF' : '',
-  ].filter(Boolean);
-  return bits.length ? bits.join(' · ') : (meta.property_label || 'Property intelligence lives on the Property tab.');
+  const label = _dealText(meta.property_label, '') || _dealText(ident.address, '') || '';
+  const loc = [_dealText(ident.city, ''), _dealText(ident.state, '')].filter(Boolean).join(', ');
+  if (label) return label + (loc ? ' · ' + loc : '');
+  return 'Property intelligence lives on the Property tab.';
 }
 function _dealWhatNext(packet) {
   const ms = packet?.deal?.milestones || [];
@@ -15533,7 +15837,10 @@ function _entityRenderCompletenessRail() {
   parts.push('<div class="cr-chips">');
   parts.push(chip('Salesforce account', hasSf, null));
   parts.push(chip('Contact', hasContact, 'switchEntityTab(&quot;Contacts&quot;)'));
-  parts.push(chip('Portfolio value', hasValue, 'switchEntityTab(&quot;Portfolio&quot;)'));
+  // O-1 (redesign 2026-08-15 §3.1): was 'Portfolio' — a tab name that is not in
+  // any role set since the rename, so switchEntityTab's guard bounced the click
+  // to tab 0. The live tab is 'Ownership' (Portfolio remains a render alias).
+  parts.push(chip('Portfolio value', hasValue, 'switchEntityTab(&quot;Ownership&quot;)'));
   parts.push('</div>');
   rail.innerHTML = parts.join('');
   rail.style.display = '';
@@ -16396,17 +16703,17 @@ async function _ownerDrawerBeginProspecting() {
     showToast('Could not create SF task: ' + e.message, 'error');
   }
 
+  // The old follow-up scrolled to `#udLogCallForm` on the property Ownership
+  // tab. That form moved to the owner panel (redesign 2026-08-15 \u00a72.5), so the
+  // flow would silently dead-end. Land the user on the OWNER panel instead \u2014
+  // that is where the activity now gets logged.
   closeDetail();
+  const _ownerEntityId = c.entity_id || c.owner_entity_id || null;
+  const _ownerName = c.parent_account_name || c.name || null;
   setTimeout(function() {
-    const logForm = document.getElementById('udLogCallForm');
-    if (logForm) {
-      logForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      const notes = document.getElementById('udLogNotes');
-      if (notes) {
-        notes.value = 'Prospecting ' + (c.parent_account_name || c.name) + ' \u2014 ';
-        notes.focus();
-      }
-    }
+    if (_ownerEntityId && typeof openEntityDetail === 'function') openEntityDetail(String(_ownerEntityId));
+    else if (_ownerName && typeof openEntityDetailByName === 'function') openEntityDetailByName(_ownerName);
+    else showToast('Prospecting opened \u2014 log the touch on the owner panel.', 'info');
   }, 250);
 }
 

@@ -10,6 +10,66 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-15 (Cowork) — property + owner panel redesign (IA + panel shell)
+
+Spec: **`docs/architecture/property-owner-panel-redesign-2026-08.md`** (normative target state; supersedes the
+open P1.5 / P1.6 / P3.3 items in `property-tab-ux-review.md` + `contact-owner-sidebar-design.md`).
+Trigger: Scott's walkthrough opening a true owner (Rem Management) from a dia comp — owner-CRM content on a
+property tab, one owner name rendered four times, tab bar wrapping, no way to widen/move/park a panel.
+
+**Placement rule adopted:** the property panel answers *what is this asset and what is it worth*; the owner
+panel answers *who controls it and what do I do about them*. The owning panel renders the interactive version;
+the other renders a read-only one-liner that links across.
+
+**Shipped (frontend only — no DB, no API; ships on the next Railway redeploy of merged `main`):**
+- **Panel shell.** Widths are now CSS vars `--panel-primary-w` (520→**720**) / `--panel-companion-w` (480→**620**)
+  so `.companion-panel` + the resizer strips track the primary (they were hard-coded `right:520px` in three
+  places — the reason the primary was never widened). Added drag-to-resize with persisted width
+  (`lcc.panelw.*`, double-click resets), a **⇄ swap** control in both headers (promote the companion into the
+  wide slot), and a **minimize tray** holding any number of parked panels — replacing the single vertical
+  restore tab that was hard-coded to the label "Property" even when it held an owner.
+  `DUAL_DOCK_MIN_WIDTH` 980→1180. At 720px the 7 property tabs fit one row.
+- **Property `Ownership & CRM` → `Ownership`.** Removed from the tab: Ownership Assistant, contact roster +
+  contact-edit inputs, Recent Touchpoints, Salesforce Activity Feed, Log Call/Activity form, Draft Email engine,
+  per-row CRM-coverage bar, per-row "Sync & Begin Prospecting". Every destination already existed on the owner
+  panel, so this was a deletion + a hand-off, not new construction. Added **`Work this owner →`** (hero on the
+  Current Owner card + footer repeat) as the seam between the property ladder and the owner ladder.
+  Also: `Log Touchpoint` dropped from Overview Actions (a touchpoint is logged against a party, not a building);
+  Research Notes relocated to Overview › AI Research; completeness rail capped 6→4 chips (it wrapped to two rows
+  and pushed the Next-step card off screen); owner-ladder collapses to ONE card when recorded == true owner.
+- **Owner panel:** rail chip pointed at the dead tab name `Portfolio` → `Ownership`; Deal tab's Property
+  Reference no longer repeats the Property tab's tenant/guarantor/term/SF snapshot.
+
+**Review-caught defects fixed before hand-off (a verification agent read the whole diff):**
+1. **`_udSaveOwnership` would have nulled `true_owners.contact_1_name` on every save** once the contact inputs
+   were removed (`contactName` read null, payload still sent the key). Now gated on `_contactFormPresent` and
+   the key is OMITTED when the form isn't rendered — never-clobber doctrine.
+2. `_udWorkOwnerCta` double-escaped the owner name (`esc()` then `.replace(/'/…)` matches nothing), producing a
+   broken `onclick` for any name with an apostrophe. Both it and the older "research owner →" link now use an
+   `encodeURIComponent`/`decodeURIComponent` round-trip.
+3. Tray de-dupe signature ignored the companion descriptor's `propertyId`, collapsing every dock-parked property
+   to one chip. 4. Swap/restore lost the property summary (dock rendered "(property)"). 5. Tray restore routed on
+   a never-cleared `_activePrimaryKind`, which could dock a lone companion with no primary beside it.
+   6. Cache-busters bumped on `app.js`/`detail.js`/`ops.js` + added to `styles.css` (a half-cached client would
+   have had the new CSS hiding the old restore tab = un-recoverable minimize). 7. Resizer strips moved INSIDE
+   their panel's left edge so they stop covering the neighbouring panel's scrollbar. 8. Width clamps are now
+   viewport-aware (independent 1100+900 maxima could push the companion off-screen on a smaller monitor).
+   9. `_ownerDrawerBeginProspecting` scrolled to the deleted `#udLogCallForm`; now opens the owner panel.
+   10. Owner-name normalizer could report false agreement on an empty residue; requires ≥4 chars.
+   Also removed a pre-existing stray `</div>` in the Current Ownership section.
+
+**Verified:** `node --check` on detail.js / app.js / ops.js; `node --test test/w3-6-comp-lane-clarity.test.mjs
+test/cm-native-chart-injector.test.mjs` → 221 pass / 0 fail; div-balance check on every touched renderer
+(`_udTabOwnership`, `_udOwnershipLadder` both branches, `_udCurrentOwnerCard`, `_udOwnerHandoffCard`,
+`_udResearchNotesSection`, `_udWorkOwnerCta`) → balanced; orphaned handlers (`_loadTouchpoints`,
+`_loadActivityFeed`, `_loadEmailTemplates`, `_udSubmitLogCall`, `_udGenerateDraft`, `_udOwnerBeginProspecting`)
+confirmed DOM-guarded so they no-op rather than throw.
+
+**Follow-ons (deliberately not built):** free-floating draggable windows with a window manager (validate the
+docked-resize model in use first); relocating `Diligence & Vendors` off the owner Deal tab to property Documents;
+deleting the now-unreachable CRM handlers once Scott confirms the move; the lease-dedupe / cap-recompute data
+work (Findings B/C) is unchanged and still open.
+
 ## Session 2026-08-14 (Prompt 110) — fuller email-body ingestion (past the ~255-char bodyPreview cap)
 
 - **Finding.** The correspondence store keeps only Graph's `bodyPreview` (~255 chars);

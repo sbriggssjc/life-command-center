@@ -2207,7 +2207,7 @@ async function resolveOwnerLink(linkId, decision, propId) {
   const row = document.getElementById('soslink-' + linkId);
   if (res.ok && res.data && res.data.ok) {
     // Carry-forward: after a confirm, the owner is now CRM-linked — offer a
-    // one-click hop to that property's Ownership & CRM tab to act on it
+    // one-click hop to that property's Ownership tab to act on it
     // (create lead / cadence) instead of stranding the user in the worklist.
     const pid = (res.data && res.data.source_property_id != null) ? res.data.source_property_id : propId;
     if (row) {
@@ -3782,7 +3782,7 @@ function bdOpenWorklistItem(ix) {
   var pid = it.property_id == null ? '' : String(it.property_id);
   if (!dom || !pid) return;
   var hint = { type: it.signal_type, context: Object.assign({}, it.detail || {}, { owner_name: it.who || null }) };
-  openUnifiedDetail(dom, { property_id: pid }, { _bdSignal: hint }, 'Ownership & CRM');
+  openUnifiedDetail(dom, { property_id: pid }, { _bdSignal: hint }, 'Ownership');
 }
 window.bdOpenWorklistItem = bdOpenWorklistItem;
 

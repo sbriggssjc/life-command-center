@@ -437,21 +437,56 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
 .btn-submit:hover { background: var(--accent2); filter: brightness(1.12); }
 .btn-submit:disabled { opacity: 0.5; cursor: default; }
 
-/* Detail slide panel */
+/* Detail slide panel
+   ── Panel geometry (redesign 2026-08-15, docs/architecture/property-owner-panel-redesign-2026-08.md)
+   Widths are CSS custom properties so the companion panel and its restore chrome
+   TRACK the primary automatically. Before this they were hard-coded 520px in
+   three places, which is why the primary panel could never be widened.
+   JS (_panelSetWidth) writes these on document.documentElement during a drag and
+   restores the persisted value on boot. */
+:root { --panel-primary-w: 720px; --panel-companion-w: 620px; }
 .detail-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 200; }
 .detail-overlay.open { display: block; }
-.detail-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; max-width: 520px; background: var(--s1); overflow-y: auto; z-index: 201; animation: slideIn 0.2s ease-out; padding: 0; display: none; }
+.detail-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; max-width: var(--panel-primary-w); background: var(--s1); overflow-y: auto; z-index: 201; animation: slideIn 0.2s ease-out; padding: 0; display: none; }
 .detail-panel.open { display: block; }
 @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
 
-/* Companion property panel (dual-dock) — sits to the LEFT of the main detail
-   panel so a contact/owner and a property are visible side by side. Only shown
-   on wide screens (JS gates on width); minimizes to a thin restore tab. */
-.companion-panel { position: fixed; top: 0; bottom: 0; right: 520px; width: 42vw; max-width: 480px; background: var(--s1); overflow-y: auto; z-index: 201; border-right: 1px solid var(--border); box-shadow: 8px 0 28px rgba(0,0,0,0.28); animation: slideIn 0.2s ease-out; padding: 0; display: none; }
+/* Companion panel (dual-dock) — sits to the LEFT of the main detail panel so a
+   contact/owner and a property are visible side by side. Only shown on wide
+   screens (JS gates on DUAL_DOCK_MIN_WIDTH); parks into the minimize tray. */
+.companion-panel { position: fixed; top: 0; bottom: 0; right: var(--panel-primary-w); width: var(--panel-companion-w); max-width: var(--panel-companion-w); background: var(--s1); overflow-y: auto; z-index: 201; border-right: 1px solid var(--border); box-shadow: 8px 0 28px rgba(0,0,0,0.28); animation: slideIn 0.2s ease-out; padding: 0; display: none; }
 .companion-panel.open { display: block; }
-.companion-min { position: fixed; top: 50%; right: 520px; transform: translateY(-50%); z-index: 202; display: none; background: var(--accent); color: #fff; padding: 10px 6px; border-radius: 8px 0 0 8px; writing-mode: vertical-rl; text-orientation: mixed; cursor: pointer; font-size: 11px; font-weight: 600; box-shadow: -2px 0 10px rgba(0,0,0,0.25); }
-.companion-min.open { display: block; }
-.companion-min::after { content: 'Property'; }
+
+/* ── Resize grab strip (left edge of each panel) ──────────────────────────── */
+/* The strip sits just INSIDE its own panel's left edge (hence the -8px). Placing
+   it just outside would overlay the neighbouring companion panel's right edge —
+   i.e. its scrollbar — making that panel un-scrollable by drag. Panels pad 20px
+   on the left, so an 8px gutter there costs no content. */
+.panel-resizer { position: fixed; top: 0; bottom: 0; width: 8px; z-index: 203; cursor: col-resize; display: none; background: transparent; }
+.panel-resizer::before { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background 0.12s; }
+.panel-resizer:hover::before, .panel-resizer.dragging::before { background: var(--accent); }
+.panel-resizer.open { display: block; }
+#panelResizerPrimary { right: calc(var(--panel-primary-w) - 8px); }
+#panelResizerCompanion { right: calc(var(--panel-primary-w) + var(--panel-companion-w) - 8px); }
+body.panel-resizing { user-select: none; cursor: col-resize; }
+body.panel-resizing .detail-panel, body.panel-resizing .companion-panel { animation: none; }
+
+/* ── Minimize tray — parked panels, bottom-right. Replaces the single vertical
+   "Property" restore tab (which was hard-coded to that label even when it held
+   an owner). Holds any number of parked panels so you can park one and open
+   another. ─────────────────────────────────────────────────────────────────── */
+.panel-tray { position: fixed; right: 12px; bottom: 12px; z-index: 204; display: none; flex-direction: column; align-items: flex-end; gap: 6px; }
+.panel-tray.open { display: flex; }
+.panel-tray-chip { display: flex; align-items: center; gap: 8px; max-width: 260px; background: var(--s2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 7px 10px; font-size: 12px; color: var(--text); cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+.panel-tray-chip:hover { background: var(--s3); border-color: var(--accent); }
+.panel-tray-chip .ptc-kind { font-size: 12px; flex-shrink: 0; }
+.panel-tray-chip .ptc-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.panel-tray-chip .ptc-close { flex-shrink: 0; color: var(--text3); font-size: 14px; line-height: 1; padding: 0 2px; }
+.panel-tray-chip .ptc-close:hover { color: var(--red, #ef4444); }
+
+/* Legacy single restore tab — retained as a no-op hook for any external caller;
+   the tray above is the live surface. */
+.companion-min { display: none !important; }
 .detail-header { padding: 16px 20px; padding-top: calc(16px + var(--safe-top)); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--s1); position: sticky; top: 0; z-index: 2; }
 .detail-header-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
 .detail-back { background: none; border: none; color: var(--text1); font-size: 20px; cursor: pointer; padding: 6px 10px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; font-weight: 500; }
@@ -1215,6 +1250,8 @@ body.compact .greeting { font-size: 18px; }
   .live-ingest-retry-grid { grid-template-columns: 1fr; }
   .charts-row { flex-direction: column; }
   .detail-panel { max-width: 100%; }
+  /* Dual-dock chrome is desktop-only; JS also gates on DUAL_DOCK_MIN_WIDTH. */
+  .companion-panel, .panel-resizer { display: none !important; }
 }
 
 /* Home layout — mobile-first stacking, sidebar below main */
