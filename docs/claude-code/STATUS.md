@@ -98,6 +98,23 @@ route** (50 via the org record + 60 via a linked person) → 134 on cadence, **a
 - **Data-quality defect surfaced:** 3 cadence rows carry `last_touch_at` in the FUTURE (max 2026-10-15) — a
   writer is stamping a scheduled date into the completed-touch column.
 
+### Queued from the audit — prompts 111 / 112 / 113 (drafted, not started)
+
+The three measured flow breaks are registered in `docs/architecture/connectivity-and-open-threads.md` §4b
+with a drafted prompt each. Recommended order is **111 → 112 → 113**: 111 unblocks the constraint, 112 stops
+the noise that would otherwise swamp whatever 111 unlocks, 113 widens the funnel once the downstream can
+carry it.
+
+| Prompt | Break | Headline number | Core finding to act on |
+|---|---|---|---|
+| **111** owner reachability | BREAK-1 (HIGH — blocks the redesigned flow) | 104/690 owners reachable (**15.1%**) | **585 of 586 unreachable owners have NO person known at all** — this is decision-maker *discovery*, not contact enrichment. Two unlocks need no new fetching: **80** already carry an SF identity, and gov `recorded_owners.manager_name` is populated on **1,469** rows while the LCC owner graph shows **1** named person → a domain→entity **propagation** gap. |
+| **112** cadence consumption | BREAK-2 (HIGH — doctrine violation) | **1,728/1,905 (91%) never touched**, 23 due in future, 7 with a rep | **94 owners are on a cadence with no way to contact them** — un-actionable by construction. Includes the `last_touch_at`-in-the-future writer bug (3 rows) and the upstream rep stamp (backfill already proven a dead end). Explicitly licences *retiring* the population rather than building more consumption around it. |
+| **113** owner resolution feeders | BREAK-3 (MEDIUM — known, improving) | 1,396/3,886 assets (**35.9%**) | P0.2 own-deal buyer + P0.3 deed→evidence, still unbuilt. Up from ~2% in July, so **size each feeder before building** — the likely win is *promotion* of `recorded_owners` we already hold, not new capture. |
+
+Each prompt carries its grounded baseline, the re-run SQL, the standing discipline (fill-blanks · unambiguous ·
+provenance · reversible · idempotent · dry-run default), and an explicit out-of-scope list. All three require
+reporting a **before/after** against `panel-redesign-verification.md` §3.2 rather than asserting success.
+
 ### ⚠️ Environment: the Cowork sandbox mount denies file DELETE (rename is allowed)
 
 Root cause of the recurring "git lock" errors, verified this session. Git cannot unlink `index.lock` /

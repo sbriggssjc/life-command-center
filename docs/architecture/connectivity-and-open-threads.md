@@ -123,6 +123,53 @@ gate the nuance blocks by `db`/domain.
 
 ---
 
+## 4b. Measured flow breaks — the asset → owner → contact → cadence chain (2026-08-15)
+
+Found while proving the property/owner panel redesign end-to-end
+(`panel-redesign-verification.md` §3). These are **measured, not inferred** — LCC Opps
+`xengecqvemvfknjvbvrq` + the two domain DBs, read-only. Each has a drafted Claude Code prompt.
+
+The redesigned UI expresses one chain: **asset → resolved owner → reachable contact → cadence → touch.**
+Here is where the chain actually parts.
+
+| Leg | Live | Break | Prompt |
+|---|---|---|---|
+| asset → resolved owner | **1,396 / 3,886 (35.9%)** | 2,490 assets have no owner; the owner feeders (own-deal buyer, county deed) never landed | **113** |
+| owner → reachable contact | **104 / 690 (15.1%)** | **the binding constraint** — the new `Work this owner →` hand-off dead-ends for ~85% of owners | **111** |
+| cadence → touch | **1,728 / 1,905 never touched (91%)** | producer with almost no consumer; 23 rows due in the future; 7 carry a rep | **112** |
+
+### BREAK-1 — owner reachability (severity: HIGH, blocks the redesigned flow)
+**585 of the 586 unreachable owners have NO person known at all** — not one name behind the LLC. This
+reframes the problem: it is **decision-maker discovery**, not contact-detail enrichment. Two unlocks that do
+**not** depend on the blocked SOS-direct fetcher:
+- **80** unreachable owners already carry a **`salesforce` external identity** — SF may already hold contacts
+  under those accounts that were never pulled onto the entity.
+- **gov `recorded_owners.manager_name` is populated on 1,469 rows** (ORE Phase 1 Unit A, SOS registry) — a
+  named decision-maker per LLC — yet the LCC owner graph shows **1** named person across all 586. Strong
+  evidence of a **propagation gap between the domain DB and the entity graph**, with no new fetching needed.
+  (dia is genuinely starved: 31 manager names of 7,217.)
+- Owner mailing addresses remain input-starved as documented: gov 31 `mailing_address`, 137
+  `registered_agent_name`; dia 551 owner addresses. Consistent with the Phase-A1 grounding — capture, not
+  promotion, is the missing half.
+
+### BREAK-2 — cadence is a producer with no consumer (severity: HIGH, doctrine violation)
+Of **1,905** `touchpoint_cadence` rows: **1,728 (91%) never touched**, **1,803** overdue < 90 days (a bulk
+stamp that went stale), 68 overdue > 1 yr (oldest due **2021-09-06**), only **23** due in the future, only
+**7** carrying `owner_user_id` (the documented producer gap → the ROE line on the owner card is blank).
+- **94 of the unreachable owners are already on a cadence** — we are "prospecting" 94 parties we have no way
+  to contact. A cadence with no contact method is un-actionable work by construction, and it is exactly what
+  the Consumption-Layer doctrine says must be value-gated at the producer.
+- **Data defect:** 3 rows carry `last_touch_at` **in the future** (max `2026-10-15`). A completed touch
+  cannot be in the future — a writer is stamping a scheduled date into the completed-touch column.
+
+### BREAK-3 — owner resolution coverage (severity: MEDIUM, known, improving)
+35.9% of assets carry a reconciled owner — real progress against the 2026-07-31 audit (102 of 4,837 ≈ 2%),
+but 2,490 assets still fall back to "Unresolved" in the header. The feeders specified as P0.2 (own-deal buyer
+→ owner evidence) and P0.3 (county deed) in `property-tab-ux-review.md` are still the highest-leverage
+remaining work.
+
+**Re-measure:** the SQL for every number above is in `panel-redesign-verification.md` §3.2.
+
 ## 5. Doc trail (all linked from CLAUDE.md "Pointers to canonical docs")
 - `property-owner-subsystem.md` + `property-owner-source-authority-and-doctrine.md`
 - `access-scoping-and-my-work.md`
