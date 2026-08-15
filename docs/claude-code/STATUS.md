@@ -10,6 +10,29 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Last night's runs — 2026-08-15 (Cowork review)
+
+All live crons fired and produced; nothing red. Highlights:
+- **Twin assist (106) — FIRST cron fired 05:46 UTC → 40 annotations.** The `property_twin` lane is now pre-ranked
+  + sorted (deterministic merges bulk-confirmable, LLM residue scored). New capability live and working.
+- **Reachability harvest — 12 open** proposals (04:40 UTC run; accruing after Scott worked the first batch).
+- **W9.6 owner-attribution — 8 NEW open** proposals (05:05 UTC; lane refilled after Scott cleared the prior 22 —
+  the `correspondence_entity_owner_llc` metric will keep climbing as these are worked).
+- **Contact-acquisition — 1 open.**
+- **Full-body corpus (`email_bodies`) — still 0 >255-char bodies, EXPECTED:** the Prompt-114 allowlist fix
+  UNBLOCKS ingestion (`body` now allowed on `outlook.messages`, verified live) but the Graph body-sweep that
+  actually re-pulls bodies isn't built yet (`docs/setup/OUTLOOK_BODY_SWEEP_FLOW.md` is Scott's PA build). Bodies
+  start landing once that sweep runs.
+
+**Open lanes for Scott right now:** twin assist (40, mostly one-click merges), W9.6 owner-attribution (8),
+reachability (12), contact-acq (1) — plus the standing junk / naming / owner-reconcile / SF-assist lanes.
+
+**⚠ Prompt-number collision (housekeeping):** parallel Claude Code streams both used **114** — `114-backward-body-capture-via-bridge.md`
+(this voice-corpus task, = `done/114-voice-corpus-body-sweep.md`) and `114-review-lane-drain-and-c360-fold-in.md`
+(a separate owner/lane task). **Next prompt should be 115+** to avoid further collision.
+
+---
+
 ## Session 2026-08-15 — Prompt 114 (voice corpus): the bridge fills `email_bodies`, and its allowlist was stripping `body`
 
 **Root-caused why the voice corpus (`email_bodies`) has 23,169 rows ALL with empty body**, and fixed it.
