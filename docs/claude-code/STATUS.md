@@ -10,6 +10,47 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Milestone 2026-08-15 — voice corpus body-capture PROVEN end-to-end (0 → 24 full bodies)
+
+**Prompt 115 closed the last blocker on the voice corpus. Verified live: `email_bodies` rows with a >255-char
+body went 0 → 24** (all `body_format='html'`, 5.7K–248K chars, full `<html>…</html>`). The whole chain is now
+proven: Graph sweep → `/api/bridges?_route=ingest` → allowlist (`body` passes, Prompt 114) → queue → worker →
+`handleOutlookMessageExtract` → `email_bodies` full body.
+
+**The bug was handler-side, and 115 found THREE defects (two beyond the scoped one):**
+1. **Brittle body split** — `bodyFmt === 'html'` dropped content on any casing/shape variance. Fixed: JSON.parse
+   if `p.body` is a stringified JSON, lowercase/trim `contentType`, and **sniff HTML from content when
+   contentType is missing** — non-empty content ALWAYS lands in `body_html`/`body_text` now.
+2. **⚠ Corpus self-drain (the important catch):** the bodyless 5-min forward sweep was upserting explicit
+   `body_*: null`, so a re-touch of an already-filled row **erased** its body (last-writer-wins). Fixed: body
+   columns are now **omitted, not nulled**, when there's no content — a filled body survives a later bodyless
+   touch; a fresh bodyless row still lands NULL by default (no fabrication).
+3. **Silent write failure** — `opsQuery` returns `{ok:false}` (doesn't throw) and the handler ignored it, so a
+   rejected write looked like a stored body. Now checked + logged as `result.body_persist_error` (+20s timeout);
+   deliberately does NOT fail the job (a retry would double-count `total_emails_sent`).
+
+**Backfill applied live** (migration `20260907120000`) — the 24 already-swept rows filled straight from their
+stored `enrichment_jobs` payloads, idempotent + reversible, no re-sweep needed. (24 not 25: one swept message has
+no tracked party, so the privacy gate correctly created no row — not a miss.) 12 new tests pass; the 6 full-suite
+failures are pre-existing on main, unrelated. PR #1755 (handler fix on origin/main).
+
+**Correction to the earlier diagnosis:** my "even the correct-shape payload stored nothing" read was two sweeps
+confounded — the 18:41 object-shape sweep likely wrote fine; the 18:55 `setProperty` re-sweep (which dropped
+contentType) then nulled the same rows. The `setProperty` flow tweak is unnecessary — the original flow shape was
+correct; revert it.
+
+**Two steps remain for the full corpus:**
+1. **Railway redeploy of merged main** — the handler fix ships then (the backfill is data-layer, already live).
+   Until redeploy, forward sweeps still hit the old handler.
+2. **After redeploy, re-run the backward sweep** (`OUTLOOK_BODY_SWEEP_FLOW.md`) to fill the rest of the
+   **23,169-row** corpus in place (merge-duplicates updates existing rows; the null-erasure guard makes repeated
+   sweeps safe now).
+
+Housekeeping: 115 prompt + response filed to `done/` (Claude Code noted it couldn't find a `done/` dir — it's
+`docs/claude-code/prompts/done/`; filed manually).
+
+---
+
 ## Last night's runs — 2026-08-15 (Cowork review)
 
 All live crons fired and produced; nothing red. Highlights:
