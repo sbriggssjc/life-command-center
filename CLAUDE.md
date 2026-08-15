@@ -375,6 +375,30 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   identity on the person (`api/_shared/sf-account-link.js`).
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
+- **"Owner is reachable" has TWO different definitions — the UI reads the NARROW one.** The owner-panel
+  hero (`_nextActionForContact`, detail.js) shows "Find a contact" unless `buildContact360` produced a
+  `subject.email` / `entity.phone`, and `buildContact360` builds `subject.email` from **`entities.email`
+  or a `unified_contacts` row whose `entity_id` IS that entity** — it does **NOT** walk
+  `entity_relationships` to a linked person. So an owner with a linked person carrying an email still
+  reads as unreachable in the panel. Measuring reachability by the graph therefore OVERSTATES what the
+  operator sees (2026-08-15: graph 110 vs hero 56 of 690 property-resolved owners). **Use
+  `v_lcc_owner_reachability`** — it reports `reachable_hero` (quote this for operator experience) and
+  `reachable_graph` side by side, plus `v_lcc_owner_unreachable_worklist` for the value-ranked
+  population. Attaching a person+edge without folding their detail into c360 writes correct data the
+  hero cannot see.
+- **`dup-pair-planner.ownerCore` / `nameSimilarity` are for FUZZY PAIRING, never for IDENTITY.** They
+  strip a generic-CRE **stoplist** (realty, capital, income, group, holdings, properties, partners,
+  services…) on top of legal forms, which is right when scoring a candidate pair and catastrophic when
+  asking "is this the same party": `Realty Income Corporation` reduces to the **empty string** (so it
+  fails to match ITSELF), and `Agree Realty Corp` / `Agree Holdings LLC` both reduce to `agree` and
+  score **1.0**. Both were caught by a live dry-run in Prompt 111, one of them a would-be automatic
+  write onto the wrong owner. For identity use the STRICT core that strips **only** pure legal-entity
+  forms — `owner-contact-propagate-planner.js::strictOwnerCore` (JS) / `gov_owner_strict_core` (SQL, gov
+  `CLAUDE.md` §20) — and require the core to carry real material before letting equality drive a write.
+- **`entities.email` / `entities.phone` had NO `field_source_priority` ladder** until migration
+  `20260903120000` (manual@1 → salesforce@20 → `domain_owner_contact`@55 → costar_sidebar@60), so every
+  writer to them was invisible to the provenance doctrine. Register a row when you add another.
+  (`v_field_provenance_unranked` still returns **35** rows for other tables — pre-existing drift.)
 - **TrafficMetrix table-as-contact-list misparse (Prompt 89).** A CoStar/sidebar capture once parsed a
   property page's TrafficMetrix traffic-count TABLE as a contact list — street names / column labels
   ("Collection Street", "Traffic Vol", "Made with TrafficMetrix") minted as PERSON entities, all stamped

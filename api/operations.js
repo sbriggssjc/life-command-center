@@ -245,6 +245,17 @@ export default withErrorHandler(async function handler(req, res) {
     return handleOwnerContactEnrichTick(req, res);
   }
 
+  // BREAK-1 (Prompt 111) — owner-contact PROPAGATION worker. Fill-blanks the
+  // owner entity's email/phone from an OWNER-BOUND, NAME-MATCHED dia/gov
+  // contacts row so the redesigned owner panel's hand-off stops dead-ending on
+  // "Find a contact". GET = dry-run (default) / POST = apply. Authenticates
+  // internally. Sibling of, not a replacement for, owner-contact-enrich-tick.
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'owner-contact-propagate-tick') {
+    const { handleOwnerContactPropagateTick } = await import('./_handlers/owner-contact-propagate.js');
+    return handleOwnerContactPropagateTick(req, res);
+  }
+
   // ORE Phase B B1 / Tier A / reconcile-engine workers (via vercel.json /
   // server.js). GET=dry-run / POST=drain, each authenticates internally + is
   // bounded (limit + wall-clock); the reconcile-engine's auto-merge cron stays

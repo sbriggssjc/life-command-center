@@ -152,6 +152,92 @@ reframes the problem: it is **decision-maker discovery**, not contact-detail enr
   `registered_agent_name`; dia 551 owner addresses. Consistent with the Phase-A1 grounding — capture, not
   promotion, is the missing half.
 
+#### BREAK-1 findings — Prompt 111 investigation + first unlock (2026-08-15)
+
+Four leads sized against live data, then the largest one built. **Re-measure any number here with
+`SELECT * FROM v_lcc_owner_reachability;`** (LCC Opps) — the loose SQL that used to live in
+`panel-redesign-verification.md` §3.2 is now that view, so the definition can't drift.
+
+**Correction to the headline, found while sizing.** The 104/690 figure counts owners reachable by *any*
+graph route, including a linked person carrying email/phone. **The owner panel hero does not read that
+route.** `buildContact360` sets `subject.email` from `entities.email` or a `unified_contacts` row whose
+`entity_id` IS the owner — it never walks `entity_relationships` to a linked person — and
+`_nextActionForContact` gates on `subject.email || entity.email || emailRel.email` / `entity.phone`. So
+what the operator actually experienced was **56 / 690 (8.1%)**, not 104. The view now reports both:
+`reachable_hero` (what the hero reads) and `reachable_graph` (the wider number). **Quote
+`reachable_hero` when describing operator experience.** The 54-owner gap between them is a real,
+separately-fixable defect: we can reach those owners and the panel says we can't.
+
+| Lead | Sized | Verdict |
+|---|---|---|
+| **A** — gov `recorded_owners.manager_name` → entity graph | **22 owners** would gain a NAME; **0** gain a reachable contact | **Much smaller than the 1,469 headline implies.** Of the 481 gov properties behind unreachable owners, only **50** have a manager on the recorded owner (25 distinct owners); dia contributes **1**. The 1,469 manager names are concentrated on owners whose properties are *not* in the property-resolved set. A manager name carries no email/phone, so it cannot move reachability at all. |
+| **B** — Salesforce contacts under a linked Account | **19 owners** (27 contacts) | 79 unreachable owners carry a `salesforce/Account` identity, but only 19 have a `unified_contacts` row under that account id with email/phone. Real, and needs the person+org-edge model (below). |
+| **C** — contacts we already hold in dia/gov `contacts` | **74 owners** have an owner-bound contact with email/phone; **36 auto-attributable** | **The largest lead, and the one built.** |
+| **D** — solvable only by the paused SOS/web-search path | **~478 owners (82% of the unreachable)** | The measured cost of `W9_1_SOS_DIRECT` being off. Not re-provisioned, not recommended — per gov `CLAUDE.md` §25 the residential proxy is already BUILT and the remaining blocker is TLS/bot-wall fingerprinting, not egress. |
+
+**Which pipe is broken vs missing.** Neither, exactly — the existing pipe is *aimed elsewhere*.
+`owner_contact_pivot` holds 5,159 rows and its whole chain is healthy (`lcc-owner-contact-signals-sync`
+05:00, `-finalize` 05:05, `-pivot-refresh` 05:20, `-owner-contact-enrich` 05:25 — **all four crons
+ACTIVE**). But it intersects this population on **48 of 586 owners**, because it is keyed off the domain
+true_owner signal view rather than off the `lcc_property_owner` graph the panel resolves through. So the
+fix was **not** to re-aim or fork the pivot; it was a sibling worker walking the panel's own graph.
+`owner-contact-enrich` still drains the pivot unchanged.
+
+**Built:** `POST /api/owner-contact-propagate-tick` (GET = dry-run default) —
+`api/_handlers/owner-contact-propagate.js` + the pure planner
+`api/_shared/owner-contact-propagate-planner.js`, migration `20260903120000`, 27 tests in
+`test/owner-contact-propagate.test.mjs`. It fill-blanks `entities.email`/`entities.phone` from an
+**owner-bound, name-matched** dia/gov `contacts` row. Property-scoped contacts are deliberately never
+read (a property contact may be a broker or the prior seller — attributing it to the current owner would
+be a guess), and broker-role rows are excluded per the deal-spine `third_party` discipline.
+
+**Before → after (batch `ocp_20260815`, applied live):**
+
+| Metric | Before | After |
+|---|---|---|
+| `reachable_hero` (what the hero reads) | **56 / 690 (8.1%)** | **92 / 690 (13.3%)** |
+| `reachable_graph` (any route) | 110 | 139 |
+| owners reachable via the org record | 50 | **86** |
+| pending decision-maker candidates in a review lane | 0 | **101** (89 named parties across 50 owners, 12 fan-out) |
+
+**36 owners, not 400 — and that is the honest ceiling of this lead.** The remaining 38 of Lead C's 74
+are differently-named real parties (Eric Dowling @boydwatterson.com, Delos Yancey, Lee Elman, Daniel
+Brower, Marcus Monical…) that must **not** be stamped onto the owner org record — that is precisely the
+conflation error `sf-account-link.js` C1/C2 guards against. They now sit in
+`lcc_owner_contact_propagate_review` with verbatim evidence instead of being invisible. **That lane is
+the actual decision-maker discovery backlog**, and draining it (plus Lead B's 19) needs the person+edge
+model *and* the `buildContact360` fold-in above — otherwise the attach is written correctly and the hero
+still says "Find a contact".
+
+> **Doctrine caveat, stated rather than glossed:** that review lane is a **producer with no consumer
+> surface yet** — 101 rows readable only by SQL/API. It is deliberately **not** registered in
+> `FEDERATED_DECISION_TYPES` / `_DC_FEDERATED` / the review-counts badge, so it cannot inflate any
+> existing count or train anyone to ignore a badge; and it is bounded by the population (101 rows / 50
+> owners), not emitted per captured row. But it does not satisfy "named consumer" until the person+edge
+> attach unit ships. **Wire the lane and the drain together, in that unit — not before.**
+
+**Two defects the live dry-run caught** (recorded because they'd have shipped silently):
+1. Reusing `dup-pair-planner.ownerCore` for identity was wrong — it strips a generic-CRE stoplist, so
+   `Realty Income Corporation` reduces to `""` and **failed to match itself** (filed as `name_mismatch`).
+2. Worse, `Agree Realty Corp` and `Agree Holdings LLC` both reduce to `agree` and scored **1.0** — an
+   automatic write onto the wrong party. Both fixed by a strict identity core that strips *only* pure
+   legal-entity forms, mirroring gov `gov_owner_strict_core` (gov `CLAUDE.md` §20); both are regression
+   tests now.
+
+**Consumption-Layer note:** this worker emits **zero** new operator-facing work — no task, badge, queue
+row or cadence. It runs the doctrine in reverse, making existing work actionable: 107 still-unreachable
+owners sit on a cadence we cannot act on; 6 of the 36 filled owners were already on one. It deliberately
+does **not** stamp `touchpoint_cadence.contact_id`, because the reachable party here is an org
+switchboard and that column means "which person do we call".
+
+**Pre-existing drift surfaced, not fixed:** `v_field_provenance_unranked` returns **35** rows (doctrine
+says 0). `entities.email`/`phone` had *no* `field_source_priority` ladder at all, so every prior writer
+to them was unranked; the migration registers one (manual@1 → salesforce@20 → `domain_owner_contact`@55
+→ costar_sidebar@60). The other 35 belong to other tables and predate this work.
+
+**Reversal:** runbook in the migration header — `batch_tag='ocp_20260815'`, ledger
+`lcc_owner_contact_propagate_log` carries `old_value` per field.
+
 ### BREAK-2 — cadence is a producer with no consumer (severity: HIGH, doctrine violation)
 Of **1,905** `touchpoint_cadence` rows: **1,728 (91%) never touched**, **1,803** overdue < 90 days (a bulk
 stamp that went stale), 68 overdue > 1 yr (oldest due **2021-09-06**), only **23** due in the future, only
