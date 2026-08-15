@@ -70,6 +70,44 @@ docked-resize model in use first); relocating `Diligence & Vendors` off the owne
 deleting the now-unreachable CRM handlers once Scott confirms the move; the lease-dedupe / cap-recompute data
 work (Findings B/C) is unchanged and still open.
 
+### Verification pass (same session) — `docs/architecture/panel-redesign-verification.md`
+
+Standing rule adopted: **no design item is done until it has a row in the evidence matrix with a check
+someone else could run.** New suite `test/panel-redesign.test.mjs` — **47/47 pass** (behavioural: the new
+pure functions sliced out of the live `detail.js`; structural: assertions that the CRM surfaces really left
+the property tab, that widths are var-driven, that cache busters move together).
+
+**Two live defects were caught by the first test run, after a full review had passed them:**
+- **The viewport width clamp did not work.** Each panel was clamped against the *other panel's minimum*, so
+  on a 1400px screen primary→920 and companion→860 were each "valid" while totalling 1780. Now budgets
+  against the other panel's *actual* width.
+- **The apostrophe fix was still broken.** `encodeURIComponent` does NOT escape `'` — `O'Brien Holdings LLC`
+  still emitted a raw quote and the `onclick` was still a SyntaxError. New `_jsStrArg()` percent-escapes
+  `'` and `"` explicitly; the test now *parses and invokes* the emitted handler rather than pattern-matching it.
+
+**Live data audit (LCC Opps, read-only) — the chain the layout drives:**
+assets 3,886 → **1,396 (35.9%) with a resolved owner** → 690 owner entities → **104 (15.1%) reachable by any
+route** (50 via the org record + 60 via a linked person) → 134 on cadence, **all 134 overdue**.
+- **The binding constraint is contact reachability, not UI.** The `Work this owner →` hand-off resolves to
+  *"Find a contact"* for ~85% of owners, and that chain is paused / CI-blocked. The redesign did not create
+  the gap — it stopped hiding it (the old property-tab Log Call form let you log activity against an owner
+  you had no way to contact).
+- **Cadence is a producer with almost no consumer:** of 1,905 rows, **1,728 (91%) have never been touched**,
+  only **23** are due in the future, only **7** carry a rep, oldest overdue **2021-09-06**. Textbook
+  Consumption-Layer failure; flagged, not fixed here.
+- **Data-quality defect surfaced:** 3 cadence rows carry `last_touch_at` in the FUTURE (max 2026-10-15) — a
+  writer is stamping a scheduled date into the completed-touch column.
+
+### ⚠️ Environment: the Cowork sandbox mount denies file DELETE (rename is allowed)
+
+Root cause of the recurring "git lock" errors, verified this session. Git cannot unlink `index.lock` /
+`HEAD.lock` after any command that rolls the lock back (e.g. `git status`), so the stale lock blocks the NEXT
+command. `.git/_to_delete/` had **31** swept locks going back to 2026-07-31 and `.git/objects` **812** orphan
+`tmp_obj_*` files — debris, not corruption. Also **unset a stale `core.hooksPath`** pinned to a dead session
+mount (`/sessions/charming-blissful-clarke/...`). Commits still work (git finishes with a *rename*, which is
+permitted). **Standing rule: run git writes and pushes from Windows**; from Cowork, sweep locks first. Full
+runbook + cleanup commands in §5 of the verification doc.
+
 ## Session 2026-08-14 (Prompt 110) — fuller email-body ingestion (past the ~255-char bodyPreview cap)
 
 - **Finding.** The correspondence store keeps only Graph's `bodyPreview` (~255 chars);

@@ -7466,6 +7466,25 @@ window._udOwnershipLadder = _udOwnershipLadder;
 // last-verified. Domain-generic. Renders only when we have a resolved owner (never the
 // operator). See docs/architecture/property-owner-subsystem.md.
 /**
+ * Render an arbitrary string as a SAFE JS string argument inside an inline
+ * `onclick="..."` attribute.
+ *
+ * Two traps this closes, both of which shipped as live bugs:
+ *  1. `esc(name)` turns `'` into `&#39;`, which the HTML parser decodes back to
+ *     a RAW apostrophe inside the onclick source — so chaining
+ *     `.replace(/'/g,"\\'")` after esc() is a no-op (there is no `'` left to
+ *     match) and the handler is a SyntaxError for any O'Brien / D'Angelo owner.
+ *  2. `encodeURIComponent` does NOT escape `'` (it is in the unreserved set),
+ *     so the naive round-trip still emits a raw apostrophe.
+ * Percent-escaping the quote characters explicitly is what actually works.
+ */
+function _jsStrArg(s) {
+  return "decodeURIComponent('"
+    + encodeURIComponent(String(s == null ? '' : s)).replace(/'/g, '%27').replace(/"/g, '%22')
+    + "')";
+}
+
+/**
  * The resolved owner of THIS asset, as a { name, id } reference.
  * Single source for the Current Owner card, the hand-off CTA and the ladder
  * de-duplication — so the three can never disagree about who the owner is.
@@ -7490,14 +7509,9 @@ function _udResolvedOwnerRef(own) {
  */
 function _udWorkOwnerCta(ref, size) {
   if (!ref) return '';
-  // Names carry apostrophes ("O'Brien Holdings LLC"). esc() turns ' into &#39;,
-  // which the HTML parser decodes back to a raw ' INSIDE the onclick source —
-  // breaking the string literal. Chaining .replace(/'/g,"\\'") after esc() does
-  // nothing because there is no ' left to match. Round-trip through
-  // encodeURIComponent instead (the pattern used elsewhere in this file).
   const open = ref.id
-    ? `_openEntitySmart(decodeURIComponent('${encodeURIComponent(String(ref.id))}'))`
-    : `_openEntityByNameSmart(decodeURIComponent('${encodeURIComponent(ref.name)}'))`;
+    ? `_openEntitySmart(${_jsStrArg(String(ref.id))})`
+    : `_openEntityByNameSmart(${_jsStrArg(ref.name)})`;
   const hero = size === 'hero';
   const btn = `<button onclick="${open}" title="Open the owner panel — calls, emails, cadence, contacts"`
     + ` style="padding:${hero ? '9px 16px' : '7px 14px'};border-radius:8px;font-size:${hero ? '13px' : '12px'};font-weight:600;cursor:pointer;`
@@ -7569,8 +7583,7 @@ function _udCurrentOwnerCard(own, db) {
     if (eng.length) h += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${eng.join(' · ')}</div>`;
   } else if (ps && ps.prospecting === false) {
     // Not prospected — P3.3 suggestion (research the owner / connect in SF).
-    // Same apostrophe fix as _udWorkOwnerCta: encodeURIComponent round-trip.
-    const safe = "decodeURIComponent('" + encodeURIComponent(name) + "')";
+    const safe = _jsStrArg(name);
     h += `<div style="margin-top:8px;font-size:12px;color:var(--text2)">Not yet prospected · ` +
       `<span style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" ` +
       `onclick="_openEntityByNameSmart(${safe})" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
@@ -14176,8 +14189,21 @@ function _panelClampWidth(which, px) {
   const vw = (typeof window !== 'undefined' && window.innerWidth) || 0;
   let viewportMax = cfg.max;
   if (vw > 0) {
-    // Leave the other panel its minimum plus a 120px sliver of the app behind.
-    const other = which === 'primary' ? _PANEL_W.companion.min : _PANEL_W.primary.min;
+    // Budget against the OTHER panel's ACTUAL current width, not its minimum —
+    // clamping each panel independently against the other's *minimum* still let
+    // the pair total more than the viewport (920 + 860 = 1780 on a 1400px
+    // screen). Fall back to the other panel's default before the vars are set.
+    const otherKey = which === 'primary' ? 'companion' : 'primary';
+    const otherCfg = _PANEL_W[otherKey];
+    let other = otherCfg.def;
+    try {
+      const raw = (typeof document !== 'undefined' && document.documentElement)
+        ? getComputedStyle(document.documentElement).getPropertyValue(otherCfg.varName) : '';
+      const parsed = parseInt(String(raw).trim(), 10);
+      if (isFinite(parsed) && parsed > 0) other = parsed;
+    } catch (_e) { /* keep the default */ }
+    other = Math.max(otherCfg.min, Math.min(otherCfg.max, other));
+    // Leave a 120px sliver of the app visible behind the pair.
     viewportMax = Math.min(cfg.max, Math.max(cfg.min, vw - other - 120));
   }
   return Math.max(cfg.min, Math.min(viewportMax, out));

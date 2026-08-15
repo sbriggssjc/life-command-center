@@ -239,6 +239,19 @@ doing work. The **`Work this owner →`** CTA added in §2.5.1 is the physical s
 
 ---
 
+## 4b. Proof
+
+Every claim in this document has a re-runnable check in
+**[`panel-redesign-verification.md`](panel-redesign-verification.md)** — 47 automated assertions
+(`node --test test/panel-redesign.test.mjs`), the live SQL that measures each leg of the
+asset → owner → contact → cadence chain, and the 12 manual browser steps.
+
+**Measured 2026-08-15, and the honest headline:** the UI chain is correct, but only **15.1%** of owner
+entities (104 of 690) have any contact method, so the new `Work this owner →` hand-off resolves to
+*"Find a contact"* for ~85% of owners — and that enrichment chain is paused. The redesign did not create
+that gap; it **stopped hiding it** (the old property-tab Log Call form let you log activity against an owner
+you had no way to reach). Full numbers + the cadence-consumption finding in §3 of the verification doc.
+
 ## 5. Out of scope / follow-ons
 
 1. Free-floating draggable windows with a full window manager (validate docked-resize first).
