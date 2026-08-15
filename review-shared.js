@@ -69,6 +69,10 @@ var LCC_DECISION_LANE_MAP = {
   news_alert_followup:           { lane: 'automation',    merges: false },
   sos_owner_links:               { lane: 'linkage',       merges: false },
   contact_company_link:          { lane: 'linkage',       merges: false },
+  // Prompt 114: "is this contact really this owner's — attach the person, fill
+  // the org's own blank, or reject it?" is a LINKAGE question, same family as
+  // sos_owner_links and contact_company_link.
+  owner_contact_attach_review:   { lane: 'linkage',       merges: false },
   implausible_value:             { lane: 'automation',    merges: false },
   llc_research_dead:             { lane: 'automation',    merges: false },
   availability_checker_botblock: { lane: 'automation',    merges: false },

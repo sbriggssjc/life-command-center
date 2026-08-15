@@ -1082,6 +1082,7 @@ async function handleReviewCounts(req, res) {
   // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
   const [
     orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open, w91Open, w96Open,
+    ocpOpen,
   ] = await Promise.all([
     withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
     withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
@@ -1099,6 +1100,10 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(opsCount('contact_acquisition_review?status=eq.proposed')),
     // W9.6 (Prompt 102): open correspondence→owner attribution proposals.
     withLaneTimeout(opsCount('comms_owner_attribution_review?status=eq.proposed')),
+    // Prompt 114 (BREAK-1 Unit 3): ACTIONABLE owner-contact review proposals.
+    // Counted off the VIEW, not the table: the view drops rows whose owner is
+    // already reachable, so the badge is real work rather than raw output.
+    withLaneTimeout(opsCount('v_lcc_owner_contact_attach_review_open')),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -1182,6 +1187,10 @@ async function handleReviewCounts(req, res) {
     { key: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution',
       count: sum(w96Open), parts: { open_proposals: val(w96Open) },
       count_mode: 'exact', status: laneStatus(w96Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject',
+      count: sum(ocpOpen), parts: { actionable_proposals: val(ocpOpen) },
+      count_mode: 'exact', status: laneStatus(ocpOpen),
       href: 'pageDataQuality', tone: '' },
   ];
 
@@ -6892,6 +6901,17 @@ const FEDERATED_DECISION_TYPES = new Set([
   // entity to the correspondence rows' metadata.linked_entity_ids (reversible) —
   // feeds owner-record history + the harvest create-contact arm. NEVER auto-writes.
   'comms_owner_attribution_review',
+  // Prompt 114 (BREAK-1 Unit 3): the owner-contact review lane Prompt 111 filled
+  // and left without a consumer. Source = v_lcc_owner_contact_attach_review_open
+  // (pending, owner still asset-resolved, owner still hero-unreachable — so the
+  // badge counts real work only). THREE shape-aware verdicts, because the lane
+  // holds two different candidate kinds: attach_person mints/links a PERSON via
+  // entity_relationships (never stamps them onto the org); same_party fills the
+  // OWNER's own blank email/phone from an abbreviation/acronym name variant;
+  // reject is recorded so a transaction counterparty is never re-proposed. The
+  // server re-runs the shape gate before writing, so a verdict that does not
+  // match the candidate's shape is refused. Reversible via lcc_owner_contact_attach_log.
+  'owner_contact_attach_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
   // auto-merges only blank-operator husks; every twin with a competing clinical
@@ -7054,6 +7074,8 @@ function federatedSubjectRef(type, s) {
     case 'naming_hygiene_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'reachability_harvest_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'contact_acquisition_review': return s.subject_ref ? String(s.subject_ref) : null;
+    // Prompt 114: the review row's own subject_ref ('ocp:<owner>:<domain>:<contact>').
+    case 'owner_contact_attach_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'comms_owner_attribution_review': return s.subject_ref ? String(s.subject_ref) : null;
   }
   return null;
@@ -7365,6 +7387,49 @@ async function fetchFederatedSource(type, cap, opts) {
       },
     }));
     out.total = await opsCnt('contact_acquisition_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'owner_contact_attach_review') {
+    // Prompt 114 (BREAK-1 Unit 3). The view supplies the ACTIONABLE population
+    // (already-reachable owners excluded inline, so the badge stays honest); the
+    // PURE planner supplies each row's shape + eligible verdicts + lean, so the
+    // card, the bulk action and the server-side write gate all read one rule.
+    const { classifyLaneRow } = await import('./_shared/owner-contact-verdict-planner.js');
+    const r = await opsQuery('GET', 'v_lcc_owner_contact_attach_review_open?select=review_id,subject_ref,'
+      + 'owner_entity_id,owner_name,source_domain,source_contact_id,source_bound_by,contact_name,'
+      + 'contact_email,contact_phone,contact_type,data_source,reason,evidence,rank_value,asset_count'
+      + '&order=rank_value.desc.nullslast,review_id.asc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => {
+      const cls = classifyLaneRow(row);
+      return {
+        subject_ref: row.subject_ref,
+        subject_domain: row.source_domain,
+        subject_property_id: null,
+        subject_entity_id: row.owner_entity_id,
+        // A same_party card is the cheapest, safest work (it fills the owner's
+        // OWN blank from a name variant), so it ranks first; then person
+        // attaches; then the reject-leaning counterparty bulk. Owner $ value
+        // orders within each band.
+        rank_value: (cls.lean === 'same_party' ? 2e12 : cls.lean === 'attach_person' ? 1e12 : 0)
+          + (Number(row.rank_value) || 0),
+        context: {
+          review_id: row.review_id, owner_entity_id: row.owner_entity_id, owner_name: row.owner_name,
+          domain: row.source_domain, source_contact_id: row.source_contact_id,
+          source_bound_by: row.source_bound_by, contact_name: row.contact_name,
+          contact_email: row.contact_email, contact_phone: row.contact_phone,
+          contact_type: row.contact_type, data_source: row.data_source,
+          reason: row.reason, evidence: row.evidence,
+          rank_value: row.rank_value, asset_count: row.asset_count,
+          shape: cls.shape, allowed: cls.allowed, lean: cls.lean, note: cls.note,
+          counterparty: cls.counterparty, variant_hint: cls.variant_hint,
+          proposed_role: cls.role,
+        },
+      };
+    });
+    // Honest total: the ACTIONABLE population, not every row ever proposed.
+    out.total = await opsCnt('v_lcc_owner_contact_attach_review_open');
     return out;
   }
 
@@ -9381,6 +9446,176 @@ async function handleDecisionVerdict(req, res) {
       return res.status(200).json({ ok: true, verdict,
         action: review.proposed_kind === 'mint' ? 'minted_and_attached' : 'attached',
         contact_entity_id: contactEntityId, review_id: review.review_id });
+    }
+
+    // ---- owner_contact_attach_review (BREAK-1 Unit 1 / Prompt 114) -----------
+    // The human verdict on an owner-contact review proposal. THREE shapes, and
+    // the server re-runs the pure shape gate before writing anything so a stale
+    // card or a crafted request cannot produce the wrong one:
+    //   attach_person : mint/resolve the PERSON entity (ensureEntityLink), carry
+    //                   the contact detail onto THAT person (fill-blanks), then
+    //                   link person→owner via entity_relationships with a role.
+    //                   The person is RELATED to the org, never stamped AS it —
+    //                   the conflation sf-account-link.js C1/C2 guards against.
+    //   same_party    : the candidate is an abbreviation/acronym variant of the
+    //                   owner's OWN name, so fill-blanks entities.email/phone on
+    //                   the OWNER. This is the fill_org write Prompt 111's
+    //                   planner deliberately refused to automate.
+    //   reject        : recorded, terminal. The seeder is idempotent on
+    //                   subject_ref, so a rejected counterparty is never
+    //                   re-proposed.
+    // Every effect lands in lcc_owner_contact_attach_log (ledger written FIRST)
+    // so a single verdict or a whole batch reverses. NO cadence is seeded or
+    // stamped here — cadence enrolment for newly-reachable owners is prompt 112
+    // Unit A2, deliberately separate so this lane cannot quietly create a pile
+    // of un-worked cadences.
+    if (decision.decision_type === 'owner_contact_attach_review') {
+      const revR = await opsQuery('GET', 'lcc_owner_contact_propagate_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'owner_contact_attach_review: proposal not found' });
+      if (review.status !== 'pending') {
+        return res.status(409).json({ error: 'owner_contact_attach_review: already ' + review.status,
+          review_id: review.review_id });
+      }
+
+      const { validateVerdict } = await import('./_shared/owner-contact-verdict-planner.js');
+      const gate = validateVerdict(review, verdict);
+      if (!gate.ok) {
+        return res.status(400).json({ error: 'owner_contact_attach_review: ' + gate.error,
+          shape: gate.classification.shape, allowed: gate.classification.allowed });
+      }
+      const action = gate.verdict;
+      const cls = gate.classification;
+      const nowIso = new Date().toISOString();
+      const batchTag = 'ocpv_' + nowIso.slice(0, 10).replace(/-/g, '');
+      const ownerId = review.owner_entity_id;
+      const effects = { review_id: review.review_id, owner_entity_id: ownerId, shape: cls.shape, action };
+
+      const ledgerBase = {
+        batch_tag: batchTag, review_id: review.review_id, subject_ref: review.subject_ref,
+        verdict: action, owner_entity_id: ownerId, owner_name: review.owner_name || null,
+        source_domain: review.source_domain || null, source_contact_id: review.source_contact_id || null,
+        contact_name: review.contact_name || null, shape: cls.shape, actor: user.id || null,
+      };
+      const ledgerWrite = (rows) => opsQuery('POST',
+        'lcc_owner_contact_attach_log?on_conflict=review_id,verdict,field_name,batch_tag',
+        rows, { headers: { Prefer: 'resolution=ignore-duplicates,return=representation' } });
+
+      // ---- reject -----------------------------------------------------------
+      if (action === 'reject') {
+        await ledgerWrite([ledgerBase]);
+        await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', applied_verdict: 'reject', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: action, action: 'rejected', review_id: review.review_id });
+      }
+
+      const ownerR = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(ownerId)
+        + '&select=id,name,email,phone,workspace_id&limit=1');
+      const ownerRow = (ownerR.ok && Array.isArray(ownerR.data)) ? ownerR.data[0] : null;
+      if (!ownerRow) return res.status(404).json({ error: 'owner_contact_attach_review: owner entity vanished' });
+      const workspaceId = ownerRow.workspace_id;
+
+      // ---- same_party: fill the OWNER's own blank contact detail -------------
+      if (action === 'same_party') {
+        // Fill-blanks re-checked HERE, at write time, so a curated edit that
+        // landed after the card was rendered is never clobbered.
+        const patch = {};
+        if (cls.has_email && !String(ownerRow.email || '').trim()) patch.email = String(review.contact_email).trim().toLowerCase();
+        if (cls.has_phone && !String(ownerRow.phone || '').trim()) patch.phone = String(review.contact_phone).trim();
+        if (!Object.keys(patch).length) {
+          await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+            { status: 'withdrawn', retire_reason: 'no_longer_blank', decided_by: user.id || null, decided_at: nowIso });
+          return res.status(200).json({ ok: true, verdict: action, action: 'no_longer_blank', review_id: review.review_id });
+        }
+        const led = await ledgerWrite(Object.keys(patch).map((f) => ({
+          ...ledgerBase, field_name: f, old_value: null, new_value: patch[f],
+        })));
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].log_id : null;
+        const upd = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(ownerId), patch);
+        if (!upd.ok) {
+          if (applyLogId != null) await opsQuery('PATCH', 'lcc_owner_contact_attach_log?log_id=eq.' + applyLogId,
+            { reverted_at: nowIso }).catch(() => {});
+          return res.status(502).json({ error: 'owner_contact_attach_review: owner_patch_failed', detail: upd.data });
+        }
+        await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+          { status: 'confirmed', applied_verdict: 'same_party', applied_log_id: applyLogId,
+            decided_by: user.id || null, decided_at: nowIso });
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        effects.fields = Object.keys(patch);
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: action, action: 'owner_contact_filled',
+          fields: Object.keys(patch), review_id: review.review_id });
+      }
+
+      // ---- attach_person: mint/resolve the person, then LINK it --------------
+      const { ensureEntityLink } = await import('./_shared/entity-link.js');
+      const { linkPersonToEntity } = await import('./_shared/contact-attach.js');
+      // A lane-only research contact keyed deterministically off the proposal,
+      // so replaying the verdict resolves the SAME person instead of minting a
+      // duplicate. Domain 'lcc': this is not a dia/gov domain identity binding.
+      const el = await ensureEntityLink({
+        workspaceId, userId: user.id,
+        sourceSystem: 'costar', sourceType: 'Contact',
+        externalId: 'ocp:' + review.subject_ref,
+        domain: 'lcc',
+        seedFields: { name: review.contact_name },
+        metadata: { via: 'owner_contact_attach_p114', source_domain: review.source_domain,
+          source_contact_id: review.source_contact_id, owner_entity_id: ownerId },
+      });
+      if (!el || !el.ok || !el.entity || !el.entity.id) {
+        return res.status(502).json({ error: 'owner_contact_attach_review: mint_failed', detail: el && el.reason });
+      }
+      const personId = el.entity.id;
+
+      // The contact detail belongs to the PERSON. Fill-blanks — a curated value
+      // on an existing person entity always wins over this proposal.
+      const personPatch = {};
+      if (cls.has_email && !String(el.entity.email || '').trim()) personPatch.email = String(review.contact_email).trim().toLowerCase();
+      if (cls.has_phone && !String(el.entity.phone || '').trim()) personPatch.phone = String(review.contact_phone).trim();
+      if (Object.keys(personPatch).length) {
+        await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(personId), personPatch).catch(() => {});
+      }
+
+      const role = cls.role || 'prospecting_contact';
+      const link = await linkPersonToEntity({
+        workspaceId, entityId: ownerId, contactEntityId: personId,
+        role, via: 'owner_contact_attach_p114',
+      });
+      // Recover the edge id so the reversal runbook can drop exactly this edge.
+      let relationshipId = null;
+      try {
+        const relR = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
+          + '&from_entity_id=eq.' + pgFilterVal(ownerId) + '&to_entity_id=eq.' + pgFilterVal(personId)
+          + '&order=created_at.desc&limit=1');
+        relationshipId = (relR.ok && Array.isArray(relR.data) && relR.data[0]) ? relR.data[0].id : null;
+      } catch (_e) { /* soft — the ledger still records the pair */ }
+
+      const led = await ledgerWrite([{
+        ...ledgerBase,
+        person_entity_id: personId,
+        person_minted: !!(el.created || el.is_new),
+        relationship_id: relationshipId,
+        relationship_created: !!(link && link.linked),
+        relationship_role: role,
+        new_value: personPatch.email || personPatch.phone || null,
+        field_name: personPatch.email ? 'email' : (personPatch.phone ? 'phone' : null),
+      }]);
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].log_id : null;
+
+      await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+        { status: 'confirmed', applied_verdict: 'attach_person', applied_log_id: applyLogId,
+          decided_by: user.id || null, decided_at: nowIso });
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+      effects.person_entity_id = personId;
+      effects.relationship = (link && link.linked) ? 'created' : 'existed';
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict: action, action: 'person_attached',
+        person_entity_id: personId, role, review_id: review.review_id });
     }
 
     // ---- naming_hygiene_review (W8 U5 / Prompt 79) ---------------------------
