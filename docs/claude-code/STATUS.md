@@ -33,6 +33,58 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-15d (Cowork) — SUPERSESSION tier shipped: owner resolution 49.2% → 59.0%
+
+Branch **`claude/owner-supersession-tier`** · migration `20260907120000_lcc_owner_supersession_tier.sql` ·
+**applied live**, batch `supersede_20260815`. Full write-up: `connectivity-and-open-threads.md` §4c.
+
+**The defect.** `lcc_reconcile_property_owner` sets `confidence = top_score / SUM(all scores)` — the
+winner's **share of the vote** — with recency decay floored at 0.25, so a 20-year-old transaction never
+stops voting. Ownership is a **chain with a most-recent link**, not an election. Live: **741** assets had
+evidence and no owner; **all 741 multi-candidate, NOT ONE passed the 0.55 gate** (avg share 0.407). More
+evidence makes it *worse*. **295** already carried a curated `domain_true_owner` and still lost.
+
+**Two guards the live dry-run forced — the design changed because of the data:**
+1. **Brokerages were about to be written as property owners** — `Matthews™`, `Colliers`,
+   `Coldwell Banker Commercial®`, `PeerRealty`: the broker on the transaction modelled as the purchaser.
+   `entity_type` said `organization` for every one, so the shape guard could not catch it; only sampling
+   the **names** did.
+2. **An operator leaked** ("Satellite Dialysis") — root cause a **flag-coverage gap at source**:
+   "Satellite Healthcare" (56 properties) was already flagged `is_operator_not_owner`, its sibling rows for
+   the same operator were NULL. Fixed in dia and propagated **by ID**, per CLAUDE.md's "use the existing
+   flag, never write a second name-based operator test."
+
+| | Before | After |
+|---|---|---|
+| assets with a resolved owner | 1,910 (49.2%) | **2,294 (59.0%)** |
+| owner entities | 1,118 | **1,420** |
+| `reachable_hero_effective` | 228 | **262** |
+
+418 written · ledger reconciles exactly · **re-run resolves 0** · reversible by batch tag.
+**323 assets to `v_lcc_owner_supersession_review`** (236 ties · 59 person · 18 brokerage · 10 no-org-marker)
+— a **VIEW, not a table**, so it self-drains and cannot become another un-consumed producer (Prompt 114's
+lesson).
+
+**New hygiene finding:** assets rose 384 while 418 rows were written — the other **34 targets are
+`entity_type='asset'` with a NULL `domain`**, so every `domain in ('dia','gov')` rollup silently
+under-reports them.
+
+**Still true:** resolving an owner does not make them reachable. The *share* stays ~20% because each
+resolved asset adds owners to the denominator — quote the absolute count. **~478 owners remain solvable
+only via the paused SOS-direct path.**
+
+### ⚠️ TWO branches to merge, in this order — `main` has NEITHER
+
+```powershell
+git checkout main
+git merge claude/panel-ui-defects-manual-run   # UI-1/2/3 + the entityLink apostrophe fix
+git merge claude/owner-supersession-tier       # this session's data work + docs
+git push origin main
+```
+
+A sandbox `git merge` could not run (VS Code holds `index.lock` continuously). Any conflict will be
+additive text in `STATUS.md` / `panel-redesign-verification.md` — keep both sides.
+
 ## Session 2026-08-15 — Prompt 114 (voice corpus): the bridge fills `email_bodies`, and its allowlist was stripping `body`
 
 **Root-caused why the voice corpus (`email_bodies`) has 23,169 rows ALL with empty body**, and fixed it.
