@@ -98,6 +98,57 @@ route** (50 via the org record + 60 via a linked person) → 134 on cadence, **a
 - **Data-quality defect surfaced:** 3 cadence rows carry `last_touch_at` in the FUTURE (max 2026-10-15) — a
   writer is stamping a scheduled date into the completed-touch column.
 
+## Session 2026-08-15b (Cowork) — reviewed the 111 response + Scott's manual-check run
+
+**Prompt 111 = DONE** (PR #1750, branch `claude/owner-reachability-gap-904h3v`, migration already applied
+live). **Manual checks M-1…M-12 = partially run**, evidence in `responses/manual checks.docx`.
+
+### 111 corrected this project's own headline number
+The "104 of 690 reachable" baseline **I wrote** counted any graph route, but `buildContact360` never walks
+`entity_relationships` — so 60 of those owners still saw *"Find a contact"*. **Hero-true was 56 (8.1%).**
+Both definitions are now columns on `v_lcc_owner_reachability`; **quote `reachable_hero`**. Recorded as V-3
+in the verification doc, with the lesson: *measure the number the operator experiences, not the one the
+schema permits.*
+
+111 also caught (V-4) that reusing `dup-pair-planner.ownerCore` for identity made `Realty Income Corporation`
+fail to match itself, and scored `Agree Realty Corp` vs `Agree Holdings LLC` at **1.0** — a would-be
+automatic write onto the **wrong owner**, caught only by a live dry-run. Now a `CLAUDE.md` footgun.
+
+**Result:** `reachable_hero` **56 → 92 of 690** (batch `ocp_20260815`, 39 fields / 36 owners, ledgered +
+idempotent). Lead sizes measured: A (gov `manager_name`) 22 gain a name / **0 gain a contact** — my prompt's
+1,469 headline sat almost entirely off this population; B (Salesforce) 19; C (contacts we already hold) 74,
+36 auto-safe → built; **D (only via the paused SOS path) ~478 = 82%** — the measured cost of that flag.
+The pipe wasn't broken, it was **aimed elsewhere**: `owner_contact_pivot` has 5,159 rows but intersects the
+panel's owner graph on 48 of 586.
+
+### Manual run: the IA landed, the panel-shell interactions did not
+✅ 720px panel · 7 tabs on one row · 4-chip rail · CRM stack gone from the Ownership tab · ladder collapsed to
+ONE card for Rem Management (was 4) · `Work this owner →` renders · Resolve Data Gaps 4→1 · Log Touchpoint
+gone from Overview.
+❌ **UI-1** resize does not drag · **UI-2** owner chip only sometimes opens the dock · **UI-3** swap does
+nothing · **UI-0 (HIGH)** an *uncaught JS error* fires on the Ownership tab — that toast is `index.html`'s
+global `onerror` handler, so a real exception/rejection is running. A static pass found no missing references
+in `_udTabOwnership` (23 identifiers, all defined), so it is runtime/async. **Needs the console line before
+any fix** — diagnostic snippet in `panel-redesign-verification.md` §4.3.
+
+### Design change from Scott (supersedes spec §1.2 in part)
+> *"I think we want to see the full detail side-by-side instead of a placeholder that you can swap over to
+> the primary."*
+
+The companion dock's summary card is rejected; both slots should host the **full tabbed panel**. This demotes
+⇄ swap from "the way to reach detail" to a convenience. **The blocking work is not layout** — every renderer
+writes into the singleton ids `#detailBody`/`#detailTabs`/`#detailHeader` and must be parameterised by a
+mount root; plus the dual-dock width floor (720+620 > 1180), the tab bar at 620px, and `?d=` encoding only
+one subject. Consequences catalogued in `panel-redesign-verification.md` §4.2.
+
+### Queue re-ordered — **114 → 112 → 113**
+
+| Prompt | Change |
+|---|---|
+| **114 (NEW)** review-lane drain + `buildContact360` fold-in | Created by 111, which left **101 candidates in a lane with no consumer** and proved attaching a person changes nothing because the hero can't see linked people (**47 owners reachable in data, invisible in UI**). The two defects must ship together — either alone looks like a failure. **Run before 112.** |
+| **112** cadence | Restated to hero-true: **107 of 134 cadences (80%) are on unreachable owners** (was 94 on the loose definition). New **Unit A2** — the inverse defect: **65 reachable owners have no cadence at all**, so the actionable population is idle while the un-actionable one generates the noise. That is the only unit here that adds pipeline. |
+| **113** owner feeders | Added: use `reachable_hero`, never a hand-rolled query; **every asset this resolves enlarges 111's problem** (~87% of new owners will be unreachable, so a good result *lowers* the reachability %) — report absolute counts and pre-state the denominator effect; and a newly-resolved owner must **not** auto-enrol into a cadence. |
+
 ### Queued from the audit — prompts 111 / 112 / 113 (drafted, not started)
 
 The three measured flow breaks are registered in `docs/architecture/connectivity-and-open-threads.md` §4b

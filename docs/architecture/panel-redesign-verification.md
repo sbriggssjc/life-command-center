@@ -30,6 +30,16 @@ The other two failures were the test's fault (the structural regexes were matchi
 *documents* each removed surface) — fixed by stripping comments before asserting. Worth recording: a
 "has X been removed" assertion must not be satisfiable by a comment saying X was removed.
 
+Two more, from the rounds that followed:
+
+| # | Caught by | Finding |
+|---|---|---|
+| V-3 | **Prompt 111**, re-verifying the baseline | **This document's own headline number was wrong.** "104 of 690 reachable" counted any graph route, but `buildContact360` never walks `entity_relationships`, so 60 of those owners still saw *"Find a contact"*. Hero-true was **56 (8.1%)**. Lesson: **measure the number the operator experiences, not the one the schema permits** — a metric defined by a join is not a metric defined by the UI. Now both are columns on `v_lcc_owner_reachability`. |
+| V-4 | **Prompt 111**, live dry-run before applying | Reusing `dup-pair-planner.ownerCore` (a *fuzzy-pairing* helper) for *identity*: `Realty Income Corporation` reduced to `""` and failed to match itself, and `Agree Realty Corp` / `Agree Holdings LLC` both reduced to `agree` and scored **1.0** — an automatic write onto the **wrong owner**. Only a dry-run over real data exposed it. Now in `CLAUDE.md` as a footgun. |
+
+The pattern across V-1…V-4: **every one survived reading the code and died to executing it against reality.**
+That is the argument for the dry-run and the evidence matrix, and it is why §4 is not optional.
+
 ---
 
 ## 2. UI / logic claims — automated
@@ -191,24 +201,84 @@ Recorded so the next run can be compared, not just admired.
 
 ---
 
-## 4. Manual checks (need a browser)
+## 4. Manual checks — RUN 2026-08-15 (Scott)
 
-Not automatable in this repo today; run once after the redeploy and initial the date.
+Evidence: `docs/claude-code/responses/manual checks.docx` (13 screenshots + notes).
+**Verdict: the IA changes all landed; the panel-shell interactions did not.**
 
-| # | Step | Expected | Done |
+| # | Step | Result | Evidence |
 |---|---|---|---|
-| M-1 | Open a dia comp → property panel | Panel is ~720px; the 7 tabs sit on **one** row | ☐ |
-| M-2 | Drag the strip on the panel's left edge | Width follows the cursor; reload keeps it; double-click resets to 720 | ☐ |
-| M-3 | Ownership tab → click the owner chip | Owner opens in the **companion dock beside** the property, not over it | ☐ |
-| M-4 | Press **⇄** in either header | Owner becomes the wide panel, property drops to the dock, both keep their subject | ☐ |
-| M-5 | Press **–** on the companion, then open a different owner | First owner is a chip in the bottom-right tray; clicking it restores | ☐ |
-| M-6 | Ownership tab, full scroll | **No** Log Call form, Draft Email, touchpoints, SF feed, Ownership Assistant | ☐ |
-| M-7 | An owner where deed == decision maker (e.g. Rem Management) | Owner name appears **twice at most** (header + one card), not four times | ☐ |
-| M-8 | An owner with a shell in front of a parent | Two-card ladder with the arrow still renders | ☐ |
-| M-9 | Overview → AI Research | Research Notes present and **Save Notes** persists | ☐ |
-| M-10 | Ownership → change only "True Owner" → Save | Existing owner contact name **survives** the save (the V-1-class never-clobber check, live) | ☐ |
-| M-11 | Deep-link `#/dia?d=prop:dia:<id>:Ownership%20%26%20CRM` | Still lands on the renamed Ownership tab | ☐ |
-| M-12 | Window < 1180px | Single full-width panel; no orphan dock, no resizer strips | ☐ |
+| M-1 | Panel width + one-row tabs | ✅ **PASS** | Panel renders at 720px in a ~1440px window; all 7 tabs on one row; rail shows **4 chips + "+3 more"**; Next-step card above the fold |
+| M-2 | Drag the left-edge strip to resize | ❌ **FAIL** | *"The panel does not drag."* → **UI-1** |
+| M-3 | Owner chip → companion dock beside the property | ⚠️ **INTERMITTENT** | *"Ownership panel does not open from this view but I clicked around a few more screens and was able to open it elsewhere."* → **UI-2** |
+| M-4 | ⇄ swap | ❌ **FAIL** | *"The panels do not move around."* Swap button renders in the header but pressing it does not exchange the panels → **UI-3** |
+| M-5 | Minimize → tray → restore | ⛔ **NOT REACHED** | blocked by M-3/M-4 |
+| M-6 | No CRM stack on the Ownership tab | ✅ **PASS** | No Log Call form, Draft Email, touchpoints, SF feed, or Ownership Assistant anywhere on the tab |
+| M-7 | Owner name not repeated | ✅ **PASS** | Rem Management: ladder collapsed to a single **"OWNER — DEED & DECISION MAKER"** card with *"Recorded deed owner and decision maker are the same party."* Was 4 cards, now 1 |
+| M-8 | Shell-in-front-of-parent still shows two cards | ⛔ **NOT TESTED** | needs an owner where recorded ≠ true |
+| M-9 | Research Notes on Overview → save | ⛔ **NOT TESTED** | |
+| M-10 | Never-clobber on Save Ownership | ⛔ **NOT TESTED** | **highest-value remaining check** |
+| M-11 | Legacy deep-link still routes | ⛔ **NOT TESTED** | |
+| M-12 | Window < 1180px | ⛔ **NOT TESTED** | |
+
+Also confirmed working in the screenshots (not on the original list): **"Work this owner →"** renders with its
+explanatory line; **Resolve Data Gaps** dropped 4 → **1** (the contact gaps left, as designed); Overview
+Actions reads *Mark as Lead · Add to Pipeline · Create Task · **Owner & contacts →*** with **Log Touchpoint
+gone**; the ⇄ / – / × control cluster renders in the header.
+
+### 4.1 Defects raised by the run
+
+| # | Defect | Severity | Note |
+|---|---|---|---|
+| **UI-0** | **Uncaught JS error on the Ownership tab** — a red *"Something went wrong — try refreshing"* toast. That string is `index.html`'s **global `window.onerror` / `unhandledrejection` handler**, so a real exception or rejected promise is firing. A static pass over `_udTabOwnership` found **no missing references** (23 called identifiers, all defined), so it is a **runtime/async** failure, not a broken render path — and it may predate this change. | **HIGH — diagnose first** | Needs the console line: DevTools → Console → reproduce → copy the `[LCC error] …` / `[LCC promise] …` entry. Do not guess-fix. |
+| **UI-1** | Resizer does not drag | HIGH | Two candidate causes, distinguishable in one console command (below): (a) the strip is not receiving `.open` from `_panelSyncResizers`, or (b) it is present but **undiscoverable** — an 8px transparent strip with no visual grip, so Scott may have been dragging the header. Either way the affordance needs to be *visible*. |
+| **UI-2** | Owner chip doesn't always open the companion | MEDIUM | `_openEntitySmart` docks only when `_dualCapable() && _activePrimaryKind === 'property'`. `_activePrimaryKind` is set but **never cleared**, and some chips route through `_ownerLink` rather than `_openEntitySmart` — so behaviour varies by which surface the chip came from. Audit every owner-chip entry point onto one router. |
+| **UI-3** | Swap does nothing | MEDIUM | `_panelSwap` returns early with an *"Open two panels to swap"* toast when there is no companion — likely what happened, since M-3 was already failing. Cannot be judged until UI-2 is fixed. |
+
+### 4.2 Design change requested (supersedes part of spec §1.2)
+
+> **Scott, 2026-08-15:** *"I think we want to see the full detail side-by-side instead of a placeholder that
+> you can swap over to the primary."*
+
+The companion dock currently renders a **summary card** (next-best-action, standing, portfolio one-liner,
+contact, and an "Open full detail ↗" button). Scott wants the **full tabbed panel in both slots**.
+
+Consequences to work through before building:
+- **Swap loses most of its purpose.** ⇄ exists because the companion is a placeholder; if both slots are
+  full panels, swap becomes a convenience, not the way to reach detail. Keep it, demote it.
+- **Two full panels need the width.** 720 + 620 = 1340 plus chrome; the dual-dock floor (currently 1180)
+  must rise, or both panels shrink, or the primary yields while a companion is open.
+- **The tab bar has to survive ~620px.** Seven property tabs fit at 720 but will wrap at 620 — the
+  `flex-wrap` fallback is still there, so this degrades rather than breaks, but it should be designed.
+- **Two panels = two independent tab/scroll/route states.** Hash routing (`?d=`) currently encodes ONE
+  detail subject; a genuine side-by-side needs a second token or an explicit decision that only the primary
+  is deep-linkable.
+- `_renderCompanionEntity` / `openCompanionProperty` become thin wrappers that mount the same renderers as
+  `openEntityDetail` / `openUnifiedDetail` into the companion node — the renderers must stop assuming the
+  singleton ids `#detailBody` / `#detailTabs`. **That element-id assumption is the real work.**
+
+### 4.3 One command that resolves UI-0 and UI-1
+
+Run in the browser console with a property panel open, and paste the output:
+
+```js
+copy(JSON.stringify({
+  innerWidth: innerWidth,
+  dualCapable: innerWidth >= 1180,
+  primaryVar: getComputedStyle(document.documentElement).getPropertyValue('--panel-primary-w').trim(),
+  panelRealWidth: document.getElementById('detailPanel')?.getBoundingClientRect().width,
+  panelDisplay: document.getElementById('detailPanel')?.style.display,
+  resizerExists: !!document.getElementById('panelResizerPrimary'),
+  resizerOpen: document.getElementById('panelResizerPrimary')?.classList.contains('open'),
+  resizerRect: document.getElementById('panelResizerPrimary')?.getBoundingClientRect(),
+  trayExists: !!document.getElementById('panelTray'),
+  bound: !!document.getElementById('panelResizerPrimary')?._pwBound,
+  activePrimaryKind: window._activePrimaryKind,
+}, null, 2))
+```
+
+`resizerExists:false` ⇒ stale `index.html` (cache-bust / redeploy). `resizerOpen:false` ⇒ the
+`_panelSyncResizers` gate. `resizerRect` far from the panel's left edge ⇒ the var/actual-width mismatch.
 
 ---
 

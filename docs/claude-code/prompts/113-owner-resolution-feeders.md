@@ -75,6 +75,16 @@ grantee/grantor **names and mailing addresses** (ORE Phase 1 Unit C), and gov/di
 - **Feeding the owner does not make them reachable.** Prompt 111 covers that leg. Report the two numbers
   separately so the win is not overstated: assets that gain a resolved **owner**, and owners that gain a
   reachable **contact** (likely near zero from this prompt alone).
+- **Use `v_lcc_owner_reachability` for any reachability figure** (Prompt 111). Quote **`reachable_hero`**,
+  not `reachable_graph` — the loose graph definition overstated the original baseline by ~2× because
+  `buildContact360` never walks `entity_relationships`. Do not hand-roll the query.
+- **Every asset this prompt resolves ENLARGES prompt 111's problem.** Each newly-resolved owner joins the
+  690-owner population, and on current rates ~87% of them will be unreachable — so a big win here *lowers*
+  the `reachable_hero` percentage even though it is unambiguously good. **Report the absolute counts, and
+  state the expected percentage move up front**, so a denominator effect is never mistaken for a regression.
+- **A new owner should not automatically get a cadence.** See prompt 112 Unit A: 80% of existing cadences
+  are on unreachable owners. Whatever feeder ships here must not enrol its output into prospecting by
+  default.
 
 ---
 

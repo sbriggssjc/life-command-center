@@ -27,15 +27,31 @@ about: *"a `5,447` / `999+` badge that is mostly noise trains the operator to ig
 | suppressed / unsubscribed | 0 | |
 | distinct entities on cadence | 1,903 | ~1 row per entity, so not a duplication artefact |
 | **`last_touch_at` in the FUTURE** | **3** (max `2026-10-15`) | **data defect — see Unit C** |
-| owner-entities on cadence that are **UNREACHABLE** | **94** | un-actionable work by construction |
+
+### ⚠️ Reachability numbers below were RESTATED after Prompt 111 — use these
+
+Prompt 111 proved the old "reachable" figure counted a graph join the UI never walks. **Always use
+`v_lcc_owner_reachability.reachable_hero`** — what the owner-panel hero actually reads — not an ad-hoc
+`entity_relationships` query. Re-measured 2026-08-15 **after** the BREAK-1 unlock landed:
+
+| Metric (hero-true) | Value | Reading |
+|---|---|---|
+| owner entities reachable from an asset | 690 | |
+| `reachable_hero` | **92 (13.3%)** | post-111 (was 56) |
+| owners on a cadence | 134 | |
+| **on a cadence but UNREACHABLE** | **107 of 134 (80%)** | worse than the 94 first reported — that used the loose definition |
+| **reachable but NOT on a cadence** | **65** | **the inverse defect — see Unit A2** |
+
+---
 
 ---
 
 ## Unit A — the value gate the producer never had
 
-**94 owners on a cadence have no contact method at all** (no email, no phone, no named person — see
-prompt 111). A touchpoint cadence for a party you cannot contact can never advance; it is guaranteed to
-age into "overdue" and pollute every count that reads the table.
+**107 of the 134 owners on a cadence (80%) are unreachable by the hero.** A touchpoint cadence for a party
+you cannot contact can never advance; it is guaranteed to age into "overdue" and pollute every count that
+reads the table. (Prompt 111 established that this is a *decision-maker discovery* gap — 585 of 586
+unreachable owners have no person known at all — so these will not self-heal.)
 
 Determine which producer creates these (`growCadenceFromOutreach`, `bridgeCreateLead`, `_udAddToCadence`,
 the bulk seeding that stamped ~1,800 rows) and add a **reachability precondition** consistent with the
@@ -46,6 +62,20 @@ doctrine's "value-gate the producer":
 - Existing rows: **auto-retire, reversibly** (pause with a reason, never hard-delete) — the doctrine's
   "auto-retire + auto-resolve" requirement. They should return automatically once the owner becomes
   reachable.
+
+## Unit A2 — the inverse defect: 65 reachable owners are NOT being worked
+
+The mirror of Unit A, and probably the **only unit here that creates immediate revenue-side value**:
+**65 owners we CAN reach have no cadence at all**, while 107 we cannot reach occupy the queue.
+
+That is the queue inverted — the actionable population is idle and the un-actionable one is generating
+"overdue" noise. Determine why they were never enrolled (value gate too high? enrolment keyed off a
+population that excludes them — the same aiming problem prompt 111 found with `owner_contact_pivot`,
+which holds 5,159 rows but intersects the panel's owner graph on only 48 of 586?).
+
+Propose enrolment for the 65, **value-ranked and capped**, with the same discipline as any producer:
+a named consumer, a value gate, an auto-retire predicate. Do not enrol all 65 because you can — rank by
+portfolio value / our open deals and say who works them.
 
 ## Unit B — why 91% were never touched
 
@@ -94,11 +124,20 @@ producer stamp.
 1. Findings appended to `connectivity-and-open-threads.md` §4b BREAK-2 — including, explicitly, whether the
    1,728-row population is **worth consuming or worth retiring**.
 2. The producer value-gate (Unit A) + the reversible auto-retire sweep, dry-run default.
-3. The Unit C writer fix + the 3-row correction.
-4. The Unit D upstream rep stamp.
-5. **Re-run the §3.2 cadence SQL and report before/after.** The success metric is NOT "more cadence rows" —
-   it is **fewer, all actionable**: every remaining row reachable, value-gated, and either due in the future
-   or genuinely awaiting a human today.
+3. **Unit A2 — the 65 reachable-but-unworked owners**, value-ranked and capped. If you ship one thing from
+   this prompt, ship this: it is the only unit that adds workable pipeline rather than removing noise.
+4. The Unit C writer fix + the 3-row correction.
+5. The Unit D upstream rep stamp.
+6. **Re-run the §3.2 cadence SQL and report before/after.** The success metric is NOT "more cadence rows" —
+   it is **fewer, all actionable**: every remaining row reachable (by `reachable_hero`, not the graph
+   definition), value-gated, and either due in the future or genuinely awaiting a human today.
+
+## Sequencing note (added after Prompt 111)
+Prompt 111 left **101 candidate decision-makers in a review lane with no consumer**, and draining that lane
+is what will move `reachable_hero` materially. If **prompt 114** (review-lane drain + `buildContact360`
+fold-in) runs first, the reachable population grows and Unit A's retire list shrinks — so **114 before 112**
+avoids retiring cadences that are about to become workable. If 112 runs first, make the auto-retire
+*reversible and re-entrant* so those rows return automatically when the owner becomes reachable.
 
 ## Discipline
 Reversible (pause/skip with a reason, **never hard-delete**) · idempotent · dry-run default ·
