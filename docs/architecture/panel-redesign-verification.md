@@ -216,12 +216,14 @@ Recorded so the next run can be compared, not just admired.
 
 | Metric | 2026-08-15 | Why it matters | Owner of the fix |
 |---|---|---|---|
-| assets with a resolved owner | 35.9% → **49.2%** (2026-08-15, Prompt 113) | gates the whole hand-off | **P0.3 SHIPPED** — `lcc_ingest_domain_owner_evidence` (domain `true_owner` → evidence, ID-joined, operator-guarded): 1,396 → **1,910** of 3,886; owner entities 690 → **1,118**. P0.2 measured at ≤40 assets and **skipped**. Next lever is the resolver's chain-vs-competing-claims scoring (876 assets stuck, 465 recoverable), not another feeder |
-| owners the hero can reach (`reachable_hero_effective`) | 8.1% → 13.3% → **20.1%** (2026-08-15, Prompt 114) | **the binding constraint** on the redesigned flow | BREAK-1: `owner-contact-propagate-tick` (+36) then the Prompt 114 c360 fold-in (+47) |
+| assets with a resolved owner | 35.9% → 49.2% → **59.0%** (2026-08-15) | gates the whole hand-off | **P0.3 SHIPPED** (Prompt 113) 1,396 → 1,910, then the **SUPERSESSION TIER SHIPPED** (+418) → **2,294** of 3,886; owner entities 690 → **1,420**. P0.2 measured at ≤40 assets and **skipped** |
+| resolver: chain scored as competing claims | **741 stuck → 418 resolved, 323 to review** | the share-based gate, not evidence volume, was the blocker — **all 741 were multi-candidate and NONE passed 0.55** (avg share 0.407); 295 already had a curated `domain_true_owner` and still lost | **SHIPPED** — `lcc_supersede_property_owner`, batch `supersede_20260815`, idempotent + reversible. Guards added mid-build after the live dry-run tried to write **brokerages** (Matthews/Colliers/Coldwell Banker) as owners |
+| owners the hero can reach (`reachable_hero_effective`) | 56 → 92 → 139 → **262** owners (2026-08-15) | **the binding constraint** on the redesigned flow | BREAK-1 `owner-contact-propagate-tick` (+36) → Prompt 114 c360 fold-in → supersession (+34). **The SHARE stays ~20% because each resolved asset adds owners to the denominator** — quote the absolute count; ~478 owners remain SOS-blocked |
 | hero-vs-graph gap (reachable but invisible) | 54 → **0** | a defect, not a data gap — `buildContact360` never walked `entity_relationships`, so every correct person+edge write was invisible | **CLOSED** (Prompt 114 Unit 2: `subject.reachable_via`) |
 | owner-contact review lane — actionable | **84** (of 101 proposed; 17 auto-retired) | Prompt 111 produced these and shipped no consumer | **CLOSED** (Prompt 114 Unit 3: Decision Center lane `owner_contact_attach_review`) |
 | cadence rows ever touched | **9%** | a strip that always says "overdue" trains you to ignore it | consumption layer — auto-retire + reality-driven advance |
-| cadence rows with a rep | 0.4% | ROE line on the owner card is blank | upstream producer stamp (documented; backfill is a dead end) |
+| cadence rows with a rep | 0.4% → **2%** (7 → 37) | ROE line on the owner card is blank | Prompt 112 Unit D — the backfill was **not** a dead end after all; `lcc_entity_owner_override` had 131 point-person rows |
+| **assets with a NULL `domain`** | **34** | they are `entity_type='asset'` but excluded from every `domain in ('dia','gov')` rollup, so they silently under-report every coverage metric | NEW 2026-08-15 — found reconciling +384 assets against 418 writes; hygiene pass needed |
 
 ---
 

@@ -508,6 +508,65 @@ lever on BREAK-3.**
 **Re-measure:** the SQL for every number above is in `panel-redesign-verification.md` §3.2; the feeder's own
 dry-run surface is `SELECT status, count(DISTINCT entity_id) FROM v_lcc_domain_owner_candidates GROUP BY 1`.
 
+## 4c. BREAK-3 follow-on — the SUPERSESSION tier (2026-08-15, SHIPPED)
+
+Prompt 113 sized this and left it ("it changes the shared consumer"). Re-grounded and built.
+Migration `supabase/migrations/20260907120000_lcc_owner_supersession_tier.sql`, applied live, batch
+`supersede_20260815`.
+
+**The defect.** `lcc_reconcile_property_owner` sets `confidence = top_score / SUM(all scores)` — the
+winner's **share of the vote** — and floors recency decay at 0.25, so a 20-year-old transaction never stops
+voting. Ownership is a **chain with a most-recent link**, not an election.
+
+Measured live: **741** assets had evidence and no resolved owner; **all 741 were multi-candidate and NOT ONE
+passed the 0.55 gate** (avg top share 0.407). Adding evidence cannot fix this class — more evidence makes
+the share *worse*. The clincher: **295** of the 741 already carried a `domain_true_owner` row (the curated
+current owner-of-record, the top non-manual authority) and still lost to a pile of historical purchases.
+
+**The rule.** Authority first, then recency inside the winning tier:
+`manual > domain_true_owner > rel_purchase > sf_seller > rel_owns`. Ties on the winning date **abstain**.
+*Checked, not assumed:* `rel_purchase.observed_at` is a real transaction date (first-of-month clustering,
+CoStar granularity) while `rel_owns.observed_at` is a **sync timestamp** — so ranking a recent `rel_owns`
+above a dated deed would be a recency illusion.
+
+**Two guards the live dry-run forced (the design changed because of the data):**
+1. **Brokerages were about to be written as owners** — `Matthews™`, `Colliers`,
+   `Coldwell Banker Commercial®`, `PeerRealty`: the broker on the transaction modelled as the purchaser.
+   `entity_type` said `organization` for every one, so the shape guard could not catch it. Added a
+   brokerage-name guard on all tiers, plus an org-marker requirement on the purchase tier only —
+   a personal name is suspicious on a purchase edge but **legitimate** as a curated owner-of-record
+   (a clinic can be owned by "Surinder Mann" or a family living trust).
+2. **An operator leaked** — "Satellite Dialysis". Root cause was a **flag-coverage gap at source**, not a
+   naming problem: "Satellite Healthcare" (56 properties) was already flagged `is_operator_not_owner`, its
+   sibling rows for the same operator were NULL. Per CLAUDE.md ("use the existing flag; never write a second
+   name-based operator test") it was fixed **in dia** and propagated into `lcc_owner_operator_block` **by
+   ID** via `external_identities`. After both guards: **0** operator-ish and **0** brokerage names remain.
+
+**Result (live, verified):**
+
+| | Before | After |
+|---|---|---|
+| assets with a resolved owner | 1,910 (49.2%) | **2,294 (59.0%)** |
+| owner entities | 1,118 | **1,420** |
+| `reachable_hero_effective` | 228 | **262** |
+
+418 written (293 domain_true_owner · 124 latest purchase · 1 other); ledger reconciles exactly; **re-run
+resolves 0** (idempotent); reversible by batch tag.
+
+**Left to a human, by design — `v_lcc_owner_supersession_review` (323 assets):** 236 ties on the winning
+date · 59 person-shaped winners · 18 brokerages · 10 purchase-tier names with no org marker. Deliberately a
+**VIEW, not a table** — Prompt 114's lesson was that a review table with no consumer is an un-consumed
+producer; a view recomputes from live evidence, drains itself as upstream data improves, and can never go
+stale.
+
+**New hygiene item found:** the asset count rose 384 while 418 rows were written. The other **34 target
+entities are `entity_type='asset'` with a NULL `domain`**, so `v_lcc_owner_reachability` (which filters
+`domain in ('dia','gov')`) does not count them. Assets should always carry a domain — worth a cleanup pass.
+
+**Still true, and unchanged by this:** resolving an owner does not make them reachable. `reachable_hero_effective`
+moved 228 → 262 in absolute terms while the *share* stayed ~20%, because every newly-resolved asset adds
+owners to the denominator. **~478 owners remain solvable only via the paused SOS-direct path.**
+
 ## 5. Doc trail (all linked from CLAUDE.md "Pointers to canonical docs")
 - `property-owner-subsystem.md` + `property-owner-source-authority-and-doctrine.md`
 - `access-scoping-and-my-work.md`
