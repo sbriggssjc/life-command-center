@@ -33,6 +33,43 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-15e (Cowork) — P112 A2 enrolment + the four sweeps nobody scheduled
+
+Migration `20260908120000_lcc_p112_a2_enrol_and_schedule.sql`, applied live, batch `a2_enrol_20260815`.
+Write-up: `connectivity-and-open-threads.md` §4d.
+
+**The bigger gap, found on the way in: NONE of the P112 sweeps were scheduled.** 112's write-up flagged only
+`resume`; in fact **no cron referenced any P112 function** — retire, resume and stamp were built, verified,
+and never ran again, so the consumption loop the prompt existed to close had not closed. Now scheduled
+06:20–06:35 daily in dependency order **retire → resume → enrol → stamp** (jobids 226–229). All four
+dry-ran to **0** first, so this is maintenance, not a pending bulk change.
+
+**A2 — my raw count overstated it a fourth time.** 1,420 owners → 110 reachable → 99 with no active cadence
+(*the number I quoted*) → **44 pass the same gate the retire sweep uses**, measured via the **canonical
+`lcc_entity_cadence_reachable()`** rather than my ad-hoc query — which is precisely why my number kept
+disagreeing. **41 enrolled**; the other ~58 fail the value gate and are **correctly excluded, not a gap**.
+Active surface 278 → **319**. Re-run enrols 0.
+
+### ⚠️ NEW UNIT (not fixed) — brokerages recorded as property owners, 46 rows
+
+The first dry-run put **Marcus & Millichap** ($4.99M) at the top of the enrolment list — one step from
+cold-prospecting a competitor's brokerage as a landlord. 42 rows from `relationship_graph`, 4 from
+`domain_true_owner`, **0 from `supersession`** (the guard I added yesterday held). Two classes:
+**(a) ~35 suffix-polluted** (`DP Brighton LLC by Marcus & Millichap`) — owner correct, name carries the
+CoStar `by <broker>` suffix that `detail.js` only strips *on render*, so the pollution rides into exports,
+comps and dedupe; **(b) ~11 pure brokerages** — owner wrong. `lcc_owner_name_is_brokerage()` is the
+ready-made detector. **This is the next data unit.**
+
+### Revised plan
+
+1. **Brokerage-as-owner cleanup** (46 rows, two classes) — highest-value data unit; the detector exists.
+2. **UI-0** — the uncaught JS error on the Ownership tab. Still needs one console line from Scott
+   (diagnostic in `panel-redesign-verification.md` §4.3); it is the only HIGH I cannot close blind.
+3. **Re-run manual checks M-2/3/4/5** — the UI-1/2/3 fixes are now merged and deployed but unverified.
+4. **Side-by-side panels** — blocked on renderers writing to singleton `#detailBody`/`#detailTabs`.
+5. **34 assets with a NULL `domain`** — silently excluded from every coverage rollup.
+6. **Supersession review view** — 323 assets awaiting human verdicts (236 ties · 59 person · 18 brokerage).
+
 ## Session 2026-08-15d (Cowork) — SUPERSESSION tier shipped: owner resolution 49.2% → 59.0%
 
 Branch **`claude/owner-supersession-tier`** · migration `20260907120000_lcc_owner_supersession_tier.sql` ·
