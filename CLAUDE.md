@@ -375,17 +375,42 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   identity on the person (`api/_shared/sf-account-link.js`).
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
-- **"Owner is reachable" has TWO different definitions — the UI reads the NARROW one.** The owner-panel
-  hero (`_nextActionForContact`, detail.js) shows "Find a contact" unless `buildContact360` produced a
-  `subject.email` / `entity.phone`, and `buildContact360` builds `subject.email` from **`entities.email`
-  or a `unified_contacts` row whose `entity_id` IS that entity** — it does **NOT** walk
-  `entity_relationships` to a linked person. So an owner with a linked person carrying an email still
-  reads as unreachable in the panel. Measuring reachability by the graph therefore OVERSTATES what the
-  operator sees (2026-08-15: graph 110 vs hero 56 of 690 property-resolved owners). **Use
-  `v_lcc_owner_reachability`** — it reports `reachable_hero` (quote this for operator experience) and
-  `reachable_graph` side by side, plus `v_lcc_owner_unreachable_worklist` for the value-ranked
-  population. Attaching a person+edge without folding their detail into c360 writes correct data the
-  hero cannot see.
+- **"Owner is reachable" has THREE definitions — quote `reachable_hero_effective`.** The owner-panel hero
+  (`_nextActionForContact`, detail.js) used to show "Find a contact" unless `buildContact360` produced a
+  `subject.email` / `entity.phone`, and c360 never walked `entity_relationships` — so an owner with a
+  linked person carrying an email read as unreachable, and attaching a person+edge (the doctrinally
+  correct write) changed nothing on screen. **Prompt 114 closed that** (`subject.reachable_via`, resolved
+  by `api/_shared/owner-reachable-via.js`; hero renders "Reach via <name> (<role>)"). Read
+  `v_lcc_owner_reachability`, which now reports all three side by side:
+  `reachable_hero` = the PRE-114 definition, retained ONLY as the before/after yardstick;
+  **`reachable_hero_effective`** = what the hero reads today (org routes ∪ a linked person surviving the
+  guards) — **quote this one**; `reachable_graph` = any linked person INCLUDING brokers, which
+  OVERSTATES what the panel can show. `hero_gap` is the UI-defect residue (47 → 0 on 2026-08-15).
+  `v_lcc_owner_unreachable_worklist` is the value-ranked population.
+  - **`reachable_via` is NEVER merged into `subject.email`.** That field means "the ORG's own contact
+    detail"; a linked person's address is a different claim. Merging them would assert the org has an
+    address it does not and re-commit the person/org conflation `sf-account-link.js` guards against.
+  - **The winner-selection rule is ranked, pure and regression-tested** (explicit primary → role
+    authority → email-over-phone → most-recently-verified → `person_id`). Never "first row wins" — that
+    is the gov `ensureTrueOwner` substring defect (gov `CLAUDE.md` §20). Broker-ish roles
+    (`NON_REACHABLE_ROLES`) are EXCLUDED, not ranked last; the SQL `via_person_selectable` arm mirrors
+    that list, so **add a role to one and you must add it to the other** or measurement and UI drift apart.
+- **The owner-contact review lane is mostly REJECTS — never wire a single "confirm" button to it.**
+  `lcc_owner_contact_propagate_review` (Prompt 111) was documented as candidate decision-makers; live
+  classification of all 101 rows says **22 person-shaped, 77 organization-shaped, 2 blocked**, and the
+  organizations are dominated by **transaction counterparties** — the buyer/seller of a sale on the
+  owner's property, captured by the CoStar sidebar ("NGP Capital" ← "CoreCivic, Inc."). Confirming those
+  writes another company's switchboard onto the owner. The Decision Center lane
+  `owner_contact_attach_review` (Prompt 114) therefore has **three shape-aware verdicts** —
+  `attach_person` (person entity + `entity_relationships` edge), `same_party` (fill the OWNER's own blank
+  from an abbreviation/acronym name variant), `reject` (terminal, never re-proposed) — and `admin.js`
+  re-runs the pure shape gate (`owner-contact-verdict-planner.js::validateVerdict`) before writing, so a
+  stale card cannot mint a REIT as a person. Three live-caught traps encoded there:
+  `looksLikePersonName` alone accepts org names with no legal suffix (**"Global Net Lease"**, **"U.S.
+  Department of Veterans Affairs"** both passed) — require `isPersonShaped` (adds an org-marker check);
+  acronym matching must read initials from the **unsorted** name, because `strictOwnerCore` sorts tokens;
+  and a strict token SUBSET is NOT an abbreviation (**"Government Properties Trust"** ⊄ **"Easterly
+  Government Properties"** — different REITs), so require equal token counts and leave subsets undecided.
 - **`dup-pair-planner.ownerCore` / `nameSimilarity` are for FUZZY PAIRING, never for IDENTITY.** They
   strip a generic-CRE **stoplist** (realty, capital, income, group, holdings, properties, partners,
   services…) on top of legal forms, which is right when scoring a candidate pair and catastrophic when

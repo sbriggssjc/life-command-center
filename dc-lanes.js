@@ -67,6 +67,8 @@ const _DC_FED_META = {
     intro: 'W9.1 data-connectedness (Stage 1, internal sources). A value-ranked owner with NO contact on file. The engine ran the sanctioned chain — cross-reference (the same person already a contact under a related owner), institution registry, the owner\'s own deed signatory, and the OM listing broker-of-record — stopping at the first hit. An ATTACH links an EXISTING person; a CREATE mints a lane-only contact from a deed signatory or a broker (a broker is typed broker-of-record, NEVER the owner\'s own contact). PROPOSES only — you decide. Confirm resolves it into the graph (associated_with edge + a value-gated cadence, reversible via the ledger); Reject keeps the owner untouched. Stage 2 (SOS-direct) is a separate lane. Every verdict is recorded (won\'t re-ask).' },
   comms_owner_attribution_review: { title: 'Correspondence → owner attribution',
     intro: 'W9.6 data-connectedness. Correspondence is stamped with the deal / party / property entity the resolver found — brokers, buyers, seller contacts — NOT the owning LLC, so an email about a property never surfaces against the owner you\'re trying to reach. This lane closes that gap. PATH A (property bridge) is arithmetic: the thread\'s entity resolves to an ASSET, and the ops graph owns-links it to a single current true_owner — one-click bulk-confirmable. PATH B (person match) attributes a thread whose correspondent is a PERSON tied to a single owner (the owner\'s active contact, or an unambiguous person→owner edge); it carries the correspondent\'s VERBATIM header name/email and a shared-token-only name bridge is rejected. PROPOSES only — you decide. Confirm attributes the thread to the owner (appends the owner ops entity to the correspondence rows\' anchors, reversible) so the owner\'s record shows its correspondence AND the reachability harvester can mint owner contacts from it; Reject keeps it untouched. Every verdict is recorded (won\'t re-ask).' },
+  owner_contact_attach_review: { title: 'Owner contacts — attach or reject',
+    intro: 'Prompt 114. Contacts we already hold that are BOUND to an owner in dia/gov but could not be attributed automatically. ⚠ Read the shape badge before acting — this lane holds two different things and one of them is mostly rejects. A PERSON card proposes a real human: confirm mints/links them to the owner as a related contact (never stamped onto the org record) and the owner panel immediately reads "Reach via …". An ORG card is usually the BUYER or SELLER of a transaction on the owner\'s property — a different company entirely (e.g. "NGP Capital" ← "CoreCivic, Inc.") — and should be rejected; the exception is a name VARIANT of the owner itself ("Easterly Gov Properties (REIT)" ↔ "Easterly Government Properties, Inc."), flagged "same party", where confirm fills the owner\'s own blank email/phone. Cards marked "undecidable" are yours to judge: the names overlap but one side adds distinct material. Value-ranked by owner rent; owners that became reachable some other way drop out automatically. Every verdict is reversible and recorded (won\'t re-ask).' },
   w8_u3_link_review: { title: 'Ownership links — Ollama proposals',
     intro: 'W8 U3 connection-propagation. Ollama proposed an ownership link from a real signal: a CHAIN proposal fills a missing owner→parent/developer edge for a property (source = a deed/OM/registry evidence quote), or a DIFFERENT-PEOPLE finding flags that two email-sharing person records are NOT the same person (a shared mailbox). Each card shows the proposed link + role, the confidence, and the VERBATIM evidence quote + its source. Ollama PROPOSES only — you decide. Confirm runs the deterministic edge writer (entity_relationships + provenance, recorded in w8_u3_link_apply_log so it is reversible; a same-person email proposal routes to the resolver, never auto-merged); Reject keeps the records untouched. Every verdict is recorded (won’t re-ask).' },
   agency_risk_action: { title: 'Agency risk → disposition',
@@ -679,6 +681,47 @@ function _fedCardHTML(it, i, isNext) {
         + (attach ? 'attach this contact to the owner' : 'create this ' + (isBroker ? 'broker-of-record' : 'contact')) + ' (reversible), or reject.</div>';
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">Confirm — ' + (attach ? 'attach' : 'create') + '</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject</button>';
+  } else if (_dcFedType === 'owner_contact_attach_review') {
+    // Prompt 114. The card's job is to make the SHAPE obvious, because the wrong
+    // verdict here writes a real company's switchboard onto an unrelated owner
+    // (org cards) or mints a REIT as a human being (person cards). Buttons are
+    // built from `allowed`, which the server re-derives and enforces — a card
+    // can never offer a verdict the write path would refuse.
+    const shape = c.shape || 'blocked';
+    const allowed = Array.isArray(c.allowed) ? c.allowed : ['reject'];
+    const lean = c.lean || null;
+    const hint = c.variant_hint || {};
+    const chan = c.contact_email || c.contact_phone || '';
+    const shapeLabel = shape === 'person' ? 'person' : (shape === 'org' ? 'organization' : 'blocked');
+    const badges = '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
+      + '<span class="q-badge type">' + esc(shapeLabel) + '</span>'
+      + (c.counterparty ? '<span class="q-badge">transaction ' + esc(String(c.contact_type || '').replace(/_/g, ' ')) + '</span>' : '')
+      + (hint.likely ? '<span class="q-badge">same party (' + esc(String(hint.how || '')) + ')</span>' : '')
+      + (hint.ambiguous ? '<span class="q-badge">undecidable</span>' : '')
+      + (Number(c.rank_value) > 0 ? '<span class="q-badge">$' + Math.round(Number(c.rank_value)).toLocaleString() + '</span>' : '') + '</div>';
+    // Say plainly what confirming would DO, per shape — the operator should never
+    // have to infer which of two very different writes a button performs.
+    const whatConfirm = lean === 'same_party'
+      ? 'These read as the same party under an abbreviation/acronym, so confirming fills <b>' + esc(String(c.owner_name || 'the owner')) + '</b>’s own blank contact detail.'
+      : lean === 'attach_person'
+        ? 'Confirming creates/links <b>' + esc(String(c.contact_name || 'this person')) + '</b> as a contact RELATED to the owner — their detail is never stamped onto the owner record.'
+        : shape === 'org'
+          ? 'This looks like a DIFFERENT organization (typically the counterparty on a sale of the owner’s property). Reject unless you know it is the same party.'
+          : 'This person is named on a transaction involving the owner — they may be the owner’s principal or the counterparty’s. Your call.';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(c.owner_name || 'owner'))
+      + ' <span style="opacity:.6">&larr;</span> ' + esc(String(c.contact_name || '?')) + '</span>' + badges + '</div>'
+      + (chan ? '<div class="q-item-meta">Reachable at: <b>' + esc(String(chan)) + '</b></div>' : '')
+      + (c.data_source ? '<div class="q-item-meta" style="opacity:.7">Captured by ' + esc(String(c.data_source))
+          + (c.source_bound_by ? ' · bound to the ' + esc(String(c.source_bound_by).replace(/_/g, ' ')) : '') + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.85">' + whatConfirm + '</div>';
+    actions = '';
+    if (allowed.indexOf('same_party') >= 0) {
+      actions += '<button class="q-action' + (lean === 'same_party' ? ' primary' : '') + '" onclick="dcFed(' + i + ',\'same_party\')">Same party — fill owner contact</button>';
+    }
+    if (allowed.indexOf('attach_person') >= 0) {
+      actions += '<button class="q-action' + (lean === 'attach_person' ? ' primary' : '') + '" onclick="dcFed(' + i + ',\'attach_person\')">Attach person to owner</button>';
+    }
+    actions += '<button class="q-action' + (lean === 'reject' ? ' primary' : '') + '" onclick="dcFed(' + i + ',\'reject\')">Reject — not this owner’s contact</button>';
   } else if (_dcFedType === 'comms_owner_attribution_review') {
     // W9.6: a correspondence→owner attribution. Path A (property_bridge, arithmetic
     // owns-edge) or Path B (person_match, verbatim correspondent header). Confirm

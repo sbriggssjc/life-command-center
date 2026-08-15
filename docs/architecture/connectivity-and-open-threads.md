@@ -238,6 +238,105 @@ to them was unranked; the migration registers one (manual@1 → salesforce@20 �
 **Reversal:** runbook in the migration header — `batch_tag='ocp_20260815'`, ledger
 `lcc_owner_contact_propagate_log` carries `old_value` per field.
 
+#### BREAK-1 — Prompt 114: the c360 fold-in + the lane's consumer (2026-08-15)
+
+The two coupled defects Prompt 111 left open, shipped together because either alone reads as a failure:
+draining the lane without the fold-in writes correct data the hero cannot see; the fold-in without the
+lane fixes 47 owners and strands the rest.
+
+**Unit 2 — `buildContact360` now walks `entity_relationships` (the pure UI defect, CLOSED).**
+`subject.reachable_via` is a **separate** descriptor, deliberately not merged into `subject.email`:
+`subject.email` means *"this org's own contact detail"*, and a linked person's address is a different
+claim. Blurring them would tell the operator the org has an address it does not, and would re-commit the
+person/org conflation `sf-account-link.js` guards against. The hero now reads **"Reach via Eric Dowling
+(manager)"** instead of "Find a contact"; the companion dock reuses the same resolver, so the two
+surfaces cannot disagree. Winner selection is a pure, ranked, regression-tested rule in
+`api/_shared/owner-reachable-via.js` — explicit primary → role authority → email-over-phone → most
+recently verified → `person_id`. **Never "first row wins":** that is the exact shape of the gov
+`ensureTrueOwner` substring defect (gov `CLAUDE.md` §20), and the test asserts order-independence.
+Broker-ish roles are **excluded outright**, not ranked last — surfacing a listing broker as "reach the
+owner via…" would send outreach to the wrong human.
+
+**Unit 1 + 3 — three shape-aware verdicts and a Decision Center lane.**
+New federated lane `owner_contact_attach_review` (`v_lcc_owner_contact_attach_review_open`), migration
+`20260904120000`, ledger `lcc_owner_contact_attach_log`, auto-retire
+`lcc_owner_contact_review_autoretire()` on cron `lcc-owner-contact-review-autoretire` (05:45, after the
+owner-contact signal chain). Verdicts: **attach_person** (mint/resolve the person, carry the detail onto
+*them*, link via `entity_relationships`), **same_party** (fill the OWNER's own blank — the `fill_org`
+write Prompt 111 refused to automate), **reject** (recorded and terminal, so a counterparty is never
+re-proposed). The server re-runs the pure shape gate before writing, so a stale card or a misclick cannot
+mint a REIT as a person or stamp a human's email onto an org.
+
+> ⚠️ **GROUNDING CORRECTION — the lane was NOT 101 decision-makers.** Prompt 111's own write-up (and
+> Prompt 114's brief) described these rows as candidate decision-makers. Classifying every pending row
+> live says otherwise: **22 person-shaped, 77 organization-shaped, 2 blocked.** The organizations split
+> into (a) **transaction counterparties** — the buyer/seller of a sale on the owner's property, captured
+> by the CoStar sidebar ("NGP Capital" ← "CoreCivic, Inc.", "Boyd Watterson" ← "CIM Group, LP") — which
+> are **rejects**; and (b) **same-party name variants** the strict matcher could not see through because
+> the difference is an abbreviation or acronym ("Easterly Gov Properties (REIT)" ↔ "Easterly Government
+> Properties, Inc.", "UIRC" ↔ "UIRC, Urban Investment Research Corporation"), which want the ORG fill.
+> **A single "confirm" button would have written the wrong shape for the majority of this backlog.**
+
+**Pre-verdict triage forecast (deterministic, no LLM), 101 rows:**
+
+| Lean | Rows | Distinct owners | What it is |
+|---|---|---|---|
+| `reject` | 64 | 39 | transaction counterparties + 2 blocked (a government body, a broker row) |
+| `same_party` | 11 | 8 | abbreviation / acronym variants of the owner's own name |
+| `attach_person` | 8 | 8 | a named human with no competing transaction role |
+| no lean (human call) | 18 | 12 | a person named on a buyer/seller role (could be either side), or an org name that is a strict subset of the other |
+
+**Auto-retire, applied live:** 17 of the 101 already had a reachable owner and were withdrawn
+(`retire_reason='owner_now_reachable'`); re-run retires 0. The lane badge counts **84 actionable rows
+across 53 owners**, not 101 — honest counts.
+
+**Before → after (Prompt 114):**
+
+| Metric | Before | After |
+|---|---|---|
+| `reachable_hero` (pre-114 definition, kept as the yardstick) | 92 / 690 (13.3%) | 92 (unchanged by design) |
+| **`reachable_hero_effective`** (what the hero reads now) | 92 / 690 (13.3%) | **139 / 690 (20.1%)** |
+| **hero-vs-graph gap** (reachable in data, invisible in UI) | **47** | **0** |
+| owner-contact review lane, actionable | 101 (no consumer) | **84** (Decision Center lane) |
+
+**Honest ceiling, stated rather than implied.** `reachable_hero_effective` 20.1% is the arithmetic
+maximum this prompt could reach, and it was reached: the 47-owner gap was a UI defect and it is now 0.
+Draining the remaining 84 lane rows will add at most ~16 owners (8 `same_party` + 8 `attach_person`),
+because the lane is dominated by rejects. **~478 owners (82%) remain solvable only by the paused
+SOS-direct path** — untouched here and still measured-but-blocked (gov `CLAUDE.md` §25: the residential
+proxy is built; the blocker is TLS/bot-wall fingerprinting, not egress).
+
+**Deliberately NOT done:** cadence enrolment for newly-reachable owners (prompt 112 Unit A2). No verdict
+seeds or stamps a cadence, so this lane cannot quietly create a pile of un-worked cadences.
+
+**Three defects the live full-lane run caught** (all now regression tests):
+1. `looksLikePersonName` accepts organization names carrying no legal suffix — **"U.S. Department of
+   Veterans Affairs"** and **"Global Net Lease"** both passed as people. One confirm from minting a
+   federal agency and a REIT as human beings. Fixed by requiring person shape = `looksLikePersonName`
+   AND no org marker.
+2. Acronyms were computed off `strictOwnerCore`, which **sorts** its tokens — so initials were read in
+   the wrong order and **every** acronym pair scored nothing. "UIRC" ↔ "UIRC, Urban Investment Research
+   Corporation" was silently missed.
+3. Pure token coverage called **"Government Properties Trust"** ↔ **"Easterly Government Properties,
+   Inc."** an abbreviation. They are two different REITs. Fixed by requiring equal token counts; a strict
+   subset now leans *nothing* and is labelled undecidable rather than nudging a wrong confirm.
+
+**Provenance (Unit 4).** No new `field_source_priority` rows were needed and none were added: both
+writers are human verdicts in a review lane, which `20260903120000` already registered as
+`manual_resolution` @1 for `entities.email`/`phone`. So this work **cannot** add a 36th unranked row.
+The standing drift is unchanged at **35 rows across 5 tables**, all *capture-metadata* fields rather than
+curated values — `dia.sales_transactions` (20: `data_source`, `notes`, `updated_at`, `property_id`,
+`recorded_date`, `rent_source`, `sale_notes_raw`/`_extracted`, `listing_sale_id`,
+`exclude_from_market_metrics`, `cap_rate_confidence`, `cap_rate_noi_source_table`/`_id`),
+`gov.sales_transactions` (4), `gov.properties` (3: `government_type`, `noi_source`, `noi_as_of_date`),
+`dia.loans` (2), `deal_provenance` (1) — sources `costar_sidebar` / `om_extraction` / `rca_sidebar` /
+`ops_asset_metadata_loan` / `salesforce`. Registering those ladders belongs with whoever owns the sidebar
+and OM writers; it is listed here so it stops being invisible.
+
+**Reversal:** runbook in the `20260904120000` migration header — `batch_tag='ocpv_<YYYYMMDD>'`, ledger
+`lcc_owner_contact_attach_log` carries `old_value` per filled field and the created edge id. A minted
+person entity is never hard-deleted; the reversal drops the edge.
+
 ### BREAK-2 — cadence is a producer with no consumer (severity: HIGH, doctrine violation)
 Of **1,905** `touchpoint_cadence` rows: **1,728 (91%) never touched**, **1,803** overdue < 90 days (a bulk
 stamp that went stale), 68 overdue > 1 yr (oldest due **2021-09-06**), only **23** due in the future, only

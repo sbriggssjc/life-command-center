@@ -143,9 +143,21 @@ is stamping a scheduled date into the completed-touch column. Low volume, but it
 SELECT * FROM public.v_lcc_owner_reachability;
 -- assets | assets_with_owner | owner_entities | via_org | via_unified_contact
 -- via_linked_person | reachable_hero | reachable_graph
+-- via_linked_person_selectable | reachable_hero_effective | hero_gap   <- Prompt 114
 --
--- reachable_hero  = what the owner panel hero actually reads. QUOTE THIS ONE.
--- reachable_graph = additionally counts a linked person carrying contact detail.
+-- reachable_hero            = the PRE-Prompt-114 hero definition. Kept unchanged
+--                             on purpose: it is the before/after yardstick, and
+--                             redefining it would erase the comparison.
+-- reachable_hero_effective  = what the hero reads AFTER the Prompt 114 fold-in
+--                             (org routes PLUS a linked person that survives the
+--                             reachable-via guards). QUOTE THIS ONE from now on.
+-- hero_gap                  = the difference: owners the data could reach and the
+--                             UI could not. This was the pure UI defect.
+-- reachable_graph           = any linked person INCLUDING brokers, so it
+--                             OVERSTATES what the panel can show. Do not quote it.
+
+-- the actionable owner-contact review lane (already-reachable owners excluded)
+SELECT count(*) FROM public.v_lcc_owner_contact_attach_review_open;
 
 -- the value-ranked population any owner-contact feeder is measured against
 SELECT count(*) FROM public.v_lcc_owner_unreachable_worklist;
@@ -194,8 +206,9 @@ Recorded so the next run can be compared, not just admired.
 | Metric | 2026-08-15 | Why it matters | Owner of the fix |
 |---|---|---|---|
 | assets with a resolved owner | 35.9% | gates the whole hand-off | owner feeders (P0.2 own-deal buyer, P0.3 county deed) |
-| owners the hero can reach (`reachable_hero`) | 8.1% → **13.3%** (2026-08-15) | **the binding constraint** on the redesigned flow | BREAK-1: `owner-contact-propagate-tick` shipped (+36); the rest needs the review lane drained + the c360 fold-in |
-| hero-vs-graph gap (reachable but invisible) | **54 owners** | a defect, not a data gap — `buildContact360` never folds a linked person's contact detail into `subject` | open |
+| owners the hero can reach (`reachable_hero_effective`) | 8.1% → 13.3% → **20.1%** (2026-08-15, Prompt 114) | **the binding constraint** on the redesigned flow | BREAK-1: `owner-contact-propagate-tick` (+36) then the Prompt 114 c360 fold-in (+47) |
+| hero-vs-graph gap (reachable but invisible) | 54 → **0** | a defect, not a data gap — `buildContact360` never walked `entity_relationships`, so every correct person+edge write was invisible | **CLOSED** (Prompt 114 Unit 2: `subject.reachable_via`) |
+| owner-contact review lane — actionable | **84** (of 101 proposed; 17 auto-retired) | Prompt 111 produced these and shipped no consumer | **CLOSED** (Prompt 114 Unit 3: Decision Center lane `owner_contact_attach_review`) |
 | cadence rows ever touched | **9%** | a strip that always says "overdue" trains you to ignore it | consumption layer — auto-retire + reality-driven advance |
 | cadence rows with a rep | 0.4% | ROE line on the owner card is blank | upstream producer stamp (documented; backfill is a dead end) |
 

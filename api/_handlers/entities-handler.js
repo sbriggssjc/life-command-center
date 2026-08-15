@@ -34,6 +34,7 @@ import { enrichReviewQueueContext } from '../_shared/provenance-row-context.js';
 import { computeRoe, mergeTimeline } from '../_shared/roe.js';
 import { sf15, toSf18 } from '../_shared/sf-id.js';
 import { loadOrCreateStaticMap, loadOrCreateNearbyNationalTenants } from '../_shared/location-trade-area.js';
+import { buildReachableVia } from '../_shared/owner-reachable-via.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -3283,6 +3284,73 @@ async function buildContactConnectivity(entityId, propertiesRes, dealsRes) {
 }
 
 /**
+ * Prompt 114 Unit 2 — resolve "we can reach this owner THROUGH a linked person".
+ *
+ * The defect this closes: `buildContact360` built `subject.email` from
+ * `entities.email` or a `unified_contacts` row whose entity_id IS this entity,
+ * and never walked `entity_relationships`. So an owner with a linked person
+ * carrying an email still rendered "Find a contact" — 47 owners, measured live
+ * (v_lcc_owner_reachability: reachable_graph 139 vs reachable_hero 92). Every
+ * correct person+edge write was invisible to the operator.
+ *
+ * Walks BOTH edge directions (producers disagree on orientation: the
+ * contact-attach helpers write owner→person, other paths write person→org) and
+ * hands the candidates to the PURE resolver, which owns the selection rule.
+ *
+ * Best-effort: any failure returns null and the panel degrades to its previous
+ * behaviour rather than 500-ing.
+ */
+async function fetchReachableVia(entityId, workspaceId) {
+  try {
+    const relRes = await opsQuery('GET',
+      `entity_relationships?or=(from_entity_id.eq.${entityId},to_entity_id.eq.${entityId})` +
+      `&select=id,from_entity_id,to_entity_id,relationship_type,metadata,updated_at&limit=200`);
+    const rels = (relRes.ok && Array.isArray(relRes.data)) ? relRes.data : [];
+    if (!rels.length) return null;
+
+    const otherIds = new Set();
+    for (const r of rels) {
+      const other = String(r.from_entity_id) === String(entityId) ? r.to_entity_id : r.from_entity_id;
+      if (other && String(other) !== String(entityId)) otherIds.add(String(other));
+    }
+    if (!otherIds.size) return null;
+
+    const inIds = Array.from(otherIds).map((v) => encodeURIComponent(v)).join(',');
+    const peopleRes = await opsQuery('GET',
+      `entities?id=in.(${inIds})&workspace_id=eq.${workspaceId}&entity_type=eq.person` +
+      `&select=id,name,email,phone,updated_at&limit=200`);
+    const people = (peopleRes.ok && Array.isArray(peopleRes.data)) ? peopleRes.data : [];
+    if (!people.length) return null;
+    const byId = new Map(people.map((p) => [String(p.id), p]));
+
+    const candidates = [];
+    for (const r of rels) {
+      const otherId = String(r.from_entity_id) === String(entityId)
+        ? String(r.to_entity_id) : String(r.from_entity_id);
+      const p = byId.get(otherId);
+      if (!p) continue;
+      const meta = (r.metadata && typeof r.metadata === 'object') ? r.metadata : {};
+      candidates.push({
+        person_id: p.id,
+        name: p.name,
+        email: p.email,
+        phone: p.phone,
+        // The edge's declared role wins; the relationship_type is the fallback
+        // ("associated_with" ranks last but is still selectable).
+        role: meta.role || r.relationship_type || null,
+        is_primary: meta.is_primary === true || meta.primary === true,
+        verified_at: meta.verified_at || r.updated_at || p.updated_at || null,
+        source: meta.via || meta.source || null,
+        relationship_id: r.id,
+      });
+    }
+    return buildReachableVia(candidates);
+  } catch (_e) {
+    return null;
+  }
+}
+
+/**
  * Compose the full Contact 360 payload for an entity. Returns null when the
  * entity is missing / not in this workspace. Every sub-fetch is best-effort so a
  * missing dia connection / stale table degrades to an empty block, never a 500.
@@ -3472,6 +3540,16 @@ async function buildContact360(entityId, workspaceId) {
     ? await buildBrokerDealIntel(entity, entityId).catch(() => null)
     : null;
 
+  // Prompt 114 Unit 2: for a non-person subject (an owner LLC / org), resolve
+  // whether a LINKED PERSON makes it reachable. Deliberately a SEPARATE field —
+  // it is NOT merged into `subject.email`, because that field means "this org's
+  // own contact detail" and a person's address is a different claim. Blurring
+  // them would tell the operator the org has an address it does not, and would
+  // re-commit the person/org conflation `sf-account-link.js` guards against.
+  const reachableVia = entity.entity_type === 'person'
+    ? null
+    : await fetchReachableVia(entityId, workspaceId);
+
   return {
     subject: {
       entity_id: entityId,
@@ -3481,6 +3559,7 @@ async function buildContact360(entityId, workspaceId) {
       email: subjectEmail,
       sf_contact_ids: sfIds,
       role: roleInfo.role,
+      reachable_via: reachableVia,
     },
     role: roleInfo.role,
     role_flags: roleInfo,
