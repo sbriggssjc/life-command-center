@@ -36,6 +36,37 @@ reached through the bridge ingest receiver. This doc feeds that path.
   this pattern to another workspace, add `body` to that bridge's `Message`
   allowlist first.
 
+- **⚠ The SECOND blocker that was fixed (Prompt 115) — the handler split, not the
+  payload.** With the allowlist open, a real 25-message Sent-Items sweep landed
+  the FULL body in `enrichment_jobs.payload` (verified live: `contentType='html'`,
+  content 5,700–248,516 chars) and `email_bodies` still came out
+  `body_format = body_text = body_html = NULL` on every row. The payload was fine;
+  `handleOutlookMessageExtract` dropped it. Two failure modes, both now closed:
+  1. **`p.body` does not always arrive as an object.** Grounded from the stored
+     payloads: the first sweep sent the Graph object
+     `{contentType:'html', content:'<html>…'}`, and a later `setProperty`/compose
+     variant of the same 25 messages sent `body` as a **serialized JSON string**
+     (`'{"content":"<html>…","contentType":"html"}'`). The old split
+     `p.body?.contentType === 'html' ? p.body.content : null` yields `undefined`
+     on the string shape → **both** columns NULL while 90–180 KB of content is
+     discarded. `normalizeGraphBody` now parses the string shape, lowercases /
+     trims `contentType`, accepts the `text/html` + `text/plain` spellings, and
+     **sniffs** HTML from the content itself when `contentType` is missing —
+     non-empty content always lands in a column.
+  2. **The bodyless forward sweep ERASED filled bodies.** The 5-minute
+     recurrence sends no `body` key at all, and the handler wrote explicit
+     `body_*: null` into a `resolution=merge-duplicates` upsert — so it
+     overwrote whatever a body-bearing sweep had stored. That is why the
+     object-shaped sweep at 18:41 read as "stored nothing": the string-shaped
+     re-sweep of the same 25 messages 13 minutes later nulled the row. The body
+     columns are now **omitted** from the row when there is no content — a fresh
+     row still lands NULL (column default, no fabrication), an existing body is
+     never clobbered.
+  Also: the upsert result was previously discarded, so a rejected write looked
+  exactly like a stored body. It is now checked, logged, and reported as
+  `enrichment_jobs.result->>'body_persist_error'`, and the call gets a 20s
+  timeout (the 8s `opsQuery` default is thin for a 250 KB write).
+
 ### The bridge name footgun
 
 The **bridge key is `outlook.messages`** (the `connector_bridges.bridge_key`). The
@@ -222,3 +253,19 @@ order by received_at desc limit 5;
 
 Mirror docs: `OUTLOOK_SENT_SWEEP_FLOW.md` (deal-to-do sweep),
 `OUTLOOK_CATEGORY_TAGGING_FLOW.md` (tagging path).
+
+---
+
+## STATUS
+
+| Date | Event |
+|---|---|
+| 2026-08-15 | **Prompt 114** — `body` added to the `outlook.messages` / `Message` allowlist (migration `20260905120000`). Bodies start reaching `enrichment_jobs.payload`; `email_bodies` bodies still 0 of 23,169. |
+| 2026-08-15 | **Prompt 115** — root-caused to the HANDLER, not the payload (see the two bullets in the grounded contract above): the `contentType` exact-equality split dropped the serialized-JSON-string body shape, and the bodyless forward sweep wrote NULLs over filled rows. Handler fixed (`normalizeGraphBody` + body columns omitted when there is no content + the upsert result is checked). |
+| 2026-08-15 | **Backfill applied live** (migration `20260907120000_lcc_p115_email_body_backfill.sql`, LCC Opps) — re-drove the 25 already-swept payloads straight from `enrichment_jobs` rather than asking for a re-sweep. **Bodies with >255 chars: 0 → 24** (all `body_format='html'`, 5,700–248,516 chars, full `<html>…</html>` intact). 24 not 25 because one swept message has no tracked party, so the privacy gate correctly never created an `email_bodies` row for it. Fill-blanks, idempotent (a re-run writes 0), reversible via `lcc_p115_email_body_backfill_backup`. |
+
+**Still to come:** the handler fix ships on the next Railway redeploy of merged
+`main` (the backfill above is data-layer and already live). After that redeploy,
+re-run the backward sweep to fill the rest of the 23,169-row corpus — the count
+in the Verification query should climb well past 24. Structural regression cover:
+`test/outlook-body-persist.test.mjs`.
