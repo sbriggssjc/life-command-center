@@ -442,13 +442,71 @@ reversible; runbooks are in the migration header.
   signal or becomes reachable, with `next_touch_due = now()` so it surfaces as actionable rather than
   instantly "overdue". **Not yet on a cron** — schedule it alongside the other daily sweeps.
 
-### BREAK-3 — owner resolution coverage (severity: MEDIUM, known, improving)
-35.9% of assets carry a reconciled owner — real progress against the 2026-07-31 audit (102 of 4,837 ≈ 2%),
-but 2,490 assets still fall back to "Unresolved" in the header. The feeders specified as P0.2 (own-deal buyer
-→ owner evidence) and P0.3 (county deed) in `property-tab-ux-review.md` are still the highest-leverage
-remaining work.
+### BREAK-3 — owner resolution coverage (severity: MEDIUM, **35.9% → 49.2%**, Prompt 113)
 
-**Re-measure:** the SQL for every number above is in `panel-redesign-verification.md` §3.2.
+**1,396 → 1,910 of 3,886 assets (35.9% → 49.2%)**; owner entities **690 → 1,118**. Batch tag
+`p113_dom_owner_20260815`, reversible. Against the 2026-07-31 audit baseline (102 of 4,837 ≈ 2%) the
+reconciliation engine is clearly working; what was missing was a feeder, and the brief's hunch was right —
+**"the likely gap is promotion, not capture."** No external data was acquired.
+
+**What shipped — P0.3, by ID, not by name.** The domain DBs already held the owner
+(`dia|gov properties.true_owner_id`), and LCC already mirrored the property; the missing link was the owner's
+IDENTITY. `v_property_owner_facts_portfolio` on both domains now exposes
+`recorded_owner_id / true_owner_id / true_owner_effective_id (one merge hop) / true_owner_is_operator`,
+`lcc_property_owner_facts` mirrors them, and `lcc_ingest_domain_owner_evidence(dry_run default true)` resolves
+the candidate through `external_identities(source_system, 'true_owner', <id>)` and writes
+`lcc_property_owner_evidence` at source `domain_true_owner`, weight **5.0** — above `rel_purchase` (4.0, ONE
+historical transaction) and below `manual` (8.0). Name matching is absent from the path by design (the
+`Realty Income Corporation` → `""` footgun in CLAUDE.md).
+
+**The operator trap was bigger than the win, and it held.** dia files the OPERATOR in the owner slot at scale
+(7,926 of 11,783 dia properties). Of the candidates, **815 assets were operator-blocked** — DaVita Inc. (348),
+Fresenius Medical Care (334), DaVita Kidney Care (67) — versus 809 eligible. The guard reads the SAME flag the
+P0.1 display guard reads (`dia.true_owners.is_operator_not_owner`), not a second name-based definition.
+
+| candidate status | assets |
+|---|---|
+| eligible → evidence written | **809** (→ **514 resolved**, 295 evidence-only) |
+| operator_blocked (would have stamped the tenant) | 815 |
+| no_owner_entity (domain owner has no LCC entity) | 48 |
+| name_blocked (placeholder / federal tenant / brokerage) | 20 |
+| ambiguous → `lcc_domain_owner_ambiguous` | 2 |
+
+**Reachability did NOT move with it, as predicted.** `reachable_hero_effective` **139 → 228** owners, but as a
+share of owners **20.1% → 20.4%** — essentially flat. Resolving an owner does not make them reachable; that
+is Prompt 111/114's leg. The reachable-but-invisible residue (`reachable_graph − reachable_hero_effective`)
+stays **0**. (Note: the `hero_gap` COLUMN on `v_lcc_owner_reachability` computes
+`reachable_hero_effective − reachable_hero`, i.e. the Prompt-114 before/after delta — now 128, and it grows
+as owners are added. It is not a defect count; don't read it as one.)
+
+**P0.2 (own-deal buyer) was measured and SKIPPED — data-thin, below the brief's own 50-asset floor.** Only
+**70** assets carry a closed-won `bd_opportunity` at all, **40** of those were unresolved, and just **17** had
+a buyer party edge. After P0.3 the residue is **34 unresolved / 15 with a buyer edge**.
+
+**The canonical test case does not resolve, and the reason is worth recording.** Fresenius – Woodland Hills
+(dia property 35724, entity `d118b3a1…`) is a **four-link break**, none of which is a missing owner feeder:
+1. its domain `true_owner` is **"Fresenius Medical Care"**, flagged operator → P0.3 correctly refuses it;
+2. dia `sales_transactions` sale 14832 ($15.73M, 2026-07-24) has **`buyer_name` NULL**;
+3. the closed-won SF deal *does* exist (`Fresenius - Woodland Hills - CA`, opp `006Vs00000MvNT3IAN`) but is
+   anchored to a **DUPLICATE asset entity** (`Fresenius Woodland Hills`, `a0feab2e…`) — not the
+   domain-linked one;
+4. that deal entity carries **zero** `entity_relationships` — no buyer party to read.
+
+So **P0.2 as specified could not have fixed it either**; the buyer lives only in the 11 linked
+`property_documents` (om/dd/lease). The real blockers are an **asset-entity merge** (SF-name-derived duplicate
+vs domain-linked asset) and **deal-party edges from the deal spine**, then document extraction. Recorded here
+rather than guessed at.
+
+**Known, sized, NOT built: the resolver scores an ownership CHAIN as competing claims.** 876 unresolved assets
+already had evidence and failed the 0.55 gate — `lcc_reconcile_property_owner` sums weights with a decay
+floored at 0.25, so a building sold three times yields three near-equal candidates (confidence 0.33–0.50). A
+strict-latest-purchase supersession tier would resolve **465** of them (439 strictly-latest + 26
+single-candidate) and correctly abstain on the 360 that tie. That is a change to the shared CONSUMER, not a
+feeder, so it is sized and reported rather than bundled into a feeder migration. **This is the next-highest
+lever on BREAK-3.**
+
+**Re-measure:** the SQL for every number above is in `panel-redesign-verification.md` §3.2; the feeder's own
+dry-run surface is `SELECT status, count(DISTINCT entity_id) FROM v_lcc_domain_owner_candidates GROUP BY 1`.
 
 ## 5. Doc trail (all linked from CLAUDE.md "Pointers to canonical docs")
 - `property-owner-subsystem.md` + `property-owner-source-authority-and-doctrine.md`

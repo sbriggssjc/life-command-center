@@ -161,7 +161,18 @@ SELECT count(*) FROM public.v_lcc_owner_contact_attach_review_open;
 
 -- the value-ranked population any owner-contact feeder is measured against
 SELECT count(*) FROM public.v_lcc_owner_unreachable_worklist;
+
+-- Prompt 113: the owner-FEEDER dry-run surface (leg 1). Re-runnable, read-only.
+-- Note `operator_blocked` is not a failure -- it is the count of assets whose
+-- domain "owner" is the TENANT, which the feeder must refuse to promote.
+SELECT status, count(DISTINCT entity_id) FROM public.v_lcc_domain_owner_candidates
+ GROUP BY 1 ORDER BY 2 DESC;
 ```
+
+> **⚠️ `hero_gap` is not a defect count.** The column computes
+> `reachable_hero_effective − reachable_hero`, i.e. the Prompt-114 before/after delta, so it *grows* as
+> owners are added (54 → 128 after Prompt 113 resolved 514 more assets). The metric this table called
+> "reachable but invisible" is `reachable_graph − reachable_hero_effective`, which is still **0**.
 
 The original inline SQL is kept below for reference / to re-derive the view:
 
@@ -205,7 +216,7 @@ Recorded so the next run can be compared, not just admired.
 
 | Metric | 2026-08-15 | Why it matters | Owner of the fix |
 |---|---|---|---|
-| assets with a resolved owner | 35.9% | gates the whole hand-off | owner feeders (P0.2 own-deal buyer, P0.3 county deed) |
+| assets with a resolved owner | 35.9% → **49.2%** (2026-08-15, Prompt 113) | gates the whole hand-off | **P0.3 SHIPPED** — `lcc_ingest_domain_owner_evidence` (domain `true_owner` → evidence, ID-joined, operator-guarded): 1,396 → **1,910** of 3,886; owner entities 690 → **1,118**. P0.2 measured at ≤40 assets and **skipped**. Next lever is the resolver's chain-vs-competing-claims scoring (876 assets stuck, 465 recoverable), not another feeder |
 | owners the hero can reach (`reachable_hero_effective`) | 8.1% → 13.3% → **20.1%** (2026-08-15, Prompt 114) | **the binding constraint** on the redesigned flow | BREAK-1: `owner-contact-propagate-tick` (+36) then the Prompt 114 c360 fold-in (+47) |
 | hero-vs-graph gap (reachable but invisible) | 54 → **0** | a defect, not a data gap — `buildContact360` never walked `entity_relationships`, so every correct person+edge write was invisible | **CLOSED** (Prompt 114 Unit 2: `subject.reachable_via`) |
 | owner-contact review lane — actionable | **84** (of 101 proposed; 17 auto-retired) | Prompt 111 produced these and shipped no consumer | **CLOSED** (Prompt 114 Unit 3: Decision Center lane `owner_contact_attach_review`) |
