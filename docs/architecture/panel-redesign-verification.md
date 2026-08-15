@@ -74,9 +74,22 @@ The UI now expresses that chain cleanly. Here is how much of it the data can act
 | 1 · asset entities (dia+gov) | the property panel | **3,886** | — |
 | 1 · assets with a resolved owner | Current Owner card + `Work this owner →` | **1,396** | **35.9%** |
 | 2 · distinct owner entities reachable from an asset | the owner panel's population | **690** | — |
-| 3 · owners reachable **via the org record** (email or phone) | owner hero skips "Find a contact" | **50** | 7.2% |
-| 3 · owners reachable **via a linked person** | same | **60** | 8.7% |
-| 3 · **owners reachable by any route** | | **104** | **15.1%** |
+| 3 · owners reachable **via the org record** (email or phone) | owner hero skips "Find a contact" | **50** → **86** | 7.2% → **12.5%** |
+| 3 · owners reachable **via a linked person** | *nothing — see the correction below* | **60** | 8.7% |
+| 3 · **owners the hero can actually reach** | hero skips "Find a contact" | **56** → **92** | 8.1% → **13.3%** |
+| 3 · owners reachable by any graph route | (wider than the hero) | **110** → **139** | 15.9% → 20.1% |
+
+> **Correction (Prompt 111, 2026-08-15).** The original "104 reachable by any route" **overstated what
+> the operator sees.** `buildContact360` builds `subject.email` from `entities.email` or a
+> `unified_contacts` row whose `entity_id` IS the owner — it never walks `entity_relationships` to a
+> linked person — and `_nextActionForContact` gates on that. So the 60 "via a linked person" owners
+> still get **"Find a contact"**. The hero-true figure was **56 (8.1%)**. Both numbers are now columns
+> on `v_lcc_owner_reachability` (`reachable_hero` / `reachable_graph`); quote `reachable_hero` for
+> operator experience. The ~54-owner gap is a live defect: reachable in the graph, unreachable in the UI.
+>
+> The arrows above are the BREAK-1 unlock (batch `ocp_20260815`): 36 owners filled from owner-bound,
+> name-matched dia/gov contacts we already held. Findings + the honest ceiling:
+> [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §4b BREAK-1 findings.
 | 4 · owners on a touchpoint cadence | the read-only prospecting strip | **134** | 19.4% |
 | 4 · owners whose next touch is **overdue** | hero → "log the overdue touch" | **134** | **100% of those on cadence** |
 
@@ -112,6 +125,23 @@ is stamping a scheduled date into the completed-touch column. Low volume, but it
 "last touch" on the owner card.
 
 ### 3.2 Re-runnable SQL
+
+**Legs 1–3 are now a view** (Prompt 111) — the loose SQL below was retyped on every re-measure and the
+"reachable" definition drifted from what the UI reads. One statement, both definitions:
+
+```sql
+SELECT * FROM public.v_lcc_owner_reachability;
+-- assets | assets_with_owner | owner_entities | via_org | via_unified_contact
+-- via_linked_person | reachable_hero | reachable_graph
+--
+-- reachable_hero  = what the owner panel hero actually reads. QUOTE THIS ONE.
+-- reachable_graph = additionally counts a linked person carrying contact detail.
+
+-- the value-ranked population any owner-contact feeder is measured against
+SELECT count(*) FROM public.v_lcc_owner_unreachable_worklist;
+```
+
+The original inline SQL is kept below for reference / to re-derive the view:
 
 ```sql
 -- Leg 1–2: asset → resolved owner
@@ -154,7 +184,8 @@ Recorded so the next run can be compared, not just admired.
 | Metric | 2026-08-15 | Why it matters | Owner of the fix |
 |---|---|---|---|
 | assets with a resolved owner | 35.9% | gates the whole hand-off | owner feeders (P0.2 own-deal buyer, P0.3 county deed) |
-| owners reachable by any route | **15.1%** | **the binding constraint** on the redesigned flow | contact-acquisition chain (currently paused / CI-blocked) |
+| owners the hero can reach (`reachable_hero`) | 8.1% → **13.3%** (2026-08-15) | **the binding constraint** on the redesigned flow | BREAK-1: `owner-contact-propagate-tick` shipped (+36); the rest needs the review lane drained + the c360 fold-in |
+| hero-vs-graph gap (reachable but invisible) | **54 owners** | a defect, not a data gap — `buildContact360` never folds a linked person's contact detail into `subject` | open |
 | cadence rows ever touched | **9%** | a strip that always says "overdue" trains you to ignore it | consumption layer — auto-retire + reality-driven advance |
 | cadence rows with a rep | 0.4% | ROE line on the owner card is blank | upstream producer stamp (documented; backfill is a dead end) |
 

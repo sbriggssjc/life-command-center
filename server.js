@@ -325,6 +325,11 @@ app.all('/api/contact-acquisition-engine-tick', (req, res) => { req.query._route
 app.all('/api/sf-contact-resolve-tick', (req, res) => { req.query._route = 'sf-contact-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/sf-link-reconcile-tick', (req, res) => { req.query._route = 'sf-link-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'owner-contact-enrich-tick'; operationsHandler(req, res); });
+// BREAK-1 (Prompt 111) — owner-contact PROPAGATION tick. Distinct from the
+// enrich tick above: that drains owner_contact_pivot; this walks the panel's own
+// asset → lcc_property_owner graph and fill-blanks the owner entity from an
+// owner-bound dia/gov contacts row. GET = dry-run (default), POST = apply.
+app.all('/api/owner-contact-propagate-tick', (req, res) => { req.query._route = 'owner-contact-propagate-tick'; operationsHandler(req, res); });
 app.all('/api/owner-reconcile-tick', (req, res) => { req.query._route = 'owner-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-reconcile-engine-tick', (req, res) => { req.query._route = 'owner-reconcile-engine-tick'; operationsHandler(req, res); });
 app.all('/api/institution-contact-tick', (req, res) => { req.query._route = 'institution-contact-tick'; operationsHandler(req, res); });
