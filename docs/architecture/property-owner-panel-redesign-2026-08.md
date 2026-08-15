@@ -69,6 +69,24 @@ hard-coded `right:520px` in three places was the reason widening the primary was
 (`#/<slug>?d=<token>`), the `_detailStack` zoom model, and the overlay/z-index model untouched.
 Free-float is spec'd as the follow-on once this layout is validated in use.
 
+> ### ⚠️ SUPERSEDED IN PART — companion must be a FULL panel, not a summary (Scott, 2026-08-15)
+> The 2026-08-15 manual run rejected the placeholder model:
+> *"I think we want to see the full detail side-by-side instead of a placeholder that you can swap over to
+> the primary."*
+>
+> So **behaviour 2 (swap) is demoted** — it exists in this spec because the companion is a placeholder you
+> must promote to read. With two full panels it becomes a convenience, not the route to detail.
+>
+> The blocking work is **not** layout: `openUnifiedDetail` / `openEntityDetail` and every tab renderer write
+> into the singleton ids `#detailBody` / `#detailTabs` / `#detailHeader`. A real side-by-side needs those
+> renderers parameterised by a mount root. Also unresolved: the dual-dock width floor (720 + 620 + chrome
+> > the current 1180), the tab bar at 620px, and the fact that `?d=` encodes exactly one detail subject.
+> Full consequence list + the manual-run results: [`panel-redesign-verification.md`](panel-redesign-verification.md) §4.2.
+>
+> Also from that run: **the resize, swap and dock interactions did not work in the browser** (UI-1/2/3) and
+> an **uncaught JS error** fires on the Ownership tab (UI-0). The IA changes — width, one-row tabs, 4-chip
+> rail, CRM removal, collapsed ladder, `Work this owner →` — all verified working.
+
 ### 1.3 Tab bar
 
 At 720px the seven property tabs fit **one row** — the `flex-wrap` from QA#10 (2026-06-03) stays as

@@ -1901,6 +1901,12 @@ var _DC_FEDERATED = new Set([
   // comms_owner_attribution_apply_log). Keep in sync with admin.js
   // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
   'comms_owner_attribution_review',
+  // Prompt 114 (BREAK-1 Unit 3): the owner-contact review lane Prompt 111 filled
+  // and left with no consumer surface. Source = v_lcc_owner_contact_attach_review_open;
+  // three shape-aware verdicts (attach_person / same_party / reject), reversible
+  // via lcc_owner_contact_attach_log. Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'owner_contact_attach_review',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1981,6 +1987,10 @@ async function renderReviewConsolePage() {
     if (w91Lane && typeof w91Lane.count === 'number') dc['contact_acquisition_review'] = w91Lane.count;
     const w96Lane = res.data.lanes.find(function (l) { return l.key === 'comms_owner_attribution_review'; });
     if (w96Lane && typeof w96Lane.count === 'number') dc['comms_owner_attribution_review'] = w96Lane.count;
+    // Prompt 114: read the ACTIONABLE depth from /api/review-counts (the view
+    // already drops owners that became reachable), not the raw proposal table.
+    const ocpLane = res.data.lanes.find(function (l) { return l.key === 'owner_contact_attach_review'; });
+    if (ocpLane && typeof ocpLane.count === 'number') dc['owner_contact_attach_review'] = ocpLane.count;
   }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
@@ -2018,6 +2028,7 @@ async function renderReviewConsolePage() {
     { dt: 'reachability_harvest_review', label: 'Contact reachability — internal harvest', open: "renderFederatedLane('reachability_harvest_review')" },
     { dt: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach', open: "renderFederatedLane('contact_acquisition_review')" },
     { dt: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution', open: "renderFederatedLane('comms_owner_attribution_review')" },
+    { dt: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject', open: "renderFederatedLane('owner_contact_attach_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'property_twin', label: 'Property address twins (dia)', open: "renderFederatedLane('property_twin')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },

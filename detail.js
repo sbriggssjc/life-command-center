@@ -13811,6 +13811,11 @@ function _nextActionForContact(c) {
   const emailRel = c.emailRel || null;
   const email = (c.subject && c.subject.email) || e.email || (emailRel && emailRel.email) || null;
   const phone = e.phone || null;
+  // Prompt 114 Unit 2 — the org has no contact detail of its own, but a LINKED
+  // PERSON does. Kept as a separate signal, never folded into `email`: the org
+  // does not have that address, we reach the org THROUGH that human. The hero
+  // says exactly that rather than implying the org is directly contactable.
+  const via = (c.subject && c.subject.reachable_via) || null;
   const sfIds = (c.subject && Array.isArray(c.subject.sf_contact_ids)) ? c.subject.sf_contact_ids : [];
   const sfLinked = sfIds.length > 0 || (Array.isArray(e.external_identities) && e.external_identities.some(function(x){
     return String(x.source_system || '').toLowerCase() === 'salesforce' && String(x.source_type || '').toLowerCase() === 'contact';
@@ -13823,7 +13828,20 @@ function _nextActionForContact(c) {
   // 1. Suppressed — hard stop, no outreach CTA.
   if (suppressed) return { key: 'suppressed', tone: 'stop', label: 'Do not contact',
     sub: 'Marked ' + cad.unsubscribe_status + ' — suppressed from outreach.', cta: null, onclick: null };
-  // 2. No contact method on file — acquire one first.
+  // 2. No contact method on file — acquire one first, UNLESS a linked person
+  //    already carries one. Before Prompt 114 this branch fired even then, so 47
+  //    owners that the graph could reach read "Find a contact" and the operator
+  //    was sent to acquire a contact we already held.
+  if (!email && !phone && via) {
+    const whoRole = via.role ? ' (' + String(via.role).replace(/_/g, ' ') + ')' : '';
+    const chan = via.email || via.phone || '';
+    return { key: 'reach_via_person', tone: 'go',
+      label: 'Reach via ' + via.name + whoRole,
+      sub: 'No contact on file for this entity itself — ' + via.name + ' is linked to it and is reachable'
+        + (chan ? ' at ' + chan : '')
+        + (via.via_count > 1 ? ' (' + (via.via_count - 1) + ' other linked contact' + (via.via_count === 2 ? '' : 's') + ').' : '.'),
+      cta: 'Open contact →', onclick: '_entityOpenReachableVia()' };
+  }
   if (!email && !phone) return { key: 'find_contact', tone: 'warn', label: 'Find a contact',
     sub: 'No email or phone on file — acquire a reachable contact before outreach.', cta: 'Select contact →', onclick: '_entityAcquireContact()' };
   // 3. Not linked in Salesforce — connect to log activity + mark ROE territory.
@@ -14693,10 +14711,22 @@ function _renderCompanionEntity(c360, entityId) {
   // Contact methods.
   const email = (c360 && c360.subject && c360.subject.email) || e.email || null;
   const phone = e.phone || null;
-  if (email || phone) {
+  // Prompt 114 Unit 2 — the dock reuses the same resolver output as the full
+  // panel, so the two surfaces cannot disagree about whether this owner is
+  // reachable. Rendered under its own label because it is a DIFFERENT claim
+  // from the entity's own contact detail.
+  const dockVia = (c360 && c360.subject && c360.subject.reachable_via) || null;
+  if (email || phone || dockVia) {
     html += '<div class="detail-section"><div class="detail-section-title">Contact</div>';
     if (email) html += '<div style="font-size:12px"><a href="mailto:' + esc(email) + '" style="color:var(--accent)">' + esc(email) + '</a></div>';
     if (phone) html += '<div style="font-size:12px;margin-top:3px"><a href="tel:' + esc(phone) + '" style="color:var(--accent)">' + esc(phone) + '</a></div>';
+    if (dockVia) {
+      html += '<div style="font-size:11px;color:var(--text3);margin-top:' + (email || phone ? '6' : '0') + 'px">Reach via '
+        + '<b style="color:var(--text2)">' + esc(dockVia.name) + '</b>'
+        + (dockVia.role ? ' <span style="opacity:.75">(' + esc(String(dockVia.role).replace(/_/g, ' ')) + ')</span>' : '') + '</div>';
+      if (dockVia.email) html += '<div style="font-size:12px;margin-top:2px"><a href="mailto:' + esc(dockVia.email) + '" style="color:var(--accent)">' + esc(dockVia.email) + '</a></div>';
+      else if (dockVia.phone) html += '<div style="font-size:12px;margin-top:2px"><a href="tel:' + esc(dockVia.phone) + '" style="color:var(--accent)">' + esc(dockVia.phone) + '</a></div>';
+    }
     html += '</div>';
   }
   html += '<div class="detail-section"><button class="dns-cta" onclick="_companionEnlargeEntity()">Open full detail ↗</button>'
@@ -15947,6 +15977,18 @@ function _entityBandLabel(reason) {
   if (map[r]) return map[r];
   return r ? r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'BD priority';
 }
+
+// ── Prompt 114 Unit 2 — open the linked person the owner is reachable THROUGH ──
+// The hero's "Reach via <name>" CTA. Zooms to that person's own entity panel
+// (openEntityDetail pushes a detail-stack level, so in-panel Back returns here),
+// which is where their email/phone, cadence and SF linkage actually live.
+function _entityOpenReachableVia() {
+  const c = _entityDetailCache;
+  const via = c && c.subject && c.subject.reachable_via;
+  if (!via || !via.person_id) return;
+  if (typeof openEntityDetail === 'function') openEntityDetail(via.person_id);
+}
+window._entityOpenReachableVia = _entityOpenReachableVia;
 
 // ── Entity contact acquire (reuses the P-CONTACT / buyer picker endpoints) ──
 async function _entityAcquireContact() {
