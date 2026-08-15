@@ -10,6 +10,36 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Session 2026-08-15 — Prompt 114 (voice corpus): the bridge fills `email_bodies`, and its allowlist was stripping `body`
+
+**Root-caused why the voice corpus (`email_bodies`) has 23,169 rows ALL with empty body**, and fixed it.
+
+- **`email_bodies` is written by EXACTLY ONE path** — the bridge handler
+  `handleOutlookMessageExtract` (`api/_shared/bridge-handlers-outlook.js`), reached via
+  `POST /api/bridges?_route=ingest&_source=outlook&bridge=outlook.messages` → worker drain. It reads the
+  FULL Graph body (`p.body.content`) and upserts on `(workspace_id, internet_message_id)` with
+  merge-duplicates (so a backward re-sweep fills existing empty-body rows). **This SUPERSEDES the Prompt-110
+  assumption that `/api/intake?_route=outlook-message`/`outlook-sent` feed the corpus — they don't**
+  (`intake.js` writes body to `staged_intake_items`/`activity_events`, never `email_bodies`; confirmed —
+  `intake.js` is not among the `email_bodies` writers).
+- **THE BLOCKER (found via the "verify contract live first" house rule):** the ingest receiver strips any
+  field not on the bridge's per-object allowlist (`applyAllowlist`) BEFORE enqueue. The `outlook.messages`
+  `Message` allowlist did **not** include `body`, so the full body was dropped at ingest and every row landed
+  `body_text = body_html = NULL`. A sweep would have "succeeded" green while filling nothing.
+- **Fixed:** migration `supabase/migrations/20260905120000_lcc_p114_outlook_body_allowlist.sql` adds `body`
+  to that allowlist (**applied live** to LCC Opps — config is live-immediately, no deploy). Reversible.
+- **Scope decision surfaced (Part 1):** the handler's tracked-contact gate means the corpus = deal/BD-relevant
+  mail (recommended Option A, no writer change). Tracked-vs-untracked split can't be measured from LCC data
+  (untracked traffic is never stored) — needs a mailbox-side count. `email_bodies.is_sent` is a weak heuristic
+  (from-not-tracked), NOT "Scott sent it"; the reader correctly gates on `from ∈ SCOTT_FROM`.
+- **Readers confirmed (Part 3):** `draft-assist.js::loadCorpus` + `voice-corpus-clean.js::pickBestBody` already
+  read `body_text`/`body_html` (fallback → `body_preview`), gated on presence not length — no reader change.
+- **Deliverable:** `docs/setup/OUTLOOK_BODY_SWEEP_FLOW.md` — the backward+forward Graph→bridge sweep,
+  copy-paste (full-`body` `$select`, `X-LCC-Source-User-Id` = Scott's `lcc_user_id`, `records[]` array,
+  high-water-mark backward bound, worker drain). The Graph sweep is Scott's PA build; the live
+  POST-through-endpoint + worker-drain is the operator step (the ingest blocker that would have made it
+  silently no-op is now removed).
+
 ## Session 2026-08-15 (Cowork) — property + owner panel redesign (IA + panel shell)
 
 Spec: **`docs/architecture/property-owner-panel-redesign-2026-08.md`** (normative target state; supersedes the

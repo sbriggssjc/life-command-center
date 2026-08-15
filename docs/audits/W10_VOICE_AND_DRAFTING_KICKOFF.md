@@ -118,3 +118,14 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
   falling back to the preview cleanly. The actual unlock is a forward-only PA "Get email (V3)" flow change
   (Scott's step, documented) + a scoped historical backfill (future unit, recommended: PA loop keyed on
   `internet_message_id`). Doc: `docs/audits/W10_FULL_BODY_INGESTION_2026-08-14.md`. Prompt → `done/`.
+- 2026-08-15: **⚠ Corpus-fill correction (Prompt 114) — how `email_bodies` ACTUALLY fills.** Grounded live:
+  the voice corpus `email_bodies` is written by **exactly one path** — the bridge handler
+  `handleOutlookMessageExtract`, reached via `POST /api/bridges?_route=ingest&_source=outlook&bridge=outlook.messages`
+  → worker drain (reads the full Graph `body`, merge-duplicates upsert). **`intake.js` does NOT write
+  `email_bodies`** (it writes `staged_intake_items`/`activity_events`), so Prompt 110's Part-A flow change
+  (posting `body_html` to `/api/intake?_route=outlook-message`/`outlook-sent`) fed the wrong table — the
+  corpus never filled from it (all 23,169 rows still empty-body). Root blocker: the `outlook.messages`
+  ingest **allowlist stripped `body`** before enqueue; fixed by
+  `supabase/migrations/20260905120000_lcc_p114_outlook_body_allowlist.sql` (applied live). The correct
+  fill path is documented in **`docs/setup/OUTLOOK_BODY_SWEEP_FLOW.md`** (backward+forward Graph→bridge
+  sweep). Corpus scope = tracked-contact mail (Option A, no writer change). Prompt → `done/`.
