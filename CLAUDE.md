@@ -373,6 +373,32 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
 - **Salesforce is minimum-necessary and NOT cleaned by LCC** — LCC is the source of truth and reconciles around
   SF's dups/errors (never writes back to clean SF). An SF Account binds as an **org edge** on the person, not an
   identity on the person (`api/_shared/sf-account-link.js`).
+- **A bare Salesforce IDENTITY is NOT a BD signal — never re-add it as a cadence gate arm (P112).**
+  R63's `bdSignalFromFacts` listed `hasSalesforceIdentity` as sufficient. Measured 2026-08-15 that one
+  arm carried **930 of 1,113** prospecting cadences (897 never touched, and **0** prospecting cadences
+  had an open `bd_opportunity`) — it admitted the whole SF contact book, which is precisely the
+  Consumption-Layer failure ("SF is minimum-necessary and NOT cleaned by LCC" — a capture surface, not a
+  relationship). The gate now requires an open opp / real SF activity / value ≥ `CADENCE_SIGNAL_MIN_VALUE`;
+  an SF identity is corroboration only. This propagates to `growGateFromFacts` **by design** (the grow
+  path keeps its own `outreachEventCount >= N` arm). Auto-seed callers go through
+  `cadenceSeedDecision()`, which also applies the **reachability precondition** — never seed a cadence for
+  a party with no contact method and no named person, because it can never advance and only ages into
+  "overdue". Retire/resume sweeps: `lcc_p112_retire_unworkable_cadences` /
+  `lcc_p112_resume_workable_cadences` (reversible pause, never delete). Note the reachability gate fails
+  **OPEN** (a read error must not suppress a reachable owner) while the BD-signal gate fails **CLOSED**.
+- **`touchpoint_cadence.owner_user_id` and `lcc_entity_owner_override.owner_user_id` FK to DIFFERENT user
+  tables.** `touchpoint_cadence.owner_user_id → users(id)`; `lcc_entity_owner_override.owner_user_id →
+  lcc_users(lcc_user_id)`, and **none** of the `lcc_users` ids exist in `public.users`. Stamping the
+  override id straight onto a cadence FK-violates on every row. The bridge is **email**, resolved once by
+  `v_lcc_entity_point_person` / `lcc_cadence_point_person(uuid)` — always go through that, never
+  re-derive the mapping in JS.
+- **A cadence `last_touch_at` can never be in the future.** `lcc_activity_event_advance_cadence` used to
+  pass `p_logged_at := NEW.occurred_at` unguarded, so a calendar meeting **scheduled ahead** landed as a
+  COMPLETED touch and pushed `next_touch_due` a further quarter out. Guarded in three layers: the trigger
+  skips future-dated events, `lcc_advance_onboarding_cadence` clamps to `now()`, and
+  `trg_lcc_cadence_future_touch_guard` (BEFORE INSERT/UPDATE on `touchpoint_cadence`) clamps + opens a
+  deduped `cadence_future_last_touch` health alert. **A real `CHECK` is impossible** — `now()` is not
+  immutable, so Postgres rejects it in a CHECK constraint; the trigger form is the only option.
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
 - **"Owner is reachable" has THREE definitions — quote `reachable_hero_effective`.** The owner-panel hero

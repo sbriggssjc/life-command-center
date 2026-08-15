@@ -16,8 +16,17 @@ import {
 } from '../api/_shared/cadence-engine.js';
 
 describe('growGateFromFacts (pure classifier)', () => {
-  it('grows on a Salesforce identity (a real CRM contact) even with no value', () => {
-    assert.equal(growGateFromFacts({ hasSalesforceIdentity: true, outreachEventCount: 0 }), true);
+  // P112: a bare SF identity with ZERO outreach no longer grows a cadence.
+  // Growing on "an SF contact record exists" is exactly the noise BREAK-2
+  // chased out (930 of 1,113 prospecting cadences rode that arm, 897 never
+  // touched). The grow path keeps its own, correct arm: >= N REAL outreach
+  // events, i.e. a relationship Scott actually worked.
+  it('does NOT grow on a bare Salesforce identity with 0 outreach (P112)', () => {
+    assert.equal(growGateFromFacts({ hasSalesforceIdentity: true, outreachEventCount: 0 }), false);
+  });
+
+  it('grows on an SF identity once real outreach exists', () => {
+    assert.equal(growGateFromFacts({ hasSalesforceIdentity: true, outreachEventCount: 2 }), true);
   });
 
   it('grows on >= 2 real outreach events (a genuinely-worked relationship), no value', () => {
@@ -59,12 +68,12 @@ function fakeQuery(fixtures) {
 }
 
 describe('entityQualifiesForCadenceGrowth (deps-injected gatherer)', () => {
-  it('qualifies an SF-linked person even with 0 outreach events + no value', async () => {
+  it('does NOT qualify an SF-linked person with 0 outreach + no value (P112)', async () => {
     const query = fakeQuery({
-      'external_identities': [{ entity_id: 'e1' }],   // has SF identity
+      'external_identities': [{ entity_id: 'e1' }],   // has SF identity, nothing else
       'entities?id=eq.': [{ name: 'Jane Broker', entity_type: 'person' }],
     });
-    assert.equal(await entityQualifiesForCadenceGrowth('e1', { query }), true);
+    assert.equal(await entityQualifiesForCadenceGrowth('e1', { query }), false);
   });
 
   it('qualifies a >=2-event entity with no SF and no value', async () => {

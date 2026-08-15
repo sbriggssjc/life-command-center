@@ -16,6 +16,10 @@
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { recordTemplateSend } from './templates.js';
 import { isJunkEntityName, isImplausiblePersonName } from './entity-link.js';
+// Single source of truth for broker-ish roles that are never the owner's own
+// reachable contact — imported, never restated (CLAUDE.md: adding a role to one
+// list and not the other makes measurement and UI drift apart).
+import { isNonReachableRole } from './owner-reachable-via.js';
 
 // ============================================================================
 // OPEN-TRACKING FLAG (R24 Unit 3)
@@ -56,10 +60,15 @@ export function cadenceSignalFloor() {
 
 /**
  * Pure classifier — does this entity carry a real BD signal?
- * Real = any of: a Salesforce CRM identity, connected/portfolio value at or
- * above the floor, an open BD opportunity, real SF activity, or a buy-side
- * cadence (a P-BUYER relationship is real by construction). Pure + synchronous
- * so the decision logic is unit-testable without the DB.
+ * Real = any of: connected/portfolio value at or above the floor, an open BD
+ * opportunity, real SF activity, or a buy-side cadence (a P-BUYER relationship
+ * is real by construction). Pure + synchronous so the decision logic is
+ * unit-testable without the DB.
+ *
+ * P112: a bare Salesforce IDENTITY is explicitly NOT sufficient — see the
+ * BARE-SF-IDENTITY block below. `hasSalesforceIdentity` is still gathered and
+ * accepted in `facts` (it is useful corroboration and keeps the fact available
+ * to callers/diagnostics) but it no longer decides.
  *
  * @param {object} facts - { hasSalesforceIdentity, hasOpenOpportunity,
  *   hasSalesforceActivity, connectedValue, portfolioValue, phase, floor }
@@ -68,12 +77,170 @@ export function cadenceSignalFloor() {
 export function bdSignalFromFacts(facts = {}) {
   const floor = Number.isFinite(facts.floor) ? facts.floor : CADENCE_SIGNAL_MIN_VALUE_DEFAULT;
   if (facts.phase === 'buy_side') return true;
-  if (facts.hasSalesforceIdentity) return true;
   if (facts.hasOpenOpportunity) return true;
   if (facts.hasSalesforceActivity) return true;
   if (Number(facts.connectedValue) >= floor) return true;
   if (Number(facts.portfolioValue) >= floor) return true;
+  // NOTE (P112): `hasSalesforceIdentity` is deliberately NOT an arm here. See
+  // the BARE-SF-IDENTITY block below for the grounded reason.
   return false;
+}
+
+// ============================================================================
+// P112 / BREAK-2 — a bare Salesforce identity is NOT a BD signal
+// ============================================================================
+//
+// R63 listed `hasSalesforceIdentity` as a sufficient arm. Measured live on
+// 2026-08-15 that single arm was carrying the entire noise population:
+//
+//   prospecting cadences ................................ 1,113
+//   ... passing the gate ONLY on a bare SF identity ......   930  (84%)
+//       (no open opp, no SF activity, no value >= floor)
+//   ... of those, never touched .........................   897
+//   prospecting cadences with an OPEN opportunity .......     0
+//
+// Salesforce is documented as "minimum-necessary and NOT cleaned by LCC" — it
+// is a capture surface full of dups and stale rows. "An SF contact record
+// exists" therefore says nothing about whether there is a relationship worth
+// working; it admitted essentially the whole SF contact book into a prospecting
+// cadence that no one would ever work. That is the Consumption-Layer failure
+// the doctrine names: a producer emitting one item per captured row.
+//
+// An SF identity remains useful CORROBORATION (it is why `hasSalesforceActivity`
+// can be observed at all), but the signal must come from something that implies
+// a real relationship: an open opportunity, real logged SF/Outlook outreach, or
+// portfolio/connected value at or above the floor.
+//
+// Reversal: re-add `if (facts.hasSalesforceIdentity) return true;` above and
+// re-run the retire sweep's REVERSE runbook (migration 20260815120000).
+// ============================================================================
+
+// ============================================================================
+// P112 — REACHABILITY PRECONDITION (the value gate the producer never had)
+// ============================================================================
+//
+// A touchpoint cadence for a party we cannot contact can never advance: it is
+// guaranteed to age into "overdue" and pollute every count that reads the
+// table. The correct predecessor step for such an owner is "find the
+// decision-maker" (the contact-acquisition lane), not "send touch #1 into the
+// void".
+//
+// The predicate MIRRORS `v_lcc_owner_reachability.reachable_hero_effective` —
+// the definition CLAUDE.md instructs us to quote, and the one the owner-panel
+// hero actually renders. Three routes:
+//   1. the org's own email/phone           (entities.email / entities.phone)
+//   2. a unified_contacts email on the org
+//   3. a linked PERSON carrying email/phone whose role survives the guards
+//
+// Broker-ish roles are EXCLUDED, not ranked last, exactly as in
+// `owner-reachable-via.js::NON_REACHABLE_ROLES` and the SQL
+// `via_person_selectable` arm. CLAUDE.md warns that adding a role to one and
+// not the other makes measurement and UI drift apart — so this module imports
+// the single JS list rather than restating it.
+// ============================================================================
+
+/**
+ * Pure classifier — can this entity be contacted at all today?
+ *
+ * @param {object} facts - { orgEmail, orgPhone, unifiedContactEmail,
+ *   linkedPersons: [{ email, phone, role }] }
+ * @returns {boolean}
+ */
+export function cadenceReachableFromFacts(facts = {}) {
+  const nonEmpty = (v) => !!String(v ?? '').trim();
+  if (nonEmpty(facts.orgEmail) || nonEmpty(facts.orgPhone)) return true;
+  if (nonEmpty(facts.unifiedContactEmail)) return true;
+  const persons = Array.isArray(facts.linkedPersons) ? facts.linkedPersons : [];
+  return persons.some((p) => (
+    p && (nonEmpty(p.email) || nonEmpty(p.phone)) && !isNonReachableRole(p.role)
+  ));
+}
+
+/**
+ * Gather the reachability facts for an entity and classify. deps.query
+ * injectable for tests (defaults to opsQuery).
+ *
+ * Fails OPEN (treated as reachable) on a gather error — the opposite of
+ * `entityHasBdSignal`, and deliberately so. The BD-signal gate fails CLOSED
+ * because seeding on a hiccup creates noise; this gate fails OPEN because a
+ * transient read error must never silently suppress a cadence for a genuinely
+ * reachable owner. A false "unreachable" is the more expensive mistake: it
+ * drops real work on the floor, and nothing downstream would show it was lost.
+ *
+ * @param {string} entityId
+ * @param {object} [opts] - { query }
+ * @returns {Promise<boolean>}
+ */
+export async function entityIsCadenceReachable(entityId, opts = {}) {
+  if (!entityId) return false;
+  const query = opts.query || opsQuery;
+  const v = pgFilterVal(entityId);
+  try {
+    const [org, uc, rel] = await Promise.all([
+      query('GET', `entities?id=eq.${v}&select=email,phone&limit=1`),
+      query('GET', `unified_contacts?entity_id=eq.${v}&email=not.is.null&select=email&limit=1`),
+      query('GET', `entity_relationships?or=(from_entity_id.eq.${v},to_entity_id.eq.${v})`
+        + '&select=from_entity_id,to_entity_id,metadata,'
+        + 'from_entity:entities!entity_relationships_from_entity_id_fkey(id,entity_type,email,phone),'
+        + 'to_entity:entities!entity_relationships_to_entity_id_fkey(id,entity_type,email,phone)'
+        + '&limit=200'),
+    ]);
+    // A non-ok read is an ERROR, not evidence of absence. Treating a failed
+    // relationship fetch as "no linked people" would fail CLOSED and silently
+    // suppress a reachable owner — the exact failure this gate must not cause.
+    if (!org.ok || !uc.ok || !rel.ok) return true;
+    const orgRow = (org.data?.[0]) ? org.data[0] : {};
+    const ucRow  = (uc.data?.[0]) ? uc.data[0] : {};
+    const linkedPersons = [];
+    if (Array.isArray(rel.data)) {
+      for (const r of rel.data) {
+        // The counterparty of the edge is whichever side is NOT this entity.
+        const other = String(r.from_entity_id) === String(entityId) ? r.to_entity : r.from_entity;
+        if (!other || other.entity_type !== 'person') continue;
+        linkedPersons.push({
+          email: other.email, phone: other.phone,
+          role: (r.metadata && r.metadata.role) || '',
+        });
+      }
+    }
+    return cadenceReachableFromFacts({
+      orgEmail: orgRow.email, orgPhone: orgRow.phone,
+      unifiedContactEmail: ucRow.email, linkedPersons,
+    });
+  } catch (_e) {
+    return true; // fail OPEN — never silently suppress a reachable owner
+  }
+}
+
+/**
+ * The single AUTO-SEED decision: should a prospecting cadence be created for
+ * this entity right now? Combines the (tightened) BD-signal value gate with the
+ * reachability precondition so both auto-seed producers — the CoStar sidebar
+ * capture path and `contact-attach::maybeSeedValuableCadence` — agree.
+ *
+ * Deliberately NOT applied to:
+ *   - `initiate_cadence` (a deliberate operator action; the human overrides)
+ *   - the sf-activity GROW path (real outreach already happened, which both
+ *     proves reachability and is itself the signal)
+ *
+ * @returns {Promise<{seed:boolean, reason:string}>}
+ *   reason: 'ok' | 'below_value_floor' | 'unreachable_no_contact_method'
+ */
+export async function cadenceSeedDecision(entityId, opts = {}) {
+  if (!entityId) return { seed: false, reason: 'no_entity' };
+  const signalCheck = opts.signalCheck || entityHasBdSignal;
+  const reachCheck  = opts.reachCheck  || entityIsCadenceReachable;
+  if (!(await signalCheck(entityId, opts))) {
+    return { seed: false, reason: 'below_value_floor' };
+  }
+  if (!(await reachCheck(entityId, opts))) {
+    // The correct predecessor work item is "find the decision-maker". Owner
+    // entities are already carried, value-ranked, by
+    // `v_lcc_owner_unreachable_worklist` (prompt 111/114) — so this is a
+    // SUPPRESSION, not a dropped item, and needs no duplicate producer here.
+    return { seed: false, reason: 'unreachable_no_contact_method' };
+  }
+  return { seed: true, reason: 'ok' };
 }
 
 /**
@@ -340,6 +507,55 @@ const COOLDOWNS = {
  * @param {object} [propertyInfo] - { property_id, property_address, domain }
  * @returns {object} The cadence record (existing or newly created)
  */
+// ============================================================================
+// P112 UNIT D — stamp the REP (point person) upstream, at create + advance
+// ============================================================================
+//
+// Only 7 of 1,905 rows carried an `owner_user_id`, so the owner panel's ROE
+// line ("Kelly owns this relationship") rendered blank almost everywhere. A
+// BACKFILL is the documented dead end (property-tab-ux-review: 0 rows carry a
+// bd_opportunity_id, and re-verified live 0 prospecting cadences have an open
+// opportunity) — so the fix is upstream: stamp at cadence CREATE and fill at
+// ADVANCE, from the POINT-PERSON source of truth.
+//
+// ⚠️ FOOTGUN — the two columns FK to DIFFERENT user tables:
+//     lcc_entity_owner_override.owner_user_id -> lcc_users(lcc_user_id)
+//     touchpoint_cadence.owner_user_id        -> users(id)
+// and ALL 131 override ids are absent from public.users, so stamping the
+// override id directly FK-violates on every row. The bridge is EMAIL, resolved
+// once in SQL by `v_lcc_entity_point_person` / `lcc_cadence_point_person()`.
+// Always go through the RPC — never re-derive the mapping in JS.
+//
+// CLAUDE.md: the POINT PERSON (`lcc_entity_owner_override.owner_user_id`) is
+// the lcc_user who works the deal. It is NOT the property owner — that lives in
+// `lcc_property_owner`. Never feed owner entities through this resolver.
+//
+// Best-effort: a resolve failure NEVER blocks the cadence write.
+// ============================================================================
+
+/**
+ * Resolve the point person for an entity as a `public.users.id`, or null.
+ * @param {string} entityId
+ * @param {object} [opts] - { query }
+ * @returns {Promise<string|null>}
+ */
+export async function resolveCadencePointPerson(entityId, opts = {}) {
+  if (!entityId) return null;
+  const query = opts.query || opsQuery;
+  try {
+    const r = await query('POST', 'rpc/lcc_cadence_point_person', { p_entity_id: entityId });
+    if (!r || !r.ok) return null;
+    // PostgREST returns a scalar for a scalar-returning function.
+    const v = Array.isArray(r.data) ? r.data[0] : r.data;
+    if (v == null) return null;
+    if (typeof v === 'string') return v || null;
+    if (typeof v === 'object') return v.lcc_cadence_point_person || null;
+    return null;
+  } catch (_e) {
+    return null;
+  }
+}
+
 export async function getCadenceState(ids, propertyInfo = {}) {
   // Build filter to find existing record
   const filters = [];
@@ -374,6 +590,16 @@ export async function getCadenceState(ids, propertyInfo = {}) {
     next_touch_template: 'T-001',
     next_touch_due: new Date().toISOString()
   };
+
+  // P112 Unit D — stamp the rep at CREATE so the ROE line is populated from the
+  // start. Best-effort: never block the cadence write on the lookup.
+  if (ids.entity_id) {
+    const repId = await resolveCadencePointPerson(ids.entity_id);
+    if (repId) {
+      newRecord.owner_user_id = repId;
+      newRecord.metadata = { ...(newRecord.metadata || {}), rep_source: 'entity_owner_override' };
+    }
+  }
 
   const insertResult = await opsQuery('POST', 'touchpoint_cadence', newRecord);
 
@@ -660,6 +886,18 @@ export async function advanceCadence(cadenceId, touchData) {
     last_touch_type: touchData.type || 'email',
     last_touch_template: touchData.template_id || null
   };
+
+  // P112 Unit D — FILL-BLANKS the rep at advance time. A cadence created before
+  // the create-time stamp existed (or before the entity had a point person)
+  // picks one up the first time it is actually worked. Never overwrites an
+  // assigned rep, and never blocks the advance.
+  if (!cadence.owner_user_id && cadence.entity_id) {
+    const repId = await resolveCadencePointPerson(cadence.entity_id);
+    if (repId) {
+      update.owner_user_id = repId;
+      update.metadata = { ...(cadence.metadata || {}), rep_source: 'entity_owner_override' };
+    }
+  }
 
   // Advance touch counter for prospecting phase
   if (cadence.phase === 'prospecting') {

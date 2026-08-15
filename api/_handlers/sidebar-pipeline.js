@@ -23,7 +23,7 @@ import { uploadArtifactToStorage } from '../_shared/artifact-storage.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
-import { getCadenceState, entityHasBdSignal } from '../_shared/cadence-engine.js';
+import { getCadenceState, cadenceSeedDecision } from '../_shared/cadence-engine.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 import { reconcileLatestEvidence } from '../_shared/rent-reconcile-hook.js';
@@ -2053,8 +2053,15 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
         //    inbox triage below; Scott promotes it to a real target (open an
         //    opp / SF-link / portfolio value), and a cadence then grows from the
         //    real outreach he logs (the sf-activity grow path).
+        //    P112 extends that gate twice: a bare Salesforce identity no longer
+        //    counts as the BD signal (it admitted the whole SF contact book —
+        //    930 of 1,113 prospecting cadences passed on that arm alone, 897 of
+        //    them never touched), and an entity with no contact method and no
+        //    named person is not seeded at all, because such a cadence can
+        //    never advance and only ages into "overdue".
         let cadenceRes = null;
-        if (await entityHasBdSignal(link.entityId)) {
+        const seedDecision = await cadenceSeedDecision(link.entityId);
+        if (seedDecision.seed) {
           // Initialize touchpoint_cadence at touch 0 (idempotent — an existing
           // row for this entity_id is returned unchanged).
           cadenceRes = await getCadenceState(
