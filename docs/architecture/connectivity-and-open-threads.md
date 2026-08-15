@@ -347,6 +347,101 @@ stamp that went stale), 68 overdue > 1 yr (oldest due **2021-09-06**), only **23
 - **Data defect:** 3 rows carry `last_touch_at` **in the future** (max `2026-10-15`). A completed touch
   cannot be in the future — a writer is stamping a scheduled date into the completed-touch column.
 
+#### BREAK-2 RESOLVED — Prompt 112 (2026-08-15)
+
+Migration `20260815120000_lcc_p112_cadence_overdue_signal.sql` (applied live to LCC Opps) + the JS producer
+gate. **Verdict on the headline question: the 1,728-row population was worth RETIRING, not consuming.**
+
+**Root cause (Unit B) — it was NOT a bulk stamp, and NOT a missing consumer.** Creation is a steady drip
+across ~90 days (largest single day 414 rows), so there was no one event to blame. The producer's value gate
+had a hole: R63's `bdSignalFromFacts` accepted a bare **Salesforce IDENTITY** as a BD signal. Measured live,
+that one arm carried the entire noise population:
+
+| measure | value |
+|---|---|
+| prospecting cadences | 1,113 |
+| …passing the gate ONLY on a bare SF identity | **930 (84%)** |
+| …of those, never touched | **897** |
+| prospecting cadences with an OPEN bd_opportunity | **0** |
+| prospecting cadences with portfolio/connected value ≥ $500k | 105 |
+
+Salesforce is documented as *"minimum-necessary and NOT cleaned by LCC"* — a capture surface, not a
+relationship signal. "An SF contact record exists" admitted essentially the whole SF contact book into a
+prospecting cadence nobody would ever work. **The five doctrine questions, answered honestly:**
+1. **Named consumer?** No. The only consumer was "a human eventually opens the owner panel" — which the
+   doctrine explicitly says is not a consumer. Now: the auto-retire/auto-resolve sweep pair below.
+2. **Value gate?** `CADENCE_SIGNAL_MIN_VALUE` ($500k) existed but was **bypassed** on this path, because the
+   bare-SF-identity arm short-circuited before value was ever consulted. Now applied.
+3. **Auto-retire predicate?** None existed. Now `lcc_p112_retire_unworkable_cadences`.
+4. **Actionable-only, ranked, capped surface?** No — every row rendered, all "overdue".
+5. **Advances from real activity?** Yes (the SF/Outlook grow path) — this one was already right.
+
+**⚠️ Two grounding corrections to the numbers above — do not rebuild on them.**
+- **The "94 unreachable owners on a cadence" does not reproduce.** Under
+  `reachable_hero_effective` — the definition CLAUDE.md says to quote — only **190 of 1,905** rows were
+  unreachable, and only **17** of the 1,113 prospecting rows. Scoped the way the sentence reads (owners of
+  dia/gov assets, on a cadence, unreachable) the live answer is **0**. The closest reproducible figure is
+  **109** — owners on a cadence with no *organisation-level* email/phone — i.e. the pre-114 `reachable_hero`
+  definition, which ignores `unified_contacts` and linked persons. Reachability was therefore a **real but
+  minor** contributor (9 rows swept), not the driver.
+- **Unit D's "assignment is simply not in the data" is only partly true.** 0 prospecting cadences carry an
+  open opportunity (confirmed dead end), but `lcc_entity_owner_override` holds **131** point-person rows and
+  **30** cadence rows resolve to one. Those were stamped.
+
+**⚠️ FOOTGUN caught before it shipped (Unit D):** the two rep columns FK to **different user tables** —
+`lcc_entity_owner_override.owner_user_id → lcc_users(lcc_user_id)` but
+`touchpoint_cadence.owner_user_id → users(id)` — and **all 131** override ids are absent from `public.users`.
+Stamping the override id directly would have FK-violated on every row. The bridge is **email**, resolved once
+in SQL by `v_lcc_entity_point_person` / `lcc_cadence_point_person()`. Never re-derive it in JS.
+
+**Unit C — the future `last_touch_at` (writer found and fixed at source).** All 3 rows were
+`last_touch_type='meeting'` in `steady_state`. `lcc_activity_event_advance_cadence` passed
+`p_logged_at := NEW.occurred_at` with no future guard, so a calendar meeting **scheduled ahead** was ingested
+as a **completed** touch — and `next_touch_due` was then computed from that future date, pushing it a further
+quarter out. The JS `advanceCadence` is NOT implicated (it always stamps `now()`). Live blast radius: **78**
+future-dated `meeting` activity_events across 4 entities, so it recurred on every calendar sync. Fixed in
+three layers: the trigger skips future-dated events (a scheduled event is not a completed touch); the advance
+function clamps `p_logged_at` to `now()`; and a BEFORE trigger on `touchpoint_cadence`
+(`trg_lcc_cadence_future_touch_guard`) clamps + opens a deduped `cadence_future_last_touch` health alert so no
+write path can silently persist one again. *(A real `CHECK` is impossible — `now()` is not immutable, so
+Postgres rejects it in a CHECK; hence the trigger form. All three layers are additive/clamping, so deploy
+ordering is satisfied without waiting on the JS redeploy.)* The 3 rows were corrected from **real data**
+(`last_touch_at` := the entity's most recent PAST touch; `next_touch_due` := its next SCHEDULED event), which
+also made them materially more useful — one went from *"last touched Oct 15, next due Jan 14"* to
+*"last touched Aug 14, next due Aug 17"*, which is the meeting actually on the calendar.
+
+**Before / after (§3.2 SQL re-run live, 2026-08-15).** The success metric is *fewer, all actionable* — not
+more rows. Nothing was deleted; `rows_total` is unchanged at 1,905 and every retire is a reversible pause.
+
+| metric | before | after |
+|---|---|---|
+| rows total (nothing deleted) | 1,905 | 1,905 |
+| **active surface** (`phase NOT IN (paused,unsubscribed)`) | **1,214** | **278** |
+| paused (reversible) | 691 | 1,627 |
+| active never-touched | ~1,034 (prospecting alone) | 103 |
+| active reachable | — | **269 / 278 (96.8%)** |
+| `last_touch_at` in the future | 3 | **0** |
+| rows carrying a rep | 7 | **37** |
+
+**The residual is honest work, not noise.** Of the 278 active rows: 97 of the 103 never-touched are there
+because portfolio/connected value is **≥ $500k** (genuinely valuable owners never worked); 152 of the overdue
+rows are relationships that were actually touched and are genuinely due; the 9 remaining unreachable rows are
+kept deliberately because 6 carry worked history and 3 carry real activity — **a worked row is never swept**.
+The badge now counts real work: overdue fell 1,802 → 253, and every one of those is value-gated and reachable.
+
+**Still open (surfaced, not fixed here):** 68 active rows remain overdue by more than a year with stale
+`next_touch_due` dates. They pass the value gate, so they are real targets whose due-date arithmetic never
+caught up — a re-baselining question for the cadence cockpit, not a producer defect.
+
+**Reversal / operations.** Every piece is dry-run-default, idempotent (a second retire run pauses 0), and
+reversible; runbooks are in the migration header.
+- Un-pause the sweep: `metadata->>'paused_by' = 'lcc_p112_retire_unworkable_cadences'`.
+- Un-stamp the rep: `metadata->>'rep_source' = 'entity_owner_override'`.
+- Un-correct Unit C: `_lcc_p112_future_touch_backup_20260815`.
+- **Auto-resolve:** `lcc_p112_resume_workable_cadences(false)` returns a paused row the moment it earns a
+  signal or becomes reachable, with `next_touch_due = now()` so it surfaces as actionable rather than
+  instantly "overdue". **Not yet on a cron** — schedule it alongside the other daily sweeps.
+
 ### BREAK-3 — owner resolution coverage (severity: MEDIUM, known, improving)
 35.9% of assets carry a reconciled owner — real progress against the 2026-07-31 audit (102 of 4,837 ≈ 2%),
 but 2,490 assets still fall back to "Unresolved" in the header. The feeders specified as P0.2 (own-deal buyer
