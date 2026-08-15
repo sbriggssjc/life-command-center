@@ -74,7 +74,49 @@ All in `test/panel-redesign.test.mjs`. **47/47 pass.**
 
 ## 3. Data claims — the flow measured against live data
 
-*Queried LCC Opps `xengecqvemvfknjvbvrq`, 2026-08-15. Read-only.*
+### 3.0 END-OF-DAY STATE after prompts 111 → 114 (re-measured live, 2026-08-15)
+
+All four shipped and merged (PRs #1750 / #1751 / #1753 / #1754). **This table supersedes the numbers
+below it**; the detail underneath is kept as the audit trail of how each leg moved.
+
+| Leg | Start of day | Now | Note |
+|---|---|---|---|
+| assets with a resolved owner | 1,396 (35.9%) | **1,910 (49.2%)** | P113 — promotion of owners we already held, not new capture |
+| distinct owner entities | 690 | **1,118** | |
+| `reachable_hero_effective` | 56 (8.1%) | **228 (20.4%)** | P111 (+36) then P114 (fold-in) |
+| reachable-in-data but invisible-in-UI | 47 | **0** ✅ | P114 closed it — was a pure UI defect |
+| cadence rows (total, nothing deleted) | 1,905 | **1,905** | |
+| cadence **active surface** | 1,214 | **278** | P112 — 1,627 reversibly paused |
+| cadence rows with a rep | 7 | **37** | P112 Unit D |
+| `last_touch_at` in the future | 3 | **0** ✅ | P112 Unit C, fixed in 3 layers |
+| **reachable owners with NO active cadence** | 65 | **89** | ⚠️ **112 Unit A2 was NOT built** — grew with the owner population |
+
+**Read this honestly.** Owner resolution moved a lot; **reachability barely moved as a share** (20.1% →
+20.4%) because every asset P113 resolved added owners to the denominator, ~87% of them unreachable. That is
+the denominator effect prompt 113 was told to pre-state, and it did. The constraint is unchanged:
+**~478 owners (82%) remain solvable only via the paused SOS-direct path.**
+
+### 3.0.1 Where my own numbers were wrong (three times)
+
+Recording these because the pattern matters more than the individual errors:
+
+| Metric I published | Reality | Why |
+|---|---|---|
+| "104 of 690 reachable" | **56** hero-true | counted a graph join `buildContact360` never walks (V-3) |
+| "94 owners on a cadence are unreachable" | **does not reproduce** — 17 of 1,113 prospecting rows under `reachable_hero_effective`; **0** scoped exactly as I wrote it; closest reproducible is 109 on the pre-114 definition | I scoped an ad-hoc query differently from the canonical predicate |
+| "the cadence rep backfill is a dead end" | **partly wrong** — `lcc_entity_owner_override` has 131 point-person rows; 30 cadences resolved → reps 7 → 37 | I inherited the July finding without re-testing it |
+
+**Rule adopted:** quote `v_lcc_owner_reachability.reachable_hero_effective` and the canonical predicates —
+never hand-roll a reachability or reachability-adjacent query. A number that isn't the one a surface reads
+is a different number.
+
+> ⚠️ `v_lcc_owner_reachability.hero_gap` is **not** a defect count. It is the Prompt-114 before/after delta
+> and therefore *grows* as owners are added (54 → 128). The real "reachable but invisible" metric is
+> `reachable_graph − reachable_hero_effective` = **0**. (Flagged by prompt 113.)
+
+---
+
+*Historical audit trail — queried LCC Opps `xengecqvemvfknjvbvrq`, 2026-08-15 morning. Read-only.*
 
 The redesign's whole thesis is a chain: **asset → resolved owner → reachable contact → cadence → touch.**
 The UI now expresses that chain cleanly. Here is how much of it the data can actually carry.

@@ -394,6 +394,94 @@ describe('§1.1 STRUCTURAL — panel widths are var-driven and the shell is cohe
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────
+describe('UI-1/2/3 — defects from the 2026-08-15 manual run', () => {
+  it('UI-2: every owner chip goes through ONE router', () => {
+    // Before: `.owner-link` CLICK docked-or-drawered, KEYDOWN always drawered,
+    // and entityLink had two more paths — so which surface opened depended on
+    // where the chip was rendered and how you activated it.
+    assert.match(detailSrc, /function _openOwnerChip\(/, '_openOwnerChip router missing');
+    const handlers = [...detailSrc.matchAll(/closest\('\.owner-link\[data-owner-ctx\]'\)[\s\S]{0,320}?\n\}\);/g)]
+      .map(m => m[0]);
+    assert.ok(handlers.length >= 2, 'expected both a click and a keydown owner-link handler');
+    for (const h of handlers) {
+      assert.match(h, /_openOwnerChip\(/, 'an owner-link handler still bypasses the shared router');
+    }
+  });
+
+  it('UI-2: docking requires a primary panel that is actually OPEN', () => {
+    // `_activePrimaryKind` is set on open but was never cleared, so a stale
+    // 'property' could dock a lone companion beside nothing.
+    for (const fn of ['_openEntitySmart', '_openEntityByNameSmart', '_openOwnerChip']) {
+      const src = sliceFn(detailSrc, fn);
+      assert.match(src, /_panelPrimaryOpen\(\)/,
+        `${fn} decides to dock without checking that a primary panel is open`);
+    }
+    assert.match(detailSrc, /function _panelPrimaryOpen\(/);
+  });
+
+  it('UI-2: closing the detail panel clears the primary-kind flag', () => {
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    const close = sliceFn(appSrc, 'closeDetail');
+    assert.match(close, /_setPrimaryKind\(null\)/, 'closeDetail must clear _activePrimaryKind');
+  });
+
+  it('UI-1: the resize strip is anchored to the panel\'s real rect, not the CSS var', () => {
+    assert.match(detailSrc, /function _panelAnchorResizer\(/);
+    const anchor = sliceFn(detailSrc, '_panelAnchorResizer');
+    assert.match(anchor, /getBoundingClientRect\(\)/,
+      'must measure the panel; a var-derived offset drifts when the rendered width differs');
+    const sync = sliceFn(detailSrc, '_panelSyncResizers');
+    assert.match(sync, /_panelAnchorResizer\(/, 'sync must re-anchor the strips');
+  });
+
+  it('UI-1: the resize strip is visually discoverable', () => {
+    // It was a fully transparent 8px zone — the handler worked, nobody could
+    // find it. The hairline and the grip must paint by default, not on hover.
+    const before = stylesSrc.match(/\.panel-resizer::before\s*\{([^}]*)\}/);
+    const after = stylesSrc.match(/\.panel-resizer::after\s*\{([^}]*)\}/);
+    assert.ok(before, '.panel-resizer::before rule missing');
+    assert.ok(after, '.panel-resizer::after grip missing');
+    assert.ok(!/background:\s*transparent/.test(before[1]),
+      'the hairline is still transparent by default — undiscoverable');
+  });
+
+  it('UI-3: swap explains itself instead of failing silently', () => {
+    const swap = sliceFn(detailSrc, '_panelSwap');
+    assert.match(swap, /Swap needs two panels/,
+      'pressing swap with one panel open must say why, not look broken');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('V-2 generalised — no inline onclick may hand-roll quote escaping', () => {
+  // The original V-2 fix touched ONE call site. The same broken idiom
+  // `esc(x).replace(/'/g, "\\'")` — a no-op, because esc() already produced
+  // &#39; — survived in `entityLink`, the app's main party-chip factory, so
+  // every O'Brien / D'Angelo chip emitted a SyntaxError handler.
+  const offenders = detailSrc.split('\n')
+    .map((l, i) => [i + 1, l])
+    .filter(([, l]) => /\.replace\(\/'\/g/.test(l) && /onclick=/.test(l));
+
+  it('detail.js has no remaining hand-rolled quote escaping inside an onclick', () => {
+    assert.deepEqual(offenders.map(([n]) => n), [],
+      'use _jsStrArg(); offending lines:\n' + offenders.map(([n, l]) => `  ${n}: ${l.trim().slice(0, 120)}`).join('\n'));
+  });
+
+  it('entityLink round-trips an apostrophe through every name-based branch', () => {
+    const entityLinkSrc = detailSrc.slice(
+      detailSrc.indexOf('window.entityLink = function'),
+      detailSrc.indexOf('window.entityLink = function') + 4000);
+    for (const branch of ['openContactDetailByName', '_openEntityByNameSmart', 'navToState']) {
+      const line = entityLinkSrc.split('\n').find(l => l.includes(branch + '('));
+      assert.ok(line, `branch ${branch} not found`);
+      assert.match(line, new RegExp(branch + '\\(\' \\+ _jsStrArg\\(text\\)|' + branch + '\\(\' \\+ _jsStrArg'),
+        `${branch} does not use _jsStrArg`);
+    }
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 describe('§3.1 owner panel — the cross-links point at tabs that exist', () => {
   it('the completeness-rail chip targets a live tab name', () => {
     // It pointed at "Portfolio", which is not in any role tab set, so

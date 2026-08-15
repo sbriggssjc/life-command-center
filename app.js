@@ -5968,6 +5968,10 @@ function closeDetail() {
   // Close the companion property dock (dual-panel) with the main panel — it is
   // anchored to the contact/owner that just closed.
   if (typeof closeCompanion === 'function') closeCompanion();
+  // UI-2: `_activePrimaryKind` was set on every open but never cleared, so after
+  // a close it still claimed 'property' and could dock a lone companion beside
+  // nothing. Clear it with the panel.
+  if (typeof _setPrimaryKind === 'function') _setPrimaryKind(null);
   if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
   const overlay = document.getElementById('detailOverlay');
   if (overlay) {

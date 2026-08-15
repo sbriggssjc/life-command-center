@@ -11230,11 +11230,16 @@ window.entityLink = function(text, type, id, db) {
     case 'property':
       if (!id) return esc(text);
       return '<span style="' + style + '" onclick="navToProperty(' + id + ',\'' + (db || 'dialysis') + '\')" title="View property details">' + esc(text) + '</span>';
+    // NOTE (2026-08-15): `esc(text).replace(/'/g, "\\'")` is a NO-OP — esc() has
+    // already turned ' into &#39;, which the HTML parser decodes back to a raw
+    // quote inside the onclick source, so every O'Brien / D'Angelo party chip
+    // in the app emitted a SyntaxError handler. Same defect as V-2 in
+    // panel-redesign-verification.md; `_jsStrArg` is the single safe encoder.
     case 'contact':
-      if (!id) return '<span style="' + style + '" onclick="openContactDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View contact">' + esc(text) + '</span>';
+      if (!id) return '<span style="' + style + '" onclick="openContactDetailByName(' + _jsStrArg(text) + ')" title="View contact">' + esc(text) + '</span>';
       return '<span style="' + style + '" onclick="openContactDetail(' + JSON.stringify(String(id)) + ')" title="View contact details">' + esc(text) + '</span>';
     case 'entity':
-      if (!id) return '<span style="' + style + '" onclick="_openEntityByNameSmart(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
+      if (!id) return '<span style="' + style + '" onclick="_openEntityByNameSmart(' + _jsStrArg(text) + ')" title="View entity">' + esc(text) + '</span>';
       return '<span style="' + style + '" onclick="_openEntitySmart(' + JSON.stringify(String(id)) + ')" title="View entity details">' + esc(text) + '</span>';
     case 'transaction':
       if (!id) return esc(text);
@@ -11254,9 +11259,9 @@ window.entityLink = function(text, type, id, db) {
     case 'buyer':
     case 'seller':
     case 'investor':
-      return '<span style="' + style + '" onclick="_openEntityByNameSmart(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="_openEntityByNameSmart(' + _jsStrArg(text) + ')" title="View entity">' + esc(text) + '</span>';
     case 'state':
-      return '<span style="' + style + '" onclick="navToState(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View state properties">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="navToState(' + _jsStrArg(text) + ')" title="View state properties">' + esc(text) + '</span>';
     default:
       return esc(text);
   }
@@ -14284,17 +14289,47 @@ function _panelInitResizers() {
 }
 
 // Resizers are only grabbable when their panel is actually open.
+//
+// UI-1 (manual run 2026-08-15: "the panel does not drag"). Two fixes here:
+//  1. The strip is positioned from the panel's ACTUAL bounding rect, not from
+//     the CSS var. If anything caps the rendered width (a narrow viewport, a
+//     more specific rule, a stale var) the var and the real edge diverge and the
+//     8px grab zone ends up floating in the middle of the panel — invisible and
+//     un-grabbable. Measuring the element cannot drift.
+//  2. It is drawn with a visible grip, because an 8px fully transparent strip is
+//     undiscoverable — you cannot drag an affordance you cannot see.
 function _panelSyncResizers() {
   if (typeof document === 'undefined') return;
-  const primaryOpen = !!(document.getElementById('detailPanel') && document.getElementById('detailPanel').style.display === 'block');
+  const panelEl = document.getElementById('detailPanel');
+  const primaryOpen = !!(panelEl && panelEl.style.display === 'block');
   const compEl = document.getElementById('companionPanel');
   const companionOpen = !!(compEl && compEl.classList.contains('open'));
   const rp = document.getElementById('panelResizerPrimary');
   const rc = document.getElementById('panelResizerCompanion');
-  if (rp) rp.classList.toggle('open', primaryOpen && _dualCapable());
-  if (rc) rc.classList.toggle('open', companionOpen && _dualCapable());
+  const dual = _dualCapable();
+
+  if (rp) {
+    const on = primaryOpen && dual;
+    rp.classList.toggle('open', on);
+    if (on && panelEl) _panelAnchorResizer(rp, panelEl);
+  }
+  if (rc) {
+    const on = companionOpen && dual;
+    rc.classList.toggle('open', on);
+    if (on && compEl) _panelAnchorResizer(rc, compEl);
+  }
 }
 window._panelSyncResizers = _panelSyncResizers;
+
+/** Pin a resize strip to the real left edge of its panel (see UI-1 above). */
+function _panelAnchorResizer(strip, panel) {
+  try {
+    const r = panel.getBoundingClientRect();
+    // `right` offset from the viewport's right edge, so it tracks the panel even
+    // if the rendered width differs from the CSS variable.
+    strip.style.right = Math.max(0, Math.round(window.innerWidth - r.left - 8)) + 'px';
+  } catch (_e) { /* leave the CSS fallback in place */ }
+}
 
 // ── Minimize tray ────────────────────────────────────────────────────────────
 // Any number of parked panels. Each entry is a re-open recipe, not a DOM
@@ -14427,7 +14462,14 @@ function _panelCompanionDescriptor() {
 function _panelSwap() {
   const prim = _panelPrimaryDescriptor();
   const comp = _panelCompanionDescriptor();
-  if (!prim || !comp) { if (typeof showToast === 'function') showToast('Open two panels to swap', 'info'); return; }
+  // UI-3: this returned a vague toast, so pressing ⇄ with one panel open read as
+  // "the button is broken" rather than "there is nothing to swap with".
+  if (!prim && !comp) { if (typeof showToast === 'function') showToast('Nothing to swap', 'info'); return; }
+  if (!comp) {
+    if (typeof showToast === 'function') showToast('Swap needs two panels — click an owner or property to open one beside this.', 'info');
+    return;
+  }
+  if (!prim) { if (typeof showToast === 'function') showToast('Swap needs a main panel open', 'info'); return; }
   closeCompanion();
   const openPrimary = function(d) {
     if (d.kind === 'entity') openEntityDetail(d.entityId);
@@ -14600,14 +14642,16 @@ function _setPrimaryKind(k) { _activePrimaryKind = k; try { window._activePrimar
 // companion (when there's room); otherwise the normal full-panel open.
 function _openEntitySmart(id) {
   if (!id) return;
-  if (_dualCapable() && _activePrimaryKind === 'property') { openCompanionEntity(String(id)); return; }
+  // UI-2: require a property panel to actually BE open, not just a stale
+  // `_activePrimaryKind` left over from a previous open.
+  if (_dualCapable() && _panelPrimaryOpen() && _activePrimaryKind === 'property') { openCompanionEntity(String(id)); return; }
   openEntityDetail(String(id));
 }
 window._openEntitySmart = _openEntitySmart;
 
 async function _openEntityByNameSmart(name) {
   if (!name) return;
-  if (_dualCapable() && _activePrimaryKind === 'property') {
+  if (_dualCapable() && _panelPrimaryOpen() && _activePrimaryKind === 'property') {
     try {
       const data = await _entityApiFetch('/api/entities?action=search&q=' + encodeURIComponent(name));
       const hit = (data && Array.isArray(data.entities) && data.entities[0]) || null;
@@ -16264,32 +16308,56 @@ document.addEventListener('click', function (e) {
   if (!el) return;
   e.preventDefault();
   e.stopPropagation();
-  try {
-    const raw = decodeURIComponent(el.getAttribute('data-owner-ctx') || '');
-    if (!raw) return;
-    // When a PROPERTY is primary and there's room, dock the owner BESIDE the
-    // property (companion) instead of replacing the property panel (Scott: keep
-    // both open). Falls back to the full owner drawer otherwise.
-    if (typeof _dualCapable === 'function' && _dualCapable() && _activePrimaryKind === 'property') {
-      let nm = null;
-      try { nm = (JSON.parse(raw) || {}).name || null; } catch (_e2) {}
-      if (nm && typeof _openEntityByNameSmart === 'function') { _openEntityByNameSmart(nm); return; }
-    }
-    openOwnerDrawer(raw);
-  } catch (err) {
-    console.warn('owner-link click: bad payload', err);
-  }
+  _openOwnerChip(el.getAttribute('data-owner-ctx'));
 });
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Enter' && e.key !== ' ') return;
   const el = e.target && e.target.closest && e.target.closest('.owner-link[data-owner-ctx]');
   if (!el) return;
   e.preventDefault();
-  try {
-    const raw = decodeURIComponent(el.getAttribute('data-owner-ctx') || '');
-    if (raw) openOwnerDrawer(raw);
-  } catch (err) { /* ignore */ }
+  _openOwnerChip(el.getAttribute('data-owner-ctx'));
 });
+
+/**
+ * UI-2 (manual run 2026-08-15: "Ownership panel does not open from this view but
+ * … was able to open it elsewhere").
+ *
+ * ONE router for every owner chip. Before this there were four divergent paths:
+ *   1. `.owner-link` CLICK   → dock, else `openOwnerDrawer`
+ *   2. `.owner-link` KEYDOWN → **always** `openOwnerDrawer` (never docked)
+ *   3. `entityLink(…,'entity',id)` → `_openEntitySmart`
+ *   4. `entityLink(…,'owner'|'buyer'|…)` → `_openEntityByNameSmart`
+ * …so which surface you got depended on where the chip was rendered and how you
+ * activated it. That is precisely the "sometimes it opens" behaviour reported.
+ *
+ * The dock decision also consulted `_activePrimaryKind`, which is SET but never
+ * CLEARED — so after closing the property panel it still read 'property' and
+ * could dock a lone companion beside nothing. `_panelPrimaryOpen()` closes that.
+ */
+function _openOwnerChip(rawAttr) {
+  let raw = '';
+  try { raw = decodeURIComponent(rawAttr || ''); } catch (_e) { raw = ''; }
+  if (!raw) return;
+  let ctx = null;
+  try { ctx = JSON.parse(raw); } catch (_e) { ctx = null; }
+  const id = ctx && (ctx.entity_id || ctx.owner_entity_id || ctx.id);
+  const nm = ctx && ctx.name;
+
+  // Dock beside the property only when a property panel is genuinely on screen
+  // and there is room for two.
+  const canDock = typeof _dualCapable === 'function' && _dualCapable()
+    && typeof _panelPrimaryOpen === 'function' && _panelPrimaryOpen()
+    && _activePrimaryKind === 'property';
+
+  if (canDock) {
+    if (id && typeof openCompanionEntity === 'function') { openCompanionEntity(String(id)); return; }
+    if (nm && typeof _openEntityByNameSmart === 'function') { _openEntityByNameSmart(nm); return; }
+  }
+  if (id && typeof openEntityDetail === 'function') { openEntityDetail(String(id)); return; }
+  // No resolved entity id — the owner drawer resolves by context/name.
+  try { openOwnerDrawer(raw); } catch (err) { console.warn('owner-chip: bad payload', err); }
+}
+window._openOwnerChip = _openOwnerChip;
 
 /**
  * Build an owner context object from a v_ownership_chain row.
