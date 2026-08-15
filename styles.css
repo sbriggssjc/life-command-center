@@ -462,9 +462,15 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
    it just outside would overlay the neighbouring companion panel's right edge —
    i.e. its scrollbar — making that panel un-scrollable by drag. Panels pad 20px
    on the left, so an 8px gutter there costs no content. */
+/* UI-1: the strip must be VISIBLE. An 8px fully-transparent grab zone is an
+   affordance nobody can find — the 2026-08-15 manual run reported "the panel
+   does not drag" while the handler was bound and working. A hairline plus a
+   centred grip dot makes it readable as a drag edge; both brighten on hover. */
 .panel-resizer { position: fixed; top: 0; bottom: 0; width: 8px; z-index: 203; cursor: col-resize; display: none; background: transparent; }
-.panel-resizer::before { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background 0.12s; }
+.panel-resizer::before { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: var(--border); transition: background 0.12s; }
+.panel-resizer::after { content: ''; position: absolute; left: 1px; top: 50%; width: 6px; height: 34px; margin-top: -17px; border-radius: 3px; background: var(--s3); border: 1px solid var(--border); transition: background 0.12s, border-color 0.12s; }
 .panel-resizer:hover::before, .panel-resizer.dragging::before { background: var(--accent); }
+.panel-resizer:hover::after, .panel-resizer.dragging::after { background: var(--accent); border-color: var(--accent); }
 .panel-resizer.open { display: block; }
 #panelResizerPrimary { right: calc(var(--panel-primary-w) - 8px); }
 #panelResizerCompanion { right: calc(var(--panel-primary-w) + var(--panel-companion-w) - 8px); }

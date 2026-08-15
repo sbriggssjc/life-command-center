@@ -151,6 +151,60 @@ route** (50 via the org record + 60 via a linked person) → 134 on cadence, **a
 - **Data-quality defect surfaced:** 3 cadence rows carry `last_touch_at` in the FUTURE (max 2026-10-15) — a
   writer is stamping a scheduled date into the completed-touch column.
 
+## Session 2026-08-15c (Cowork) — prompts 111–114 ALL DONE + merged; plan revised
+
+PRs **#1750 / #1751 / #1753 / #1754** merged to `main` (`e7999e79`). Prompts + responses archived to
+`docs/claude-code/prompts/done/` and `responses/done/`. Consolidated end-state:
+`docs/architecture/panel-redesign-verification.md` **§3.0**.
+
+| Leg | Start of day | Now |
+|---|---|---|
+| assets with a resolved owner | 1,396 (35.9%) | **1,910 (49.2%)** |
+| distinct owner entities | 690 | **1,118** |
+| `reachable_hero_effective` | 56 (8.1%) | **228 (20.4%)** |
+| reachable-in-data / invisible-in-UI | 47 | **0** ✅ |
+| cadence active surface (nothing deleted) | 1,214 | **278** (1,627 reversibly paused) |
+| cadence rows with a rep | 7 | **37** |
+| `last_touch_at` in the future | 3 | **0** ✅ |
+
+**Each prompt overturned its own brief's premise — that is the useful part:**
+- **111** — the gap is *decision-maker discovery*, not contact enrichment (585 of 586 unreachable owners had
+  no person known). My "1,469 gov manager names" headline sat almost entirely off this population (22 gain a
+  name, **0** gain a contact). The pipe wasn't broken, it was **aimed elsewhere**.
+- **114** — the review lane was **not** 101 decision-makers: 22 person-shaped, **77 organization-shaped**
+  (mostly transaction counterparties captured by the CoStar sidebar), 2 blocked. **A single "confirm" button
+  would have written the wrong shape for most of the backlog.** Three shape-aware verdicts instead.
+- **112** — the cause was **not** a bulk stamp or a missing consumer. R63's `bdSignalFromFacts` accepted a
+  **bare Salesforce identity** as a BD signal; that one arm carried **930 of 1,113** prospecting cadences
+  (897 never touched, **0** with an open opportunity). The $500k floor was short-circuited before it was ever
+  consulted. SF is a capture surface, so the gate was admitting the whole SF contact book.
+- **113** — P0.2 own-deal buyer **skipped as data-thin** (17 assets, below the brief's own 50 floor); P0.3 was
+  promotion not capture (1,699 assets had an owner never promoted). **The operator guard blocked MORE than
+  the feeder promoted** — dia files the tenant in the owner slot on 7,926 of 11,783 properties.
+
+**My published numbers were wrong three times** (§3.0.1): the 104-reachable baseline, the "94 unreachable on
+cadence" figure (does not reproduce), and "the rep backfill is a dead end" (it wasn't — 30 resolvable).
+**Rule adopted: quote `v_lcc_owner_reachability.reachable_hero_effective` and the canonical predicates —
+never hand-roll a reachability query.**
+
+### Still open after 111–114
+
+| # | Item | Size / note |
+|---|---|---|
+| **UI-0** | Uncaught JS error on the property Ownership tab | **HIGH** — needs one console line; diagnostic in verification §4.3 |
+| **UI-1/2/3** | Resize doesn't drag · owner chip only sometimes docks · swap does nothing | manual run 2026-08-15 |
+| **SxS** | Full detail side-by-side (Scott) — blocked on renderers writing to singleton `#detailBody`/`#detailTabs` | spec §1.2 superseded; consequences in verification §4.2 |
+| **112 A2** | **89 reachable owners have NO active cadence** — never built; grew 65 → 89 with the owner population | the only item that *adds* pipeline |
+| **112** | `lcc_p112_resume_workable_cadences` built but **not scheduled** | one cron line; closes the auto-resolve loop |
+| **112** | 68 cadence rows overdue > 1 yr on stale date arithmetic | re-baselining question, flagged not fixed |
+| **113** | **Resolver supersession tier — sized at +465 assets, not built.** `lcc_reconcile_property_owner` sums evidence with decay floored at 0.25, so a thrice-sold building reads as three competing claims (conf 0.33–0.50). **876 assets have evidence but fail the 0.55 gate — the next lever is the resolver, not another feeder.** | awaiting go-ahead |
+| **114** | 84 lane rows awaiting human verdicts (forecast 64 reject · 11 same_party · 8 attach · 18 no lean) | needs a human, by design |
+| — | Railway redeploy for all merged JS halves, then `npm run verify:deploy` | DB halves already live |
+| — | ~250 stale local branches at 0 commits ahead of main | housekeeping |
+
+**Recommended next:** UI-0 → UI-1/2/3 → 112 A2 + the resume cron (small, adds pipeline) → 113 resolver
+supersession (+465, biggest remaining data win) → side-by-side.
+
 ## Session 2026-08-15b (Cowork) — reviewed the 111 response + Scott's manual-check run
 
 **Prompt 111 = DONE** (PR #1750, branch `claude/owner-reachability-gap-904h3v`, migration already applied
