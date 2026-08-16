@@ -359,6 +359,18 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   write 400s on a column you JUST added, check the cache before re-diagnosing the migration.
 - **`CREATE OR REPLACE VIEW` is append-only for columns** (Postgres 42P16 if you insert a column mid-list). All
   view edits add new columns at the END of the SELECT.
+- **Profile a slow endpoint with the handler's REAL query shape — `LIMIT 5` without the `ORDER BY` lies.**
+  An `ORDER BY` forces the WHOLE view to materialise, so the limit is irrelevant: `v_lcc_bd_worklist` cost
+  321 ms at `LIMIT 5` (no order) and **30,610 ms** at `order=rank_value.desc.nullslast&limit=150` — the shape
+  the handler actually issues. That gap produced two wrong claims and nearly shipped a no-op `CAP` reduction.
+  Read the handler, reproduce its exact PostgREST path (filters included), and check `loops=` in the plan:
+  **any node with `loops=` equal to the output row count is a correlated subplan**, and no index or ANALYZE
+  can fix one — it needs the aggregate hoisted out of the correlation and LEFT JOINed once (Prompt 115 did
+  exactly this to `v_lcc_contact_writeback_candidates`: 3 subplans at `loops=1648` → 0, 51.9×, 46× fewer
+  buffers, 0-row equivalence diff both directions). Also note the raw DB timing is **session-variable**
+  (19.3 s vs 30.6 s for the same unchanged query on consecutive days) — always measure before AND after in
+  ONE session, and treat the structural facts (loops gone, buffer count) as the durable evidence.
+  Details: `docs/architecture/panel-redesign-verification.md` §4.2d–4.2e.
 - **Overview/snapshot tiles must render SYNCHRONOUSLY from the main data load, reading ONE canonical
   source/summary view.** Never compute a count by filtering a client-loaded array (empty on Overview), never
   gate a tile's value behind a lazy async filler with a `_rendered` once-flag (a re-render strands it forever).

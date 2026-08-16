@@ -411,6 +411,106 @@ dry-run rather than being tacked onto a perf pass I have already been wrong abou
 ANALYZE are correct and durable but did not move the endpoint they were aimed at. `bd_worklist` and
 `priority-queue` are still open, and now precisely diagnosed.
 
+> **Superseded by §4.2e (2026-08-16).** `bd_worklist` is fixed at the DB layer (30,610 ms → 590 ms, three
+> correlated subplans removed, 0-row equivalence diff); `priority-queue` was profiled and is **not** a SQL
+> problem at all. The endpoint-level browser re-measure is still outstanding — see §4.2e.
+
+### 4.2e PROMPT 115 — the bd_worklist view rewrite, and what priority-queue actually is (2026-08-16)
+
+Migration `20260911120000_lcc_p115_bd_worklist_decorrelate.sql`, applied live to LCC Opps. **DB-only — the
+CM/worklist surfaces read the view per request, so this needed no Railway redeploy.**
+
+#### The diagnosis was right in shape, and understated in size
+
+Re-verified first, with `ORDER BY rank_value DESC NULLS LAST LIMIT 150` (the handler's real shape — confirmed
+by reading `getBdWorklist`: with no `&type=` filter `lccFilter` is empty and `CAP` is 150 even for `limit=5`).
+It is **not one** correlated subplan but **three**, all in `v_lcc_contact_writeback_candidates`, each
+re-executed once per candidate person (`loops=1648`):
+
+| SubPlan | column | per-loop | × 1,648 | what it re-did every row |
+|---|---|---|---|---|
+| 2 | `sf_account_id` | 1.179 ms | ~1.9 s | full linear re-filter of the 15,981-row `owner_link` CTE |
+| 3 | `rank_value` | 12.458 ms | **~20.5 s** | re-aggregated `v_entity_portfolio_all` (3,681 orgs) **and** the CTE re-filter — 8.99 M buffer hits |
+| 4 | `rank_property_count` | 4.581 ms | ~7.5 s | HashAggregate over 42,245 orgs + the CTE re-filter |
+
+A CTE scan cannot use an index, so each correlation is O(rows × CTE). The whole `cw` branch was 30,327 ms of a
+30,598 ms Append.
+
+#### The fix
+
+Hoist both rollups out of the correlation: `portfolio` (a CTE over `v_entity_portfolio_all`, referenced twice
+so Postgres materialises it once), `owner_roll` (one `GROUP BY ol.person_id` replacing the two correlated
+aggregates), `owner_sf` (likewise). All three `LEFT JOIN` onto the candidate rows.
+
+#### Measured — same session, same warm cache, same query shape
+
+| | before | after |
+|---|---|---|
+| Execution time, `ORDER BY … LIMIT 150` | **30,610.6 ms** | **589.9 ms** (−98.1%, **51.9×**) |
+| Buffers | shared hit=10,726,588 | shared hit=232,071 (**46× fewer**) |
+| `cw` branch | 30,327 ms | 371 ms |
+| `ch` branch | 269 ms | 212 ms (untouched) |
+| any node with `loops=1648` | 3 | **0** |
+
+Note the DB number is **session-variable** — the same shape measured 19,320 ms on 2026-08-15 and 30,610 ms on
+2026-08-16 before any change. That is why before/after were taken back-to-back in one session. The durable,
+non-variable facts are the structural ones: three `loops=1648` nodes gone, 46× fewer buffers.
+
+#### Equivalence — 0 rows, both directions, multiset-strict
+
+Snapshotted the pre-change output (5,054 rows) into `_bd_worklist_snap_p115`, then after applying:
+
+```
+old EXCEPT new = 0     new EXCEPT old = 0     old_rows = new_rows = 5054
+rows_with_differing_multiplicity = 0      -- md5(row) group-by, since EXCEPT is set-wise
+```
+
+One semantic call worth recording: `sf_account_id` was `(SELECT … LIMIT 1)` with **no ORDER BY** — arbitrary
+when a person reaches several SF Accounts. It is now `min()`. Checked before changing anything: of the 1,648
+candidates, 54 reach an SF Account and **0** reach more than one, so this is byte-identical today and
+deterministic from now on. (397 persons DB-wide do have multiple, but none are writeback candidates — they
+already carry a salesforce Contact identity, which the `cand` NOT EXISTS filter removes.)
+
+#### The `ch` branch was measured and deliberately left alone
+
+`v_ownership_chain_worklist` is 269 ms of the 30.6 s (<1%). It does carry the `Seq Scan on entities` (60,678
+rows) inside a HashAggregate the prompt flagged, but that scan is ~20 ms. Rewriting it would put risk on a
+shared consumer for no measurable gain.
+
+#### ⚠️ `/api/priority-queue` does NOT share this shape — the DB is not its problem
+
+Profiled all three queries the handler issues. Full column list, real ORDER BY:
+
+| Query | Planning | Execution |
+|---|---|---|
+| `v_priority_queue_enriched` items (all 37 cols, `limit=5`) | 47.6 ms | **248.7 ms** |
+| `v_priority_queue_band_counts` (the chip row) | 45.1 ms | **131.5 ms** |
+| `attachPqOppState` | one `bd_opportunities` read for 5 ids | trivial |
+
+Items and band-counts run in `Promise.all`, so the DB floor for the endpoint is roughly **~250 ms** — against
+a browser-measured **5,776 ms**. The view's laterals do run per queue row (`loops=1150`) but they are
+index-driven and bounded by queue size, not by re-aggregating a large view, which is precisely what made
+`bd_worklist` quadratic. **There is no correlated-subplan fix to make here.** The residual ~5.5 s is handler +
+transport (authenticate, then cross-region PostgREST round trips), which §"Out of scope" of prompt 115 calls
+architectural. Anyone picking this up next should start there, not in SQL — the R7 Phase 0 cache already took
+the view itself from 5,785 ms to ~1,140 ms and it is now a fifth of that again.
+
+#### ⚠️ NOT re-measured in the browser — this needs Scott
+
+The one deliverable I could not complete. This sandbox's network policy denies the Railway host at the proxy
+(`403 to CONNECT tranquil-delight-production-633f.up.railway.app:443`), so neither curl nor the bundled
+Chromium can reach the live endpoint. **The DB number has already proved misleading on this endpoint once, so
+treat the 51.9× as a DB result, not an endpoint result, until the browser confirms it.** Same method as §4.2d
+(Claude-in-Chrome + Resource Timing, two consecutive loads to separate cold start):
+
+```js
+copy(JSON.stringify(performance.getEntriesByType('resource')
+  .filter(e => /bd_worklist|priority-queue|decisions\?summary/.test(e.name))
+  .map(e => ({ url: e.name.split('/api/')[1], ms: Math.round(e.duration) })), null, 2))
+```
+
+No deploy is required first — the migration is already live, so a hard reload measures the fixed view.
+
 ### 4.3 One command that resolves UI-0 and UI-1
 
 Run in the browser console with a property panel open, and paste the output:
