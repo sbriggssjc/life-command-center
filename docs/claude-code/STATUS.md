@@ -74,6 +74,48 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-15f (Cowork) — page-load performance: stale stats + a missing index
+
+Migration `20260909120000_lcc_perf_stats_and_rel_type_index.sql`, applied live.
+Triggered by Scott's console capture, which showed a worse daily problem than the panel defects:
+`bd_worklist&limit=5` **8,192ms for five rows**, `decisions?summary=1` **16,199ms**, Marketing pulling
+**11,831 rows in 12 round-trips** on load.
+
+**Root cause 1 — `entity_relationships` statistics were 26 days stale.** 114,145 rows, last analyzed
+2026-07-21, 8,882 modifications since. Autoanalyze fires at 10% of the table (~11,464 rows here), so it sat
+under the threshold and drifted for a month. The planner then estimated **2,261 rows where 5 were returned**
+and chose plans whose correlated subplans re-scanned **~42,000 organizations per output row**. Fixed at
+source by lowering the scale factor — the repo already does this for ~20 smaller tables; the two biggest and
+hottest had been missed.
+
+**Root cause 2 — no index on `entity_relationships.relationship_type`.** The bd_worklist CTE seq-scanned
+114,145 rows for the 15,981 `associated_with` edges, then re-filtered that CTE once per output row. Indexes
+existed on `from_entity_id`/`to_entity_id` only.
+
+| `v_lcc_bd_worklist LIMIT 5` (warm) | before | after |
+|---|---|---|
+| Planning | 145.3 ms | **15.3 ms** |
+| Execution | 1,334.1 ms | **321.3 ms** |
+| CTE `owner_link` | Seq Scan, 71 ms | **Index Only Scan, 21 ms** |
+
+Scott's 8,192ms was a cold cache; both changes cut buffer reads as well as CPU, so the cold path benefits
+too — but the honest claim is the **warm 4.2×**. Re-measure from the browser for the real number.
+
+**A hypothesis I disproved, recorded so nobody re-tests it:** I assumed `decisions?summary=1` was slow
+because the federated lanes ran sequentially. They don't — `api/admin.js:8453` already uses `Promise.all`,
+and the underlying `v_lcc_decision_open_counts` runs in **85ms**. The remaining leads are **cross-region
+latency** (LCC Opps us-east-1, dia us-west-1, gov us-west-2 — every lane is a cross-country round trip) and
+**`Prefer: count=exact`**, which forces a full scan purely to produce a badge number (`admin.js:566` does
+`select=*&limit=1` with count=exact). A lane badge needs an honest order of magnitude, not an exact count.
+
+**Also open:** Marketing's 11,831-row / 12-round-trip pull — `select=*`, sequential pages, whole table
+fetched to compute what is mostly counts and one filtered page.
+
+### ⚠️ Note on the divider retest
+Scott retested the drag on build `5dedbb9f2026`, which is **before** the divider fix (`d4bf43cd`,
+branch `claude/panel-divider-split`, unmerged). The geometry was unchanged because that build still has the
+74px-travel clamp. Merge + redeploy before retesting.
+
 ## Session 2026-08-15e (Cowork) — P112 A2 enrolment + the four sweeps nobody scheduled
 
 Migration `20260908120000_lcc_p112_a2_enrol_and_schedule.sql`, applied live, batch `a2_enrol_20260815`.
