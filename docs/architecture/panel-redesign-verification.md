@@ -411,6 +411,53 @@ dry-run rather than being tacked onto a perf pass I have already been wrong abou
 ANALYZE are correct and durable but did not move the endpoint they were aimed at. `bd_worklist` and
 `priority-queue` are still open, and now precisely diagnosed.
 
+### 4.2f BROWSER VERIFICATION of Prompt 115 — the DB win DID translate (2026-08-15)
+
+Prompt 115 could not reach Railway from its sandbox and asked that its **51.9× be treated as a DB result
+until confirmed in a browser**. Confirmed here, driven directly in Scott's browser. No redeploy was needed —
+the view is read per request.
+
+| Endpoint | Original | Pre-115 warm | Post-115 **cold** | Post-115 **warm** | |
+|---|---|---|---|---|---|
+| `bd_worklist&limit=5` | 8,192 ms | 8,171 ms | 8,178 ms | **2,485 ms** | **3.3×** ✔ |
+| `decisions?summary=1` | 16,199 ms | 10,100 ms | 13,030 ms | **8,620 ms** | **−47%** ✔ |
+| `priority-queue?limit=5` | — | 5,776 ms | 5,492 ms | 5,314 ms | ~flat |
+| wall-clock to last API | — | 13,925 ms | 17,517 ms | **12,664 ms** | |
+| API calls > 1 s | — | 5 | 5 | **4** | |
+
+#### ⚠️ A second measurement-condition error, nearly repeated
+
+The **first** post-115 load showed `bd_worklist` at **8,178 ms** and I began writing it up as *"P115 didn't
+translate."* That was a **cold** call — cold PostgREST connections, cold plan cache. The very next warm load
+was **2,485 ms**.
+
+This is the same class of mistake as §4.2d (measuring `LIMIT 5` instead of the handler's `LIMIT 150`): both
+times the *number* was real and the *condition* was wrong. **Rule now standing: label every timing
+cold/warm, and never conclude from a single sample.** Added to `CLAUDE.md` alongside the query-shape footgun
+that Prompt 115 recorded.
+
+#### Where the remaining `bd_worklist` time actually is
+
+`getBdWorklist` fires six sources in one `Promise.all`; the `?type=` filter isolates each. Measured warm,
+in-browser, twice each:
+
+| `type=` | ms | source |
+|---|---|---|
+| `suspected_sale` | **1,847** | **gov, cross-region** ← the floor |
+| `ownership_chain` | 674 | LCC |
+| `contact_writeback` | 600 | LCC — **the view P115 rewrote** |
+| `owner_source_conflict` | 504 | gov + dia |
+| `loan_maturity` | 249 | gov + dia |
+| *(all — what the app calls)* | **1,870** | ≈ the slowest, as expected for a parallel fan-out |
+
+**The LCC view is no longer the bottleneck** — 600 ms of a 1,870 ms call. The floor is now
+`v_suspected_sale` on gov (us-west-2), i.e. cross-region transport plus that view's own cost. Any further
+work on this endpoint should start there, **not** in LCC.
+
+Prompt 115's other honest finding stands: **`/api/priority-queue` is not the same bug.** Its DB side is
+249 ms (items, all 37 columns) + 132 ms (band counts) in parallel — a ~250 ms floor against a 5,314 ms
+measurement. The residual is handler + cross-region transport, and there is no SQL fix to make there.
+
 ### 4.3 One command that resolves UI-0 and UI-1
 
 Run in the browser console with a property panel open, and paste the output:

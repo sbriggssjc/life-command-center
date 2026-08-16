@@ -98,6 +98,60 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-16 (Cowork) — Prompt 115 reviewed + VERIFIED in the browser
+
+**Prompt 115 = DONE** (PR #1756), migration `20260911120000_lcc_p115_bd_worklist_decorrelate.sql` already
+applied live. It found **three** correlated subplans in `v_lcc_contact_writeback_candidates`, not the one I
+diagnosed — each at `loops=1648`: `sf_account_id` (~1.9 s), `rank_value` (~20.5 s, 8.99 M buffer hits),
+`rank_property_count` (~7.5 s). Decorrelated: **30,610 ms → 590 ms (51.9×)**, buffers 10.7 M → 232 k, zero
+`loops=1648` nodes remaining.
+
+Equivalence was checked properly: `EXCEPT` both directions **and** an md5-per-row multiset check (because
+`EXCEPT` is set-wise and would hide a multiplicity change) — **0 rows differ**, 5,054 = 5,054. One semantic
+change, `sf_account_id` from an arbitrary `LIMIT 1` to `min()`, was de-risked *before* the edit by
+confirming **0 of 1,648 candidates map to more than one SF Account** — byte-identical today, deterministic
+from here. It also measured the `ch` branch as instructed and **left it alone** (269 ms of the 30.6 s).
+
+### The verification 115 couldn't do — I did it in the browser
+
+115 was blocked from Railway by its sandbox proxy and explicitly asked that 51.9× be treated as a DB result
+until confirmed. **Confirmed** (no redeploy needed — the view reads per request):
+
+| Endpoint | Original | Pre-115 warm | Post-115 warm | |
+|---|---|---|---|---|
+| `bd_worklist&limit=5` | 8,192 ms | 8,171 ms | **2,485 ms** | **3.3×** ✔ |
+| `decisions?summary=1` | 16,199 ms | 10,100 ms | **8,620 ms** | **−47%** ✔ |
+| `priority-queue?limit=5` | — | 5,776 ms | 5,314 ms | flat |
+| wall-clock to last API | — | 13,925 ms | **12,664 ms** | |
+
+**⚠️ I nearly got this wrong a second time.** The *first* post-115 load read **8,178 ms** and I started
+writing "P115 didn't translate" — that was a **cold** call; the next warm load was 2,485 ms. Same class of
+error as §4.2d (measuring `LIMIT 5` instead of the handler's `LIMIT 150`): the number was real, the
+condition was wrong. **Standing rule: label every timing cold/warm; never conclude from one sample.**
+
+### Where `bd_worklist` time now lives — and it is not LCC
+
+Isolated with the endpoint's own `?type=` filter, warm, twice each:
+`suspected_sale` **1,847 ms** (gov, cross-region) · `ownership_chain` 674 · `contact_writeback` **600**
+(the view 115 rewrote) · `owner_source_conflict` 504 · `loan_maturity` 249 · **all 1,870** (≈ the slowest,
+as expected for a parallel fan-out).
+
+**The LCC view is no longer the bottleneck.** The floor is `v_suspected_sale` on gov. Further work starts
+there, not in LCC.
+
+### Revised plan — perf thread is effectively closed
+
+Remaining perf items are all **cross-region transport**, which is architectural (three Supabase projects in
+three regions) and not worth chasing before the product work:
+1. `decisions?summary=1` 8.6 s — the `count=exact` per federated lane in `fetchFederatedSource` is the last
+   tractable term.
+2. `priority-queue` 5.3 s — ~250 ms of DB; the rest is handler + transport. **115 correctly refused to
+   invent a SQL fix here.**
+3. `v_suspected_sale` (gov) — the new `bd_worklist` floor.
+
+**Recommended next is product, not perf:** the **brokerage-as-owner cleanup** (46 rows, two classes,
+detector already built) and the **outstanding manual checks** M-2/3/4/5 on the panel divider.
+
 ## Session 2026-08-15i (Cowork) — BROWSER re-measure, and a retraction
 
 Driven directly in Scott's browser (Claude-in-Chrome) against merged build `41e03651a6b9`, two consecutive
