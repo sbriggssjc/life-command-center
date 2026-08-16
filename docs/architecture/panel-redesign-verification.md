@@ -458,6 +458,64 @@ Prompt 115's other honest finding stands: **`/api/priority-queue` is not the sam
 249 ms (items, all 37 columns) + 132 ms (band counts) in parallel — a ~250 ms floor against a 5,314 ms
 measurement. The residual is handler + cross-region transport, and there is no SQL fix to make there.
 
+### 4.2g UI-4 — the hand-off silently did not render (found 2026-08-16, FIXED)
+
+Running the outstanding manual checks **myself in Scott's browser** (rather than handing them back) surfaced
+the most consequential defect of the whole redesign: **`Work this owner →` — the centrepiece hand-off — was
+not rendering at all** on a property whose owner is fully resolved.
+
+**Chain of failure, traced live on dia property 25752 (DaVita Fort Wayne):**
+
+| step | result |
+|---|---|
+| `lcc_property_owner` row | ✅ Agree Realty CORP, confidence **1.000** |
+| `/api/entities?action=lookup_asset&domain=dia&domain_property_id=25752` | ✅ returns `property_owner` **with** full prospecting (tier A, 13 properties) |
+| what `openUnifiedDetail` actually calls | ❌ `lookup_asset&address=…` — **by address string** |
+| panel address vs entity address | `3233 East Coliseum Blvd.` vs `3233 E Coliseum Blvd` |
+| address lookup | ❌ **no match** |
+| ⇒ `ent` null ⇒ no `ent.property_owner` ⇒ | **no Current Owner card, no `Work this owner →`** |
+
+The panel was resolving **its own asset entity by fuzzy address string** while already holding the exact
+domain property id. It missed on ordinary abbreviation + punctuation variation.
+
+**Size:** 2,743 of 3,886 asset entities (**70.6%**) carry an exact `metadata.domain_property_id`, and
+**2,117 of those also have a resolved owner** — that whole population was gambling on a string compare for
+the owner card, the hand-off, the LCC-entity badge and the `owner_entity_id` the Next-step banner reads.
+
+**Fix:** try `domain_property_id + domain` first, keep address as the fallback for assets with no domain id,
+and wrap the id attempt so a failure falls through rather than aborting the panel load. This is the same
+doctrine `CLAUDE.md` states for owners — *"resolve to an LCC entity by ID, never by name"* — applied to the
+asset. Four regression tests added (74 pass).
+
+**Two wrong turns of my own on the way here, both from reading a truncated or transient value:**
+1. I measured the panel rect mid-slide-in (`left: 1758` in a 1758px viewport) and briefly treated the panel
+   as mis-positioned. It was 1,038/720 once settled — correct.
+2. I printed the API response `.slice(0, 600)`, saw no `property_owner`, and started diagnosing a
+   server-side bug. It was there, past the truncation. **The client was the problem all along.**
+   Same family as §4.2d/§4.2f: the reading was real, the *conditions* were wrong.
+
+### 4.2h Manual checks — re-run in-browser 2026-08-16 (build `f59679a2f9f3`)
+
+Divider fix confirmed present in the deployed bundle (`splitMode`, `_panelSetWidthExact`,
+`_panelAnchorResizer`, `_jsStrArg` all in the served `detail.js`; the one lingering
+`esc(text).replace(/'/g` hit is my own explanatory comment, verified line-by-line).
+
+| # | Check | Result |
+|---|---|---|
+| M-1 | 720px panel, 7 tabs on ONE row, tab reads "Ownership" | ✅ **PASS** (`{l:1038, w:720}`, 1 tab row) |
+| M-1b | Completeness rail capped | ✅ 1 chip on this asset (score 95) |
+| M-6 | CRM stack gone from the property tab | ✅ **PASS** — `udLogCallForm`, `udDraftTemplate`, `udTouchpoints`, `udActivityFeed`, `udOwnContact` all absent from the DOM |
+| M-2/3/4/5 | resize · dock · swap · tray | ⛔ **blocked by UI-4** — retest after the fix deploys |
+| **UI-4** | `Work this owner →` renders | ❌ **FAIL → fixed above** |
+
+**Also observed, not yet fixed (UI-5):** on this asset the ladder renders **two cards both reading
+"Agree Realty Corp"** — the recorded owner *and* the true-owner slot, because `true_owner` is DaVita
+(operator-flagged), so the P0.1 guard correctly elevates the deed owner into the decision-maker slot. Correct
+data, but it reproduces the very "same name twice" problem §0 set out to kill, via a different branch.
+`_ownersAgree` only collapses when `trueResolved` is true. **The collapse should also apply when the true
+owner is operator-flagged and the recorded owner is being elevated.** Logged, not fixed — it is cosmetic
+next to UI-4.
+
 ### 4.3 One command that resolves UI-0 and UI-1
 
 Run in the browser console with a property panel open, and paste the output:
