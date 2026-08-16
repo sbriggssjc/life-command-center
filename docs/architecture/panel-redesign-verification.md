@@ -325,6 +325,45 @@ Consequences to work through before building:
   `openEntityDetail` / `openUnifiedDetail` into the companion node — the renderers must stop assuming the
   singleton ids `#detailBody` / `#detailTabs`. **That element-id assumption is the real work.**
 
+### 4.2b UI-0 — DOES NOT REPRODUCE on the current build (2026-08-15, live capture)
+
+Armed console capture (`docs/architecture/ui-0-console-diagnostic.js`), reproduced the full flow on the
+deployed build `?v=5dedbb9f2026`:
+
+```
+UI0_errors: []   UI0_rejections: []   UI0_consoleErrors: []
+build.hasOpenOwnerChip: true          (the UI-1/2/3 fixes ARE live)
+```
+
+**Leading hypothesis, and it is consistent:** the red toast was the **entityLink apostrophe bug**. A broken
+inline `onclick` is a *parse* error raised at click time through `window.onerror` — which is exactly the
+handler that renders "Something went wrong — try refreshing", and exactly why the toast carried no useful
+detail. That defect shipped fixed in `claude/panel-ui-defects-manual-run` (all four `entityLink` branches
+now use `_jsStrArg`). Not claimed as proven — a non-reproduction is weaker evidence than a caught stack —
+so the capture stays in the repo and UI-0 stays **open-but-unreproducible** until a clean pass on a property
+Ownership tab with an apostrophe-bearing owner name.
+
+### 4.2c ⚠️ Bigger finding from the same capture — page-load performance
+
+The console timings are a more serious operator problem than any of UI-1/2/3:
+
+```
+api:/api/review-counts                    1,507ms
+api:action=cadence_dashboard&limit=200    1,526ms
+api:action=bd_worklist&limit=5            8,192ms
+api:summary=1                            16,199ms   ← 16 seconds
+[Marketing] Opportunities pages 1..12    11,831 rows pulled client-side
+```
+
+**16s for `summary=1` and a 12-page/11,831-row client-side pull of `marketing_leads` on every load.** The
+1000-row page size is the PostgREST cap, so this is 12 sequential round-trips. `bd_worklist&limit=5` taking
+**8.2s to return five rows** points at an unindexed or view-heavy query path, not payload size. Logged as a
+new workstream — see `connectivity-and-open-threads.md`.
+
+Also visible in the same load: `[sales-comp xref] 44 price disagreement(s)` (already tracked as
+`sales_price_xref_conflict` in dia `v_data_quality_issues`), and auth running in **dev-fallback** mode
+(expected pre-enforcement; see `docs/AUTH_ENFORCEMENT_ROLLOUT.md`).
+
 ### 4.3 One command that resolves UI-0 and UI-1
 
 Run in the browser console with a property panel open, and paste the output:

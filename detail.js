@@ -14241,6 +14241,20 @@ function _panelSetWidth(which, px, persist) {
 }
 window._panelSetWidth = _panelSetWidth;
 
+/**
+ * Set a width honouring ONLY the panel's own min/max, skipping the viewport
+ * budget. Used by the split drag, where the pair total is held constant and
+ * therefore already fits by construction — applying the viewport term there
+ * would double-count the other panel and strangle the travel.
+ */
+function _panelSetWidthExact(which, px) {
+  const cfg = _PANEL_W[which];
+  if (!cfg || typeof document === 'undefined') return cfg ? cfg.def : 0;
+  const w = Math.max(cfg.min, Math.min(cfg.max, Math.round(Number(px) || cfg.def)));
+  document.documentElement.style.setProperty(cfg.varName, w + 'px');
+  return w;
+}
+
 function _panelGetWidth(which) {
   const cfg = _PANEL_W[which];
   if (!cfg || typeof document === 'undefined') return 0;
@@ -14271,16 +14285,65 @@ function _panelInitResizers() {
       ev.preventDefault();
       el.classList.add('dragging');
       document.body.classList.add('panel-resizing');
-      const offsetRight = which === 'companion' ? _panelGetWidth('primary') : 0;
+
+      // TWO DISTINCT DRAG MODES (fixed 2026-08-15 after a live capture).
+      //
+      // The primary strip sits at the boundary BETWEEN the two docked panels
+      // when both are open — measured live: companion 194..814, primary
+      // 814..1534, strip 814..822. That is a SPLIT DIVIDER, and a divider must
+      // REALLOCATE space: one panel grows by exactly what the other gives up.
+      //
+      // The first cut instead grew the primary into the 120px sliver left
+      // behind the pair, so on a 1534px screen with a 620px companion the
+      // travel was 720 -> 794 = SEVENTY-FOUR PIXELS before the clamp stopped it
+      // dead. Bound, positioned, visible — and it read as "the panel does not
+      // drag", which is exactly how it was reported.
+      //
+      //   inner divider (primary strip, companion open) -> split the pair,
+      //                                                    total held constant
+      //   outer edge    (companion strip, or primary alone) -> resize the whole
+      //                                                    dock into the app
+      const compEl = document.getElementById('companionPanel');
+      const splitMode = (which === 'primary') && !!(compEl && compEl.classList.contains('open'));
+      const startX = ev.clientX;
+      const startPrimary = _panelGetWidth('primary');
+      const startCompanion = _panelGetWidth('companion');
+      const total = startPrimary + startCompanion;
+
       const move = function(e) {
-        _panelSetWidth(which, window.innerWidth - e.clientX - offsetRight, false);
+        if (splitMode) {
+          const dx = startX - e.clientX;               // drag LEFT => primary grows
+          let p = Math.max(_PANEL_W.primary.min,
+                  Math.min(_PANEL_W.primary.max, startPrimary + dx));
+          // Give the companion whatever is left, then re-derive the primary so
+          // the pair ALWAYS sums to `total` even when one side hits its bound.
+          let c = Math.max(_PANEL_W.companion.min,
+                  Math.min(_PANEL_W.companion.max, total - p));
+          p = Math.max(_PANEL_W.primary.min,
+              Math.min(_PANEL_W.primary.max, total - c));
+          _panelSetWidthExact('primary', p);
+          _panelSetWidthExact('companion', c);
+        } else {
+          const offsetRight = which === 'companion' ? _panelGetWidth('primary') : 0;
+          _panelSetWidth(which, window.innerWidth - e.clientX - offsetRight, false);
+        }
+        // Re-anchor live: _panelAnchorResizer writes an INLINE `right`, which
+        // overrides the CSS calc, so without this the strip detaches from the
+        // edge it is supposed to be dragging.
+        _panelSyncResizers();
       };
+
       const up = function() {
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         el.classList.remove('dragging');
         document.body.classList.remove('panel-resizing');
-        _panelSetWidth(which, _panelGetWidth(which), true); // persist final
+        // Persist both — a split moved two widths.
+        try {
+          localStorage.setItem(_PANEL_W.primary.key, String(_panelGetWidth('primary')));
+          localStorage.setItem(_PANEL_W.companion.key, String(_panelGetWidth('companion')));
+        } catch (_e) {}
+        _panelSyncResizers();
       };
       document.addEventListener('mousemove', move);
       document.addEventListener('mouseup', up);

@@ -446,6 +446,42 @@ describe('UI-1/2/3 — defects from the 2026-08-15 manual run', () => {
       'the hairline is still transparent by default — undiscoverable');
   });
 
+  it('UI-1: the inner strip SPLITS the pair — reproduces Scott\'s live geometry', () => {
+    // Live capture 2026-08-15: innerWidth 1534, companion 194..814 (w620),
+    // primary 814..1534 (w720), strip 814..822 — bound, open, correctly placed.
+    // The old drag grew the primary into the 120px sliver behind the pair, so
+    // the clamp allowed 720 -> 794: SEVENTY-FOUR pixels, which reads as "does
+    // not drag". A divider must reallocate, holding the pair total constant.
+    const src = sliceFn(detailSrc, '_panelInitResizers');
+    assert.match(src, /splitMode/, 'no split mode — the inner strip is not a divider');
+    assert.match(src, /companionPanel/, 'split must be conditional on the companion being open');
+    assert.match(src, /_panelSetWidthExact/,
+      'split must bypass the viewport clamp; the pair total already fits by construction');
+    assert.match(src, /_panelSyncResizers\(\)/,
+      'the strip writes an inline `right`, so it must re-anchor during the drag');
+
+    // Simulate the split arithmetic on the real numbers.
+    const MIN_P = 420, MAX_P = 1100, MIN_C = 360, MAX_C = 900;
+    const total = 720 + 620;               // 1340
+    const split = (dx) => {
+      let p = Math.max(MIN_P, Math.min(MAX_P, 720 + dx));
+      let c = Math.max(MIN_C, Math.min(MAX_C, total - p));
+      p = Math.max(MIN_P, Math.min(MAX_P, total - c));
+      return { p, c };
+    };
+    const wide = split(260);   // drag 260px left
+    assert.equal(wide.p + wide.c, total, 'the pair total must be conserved');
+    assert.ok(wide.p >= 940, `expected real travel, got primary ${wide.p} (old clamp capped at 794)`);
+    assert.ok(wide.c >= MIN_C, 'companion must never go below its minimum');
+
+    const narrow = split(-250);
+    assert.equal(narrow.p + narrow.c, total, 'the pair total must be conserved both ways');
+    assert.ok(narrow.p >= MIN_P && narrow.c <= MAX_C);
+
+    // And the pair must still fit the viewport it started in.
+    assert.ok(wide.p + wide.c <= 1534, 'split must not overflow the viewport');
+  });
+
   it('UI-3: swap explains itself instead of failing silently', () => {
     const swap = sliceFn(detailSrc, '_panelSwap');
     assert.match(swap, /Swap needs two panels/,

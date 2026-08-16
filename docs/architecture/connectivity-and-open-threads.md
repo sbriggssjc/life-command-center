@@ -567,6 +567,57 @@ entities are `entity_type='asset'` with a NULL `domain`**, so `v_lcc_owner_reach
 moved 228 → 262 in absolute terms while the *share* stayed ~20%, because every newly-resolved asset adds
 owners to the denominator. **~478 owners remain solvable only via the paused SOS-direct path.**
 
+## 4d. BREAK-2 follow-on — A2 enrolment + the sweeps nobody scheduled (2026-08-15, SHIPPED)
+
+Migration `20260908120000_lcc_p112_a2_enrol_and_schedule.sql`, applied live, batch `a2_enrol_20260815`.
+
+**The bigger gap found on the way in: none of the P112 sweeps were scheduled.** Prompt 112's write-up
+flagged only `resume` as needing a cron; in fact **no cron referenced any P112 function** — retire, resume
+and stamp were built, verified, and never ran again. The consumption loop the prompt existed to close had
+not actually closed. Now scheduled 06:20–06:35 daily in dependency order: **retire → resume → enrol →
+stamp** (jobids 226–229). All four dry-ran to **0** first, so the schedule is maintenance, not a pending
+bulk change.
+
+**A2 honest sizing — the raw count overstated this a fourth time.** 1,420 owners → 110 reachable → 99 with
+no active cadence (*the number previously quoted*) → **44 pass the same gate the retire sweep uses**, via the
+**canonical `lcc_entity_cadence_reachable()`** predicate rather than an ad-hoc query — which is exactly why
+the hand-rolled number kept disagreeing. **41 enrolled** (1 brokerage excluded). The other ~58 fail the
+value gate and are **correctly excluded, not a gap**; enrolling them would re-create the noise 112 cleared.
+
+| | Before | After |
+|---|---|---|
+| cadence rows total | 1,905 | 1,946 |
+| active surface | 278 | **319** |
+| `last_touch_at` in the future | 0 | 0 |
+
+Re-run enrols **0** (idempotent). First cut wasn't: it selected owners with no *active* cadence, so three
+owners holding a *paused* row stayed eligible forever while the insert silently no-opped on the unique
+index — a dry-run reporting "would_enrol 3" in perpetuity is a dishonest count. Enrolment now requires **no
+cadence row at all**; a paused row is resume's job.
+
+### ⚠️ NEW DATA-QUALITY UNIT — brokerages recorded as property owners (46 rows, NOT fixed)
+
+The first A2 dry-run put **Marcus & Millichap** ($4.99M connected value) at the top of the enrolment list —
+we were one step from cold-prospecting a competitor's brokerage as if it were a landlord. Sizing it:
+
+| source | owner rows | brokerage-as-owner |
+|---|---|---|
+| `relationship_graph` | 1,763 | **42** |
+| `domain_true_owner` | 401 | **4** |
+| `supersession` | 418 | **0** ← the 20260907 guard held |
+
+**Two distinct classes needing different fixes:**
+- **(a) ~35 suffix-polluted names** — `1121 California Avenue LLC by Capital Pacific`,
+  `DP Brighton LLC by Marcus & Millichap`, `Michvet LLC by Northmarq`. **The owner is correct; the name
+  carries a CoStar "by &lt;broker&gt;" suffix.** This is the `_BROKER_SUFFIX_RE_R5` defect `detail.js`
+  already strips *defensively on render* — the underlying data was never cleaned, so the pollution rides
+  into exports, comps, matching and dedupe. Fix at source.
+- **(b) ~11 pure brokerages as owner** — `Marcus & Millichap`, `Capital Pacific`, `Stan Johnson Co`,
+  `Lee & Associates`, `Trammell Crow Co (CBRE)`, `NAI Pfefferle`, `Svn®`. **The owner is wrong.**
+
+Not fixed here — they need different treatments and their own dry-run. `lcc_owner_name_is_brokerage()`
+(built for the supersession tier) is the ready-made detector. **Next data unit.**
+
 ## 5. Doc trail (all linked from CLAUDE.md "Pointers to canonical docs")
 - `property-owner-subsystem.md` + `property-owner-source-authority-and-doctrine.md`
 - `access-scoping-and-my-work.md`
