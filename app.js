@@ -3391,21 +3391,32 @@ async function loadMarketing() {
         }
       }
 
-      // Load opportunities separately — paginated to capture all rows (DB has 11K+)
+      // Load opportunities — 11,831 rows of v_opportunity_domain_classified.
+      //
+      // PERF 2026-08-15: this was a hand-rolled STRICTLY SEQUENTIAL loop, so a
+      // live page load showed 12 round-trips one after another (console:
+      // "[Marketing] Opportunities page 1..12"). Serial paging multiplies
+      // latency by page count, and the count grows with the table.
+      //
+      // Now uses diaQueryAllThrottled — the concurrency-4 pager that R2-W-6
+      // specified and deferred in dialysis.js. Deliberately NOT unbounded
+      // parallel: QA-27 shipped that and QA-33/R2-W-6 rolled it back twice
+      // because N concurrent page requests overwhelm Vercel/Supabase/browser
+      // when several dashboards stack pagers. Four is the documented ceiling.
+      //
+      // `select` stays '*': the matview has 21 columns and the mapper below
+      // reads 19 of them, so a column list would save ~2 fields — not worth
+      // the drift risk of maintaining a hand-written list against a matview.
       let opportunitiesRaw = [];
       try {
-        let oppOffset = 0;
-        const OPP_PAGE = 1000; // Must match PostgREST max-rows (1000)
-        for (let pg = 0; pg < 15; pg++) { // safety cap: 15 pages = 15,000 rows max
-          const batch = await diaQuery('v_opportunity_domain_classified', '*', { limit: OPP_PAGE, offset: oppOffset });
-          if (!batch || batch.length === 0) break;
-          opportunitiesRaw = opportunitiesRaw.concat(batch);
-          console.debug('[Marketing] Opportunities page ' + (pg + 1) + ': ' + batch.length + ' rows (total: ' + opportunitiesRaw.length + ')');
-          var statusEl = document.getElementById('mktLoadStatus');
-          if (statusEl) statusEl.textContent = 'Loading opportunities... ' + opportunitiesRaw.length.toLocaleString() + ' rows';
-          if (batch.length < OPP_PAGE) break;
-          oppOffset += OPP_PAGE;
-        }
+        var statusEl0 = document.getElementById('mktLoadStatus');
+        if (statusEl0) statusEl0.textContent = 'Loading opportunities...';
+        opportunitiesRaw = (typeof diaQueryAllThrottled === 'function')
+          ? await diaQueryAllThrottled('v_opportunity_domain_classified', '*', {}, 4)
+          : await diaQueryAll('v_opportunity_domain_classified', '*', {});
+        console.debug('[Marketing] Opportunities loaded: ' + opportunitiesRaw.length + ' rows (throttled-parallel, concurrency 4)');
+        var statusEl = document.getElementById('mktLoadStatus');
+        if (statusEl) statusEl.textContent = 'Loaded ' + opportunitiesRaw.length.toLocaleString() + ' opportunities';
       } catch (e) {
         console.warn('Opportunity domain query failed, will retry in 10s:', e.message);
       }

@@ -212,6 +212,76 @@ async function diaQueryAll(table, select, params = {}) {
   return all;
 }
 
+/**
+ * THROTTLED-parallel pagination — the fix R2-W-6 named and deferred above.
+ *
+ * History matters here. QA-27 made dia pagination fully parallel (N concurrent
+ * requests, one per page); QA-33 rolled back the same change on gov because it
+ * "overwhelms Vercel/Supabase/browser" when several dashboards stack pagers in
+ * a Promise.all. R2-W-6 reverted dia to serial and wrote down the correct
+ * answer: *"A throttled-parallel approach (concurrency=4) is the better
+ * long-term fix; deferred for both gov + dia."* This is that, at exactly that
+ * concurrency — NOT a re-run of the unbounded version that was reverted twice.
+ *
+ * Why it is needed: the Marketing loader was pulling 11,831 rows of
+ * v_opportunity_domain_classified in 12 STRICTLY SEQUENTIAL round-trips on
+ * page load (measured 2026-08-15). Serial paging makes latency multiply by
+ * page count; a cap of 4 keeps the concurrent-request count bounded and
+ * constant no matter how large the table grows.
+ *
+ * Correctness notes:
+ *  - Page 0 is fetched with includeCount so the total is known up front and
+ *    the remaining offsets can be planned. Without a count we fall back to the
+ *    original serial loop rather than guessing.
+ *  - Results are written into a positional array and flattened, so the output
+ *    order is identical to the serial version regardless of completion order.
+ *  - The 2-minute fuse from diaQueryAll is preserved.
+ *
+ * ⚠️ OFFSET pagination without an ORDER BY is only stable if the underlying
+ * relation returns rows consistently. That caveat is inherited from the serial
+ * version, not introduced here — callers that need a guaranteed-stable page
+ * boundary should pass `order`.
+ */
+async function diaQueryAllThrottled(table, select, params = {}, concurrency = 4) {
+  const pageSize = 1000;   // PostgREST max-rows cap
+  const maxTime = 120000;  // same 2-minute fuse as diaQueryAll
+  const start = Date.now();
+
+  const first = await diaQuery(table, select, { ...params, limit: pageSize, offset: 0, includeCount: true });
+  const rows0 = (first && Array.isArray(first.data)) ? first.data : [];
+  const total = (first && typeof first.count === 'number') ? first.count : null;
+
+  if (rows0.length < pageSize) return rows0;           // single page, done
+  if (total == null || total <= pageSize) {
+    // No usable count — fall back to the proven serial loop rather than guess.
+    return diaQueryAll(table, select, params);
+  }
+
+  const pages = Math.ceil(total / pageSize);
+  const out = new Array(pages);
+  out[0] = rows0;
+
+  let next = 1;
+  const worker = async () => {
+    while (true) {
+      const page = next++;
+      if (page >= pages) return;
+      if (Date.now() - start > maxTime) {
+        console.warn('diaQueryAllThrottled(' + table + ') fuse hit at page ' + page + '/' + pages);
+        return;
+      }
+      const rows = await diaQuery(table, select, { ...params, limit: pageSize, offset: page * pageSize });
+      out[page] = rows || [];
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, pages - 1) }, worker));
+
+  const flat = [];
+  for (const chunk of out) if (chunk) flat.push(...chunk);
+  return flat;
+}
+window.diaQueryAllThrottled = diaQueryAllThrottled;
+
 // Single-page fetch with count — for server-side pagination
 async function diaQueryPage(table, select, params = {}) {
   const { filter, filter2, order, limit = 25, offset = 0 } = params;

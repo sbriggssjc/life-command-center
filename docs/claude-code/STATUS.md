@@ -98,6 +98,33 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-15h (Cowork) — Marketing: 12 sequential round-trips → throttled-parallel
+
+Branch **`claude/marketing-throttled-pager`**. Frontend only — ships on the next Railway redeploy.
+
+**Two of my own assumptions were wrong, and checking them changed the fix:**
+1. *"`select=*` is wasteful."* It isn't — `v_opportunity_domain_classified` is a **matview with 21 columns
+   and the mapper reads 19**. A hand-written column list would save ~2 fields and add drift risk against a
+   matview. Left as `*`.
+2. *"Just parallelise the pages."* **That was shipped and rolled back twice** — QA-27 on dia, QA-33 on gov —
+   because N concurrent page requests overwhelm Vercel/Supabase/browser when dashboards stack pagers in a
+   `Promise.all`. R2-W-6 reverted dia to serial and wrote the correct answer in the comment:
+   *"A throttled-parallel approach (concurrency=4) is the better long-term fix; deferred for both gov + dia."*
+
+**So I built the deferred fix at exactly that concurrency**, rather than repeating the reverted one:
+`diaQueryAllThrottled(table, select, params, concurrency = 4)` in `dialysis.js`. Page 0 is fetched with
+`includeCount` to plan the rest; results land in a positional array so output order matches the serial
+version regardless of completion order; the 2-minute fuse is preserved; **no usable count ⇒ falls back to
+the proven serial `diaQueryAll` rather than guessing a page count and silently truncating.**
+
+Marketing's hand-rolled 15-page sequential loop now calls it. **12 sequential round-trips → 3 waves of 4.**
+The deferred-retry path stays serial on purpose — it only fires when the first attempt returned zero, and
+parallelising a retry after a failure turns a blip into an outage.
+
+Tests: new `test/dia-throttled-pager.test.mjs` (9). The load-bearing ones assert the **concurrency cap
+holds at 50 pages** — a future "simplification" to `Promise.all(pages.map(…))` is exactly the twice-reverted
+regression, so it now fails loudly. **70 pass** across the three perf/UI suites.
+
 ## Session 2026-08-15g (Cowork) — decisions?summary=1: stop paging history for badges
 
 Branch **`claude/decisions-summary-perf`** (`6cf0c443`) · migration
