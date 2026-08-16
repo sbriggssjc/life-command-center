@@ -51,6 +51,30 @@ Housekeeping: 115 prompt + response filed to `done/` (Claude Code noted it could
 
 ---
 
+## Post-redeploy status — 2026-08-16 (Cowork): handler fix LIVE, but corpus still 24 — sweep flow is body-broken
+
+PR #1755 merged + redeployed (handler fix live). Corpus body count is **still 24**, and the job data (last 24h,
+`outlook.message.extract`) explains it — it is NOT a handler regression:
+- **19,184 jobs = the existing INBOUND bridge** (`from` = string, **no `body` in payload**). High-volume Inbox
+  ingestion that carries no body → can't fill the corpus. (If inbound bodies are ever wanted, that flow needs the
+  same `$select=body`; separate from the voice-corpus/sent goal.) Note the volume — ~19K/day; worth confirming
+  it's not a runaway scheduled sweep.
+- **50 jobs = Scott's sweep flow's `setProperty` runs** — **bodyless** (the `setProperty` tweak stripped the body).
+- **25 jobs = Scott's ORIGINAL 18:41 run** — full bodies → these are the 24 that landed (24 not 25: one no-tracked-party).
+
+**So to backfill the 23,578-row corpus, Scott's sweep flow needs TWO changes before re-running:**
+1. **Revert the `setProperty` tweak** back to `"body": @{items('Apply_to_each')?['body']}` — the original shape
+   carried the full body; the handler fix now persists it. (`setProperty` was never needed; it broke the body.)
+2. **Add backward pagination** (OUTLOOK_BODY_SWEEP_FLOW.md Phase 2 / Part A backward pass) — the current flow has
+   no `$filter`, so it only grabs the 25 most-recent Sent and re-running re-pulls the same 25. Cursor walk:
+   `&$filter=sentDateTime lt @{variables('cursor')}`, `$top=25&$orderby=sentDateTime desc`, set `cursor`=oldest
+   per page, stop on a short page.
+
+With both in + the fix live, body-carrying jobs fill `email_bodies` in place; repeated sweeps are safe (the
+null-erasure guard from 115). **Cowork can't trigger PA flows — Scott runs the sweep; Cowork watches the count.**
+
+---
+
 ## Last night's runs — 2026-08-15 (Cowork review)
 
 All live crons fired and produced; nothing red. Highlights:
