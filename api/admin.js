@@ -8447,14 +8447,38 @@ async function handleDecisionsList(req, res) {
   // workable count (universe − decided), each labeled with its mode so the chip
   // number means the same thing ("things to work") regardless of mode.
   if (req.query.summary) {
-    const seededR = await opsQuery('GET', 'v_lcc_decision_open_counts?select=decision_type,n');
+    // PERF 2026-08-15: this branch used to call fetchExcludedRefs(t) per lane,
+    // which PAGES every non-open subject_ref for the type in 1000-row
+    // SEQUENTIAL pages and materialises them into a Set — purely to read
+    // `.size`. Roughly 18 sequential cross-region round-trips to produce 17
+    // integers, on a page-load path measured at 16.2s. `summary` never needs
+    // the refs themselves, only the count, so it now reads them all in ONE
+    // query from v_lcc_decision_excluded_counts.
+    //
+    // The view uses count(DISTINCT subject_ref) because fetchExcludedRefs
+    // returns a Set: match_disambiguation has 1,231 decided rows but only
+    // 1,044 distinct refs, so a plain count(*) would under-report that badge
+    // by 187. The LIST branch below still uses fetchExcludedRefs — it needs
+    // the actual refs to filter rows, not just the size.
+    const [seededR, exclR] = await Promise.all([
+      opsQuery('GET', 'v_lcc_decision_open_counts?select=decision_type,n'),
+      opsQuery('GET', 'v_lcc_decision_excluded_counts?select=decision_type,n_excluded'),
+    ]);
     const seeded = (seededR.ok && Array.isArray(seededR.data)) ? seededR.data : [];
+    const exclByType = new Map();
+    if (exclR.ok && Array.isArray(exclR.data)) {
+      for (const row of exclR.data) exclByType.set(row.decision_type, Number(row.n_excluded) || 0);
+    }
     const lanes = seeded.map((l) => ({ decision_type: l.decision_type, n: Number(l.n) || 0, mode: 'seeded' }));
     const fed = await Promise.all([...FEDERATED_DECISION_TYPES].map(async (t) => {
       try {
-        const [src, excl] = await Promise.all([fetchFederatedSource(t, 1), fetchExcludedRefs(t)]);
-        const n = (typeof src.total === 'number') ? Math.max(0, src.total - excl.size)
-                : Math.max(0, src.items.length - excl.size);
+        const src = await fetchFederatedSource(t, 1);
+        // Fall back to the paged Set only if the view read failed outright, so
+        // a view/grant problem degrades to the old behaviour rather than
+        // silently reporting inflated badges.
+        const exclN = exclR.ok ? (exclByType.get(t) || 0) : (await fetchExcludedRefs(t)).size;
+        const n = (typeof src.total === 'number') ? Math.max(0, src.total - exclN)
+                : Math.max(0, src.items.length - exclN);
         return { decision_type: t, n, mode: 'federated' };
       } catch (_e) { return { decision_type: t, n: 0, mode: 'federated' }; }
     }));
