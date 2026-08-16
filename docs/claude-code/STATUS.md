@@ -98,6 +98,45 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-15i (Cowork) — BROWSER re-measure, and a retraction
+
+Driven directly in Scott's browser (Claude-in-Chrome) against merged build `41e03651a6b9`, two consecutive
+loads to separate cold-start. Full detail: `panel-redesign-verification.md` §4.2d.
+
+| Endpoint | Original | Warm now | |
+|---|---|---|---|
+| `decisions?summary=1` | 16,199 ms | **10,100 ms** | **−38%** ✔ |
+| `bd_worklist&limit=5` | 8,192 ms | **8,171 ms** | ❌ **no change** |
+| `priority-queue?limit=5` | not captured | **5,776 ms** | ⚠ new |
+| wall-clock to last API | — | 13.9 s | |
+
+### ⚠️ Retraction — my "bd_worklist 4.2× faster" claim does not apply
+
+I measured `v_lcc_bd_worklist` at `LIMIT 5` **with no ORDER BY**, which short-circuits after five rows. The
+handler runs `ORDER BY rank_value DESC LIMIT 150`, and an ORDER BY materialises the **whole view**:
+
+| shape | execution |
+|---|---|
+| `LIMIT 5`, no ORDER BY *(what I measured)* | 321 ms |
+| `ORDER BY … LIMIT 25` | **18,561 ms** |
+| `ORDER BY … LIMIT 150` *(the handler)* | **19,320 ms** |
+
+**The limit is irrelevant** — so the fix I was about to ship (shrink the handler's `CAP` 150 → ~3× limit)
+would have done nothing. That would have been my third wrong claim on this endpoint; measuring first is the
+only reason it didn't ship.
+
+**Real cause, now precisely located:** `SubPlan 2` is a correlated aggregate running **1,648 times** — once
+per candidate person — each re-aggregating ~3,681 organizations *and* linearly re-filtering the entire
+15,981-row `owner_link` CTE (`Rows Removed by Filter: 15981`, per loop). The index + ANALYZE were correct
+and durable (they fixed the CTE seq scan and the planner estimates) but cannot fix a per-row correlated
+subquery. That needs a **view rewrite** → **prompt 115**, written and grounded in the plan output. Not
+attempted here: it changes a shared BD surface (home rail, My Day, worklist) and deserves its own dry-run
+rather than being bolted onto a pass I have already been wrong about twice.
+
+**Honest scoreboard:** `decisions?summary=1` genuinely improved by 6.1s. The stats/index work is correct but
+did not move the endpoint it was aimed at. `bd_worklist` and `priority-queue` remain open and are now
+diagnosed rather than guessed at.
+
 ## Session 2026-08-15h (Cowork) — Marketing: 12 sequential round-trips → throttled-parallel
 
 Branch **`claude/marketing-throttled-pager`**. Frontend only — ships on the next Railway redeploy.

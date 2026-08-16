@@ -364,6 +364,53 @@ Also visible in the same load: `[sales-comp xref] 44 price disagreement(s)` (alr
 `sales_price_xref_conflict` in dia `v_data_quality_issues`), and auth running in **dev-fallback** mode
 (expected pre-enforcement; see `docs/AUTH_ENFORCEMENT_ROLLOUT.md`).
 
+### 4.2d BROWSER RE-MEASURE, 2026-08-15 — and a claim of mine that did NOT hold
+
+Driven directly in Scott's browser (Claude-in-Chrome) against the merged build `41e03651a6b9`, using the
+Resource Timing API. Two consecutive loads, so cold-start is separated from steady state.
+
+| Endpoint | Scott's original | Warm re-measure | Verdict |
+|---|---|---|---|
+| `/api/decisions?summary=1` | 16,199 ms | **10,100 ms** | **−38%** ✔ real improvement |
+| `/api/operations?action=bd_worklist&limit=5` | 8,192 ms | **8,171 ms** | ❌ **NO CHANGE** |
+| `/api/priority-queue?limit=5` | *(not captured)* | **5,776 ms** | ⚠ new find |
+| `/api/review-counts` | 1,507 ms | 1,690 ms | ~flat |
+| `action=cadence_dashboard&limit=200` | 1,526 ms | 1,488 ms | ~flat |
+| wall-clock to last API | — | **13.9 s** | |
+
+#### ⚠️ Retraction: the "4.2× faster bd_worklist" claim does not apply
+
+I reported `v_lcc_bd_worklist` going 1,334 ms → 321 ms after the index + ANALYZE. That measurement was
+real but **measured the wrong query shape**. I ran `LIMIT 5` with no `ORDER BY`, which short-circuits after
+five rows. The handler runs `order=rank_value.desc.nullslast&limit=150`, and an ORDER BY forces the **entire
+view to materialise** before the limit applies.
+
+Measured properly, against the shape the handler actually uses:
+
+| Query shape | Execution |
+|---|---|
+| `LIMIT 5`, no ORDER BY *(what I measured)* | **321 ms** |
+| `ORDER BY rank_value LIMIT 25` | **18,561 ms** |
+| `ORDER BY rank_value LIMIT 150` *(the handler)* | **19,320 ms** |
+
+**The limit is irrelevant** — 25 and 150 cost the same. So the fix I was about to ship (shrink the handler's
+`CAP` from 150 to ~3× the caller's limit) would have achieved **nothing**, and would have been my third
+wrong claim on this endpoint. Measuring first is the only reason it didn't ship.
+
+**The real cost is `SubPlan 2` — a correlated aggregate that runs 1,648 times**, once per candidate person,
+each time re-running a `GroupAggregate` over ~3,681 organizations plus a full re-filter of the 15,981-row
+`owner_link` CTE (`Rows Removed by Filter: 15981`, per loop). The index and ANALYZE did help — they fixed
+the CTE's seq scan and the planner's row estimates — but they cannot fix a per-row correlated subquery.
+That needs a **view rewrite**: hoist the owner→portfolio rollup out of the correlation and join it once.
+
+Specified in `docs/claude-code/prompts/115-bd-worklist-view-correlated-subplan.md`. Not attempted here —
+it changes a shared BD surface that My Day, the worklist and the home rail all read, and it deserves its own
+dry-run rather than being tacked onto a perf pass I have already been wrong about twice.
+
+**The honest scoreboard for the perf work:** `decisions?summary=1` genuinely improved (−6.1 s). The index +
+ANALYZE are correct and durable but did not move the endpoint they were aimed at. `bd_worklist` and
+`priority-queue` are still open, and now precisely diagnosed.
+
 ### 4.3 One command that resolves UI-0 and UI-1
 
 Run in the browser console with a property panel open, and paste the output:
