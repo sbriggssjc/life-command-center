@@ -98,6 +98,43 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-15g (Cowork) — decisions?summary=1: stop paging history for badges
+
+Branch **`claude/decisions-summary-perf`** (`6cf0c443`) · migration
+`20260910120000_lcc_decision_excluded_counts.sql` **applied live**.
+
+**Two hypotheses disproved before changing anything** (recorded so nobody re-tests them): it was **not the
+SQL** (`v_lcc_decision_open_counts` runs in **85ms**) and **not sequential federation** (`admin.js:8453`
+already uses `Promise.all`).
+
+**The actual cost:** summary mode called `fetchExcludedRefs(type)` **once per federated lane**. That function
+pages every non-open `subject_ref` for the type in **1000-row sequential pages** and materialises them into a
+Set — purely so the caller can read `.size`. Roughly **18 sequential cross-region round-trips to produce 17
+integers** (LCC Opps us-east-1, dia us-west-1, gov us-west-2). Summary now reads them all in **one query**
+from `v_lcc_decision_excluded_counts`.
+
+**`count(DISTINCT subject_ref)`, not `count(*)`** — `fetchExcludedRefs` builds a *Set*, so `.size` is a
+distinct count. `match_disambiguation` has **1,231 decided rows but only 1,044 distinct refs**; a plain
+`count(*)` would have under-reported that badge by 187 and every other duplicated lane likewise. Verified
+equivalent across all 16 live decision types — **zero mismatches**.
+
+**Fails safe:** if the view read fails (missing view/grant) the code falls back to the paged Set rather than
+defaulting the exclusion to 0, which would silently *overstate* every federated badge. The LIST branch is
+unchanged — it needs the actual refs, not the size.
+
+Tests: new `test/decisions-summary-perf.test.mjs` (5). One failed first time by matching the code **comment**
+that names `fetchExcludedRefs` — the same trap as `panel-redesign.test.mjs`, so it now strips comments before
+asserting. **61 pass** across both suites.
+
+### Remaining perf work
+1. **Marketing 11,831-row / 12-round-trip pull** — `select=*`, sequential pages, whole table fetched to
+   compute mostly counts and one filtered page.
+2. **`count=exact` elsewhere** — `fetchFederatedSource` still does one exact count per lane
+   (`admin.js:7267`), and `admin.js:566`/`domCount` do `select=*&limit=1` with `count=exact` purely for
+   badge numbers. Now the dominant remaining term; measure per-lane before changing.
+3. **Cross-region latency** — three Supabase projects in three regions; every federated lane is a
+   cross-country round trip. Architectural, not a quick fix.
+
 ## Session 2026-08-15f (Cowork) — page-load performance: stale stats + a missing index
 
 Migration `20260909120000_lcc_perf_stats_and_rel_type_index.sql`, applied live.
