@@ -98,6 +98,42 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-16b (Cowork) — brokerage-as-owner classified; the obvious fix was wrong
+
+Branch **`claude/brokerage-owner-prompt-116`**. Analysis + prompt only — **no data changed**.
+
+Exact split of the 46: **(a) 27 suffix-polluted** (`"<owner> by <brokerage>"` — owner correct, name carries
+a CoStar artefact) · **(b) 19 rows / 7 distinct pure brokerages** (owner wrong): Marcus & Millichap,
+Capital Pacific, Stan Johnson Co, Lee & Associates, NAI Pfefferle, Svn®, Trammell Crow Co (CBRE).
+
+**⚠️ The obvious fix — strip the suffix — is wrong.** The dry-run produced 27 clean, plausible names, but
+**17 of the 27 collide with an entity that already exists under the clean name** (`Mielkemark LLC` has
+*two*). This is a **duplicate-entity problem, not a naming problem**: the CoStar capture minted
+`"X LLC by Broker"` as a separate entity from the existing `"X LLC"`. Renaming in place would create two
+identically-named entities — hiding the duplication and leaving the property pointed at the duplicate, with
+its own split portfolio, cadence and contact history.
+
+Corrected design is **prompt 116**: re-point the owner to the existing clean entity and file the polluted one
+through the *existing* `lcc_merge_entity` path; abstain on the ambiguous 2-candidate case; strip in place only
+where no clean twin exists; remove class (b) into a reversible ledger + review **view**; and — the durable
+part — **add the brokerage guard to the `relationship_graph` feeder, which produced 42 of the 46** and will
+otherwise re-create them. The supersession feeder already has that guard and produced **0**.
+
+I stopped at the prompt rather than implementing: 17 of these need entity **merges**, which is the repo's
+most safety-critical machinery, and I have been reminded three times this week that rushing here produces
+wrong claims.
+
+### ⚠️ Deploy mismatch — UI-4 is NOT live
+
+The redeploy at `a4fc7beb0d79` contains the **docs** commit (`2bbd4e27`), not the UI-4 fix (`6f7ae2d7`).
+Verified by fetching the served `detail.js` — the fix markers are absent. `claude/ui4-asset-lookup-by-id` is
+still 1 ahead of main. **Manual checks M-2/3/4/5 remain blocked** until it merges.
+
+Useful check before declaring a deploy done:
+```powershell
+git branch --no-merged main    # anything listed is NOT deployed
+```
+
 ## Session 2026-08-16 (Cowork) — Prompt 115 reviewed + VERIFIED in the browser
 
 **Prompt 115 = DONE** (PR #1756), migration `20260911120000_lcc_p115_bd_worklist_decorrelate.sql` already
