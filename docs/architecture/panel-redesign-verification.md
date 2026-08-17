@@ -1056,6 +1056,55 @@ convenience — it is a *detector*, because a wrong high-value row floats to the
 top where someone will look at it. I found my own bug within minutes of making
 the lane honest.
 
+### 4.2r P121 — one canonical decision value, and the ordering footgun behind it
+
+P118 and P120 each fixed one lane. Measuring the rest found the same defect in
+four more, with the money concentrated in the smallest lane:
+
+| lane | open | would rank | rent behind rank 0 |
+|---|---|---|---|
+| `sf_link_conflict` | 6 | **6 (100%)** | **$16,053,980** |
+| `sf_link_collision` | 30 | 12 | $8,590,543 |
+| `sf_contact_account_mismatch` | 4 | 3 (cadence only) | $0 |
+| `confirm_true_owner` residue | 2 | 1 | $0 |
+| `junk_entity_name` pipe-composites | 45 | **0** | $0 |
+
+`sf_link_conflict` is **six rows, every one a real owner** — Agree Realty
+($6.9M), HC Government Realty Trust ($5.4M), JB Harrison Properties ($2.0M),
+Cove Capital ($1.0M) — at the bottom of every sort because its producer never
+set a rank. (And the junk lane's 45 pipe-composites independently re-confirm the
+P120 finding: zero value, so no splitter was ever warranted.)
+
+**Defined once, not a fourth time.** `lcc_decision_entity_value(uuid)` is now the
+single definition. Pasting the expression again is precisely the failure this
+repo keeps re-learning — P116's strict-core vs fuzzy-core, the
+`NON_REACHABLE_ROLES` pair that must be edited in two places, the three
+definitions of owner-reachable. A comment on the function says any new
+value-ranked lane must call it.
+
+**Fill-blanks, so it cannot fight a better producer.** It only stamps rank 0/NULL.
+P118 deliberately ranks `confirm_true_owner` by the **asset's** rent — the
+decision is about one building, not the owner's whole book — which is a different
+and correct value. Verified after: that lane's median is unchanged at $498,431,
+and P120's junk-lane median is unchanged too.
+
+**The ordering footgun, which is the real reason this needed a wrapper.**
+`lcc_open_decision` re-stamps `rank_value` on every reseed
+(`ON CONFLICT DO UPDATE SET rank_value = EXCLUDED.rank_value`). So a rerank that
+runs *before* the refresh is silently undone 15 minutes later — it would have
+looked like it worked, then quietly reverted. `lcc_refresh_and_rerank_decisions()`
+fixes the order in code, and cron job 98 (`lcc-decision-refresh`, every 15 min)
+was repointed at it so no caller can get it wrong.
+
+Verified live: 6/6 and 12/30 ranked; re-run writes 0 rows; both prior lanes
+untouched; **$366M of rent now visible across ranked lanes**; open total 406.
+
+**A small correction to my own reading along the way:** the "top of
+`sf_link_collision`" query returned NULL and I nearly treated it as a data
+problem. It was my SQL — Postgres `ORDER BY … DESC` puts NULLs **first**, so the
+top four rows were unranked and the string concat nulled the whole aggregate. The
+data was fine. Checked before reporting, unlike §4.2n.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:
