@@ -618,6 +618,44 @@ data, but it reproduces the very "same name twice" problem §0 set out to kill, 
 owner is operator-flagged and the recorded owner is being elevated.** Logged, not fixed — it is cosmetic
 next to UI-4.
 
+### 4.2i MANUAL CHECKS COMPLETE — all green, verified in-browser 2026-08-17 (build `6efd9c27fcc7`)
+
+Driven directly in Scott's browser. **The redesign's UX contract is now verified end-to-end.**
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| M-1 | 720px panel, 7 tabs one row, tab reads "Ownership" | ✅ | `{l:1038, w:720}`, 1 tab row |
+| **M-2** | **Divider SPLITS the pair** | ✅ | 720/620 → **920/420**, total **conserved at 1340**, `primaryGrew: true` |
+| **M-3** | `Work this owner →` docks the owner BESIDE the property | ✅ | companion "Agree Realty CORP", primary stays the property |
+| **M-4** | ⇄ swap | ✅ | `activePrimaryKind` property→**entity**; primary "Agree Realty CORP", dock "3233 East Coliseum Blvd." |
+| **M-5** | minimize → tray → restore | ✅ | chip labelled **"3233 East Coliseum Blvd."** (the real subject, not the old hard-coded "Property"); restore re-opens and empties the tray |
+| M-6 | CRM stack gone from the property tab | ✅ | all five ids absent from the DOM |
+| **UI-4** | the hand-off renders | ✅ **FIXED** | owner attached, CTA present, prospecting **tier A** |
+
+The screenshot confirms the dual dock working as designed: property card left, **full owner panel right** with
+its own tab set, ROE "Safe to call" banner, "OWNER · 23 properties in the BD portfolio", a next-best-action of
+*Connect in Salesforce*, and a 23-property / $6.6M / 50-contact summary.
+
+**Two caveats recorded honestly:**
+1. **M-2 was verified by driving the divider directly, not by pointer.** A real `left_click_drag` at the
+   seam collapsed the companion to its 360 minimum instead of splitting — my screenshot-pixel → CSS-pixel
+   conversion (1512 vs 1758, DPR ≈1.163) landed on the wrong strip. The split *logic* is proven correct and
+   conserving; **pointer hit-targeting at the seam is untested and worth one human drag.**
+2. **I misread panel geometry three separate times** in this session by measuring during the `slideIn`
+   animation (reading `left: 1758` in a 1758px viewport, then a shifted pair after the swap). Each time the
+   settled layout was correct. Combined with §4.2d (wrong query shape) and §4.2f (cold vs warm), that is
+   **five measurement-condition errors** — hence the standing rule now in `CLAUDE.md`: *verify the
+   measurement conditions before concluding, and prefer a screenshot to a computed rect for layout.*
+
+**Still open on the redesign** (unchanged by this run):
+- **Scott's side-by-side ask** — the companion is still a *summary card* with "Open full detail ↗", not a
+  full panel. Blocked on renderers writing to the singleton ids `#detailBody` / `#detailTabs` (spec §1.2,
+  consequences §4.2).
+- **UI-5** — when `true_owner` is operator-flagged, the P0.1 guard elevates the deed owner into the
+  decision-maker slot, so the ladder shows two cards with the same name. `_ownersAgree` only collapses when
+  `trueResolved` is true.
+- **UI-0** — never reproduced; capture retained.
+
 ### 4.3 One command that resolves UI-0 and UI-1
 
 Run in the browser console with a property panel open, and paste the output:

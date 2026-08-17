@@ -98,6 +98,64 @@ reachability (12), contact-acq (1) — plus the standing junk / naming / owner-r
 
 ---
 
+## Session 2026-08-17 (Cowork) — P116 reviewed + the redesign's manual checks CLOSED
+
+### Prompt 116 = DONE (PR #1757), applied live — and it corrected me twice
+
+**Result verified independently: brokerage-as-owner 46 → 5**, all `relationship_graph`;
+`domain_true_owner` 4 → **0**; `supersession` held at **0**. The 5 remaining are exactly the deliberate
+abstains. Assets with a resolved owner 2,294 → **2,275** — *down by design*, because 19 class-(b) owners were
+removed and "Unresolved" is the honest state.
+
+**My collision count was wrong, and the reason matters.** I measured collisions with an exact
+lowercase compare and reported **17 colliding / 1 ambiguous**. 116 re-scored and found **21 colliding /
+4 ambiguous** (BGC-Havasu, Century Park Partners, Mielkemark, MLC Ranch). More importantly it found that
+`lcc_normalize_entity_name` — the obvious tool — **strips semantic tokens**, collapsing
+`Century Park Partners` and `Century Park Properties LLC` to the same core. Using it would have re-pointed a
+property onto **a different company**. It built `lcc_owner_strict_core()` (SQL mirror of the
+regression-tested JS `strictOwnerCore`) and re-scored on an identity-safe basis. It also surfaced a third
+abstain I never saw: `Michael Moore by Matthews™` is a **person** whose clean twin is an **organization** —
+the person/org conflation. Final class (a): **16 repoint · 6 strip · 4 ambiguous · 1 type-shape.**
+
+**My design reasoning was inverted on one point.** I wrote that renaming "makes the duplication invisible."
+The opposite is true: `v_lcc_merge_candidates` groups on the *normalized name* needing ≥2 members, and
+`"DP Brighton LLC by Marcus & Millichap"` normalizes to `dp brighton by marcus millichap` — which never
+groups with `dp brighton`. **That is precisely why it has been invisible.** So renaming the loser is what
+*surfaces* the pair to the existing detector; 15 of 16 now appear in the lane (4 already auto-mergeable),
+and the 16th (the person) got a `person_duplicate_unmerged` lane rather than being left as silent residue.
+
+It also caught something I had not considered: **`lcc_property_owner_evidence` must be re-pointed too**,
+otherwise the next reconcile pass re-elects the duplicate and silently undoes the fix. Proven by re-running
+the live feeder over all 41 touched assets: 22 kept the corrected owner, 19 returned `no_evidence`, and the
+brokerage count stayed at 5 — **the Unit-4 guard on `relationship_graph` holds.**
+
+**New backlog surfaced, not acted on:** 45 `guard_blocked_candidate` rows — pre-existing assets with
+brokerage-named evidence and no resolved owner. Review view total 70.
+
+### Manual checks CLOSED — all green (build `6efd9c27fcc7`)
+
+M-1 ✅ · **M-2 ✅ divider splits, total conserved 720/620 → 920/420** · **M-3 ✅ owner docks beside the
+property** · **M-4 ✅ swap exchanges primary/companion** · **M-5 ✅ tray chip carries the real subject name** ·
+M-6 ✅ · **UI-4 ✅ fixed and verified live** (owner attached, CTA present, prospecting tier A).
+
+Two caveats: M-2 was proven by driving the divider directly — a real pointer drag landed on the wrong strip
+because of my screenshot-vs-CSS pixel conversion, so **pointer hit-targeting at the seam is worth one human
+drag**. And I misread panel geometry three times by measuring during the slide-in animation; with the
+wrong-query-shape and cold/warm errors that is **five measurement-condition mistakes**, now a standing rule.
+
+### Revised plan
+
+| # | Item | Note |
+|---|---|---|
+| 1 | **Side-by-side full detail** (Scott's ask) | The companion is still a summary card. Blocked on renderers writing to singleton `#detailBody`/`#detailTabs` — the real work is parameterising a mount root. **The last open item on the redesign itself.** |
+| 2 | **UI-5** ladder shows the same name twice on the operator-elevation path | Small, cosmetic, well understood |
+| 3 | 45 `guard_blocked_candidate` + 4 ambiguous + 1 person-dup | Human review lanes, surfaced and waiting |
+| 4 | 15 merge candidates now visible in `v_lcc_merge_candidates` | 4 auto-mergeable |
+| 5 | Perf remainder | Cross-region transport only — architectural, deliberately parked |
+
+**Recommend next: the side-by-side panel** — it's the one thing Scott explicitly asked for that is still
+outstanding, and everything else is now either verified, surfaced for human review, or parked with reasons.
+
 ## Session 2026-08-16b (Cowork) — brokerage-as-owner classified; the obvious fix was wrong
 
 Branch **`claude/brokerage-owner-prompt-116`**. Analysis + prompt only — **no data changed**.
