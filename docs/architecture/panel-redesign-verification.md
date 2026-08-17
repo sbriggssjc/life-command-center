@@ -748,6 +748,67 @@ the "— unresolved — queue LLC / SoS research" call to action survives. Teste
 leaving a single branch on `_ownersAgree` would render a one-column grid with a stranded arrow
 — the failure mode of a partial fix.
 
+### 4.2l P117 — the "0 Properties" defect from §4.2j, root-caused and closed
+
+§4.2j noticed the docked owner reporting `0 Properties` while being the resolved
+owner of the asset in the other panel. That turned out to be **two unrelated
+things**, and it is worth recording that the one I chased first was the wrong one.
+
+**What I checked first, and why it was wrong.** I assumed the NETSTREIT case was
+an instance of a systemic gap and started sizing name pollution. It was not:
+`dia:31857` has **no `lcc_property_owner` row at all**, so it is not in the
+resolved population. The real cause there is entity fragmentation — **seven**
+"Netstreit" entities exist, three typed `person` (a REIT is not a person), with
+`by Matthews™` (brokerage pollution) and `(Non Traded)` (a CoStar buyer-type
+annotation) suffixes that `lcc_normalize_entity_name` cannot group. The chip
+label said `Netstreit Inc` (assets=1, the real one) but navigated by the raw
+name to `NETSTREIT Corp` (assets=0). **The UI-5b fix in §4.2k corrects exactly
+this case** — with the canonical name it now resolves to the entity that holds
+the link.
+
+I then sized that pollution fleet-wide before building on it: **148 entities
+total** (106 broker-suffix, 25 buyer-type annotation, 17 trademark glyph), only
+**8 of which own any asset**. Small. I had nearly generalised a fleet-wide claim
+from one property I happened to open — the sampling error, not a measurement
+error, but the same family as §4.2b–4.2e.
+
+**The real, measured defect underneath it.** Two stores, zero feeder overlap:
+
+| store | read by | fed by |
+|---|---|---|
+| `lcc_property_owner` | the **property** panel's owner | relationship_graph, supersession, domain_true_owner, sf_seller, rel_purchase |
+| `lcc_entity_portfolio_facts` | the **owner** panel's Properties/Rent tiles (via `v_entity_portfolio_all`) | gsa_lease_diff, sales_transaction*, gsa_lease_lessor, county_records, costar |
+
+Nothing bridged them, so 1,951 of 2,337 resolved owner→asset pairs (83.5%) were
+absent from the portfolio store and 1,246 of 1,552 owners (80.3%) rendered
+`0 Properties`. **Docking the two panels side by side is what made this visible** —
+the two numbers had never been on screen at the same time.
+
+| | before | after |
+|---|---|---|
+| owners rendering `0 Properties` | 1,246 / 1,552 (80.3%) | **135 / 1,552** |
+| resolved pairs missing from portfolio | 1,951 (83.5%) | **11** (dia 1.0%, gov 0.2%) |
+| re-run | — | **0 rows** (idempotent) |
+
+**The check that mattered most was the one I ran before writing anything.**
+Portfolio rent is a cadence-admission arm (`bdSignalFromFacts`:
+`portfolioValue >= $500k`), so backfilling it can flood the cadence surface —
+the exact Consumption-Layer failure. Measured first: 228 owners newly cross the
+floor, 156 have no cadence, but only **23 are reachable**. The existing P112
+reachability precondition withholds the other 133, so this adds ~23 real
+cadences, not 156. **No new gate was added** — a second definition of
+"reachable" would drift from the first (P116 lesson).
+
+Second check: `$1.36B` of added annual rent is a big claim, so I verified the
+unit rather than the total — dia median **$26.14/SF**, gov median **$28.02/SF**.
+Correct for dialysis NNN and GSA space; a unit error would show an absurd PSF.
+
+Guards fired as intended (5 brokerage, 6 operator rows refused — a brokerage is
+the agent, an operator is the tenant, neither is a portfolio holder), reusing the
+existing single definitions rather than new ones. Reversible by
+`ownership_source='lcc_property_owner'`; drift detector
+`v_lcc_portfolio_owner_sync_gap`.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:
