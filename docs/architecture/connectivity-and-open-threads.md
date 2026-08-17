@@ -639,6 +639,56 @@ place only where no clean twin exists; remove the class-(b) owners into a revers
 and — the durable part — **add the brokerage guard to the `relationship_graph` feeder, which produced 42 of
 the 46** and will otherwise re-create them. The supersession feeder already has that guard and produced **0**.
 
+### SHIPPED 2026-08-17 — migration `20260817120000_lcc_p116_brokerage_as_owner.sql`, batch `p116_20260817`
+
+**Brokerage-as-owner rows 46 → 5**, and the 5 are exactly the deliberate abstains.
+
+| source | before | after |
+|---|---|---|
+| `relationship_graph` | 42 | **5** |
+| `domain_true_owner` | 4 | **0** |
+| `supersession` | 0 | **0** ← held throughout |
+
+**⚠️ Two of the numbers quoted above (from the single 2026-08-16 dry-run) were wrong, and the correction
+matters.** Re-measured on a **strict identity core**:
+
+- **21 of 27 collide, not 17** — and **4 are ambiguous, not 1**: `BGC-Havasu Project LLC`,
+  `Century Park Partners Inc`, `Mielkemark LLC`, `MLC Ranch, LLC` each have **two** clean twins.
+- The 2026-08-16 dry-run scored identity with **`lcc_normalize_entity_name`**, which strips *semantic*
+  tokens (`partners`, `properties`, `capital`, `group`, `holdings`) — the CLAUDE.md stoplist footgun.
+  Under it **"Century Park Partners" and "Century Park Properties LLC" both collapse to `century park`**,
+  so the plan would have re-pointed a property onto **a different company**. Fixed by adding
+  **`lcc_owner_strict_core()`**, the SQL mirror of the regression-tested JS `strictOwnerCore` /
+  `gov_owner_strict_core`: strip only pure legal-entity forms, keep every semantic token.
+- A third abstain the dry-run never surfaced: **`Michael Moore by Matthews™` is a `person` whose clean
+  twin is an `organization`** — merging those is the person/org conflation `sf-account-link.js` guards
+  against.
+
+Final class (a) disposition (27): **16 repoint · 6 strip in place · 4 review_ambiguous · 1 review_type_shape**.
+
+**Why re-pointing alone was not enough (two mechanisms worth remembering):**
+1. **The rename is what makes the duplicate visible.** `v_lcc_merge_candidates` groups on
+   `lcc_normalize_entity_name` with `count(*) >= 2`; `"DP Brighton LLC by Marcus & Millichap"` normalizes
+   to `dp brighton by marcus millichap`, which **never groups with `dp brighton`** — precisely why the
+   duplication had been invisible. Renaming the loser to the clean name surfaces the pair to the existing
+   lane. **15 of the 16 now appear in `v_lcc_merge_candidates`** (4 already `auto_mergeable`); the 16th is
+   the person, carried by a `person_duplicate_unmerged` lane because that view is organization-only.
+2. **The evidence had to move too.** Without re-pointing `lcc_property_owner_evidence.candidate_owner_entity`,
+   the next `lcc_reconcile_property_owner` pass re-elects the duplicate and silently undoes the correction.
+
+**Unit 4 (the durable fix)** adds `and not lcc_owner_name_is_brokerage(ce.name)` to
+`lcc_reconcile_property_owner` — the *same predicate* `lcc_supersede_property_owner` already carries.
+Because `lcc_property_owner.source` is derived from the evidence this function scores, **one guard covers
+both `relationship_graph` and `domain_true_owner`**. Verified by re-running the live feeder over all 41
+touched assets: 22 kept the corrected owner, 19 returned `no_evidence`, and the brokerage count **stayed 5**.
+
+Consumer: **`v_lcc_p116_brokerage_owner_review`** (70 rows) — `guard_blocked_candidate` 45 ·
+`class_b_owner_removed` 19 · `review_ambiguous` 4 · `review_type_shape` 1 · `person_duplicate_unmerged` 1.
+The `guard_blocked_candidate` lane exists so a **false positive** on the brokerage regex (it matches bare
+`\mmarcus\M`, so a genuine "Marcus Family Trust" would trip it) surfaces rather than failing silently;
+measured today it blocks **exactly** the known brokerages and nothing else. All three units re-run to
+**0/0/0** (idempotent) and are reversible by `batch_tag` via `lcc_p116_brokerage_owner_log`.
+
 ## 5. Doc trail (all linked from CLAUDE.md "Pointers to canonical docs")
 - `property-owner-subsystem.md` + `property-owner-source-authority-and-doctrine.md`
 - `access-scoping-and-my-work.md`

@@ -489,8 +489,30 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   fails to match ITSELF), and `Agree Realty Corp` / `Agree Holdings LLC` both reduce to `agree` and
   score **1.0**. Both were caught by a live dry-run in Prompt 111, one of them a would-be automatic
   write onto the wrong owner. For identity use the STRICT core that strips **only** pure legal-entity
-  forms — `owner-contact-propagate-planner.js::strictOwnerCore` (JS) / `gov_owner_strict_core` (SQL, gov
-  `CLAUDE.md` §20) — and require the core to carry real material before letting equality drive a write.
+  forms — `owner-contact-propagate-planner.js::strictOwnerCore` (JS) / **`lcc_owner_strict_core()`** (SQL,
+  LCC Opps, added P116) / `gov_owner_strict_core` (SQL, gov `CLAUDE.md` §20) — and require the core to carry
+  real material before letting equality drive a write.
+  - **`lcc_normalize_entity_name()` is in the SAME banned-for-identity class** (P116, caught live). It
+    strips `holdings|properties|partners|capital|group|company|co|trust` on top of legal forms, so
+    **"Century Park Partners" == "Century Park Properties LLC"** (both → `century park`). It is correct
+    where it is used — GROUPING candidate duplicates in `v_lcc_merge_candidates`, where a human confirms —
+    but a P116 dry-run that used it to pick a re-point target would have moved a property onto a
+    **different company**. Grouping-for-review ≠ identity-for-write.
+  - **Corollary (P116): a brokerage-polluted name is INVISIBLE to the merge detector.**
+    `v_lcc_merge_candidates` groups on `lcc_normalize_entity_name` needing ≥2 members, and
+    `"DP Brighton LLC by Marcus & Millichap"` normalizes to `dp brighton by marcus millichap` — which never
+    groups with `dp brighton`. Cleaning the stored name is therefore what SURFACES a duplicate, not what
+    hides it. Whenever you correct a captured name, check whether the correction changes its merge grouping.
+- **A brokerage is the agent, never the principal — every owner-writing feeder needs the guard.**
+  `lcc_reconcile_property_owner` had none and produced **42 of 46** brokerage-as-owner rows (P116);
+  `lcc_supersede_property_owner` carried `and not lcc_owner_name_is_brokerage(...)` and produced **0**.
+  The guard now sits on both. Because `lcc_property_owner.source` is derived from the evidence rows the
+  reconcile function scores, that one predicate covers `relationship_graph` AND `domain_true_owner`.
+  **Re-point the EVIDENCE too, not just `lcc_property_owner`** — otherwise the next reconcile pass
+  re-elects the bad candidate and silently undoes the correction. Note the detector matches bare
+  `\mmarcus\M`/`\mnai\M`, so a genuine "Marcus Family Trust" would trip it; the
+  `guard_blocked_candidate` lane of `v_lcc_p116_brokerage_owner_review` exists so a false positive
+  surfaces instead of failing silently (measured 2026-08-17: it blocks exactly the known brokerages).
 - **`entities.email` / `entities.phone` had NO `field_source_priority` ladder** until migration
   `20260903120000` (manual@1 → salesforce@20 → `domain_owner_contact`@55 → costar_sidebar@60), so every
   writer to them was invisible to the provenance doctrine. Register a row when you add another.
