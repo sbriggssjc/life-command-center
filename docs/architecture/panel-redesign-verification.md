@@ -852,6 +852,42 @@ never actually run**.
 This is the same family as §4.2b–4.2e and §4.2j: the numbers were right, the
 thing I was reading them off was wrong.
 
+### 4.2n Property-in-dock verified live (build `5b6fe60f3d6e`) + a compact-header fix
+
+Owner primary (Netstreit Inc) → clicked a row in its portfolio.
+
+| # | Claim | Evidence |
+|---|---|---|
+| PD-1 | the dock renders the FULL property panel | `companionTabs` = `Overview, Rent Roll, Operations, Deal History, Ownership, Documents, Activity Log`; body 18,408 chars (was 1,273 as a card). Screenshot shows Pipeline, Property Information, Actions, Research Quick Links, Data Resolution Status. |
+| PD-2 | **no cross-wiring** — the whole point of the mount pointer | clicked the dock's `Ownership` tab: dock body changed, **primary body byte-identical**, `dockActiveTab = ['Ownership']`. |
+| PD-3 | the dock leaves the hash alone | `hashUnchanged` true — stayed on `d=entity:4a93e98b…:Ownership`, the primary's subject. |
+| PD-4 | no Back in the dock | `companionHasBack` false. |
+| PD-5 | property-beside-property REFUSED | toast `"Open an owner to dock a property beside it"`; the property opened in the PRIMARY slot (`1849 Davisville Rd`) instead of corrupting `_udCache`. |
+| PD-6 | P117 visible in the UI | the same owner panel reads **9 Properties (3 current) · $1.1M Annual Rent · 9 DIA**. It read 0 before P117. |
+
+**Defect found in the screenshot and fixed in the same pass.** The header was laid
+out for the 720px primary. At 620px it collapsed: the title wrapped to three
+lines, `_udKeyFields` re-printed `Address:` directly under a title that IS the
+address, and the comps / Consolidate / Dossier controls pushed the panel controls
+onto their own row with an orphaned `×`. The dock header is now compact —
+identity + panel controls only; the body carries the detail, and the same actions
+live inside the tabs. Title ellipsizes instead of wrapping, in both header renders.
+Test asserts all of it (103 total).
+
+**METHOD FAILURE — I re-committed the exact error from the start of this session.**
+Every `navigate` I issued changed only the **hash** on an already-loaded document,
+so the SPA never reloaded and the page kept running `51c7282b` — *three deploys
+old*. I then watched the dock render a summary card and began diagnosing my
+delegation as broken. It was not: `window.openCompanionProperty` in that page had
+no delegation because it was old code. A path-changing reload (`/?r=…#/…`) showed
+`detail.js?v=5b6fe60f3d6e` and arity 5, and every check passed.
+
+Compounding it, minutes earlier I read `/version`'s `ts` as a build timestamp and
+told Scott "Railway is mid-build". `ts` is regenerated per request — it is the
+clock, not the build. **Rule now: verify the deployed build by comparing the
+served asset's `?v=` SHA inside the live document, never by a hash-only navigate
+and never by `ts`.**
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:

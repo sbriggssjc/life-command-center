@@ -164,10 +164,10 @@ async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
     ${inCompanion ? '' : '<button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>'}
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
-        <div class="detail-title">${esc(title)}</div>
+        <div class="detail-title"${inCompanion ? ' style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"' : ''}>${esc(title)}</div>
         ${locForSubtitle ? `<div class="detail-subtitle">${esc(locForSubtitle)}</div>` : ''}
       </div>
-      <button class="detail-action-btn" title="Open a print-ready property dossier"
+      ${inCompanion ? '' : `<button class="detail-action-btn" title="Open a print-ready property dossier"
         onclick="_udOpenPropertyDossier(this)"
         style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
         Dossier
@@ -178,7 +178,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
         style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px"
         ${ids.property_id ? '' : 'disabled'}>
         🔗 Consolidate
-      </button>
+      </button>`}
       <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
       ${inCompanion && typeof _panelHeaderControls === 'function' ? _panelHeaderControls('companion') : ''}
     </div>
@@ -666,22 +666,30 @@ async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
       const dismissBtn = (db === 'dia' && (fallback.clinic_id || fallback.medicare_id))
         ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
         : '';
+      // The header was laid out for the 720px+ primary slot. Dropped into the
+      // 620px dock it collapsed: the title wrapped to three lines, the key-field
+      // strip re-printed "Address:" directly under a title that IS the address,
+      // and the comps/Consolidate controls squeezed the panel controls onto their
+      // own row. In the dock, keep identity + the panel controls and let the BODY
+      // carry the detail — the full tab set is one click away and the same
+      // actions live inside it.
+      const _compactHeader = inCompanion;
       if (headerEl) headerEl.innerHTML = `
         <div class="detail-header-info">
-          <div style="flex:1">
-            <div class="detail-title">${esc(realTitle)}</div>
+          <div style="flex:1;min-width:0">
+            <div class="detail-title"${_compactHeader ? ' style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"' : ''}>${esc(realTitle)}</div>
             ${_subtitleHtml}
-            ${_udKeyFields(db, synthProperty, ownership)}
+            ${_compactHeader ? '' : _udKeyFields(db, synthProperty, ownership)}
           </div>
-          ${dismissBtn}
-          ${_udLeaseCompsControlHtml(db, propertyId || synthProperty?.property_id || ids.property_id)}
-          <button class="detail-action-btn" id="consolidateBtn"
+          ${_compactHeader ? '' : dismissBtn}
+          ${_compactHeader ? '' : _udLeaseCompsControlHtml(db, propertyId || synthProperty?.property_id || ids.property_id)}
+          ${_compactHeader ? '' : `<button class="detail-action-btn" id="consolidateBtn"
             title="Find duplicate properties + same-tenant clusters"
             onclick="openConsolidateModal('${db}', ${(propertyId || ids.property_id) || 'null'})"
             style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px"
             ${(propertyId || ids.property_id) ? '' : 'disabled'}>
             🔗 Consolidate
-          </button>
+          </button>`}
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
           ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls(_udMount) : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}
         </div>`;

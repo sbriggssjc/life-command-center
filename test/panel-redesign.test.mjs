@@ -430,6 +430,20 @@ describe('property-in-dock — the full tabbed panel, mounted without global cro
       'the dock hid the tab bar for the old summary card; the full panel must show it');
   });
 
+  it('the dock header is COMPACT — 620px cannot carry the primary header furniture', () => {
+    // Seen live: at 620px the title wrapped to three lines, the key-field strip
+    // re-printed "Address:" under a title that IS the address, and the comps /
+    // Consolidate / Dossier controls pushed the panel controls onto their own row.
+    assert.match(openUD, /_compactHeader \? '' : _udKeyFields/,
+      'the key-field strip must be dropped in the dock');
+    assert.match(openUD, /_compactHeader \? '' : _udLeaseCompsControlHtml/);
+    assert.match(openUD, /inCompanion \? '' : `<button class="detail-action-btn" title="Open a print-ready property dossier"/,
+      'Dossier/Consolidate must be dropped from the dock loading header');
+    // …and the title must ellipsize rather than wrap, in BOTH header renders.
+    const ell = openUD.match(/white-space:nowrap;overflow:hidden;text-overflow:ellipsis/g) || [];
+    assert.ok(ell.length >= 2, `expected both header renders to ellipsize the title, found ${ell.length}`);
+  });
+
   it('closing the dock re-aims the mount pointer so a later refresh cannot render into nothing', () => {
     assert.match(closeCo, /_companionState\.kind === 'property'\)\s*_udMount = 'primary'/);
   });
