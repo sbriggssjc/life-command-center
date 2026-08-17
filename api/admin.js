@@ -83,7 +83,8 @@ import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
-import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask } from './_shared/salesforce.js';
+import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask,
+         updateSalesforceTaskDue, closeSalesforceTask, getOpenTasksForCompliance } from './_shared/salesforce.js';
 import { handleSfOwnerSync, handleOwnerReconcile } from './_handlers/sf-owner-sync.js';
 import { planSfLinkVerdict, sfLinkColumn, sfLinkTarget, parseConflictExistingId } from './_handlers/sf-link-review.js';
 import * as RS from './_shared/sf-link-rescore-planner.js';
@@ -13295,6 +13296,70 @@ async function handleDiag(req, res) {
 
   const user = await authenticate(req, res);
   if (!user) return;
+
+  // ── P125 — SF Task maintenance probe ─────────────────────────────────────
+  // Exercises the three new compliance ops against a SINGLE named Task so the
+  // Power-Automate cases can be verified one at a time, before anything is
+  // wired to the cadence engine.
+  //
+  // It exists because SF_LOOKUP_WEBHOOK_URL is a SIGNED SECRET: the only ways to
+  // test the flow are to paste that URL into a chat (never) or to go through the
+  // app, which already holds it server-side. This is that seam.
+  //
+  //   POST /api/diag?kind=sf-task-probe
+  //     { "op":"update_due", "sf_task_id":"00T…", "activity_date":"2026-09-30" }
+  //     { "op":"close",      "sf_task_id":"00T…" }
+  //     { "op":"open_tasks", "owner_ids":["005…"] }     // read-only audit
+  //
+  // Guards: manager role; POST only; ONE task id per call (never a sweep); and
+  // `close` demands an explicit confirm so a mis-click cannot close a live
+  // pursuit. Writes nothing to LCC — it is a pass-through to the flow.
+  if (req.query.kind === 'sf-task-probe') {
+    const wsId = primaryWorkspace(user)?.workspace_id;
+    if (!requireRole(user, 'manager', wsId)) {
+      return res.status(403).json({ error: 'Manager role required' });
+    }
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'POST only — this op writes to Salesforce' });
+    }
+    const b = req.body || {};
+    const op = String(b.op || '').trim();
+    try {
+      if (op === 'update_due') {
+        const r = await updateSalesforceTaskDue({
+          sfTaskId: b.sf_task_id, activityDate: b.activity_date,
+        });
+        return res.status(200).json({ probe: 'update_due', ...r });
+      }
+      if (op === 'close') {
+        // Closing a pursuit task is destructive to a live workflow. Require the
+        // caller to say so explicitly rather than inferring intent from `op`.
+        if (b.confirm !== true) {
+          return res.status(400).json({
+            error: 'close requires {"confirm": true} — this closes a live pursuit task',
+          });
+        }
+        const r = await closeSalesforceTask({ sfTaskId: b.sf_task_id, status: b.status });
+        return res.status(200).json({ probe: 'close', ...r });
+      }
+      if (op === 'open_tasks') {
+        const r = await getOpenTasksForCompliance({
+          ownerIds: Array.isArray(b.owner_ids) ? b.owner_ids : [],
+          nmType: (b.nm_type === null) ? null : b.nm_type,
+        });
+        return res.status(200).json({ probe: 'open_tasks', ...r });
+      }
+      return res.status(400).json({
+        error: `Unknown op: ${op || '(missing)'}`,
+        known: ['update_due', 'close', 'open_tasks'],
+      });
+    } catch (e) {
+      return res.status(200).json({
+        probe: op, ok: false, reason: 'probe_threw',
+        detail: String((e && e.message) || e).slice(0, 300),
+      });
+    }
+  }
 
   // Lightweight env-var presence probe — no secret required. Added after the
   // 2026-04-24 outage where OPS_SUPABASE_KEY went missing from Vercel Prod
