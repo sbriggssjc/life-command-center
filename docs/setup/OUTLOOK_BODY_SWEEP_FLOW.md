@@ -182,10 +182,14 @@ Inbox: same, but `mailFolders/Inbox/messages` and filter/order on
   - `X-LCC-Key: <operator key>` — the receiver runs `authenticate`; use the same
     operator key/connection the other operator-scoped flows use.
   - `X-LCC-Workspace: a0000000-0000-0000-0000-000000000001`
-  - `X-LCC-Source-User-Id: 1d3f7321-a4ad-4f83-9c7b-489554fc1c51` — **required**
-    (`requireSourceUser`). This is Scott's `lcc_users.lcc_user_id`; the handler
-    errors `missing_source_user_id` without it. The receiver injects it into each
-    enqueued payload as `_source_user_id` and stamps it onto `email_bodies.source_user_id`.
+  - `X-LCC-Source-User-Id: b0000000-0000-0000-0000-000000000001` — **required**
+    (`requireSourceUser`). ⚠ **Use the `public.users` id (`b0000000-…-0001`), NOT the `lcc_users` id
+    (`1d3f7321-…`).** `email_bodies.source_user_id` FKs `public.users(id)`; the `lcc_users` id lives in a
+    disjoint id space and FK-violates → **`upsert_409`** (Prompt 116 — the FK 23503 that PostgREST reports as 409;
+    this was the systematic body-drop, see the STATUS 2026-08-17 milestone). Post-Prompt-116 the handler
+    NORMALIZES any inbound id to a real `public.users.id` via `resolveSourceUserId` (pass-through → `lcc_users`
+    → email → `users` → null), so either id now works — but send the `public.users` id to be safe. The receiver
+    injects it into each enqueued payload as `_source_user_id` and stamps it onto `email_bodies.source_user_id`.
 - **Body** — the receiver expects a `records` **array** (one or many messages per
   POST). Pass the Graph message object through as one record, keeping the raw
   Graph field names (`id`, `internetMessageId`, `body`, `from`, `toRecipients`,

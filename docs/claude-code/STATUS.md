@@ -10,6 +10,47 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Milestone 2026-08-17 — voice corpus FILLING (24 → 654 full bodies); the `upsert_409` was an FK, not a conflict
+
+**Prompt 116 closed the real, final blocker. `email_bodies` full bodies: 24 → 654** (all `body_format='html'`,
+324–248,516 chars, verified `<html>…</html>` intact), `upsert_409` errors → 0, and the PA sweep has walked back
+to **2026-05-03** and counting. The voice corpus is finally filling from Scott's real Sent history.
+
+**The true root cause — my Prompt-116 premise was half wrong (it was NOT a merge-duplicates conflict):**
+- `upsert_409` was a **foreign-key violation (SQLSTATE 23503)**, which PostgREST maps to HTTP 409 *identically*
+  to a unique conflict (23505) — so the status code was unreadable. The live Postgres log named it:
+  `violates foreign key constraint "email_bodies_source_user_id_fkey"`.
+- `email_bodies.source_user_id` FKs `public.users(id)`. **The sweep sent the `lcc_users` id
+  `1d3f7321-…` where the working forward path sends the `public.users` id `b0000000-…-0001`** — same person,
+  disjoint id spaces (the exact P116 id-collision footgun in CLAUDE.md). Every one of the 10,510 bad-id jobs
+  409'd; the 112,030 good-id jobs never did. **⚠ This traces to Cowork's own sweep walkthrough + the
+  `OUTLOOK_BODY_SWEEP_FLOW.md` doc, which specified the `lcc_users` id in the `X-LCC-Source-User-Id` header.**
+- Wider than reported: the same bad id was also silently killing `activity_events` timeline writes (423 FK
+  rejections/24h, swallowed as best-effort). And the PA sweep was correct all along — the bodies were on disk.
+
+**The fix (`api/_shared/source-user-id.js` — the P116 `resolveSourceUserId`):** normalizes ANY inbound id to a
+real `public.users.id` (pass-through → `lcc_users` → email → `users` → null), wired into both handlers (also
+covers `meetings.source_user_id` + `activity_events.actor_id`). An unresolvable id writes NULL into the nullable
+provenance column rather than 409'ing the whole row — losing a mailbox stamp is recoverable, losing a 250 KB body
+isn't. `body_persist_detail` now carries the DB's own code/message so the next 409 self-diagnoses. 11 new tests
+(FK-first, merge-duplicates-when-asked, DO-UPDATE-payload-cols-only; mutation-checked). PR **#1758** (merged to
+origin/main; migration `20260914120000` — retimestamped off a P118 collision).
+
+**Live counts:** 654 = 465 blank rows filled + 165 rows the FK had blocked from existing + 24 from P115. Re-run
+probe 0/0/0 (idempotent); 630 reversal rows.
+
+**⚠ TWO REMAINING STEPS (Scott):**
+1. **Railway redeploy of merged main** — the DB backfill is live (hence 654), but the **handler fix isn't
+   deployed yet**, so the ongoing sweep is STILL 409'ing new jobs. Redeploy makes it durable.
+2. **After redeploy, keep the sweep running** — it walks back a chunk per run (currently at May 2026); re-run to
+   continue toward the full ~23K. Newly-swept + any still-409'd jobs then fill in place (fill-blanks, idempotent).
+
+**Doc correction:** `OUTLOOK_BODY_SWEEP_FLOW.md` `X-LCC-Source-User-Id` should be the `public.users` id
+`b0000000-0000-0000-0000-000000000001` (the handler now normalizes either, but the doc's `lcc_users` id was the
+trigger). 116 prompt/response filed to `done/`.
+
+---
+
 ## Milestone 2026-08-15 — voice corpus body-capture PROVEN end-to-end (0 → 24 full bodies)
 
 **Prompt 115 closed the last blocker on the voice corpus. Verified live: `email_bodies` rows with a >255-char
