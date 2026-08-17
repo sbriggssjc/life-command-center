@@ -618,6 +618,27 @@ we were one step from cold-prospecting a competitor's brokerage as if it were a 
 Not fixed here — they need different treatments and their own dry-run. `lcc_owner_name_is_brokerage()`
 (built for the supersession tier) is the ready-made detector. **Next data unit.**
 
+### Classified + dry-run 2026-08-16 → **prompt 116**, and the design changed
+
+Exact split: **(a) 27 suffix-polluted** (27 distinct owner entities) · **(b) 19 rows / 7 distinct pure
+brokerages** — `Marcus & Millichap`, `Capital Pacific`, `Stan Johnson Co`, `Lee & Associates`,
+`NAI Pfefferle`, `Svn®`, `Trammell Crow Co (CBRE)`.
+
+**⚠️ The obvious fix is wrong.** Stripping the ` by <broker>` suffix produced 27 clean, plausible names —
+but **17 of the 27 collide with an entity that already exists under the clean name** (`DP Brighton LLC`,
+`Michael Moore`, `MassMutual Asset Finance LLC; SMBC…`; `Mielkemark LLC` has **two**).
+
+So this is a **duplicate-entity problem, not a naming problem**: the CoStar capture minted
+`"X LLC by Broker"` as a *separate entity* from the existing `"X LLC"`. Renaming in place would create two
+identically-named entities — hiding the duplication rather than fixing it, and leaving the property pointed
+at the duplicate with its own split portfolio, cadence and contact history.
+
+The corrected design (prompt 116): **re-point** the owner to the existing clean entity and file the polluted
+one through the *existing* `lcc_merge_entity` machinery; abstain on the ambiguous 2-candidate case; strip in
+place only where no clean twin exists; remove the class-(b) owners into a reversible ledger + review view;
+and — the durable part — **add the brokerage guard to the `relationship_graph` feeder, which produced 42 of
+the 46** and will otherwise re-create them. The supersession feeder already has that guard and produced **0**.
+
 ## 5. Doc trail (all linked from CLAUDE.md "Pointers to canonical docs")
 - `property-owner-subsystem.md` + `property-owner-source-authority-and-doctrine.md`
 - `access-scoping-and-my-work.md`
