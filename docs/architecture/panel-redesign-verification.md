@@ -1105,6 +1105,56 @@ problem. It was my SQL — Postgres `ORDER BY … DESC` puts NULLs **first**, so
 top four rows were unranked and the string concat nulled the whole aggregate. The
 data was fine. Checked before reporting, unlike §4.2n.
 
+### 4.2s P122 — two decisions NOT to build, and one invisible gap made visible
+
+`milestone_confirm` (40 rows) was the last unranked lane. I did not rerank it,
+and the reason is worth more than the change would have been.
+
+**First I had to correct myself.** I told Scott its deal reference was "free text
+in `context.deal_name`". Wrong — `context.entity_id` is a real, resolving UUID on
+all 40 rows.
+
+**Then a trap I nearly walked into.** The obvious fix is to populate
+`subject_entity_id` from context so the P121 sweep picks it up. Measured first:
+**40 open rows, 40 distinct `subject_ref`, but only 23 distinct entities — up to
+3 rows share one.** `lcc_open_decision` dedups on
+`COALESCE(subject_entity_id::text, subject_ref, …)`, so populating that column
+would have collapsed the key and **destroyed 17 milestones**. `subject_ref` is
+deliberately the dedup key precisely so several milestones can coexist per deal.
+
+**Then the measurement said don't bother anyway.** 38 of 40 would rank, but every
+one lands on the same flat **$5,000** open-opportunity tier — total $171k across
+the lane. The rank they have today is the extraction **confidence** (0.5–1.0),
+and a low-confidence AI-extracted milestone is exactly what a human should check
+first. Value-ranking would have replaced a useful signal with noise.
+
+**Chasing why the tier was flat found the real gap.** `bd_opportunities.amount`
+is NULL on **all 614 rows** (45 open, 226 closed-won, 607 with `sf_opp_id`).
+
+My first hypothesis — "the SF sync doesn't request Amount" — was wrong twice
+over. The handler *does* map `amount: p.Amount ?? null`. And these opportunities
+are **outbound**: LCC originates them from `property_flow` leads and pushes to
+Salesforce, storing the returned Id. `amount` is empty because LCC never had a
+deal value, not because a sync drops it. Deriving one from rent or price would be
+fabrication, so nothing was backfilled.
+
+What *is* dormant: the inbound path. `api/bridges.js` registers `sf.opportunities`
+→ `salesforce.opportunity.upsert`, and it has **never run** — 0 opportunities in
+`entities.metadata.salesforce.opportunities[]` table-wide. It is gated by a
+Power-Automate flow, not an env var, so **nothing anywhere reported it as off**.
+It read as a pipeline with nothing to say — the exact failure
+`feature_flags_registry` exists to catch.
+
+Registered as `SF_OPPORTUNITY_INBOUND_SYNC`, off since 2026-06-03 (75 days), so
+it clears the >30-day gate and prints in the daily briefing's Dormant
+Capabilities section. The consequence is recorded on the row: every deal in the
+BD spine is value-blind, which is why P121 can only give an open opportunity a
+flat tier.
+
+**Net: two "don't build it" calls and one registration.** Both refusals are
+measured, not asserted — and the second one identified a real, actionable gap
+that had been silently invisible for 75 days.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:
