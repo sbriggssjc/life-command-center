@@ -67,6 +67,61 @@ reached through the bridge ingest receiver. This doc feeds that path.
   `enrichment_jobs.result->>'body_persist_error'`, and the call gets a 20s
   timeout (the 8s `opsQuery` default is thin for a 250 KB write).
 
+- **⚠ The THIRD blocker that was fixed (Prompt 116) — the "upsert 409" was a
+  FOREIGN KEY violation, not a merge-duplicates conflict.** With 114 + 115 in
+  place, the backward Sent-Items sweep was working end-to-end — full bodies in
+  `enrichment_jobs.payload`, contacts resolving — and `email_bodies.body_html`
+  still stayed NULL. Prompt 115's new error field said `upsert_409` on **10,470
+  of 10,510** body-carrying jobs. A 409 on an `on_conflict=…` +
+  `Prefer: resolution=merge-duplicates` POST reads exactly like *"merge-duplicates
+  didn't take, so the existing row 23505'd"*, and that diagnosis is **wrong**:
+
+  > **PostgREST maps BOTH `23505` (unique_violation) AND `23503`
+  > (foreign_key_violation) onto HTTP 409.** The status code alone cannot tell
+  > them apart — read the Postgres log.
+
+  The live log said:
+  ```
+  insert or update on table "email_bodies"
+    violates foreign key constraint "email_bodies_source_user_id_fkey"
+  insert or update on table "activity_events"
+    violates foreign key constraint "activity_events_actor_id_fkey"
+  ```
+  **Root cause: the two user tables.** `email_bodies.source_user_id`,
+  `meetings.source_user_id` and `activity_events.actor_id` all FK
+  `public.users(id)`. LCC also has `lcc_users`, whose id space is **disjoint** —
+  no `lcc_users.lcc_user_id` exists in `public.users` (the footgun already
+  documented in `CLAUDE.md` for `touchpoint_cadence.owner_user_id`). The
+  receiver takes `_source_user_id` **verbatim** from the flow's
+  `X-LCC-Source-User-Id` header, and this sweep's flow was configured with the
+  **`lcc_users`** id `1d3f7321-a4ad-4f83-9c7b-489554fc1c51` while the working
+  forward sweep used the **`public.users`** id
+  `b0000000-0000-0000-0000-000000000001` — *the same person*
+  (`sabriggs@northmarq.com`). So the FK rejected the whole row and the body was
+  dropped. **The bridge between the two id spaces is EMAIL.**
+
+  Two things this exonerates, so nobody re-investigates them:
+  1. **The merge-duplicates upsert was correct all along.** Proven live by a
+     self-rolling-back gate: the identical `ON CONFLICT (workspace_id,
+     internet_message_id) DO UPDATE` with a *valid* user id updates the existing
+     row in place. `email_bodies_ws_msg_uidx` infers fine (a plain UNIQUE INDEX
+     is a valid ON CONFLICT arbiter; the extra non-unique
+     `ix_email_bodies_message_id` on the same columns does not interfere).
+  2. **The PA sweep was correct all along** — the header value was the only
+     wrong thing, and the bodies it captured were already on disk in
+     `enrichment_jobs.payload`, so nothing had to be re-swept.
+
+  **The fix is code-side, not flow-side** (`api/_shared/source-user-id.js`,
+  wired into both handlers in `bridge-handlers-outlook.js`): every inbound
+  `_source_user_id` is normalized to a real `public.users.id` — pass-through if
+  it already is one, else `lcc_users.lcc_user_id` → email → `public.users`. So
+  the sweep is robust to *whichever* id a flow sends. An unresolvable id writes
+  **NULL** into the nullable provenance column rather than 409ing the row —
+  losing the "whose mailbox" stamp is recoverable, losing a 250 KB body is not —
+  and is surfaced as `result.source_user_unresolved`. `body_persist_error` now
+  also carries `body_persist_detail` with the DB's own `code` + `message`, so a
+  future 409 is self-diagnosing instead of ambiguous.
+
 ### The bridge name footgun
 
 The **bridge key is `outlook.messages`** (the `connector_bridges.bridge_key`). The
@@ -264,8 +319,35 @@ Mirror docs: `OUTLOOK_SENT_SWEEP_FLOW.md` (deal-to-do sweep),
 | 2026-08-15 | **Prompt 115** — root-caused to the HANDLER, not the payload (see the two bullets in the grounded contract above): the `contentType` exact-equality split dropped the serialized-JSON-string body shape, and the bodyless forward sweep wrote NULLs over filled rows. Handler fixed (`normalizeGraphBody` + body columns omitted when there is no content + the upsert result is checked). |
 | 2026-08-15 | **Backfill applied live** (migration `20260907120000_lcc_p115_email_body_backfill.sql`, LCC Opps) — re-drove the 25 already-swept payloads straight from `enrichment_jobs` rather than asking for a re-sweep. **Bodies with >255 chars: 0 → 24** (all `body_format='html'`, 5,700–248,516 chars, full `<html>…</html>` intact). 24 not 25 because one swept message has no tracked party, so the privacy gate correctly never created an `email_bodies` row for it. Fill-blanks, idempotent (a re-run writes 0), reversible via `lcc_p115_email_body_backfill_backup`. |
 
-**Still to come:** the handler fix ships on the next Railway redeploy of merged
-`main` (the backfill above is data-layer and already live). After that redeploy,
-re-run the backward sweep to fill the rest of the 23,169-row corpus — the count
-in the Verification query should climb well past 24. Structural regression cover:
-`test/outlook-body-persist.test.mjs`.
+| 2026-08-17 | **Prompt 116** — root-caused the residual `upsert_409` to a **FOREIGN KEY violation** (`email_bodies_source_user_id_fkey`), NOT a merge-duplicates conflict: PostgREST maps 23503 and 23505 to the same HTTP 409. The sweep's flow sent the **`lcc_users`** id where the column FKs **`public.users`** — see the third bullet in the grounded contract. **This was the systematic blocker: 10,470 of 10,510 body-carrying writes were 409ing**, and the same bad id was silently killing the `activity_events` timeline row too (423 FK rejections in 24 h). Fixed code-side by normalizing the id at the boundary (`api/_shared/source-user-id.js`); the PA sweep and the merge-duplicates upsert were both correct all along. |
+| 2026-08-17 | **Backfill applied live** (migration `20260914120000_lcc_p116_email_body_source_user_fk.sql`, LCC Opps) — re-drove every already-captured payload body, again with no re-sweep. **Bodies with >255 chars: 24 → 654** (465 blank rows filled + 165 rows the FK had blocked from ever existing; all `body_format='html'`, 2,233–248,516 chars, `<html>…</html>` intact). All 165 inserts resolved to a valid `users.id` via the email bridge; `email_bodies` rows with a dangling `source_user_id` = **0**. Fill-blanks, idempotent (re-run writes 0/0/0 — verified), reversible via `lcc_p116_email_body_backfill_backup` (`op='update'` restores, `op='insert'` deletes). Recovered jobs are stamped `result.body_persist_recovered_by` so "still broken" stays distinguishable from "already recovered". |
+
+**Still to come:** the Prompt-115 + Prompt-116 handler fixes ship on the next
+Railway redeploy of merged `main` (both backfills are data-layer and already
+live). **Until that redeploy the live sweep keeps 409ing**, so the corpus stays
+at 654 — every *new* body-bearing job will still record `body_persist_error`.
+After the redeploy, confirm with:
+```sql
+-- new jobs must carry NO body_persist_error
+select count(*) from enrichment_jobs
+ where job_type='outlook.message.extract' and created_at > '<redeploy time>'
+   and result->>'body_persist_error' is not null;            -- expect 0
+-- and the resolver must report the bridge it used
+select result->>'source_user_resolved_via', count(*) from enrichment_jobs
+ where job_type='outlook.message.extract' and created_at > '<redeploy time>'
+ group by 1;                                                 -- expect lcc_users_email
+```
+then let the backward sweep continue walking back — the Verification count
+should climb past 654 on its own, with no further migration.
+
+Structural regression cover: `test/outlook-body-persist.test.mjs` (body
+normalization) + `test/outlook-body-upsert-fk.test.mjs` (upsert-against-existing-row,
+null-erasure guard, insert-new, and the id-space bridge — mutation-checked: reverting
+either the resolver or the `merge-duplicates` header fails it).
+
+**Known, unchanged, out of scope:** `is_sent` is the handler's pre-existing
+approximation ("sent by us unless the FROM address is itself a tracked contact"),
+so Scott's own outbound mail reads `is_sent=false` because he is in
+`unified_contacts`. The backfill mirrors that rule exactly rather than quietly
+changing the semantics of 23,760 rows; fixing it means resolving the source
+user's mailbox address and is a separate change.

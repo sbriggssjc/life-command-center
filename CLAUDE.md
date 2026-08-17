@@ -412,6 +412,30 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   override id straight onto a cadence FK-violates on every row. The bridge is **email**, resolved once by
   `v_lcc_entity_point_person` / `lcc_cadence_point_person(uuid)` — always go through that, never
   re-derive the mapping in JS.
+  - **P116 — the same id-space collision hit the Outlook/Calendar bridges, and it presented as an
+    "upsert 409".** `email_bodies.source_user_id`, `meetings.source_user_id` and
+    `activity_events.actor_id` ALL FK `public.users(id)`, while `api/bridges.js` takes
+    `_source_user_id` **verbatim** from the PA flow's `X-LCC-Source-User-Id` header. The body sweep's
+    flow was configured with the `lcc_users` id for sabriggs@northmarq.com (`1d3f7321-…`) instead of
+    the `public.users` id (`b0000000-…-0001`), so **10,470 of 10,510** body-carrying `email_bodies`
+    writes and 423+/day `activity_events` inserts were rejected — the voice corpus stayed empty for
+    two days while every upstream layer (allowlist, payload, sweep, contact resolution) looked
+    healthy. Every inbound source-user id now normalizes through
+    **`api/_shared/source-user-id.js::resolveSourceUserId`** (pass-through → `lcc_users`→email→`users`
+    → null); route any NEW writer to an FK'd user column through it rather than trusting the caller.
+- **⚠️ A PostgREST `409` on an upsert is NOT necessarily a conflict — PostgREST maps BOTH `23505`
+  (unique_violation) AND `23503` (foreign_key_violation) onto HTTP 409.** A POST with `on_conflict=…`
+  + `Prefer: resolution=merge-duplicates` that returns 409 therefore reads convincingly as
+  "merge-duplicates didn't take / the unique index isn't being inferred", when the real cause can be
+  an unrelated FK on the same row (P116 lost two days to exactly that misread — the merge-duplicates
+  upsert was correct the whole time, proven by a self-rolling-back `ON CONFLICT … DO UPDATE` gate).
+  **Never diagnose a 409 from the status code — read the DB.** Supabase `query_logs`
+  (`source='postgres_logs'`, `event_message ilike '%violates%'`) names the exact constraint; or capture
+  `data.code`/`data.message` off the PostgREST body. Writers must record the DB's own code + message,
+  not just `upsert_<status>` (see `describeWriteFailure`, `bridge-handlers-outlook.js`). Two things
+  NOT worth investigating before the log is read: a plain **UNIQUE INDEX** (not constraint) is a valid
+  `ON CONFLICT` arbiter, and a duplicate NON-unique index on the same columns does not break
+  inference.
 - **A cadence `last_touch_at` can never be in the future.** `lcc_activity_event_advance_cadence` used to
   pass `p_logged_at := NEW.occurred_at` unguarded, so a calendar meeting **scheduled ahead** landed as a
   COMPLETED touch and pushed `next_touch_due` a further quarter out. Guarded in three layers: the trigger

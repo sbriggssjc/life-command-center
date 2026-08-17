@@ -25,6 +25,41 @@ import { opsQuery, pgFilterVal } from './ops-db.js';
 import { appendActivityEvent } from './activity-events.js';
 import { growCadenceFromOutreach } from './cadence-engine.js';
 import { parseAddress, parseAddressList } from './outlook-recipients.js';
+import { resolveSourceUserId } from './source-user-id.js';
+
+// ---- the upsert 409 that was NOT a conflict (Prompt 116) -------------------
+//
+// Prompt 115 started recording `result.body_persist_error = 'upsert_<status>'`,
+// and 10,470 of the backward sweep's writes came back `upsert_409`. A 409 on an
+// `on_conflict=…` + `Prefer: resolution=merge-duplicates` POST reads exactly
+// like "merge-duplicates didn't take, so the existing row 23505'd" — and that
+// is the wrong diagnosis. PostgREST maps **both** 23505 (unique_violation) and
+// **23503 (foreign_key_violation)** onto HTTP 409.
+//
+// Grounded live 2026-08-17 from the Postgres log, not from the status code:
+//   insert or update on table "email_bodies"
+//     violates foreign key constraint "email_bodies_source_user_id_fkey"
+//
+// The merge-duplicates upsert was correct all along (proven by a
+// self-rolling-back SQL gate: the same ON CONFLICT statement with a VALID user
+// id UPDATES the existing row in place). What failed was the FK: the sweep's
+// `_source_user_id` is an `lcc_users.lcc_user_id`, and these columns FK
+// `public.users(id)`. See `source-user-id.js` for the id-space bridge.
+//
+// So the error field now carries the DB's own code + message, never just the
+// HTTP status — a future 409 must be self-diagnosing.
+function describeWriteFailure(r) {
+  const d = r?.data;
+  const code = (d && typeof d === 'object' && d.code) ? String(d.code) : null;
+  const msg = (d && typeof d === 'object')
+    ? String(d.message || d.details || d.hint || '')
+    : (typeof d === 'string' ? d : '');
+  return {
+    status: r?.status ?? null,
+    ...(code ? { code } : {}),
+    ...(msg ? { message: msg.slice(0, 300) } : {})
+  };
+}
 
 // ---- shared helpers --------------------------------------------------------
 
@@ -122,13 +157,13 @@ export function normalizeGraphBody(rawBody) {
  * inputs and match against lower(email). The unified_contacts schema
  * already has a unique index on lower(email), so this is index-friendly.
  */
-async function findTrackedContacts(workspaceId, emails, max = 25) {
+async function findTrackedContacts(workspaceId, emails, max = 25, q = opsQuery) {
   if (!emails || !emails.length) return [];
   const lowered = [...new Set(emails.map(lower).filter(Boolean))];
   if (!lowered.length) return [];
   const filter = `email=in.(${lowered.map(e => pgFilterVal(e)).join(',')})`;
   // entity_id added by Phase 3.5 — needed for activity_events writes.
-  const r = await opsQuery('GET',
+  const r = await q('GET',
     `unified_contacts?${filter}&select=unified_id,entity_id,email,full_name,sf_contact_id,total_emails_sent,total_calls&limit=${max}`,
     null, { countMode: 'none' }
   );
@@ -178,13 +213,17 @@ export function buildEmailBodyRow({
   return row;
 }
 
-export async function handleOutlookMessageExtract(job) {
+export async function handleOutlookMessageExtract(job, deps = {}) {
+  // `deps.opsQuery` is a test seam (repo convention) so the upsert CONTRACT —
+  // merge-duplicates against an existing row, and the resolved FK stamp — is
+  // provable without a live PostgREST.
+  const q = deps.opsQuery || opsQuery;
   const p = job.payload || {};
   const workspaceId  = job.workspace_id;
-  const sourceUserId = p._source_user_id || null;
+  const rawSourceUserId = p._source_user_id || null;
   const msgId        = p.internetMessageId || p.id || job.external_id;
   if (!msgId)        return { ok: false, error: 'missing_message_id' };
-  if (!sourceUserId) return { ok: false, error: 'missing_source_user_id' };
+  if (!rawSourceUserId) return { ok: false, error: 'missing_source_user_id' };
 
   // Drop drafts — they're not real touches and the user might still be editing.
   if (p.isDraft) return { ok: true, result: { skipped: 'draft' } };
@@ -205,7 +244,7 @@ export async function handleOutlookMessageExtract(job) {
   if (!allParties.length) return { ok: true, result: { skipped: 'no_parties' } };
 
   // Look up tracked contacts. If none, drop — we don't store untracked traffic.
-  const tracked = await findTrackedContacts(workspaceId, allParties);
+  const tracked = await findTrackedContacts(workspaceId, allParties, 25, q);
   if (!tracked.length) {
     return { ok: true, result: { skipped: 'no_tracked_party', parties: allParties.length } };
   }
@@ -223,6 +262,12 @@ export async function handleOutlookMessageExtract(job) {
   // first non-source-user contact (i.e. the "other party" in the thread).
   const primaryContact = tracked[0]; // for now; UI can render all linked contacts via metadata
 
+  // Prompt 116 — map the flow-supplied id onto `public.users(id)` BEFORE it
+  // reaches an FK'd column. An unresolvable id becomes NULL: losing the
+  // "whose mailbox" stamp is recoverable, losing the body is not.
+  const srcUser = await resolveSourceUserId(rawSourceUserId, { opsQuery: q });
+  const sourceUserId = srcUser.id;
+
   const bodyRow = buildEmailBodyRow({
     workspaceId, msgId, payload: p, fromEmail, toEmails, ccEmails,
     isSent, sourceUserId
@@ -230,7 +275,7 @@ export async function handleOutlookMessageExtract(job) {
 
   // Bodies run 5 KB–250 KB, well past the shape of a normal ops write, so this
   // one call gets real headroom over the 8s opsQuery default.
-  const upsert = await opsQuery('POST',
+  const upsert = await q('POST',
     'email_bodies?on_conflict=workspace_id,internet_message_id',
     bodyRow,
     { headers: { Prefer: 'resolution=merge-duplicates' }, timeoutMs: 20000 }
@@ -240,11 +285,15 @@ export async function handleOutlookMessageExtract(job) {
   // `enrichment_jobs.result ? 'body_persist_error'`) instead of failing the job
   // — a retry would double-count total_emails_sent below.
   let bodyPersistError = null;
+  let bodyPersistDetail = null;
   if (!upsert.ok) {
     bodyPersistError = `upsert_${upsert.status}`;
+    bodyPersistDetail = describeWriteFailure(upsert);
     console.error(
       `[outlook.message.extract] email_bodies upsert failed status=${upsert.status} ` +
-      `msg=${msgId} body_bytes=${(bodyRow.body_html || bodyRow.body_text || '').length}`
+      `code=${bodyPersistDetail.code || '-'} msg=${msgId} ` +
+      `body_bytes=${(bodyRow.body_html || bodyRow.body_text || '').length} ` +
+      `detail=${bodyPersistDetail.message || '-'}`
     );
   }
 
@@ -257,7 +306,7 @@ export async function handleOutlookMessageExtract(job) {
     if (isSent && lower(c.email) !== fromEmail) {
       patch.total_emails_sent = (c.total_emails_sent || 0) + 1;
     }
-    await opsQuery('PATCH',
+    await q('PATCH',
       `unified_contacts?unified_id=eq.${c.unified_id}`,
       patch
     );
@@ -314,7 +363,12 @@ export async function handleOutlookMessageExtract(job) {
       timeline_attached: !!primaryEntityId,
       body_format:   bodyRow.body_format || null,
       body_bytes:    (bodyRow.body_html || bodyRow.body_text || '').length,
-      ...(bodyPersistError ? { body_persist_error: bodyPersistError } : {})
+      source_user_resolved_via: srcUser.via,
+      // Only surfaced when the flow's id could NOT be mapped onto public.users
+      // — so an un-stamped provenance column is queryable, never silent.
+      ...(sourceUserId ? {} : { source_user_unresolved: srcUser.raw }),
+      ...(bodyPersistError ? { body_persist_error: bodyPersistError } : {}),
+      ...(bodyPersistDetail ? { body_persist_detail: bodyPersistDetail } : {})
     }
   };
 }
@@ -324,10 +378,10 @@ export async function handleOutlookMessageExtract(job) {
 export async function handleCalendarEventLink(job) {
   const p = job.payload || {};
   const workspaceId  = job.workspace_id;
-  const sourceUserId = p._source_user_id || null;
+  const rawSourceUserId = p._source_user_id || null;
   const eventId      = p.id || job.external_id;
   if (!eventId)      return { ok: false, error: 'missing_event_id' };
-  if (!sourceUserId) return { ok: false, error: 'missing_source_user_id' };
+  if (!rawSourceUserId) return { ok: false, error: 'missing_source_user_id' };
 
   // Graph event attendees: [{ emailAddress: { address, name }, type, status }, ...]
   const attendeeEmails = (p.attendees || [])
@@ -338,7 +392,7 @@ export async function handleCalendarEventLink(job) {
 
   if (!allParties.length) return { ok: true, result: { skipped: 'no_parties' } };
 
-  const tracked = await findTrackedContacts(workspaceId, allParties);
+  const tracked = await findTrackedContacts(workspaceId, allParties, 25, q);
   if (!tracked.length) {
     return { ok: true, result: { skipped: 'no_tracked_attendee', attendees: attendeeEmails.length } };
   }
@@ -364,7 +418,13 @@ export async function handleCalendarEventLink(job) {
   const startsAt = p.start?.dateTime || null;
   const endsAt   = p.end?.dateTime || null;
 
-  await opsQuery('POST',
+  // Prompt 116 — `meetings.source_user_id` carries the SAME FK to
+  // `public.users(id)` that broke the mailbox sweep, so this path is bridged
+  // identically rather than left as a latent 409.
+  const srcUser = await resolveSourceUserId(rawSourceUserId, { opsQuery: q });
+  const sourceUserId = srcUser.id;
+
+  const meetingUpsert = await q('POST',
     'meetings?on_conflict=workspace_id,external_id',
     {
       workspace_id:      workspaceId,
@@ -386,12 +446,25 @@ export async function handleCalendarEventLink(job) {
     },
     { headers: { Prefer: 'resolution=merge-duplicates' } }
   );
+  // Same lesson as the body upsert: a rejected write must never look like a
+  // stored one.
+  let meetingPersistError = null;
+  let meetingPersistDetail = null;
+  if (!meetingUpsert.ok) {
+    meetingPersistError = `upsert_${meetingUpsert.status}`;
+    meetingPersistDetail = describeWriteFailure(meetingUpsert);
+    console.error(
+      `[calendar.event.link] meetings upsert failed status=${meetingUpsert.status} ` +
+      `code=${meetingPersistDetail.code || '-'} event=${eventId} ` +
+      `detail=${meetingPersistDetail.message || '-'}`
+    );
+  }
 
   // Refresh last_meeting_date on each tracked attendee. Use start of meeting
   // as the "occurred" timestamp — that's the canonical "when did we meet".
   if (startsAt) {
     for (const c of tracked) {
-      await opsQuery('PATCH',
+      await q('PATCH',
         `unified_contacts?unified_id=eq.${c.unified_id}`,
         { last_meeting_date: startsAt }
       );
@@ -439,7 +512,11 @@ export async function handleCalendarEventLink(job) {
       event_id:      eventId,
       tracked_count: tracked.length,
       starts_at:     startsAt,
-      timeline_attached: !!primaryEntityId
+      timeline_attached: !!primaryEntityId,
+      source_user_resolved_via: srcUser.via,
+      ...(sourceUserId ? {} : { source_user_unresolved: srcUser.raw }),
+      ...(meetingPersistError ? { meeting_persist_error: meetingPersistError } : {}),
+      ...(meetingPersistDetail ? { meeting_persist_detail: meetingPersistDetail } : {})
     }
   };
 }
