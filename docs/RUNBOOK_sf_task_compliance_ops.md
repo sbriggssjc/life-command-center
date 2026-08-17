@@ -219,3 +219,71 @@ Nothing calls these automatically. Hooking `updateSalesforceTaskDue` to
 writing to Salesforce on a schedule, and I would rather you see the ops work by
 hand first. Say the word and I will wire them, single-advance-owner style, so one
 cadence advance produces exactly one SF update.
+
+---
+
+# LIVE RESULTS — 2026-08-17
+
+## Step 1 `update_task_due` — PASSED, and the write is genuinely minimal
+
+Task `00TVs00001Md5uEMAR` (Bryan Webb / DaVita Snellville), field by field:
+
+| field | before | after |
+|---|---|---|
+| **Due Date** | 7/28/2026 *(Overdue)* | **9/30/2026** |
+| Subject / Name / Assigned To / Related To / Related Deal | — | unchanged |
+| **Status** | Open | **Open** |
+| NM Type / Action Taken / Deal Activity / Comments / NM Notes | blank | blank |
+| Last Modified By | Sarah Martin 7/23 | **Scott Briggs 8/17 4:45 PM** |
+
+Two checks that mattered: **Status stayed `Open`** (the `create_opportunity` case
+defaults Status to `'Completed'` when empty — had `UpdateItem_V2` applied the
+same default, this pursuit would have silently closed), and the "Overdue" flag
+cleared, which is Salesforce recomputing from the new date rather than a second
+field being written.
+
+`operationId: "UpdateItem_V2"` — the one thing I could not verify when writing
+this runbook — is **confirmed correct** on this connector.
+
+⚠️ `Last Modified By` reads **Scott Briggs**, not an integration user: the flow
+runs under Scott's Salesforce connection, so audit trails attribute LCC-driven
+updates to him personally. Worth deciding rather than discovering.
+
+## Step 2 `open_tasks_by_owner` — PASSED, and immediately found a live bug
+
+### 🔴 Five Tasks carry the literal string `triggerBody()?['nm_type']` in NM Type
+
+    00TVs00001J4igbMAB  Easterly Government Properties — Government Buyer
+    00TVs00001J3iCfMAJ  Easterly Government Properties — Government Buyer
+    00TVs00001J3oHzMAJ  Boyd Watterson Global — Government Buyer
+    00TVs00001J3HduMAF  Boyd Watterson Global — Government Buyer
+    00TVs00001GC1l7MAD  Boyd Watterson Global — Government Buyer
+
+**LCC created all five and LCC was right.** `createSalesforceTask` only sets
+`body.nm_type` when truthy, and `admin.js` states the rule: *"a government buyer
+carries NMType BLANK (never 'Opportunity')"*. When the key is absent,
+`item/SJC_Type_sjc__c: "@triggerBody()?['nm_type']"` resolves to nothing and
+Power Automate writes **the expression text itself**. Intent blank, result garbage
+— in a compliance field.
+
+Invisible until now because nothing ever read Tasks back. Caught on the audit's
+first run, which is the argument for having built it.
+
+**Flow fix** — `create_opportunity`, that one field:
+
+    if(empty(triggerBody()?['nm_type']), null, triggerBody()?['nm_type'])
+
+The 5 existing records need NM Type cleared by hand.
+
+### Audit of the 10 genuine seller prospects (owner 0058W00000FDlFWQA1)
+
+- ✅ **zero contacts carry more than one open Task** — the one-per-contact rule holds
+- ⚠️ **9 of 10 have NO due date**, so the due-date discipline is not being
+  maintained on these — and it is the signal LCC would drive from
+- ⚠️ **two open statuses in play**: 9 `Not Started`, 1 `Open`. `IsClosed = false`
+  catches both; anything keying on `Status = 'Open'` would miss nine
+- ⚠️ `PORTNEUF ASC - Pocatello, ID - SOLD` (`00T8W00005CI0RdUAL`) is an open
+  pursuit on a sold deal — the natural `close_task` test subject
+
+85 open Tasks total for this owner: 70 blank NM Type (marketing/broker),
+10 Opportunity, 5 corrupted.
