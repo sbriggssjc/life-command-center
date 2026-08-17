@@ -490,6 +490,47 @@ describe('UI-1/2/3 — defects from the 2026-08-15 manual run', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────
+describe('the panel resolves its own asset entity by ID, not by address string', () => {
+  // Found live 2026-08-16 driving the browser. openUnifiedDetail looked its own
+  // asset entity up by ADDRESS even though it holds the exact domain property
+  // id. Address is a fuzzy string compare and missed on ordinary variation —
+  //   panel  "3233 East Coliseum Blvd."  vs  entity "3233 E Coliseum Blvd"
+  // — so `ent` was null, `ent.property_owner` never arrived, and the Current
+  // Owner card + "Work this owner ->" silently did not render, even though
+  // lcc_property_owner held the answer at confidence 1.0 and the API returned
+  // it correctly when asked by id. 2,117 assets carry both an exact
+  // domain_property_id and a resolved owner.
+  const region = (() => {
+    const s = detailSrc.indexOf('const lookupAddr =');
+    assert.notEqual(s, -1, 'lookup block not found');
+    return detailSrc.slice(s, s + 4200);
+  })();
+
+  it('tries domain_property_id + domain before address', () => {
+    const idAt = region.indexOf('domain_property_id');
+    const addrAt = region.indexOf("action: 'lookup_asset', address:");
+    assert.notEqual(idAt, -1, 'no id-based lookup_asset call');
+    assert.notEqual(addrAt, -1, 'address fallback should still exist');
+    assert.ok(idAt < addrAt, 'the id lookup must be attempted FIRST');
+  });
+
+  it('still falls back to address when there is no domain property id', () => {
+    assert.match(region, /if \(!ent && lookupAddr\)/,
+      'address lookup must remain as the fallback for assets with no domain id');
+  });
+
+  it('an id-lookup failure cannot abort the panel load', () => {
+    assert.match(region, /catch \(_eId\)/,
+      'the id attempt must be wrapped so a failure falls through rather than throwing');
+  });
+
+  it('still attaches property_owner to the ownership cache', () => {
+    assert.match(region, /ownership\.lcc_property_owner = ent\.property_owner/,
+      'the Current Owner card + hand-off depend on this attach');
+  });
+});
+
 describe('V-2 generalised — no inline onclick may hand-roll quote escaping', () => {
   // The original V-2 fix touched ONE call site. The same broken idiom
   // `esc(x).replace(/'/g, "\\'")` — a no-op, because esc() already produced

@@ -397,12 +397,42 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       const lookupAddr = (synthProperty && synthProperty.address) || fallback.address;
       const lookupState = (synthProperty && synthProperty.state) || fallback.state;
       const lookupCity = (synthProperty && synthProperty.city) || fallback.city;
-      if (lookupAddr) {
+      // ID FIRST, address only as a fallback (fixed 2026-08-16).
+      //
+      // This resolved the panel's own asset entity by ADDRESS STRING even though
+      // the caller already holds the exact domain property id. Address matching
+      // is a fuzzy string compare and it silently misses on ordinary variation:
+      //   panel:  "3233 East Coliseum Blvd."   (spelled out, trailing period)
+      //   entity: "3233 E Coliseum Blvd"       (abbreviated, no period)
+      // -> no match -> no `ent` -> no `ent.property_owner` -> NO Current Owner
+      // card and NO "Work this owner ->" hand-off, even though
+      // lcc_property_owner held the answer (Agree Realty CORP, confidence 1.0)
+      // and /api/entities returned it correctly when asked by id.
+      //
+      // 2,743 of 3,886 asset entities (70.6%) carry an exact
+      // metadata.domain_property_id, and 2,117 of those also have a resolved
+      // owner — that is the population that was gambling on a string compare.
+      // Same doctrine as CLAUDE.md's "resolve a domain owner to an LCC entity by
+      // ID, never by name": prefer the identifier we already have.
+      const lookupPid = (synthProperty && synthProperty.property_id) || (ids && ids.property_id) || null;
+      let ent = null;
+      if (lookupPid && db) {
+        try {
+          const idParams = new URLSearchParams({
+            action: 'lookup_asset', domain: db, domain_property_id: String(lookupPid),
+          });
+          const idRes = await _entityApiFetch('/api/entities?' + idParams.toString());
+          ent = idRes?.entity || null;
+        } catch (_eId) { /* fall through to the address lookup */ }
+      }
+      if (!ent && lookupAddr) {
         const params = new URLSearchParams({ action: 'lookup_asset', address: lookupAddr });
         if (lookupCity) params.set('city', lookupCity);
         if (lookupState) params.set('state', lookupState);
         const entRes = await _entityApiFetch('/api/entities?' + params.toString());
-        const ent = entRes?.entity || null;
+        ent = entRes?.entity || null;
+      }
+      if (ent || lookupAddr) {
         entityMeta = ent?.metadata || null;
         if (ent && ent.id) resolvedLccEntityId = ent.id;
         // Stash the resolved asset entity id onto the ownership cache so the
