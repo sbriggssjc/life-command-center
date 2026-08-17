@@ -995,6 +995,67 @@ bridged; P118 found a rank computed from the wrong subject; P119 found a rescue
 whose target predicate was one degree too narrow. None was a mistake in the
 original work — each was a documented edge that later data grew into.
 
+### 4.2q P120 + P117a — the value rank, and the bug it immediately exposed in my own work
+
+Scott asked whether the 45 pipe-composites in the junk lane had a deterministic
+auto-confirmable subset like P106 gave the property-twin lane. **They do not**,
+and finding that out redirected the work somewhere better.
+
+**Why no splitter.** Both prior rounds' notes describe these as
+`"<person> | <firm>"`. Live they are at least five shapes:
+
+| shape | example | n |
+|---|---|---|
+| brokerage office/branch | `CBRE \| Raleigh`, `SVN \| Chicago Commercial` | 18 |
+| two-party composite | `Chad Middendorf \| Green Rock USA` | 22 |
+| **reversed** firm\|person | `Choice One Development, LLC \| Michael Milone` | — |
+| firm \| firm (JV) | `American Real Estate Partners \| Davidson Kempner` | — |
+| multi-party LIST | `Paseo LLC \| Property Acquisition Assoc LLC \| …` | 2 |
+| role label / empty | `Office \| Investment Specialist`, `PCI \|` | 3 |
+
+A blanket split would be wrong for most, and `CBRE | Raleigh` is not junk at all
+— it is a real broker office that happens to contain a pipe. The value gate
+settles it: **0 of the 45 own any asset.** Building a splitter for them would be
+engineering against the doctrine's own floor.
+
+**What the lane actually needed.** `rank_value` was `COALESCE(i.n,0)` — the
+external-identity COUNT. Verified exactly: rank ∈ {0,1,2,4}, equal to
+`identity_count` row for row. The lane was ordered by "how many vendor ids does
+this junk name carry." Across 164 open rows: **7 have any BD value, 137 have
+nothing attached at all.** New rank = portfolio rent (dollars dominate) + tiers
+for open opp / owns-assets / cadence / SF, with `identity_count/10` as a sub-1
+deterministic tiebreaker. Ordering only.
+
+**Then the re-rank immediately caught a bug in P117 — mine, from earlier the
+same day.** The top of the newly-ranked lane was `GSA (US Gov't)` holding
+**$19,412,561** of portfolio rent. Source tag: `lcc_property_owner` — my feeder.
+
+P117 guarded BROKERAGE (the agent) and OPERATOR (the dia tenant) but not the two
+guards `ensureEntityLink` has always carried: junk-flagged placeholders and
+**federal agencies**. On a GSA-leased asset the landlord is a private owner and
+GSA is the TENANT. That is the gov-side twin of the dia operator-as-owner
+conflation `CLAUDE.md` devotes a footgun to — committed by a feeder I wrote
+while citing that footgun.
+
+P117a adds both guards and removes **11 rows** (1 junk-flagged, 10 federal). It
+deletes only rows carrying P117's own `ownership_source` tag; the 52 other
+portfolio rows sitting on junk-flagged entities belong to other feeders
+(`sales_transactions_seller_exit`, `sales_transaction`, source NULL) and are
+deliberately left — quietly cleaning them here would hide the same class of bug
+in someone else's producer. Upstream, `lcc_property_owner` genuinely resolved GSA
+as owner (`relationship_graph`, confidence 0.635); that row is left for the
+owner-review lane rather than silently rewritten.
+
+Verified after: 0 P117 rows on junk/federal entities, 1,929 P117 rows remain, and
+the dry run now reports `skip_federal_agency=10, skip_junk_flagged=1,
+skip_operator=6, skip_brokerage=5, inserts 0`.
+
+**The lesson worth keeping:** a lane sorted by identity count would never have
+surfaced this. Value-ranking a review surface is not only an operator
+convenience — it is a *detector*, because a wrong high-value row floats to the
+top where someone will look at it. I found my own bug within minutes of making
+the lane honest.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:
