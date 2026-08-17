@@ -888,6 +888,57 @@ clock, not the build. **Rule now: verify the deployed build by comparing the
 served asset's `?v=` SHA inside the live document, never by a hash-only navigate
 and never by `ts`.**
 
+### 4.2o P118 — the decision backlog, and a number I nearly reported wrong
+
+Went looking for the Consumption-Layer failure in the Decision Center. **My first
+measurement said 2,311 open decisions** and I was one step from telling Scott the
+doctrine was being violated at scale. It was wrong: I used `decided_at IS NULL`
+as the openness test. The real column is `status`, and the split is:
+
+| status | n | meaning |
+|---|---|---|
+| **open** | **448** | the actual backlog |
+| superseded | 1,841 | premise cleared — **auto-retire is working** |
+| skipped | 1,383 | deliberately passed |
+| decided | 1,326 | worked |
+
+So the doctrine is being followed, not violated: 1,841 rows retired themselves
+when their premise cleared, which is exactly item 2. I also checked whether the
+UI badge repeats my mistake — it does not (`api/admin.js` filters
+`status=eq.open` everywhere), so the counts Scott sees are honest.
+
+**The real defect was narrower and worth fixing.** Of 148 open
+`confirm_true_owner`, **75 carried `rank_value = 0`** — and 73 of those had a
+perfectly well-known asset rent. The producer ranked by
+`e.current_annual_rent_total`, the OWNER's portfolio total; but the decision is
+about ONE asset ("is the true owner of THIS property current or stale?"), and an
+owner needing confirmation very often has no portfolio facts — which is *why* it
+needs confirming. So half the lane sank to the bottom, hiding **$194,149,982** of
+annual rent.
+
+Unit-checked before relying on it, as in P117: all 73 gov, median $810,599/yr at
+**$34.86/SF** — a sane federal PSF.
+
+Fix: `COALESCE(NULLIF(owner portfolio total, 0), this asset's annual_rent, 0)`.
+Owner portfolio still wins when present — a portfolio holder is a bigger
+conversation than one building.
+
+| | before | after |
+|---|---|---|
+| `rank_value = 0` | 75 | **2** (exactly the two measured as valueless) |
+| median rank | 0 | **$498,431** |
+| top of lane | arbitrary | $23.7M · $19.6M · $17.1M annual rent |
+
+No backfill needed — `lcc_open_decision`'s `ON CONFLICT DO UPDATE` re-stamps
+rank for an already-open row, and all 75 were still in the seed set.
+`rank_value` drives ordering only: no verdict, no effect, nothing created or
+closed.
+
+The migration **patches the live definition in place** rather than pasting a
+6.5k-char copy, because a full copy would fork `lcc_refresh_decisions` from the
+migration that owns it and the two would drift. It raises if the anchor text is
+missing, so a changed base fails loudly instead of silently no-op'ing.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:
