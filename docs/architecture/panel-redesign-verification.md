@@ -266,6 +266,16 @@ Recorded so the next run can be compared, not just admired.
 | cadence rows ever touched | **9%** | a strip that always says "overdue" trains you to ignore it | consumption layer — auto-retire + reality-driven advance |
 | cadence rows with a rep | 0.4% → **2%** (7 → 37) | ROE line on the owner card is blank | Prompt 112 Unit D — the backfill was **not** a dead end after all; `lcc_entity_owner_override` had 131 point-person rows |
 | **assets with a NULL `domain`** | **34** | they are `entity_type='asset'` but excluded from every `domain in ('dia','gov')` rollup, so they silently under-report every coverage metric | NEW 2026-08-15 — found reconciling +384 assets against 418 writes; hygiene pass needed |
+| **brokerages recorded as the property owner** | 46 → **5** (2026-08-17) | a brokerage on the Current Owner card is not a cosmetic defect — it is the **wrong counterparty**, and it feeds comps/exports/matching and was cadence-eligible (the A2 dry-run put Marcus & Millichap top of the enrolment list) | **SHIPPED** (Prompt 116) `20260817120000`, batch `p116_20260817`. 16 re-pointed to the real owner · 6 names stripped · 19 wrong owners cleared to honest Unresolved · **5 deliberate abstains** in `v_lcc_p116_brokerage_owner_review`. Durable fix: the brokerage guard now sits on `lcc_reconcile_property_owner` (42 of the 46 came from it), the same predicate the supersession feeder already had |
+
+**⚠️ Identity must be scored on `lcc_owner_strict_core()`, never `lcc_normalize_entity_name()`.** Prompt 116's
+first dry-run used the latter, which strips *semantic* tokens (`partners`, `properties`, `capital`, `group`,
+`holdings`). Under it **"Century Park Partners" == "Century Park Properties LLC"** (both collapse to
+`century park`), and the plan would have re-pointed a property onto a different company. This is the same
+stoplist footgun CLAUDE.md records for `dup-pair-planner.ownerCore` ("Realty Income Corporation" → empty
+string), now caught a second time — on a path that was one step from an automatic write. Re-scoring on the
+strict core moved the collision count **17 → 21** and the abstains **1 → 4**. The lesson generalises: a
+normalizer built for **fuzzy pairing** is never safe for **identity**.
 
 ---
 
