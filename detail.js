@@ -13272,42 +13272,75 @@ function _entityTabsForRole(role, entityType) {
   return tabs;
 }
 
-async function openEntityDetail(entityId, initialTab) {
-  if (typeof _setPrimaryKind === 'function') _setPrimaryKind('entity');
-  _entityDetailCache = null;
-  // A fresh entity open resets any stale companion property dock (it's anchored
-  // to the previously-open contact/owner).
-  if (typeof closeCompanion === 'function') closeCompanion();
-  const panel = document.getElementById('detailPanel');
-  const overlay = document.getElementById('detailOverlay');
-  if (!panel || !overlay) return;
+/**
+ * Open the entity panel. `opts.mount === 'companion'` renders the SAME full
+ * tabbed panel into the companion dock instead of the primary slide-over.
+ *
+ * Scott, 2026-08-15: *"we want to see the full detail side-by-side instead of a
+ * placeholder that you can swap over to the primary."* The dock used to render a
+ * summary card with an "Open full detail ↗" button.
+ *
+ * Why this is a small change rather than the 80-call-site refactor the spec
+ * feared: the render captures `headerEl / tabsEl / bodyEl` into LOCALS once and
+ * writes through those, and `_renderEntityTab(tab)` is a pure string function.
+ * So a mount only has to swap three element references — no global mount state,
+ * and therefore no async-interleaving hazard when two panels load at once.
+ *
+ * The single-cache constraint is respected: `_entityDetailCache` is a module
+ * singleton, so only ONE entity panel may be open at a time. That is exactly the
+ * supported layout — property + owner, in either slot — never owner + owner.
+ * `openCompanionEntity` enforces it by refusing to dock an entity beside an
+ * entity primary.
+ */
+async function openEntityDetail(entityId, initialTab, opts) {
+  const inCompanion = !!(opts && opts.mount === 'companion');
 
-  panel.style.display = 'block';
-  overlay.classList.add('open');
+  // Panel chrome that belongs to the PRIMARY slide-over only. In companion mode
+  // we must not steal the primary kind, close ourselves, drive the overlay, or
+  // rewrite the hash/back-stack — the property in the primary slot still owns
+  // the route (`?d=` encodes exactly one subject).
+  if (!inCompanion) {
+    if (typeof _setPrimaryKind === 'function') _setPrimaryKind('entity');
+    _entityDetailCache = null;
+    // A fresh entity open resets any stale companion property dock (it's anchored
+    // to the previously-open contact/owner).
+    if (typeof closeCompanion === 'function') closeCompanion();
+    const panel = document.getElementById('detailPanel');
+    const overlay = document.getElementById('detailOverlay');
+    if (!panel || !overlay) return;
+    panel.style.display = 'block';
+    overlay.classList.add('open');
+  } else {
+    _entityDetailCache = null;
+  }
 
   const activeTab = ENTITY_DETAIL_TABS.includes(initialTab) ? initialTab : ENTITY_DETAIL_TABS[0];
 
-  // Client routing (UI Phase 1 + 4B): mirror the open entity + tab into the hash
-  // so a reload / deep-link re-opens this exact view. Loop-guarded.
-  if (typeof _routeSetDetailHash === 'function') {
-    _routeSetDetailHash({ kind: 'entity', id: entityId, tab: activeTab });
-  }
-  // UI Phase 4: reconcile the back-stack (entity is a first-class zoom level).
-  if (typeof _detailStackSync === 'function') {
-    _detailStackSync({ kind: 'entity', id: entityId, tab: activeTab });
+  if (!inCompanion) {
+    // Client routing (UI Phase 1 + 4B): mirror the open entity + tab into the hash
+    // so a reload / deep-link re-opens this exact view. Loop-guarded.
+    if (typeof _routeSetDetailHash === 'function') {
+      _routeSetDetailHash({ kind: 'entity', id: entityId, tab: activeTab });
+    }
+    // UI Phase 4: reconcile the back-stack (entity is a first-class zoom level).
+    if (typeof _detailStackSync === 'function') {
+      _detailStackSync({ kind: 'entity', id: entityId, tab: activeTab });
+    }
   }
 
-  const headerEl = document.getElementById('detailHeader');
-  const tabsEl = document.getElementById('detailTabs');
-  const bodyEl = document.getElementById('detailBody');
+  const headerEl = document.getElementById(inCompanion ? 'companionHeader' : 'detailHeader');
+  const tabsEl = document.getElementById(inCompanion ? 'companionTabs' : 'detailTabs');
+  const bodyEl = document.getElementById(inCompanion ? 'companionBody' : 'detailBody');
+  if (inCompanion && tabsEl) tabsEl.style.display = '';
 
   // Reset the shared rail / Next-Step / next-action chrome so a prior property's
-  // content never lingers under the entity panel while it loads.
-  _entityHideRailChrome();
+  // content never lingers under the entity panel while it loads. That chrome is
+  // primary-only; the dock has no rail.
+  if (!inCompanion) _entityHideRailChrome();
 
   // Loading state
   if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
+    ${inCompanion ? '' : '<button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>'}
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
         <div class="detail-title">Loading entity...</div>
@@ -13398,7 +13431,7 @@ async function openEntityDetail(entityId, initialTab) {
       _detailStackSetLabel({ kind: 'entity', id: entityId }, entity.name);
     }
     if (headerEl) headerEl.innerHTML = `
-      <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
+      ${inCompanion ? '' : '<button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>'}
       <div class="detail-header-info">
         <div style="flex:1;min-width:0">
           <div class="detail-title">${esc(entity.name)}</div>
@@ -13421,18 +13454,21 @@ async function openEntityDetail(entityId, initialTab) {
         </button>
         <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
       </div>
-      ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls('primary') : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}`;
+      ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls(inCompanion ? 'companion' : 'primary') : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}`;
     if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
 
-    // Render tabs (property-detail grammar) — role-driven set.
+    // Render tabs (property-detail grammar) — role-driven set. The mount rides
+    // in the handler so the companion's tab bar writes into the companion body.
+    const _mountArg = inCompanion ? ", 'companion'" : '';
     if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
-      '<button class="detail-tab ' + (t === effectiveTab ? 'active' : '') + '" onclick="switchEntityTab(decodeURIComponent(\'' + encodeURIComponent(t) + '\'))">' + esc(t) + '</button>'
+      '<button class="detail-tab ' + (t === effectiveTab ? 'active' : '') + '" onclick="switchEntityTab(decodeURIComponent(\'' + encodeURIComponent(t) + '\')' + _mountArg + ')">' + esc(t) + '</button>'
     ).join('');
 
     // Shared rail + Next-Step are the OWNER BD-queue chrome (connection/portfolio
     // completeness + the priority-band next action) — only meaningful for
     // owner/buyer entities. A broker/plain contact leaves them hidden (item #5).
-    if (role === 'owner' || role === 'buyer') {
+    // Primary-only: that chrome lives in the primary slide-over's DOM.
+    if (!inCompanion && (role === 'owner' || role === 'buyer')) {
       _entityRenderCompletenessRail();
       _entityRenderNextStep();
     }
@@ -13758,19 +13794,23 @@ async function openContactDetailByName(name) {
 }
 
 // ── Entity Tab Switching (UI Phase 4B — mirrors switchUnifiedTab) ──
-function switchEntityTab(tabName) {
+function switchEntityTab(tabName, mount) {
   if (!_entityDetailCache || _entityDetailCache.type !== 'entity') return;
+  const inCompanion = mount === 'companion';
   // Guard against a tab not in this entity's role-driven set (e.g. a legacy
   // deep-link to Ownership on a broker) — fall back to the first tab.
   const tabs = _entityDetailCache.tabs;
   if (Array.isArray(tabs) && tabs.length && !tabs.includes(tabName)) tabName = tabs[0];
   // Mirror the tab into the hash (replace, so reload keeps it / no history noise),
-  // exactly like the property detail's switchUnifiedTab.
-  if (typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
-  document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
+  // exactly like the property detail's switchUnifiedTab. Companion-only: the
+  // route belongs to whatever is in the PRIMARY slot — `?d=` encodes one
+  // subject, so a dock tab change must not rewrite it.
+  if (!inCompanion && typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
+  const tabSel = inCompanion ? '#companionTabs .detail-tab' : '#detailTabs .detail-tab';
+  document.querySelectorAll(tabSel).forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = document.getElementById(inCompanion ? 'companionBody' : 'detailBody');
   if (bodyEl) bodyEl.innerHTML = _renderEntityTab(tabName);
 }
 window.switchEntityTab = switchEntityTab;
@@ -14657,6 +14697,10 @@ function openCompanionProperty(db, propertyId, summary = {}) {
   if (minTab) minTab.classList.remove('open');
   panel.classList.add('open');
   panel.style.display = 'block';
+  // The dock is shared with the full entity panel, which shows a tab bar. A
+  // property docked afterwards must not inherit the previous subject's tabs.
+  const _compTabs = document.getElementById('companionTabs');
+  if (_compTabs) { _compTabs.innerHTML = ''; _compTabs.style.display = 'none'; }
 
   const addr = summary.address || '(property)';
   const loc = (summary.city || '') + (summary.city && summary.state ? ', ' : '') + (summary.state || '');
@@ -14767,20 +14811,33 @@ function openCompanionEntity(entityId) {
   if (minTab) minTab.classList.remove('open');
   panel.classList.add('open');
   panel.style.display = 'block';
+  // SINGLE-CACHE CONSTRAINT: `_entityDetailCache` is a module singleton, so two
+  // entity panels cannot coexist. That is fine for every supported layout
+  // (property + owner, in either slot) but must be refused explicitly rather
+  // than silently corrupting the primary panel's cache.
+  if (_activePrimaryKind === 'entity') {
+    if (typeof showToast === 'function') showToast('Open a property to dock a contact beside it', 'info');
+    openEntityDetail(entityId);
+    return;
+  }
   _companionState = { kind: 'entity', entityId, label: 'Contact' };
   _panelSyncResizers();
-  header.innerHTML =
-    '<div class="detail-header-info" style="width:100%">'
-    + '<div style="flex:1;min-width:0"><div class="detail-title">Loading…</div></div>'
-    + _panelHeaderControls('companion')
-    + '</div>';
-  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span></div>';
-  _entityApiFetch('/api/entities?action=contact360&id=' + encodeURIComponent(entityId))
-    .then(function(c360) {
-      if (!_companionState || _companionState.entityId !== entityId) return; // user moved on
-      _renderCompanionEntity(c360, entityId);
+  // FULL detail side-by-side (Scott, 2026-08-15) — the dock renders the same
+  // tabbed entity panel as the primary, not a summary card with an
+  // "Open full detail ↗" button.
+  openEntityDetail(entityId, undefined, { mount: 'companion' })
+    .then(function() {
+      // Keep the tray chip / swap descriptor labelled with the real subject.
+      try {
+        const t = document.querySelector('#companionHeader .detail-title');
+        if (t && _companionState && _companionState.entityId === entityId) {
+          _companionState.label = t.textContent.trim() || 'Contact';
+        }
+      } catch (_e) {}
     })
-    .catch(function() { if (body) body.innerHTML = '<div class="detail-empty">Could not load this contact.</div>'; });
+    .catch(function() {
+      if (body) body.innerHTML = '<div class="detail-empty">Could not load this contact.</div>';
+    });
 }
 window.openCompanionEntity = openCompanionEntity;
 

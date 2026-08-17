@@ -69,7 +69,32 @@ hard-coded `right:520px` in three places was the reason widening the primary was
 (`#/<slug>?d=<token>`), the `_detailStack` zoom model, and the overlay/z-index model untouched.
 Free-float is spec'd as the follow-on once this layout is validated in use.
 
-> ### ⚠️ SUPERSEDED IN PART — companion must be a FULL panel, not a summary (Scott, 2026-08-15)
+> ### ✅ RESOLVED 2026-08-17 — the companion now hosts the FULL entity panel
+> `openEntityDetail(id, tab, { mount: 'companion' })` renders the same tabbed panel into the dock. The
+> feared 80-call-site refactor was **not** needed: the render captures
+> `headerEl / tabsEl / bodyEl` into **locals** once and writes through those, and `_renderEntityTab(tab)` is
+> a **pure** string function — so a mount only swaps three element references. No global mount state, and
+> therefore no async-interleaving hazard when both panels load at once.
+>
+> What is deliberately primary-only in the dock: `_setPrimaryKind`, the overlay, hash routing +
+> `_detailStackSync` (`?d=` encodes exactly ONE subject, and it belongs to whatever is in the primary slot),
+> the completeness rail / Next-Step chrome (it lives in the primary DOM), and the **Back button** —
+> `detailBack()` walks the primary's `_detailStack`, so a Back in the dock would navigate the wrong panel.
+>
+> **Constraint, enforced explicitly:** `_entityDetailCache` is a module singleton, so only ONE entity panel
+> may exist at a time. That covers every supported layout — property + owner in either slot — but never
+> owner + owner, so `openCompanionEntity` **refuses** to dock an entity beside an entity primary and opens it
+> in the primary slot instead, rather than silently corrupting the cache.
+>
+> **⇄ swap keeps its purpose after all.** It is no longer "the way to reach detail" (both slots are now full
+> panels) but it remains how you put the subject you are working in the **wide** slot — and with the
+> 9-tab entity set at 620px the dock wraps to two tab rows, so promoting it is a real affordance.
+>
+> Still a summary card: the **property** in the dock (`openCompanionProperty`). The property panel's
+> renderers are far more entangled with the singleton ids than the entity panel's, so that half is a separate
+> piece of work. The dock now clears the entity tab bar when a property takes it.
+
+> ### ⚠️ ORIGINAL NOTE — companion must be a FULL panel, not a summary (Scott, 2026-08-15)
 > The 2026-08-15 manual run rejected the placeholder model:
 > *"I think we want to see the full detail side-by-side instead of a placeholder that you can swap over to
 > the primary."*

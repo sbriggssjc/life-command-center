@@ -531,6 +531,78 @@ describe('the panel resolves its own asset entity by ID, not by address string',
   });
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+describe('§4.2 side-by-side — the companion hosts the FULL entity panel', () => {
+  // Scott, 2026-08-15: "we want to see the full detail side-by-side instead of
+  // a placeholder that you can swap over to the primary." The dock used to
+  // render a summary card with an "Open full detail ↗" button.
+  const openEntity = sliceFn(detailSrc, 'openEntityDetail');
+  const switchTab = sliceFn(detailSrc, 'switchEntityTab');
+  const openCompEntity = sliceFn(detailSrc, 'openCompanionEntity');
+
+  it('openEntityDetail accepts a companion mount and resolves the dock elements', () => {
+    assert.match(openEntity, /opts && opts\.mount === 'companion'/);
+    for (const id of ['companionHeader', 'companionTabs', 'companionBody']) {
+      assert.ok(openEntity.includes(id), `mount must resolve ${id}`);
+    }
+  });
+
+  it('primary-only chrome is skipped in the dock', () => {
+    // Stealing the primary kind, driving the overlay, or rewriting the hash from
+    // the dock would break the property that still owns the route.
+    assert.match(openEntity, /if \(!inCompanion\) \{[\s\S]*_setPrimaryKind/,
+      '_setPrimaryKind must be primary-only');
+    assert.match(openEntity, /if \(!inCompanion\)[\s\S]{0,400}_routeSetDetailHash/,
+      'hash routing must be primary-only');
+    assert.match(openEntity, /!inCompanion && \(role === 'owner'/,
+      'the rail/next-step chrome lives in the primary DOM only');
+  });
+
+  it('the dock tab bar routes back to the dock, not the primary body', () => {
+    assert.match(openEntity, /_mountArg = inCompanion \? ", 'companion'" : ''/,
+      'tab handlers must carry the mount');
+    assert.match(switchTab, /function switchEntityTab\(tabName, mount\)/);
+    assert.match(switchTab, /inCompanion \? 'companionBody' : 'detailBody'/);
+    assert.match(switchTab, /#companionTabs \.detail-tab/);
+  });
+
+  it('a dock tab change does NOT rewrite the hash', () => {
+    assert.match(switchTab, /!inCompanion && typeof _routeUpdateTabHash/,
+      '`?d=` encodes one subject — the dock must not claim it');
+  });
+
+  it('REGRESSION: the single _entityDetailCache forbids entity-beside-entity', () => {
+    // _entityDetailCache is a module singleton, so two entity panels would
+    // corrupt each other. Refuse explicitly rather than silently.
+    assert.match(openCompEntity, /_activePrimaryKind === 'entity'/,
+      'docking an entity beside an entity must be refused');
+    assert.match(openCompEntity, /openEntityDetail\(entityId\);/,
+      'the refusal should still open the entity, just in the primary slot');
+  });
+
+  it('the companion opens the real panel, not the summary card', () => {
+    assert.match(openCompEntity, /openEntityDetail\(entityId, undefined, \{ mount: 'companion' \}\)/);
+  });
+
+  it('the dock header has no Back button — it would drive the PRIMARY back-stack', () => {
+    // `detailBack()` walks _detailStack, which belongs to the primary
+    // slide-over. A Back button in the dock would navigate the wrong panel.
+    const backs = [...openEntity.matchAll(/class="detail-back"/g)];
+    assert.ok(backs.length >= 1, 'the primary header should still have Back');
+    for (const m of backs) {
+      const line = openEntity.slice(Math.max(0, m.index - 120), m.index + 40);
+      assert.match(line, /inCompanion \? ''/,
+        'every detail-back in the entity panel must be suppressed in companion mode');
+    }
+  });
+
+  it('a property docked after an entity does not inherit its tab bar', () => {
+    const openCompProp = sliceFn(detailSrc, 'openCompanionProperty');
+    assert.match(openCompProp, /companionTabs/,
+      'the shared dock must clear the entity tab bar when a property takes it');
+  });
+});
+
 describe('V-2 generalised — no inline onclick may hand-roll quote escaping', () => {
   // The original V-2 fix touched ONE call site. The same broken idiom
   // `esc(x).replace(/'/g, "\\'")` — a no-op, because esc() already produced
