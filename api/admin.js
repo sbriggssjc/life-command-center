@@ -153,6 +153,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'connectors':  return handleConnectors(req, res);
     case 'config':      return handleConfig(req, res);
     case 'diag':        return handleDiag(req, res);
+    case 'sf-task-probe': return handleSfTaskProbe(req, res);
     case 'treasury':    return handleTreasury(req, res);
     case 'edge-data':   return handleEdgeDataProxy(req, res);
     case 'edge-brief':  return handleEdgeBriefingProxy(req, res);
@@ -13280,6 +13281,78 @@ async function handleConfig(req, res) {
   });
 }
 
+// ── P125a — SF Task maintenance probe ───────────────────────────────────────
+// Exercises the three compliance ops against a SINGLE named Task so each
+// Power-Automate case can be verified before anything is wired to the cadence
+// engine.
+//
+// It exists because SF_LOOKUP_WEBHOOK_URL is a SIGNED SECRET: the only ways to
+// reach the flow are to paste that URL into a chat (never) or to go through the
+// app, which already holds it server-side.
+//
+// WHY IT IS NOT ON /api/diag (my first attempt, corrected): handleDiag opens
+// with `if (req.method !== 'GET') return 405 'GET only'` -- diagnostics are
+// READS. This probe WRITES to Salesforce, so it never belonged there; the
+// GET-only gate was right and the placement was wrong.
+//
+//   POST /api/admin?_route=sf-task-probe
+//     { "op":"update_due", "sf_task_id":"00T...", "activity_date":"2026-09-30" }
+//     { "op":"close",      "sf_task_id":"00T...", "confirm": true }
+//     { "op":"open_tasks", "owner_ids":["005..."] }
+//
+// Guards: manager role; POST only; ONE task id per call (never a sweep); and
+// `close` demands an explicit confirm so a mis-click cannot close a live
+// pursuit. Writes nothing to LCC -- a pass-through to the flow.
+async function handleSfTaskProbe(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const wsId = primaryWorkspace(user)?.workspace_id;
+  if (!requireRole(user, 'manager', wsId)) {
+    return res.status(403).json({ error: 'Manager role required' });
+  }
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'POST only - this op writes to Salesforce' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  const b = req.body || {};
+  const op = String(b.op || '').trim();
+  try {
+    if (op === 'update_due') {
+      const r = await updateSalesforceTaskDue({
+        sfTaskId: b.sf_task_id, activityDate: b.activity_date,
+      });
+      return res.status(200).json({ probe: 'update_due', ...r });
+    }
+    if (op === 'close') {
+      // Closing a pursuit task is destructive to a live workflow. Require the
+      // caller to say so explicitly rather than inferring intent from `op`.
+      if (b.confirm !== true) {
+        return res.status(400).json({
+          error: 'close requires {"confirm": true} - this closes a live pursuit task',
+        });
+      }
+      const r = await closeSalesforceTask({ sfTaskId: b.sf_task_id, status: b.status });
+      return res.status(200).json({ probe: 'close', ...r });
+    }
+    if (op === 'open_tasks') {
+      const r = await getOpenTasksForCompliance({
+        ownerIds: Array.isArray(b.owner_ids) ? b.owner_ids : [],
+        nmType: (b.nm_type === null) ? null : b.nm_type,
+      });
+      return res.status(200).json({ probe: 'open_tasks', ...r });
+    }
+    return res.status(400).json({
+      error: `Unknown op: ${op || '(missing)'}`,
+      known: ['update_due', 'close', 'open_tasks'],
+    });
+  } catch (e) {
+    return res.status(200).json({
+      probe: op, ok: false, reason: 'probe_threw',
+      detail: String((e && e.message) || e).slice(0, 300),
+    });
+  }
+}
+
 async function handleDiag(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
 
@@ -13296,70 +13369,6 @@ async function handleDiag(req, res) {
 
   const user = await authenticate(req, res);
   if (!user) return;
-
-  // ── P125 — SF Task maintenance probe ─────────────────────────────────────
-  // Exercises the three new compliance ops against a SINGLE named Task so the
-  // Power-Automate cases can be verified one at a time, before anything is
-  // wired to the cadence engine.
-  //
-  // It exists because SF_LOOKUP_WEBHOOK_URL is a SIGNED SECRET: the only ways to
-  // test the flow are to paste that URL into a chat (never) or to go through the
-  // app, which already holds it server-side. This is that seam.
-  //
-  //   POST /api/diag?kind=sf-task-probe
-  //     { "op":"update_due", "sf_task_id":"00T…", "activity_date":"2026-09-30" }
-  //     { "op":"close",      "sf_task_id":"00T…" }
-  //     { "op":"open_tasks", "owner_ids":["005…"] }     // read-only audit
-  //
-  // Guards: manager role; POST only; ONE task id per call (never a sweep); and
-  // `close` demands an explicit confirm so a mis-click cannot close a live
-  // pursuit. Writes nothing to LCC — it is a pass-through to the flow.
-  if (req.query.kind === 'sf-task-probe') {
-    const wsId = primaryWorkspace(user)?.workspace_id;
-    if (!requireRole(user, 'manager', wsId)) {
-      return res.status(403).json({ error: 'Manager role required' });
-    }
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'POST only — this op writes to Salesforce' });
-    }
-    const b = req.body || {};
-    const op = String(b.op || '').trim();
-    try {
-      if (op === 'update_due') {
-        const r = await updateSalesforceTaskDue({
-          sfTaskId: b.sf_task_id, activityDate: b.activity_date,
-        });
-        return res.status(200).json({ probe: 'update_due', ...r });
-      }
-      if (op === 'close') {
-        // Closing a pursuit task is destructive to a live workflow. Require the
-        // caller to say so explicitly rather than inferring intent from `op`.
-        if (b.confirm !== true) {
-          return res.status(400).json({
-            error: 'close requires {"confirm": true} — this closes a live pursuit task',
-          });
-        }
-        const r = await closeSalesforceTask({ sfTaskId: b.sf_task_id, status: b.status });
-        return res.status(200).json({ probe: 'close', ...r });
-      }
-      if (op === 'open_tasks') {
-        const r = await getOpenTasksForCompliance({
-          ownerIds: Array.isArray(b.owner_ids) ? b.owner_ids : [],
-          nmType: (b.nm_type === null) ? null : b.nm_type,
-        });
-        return res.status(200).json({ probe: 'open_tasks', ...r });
-      }
-      return res.status(400).json({
-        error: `Unknown op: ${op || '(missing)'}`,
-        known: ['update_due', 'close', 'open_tasks'],
-      });
-    } catch (e) {
-      return res.status(200).json({
-        probe: op, ok: false, reason: 'probe_threw',
-        detail: String((e && e.message) || e).slice(0, 300),
-      });
-    }
-  }
 
   // Lightweight env-var presence probe — no secret required. Added after the
   // 2026-04-24 outage where OPS_SUPABASE_KEY went missing from Vercel Prod
