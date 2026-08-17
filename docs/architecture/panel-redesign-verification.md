@@ -691,6 +691,46 @@ copy(JSON.stringify({
 
 ---
 
+### 4.2j SIDE-BY-SIDE FULL DETAIL — verified live in-browser 2026-08-17 (build `51c7282b0697`)
+
+Scott's ask (2026-08-15): *"we want to see the full detail side-by-side instead of a
+placeholder that you can swap over to the primary."* Driven live via the Chrome MCP against
+the deployed build, property `dia:31857` (5660 Nimtz Pkwy, South Bend IN) → owner chip.
+
+| # | Claim | Evidence (measured live, not asserted) |
+|---|---|---|
+| SBS-1 | The dock renders the FULL entity panel, not a summary card | `companionTabs` = `Overview, History, Relationships, Activity, Engagement, ROE, Contacts` (7 tabs); `companionBody.innerHTML.length` 3,683. Screenshot shows Safe-to-call banner, Next-Best-Action, Entity Information, Summary tiles, Outreach — the same panel the primary renders. |
+| SBS-2 | Both panels fit at once | primary 720 + companion 620 = 1,340 ≤ viewport 1,758. `companion-panel open`. |
+| SBS-3 | A dock tab change does NOT rewrite the hash | clicked companion `Relationships`: `hashBefore === hashAfter` = `#/dia?d=prop:dia:31857:Ownership` (still the PROPERTY). Companion body changed (3,683 → 753); primary body unchanged at 8,900 and still property content. |
+| SBS-4 | No Back button in the dock | `hasBack` false on the companion header. After ⇆ swap the same entity in the PRIMARY slot renders `←Back` — so the button follows the slot that owns `_detailStack`, which is the point. |
+| SBS-5 | ⇆ swap works with two full panels, hash follows the primary | after swap: primary header = `←Back NETSTREIT Corp ORGANIZATION dia active`, companion = the property; widths preserved 720/620; hash rewrote to `#/dia?d=entity:80e2437b-…:Overview` — the new primary subject. |
+| SBS-6 | Entity-beside-entity is REFUSED, not silently corrupted | with an entity primary, `openCompanionEntity('6dca42e5-…')` emitted toast `"Open a property to dock a contact beside it"`, left the companion on the property, and opened the entity in the PRIMARY slot (`Lba Gsa Marianna Ii Llc`). Guard fires because `_entityDetailCache` is a module singleton. |
+
+**Two defects observed while doing this** (logged, not fixed in that pass):
+
+- **UI-5 (confirmed live, worse than filed).** On `dia:31857` the ladder renders
+  `RECORDED OWNER (DEED) → Netstreit Inc` and `TRUE OWNER / DECISION MAKER → Netstreit Inc`
+  — byte-identical labels, side by side, with an arrow between them, so `_ownersAgree`
+  did not collapse. Worse: the chip's `data-owner-ctx` carries `name: "Netstreit Corp"`
+  while the visible label reads `Netstreit Inc`, and clicking it docks **NETSTREIT Corp**.
+  So the label and the navigation target are different strings. The collapse test is
+  evidently comparing something other than the two strings actually rendered.
+- **Portfolio linkage gap (data, not UI).** The docked NETSTREIT Corp entity reports
+  `0 Properties` and `— Portfolio Rent` while being the resolved owner of the very asset
+  in the other panel. `50 Contacts`, `0 Activities`. Whatever backs the entity Summary
+  tiles is not reading the same owner→asset link the property panel just used.
+
+**Method note — three false readings before the real one, all mine, all condition errors:**
+(1) I read `#detailPanel.classList.contains('open')` and concluded the panel had not opened;
+the screenshot showed it fully rendered — wrong element for that class. (2) I clicked the
+owner chip at coordinates from an earlier `getBoundingClientRect`, after the panel had
+scrolled, and hit the *Recorded Owner input* instead; dispatching the event on the element
+worked. (3) I checked a stale tab and concluded the deploy had not shipped — `/version`
+said `51c7282b0697`, matching the merge. **Also learned: the build rewrites the asset
+cache-buster from the git SHA (`detail.js?v=51c7282b0697`), so hand-bumping the `?v=` in
+`index.html` is redundant.** Same pattern as §4.2b–4.2e: the numbers were fine, the
+conditions I read them under were not.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:
