@@ -939,6 +939,62 @@ The migration **patches the live definition in place** rather than pasting a
 migration that owns it and the two would drift. It raises if the anchor text is
 missing, so a changed base fails loudly instead of silently no-op'ing.
 
+### 4.2p P119 — the junk lane, and two hypotheses I had to abandon
+
+Scott asked whether the 206-row `junk_entity_name` lane had a deterministic
+auto-confirmable subset, the way the property-twin lane got one in P106. It did
+not — but reading it properly found something better.
+
+**Hypothesis 1, dropped.** I expected the "Buyer ContactsStephen R. Perry"
+table-header misparse to be the bulk of it. Live: **zero** open rows match that
+shape. The rows I had sampled earlier were `superseded` — I was looking at
+already-retired work.
+
+**Hypothesis 2, dropped.** 46 rows carried `r7_phase2_5_person_plausibility`
+while being typed `organization`, and I suspected a rule misapplied to the wrong
+entity type. Reading the migration showed the opposite: the rule was **correct**
+— the capture pipeline was minting firm names as *people*, and it flagged them.
+
+**What was actually wrong.** Migration `20260617120000` fixed this class properly
+— retype, un-flag, supersede — and it explicitly documents what it left alone.
+But its target set required `entity_type = 'person'`. Entities that were **already
+typed `organization`** carried the same, by-then-void flag and were never
+reached. For an organization, "this is not a plausible person name" is not a
+defect; it is the expected state. The premise is void, so the decision retires —
+doctrine item 2.
+
+Held out of the BD graph by that stale flag: **Blackstone Real Estate Partners
+VIII**, Ares Real Estate Income Trust, BH Properties, 29th Street Capital.
+`junk_name_flagged` excludes an entity from the priority-queue bands, so these
+real firms were invisible in the queue.
+
+Excluded on purpose, each with a stated reason: 8 flagged by a *different* sweep
+whose premise still stands; brokerage-polluted names (P116 — cleaning such a name
+is what SURFACES a duplicate, so it must not be silently readmitted); 45
+pipe-composites, left for the split path exactly as the June round left them; and
+every non-suffix name (`Bakery`, `Description:`, `Managing Director`) which is
+genuinely junk and stays in the lane.
+
+**Blast radius measured before applying:** all **42 of 42 are already on a
+cadence** — so this creates **zero** new work. 21 own assets, 19 have portfolio
+facts, 11 reachable, 0 open opportunities. Pure recovery of entities already
+inside outreach but invisible in the queue; not a new producer.
+
+| | before | after |
+|---|---|---|
+| `junk_entity_name` open | 206 | **164** |
+| Decision Center open (all lanes) | 448 | **406** |
+
+Reversible by `junk_rescue_source` / `superseded_reason`; idempotent (the
+predicate excludes anything already rescued).
+
+**Pattern worth naming across P117/P118/P119:** all three were *reachable* bugs
+only because someone had already built the right machinery and left an honest
+record of what it deliberately did not cover. P117 found two stores nobody
+bridged; P118 found a rank computed from the wrong subject; P119 found a rescue
+whose target predicate was one degree too narrow. None was a mistake in the
+original work — each was a documented edge that later data grew into.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:
