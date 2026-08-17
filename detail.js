@@ -75,10 +75,43 @@ let _udIntakeState = {
  * @param {object} ids - { property_id, lease_number } lookup keys
  * @param {object} fallback - the raw record from the list (shown while loading)
  */
-async function openUnifiedDetail(db, ids, fallback, initialTab) {
+// ───────────────────────────────────────────────────────────────────────────
+// Where the ONE property panel currently lives.
+//
+// The entity panel could be mounted by passing three element refs through as
+// locals, because openEntityDetail captured them once. The property panel
+// cannot: 16 call sites across 12 functions re-grab `#detailBody` on their own
+// (in-panel actions that re-render — dismiss lead, CMS link, sales filter,
+// lease sub-view…). Threading a mount argument through every one of those, and
+// through the onclick strings that call them, would be both large and easy to
+// get half-right.
+//
+// A module-level pointer is normally the wrong answer — it is global mount
+// state, and two panels loading concurrently would cross wires. It is SAFE here
+// for the same reason the entity dock refuses entity-beside-entity: `_udCache`
+// is itself a module singleton, so **only one property panel can exist at a
+// time**, in either slot but never both. `openCompanionProperty` enforces that
+// explicitly rather than leaving it to luck.
+//
+// If _udCache is ever made per-panel, this pointer MUST become a parameter.
+let _udMount = 'primary';
+const _UD_HOST_IDS = {
+  primary:   { header: 'detailHeader',    tabs: 'detailTabs',    body: 'detailBody' },
+  companion: { header: 'companionHeader', tabs: 'companionTabs', body: 'companionBody' },
+};
+/** The element hosting the live property panel — never a hard-coded id. */
+function _udHost(part) {
+  const ids = _UD_HOST_IDS[_udMount] || _UD_HOST_IDS.primary;
+  return document.getElementById(ids[part]);
+}
+
+async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
+  const inCompanion = !!(opts && opts.mount === 'companion');
+  _udMount = inCompanion ? 'companion' : 'primary';
   // Track that a PROPERTY is now the primary panel, so entity chips clicked from
-  // here dock beside it (companion) instead of replacing it.
-  if (typeof _setPrimaryKind === 'function') _setPrimaryKind('property');
+  // here dock beside it (companion) instead of replacing it. A property in the
+  // DOCK does not own the panel stack, so it must not claim the primary kind.
+  if (!inCompanion && typeof _setPrimaryKind === 'function') _setPrimaryKind('property');
   // Normalize db aliases - callers may pass 'dialysis' or 'government'
   if (db === 'dialysis') db = 'dia';
   if (db === 'government') db = 'gov';
@@ -87,15 +120,25 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   _opsExtraCache = null; // reset operations extra data for new clinic
   _opsGovCache   = null; // reset gov Operations cache for new property
   _salesCache = null; // reset sales data for new property
-  const panel = document.getElementById('detailPanel');
+  const panel = document.getElementById(inCompanion ? 'companionPanel' : 'detailPanel');
   const overlay = document.getElementById('detailOverlay');
-  if (!panel || !overlay) return;
+  if (!panel || (!inCompanion && !overlay)) return;
 
   fallback = fallback || {};  // guard against null/undefined callers
 
-  // Show panel immediately with loading state
+  // Show panel immediately with loading state. The dock has no overlay — it
+  // sits BESIDE the primary rather than over the page.
   panel.style.display = 'block';
-  overlay.classList.add('open');
+  if (inCompanion) {
+    panel.classList.add('open');
+    const _minTab = document.getElementById('companionMin');
+    if (_minTab) _minTab.classList.remove('open');
+    _companionState = { kind: 'property', db, propertyId: (ids && ids.property_id) || null,
+                        summary: fallback || {}, label: (fallback && fallback.address) || '(property)' };
+    if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
+  } else {
+    overlay.classList.add('open');
+  }
 
   // Render loading header from fallback record
   const title = fallback.page_title ||
@@ -113,12 +156,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // the subtitle when it's a substring of the title.
   const locForSubtitle = (loc && title && title.toLowerCase().includes(loc.toLowerCase())) ? '' : loc;
 
-  const headerEl = document.getElementById('detailHeader');
-  const tabsEl = document.getElementById('detailTabs');
-  const bodyEl = document.getElementById('detailBody');
+  const headerEl = _udHost('header');
+  const tabsEl = _udHost('tabs');
+  const bodyEl = _udHost('body');
 
   if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
+    ${inCompanion ? '' : '<button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>'}
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
         <div class="detail-title">${esc(title)}</div>
@@ -137,8 +180,9 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         🔗 Consolidate
       </button>
       <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
+      ${inCompanion && typeof _panelHeaderControls === 'function' ? _panelHeaderControls('companion') : ''}
     </div>
-    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+    ${inCompanion ? '' : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}`;
 
   // Render tab bar — highlight initialTab if provided, else first tab.
   // Tabs restructured to match broker workflow (2026-04-15).
@@ -155,6 +199,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership', 'Documents', 'Activity Log'];
   const mappedInitialTab = initialTab ? _udMapLegacyTab(initialTab) : null;
   const activeTab = (mappedInitialTab && tabs.includes(mappedInitialTab)) ? mappedInitialTab : tabs[0];
+  if (tabsEl) tabsEl.style.display = '';
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
     `<button class="detail-tab ${t === activeTab ? 'active' : ''}" onclick="switchUnifiedTab(decodeURIComponent('${encodeURIComponent(t)}'))">${esc(t)}</button>`
   ).join('');
@@ -165,13 +210,13 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // reload / pasted deep-link re-opens this exact detail. Loop-guarded (no-op
   // when the router is the one driving this open). Needs a stable property_id;
   // clinic-only opens (no property_id) are not deep-linked this phase.
-  if (typeof _routeSetDetailHash === 'function' && ids && ids.property_id) {
+  if (!inCompanion && typeof _routeSetDetailHash === 'function' && ids && ids.property_id) {
     _routeSetDetailHash({ kind: 'prop', db, id: ids.property_id, tab: activeTab });
   }
   // UI Phase 4: reconcile the back-stack so a lateral/drill hop pushes a new
   // level (and the breadcrumb updates immediately). Uses the fallback-derived
   // title as the crumb label; refined to the real title once data loads below.
-  if (typeof _detailStackSync === 'function' && ids && ids.property_id) {
+  if (!inCompanion && typeof _detailStackSync === 'function' && ids && ids.property_id) {
     _detailStackSync({ kind: 'prop', db, id: ids.property_id, tab: activeTab }, title);
   }
 
@@ -519,7 +564,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Ownership tab if it's the active one once they load.
     _udEnrichOwnershipSignals().then(function () {
       try {
-        var _bodyEl = document.getElementById('detailBody');
+        var _bodyEl = _udHost('body');
         if (_bodyEl && typeof activeTab !== 'undefined' && activeTab === 'Ownership') _bodyEl.innerHTML = _udRenderTab('Ownership');
       } catch (_e) {}
       try { _udRenderNextStep(); } catch (_e) {}
@@ -585,10 +630,10 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         if (!_udCache) return;
         _setUdCache({ ..._udCache, leaseExtensions: enrichment.extensions, leaseRentSchedule: enrichment.schedule, leaseOptions: enrichment.options || new Map() });
         // Re-render if the Rent Roll tab is currently active
-        const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
+        const activeTabEl = (_udHost('tabs') || document).querySelector('.detail-tab.active');
         const activeLabel = activeTabEl ? activeTabEl.textContent.trim() : '';
         if (activeLabel === 'Rent Roll' || activeLabel === 'Lease') {
-          const bodyEl = document.getElementById('detailBody');
+          const bodyEl = _udHost('body');
           if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeLabel);
         }
       }).catch((e) => { console.warn('lease enrichment fetch failed', e); });
@@ -602,7 +647,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       const pipelineName = _udPipelineName(synthProperty, fallback, db);
       const realTitle = pipelineName || legalName || synthProperty.address || fallback.address || '(Unknown)';
       // UI Phase 4: refine this level's breadcrumb crumb to the loaded title.
-      if (typeof _detailStackSetLabel === 'function' && (propertyId || ids.property_id)) {
+      if (!inCompanion && typeof _detailStackSetLabel === 'function' && (propertyId || ids.property_id)) {
         _detailStackSetLabel({ kind: 'prop', db, id: propertyId || ids.property_id }, realTitle);
       }
       const loc2 = (synthProperty.city || '') + (synthProperty.state ? ', ' + synthProperty.state : '');
@@ -638,13 +683,13 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
             🔗 Consolidate
           </button>
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
-          ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls('primary') : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}
+          ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls(_udMount) : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}
         </div>`;
     }
     if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
 
     // Render active tab (preserve on refresh) or default to Overview
-    const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
+    const activeTabEl = (_udHost('tabs') || document).querySelector('.detail-tab.active');
     const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Overview';
     // Operations and Deal History tabs need async data loading
     if (activeTab === 'Operations' && db === 'dia') {
@@ -798,7 +843,7 @@ function _udDismissLead() {
       </div>
     </div>`;
 
-  const body = document.getElementById('detailBody');
+  const body = _udHost('body');
   if (body) body.insertAdjacentHTML('afterbegin', formHTML);
 }
 window._udDismissLead = _udDismissLead;
@@ -927,10 +972,10 @@ function switchUnifiedTab(tabName) {
   // Client routing (UI Phase 1): keep the tab segment in the hash current
   // (replace, so reload keeps the tab and no history entry / loop is created).
   if (typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
-  document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
+  (_udHost('tabs') || document).querySelectorAll('.detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   // Operations tab may need async data loading
   if (tabName === 'Operations' && _udCache.db === 'dia') {
     _udRenderOperationsAsync(bodyEl);
@@ -1170,7 +1215,7 @@ async function _udCmsLinkCandidate(medicareId, method) {
   if (!_udCache) return;
   const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
   if (!propertyId) { showToast('Property ID not available', 'error'); return; }
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Linking CMS facility…</p></div>';
   try {
     const headers = { 'Content-Type': 'application/json' };
@@ -1227,7 +1272,7 @@ async function _udCmsClearLink() {
     _opsExtraCache = null;
     _setUdCache(_udCache);
     showToast('CMS link removed', 'success');
-    const bodyEl = document.getElementById('detailBody');
+    const bodyEl = _udHost('body');
     if (bodyEl) _udRenderOperationsAsync(bodyEl);
   } catch (err) {
     showToast('Unlink failed: ' + err.message, 'error');
@@ -1508,7 +1553,7 @@ function _udSynthPropertyFromFallback(fb, db) {
 function _udRenderFallbackHeader(db, fb) {
   const title = fb.page_title || fb.tenant_operator || fb.tenant_agency || fb.agency || fb.facility_name || fb.address || '(Unknown)';
   const loc = (fb.city || '') + (fb.city && fb.state ? ', ' : '') + (fb.state || '');
-  const el = document.getElementById('detailHeader');
+  const el = _udHost('header');
   if (!el) return;
   el.innerHTML = `
     <div class="detail-header-info">
@@ -3894,7 +3939,7 @@ function _udRenderRentRoll(leases, storedScheduleMap, em) {
 function switchLeaseSubView(view) {
   if (!_udCache) return;
   _udCache.leaseSubView = view;
-  const body = document.getElementById('detailBody');
+  const body = _udHost('body');
   if (body) body.innerHTML = _udRenderTab('Lease');
 }
 window.switchLeaseSubView = switchLeaseSubView;
@@ -6563,7 +6608,7 @@ async function _udOwnerBeginProspecting(trueOwnerId, ownerName) {
       showToast('No SF match found for "' + ownerName + '" — marked as actively prospecting. Create SF Account when ready.', 'info');
     }
     // 2. Refresh the Ownership tab to show updated status
-    const bodyEl = document.getElementById('detailBody');
+    const bodyEl = _udHost('body');
     // Re-fetch chain data to pick up the updated prospecting_status.
     // QA-08 (2026-05-18): gov v_ownership_chain has no property_id column
     // (its keys are ownership_id / lease_number / address). Using
@@ -8462,7 +8507,7 @@ function _udTabSales() {
 
 function _salesSetFilter(f) {
   _salesFilter = (f === 'listings' || f === 'sales') ? f : 'all';
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   if (bodyEl) bodyEl.innerHTML = _udTabSales();
 }
 
@@ -9073,7 +9118,7 @@ async function _salesSaveTransaction() {
 
   // Invalidate cache and reload
   _salesCache = null;
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   _udRenderSalesAsync(bodyEl);
 }
 
@@ -9315,7 +9360,7 @@ function _udTabDealHistory() {
 
 function _dealHistorySetFilter(f) {
   _salesFilter = (['all', 'listings', 'sales', 'ownership'].includes(f)) ? f : 'all';
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   if (bodyEl) {
     bodyEl.innerHTML = _udTabDealHistory();
     _intelRenderPriorSaleSummaryAsync(); // re-populate Prior Sale section
@@ -12188,7 +12233,7 @@ function refreshDetailPanel() {
   const fallback = _udCache.fallback || _udCache;
   if (db && ids) {
     // Brief flash to signal data refresh
-    const body = document.getElementById('detailBody');
+    const body = _udHost('body');
     if (body) {
       body.style.opacity = '0.3';
       body.style.transition = 'opacity 0.15s ease-out';
@@ -14701,6 +14746,17 @@ function _entityDrillProperty(db, propertyId, source, idx) {
 }
 window._entityDrillProperty = _entityDrillProperty;
 
+/**
+ * Dock a property beside the primary panel — the FULL tabbed property panel,
+ * not a summary card (Scott, 2026-08-15: "the full detail side-by-side").
+ *
+ * REFUSAL, for the same reason the entity dock refuses entity-beside-entity:
+ * `_udCache` (and `_opsExtraCache` / `_salesCache`) are module singletons, so
+ * two property panels would overwrite each other's data — the second open would
+ * silently repaint the first with the wrong property. Property + owner in
+ * either slot is fully supported; property + property is not, so it opens in
+ * the primary slot instead of corrupting the cache.
+ */
 function openCompanionProperty(db, propertyId, summary = {}) {
   db = (db === 'gov' || db === 'government') ? 'gov' : 'dia';
   const panel = document.getElementById('companionPanel');
@@ -14708,6 +14764,17 @@ function openCompanionProperty(db, propertyId, summary = {}) {
   const body = document.getElementById('companionBody');
   const minTab = document.getElementById('companionMin');
   if (!panel || !header || !body) { if (typeof openUnifiedDetail === 'function') openUnifiedDetail(db, { property_id: propertyId }); return; }
+
+  if (_activePrimaryKind === 'property') {
+    if (typeof showToast === 'function') showToast('Open an owner to dock a property beside it', 'info');
+    if (typeof openUnifiedDetail === 'function') openUnifiedDetail(db, { property_id: propertyId }, summary);
+    return;
+  }
+  if (typeof openUnifiedDetail === 'function') {
+    openUnifiedDetail(db, { property_id: propertyId }, summary, null, { mount: 'companion' });
+    return;
+  }
+
   if (minTab) minTab.classList.remove('open');
   panel.classList.add('open');
   panel.style.display = 'block';
@@ -14776,6 +14843,10 @@ function closeCompanion() {
   const minTab = document.getElementById('companionMin');
   if (panel) { panel.classList.remove('open'); panel.style.display = 'none'; }
   if (minTab) minTab.classList.remove('open');
+  // If the DOCK was hosting the property panel, the mount pointer must not stay
+  // aimed at a hidden element — a later refresh would render into nothing and
+  // read as "the panel went blank".
+  if (_companionState && _companionState.kind === 'property') _udMount = 'primary';
   _companionState = null;
   _panelSyncResizers();
 }
@@ -16366,7 +16437,7 @@ function _renderContactTab(contact) {
 // ── Contact Tab Switching ──
 function _switchContactTab(tabName) {
   if (!_entityDetailCache || _entityDetailCache.type !== 'contact') return;
-  document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
+  (_udHost('tabs') || document).querySelectorAll('.detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
   const bodyEl = document.getElementById('detailBody');

@@ -809,6 +809,49 @@ existing single definitions rather than new ones. Reversible by
 `ownership_source='lcc_property_owner'`; drift detector
 `v_lcc_portfolio_owner_sync_gap`.
 
+### 4.2m Property-in-dock — the last redesign item, and a silently-unrun test suite
+
+The dock now hosts the **full tabbed property panel** on the owner→property
+direction, closing the half §4.2j left open. That direction got materially more
+useful an hour earlier: P117 means an owner's portfolio is actually populated,
+so clicking through it is now a real workflow rather than an empty list.
+
+**Why this was harder than the entity half, and what made it safe.** The entity
+panel needed three element refs because `openEntityDetail` captured them once.
+The property panel could not: **16 call sites across 12 functions** re-grab
+`#detailBody` on their own — in-panel actions that re-render (dismiss lead, CMS
+link/clear, sales filter, lease sub-view, deal-history filter…). Threading a
+mount argument through all of them *and* through the onclick strings that call
+them would be large and easy to get half-right.
+
+A module-level mount pointer is normally the wrong answer — it is exactly the
+global mount state I avoided for entities. It is safe **here** for the same
+reason the entity dock refuses entity-beside-entity: `_udCache` / `_opsExtraCache`
+/ `_salesCache` are module singletons, so only ONE property panel can exist at a
+time, in either slot but never both. `openCompanionProperty` now enforces that
+explicitly (toast + open in the primary slot) rather than leaving it to luck,
+and the comment records that if `_udCache` ever becomes per-panel the pointer
+must become a parameter.
+
+Primary-only, same list as the entity half: hash + back-stack (`?d=` is the
+primary's subject), `_setPrimaryKind`, the overlay (the dock sits *beside*, not
+*over*), Back, and Close. One test asserts **no** function in the 12-strong
+family still hard-codes a singleton id — a partial conversion would have a
+docked property's button repaint the primary panel.
+
+**A test suite had been failing silently, and my own check was reading the wrong
+number.** The §0 ladder suite sliced `_norm` out of `_udOwnershipLadder` up to
+`const _ownersAgree`, which swept in `const _recCore = _norm(recDisplay)` — a
+reference to a variable that does not exist outside the function. The suite threw
+at BUILD time, registered zero subtests, and node reported **`# fail 0`** while
+printing `not ok` for the suite. I had been grepping only `# tests|pass|fail`,
+so it read green. Fixed the slice (`→ const _recCore`), and the run now checks
+suite-level `not ok` lines too. Test count **90 → 102**: 8 new, and **4 that had
+never actually run**.
+
+This is the same family as §4.2b–4.2e and §4.2j: the numbers were right, the
+thing I was reading them off was wrong.
+
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 
 **The Cowork sandbox mount denies `unlink` on the repo (rename is allowed).** Verified 2026-08-15:

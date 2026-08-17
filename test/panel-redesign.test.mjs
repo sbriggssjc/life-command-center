@@ -233,7 +233,7 @@ describe('§0 corollary — the ownership ladder collapses only for a genuine ma
   // `_norm` is declared inside _udOwnershipLadder; lift it out of the body.
   const ladderBody = sliceBody(detailSrc, '_udOwnershipLadder');
   const normSrc = ladderBody.slice(ladderBody.indexOf('const _norm = function'),
-                                  ladderBody.indexOf('const _ownersAgree'));
+                                  ladderBody.indexOf('const _recCore'));
   const norm = build('', [normSrc], '_norm');
   const agree = (rec, tru) => {
     const core = norm(rec);
@@ -341,6 +341,97 @@ describe('UI-5b — the owner chip label and its navigation target are the same 
   it('falls back to the raw name when there is no canonical', () => {
     const own = { recorded_owner: 'Rem Management LLC' };
     assert.equal(ctx(own, 'dia', 'recorded').name, 'Rem Management LLC');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('property-in-dock — the full tabbed panel, mounted without global cross-wiring', () => {
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const openUD = strip(sliceFn(detailSrc, 'openUnifiedDetail'));
+  const openCP = strip(sliceFn(detailSrc, 'openCompanionProperty'));
+  const closeCo = strip(sliceFn(detailSrc, 'closeCompanion'));
+
+  // The 12 functions in the property-render family that re-grab the body/tabs
+  // element on their own. Every one must go through _udHost(), or a docked
+  // property's in-panel action would repaint the PRIMARY panel instead.
+  const FAMILY = ['openUnifiedDetail','switchUnifiedTab','_udRenderFallbackHeader','refreshDetailPanel',
+    '_udDismissLead','_udCmsLinkCandidate','_udCmsClearLink','switchLeaseSubView',
+    '_udOwnerBeginProspecting','_salesSetFilter','_salesSaveTransaction','_dealHistorySetFilter'];
+
+  it('NO function in the property-render family still hard-codes a singleton id', () => {
+    const offenders = [];
+    for (const name of FAMILY) {
+      const body = strip(sliceFn(detailSrc, name));
+      if (/getElementById\(['"]detail(Body|Tabs|Header)['"]\)/.test(body)) offenders.push(name + ' (getElementById)');
+      if (/querySelector\w*\(['"]#detail(Body|Tabs|Header)/.test(body)) offenders.push(name + ' (querySelector)');
+    }
+    assert.deepEqual(offenders, [],
+      `these would render into the primary even when the property is docked: ${offenders.join(', ')}`);
+  });
+
+  it('the mount resolver maps both slots and defaults to primary', () => {
+    const mapSrc = detailSrc.slice(
+      detailSrc.indexOf('const _UD_HOST_IDS = {'),
+      detailSrc.indexOf('};', detailSrc.indexOf('const _UD_HOST_IDS = {')) + 2);
+    const mk = (mount) => build(
+      `const document={getElementById:(id)=>({id})};const _udMount=${JSON.stringify(mount)};`,
+      [mapSrc, sliceFn(detailSrc, '_udHost')],
+      '_udHost');
+    const host = mk('companion');
+    assert.equal(mk('primary')('body').id, 'detailBody');
+    assert.equal(mk('primary')('tabs').id, 'detailTabs');
+    assert.equal(mk(undefined)('body').id, 'detailBody', 'an unknown mount must fall back to primary');
+    assert.equal(host('body').id, 'companionBody');
+    assert.equal(host('tabs').id, 'companionTabs');
+    assert.equal(host('header').id, 'companionHeader');
+  });
+
+  it('the dock never rewrites the hash or the back-stack (they belong to the primary)', () => {
+    for (const fn of ['_routeSetDetailHash', '_detailStackSync', '_detailStackSetLabel']) {
+      const idx = openUD.indexOf(fn);
+      assert.notEqual(idx, -1, `${fn} call not found`);
+      const guard = openUD.slice(Math.max(0, idx - 170), idx);
+      assert.match(guard, /!inCompanion/, `${fn} must be guarded by !inCompanion`);
+    }
+  });
+
+  it('Back and Close are primary-only — detailBack/closeDetail act on the primary stack', () => {
+    assert.match(openUD, /inCompanion \? '' : '<button class="detail-back"/,
+      'Back must be suppressed in the dock');
+    assert.match(openUD, /inCompanion \? '' : '<button class="detail-close"/,
+      'Close must be suppressed in the dock (the dock has its own controls)');
+    assert.match(openUD, /_panelHeaderControls\('companion'\)/, 'the dock needs its own header controls');
+    assert.match(openUD, /_panelHeaderControls\(_udMount\)/, 'the loaded header must follow the mount, not hard-code primary');
+  });
+
+  it('a docked property does NOT claim the primary kind or the overlay', () => {
+    assert.match(openUD, /!inCompanion && typeof _setPrimaryKind/, '_setPrimaryKind is a primary-slot fact');
+    // The overlay must sit in the ELSE of the mount branch: the dock renders
+    // beside the primary, not over the page.
+    const ovIdx = openUD.indexOf("overlay.classList.add('open')");
+    assert.notEqual(ovIdx, -1, 'overlay open call not found');
+    assert.match(openUD.slice(Math.max(0, ovIdx - 60), ovIdx), /\}\s*else\s*\{/,
+      'the overlay is primary-only — it must be in the else of the inCompanion branch');
+    assert.match(openUD, /if \(inCompanion\) \{\s*panel\.classList\.add\('open'\)/,
+      'the dock opens the companion panel rather than the overlay');
+  });
+
+  it('REFUSES property-beside-property (the singleton caches would collide)', () => {
+    assert.match(openCP, /_activePrimaryKind === 'property'/);
+    assert.match(openCP, /showToast\(/);
+    // …and it still opens the property, in the primary slot, rather than dropping the click.
+    const refusal = openCP.slice(openCP.indexOf("_activePrimaryKind === 'property'"));
+    assert.match(refusal.slice(0, 320), /openUnifiedDetail\(db, \{ property_id: propertyId \}, summary\)/);
+  });
+
+  it('delegates to the FULL panel — no summary card, and the tab bar is shown', () => {
+    assert.match(openCP, /openUnifiedDetail\(db, \{ property_id: propertyId \}, summary, null, \{ mount: 'companion' \}\)/);
+    assert.match(openUD, /tabsEl\.style\.display = ''/,
+      'the dock hid the tab bar for the old summary card; the full panel must show it');
+  });
+
+  it('closing the dock re-aims the mount pointer so a later refresh cannot render into nothing', () => {
+    assert.match(closeCo, /_companionState\.kind === 'property'\)\s*_udMount = 'primary'/);
   });
 });
 
