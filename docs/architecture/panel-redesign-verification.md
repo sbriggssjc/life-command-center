@@ -706,7 +706,7 @@ the deployed build, property `dia:31857` (5660 Nimtz Pkwy, South Bend IN) → ow
 | SBS-5 | ⇆ swap works with two full panels, hash follows the primary | after swap: primary header = `←Back NETSTREIT Corp ORGANIZATION dia active`, companion = the property; widths preserved 720/620; hash rewrote to `#/dia?d=entity:80e2437b-…:Overview` — the new primary subject. |
 | SBS-6 | Entity-beside-entity is REFUSED, not silently corrupted | with an entity primary, `openCompanionEntity('6dca42e5-…')` emitted toast `"Open a property to dock a contact beside it"`, left the companion on the property, and opened the entity in the PRIMARY slot (`Lba Gsa Marianna Ii Llc`). Guard fires because `_entityDetailCache` is a module singleton. |
 
-**Two defects observed while doing this** (logged, not fixed in that pass):
+**Two defects observed while doing this.** UI-5 is FIXED below; the portfolio gap is data, not UI:
 
 - **UI-5 (confirmed live, worse than filed).** On `dia:31857` the ladder renders
   `RECORDED OWNER (DEED) → Netstreit Inc` and `TRUE OWNER / DECISION MAKER → Netstreit Inc`
@@ -730,6 +730,23 @@ said `51c7282b0697`, matching the merge. **Also learned: the build rewrites the 
 cache-buster from the git SHA (`detail.js?v=51c7282b0697`), so hand-bumping the `?v=` in
 `index.html` is redundant.** Same pattern as §4.2b–4.2e: the numbers were fine, the
 conditions I read them under were not.
+
+### 4.2k UI-5 FIXED — one party is never printed twice; chip label == chip target
+
+Both halves of what §4.2j found on `dia:31857`, root-caused in source rather than patched
+at the symptom.
+
+| # | Defect | Root cause (read in `detail.js`, not guessed) | Fix |
+|---|---|---|---|
+| UI-5a | `Netstreit Inc → Netstreit Inc` rendered as two cards with an arrow between them | `_ownersAgree` requires `trueResolved`, which is **false by definition** when `true_owner_is_operator` is set. But the operator branch (added 2026-07-31, correctly: *the operator is the tenant, never the owner*) then re-renders `recDisplay` into the true-owner card. So the one path guaranteed to print the same name twice was the one path the collapse could never see. | New `_operatorElevated = trueIsOperator && recDisplay`; `_singleCard = _ownersAgree \|\| _operatorElevated` now drives the wrapper, the arrow/second-card guard, and the collapsed note. The operator fact — the only thing card 2 actually added — moves into the note. |
+| UI-5b | chip read `Netstreit Inc`, docked `NETSTREIT Corp` | the ladder labels with `*_canonical \|\| *` but `_ownerCtxFromCurrent` set `name:` from the **raw** column. Label and navigation target were different strings. | `name` now prefers the canonical, i.e. the exact string the user just read. The raw value is **not lost** — it stays on `recorded_owner_name` / `true_owner_name`, and id-based resolution still wins. |
+
+Deliberately NOT collapsed: `trueIsOperator` with **no** recorded owner stays two-card, so
+the "— unresolved — queue LLC / SoS research" call to action survives. Tested.
+
+9 new tests (90 total). One asserts that *every* layout decision reads `_singleCard`, because
+leaving a single branch on `_ownersAgree` would render a one-column grid with a stranded arrow
+— the failure mode of a partial fix.
 
 ## 5. Environment constraint discovered while shipping this (read before any git work)
 

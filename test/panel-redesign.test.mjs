@@ -266,6 +266,85 @@ describe('§0 corollary — the ownership ladder collapses only for a genuine ma
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+describe('UI-5 — one party is never printed twice, on EITHER collapse path', () => {
+  const ladderFn = sliceFn(detailSrc, '_udOwnershipLadder');
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const code = strip(ladderFn);
+
+  // Found LIVE on dia:31857 (2026-08-17): true_owner was flagged as the operator,
+  // so `trueResolved` was false, `_ownersAgree` could not fire, and the
+  // true-owner card deliberately re-rendered `recDisplay` — printing
+  // "Netstreit Inc → Netstreit Inc" side by side with an arrow between them.
+  it('the operator-elevation branch is folded into the single-card condition', () => {
+    assert.match(code, /_operatorElevated\s*=\s*!!\(\s*trueIsOperator\s*&&\s*recDisplay\s*\)/,
+      'operator elevation must be recognised as a single-party render');
+    assert.match(code, /_singleCard\s*=\s*_ownersAgree\s*\|\|\s*_operatorElevated/);
+  });
+
+  it('EVERY layout decision reads _singleCard, not the narrower _ownersAgree', () => {
+    // The grid-vs-single wrapper, the arrow + second card guard, and the
+    // collapsed note must all agree; if one still read _ownersAgree the
+    // operator case would render a one-column grid with a stranded arrow.
+    assert.match(code, /h \+= _singleCard\s*\n?\s*\?/, 'wrapper must branch on _singleCard');
+    assert.match(code, /if \(!_singleCard\) \{/, 'second card must be gated on _singleCard');
+    assert.match(code, /if \(_singleCard\) \{/, 'collapsed note must be gated on _singleCard');
+    // _ownersAgree may survive ONLY where the two cases need different wording.
+    const stray = code.match(/_ownersAgree/g) || [];
+    assert.ok(stray.length <= 3,
+      `_ownersAgree still drives ${stray.length} decisions; expected it to survive only in wording choices`);
+  });
+
+  it('the collapsed card still carries the operator fact — the one thing card 2 added', () => {
+    assert.match(code, /_operatorElevated[\s\S]{0,220}operator \/ tenant, not the owner/,
+      'collapsing must not silently drop "X is the operator / tenant"');
+  });
+
+  it('an operator with NO recorded owner still renders the second card (nothing to collapse into)', () => {
+    // trueIsOperator && !recDisplay must stay two-card so the "unresolved —
+    // queue LLC / SoS research" call to action survives.
+    assert.match(code, /_operatorElevated\s*=\s*!!\(\s*trueIsOperator\s*&&\s*recDisplay\s*\)/);
+    assert.match(code, /Beneficial owner not yet identified/);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('UI-5b — the owner chip label and its navigation target are the same string', () => {
+  const ctx = build(ESC_STUB, [sliceFn(detailSrc, '_ownerCtxFromCurrent')], '_ownerCtxFromCurrent');
+  // How the ladder LABELS each side, verbatim from the renderer.
+  const labelRecorded = (own) => own.recorded_owner_canonical || own.recorded_owner || '';
+  const labelTrue = (own) => own.true_owner_canonical || own.true_owner || '';
+
+  // The live case: the chip read "Netstreit Inc" and docked "NETSTREIT Corp".
+  const live = {
+    recorded_owner: 'Netstreit Corp',
+    recorded_owner_canonical: 'Netstreit Inc',
+    true_owner: 'DaVita Inc.',
+    true_owner_is_operator: true,
+  };
+
+  it('REGRESSION: the recorded chip navigates to the name it displays', () => {
+    assert.equal(ctx(live, 'dia', 'recorded').name, labelRecorded(live));
+    assert.equal(ctx(live, 'dia', 'recorded').name, 'Netstreit Inc');
+  });
+
+  it('REGRESSION: the true-owner chip navigates to the name it displays', () => {
+    const own = { true_owner: 'Davita Incorporated', true_owner_canonical: 'DaVita Inc.' };
+    assert.equal(ctx(own, 'dia', 'true').name, labelTrue(own));
+  });
+
+  it('the RAW name is preserved for lookups, not overwritten by the canonical', () => {
+    const c = ctx(live, 'dia', 'recorded');
+    assert.equal(c.recorded_owner_name, 'Netstreit Corp', 'raw recorded name must survive');
+    assert.equal(c.true_owner_name, 'DaVita Inc.');
+  });
+
+  it('falls back to the raw name when there is no canonical', () => {
+    const own = { recorded_owner: 'Rem Management LLC' };
+    assert.equal(ctx(own, 'dia', 'recorded').name, 'Rem Management LLC');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 describe('§2 STRUCTURAL — the CRM stack actually left the property panel', () => {
   // Strip comments before asserting: the tab carries a deliberate "MOVED TO THE
   // OWNER PANEL" note that NAMES each removed surface, and a naive substring

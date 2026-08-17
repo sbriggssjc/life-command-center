@@ -6683,15 +6683,27 @@ function _udOwnershipLadder(own, db) {
   // characters) must NOT be reported as the same party.
   const _recCore = _norm(recDisplay);
   const _ownersAgree = !!(recDisplay && trueResolved && _recCore.length >= 4 && _recCore === _norm(trueDisplay));
+  // UI-5 (found live on dia:31857, 2026-08-17): the OPERATOR-ELEVATION path also
+  // printed one name twice. When true_owner is flagged as the operator, the
+  // true-owner card below deliberately re-renders `recDisplay` (the operator is
+  // the tenant, never the owner — Scott 2026-07-31), so the screen showed
+  // "Netstreit Inc → Netstreit Inc" with an arrow between them. `_ownersAgree`
+  // could not catch it because it requires `trueResolved`, which is false by
+  // definition on this path. Collapse here too, and carry the operator fact
+  // into the note — it is the one thing the second card was actually adding.
+  const _operatorElevated = !!(trueIsOperator && recDisplay);
+  const _singleCard = _ownersAgree || _operatorElevated;
 
   let h = '';
-  h += _ownersAgree
+  h += _singleCard
     ? '<div style="margin-bottom:12px">'
     : '<div style="display:grid;grid-template-columns:1fr 26px 1fr;gap:0;align-items:stretch;margin-bottom:12px">';
   // Recorded owner
   h += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">';
   h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">'
-    + (_ownersAgree ? 'Owner &mdash; deed &amp; decision maker' : 'Recorded Owner (deed)') + '</div>';
+    + (_ownersAgree ? 'Owner &mdash; deed &amp; decision maker'
+       : _operatorElevated ? 'Owner of record (deed)'
+       : 'Recorded Owner (deed)') + '</div>';
   if (recDisplay) {
     h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(recDisplay, _ownerCtxFromCurrent(own, db, 'recorded')) + '</div>';
     if (own.recorded_owner_type || own.owner_type) h += '<div style="font-size:11px;color:var(--text2)">' + esc(own.recorded_owner_type || own.owner_type) + '</div>';
@@ -6719,8 +6731,10 @@ function _udOwnershipLadder(own, db) {
   }
   // Collapsed branch: deed owner == decision maker. Print the agreement + the
   // confidence signal inline instead of a second card repeating the same name.
-  if (_ownersAgree) {
-    const _agreeBits = ['Recorded deed owner and decision maker are the same party.'];
+  if (_singleCard) {
+    const _agreeBits = [_operatorElevated
+      ? 'Deed owner (recorded) — the real-estate owner. ' + esc(trueDisplay) + ' is the operator / tenant, not the owner.'
+      : 'Recorded deed owner and decision maker are the same party.'];
     if (own.owner_source === 'lcc_property_owner' && own.lcc_property_owner && own.lcc_property_owner.confidence != null) {
       _agreeBits.push('Resolved from ownership graph \u00b7 ' + Math.round(Number(own.lcc_property_owner.confidence) * 100) + '%');
     } else if (conf && conf.value != null) {
@@ -6730,7 +6744,7 @@ function _udOwnershipLadder(own, db) {
     h += '<div style="margin-top:8px;font-size:11px;color:var(--text3);border-top:1px solid var(--border);padding-top:7px">' + _agreeBits.join(' \u00b7 ') + '</div>';
   }
   h += '</div>';
-  if (!_ownersAgree) {
+  if (!_singleCard) {
   h += '<div style="display:flex;align-items:center;justify-content:center;color:var(--purple);font-size:18px">→</div>';
   // True owner
   const trueStepBg = trueResolved
@@ -16533,11 +16547,19 @@ function _ownerCtxFromChain(h, db) {
 }
 
 /** Build owner context from a v_ownership_current row (own object). */
+// UI-5b (found live on dia:31857, 2026-08-17): the ladder LABELS an owner with
+// `*_canonical || *` but this ctx sent the RAW name, so the chip read
+// "Netstreit Inc" and docked "NETSTREIT Corp" — the visible label and the
+// navigation target were different strings, which is exactly the kind of quiet
+// mismatch that makes the panel untrustworthy. `name` is the display/search
+// string, so it must be the SAME one the user just read. The raw value is not
+// lost: it stays on `recorded_owner_name` / `true_owner_name`, and id-based
+// resolution (recorded_owner_id / true_owner_id) is unaffected and still wins.
 function _ownerCtxFromCurrent(own, db, which) {
   if (!own) return null;
   if (which === 'true' && own.true_owner) {
     return {
-      name: own.true_owner,
+      name: own.true_owner_canonical || own.true_owner,
       recorded_owner_name: null,
       recorded_owner_id: null,
       true_owner_name: own.true_owner,
@@ -16553,7 +16575,8 @@ function _ownerCtxFromCurrent(own, db, which) {
     };
   }
   return {
-    name: own.recorded_owner || own.true_owner,
+    name: own.recorded_owner_canonical || own.recorded_owner
+      || own.true_owner_canonical || own.true_owner,
     recorded_owner_name: own.recorded_owner,
     recorded_owner_id: own.recorded_owner_id || null,
     true_owner_name: own.true_owner || null,
