@@ -1038,6 +1038,42 @@ git gc --prune=now
 
 ---
 
+### 5.1 ROOT CAUSE (sharpened 2026-08-17) — the mount denies `unlink`, repo-wide
+
+Earlier notes in this section treated the recurring `.git/index.lock` as a stale
+lock to sweep. That was the symptom. Probed directly:
+
+```
+rm .git/_probe_delete    -> Operation not permitted
+rm ./_probe_delete_root  -> Operation not permitted     <-- worktree too, not just .git
+```
+
+The sandbox mount permits **rename** but denies **unlink** across the whole
+repository. Git's normal lifecycle is: create `index.lock`, do the work, then
+either `rename(index.lock -> index)` (succeeds) or `unlink(index.lock)`
+(**fails**). So any git command that ends on the unlink path — `git status`,
+`git log`, a no-op `git add` — leaves a 0-byte `index.lock` behind. Verified:
+after clearing every lock, a single `git status` recreated one.
+
+**Consequences**
+- It is not a stale process, not a crashed git, not `core.hooksPath`. Nothing to
+  kill and no config to change.
+- On Scott's Windows checkout the leftover file is a real blocker: git refuses
+  with "Unable to create '.git/index.lock': File exists."
+- It recurs after *every* sandbox git command, so "clear it once" is not a fix.
+
+**What I do about it:** sweep locks aside (rename into `.git/_to_delete/`) before
+each git call and once more after the last one, and avoid running git in the
+sandbox when a file tool will do.
+
+**Residue I created and cannot remove** (unlink denied): `.git/_to_delete/`
+(~79 renamed lock files, ~40 KB), plus two probe files from this diagnosis,
+`.git/_probe_delete` and `_probe_delete_root`. All are inert — git ignores
+unknown files under `.git`, and the worktree probe is untracked — but they are
+mine, not the repo's. Scott can remove them from Windows in one line; the command
+is in the session notes.
+
+
 ## 6. How to keep this file honest
 
 1. **A design change adds a row here in the same commit** — target state in the redesign doc, evidence here.
