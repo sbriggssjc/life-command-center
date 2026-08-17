@@ -1051,3 +1051,134 @@ export async function getSalesforceOpportunityAccounts(oppIds) {
   })).filter((a) => a.opp_id && a.account_id);
   return { ok: true, accounts };
 }
+
+// ============================================================================
+// Task MAINTENANCE — the two writes that let LCC own the pursuit list
+// ============================================================================
+// Doctrine (Scott, 2026-08-17): **LCC is the operational source of truth for
+// Team Briggs BD.** Northmarq requires call logging and open activities in
+// Salesforce, so SF carries the MINIMUM compliance artifact and nothing more --
+// no enrichment, no extra links, no LCC-derived data pushed across. SF state is
+// never read back as truth; it is read only to AUDIT compliance.
+//
+// The team's practice, which these mirror exactly:
+//   * ONE open Task per pursued contact, held open indefinitely
+//   * NM Type (API name SJC_Type_sjc__c) = 'Opportunity' marks a SELLER PROSPECT;
+//     blank = marketing / broker activity. Picklist: Opportunity, Prospect,
+//     Execution, Client Management, Other.
+//   * completed Tasks are the logged calls; the OPEN one's due date is pushed
+//     forward as the pursuit continues
+//   * the open Task is closed when the account is no longer pursued
+//
+// LCC could already CREATE tasks (createSalesforceTask) and log calls
+// (logSalesforceActivity) but could neither push the due date nor close --
+// the exact two steps Scott was doing by hand. Until both exist, LCC cannot be
+// the source of truth for the pursuit list; it can only start one.
+//
+// Both send the id plus ONE field. That minimalism is the compliance contract,
+// not an optimisation.
+// ============================================================================
+
+/** Salesforce 15- or 18-character id. */
+const SF_ID_RE = /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/;
+
+/**
+ * Push the due date on an existing open pursuit Task (ActivityDate only).
+ * Called when an LCC cadence advances — LCC owns the schedule, SF mirrors it.
+ *
+ * @param {{sfTaskId?:string, sf_task_id?:string, activityDate?:string, activity_date?:string}} args
+ * @returns {Promise<{ok:boolean, task?:{Id:string}, reason?:string, detail?:any}>}
+ */
+export async function updateSalesforceTaskDue(args = {}) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const sfTaskId = String(args.sfTaskId || args.sf_task_id || '').trim();
+  if (!SF_ID_RE.test(sfTaskId)) return { ok: false, reason: 'bad_task_id' };
+
+  // Same normalisation as createSalesforceTask: ALWAYS a clean YYYY-MM-DD.
+  // Unlike create, we do NOT fall back to today — a caller that failed to
+  // supply a date must not silently re-date the customer's task to now.
+  const raw = (args.activityDate != null) ? args.activityDate
+            : (args.activity_date != null) ? args.activity_date : null;
+  const activityDate = normalizeActivityDate(raw);
+  if (!activityDate) return { ok: false, reason: 'bad_activity_date' };
+
+  const result = await callSfLookupFlow({
+    operation: 'update_task_due',
+    sf_task_id: sfTaskId,
+    activity_date: activityDate,
+  });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  return { ok: true, task: { Id: sfTaskId } };
+}
+
+/**
+ * Close the open pursuit Task when LCC retires the cadence.
+ * Status only — never touches subject, type, comments or relationships.
+ *
+ * @param {{sfTaskId?:string, sf_task_id?:string, status?:string}} args
+ */
+export async function closeSalesforceTask(args = {}) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const sfTaskId = String(args.sfTaskId || args.sf_task_id || '').trim();
+  if (!SF_ID_RE.test(sfTaskId)) return { ok: false, reason: 'bad_task_id' };
+  const status = String(args.status || 'Completed').trim() || 'Completed';
+
+  const result = await callSfLookupFlow({
+    operation: 'close_task',
+    sf_task_id: sfTaskId,
+    status,
+  });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  return { ok: true, task: { Id: sfTaskId }, status };
+}
+
+/**
+ * READ, for COMPLIANCE AUDIT ONLY — never as a source of truth.
+ *
+ * Answers the Northmarq rules-of-engagement question: is every contact we are
+ * pursuing carrying exactly one open Task, and does what SF holds match what LCC
+ * believes? Callers MUST NOT write SF state into LCC from this; the direction of
+ * truth is LCC → SF.
+ *
+ * `nmType` defaults to 'Opportunity' (the seller-prospect marker). Pass null to
+ * audit every open Task regardless of type.
+ *
+ * @param {{ownerIds?:string[], nmType?:string|null}} args
+ * @returns {Promise<{ok:boolean, tasks?:Array<{id,who_id,what_id,subject,status,activity_date,nm_type,owner_id}>, reason?:string}>}
+ */
+export async function getOpenTasksForCompliance(args = {}) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const ownerIds = Array.from(new Set(
+    (Array.isArray(args.ownerIds) ? args.ownerIds : [])
+      .map((s) => String(s || '').trim())
+      .filter((s) => SF_ID_RE.test(s))
+  ));
+  const nmType = (args.nmType === null) ? null
+    : String(args.nmType || 'Opportunity').trim();
+
+  const result = await callSfLookupFlow({
+    operation: 'open_tasks_by_owner',
+    owner_ids: ownerIds,
+    nm_type: nmType,
+  });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  const rows = Array.isArray(result.tasks) ? result.tasks
+    : Array.isArray(result.records) ? result.records : [];
+  const tasks = rows.map((r) => ({
+    id:            r.Id || r.id || null,
+    who_id:        r.WhoId || r.who_id || null,
+    what_id:       r.WhatId || r.what_id || null,
+    subject:       r.Subject || r.subject || null,
+    status:        r.Status || r.status || null,
+    activity_date: r.ActivityDate || r.activity_date || null,
+    nm_type:       r.SJC_Type_sjc__c || r.nm_type || null,
+    owner_id:      r.OwnerId || r.owner_id || null,
+  })).filter((t) => t.id);
+  return { ok: true, tasks };
+}
