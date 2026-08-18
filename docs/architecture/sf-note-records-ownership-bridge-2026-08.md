@@ -203,3 +203,34 @@ gov side — `LSC SOUTHEAST LEASED FIELD OFFICE`, `MICHIGAN SERVICE CENTER`,
 `PITTSBURGH FIELD OFFICE PA` — which are GSA sub-tenancies LCC records by office
 name while the notes record them by agency. That needs the note *body* (address)
 rather than more classes, which is the §7 item 4 decision.
+
+---
+
+## 9. P131 — the payoff: named leads for owners we could not reach
+
+**1,137 of the 3,883 unreachable top prospects (29%) now have a named lead**,
+covering **$1,014,108,088** of annual rent. 2,645 candidate parties, 1,711 of
+them people, ~2.3 per owner.
+
+`v_lcc_note_contact_leads`, split by how ambiguous the property match is:
+
+| strength | owners | candidates | people | rent |
+|---|---|---|---|---|
+| **unambiguous** (1 property shares tenant/city/state) | 412 | 937 | 650 | $335.6M |
+| likely (≤3) | 304 | 848 | 555 | $308.7M |
+| ambiguous (>3) | 478 | 1,087 | 675 | **$666.9M** |
+
+**The biggest rent sits in the weakest bucket.** That is precisely where a single
+blended confidence score would have been most misleading — it would have averaged
+$666.9M of shaky matches together with $335.6M of solid ones and produced a
+number that felt fine. The bucket is exposed instead of averaged away, and the
+collision count (`properties_sharing_tenant_city_state`) is on every row.
+
+**A row is a research lead, not evidence.** It says "your team wrote a note about
+this party on a property matching this owner's asset." It does not say they own
+it — the export has no role (§3) — and it does not prove the property is the same
+building, because the join averages 2.7 properties per title. Nothing here may be
+promoted into `lcc_property_owner_evidence`.
+
+**Start with the 412 unambiguous owners / 650 named people.** That is the
+shortest path from "$2.72B we can rank but not reach" to a call.
