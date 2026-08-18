@@ -3001,7 +3001,11 @@ test('R46: buildInjectionSpec wires per-series showSegmentVal on buyer_class_pct
   assert.equal(out.spec.series.length, 4);
   for (const s of out.spec.series) {
     assert.equal(s.showSegmentVal, true, 'every series has showSegmentVal');
-    assert.equal(s.segmentLabelFmt, '0%');
+    // Prompt 119 item E — the trailing `;;;` blanks the negative/zero/text
+    // format sections so a series that is 0% in a given year no longer stacks
+    // a "0%" label at the top of the bar (Cross-Border most years, Public REIT
+    // in several). Positives still render as `0%`.
+    assert.equal(s.segmentLabelFmt, '0%;;;');
   }
   // First two (private + reit) use white; last two (cross-border + institutional) use dark
   assert.equal(out.spec.series[0].segmentLabelColor, 'FFFFFF', 'private white text');

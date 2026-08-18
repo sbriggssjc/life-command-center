@@ -1981,7 +1981,21 @@
         }
         case 'percent_basis_points': return (n * 100).toFixed(2) + '%';
         case 'percent_one_decimal':  return (n * 100).toFixed(1) + '%';
-        default: return n.toLocaleString('en-US');
+        // Prompt 119 item A — these tokens were unmapped here too, so the web
+        // KPI block rendered raw ratios (0.151) exactly like the Excel tiles.
+        case 'percent_zero_decimal': return (n * 100).toFixed(0) + '%';
+        case 'percent_signed':       return (n >= 0 ? '+' : '') + (n * 100).toFixed(1) + '%';
+        case 'basis_points':         return Math.round(n).toLocaleString('en-US') + ' bps';
+        case 'integer_count':        return Math.round(n).toLocaleString('en-US');
+        case 'number_one_decimal':   return n.toFixed(1);
+        case 'years_one_decimal':    return n.toFixed(1) + ' Years';
+        case 'currency_per_sf':      return '$' + n.toFixed(2);
+        default:
+          // Last-resort inference, mirroring resolveKpiTileFormat in
+          // cm-excel-export.js: an unknown percent-shaped token must never
+          // render as a bare decimal.
+          if (/^percent|_pct$|^pct_/i.test(String(format || ''))) return (n * 100).toFixed(1) + '%';
+          return n.toLocaleString('en-US');
       }
     }
 
