@@ -115,12 +115,19 @@ const rentByProp  = new Map(attrRows.map((r) => [String(r.source_property_id), r
 console.log(`lcc: ${assetByProp.size} gov asset ids · ${ownerById.size} true_owner ids · ${rentByProp.size} attribute rows`);
 
 // ---- gov side: the feedable transitions ------------------------------------
+// is_oscillating_pair (P138f) excludes properties whose history contains BOTH
+// A->B and B->A. That is a gsa_lease_diff artifact -- the GSA lessor field
+// flickers between an SPE and its parent, so the DATE is real but the DIRECTION
+// is contradicted. Found by reading a sample row from this script's own first
+// dry run: property 180 had GPIT and Echelon Pkwy swapping four times, with six
+// identical rows on the newest date. 233 properties are affected.
 const trans = await pageAll(GOV_URL, GOV_KEY,
   `v_ownership_transitions_portfolio?select=property_id,transfer_date,new_owner_cleaned,`
-  + `new_owner_true_owner_id,prior_owner_cleaned,transfer_price`
+  + `new_owner_true_owner_id,prior_owner_cleaned,transfer_price,data_source`
   + `&is_latest_for_property=is.true&new_owner_is_clean=is.true&is_self_transition=is.false`
+  + `&is_oscillating_pair=is.false`
   + `&new_owner_true_owner_id=not.is.null&order=property_id.asc`);
-console.log(`gov: ${trans.length} feedable transitions`);
+console.log(`gov: ${trans.length} feedable transitions (oscillating pairs already excluded)`);
 
 // ---- join, gate, and account for every row ---------------------------------
 const skip = { no_asset_entity: 0, no_owner_entity: 0, below_rent_floor: 0, no_rent: 0 };
@@ -146,8 +153,10 @@ for (const t of trans) {
       prior_owner: t.prior_owner_cleaned,
       transfer_price: t.transfer_price,
       annual_rent: rent,
+      gov_data_source: t.data_source,   // gsa_lease_diff is ~93% of the feed
       basis: 'gov.ownership_history dated transfer; owner id verified against the '
-           + 'transition name before use',
+           + 'transition name before use; properties with a contradicted '
+           + 'direction (A->B and B->A both recorded) excluded',
       view: 'v_ownership_transitions_portfolio',
     },
   });
