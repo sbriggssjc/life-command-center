@@ -39,7 +39,16 @@ origin/main; migration `20260914120000` — retimestamped off a P118 collision).
 **Live counts:** 654 = 465 blank rows filled + 165 rows the FK had blocked from existing + 24 from P115. Re-run
 probe 0/0/0 (idempotent); 630 reversal rows.
 
-**⚠ TWO REMAINING STEPS (Scott):**
+**UPDATE 2026-08-18 — corpus filling fast post-redeploy:** handler fix confirmed live (new sweep jobs 0 × `upsert_409`).
+Sent Items exhausted at 654 (folder only retains ~3.5 months, back to May 3 — older mail auto-archived). Pointed the
+sweep at the primary-mailbox **Archive folder** (id `…ETAAA=`, 8,781 items) → **corpus 654 → 5,110 full bodies**
+(≈4,376 `is_sent`), walking back to **2024-10-14**, zero 409s. Remaining sources for the rest of the history: confirm
+the Archive is fully swept (resume from 2024-10-14; if 0 older, it's exhausted), then the **Online Archive** (separate
+mailbox — Graph `/me/mailFolders` doesn't reach it; harder access, deferred). Voice/comms readers already filter
+(`SCOTT_FROM` for voice); a full **Inbox** sweep (42,644) is a separate broader-corpus decision, not the voice goal.
+Skip junk folders (Sync Issues 71,180, Deleted, Junk, RSS, Clutter).
+
+**⚠ REMAINING STEPS (Scott):**
 1. **Railway redeploy of merged main** — the DB backfill is live (hence 654), but the **handler fix isn't
    deployed yet**, so the ongoing sweep is STILL 409'ing new jobs. Redeploy makes it durable.
 2. **After redeploy, keep the sweep running** — it walks back a chunk per run (currently at May 2026); re-run to
