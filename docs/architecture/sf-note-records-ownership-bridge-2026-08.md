@@ -234,3 +234,44 @@ promoted into `lcc_property_owner_evidence`.
 
 **Start with the 412 unambiguous owners / 650 named people.** That is the
 shortest path from "$2.72B we can rank but not reach" to a call.
+
+---
+
+## 10. P132 — 294 owners we can call today (review lane)
+
+Narrowing P131's leads to what is actionable now:
+
+| | |
+|---|---|
+| unambiguous leads that are people | 650 across 412 owners |
+| already an LCC entity | 436 |
+| **with an email or phone on file** | **424** |
+| **owners immediately reachable** | **294** — **$265,633,776** |
+| candidates needing an SF fetch | 214 |
+
+`v_lcc_note_lead_attach_review`: 685 proposal rows, 294 owners, 424 people,
+665 with an email, **zero non-person-shaped candidates**, notes written
+2019-12-06 → 2023-11-30.
+
+**It is a review lane, not an auto-attach.** Attaching a person to an owner
+asserts who speaks for that company. P111 measured what automating that does: of
+101 rows in the owner-contact propagate lane, 77 were organization-shaped and
+dominated by transaction counterparties — confirming them writes another
+company's switchboard onto the owner. The standing rule is *"never wire a single
+confirm button to it."*
+
+This lane is weaker still, carrying **two** independent uncertainties: role is
+unknown (§3), and the property match is tenant-class + city + state rather than
+an address. So each row carries the note title, its authors, when it was last
+written and how many notes exist on that party — a 2019 note from a departed
+analyst is a different proposition from a 2023 note by the deal lead, and the
+reviewer can see which they have.
+
+### Where the pursuit funnel now stands
+
+| | owners | rent |
+|---|---|---|
+| pursuing (on cadence) | 198 + 312 seeded (P128) | — |
+| **reachable today via a note lead, pending review** | **294** | **$265.6M** |
+| named lead, weaker match or needs SF fetch | 843 | $748.5M |
+| still dark — no lead, no contact | ~2,746 | ~$1.7B |
