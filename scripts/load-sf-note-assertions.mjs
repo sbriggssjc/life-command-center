@@ -23,8 +23,7 @@
  * -- portfolios, multi-property, "Untitled Note" -- and are left NULL rather
  * than forced into a shape they do not have.
  *
- * Usage:
- *   OPS_SUPABASE_URL=... OPS_SUPABASE_KEY=... \
+ * Usage (from the repo root -- reads .env.local for the ops keys):
  *   node scripts/load-sf-note-assertions.mjs \
  *     "path/to/Note Records - Contact - Team Briggs.xlsx" \
  *     "path/to/Note Records - Company - Team Briggs.xlsx"
@@ -34,11 +33,37 @@
  *   DELETE FROM lcc_sf_note_property_assertion WHERE batch_tag = 'notes_2024';
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import XLSX from 'xlsx';
+
+// Read .env.local (which already carries OPS_SUPABASE_URL / OPS_SUPABASE_KEY) so
+// nobody has to paste a service key into a terminal. Real env vars still win, and
+// `node --env-file` is deliberately NOT relied on -- it needs Node 20.6+.
+function loadEnvLocal() {
+  for (const f of ['.env.local', '.env']) {
+    const p = path.resolve(process.cwd(), f);
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!m) continue;                                  // comments / blanks
+      let v = m[2].trim().replace(/^(['"])(.*)\1$/, '$2'); // strip wrapping quotes
+      if (process.env[m[1]] === undefined) process.env[m[1]] = v;
+    }
+    return f;
+  }
+  return null;
+}
+const envFile = loadEnvLocal();
 
 const URL = process.env.OPS_SUPABASE_URL;
 const KEY = process.env.OPS_SUPABASE_KEY;
-if (!URL || !KEY) { console.error('Set OPS_SUPABASE_URL and OPS_SUPABASE_KEY'); process.exit(1); }
+if (!URL || !KEY) {
+  console.error('Missing OPS_SUPABASE_URL / OPS_SUPABASE_KEY.');
+  console.error(envFile ? `Read ${envFile} but those keys were not in it.`
+                        : 'No .env.local found - run this from the repo root.');
+  process.exit(1);
+}
+console.log(`ops: ${URL.replace(/^https:\/\//,'').split('.')[0]}  (env: ${envFile || 'process env'})`);
 
 const BATCH_TAG = process.env.BATCH_TAG || 'notes_2024';
 const CHUNK = Number(process.env.CHUNK || 500);
