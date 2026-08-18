@@ -10,6 +10,52 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Milestone 2026-08-18 — the voice profile is re-distilled on full bodies (Prompt 117), and three premises were wrong
+
+**`BRIGGS-WRITING-VOICE.md` v2.0.0** — the sign-off / paragraph-shape / long-form sections that Stage 1
+honestly marked LOW-confidence are now **counted off whole emails**, not inferred. Corpus basis, live
+2026-08-18: **609 distinct Scott-authored messages after guards — 399 with a FULL body (2026-05-04 →
+2026-08-17) + 210 preview-only openings (2022-11-14 → now)**; 129 long-form (≥400 chars), 55 ≥900.
+
+**Three grounded corrections — each one would have quietly wrecked the result:**
+1. **"7,851 Scott-authored sent full bodies" is not Scott's mail.** It counts `email_bodies` rows with
+   `is_sent=true` that carry a body, but `is_sent` is unreliable on this store — its top senders are inbound
+   newsletters (govtribe 1,346, seekingalpha 1,105, salesforce 1,773) and only **1** of the 654 Scott-from
+   full bodies has it set. **Scott-from full bodies = 654 → 399 usable.**
+2. **`from_email` is NOT authorship.** 118 of 654 are self-addressed — **74 are the app's OWN LCC Morning
+   Briefing / Weekly Deep Dive** — and ~107 open by addressing Scott (inbound filed under his address).
+   Un-guarded, the profile would have learned the briefing template and other people's voices, and
+   draft-assist retrieval could have quoted the app's own briefing back at Scott as an exemplar of his
+   voice. New `voiceCorpusExclusion()` gates both surfaces.
+3. **The upgrade would have cancelled itself.** All 654 full bodies ALSO exist in `activity_events` as
+   ~255-char previews, and BOTH corpus loaders deduped **preview-first** — so every full body would have
+   been discarded as a duplicate and the re-distill would have re-learned the openings. Fixed:
+   `email_bodies` is drained first in `voice-distill.mjs` and `api/draft-assist.js`.
+
+**Cleaner verified on real full-body shapes.** 24% of full bodies carried NO text reply marker — Outlook's
+quote boundary is a div attribute (`id="appendonsend"` / `divRplyFwdMsg`) that vanishes with the tags.
+`htmlToText` now emits a sentinel there, min-lead-guarded so an empty div on a fresh compose can't empty the
+body (52 emptied → 0). **Retention over the 654: raw body averages 7,537 chars → 1,303 kept (17.3%) — ~83%
+of a typical full body is quoted chain + signature + disclaimer.**
+
+**What the corpus actually says about his voice (new):** **86.7% of his emails have no sign-off at all**;
+**"Best regards," is the ONLY closer he uses** (13.3%) and it is an EXTERNAL marker — 24.7% of external
+follow-ups and 31.3% of LOI/offer threads vs **2.3%** internal; **"Thanks," never appears as a closing
+line** (v1 guessed it did). LOI/offer upgrades **LOW → MEDIUM-HIGH** (83 full bodies); cold-BD is still thin
+in count (18) but now full-length (median 2,640 chars); listing-announcement (n=1) stays flagged LOW.
+
+**Code:** `voice-corpus-clean.js` (+`cleanEmailBodyDetailed` so the sign-off stays measurable after the
+cleaner trims it, `voiceCorpusExclusion`, `bodyShape`, `redactExcerpt`); `voice-distill.mjs` extended with a
+no-model deterministic layer (`--stats-only`), `--dry-run`, stratified length+recency sampling, a long-form
+pass, and **mechanical verbatim enforcement** (an excerpt that is not a literal substring of the sample is
+dropped, so a hallucinated example can't reach the committed profile); draft-assist `voice_confidence` now
+reports per-draft FULL-BODY coverage from the retrieved exemplars' real lengths. Tests: 45 + 15 + 33 green.
+
+**⏭ Scott's step (on-prem):** run `node scripts/voice-distill.mjs` on GaryBuilt with `OLLAMA_URL` set (it
+refuses without it — the corpus never touches a cloud model), fold the qualitative attributes in, then read
+v2 and answer: *does this sound like me now, sign-offs and all?* It should not be the default voice source
+until you have.
+
 ## Milestone 2026-08-17 — voice corpus FILLING (24 → 654 full bodies); the `upsert_409` was an FK, not a conflict
 
 **Prompt 116 closed the real, final blocker. `email_bodies` full bodies: 24 → 654** (all `body_format='html'`,

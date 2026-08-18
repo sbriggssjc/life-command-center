@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import {
   validateDraftFacts, extractDealFacts, rankExemplarsDeterministic, rankExemplarsByEmbedding,
   cosineSim, bucketForPurpose, buildGenerationPrompt, voiceConfidenceNote, anonymizeExemplar,
+  exemplarBodyCoverage, FULL_BODY_MIN_CHARS,
   parseDraftJson, SCOTT_FROM, PURPOSE_TO_BUCKET, VALID_PURPOSES, NOT_ON_FILE,
 } from '../api/_shared/draft-assist-core.js';
 
@@ -249,11 +250,41 @@ describe('voice-profile injection present (doctrine 3 + honest corpus cap)', () 
   });
 
   it('voice_confidence honestly surfaces the opening-only cap and thin buckets', () => {
+    // Count-only callers keep the pre-P117 behaviour: no body lengths to read, so
+    // the conservative preview-cap caveat stands.
     const thin = voiceConfidenceNote('cold_bd_outreach', 1);
     assert.match(thin, /THIN|LOW-confidence/);
     assert.match(thin, /255-char|preview cap/);
     const none = voiceConfidenceNote('external_follow_up', 0);
     assert.match(none, /No matching past exemplars/);
+  });
+
+  // P117 — the note is now derived from the RETRIEVED exemplars' real lengths.
+  it('voice_confidence claims full-body grounding only when the exemplars are full bodies', () => {
+    const full = Array.from({ length: 4 }, () => ({ cleaned: 'x'.repeat(900) }));
+    const note = voiceConfidenceNote('external_follow_up', full);
+    assert.match(note, /FULL past email bod/);
+    assert.match(note, /sign-off, paragraph shape and long-form structure are corpus-evidenced/);
+    assert.doesNotMatch(note, /255-char/, 'must not repeat the retired opening-only caveat');
+  });
+
+  it('voice_confidence keeps the preview caveat when the exemplars are still openings', () => {
+    const previews = Array.from({ length: 4 }, () => ({ cleaned: 'Got it. On it.' }));
+    const note = voiceConfidenceNote('external_follow_up', previews);
+    assert.match(note, /preview-era OPENINGS only/);
+    assert.match(note, /255-char/);
+  });
+
+  it('voice_confidence reports a MIXED retrieval honestly', () => {
+    const mixed = [{ cleaned: 'x'.repeat(900) }, { cleaned: 'Short one.' }, { cleaned: 'Another short.' }];
+    const note = voiceConfidenceNote('external_follow_up', mixed);
+    assert.match(note, /1 of them FULL bodies/);
+    assert.match(note, /2 still preview-era openings/);
+  });
+
+  it('exemplarBodyCoverage counts against the full-body threshold', () => {
+    const cov = exemplarBodyCoverage([{ cleaned: 'x'.repeat(FULL_BODY_MIN_CHARS) }, { cleaned: 'x'.repeat(FULL_BODY_MIN_CHARS - 1) }]);
+    assert.deepEqual({ total: cov.total, full_body: cov.full_body, preview_only: cov.preview_only }, { total: 2, full_body: 1, preview_only: 1 });
   });
 });
 

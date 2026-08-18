@@ -165,3 +165,206 @@ describe('pickBestBody', () => {
     assert.equal(cleanEmailBody(raw).trim(), 'Alright, I think I did it. Let me know.');
   });
 });
+
+// ===========================================================================
+// Prompt 117 — FULL-BODY fixtures.
+//
+// Stage 1 could only ever test ~255-char openings. These fixtures reproduce the
+// shapes found live in the 654 Scott-authored `email_bodies` rows that now carry
+// a real `body_html`: an Outlook reply whose quote boundary is a DIV (not text),
+// an empty `appendonsend` div on a fresh compose, a multi-level chain, and the
+// two authorship traps (`from_email` is not proof of authorship).
+// Third-party names/addresses below are invented — no live client text is
+// committed to the repo.
+// ===========================================================================
+
+import {
+  voiceCorpusExclusion,
+  isSelfAddressed,
+  bodyShape,
+  splitParagraphs,
+  detectSignoff,
+  redactExcerpt,
+  decodeEntities,
+  cleanEmailBodyDetailed,
+} from '../api/_shared/voice-corpus-clean.js';
+
+// A real Outlook reply: Scott's fresh prose, his sig, then the quoted chain —
+// and the ONLY boundary marker is the <div id="appendonsend"> attribute.
+const OUTLOOK_REPLY_HTML = `<html><head><style>p{margin:0}</style></head><body>
+<div class="elementToProof">
+<p>Got it &#8212; thanks for turning that around.</p>
+<p>&nbsp;</p>
+<p>Two things before we go back to the seller:</p>
+<p>1) The firm term reads 12.1 years, not 10. Worth correcting in the summary.</p>
+<p>2) I&#8217;d hold the asking cap at 6.00% for now.</p>
+<p>&nbsp;</p>
+<p>I&#8217;ll call him this afternoon and walk through it.</p>
+<p>&nbsp;</p>
+<p>Best regards,</p>
+</div>
+<div id="Signature">
+<p>Scott Briggs</p>
+<p>Senior Vice President &middot; Northmarq</p>
+<p>D (918) 794-9787 | E sabriggs@northmarq.com</p>
+</div>
+<div id="appendonsend"></div>
+<hr>
+<div id="divRplyFwdMsg">
+<p><b>From:</b> Dana Whitfield &lt;dwhitfield@example.com&gt;<br>
+<b>Sent:</b> Monday, August 17, 2026 4:02 PM<br>
+<b>To:</b> Scott Briggs &lt;sabriggs@northmarq.com&gt;<br>
+<b>Subject:</b> RE: Draft BOV</p>
+<p>Scott &#65279;&#8212; attached is the draft. Let me know what you think.</p>
+<p>Dana Whitfield</p>
+</div>
+</body></html>`;
+
+describe('P117 — full-body cleaning', () => {
+  it('keeps ONLY Scott\'s fresh prose from a real Outlook reply', () => {
+    const cleaned = cleanEmailBody(pickBestBody({ body_html: OUTLOOK_REPLY_HTML }));
+    assert.ok(cleaned.startsWith('Got it'), `unexpected opening: ${cleaned.slice(0, 60)}`);
+    assert.match(cleaned, /firm term reads 12\.1 years/);
+    assert.match(cleaned, /call him this afternoon/);
+    // the quoted chain, the counterparty, and the signature are all gone
+    assert.doesNotMatch(cleaned, /Dana Whitfield/);
+    assert.doesNotMatch(cleaned, /dwhitfield@example\.com/);
+    assert.doesNotMatch(cleaned, /Senior Vice President/);
+    assert.doesNotMatch(cleaned, /sabriggs@northmarq\.com/);
+    assert.doesNotMatch(cleaned, /LCC_QUOTE_BOUNDARY/);
+    // "Best regards," is a sign-off, trimmed off the prose by stripTrailingSignoff
+    assert.doesNotMatch(cleaned, /Best regards/);
+  });
+
+  it('strips ~80% of the body — the retention the 255-char preview never showed', () => {
+    const full = htmlToText(OUTLOOK_REPLY_HTML).trim();
+    const cleaned = cleanEmailBody(pickBestBody({ body_html: OUTLOOK_REPLY_HTML }));
+    const kept = cleaned.length / full.length;
+    assert.ok(kept > 0.25 && kept < 0.75, `kept ratio ${kept.toFixed(2)} outside the expected band`);
+  });
+
+  it('does NOT empty a fresh compose whose appendonsend div sits at the top', () => {
+    const html = '<body><div id="appendonsend"></div><div>Sending the LOI over now. Call me after you read it.</div></body>';
+    const cleaned = cleanEmailBody(pickBestBody({ body_html: html }));
+    assert.equal(cleaned, 'Sending the LOI over now. Call me after you read it.');
+  });
+
+  it('honours a gmail_quote / blockquote-cite boundary', () => {
+    const gmail = '<div>Works for me. Tuesday at 10 is fine.</div><div class="gmail_quote"><div>Are you free Tuesday?</div></div>';
+    assert.equal(cleanEmailBody(pickBestBody({ body_html: gmail })), 'Works for me. Tuesday at 10 is fine.');
+    const apple = '<div>Yes, send it.</div><blockquote type="cite"><div>Do you want the rent roll?</div></blockquote>';
+    assert.equal(cleanEmailBody(pickBestBody({ body_html: apple })), 'Yes, send it.');
+  });
+
+  it('a real text marker still cuts even on a very short reply (no min-lead)', () => {
+    const html = '<div>On it.</div><div>________________________________</div><div>From: Someone &lt;x@y.com&gt;</div>';
+    assert.equal(cleanEmailBody(pickBestBody({ body_html: html })), 'On it.');
+  });
+
+  it('drops <head>/<style> and decodes numeric entities', () => {
+    assert.equal(decodeEntities('I&#8217;d hold&#65279; at 6%'), 'I’d hold at 6%');
+    assert.equal(decodeEntities('a &#x26; b'), 'a & b');
+    const t = htmlToText('<html><head><style>.x{color:red}</style></head><body><p>Hello</p></body></html>');
+    assert.doesNotMatch(t, /color:red/);
+    assert.match(t, /Hello/);
+  });
+});
+
+describe('P117 — corpus membership guards (from_email is not authorship)', () => {
+  it('excludes the app\'s own generated briefing', () => {
+    assert.equal(voiceCorpusExclusion({
+      cleaned: 'Priority Queue 34 due. Treasury 10Y 4.62%.',
+      subject: 'LCC Morning Briefing — Thu Aug 6 · 34 due · 6 OMs · 10Y 4.62%',
+      toEmails: ['sabriggs@northmarq.com'], fromEmail: 'sabriggs@northmarq.com',
+    }), 'machine_generated');
+  });
+
+  it('excludes a self-addressed note', () => {
+    assert.equal(voiceCorpusExclusion({
+      cleaned: 'Remember to pull the Fresenius comps before Friday.',
+      subject: 'notes', toEmails: ['sabriggs@northmarq.com'], fromEmail: 'sabriggs@northmarq.com',
+    }), 'self_addressed');
+    assert.equal(isSelfAddressed(['sabriggs@northmarq.com'], [], 'sabriggs@northmarq.com'), true);
+    assert.equal(isSelfAddressed(['smartin@northmarq.com'], [], 'sabriggs@northmarq.com'), false);
+    // unknown recipients are never guessed at
+    assert.equal(isSelfAddressed([], [], 'sabriggs@northmarq.com'), false);
+  });
+
+  it('excludes inbound mail filed under Scott\'s address', () => {
+    for (const opener of ['Hi Scott, how are we doing on this?', 'Scott — any word from the seller?', 'Scott, see attached.']) {
+      assert.equal(voiceCorpusExclusion({
+        cleaned: opener, subject: 'RE: BOV', toEmails: ['sabriggs@northmarq.com', 'zpool@northmarq.com'], fromEmail: 'sabriggs@northmarq.com',
+      }), 'addressed_to_scott', `not caught: ${opener}`);
+    }
+  });
+
+  it('admits genuine Scott-authored mail', () => {
+    assert.equal(voiceCorpusExclusion({
+      cleaned: 'Got it. Tenant does pay the ground rent. I\'ll walk him through that section.',
+      subject: 'RE: Ground lease', toEmails: ['broker@example.com'], fromEmail: 'sabriggs@northmarq.com',
+    }), null);
+  });
+
+  it('does not mistake a greeting to a different first name for inbound', () => {
+    assert.equal(voiceCorpusExclusion({
+      cleaned: 'Hi Dana, sending the rent roll now.',
+      subject: 'Rent roll', toEmails: ['dana@example.com'], fromEmail: 'sabriggs@northmarq.com',
+    }), null);
+  });
+});
+
+describe('P117 — shape extraction', () => {
+  const body = 'Got it.\n\nTwo things: the firm term reads 12.1 years, and I\'d hold the cap at 6.00%.\n\nI\'ll call him this afternoon.\n\nBest regards,';
+
+  it('splits paragraphs on blank lines and rejoins wrapped lines', () => {
+    assert.deepEqual(splitParagraphs('One line\nsame paragraph\n\nSecond paragraph'),
+      ['One line same paragraph', 'Second paragraph']);
+    assert.equal(splitParagraphs(body).length, 4);
+  });
+
+  it('detects the trailing sign-off, and only when trailing', () => {
+    assert.equal(detectSignoff(body), 'Best regards,');
+    assert.equal(detectSignoff('Thanks for sending that over. I will review tonight.'), null);
+    assert.equal(detectSignoff('On it.'), null);
+  });
+
+  it('reports an honest shape, including the long-form flag', () => {
+    const s = bodyShape(body);
+    assert.equal(s.paragraphs, 4);
+    assert.equal(s.has_signoff, true);
+    assert.equal(s.is_long_form, false);
+    assert.ok(s.words > 20 && s.words < 60);
+    assert.equal(bodyShape('x'.repeat(500)).is_long_form, true);
+    assert.equal(bodyShape('1) first\n2) second').uses_list, true);
+  });
+});
+
+describe('P117 — redaction for committed excerpts', () => {
+  it('masks third-party PII and deal-confidential specifics', () => {
+    const out = redactExcerpt('Call Dana at (918) 555-1212 or dana@example.com re: 4820 Cedar Springs Road — asking $15.7M. See https://x.co/a');
+    assert.doesNotMatch(out, /555-1212/);
+    assert.doesNotMatch(out, /dana@example\.com/);
+    assert.doesNotMatch(out, /15\.7M/);
+    assert.doesNotMatch(out, /https:/);
+    assert.match(out, /\[phone\]/);
+    assert.match(out, /\[email\]/);
+    assert.match(out, /\[amount\]/);
+    assert.match(out, /\[address\]/);
+  });
+});
+
+describe('P117 — cleanEmailBodyDetailed keeps the sign-off measurable', () => {
+  it('returns the trimmed sign-off alongside the prose', () => {
+    const d = cleanEmailBodyDetailed(pickBestBody({ body_html: OUTLOOK_REPLY_HTML }));
+    // the prose must NOT carry the closer...
+    assert.doesNotMatch(d.cleaned, /Best regards/);
+    // ...but the closer must still be observable, which is the whole point.
+    assert.equal(d.signoff, 'Best regards,');
+    assert.ok(d.chars_before_clean > d.chars_after_clean);
+  });
+  it('reports null when the body just ends (the 89% case)', () => {
+    const d = cleanEmailBodyDetailed('Got it. I\'ll call him this afternoon.');
+    assert.equal(d.signoff, null);
+    assert.equal(d.cleaned, "Got it. I'll call him this afternoon.");
+  });
+});
