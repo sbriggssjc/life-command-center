@@ -84,6 +84,13 @@ const FMT = {
   currency_billions:    '"$"#,##0.0,,,"B"',
   currency_per_sf:      '"$"#,##0.00',
   percent_basis_points: '0.00%',
+  // Prompt 119 item A — the dia inventory-snapshot KPI view emits this token
+  // for its two Price Change % tiles. It was NEVER in this map, so
+  // `FMT[t.primary_format] || ''` resolved to '' and the tiles shipped with
+  // Excel's General format (0.1505 instead of 15.1%). Mapped honestly to its
+  // name; `resolveKpiTileFormat` below is the belt-and-braces guard for the
+  // next unmapped percent token.
+  percent_zero_decimal: '0%',
   // R70 A2 — true basis points (value already ×10000 by the pace composer).
   basis_points:         '0 "bps";-0 "bps"',
   percent_one_decimal:  '0.0%',
@@ -99,6 +106,224 @@ const FMT = {
   // Term Remaining in 'x.x Years'."
   years_one_decimal:    '0.0" Years"',
 };
+
+// ============================================================================
+// Prompt 119 item A — KPI tile number-format inference
+// ============================================================================
+//
+// KPI-block views (cm_{vertical}_{value_prop,whatsnew,trend_watch,
+// inventory_snapshot}_kpis) carry an explicit per-tile `primary_format` token.
+// That metadata IS the contract and is honored first. The defect marketing hit
+// (2Q-2026 book) was the FALLBACK: an unrecognized token silently resolved to
+// '' and Excel rendered the raw ratio (0.1505 rather than 15.1%). A percent
+// tile rendering as a bare decimal is worse than a slightly-off precision, so
+// an unmapped token is inferred rather than dropped:
+//
+//   1. token present AND mapped  -> use it (the metadata path, always wins)
+//   2. token present but UNMAPPED and percent-shaped by name -> 0.0%
+//   3. no/unknown token, label reads percent-natured AND the value is on the
+//      ratio scale (|v| < 1)                                  -> 0.0%
+//   4. otherwise -> '' (General, the prior behavior)
+//
+// Rule 3 deliberately requires ratio scale so a dollar/count tile with a
+// stray label word can never be mangled into a percent.
+const KPI_PERCENT_TOKEN_RE = /^percent|_pct$|^pct_|percentage/i;
+const KPI_PERCENT_LABEL_RE = /%|\bcap\b|\bchange\b|\byoy\b|\btrend\b|\bshare\b|\bmargin\b|\brate\b/i;
+
+export function resolveKpiTileFormat(tile) {
+  const token = tile && tile.primary_format ? String(tile.primary_format) : '';
+  if (token && FMT[token]) return FMT[token];
+  if (token && KPI_PERCENT_TOKEN_RE.test(token)) return FMT.percent_one_decimal;
+  const label = String((tile && (tile.tile_label || tile.tile_id)) || '');
+  const v = Number(tile && tile.primary_value);
+  if (KPI_PERCENT_LABEL_RE.test(label) && Number.isFinite(v) && Math.abs(v) < 1) {
+    return FMT.percent_one_decimal;
+  }
+  return '';
+}
+
+// ============================================================================
+// Prompt 119 item F — derived Value-Proposition tiles
+// ============================================================================
+//
+// Marketing hand-computed these two every quarter off the NM / Non-NM average
+// sales-price split already on the tile block. Derive them at export time so
+// the number in the book is the number in the workbook:
+//
+//   Additional Proceeds ($) = NM avg price - Non-NM avg price
+//   Additional Value (%)    = Additional Proceeds / Non-NM avg price
+//
+// Null-safe: a missing/zero input emits "Not on file", never a fabricated
+// value (never-fabricate doctrine — a blank input is not a $0 delta).
+export function deriveValuePropTiles(tiles) {
+  const list = Array.isArray(tiles) ? tiles : [];
+  const price = list.find((t) => t && t.tile_id === 'avg_sales_price');
+  // `Number(null)` is 0, not NaN — a blank input must NOT read as a $0 side of
+  // the comparison (that would manufacture a -$4.9M "additional proceeds").
+  const asNum = (v) => (v == null || v === '' ? NaN : Number(v));
+  const nm    = asNum(price && price.nm_value);
+  const non   = asNum(price && price.non_nm_value);
+  const ok    = Number.isFinite(nm) && Number.isFinite(non) && non !== 0;
+  const delta = ok ? nm - non : null;
+  const maxSort = list.reduce((m, t) => Math.max(m, Number(t && t.sort_order) || 0), 0);
+  return [
+    {
+      tile_id: 'additional_proceeds',
+      tile_label: 'Additional Proceeds ($)',
+      primary_value: delta,
+      primary_format: 'currency_dollars',
+      null_display: 'Not on file',
+      derived: true,
+      sort_order: maxSort + 1,
+    },
+    {
+      tile_id: 'additional_value_pct',
+      tile_label: 'Additional Value (%)',
+      primary_value: ok ? delta / non : null,
+      primary_format: 'percent_one_decimal',
+      null_display: 'Not on file',
+      derived: true,
+      sort_order: maxSort + 2,
+    },
+  ];
+}
+
+// ============================================================================
+// Prompt 119 item D — short operator display names
+// ============================================================================
+//
+// The operator-benchmark bar chart is a horizontal bar whose category axis is
+// the operator name; the full legal-ish names ("American Renal Associates",
+// "Fresenius Medical Care") are unreadable at book size. Map to the marketing
+// short form at EXPORT time — the source views keep their canonical names, and
+// the native chart's category axis binds to these cells so the data tab and
+// the chart stay in lockstep by construction.
+//
+// Keys are lowercase/whitespace-normalized so both the current view spellings
+// and the older long-form ones resolve. An unmapped operator passes through
+// unchanged (never guess at a truncation).
+export const OPERATOR_DISPLAY_NAMES = {
+  'american renal associates': 'American Renal',
+  'american renal':            'American Renal',
+  'davita':                    'DaVita',
+  'davita inc.':               'DaVita',
+  'davita kidney care':        'DaVita',
+  'fresenius medical care':    'Fresenius',
+  'fresenius':                 'Fresenius',
+  'us renal care':             'US Renal',
+  'u.s. renal care':           'US Renal',
+  'us renal':                  'US Renal',
+  'independent / unknown':     'Independent',
+  'other / independent':       'Other',
+  'satellite healthcare':      'Satellite',
+  'satellite':                 'Satellite',
+};
+
+export function shortOperatorName(value) {
+  if (value == null) return value;
+  const key = String(value).trim().replace(/\s+/g, ' ').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(OPERATOR_DISPLAY_NAMES, key)
+    ? OPERATOR_DISPLAY_NAMES[key]
+    : value;
+}
+
+// Column-level display transforms, referenced by the string token on a
+// CHART_COLUMNS entry (`display: 'short_operator'`) so the schema stays plain
+// serializable data for the export-bundle audit hook.
+const DISPLAY_TRANSFORMS = {
+  short_operator: shortOperatorName,
+};
+
+// ============================================================================
+// Prompt 119 items B + C — cross-tab consistency guard
+// ============================================================================
+//
+// The 2Q-2026 book shipped with a KPI tile and its sibling data tab quoting
+// two different numbers for the same metric (What's-New Cap Rate 7.41% vs
+// Data_Cap_Avg 7.06%; KPI 10+ Days on Market 398.9 vs Data_On_Market_Snapshot
+// 421.1). Both are now sourced from ONE view, so the tabs agree by
+// construction — this guard is the tripwire that catches a future view edit
+// that re-splits them, AT EXPORT TIME rather than by eye in the book.
+//
+// Pure: takes the packet's charts array, returns warning strings (empty when
+// consistent). Charts that aren't in the packet are skipped, not failed.
+const KPI_CONSISTENCY_EPS = 1e-9;
+
+function chartById(charts, id) {
+  return (Array.isArray(charts) ? charts : []).find((c) => c && c.chart_template_id === id) || null;
+}
+
+export function checkKpiSeriesConsistency(charts) {
+  const warnings = [];
+
+  // B — What's-New "Cap Rate (TTM)" must be the cap-TTM series at the same
+  // period (i.e. the last plotted point on Data_Cap_Avg for the tile's period).
+  const whatsNew = chartById(charts, 'whatsnew_quarter_kpis');
+  const capChart = chartById(charts, 'cap_rate_ttm_by_quarter');
+  const capRows  = (capChart && Array.isArray(capChart.rows)) ? capChart.rows : [];
+  const kpiRows  = (whatsNew && Array.isArray(whatsNew.rows)) ? whatsNew.rows : [];
+  const capTile  = kpiRows
+    .filter((r) => r && r.tile_id === 'cap_ttm' && r.primary_value != null)
+    .sort((a, b) => String(b.period_end).localeCompare(String(a.period_end)))[0];
+  if (capTile && capRows.length > 0) {
+    const match = capRows.find((r) => r && String(r.period_end) === String(capTile.period_end));
+    const seriesVal = Number(match && match.ttm_weighted_cap_rate);
+    const tileVal   = Number(capTile.primary_value);
+    if (Number.isFinite(seriesVal) && Number.isFinite(tileVal)
+        && Math.abs(seriesVal - tileVal) > KPI_CONSISTENCY_EPS) {
+      warnings.push(
+        `[cm-export] KPI_Whats_New Cap Rate (TTM) ${tileVal} != Data_Cap_Avg ` +
+        `${seriesVal} at ${capTile.period_end} — the tile and the cap-TTM series ` +
+        `have diverged (they must read cm_{vertical}_cap_ttm_m)`
+      );
+    }
+  }
+
+  // C — every inventory-snapshot KPI tile must equal its On-Market Snapshot
+  // counterpart for the same (period_end, cohort).
+  const invKpis = chartById(charts, 'inventory_snapshot_kpis');
+  const snapshot = chartById(charts, 'on_market_snapshot');
+  const snapRows = (snapshot && Array.isArray(snapshot.rows)) ? snapshot.rows : [];
+  const invRows  = (invKpis && Array.isArray(invKpis.rows)) ? invKpis.rows : [];
+  if (invRows.length > 0 && snapRows.length > 0) {
+    // tile_id -> the snapshot view's column carrying the same number.
+    const TILE_TO_SNAPSHOT_KEY = {
+      count_active:       'count_available',
+      avg_price:          'avg_price',
+      avg_cap:            'avg_cap',
+      upper_quartile_cap: 'upper_q_cap',
+      lower_quartile_cap: 'lower_q_cap',
+      median_cap:         'median_cap',
+      avg_dom:            'avg_dom',
+      pct_price_change:   'pct_price_change',
+    };
+    const snapBy = new Map(
+      snapRows.filter(Boolean).map((r) => [`${r.period_end}|${r.cohort}`, r])
+    );
+    for (const t of invRows) {
+      if (!t || t.primary_value == null) continue;
+      const key = TILE_TO_SNAPSHOT_KEY[t.tile_id];
+      const snap = snapBy.get(`${t.period_end}|${t.cohort}`);
+      if (!key || !snap) continue;
+      const a = Number(t.primary_value);
+      const b = Number(snap[key]);
+      if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) > KPI_CONSISTENCY_EPS) {
+        warnings.push(
+          `[cm-export] KPI_Inv_Snapshot ${t.tile_id} (${t.cohort} @ ${t.period_end}) ` +
+          `= ${a} but Data_On_Market_Snapshot ${key} = ${b} — the two tabs have ` +
+          `diverged (both must read cm_{vertical}_on_market_snapshot_q)`
+        );
+      }
+    }
+  }
+
+  return warnings;
+}
+
+export function applyColumnDisplay(token, value) {
+  const fn = token ? DISPLAY_TRANSFORMS[token] : null;
+  return fn ? fn(value) : value;
+}
 
 // Round 1 — PDF-style footer caption strips. Italicized one-liner per
 // chart that summarizes intent, displayed in a pale blue strip between
@@ -412,7 +637,11 @@ const CHART_COLUMNS = {
     { key: 'clinics',                header: 'Facilities',              format: 'integer_count',       width: 12 },
   ],
   dia_operator_ebitda_benchmark: [
-    { key: 'operator',             header: 'Operator',              width: 20 },
+    // Prompt 119 item D — `display: 'short_operator'` shortens the category
+    // labels ("Fresenius Medical Care" -> "Fresenius") so the horizontal bar
+    // chart's y-axis is legible at book size. The native chart's category axis
+    // binds to this column, so tab and chart can't diverge.
+    { key: 'operator',             header: 'Operator',              width: 20, display: 'short_operator' },
     { key: 'ebitda_margin',        header: 'EBITDA Margin',         format: 'percent_one_decimal', width: 16 },
     { key: 'operating_margin',     header: 'Operating Margin',      format: 'percent_one_decimal', width: 17 },
     { key: 'revenue_per_treatment',header: 'Revenue / Treatment',   format: 'currency_dollars',    width: 19 },
@@ -471,7 +700,9 @@ const CHART_COLUMNS = {
   // Unit-level (per-clinic) operating statistics by operator — reconciled model.
   dia_operator_unit_economics: [
     { key: 'rank',                     header: '#',                      format: 'integer_count',       width: 5 },
-    { key: 'operator',                 header: 'Operator / Chain',                                      width: 22 },
+    // Prompt 119 item D — same short display names as Data_Operator_Bench so
+    // the two operator-keyed dialysis tabs read consistently.
+    { key: 'operator',                 header: 'Operator / Chain',                                      width: 22, display: 'short_operator' },
     { key: 'clinics',                  header: 'U.S. Clinics',           format: 'integer_count',       width: 12 },
     { key: 'avg_treatments_per_clinic',header: 'Avg Treatments / Clinic',format: 'integer_count',       width: 20 },
     { key: 'avg_patients_per_clinic',  header: 'Avg Patients / Clinic',  format: 'integer_count',       width: 18 },
@@ -1917,6 +2148,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
             if (row[fk] != null) { v = row[fk]; break; }
           }
         }
+        // Prompt 119 item D — optional per-column display transform (currently
+        // the short operator names). Applied to the CELL only; the underlying
+        // view keeps its canonical values.
+        if (c.display) v = applyColumnDisplay(c.display, v);
         if (c.format === 'date_short' && typeof v === 'string') {
           // Convert ISO date string to Date object for proper Excel date type
           const d = new Date(v);
@@ -2140,6 +2375,16 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       oddFooter: `&L&"${fonts.body_family}"&9Generated by LCC &D&R&"${fonts.body_family}"&9Page &P of &N`,
     };
   }
+
+  // Prompt 119 items B + C — one number per metric across the KPI tab and its
+  // sibling data tab. Warn-only (never blocks an export); surfaced in the
+  // end-of-export driftWarnings summary alongside the schema-drift checks.
+  try {
+    for (const w of checkKpiSeriesConsistency(charts)) {
+      console.warn(w);
+      driftWarnings.push(w);
+    }
+  } catch { /* non-fatal — logging only */ }
 
   // ----------------------------------------------------------------
   // MasterPasteReady — matches the column order of master "All Charts"
@@ -2969,10 +3214,35 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
     }
   }
 
+  // Prompt 119 item F — append the two derived NM-vs-Non-NM tiles marketing
+  // used to compute by hand. Derived AFTER period selection so a null-valued
+  // derived tile can never influence which period the block renders.
+  if (chart.chart_template_id === 'value_proposition_results' && tiles.length > 0) {
+    tiles = [...tiles, ...deriveValuePropTiles(tiles)];
+  }
+
   sheet.getCell('A2').value = `KPI tile block — subspecialty=${subspecialty}${resolvedAsOf ? ' · as of ' + resolvedAsOf : ''}`;
   sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
 
-  sheet.getCell('A3').value = 'One row per tile. Rolling 12-month TTM. Primary value uses the tile\'s format token; NM / Non-NM splits (when present) use the same format.';
+  // Prompt 119 item C — the KPI tab and its sibling data tab must state which
+  // definition they carry, so a reader who has both open can tell at a glance
+  // that they are one number, not two.
+  const KPI_TAB_DESCRIPTORS = {
+    inventory_snapshot_kpis:
+      'One row per tile. Active on-market inventory at the quarter end. '
+      + 'CANONICAL SOURCE: cm_{vertical}_on_market_snapshot_q — the same view Data_On_Market_Snapshot renders, '
+      + 'unpivoted to tiles, so Days on Market and Price Change % agree between the two tabs by construction. '
+      + 'Days on Market averages listings with a positive DOM; Price Change % is the share of active listings with an observed reprice.',
+    whatsnew_quarter_kpis:
+      'One row per tile. CANONICAL SOURCE for Cap Rate (TTM): cm_{vertical}_cap_ttm_m — the same TTM series '
+      + 'Data_Cap_Avg charts, read at this quarter end (not a single-quarter simple average).',
+    value_proposition_results:
+      'One row per tile. Rolling 12-month TTM. Additional Proceeds ($) and Additional Value (%) are DERIVED at export '
+      + 'time from the NM / Non-NM Avg Sales Price split on this block.',
+  };
+  sheet.getCell('A3').value = (KPI_TAB_DESCRIPTORS[chart.chart_template_id]
+      || 'One row per tile. Rolling 12-month TTM.')
+    + ' Primary value uses the tile\'s format token; NM / Non-NM splits (when present) use the same format.';
   sheet.getCell('A3').font = { name: fonts.body_family, size: 9, color: { argb: muted } };
   sheet.getCell('A3').alignment = { wrapText: true };
   sheet.getRow(3).height = 26;
@@ -2998,7 +3268,9 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
   let rowIdx = 5;
   for (const t of tiles) {
     const r = sheet.getRow(rowIdx);
-    const fmt = FMT[t.primary_format] || '';
+    // Prompt 119 item A — never fall through to Excel's General format for a
+    // percent-natured tile (see resolveKpiTileFormat).
+    const fmt = resolveKpiTileFormat(t);
 
     const labelCell = r.getCell(1);
     labelCell.value = t.tile_label;
@@ -3006,9 +3278,15 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
 
     const setNumCell = (col, value) => {
       const cell = r.getCell(col);
-      cell.value = value == null ? null : Number(value);
+      if (value == null) {
+        // A derived tile whose inputs are absent says so out loud rather than
+        // shipping a blank the reader could mistake for zero.
+        cell.value = (col === 2 && t.null_display) ? t.null_display : null;
+      } else {
+        cell.value = Number(value);
+        if (fmt) cell.numFmt = fmt;
+      }
       cell.font = { name: fonts.body_family, size: 10, color: { argb: text } };
-      if (fmt) cell.numFmt = fmt;
     };
     setNumCell(2, t.primary_value);
     setNumCell(3, t.nm_value);
@@ -3024,8 +3302,16 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
 
   // Footer note
   const footRow = rowIdx + 1;
-  sheet.getCell(`A${footRow}`).value =
-    'Used to render the "Value Proposition Results" tile grid in the deliverable. NM / Non-NM splits are only populated when the tile has an NM-attribution comparison (Cap Rate, Sales Price). Avg NOI is single-value (no split).';
+  const KPI_TAB_FOOTERS = {
+    inventory_snapshot_kpis:
+      'Used to render the On-Market Snapshot tile grid. Every metric here is the same number Data_On_Market_Snapshot '
+      + 'reports for the current quarter — that tab additionally carries the prior-year comparison.',
+    whatsnew_quarter_kpis:
+      'Used to render the "What\'s New This Quarter" headline tiles. Cap Rate (TTM) is the trailing-twelve-month '
+      + 'weighted cap rate at this quarter end and matches the last plotted point on Data_Cap_Avg.',
+  };
+  sheet.getCell(`A${footRow}`).value = KPI_TAB_FOOTERS[chart.chart_template_id]
+    || 'Used to render the "Value Proposition Results" tile grid in the deliverable. NM / Non-NM splits are only populated when the tile has an NM-attribution comparison (Cap Rate, Sales Price). Avg NOI is single-value (no split). Additional Proceeds ($) / Additional Value (%) are derived from the NM vs Non-NM Avg Sales Price split.';
   sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 8, italic: true, color: { argb: muted } };
   sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
   sheet.mergeCells(`A${footRow}:D${footRow}`);

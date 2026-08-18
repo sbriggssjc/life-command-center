@@ -167,7 +167,20 @@ for (const t of trans) {
   });
 }
 
-console.log(`\ncandidate evidence rows: ${rows.length}`);
+// What is ALREADY there. Without this the dry run reports CANDIDATES and a
+// reader (me, in the instruction I gave Scott) mistakes that for "new rows" --
+// the re-run printed 154 again and looked like nothing was written when in fact
+// everything was. Mirrors the dia repo's own lesson: an "inserted: N" line that
+// is really a derivation counter is worse than no counter.
+const existingRows = await pageAll(OPS_URL, OPS_KEY,
+  `lcc_property_owner_evidence?select=entity_id,candidate_owner_entity`
+  + `&source=eq.gov_ownership_transition&order=entity_id.asc`);
+const existing = new Set(existingRows.map((r) => `${r.entity_id}|${r.candidate_owner_entity}`));
+const isNew = (r) => !existing.has(`${r.entity_id}|${r.candidate_owner_entity}`);
+const newRows = rows.filter(isNew);
+
+console.log(`\ncandidate evidence rows: ${rows.length}`
+          + `  (already present ${rows.length - newRows.length} · NEW ${newRows.length})`);
 console.log(`  skipped  no_asset_entity ${skip.no_asset_entity}  no_owner_entity ${skip.no_owner_entity}`
           + `  below_rent_floor ${skip.below_rent_floor}  no_rent ${skip.no_rent}`);
 console.log(`  distinct assets ${new Set(rows.map((r) => r.entity_id)).size}`
@@ -206,7 +219,24 @@ for (let i = 0; i < rows.length; i += CHUNK) {
   else { bad += chunk.length; console.error(`\nchunk ${i}: ${res.status} ${(await res.text()).slice(0, 300)}`); }
   process.stdout.write(`\r  sent ${ok + bad}/${rows.length}`);
 }
+
+// `ok` counts rows SENT, not rows written -- ignore-duplicates means a payload
+// carrying the same (asset, owner) twice lands once. The first live run sent
+// 302 and 301 landed, and only a DB count showed it. Truth is the count delta,
+// never the send counter.
+const after = await fetch(
+  `${OPS_URL}/rest/v1/lcc_property_owner_evidence`
+  + `?select=entity_id&source=eq.gov_ownership_transition`, {
+    method: 'HEAD',
+    headers: {
+      apikey: OPS_KEY, Authorization: `Bearer ${OPS_KEY}`,
+      Prefer: 'count=exact', Range: '0-0',
+    },
+  });
+const total = Number((after.headers.get('content-range') || '/0').split('/')[1]) || null;
 console.log(`\ndone: ${ok} sent, ${bad} failed`);
+console.log(`      ${existing.size} rows before · ${total ?? '?'} rows now`
+          + `${total != null ? ` · ${total - existing.size} actually written` : ''}`);
 console.log(`\nNEXT (both dry-run first, neither is run by this script):`);
 console.log(`  select * from lcc_supersede_property_owner(true);   -- see what would resolve`);
 console.log(`  select count(*) from lcc_property_owner_evidence where source='gov_ownership_transition';`);
