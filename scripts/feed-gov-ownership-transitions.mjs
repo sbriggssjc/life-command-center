@@ -139,8 +139,13 @@ for (const t of trans) {
   const ownerEntity = ownerById.get(String(t.new_owner_true_owner_id));
   if (!ownerEntity) { skip.no_owner_entity++; continue; }
   const rent = rentByProp.get(pid);
-  if (rent == null) { skip.no_rent++; continue; }
-  if (Number(rent) < MIN_RENT) { skip.below_rent_floor++; continue; }
+  // --min-rent 0 means "no value gate at all", so a MISSING rent must not keep
+  // gating. Otherwise 0 quietly still drops rows and the operator cannot express
+  // "everything". Only gate on rent when a floor is actually set.
+  if (MIN_RENT > 0) {
+    if (rent == null) { skip.no_rent++; continue; }
+    if (Number(rent) < MIN_RENT) { skip.below_rent_floor++; continue; }
+  }
   rows.push({
     entity_id: assetEntity,
     candidate_owner_entity: ownerEntity,
