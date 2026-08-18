@@ -129,3 +129,40 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
   `supabase/migrations/20260905120000_lcc_p114_outlook_body_allowlist.sql` (applied live). The correct
   fill path is documented in **`docs/setup/OUTLOOK_BODY_SWEEP_FLOW.md`** (backward+forward Graph→bridge
   sweep). Corpus scope = tracked-contact mail (Option A, no writer change). Prompt → `done/`.
+- 2026-08-18: **Stage-1 profile RE-DISTILLED on full bodies (Prompt 117) — `BRIGGS-WRITING-VOICE.md` v2.0.0.**
+  The sign-off / paragraph-shape / long-form sections that Stage 1 honestly flagged LOW-confidence are now
+  **counted off whole emails** instead of inferred. Corpus basis, verified live 2026-08-18: **609 distinct
+  Scott-authored messages after guards — 399 with a FULL body (2026-05-04 → 2026-08-17) + 210 preview-only
+  openings (2022-11-14 → 2026-08-18)**; 129 long-form (≥400 chars), 55 ≥900.
+  **⚠ Three grounded corrections to the prompt's premise, all material:**
+  1. **"7,851 Scott-authored sent" is not Scott's.** That number is `email_bodies` rows with `is_sent=true`
+     carrying a body — but `is_sent` is unreliable here: the top senders on it are inbound newsletters
+     (govtribe 1,346 · seekingalpha 1,105 · salesforce notifications 1,773), and only **1** of the 654
+     Scott-from full bodies has `is_sent=true`. **Scott-from full bodies = 654**, of which **399** survive
+     the authorship guards.
+  2. **`from_email` is NOT proof of authorship on this store.** 118 of 654 are addressed only to Scott
+     (74 are the app's **own LCC Morning Briefing / Weekly Deep Dive** output — training on them teaches the
+     briefing template) and ~107 open by addressing Scott (inbound filed under his address). New
+     `voiceCorpusExclusion()` gates both, in the distiller **and** in draft-assist retrieval (which could
+     otherwise have quoted the app's own briefing back at him as an exemplar of his voice).
+  3. **The upgrade would have silently cancelled itself.** All 654 full bodies ALSO exist in
+     `activity_events` as ~255-char previews, and both corpus loaders deduped **preview-first** — so every
+     full body would have been dropped as a duplicate. Fixed: `email_bodies` is drained first in both.
+  **Cleaner (`voice-corpus-clean.js`) verified on real full-body shapes:** 24% of full bodies carried no
+  TEXT reply marker because Outlook's quote boundary is a div (`id="appendonsend"`/`divRplyFwdMsg`) —
+  `htmlToText` now emits a sentinel there (min-lead guarded so an empty div on a fresh compose can't empty
+  the body: 52 emptied → 0). **Retention measured over the 654: raw body averages 7,537 chars → 1,303 kept
+  (17.3%) — ~83% of a typical full body is quoted chain + signature + disclaimer.**
+  **Headline voice findings (new, corpus-evidenced):** 86.7% of his emails have **no sign-off at all**;
+  **"Best regards," is the only closer he uses** (13.3% overall) and it is an EXTERNAL marker (24.7% external
+  follow-up / 31.3% LOI vs 2.3% internal); **"Thanks," never appears as a closing line** (v1 guessed it did).
+  Buckets upgraded: LOI/offer **LOW → MEDIUM-HIGH** (83 full bodies), cold-BD still thin in count (18) but now
+  full-length (median 2,640 chars). Listing-announcement (n=1) stays flagged LOW.
+  **Distiller extended** (`scripts/voice-distill.mjs`): deterministic layer-1 shape stats (`--stats-only`,
+  no model, no egress), stratified length+recency sampling, a separate long-form pass, and **mechanical
+  verbatim enforcement** (a cited excerpt that is not a literal substring of the sample is dropped) +
+  redaction of anything written to disk. Still ollama-only, still refuses without `OLLAMA_URL`.
+  **draft-assist `voice_confidence`** now reports FULL-BODY coverage per draft from the retrieved exemplars'
+  real lengths (full / mixed / preview-only), instead of asserting the retired corpus-wide 255-char cap.
+  **Scott's step:** run the on-prem distill on GaryBuilt, then read v2 — "does this sound like me now,
+  sign-offs and all?" — before it becomes the default voice source. Prompt → `done/`.
