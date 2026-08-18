@@ -27,15 +27,30 @@
  * $500k floor covers 80% of gov annual rent in ~25% of the properties. Assets
  * below the floor are counted and skipped, never silently dropped.
  *
- * DOES NOT MINT ASSET ENTITIES. A property with no asset entity is reported as
- * `no_asset_entity` and skipped. Minting is a producer action and needs its own
- * decision (see docs/architecture/gov-asset-identity-coverage-2026-08.md);
- * doing it here would smuggle ~3,000 new entities in behind an evidence load.
+ * MINTING IS OPT-IN (--mint) AND REFUSES TO RUN WITHOUT A VALUE GATE.
+ * By default a property with no asset entity is reported as `no_asset_entity`
+ * and skipped -- that was 2,909 of the skips on the first live run, i.e. the
+ * binding constraint. --mint creates the asset entity + gov identity, but only
+ * where a verified dated transition ALREADY exists and rent clears --min-rent.
+ * Evidence justifies the entity, never the reverse: an asset entity with nothing
+ * attached is noise in every entity count, search result and merge candidate.
+ * Sizing and the reasoning: docs/architecture/gov-asset-identity-coverage-2026-08.md
  *
  * Usage (repo root, reads .env.local):
- *   node scripts/feed-gov-ownership-transitions.mjs                 # dry run
+ *   node scripts/feed-gov-ownership-transitions.mjs                       # dry run
  *   node scripts/feed-gov-ownership-transitions.mjs --apply
  *   node scripts/feed-gov-ownership-transitions.mjs --min-rent 0 --apply
+ *   node scripts/feed-gov-ownership-transitions.mjs --mint --min-rent 500000
+ *   node scripts/feed-gov-ownership-transitions.mjs --mint --min-rent 500000 --apply
+ *
+ * REVERSING A MINT BATCH (entities first would orphan the identities):
+ *   delete from external_identities
+ *    where metadata->>'mint_batch' = '<batch>';
+ *   delete from lcc_property_owner_evidence e using entities x
+ *    where e.entity_id = x.id and x.metadata->>'mint_batch' = '<batch>';
+ *   delete from entities where metadata->>'mint_batch' = '<batch>';
+ * RETIRE PREDICATE: a minted entity that ends up with no evidence and no
+ * portfolio fact has no consumer and should be retired by the same keys.
  *
  * Idempotent: upserts on the natural PK
  * (entity_id, candidate_owner_entity, source) with ignore-duplicates, so a
@@ -107,11 +122,13 @@ const assetRows = await pageAll(OPS_URL, OPS_KEY,
 const ownerRows = await pageAll(OPS_URL, OPS_KEY,
   `external_identities?select=external_id,entity_id&source_system=eq.gov&source_type=eq.true_owner&order=external_id.asc`);
 const attrRows = await pageAll(OPS_URL, OPS_KEY,
-  `lcc_property_attributes?select=source_property_id,annual_rent&source_domain=eq.gov&order=source_property_id.asc`);
+  `lcc_property_attributes?select=source_property_id,annual_rent,address,city,state`
+  + `&source_domain=eq.gov&order=source_property_id.asc`);
 
 const assetByProp = new Map(assetRows.map((r) => [String(r.external_id), r.entity_id]));
 const ownerById   = new Map(ownerRows.map((r) => [String(r.external_id), r.entity_id]));
 const rentByProp  = new Map(attrRows.map((r) => [String(r.source_property_id), r.annual_rent]));
+const attrByProp  = new Map(attrRows.map((r) => [String(r.source_property_id), r]));
 console.log(`lcc: ${assetByProp.size} gov asset ids · ${ownerById.size} true_owner ids · ${rentByProp.size} attribute rows`);
 
 // ---- gov side: the feedable transitions ------------------------------------
@@ -128,6 +145,97 @@ const trans = await pageAll(GOV_URL, GOV_KEY,
   + `&is_oscillating_pair=is.false`
   + `&new_owner_true_owner_id=not.is.null&order=property_id.asc`);
 console.log(`gov: ${trans.length} feedable transitions (oscillating pairs already excluded)`);
+
+// ---- optional: MINT the missing asset entities ------------------------------
+// Consumption-Layer doctrine: a producer needs a named consumer, a value gate, a
+// retire predicate and an honest count. Here --
+//   consumer        the supersession engine, which consumes evidence the very
+//                   same run (this is why minting is bolted to the feeder rather
+//                   than being its own bulk job)
+//   value gate      --min-rent, which is why --mint REFUSES to run at 0
+//   retire predicate an entity from this batch with no evidence and no portfolio
+//                   fact is retirable; every one is batch-tagged for exactly that
+//   honest count    minted vs already-present reported separately
+//
+// An asset entity with nothing attached is noise in every entity count, search
+// result and merge candidate. So evidence justifies the entity, never the
+// reverse -- we only mint where a verified dated transition ALREADY exists.
+const MINT = process.argv.includes('--mint');
+const MINT_BATCH = process.env.MINT_BATCH || `gov_mint_${new Date().toISOString().slice(0, 10)}`;
+if (MINT && MIN_RENT <= 0) {
+  console.error('\n--mint requires a value gate. Re-run with --min-rent <floor> (e.g. 500000).');
+  console.error('Minting every candidate would add ~2,900 entities with no floor, which is');
+  console.error('the producer failure mode the Consumption-Layer rules exist to prevent.');
+  process.exit(1);
+}
+
+if (MINT) {
+  const wanted = [];
+  for (const t of trans) {
+    const pid = String(t.property_id);
+    if (assetByProp.has(pid)) continue;
+    if (!ownerById.has(String(t.new_owner_true_owner_id))) continue;   // evidence unusable anyway
+    const a = attrByProp.get(pid);
+    const rent = a?.annual_rent;
+    if (rent == null || Number(rent) < MIN_RENT) continue;
+    // never mint a nameless entity -- 78 gov attribute rows carry no address
+    const name = [a.address, [a.city, a.state].filter(Boolean).join(', ')]
+      .filter(Boolean).join(', ').trim();
+    if (!name) continue;
+    wanted.push({ pid, name, rent });
+  }
+  console.log(`\nmint: ${wanted.length} asset entities would be created `
+            + `(batch ${MINT_BATCH}, floor $${MIN_RENT.toLocaleString()})`);
+  for (const w of wanted.slice(0, 4)) {
+    console.log(`   ${w.pid}  $${Math.round(w.rent).toLocaleString().padStart(11)}  ${w.name.slice(0, 56)}`);
+  }
+
+  if (APPLY && wanted.length) {
+    const CH = 200;
+    let made = 0;
+    for (let i = 0; i < wanted.length; i += CH) {
+      const chunk = wanted.slice(i, i + CH);
+      const eRes = await fetch(`${OPS_URL}/rest/v1/entities`, {
+        method: 'POST',
+        headers: {
+          apikey: OPS_KEY, Authorization: `Bearer ${OPS_KEY}`,
+          'Content-Type': 'application/json', Prefer: 'return=representation',
+        },
+        body: JSON.stringify(chunk.map((w) => ({
+          name: w.name, entity_type: 'asset', domain: 'gov',
+          workspace_id: 'a0000000-0000-0000-0000-000000000001',
+          metadata: {
+            source: 'gov_ownership_transition_mint',
+            domain_property_id: Number(w.pid),
+            mint_batch: MINT_BATCH,
+            minted_because: 'a verified dated gov ownership transition exists and '
+                          + `annual rent >= ${MIN_RENT}`,
+          },
+        }))),
+      });
+      if (!eRes.ok) { console.error(`\nmint chunk ${i}: ${eRes.status} ${(await eRes.text()).slice(0, 300)}`); break; }
+      const created = await eRes.json();
+      const idRes = await fetch(`${OPS_URL}/rest/v1/external_identities`, {
+        method: 'POST',
+        headers: {
+          apikey: OPS_KEY, Authorization: `Bearer ${OPS_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=minimal,resolution=ignore-duplicates',
+        },
+        body: JSON.stringify(created.map((e, k) => ({
+          entity_id: e.id, source_system: 'gov', source_type: 'asset',
+          external_id: chunk[k].pid,
+          metadata: { bridge_source: 'feed-gov-ownership-transitions', mint_batch: MINT_BATCH },
+        }))),
+      });
+      if (!idRes.ok) { console.error(`\nidentity chunk ${i}: ${idRes.status} ${(await idRes.text()).slice(0, 300)}`); break; }
+      created.forEach((e, k) => assetByProp.set(chunk[k].pid, e.id));
+      made += created.length;
+      process.stdout.write(`\r  minted ${made}/${wanted.length}`);
+    }
+    console.log(`\n  minted ${made} asset entities`);
+  }
+}
 
 // ---- join, gate, and account for every row ---------------------------------
 const skip = { no_asset_entity: 0, no_owner_entity: 0, below_rent_floor: 0, no_rent: 0 };
