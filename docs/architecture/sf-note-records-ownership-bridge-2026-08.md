@@ -452,3 +452,56 @@ Chase the 672. The base rate is measured, the domain rule is the only cheap
 discriminator, and it clears 11. Anything further needs the **note bodies**
 (§7 item 4) — which carry the address, the dated sale and the role — not more
 string matching on titles.
+
+---
+
+## 13. The SPE→sponsor rollup does not survive either (2026-08-18)
+
+With the note path closed at 11, the obvious next lever came from Scott's own
+§11 observation — *"Egp 5425 Salt Lake LLC is an SPE for Easterly REIT"*. If
+single-asset SPEs roll up to a sponsor we can already reach, one contact unlocks
+many assets. The gap it would attack is **3,883 owners / $2,715.9M**.
+
+Measured by token-subset containment (every token of a reachable entity's strict
+core appears in the SPE's core, SPE strictly longer), plus a stoplist:
+
+> **631 gap owners / $451.3M / 214 sponsors** — 16% of the gap.
+
+**Then I looked at the rows, and every top sponsor was a common noun:**
+
+| "sponsor" | core | SPEs | what it actually matched |
+|---|---|---|---|
+| Q Street Ltd | `street` | 79 | `10 Weybosset Street, LLC` |
+| Owner | `owner` | 72 | `1201 Elm Street Owner LLC` |
+| Government | `government` | 10 | `Eagle County Government` |
+| Plaza Corp | `plaza` | 48 | `300 F. Ogawa Plaza LP` |
+| Bank | `bank` | 34 | `Agfirst Farm Credit Bank` |
+
+### Why tuning cannot fix it
+
+The natural repair is to replace the hand-maintained stoplist with a
+**measurement** — token document frequency, so common nouns fall out on their
+own. It does not separate them:
+
+| token | df | | token | df |
+|---|---|---|---|---|
+| `street` | 136 | | **`uirc`** | **39** |
+| `plaza` | 78 | | `gateway` | 26 |
+| `owner` | 75 | | `state` | 24 |
+| `bank` | 48 | | `government` | 20 |
+
+**`uirc` — a genuine prolific sponsor — is MORE frequent than `gateway`,
+`state`, `government` and `atlanta`, all of which are noise.** That is not a
+threshold problem. A sponsor is frequent *because* it is prolific, which is the
+same signal as a street being frequent because it is a street. No cutoff
+separates them, so no amount of tuning rescues the heuristic.
+
+### What would make it admissible
+
+A shared **property, deed, mailing address, or Salesforce contact** between SPE
+and sponsor — with name similarity as corroboration rather than the claim. The
+mailing-address route is already known input-starved (gov
+`recorded_owners.mailing_address` = 4 rows; ORE Phase A1 documents why). So this
+needs new evidence, not a better string rule.
+
+**Not built. The 631 / $451.3M figure is retracted; it is noise.**
