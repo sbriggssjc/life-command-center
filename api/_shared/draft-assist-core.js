@@ -178,19 +178,68 @@ export function extractDealFacts(packet) {
  * Stage-1 finding). Surface that honestly per bucket + exemplar count. Never
  * pretends to full-body fidelity.
  */
-export function voiceConfidenceNote(bucket, exemplarCount) {
+// P117: an exemplar past this length could not have come from the old ~255-char
+// Graph `bodyPreview` — it is a real captured body, so a draft grounded in it can
+// honestly claim full-body precedent (sign-off + paragraph shape included). Set
+// above the 255 cap with headroom for the cleaner's trimming.
+export const FULL_BODY_MIN_CHARS = 300;
+
+/** How many of the retrieved exemplars are genuine full bodies vs old previews. */
+export function exemplarBodyCoverage(exemplars) {
+  const list = Array.isArray(exemplars) ? exemplars : [];
+  const lengths = list.map((e) => String((e && e.cleaned) || '').length);
+  const full = lengths.filter((n) => n >= FULL_BODY_MIN_CHARS).length;
+  return {
+    total: list.length,
+    full_body: full,
+    preview_only: list.length - full,
+    max_chars: lengths.length ? Math.max(...lengths) : 0,
+  };
+}
+
+/**
+ * An honest, per-draft statement of what the voice is actually grounded in.
+ *
+ * Stage 1 could only ever say "openings, ~255-char cap". Since the Sent/Archive
+ * sweep landed real bodies, that is no longer uniformly true — so the note is now
+ * derived from the RETRIEVED EXEMPLARS' actual lengths rather than asserted for
+ * the whole corpus. A draft grounded in full bodies says so; one that still fell
+ * back to preview-era openings keeps the old caveat, because for that draft the
+ * caveat is still correct.
+ *
+ * Accepts either the exemplar array (preferred — enables the full-body read) or a
+ * bare count, so existing callers keep working.
+ */
+export function voiceConfidenceNote(bucket, exemplarsOrCount) {
   const thin = bucket === 'cold_bd_outreach' || bucket === 'loi_offer' || bucket === 'listing_announcement';
-  const base =
-    'Voice is grounded in Scott\'s SENT-email openings (~255-char preview cap; full bodies not yet ingested), '
-    + 'so greeting/opening/tone are high-fidelity while sign-offs and long-form paragraph shape lean on the '
-    + 'BRIGGS-WRITING-VOICE profile, not the corpus.';
+  const isList = Array.isArray(exemplarsOrCount);
+  const cov = isList ? exemplarBodyCoverage(exemplarsOrCount) : null;
+  const exemplarCount = isList ? cov.total : Number(exemplarsOrCount || 0);
+
   if (exemplarCount === 0) {
-    return `${base} No matching past exemplars were retrieved for this draft-type — the draft rests on the voice profile + facts alone; edit closely.`;
+    return 'No matching past exemplars were retrieved for this draft-type — the draft rests on the '
+      + 'BRIGGS-WRITING-VOICE profile + the supplied facts alone; edit closely.';
   }
+
+  let base;
+  if (cov && cov.full_body === cov.total) {
+    base = `Voice is grounded in ${cov.full_body} FULL past email bod(ies) of Scott's — sign-off, paragraph shape and `
+      + 'long-form structure are corpus-evidenced here, not inferred from the profile.';
+  } else if (cov && cov.full_body > 0) {
+    base = `Voice is grounded in ${cov.total} past exemplar(s), ${cov.full_body} of them FULL bodies and `
+      + `${cov.preview_only} still preview-era openings (~255-char cap) — opening/tone is well-supported throughout, `
+      + 'while sign-off and long-form shape rest on the full-body subset.';
+  } else {
+    base = `Voice is grounded in ${exemplarCount} past exemplar(s) that are preview-era OPENINGS only (~255-char cap), `
+      + 'so greeting/opening/tone are high-fidelity while sign-offs and long-form paragraph shape lean on the '
+      + 'BRIGGS-WRITING-VOICE profile, not these exemplars.';
+  }
+
   if (thin && exemplarCount < 3) {
-    return `${base} This draft-type (${bucket}) is evidence-THIN in the corpus (${exemplarCount} exemplar(s)); the profile flags it LOW-confidence — treat the draft as a starting point.`;
+    return `${base} This draft-type (${bucket}) is evidence-THIN in the corpus (${exemplarCount} exemplar(s)); `
+      + 'the profile flags it LOW-confidence — treat the draft as a starting point.';
   }
-  return `${base} Retrieved ${exemplarCount} real past exemplar(s) of this draft-type; opening voice is well-supported.`;
+  return base;
 }
 
 // Number/date/proper-name token detectors for the fact validator.

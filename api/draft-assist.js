@@ -20,7 +20,10 @@
 //  3. Strategy stays verbal — the prompt forbids negotiation/recommendations.
 //  4. On-prem generation ONLY. invokeOnPremGeneration talks to the local Ollama
 //     and FAILS CLOSED (no cloud fallback) — Scott's corpus never egresses.
-//  5. Honest about the opening-only corpus cap via voice_confidence.
+//  5. Honest about what the voice is grounded in, per draft, via voice_confidence:
+//     the note is derived from the RETRIEVED exemplars' actual body lengths, so a
+//     draft built on real full bodies says so and one that fell back to preview-era
+//     openings keeps the ~255-char caveat (P117).
 //
 // Input (GET query or POST body):
 //   purpose      cold_bd | follow_up | broker_to_broker | client_update |
@@ -37,7 +40,7 @@ import path from 'node:path';
 
 import { handleCors, authenticate } from './_shared/auth.js';
 import { opsQuery, isOpsConfigured } from './_shared/ops-db.js';
-import { cleanEmailBody, isMostlyBoilerplate, classifyDraftType, pickBestBody } from './_shared/voice-corpus-clean.js';
+import { cleanEmailBody, classifyDraftType, pickBestBody, voiceCorpusExclusion } from './_shared/voice-corpus-clean.js';
 import { invokeOnPremGeneration, invokeOnPremEmbeddings } from './_shared/ai.js';
 import { buildDealPacket } from './_handlers/entities-handler.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
@@ -88,33 +91,46 @@ async function loadCorpus() {
       `&source_type=in.(outlook,outlook_sent,outlook_tagged)` +
       `&body=not.is.null&order=occurred_at.desc&offset=${o}&limit=${l}`),
     pageAll((o, l) =>
-      `email_bodies?select=id,body_preview,body_text,body_html,subject,from_email,to_emails,sent_at,received_at,internet_message_id` +
-      `&body_preview=not.is.null&order=received_at.desc&offset=${o}&limit=${l}`),
+      `email_bodies?select=id,body_preview,body_text,body_html,subject,from_email,to_emails,cc_emails,sent_at,received_at,internet_message_id` +
+      // P117: gate on ANY body column, not `body_preview` alone — a body-only row
+      // (full html, no preview) is exactly the exemplar we most want and the old
+      // filter would have made it invisible. Harmless today (0 such rows live),
+      // latent tomorrow.
+      `&or=(body_preview.not.is.null,body_text.not.is.null,body_html.not.is.null)` +
+      `&order=received_at.desc&offset=${o}&limit=${l}`),
   ]);
 
   const seen = new Set();
   const rows = [];
-  const push = (id, imid, raw, subject, from, toEmails, ts) => {
+  const push = (id, imid, raw, subject, from, toEmails, ccEmails, ts) => {
     if (!SCOTT_FROM.has(String(from || '').toLowerCase())) return;   // outbound-only gate
     const key = imid || `body:${String(raw).slice(0, 80)}`;
     if (seen.has(key)) return;
     seen.add(key);
     const cleaned = cleanEmailBody(raw);
-    if (isMostlyBoilerplate(cleaned)) return;
+    // P117: `from_email` alone is NOT authorship on this store. Without this gate
+    // retrieval could quote the app's OWN generated briefing, or inbound mail filed
+    // under Scott's address, back at him as an exemplar of his voice.
+    if (voiceCorpusExclusion({ cleaned, subject, toEmails, ccEmails, fromEmail: from })) return;
     const { bucket } = classifyDraftType({ cleaned, subject, toEmails, fromEmail: from });
     rows.push({ id: imid || String(id), cleaned, subject: subject || '', bucket, toEmails: toEmails || [], ts });
   };
+  // P117 ORDER MATTERS: dedup is first-wins on internet_message_id and the stores
+  // OVERLAP, so `email_bodies` (which holds the real bodies) must be drained FIRST
+  // or a message's ~255-char activity_events preview claims the key and its own
+  // full body is dropped as a duplicate — silently starving retrieval of exactly
+  // the full-body exemplars voice_confidence now reports on.
+  for (const r of eb) {
+    // Prompt 110: full body_text → tag-stripped body_html → capped body_preview.
+    const raw = pickBestBody({ body_text: r.body_text, body_html: r.body_html, body_preview: r.body_preview });
+    push(r.id, r.internet_message_id, raw, r.subject, r.from_email, r.to_emails || [], r.cc_emails || [], r.sent_at || r.received_at);
+  }
   for (const r of ae) {
     const m = r.metadata || {};
     // Prompt 110: prefer a full body when the flow forwarded one into metadata
     // (body_text / body_html); fall back to the ~255-char body snippet.
     const raw = pickBestBody({ body_text: m.body_text, body_html: m.body_html, body: r.body });
-    push(r.id, m.internet_message_id, raw, r.title, m.from_email, m.to_emails || [], r.occurred_at);
-  }
-  for (const r of eb) {
-    // Prompt 110: full body_text → tag-stripped body_html → capped body_preview.
-    const raw = pickBestBody({ body_text: r.body_text, body_html: r.body_html, body_preview: r.body_preview });
-    push(r.id, r.internet_message_id, raw, r.subject, r.from_email, r.to_emails || [], r.sent_at || r.received_at);
+    push(r.id, m.internet_message_id, raw, r.title, m.from_email, m.to_emails || [], m.cc_emails || [], r.occurred_at);
   }
   return rows;
 }
@@ -224,7 +240,9 @@ export default async function draftAssistHandler(req, res) {
     body: bodyCheck.text,
   };
 
-  const voice_confidence = voiceConfidenceNote(bucket, exemplars.length);
+  // P117: pass the exemplars themselves so the note can report FULL-BODY coverage
+  // from their real lengths instead of asserting the old corpus-wide preview cap.
+  const voice_confidence = voiceConfidenceNote(bucket, exemplars);
   const factsUsed = facts;
   const notOnFile = Object.entries(facts).filter(([, v]) => v === 'Not on file').map(([k]) => k);
 
