@@ -87,14 +87,17 @@ probe 0/0/0 (idempotent); 630 reversal rows.
 
 **UPDATE 2026-08-18 — corpus filling fast post-redeploy:** handler fix confirmed live (new sweep jobs 0 × `upsert_409`).
 Sent Items exhausted at 654 (folder only retains ~3.5 months, back to May 3 — older mail auto-archived). Pointed the
-sweep at the primary-mailbox **Archive folder** (id `…ETAAA=`, 8,781 items) → **corpus 654 → 5,110 → 8,631 full bodies**
-(**7,851 `is_sent`**) across resume runs, walking back to **2022-11-04** (~4 years; matches the voice profile's Nov-2022
-corpus start), zero 409s throughout. **Archive floor CONFIRMED 2026-08-18** — a resume from
-2022-11-04 returned 0 older (2-second run), so the primary mailbox (Sent Items + Archive) is **fully swept: 8,631
-full bodies / 7,851 sent, Nov 2022 → present.** Voice corpus COMPLETE for the primary mailbox; only the **Online
-Archive** (separate
-mailbox — Graph `/me/mailFolders` doesn't reach it; harder access, deferred). Voice/comms readers already filter
-(`SCOTT_FROM` for voice); a full **Inbox** sweep (42,644) is a separate broader-corpus decision, not the voice goal.
+sweep at the primary-mailbox **Archive folder** (id `…ETAAA=`, 8,781 items) → **`email_bodies` full bodies 654 →
+5,110 → 8,631** across resume runs, walking back to **2022-11-04**, zero 409s throughout. **Archive floor CONFIRMED
+2026-08-18** (a resume from 2022-11-04 returned 0 older). **⚠ CORRECTION (Prompt 117 re-grounding): the 8,631 is
+NOT 7,851 of Scott's sent mail — that was the unreliable `is_sent` flag** (its top "senders" are govtribe 1,346 /
+seekingalpha 1,105 / salesforce 1,773; only ~1 of the Scott-from rows carries it). The **8,631 is mostly RECEIVED
+correspondence** (the Archive is Scott's archived *inbound*, back to Nov 2022) — a real BROAD-corpus enrichment
+(harvest / attribution / draft-assist context), but **not voice**. **Scott's actual SENT voice corpus = 644
+full bodies, window 2026-05-03 → 08-17 (~3.5 months)** — verified `from_email ∈ {sabriggs,teambriggs}@northmarq`.
+So the primary-mailbox VOICE corpus is still recent-only; **older sent mail lives in the Online Archive** (separate
+mailbox, Graph `/me/mailFolders` can't reach it — the remaining voice-history source). The **Inbox sweep (42,644)**
+serves the BROADER received-corpus goal Scott named ("all correspondence to enrich the LCC"), NOT voice.
 Skip junk folders (Sync Issues 71,180, Deleted, Junk, RSS, Clutter).
 
 **⚠ REMAINING STEPS (Scott):**
