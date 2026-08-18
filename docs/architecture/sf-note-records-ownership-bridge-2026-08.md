@@ -1,6 +1,6 @@
 # Salesforce note records as an ownership bridge — findings, 2026-08-17
 
-**Status:** staged, measured, tenant-class matcher shipped (P130). Out-of-scope sectors
+**Status:** staged, measured, matcher shipped. **Scott's validation (§11) reframed what this dataset IS — read §11 before using it.** Out-of-scope sectors
 parked for the swim-lane expansion (§5).
 
 **Table:** `lcc_sf_note_property_assertion` (P129) · **Loader:**
@@ -275,3 +275,70 @@ reviewer can see which they have.
 | **reachable today via a note lead, pending review** | **294** | **$265.6M** |
 | named lead, weaker match or needs SF fetch | 843 | $748.5M |
 | still dark — no lead, no contact | ~2,746 | ~$1.7B |
+
+---
+
+## 11. Scott's validation — the leads are an OWNERSHIP CHAIN, not a contact list
+
+**This section supersedes the optimistic framing in §9–10.** Scott reviewed the
+10-row sample. The verdict:
+
+| owner | candidate | Scott's read |
+|---|---|---|
+| Government Properties Income Trust | Lee Elman | **prior owner** — a private individual who owns gov properties; both likely owned it, different groups |
+| RMR (REIT) | Marvin Romanek | developer or private individual, **not RMR** |
+| **UIRC** (private fund) | **Bismarck Brackett** | ✅ **correct** |
+| Government Properties Income Trust | Breck Hines | private, **not** GPIT — "earlier or later in the ownership history" |
+| GPT Properties Trust | Bryant Martin | same Montgomery note, different party |
+| Office Properties Income Trust | Breck Hines | same as above |
+| **Gardner-Tanenbaum** | **Richard Tanenbaum** | ✅ not disputed |
+| Gardner Tanenbaum Holdings | Gregg S Barton | **Genesis Financial is a different private fund** — similar structure and focus |
+| Egp 5425 Salt Lake LLC | Scott Ozymy | **EGP 5425 is an SPE for Easterly REIT**; KDC is the developer |
+| ExchangeRight (REIT) | George Hart | **the nephrologist who owned it previously** |
+
+**1 clearly correct, maybe 2. I estimated 30–50%; the truth is 10–20%.** My guess
+was optimistic and the pattern I proposed as the discriminator ("owner-matching
+email domain = good") is right but *far* rarer than I implied.
+
+Measured across the whole lane: the domain rule confirms **16 of 293 owners
+(5.5%)**, covering $50.3M. Precise, and tiny.
+
+### What the data actually is
+
+Scott described nearly every miss as *"prior owner"*, *"earlier or later in the
+ownership history"*. **These notes are an ownership-CHAIN record, not a contact
+list.** Team Briggs wrote a note each time a party touched a property, across
+years — so one property accumulates the developer, the prior owner, the current
+owner and sometimes the broker.
+
+That is a different asset, and a more interesting one than "who do I call":
+
+- it is exactly what `lcc_property_owner_supersession_review` needs — the
+  supersession tier exists because a building sold three times yields three
+  near-equal candidates, and it currently abstains on 360 ties for want of
+  ordering evidence. **Note dates give a partial ordering.**
+- it explains entity fragmentation independently of any name-matching heuristic.
+
+### Entity facts learned, worth recording
+
+- **`Egp 5425 Salt Lake LLC` is an SPE for Easterly REIT** — an SPE→parent edge
+  LCC does not hold.
+- The `Government Properties Income Trust` / `GPT Properties Trust` /
+  `Office Properties Income Trust` cluster appears against the same Jackson, MS
+  note — a probable merge/parent group.
+- Party TYPE matters and LCC does not model it: REIT vs private fund vs SPE vs
+  individual vs developer vs operator. Scott distinguishes these instantly and
+  the distinction drives whether a contact is reachable at all.
+
+### Revised recommendation
+
+1. **Attach only the 16 domain-confirmed.** High precision, small, safe.
+2. **Do NOT work the other 277 as contacts.** ~90% would be a prior owner,
+   developer, broker or tenant — the P111 failure mode, confirmed empirically
+   rather than feared.
+3. **Re-point the remainder at the supersession problem**, where "prior owner
+   with a date" is the signal rather than the noise.
+4. **Ollama fits here** (Scott's suggestion) on the P106 pattern — deterministic
+   layer first (the domain rule), model scores only the residue, annotation-only,
+   never attaches. But it should be pointed at *ordering the ownership chain*,
+   not at guessing today's contact.
