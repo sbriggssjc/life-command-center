@@ -34,8 +34,19 @@
  *   node scripts/load-dia-ownership-master.mjs \
  *     "C:\\Users\\scott\\OneDrive - NorthMarq Capital, LLC\\Team Briggs - Documents\\Dialysis Research\\Dialysis Ownership MASTER.xlsx"
  *
- * Idempotent via the unique index on
- * (batch_tag, medicare_ccn, coalesce(recorded_owner,''), coalesce(true_owner,'')).
+ * Idempotent via the generated `dedup_key` column and `?on_conflict=dedup_key`.
+ *
+ * WHY dedup_key AND NOT THE OBVIOUS COLUMN LIST (P136a — a bug the live run found):
+ *   The real key needs coalesce(), because Postgres treats NULLs as DISTINCT and
+ *   most rows have a NULL owner. But PostgREST's `on_conflict=` takes COLUMN
+ *   NAMES ONLY and cannot express a coalesce() arbiter -- so with an expression
+ *   index there is nothing to infer, `Prefer: resolution=ignore-duplicates`
+ *   quietly falls back to the PRIMARY KEY (a bigserial that never collides), and
+ *   ON CONFLICT DO NOTHING never arms. One duplicate then 409s its whole chunk:
+ *   the first run lost 500 rows to 10 duplicate keys.
+ *   Hence a STORED GENERATED single-column key. It is GENERATED ALWAYS, so it is
+ *   never sent in the payload.
+ *
  * Reverse with:
  *   DELETE FROM lcc_dia_ownership_master WHERE batch_tag = 'dia_ownership_master';
  */
@@ -140,20 +151,38 @@ console.log(`  recorded ${c('recorded_owner')}  owner ${c('true_owner')}  `
           + `previous ${c('previous_owner')}  developer ${c('developer')}  `
           + `sale-dated ${c('last_sale_date')}`);
 
+// Collapse in-file duplicates BEFORE sending. A single dup used to 409 its whole
+// chunk; the DB arbiter below now absorbs that, but a payload that is already
+// unique is cheaper and makes the sent/failed counts honest.
+const seen = new Map();
+for (const r of staged) {
+  const k = `${r.batch_tag}|${r.medicare_ccn}|${r.recorded_owner || ''}|${r.true_owner || ''}`;
+  // keep the RICHER of two identical keys rather than whichever came last
+  const score = (x) => ['previous_owner', 'developer', 'last_sale_date', 'last_sale_price', 'cap_rate']
+    .reduce((n, f) => n + (x[f] ? 1 : 0), 0);
+  if (!seen.has(k) || score(r) > score(seen.get(k))) seen.set(k, r);
+}
+const unique = [...seen.values()];
+if (unique.length !== staged.length) {
+  console.log(`  collapsed ${staged.length - unique.length} in-file duplicate key(s) -> ${unique.length} rows`);
+}
+
 let inserted = 0, failed = 0;
-for (let i = 0; i < staged.length; i += CHUNK) {
-  const chunk = staged.slice(i, i + CHUNK);
-  const res = await fetch(`${URL}/rest/v1/lcc_dia_ownership_master`, {
-    method: 'POST',
-    headers: {
-      apikey: KEY, Authorization: `Bearer ${KEY}`,
-      'Content-Type': 'application/json',
-      Prefer: 'return=minimal,resolution=ignore-duplicates',
-    },
-    body: JSON.stringify(chunk),
-  });
+for (let i = 0; i < unique.length; i += CHUNK) {
+  const chunk = unique.slice(i, i + CHUNK);
+  const res = await fetch(
+    `${URL}/rest/v1/lcc_dia_ownership_master?on_conflict=dedup_key`, {
+      method: 'POST',
+      headers: {
+        apikey: KEY, Authorization: `Bearer ${KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal,resolution=ignore-duplicates',
+      },
+      body: JSON.stringify(chunk),
+    });
   if (res.ok) { inserted += chunk.length; }
-  else { failed += chunk.length; console.error(`chunk ${i}: ${res.status} ${(await res.text()).slice(0, 300)}`); }
-  process.stdout.write(`\r  sent ${inserted + failed}/${staged.length}`);
+  else { failed += chunk.length; console.error(`\nchunk ${i}: ${res.status} ${(await res.text()).slice(0, 300)}`); }
+  process.stdout.write(`\r  sent ${inserted + failed}/${unique.length}`);
 }
 console.log(`\ndone: sent ${inserted}, failed ${failed}, batch_tag='${BATCH_TAG}'`);
+console.log(`verify: select count(*) from lcc_dia_ownership_master where batch_tag='${BATCH_TAG}';`);
