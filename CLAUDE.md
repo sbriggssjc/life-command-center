@@ -626,6 +626,44 @@ with a competing clinical identity to review). LCC surfaces the review lane:
   deterministic merges only. Self-measure → `v_lcc_property_twin_assist_accuracy`. Migration
   `20260814130000`.
 
+## CM export — a KPI tile and its data tab must read ONE view (Prompt 119, 2026-08-18)
+
+The 2Q-2026 Dialysis book shipped two numbers for the same metric because a KPI-block view and its
+sibling data-tab view each computed their own aggregate over the same base. **A KPI tile is a
+projection of a series/table the book already renders — it must READ that view, never restate its
+filters.** Two live instances, both root-fixed in the dia views (`Dialysis`
+`supabase/migrations/20260818_cm_dia_prompt119_kpi_view_reconcile.sql`, applied live — CM reads views
+per request, so no redeploy):
+
+- `cm_dialysis_whatsnew_kpis.cap_ttm` read `cm_dialysis_market_quarterly.avg_cap_rate` (a
+  single-quarter SIMPLE average, 7.41%) while `Data_Cap_Avg` charts
+  `cm_dialysis_cap_ttm_m.ttm_weighted_cap_rate` (7.06% — the number the book quotes). Now reads the
+  TTM series.
+- `cm_dialysis_inventory_snapshot_kpis` is now an **unpivot of `cm_dialysis_on_market_snapshot_q`**
+  (the canonical on-market definition, which carries the year-ago comparison). The three drifted
+  filters were `avg_dom` (`0..3650` vs `>0` — the 22-day 10+ cohort gap), `pct_price_change`
+  (non-null denominator vs all rows) and the `avg_price` band ($30M vs $200M).
+
+**`checkKpiSeriesConsistency()`** (`api/_shared/cm-excel-export.js`) is the tripwire: it compares
+every inventory KPI tile against its `on_market_snapshot` counterpart and the What's-New cap tile
+against the cap-TTM series, and pushes any divergence into the export's `driftWarnings` — warn-only,
+never blocks. Add a pair here whenever a new KPI tile mirrors a data tab.
+
+Related invariants from the same round:
+
+- **A KPI `primary_format` token that isn't in `FMT` shipped as Excel's `General`** — a percent tile
+  rendered as `0.1505`. `resolveKpiTileFormat()` now honors the token first, then infers a percent
+  from a percent-shaped token name, then from a percent-natured label at ratio scale (`|v| < 1`, so a
+  dollar/count tile can never be mangled). Mirrored in the web KPI renderer (`capital-markets.js`
+  `fmtVal`). **Register a new token in `FMT` when a KPI view starts emitting one** —
+  `percent_zero_decimal` was live for months without a mapping.
+- **Chart-axis display names are an EXPORT-layer concern** — `CHART_COLUMNS` entries take an optional
+  `display: 'short_operator'` token (`applyColumnDisplay`) so the source views keep canonical operator
+  names while the data tab, and therefore the native chart's category axis, carry the short form.
+- **A stacked-bar data label suppresses zeros via the number format `0%;;;`**, not per-point `<c:dLbl>`
+  deletion (the series-level emitter has no per-point control). Empty negative/zero/text sections =
+  blank label on a 0% series.
+
 ## Pointers to canonical docs
 
 - **Architecture start:** `LCC-OS.md` → `docs/os/README.md`; canon in `docs/os/canon/`; consolidation map

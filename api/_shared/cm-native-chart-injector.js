@@ -6096,15 +6096,31 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // sky/pale fills (legibility). Mirror that here per-series:
           //   navy + mid-blue  → showSegmentVal: true, white text
           //   sky + pale       → showSegmentVal: true, dark text
+          //
+          // Prompt 119 item E — marketing (2Q-2026 book): a series that is 0%
+          // in a given year (Cross-Border most years, Public REIT in several)
+          // still emitted a "0%" label, and the zero-height segments stack
+          // their labels on top of each other at the top of the bar. The
+          // number format `0%;;;` renders positives as 0% and leaves the
+          // negative/zero/text sections EMPTY, so a zero point's label is
+          // blank — per-point <c:dLbl> deletion isn't available on this
+          // series-level emitter, and a format section is the portable,
+          // Excel-native way to do it (the label object still exists, so a
+          // user can restyle the series by hand).
+          //
+          // Label typography follows marketing's ChartEdits spec
+          // (public/reports/cm-brand.json): 9 pt (sz=900 in the emitter),
+          // Futura PT, white on the navy Private and mid-blue Public REIT
+          // fills, ink on the pale sky / gridline fills.
           series: [
             { titleCol: privCol, titleRow: headerRow, valCol: privCol, color: navy,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: 'FFFFFF' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: 'FFFFFF' },
             { titleCol: reitCol, titleRow: headerRow, valCol: reitCol, color: blueMid,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: 'FFFFFF' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: 'FFFFFF' },
             { titleCol: cbCol,   titleRow: headerRow, valCol: cbCol,   color: sky,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: '191919' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: '191919' },
             { titleCol: instCol, titleRow: headerRow, valCol: instCol, color: pale,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: '191919' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: '191919' },
           ],
           anchor: standardAnchor,
         },
