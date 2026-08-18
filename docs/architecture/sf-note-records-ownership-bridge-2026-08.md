@@ -342,3 +342,166 @@ That is a different asset, and a more interesting one than "who do I call":
    layer first (the domain rule), model scores only the residue, annotation-only,
    never attaches. But it should be pointed at *ordering the ownership chain*,
    not at guessing today's contact.
+
+> ⚠️ **§12 corrects items 1 and 3 above.** The "16 domain-confirmed" figure was
+> produced by a broken test and item 3 does not survive measurement. Read §12
+> before acting on this list.
+
+---
+
+## 12. P134 — two corrections to §11, both against my own work (2026-08-18)
+
+**§11 was written from measurements I did not check hard enough. Both of its
+actionable items were wrong.**
+
+### Correction 1 — my "domain-confirmed" set contained the row Scott rejected first
+
+§11 recommended attaching **16 owners / $50.3M** whose SF contact email domain
+matched the owner. I measured that with a naive substring test:
+
+```sql
+owner_core like '%' || email_root || '%'
+```
+
+`me.com` is Apple's consumer mail. Its root, `me`, is a substring of
+`governmentincomeproperties` — the strict core of **Government Properties Income
+Trust**. So the set's single largest row, **$31M, Lee Elman**, was "confirmed" by
+a rule that had matched the letters `me` inside the word `income`.
+
+That is the **exact row Scott rejected first**, with the exact explanation that
+Lee Elman is a private individual and GPIT is a REIT. My discriminator endorsed
+it. A second row, COARRA Washington Investments / John Neal, came through the
+same `me.com` hole.
+
+**Corrected rule — `lcc_email_domain_confirms_owner(email, owner_name)`**, now
+the single source so the seed and the view cannot drift:
+
+1. free-mail domains are never corroboration (`me`, `gmail`, `yahoo`, …)
+2. the domain root must be ≥ 4 chars — which kills `me` and `aol` on its own
+3. the root must **equal a token** of the owner's strict core, or be a **prefix
+   extension of the whole core** (`stoltzfusm` ~ `stoltzfus`,
+   `alteradevco` ~ `alteradev`). **No substring containment.**
+
+Live gate: **14/14** — accepts all eleven real pairs, refuses both `me.com` rows
+and a `gmail.com` control.
+
+| | §11 claimed | P134 measured |
+|---|---|---|
+| owners | 16 | **11** |
+| annual rent | $50.3M | **$17.6M** |
+| top row | Lee Elman, $31M | *rejected* |
+
+`lcc_owner_strict_core` is the deliberate choice — `lcc_normalize_entity_name`
+and `dup-pair-planner.ownerCore` are both **banned for identity** (CLAUDE.md),
+and this is an identity question.
+
+### Correction 2 — the notes cannot order the ownership chain either
+
+§11's most appealing idea was item 3: notes carry dates, supersession abstains
+for want of ordering, therefore notes break the ties. Measured against
+`v_lcc_owner_supersession_review`:
+
+| | |
+|---|---|
+| assets tied on winning date | **236** |
+| … with city + tenant to match on | 183 |
+| … with **any** tied owner named in a note | **8** |
+| … with **two** tied owners named | **3** |
+| … with two owners at **distinct dates** | **0** |
+
+**Zero ties are breakable.** The note parties and the tied owner entities barely
+intersect — the ties are dominated by SPE-named owners that no note ever names.
+
+My first pass at this measured 0 for a different reason and I nearly reported it:
+I joined on `lcc_sf_note_property_assertion.entity_id` and `resolved_property_id`,
+both of which are **NULL on all 33,997 rows** — P130 resolves matches live in a
+view and never wrote back to the table. Re-measuring through the real matching
+path (tenant class + city + state, then strict-core name equality) gives the same
+answer honestly rather than by accident. Recorded on the view comment so it is
+not re-attempted.
+
+### What shipped
+
+| | |
+|---|---|
+| `lcc_email_domain_confirms_owner()` | the corrected rule, single-sourced |
+| `lcc_p134_seed_note_domain_confirmed()` | dry-run default, idempotent, reversible |
+| `v_lcc_note_lead_attach_review` | `+ domain_confirmed`, `+ disposition` (appended) |
+
+**12 proposals seeded, 11 owner entities, 8 people, $17.6M — into the existing
+P114 lane, not a new writer.** P114 already re-runs the shape gate server-side,
+mints via `ensureEntityLink`, links via `linkPersonToEntity`, ledgers the edge id
+for reversal, and offers a terminal reject. Forking a second writer for 12 rows
+would have duplicated all of it.
+
+**`entity_relationships` rows written: 0.** These are proposals; the verdict is
+Scott's. The remaining 672 rows / 289 owners / $262.3M keep their evidence and
+carry a `disposition` saying plainly they are not workable as contacts.
+
+### A duplicate found on the way
+
+`Altera Dev` exists **twice** — `32a45073…` typed `person`, `cef1fa5f…` typed
+`organization`. Both matched Terry Quinn. Identical names, so
+`v_lcc_merge_candidates` should already group them. Two more mistypings in this
+set of eleven: `UIRC` is typed `person`, `Pete Dienna` is typed `organization`.
+Independent evidence for Scott's §11 point that **party type is undermodelled**.
+
+### What I would not do next
+
+Chase the 672. The base rate is measured, the domain rule is the only cheap
+discriminator, and it clears 11. Anything further needs the **note bodies**
+(§7 item 4) — which carry the address, the dated sale and the role — not more
+string matching on titles.
+
+---
+
+## 13. The SPE→sponsor rollup does not survive either (2026-08-18)
+
+With the note path closed at 11, the obvious next lever came from Scott's own
+§11 observation — *"Egp 5425 Salt Lake LLC is an SPE for Easterly REIT"*. If
+single-asset SPEs roll up to a sponsor we can already reach, one contact unlocks
+many assets. The gap it would attack is **3,883 owners / $2,715.9M**.
+
+Measured by token-subset containment (every token of a reachable entity's strict
+core appears in the SPE's core, SPE strictly longer), plus a stoplist:
+
+> **631 gap owners / $451.3M / 214 sponsors** — 16% of the gap.
+
+**Then I looked at the rows, and every top sponsor was a common noun:**
+
+| "sponsor" | core | SPEs | what it actually matched |
+|---|---|---|---|
+| Q Street Ltd | `street` | 79 | `10 Weybosset Street, LLC` |
+| Owner | `owner` | 72 | `1201 Elm Street Owner LLC` |
+| Government | `government` | 10 | `Eagle County Government` |
+| Plaza Corp | `plaza` | 48 | `300 F. Ogawa Plaza LP` |
+| Bank | `bank` | 34 | `Agfirst Farm Credit Bank` |
+
+### Why tuning cannot fix it
+
+The natural repair is to replace the hand-maintained stoplist with a
+**measurement** — token document frequency, so common nouns fall out on their
+own. It does not separate them:
+
+| token | df | | token | df |
+|---|---|---|---|---|
+| `street` | 136 | | **`uirc`** | **39** |
+| `plaza` | 78 | | `gateway` | 26 |
+| `owner` | 75 | | `state` | 24 |
+| `bank` | 48 | | `government` | 20 |
+
+**`uirc` — a genuine prolific sponsor — is MORE frequent than `gateway`,
+`state`, `government` and `atlanta`, all of which are noise.** That is not a
+threshold problem. A sponsor is frequent *because* it is prolific, which is the
+same signal as a street being frequent because it is a street. No cutoff
+separates them, so no amount of tuning rescues the heuristic.
+
+### What would make it admissible
+
+A shared **property, deed, mailing address, or Salesforce contact** between SPE
+and sponsor — with name similarity as corroboration rather than the claim. The
+mailing-address route is already known input-starved (gov
+`recorded_owners.mailing_address` = 4 rows; ORE Phase A1 documents why). So this
+needs new evidence, not a better string rule.
+
+**Not built. The 631 / $451.3M figure is retracted; it is noise.**
