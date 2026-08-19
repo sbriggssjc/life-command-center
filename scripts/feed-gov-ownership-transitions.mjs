@@ -190,50 +190,42 @@ if (MINT) {
     console.log(`   ${w.pid}  $${Math.round(w.rent).toLocaleString().padStart(11)}  ${w.name.slice(0, 56)}`);
   }
 
+  // The mint runs SERVER-SIDE (lcc_mint_gov_asset_entities). Two reasons, both
+  // learned the hard way on the first live attempt:
+  //   * entities.canonical_name is NOT NULL with no default and no trigger. The
+  //     JS version 23502'd on it. Computing it here would mean a second copy of
+  //     lcc_normalize_entity_name, which is exactly the normaliser drift
+  //     CLAUDE.md warns about -- merge grouping would quietly stop agreeing.
+  //   * entity and identity must land together. The JS version inserted them in
+  //     two calls; a failure between would leave entities with no identity --
+  //     invisible to every consumer and unfindable by batch.
   if (APPLY && wanted.length) {
-    const CH = 200;
+    const CH = 300;
     let made = 0;
     for (let i = 0; i < wanted.length; i += CH) {
       const chunk = wanted.slice(i, i + CH);
-      const eRes = await fetch(`${OPS_URL}/rest/v1/entities`, {
-        method: 'POST',
-        headers: {
-          apikey: OPS_KEY, Authorization: `Bearer ${OPS_KEY}`,
-          'Content-Type': 'application/json', Prefer: 'return=representation',
-        },
-        body: JSON.stringify(chunk.map((w) => ({
-          name: w.name, entity_type: 'asset', domain: 'gov',
-          workspace_id: 'a0000000-0000-0000-0000-000000000001',
-          metadata: {
-            source: 'gov_ownership_transition_mint',
-            domain_property_id: Number(w.pid),
-            mint_batch: MINT_BATCH,
-            minted_because: 'a verified dated gov ownership transition exists and '
-                          + `annual rent >= ${MIN_RENT}`,
-          },
-        }))),
-      });
-      if (!eRes.ok) { console.error(`\nmint chunk ${i}: ${eRes.status} ${(await eRes.text()).slice(0, 300)}`); break; }
-      const created = await eRes.json();
-      const idRes = await fetch(`${OPS_URL}/rest/v1/external_identities`, {
+      const res = await fetch(`${OPS_URL}/rest/v1/rpc/lcc_mint_gov_asset_entities`, {
         method: 'POST',
         headers: {
           apikey: OPS_KEY, Authorization: `Bearer ${OPS_KEY}`,
           'Content-Type': 'application/json',
-          Prefer: 'return=minimal,resolution=ignore-duplicates',
         },
-        body: JSON.stringify(created.map((e, k) => ({
-          entity_id: e.id, source_system: 'gov', source_type: 'asset',
-          external_id: chunk[k].pid,
-          metadata: { bridge_source: 'feed-gov-ownership-transitions', mint_batch: MINT_BATCH },
-        }))),
+        body: JSON.stringify({ p_rows: chunk, p_batch: MINT_BATCH, p_dry_run: false }),
       });
-      if (!idRes.ok) { console.error(`\nidentity chunk ${i}: ${idRes.status} ${(await idRes.text()).slice(0, 300)}`); break; }
-      created.forEach((e, k) => assetByProp.set(chunk[k].pid, e.id));
-      made += created.length;
+      if (!res.ok) { console.error(`\nmint chunk ${i}: ${res.status} ${(await res.text()).slice(0, 300)}`); break; }
+      const out = await res.json();
+      made += Number(out?.minted || 0);
       process.stdout.write(`\r  minted ${made}/${wanted.length}`);
     }
-    console.log(`\n  minted ${made} asset entities`);
+    console.log(`\n  minted ${made} asset entities  (batch ${MINT_BATCH})`);
+    // re-read the map so the evidence pass below sees what was just created
+    if (made) {
+      const fresh = await pageAll(OPS_URL, OPS_KEY,
+        `external_identities?select=external_id,entity_id&source_system=eq.gov`
+        + `&source_type=eq.asset&order=external_id.asc`);
+      fresh.forEach((r) => assetByProp.set(String(r.external_id), r.entity_id));
+      console.log(`  asset map refreshed: ${assetByProp.size} gov asset ids`);
+    }
   }
 }
 
