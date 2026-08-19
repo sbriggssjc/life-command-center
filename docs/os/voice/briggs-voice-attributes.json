@@ -1,0 +1,796 @@
+{
+  "generated_at": "2026-08-19T12:54:14.037Z",
+  "generated_from": "ollama:qwen2.5:14b",
+  "corpus_size": 760,
+  "excluded": {
+    "not_scott_from": 46136,
+    "duplicate": 907,
+    "empty_body": 1,
+    "machine_generated": 77,
+    "boilerplate_or_empty": 82,
+    "self_addressed": 221,
+    "addressed_to_scott": 3
+  },
+  "bucket_counts": {
+    "internal_coordination": 373,
+    "external_follow_up": 222,
+    "loi_offer": 116,
+    "listing_announcement": 28,
+    "cold_bd_outreach": 21
+  },
+  "overall_shape": {
+    "n": 760,
+    "n_full_body": 493,
+    "full_body_share_pct": 64.9,
+    "n_long_form": 87,
+    "avg_raw_chars": 5819,
+    "avg_kept_chars": 368,
+    "kept_share_pct": 6.3,
+    "median_kept_chars": 182,
+    "avg_words": 61.5,
+    "avg_sentences": 4.3,
+    "avg_words_per_sentence": 13.4,
+    "avg_paragraphs": 4.2,
+    "avg_words_per_paragraph": 18.3,
+    "avg_first_paragraph_words": 16.7,
+    "signoff_rate_pct": 27.2,
+    "signoff_forms": {
+      "(none)": 553,
+      "best regards": 200,
+      "best": 4,
+      "thanks": 3
+    },
+    "uses_list_pct": 2.8,
+    "exclamation_rate_pct": 13,
+    "long_form": {
+      "n": 87,
+      "avg_paragraphs": 17.1,
+      "avg_words": 329.8,
+      "avg_first_paragraph_words": 41.5,
+      "uses_list_pct": 2.3,
+      "signoff_rate_pct": 42.5
+    }
+  },
+  "buckets": {
+    "internal_coordination": {
+      "n": 373,
+      "shape": {
+        "n": 373,
+        "n_full_body": 223,
+        "full_body_share_pct": 59.8,
+        "n_long_form": 35,
+        "avg_raw_chars": 5313,
+        "avg_kept_chars": 308,
+        "kept_share_pct": 5.8,
+        "median_kept_chars": 179,
+        "avg_words": 51.2,
+        "avg_sentences": 3.2,
+        "avg_words_per_sentence": 15.7,
+        "avg_paragraphs": 3.1,
+        "avg_words_per_paragraph": 18.6,
+        "avg_first_paragraph_words": 19.6,
+        "signoff_rate_pct": 6.2,
+        "signoff_forms": {
+          "(none)": 350,
+          "best regards": 20,
+          "thanks": 3
+        },
+        "uses_list_pct": 4.6,
+        "exclamation_rate_pct": 13.4,
+        "long_form": {
+          "n": 35,
+          "avg_paragraphs": 7.3,
+          "avg_words": 287.6,
+          "avg_first_paragraph_words": 55.1,
+          "uses_list_pct": 2.9,
+          "signoff_rate_pct": 20
+        }
+      },
+      "sampled": 24,
+      "attributes": {
+        "greeting_patterns": [],
+        "signoff_patterns": [
+          "Best regards,"
+        ],
+        "signoff_when_used": "6.2% of emails",
+        "avg_sentence_words": 16,
+        "sentence_length": "Varies from short to long, with an average of 51.2 words per email",
+        "formality_register": "Informal",
+        "directness_vs_hedging": "Direct",
+        "characteristic_phrases": [
+          "Thanks for double checking!",
+          "How's this for an improvement?",
+          "Let me know next steps.",
+          "I'll get with Sarah and get you a draft ASAP.",
+          "Shoot me questions if you have them."
+        ],
+        "paragraph_shape": "Varies from single paragraph to multiple paragraphs, with an average of 3.1 paragraphs per email",
+        "opening_move": "Provides updates or asks for clarification",
+        "closing_move": "Offers to provide further information or asks for next steps",
+        "transitions": [
+          "And",
+          "Short version:",
+          "Sarah —",
+          "Let's also switch or add",
+          "Going forward, I'm going to try to have a deliverable format"
+        ],
+        "punctuation_habits": "Uses a mix of periods, commas, and occasionally exclamation points",
+        "never_does": [
+          "Use a formal greeting",
+          "Use a formal sign-off in most emails"
+        ],
+        "evidence": [
+          {
+            "attribute": "opening_move",
+            "excerpt": "Updated charts mentioned in the below."
+          },
+          {
+            "attribute": "closing_move",
+            "excerpt": "Shoot me questions if you have them."
+          }
+        ]
+      },
+      "dropped_unverbatim": 13,
+      "dropped_samples": [
+        "Let's update the pro forma.",
+        "null",
+        "Best regards,",
+        "6.2% of emails",
+        "null"
+      ],
+      "long_form_sampled": 10,
+      "long_form_attributes": {
+        "structure": "Scott Briggs's emails tend to be structured around specific tasks or updates, often breaking down the content into clear, actionable items.",
+        "paragraph_progression": [
+          "1: Introduces the main topic or task.",
+          "2: Provides details or instructions for the task.",
+          "3: Offers additional context or related tasks.",
+          "4: Proposes solutions or asks for feedback.",
+          "5: Provides further details or clarifications.",
+          "6: Suggests next steps or asks for input."
+        ],
+        "how_he_enumerates": "Uses bullet points or numbered lists to break down tasks or instructions, though not present in the provided emails.",
+        "how_he_hands_off_next_steps": "Explicitly states next steps or asks for feedback on proposed solutions.",
+        "what_he_never_does_at_length": [
+          "Never includes overly formal sign-offs.",
+          "Never uses overly complex or technical language unnecessarily."
+        ],
+        "evidence": [
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Let me get you the update government market pages so we can update those."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Let's also switch or add after the valuation methodology page, our traditional pricing page with the cap rate trade ranges shown in the traditional cap rate pricing section."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "I'll send you updated comps for traditional VA sales too."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Going forward, I'm going to try to have a deliverable format (maybe Word or something) that will automatically get sorted and match the exact layout in our report so it's easier."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Shoot me questions if you have them."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "I'll take a look at dialysis and get you comments/adjustments."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "On ST Market, those are still manual so the charts are what's in that old chart under ST Market on the Team Briggs folder."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "GSA is coming shortly, had a few more revisions to charts and underlying code building and sorting the data before getting you a new update."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Honestly didn't even notice at first but can't unsee it now."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Maybe its my Print to PDF? Should I be saving as a PDF instead?"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Sounds good. Let me generate one real quick from the app so you can see what it looks like."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "I've also got a couple of pages addition to the dialysis book with data from here to help."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "I'm also wiring this into the BOV generator for dialysis deals so we'll need to figure out a way to wire that into the BOV from the master sheet in BOVs on dialysis deals too but it should look very similar to this export, just in Excel."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Your questions"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Either we:"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "All of the original master versions are tabs in this spreadsheet and updated."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Alright, here's the latest version of the charts."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Yes but because about half of this is code based storage/sort/exporting from a Supabase database and half is the export machinery in code that pulls and displays the data, at this point, it's probably easier to send me bullet point by bullet point changes in an email or a Word doc."
+          }
+        ]
+      },
+      "long_form_dropped_unverbatim": 0
+    },
+    "external_follow_up": {
+      "n": 222,
+      "shape": {
+        "n": 222,
+        "n_full_body": 137,
+        "full_body_share_pct": 61.7,
+        "n_long_form": 19,
+        "avg_raw_chars": 4980,
+        "avg_kept_chars": 240,
+        "kept_share_pct": 4.8,
+        "median_kept_chars": 197,
+        "avg_words": 40.9,
+        "avg_sentences": 3.5,
+        "avg_words_per_sentence": 10.6,
+        "avg_paragraphs": 2.9,
+        "avg_words_per_paragraph": 17.8,
+        "avg_first_paragraph_words": 13.3,
+        "signoff_rate_pct": 45,
+        "signoff_forms": {
+          "(none)": 122,
+          "best regards": 99,
+          "best": 1
+        },
+        "uses_list_pct": 0.5,
+        "exclamation_rate_pct": 12.6,
+        "long_form": {
+          "n": 19,
+          "avg_paragraphs": 7.5,
+          "avg_words": 178.6,
+          "avg_first_paragraph_words": 37.5,
+          "uses_list_pct": 5.3,
+          "signoff_rate_pct": 84.2
+        }
+      },
+      "sampled": 24,
+      "attributes": {
+        "greeting_patterns": [],
+        "signoff_patterns": [
+          "Best regards,",
+          "Best"
+        ],
+        "signoff_when_used": "45%",
+        "avg_sentence_words": 12,
+        "sentence_length": "Short to medium length sentences, with an average of around 12 words.",
+        "formality_register": "Moderately formal",
+        "directness_vs_hedging": "Direct, with some hedging phrases like 'I'll follow up again' and 'Let me know'.",
+        "characteristic_phrases": [
+          "I'll follow up",
+          "Let me know",
+          "Stay tuned",
+          "I'm working with"
+        ],
+        "paragraph_shape": "Mostly single paragraph emails, with some multi-paragraph emails for detailed updates.",
+        "opening_move": "Acknowledgment or confirmation of previous communication or action.",
+        "closing_move": "Promise to follow up or provide additional information.",
+        "transitions": [
+          "but",
+          "and"
+        ],
+        "punctuation_habits": "Uses commas and periods appropriately, occasionally uses dashes for emphasis.",
+        "never_does": [
+          "Use overly formal greetings or sign-offs",
+          "Include personal anecdotes or unrelated content"
+        ],
+        "evidence": [
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "I'll follow up again"
+          },
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "Let me know"
+          },
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "Stay tuned"
+          },
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "I'm working with their broker"
+          },
+          {
+            "attribute": "opening_move",
+            "excerpt": "Great. The Lender is supposed to be reaching out to me, so I'll loop you in when I get that information."
+          },
+          {
+            "attribute": "closing_move",
+            "excerpt": "I'll follow up but yes, I have at least made the request for financials. I'm not sure about Title. Stay tuned."
+          }
+        ]
+      },
+      "dropped_unverbatim": 2,
+      "dropped_samples": [
+        "for the assignment of",
+        "Best regards,"
+      ],
+      "long_form_sampled": 10,
+      "long_form_attributes": {
+        "structure": "Scott Briggs's longer emails tend to be highly structured, often starting with an update or apology, followed by detailed information or analysis, and concluding with next steps or requests for action.",
+        "paragraph_progression": [
+          "1: Provides an update or apology.",
+          "2: Offers detailed information or analysis.",
+          "3: Presents specific data or modeling results.",
+          "4: Proposes next steps or asks for further input.",
+          "5: Summarizes findings or recommendations.",
+          "6: Offers additional context or background.",
+          "7: Provides contact information or next steps for follow-up.",
+          "8: Clarifies misunderstandings or provides additional details.",
+          "9: Offers solutions or suggestions for resolving issues.",
+          "10: Concludes with a summary or next action item."
+        ],
+        "how_he_enumerates": "Scott Briggs uses numbered lists to clearly outline preferences, requirements, or steps, as seen in the email to Frank where he lists the investor's property preferences.",
+        "how_he_hands_off_next_steps": "Scott Briggs typically hands off next steps by explicitly stating what needs to be done next or by asking for specific actions from the recipient, as seen in the email to Frank where he asks for approval to use the attached photos and then to draft marketing collateral.",
+        "what_he_never_does_at_length": "Scott Briggs never includes lengthy personal anecdotes or irrelevant details in his emails.",
+        "evidence": [
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Apologies for the delay, Pat. We are working in the background to try to get our arms around prevailing market rents and time to lease up for this building if it were vacant today."
+          },
+          {
+            "attribute": "how_he_enumerates",
+            "excerpt": "1. Single tenant, investment-grade (or near)."
+          },
+          {
+            "attribute": "how_he_hands_off_next_steps",
+            "excerpt": "Once we have your approval to use the attached, we will draft the remaining marketing collateral (flyer, website, etc.) using the approved OM and commence our outbound call and email efforts immediately."
+          }
+        ]
+      },
+      "long_form_dropped_unverbatim": 1
+    },
+    "loi_offer": {
+      "n": 116,
+      "shape": {
+        "n": 116,
+        "n_full_body": 110,
+        "full_body_share_pct": 94.8,
+        "n_long_form": 16,
+        "avg_raw_chars": 10158,
+        "avg_kept_chars": 280,
+        "kept_share_pct": 2.8,
+        "median_kept_chars": 126,
+        "avg_words": 47.4,
+        "avg_sentences": 3.9,
+        "avg_words_per_sentence": 9.5,
+        "avg_paragraphs": 3.4,
+        "avg_words_per_paragraph": 20.5,
+        "avg_first_paragraph_words": 17.8,
+        "signoff_rate_pct": 69.8,
+        "signoff_forms": {
+          "best regards": 78,
+          "(none)": 35,
+          "best": 3
+        },
+        "uses_list_pct": 0,
+        "exclamation_rate_pct": 11.2,
+        "long_form": {
+          "n": 16,
+          "avg_paragraphs": 14.5,
+          "avg_words": 201.4,
+          "avg_first_paragraph_words": 51.6,
+          "uses_list_pct": 0,
+          "signoff_rate_pct": 81.3
+        }
+      },
+      "sampled": 24,
+      "attributes": {
+        "greeting_patterns": [],
+        "signoff_patterns": [
+          "Best regards",
+          "Best"
+        ],
+        "signoff_when_used": "Best regards",
+        "avg_sentence_words": 12.3,
+        "sentence_length": "Short to medium",
+        "formality_register": "Moderate",
+        "directness_vs_hedging": "Direct",
+        "characteristic_phrases": [
+          "Great",
+          "Awesome",
+          "Thanks",
+          "Stay tuned",
+          "I'll let Seller know"
+        ],
+        "paragraph_shape": "Varies from single sentence to multiple sentences",
+        "opening_move": "Provides immediate information or action items",
+        "closing_move": "Expresses gratitude, provides next steps, or confirms receipt",
+        "transitions": [
+          "and",
+          "but"
+        ],
+        "punctuation_habits": "Uses commas and periods appropriately, occasional use of exclamation points",
+        "never_does": [
+          "Use overly formal language",
+          "Include lengthy intros or conclusions"
+        ],
+        "evidence": [
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "Great. I'll let Leena know."
+          },
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "Thanks, Scott. I'll get this off to Realty Income right now."
+          },
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "Stay tuned."
+          },
+          {
+            "attribute": "opening_move",
+            "excerpt": "Frank,"
+          }
+        ]
+      },
+      "dropped_unverbatim": 2,
+      "dropped_samples": [
+        "therefore",
+        "Best regards,"
+      ],
+      "long_form_sampled": 10,
+      "long_form_attributes": {
+        "structure": "Scott Briggs's longer emails tend to be highly structured, often including detailed analyses, summaries, and follow-up actions.",
+        "paragraph_progression": [
+          "1: Introduces the topic or provides a summary of the situation.",
+          "2: Provides detailed analysis or data.",
+          "3: Offers recommendations or next steps.",
+          "4: Includes attachments or additional information.",
+          "5: Concludes with a sign-off or request for further action."
+        ],
+        "how_he_enumerates": "Uses bullet points or tables to present data clearly and concisely.",
+        "how_he_hands_off_next_steps": "Explicitly outlines next steps and assigns responsibilities.",
+        "what_he_never_does_at_length": [
+          "Never includes personal anecdotes or irrelevant information.",
+          "Never leaves the reader guessing about next steps or responsibilities."
+        ],
+        "evidence": [
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Please see the attached Letter of Intent for the acquisition of your Snellville, Georgia project. Details can be found in the attached, but highlights are as follows:"
+          },
+          {
+            "attribute": "how_he_enumerates",
+            "excerpt": "NOI: [amount]Ask\nLower Quartile (25%)\nMiddle (50%)\nUpper Quartile (75%)\nInitial Offer\nPrice\n[amount][amount][amount][amount][amount]"
+          },
+          {
+            "attribute": "how_he_hands_off_next_steps",
+            "excerpt": "Let me know if you have any questions. As always, as soon as we have an actionable offer, I will present the same to your attention."
+          },
+          {
+            "attribute": "what_he_never_does_at_length",
+            "excerpt": "I think he was using that to help juice the returns to make the numbers work (if you recall, he was getting his acquisition financing based on the total amount)"
+          }
+        ]
+      },
+      "long_form_dropped_unverbatim": 0
+    },
+    "listing_announcement": {
+      "n": 28,
+      "shape": {
+        "n": 28,
+        "n_full_body": 7,
+        "full_body_share_pct": 25,
+        "n_long_form": 3,
+        "avg_raw_chars": 4055,
+        "avg_kept_chars": 1435,
+        "kept_share_pct": 35.4,
+        "median_kept_chars": 235,
+        "avg_words": 221.6,
+        "avg_sentences": 9.4,
+        "avg_words_per_sentence": 19.9,
+        "avg_paragraphs": 17.9,
+        "avg_words_per_paragraph": 8.9,
+        "avg_first_paragraph_words": 8.8,
+        "signoff_rate_pct": 3.6,
+        "signoff_forms": {
+          "(none)": 27,
+          "best regards": 1
+        },
+        "uses_list_pct": 10.7,
+        "exclamation_rate_pct": 14.3,
+        "long_form": {
+          "n": 3,
+          "avg_paragraphs": 131,
+          "avg_words": 1803.7,
+          "avg_first_paragraph_words": 16.7,
+          "uses_list_pct": 0,
+          "signoff_rate_pct": 0
+        }
+      },
+      "sampled": 24,
+      "attributes": {
+        "greeting_patterns": [],
+        "signoff_patterns": [
+          {
+            "signoff": "Best regards",
+            "excerpt": "Best regards,"
+          }
+        ],
+        "signoff_when_used": "Best regards",
+        "avg_sentence_words": 0,
+        "sentence_length": "",
+        "formality_register": "formal",
+        "directness_vs_hedging": "direct",
+        "characteristic_phrases": [
+          "Please see attached",
+          "Let us know if we can answer any questions"
+        ],
+        "paragraph_shape": "block",
+        "opening_move": "introduce the topic or provide a response",
+        "closing_move": "provide contact information or sign off",
+        "transitions": [
+          "Please see attached",
+          "Let us know if we can answer any questions"
+        ],
+        "punctuation_habits": "use of commas and periods",
+        "never_does": [
+          "use informal greetings",
+          "use casual sign-offs",
+          "include personal anecdotes"
+        ],
+        "evidence": [
+          {
+            "attribute": "opening_move",
+            "excerpt": "Hi Paul,"
+          },
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "Please see attached and let us know if we can answer any questions."
+          },
+          {
+            "attribute": "transitions",
+            "excerpt": "Hi Jesse,"
+          }
+        ]
+      },
+      "dropped_unverbatim": 1,
+      "dropped_samples": [
+        "Best regards,"
+      ],
+      "long_form_sampled": 3,
+      "long_form_attributes": {
+        "structure": null,
+        "paragraph_progression": [
+          "1: introduces the topic or purpose of the email",
+          "2: provides detailed explanations or descriptions",
+          "3: lists specific data or examples",
+          "4: offers additional context or analysis",
+          "5: concludes or summarizes the information"
+        ],
+        "how_he_enumerates": null,
+        "how_he_hands_off_next_steps": null,
+        "what_he_never_does_at_length": [],
+        "evidence": [
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Alright, latest export attached. Sorry, I wanted to keep those generic \"what's in the chart\" or \"how to read this chart\" but only change the text around the specific data for this quarter."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "What the chart shows: The sky-blue section at the base of each high-low bar is the average of the last broadly marketed asking cap rate for clinics that ultimately sold in the trailing 12 months; the dark-blue section at the top of each high-low bar is the average of the sold cap rate for those same broadly marketed sales in the trailing 12 months; the full bar shows the range of the spread between those two figures."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Deal-level bid-ask spread (how to read 2Q26): The line plots the average per-deal spread between each sale’s last ask and its achieved cap—not the difference between TTM averages. The long-run average spread in this dataset is ~44 bps; the most recent reading stands at 60 bps, narrowed from 75 bps at the end of the first quarter."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Supply Side: Seller Sentiment and Confidence"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Hi Marlon,\n\nThank you for your response. Here is our current inventory. Let us know if any of these might be a better fit and if we can answer any questions."
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Tenant\nInterest\nCity\nState\nBuilt\nRBA\nNOI\nExpiration\nTerm Rem.\nExpenses\nIncreases\nOptions\nAsk Cap\nAsk Price\nOM Link"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "DaVita, Inc.\nFee Simple\nSuccasunna\nNJ\n1960/2025\n5,000\n[amount]TBD\n10.0\nNN\n10% every 5\n3, 5-year\n6.50%\n[amount][link]"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "DaVita, Inc.\nLeasehold\nThe Villages\nFL\n2023\n6,453\n[amount]08/05/38\n12.3\nNN\n10% every 5\n3, 5 year\n6.75%\n[amount][link]"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "DaVita, Inc.\nFee Simple\nZapata\nTX\n2017\n8,020\n[amount]12/31/32\n6.7\nNN\n10% every 5\n2, 5 year\n7.25%\n[amount][link]"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Archbold Medical Center\nFee Simple\nThomasville\nGA\n2004\n13,813\n[amount]12/31/35\n9.7\nNN\n4% Yr 7; 5% Opts\n2, 5-year\n6.65%\n[amount][link]"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "DaVita, Inc.\nFee Simple\nOmaha\nNE\nRetrofit 2023\n8,081\n[amount]06/13/38\n12.1\nNN\n10% every 5\n3, 5 year\n6.10%\n[amount][link]"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Fresenius Portfolio 2 - GA\nFee Simple\nRome & Summerville\nGA\n2005/2007\n14,286\n[amount]ulti\n7.8\nNN\n2% Annually\n2, 5-year\n6.50%\n[amount][link]"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "DaVita, Inc.\nFee Simple\nBanning\nCA\n2003\n9,002\n[amount]TBD\n12.0\nNN\n10% every 5\n3, 5 year\n5.85%\n[amount][link]"
+          },
+          {
+            "attribute": "paragraph_progression",
+            "excerpt": "Essentia Health\nFee Simple\nHinckley\nMN\n1999\n14,186\n[amount]09/30/33\n7.4\nNN\n2% Annually\n1, 5 year\n7.15%\n[amount]Pre-Market - [address]"
+          }
+        ]
+      },
+      "long_form_dropped_unverbatim": 1
+    },
+    "cold_bd_outreach": {
+      "n": 21,
+      "shape": {
+        "n": 21,
+        "n_full_body": 16,
+        "full_body_share_pct": 76.2,
+        "n_long_form": 14,
+        "avg_raw_chars": 2074,
+        "avg_kept_chars": 1875,
+        "kept_share_pct": 90.4,
+        "median_kept_chars": 2428,
+        "avg_words": 323.9,
+        "avg_sentences": 29.4,
+        "avg_words_per_sentence": 15.5,
+        "avg_paragraphs": 24.2,
+        "avg_words_per_paragraph": 18.7,
+        "avg_first_paragraph_words": 6.9,
+        "signoff_rate_pct": 9.5,
+        "signoff_forms": {
+          "(none)": 19,
+          "best regards": 2
+        },
+        "uses_list_pct": 0,
+        "exclamation_rate_pct": 19,
+        "long_form": {
+          "n": 14,
+          "avg_paragraphs": 33.1,
+          "avg_words": 471.1,
+          "avg_first_paragraph_words": 7,
+          "uses_list_pct": 0,
+          "signoff_rate_pct": 7.1
+        }
+      },
+      "sampled": 21,
+      "attributes": {
+        "greeting_patterns": [
+          "Good Morning, Claire Bear",
+          "Patriot Families",
+          "Jordan",
+          "Keith"
+        ],
+        "signoff_patterns": [
+          "Best regards,"
+        ],
+        "signoff_when_used": "Used in formal and semi-formal emails",
+        "avg_sentence_words": 323.9,
+        "sentence_length": "29.4 sentences per email",
+        "formality_register": "Formal and Informal",
+        "directness_vs_hedging": "Direct",
+        "characteristic_phrases": [
+          "I hope everyone is wrapping up the school year well",
+          "Please reply to this email by Sunday, May 31 with one of the following:",
+          "Mom continues her full-time job of checking the Kanakuk app",
+          "Not bad for a random morning at the Briggs house"
+        ],
+        "paragraph_shape": "Varies from short, single-sentence paragraphs to longer, multi-sentence paragraphs",
+        "opening_move": "Provides an update or asks for information",
+        "closing_move": "Requests a response or provides a call to action",
+        "transitions": [
+          "First",
+          "Speaking of",
+          "Meanwhile",
+          "However"
+        ],
+        "punctuation_habits": "Uses commas and periods appropriately, occasionally uses exclamation points for emphasis",
+        "never_does": [
+          "Does not use overly complex or technical language",
+          "Does not use contractions in formal emails"
+        ],
+        "evidence": [
+          {
+            "attribute": "greeting_patterns",
+            "excerpt": "Good Morning, Claire Bear"
+          },
+          {
+            "attribute": "characteristic_phrases",
+            "excerpt": "Mom continues her full-time job of checking the Kanakuk app"
+          },
+          {
+            "attribute": "transitions",
+            "excerpt": "Speaking of"
+          },
+          {
+            "attribute": "punctuation_habits",
+            "excerpt": "Not bad for a random morning at the Briggs house."
+          }
+        ]
+      },
+      "dropped_unverbatim": 1,
+      "dropped_samples": [
+        "Best regards,"
+      ],
+      "long_form_sampled": 10,
+      "long_form_attributes": {
+        "structure": "",
+        "paragraph_progression": [
+          "1: greets the recipient and sets the tone for the email",
+          "2: provides an update on the weather or current situation",
+          "3: shares activities or events from the day",
+          "4: offers encouragement or shares thoughts on personal growth",
+          "5: mentions family activities or updates",
+          "6: reminds the recipient to smile for the camera",
+          "7: shares a personal anecdote or reflection",
+          "8: gives advice or shares a lesson",
+          "9: expresses pride in the recipient's accomplishments",
+          "10: shares a quote or piece of wisdom",
+          "11: expresses anticipation or excitement for the future",
+          "12: offers a closing thought or reminder"
+        ],
+        "how_he_enumerates": "",
+        "how_he_hands_off_next_steps": "",
+        "what_he_never_does_at_length": [
+          "writes about mundane tasks or chores",
+          "provides lengthy descriptions of daily routines",
+          "discusses financial or administrative matters",
+          "offers unsolicited advice or criticism"
+        ],
+        "evidence": [
+          {
+            "attribute": "greeting",
+            "excerpt": "Good Morning, Claire Bear!"
+          },
+          {
+            "attribute": "activity update",
+            "excerpt": "Yesterday was one of the laziest Sundays we've had in a while. Jack and I got donuts and a coffee for Mom in the morning, then we got new propane and spent some time burning all the weeds growing in the rocks around the house."
+          },
+          {
+            "attribute": "encouragement",
+            "excerpt": "One thing I've been thinking about today is how often the best things in life are hard before they're good."
+          },
+          {
+            "attribute": "personal anecdote",
+            "excerpt": "One funny thing happened at Michael's. A random shopper recognized Daisy because she works at Noah's. Daisy is apparently a local celebrity now. She might be more famous than anyone else in this family."
+          },
+          {
+            "attribute": "pride",
+            "excerpt": "I wanted to tell you how proud I was of you today. I know getting up on stage and being introduced by the counselors probably felt a little uncomfortable, but you handled it like a champ."
+          },
+          {
+            "attribute": "quote",
+            "excerpt": "\"Sometimes you will never know the value of a moment until it becomes a memory.\" — Dr. Seuss"
+          }
+        ]
+      },
+      "long_form_dropped_unverbatim": 0
+    }
+  }
+}
