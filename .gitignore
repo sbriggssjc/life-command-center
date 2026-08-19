@@ -50,3 +50,10 @@ docs/capital-markets/sf-exports/
 _to_delete/
 # Runtime logs.
 logs/
+# Personal mailbox exports — never commit. A 475 MB
+# email_export/sabriggs@northmarq.com.pst was committed 2026-08-19 and GitHub's
+# pre-receive hook rejected the push (100 MB limit). Beyond size, a .pst is
+# personal correspondence and does not belong in a code repo at all.
+email_export/
+*.pst
+*.ost
