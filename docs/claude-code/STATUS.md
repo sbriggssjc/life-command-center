@@ -98,6 +98,10 @@ full bodies, window 2026-05-03 → 08-17 (~3.5 months)** — verified `from_emai
 So the primary-mailbox VOICE corpus is still recent-only; **older sent mail lives in the Online Archive** (separate
 mailbox, Graph `/me/mailFolders` can't reach it — the remaining voice-history source). The **Inbox sweep (42,644)**
 serves the BROADER received-corpus goal Scott named ("all correspondence to enrich the LCC"), NOT voice.
+**2026-08-18: Inbox sweep started (after an ASCII-in-URI fix — a non-breaking space from paste) → broad corpus
+8,631 → 11,827 full bodies (+3,196 received), 0 409s. Inbox is 42,644 → needs resume-across-runs to finish.**
+Voice distill v2 (PR #1760) merged; the on-prem `node scripts/voice-distill.mjs` run is Scott's step
+(`--stats-only` first, then GaryBuilt with `OLLAMA_URL`).
 Skip junk folders (Sync Issues 71,180, Deleted, Junk, RSS, Clutter).
 
 **⚠ REMAINING STEPS (Scott):**
