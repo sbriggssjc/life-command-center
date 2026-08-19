@@ -564,6 +564,99 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   `api/_handlers/contact-acquisition-engine.js`) is flag-gated `W9_1_SOS_DIRECT`, proposal-only
   (`contact_acquisition_review` — confirm never auto), and no-ops honest-blocked while off. Adapter
   re-verification through the proxy + the flag flip are Scott's live post-install steps.
+- **PostgREST's write surface is NARROWER than SQL's, and it reports the difference badly.** Three
+  distinct traps, all hit live in one session (P136a/P136b/P141), all costing real rows:
+  - **An EXPRESSION or PARTIAL unique index is invisible to PostgREST.** `on_conflict=` takes COLUMN
+    NAMES ONLY, so it cannot express a `coalesce()` arbiter. With nothing inferable,
+    `Prefer: resolution=ignore-duplicates` silently falls back to the **PRIMARY KEY** — and if that is
+    a `bigserial` it never collides, so `ON CONFLICT DO NOTHING` never arms and ONE duplicate 409s its
+    entire chunk (10 in-file dups cost 500 rows). **If rows arrive over REST, the dedup key must be a
+    single PLAIN column — generate it (`STORED GENERATED`) when the real key needs coalesce().**
+    Precedent: `dia.sales_transactions.dedup_natural_key`, `lcc_dia_ownership_master.dedup_key`.
+  - **Postgres evaluates NOT NULL BEFORE ON CONFLICT.** A partial-column upsert intended to merge
+    (`{id, col_a, col_b}` on a table with other NOT NULL columns) fails **23502**, never reaching the
+    conflict. Use an RPC taking a `jsonb` array, not a PostgREST upsert. Per-row PATCH is the other
+    option and is thousands of round trips.
+  - **A send counter is NOT a write counter.** `chunk.length` summed over successful POSTs counts rows
+    SENT; with ignore-duplicates a payload carrying the same key twice lands once (302 sent → 301
+    written). Same class as the Dialysis repo's documented "`inserted: N` is a DERIVATION counter."
+    **Truth is a `count=exact` delta before vs after**, and a dry run must ALSO report
+    already-present vs NEW or a re-run looks like it did nothing when it did everything.
+- **`lower()` BEFORE a character-class strip, never after.** `regexp_replace(x,'[^a-z0-9]','','g')`
+  carries no `i` flag, so applied to raw text it DELETES every uppercase letter. `lower(regexp_replace(
+  'YUKON MEDICAL VA LLC','[^a-z0-9]','','g'))` → **`''`**, and every ALL-CAPS name collapses to the
+  empty string and compares EQUAL to every other. This shipped a "32.6% of transitions are
+  self-transitions" finding that was really **0.8%** — wrong by 43×, and inverted on both gate rows
+  (a case-only variant read FALSE, a real GPT→NGP sale read TRUE). Correct form:
+  `regexp_replace(lower(x),'[^a-z0-9]','','g')`.
+- **Verify on NAMED rows with stated expected answers, never on an aggregate.** The bug above produced
+  a completely plausible 32.6% that would have shipped unchallenged; it was caught only because the
+  gate asserted specific properties with expected outcomes. Corollary, hit four times in one session:
+  **read the rows the CONSUMER will actually process, not a sample of the population.** They are not
+  the same distribution — across all 9,582 gov ownership transitions 3.9% fail the name guards, but
+  across the TIED rows a supersession consumer actually touches, **25%** do. A tie exists *precisely*
+  where the evidence is messy. Sample the population, conclude "96% clean", be wrong about a quarter
+  of your rows.
+
+## gov ownership transitions → LCC supersession (P138–P141, 2026-08-19)
+
+`gov.ownership_history` held **9,582 dated prior→new transfers across 7,057 properties** that LCC could
+never see: the anon-readable `v_ownership_history_portfolio` exposes `transfer_date` but **not
+`prior_owner`/`new_owner`**, and filters `true_owner_id IS NOT NULL` (hiding 23.5%). gov
+`v_ownership_transitions_portfolio` (sibling view, gov repo `sql/20260818_gov_p138*.sql`) exposes them.
+
+**FEED FROM:** `is_latest_for_property AND new_owner_is_clean AND NOT is_self_transition AND NOT
+is_oscillating_pair AND new_owner_true_owner_id IS NOT NULL`. Each guard exists because it caught
+something live:
+
+- **`new_owner_true_owner_id`** is `true_owner_id` exposed ONLY where the linked `true_owners.name`
+  matches the transition's `new_owner`. Measured: the id means the NEW owner 91.4%, the PRIOR owner
+  0.6%, **neither 8.1%** — where id and name disagree one is wrong and we cannot tell which. **The
+  NAME verifies the ID, the ID carries the identity, neither is trusted alone.** This is what keeps the
+  LCC join ID-to-ID via `external_identities(gov, true_owner)` with no fuzzy step anywhere.
+- **`is_oscillating_pair`** — a property whose history records BOTH A→B and B→A. `gsa_lease_diff` emits
+  an "acquisition" every time the GSA lessor field flickers between an SPE and its parent (property 180:
+  GPIT ⇄ Echelon Pkwy four times, six identical rows on one date). The DATE is real, the DIRECTION is
+  not. 233 properties; `gsa_lease_diff` is ~93% of the feed and the ONLY source affected — so the flag
+  is per-property rather than a down-weight of the whole producer.
+- **`gov_strip_brokerage_suffix`** — a `by <brokerage>` suffix is **STRIPPED, not rejected**. Of 214
+  brokerage-flagged rows, 197 are REAL owners wearing a capture artifact (`Gardner Tanenbaum Holdings
+  by Colliers`, `Boyd Watterson by Newmark Knight Frank`) and only 14 are genuine brokerage-as-owner.
+  A rejection guard discards the owner with the artifact. Same lesson as the LCC-side note that
+  cleaning a brokerage-polluted name is what SURFACES a duplicate.
+- **`is_name_variant`** catches strict prefix extensions ONLY. `1521 N CARPENTER LLC` vs `1521 North
+  Carpenter Road LLC` is missed. Catching it needs token-level fuzzy matching — banned for identity —
+  so it is a **stated gap, not a patch**.
+
+**LCC side:** `gov_ownership_transition` is registered at supersession **TIER 3 (with `rel_purchase`,
+so the DATE decides)** and `field_source_priority` **18** (above rel_purchase 20). The two ladders
+differ ON PURPOSE — the tier asks *what kind of claim is this* (both are one historical transaction),
+the priority asks *if they disagree, who wins* (the domain's own recorded transfer beats an inferred
+edge). Feeder: `scripts/feed-gov-ownership-transitions.mjs`.
+
+### Asset-identity coverage is what gates owner resolution — not evidence
+
+`lcc_property_owner_evidence` / `lcc_property_owner` / supersession all key on an **entity UUID**, so a
+property with no `external_identities(domain, 'asset')` row cannot carry owner evidence at all. LCC
+holds `lcc_property_attributes` for 13,823 gov properties but asset entities for only 2,235 — and the
+first feeder run skipped **2,909 of 3,254** transitions as `no_asset_entity`. **When a domain feeder
+under-delivers, check asset-identity coverage before blaming the evidence.**
+
+**Minting is gated, and `--mint` REFUSES to run without a value gate** (`--min-rent`). Doctrine
+satisfied four ways: consumer = the supersession engine, *in the same pass*; value gate = the rent
+floor; retire predicate = a minted entity with no evidence and no portfolio fact (verified **0**);
+honest counts = minted vs already-present, plus the write delta. **Evidence justifies the entity, never
+the reverse** — an asset entity with nothing attached is noise in every count, search and merge
+candidate. Mint via `lcc_mint_gov_asset_entities()` (RPC, not JS: `entities.canonical_name` and
+`external_identities.workspace_id` are both NOT NULL with no default, and canonical_name must come from
+the SQL `lcc_normalize_entity_name` — a JS copy is the normaliser drift this file warns about
+elsewhere; the RPC also keeps entity+identity in ONE transaction so a failure cannot orphan either).
+
+**Live result 2026-08-19:** 663 minted at a $500k floor → 964 evidence rows → **612 resolved owners**
+(2,725 → 3,337) with 51 held in `purchase_tier_no_org_marker` (municipal owners like `City and County
+of Denver` and person-shaped names — the guard correctly abstaining). 663 = 612 + 51, zero stray.
+Resolve rate does **not** degrade at lower rent (bands under $500k resolve at 100%, though on small
+already-modelled samples). Reverse by `metadata->>'mint_batch'` — identities before entities.
 
 ---
 
