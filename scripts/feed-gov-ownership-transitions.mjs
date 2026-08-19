@@ -162,6 +162,8 @@ console.log(`gov: ${trans.length} feedable transitions (oscillating pairs alread
 // reverse -- we only mint where a verified dated transition ALREADY exists.
 const MINT = process.argv.includes('--mint');
 const MINT_BATCH = process.env.MINT_BATCH || `gov_mint_${new Date().toISOString().slice(0, 10)}`;
+const WOULD_MINT = '__would_mint__';   // dry-run sentinel, never written
+let MINTED_PIDS = new Set();
 if (MINT && MIN_RENT <= 0) {
   console.error('\n--mint requires a value gate. Re-run with --min-rent <floor> (e.g. 500000).');
   console.error('Minting every candidate would add ~2,900 entities with no floor, which is');
@@ -188,6 +190,15 @@ if (MINT) {
             + `(batch ${MINT_BATCH}, floor $${MIN_RENT.toLocaleString()})`);
   for (const w of wanted.slice(0, 4)) {
     console.log(`   ${w.pid}  $${Math.round(w.rent).toLocaleString().padStart(11)}  ${w.name.slice(0, 56)}`);
+  }
+  // In DRY RUN the mint has not happened, so without this the evidence count
+  // below reports only what the CURRENT asset map can reach and reads
+  // "NEW 0" -- badly understating what --apply would actually do. Stand in a
+  // sentinel id so the dry run counts the rows the mint would unlock, and label
+  // them separately so nobody mistakes them for rows that exist today.
+  if (!APPLY) {
+    for (const w of wanted) if (!assetByProp.has(w.pid)) assetByProp.set(w.pid, WOULD_MINT);
+    MINTED_PIDS = new Set(wanted.map((w) => w.pid));
   }
 
   // The mint runs SERVER-SIDE (lcc_mint_gov_asset_entities). Two reasons, both
@@ -218,6 +229,7 @@ if (MINT) {
       process.stdout.write(`\r  minted ${made}/${wanted.length}`);
     }
     console.log(`\n  minted ${made} asset entities  (batch ${MINT_BATCH})`);
+    MINTED_PIDS = new Set(wanted.map((w) => w.pid));
     // re-read the map so the evidence pass below sees what was just created
     if (made) {
       const fresh = await pageAll(OPS_URL, OPS_KEY,
@@ -279,8 +291,10 @@ const existing = new Set(existingRows.map((r) => `${r.entity_id}|${r.candidate_o
 const isNew = (r) => !existing.has(`${r.entity_id}|${r.candidate_owner_entity}`);
 const newRows = rows.filter(isNew);
 
+const viaMint = rows.filter((r) => MINTED_PIDS.has(r.detail.gov_property_id)).length;
 console.log(`\ncandidate evidence rows: ${rows.length}`
-          + `  (already present ${rows.length - newRows.length} · NEW ${newRows.length})`);
+          + `  (already present ${rows.length - newRows.length} · NEW ${newRows.length}`
+          + (viaMint ? ` · of the NEW, ${viaMint} unlocked by the mint` : '') + ')');
 console.log(`  skipped  no_asset_entity ${skip.no_asset_entity}  no_owner_entity ${skip.no_owner_entity}`
           + `  below_rent_floor ${skip.below_rent_floor}  no_rent ${skip.no_rent}`);
 console.log(`  distinct assets ${new Set(rows.map((r) => r.entity_id)).size}`
@@ -294,7 +308,14 @@ if (rows.length) {
   }
 }
 
-if (!APPLY) { console.log('\ndry run — re-run with --apply to write'); process.exit(0); }
+if (!APPLY) {
+  if (MINT && MINTED_PIDS.size) {
+    console.log(`  (dry run: ${MINTED_PIDS.size} of the above assets do not exist yet — `
+              + `their evidence is counted here but lands only after --apply)`);
+  }
+  console.log('\ndry run — re-run with --apply to write');
+  process.exit(0);
+}
 
 // ---- write ------------------------------------------------------------------
 // PK is (entity_id, candidate_owner_entity, source) -- PLAIN columns, so unlike
