@@ -32,46 +32,52 @@ fixed, alerting only on unranked rows BEYOND this set.
 
 ---
 
-## `pending_moves` cosmetic inflation in the daily-briefing "Email cleanup (24h)" line
+## ~~`pending_moves` cosmetic inflation in the daily-briefing "Email cleanup (24h)" line~~ — **RESOLVED 2026-08-20 (P120)**
 
-**Surfaced:** 2026-07-20 (follow-up to PR #1435, which removed the shadowed
-duplicate `/api/webhooks/processing-complete` intake handler).
+**Surfaced:** 2026-07-20. **Resolved:** 2026-08-20 by the Move-Queue Executor (P120).
 
-**Symptom:** The daily executive briefing's "Ops & Queue" section renders an
-`Email cleanup (24h): … N move(s) pending` clause. The `N` grows without bound —
-it counts essentially every move-eligible email in the 24h window.
+**Symptom (as filed):** the briefing's `Email cleanup (24h): … N move(s) pending`
+clause grew without bound.
 
-**Root cause:** `fetchProcessingSummary` (`api/_shared/briefing-data.js`) computes
-`pending_moves` as `count(processing_log WHERE move_status = 'pending')`.
-`move_status` is set to `'pending'` at emit time (`emitProcessingComplete` in
-`api/_shared/processing-complete.js`) but **nothing ever transitions it to
-`moved` / `move_failed`**:
+**Root cause (as filed, and CORRECT):** `move_status` was set to `'pending'` at
+emit time by `emitProcessingComplete` and **nothing ever transitioned it**. The
+old queue-drain consumer (`api/_handlers/processing-complete.js`) was shadowed and
+then deleted by PR #1435; the live `sync.js` relay never touched
+`processing_log.move_status`.
 
-- The only code that flipped `move_status` was the queue-drain consumer in
-  `api/_handlers/processing-complete.js` (`reportMoveResults`), which was **already
-  shadowed/unreachable** before PR #1435 (the `sync.js` mount for
-  `/api/webhooks/processing-complete` is registered first, wins in Express, and
-  returns 405 on the `GET` that queue design needed). PR #1435 deleted that dead
-  handler.
-- The live production handler (`sync.js` `handleProcessingComplete`) reconciles the
-  mailbox move via `pa-move-message.js` and **never touches
-  `processing_log.move_status`** on the terminal path. (The To Do Completion Poll's
-  `staged → filed` flip does set `move_status='moved'` for staged emails.)
+> ### ⚠️ The diagnosis was right; the IMPACT call was wrong, and it cost a month.
+>
+> This entry concluded **"Impact: Cosmetic only, and confined to the trailing
+> 'N moves pending' sub-stat."** It was not cosmetic. A `move_status` that never
+> leaves `'pending'` was not a stale counter — it was the mailbox telling us **the
+> emails were never being moved at all**. Measured 2026-08-20: 323 `staged` + 15
+> `duplicate` moves pending since 2026-07-21, the "Intake Staged, Not Completed"
+> folder empty, and every one of the 16 `move_status='moved'` rows explained by
+> Flow 6 bookkeeping rather than by a move. The recommended fix — *"drop the
+> `pending_moves` clause from the briefing line"* — would have **deleted the only
+> live indicator that the loop was open**.
+>
+> **Durable lesson:** before calling an unmaintained counter cosmetic, ask what
+> the counter would look like if the underlying WORK were genuinely not happening.
+> If the answer is "exactly like this", it is not a display bug — it is the
+> symptom. Assert on the STATE DELTA (did any message change folders?), never on
+> the counter's plausibility. Same class as the P159a "drillthrough: 37 while the
+> queue drained 6" finding.
 
-So `move_status` has been unmaintained since the "Closing the Loop" redesign
-superseded the old queue design — this predates PR #1435, which neither caused nor
-worsened it.
+**Fix:** P120 built the missing executor —
+`GET /api/move-queue-worklist` + `POST /api/move-queue-ack`
+(`api/_handlers/move-queue.js`), backed by `v_lcc_move_queue_worklist` and
+`lcc_move_queue_ack()` (migration `20260820140000`). It is now the SINGLE
+stamp-back path and clears `move_status` on every terminal outcome, so
+`pending_moves` is an honest actionable count again and **stays on the briefing
+line**.
 
-**Impact:** Cosmetic only, and confined to the trailing "N moves pending" sub-stat.
-The headline numbers in the same line — `filed` / `needs_review` / `duplicate`
-("N auto-filed, M flagged for review, K deduped") — are **accurate**: they key on
-the `outcome` column, which `emitProcessingComplete` still writes correctly.
+**The "do NOT wire a second mechanism" warning still stands** — and P120 honours
+it: there is exactly ONE owner per folder transition (drainer: Inbox → staging
+and Inbox → Processed/*; W7.6 mirror: staging → Processed), and exactly one
+stamp-back path. P120 did not add a parallel tracker; it supplied the missing
+owner the note assumed already existed.
 
-**Preferred fix (when someone picks this up):** Drop the `pending_moves` clause
-from the briefing line entirely (`fetchProcessingSummary` + the render in
-`api/_handlers/briefing-email-handler.js` `renderOpsAndQueue`).
-
-**Do NOT** wire a parallel PATCH-based tracker on `processing_log.move_status`. The
-`sync.js` relay + the To Do Completion Poll already own real move-tracking; adding a
-second mechanism would recreate the exact two-systems-doing-the-same-thing
-duplication that PR #1435 just removed.
+**When reading the numbers:** `move_status='moved'` covers BOTH "we relocated it"
+and "it had already left the folder" (P119 terminal semantics). The real
+move-delta is `processing_log.move_outcome = 'moved'`.
