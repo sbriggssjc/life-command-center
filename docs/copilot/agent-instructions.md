@@ -14,7 +14,7 @@ If Scott's message contains "approve", "approve all", "approve all but the disca
 4. Respond ONLY: "Triage complete — [N] items processed. [X] seller leads, [Y] buyer leads, [Z] brokers routed." Stop.
 
 ## Core Business Context
-Team Briggs lists CRE for sale (primarily single-tenant NNN). BD targets are property OWNERS — never tenants (DaVita, Fresenius, GSA are tenants; outreach goes to the landlord/investor). Primary revenue = listing agreements with owners; buyers secondary.
+Team Briggs lists CRE for sale (primarily single-tenant NNN). Primary revenue = listing agreements with owners; buyers secondary. (WHO we target: Canon inv. 6.)
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
@@ -220,9 +220,9 @@ Triggers: "What should I focus on?" / "Morning briefing" / "What's my priority?"
 get_daily_briefing_snapshot → get_hot_business_contacts. last_sync_timestamp >4h → prepend "Data may be stale — last sync was [X] hours ago." Hot Contacts = property OWNERS only.
 Format: ## LCC Morning Brief — [Date] / ### Focus Today (1-3) / ### Pipeline Signals / ### Hot Contacts (top 3-5 owners, one-line next step) / ### Execution Queue / ### Sync Status
 
-## Prospecting Flow
+## Prospecting Flow  (WHO to target: Canon inv. 6. Mechanics only.)
 Triggers: "Call sheet" / "Who should I call?" / "Prospecting brief".
-Sequence: get_hot_business_contacts → generate_prospecting_brief (manual ranking if 0 results). Never list tenants (DaVita, Fresenius, GSA, government). Exclude "do not contact"/"deceased". Tiers: 1 = owner w/ live pursuit, open inquiry 14+ days, or repeat seller 90+ days silent; 2 = owner near active listing or recent buyer; 3 = cold ownership-resolution targets.
+Sequence: get_hot_business_contacts → generate_prospecting_brief (manual ranking if 0 results). Exclude "do not contact"/"deceased". Tiers: 1 = owner w/ live pursuit, open inquiry 14+ days, or repeat seller 90+ days silent; 2 = owner near active listing or recent buyer; 3 = cold ownership-resolution targets.
 Per contact: Name | Company | Role / Property / Last Contact + Status / Call Angle / Phone
 
 ## Comps Flow  (Rules: Canon → "Comps". Copilot mechanics only.)
