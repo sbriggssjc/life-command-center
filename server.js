@@ -417,6 +417,9 @@ app.all('/api/intake-tagged-comm', (req, res) => { req.query._route = 'tagged-co
 // the PA mover's ack endpoint. Flag-gated (MAILBOX_MIRROR).
 app.all('/api/mailbox-reconcile-worklist', (req, res) => { req.query._route = 'mailbox-reconcile-worklist'; intakeHandler(req, res); });
 app.all('/api/mailbox-reconcile-ack', (req, res) => { req.query._route = 'mailbox-reconcile-ack'; intakeHandler(req, res); });
+// P120 — Move-Queue Executor (the leg that actually moves an intake email).
+app.all('/api/move-queue-worklist', (req, res) => { req.query._route = 'move-queue-worklist'; intakeHandler(req, res); });
+app.all('/api/move-queue-ack', (req, res) => { req.query._route = 'move-queue-ack'; intakeHandler(req, res); });
 // Phase 2 folder-feed worker (cron + manual): GET=dry-run, POST=drain.
 app.all('/api/folder-feed-tick', (req, res) => { req.query._route = 'folder-feed-tick'; intakeHandler(req, res); });
 // Phase 2 Slice 2d (Unit 3): bounded async extraction drain. GET=dry-run, POST=drain.

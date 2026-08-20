@@ -245,3 +245,45 @@ retry-backoff are excluded via the ledger, so re-runs are safe and idempotent.
    `outcome` for which. Never quote `moved` as a count of moves performed.
 
 Companion docs: `OUTLOOK_SENT_SWEEP_FLOW.md` (W7.5), `OUTLOOK_CATEGORY_TAGGING_FLOW.md` (W7.3).
+
+---
+
+## P120 (2026-08-20) — the staging folder is now actually populated
+
+The mirror's job is **staging → Processed**. Until P120, nothing ever performed
+the **Inbox → staging** move: `processing_log` held 325 `staged` + 15 `duplicate`
+rows still `move_status='pending'` (oldest 2026-07-21) because the move queue had
+no consumer. So "Intake Staged, Not Completed" was **empty**, and the mirror was
+correctly-but-uselessly acking every candidate `already_out` — the P119 terminal
+path doing exactly its job over an empty folder.
+
+The missing leg is now built: **Flow 7 — Move Queue Executor**
+(`docs/architecture/flows/move-queue-executor.md`,
+`GET /api/move-queue-worklist` + `POST /api/move-queue-ack`, flag
+`MOVE_QUEUE_EXECUTOR`). It reuses this runbook's terminal semantics verbatim via
+the SAME SQL classifier `lcc_mailbox_mirror_error_is_terminal()` — there is still
+exactly one owner of that decision and still no JS copy.
+
+**Ownership is unchanged and now real:**
+
+| transition | owner |
+|---|---|
+| Inbox → staging, Inbox → `Processed/*` | Flow 7 (the move-queue drainer) |
+| staging → `Processed/*` | **this mirror** |
+
+Expect the mirror's `already_out` rate to fall as Flow 7 drains the backlog and
+staging fills for the first time.
+
+### ⚠️ Ordering hazard to close before/with the mirror rollout
+
+Two things react to a completed To Do: **Flow 6** (`todo-completion-poll`) flips
+`processing_log` `staged → filed` and stamps `move_status='moved'` *without
+moving anything* (its comment assumes "PA already moved the email there"), while
+**this mirror** performs the actual staging → Processed move and gates its
+worklist on `processing_log.outcome='staged'`.
+
+If Flow 6 wins the race, the row stops being `outcome='staged'`, this mirror's
+worklist **drops it, and the message sits in staging forever** while the DB reads
+`filed`/`moved`. That was unreachable while staging was empty; populating staging
+makes it reachable. Fix: gate Flow 6 behind the mirror's ack, or anchor the
+mirror's worklist on its own ledger rather than the current `outcome`.

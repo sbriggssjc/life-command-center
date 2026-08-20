@@ -293,18 +293,17 @@ export async function fetchProcessingSummary(workspaceId, hours = 24) {
     opsQuery('GET', `${base}&outcome=eq.filed&select=id&limit=0`),
     opsQuery('GET', `${base}&outcome=eq.needs_review&select=id&limit=0`),
     opsQuery('GET', `${base}&outcome=eq.duplicate&select=id&limit=0`),
-    // KNOWN ISSUE (see docs/KNOWN_ISSUES.md): pending_moves counts rows still at
-    // move_status='pending', but NOTHING clears that column anymore — the queue-
-    // drain consumer (api/_handlers/processing-complete.js) was retired, and the
-    // live sync.js relay reconciles via pa-move-message, never touching
-    // processing_log.move_status on the terminal path. So this count monotonically
-    // inflates (counts ~every move-eligible email in the window). The filed/
-    // needs_review/duplicate counts above are accurate (they key on `outcome`,
-    // still written by emitProcessingComplete). Preferred fix: DROP the
-    // pending_moves clause from the briefing line — do NOT wire a parallel
-    // PATCH-based move_status tracker (sync.js + the To Do Completion Poll already
-    // own real move-tracking; a second mechanism would recreate the two-systems
-    // duplication that PR #1435 removed).
+    // P120 (2026-08-20) — RESOLVED. The note that used to sit here said this count
+    // "monotonically inflates because NOTHING clears move_status". That was true
+    // and is no longer: the queue-drain consumer now exists as the Move-Queue
+    // Executor (api/_handlers/move-queue.js + lcc_move_queue_ack), which is the
+    // single stamp-back path and clears move_status on every terminal outcome.
+    // So pending_moves is once again an HONEST actionable count — moves the app
+    // still owes the mailbox — and belongs on the briefing line.
+    // Caveat when reporting: move_status='moved' covers BOTH "we relocated it"
+    // and "it was already gone" (P119 terminal semantics). The real move-DELTA is
+    // processing_log.move_outcome='moved' — never quote move_status as a count of
+    // moves performed.
     opsQuery('GET', `${base}&move_status=eq.pending&select=id&limit=0`),
   ]);
   return {
