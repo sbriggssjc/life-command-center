@@ -307,6 +307,56 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(appSrc, /MOVED to app-modal\.js/, 'app.js keeps a pointer comment');
   });
 
+  // ── Stage 3, Unit 2: app-treasury-chart.js ───────────────────────────────
+  it('app-treasury-chart.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const chart = scriptIndex('app-treasury-chart.js');
+    assert.ok(chart >= 0, 'index.html must load app-treasury-chart.js');
+    assert.ok(chart < scriptIndex('app.js'), 'app-treasury-chart.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-treasury-chart\.js/i,
+      'app-treasury-chart.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-treasury-chart.js')]),
+      'app-treasury-chart.js must be syntactically valid');
+  });
+
+  it('the chart LOGIC moved but its wiring stayed — because that block boots the ROUTER', () => {
+    const chartSrc = readFileSync(join(root, 'app-treasury-chart.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    for (const fn of ['loadMarket', 'yearsForRange', 'fetchYieldHistory', 'filterByRange',
+                      'loadYieldChart', 'renderYieldSVG']) {
+      assert.match(chartSrc, new RegExp(`function\\s+${fn}\\b`), `app-treasury-chart.js defines ${fn}`);
+      assert.doesNotMatch(appSrc, new RegExp(`function\\s+${fn}\\b`), `app.js must NOT redefine ${fn}`);
+    }
+    for (const d of ['yieldHistoryCache', 'currentYieldRange']) {
+      assert.match(chartSrc, new RegExp(`let\\s+${d}\\b`), `app-treasury-chart.js owns ${d}`);
+      assert.doesNotMatch(appSrc, new RegExp(`let\\s+${d}\\b`), `app.js must NOT redeclare ${d}`);
+    }
+    // ⚠️ THE POINT OF THIS UNIT. The yieldChartControls handler shares a
+    // DOMContentLoaded block with applyRoute(). Taking the block would have taken
+    // the hash router with it. Both must remain in app.js, in the SAME block.
+    // Assert on the CONSTRUCT, not the word: this file's own header explains the
+    // shared-bootstrap decision, so a bare /DOMContentLoaded/ match fails on the
+    // documentation. (It did, on the first run — the guard caught my own comment.)
+    assert.doesNotMatch(chartSrc, /addEventListener\(\s*['"]DOMContentLoaded['"]/,
+      'app-treasury-chart.js must NOT take the shared bootstrap — it boots the router');
+    // ⚠️ Assert the CONSTRUCT, never the bare word — twice in this unit a word-match
+    // was satisfied by a COMMENT while the real code was gone. Deleting the wiring
+    // and leaving "yieldChartControls" in the pointer comment passed 123/123 on the
+    // first mutation run. A guard that a comment can satisfy is not a guard.
+    assert.match(appSrc, /getElementById\(\s*['"]yieldChartControls['"]\s*\)\s*\??\.addEventListener/,
+      'app.js keeps the LIVE chart-controls wiring (not just a mention of it)');
+    // (No loose applyRoute() assertion here: there are TWO call sites — the
+    // hashchange handler at ~2519 and the bootstrap — so a bare match is satisfied
+    // by the wrong one. The BLOCK assertion below is the real guard, and it pins
+    // the bootstrap specifically.)
+    const boot = appSrc.slice(appSrc.indexOf("addEventListener('DOMContentLoaded'"));
+    const blockEnd = boot.indexOf('\n});');
+    const block = boot.slice(0, blockEnd > 0 ? blockEnd : 3000);
+    assert.ok(block.includes('applyRoute') && block.includes('yieldChartControls'),
+      'the router bootstrap and the chart wiring must stay in the SAME DOMContentLoaded block — '
+      + 'splitting them changes init ordering');
+    assert.match(appSrc, /MOVED to app-treasury-chart\.js/, 'app.js keeps a pointer comment');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
