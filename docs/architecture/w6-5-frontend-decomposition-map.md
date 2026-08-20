@@ -377,7 +377,7 @@ the shared header makes newly dangerous.
 | # | region | lines | why this order |
 |---|---|---|---|
 | 1 | ~~Performance dashboard~~ | **6766–7144** | ✅ **SHIPPED 2026-08-20** — the map's first correct range |
-| 2 | Sync health | 6346–6539 | self-contained connector status |
+| 2 | ~~Sync health~~ | **6346–6538** | ✅ **SHIPPED 2026-08-20** |
 | 3 | Domain health summary | 6145–6345 | self-contained |
 | 4 | Metrics | 6025–6144 | reads shared state, no writers elsewhere |
 | 5 | Research (**not** the banner's range) | 5225–~5860 **+ 261** | non-contiguous; fix the orphaned banner in the same change |
@@ -418,3 +418,44 @@ reachable "via `navTo('pagePerfDashboard')`". No such route exists anywhere in t
 the string occurs in that comment and nowhere else. Sync Health is the only entry point.
 Left as-is because correcting prose is not a byte-identical refactor's business; recorded
 here so it is fixed knowingly rather than trusted.
+
+
+### Stage 4, Unit 2 — `ops-sync-health.js` (SHIPPED 2026-08-20)
+
+ops.js 6346–6538 (sha256 `878c96f311af5913`, byte-identical). `ops.js` 6,803 → 6,617.
+`renderSyncHealthPage` + `triggerSync` / `retrySync` / `reconnectConnector` /
+`removeConnector`. Entry point: `app.js:1135`, the `pageSyncHealth` nav case.
+
+**Two different `window`-binding mechanisms coexist in this one region, both load-bearing.**
+Neither may be "tidied" into the other:
+
+| fn | how it reaches `window` | call site |
+|---|---|---|
+| `reconnectConnector`, `removeConnector` | **explicit** `window.x = x` (6520/6538) | `onclick="reconnectConnector(…)"` 6398/6399 |
+| `triggerSync`, `retrySync` | **automatic** — top-level `function` in a CLASSIC script | `onclick="_opsBtnGuard(this, triggerSync, …)"` 6397/6470 |
+
+The second pair has no export line to assert, so the guard asserts the **call shape**
+instead: the bare identifier must still appear inside an inline `onclick`. If it ever stops
+being an inline handler, the automatic binding stops mattering and someone has to think.
+This is also why the module-forbidding assertion carries a specific reason here — convert
+this file to `type="module"` and `triggerSync`/`retrySync` die silently while everything
+else keeps working.
+
+**⚠️ A GUARD THAT NAMES A FILE GOES STALE ON THE NEXT MOVE — Unit 1's did, one unit later.**
+Unit 1 asserted `assert.match(opsSrc, /setTimeout\(appendPerfToSyncHealth,/)` — "Sync Health
+**in ops.js** still schedules the graft." True when written; false the instant Unit 2 moved
+Sync Health to a sibling, even though the relationship it protects was never violated. It
+was re-based to assert the **relationship**: find whichever ops file defines
+`renderSyncHealthPage`, and require *that* file to schedule `appendPerfToSyncHealth`. Now
+move-proof and strictly more meaningful. **Rule: assert the relationship, not the address.**
+
+**Dead state found:** `opsSyncData` (ops.js:86, `let opsSyncData = null;`) is referenced
+**nowhere in the repo** — the declaration is its only occurrence. It sits in the shared
+state header that Unit 1 established siblings must never own, which makes the header partly
+dead weight. Not removed here (out of scope for a byte-identical move); recorded so the
+next reader does not assume every line of that header is live.
+
+Six mutations, all fail correctly: drop the explicit export; break the bare-identifier
+onclick; delete the perf graft (**2 suites** — the re-based Unit 1 guard and the Unit 2
+seam guard); eval-time statement (Stage-4 rule); `app.js` stops dispatching `pageSyncHealth`;
+load after ops.js.

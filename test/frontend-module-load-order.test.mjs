@@ -12,7 +12,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -453,8 +453,20 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
       assert.match(perfSrc, new RegExp(`function\\s+${fn}\\b`), `ops-perf-dashboard.js defines ${fn}`);
       assert.doesNotMatch(opsSrc, new RegExp(`function\\s+${fn}\\b`), `ops.js must NOT redefine ${fn}`);
     }
-    assert.match(opsSrc, /setTimeout\(appendPerfToSyncHealth,/,
-      'Sync Health in ops.js still schedules appendPerfToSyncHealth');
+    // ⚠️ THIS ASSERTION USED TO NAME A FILE, AND STAGE 4 UNIT 2 BROKE IT.
+    // It read `assert.match(opsSrc, /setTimeout\(appendPerfToSyncHealth,/)` —
+    // true when Sync Health lived in ops.js, false the moment Sync Health moved
+    // to ops-sync-health.js, even though the RELATIONSHIP it protects was never
+    // violated. A guard that encodes an ADDRESS goes stale on the next move; a
+    // guard that encodes the RELATIONSHIP survives it. The real invariant is:
+    // whatever file owns the Sync Health page must still graft the dashboard on.
+    const opsCorpus = readdirSync(root)
+      .filter((f) => f === 'ops.js' || /^ops-[a-z0-9-]+\.js$/i.test(f))
+      .map((f) => [f, readFileSync(join(root, f), 'utf8')]);
+    const syncOwner = opsCorpus.find(([, src]) => /function\s+renderSyncHealthPage\b/.test(src));
+    assert.ok(syncOwner, 'some ops file must define renderSyncHealthPage');
+    assert.match(syncOwner[1], /setTimeout\(appendPerfToSyncHealth,/,
+      `${syncOwner[0]} owns the Sync Health page and must still schedule appendPerfToSyncHealth`);
     assert.match(opsSrc, /MOVED to ops-perf-dashboard\.js/, 'ops.js keeps a pointer comment');
     // Neighbours that stayed: the helper above and the Home-stats section below.
     assert.match(opsSrc, /function\s+jsStringArg\b/, 'jsStringArg stays in ops.js');
@@ -481,6 +493,63 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     }
     assert.match(readFileSync(join(root, 'ops.js'), 'utf8'), /^const opsPerfLog = \[\];/m,
       'ops.js still owns the opsPerfLog declaration');
+  });
+
+  // ── Stage 4, Unit 2: ops-sync-health.js ──────────────────────────────────
+  it('ops-sync-health.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-sync-health.js');
+    assert.ok(x >= 0, 'index.html must load ops-sync-health.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-sync-health.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-sync-health\.js/i,
+      'ops-sync-health.js must be a CLASSIC script — triggerSync/retrySync reach window '
+      + 'only via the automatic top-level-function binding, which modules do not get');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-sync-health.js')]),
+      'ops-sync-health.js must be syntactically valid');
+  });
+
+  it('sync health moved with BOTH of its window-binding mechanisms intact', () => {
+    const shSrc = readFileSync(join(root, 'ops-sync-health.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    for (const fn of ['renderSyncHealthPage', 'triggerSync', 'retrySync',
+                      'reconnectConnector', 'removeConnector']) {
+      assert.match(shSrc, new RegExp(`function\\s+${fn}\\b`), `ops-sync-health.js defines ${fn}`);
+      assert.doesNotMatch(opsSrc, new RegExp(`function\\s+${fn}\\b`), `ops.js must NOT redefine ${fn}`);
+    }
+    // Mechanism 1 — explicit exports, reached by onclick="reconnectConnector(…)".
+    for (const w of ['reconnectConnector', 'removeConnector']) {
+      assert.match(shSrc, new RegExp(`window\\.${w}\\s*=\\s*${w}`), `explicit window.${w} export survives`);
+      assert.match(shSrc, new RegExp(`onclick="${w}\\(`), `the onclick calling ${w} came along`);
+    }
+    // Mechanism 2 — bare identifier inside an onclick, resolved off window at
+    // CLICK time. No export line exists to assert, so assert the CALL SHAPE:
+    // if this stops being an inline handler, the automatic binding stops mattering
+    // and someone must think about it.
+    for (const fn of ['triggerSync', 'retrySync']) {
+      assert.match(shSrc, new RegExp(`onclick="_opsBtnGuard\\(this, ${fn},`),
+        `${fn} is still passed as a bare identifier inside an inline onclick`);
+      assert.doesNotMatch(shSrc, new RegExp(`window\\.${fn}\\s*=`),
+        `${fn} relies on the automatic binding — a redundant export would hide that`);
+    }
+    // _opsBtnGuard stayed in ops.js and is reached the same way.
+    assert.match(opsSrc, /function\s+_opsBtnGuard\b/, '_opsBtnGuard stays in ops.js');
+    // Cross-sibling seam into Unit 1.
+    assert.match(shSrc, /setTimeout\(appendPerfToSyncHealth,/,
+      'the page still grafts on ops-perf-dashboard.js at call time');
+    // External nav dispatcher.
+    assert.match(readFileSync(join(root, 'app.js'), 'utf8'), /case 'pageSyncHealth':/,
+      'app.js still dispatches pageSyncHealth');
+    assert.match(opsSrc, /MOVED to ops-sync-health\.js/, 'ops.js keeps a pointer comment');
+    assert.doesNotMatch(shSrc, /QUICK ACTIONS/, 'the Quick Actions section stayed behind');
+  });
+
+  it('STAGE 4 RULE holds for ops-sync-health.js (functions + window exports only)', () => {
+    const shSrc = readFileSync(join(root, 'ops-sync-health.js'), 'utf8');
+    const offenders = shSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))
+      .filter((l) => !/^(async\s+)?function\s/.test(l))
+      .filter((l) => !/^window\.\w+\s*=/.test(l));
+    assert.deepEqual(offenders, [],
+      `ops-sync-health.js must declare only functions/window exports; found: ${offenders.join(' | ')}`);
   });
 
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
