@@ -609,6 +609,36 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     `resolved_note LIKE 'p119-mirror-auto-retire:%'`. **Related honest-count trap:** the ledger's `moved=true`
     now covers BOTH "we moved it" and "it was already gone" — read `outcome`, never quote `moved` as a count
     of moves performed. Full writeup: `docs/setup/OUTLOOK_MAILBOX_MIRROR_FLOW.md`.
+- **A HANDOFF BETWEEN TWO CONSUMERS MUST BE ANCHORED ON A DURABLE FACT, NEVER A TRANSIENT ONE
+  (P121, 2026-08-20).** P119 gave the mailbox mirror a source-folder gate — `processing_log.outcome
+  ='staged'` — which was right, but `outcome` is exactly the field the OTHER consumer flips. Flow 6
+  (`todo-completion-poll`) flips `staged→filed` on a completed To Do, so whenever it won the race the
+  mirror's worklist **dropped the row and the message sat in staging forever while the DB read
+  `filed`/`moved`**. Three durable rules:
+  - **Anchor on the fact, not the status.** `processing_log.staged_at` records that LCC PLACED the
+    message in the staging folder; it is stamped by `lcc_move_queue_ack` only on a genuine move whose
+    destination is `lcc_staging_folder_name()`, and never cleared. A status can be flipped by anyone;
+    a placement happened or it didn't. Note it is deliberately NOT stamped on an `already_out` ack —
+    "the message was not in the Inbox" does not prove "the message is in staging."
+  - **A worker must not stamp a field describing work it did not do.** Flow 6 performs no Graph move,
+    yet stamped `move_status='moved'` + `moved_at` because "PA already moved it". That stamp is what
+    made a stranded message indistinguishable from a filed one. It now goes through
+    `lcc_todo_completion_mark_filed`, which records `todo_completed_at` and returns a *disposition*
+    (`mirror_owns_move` / `retargeted_to_final` / `no_move_state_change`). **`filed` counts flips, never
+    emails moved.**
+  - **⚠️ A VERDICT RECORDED BEFORE THE CURRENT STATE IS STALE, AND STALE VERDICTS ARE STICKY.** 61 of
+    the 81 messages P120's executor placed in staging were ALREADY invisible to the mirror, excluded by
+    `parked=true` / `not_found_or_not_in_source_folder` acks from 2026-08-07..09 — **correct when
+    written** (the folder was empty), wrong the instant the executor filled it. P119's retire sweep
+    cannot catch this: it only ever moves a row TOWARD terminal, never re-queues. Any ledger that
+    excludes work must compare its verdict timestamp against the state the verdict was about
+    (`led.acked_at < pl.staged_at`), and ship the inverse of auto-retire — a re-enqueue sweep
+    (`lcc_mailbox_mirror_requeue_stranded`, cron 06:35, prior state kept in `requeue_prior`).
+  - **Corollary — check the closure arms can actually FIRE for the population you gated in.** The mirror's
+    `todos_done` arm is structurally dead for staged emails: the native Flagged-email model creates no
+    `action_items`, so **0 of 103** staged messages have any, and 27 had an untriaged `inbox_item` too.
+    A completed To Do would have flipped the row to `filed` with nothing ever publishing the move. Hence
+    the `todo_completed` arm. A gate that admits rows no arm can ever close is a silent stall.
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
 - **"Owner is reachable" has THREE definitions — quote `reachable_hero_effective`.** The owner-panel hero

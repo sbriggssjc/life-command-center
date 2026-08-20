@@ -207,8 +207,14 @@ alert). See `supabase/migrations/20260824120000_lcc_w7_6_mailbox_mirror.sql`.
 
 ### When is a message "closed" (worklist gate — deterministic, no AI)?
 A flagged-email `inbox_item` (with an `internet_message_id`) qualifies when LCC
-routed it to the staging folder (`processing_log.outcome='staged'` — the P119
-source-folder gate) **AND ANY** of:
+routed it to the staging folder — since P121 the **durable**
+`processing_log.staged_at IS NOT NULL OR outcome='staged'`, not the transient
+outcome alone — **AND ANY** of:
+- **`todo_completed`** (P121) — Flow 6 saw the native Flagged-email To Do
+  completed (`processing_log.todo_completed_at`). The most authoritative closure
+  signal there is, and **the only one this population can satisfy**: the
+  native-list model creates no `action_items`, so `todos_done` is structurally
+  dead for staged messages (0 of 103 live have any);
 - **`todos_done`** — every to-do generated from it (`action_items.inbox_item_id`
   lineage) is terminal (completed/cancelled), and at least one existed;
 - **`thread_replied`** — a later outbound comm exists in the same
@@ -220,7 +226,10 @@ source-folder gate) **AND ANY** of:
 by widening/narrowing the `offer_review` predicate in the view.)
 
 Messages already moved, already-out (P119 terminal), parked, or inside a
-retry-backoff are excluded via the ledger, so re-runs are safe and idempotent.
+retry-backoff are excluded via the ledger, so re-runs are safe and idempotent —
+**except** where the ledger verdict predates the message's current `staged_at`
+placement (P121): that verdict is about a prior state of the mailbox and no longer
+binds this one.
 
 ---
 
@@ -274,16 +283,57 @@ exactly one owner of that decision and still no JS copy.
 Expect the mirror's `already_out` rate to fall as Flow 7 drains the backlog and
 staging fills for the first time.
 
-### ⚠️ Ordering hazard to close before/with the mirror rollout
+### ✅ Ordering hazard — CLOSED by P121 (2026-08-20)
 
-Two things react to a completed To Do: **Flow 6** (`todo-completion-poll`) flips
-`processing_log` `staged → filed` and stamps `move_status='moved'` *without
-moving anything* (its comment assumes "PA already moved the email there"), while
-**this mirror** performs the actual staging → Processed move and gates its
-worklist on `processing_log.outcome='staged'`.
+Two things react to a completed To Do: **Flow 6** (`todo-completion-poll`) and
+**this mirror**. Both keyed on the same transient field, `processing_log.outcome
+= 'staged'` — and Flow 6 stamped `move_status='moved'` *without moving anything*.
+If Flow 6 won the race the row stopped being `staged`, this mirror's worklist
+**dropped it, and the message sat in staging forever** while the DB read
+`filed`/`moved`. Latent while staging was empty; reachable the moment P120 filled
+it. **P121 closes it** (migration
+`20260820160000_lcc_p121_staging_processed_single_owner.sql`, applied live):
 
-If Flow 6 wins the race, the row stops being `outcome='staged'`, this mirror's
-worklist **drops it, and the message sits in staging forever** while the DB reads
-`filed`/`moved`. That was unreachable while staging was empty; populating staging
-makes it reachable. Fix: gate Flow 6 behind the mirror's ack, or anchor the
-mirror's worklist on its own ledger rather than the current `outcome`.
+- **A durable anchor replaces the transient one.** `processing_log.staged_at` is
+  stamped by `lcc_move_queue_ack` on a genuine move whose destination is the
+  staging folder — never on an `already_out` ack ("the message wasn't in the
+  Inbox" does not prove "it is in staging"). The worklist gate is now
+  `staged_at IS NOT NULL OR outcome='staged'`, so a `staged→filed` flip cannot
+  drop a message that is still sitting in staging.
+- **Flow 6 no longer claims a mailbox action.** It routes through
+  `rpc/lcc_todo_completion_mark_filed`, which flips the outcome and stamps
+  `todo_completed_at` — and never writes `move_status` / `moved_at` /
+  `move_outcome`. If the message was never placed in staging and its move is
+  still queued, it instead **retargets** that queue row to `final_target_folder`
+  so Flow 7 delivers it straight to `Processed/*` (one owner for Inbox → \*).
+- **A stale ledger verdict no longer excludes a row.** A ledger ack recorded
+  *before* the current placement describes a prior state of the mailbox. This was
+  not theoretical: **61 of the 81 messages Flow 7 placed in staging on 2026-08-20
+  were already invisible to this mirror**, carrying `parked=true` /
+  `not_found_or_not_in_source_folder` acks from 2026-08-07..09 — correct then
+  (the folder was empty), wrong now. Worklist **0 → 61** on the fix.
+- **A fourth closure arm, `todo_completed`** (see the gate section above) — without
+  it, completing a To Do would flip the row to `filed` and *nothing* would ever
+  publish the move, because the native-Flagged-email model creates no
+  `action_items` (0 of 103 staged messages have any) so `todos_done` is
+  structurally dead for this population.
+
+**One operator step remains: edit the Flow 6 PA flow to stop moving.** Its GET
+worklist now publishes `move:false`, `move_owner:'mailbox_mirror'`,
+`clear_flag:false` plus a top-level `contract` note, but LCC cannot stop a PA
+action it does not control. Until that edit lands the two movers race benignly —
+whichever moves first wins and the loser acks `already_out`, which P119 treats as
+terminal success. **It is no longer a stranding bug, just a redundant Graph call**,
+so this is cleanup, not a blocker.
+
+Detector + self-heal:
+
+```sql
+-- in staging, invisible to the mirror (should be 0)
+select stranded_class, count(*) from v_lcc_mailbox_mirror_stranded group by 1;
+-- reversible re-enqueue (dry-run default); cron lcc-mailbox-mirror-requeue @ 06:35 UTC
+select lcc_mailbox_mirror_requeue_stranded(false);
+```
+
+Reversal for a re-queued ledger row is mechanical from `requeue_prior` — runbook
+in the migration header.
