@@ -214,7 +214,7 @@ purpose — the third unit running where the file's line order carried no groupi
 
 | Export-comps-to-Excel (12920+) | `app-export-comps.js` | leaf, XLSX only |
 | **Hash router** (`ROUTE_*`, `applyRoute`, `_routeParseHash`, `navTo`, `_detailStack*`) (988–2300) | **keep in app.js** | the router is the spine — extract last, if ever |
-| Shared task store, SF sync, reassign/reclassify (5361–6260) | `app-tasks.js` | med coupling |
+| Shared task store + SF task sync (**5304–5564**, corrected) | `app-tasks.js` | SHIPPED — see below |
 
 Router stays put; extract leaves first. **Do not** move `applyRoute`/`ROUTE_*` in an
 early stage — hash routing is the load-bearing invariant.
@@ -262,3 +262,47 @@ prompt, re-run guards + `npm run verify:deploy` each time.**
     federated surface lives in `dc-lanes.js`, and the partition stays in `ops.js`.
 - `npm run verify:deploy` is unaffected (it probes `/version` + `/api/*` JSON, not
   front-end file layout).
+
+### Stage 3, Unit 4 — `app-tasks.js` (SHIPPED 2026-08-20)
+
+app.js 5304–5564 (sha256 `8c2fddebb3d370fb`, byte-identical). `app.js` 12,646 → 12,392.
+The shared task store, the fire-and-forget Salesforce outbound sync, and the three
+public actions `completeTask` / `rescheduleTask` / `dismissTask`.
+
+**⚠️ THIS ROW OF THE MAP WAS WRONG IN BOTH DIRECTIONS — the worst miss in W6.5 so far.**
+It said 5361–6260. That range starts **57 lines too late**, excluding
+`_updateTaskInAllStores` — the store the entire module exists to own — and runs
+**~700 lines too far**, which would have swept FOUR unrelated subsystems into a file
+named `app-tasks.js`:
+
+| swept in by the map's range | what it actually is |
+|---|---|
+| `mktReclassifyDeal`, `mktMatchLead`, `mktUpdateStatus`, `openMktEmail` | Marketing actions |
+| `renderProspects`, `initProspectsSearch`, `execProspectsSearch` **+ 3 top-level `let`s** | Prospects search |
+| `showDetail`, `closeDetail`, `switchDetailTab`, `renderDetail*` + `window._detailRecord` | detail-record view |
+| `openLogCall`, `openLogAndReschedule`, `submitLogReschedule`, `var _lrData` | two modals |
+
+The "reclassify" in the map's own label is `mktReclassifyDeal` — **Marketing, not tasks**.
+The three Prospects `let`s make it worse than mis-filing: a top-level `let` declared in two
+classic scripts is a runtime SyntaxError that kills the whole app, so "finish the range
+later" was a live hazard. The guard now pins all ten functions and all three `let`s on the
+`app.js` side, and a mutation that drags `mktReclassifyDeal` across fails.
+
+**Passenger flagged, not silently absorbed:** `_rerenderCurrentView` is a generic view
+dispatcher (`currentBizTab`/`currentGovTab`/`currentDiaTab` → `renderMarketing` /
+`renderDomainProspects`), not task logic. It travels because it was authored inside the
+block and 3 of its 4 callers are task actions; the 4th is `submitLogReschedule`, still in
+app.js. Re-home it if a later unit gives the view dispatchers a home.
+
+**Not a leaf, and that is fine.** `submitLogReschedule` (app.js ~6327/6347/6348) reaches
+back into `_updateSfTaskDate`, `_updateTaskInAllStores` and `_rerenderCurrentView`, and the
+Marketing rows build `onclick="completeTask(...)"` at ~4520/4522. All top-level `function`
+declarations, so they are on `window` automatically — no explicit export line exists to
+lose. What the split requires is only that the file stay CLASSIC and load before app.js.
+
+Five mutations, all fail correctly: partial move (leave `_updateTaskInAllStores` behind);
+duplicate a Prospects `let`; drag `mktReclassifyDeal` across (**the map's own range**);
+break the `completeTask` onclick; load after app.js.
+
+**Standing lesson, now five-for-five across Stage 2 + Stage 3: every range in this map has
+been wrong. Re-measure the file before every extraction; the map is a hypothesis.**

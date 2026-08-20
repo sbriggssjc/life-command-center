@@ -389,6 +389,52 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(appSrc, /MOVED to app-export-comps\.js/, 'app.js keeps a pointer comment');
   });
 
+  // ── Stage 3, Unit 4: app-tasks.js ────────────────────────────────────────
+  it('app-tasks.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const x = scriptIndex('app-tasks.js');
+    assert.ok(x >= 0, 'index.html must load app-tasks.js');
+    assert.ok(x < scriptIndex('app.js'), 'app-tasks.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-tasks\.js/i,
+      'app-tasks.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-tasks.js')]),
+      'app-tasks.js must be syntactically valid');
+  });
+
+  it('the task store moved whole, and the four subsystems the map would have swept in stayed', () => {
+    const taskSrc = readFileSync(join(root, 'app-tasks.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    for (const fn of ['_updateTaskInAllStores', '_rerenderCurrentView', '_syncTaskToSalesforce',
+                      '_closeOriginalSfTask', '_updateSfTaskDate',
+                      'completeTask', 'rescheduleTask', 'dismissTask']) {
+      assert.match(taskSrc, new RegExp(`function\\s+${fn}\\b`), `app-tasks.js defines ${fn}`);
+      assert.doesNotMatch(appSrc, new RegExp(`function\\s+${fn}\\b`), `app.js must NOT redefine ${fn}`);
+    }
+    // ⚠️ The map said 5361-6260. That range crosses FOUR unrelated subsystems.
+    // Pin each one on the app.js side so a later "finish the range" cannot drag
+    // them into a file called app-tasks.
+    for (const fn of ['mktReclassifyDeal', 'mktMatchLead', 'mktUpdateStatus',
+                      'renderProspects', 'execProspectsSearch',
+                      'showDetail', 'closeDetail', 'switchDetailTab',
+                      'openLogCall', 'submitLogReschedule']) {
+      assert.match(appSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} stays in app.js — not task logic`);
+      assert.doesNotMatch(taskSrc, new RegExp(`function\\s+${fn}\\b`), `app-tasks.js must NOT hold ${fn}`);
+    }
+    // The Prospects search state is three top-level `let`s. Two definitions of a
+    // top-level let across classic scripts is a runtime SyntaxError that kills
+    // the whole app — they must exist in exactly one file.
+    for (const v of ['prospectsSearchTerm', 'prospectsResults', 'prospectsSearching']) {
+      assert.match(appSrc, new RegExp(`^let\\s+${v}\\b`, 'm'), `app.js owns the top-level let ${v}`);
+      assert.doesNotMatch(taskSrc, new RegExp(`^let\\s+${v}\\b`, 'm'), `app-tasks.js must NOT redeclare ${v}`);
+    }
+    // These are top-level function declarations, so they land on `window`
+    // automatically — that is how the inline onclick strings reach them.
+    assert.match(appSrc, /onclick="completeTask\(/, 'app.js still onclicks completeTask');
+    assert.match(appSrc, /onclick="dismissTask\(/, 'app.js still onclicks dismissTask');
+    // And submitLogReschedule still reaches back across the seam.
+    assert.match(appSrc, /_updateTaskInAllStores\(/, 'submitLogReschedule still calls the shared store');
+    assert.match(appSrc, /MOVED to app-tasks\.js/, 'app.js keeps a pointer comment');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
