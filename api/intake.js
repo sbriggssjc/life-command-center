@@ -243,6 +243,16 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleMailboxAck } = await import('./_handlers/mailbox-reconcile.js');
       return handleMailboxAck(req, res);
     }
+    case 'move-queue-worklist': {
+      // P120 — Move-Queue Executor: pending moves the PA mover should execute.
+      const { handleMoveQueueWorklist } = await import('./_handlers/move-queue.js');
+      return handleMoveQueueWorklist(req, res);
+    }
+    case 'move-queue-ack': {
+      // P120 — Move-Queue Executor: the PA mover stamps each move outcome here.
+      const { handleMoveQueueAck } = await import('./_handlers/move-queue.js');
+      return handleMoveQueueAck(req, res);
+    }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
       return handleIntakeFeedback(req, res);
@@ -253,7 +263,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, sf-cis, mobile-share, log-call, tagged-comm, mailbox-reconcile-worklist, mailbox-reconcile-ack, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, sf-cis, mobile-share, log-call, tagged-comm, mailbox-reconcile-worklist, mailbox-reconcile-ack, move-queue-worklist, move-queue-ack, feedback, accuracy'
       });
   }
 });

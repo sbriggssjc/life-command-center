@@ -10,6 +10,70 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## P120 (2026-08-20) — the app now MOVES emails: move-queue executor built (was: nothing ever drained it)
+
+**Migration `20260820140000_lcc_p120_move_queue_executor.sql` — APPLIED LIVE to LCC Opps
+(`xengecqvemvfknjvbvrq`), so the data layer is live now. The two new sub-routes ship on the next Railway
+redeploy of merged `main` → run the deploy gate `npm run verify:deploy` and confirm
+`/api/move-queue-worklist` + `/api/move-queue-ack` return JSON, not the SPA HTML.**
+
+**Cowork reconcile-verified live 2026-08-20 (PR #1763 merged @ 37fa2e7):** LCC side all present —
+`v_lcc_move_queue_worklist` (n=**340**: 325 staged + 15 duplicate), `lcc_move_queue_ack` RPC, auto-retire
+cron, `MOVE_QUEUE_EXECUTOR` flag registered **off**, both routes mounted in `server.js` (L421–422).
+`processing_log` real moves since Aug 1 = **0** (correct — nothing moves until the gate below is closed).
+**⏭ THREE STEPS remain, all Scott-side, before a single email actually moves:** (1) Railway redeploy of `main`
++ `verify:deploy`; (2) build the PA executor flow per `docs/architecture/flows/move-queue-executor.md` (Flow 7);
+(3) `MOVE_QUEUE_EXECUTOR=true` + flip the registry row. **⚠️ Ordering hazard to close before/with rollout
+(CC-flagged, not fixed):** Flow 6 (`todo-completion-poll`) flips `staged→filed` WITHOUT moving, while the
+mirror gates on `outcome='staged'` — if Flow 6 wins the race a message sits in staging forever reading
+`filed/moved`. Latent while staging was empty, reachable once the drainer fills it.
+
+**The break (measured live, 4 independent confirmations).** `staged/pending 325 · duplicate/pending 15 ·
+filed/moved 16 · needs_review/skipped 47`. **All 16 `moved` rows carry `outcome='filed'` AND
+`target_folder = final_target_folder`** — the signature of the Flow 6 `todo-completion-poll` `staged→filed`
+flip; `intake.js` never emits `outcome='filed'`. **So the move executor stamped ZERO rows, ever.** Root cause:
+`processing-complete.js` writes the queue row and returns the event in the intake HTTP *response*; the mover
+relay (`POST /api/webhooks/processing-complete` → `pa-move-message.js`) is real and correct but has **no
+caller** (the only `postMoveMessage` call site is the relay itself) and **never wrote `move_status` on any
+path** — no queue endpoint to poll, no stamp-back. `briefing-data.js:297` and the P119 migration header had
+both already recorded it. The index `ix_processing_log_move_queue` existed for a drainer nobody wrote.
+
+**Built.** `v_lcc_move_queue_worklist` (actionable-only: has a move key + destination, not parked, outside the
+1h backoff; FIFO) · `lcc_move_queue_ack()` (the SINGLE stamp-back path; idempotent) ·
+`lcc_move_queue_retire_cleared_parks(dry_run default true)` · handler `api/_handlers/move-queue.js` +
+sub-routes `GET /api/move-queue-worklist` / `POST /api/move-queue-ack` (batch-capable) · flag
+`MOVE_QUEUE_EXECUTOR` registered in `feature_flags_registry` (state `off`) · PA build sheet
+`docs/architecture/flows/move-queue-executor.md` (Flow 7).
+
+**P119 semantics reused, not reinvented** — MESSAGE-not-in-source-folder = terminal SUCCESS on the first ack
+(`move_outcome='already_out'`, no retry/park/alert); DESTINATION-folder-not-found = real break → 1h backoff →
+park after 5 → deduped `move_queue_parked` alert. The classifier remains the single SQL owner
+`lcc_mailbox_mirror_error_is_terminal()`; a test asserts there is **no JS copy**.
+
+**Honest counts:** `move_status='moved'` covers BOTH a real relocation and an already-gone no-op. The
+move-DELTA is `move_outcome='moved'`; the ack response reports `moves_performed` separately from `counts`.
+
+**Verified:** 13/13 JS tests + full suite green; live self-rolling-back synthetic gate **11/11 PASS, 0 residue**
+(real move · msg-not-found terminal at attempts=0 · dest-folder retries · backoff excludes · park-after-5 with
+exactly 1 alert · parked excluded · idempotent re-ack · ack resolves the alert · unknown-message honest ·
+clear_flag true for duplicate / false for staged). **The gate caught a real bug pre-ship:** the first cut used
+`move_status='error'`, which `processing_log_move_status_check` rejects — the schema already had `move_failed`.
+
+**⏭ Scott's live steps (the backlog does NOT drain until these run):** redeploy + deploy gate → dry-run
+`GET /api/move-queue-worklist?force=1&limit=5` → build the PA flow from the Flow 7 sheet → set
+`MOVE_QUEUE_EXECUTOR=true` in Railway + flip the registry row to `on`. Then verify by **state delta**
+(`select move_outcome, count(*) …` and the falling worklist count), never by the run's own tally.
+
+**⚠️ Ordering hazard surfaced (not fixed here):** once staging fills, Flow 6 flips `staged→filed` *without
+moving anything* while the W7.6 mirror (which does the moving) gates its worklist on `outcome='staged'` — if
+Flow 6 wins the race the message sits in staging forever while the DB reads `filed`/`moved`. Latent while
+staging was empty; reachable now. Close it before/with the `MAILBOX_MIRROR` rollout.
+
+**Also corrected:** `docs/KNOWN_ISSUES.md` called this same symptom **"Impact: cosmetic only"** and recommended
+**deleting the `pending_moves` briefing clause** — i.e. removing the only live indicator that the loop was
+open. Entry rewritten as RESOLVED with the durable lesson: before calling an unmaintained counter cosmetic, ask
+what it would look like if the underlying work were genuinely not happening.
+
 ## P150a–P160 (2026-08-19/20, Cowork) — the contact pipe was dead for 3 weeks; owner resolution 2,716 → 4,064
 
 **Not filed as prompt files** — these were done live in Cowork against the DBs. They exist as
