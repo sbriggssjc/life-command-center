@@ -28,8 +28,15 @@ open, of which 3,958 are `mailbox_mirror_parked`** (the intake "Processed"-folde
 buries the ~24 real alerts (9 http_failure, 5 cron_failure on OTHER jobs, 3 sidebar_promote, etc.) — the
 classic Consumption-Layer "999+ badge trains the operator to ignore the surface." Likely cause: the
 flagged-intake flow ALREADY moves the email to Processed on success (its Condition → `Move_email_(V2)`), so
-the separate mailbox-mirror mover then can't find it in the source folder. **Next-up candidate: an auto-retire
-sweep for parked mirror alerts whose email already moved, + de-dup the two movers.** Own prompt, not P118.
+the separate mailbox-mirror mover then can't find it in the source folder.
+
+**✅ Immediate cleanup done (Cowork 2026-08-20):** all 3,960 (100% `not_found_or_not_in_source_folder`, terminal
+after 5×+park) retired reversibly — `resolved_at` set + `resolved_note` tag `cowork-mirror-backlog-retire-20260820`.
+**Health surface 3,987 → 27 real alerts** (cron_failure 6, http_failure 10, flow_failure 3, sidebar_promote 3,
+resolver_calibration_drift 3, lcc_health_red 2 — now visible). Reversible by the note tag.
+**⏭ Durable fix = prompt 119** (`119-mailbox-mirror-park-storm-root-cause-and-auto-retire.md`): root-cause the
+double-mover race, treat `not_found` as terminal SUCCESS (not a retry→park), and add the missing
+Consumption-Layer auto-retire sweep so the surface self-heals. Do NOT re-clear the tagged backlog.
 
 **⚠️ Scope correction — neither was an overnight blip.** Resolving the alert backlog showed both crons had
 been failing on EVERY scheduled run for weeks: **`field-provenance-prune` on 16 days back to 2026-07-25**,
