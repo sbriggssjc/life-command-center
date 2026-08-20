@@ -202,7 +202,21 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
       assert.doesNotMatch(tabsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-entity-tabs.js must NOT take ${fn}`);
     }
     assert.match(detailSrc, /const\s+ENTITY_DETAIL_TABS\s*=/, 'the tab list stays with the dispatcher');
-    for (const w of ['_cortexPullHistory', '_dealOpenSource', '_dealInspectSource']) {
+    // Unit 5 completed the set — no _entityTab* body may remain in detail.js.
+    const strays = [...detailSrc.matchAll(/^function\s+(_entityTab[A-Za-z]+)\s*\(/gm)]
+      .map((m) => m[1])
+      .filter((n) => n !== '_entityTabsForRole' && n !== '_entityTabOverview');
+    assert.deepEqual(strays, [],
+      `entity tab BODY left behind in detail.js — it belongs with its siblings: ${strays.join(', ')}`);
+    for (const fn of ['_entityTabContactDeals', '_entityTabBrokerDeals', '_entityTabPortfolio',
+                      '_entityTabContacts', '_entityGenerateDossier', '_entityOpenDossierMenu']) {
+      assert.match(tabsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-entity-tabs.js defines ${fn}`);
+    }
+    // Shared chrome writes the SAME DOM nodes as the property panel — it is shell.
+    assert.match(detailSrc, /function\s+_entityRenderCompletenessRail\b/,
+      'the shared completeness rail stays in detail.js (it is shell, not tab content)');
+    for (const w of ['_cortexPullHistory', '_dealOpenSource', '_dealInspectSource',
+                     '_entityGenerateDossier', '_entityOpenDossierMenu']) {
       assert.match(tabsSrc, new RegExp(`window\\.${w}\\s*=`), `detail-entity-tabs.js keeps the window.${w} export`);
     }
     assert.match(detailSrc, /MOVED to detail-entity-tabs\.js/, 'detail.js keeps a pointer comment');
