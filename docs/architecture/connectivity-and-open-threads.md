@@ -183,6 +183,38 @@ true_owner signal view rather than off the `lcc_property_owner` graph the panel 
 fix was **not** to re-aim or fork the pivot; it was a sibling worker walking the panel's own graph.
 `owner-contact-enrich` still drains the pivot unchanged.
 
+> ### ⚠️ CORRECTION 2026-08-20 — "the whole chain is healthy" was FALSE, and the crons being ACTIVE is
+> exactly why nobody noticed (P157 / P157a / P159 / P159a)
+>
+> **All four crons were active and succeeding daily while the chain wrote nothing for three weeks.**
+> `lcc_owner_contact_signals` was frozen from **2026-07-28 to 2026-08-20**.
+>
+> * **P157 — the domain views returned nothing to anon.** Six gov and four dia
+>   `v_*_portfolio` views carried `security_invoker=on`, so the CALLER's RLS applied instead of the view
+>   owner's; anon has no policy on `recorded_owners` (where `manager_name` lives), so every `pg_net` page
+>   came back **HTTP 200 with `[]`** — indistinguishable from "no new data". `lcc_sync_owner_contact_signals`
+>   returns `pages_fired`, an honest counter that reads like throughput. Measured
+>   service_role→anon: `v_ownership_history_portfolio` 12,697→0, `vw_portfolio_owners` 1,915→0,
+>   `v_owner_contact_signals_portfolio` 733→0. Fixed by `security_invoker=off`; gov 697→743 rows,
+>   dia 392→408, first write since July.
+> * **P157a — the finalize could not survive a duplicate key.** Two pages covering the same owner in one
+>   batch hit `21000 ON CONFLICT DO UPDATE cannot affect row a second time`, and the abort also skipped the
+>   CTE that clears `lcc_owner_signal_sync_inflight` — so it was self-perpetuating. **Dormant only because
+>   P157 meant no batch ever contained two real rows.** Fixing one bug exposed the other.
+> * **P159 / P159a — the enrich tick was 2/3 dead weight.** Under `rank_value DESC` the `updated_at`
+>   rotation this section's model assumes is only a TIEBREAK, so terminal rows
+>   (`enrichment_action='manual_research'`, `find_person_at_manager`, or an open `owner_contact_manual`
+>   task) jammed the highest-value slots forever — **17 of the top 25**, matching the live `skipped` count
+>   exactly. Queue 4,472 → 757 actionable; useful work 32% → 88%; real drain 6 → 16/run. **Cron 139 is now
+>   `25 * * * *` at `limit=100`, not daily at 25.**
+>
+> **Read row (D) below with this in mind:** SOS-direct is no longer the only unlock. **P155/P156 built a
+> SAM.gov bulk path** — the per-entity API is rate-limited to ~10 lookups/day (NOT the 401 the older docs
+> claim), but the PUBLIC MONTHLY extract is ONE request covering every registrant. It carries POC
+> **name + title** but **no email/phone** (those are FOUO, federal-account-only), so it converts
+> "unreachable LLC" into "named decision-maker at a known company" at scale — which is what
+> **P158's new `NAMED LEAD — find their line` state** and `v_lcc_named_lead_worklist` exist to surface.
+
 **Built:** `POST /api/owner-contact-propagate-tick` (GET = dry-run default) —
 `api/_handlers/owner-contact-propagate.js` + the pure planner
 `api/_shared/owner-contact-propagate-planner.js`, migration `20260903120000`, 27 tests in

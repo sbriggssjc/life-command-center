@@ -17,6 +17,13 @@ which records why the Salesforce note records did **not** close this gap.
 The gap: **3,883 top seller prospects with no reachable contact, $2,715.9M** of
 annual rent. The dia slice is **808 owners / $244.3M** across 1,135 properties.
 
+> **📌 COUNT UPDATED 2026-08-20 — now 4,120 prospects / $3,771.9M, and NOT directly comparable to the
+> 3,883 / $2,715.9M above.** The figure moved because the *composition* of `v_lcc_top_seller_prospects`
+> changed, not because the backlog simply grew: **P150a/P154** removed merged-away tombstones (an entity
+> that had already been merged into a survivor was still being ranked as its own prospect), **P151**
+> removed public bodies, and **P152** removed agents. Treat the two numbers as different populations —
+> do not subtract them to infer progress or regression.
+
 The note records (P129–P134) failed at it twice — ~10% contact hit rate, and 0 of
 236 supersession ties broken — for two structural reasons this workbook does not
 share:

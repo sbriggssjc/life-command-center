@@ -36,6 +36,23 @@ LCC NEXT BEST ACTION  ─► broker/sidebar action ─► (back to SOURCES)
 | **Salesforce** | bidirectional sync | existing **accounts (entities)** + **contacts (decision makers)** + relationship/engagement | `unified_contacts.sf_account_id`, contacts | resolved entity with no `sf_account_id` → **research_task / auto-create SF account** (`sf_push`); decision-maker contacts attached |
 | **Outlook / calendar** | sync | who we actually know + last touch | `unified_contacts.outlook_contact_id`, engagement fields | raises NBA priority for entities where we already have a warm contact |
 
+> **⚠️ SAM.gov row — SUPERSEDED 2026-08-20. The key is VALID; the constraint is a RATE LIMIT.** (This
+> blueprint never carried the `401 API_KEY_INVALID` claim that circulated elsewhere; the correction is
+> recorded here because the "weekly + on-demand from a GSA-owner task" cadence — and the "SAM enrichment
+> tick, every 2h" row in §5 — assume a throughput that does not exist.) Live evidence: 281 `sam_entities`
+> (53 in the last 30 days), 497 contacts with `data_source='sam'`, owners stamped `sam_checked` as recently
+> as 2026-08-19. Per GSA's published tier table a non-federal personal key with **no role** gets **10
+> requests/day** (with a role: 1,000). A live probe returns
+> `{"rate_limited":true,"api_calls":0,"next_access":"…00:00Z"}` and stops on the first owner, so an
+> on-demand `owner_needs_sam` task cannot be serviced promptly. The fail-soft design (an API error skips the
+> `sam_checked` mark so the owner retries) makes a ~98% rate-limited pipeline indistinguishable from a
+> healthy slow one — **measure `sam_checked` stamps per day, never "is the cron active".** Bulk alternative
+> built 2026-08-20: the PUBLIC MONTHLY entity extract is ONE request covering all registrants
+> (`GovernmentProject/src/ingest_sam_public_extract.py` + `gov_match_sam_public_extract`) — it carries POC
+> name+title but **NOT email/phone** (FOUO, federal-account-only), so the "officer rows → contacts →
+> unified_contacts" cascade above lands names, not reachable lines. See
+> `GovernmentProject/docs/RUNBOOK_sam_public_extract_cron.md`.
+
 **Already-firing triggers we build on** (gov, confirmed): `propagate_ownership_to_property`, `propagate_sale_to_property`, `close_listing_on_sale`, `contact_auto_link_before/after`, cap-rate snapshots, `stamp_ingestion_log`. **To add:** an AFTER-insert/update trigger on `recorded_owners`/`true_owners` that calls `resolve_company` and, on no-match, enqueues a research task (today owner resolution is batch-only).
 
 ---

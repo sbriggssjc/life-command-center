@@ -18,7 +18,23 @@
 
 ## 2. The recommendation — five free lanes, then re-price OpenCorporates
 
-**Lane 1 — SAM feed widening (gov; free; automated; highest certainty).** Point `sam-entity-lookup`'s candidate query at every gov recorded/true owner lacking a SAM match, value-ranked, GSA-lessor rows first (the 380). At the existing 50-per-2h cadence the lessor cohort drains in ~2 days. Expected yield: a large majority of the 380 (federal lessors are near-universally registered), each closing its queue row via the existing propagator.
+**Lane 1 — SAM feed widening (gov; free; automated; highest certainty).** Point `sam-entity-lookup`'s candidate query at every gov recorded/true owner lacking a SAM match, value-ranked, GSA-lessor rows first (the 380). ~~At the existing 50-per-2h cadence the lessor cohort drains in ~2 days.~~ Expected yield: a large majority of the 380 (federal lessors are near-universally registered), each closing its queue row via the existing propagator.
+
+> **⚠️ SUPERSEDED 2026-08-20 — the drain rate above is unreachable; the key is VALID and the constraint is a RATE LIMIT.**
+> (This plan never claimed a `401 API_KEY_INVALID`; the correction is recorded here because the "50-per-2h /
+> ~2 days" cadence Lane 1 is priced on is wrong by ~2 orders of magnitude.) Live evidence: 281 `sam_entities`
+> (53 in the last 30 days), 497 contacts with `data_source='sam'`, owners stamped `sam_checked` as recently as
+> 2026-08-19. Per GSA's published tier table a non-federal personal key with **no role** gets **10 requests/day**
+> (with a role: 1,000). The cron asks for 50 lookups × 12 runs/day and **~10–23 owners actually get checked** —
+> one run burns the daily allowance and the other eleven no-op; a live probe returns
+> `{"rate_limited":true,"api_calls":0,"next_access":"…00:00Z"}` and stops on the first owner. So the 380-row
+> lessor cohort is **~1–2 months**, not ~2 days, unless the key gains a role. The fail-soft design (an API error
+> skips the `sam_checked` mark so the owner retries) makes a ~98% rate-limited pipeline indistinguishable from a
+> healthy slow one — **measure `sam_checked` stamps per day, never "is the cron active".** Bulk alternative built
+> 2026-08-20 and the better Lane-1 primitive: the PUBLIC MONTHLY entity extract is ONE request covering all
+> registrants (`GovernmentProject/src/ingest_sam_public_extract.py` + `gov_match_sam_public_extract`), carrying
+> POC name+title but NOT email/phone (FOUO, federal-account-only). See
+> `GovernmentProject/docs/RUNBOOK_sam_public_extract_cron.md`.
 
 **Lane 2 — County mailing-address capture (both; free; already planned as W3.1).** The near-free win the 07-14 audit identified: 9,541 parcels already fetched, 7 with mailing addresses — the scraper never grabbed the column. This is Scott's manual step #1 and fuels the ORE's second-strongest evidence signal. No new credentials.
 

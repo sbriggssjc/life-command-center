@@ -10,6 +10,44 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## P150a–P160 (2026-08-19/20, Cowork) — the contact pipe was dead for 3 weeks; owner resolution 2,716 → 4,064
+
+**Not filed as prompt files** — these were done live in Cowork against the DBs. They exist as
+`supabase/migrations/20260930120900…20260930121600*.sql` (LCC),
+`GovernmentProject/sql/20260819_gov_p155*…20260820_gov_p157*.sql`,
+`DialysisProject/supabase/migrations/20260820_dia_p157*.sql`, plus
+`GovernmentProject/src/ingest_sam_public_extract.py` and
+`docs/RUNBOOK_sam_public_extract_cron.md`. Full narrative in `docs/audits/ROLLOUT_STATUS.md` session log.
+
+**Theme: every failure reported healthy.** Three-week-dead pipes behind green crons; a value gate present
+in code and inert in the data; a worker reporting `drillthrough: 37` while draining 6.
+
+| Unit | What |
+|---|---|
+| P150a/b, P154 | Merge tombstones: evidence stranded, **30 merged-away entities still in the prospect list**, $32.5M double-counted, one live A→B/B→A **merge cycle**. `lcc_entity_survivor()` (hop-capped 20). |
+| P151 | Public bodies out of prospects — 234 owners / $87.2M of unworkable BD. Guard matches the governmental FORM, not the word "city" (`Space Center Kansas City Inc` is private). |
+| P152 | `lcc_owner_name_is_agent()` — CMBS servicers / trustee banks / OBO managers are not principals. Deferred by P146, P148a and P149; closed here. **60 community banks and 17 individual trustees deliberately NOT matched.** |
+| P153 | Article/punctuation duplicate merges (told Scott "5 pairs", merged 86 — all verified genuine). |
+| P155 | **The SAM value gate was inert.** `deal_value` used a join path empty for exactly the owners its top tier selects, so ~10 scarce daily lookups went out **alphabetically by UUID**. 131/131 tier-0 owners have rent (max $26.3M) via the other path. |
+| P156/a/b/e/f/g | **SAM public monthly BULK extract** — one API request instead of 23,000. Railway (per the standing hosting rule; I built it on GH Actions first and Scott caught it). Layout guard, placeholder-POC guard (**GSA's sample is anonymised to "JOHN DOE" — an `--apply` would have written a fictional person onto 1,117 owners**), per-table uniqueness (union rule was discarding 5.1× the coverage), matcher 7.09s→2.03s. |
+| **P157/P157a** | **6 gov + 4 dia `v_*_portfolio` views had `security_invoker=on` → anon got HTTP 200 `[]`.** `lcc_owner_contact_signals` frozen **2026-07-28 → 2026-08-20** with crons 136/137 green throughout. Fixing it exposed a second bug (`21000` on duplicate keys) **dormant only because of the first**. |
+| P158/a | New pursuit state **`NAMED LEAD — find their line`** + `v_lcc_named_lead_worklist` — 61 owners / $121.5M we can name but not dial (USAA Real Estate → Joseph Capra, $62.0M). NOT marked reachable (P112). |
+| P159/a | Enrich queue 4,472 → **757 actionable**; useful work 32% → 88%; real drain 6 → 16/run. Cron 139 now hourly `limit=100`. |
+| P160 | `lcc_merge_entity` repoints the ownership/BD backrefs the reconcile never moved + cycle guard + terminal-survivor resolution. Cleaned **63 dead owners / 99 stranded pivots** it had already created. |
+
+**Near-misses worth remembering** (all caught by measuring before applying): adding `&` as an org marker
+would have retyped **119 people and touched 66 resolved owners** — the population is married couples
+(`Amy & Richard Gonzalez`); a `bank ... trust` agent arm would have swallowed **60 community banks**;
+a `by <brokerage>` rejection guard would have discarded **197 real owners** wearing a capture artifact.
+
+**Book after:** 4,120 prospects / $3.77B — 509 pursuing, 61 named leads, 3,547 needing a contact.
+
+**Operator (Scott):** confirm `SAM_API_KEY` (repo convention, NOT the edge function's `SAM_GOV_API_KEY`)
+and gov `SUPABASE_URL` on the new Railway service. Cron `0 0 9 * *` is deliberate — the entity cron
+empties the daily quota at 00:15, so any later slot is rate-limited every month.
+
+---
+
 ## P119 (2026-08-20) — mailbox-mirror park storm root-caused + auto-retire shipped
 
 **Migration `20260820120000_lcc_p119_mailbox_mirror_not_found_terminal.sql`, applied live to LCC Opps
