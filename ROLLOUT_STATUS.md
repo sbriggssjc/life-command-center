@@ -77,6 +77,18 @@ mailbox write-back, built as a PULL model (LCC never touches the mailbox).
   self-rolling-back synthetic fixtures (0 residue). JS tests
   `test/mailbox-reconcile.test.mjs` (11) incl. the no-LLM-import assertion.
 
+> **⚠️ CORRECTED BY P119 (2026-08-20) — read that before touching this.** "3,908, all
+> via the triage arm" was recorded as a coverage note; it was in fact the defect. The
+> worklist had **no source-folder-membership gate**, so it published the entire
+> historical flagged-email inbox (4,051 `inbox_items`, 3,944 bulk-`archived` on a
+> handful of days) as moves against a folder those messages had never entered. Live
+> result: **3,963 acks, 0 moves ever, 3,960 parks** = 99.3% of the open-alert surface.
+> Migration `20260820120000_lcc_p119_mailbox_mirror_not_found_terminal.sql` (applied
+> live) gates the view on `processing_log.outcome='staged'` (anchor 4,051 → 323),
+> makes a not-in-source-folder ack **terminal success** rather than a retry→park, and
+> adds the auto-retire sweep + cron. Details: `docs/claude-code/STATUS.md` (P119) and
+> `docs/setup/OUTLOOK_MAILBOX_MIRROR_FLOW.md`.
+
 ### W7.1 — session log (2026-08-06)
 Branch `claude/deal-correspondence-attribution-live-s8ta63`.
 

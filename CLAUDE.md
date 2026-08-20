@@ -535,6 +535,34 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   `trg_lcc_cadence_future_touch_guard` (BEFORE INSERT/UPDATE on `touchpoint_cadence`) clamps + opens a
   deduped `cadence_future_last_touch` health alert. **A real `CHECK` is impossible** — `now()` is not
   immutable, so Postgres rejects it in a CHECK constraint; the trigger form is the only option.
+- **A worklist that publishes a MOVE must gate on the item actually being where it says (P119, 2026-08-20).**
+  The W7.6 mailbox mirror acked **3,963 messages and moved zero, ever** — 100% of them
+  `not_found_or_not_in_source_folder`, parking 3,960 `mailbox_mirror_parked` alerts = **99.3% of the whole
+  open-alert surface**. Three durable rules came out of it:
+  - **"The desired end state is already true" is SUCCESS, not a retryable failure.** A mover reporting the
+    MESSAGE is not in the source folder means the work is done. It is now terminal
+    (`lcc_mailbox_reconcile_ledger.outcome='already_out'`, `action='noop'`) on the FIRST ack — no retry, no
+    park, no alert — and any open park alert for it is resolved on the spot. The classifier
+    `lcc_mailbox_mirror_error_is_terminal()` is a narrow allowlist and the SINGLE owner of the decision (a JS
+    copy is the normaliser drift this file warns about elsewhere; a test enforces there isn't one). A missing
+    **DESTINATION** folder (`ErrorFolderNotFound`, a stale `processedFolderId`) is a REAL break and still
+    retries/parks/alerts — "X not found" is two different facts, so never collapse them into one predicate.
+  - **ONE OWNER PER STATE TRANSITION.** The flagged-intake flow already moves the email to Processed on its
+    own success, so two movers were racing for one transition. The intake flow owns Inbox→Processed and
+    Inbox→staging; the mirror owns staging→Processed and publishes ONLY messages LCC itself staged
+    (`processing_log.outcome='staged'`) — producer anchor **4,051 → 323**.
+  - **⚠️ A "triaged away" status is NOT a per-item decision when it was set in bulk.** The worklist's
+    `inbox_triaged` arm (`inbox_items.status IN ('dismissed','archived')`) carried **100%** of the 3,960
+    parks, because 3,944 of 4,051 flagged items are `archived` — 2,319 of them in ONE bulk sweep on
+    2026-06-04 and 580 on 2026-06-16. Before using a status as a closure signal, check whether it clusters on
+    a handful of days; a bulk-set status admits the entire historical population and is the same
+    Consumption-Layer failure as the P112 bare-SF-identity cadence gate.
+  - Sweep: `lcc_mailbox_mirror_retire_cleared_parks(dry_run default true)` + cron `lcc-mailbox-mirror-retire`
+    (06:25). Touches `resolved_at IS NULL` only ⇒ idempotent, never rewrites another batch's retire tag;
+    returns `alerts_left_open` as the honest count of genuinely stuck moves. Reversible by
+    `resolved_note LIKE 'p119-mirror-auto-retire:%'`. **Related honest-count trap:** the ledger's `moved=true`
+    now covers BOTH "we moved it" and "it was already gone" — read `outcome`, never quote `moved` as a count
+    of moves performed. Full writeup: `docs/setup/OUTLOOK_MAILBOX_MIRROR_FLOW.md`.
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
 - **"Owner is reachable" has THREE definitions — quote `reachable_hero_effective`.** The owner-panel hero

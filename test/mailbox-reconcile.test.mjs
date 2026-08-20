@@ -135,6 +135,57 @@ describe('mailbox mirror — ack mapping + validation', () => {
   });
 });
 
+describe('mailbox mirror — P119 terminal not-found disposition', () => {
+  it('forwards a not-in-source-folder error VERBATIM (SQL owns the classification)', async () => {
+    process.env.MAILBOX_MIRROR = 'true';
+    let call = null;
+    const opsQuery = async (m, path, body) => {
+      call = { body };
+      return { ok: true, data: [{ ok: true, moved: true, outcome: 'already_out', terminal: true, parked: false, attempts: 0 }] };
+    };
+    const res = mockRes();
+    await handleMailboxAck({ method: 'POST', headers: {}, query: {},
+      body: { internet_message_id: 'T1', moved: false, error: 'not_found_or_not_in_source_folder' } },
+      res, { authenticate: authOk, opsQuery });
+    // The handler must NOT rewrite/normalise the error — the SQL classifier reads it.
+    assert.equal(call.body.p_error, 'not_found_or_not_in_source_folder');
+    assert.equal(call.body.p_moved, false);
+  });
+
+  it('surfaces the RPC terminal disposition back to the mover', async () => {
+    process.env.MAILBOX_MIRROR = 'true';
+    const opsQuery = async () => ({ ok: true,
+      data: [{ ok: true, moved: true, outcome: 'already_out', terminal: true, parked: false, attempts: 0 }] });
+    const res = mockRes();
+    await handleMailboxAck({ method: 'POST', headers: {}, query: {},
+      body: { internet_message_id: 'T2', moved: false, error: 'not_found' } },
+      res, { authenticate: authOk, opsQuery });
+    assert.equal(res.body.result.terminal, true);
+    assert.equal(res.body.result.outcome, 'already_out');
+    assert.equal(res.body.result.parked, false);
+  });
+
+  it('still surfaces a genuine park (destination-folder break) as failed', async () => {
+    process.env.MAILBOX_MIRROR = 'true';
+    const opsQuery = async () => ({ ok: true,
+      data: [{ ok: true, moved: false, outcome: 'failed', terminal: false, parked: true, attempts: 5 }] });
+    const res = mockRes();
+    await handleMailboxAck({ method: 'POST', headers: {}, query: {},
+      body: { internet_message_id: 'T3', moved: false, error: 'ErrorFolderNotFound: destinationId invalid' } },
+      res, { authenticate: authOk, opsQuery });
+    assert.equal(res.body.result.terminal, false);
+    assert.equal(res.body.result.parked, true);
+  });
+
+  it('never re-implements the terminal classifier in JS (single SQL owner)', () => {
+    const src = readFileSync(join(root, '..', 'api', '_handlers', 'mailbox-reconcile.js'), 'utf8');
+    // A JS copy of the not-found allowlist is the normaliser-drift footgun.
+    const code = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    assert.ok(!/not_?found|already_out|ErrorItemNotFound|isTerminal/i.test(code),
+      'the not-found/terminal classification must live only in lcc_mailbox_mirror_error_is_terminal()');
+  });
+});
+
 describe('mailbox mirror — no-LLM invariant', () => {
   it('the module imports no ai / LLM seam', () => {
     const src = readFileSync(join(root, '..', 'api', '_handlers', 'mailbox-reconcile.js'), 'utf8');

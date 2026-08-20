@@ -10,6 +10,61 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## P119 (2026-08-20) — mailbox-mirror park storm root-caused + auto-retire shipped
+
+**Migration `20260820120000_lcc_p119_mailbox_mirror_not_found_terminal.sql`, applied live to LCC Opps
+(`xengecqvemvfknjvbvrq`). No Railway deploy required for the fix itself** (view + RPC + sweep are all
+data-layer); the JS change is comment/test only.
+
+**⚠️ The leading hypothesis below (double-mover race) was RIGHT about the mechanism and WRONG about the
+scale — it accounts for 7 of 3,960 rows (0.2%).** Measured live:
+
+- **The mover has moved ZERO messages, ever.** `lcc_mailbox_reconcile_ledger` = 3,963 rows since
+  2026-08-06, **0 with `moved=true`**, 100% `last_error='not_found_or_not_in_source_folder'`.
+- **100% of the 3,960 parks qualified via the `inbox_triaged` arm** — none via `todos_done` or
+  `thread_replied`. And `archived` is not deliberate triage: 2,319 rows were archived in one bulk sweep on
+  2026-06-04, another 580 on 2026-06-16.
+- **The real cause is producer over-emission.** The worklist had **no source-folder-membership predicate** —
+  it published every `inbox_items` row with `source_type='flagged_email'` (4,051) as a move against a folder
+  those messages never entered. Split of the 3,960 parks: **3,649 (92.1%) no `processing_log` decision at
+  all** (Apr–May 2026 capture, predates the move queue) · 245 (6.2%) `staged` · 45 (1.1%) `needs_review`
+  (by design left in place) · 14 (0.4%) `duplicate` · **7 (0.2%) `filed`** — the actual double-mover class.
+- **Stale-folder-binding is moot, not ruled in or out.** It's PA-side and unreadable from LCC, but a correct
+  binding would still find nothing, because nothing populates the folder (below).
+
+**Fixes:**
+1. **Producer gate** — the worklist now requires `processing_log.outcome='staged'` (LCC itself routed the
+   message to "Intake Staged, Not Completed"). Producer anchor **4,051 → 323 (−92.0%)**. Ownership rule:
+   the intake flow owns Inbox→Processed and Inbox→staging; the mirror owns staging→Processed *only*.
+2. **`not_found` is TERMINAL SUCCESS** — a not-in-source-folder ack records `outcome='already_out'`,
+   `action='noop'`, attempts 0, no park, no alert, and resolves any open park alert for that message.
+   Classifier `lcc_mailbox_mirror_error_is_terminal()` is a narrow allowlist and is the **single owner** of
+   that decision (never re-implemented in JS — test-enforced). A **destination**-folder-not-found
+   (`ErrorFolderNotFound`, stale `processedFolderId`) still retries, parks and alerts.
+3. **Auto-retire sweep** `lcc_mailbox_mirror_retire_cleared_parks(dry_run default true)` + cron
+   `lcc-mailbox-mirror-retire` (06:25 UTC). Resolves open parks whose premise cleared, normalises those
+   ledger rows so they can't re-park, returns `alerts_left_open` as the honest count of genuinely stuck
+   moves. Touches `resolved_at IS NULL` only ⇒ **idempotent and never rewrites the
+   `cowork-mirror-backlog-retire-20260820` batch**. Reverse by `resolved_note LIKE 'p119-mirror-auto-retire:%'`.
+
+**Verified live:** 16/16 named terminal-classifier cases pass (including the destination-folder case that
+must still alert); a self-rolling-back synthetic gate covers terminal ack → already_out + 0 alerts, re-ack
+idempotence, destination-folder break → parks + 1 alert, sweep dry-run mutates nothing, sweep real retires
+the cleared park and normalises its ledger row, **and leaves the genuinely-stuck park open** — `all_pass=t`,
+**0 residue**. The 3 still-retrying ledger rows all classify terminal on their next ack ⇒ **no new parks**.
+Open `mailbox_mirror_parked` = **0**; the 27 real alerts stay visible. JS/tests: 15/15 in
+`test/mailbox-reconcile.test.mjs`.
+
+**⏭ Open upstream gap (surfaced, NOT fixed here — it is not a mirror bug).** All **323**
+`processing_log` rows with `outcome='staged'` are still `move_status='pending'`, back to 2026-07-21 — the
+queue that moves a staged email *into* "Intake Staged, Not Completed" **has never been drained** (the only
+rows it ever moved were 16 `filed` ones, 2026-07-21→23). So the staging folder is not being populated and
+the mirror will keep correctly + quietly acking `already_out`. **Draining that queue is the next piece of
+work.** Also: the PA mover omits `reason` on its failure ack (all 3,963 ledger rows have `reason=NULL`) —
+one-line flow fix noted in the runbook.
+
+---
+
 ## P118 (2026-08-20) — two overnight cron failures fixed live on LCC Opps
 
 Both surfaced in the 2026-08-20 overnight-verification sweep below. Three migrations, all **live on LCC
@@ -34,9 +89,10 @@ the separate mailbox-mirror mover then can't find it in the source folder.
 after 5×+park) retired reversibly — `resolved_at` set + `resolved_note` tag `cowork-mirror-backlog-retire-20260820`.
 **Health surface 3,987 → 27 real alerts** (cron_failure 6, http_failure 10, flow_failure 3, sidebar_promote 3,
 resolver_calibration_drift 3, lcc_health_red 2 — now visible). Reversible by the note tag.
-**⏭ Durable fix = prompt 119** (`119-mailbox-mirror-park-storm-root-cause-and-auto-retire.md`): root-cause the
-double-mover race, treat `not_found` as terminal SUCCESS (not a retry→park), and add the missing
-Consumption-Layer auto-retire sweep so the surface self-heals. Do NOT re-clear the tagged backlog.
+**✅ Durable fix SHIPPED — see the P119 section at the top of this file** (2026-08-20). Note the hypothesis
+in the paragraph above is only 0.2% of the story: the mirror had moved **zero** messages ever, and the real
+cause was a worklist with no source-folder-membership gate publishing the whole historical flagged inbox.
+The tagged backlog was NOT re-cleared.
 
 **⚠️ Scope correction — neither was an overnight blip.** Resolving the alert backlog showed both crons had
 been failing on EVERY scheduled run for weeks: **`field-provenance-prune` on 16 days back to 2026-07-25**,
