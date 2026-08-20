@@ -12,9 +12,17 @@
 
 ## P118 (2026-08-20) — two overnight cron failures fixed live on LCC Opps
 
-Both from the 2026-08-20 overnight-verification sweep below (`cron_failure` on `lcc-owner-address-feed`,
-plus the `field-provenance-prune` FK error). Three migrations, all **live on LCC Opps
-(`xengecqvemvfknjvbvrq`), no Railway deploy**: `20260930121200` / `121300` / `121400`.
+Both surfaced in the 2026-08-20 overnight-verification sweep below. Three migrations, all **live on LCC
+Opps (`xengecqvemvfknjvbvrq`), no Railway deploy**: `20260930121200` / `121300` / `121400`.
+
+**⚠️ Scope correction — neither was an overnight blip.** Resolving the alert backlog showed both crons had
+been failing on EVERY scheduled run for weeks: **`field-provenance-prune` on 16 days back to 2026-07-25**,
+**`lcc-owner-address-feed` on 10 days back to 2026-08-11**. The nightly `cron_failure` alert fired each
+time and was read each morning as a fresh one-off. So `field_provenance` had been growing entirely
+unpruned for ~4 weeks (to 1.66M) — the disk-pressure → **sign-in-lockout** path, not a cosmetic cron.
+21 stale alerts were closed with a P118 note (the unrelated `cm-gov-packet-refresh` alert left open).
+**Lesson: a recurring alert that reads as "new today" is worth one `group by job` over the alert history
+before triaging it as fresh.**
 
 **(a) `field-provenance-prune` — FK 23503 on the SECOND resolution pointer.**
 `field_provenance_resolutions` references `field_provenance` through **two** FK columns; the 2026-08-06
