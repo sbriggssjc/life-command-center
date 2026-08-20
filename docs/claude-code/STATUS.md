@@ -17,6 +17,17 @@
 redeploy of merged `main` → run the deploy gate `npm run verify:deploy` and confirm
 `/api/move-queue-worklist` + `/api/move-queue-ack` return JSON, not the SPA HTML.**
 
+**Cowork reconcile-verified live 2026-08-20 (PR #1763 merged @ 37fa2e7):** LCC side all present —
+`v_lcc_move_queue_worklist` (n=**340**: 325 staged + 15 duplicate), `lcc_move_queue_ack` RPC, auto-retire
+cron, `MOVE_QUEUE_EXECUTOR` flag registered **off**, both routes mounted in `server.js` (L421–422).
+`processing_log` real moves since Aug 1 = **0** (correct — nothing moves until the gate below is closed).
+**⏭ THREE STEPS remain, all Scott-side, before a single email actually moves:** (1) Railway redeploy of `main`
++ `verify:deploy`; (2) build the PA executor flow per `docs/architecture/flows/move-queue-executor.md` (Flow 7);
+(3) `MOVE_QUEUE_EXECUTOR=true` + flip the registry row. **⚠️ Ordering hazard to close before/with rollout
+(CC-flagged, not fixed):** Flow 6 (`todo-completion-poll`) flips `staged→filed` WITHOUT moving, while the
+mirror gates on `outcome='staged'` — if Flow 6 wins the race a message sits in staging forever reading
+`filed/moved`. Latent while staging was empty, reachable once the drainer fills it.
+
 **The break (measured live, 4 independent confirmations).** `staged/pending 325 · duplicate/pending 15 ·
 filed/moved 16 · needs_review/skipped 47`. **All 16 `moved` rows carry `outcome='filed'` AND
 `target_folder = final_target_folder`** — the signature of the Flow 6 `todo-completion-poll` `staged→filed`
