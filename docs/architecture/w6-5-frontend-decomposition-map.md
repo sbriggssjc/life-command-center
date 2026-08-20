@@ -189,6 +189,29 @@ tab label in the strip has a reachable renderer (mirror of the W8 lane-wiring gu
 |---|---|---|
 | Custom modal (`lccPrompt`/`lccConfirm`) (1945+) | `app-modal.js` | leaf utility, **best first candidate** |
 | Treasury yield chart (6889+) | `app-treasury-chart.js` | self-contained Chart.js block |
+
+### Stage 3, Unit 3 — `app-export-comps.js` (SHIPPED 2026-08-20)
+
+`exportCompsToXlsx` + its `window` export, app.js 12615–12686 (sha256 `e97dba86c3f8f9d2`,
+byte-identical). A genuine leaf — reads only its arguments, calls the CDN-global `XLSX`,
+reports via `showToast`. 96 lines out; `app.js` 12,712 → 12,646.
+
+**The load-bearing detail: its ONLY callers are inline `onclick` strings built by OTHER
+files** — `dialysis.js` (~10197) and `gov.js` (~9336) both emit
+`onclick="exportCompsToXlsx(<domain>FilteredSalesData, 'sales')"`. Nothing calls it
+lexically. Drop `window.exportCompsToXlsx = exportCompsToXlsx;` and both Export buttons
+render perfectly and do nothing, silently — the exact hazard §2b warns about, here in its
+purest form. The guard asserts the export by name AND that both callers still invoke it
+by that name, so renaming either half fails.
+
+Four mutations, all fail correctly: drop the window export (1 suite); break the
+`dialysis.js` onclick (1); leave a copy behind in `app.js` (**2** — load-order and the
+duplicate detector catch it independently); load the sibling after `app.js` (1).
+
+Neighbours deliberately left in `app.js`: the LiveIngest window exports immediately above
+the region, the iOS install banner immediately below. Adjacent in the file, unrelated in
+purpose — the third unit running where the file's line order carried no grouping meaning.
+
 | Export-comps-to-Excel (12920+) | `app-export-comps.js` | leaf, XLSX only |
 | **Hash router** (`ROUTE_*`, `applyRoute`, `_routeParseHash`, `navTo`, `_detailStack*`) (988–2300) | **keep in app.js** | the router is the spine — extract last, if ever |
 | Shared task store, SF sync, reassign/reclassify (5361–6260) | `app-tasks.js` | med coupling |

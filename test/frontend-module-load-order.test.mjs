@@ -357,6 +357,38 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(appSrc, /MOVED to app-treasury-chart\.js/, 'app.js keeps a pointer comment');
   });
 
+  // ── Stage 3, Unit 3: app-export-comps.js ─────────────────────────────────
+  it('app-export-comps.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const x = scriptIndex('app-export-comps.js');
+    assert.ok(x >= 0, 'index.html must load app-export-comps.js');
+    assert.ok(x < scriptIndex('app.js'), 'app-export-comps.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-export-comps\.js/i,
+      'app-export-comps.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-export-comps.js')]),
+      'app-export-comps.js must be syntactically valid');
+  });
+
+  it('the Excel export moved WITH its window export (two files onclick it)', () => {
+    const xSrc = readFileSync(join(root, 'app-export-comps.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    assert.match(xSrc, /function\s+exportCompsToXlsx\b/, 'app-export-comps.js defines exportCompsToXlsx');
+    assert.doesNotMatch(appSrc, /function\s+exportCompsToXlsx\b/, 'app.js must NOT redefine it');
+    // ⚠️ The ONLY callers are inline onclick strings built by dialysis.js and
+    // gov.js. They resolve off `window` at CLICK time — lose this line and both
+    // Export buttons render and do nothing, with no error anywhere.
+    assert.match(xSrc, /window\.exportCompsToXlsx\s*=\s*exportCompsToXlsx/,
+      'app-export-comps.js MUST keep the window export — dialysis.js and gov.js onclick it');
+    // And the callers must still be reaching it by that name.
+    for (const f of ['dialysis.js', 'gov.js']) {
+      assert.match(readFileSync(join(root, f), 'utf8'), /onclick="exportCompsToXlsx\(/,
+        `${f} still invokes exportCompsToXlsx from an inline onclick`);
+    }
+    // Neighbours that deliberately stayed.
+    assert.match(appSrc, /window\.renderLiveIngestWorkbench\s*=/, 'LiveIngest exports stay in app.js');
+    assert.doesNotMatch(xSrc, /iPhone\|iPad/, 'the iOS install banner is not part of this region');
+    assert.match(appSrc, /MOVED to app-export-comps\.js/, 'app.js keeps a pointer comment');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
