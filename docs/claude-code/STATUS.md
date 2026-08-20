@@ -10,6 +10,65 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## P118 (2026-08-20) — two overnight cron failures fixed live on LCC Opps
+
+Both from the 2026-08-20 overnight-verification sweep below (`cron_failure` on `lcc-owner-address-feed`,
+plus the `field-provenance-prune` FK error). Three migrations, all **live on LCC Opps
+(`xengecqvemvfknjvbvrq`), no Railway deploy**: `20260930121200` / `121300` / `121400`.
+
+**(a) `field-provenance-prune` — FK 23503 on the SECOND resolution pointer.**
+`field_provenance_resolutions` references `field_provenance` through **two** FK columns; the 2026-08-06
+fix guarded `current_provenance_id` only, so a row referenced solely via `attempted_provenance_id`
+(id 187741) passed the guard. Because the delete is `where id = any(v_ids)` over a 5,000-id batch,
+**one referenced id failed the entire batch** — the prune deleted *nothing* while `field_provenance`
+grew to 1.66M. Guard added for both columns, in the dry-run count and the batch CTE.
+**Measured: 1,663,282 → 1,371,524 = 291,758 rows pruned, 0 remaining candidates**, all 3 resolutions
+and all 6 referenced provenance rows intact (187741 alive). `attempted_provenance_id` is deliberately
+NOT nulled to make those rows prunable — it is the audit record of what a resolution *tried* to write.
+
+**(b) `lcc-owner-address-feed` — correlated subplan in the resolver.**
+`lcc_resolve_owner_address_observation_entities` recomputed `lcc_normalize_entity_name(e.name)` for every
+org entity, for every observation row (`loops=5`, ~1,021 ms each, 45,325 rows removed by filter).
+Hoisted into a `norm_org` CTE + LEFT JOIN; earliest-`created_at` tiebreak preserved (`e.id` appended only
+to make ties deterministic). Timed in ONE session: old 5,091.8 ms/5 rows (~45 s at 44) → new **1,216 ms at
+the full 44 rows, flat** — cost no longer scales with input rows. Equivalence proven on a match-rich
+104-row sample (44 unresolved + 60 already-resolved): 58 matched by both, **0-row diff both directions**.
+
+**(c) The fix that actually cleared the timeout — a third instance of the same antipattern.**
+(b) alone was **not sufficient**. `lcc_owner_address_feed_tick()` has two halves, and the *feed* half
+(`lcc_feed_owner_signal_addresses`) loops row-by-row over 433 signals calling
+`lcc_record_owner_address_observation`, whose entity-fallback branch runs the **same** full-table
+normalize scan — ~86 ms/row, ~37 s per tick. It is a per-row API called from several places, so it cannot
+be hoisted; it needed an index. Added `idx_entities_norm_name_org` on
+`(lcc_normalize_entity_name(name), created_at) WHERE entity_type='organization' AND merged_into_entity_id
+IS NULL`. **998.756 ms → 0.099 ms, 2,903 → 4 buffers (~10,000x)**, sort node gone.
+**End-to-end: the tick went from statement-timeout (>120 s) to 755 ms; the real pg_cron path now
+succeeds in 0.7–2.5 s and the prune cron in 23.7 s with no FK error.** `entities_resolved` advanced —
+unresolved observations 44 → 43 (only 1 of the 44 has a genuine org match; the rest are honestly
+unmatchable, not starved).
+
+### Lessons (durable)
+
+- **The correlated-subplan antipattern recurs — check EVERY layer of a tick, not the one named in the
+  error.** The alert's CONTEXT named the resolver, and fixing it left the cron still failing. A wrapper
+  that calls two functions needs both timed separately before you claim the fix.
+- **A per-row API cannot be hoisted — that is when a functional index is the right answer.** Hoist when
+  you control the query; index when the call is the interface.
+- **⚠️ A partial index is only usable if the query's predicates IMPLY the index predicate.** Adding
+  `AND name IS NOT NULL` to the index WHERE made it valid-but-never-used: the query never states it, and a
+  non-STRICT plpgsql function gives the planner no way to infer it. Cost an unexplained "index built,
+  nothing got faster" round.
+- **`lcc_normalize_entity_name(text)` IS IMMUTABLE** (`pg_proc.provolatile='i'`) — a functional index on it
+  is legal. The prompt's premise that it was not was wrong; check `provolatile`, don't assume.
+- **Verify a prune by the row-count DELTA, never by its return value.** An MCP/client disconnect at 60 s
+  rolls the whole function's transaction back, so a delta of 0 reads identically to "nothing to prune" —
+  the candidate set had to be probed with a `LIMIT` to tell them apart. The honest verification path was
+  to run both through **one-shot pg_cron jobs** (the real production path), then unschedule them.
+- **`count(*)` over a scalar subquery optimizes the subquery away.** The first timing run showed the
+  "old" correlated form at 2.3 ms — the planner had elided it. Force it with `count(<the column>)`.
+- **Build a small index NON-concurrently.** A cancelled `CREATE INDEX CONCURRENTLY` leaves an INVALID
+  index that must be dropped before retrying; at 43k rows the plain build takes seconds.
+
 ## 2026-08-20 overnight verification
 
 - **Worker queue clean:** last 24h = `outlook.message.extract` 1,331 **done** (0 failed/stuck) + `cre.doc.text`
@@ -18,8 +77,7 @@
   OMs finalizing normally, so the Select-bug fix holds. Last email intake 2026-08-20 11:26Z.
 - **16 new health alerts (15h), none blocking, but note:** 11 `mailbox_mirror_parked` (the Processed-folder
   MOVER failing 5x on some just-intaken emails, e.g. the DS0PR05MB9718 OM thread — intake itself succeeded,
-  only the tidy-up move parked); 2 `cron_failure` on **`lcc-owner-address-feed`** (failed 05:07Z — needs a
-  look); 1 `http_failure` no_response to `/api/link-propagation-tick` (transient); 1 `http_failure` **401 to
+  only the tidy-up move parked); 2 `cron_failure` on **`lcc-owner-address-feed`** (failed 05:07Z — **fixed, see P118 above**); 1 `http_failure` no_response to `/api/link-propagation-tick` (transient); 1 `http_failure` **401 to
   `/api/daily-briefing`** (auth). Follow-ups: owner-address-feed cron + the briefing 401.
 - **Git:** local repo has a stale lock (`.git/HEAD.lock` + `.git/objects/maintenance.lock` + tmp_obj\_\*)
   left by a sandbox commit racing Git's background `maintenance`. Sandbox can't unlink them (perms). Cleared

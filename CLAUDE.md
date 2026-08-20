@@ -386,6 +386,28 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   (19.3 s vs 30.6 s for the same unchanged query on consecutive days) — always measure before AND after in
   ONE session, and treat the structural facts (loops gone, buffer count) as the durable evidence.
   Details: `docs/architecture/panel-redesign-verification.md` §4.2d–4.2e.
+  - **P118 corollaries (2026-08-20, all three caught live in one session).**
+    (1) **Fix EVERY layer of a tick, not the one the error names.** The `lcc-owner-address-feed` alert's
+    CONTEXT pointed at `lcc_resolve_owner_address_observation_entities`; hoisting that correlated subplan
+    (45 s → 1.2 s, flat in row count, 0-row equivalence diff) left the cron STILL timing out, because
+    `lcc_owner_address_feed_tick()` calls two functions and the *other* one
+    (`lcc_feed_owner_signal_addresses`) carried the same full-table normalize scan per row (~86 ms × 433
+    rows ≈ 37 s). Time each half separately before claiming a tick is fixed.
+    (2) **A per-row API cannot be hoisted — that is exactly when a functional index IS the fix.** The
+    doctrine above ("no index can fix a correlated subplan") applies when you control the query and can
+    LEFT JOIN once. `lcc_record_owner_address_observation` is called per row from several callers, so it
+    needed the index instead: 998.756 ms → **0.099 ms**, 2,903 → 4 buffers. **`lcc_normalize_entity_name(text)`
+    IS `IMMUTABLE`** (`pg_proc.provolatile='i'`) — check `provolatile`, don't assume a plpgsql helper isn't.
+    (3) **⚠️ A partial index is only usable if the query's own predicates IMPLY the index predicate.**
+    Building it `WHERE … AND name IS NOT NULL` produced a valid index the planner NEVER used — the query
+    never states `name IS NOT NULL`, and a non-STRICT plpgsql function gives the planner no way to infer it
+    from the equality. Dropping that one clause is what made it match. Also: build a small index
+    NON-concurrently (a cancelled `CREATE INDEX CONCURRENTLY` leaves an INVALID index to clean up).
+    (4) **Verify a batch delete by the row-count DELTA, not the function's return value** — a client
+    disconnect rolls the whole function back, so "0 deleted" and "nothing to delete" look identical; probe
+    the candidate set with a `LIMIT` to tell them apart, and prefer a one-shot **pg_cron** job (the real
+    production path) over a client call for anything near the timeout. Related: `count(*)` over a scalar
+    subquery **optimizes the subquery away** — time it with `count(<the column>)` or you will measure nothing.
 - **Overview/snapshot tiles must render SYNCHRONOUSLY from the main data load, reading ONE canonical
   source/summary view.** Never compute a count by filtering a client-loaded array (empty on Overview), never
   gate a tile's value behind a lazy async filler with a `_rendered` once-flag (a re-render strands it forever).
