@@ -10,6 +10,45 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## Milestone 2026-08-19 — email capture end-to-end: forward sweep + contact-history pull live, v2 voice distilled, LCC Intake root-caused & fixed
+
+**Session (Cowork) built and verified live:**
+
+1. **LCC Intake folder "not processing" — ROOT-CAUSED & FIXED (highest impact).** Flagged OMs never reached
+   `staged_intake_items`. Cause was NOT attachments (my first hypothesis, wrong): the `LCC Flagged Email
+   Intake` flow had been enhanced (post-2026-08-11) to add `body_html` + `to/cc_recipients` via
+   `Select`→`Join` actions that read `triggerOutputs()?['body/toRecipients']` as a Graph array — but the
+   **`When an email is flagged (V3)` trigger returns To/Cc as semicolon STRINGS**, so `Select` errored every
+   run (`'from' … is of type 'String'. The value must be an array`) and killed the flow before the intake
+   POST. Fix: deleted the 4 Select/Join actions, repointed `to_recipients/cc_recipients` to the trigger
+   strings directly, kept `Get_email_(V2)` (body_html) + the (correct) attachment loop. **Verified live:**
+   the 337 E. Coronado Rd. OM finalized from its real 7.28 MB PDF; backlog drained; junk still discarded.
+   Doc reconciled: `docs/architecture/flows/lcc-flagged-email-intake.md` (incident + live export
+   `LCCFlaggedEmailIntake_20260819220833.zip`). **Recovery:** 4 real-attachment OMs discarded Aug 4–14
+   (Oceanside CA, Scarborough ME GSA-DHS, two Aug-5 PDFs) — reflag to retry; the rest of the discards were
+   correctly body-only junk.
+
+2. **Forward-capture sweep LIVE.** New recurring PA flow (every 30 min): Graph `GET /me/messages`
+   filtered `sentDateTime ge utcNow-2h and isDraft eq false`, per-message → bridge → worker drain. Spans
+   Sent+Inbox; the 2h/30min trailing window self-heals gaps and the `internet_message_id` upsert makes
+   overlaps free. Verified: 53 jobs/run all `done`, tracked bodies landing into timeline + corpus. Keeps
+   the LCC current going forward (both tracking history AND voice).
+
+3. **On-demand contact-history pull LIVE.** New instant PA flow: text input `emailAddress` → Graph
+   `$search="participants:{addr}"` with `@odata.nextLink` paging → bridge → drain. Pulls a contact's FULL
+   primary-mailbox history (all folders). Verified vs klargent@northmarq.com: 30+ bodies, dedup-safe.
+
+4. **v2 voice distilled on-prem.** `voice-distill.mjs` ran on GaryBuilt (qwen2.5:14b), **760 usable
+   Scott-authored** corpus, guards working (46,136 not-from-Scott, 76 app-briefings, 221 self-addressed all
+   excluded); wrote `docs/os/voice/briggs-voice-attributes.json`. Per-context signal confirmed (internal
+   terse/no-signoff; LOI formal/70% signoff; cold-BD long-form). ⏭ fold attributes into
+   `BRIGGS-WRITING-VOICE.md` once the json syncs to the repo; Scott to read/approve before it's the default.
+
+5. **Online Archive backfill PARKED (no IT).** The older SENT-mail voice history lives in the
+   auto-expanding online archive, which no Outlook client route can reach (Copy/Move/Export-to-PST all see
+   the primary mailbox only; Graph can't see the archive). Requires a Purview Content Search export (IT) —
+   deferred per Scott. Primary-mailbox received history already back to 2022-11 (Inbox/Archive swept).
+
 ## Milestone 2026-08-18 — the voice profile is re-distilled on full bodies (Prompt 117), and three premises were wrong
 
 **`BRIGGS-WRITING-VOICE.md` v2.0.0** — the sign-off / paragraph-shape / long-form sections that Stage 1
