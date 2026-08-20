@@ -235,6 +235,40 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(detailSrc, /MOVED to detail-entity-tabs\.js/, 'detail.js keeps a pointer comment');
   });
 
+  // ── Stage 2, Unit 7: detail-openers.js ───────────────────────────────────
+  it('detail-openers.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const op = scriptIndex('detail-openers.js');
+    assert.ok(op >= 0, 'index.html must load detail-openers.js');
+    assert.ok(op < scriptIndex('detail.js'), 'detail-openers.js must appear before detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-openers\.js/i,
+      'detail-openers.js must be a classic script — the openers rely on top-level '
+      + 'function declarations becoming window properties, which modules do NOT do');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-openers.js')]),
+      'detail-openers.js must be syntactically valid');
+  });
+
+  it('the subject OPENERS moved; the panel opener + fetch layer stayed', () => {
+    const opSrc = readFileSync(join(root, 'detail-openers.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_ensureCallNoteModal', 'openCallNote', 'closeCallNote', 'submitCallNote',
+                      'openContact360', 'openEntityDetailByName', 'openContactDetail',
+                      'openContactDetailByName']) {
+      assert.match(opSrc, new RegExp(`function\\s+${fn}\\b`), `detail-openers.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    assert.match(opSrc, /var\s+_callNoteCtx/, 'the modal state moves with its modal');
+    assert.doesNotMatch(detailSrc, /var\s+_callNoteCtx/, 'detail.js must NOT redeclare _callNoteCtx');
+    // These are what the openers delegate INTO — they stay.
+    for (const fn of ['openEntityDetail', '_entityApiFetch', '_entityApiHeaders']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} stays in detail.js`);
+      assert.doesNotMatch(opSrc, new RegExp(`function\\s+${fn}\\b`), `detail-openers.js must NOT take ${fn}`);
+    }
+    for (const w of ['openCallNote', 'closeCallNote', 'submitCallNote', 'openContact360']) {
+      assert.match(opSrc, new RegExp(`window\\.${w}\\s*=`), `detail-openers.js keeps the window.${w} export`);
+    }
+    assert.match(detailSrc, /MOVED to detail-openers\.js/, 'detail.js keeps a pointer comment');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
