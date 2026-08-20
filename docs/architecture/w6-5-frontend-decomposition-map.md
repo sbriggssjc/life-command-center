@@ -45,6 +45,19 @@ Two options were considered:
 4. Leave a pointer comment where the region was.
 5. Update any guard test that reads the moved region's **file path** (read the
    concatenation of the two files) — assertions unchanged.
+5b. **⚠️ ALSO fix any test that SLICES a moved function and `eval`s it in
+   isolation — step 5 does not cover those, and Stage 1 shipped one broken.**
+   `_fedCardHTML` moved to `dc-lanes.js` but still calls `_cleanAssistHTML`,
+   which stayed in `ops.js`. Production is fine — that is the whole point of the
+   classic-script shared global scope — but an isolated `new Function(...)`
+   sandbox has only the stubs the test declares, so the cross-file callee is a
+   **ReferenceError**. Two `w3-6-display-name-resolution` tests failed this way
+   from Stage 1 until 2026-08-20. **The load-order guard cannot catch it** (it
+   asserts file structure, not eval-ability), and neither can the tab-registry
+   guard. Before extracting, grep the test dir for the moved function name; any
+   `sliceFn(... , 'function <moved>(')` needs a stub for every callee left
+   behind. Prefer a faithful minimal stub (match the real fn's return for the
+   fixture's shape), and say in a comment why it exists.
 6. Add/extend the load-order smoke test.
 
 > **Path note:** the W6.5 prompt suggested `public/js/dc-lanes.js`, but this repo
