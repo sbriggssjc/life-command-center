@@ -570,7 +570,10 @@ describe('§1.1 STRUCTURAL — panel widths are var-driven and the shell is cohe
     // detail.js has the new CSS hiding the old restore tab — minimizing the
     // companion becomes unrecoverable.
     const v = (f) => (indexSrc.match(new RegExp(f.replace('.', '\\.') + '\\?v=(\\d+)')) || [])[1];
-    const versions = { 'app.js': v('app.js'), 'detail.js': v('detail.js'), 'ops.js': v('ops.js'), 'styles.css': v('styles.css') };
+    // W6.5 Stage 2: detail-rent.js was extracted OUT of detail.js and shares its
+    // global scope, so a fresh detail.js paired with a cached detail-rent.js is
+    // exactly the stale mix this guard exists to prevent — it joins the set.
+    const versions = { 'app.js': v('app.js'), 'detail.js': v('detail.js'), 'detail-rent.js': v('detail-rent.js'), 'ops.js': v('ops.js'), 'styles.css': v('styles.css') };
     for (const [f, ver] of Object.entries(versions)) assert.ok(ver, `${f} has no ?v= cache buster`);
     assert.equal(new Set(Object.values(versions)).size, 1,
       `cache busters disagree: ${JSON.stringify(versions)}`);

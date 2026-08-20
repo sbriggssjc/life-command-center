@@ -56,6 +56,41 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     }
   });
 
+  // ── Stage 2, Unit 1: detail-rent.js ──────────────────────────────────────
+  it('detail-rent.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const rent = scriptIndex('detail-rent.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(rent >= 0, 'index.html must load detail-rent.js');
+    assert.ok(detail >= 0, 'index.html must load detail.js');
+    assert.ok(rent < detail, 'detail-rent.js must appear before detail.js in index.html');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-rent\.js/i,
+      'detail-rent.js must be a classic script, not a module');
+  });
+
+  it('detail-rent.js and detail.js both parse (node --check)', () => {
+    for (const f of ['detail-rent.js', 'detail.js']) {
+      assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, f)]),
+        `${f} must be syntactically valid`);
+    }
+  });
+
+  it('the rent POLICY moved to detail-rent.js; the rent RENDERERS stayed in detail.js', () => {
+    const rentSrc = readFileSync(join(root, 'detail-rent.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    // Moved: the four pure helpers now live in detail-rent.js ONLY.
+    for (const fn of ['_udProjectRent', '_udPickCurrentRent', '_udParseRentEscalation', '_udBuildRentSchedule']) {
+      assert.match(rentSrc, new RegExp(`function\\s+${fn}\\b`), `detail-rent.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // Stayed: the UI renderers + the shared date coercer remain in detail.js ONLY.
+    for (const fn of ['_udRenderRentChart', '_udRenderRentRoll', '_udRentPsfTagHtml', '_udCoerceDate']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js keeps ${fn}`);
+      assert.doesNotMatch(rentSrc, new RegExp(`function\\s+${fn}\\b`), `detail-rent.js must NOT copy ${fn}`);
+    }
+    // A pointer comment is left where the region was, so the seam is findable.
+    assert.match(detailSrc, /MOVED to detail-rent\.js/, 'detail.js keeps a pointer comment at the extraction site');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
