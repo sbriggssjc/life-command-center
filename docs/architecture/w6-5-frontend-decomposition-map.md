@@ -146,15 +146,21 @@ order (lowest coupling first), each a classic file loaded before `detail.js`:
 > | 3 | panel geometry + tray + companion dock | `detail-panel-shell.js` | ✅ **DONE** — 13838–14546, 702 lines, 19 window exports |
 > | 4 | entity tabs block B (`_ENTITY_REL_SECTIONS` … `_entityTabDeal`) | `detail-entity-tabs.js` | ✅ **DONE** — 13846–14615, 763 lines |
 > | 5 | the entity tab bodies Unit 4 MISSED (`_entityGenerateDossier` … `_entityTabContacts`) | `detail-entity-tabs.js` (appended) | ✅ **DONE** — 13854–14198, 345 lines |
-> | 6 | `_entityTabOverview` + its render-helper cluster (`_entityHeroHTML`, `_nextActionForContact`, `_entityContact*Section`, `_entityRoeBanner`, `_entityFmtMoney`) | `detail-entity-tabs.js` | ⬜ next — contiguous, but knotted to the helpers; move as ONE cluster |
-> | 7 | contact openers (`openContact360`, `openContactDetail`, `openContactDetailByName`, call-note modal) | `detail-contact.js` | ⬜ interleaved with the entity dispatcher — map before moving |
+> | 6 | `_entityTabOverview` + its render-helper cluster | `detail-entity-tabs.js` | ✅ **DONE** — 13435–13836, 402 lines; the guard's carve-out for it is now GONE |
+> | 7 | the subject OPENERS + "Log call" modal | **`detail-openers.js`** | ✅ **DONE** — 13075–13385, 311 lines. ⚠️ the map's name `detail-contact.js` was WRONG: `openEntityDetailByName` is an ENTITY opener in the same resolve-and-open family (all four share `_entityApiFetch`), so the file is named for what it is |
 > | — | entity DISPATCHER (`ENTITY_DETAIL_TABS`, `openEntityDetail`, `switchEntityTab`, `_renderEntityTab`) + the shared completeness-rail / Next-Step chrome | **STAYS in detail.js** | 🔒 pinned by guard — shell, not content |
 >
-> **RESULT AFTER UNITS 1–5 (2026-08-20):** `detail.js` **18,481 → 16,203 lines**
-> (1,037,393 → 900,378 bytes, **13.2% smaller**). Five siblings, every region
+> **STAGE 2 COMPLETE — UNITS 1–7 (2026-08-20):** `detail.js` **18,481 → 15,505 lines**
+> (1,037,393 → 859,844 bytes, **17.1% smaller**). SIX siblings, every region
 > byte-identical (sha256 verified before/after), every unit mutation-tested.
-> Guards: 113 assertions across `detail-tab-registry`, `frontend-module-load-order`
-> and `panel-redesign`.
+> Guards: **115 assertions** across `detail-tab-registry`, `frontend-module-load-order`
+> and `panel-redesign`. The map's seam inventory was wrong **four times** (stale
+> ranges every unit; the panel shell mis-filed under entity tabs; overlapping
+> entity/contact ranges; and `detail-contact.js` as a name for a module holding an
+> entity opener) — each caught by measuring the file instead of trusting the doc.
+> **Nothing of `detail.js` remains on the mapped inventory.** What is left is
+> pinned by design: the property-tab renderers, the entity dispatcher, the shared
+> completeness-rail / Next-Step chrome, and `_entityApiFetch`.
 >
 > **⚠️ UNIT 4 SILENTLY LEFT WORK BEHIND, and no guard noticed.** It moved 7 of 12
 > `_entityTab*` bodies; five stayed in a second block further down. Everything
