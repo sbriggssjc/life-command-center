@@ -113,11 +113,46 @@ order (lowest coupling first), each a classic file loaded before `detail.js`:
 
 | Tab / region | Target | Notes |
 |---|---|---|
-| Rent source-tier policy + escalation parser (3403–3620) | `detail-rent.js` | pure helpers, near-zero UI coupling — **best first candidate** |
-| Documents tab (9089+) | `detail-tab-documents.js` | self-contained OM/BOV/lease/comps list |
-| Entity tabs — Overview/Relationships/History/Activity/Deals/Portfolio/Contacts (13363–15267) | `detail-entity.js` | mirrors `switchUnifiedTab` via `switchEntityTab`; large but cohesive |
-| Contact 360 + Contact tabs (13149–15460) | `detail-contact.js` | reuses `buildContact360` |
-| Companion docks (13792–14029) | fold into `detail-entity.js` | |
+| ~~Rent source-tier policy + escalation parser (3403–3620)~~ | `detail-rent.js` | ✅ **DONE 2026-08-20 (Unit 1)** — real range was 3549–3826 |
+| ~~Documents tab (9089+)~~ | `detail-tab-documents.js` | ✅ **DONE 2026-08-20 (Unit 2)** — real range 9240–9452; also carried the client-dossier builders |
+| Entity tabs — Overview/Relationships/History/Activity/Deals/Portfolio/Contacts (13363–15267) | `detail-entity.js` | ⚠️ **RANGE IS WRONG — see the correction below. Do not use it.** |
+| Contact 360 + Contact tabs (13149–15460) | `detail-contact.js` | ⚠️ **RANGE IS WRONG — overlaps the row above. See below.** |
+| Companion docks (13792–14029) | fold into `detail-entity.js` | ⚠️ **NO — this is the panel shell, and it is its own module. See below.** |
+
+> ### ⚠️ CORRECTION 2026-08-20 — the entity/contact rows above do not survive contact with the file
+>
+> Re-measured after Units 1 and 2 (line numbers below are post-extraction and
+> will shift again). **Three things are wrong with the original plan:**
+>
+> 1. **The two ranges OVERLAP** (13363–15267 vs 13149–15460). They were written as
+>    if each were a contiguous block. They are not — entity and contact functions
+>    interleave.
+> 2. **The PANEL SHELL sits in the middle of them**, and the proposed
+>    `detail-entity.js` range would swallow it whole:
+>    `DUAL_DOCK_MIN_WIDTH`, `_PANEL_W`, `_panelClampWidth/SetWidth/GetWidth/
+>    RestoreWidths/InitResizers/SyncResizers/AnchorResizer`, the tray
+>    (`_panelTrayRender/ParkSig/Park/Drop/Restore`), `_panelSwap`,
+>    `minimizePrimary`, `openCompanionProperty/Entity`, `minimize/restore/
+>    closeCompanion`. That is window management, not entity-tab rendering, and
+>    `detail-tab-registry.test.mjs` explicitly requires the shell to stay put.
+> 3. **The entity tabs are SPLIT around it** — 21 entity/contact functions before
+>    the panel cluster, 25 after. Neither half is contiguous with the other, so
+>    "extract the entity tabs" is not one region-move.
+>
+> **What the file actually supports (revised order):**
+>
+> | # | Region | Target | Contiguous? |
+> |---|---|---|---|
+> | 3 | panel geometry + tray + companion dock (`DUAL_DOCK_MIN_WIDTH` … `_renderCompanionEntity`, ~13847–14551, ~700 lines) | `detail-panel-shell.js` | ✅ yes — the cleanest remaining seam |
+> | 4 | entity tabs block B (`_ENTITY_REL_SECTIONS` … `_entityTabDeal`, 14553–15200+) | `detail-entity-tabs.js` | ✅ yes |
+> | 5 | entity open/dispatch block A (`ENTITY_DETAIL_TABS` … `_entityFmtMoney`, 12846–13845) | `detail-entity.js` | ✅ yes, but contains the contact openers — split or accept |
+>
+> **⚠️ STEP 5b HAZARD ON #3 — this one WILL bite.** `panel-redesign.test.mjs`
+> (89 tests) slices panel functions straight out of `detail.js`:
+> `sliceFn(detailSrc, '_panelClampWidth')` (line 72) and
+> `sliceFn(detailSrc, '_panelParkSig')` (line 120). Moving the cluster breaks
+> both unless `detailSrc` is first repointed at the concatenation of `detail.js`
+> + every `detail-*.js`. Do that in the SAME change, per step 5b.
 
 Shell (`openUnifiedDetail`, `switchUnifiedTab`, tab strip, beforeunload guard) stays
 in `detail.js`. **Guard to add before Stage 2:** a tab-registry test asserting every
