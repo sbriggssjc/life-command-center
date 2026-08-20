@@ -91,6 +91,37 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(detailSrc, /MOVED to detail-rent\.js/, 'detail.js keeps a pointer comment at the extraction site');
   });
 
+  // ── Stage 2, Unit 2: detail-tab-documents.js ─────────────────────────────
+  it('detail-tab-documents.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const docs = scriptIndex('detail-tab-documents.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(docs >= 0, 'index.html must load detail-tab-documents.js');
+    assert.ok(docs < detail, 'detail-tab-documents.js must appear before detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-tab-documents\.js/i,
+      'detail-tab-documents.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-tab-documents.js')]),
+      'detail-tab-documents.js must be syntactically valid');
+  });
+
+  it('the Documents tab moved whole — renderers AND the section table', () => {
+    const docsSrc = readFileSync(join(root, 'detail-tab-documents.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_udRenderDocumentsAsync', '_udRenderDossiers', '_udRenderDocuments',
+                      '_udOpenDossier', '_udOpenDocument',
+                      '_udBuildPropertyDossierHTML', '_udOpenClientDossier']) {
+      assert.match(docsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-tab-documents.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // The section table is only meaningful with its renderers — it moves too.
+    assert.match(docsSrc, /const\s+_UD_DOC_SECTIONS\s*=/, 'detail-tab-documents.js owns _UD_DOC_SECTIONS');
+    assert.doesNotMatch(detailSrc, /const\s+_UD_DOC_SECTIONS\s*=/, 'detail.js must NOT redefine _UD_DOC_SECTIONS');
+    // window.* exports feed inline onclick handlers — they must survive the move.
+    for (const w of ['_udOpenDossier', '_udOpenDocument', '_udBuildPropertyDossierHTML']) {
+      assert.match(docsSrc, new RegExp(`window\\.${w}\\s*=`), `detail-tab-documents.js keeps the window.${w} export`);
+    }
+    assert.match(detailSrc, /MOVED to detail-tab-documents\.js/, 'detail.js keeps a pointer comment');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
