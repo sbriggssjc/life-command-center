@@ -115,6 +115,52 @@ needs **no catch-all rewrite**. Empty/unknown hash ⇒ Today. **No PII in the UR
 
 ---
 
+## Front-end: NO BUNDLER — classic scripts in ONE shared global scope (W6.5)
+
+`index.html` loads the SPA as a sequence of **classic** `<script src>` tags served
+statically from the repo root. There is no bundler and no build step. Every file therefore
+shares **one global scope** — a top-level `function`/`var` (via `window`) or `let`/`const`
+(via the shared global lexical environment) in one file is visible to all the others.
+`ops.js` calls `esc`/`opsApi` from `app.js`; `detail.js` calls into its siblings; none of it
+imports anything. **LOAD ORDER is the entire dependency mechanism.**
+
+`detail.js` is being decomposed by region (W6.5 Stage 2 — five siblings so far:
+`detail-rent.js`, `detail-tab-documents.js`, `detail-panel-shell.js`, `detail-entity-tabs.js`,
+plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
+`docs/architecture/w6-5-frontend-decomposition-map.md`. Durable invariants:
+
+- **An extracted sibling loads BEFORE its parent.** Almost all cross-file use is at CALL
+  time so order is forgiving, but a moved top-level `let` (e.g. `_companionState`,
+  `_activePrimaryKind` in `detail-panel-shell.js`) is read by the parent, so the sibling
+  must be initialized first. Guarded by `test/frontend-module-load-order.test.mjs`.
+- **NEVER `type="module"` for a split region.** Modules get their own scope; every one of
+  the hundreds of cross-file references and every inline-`onclick` target would need
+  explicit import/export. That rewrite cannot be byte-identical. Modules are for genuinely
+  new leaf code only.
+- **⚠️ `window.*` EXPORTS ARE LOAD-BEARING and invisible to structural checks.** Inline
+  `onclick=""` in generated HTML resolves off `window` at CLICK time, not through lexical
+  scope. Drop one in a move and the UI renders perfectly and dies on interaction. The panel
+  shell alone carries 19. Every extraction asserts its exports by name.
+- **A split must MOVE, not COPY.** Two definitions of one function in a shared scope means
+  the later file silently wins; two top-level `let`s of one name is a **runtime
+  SyntaxError that kills the whole app**. Guards forbid redeclaration on both sides.
+- **Cache busters move as a SET** (`app.js`/`detail.js`/every `detail-*.js`/`ops.js`/
+  `styles.css`). Fresh CSS + a cached old script is an unrecoverable UI;
+  `panel-redesign.test.mjs` enforces one shared `?v=`.
+- **⚠️ Step 5b — a test that SLICES a function and `eval`s it breaks when that function
+  moves,** and no structural guard can see it (they assert file shape, not eval-ability).
+  Stage 1 shipped one broken this way for weeks. **Grep `test/` for the moved function name
+  BEFORE extracting**; stub any callee left behind in the parent.
+- **⚠️ "REACHABLE" AND "IN THE RIGHT MODULE" ARE DIFFERENT PROPERTIES.** Unit 4 moved 7 of
+  12 `_entityTab*` bodies and left five behind; every guard stayed green because the
+  tab-registry guard only asks whether a tab reaches a renderer that EXISTS — and it did.
+  Before declaring an extraction done, **grep the parent for what you claimed to move.**
+- **`npm run verify:deploy` probes every local `<script src>`,** not just `/version` and
+  `/api/*`. A newly-added front-end file that fails to ship 404s in the browser while the
+  gate reads green — and the SPA catch-all can return **HTTP 200 with index.html in the
+  body**, so the check asserts on the BODY. Use `--wait[=sec]` for the interactive
+  push→verify loop (Railway may still be building); CI keeps the hard fail.
+
 ## Core doctrines (apply to every change)
 
 ### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
