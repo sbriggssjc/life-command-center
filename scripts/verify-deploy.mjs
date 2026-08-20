@@ -36,6 +36,7 @@
 
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { CRITICAL_SUBROUTES, CRITICAL_ROUTES_NON_OPERATIONS } from '../test/critical-subroutes.mjs';
 
 // Append a unique cache-buster so no URL-keyed cache (client/proxy/CDN) can serve
@@ -180,6 +181,39 @@ async function main() {
       }
     } catch (err) {
       failures.push(`GET /api/${route} failed: ${err.message}`);
+    }
+  }
+
+  // 3) EVERY classic <script src> in index.html must actually be served as JS.
+  //    W6.5 decomposition ADDS front-end files (dc-lanes.js, detail-rent.js, …).
+  //    A newly-added file that does not ship 404s in the browser and every symbol
+  //    it defines is undefined at call time — the app breaks — while checks (1)
+  //    and (2) stay green, because they only ever probe /version and /api/*.
+  //    Found the hard way on 2026-08-20: detail-rent.js had to be curl'd by hand
+  //    to confirm it was live, because nothing in this gate looked at it.
+  //    The SPA catch-all makes this extra sneaky — a missing .js can come back
+  //    HTTP 200 with index.html in the body, so assert on the BODY, not status.
+  const scriptSrcs = [...readFileSync('index.html', 'utf8')
+    .matchAll(/<script\s+src="([^"?]+\.js)(\?[^"]*)?"/gi)]
+    .map((m) => m[1])
+    .filter((src) => !/^https?:\/\//i.test(src));   // CDN scripts are not ours
+  for (const src of scriptSrcs) {
+    const url = `${base}/${src.replace(/^\.?\//, '')}`;
+    try {
+      const res = await fetchWithTimeout(
+        withCacheBust(url), { headers: { ...NOCACHE_HEADERS } }, args.timeout,
+      );
+      const text = await res.text();
+      const ctype = res.headers.get('content-type') || '';
+      if (!res.ok) {
+        failures.push(`GET /${src} → HTTP ${res.status} — a <script> in index.html is NOT deployed`);
+      } else if (bodyLooksLikeHtml(text, ctype)) {
+        failures.push(`GET /${src} returned HTML — the SPA catch-all is masking a MISSING script file`);
+      } else {
+        console.log(`  ✓ /${src} served (${(text.length / 1024).toFixed(0)} KB)`);
+      }
+    } catch (err) {
+      failures.push(`GET /${src} failed: ${err.message}`);
     }
   }
 

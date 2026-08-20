@@ -59,6 +59,23 @@ Two options were considered:
    behind. Prefer a faithful minimal stub (match the real fn's return for the
    fixture's shape), and say in a comment why it exists.
 6. Add/extend the load-order smoke test.
+7. **Bump the cache buster on the WHOLE coupled set, not just the file you
+   edited.** `panel-redesign.test.mjs` enforces that `app.js` / `detail.js` /
+   `detail-rent.js` / `ops.js` / `styles.css` share one `?v=`, because a client
+   that gets fresh CSS and a cached old script is an unrecoverable UI. Add each
+   newly-extracted file to that set — a fresh parent paired with a cached
+   extracted child is the same stale mix. (This guard caught Unit 1 mid-flight.)
+8. **After the redeploy, confirm the NEW FILE IS ACTUALLY SERVED.**
+   `npm run verify:deploy` now probes every local `<script src>` in index.html
+   (added 2026-08-20, prompted by Unit 1). Before that it only checked `/version`
+   and `/api/*`, so a newly-added front-end file that failed to ship would 404 in
+   the browser — every symbol it defines undefined at call time — while the gate
+   stayed green. The SPA catch-all makes it worse: a missing `.js` can return
+   **HTTP 200 with index.html in the body**, so the check asserts on the BODY,
+   not the status code.
+   ⚠️ Run it only AFTER Railway finishes rebuilding — running it immediately
+   after `git push` reports a SHA mismatch that is just a timing race, not a
+   stale deploy.
 
 > **Path note:** the W6.5 prompt suggested `public/js/dc-lanes.js`, but this repo
 > serves front-end JS from the **repo root** (there is no `public/js` on the served
