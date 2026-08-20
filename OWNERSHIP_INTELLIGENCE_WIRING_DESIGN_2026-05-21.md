@@ -50,6 +50,21 @@ property ──► recorded_owner (who is on title / the lessor)
 - **SAM.gov** (`sam_entities`, currently 127 — expand the ingest): entity registration carries the registered agent, POCs, and officers → decision-maker contacts + true-owner signal. Match `sam_entities` → owner by canonical name/EIN/address; populate `recorded_owners.registered_agent_name` and create contacts for POCs.
 - **USASpending / federal_lease_awards**: the awardee entity corroborates the lessor and gives a UEI to join SAM.
 
+> **⚠️ SAM.gov — SUPERSEDED 2026-08-20. The key is VALID; the constraint is a RATE LIMIT.** (This design doc
+> never carried the `401 API_KEY_INVALID` claim that circulated elsewhere; the correction is recorded here
+> because "expand the ingest" is not achievable per-entity at any useful rate.) Live evidence: 281
+> `sam_entities` (53 in the last 30 days), 497 contacts with `data_source='sam'`, owners stamped
+> `sam_checked` as recently as 2026-08-19. Per GSA's published tier table a non-federal personal key with
+> **no role** gets **10 requests/day** (with a role: 1,000). A live probe returns
+> `{"rate_limited":true,"api_calls":0,"next_access":"…00:00Z"}` and stops on the first owner. The fail-soft
+> design (an API error skips the `sam_checked` mark so the owner retries) makes a ~98% rate-limited pipeline
+> indistinguishable from a healthy slow one — **measure `sam_checked` stamps per day, never "is the cron
+> active".** Bulk alternative built 2026-08-20 and the correct way to "expand the ingest": the PUBLIC MONTHLY
+> entity extract is ONE request covering all registrants
+> (`GovernmentProject/src/ingest_sam_public_extract.py` + `gov_match_sam_public_extract`) — it carries POC
+> name+title but **NOT email/phone** (FOUO, federal-account-only), so the "contacts for POCs" step above still
+> yields names, not reachable lines. See `GovernmentProject/docs/RUNBOOK_sam_public_extract_cron.md`.
+
 ### 3b. Dialysis — the manual-research path (the big gap)
 - **County records** (deed grantee/grantor, assessor owner, tax-mailing owner): the deed grantee = recorded owner; the **tax-mailing owner/address is often the true owner or its manager** (where the bill is sent). Currently <4% populated — this is the highest-value dia fix. Drive the county scraper to cover the dia property set and write `latest_deed_grantee`→recorded_owner, `tax_mailing_owner`→true-owner candidate.
 - **SOS filings** (both domains): registered agent + managers/members → true owner + named decision makers. **This is the universally-empty gap.** The `llc_research_queue` has 461 gov + 1,235 dia rows stuck because the enrichment was gated on a paid OpenCorporates key and the free SOS-direct scraper was deferred. Build the SOS-direct scraper (per-state) to drain the queue into `recorded_owners.registered_agent_name / manager_name / filing_id`.

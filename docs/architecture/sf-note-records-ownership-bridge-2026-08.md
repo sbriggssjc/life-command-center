@@ -18,6 +18,13 @@ resolving to an entity, **zero emails or phones**, with `enrichment_action`
 values like `find_person_at_manager` and `address_reverse_lookup`. There was no
 shortcut there.
 
+> **📌 COUNT UPDATED 2026-08-20 — now 4,120 prospects / $3,771.9M, and NOT directly comparable to the
+> 3,883 / $2.72B above.** The figure moved because the *composition* of `v_lcc_top_seller_prospects`
+> changed, not because the backlog simply grew: **P150a/P154** removed merged-away tombstones (an entity
+> that had already been merged into a survivor was still being ranked as its own prospect), **P151**
+> removed public bodies, and **P152** removed agents. Treat the two numbers as different populations —
+> do not subtract them to infer progress or regression.
+
 Scott's legacy Salesforce practice is the real bridge: one note per property,
 titled `Tenant - City, State`, body carrying address / tenant / prior sales /
 lease term / cap rates, tagged to the parties connected to that property.
@@ -208,6 +215,12 @@ rather than more classes, which is the §7 item 4 decision.
 
 ## 9. P131 — the payoff: named leads for owners we could not reach
 
+> **▶ Forward reference:** the "named lead" concept introduced here and in §10 was promoted to a first-class
+> pursuit state by **P158/P158a (2026-08-20)** — `NAMED LEAD — find their line` in
+> `v_lcc_top_seller_prospects`, surfaced by `v_lcc_named_lead_worklist` (61 owners / $121.5M), deliberately
+> **not** counted as reachable (P112) and auto-retiring once the contact gains an email or phone. Details at
+> the end of §10 ("Where the pursuit funnel now stands").
+
 **1,137 of the 3,883 unreachable top prospects (29%) now have a named lead**,
 covering **$1,014,108,088** of annual rent. 2,645 candidate parties, 1,711 of
 them people, ~2.3 per owner.
@@ -275,6 +288,15 @@ reviewer can see which they have.
 | **reachable today via a note lead, pending review** | **294** | **$265.6M** |
 | named lead, weaker match or needs SF fetch | 843 | $748.5M |
 | still dark — no lead, no contact | ~2,746 | ~$1.7B |
+
+> **▶ FORWARD REFERENCE — P158/P158a (2026-08-20) made "named lead" a first-class pursuit state.** The
+> concept built across §9–§10 and tabulated above is no longer an ad-hoc review cohort: `NAMED LEAD — find
+> their line` is now its own state in **`v_lcc_top_seller_prospects`**, surfaced by the dedicated worklist
+> view **`v_lcc_named_lead_worklist`** — **61 owners / $121.5M**. Two properties of that state matter when
+> reading the funnel above: (1) it is **deliberately NOT counted as reachable**, per P112 — a cadence for a
+> party with no contact method can never advance and would only age into "overdue", so a named lead is a
+> research target, not an outreach target; and (2) it **auto-retires from the lane** the moment the contact
+> gains an email or phone, so the count is self-draining rather than a static backlog.
 
 ---
 
