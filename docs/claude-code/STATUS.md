@@ -15,6 +15,22 @@
 Both surfaced in the 2026-08-20 overnight-verification sweep below. Three migrations, all **live on LCC
 Opps (`xengecqvemvfknjvbvrq`), no Railway deploy**: `20260930121200` / `121300` / `121400`.
 
+**Cowork reconcile-verified live 2026-08-20 (PR #1761 merged @ 381ed62):** `field_provenance` = 1.371M
+(drained from 1.66M, still shedding), prune guards BOTH FK columns, `idx_entities_norm_name_org` present,
+audit row 187741 alive, **0 open `cron_failure` for either fixed job**. Premise corrections from CC accepted:
+`lcc_normalize_entity_name(text)` IS `IMMUTABLE` (enabled the index that actually cleared the tick), and
+neither cron was an overnight blip. ⏭ **Follow-up flagged by CC, not urgent:** `lcc_feed_owner_signal_addresses`
+is still a per-row loop (fast enough now behind the index; set-based rewrite if its 433-row feed grows).
+
+**🔭 NEW finding from the reconcile — health-surface is 99% noise.** `v_lcc_health_alerts_open` = **3,982
+open, of which 3,958 are `mailbox_mirror_parked`** (the intake "Processed"-folder mover failing
+`not_found_or_not_in_source_folder` and parking one alert per email, still firing 2026-08-20 04:04Z). This
+buries the ~24 real alerts (9 http_failure, 5 cron_failure on OTHER jobs, 3 sidebar_promote, etc.) — the
+classic Consumption-Layer "999+ badge trains the operator to ignore the surface." Likely cause: the
+flagged-intake flow ALREADY moves the email to Processed on success (its Condition → `Move_email_(V2)`), so
+the separate mailbox-mirror mover then can't find it in the source folder. **Next-up candidate: an auto-retire
+sweep for parked mirror alerts whose email already moved, + de-dup the two movers.** Own prompt, not P118.
+
 **⚠️ Scope correction — neither was an overnight blip.** Resolving the alert backlog showed both crons had
 been failing on EVERY scheduled run for weeks: **`field-provenance-prune` on 16 days back to 2026-07-25**,
 **`lcc-owner-address-feed` on 10 days back to 2026-08-11**. The nightly `cron_failure` alert fired each
