@@ -269,6 +269,44 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(detailSrc, /MOVED to detail-openers\.js/, 'detail.js keeps a pointer comment');
   });
 
+  // ── Stage 3, Unit 1: app-modal.js ────────────────────────────────────────
+  it('app-modal.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const modal = scriptIndex('app-modal.js');
+    assert.ok(modal >= 0, 'index.html must load app-modal.js');
+    assert.ok(modal < scriptIndex('app.js'), 'app-modal.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-modal\.js/i,
+      'app-modal.js must be a classic script — lccConfirm/lccPrompt become window '
+      + 'properties via top-level function declarations, which five other files rely on');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-modal.js')]),
+      'app-modal.js must be syntactically valid');
+  });
+
+  it('the modal moved whole — state, dialogs, and its own DOM wiring', () => {
+    const modalSrc = readFileSync(join(root, 'app-modal.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    for (const fn of ['_isModalOpen', '_showModal', '_closeModal', '_modalCancel',
+                      'lccConfirm', 'lccPrompt']) {
+      assert.match(modalSrc, new RegExp(`function\\s+${fn}\\b`), `app-modal.js defines ${fn}`);
+      assert.doesNotMatch(appSrc, new RegExp(`function\\s+${fn}\\b`), `app.js must NOT redefine ${fn}`);
+    }
+    // Dialog state is useless apart from its dialogs — it moves with them.
+    for (const d of ['_modalResolve', '_modalPrevFocus', '_modalIsPrompt']) {
+      assert.match(modalSrc, new RegExp(`let\\s+${d}\\b`), `app-modal.js owns ${d}`);
+      assert.doesNotMatch(appSrc, new RegExp(`let\\s+${d}\\b`), `app.js must NOT redeclare ${d}`);
+    }
+    // The listener block is what makes OK/Cancel/Esc work; leaving it behind
+    // would give a modal that renders and never closes.
+    assert.match(modalSrc, /DOMContentLoaded/, 'app-modal.js keeps its own DOM wiring');
+    assert.match(modalSrc, /lcc-modal-ok/, 'app-modal.js keeps the OK-button wiring');
+    // The ROUTER stays put — the map lumped this region into a 988-2300 "router"
+    // range, which is wrong; hash routing is the spine and is extracted last, if ever.
+    for (const fn of ['navTo', 'applyRoute', '_routeParseHash']) {
+      assert.match(appSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} (router) stays in app.js`);
+      assert.doesNotMatch(modalSrc, new RegExp(`function\\s+${fn}\\b`), `app-modal.js must NOT take ${fn}`);
+    }
+    assert.match(appSrc, /MOVED to app-modal\.js/, 'app.js keeps a pointer comment');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
