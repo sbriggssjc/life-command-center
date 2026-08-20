@@ -117,6 +117,28 @@ needs **no catch-all rewrite**. Empty/unknown hash ⇒ Today. **No PII in the UR
 
 ## Core doctrines (apply to every change)
 
+### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
+
+This file and its siblings are full of dated findings — "X is blocked", "Y returns 401", "Z yields
+nothing from CI". **They were true when written and several are no longer true.** On 2026-08-20 the gov
+CLAUDE.md §18 note "`SAM_GOV_API_KEY` returns 401 API_KEY_INVALID" was quoted as current fact and
+Scott acted on it. The key had been valid for weeks; the real constraint was a **rate limit** (~10
+lookups/day), which is a completely different problem with a completely different fix. One query
+against `sam_entities.created_at` would have caught it.
+
+A dated blocker is a **hypothesis to re-test**, never an input to a recommendation. The re-test is
+almost always one cheap query or one probe. Corollary: when you *do* re-measure and the note is wrong,
+**fix the note in the same change** — that is how these files stay worth reading.
+
+### The failure mode that matters looks exactly like success
+
+Every silent failure found on 2026-08-19/20 reported healthy: `pages_fired: 6` with every page empty;
+`rate_limited:true` with `api_calls:0` behind a fail-soft that skips the "checked" mark so a 98%
+throttled pipeline is indistinguishable from a slow healthy one; `drillthrough: 37` while the queue
+drained 6; `HTTP 200 []` from a view anon cannot read; cron 136/137 green daily for three weeks while
+writing nothing. **Assert on the STATE DELTA — rows written, queue drained, population changed — never
+on the worker's own tally, its exit status, or "the cron is active".**
+
 ### Producer/Consumer (Consumption Layer)
 
 LCC produces work (research tasks, cadences, decisions, queue rows, inbox items) at ingestion scale and
@@ -293,6 +315,23 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   `v_sales_transactions_portfolio`, `v_property_owner_facts_portfolio`, `v_owner_contact_signals_portfolio`,
   `v_property_id_census`…). **Add BD columns to these views, not the underlying tables** (don't loosen RLS on
   PII). dia has the mirrored set.
+  - **⚠️ THE VIEW MUST BE `security_invoker=off` OR IT SILENTLY RETURNS NOTHING TO ANON (P157, 2026-08-20).**
+    With `security_invoker=on` the CALLER's RLS applies instead of the view owner's, so anon hits RLS on the
+    base tables and PostgREST answers **HTTP 200 with `[]`** — indistinguishable from "no new data". Six gov
+    views and four dia views were in that state; `lcc_owner_contact_signals` sat frozen from **2026-07-28 to
+    2026-08-20** while crons 136/137 ran daily and *succeeded*, because `lcc_sync_owner_contact_signals`
+    returns `pages_fired` (an honest counter that looks like throughput) and every page came back empty.
+    Measured: `v_ownership_history_portfolio` 12,697→0, `vw_portfolio_owners` 1,915→0,
+    `v_owner_contact_signals_portfolio` 733→0, `v_agency_portfolio` 498→0, `v_portfolio_summary` 163→0,
+    `v_cmbs_portfolio` 149→0 (dia: 6,808 / 391 / 42 / 32 → 0).
+  - **Diagnose with `SET LOCAL ROLE anon` + `count(*)`, not HTTP.** It is instant, needs no key, and compares
+    directly against the service_role count. And **check `reloptions` directly** — the stored value is
+    `security_invoker=**on**`, so a test for `ilike '%security_invoker=true%'` returns false and reports the
+    exact opposite of the truth (it did).
+  - **Never "fix" this by adding an anon SELECT policy to the base table** — that exposes the whole table
+    (e.g. `recorded_owners.contact_info`), which is precisely what the view pattern exists to avoid. Flip the
+    view. Note the views that *were* working do so via anon policies on `properties`/`true_owners` — the
+    looser mechanism, worth tightening on its own terms.
 - **Cap rates are stored as decimals** (7.47% → `0.0747`) and are **derived, not trusted-as-ingested**. gov has
   a full cap-rate framework: `cap_rate_history` is the authoritative derived ledger (`gov_compute_cap_rate()`,
   a 7-tier income hierarchy; opex anchors from trusted ingested cap rates). Raw ingested cap rates are preserved
@@ -318,7 +357,23 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   (`lcc_priority_queue_resolved`, refreshed by cron); a band-moving verdict calls
   `lcc_refresh_priority_queue_resolved()` to update immediately.
 - **Entity ops:** `lcc_merge_entity` (two-step DELETE-then-UPDATE; the single "move backrefs loser→winner"
-  path — reconciles portfolio/identities/relationships/cadence), `lcc_normalize_entity_name`,
+  path — reconciles portfolio/identities/relationships/cadence **plus, since P160, the ownership/BD
+  backrefs**), `lcc_normalize_entity_name`,
+  - **⚠️ WHEN YOU ADD A TABLE WITH AN ENTITY FK, ADD IT TO THE MERGE PATH (P160, 2026-08-20).**
+    `lcc_reconcile_tombstone_backrefs` moves portfolio facts, external identities, relationships and
+    cadence — and for a long time nothing else. `lcc_property_owner`, `lcc_property_owner_evidence`,
+    `owner_contact_pivot` and `bd_opportunities` were never moved, so **every merge LCC ever ran left a
+    DEAD OWNER behind**: measured live at 63 assets whose `owner_entity_id` pointed at a merged-away
+    entity (plus 99 stranded contact pivots). Nothing errors; the asset still displays an owner that no
+    longer exists. `lcc_merge_entity` now repoints all four, dedup-then-update so a PK collision cannot
+    abort a merge midway.
+  - **It also had NO CYCLE GUARD, and that is not theoretical** — P153 merged a live entity into its own
+    May-2026 tombstone (the tombstone was still visible as a prospect, since `v_lcc_top_seller_prospects`
+    did not filter merged entities until P154) and created a mutual `A→B, B→A` merge in which NEITHER row
+    was a survivor. A one-hop follow cannot detect it and an uncapped follow HANGS on it — which is why
+    `lcc_entity_survivor(uuid)` is hop-capped at 20. `lcc_merge_entity` now resolves the winner to its
+    terminal survivor (a caller naming a tombstone means the survivor), refuses a genuine cycle, and
+    refuses an already-tombstoned loser.
   `ensureEntityLink` (the R4-A choke point: junk/implausible/federal guards + email-resolution tier +
   SF-account-as-org-edge modeling).
 - **Deal spine (living deal dossier, prompt 02/06):** `bd_opportunities` is the deal container;
@@ -564,6 +619,20 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     `"DP Brighton LLC by Marcus & Millichap"` normalizes to `dp brighton by marcus millichap` — which never
     groups with `dp brighton`. Cleaning the stored name is therefore what SURFACES a duplicate, not what
     hides it. Whenever you correct a captured name, check whether the correction changes its merge grouping.
+  - **⚠️ `&` IN AN OWNER NAME IS USUALLY A MARRIED COUPLE, NOT A FIRM (P158a, caught pre-apply).** Adding
+    `&` to `lcc_owner_name_has_org_marker` looks obviously right — no person's name has an ampersand — and
+    would have flagged **1,305 entities, retyped 119 people and touched 66 RESOLVED OWNERS**. The population
+    is dominated by joint individual owners: `Amy & Richard Gonzalez`, `Anil M & Rajeshkumar K Khatri`,
+    `Adel B & Gihan M Bareh`, `A.R. Venugopala & Padma V. Reddy`. Exactly the individuals Scott's
+    2026-08-19 doctrine admits as owners. One firm caught (`Rutherford & Strickland`) is not worth
+    misclassifying dozens of couples. **Only the unambiguous half shipped** — plural/business nouns
+    (`companies|health|medical|clinic|services|solutions|systems|industries`); note `company` was already
+    listed but `\M` is a word boundary so the PLURAL slipped through (`The Graham Companies`).
+  - **Adding an org marker without RETYPING silently removes owner eligibility.**
+    `lcc_supersede_property_owner` admits `owner_entity_type='organization' OR
+    lcc_owner_name_is_credible_person(...)`, and credible_person EXCLUDES org markers — so a name that
+    gains a marker while still typed `person` fails BOTH arms. Retype in the same migration (P149 pattern)
+    and gate on `0 resolved owners failing both arms`.
 - **A brokerage is the agent, never the principal — every owner-writing feeder needs the guard.**
   `lcc_reconcile_property_owner` had none and produced **42 of 46** brokerage-as-owner rows (P116);
   `lcc_supersede_property_owner` carried `and not lcc_owner_name_is_brokerage(...)` and produced **0**.
@@ -619,6 +688,24 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     written). Same class as the Dialysis repo's documented "`inserted: N` is a DERIVATION counter."
     **Truth is a `count=exact` delta before vs after**, and a dry run must ALSO report
     already-present vs NEW or a re-run looks like it did nothing when it did everything.
+  - **⚠️ AND THE GENERAL FORM (P159a, 2026-08-20): an outcome that reports SUCCESS but does not change the
+    row's QUEUE ELIGIBILITY is indistinguishable from progress.** The owner-contact enrich tick reported
+    `drillthrough: 37` — which reads as the worker doing real work — while the queue drained **6**. The
+    drillthrough branch keys on the NAME and never sets `active_contact_entity_id`, so the same rows
+    re-qualified and re-drilled every tick, forever. Only the STATE DELTA exposed it: queue 752→746 (−6)
+    against `find_person_at_manager` 45→47 (+2), i.e. 35 of 37 were repeats. **Never judge a worker by its
+    tally; judge it by the delta in the population it is supposed to drain.**
+- **A value-ranked queue must EXCLUDE its terminal states, or the highest-value rows jam the head forever
+  (P159).** `v_owner_contact_enrich_queue` orders `rank_value DESC NULLS LAST, updated_at ASC`. Once
+  value-ranking was added (20260729120000), `updated_at` became a mere TIEBREAK — so the rotation the
+  handler's comment still claims ("updated_at ASC is the tiebreak that keeps the queue moving",
+  `owner-contact-enrich.js:502`, now stale) no longer protects anything. Rows that can never resolve
+  (`enrichment_action='manual_research'` — and note that CASE ends in `ELSE 'manual_research'`, so the
+  column is NEVER null and a `not.is.null` filter admits everything — plus `find_person_at_manager`, plus
+  an open `owner_contact_manual` research task) sat permanently at the top: **17 of the top 25 slots**,
+  matching the live tick's `skipped` count exactly. Fixed in the VIEW, not the handler — actionable-only is
+  the Consumption-Layer rule, and it needs no redeploy. Queue 4,472 → 757 actionable; useful work per run
+  32% → 88%; real drain 6 → 16.
 - **`lower()` BEFORE a character-class strip, never after.** `regexp_replace(x,'[^a-z0-9]','','g')`
   carries no `i` flag, so applied to raw text it DELETES every uppercase letter. `lower(regexp_replace(
   'YUKON MEDICAL VA LLC','[^a-z0-9]','','g'))` → **`''`**, and every ALL-CAPS name collapses to the
