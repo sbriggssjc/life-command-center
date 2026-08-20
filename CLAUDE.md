@@ -10,6 +10,21 @@
 > **CRITICAL: Read `.github/AI_INSTRUCTIONS.md` before modifying any files in `/api/`.** It carries the full
 > routing/architecture reference and any lettered-section footguns.
 
+> **⚠️ DESTRUCTIVE-OP ORDER (learned the hard way 2026-08-19, nearly lost a 475 MB mailbox):**
+> **extract → VERIFY → only then delete the backup and prune.** A 475 MB
+> `email_export/*.pst` blocked a push (GitHub rejects >100 MB), so `filter-branch` purged it from
+> history. Two mistakes, both about *order*:
+> 1. **`git filter-branch` rewrites the WORKING TREE too**, not just history — a file dropped from the
+>    rewritten commits is deleted from disk. Do not tell anyone "only history changes".
+> 2. **PowerShell `>` is NOT binary-safe.** `git cat-file -p <blob> > file.pst` produced
+>    **1,002,334,726 bytes for a 498,017,280-byte blob** — UTF-16LE widening every byte. Use
+>    `cmd /c "git cat-file -p <sha> > %USERPROFILE%\...\file.pst"`, which redirects in binary, then
+>    check `(Get-Item …).Length` against `git cat-file -s <sha>` **before** deleting the backup ref.
+>    (PST magic is `!BDN` in the first 4 bytes if you want a second check.)
+> The recovery only worked because `gc --prune=now` happened to leave the unreferenced blob behind.
+> Never rely on that. Also: `email_export/`, `*.pst`, `*.ost` are now git-ignored — a mailbox export is
+> personal correspondence and does not belong in a repo regardless of size.
+
 > **This file is the durable reference — architecture invariants, DB topology, naming, write-surface rules,
 > doctrines, and known footguns.** The full round-by-round worklog (R5→R64, ORE, CONNECTIVITY, UI phases, SF
 > reconcile, etc., through 2026-07) was moved verbatim to **[`docs/history/CLAUDE_full_2026-07.md`](docs/history/CLAUDE_full_2026-07.md)** —
