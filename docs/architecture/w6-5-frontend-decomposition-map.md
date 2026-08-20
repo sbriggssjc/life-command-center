@@ -230,7 +230,8 @@ early stage — hash routing is the load-bearing invariant.
   tab-registry guard first.
 - **Stage 3 (app.js by leaf):** `app-modal.js` → `app-treasury-chart.js` →
   `app-export-comps.js` → `app-tasks.js`. Router extracted last, if at all.
-- **Stage 4 (ops.js remainder):** `pq.js`, `ops-draft-log.js`, `ops-research.js`.
+- **Stage 4 (ops.js remainder):** ⚠️ **RE-MEASURED 2026-08-20 — the original three-module
+  proposal does not survive contact with the file. See §3a below before starting.**
 
 Ordering rule: **lowest coupling first, load dependencies-first, one region per
 prompt, re-run guards + `npm run verify:deploy` each time.**
@@ -306,3 +307,85 @@ break the `completeTask` onclick; load after app.js.
 
 **Standing lesson, now five-for-five across Stage 2 + Stage 3: every range in this map has
 been wrong. Re-measure the file before every extraction; the map is a hypothesis.**
+
+
+---
+
+## 3a. Stage 4 re-measured (2026-08-20) — before any ops.js extraction
+
+Stage 3 finished four-for-four, and **every range this map supplied was wrong** (5 of 5
+across Stages 2–3). Stage 4 supplied *no* ranges at all — three module names and nothing
+else — so it was measured from the file before starting rather than one unit at a time.
+
+`ops.js`: **7,176 lines, 207 top-level functions, 72 `window` exports.**
+
+### Finding 1 — `ops-draft-log.js` IS NOT A SEAM. Drop it from the plan.
+
+The name is a word that appears across unrelated code, not a subsystem. Its eight
+candidate members belong to **three different subsystems plus one false match**:
+
+| fn | line | actually belongs to |
+|---|---|---|
+| `submitListingBdDrafts`, `showListingBdDraftsModal` | 1006, 1030 | W3.5 Listing-BD inbox consumer |
+| `pqLogTouch` | 3200 | priority queue |
+| `cadDraft`, `cadCopyDraft`, `cadLogTouch`, `cadDraftAndLog` | 3961–4107 | R10 cadence dashboard |
+| `_renderReviewSourceBacklog` | 4984 | **false match — "back·LOG"**, a review-lane renderer |
+
+Extracting "the draft/log module" would have cut across three subsystems on the strength
+of a substring. There is no draft/log banner in the file and no draft/log seam in it.
+
+### Finding 2 — the `RESEARCH` banner at 4973 is ORPHANED. Do not extract from it.
+
+Two section banners are stacked with nothing between them:
+
+```
+4973  // ===========================================
+4974  // RESEARCH — research task queue
+4975  // ===========================================
+4976  // ===========================================
+4977  // W3.4 — Comp reconciliation review lane ...
+```
+
+The comp-review lane was inserted directly beneath the RESEARCH header and runs to ~5220.
+**The research functions do not start until 5225.** Trusting the banner drags ~250 lines
+of an unrelated Decision-Center lane into `ops-research.js`. Real research members:
+5225, 5237, 5441–5860, plus `researchAssistantPanelHTML` at **261** — 5,000 lines away,
+in the file's helper preamble. Research is *not* one contiguous region.
+(When the extraction happens, correct the banner in the same change.)
+
+### Finding 3 — ops.js has a SHARED MUTABLE STATE HEADER. This is the real structural difference.
+
+Lines **45–126** declare ~30 top-level `let`/`const`s — `opsMyWorkData`, `opsInboxData`,
+`opsResearchData`, `opsEntityFilter`, `opsPagination`, `useV2` … — read by every
+subsystem in the file. detail.js and app.js kept their state local to the region that
+owned it; ops.js does not. The research state alone (`opsResearchData` 84,
+`opsResearchFilter` 93, `opsResearchTypeFilter` 94, `opsResearchPage` 96,
+`opsResearchAssistantState` 107) is interleaved with myWork/inbox/entities state, so it
+**cannot be moved byte-identically** with its functions, and it is read from **262** and
+**6562** — both outside any research region.
+
+**Consequence — the pattern still works, but the rule changes.** Leave the state header
+in `ops.js`; move only functions. A sibling loaded *before* ops.js is still correct,
+because every read of that state happens at CALL time (including the default parameter
+`renderResearchPage(page = opsResearchPage)`, which evaluates per call). What a Stage 4
+guard must add over the Stage 2/3 guards is an assertion that **the sibling contains no
+top-level statement that reads ops state at EVAL time** — that, and only that, is what
+the shared header makes newly dangerous.
+
+### Corrected Stage 4 order (measured, from the file's own banners)
+
+| # | region | lines | why this order |
+|---|---|---|---|
+| 1 | Performance dashboard | 6766–7145 | manager-only, terminal, lowest coupling |
+| 2 | Sync health | 6346–6539 | self-contained connector status |
+| 3 | Domain health summary | 6145–6345 | self-contained |
+| 4 | Metrics | 6025–6144 | reads shared state, no writers elsewhere |
+| 5 | Research (**not** the banner's range) | 5225–~5860 **+ 261** | non-contiguous; fix the orphaned banner in the same change |
+| 6 | Comp reconciliation review lane | 4976–~5220 | W3.4; sits under the wrong banner today |
+
+`pq.js` is **deferred**: only 5 pq-named functions exist and the priority-queue code is
+entangled with the R60 row-pagination block (2946–3482) and `_opsRowStore`, which other
+surfaces use. It is not the cheap win the original plan implied.
+
+**Standing rule, earned six times now: this map is a hypothesis. Re-measure the file
+before every extraction, and correct the row in the same change.**
