@@ -10,6 +10,23 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## 2026-08-20 overnight verification
+
+- **Worker queue clean:** last 24h = `outlook.message.extract` 1,331 **done** (0 failed/stuck) + `cre.doc.text`
+  13 done. Forward sweep + intake draining normally.
+- **Intake stayed healthy post-fix (13h):** email channel finalized 7 / review 3 / discarded 7 / failed 1 —
+  OMs finalizing normally, so the Select-bug fix holds. Last email intake 2026-08-20 11:26Z.
+- **16 new health alerts (15h), none blocking, but note:** 11 `mailbox_mirror_parked` (the Processed-folder
+  MOVER failing 5x on some just-intaken emails, e.g. the DS0PR05MB9718 OM thread — intake itself succeeded,
+  only the tidy-up move parked); 2 `cron_failure` on **`lcc-owner-address-feed`** (failed 05:07Z — needs a
+  look); 1 `http_failure` no_response to `/api/link-propagation-tick` (transient); 1 `http_failure` **401 to
+  `/api/daily-briefing`** (auth). Follow-ups: owner-address-feed cron + the briefing 401.
+- **Git:** local repo has a stale lock (`.git/HEAD.lock` + `.git/objects/maintenance.lock` + tmp_obj\_\*)
+  left by a sandbox commit racing Git's background `maintenance`. Sandbox can't unlink them (perms). Cleared
+  locally by Scott; durable fix = `git maintenance unregister --force` + stop committing from the sandbox on
+  this repo. Also uncommitted staged WIP present (CLAUDE.md + p143–p152 migrations + supersession-tie-lane
+  doc) awaiting Scott's commit; push still blocked by the 475 MB .pst blob at f85b2c98 (history rewrite pending).
+
 ## Milestone 2026-08-19 — email capture end-to-end: forward sweep + contact-history pull live, v2 voice distilled, LCC Intake root-caused & fixed
 
 **Session (Cowork) built and verified live:**
