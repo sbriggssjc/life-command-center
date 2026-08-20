@@ -10,6 +10,42 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## W6.5 Stage 2 Units 1–5 (2026-08-20, Cowork) — detail.js 18,481 → 16,203 lines, byte-identical
+
+The highest-value W6 unit (it de-risks the Edit-truncation incidents). Five regions extracted from
+`detail.js` into classic sibling scripts. **Every region sha256-verified byte-identical before/after the
+move; every unit mutation-tested before commit.**
+
+| Unit | File | Lines | Note |
+|---|---|---|---|
+| 1 | `detail-rent.js` | 301 | rent source-tier policy + escalation parser |
+| 2 | `detail-tab-documents.js` | 238 | Documents tab — also carried the client-dossier builders it surfaces |
+| 3 | `detail-panel-shell.js` | 739 | panel geometry, resizers, minimize tray, companion dock — **19 window exports** |
+| 4+5 | `detail-entity-tabs.js` | 1,143 | entity tab bodies (Unit 5 = the five Unit 4 missed) |
+
+**THE MAP WAS WRONG THREE TIMES, and each correction was load-bearing.** Its line ranges were stale for
+every unit. Its `detail-entity.js` range would have swallowed the PANEL SHELL — window management, which
+`detail-tab-registry.test.mjs` pins to `detail.js`. And its entity/contact ranges OVERLAPPED, because the
+two clusters interleave *around* that shell — so "extract the entity tabs" was never one region-move.
+**Unit 3 lifting the shell out is what made Unit 4 contiguous at all.**
+
+**Three defects found in the machinery itself:**
+1. **Stage 1 had shipped a broken test.** `_fedCardHTML` moved to `dc-lanes.js` while `_cleanAssistHTML`
+   stayed in `ops.js` — fine in production's shared global scope, a ReferenceError in an isolated eval
+   sandbox. Fixed, and became **recipe step 5b**: grep `test/` for the moved function BEFORE extracting.
+2. **`verify:deploy` never probed a front-end file.** It checked `/version` + `/api/*` only, so a new
+   script that failed to ship would 404 in the browser with the gate green. Now probes all 13 local
+   `<script src>`, asserting on the BODY (the SPA catch-all can return 200 with index.html).
+   `--wait[=sec]` added for the push→verify loop.
+3. **Unit 4 silently left five `_entityTab*` bodies behind and no guard noticed** — the tab-registry
+   guard asks whether a tab reaches a renderer that EXISTS, and it did. *"Reachable" and "in the right
+   module" are different properties.* The load-order guard now asserts the second one.
+
+Guards: **113 assertions** across `detail-tab-registry`, `frontend-module-load-order`, `panel-redesign`.
+Remaining (map §2b): #6 `_entityTabOverview` + its helper cluster, #7 contact openers. The entity
+dispatcher and the shared completeness-rail / Next-Step chrome stay in `detail.js` by design.
+
+---
 ## P120 (2026-08-20) — the app now MOVES emails: move-queue executor built (was: nothing ever drained it)
 
 **Migration `20260820140000_lcc_p120_move_queue_executor.sql` — APPLIED LIVE to LCC Opps
