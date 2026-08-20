@@ -17,12 +17,24 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+// W6.5 step 5b (2026-08-20): this suite SLICES functions out of the detail
+// source and evals them (_panelClampWidth, _panelParkSig, _udOwnershipLadder, …).
+// As Stage 2 carves detail.js into siblings, a sliced function can move out from
+// under the slicer — so read detail.js AND every detail-*.js as one source, the
+// same contract detail-tab-registry.test.mjs uses. Safe to widen: all 49
+// detailSrc assertions here are POSITIVE (match / includes / sliceFn), so a
+// larger corpus cannot weaken one. Do this BEFORE an extraction, never after —
+// then a failure afterwards is the extraction's fault, not the harness's.
+const detailSrc = ['detail.js', ...readdirSync(root)
+  .filter((f) => /^detail-[a-z0-9-]+\.js$/i.test(f))
+  .sort()]
+  .map((f) => readFileSync(join(root, f), 'utf8'))
+  .join('\n');
 const stylesSrc = readFileSync(join(root, 'styles.css'), 'utf8');
 const indexSrc = readFileSync(join(root, 'index.html'), 'utf8');
 
@@ -573,7 +585,7 @@ describe('§1.1 STRUCTURAL — panel widths are var-driven and the shell is cohe
     // W6.5 Stage 2: detail-rent.js was extracted OUT of detail.js and shares its
     // global scope, so a fresh detail.js paired with a cached detail-rent.js is
     // exactly the stale mix this guard exists to prevent — it joins the set.
-    const versions = { 'app.js': v('app.js'), 'detail.js': v('detail.js'), 'detail-rent.js': v('detail-rent.js'), 'detail-tab-documents.js': v('detail-tab-documents.js'), 'ops.js': v('ops.js'), 'styles.css': v('styles.css') };
+    const versions = { 'app.js': v('app.js'), 'detail.js': v('detail.js'), 'detail-rent.js': v('detail-rent.js'), 'detail-panel-shell.js': v('detail-panel-shell.js'), 'detail-tab-documents.js': v('detail-tab-documents.js'), 'ops.js': v('ops.js'), 'styles.css': v('styles.css') };
     for (const [f, ver] of Object.entries(versions)) assert.ok(ver, `${f} has no ?v= cache buster`);
     assert.equal(new Set(Object.values(versions)).size, 1,
       `cache busters disagree: ${JSON.stringify(versions)}`);

@@ -122,6 +122,58 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(detailSrc, /MOVED to detail-tab-documents\.js/, 'detail.js keeps a pointer comment');
   });
 
+  // ── Stage 2, Unit 3: detail-panel-shell.js ───────────────────────────────
+  it('detail-panel-shell.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const shell = scriptIndex('detail-panel-shell.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(shell >= 0, 'index.html must load detail-panel-shell.js');
+    assert.ok(shell < detail, 'detail-panel-shell.js must appear before detail.js — '
+      + 'its top-level lets (_companionState, _panelParked, _activePrimaryKind) are read from detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-panel-shell\.js/i,
+      'detail-panel-shell.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-panel-shell.js')]),
+      'detail-panel-shell.js must be syntactically valid');
+  });
+
+  it('the panel SHELL moved; the tab shell + entity tabs stayed in detail.js', () => {
+    const shellSrc = readFileSync(join(root, 'detail-panel-shell.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_dualCapable', '_panelClampWidth', '_panelSetWidth', '_panelRestoreWidths',
+                      '_panelInitResizers', '_panelSyncResizers', '_panelTrayRender', '_panelParkSig',
+                      '_panelTrayPark', '_panelTrayRestore', '_panelSwap', 'minimizePrimary',
+                      'openCompanionProperty', 'openCompanionEntity', '_renderCompanionEntity',
+                      'closeCompanion', '_setPrimaryKind']) {
+      assert.match(shellSrc, new RegExp(`function\\s+${fn}\\b`), `detail-panel-shell.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // Mutable panel state moves WITH its owners, or the two files disagree.
+    for (const decl of ['let\\s+_companionState', 'let\\s+_panelParked', 'let\\s+_activePrimaryKind',
+                        'const\\s+_PANEL_W', 'const\\s+DUAL_DOCK_MIN_WIDTH']) {
+      assert.match(shellSrc, new RegExp(decl), `detail-panel-shell.js owns ${decl}`);
+      assert.doesNotMatch(detailSrc, new RegExp(decl), `detail.js must NOT redeclare ${decl}`);
+    }
+    // The TAB shell is a different thing and must NOT have followed.
+    for (const fn of ['openUnifiedDetail', 'switchUnifiedTab', '_udMapLegacyTab']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} stays in detail.js`);
+    }
+    assert.match(detailSrc, /MOVED to detail-panel-shell\.js/, 'detail.js keeps a pointer comment');
+  });
+
+  it('every window.* export survives the panel-shell move (inline onclick targets)', () => {
+    // These are reached from onclick="" at CLICK time, off `window` — not through
+    // lexical scope. Lose one and the UI renders fine and dies on interaction.
+    const shellSrc = readFileSync(join(root, 'detail-panel-shell.js'), 'utf8');
+    const exports = [
+      '_activePrimaryKind', '_companionEnlargeEntity', '_companionOpenFull', '_entityDrillProperty',
+      '_openEntityByNameSmart', '_openEntitySmart', '_panelHeaderControls', '_panelSetWidth',
+      '_panelSwap', '_panelSyncResizers', '_panelTrayDrop', '_panelTrayPark', '_panelTrayRestore',
+      'closeCompanion', 'minimizeCompanion', 'minimizePrimary', 'openCompanionEntity',
+      'openCompanionProperty', 'restoreCompanion',
+    ];
+    const missing = exports.filter((e) => !new RegExp(`window\\.${e}\\s*=`).test(shellSrc));
+    assert.deepEqual(missing, [], `window export(s) lost in the move — onclick handlers would break: ${missing.join(', ')}`);
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
