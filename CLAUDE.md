@@ -144,6 +144,22 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 - **A split must MOVE, not COPY.** Two definitions of one function in a shared scope means
   the later file silently wins; two top-level `let`s of one name is a **runtime
   SyntaxError that kills the whole app**. Guards forbid redeclaration on both sides.
+- **⚠️ 36 CROSS-FILE DUPLICATE DEFINITIONS ALREADY EXIST, and one was a live bug.**
+  Measured 2026-08-20 while mapping Stage 3; every pair is genuinely DIFFERENT code, not
+  copies. 28 are intentional (`app.js` ships inert placeholder stubs — `renderGovOverview`,
+  `diaQuery`, `metricHTML`, … — that `gov.js`/`dialysis.js` override with the real
+  implementations); 4 are harmless equivalents (`esc` in `app.js` and `ops.js` do the same
+  five escapes); 3 are dead code (`app.js`'s 2,403-byte `loadMergeQueue` sits under
+  contacts-ui.js's 303-byte one). **The one that bit: `_opsSparkline`.** `detail.js` built an
+  OBJECT census series and defined `_opsSparkline(history)` to read it; `ops.js` loads later
+  with `_opsSparkline(series, opts)` expecting NUMBERS, so `Number({total_patients:81,…})`
+  → `NaN` → every point filtered → the dialysis Ops tab's census chart returned the literal
+  string **"no trend" on every property**, for months, with no error. Fixed by mapping the
+  call sites to numbers and deleting the dead definition.
+  **`test/frontend-duplicate-definitions.test.mjs` pins the set** — a NEW duplicate fails,
+  and a stale allowlist entry also fails, so the list cannot rot into a lie. Before adding a
+  top-level `function` to any SPA file, check the name is not already taken by a file that
+  loads later; "it works on my page" is not evidence, because the override is silent.
 - **Cache busters move as a SET** (`app.js`/`detail.js`/every `detail-*.js`/`ops.js`/
   `styles.css`). Fresh CSS + a cached old script is an unrecoverable UI;
   `panel-redesign.test.mjs` enforces one shared `?v=`.
