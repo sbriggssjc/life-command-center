@@ -111,9 +111,10 @@ const KNOWN = [
   'loadMergeQueue|app.js|contacts-ui.js',   // app.js 2,403b dead under 303b
   'openContactDetail|detail-openers.js|contacts-ui.js', // dead before Unit 7 too
 
-  // ── (D) ⚠️ LIVE BUG — signature mismatch, see the header. Tracked here so the
-  // count stays honest; the fix is its own change.
-  '_opsSparkline|detail.js|ops.js',
+  // ── (D) was: _opsSparkline|detail.js|ops.js — the LIVE BUG. FIXED 2026-08-20:
+  // the dead detail.js definition was removed and the two call sites now pass
+  // numbers to ops.js's surviving implementation. The duplicate is gone, so it
+  // is gone from this list too — the stale-entry check enforces that.
 ];
 
 describe('W6.5 — no NEW cross-file duplicate function definitions', () => {

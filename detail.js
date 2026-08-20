@@ -4867,10 +4867,19 @@ function _udTabOperations() {
         .filter(s => s && s.reconciled_census != null && isFinite(Number(s.reconciled_census)) && Number(s.reconciled_census) > 0)
         .map(s => ({ total_patients: Number(s.reconciled_census), snapshot_date: (s.fiscal_year != null ? String(s.fiscal_year) + '-12-31' : null) }))
     : [];
+  // ⚠️ _opsSparkline takes an array of NUMBERS. Both call sites used to pass the
+  // OBJECT rows above, which silently rendered "no trend" on every property:
+  // detail.js defined its own _opsSparkline(history) that read {total_patients},
+  // but ops.js loads LATER and its _opsSparkline(series, opts) — expecting
+  // numbers — won in the shared global scope. Number({total_patients: 81, …}) is
+  // NaN, every point was filtered, and the chart reported "no trend" as though
+  // the data were missing. Map to numbers here; see
+  // test/frontend-duplicate-definitions.test.mjs for the duplicate-definition guard.
+  const _censusPt = (h) => Number(h && (h.total_patients ?? h.patient_count) || 0);
   if (reconCensusSeries.length >= 2) {
-    html += _opsSparkline(reconCensusSeries);
+    html += _opsSparkline(reconCensusSeries.map(_censusPt).filter(v => v > 0));
   } else if (patientHistory.length >= 2) {
-    html += _opsSparkline(patientHistory);
+    html += _opsSparkline(patientHistory.map(_censusPt).filter(v => v > 0));
   }
 
   // Trend direction badge
@@ -5887,47 +5896,11 @@ function _starsCompact(n) {
 }
 
 /** Patient history sparkline (inline SVG) */
-function _opsSparkline(history) {
-  if (!history || history.length < 2) return '';
-  const pts = history.map(h => Number(h.total_patients || h.patient_count || 0)).filter(v => v > 0);
-  if (pts.length < 2) return '';
+// _opsSparkline was DEFINED here and never ran: ops.js loads later and its
+// _opsSparkline(series, opts) won in the shared global scope. Removed rather
+// than left as live-looking dead code — the ONE implementation is ops.js's,
+// and the call sites above now pass it numbers. (2026-08-20)
 
-  const w = 280, h = 50, pad = 4;
-  const min = Math.min(...pts), max = Math.max(...pts);
-  const range = max - min || 1;
-
-  const points = pts.map((v, i) => {
-    const x = pad + (i / (pts.length - 1)) * (w - 2 * pad);
-    const y = pad + (1 - (v - min) / range) * (h - 2 * pad);
-    return x.toFixed(1) + ',' + y.toFixed(1);
-  });
-
-  const lastVal = pts[pts.length - 1];
-  const firstVal = pts[0];
-  const trendColor = lastVal >= firstVal ? 'var(--green)' : 'var(--red)';
-
-  let svg = '<div style="margin-bottom:8px">';
-  svg += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:2px">';
-  svg += '<span>' + (history[0].snapshot_date ? _fmtDate(history[0].snapshot_date) : '') + '</span>';
-  svg += '<span>Patient Census History</span>';
-  svg += '<span>' + (history[history.length - 1].snapshot_date ? _fmtDate(history[history.length - 1].snapshot_date) : '') + '</span>';
-  svg += '</div>';
-  svg += '<svg width="100%" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="display:block">';
-  // Fill area
-  svg += '<polygon points="' + pad + ',' + h + ' ' + points.join(' ') + ' ' + (w - pad) + ',' + h + '" fill="' + trendColor + '" fill-opacity="0.08"/>';
-  // Line
-  svg += '<polyline points="' + points.join(' ') + '" fill="none" stroke="' + trendColor + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  // Endpoint dot
-  const lastPt = points[points.length - 1].split(',');
-  svg += '<circle cx="' + lastPt[0] + '" cy="' + lastPt[1] + '" r="3" fill="' + trendColor + '"/>';
-  svg += '</svg>';
-  svg += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)">';
-  svg += '<span>' + fmtN(firstVal) + ' patients</span>';
-  svg += '<span style="font-weight:600;color:' + trendColor + '">' + fmtN(lastVal) + ' patients</span>';
-  svg += '</div>';
-  svg += '</div>';
-  return svg;
-}
 
 /** Compute composite lease risk score (0-100) */
 function _computeLeaseRisk(r, trends, quality, lease, leaseMonths, margin) {
