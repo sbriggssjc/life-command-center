@@ -20,13 +20,18 @@ redeploy of merged `main` → run the deploy gate `npm run verify:deploy` and co
 **Cowork reconcile-verified live 2026-08-20 (PR #1763 merged @ 37fa2e7):** LCC side all present —
 `v_lcc_move_queue_worklist` (n=**340**: 325 staged + 15 duplicate), `lcc_move_queue_ack` RPC, auto-retire
 cron, `MOVE_QUEUE_EXECUTOR` flag registered **off**, both routes mounted in `server.js` (L421–422).
-`processing_log` real moves since Aug 1 = **0** (correct — nothing moves until the gate below is closed).
-**⏭ THREE STEPS remain, all Scott-side, before a single email actually moves:** (1) Railway redeploy of `main`
-+ `verify:deploy`; (2) build the PA executor flow per `docs/architecture/flows/move-queue-executor.md` (Flow 7);
-(3) `MOVE_QUEUE_EXECUTOR=true` + flip the registry row. **⚠️ Ordering hazard to close before/with rollout
+**✅ LIVE 2026-08-20 — the app now moves emails.** All three activation steps done: `main` redeployed,
+`MOVE_QUEUE_EXECUTOR=true` set on `tranquil-delight` + registry flipped `on`, and the **Flow 7 PA executor built
++ running** (`LCC — Move Queue Executor`, 15-min recurrence). First manual run: **22 `moved` + 3 `already_out`,
+0 parked, worklist 340 → 315.** Recurrence drains the rest at ~25/run. Flow-build footguns hit + fixed live:
+the guard used `equals(skipped,'')` but the flag-on response OMITS `skipped` (PA `equals(null,'')`=false) → wrap
+in `coalesce(...,'')`; the ack URL had `/api-move-queue-ack` (should be `/api/move-queue-ack`); and the msg-id
+expr must be `first(body('Find_message')?['value'])?['id']` (the `)` after `['value']`, not around the whole). **⚠️ Ordering hazard to close before/with rollout
 (CC-flagged, not fixed):** Flow 6 (`todo-completion-poll`) flips `staged→filed` WITHOUT moving, while the
 mirror gates on `outcome='staged'` — if Flow 6 wins the race a message sits in staging forever reading
-`filed/moved`. Latent while staging was empty, reachable once the drainer fills it.
+`filed/moved`. Latent while staging was empty, **now reachable (drainer live 2026-08-20) → drafted as
+prompt 121** (`121-staging-move-vs-flow6-ordering-hazard.md`): decouple the mirror worklist from the transient
+`outcome` flip (anchor on the mirror ledger), stop Flow 6 asserting a move it didn't make, heal any stranded.
 
 **The break (measured live, 4 independent confirmations).** `staged/pending 325 · duplicate/pending 15 ·
 filed/moved 16 · needs_review/skipped 47`. **All 16 `moved` rows carry `outcome='filed'` AND
