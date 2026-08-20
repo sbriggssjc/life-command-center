@@ -18,7 +18,24 @@ The sidebar **writer is fine** — `ensureRecordedOwner(name, address)` correctl
 ## To build (app code — can't run as SQL)
 
 ### 1. Feed SAM the right candidates (the GSA lever you flagged)
-The `sam-entity-lookup` edge function only produced 127 — it isn't iterating the owner universe. **Point its candidate query at all `recorded_owners`/`true_owners` lacking a SAM match, prioritized by deal value, and especially the GSA lessor LLCs** (they're federal lessees → almost always SAM-registered). At 50/2h that drains thousands over weeks; raise the batch if the SAM API budget allows. The `sam_propagate_to_owners()` (built) then auto-fills owners/contacts as the pool grows.
+The `sam-entity-lookup` edge function only produced 127 — it isn't iterating the owner universe. **Point its candidate query at all `recorded_owners`/`true_owners` lacking a SAM match, prioritized by deal value, and especially the GSA lessor LLCs** (they're federal lessees → almost always SAM-registered). ~~At 50/2h that drains thousands over weeks; raise the batch if the SAM API budget allows.~~ The `sam_propagate_to_owners()` (built) then auto-fills owners/contacts as the pool grows.
+
+> **⚠️ SUPERSEDED 2026-08-20 — the key is VALID; the constraint is a RATE LIMIT, and "raise the batch" is not
+> available.** (This spec never claimed a `401 API_KEY_INVALID`; the correction is recorded here because the
+> feed-widening it prescribes was implemented and is throttled at the source, and because the feed table above
+> reads SAM as "works but tiny + unpropagated" when the real ceiling is the quota.) Live evidence: 281
+> `sam_entities` (53 in the last 30 days), 497 contacts with `data_source='sam'`, owners stamped `sam_checked`
+> as recently as 2026-08-19. Per GSA's published tier table a non-federal personal key with **no role** gets
+> **10 requests/day** (with a role: 1,000). The cron asks for 50 lookups × 12 runs/day and **~10–23 owners
+> actually get checked** — one run burns the daily allowance and the other eleven no-op; a live probe returns
+> `{"rate_limited":true,"api_calls":0,"next_access":"…00:00Z"}` and stops on the first owner. Raising the batch
+> size therefore changes nothing; only a key with a role, or the bulk path below, does. The fail-soft design
+> (an API error skips the `sam_checked` mark so the owner retries) makes a ~98% rate-limited pipeline
+> indistinguishable from a healthy slow one — **measure `sam_checked` stamps per day, never "is the cron
+> active".** Bulk alternative built 2026-08-20: the PUBLIC MONTHLY entity extract is ONE request covering all
+> registrants (`GovernmentProject/src/ingest_sam_public_extract.py` + `gov_match_sam_public_extract`),
+> carrying POC name+title but NOT email/phone (FOUO, federal-account-only). See
+> `GovernmentProject/docs/RUNBOOK_sam_public_extract_cron.md`.
 
 ### 2. SOS-direct scraper (drains the 1,700 stuck rows — the universal unlock)
 Per-state SOS scraper (or sidebar-assisted) to populate `recorded_owners.registered_agent_name / manager_name / registered_agent_address / filing_id / state_of_incorporation`, draining `llc_research_queue`. This is the **prerequisite for the address matcher** (recorded-owner addresses) and the manager→true-owner→decision-maker chain. Write-back fires the existing resolution; mark `no_match` (visible) when SOS returns nothing — never leave `queued` silently (the coverage alert now catches a stalled queue).

@@ -18,7 +18,7 @@ Team Briggs lists CRE for sale (primarily single-tenant NNN). BD targets are pro
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.4.3 — generated; edit docs/os/canon, not here -->
+<!-- Canon: v1.5.0 — generated; edit docs/os/canon, not here -->
 <!-- CANON:comps -->
 ### Comps
 Comps come ONLY from the LCC engine: `SynthesizeComps` (default — pass Scott's request text VERBATIM; never add
@@ -119,6 +119,16 @@ guess. After any material action or stated preference, log a one-line memory to 
 Claude/MCP-only, never HTTP). BD cadence: new leads 7 touches / first 6 months; active accounts ~4/yr; top
 repeat owners monthly/bi-weekly; every active listing 20+ targeted outreaches/week, OM downloaders called
 within 48h, sellers get a weekly report. An unlogged touch is a lost signal.
+
+**WHO we prospect (invariant 6, Scott 2026-08-20).** Target the **ultimate individual in control of the
+decision** for the asset pursued or the buyer being sold to — the person who decides, not the entity.
+**Agents of the LLC/SPE ARE prospectable** (managing member / asset manager who controls the vehicle);
+an SPE with no named human is a research target, not a dead end. **Prior listing or procuring brokers for
+that entity are NOT** — a broker contact is evidence about a deal, never a BD target; sole exception is
+Scott's explicit instruction from a prior working relationship. **Public entities** (state, county,
+municipality) never enter the prospect list at any value. **The owner of record is not automatically the
+decision-maker:** a fiduciary holding title (trustee bank, CMBS special servicer, custodial trust co) is
+an agent for someone else — resolve through it to the principal.
 <!-- /CANON:logging-and-touchpoints -->
 
 <!-- CANON:offer-submission -->

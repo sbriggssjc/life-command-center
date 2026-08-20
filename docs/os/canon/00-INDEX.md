@@ -1,6 +1,8 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.4.3** — 2026-08-06. (1.4.3: comps block compressed — every rule retained, denser phrasing — to bring the rendered Copilot instructions under Copilot Studio's 20,000-char limit. 1.4.2: logging-and-touchpoints gains the W7.3 deal-spine capture
+**CANON_VERSION: 1.5.0** — 2026-08-20. (1.5.0: Global invariant 6 states WHO we prospect — the ultimate
+individual in control; agents of the LLC/SPE are prospectable, prior listing/procuring brokers are not,
+public entities are never prospected. 1.4.3: comps block compressed — every rule retained, denser phrasing — to bring the rendered Copilot instructions under Copilot Studio's 20,000-char limit. 1.4.2: logging-and-touchpoints gains the W7.3 deal-spine capture
 actions `log_call_note` + `tag_comm_to_deal` via dispatchCopilotAction — pick-list on ambiguity, never guess.) Bump this on any rule change; record it in the changelog below and
 run `../SURFACE-SYNC-PROTOCOL.md`.
 
@@ -14,7 +16,9 @@ run `../SURFACE-SYNC-PROTOCOL.md`.
    (`WRITE_SURFACE_POLICY.md`).
 5. **Memory is Cortex, write-gated.** After any material action or stated preference, log a one-line
    conversational memory. `log_memory` is Claude/MCP-only (never HTTP).
-6. **Target the OWNER, not the tenant**, in all BD/outreach.
+6. **Target the OWNER, not the tenant** — specifically the **ultimate individual in control of the
+   decision**. Agents of the LLC/SPE yes; prior listing/procuring brokers no; public entities never.
+   Detail in `blocks/logging-and-touchpoints.md`.
 7. **System-of-record.** Gov/Dia read via LCC proxy only; canonical writes through audited paths.
 
 ## Handler modules (the topic canon)
@@ -52,6 +56,19 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.5.0** (2026-08-20) — **Global invariant 6 now states WHO we prospect**, in Scott's words: the target is
+  the *ultimate individual in control of the decision* for the asset we are pursuing or the buyer we are
+  taking an offering to. **Agents of the LLC/SPE ARE prospectable** (the managing member / asset manager who
+  controls the vehicle is exactly who we want); **prior listing or procuring brokers for that entity are
+  NOT** — the only exception is an explicit instruction from Scott based on a prior working relationship;
+  **public entities are never prospected**; and a fiduciary holding title (trustee bank, CMBS special
+  servicer, custodial trust company) is an agent for someone else — resolve through it to the principal
+  rather than pursuing the fiduciary. Expanded in `blocks/logging-and-touchpoints.md`. Already enforced in
+  LCC and verified live the same day (0 brokers in the named-lead lane, 0 broker cadence contacts, 234
+  public bodies removed from prospects) — this bump makes the rule portable to every surface so it cannot
+  drift. Enforcement points: `lcc_owner_name_is_brokerage`, `lcc_owner_name_is_public_body`,
+  `lcc_owner_name_is_agent`, `NON_REACHABLE_ROLES`, `v_lcc_top_seller_prospects`,
+  `v_lcc_named_lead_worklist`.
 - **1.4.1** (2026-08-05) — Comps block: the appraisal cap discipline is a **hard filter on the DISPLAYED workbook rows** (prompt 54), not just the summary stat — every shipped Sold/On-Market row obeys displayed cap ≤ subject cap + 35 bps, the sold-set average holds below the subject, and a **reliability-or-exclude** floor drops rows with a displayed cap < 4.5% or a dialysis RENT/SF outside ~12–60 (rent/SF/price errors) to the review lane. The response `summary` cap range now matches the rows actually in the sheet. Sold comps join the **real market-entry date** (rpc `list_date`, gated < sale) so the Sold tab shows ON MARKET + DOM where a genuine list date exists (never synthetic).
 - **1.4.0** (2026-08-05) — Comps block gains the **appraisal cap discipline + selection policy** (prompts 48-52): comps within 35 bps of the subject cap with the set average below the subject (never a higher cap / lower value beyond the band); 18-mo default reaching to ~24 mo but keeping a handful of trailing ~7-9-mo sales; rank/filter on the **displayed cap = rent/price** (not the mislabeled stored `cap_rate`); operator **anchors similarity, not a hard filter** (appraisal spans all dialysis operators); prefer the enriched record and **drop bare same-address duplicates** (consolidated via review-lane, prompt 51); sold comps read from `sales_transactions` with recent closes **propagated from `available_listings`** (prompt 50); **address-first phrasing-independent** subject resolution + hydrated cap in `fields` (prompt 49); width contract re-applied **after** LibreOffice recalc (prompt 48). Connector verified live end-to-end 2026-08-05 (generate_comps: no 500, subject 31964 hydrated, 25 sold + 20 on-market, all operators).
 - **1.3.0** (2026-08-05) — Comps field-standardization + recency doctrine (prompt 41): 18-month default sold window with operator-first widening; canonical operator brands, expense vocabulary (Absolute NNN/NNN/NN/Gross/Ground Lease/Modified Gross), OPTIONS `(N) M-yr`, bumps `X% / N yrs`. Documented in the `comps` block. (Data-quality gates + OPTIONS-header/auto-fit shipped in code/templates, prompts 42/43.)

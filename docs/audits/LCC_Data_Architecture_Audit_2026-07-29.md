@@ -62,9 +62,24 @@ The rest of this document details each area, then gives a prioritized remediatio
 |---|---|---|
 | CMS `facility_patient_counts` | **2025-03-01** (last real monthly) | 16 months stale. Daily job runs, logs "7,534 inserted," writes 0 (derivation counter vs DB counter; upsert no-ops on existing snapshot_date). |
 | GSA inventory snapshots | 2026-06-01 | Recovered from the phantom-snapshot freeze but ~2 months behind; `gsa_lease_events` current (07-27). |
-| SAM.gov / USAJobs | 2026-07-27 | Recovered (previously dead for months, found by accident — the reason R56 feed-freshness monitoring was built). |
+| SAM.gov / USAJobs | 2026-07-27 | Recovered (previously dead for months, found by accident — the reason R56 feed-freshness monitoring was built). **⚠️ SAM.gov re-assessed 2026-08-20 — see the note below the table.** |
 | NPPES NPI weekly sweep | 2026-07-26 | Healthy. The cleanest end-to-end automated feed in the system. |
 | State lease inventory (TX TFC) | 2026-06-01 | Single state; Phase-3 seams (events → prospect_leads) unbuilt. |
+
+> **⚠️ SAM.gov — SUPERSEDED 2026-08-20. The key is VALID; the constraint is a RATE LIMIT.** (Note: this
+> document never carried the `401 API_KEY_INVALID` claim that circulated elsewhere — the correction is
+> recorded here because "Recovered / healthy" overstates SAM.gov throughput.) Live evidence: 281
+> `sam_entities` (53 in the last 30 days), 497 contacts with `data_source='sam'`, owners stamped
+> `sam_checked` as recently as 2026-08-19. Per GSA's published tier table a non-federal personal key with
+> **no role** gets **10 requests/day** (with a role: 1,000). A live probe returns
+> `{"rate_limited":true,"api_calls":0,"next_access":"…00:00Z"}` and stops on the first owner. The fail-soft
+> design (an API error skips the `sam_checked` mark so the owner retries) makes a ~98% rate-limited pipeline
+> indistinguishable from a healthy slow one — **measure `sam_checked` stamps per day, never "is the cron
+> active"** (exactly the freshness-monitoring blind spot this row was written to close). Bulk alternative
+> built 2026-08-20: the PUBLIC MONTHLY entity extract is ONE request covering all registrants
+> (`GovernmentProject/src/ingest_sam_public_extract.py` + `gov_match_sam_public_extract`), carrying POC
+> name+title but NOT email/phone (FOUO, federal-account-only). See
+> `GovernmentProject/docs/RUNBOOK_sam_public_extract_cron.md`.
 
 ### Provenance enforcement
 
