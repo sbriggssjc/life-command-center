@@ -1,0 +1,61 @@
+-- ============================================================================
+-- P118 (c) — the THIRD instance of the same correlated-normalize scan, and the
+-- one that was actually keeping `lcc-owner-address-feed` over the timeout.
+--
+-- Fixing the resolver (P118 b) was necessary but NOT sufficient: the cron calls
+-- `lcc_owner_address_feed_tick()`, which is TWO halves --
+--     observations_fed  := lcc_feed_owner_signal_addresses();
+--     entities_resolved := lcc_resolve_owner_address_observation_entities();
+-- and the FEED half was the larger cost. It loops row-by-row over
+-- `lcc_owner_contact_signals` (433 rows) calling
+-- `lcc_record_owner_address_observation`, whose entity-fallback branch runs the
+-- SAME full-table normalize scan:
+--
+--   SELECT e.id FROM entities e
+--    WHERE entity_type='organization' AND merged_into_entity_id IS NULL
+--      AND lcc_normalize_entity_name(e.name) = lcc_normalize_entity_name(p_owner_name)
+--    ORDER BY e.created_at ASC LIMIT 1;
+--
+-- Measured live: the cursor SELECT alone is 47 ms/50 rows, but the loop took
+-- 4,306 ms/50 rows -- i.e. ~86 ms/row inside that lookup, ~37 s over the full
+-- 433-row feed. That is a per-row API called from several places, so it CANNOT
+-- be hoisted the way the resolver was. The right fix is an index.
+--
+-- `lcc_normalize_entity_name(text)` IS declared IMMUTABLE, so a functional
+-- index is legal. (The originating note asserted it was not -- that premise is
+-- wrong; verified via pg_proc.provolatile = 'i'.)
+--
+-- ⚠️ PREDICATE FOOTGUN, caught live: the first build included
+-- `AND name IS NOT NULL` in the WHERE. The index was valid but the planner
+-- NEVER used it -- a partial index is only usable when the query's own
+-- predicates IMPLY the index predicate, the query never says `name IS NOT NULL`,
+-- and `lcc_normalize_entity_name` is not STRICT so the planner cannot infer it
+-- from the equality. Dropping that one clause is what made it match.
+-- Rows with a NULL name index as NULL and simply never satisfy an equality
+-- probe, so nothing is lost by omitting it.
+--
+-- `created_at` is the second index column so it also serves the
+-- `ORDER BY created_at ASC LIMIT 1` tiebreak -- the sort node disappears.
+--
+-- MEASURED LIVE (same probe, before vs after):
+--   before: Index Scan idx_entities_workspace_type + Sort
+--           Rows Removed by Filter: 45,320 | Buffers 2,903 |   998.756 ms
+--   after : Index Scan idx_entities_norm_name_org, no Sort
+--           Index Cond: lcc_normalize_entity_name(name) = 'realty income'
+--           Buffers 4                                    |     0.099 ms
+--   => ~10,000x, 726x fewer buffers.
+--
+-- END-TO-END: lcc_owner_address_feed_tick() went from statement-timeout
+-- (>120 s) to 755 ms, and the real pg_cron path now succeeds in 0.7-2.5 s.
+--
+-- Build note: created NON-concurrently on purpose. `entities` is ~43k rows and
+-- the index is ~2 MB (seconds to build); CONCURRENTLY repeatedly aborted here
+-- because the client connection is capped at 60 s and a cancelled concurrent
+-- build leaves an INVALID index behind that must then be dropped.
+--
+-- Discipline: additive, idempotent (IF NOT EXISTS), no data mutated.
+-- REVERSAL: DROP INDEX public.idx_entities_norm_name_org;
+-- ============================================================================
+CREATE INDEX IF NOT EXISTS idx_entities_norm_name_org
+  ON public.entities (public.lcc_normalize_entity_name(name), created_at)
+  WHERE entity_type = 'organization' AND merged_into_entity_id IS NULL;
