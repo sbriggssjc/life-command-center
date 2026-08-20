@@ -174,6 +174,40 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.deepEqual(missing, [], `window export(s) lost in the move — onclick handlers would break: ${missing.join(', ')}`);
   });
 
+  // ── Stage 2, Unit 4: detail-entity-tabs.js ───────────────────────────────
+  it('detail-entity-tabs.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const tabs = scriptIndex('detail-entity-tabs.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(tabs >= 0, 'index.html must load detail-entity-tabs.js');
+    assert.ok(tabs < detail, 'detail-entity-tabs.js must appear before detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-entity-tabs\.js/i,
+      'detail-entity-tabs.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-entity-tabs.js')]),
+      'detail-entity-tabs.js must be syntactically valid');
+  });
+
+  it('entity tab BODIES moved; the entity DISPATCHER stayed in detail.js', () => {
+    const tabsSrc = readFileSync(join(root, 'detail-entity-tabs.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_entityTabRelationships', '_entityTabHistory', '_entityTabActivity',
+                      '_entityTabEngagement', '_entityTabRoe', '_entityTabPropertyRef',
+                      '_entityTabDeal', '_entityCadenceCockpit', '_dealOpenSource', '_dealInspectSource']) {
+      assert.match(tabsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-entity-tabs.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // The DISPATCHER is the shell for the entity panel — same split the property
+    // panel keeps between switchUnifiedTab and its tab bodies.
+    for (const fn of ['_renderEntityTab', 'switchEntityTab', 'openEntityDetail']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} is the entity dispatcher and stays in detail.js`);
+      assert.doesNotMatch(tabsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-entity-tabs.js must NOT take ${fn}`);
+    }
+    assert.match(detailSrc, /const\s+ENTITY_DETAIL_TABS\s*=/, 'the tab list stays with the dispatcher');
+    for (const w of ['_cortexPullHistory', '_dealOpenSource', '_dealInspectSource']) {
+      assert.match(tabsSrc, new RegExp(`window\\.${w}\\s*=`), `detail-entity-tabs.js keeps the window.${w} export`);
+    }
+    assert.match(detailSrc, /MOVED to detail-entity-tabs\.js/, 'detail.js keeps a pointer comment');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
