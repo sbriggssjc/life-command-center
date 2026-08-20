@@ -21,6 +21,19 @@
 //     per internet_message_id; re-acks are no-ops; failed moves back off 1h and
 //     park after 5 tries with a loud lcc_health_alerts row (never a silent drop).
 //   - Auth: X-LCC-Key (or a signed-in operator) via the shared authenticate().
+//
+// P119 (2026-08-20) — "already out of the source folder" is SUCCESS.
+//   An ack of moved:false whose error says the MESSAGE is not in the
+//   "Intake Staged, Not Completed" folder means the desired end state is
+//   already true, so the RPC records it TERMINAL (outcome='already_out',
+//   action='noop') — no retry, no park, no alert — and resolves any open park
+//   alert for that message. A missing DESTINATION folder still fails loudly.
+//   This handler therefore forwards the mover's error text VERBATIM and does
+//   NOT classify it: the single owner of that decision is the SQL function
+//   lcc_mailbox_mirror_error_is_terminal(). A JS copy would be exactly the
+//   normaliser drift this codebase keeps getting bitten by — never add one.
+//   The ack response echoes the RPC's { outcome, terminal, parked, attempts }
+//   so the PA flow can log the honest disposition.
 // ============================================================================
 
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
@@ -97,6 +110,7 @@ export async function handleMailboxAck(req, res, deps = {}) {
   // Coerce moved: accept boolean or the string forms PA sends.
   const moved = p.moved === true || p.moved === 'true' || p.moved === 1 || p.moved === '1';
   const reason = firstNonEmpty(p.reason, null);
+  // Verbatim — the SQL classifier reads this text. Never pre-judge it here.
   const errorText = moved ? null : (firstNonEmpty(p.error, p.error_text, 'unknown_error'));
 
   const r = await query('POST', 'rpc/lcc_mailbox_reconcile_ack', {

@@ -17,6 +17,9 @@ back. **Move only — never delete.** The LCC side is already built and live:
   true|false, reason?, error? }`. On `moved:false` the message re-queues after a
   1-hour backoff and **parks after 5 tries** with a loud `lcc_health_alerts`
   (`mailbox_mirror_parked`) row — never a silent drop.
+  **Except (P119): an error meaning "the message is not in the source folder" is
+  recorded as TERMINAL SUCCESS** (`outcome:'already_out'`, `terminal:true`) — no
+  retry, no park, no alert. See "not-found is success" below.
 
 Both endpoints are **flag-gated** (`MAILBOX_MIRROR`, default off). While off they
 return `{ "skipped": "flag_off" }` — build the flow first, then flip the flag.
@@ -113,12 +116,85 @@ PATCH fails, you fall through to the failure ack below with the error text.
   {
     "internet_message_id": "@{items('Apply_to_each')?['internet_message_id']}",
     "moved": false,
+    "reason": "@{items('Apply_to_each')?['reason']}",
     "error": "not_found"
   }
   ```
   (Use `"error": "move_failed"` / the Graph error body in the move-failed branch.)
-  LCC re-queues the message after 1h and parks it after 5 failures with a health
-  alert — so a message that can't be found/moved is never silently lost.
+  A genuine move failure re-queues after 1h and parks after 5 failures with a
+  health alert — so a message that can't be moved is never silently lost. A
+  **not-found** ack is terminal success and does none of that (below).
+
+  > **Send `reason` on the failure branch too.** The live mover omitted it, so all
+  > 3,963 ledger rows carry `reason = NULL` and the ledger can't say which closure
+  > arm published the message.
+
+---
+
+## ⚠️ "not in the source folder" is SUCCESS, not a failure (P119, 2026-08-20)
+
+**What happened.** Between 2026-08-06 and 2026-08-20 the mover acked
+**3,963 messages and moved exactly zero** — every single one `moved:false` with
+`error: "not_found_or_not_in_source_folder"`. Each burned 5 retries, parked, and
+opened an `lcc_health_alerts` row: **3,960 open alerts, 99.3% of the entire
+open-alert surface**, burying the ~24 genuinely actionable ones.
+
+**Two independent causes, both fixed on the LCC side (migration
+`20260820120000_lcc_p119_mailbox_mirror_not_found_terminal.sql`):**
+
+1. **The worklist published messages that were never in the folder.** It anchored
+   on *every* `inbox_items` row with `source_type='flagged_email'` (4,051), of
+   which 3,944 are `status='archived'` — and that archive is not deliberate triage
+   but two bulk inbox sweeps (2,319 rows on 2026-06-04, 580 on 2026-06-16).
+   **100%** of the parked messages qualified via the `inbox_triaged` arm; not one
+   via `todos_done` or `thread_replied`. **92.1%** had no `processing_log`
+   decision at all (an Apr–May 2026 capture predating the move queue), so LCC
+   never routed them anywhere near the staging folder.
+   → The view now requires `processing_log.outcome='staged'` — i.e. **LCC itself
+   put the message in "Intake Staged, Not Completed"**. Producer anchor
+   **4,051 → 323**.
+
+2. **`not_found` was treated as retryable.** If the mover reports the message
+   isn't in the source folder, the **desired end state is already true**. It is
+   now recorded terminal (`outcome='already_out'`, `action='noop'`) on the first
+   ack: no retry, no park, no alert — and any open park alert for that message is
+   resolved on the spot.
+
+**Ownership rule — one owner per folder transition:**
+
+| Transition | Owner |
+|---|---|
+| Inbox → `Processed/*` | the flagged-intake flow's own `Move_email_(V2)` / the `processing_log` move queue |
+| Inbox → "Intake Staged, Not Completed" | the `processing_log` move queue (`outcome='staged'`) |
+| "Intake Staged, Not Completed" → Processed | **this mover, and only for messages LCC staged** |
+
+A message this mover does not find in the staging folder is **done**, not broken.
+
+**What still fails loudly.** The terminal classifier
+(`lcc_mailbox_mirror_error_is_terminal()`, the single owner of the decision —
+never re-implement it in the flow or in JS) is a narrow allowlist. A missing
+**destination** folder (`ErrorFolderNotFound`, `destinationId ...`) is a real
+break — a stale `processedFolderId` binding, the same class that bit the
+flagged-intake trigger on 2026-08-19 — and still retries, parks and alerts.
+Throttling (429), 5xx, timeouts and auth errors are unchanged.
+
+**Auto-retire (Consumption-Layer arm).**
+`lcc_mailbox_mirror_retire_cleared_parks(p_dry_run default true)` resolves open
+`mailbox_mirror_parked` alerts whose premise has cleared (ledger row gone /
+`moved` / `already_out` / a terminal `last_error`) and normalises those ledger
+rows so they can never re-park. Cron `lcc-mailbox-mirror-retire` (06:25 UTC).
+It only touches `resolved_at IS NULL`, so it is idempotent and never rewrites the
+`cowork-mirror-backlog-retire-20260820` batch. `alerts_left_open` in its return is
+the honest count of genuinely stuck moves an operator must still work. Reverse
+with `resolved_note LIKE 'p119-mirror-auto-retire:%'`.
+
+**⚠️ Open upstream gap (not a mirror bug).** All **323** `processing_log`
+`outcome='staged'` rows are still `move_status='pending'` — the queue that moves
+a staged email *into* "Intake Staged, Not Completed" has never been drained (the
+only rows it ever moved were 16 `filed` ones, 2026-07-21→23). Until something
+consumes that queue, the staging folder is not being populated, so the mirror
+will keep (correctly, quietly) acking `already_out`. Draining it is the next
+piece of work, not something this fix can do.
 
 ---
 
@@ -130,8 +206,9 @@ view `v_lcc_mailbox_reconcile_worklist`; `POST /api/mailbox-reconcile-ack` calls
 alert). See `supabase/migrations/20260824120000_lcc_w7_6_mailbox_mirror.sql`.
 
 ### When is a message "closed" (worklist gate — deterministic, no AI)?
-A flagged-email `inbox_item` (with an `internet_message_id`) qualifies when **ANY**
-of:
+A flagged-email `inbox_item` (with an `internet_message_id`) qualifies when LCC
+routed it to the staging folder (`processing_log.outcome='staged'` — the P119
+source-folder gate) **AND ANY** of:
 - **`todos_done`** — every to-do generated from it (`action_items.inbox_item_id`
   lineage) is terminal (completed/cancelled), and at least one existed;
 - **`thread_replied`** — a later outbound comm exists in the same
@@ -142,8 +219,8 @@ of:
 `offer_review`** — an offer thread stays visible until the offer resolves. (Tune
 by widening/narrowing the `offer_review` predicate in the view.)
 
-Messages already moved, parked, or inside a retry-backoff are excluded via the
-ledger, so re-runs are safe and idempotent.
+Messages already moved, already-out (P119 terminal), parked, or inside a
+retry-backoff are excluded via the ledger, so re-runs are safe and idempotent.
 
 ---
 
@@ -156,6 +233,15 @@ ledger, so re-runs are safe and idempotent.
    the Processed folder fill and the Not-Complete folder shrink to open work only.
 4. If a message parks, an `lcc_health_alerts` (`mailbox_mirror_parked`) row is
    opened — investigate the `last_error`, fix, then delete that ledger row to
-   re-queue.
+   re-queue. Post-P119 a park means a *genuine* failure (bad destination folder,
+   throttling, auth), never "the message wasn't there".
+5. **Watch the honest counters, not `moved`:**
+   ```sql
+   SELECT outcome, count(*) FROM public.lcc_mailbox_reconcile_ledger GROUP BY 1;
+   SELECT count(*) FROM public.lcc_health_alerts
+    WHERE alert_kind='mailbox_mirror_parked' AND resolved_at IS NULL;
+   ```
+   `moved=true` covers both "we moved it" and "it was already gone" — read
+   `outcome` for which. Never quote `moved` as a count of moves performed.
 
 Companion docs: `OUTLOOK_SENT_SWEEP_FLOW.md` (W7.5), `OUTLOOK_CATEGORY_TAGGING_FLOW.md` (W7.3).
