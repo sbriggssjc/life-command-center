@@ -54,6 +54,19 @@ empties the daily quota at 00:15, so any later slot is rate-limited every month.
 (`xengecqvemvfknjvbvrq`). No Railway deploy required for the fix itself** (view + RPC + sweep are all
 data-layer); the JS change is comment/test only.
 
+**Cowork reconcile-verified live 2026-08-20 (PR #1762 merged @ 5c9862e):** open `mailbox_mirror_parked` = **0**,
+total open alerts = **27** (real surface holds), the `cowork-mirror-backlog-retire-20260820` tag intact at 3,960
+(auto-retire sweep correctly did NOT re-touch it), `lcc_mailbox_mirror_error_is_terminal` + retire sweep +
+`lcc-mailbox-mirror-retire` cron all present, and 1 ack already recorded `already_out` (terminal-success path
+live). ⏭ **Real remaining blocker (surfaced, not fixed):** all 323 `processing_log.outcome='staged'` rows sit
+`move_status='pending'` back to 2026-07-21 — nothing drains the queue that populates "Intake Staged, Not
+Completed", so the mirror correctly but silently acks `already_out` and moves nothing. **That staged-queue
+drainer is the next piece of work → drafted as prompt 120** (`120-staged-move-drainer-app-moves-emails.md`):
+the `processing_log` move queue is populated (`target_folder`/`move_status`) but only 16 `filed` rows ever
+executed — build the move-executor so the app actually relocates emails (Scott's stated goal), reusing P119's
+`not_found`=terminal-success semantics. Minor: the PA mover omits `reason` on its failure ack (3,963 ledger
+rows `reason=NULL`) — one-line flow fix, in the runbook A5b.
+
 **⚠️ The leading hypothesis below (double-mover race) was RIGHT about the mechanism and WRONG about the
 scale — it accounts for 7 of 3,960 rows (0.2%).** Measured live:
 
