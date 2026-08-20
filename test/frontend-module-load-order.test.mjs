@@ -435,6 +435,54 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.match(appSrc, /MOVED to app-tasks\.js/, 'app.js keeps a pointer comment');
   });
 
+  // ── Stage 4, Unit 1: ops-perf-dashboard.js ───────────────────────────────
+  it('ops-perf-dashboard.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-perf-dashboard.js');
+    assert.ok(x >= 0, 'index.html must load ops-perf-dashboard.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-perf-dashboard.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-perf-dashboard\.js/i,
+      'ops-perf-dashboard.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-perf-dashboard.js')]),
+      'ops-perf-dashboard.js must be syntactically valid');
+  });
+
+  it('the perf dashboard moved, and Sync Health still calls into it', () => {
+    const perfSrc = readFileSync(join(root, 'ops-perf-dashboard.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    for (const fn of ['renderPerfDashboard', 'appendPerfToSyncHealth']) {
+      assert.match(perfSrc, new RegExp(`function\\s+${fn}\\b`), `ops-perf-dashboard.js defines ${fn}`);
+      assert.doesNotMatch(opsSrc, new RegExp(`function\\s+${fn}\\b`), `ops.js must NOT redefine ${fn}`);
+    }
+    assert.match(opsSrc, /setTimeout\(appendPerfToSyncHealth,/,
+      'Sync Health in ops.js still schedules appendPerfToSyncHealth');
+    assert.match(opsSrc, /MOVED to ops-perf-dashboard\.js/, 'ops.js keeps a pointer comment');
+    // Neighbours that stayed: the helper above and the Home-stats section below.
+    assert.match(opsSrc, /function\s+jsStringArg\b/, 'jsStringArg stays in ops.js');
+    assert.match(opsSrc, /function\s+updateHomeStats\b/, 'updateHomeStats stays in ops.js');
+    assert.doesNotMatch(perfSrc, /HOME PAGE INTEGRATION/, 'the Home-stats section did not come along');
+  });
+
+  it('⚠️ STAGE 4 RULE: an ops sibling declares ONLY functions — no eval-time read of the shared state header', () => {
+    // ops.js keeps ~30 top-level let/const (lines 45-126) that every subsystem
+    // reads. A sibling loaded BEFORE ops.js runs first, so ANY top-level
+    // statement here that touched that state would hit the TDZ and throw at
+    // load — killing the app. Call-time reads (opsPerfLog inside a function
+    // body) are safe and are the whole reason before-ops ordering works.
+    const perfSrc = readFileSync(join(root, 'ops-perf-dashboard.js'), 'utf8');
+    const offenders = perfSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))                    // top-level, not comment/blank/close
+      .filter((l) => !/^(async\s+)?function\s/.test(l));    // ...and not a function declaration
+    assert.deepEqual(offenders, [],
+      `ops-perf-dashboard.js must contain only top-level function declarations; found: ${offenders.join(' | ')}`);
+    // The shared state itself must NOT have been copied out of ops.js.
+    for (const v of ['opsPerfLog', 'opsSyncData', 'opsPagination']) {
+      assert.doesNotMatch(perfSrc, new RegExp(`^\\s*(let|const|var)\\s+${v}\\b`, 'm'),
+        `${v} must stay declared in ops.js, never redeclared in a sibling`);
+    }
+    assert.match(readFileSync(join(root, 'ops.js'), 'utf8'), /^const opsPerfLog = \[\];/m,
+      'ops.js still owns the opsPerfLog declaration');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');

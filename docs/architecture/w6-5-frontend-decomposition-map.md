@@ -376,7 +376,7 @@ the shared header makes newly dangerous.
 
 | # | region | lines | why this order |
 |---|---|---|---|
-| 1 | Performance dashboard | 6766–7145 | manager-only, terminal, lowest coupling |
+| 1 | ~~Performance dashboard~~ | **6766–7144** | ✅ **SHIPPED 2026-08-20** — the map's first correct range |
 | 2 | Sync health | 6346–6539 | self-contained connector status |
 | 3 | Domain health summary | 6145–6345 | self-contained |
 | 4 | Metrics | 6025–6144 | reads shared state, no writers elsewhere |
@@ -389,3 +389,32 @@ surfaces use. It is not the cheap win the original plan implied.
 
 **Standing rule, earned six times now: this map is a hypothesis. Re-measure the file
 before every extraction, and correct the row in the same change.**
+
+
+### Stage 4, Unit 1 — `ops-perf-dashboard.js` (SHIPPED 2026-08-20)
+
+ops.js 6766–7144 (sha256 `25996db46c60e189`, byte-identical). `ops.js` 7,176 → 6,803.
+`renderPerfDashboard` + `appendPerfToSyncHealth`. **The first range in this map that
+measured correct** — noted because the standing rule is earned, not decorative.
+
+The cleanest unit in W6.5: the region declares only functions, does no eval-time work,
+exports nothing to `window`, and has exactly one external caller —
+`setTimeout(appendPerfToSyncHealth, 100)` at ops.js ~6481, inside the Sync Health render.
+
+**The Stage-4 rule is now executable, not advisory.** Because ops.js owns a shared mutable
+state header (45–126) that cannot travel with any one region, an ops sibling must contain
+**no top-level statement that reads ops state at eval time** — a sibling loads first, so
+such a read hits the TDZ and throws at load, killing the app. The guard enumerates every
+top-level line in the sibling and requires each to be a function declaration, and
+separately forbids redeclaring `opsPerfLog`/`opsSyncData`/`opsPagination`. Mutation A
+(`const _perfSeen = opsPerfLog.length;` appended to the sibling) fails it.
+
+Five mutations, all fail correctly: eval-time state read (**the new hazard**); redeclare
+shared state; Sync Health stops scheduling the graft; a copy left in ops.js (**2 suites** —
+load-order and the duplicate detector); load after ops.js.
+
+**Doc drift found, deliberately not fixed:** the section banner claims the view is
+reachable "via `navTo('pagePerfDashboard')`". No such route exists anywhere in the repo —
+the string occurs in that comment and nowhere else. Sync Health is the only entry point.
+Left as-is because correcting prose is not a byte-identical refactor's business; recorded
+here so it is fixed knowingly rather than trusted.
