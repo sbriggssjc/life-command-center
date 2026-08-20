@@ -31,7 +31,7 @@
 //                 returned HTML.
 //
 // Usage:
-//   node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>]
+//   node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>] [--wait[=sec]]
 //   npm run verify:deploy
 
 import { execSync } from 'node:child_process';
@@ -52,12 +52,16 @@ const NOCACHE_HEADERS = { 'cache-control': 'no-cache', pragma: 'no-cache' };
 const DEFAULT_URL = 'https://tranquil-delight-production-633f.up.railway.app';
 
 function parseArgs(argv) {
-  const args = { url: DEFAULT_URL, sha: null, timeout: 15000 };
+  const args = { url: DEFAULT_URL, sha: null, timeout: 15000, wait: 0 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--url') args.url = argv[++i];
     else if (a === '--sha') args.sha = argv[++i];
     else if (a === '--timeout') args.timeout = parseInt(argv[++i], 10) || args.timeout;
+    // --wait[=seconds] — poll /version until it matches, for the interactive
+    // push→verify loop where Railway is still building. Bare --wait = 180s.
+    else if (a === '--wait') args.wait = 180;
+    else if (a.startsWith('--wait=')) args.wait = parseInt(a.slice(7), 10) || 180;
     else if (a === '-h' || a === '--help') args.help = true;
   }
   return args;
@@ -90,7 +94,9 @@ function bodyLooksLikeHtml(text, contentType) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('Usage: node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>]');
+    console.log('Usage: node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>] [--wait[=sec]]');
+    console.log('  --wait[=sec]  poll /version until it matches the repo SHA (default 180s).');
+    console.log('                For the interactive push→verify loop; CI should NOT use it.');
     process.exit(0);
   }
   const base = args.url.replace(/\/+$/, '');
@@ -155,7 +161,30 @@ async function main() {
     } else if (deployed.git_pinned === false) {
       failures.push(`deploy is NOT git-pinned (source=${deployed.source}) — cannot confirm it matches ${expectedSha.slice(0, 12)}`);
     } else if (!expectedSha.startsWith(live) && !live.startsWith(expectedSha)) {
-      failures.push(`SHA MISMATCH: live=${live} vs repo=${expectedSha.slice(0, 12)} — the deploy is stale (unshipped merges)`);
+      // --wait: poll until Railway finishes rebuilding, instead of failing on a
+      // race. Running this straight after `git push` reported a stale deploy
+      // twice on 2026-08-20 when Railway was simply still building — the hard
+      // fail is right for CI, wrong for the interactive push→verify loop.
+      // Default stays hard-fail: you must ASK to wait.
+      let matched = false;
+      if (args.wait > 0) {
+        const deadline = Date.now() + args.wait * 1000;
+        process.stdout.write(`  ⏳ live=${live} != repo=${expectedSha.slice(0, 12)} — waiting up to ${args.wait}s for the rebuild`);
+        while (Date.now() < deadline && !matched) {
+          await new Promise((r) => setTimeout(r, 5000));
+          process.stdout.write('.');
+          const again = await readVersion();
+          const now = String((again.json && again.json.version) || '');
+          if (now && (expectedSha.startsWith(now) || now.startsWith(expectedSha))) matched = true;
+        }
+        console.log('');
+      }
+      if (matched) {
+        console.log(`  ✓ SHA matches repo (${expectedSha.slice(0, 12)}) — after waiting for the rebuild`);
+      } else {
+        failures.push(`SHA MISMATCH: live=${live} vs repo=${expectedSha.slice(0, 12)} — the deploy is stale (unshipped merges)`
+          + (args.wait > 0 ? ` [still stale after ${args.wait}s — this is NOT a build race]` : ' [if you just pushed, Railway may still be building: re-run with --wait]'));
+      }
     } else {
       console.log(`  ✓ SHA matches repo (${expectedSha.slice(0, 12)})`);
     }

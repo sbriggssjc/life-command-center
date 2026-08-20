@@ -141,11 +141,30 @@ order (lowest coupling first), each a classic file loaded before `detail.js`:
 >
 > **What the file actually supports (revised order):**
 >
-> | # | Region | Target | Contiguous? |
+> | # | Region | Target | State |
 > |---|---|---|---|
-> | 3 | panel geometry + tray + companion dock (`DUAL_DOCK_MIN_WIDTH` … `_renderCompanionEntity`, ~13847–14551, ~700 lines) | `detail-panel-shell.js` | ✅ yes — the cleanest remaining seam |
-> | 4 | entity tabs block B (`_ENTITY_REL_SECTIONS` … `_entityTabDeal`, 14553–15200+) | `detail-entity-tabs.js` | ✅ yes |
-> | 5 | entity open/dispatch block A (`ENTITY_DETAIL_TABS` … `_entityFmtMoney`, 12846–13845) | `detail-entity.js` | ✅ yes, but contains the contact openers — split or accept |
+> | 3 | panel geometry + tray + companion dock | `detail-panel-shell.js` | ✅ **DONE** — 13838–14546, 702 lines, 19 window exports |
+> | 4 | entity tabs block B (`_ENTITY_REL_SECTIONS` … `_entityTabDeal`) | `detail-entity-tabs.js` | ✅ **DONE** — 13846–14615, 763 lines |
+> | 5 | the entity tab bodies Unit 4 MISSED (`_entityGenerateDossier` … `_entityTabContacts`) | `detail-entity-tabs.js` (appended) | ✅ **DONE** — 13854–14198, 345 lines |
+> | 6 | `_entityTabOverview` + its render-helper cluster (`_entityHeroHTML`, `_nextActionForContact`, `_entityContact*Section`, `_entityRoeBanner`, `_entityFmtMoney`) | `detail-entity-tabs.js` | ⬜ next — contiguous, but knotted to the helpers; move as ONE cluster |
+> | 7 | contact openers (`openContact360`, `openContactDetail`, `openContactDetailByName`, call-note modal) | `detail-contact.js` | ⬜ interleaved with the entity dispatcher — map before moving |
+> | — | entity DISPATCHER (`ENTITY_DETAIL_TABS`, `openEntityDetail`, `switchEntityTab`, `_renderEntityTab`) + the shared completeness-rail / Next-Step chrome | **STAYS in detail.js** | 🔒 pinned by guard — shell, not content |
+>
+> **RESULT AFTER UNITS 1–5 (2026-08-20):** `detail.js` **18,481 → 16,203 lines**
+> (1,037,393 → 900,378 bytes, **13.2% smaller**). Five siblings, every region
+> byte-identical (sha256 verified before/after), every unit mutation-tested.
+> Guards: 113 assertions across `detail-tab-registry`, `frontend-module-load-order`
+> and `panel-redesign`.
+>
+> **⚠️ UNIT 4 SILENTLY LEFT WORK BEHIND, and no guard noticed.** It moved 7 of 12
+> `_entityTab*` bodies; five stayed in a second block further down. Everything
+> passed, because the tab-registry guard asks whether a tab reaches a renderer
+> that EXISTS — and it did. **"Reachable" and "in the right module" are different
+> properties.** The load-order guard now asserts the second one too: no
+> `_entityTab*` body may remain in `detail.js` (documented exclusions:
+> `_entityTabsForRole`, a dispatcher helper; `_entityTabOverview`, pending #6).
+> Before declaring any future unit done, grep the parent for what you claimed to
+> have moved.
 >
 > **⚠️ STEP 5b HAZARD ON #3 — this one WILL bite.** `panel-redesign.test.mjs`
 > (89 tests) slices panel functions straight out of `detail.js`:
