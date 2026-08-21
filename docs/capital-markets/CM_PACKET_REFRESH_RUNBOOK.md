@@ -38,7 +38,11 @@ Serialization is a real completion check, not a timing assumption: the tick refu
 batch until the previous batch's pg_net request has a row in `net._http_response`, and **fails
 forward** after `max_wait_sec` (default 90s) so a purged or lost response can never stall the cycle.
 
-Gov today: **31 charts / 8 batches**, so a cycle drains in ~8 minutes. Synthetic (composed) charts
+Gov today: **31 charts / 8 batches**. A 4-chart gov subset merge measures **~69s**, and a batch
+that finishes ~10s past a minute boundary is picked up by the *following* tick — so expect roughly
+**2 minutes per batch, ~16 minutes per cycle**. That is normal, not a stall: `charts_remaining`
+falling by `batch_size` every couple of minutes is a healthy drain. Shrinking the wall clock would
+mean a smaller `batch_size` (more, faster requests), not a shorter wait. Synthetic (composed) charts
 and `DataTable`/`kpi_block` templates are excluded — they are not built in subset mode. That is a
 **documented residual, not a failure**; do not count them as missing.
 
@@ -63,6 +67,14 @@ Two durable rules:
 2. **A rolled-back `net.http_post` is a silent no-op.** Any function that queues pg_net requests and
    can later raise will deliver *nothing*, while the cron log shows only the final error and the
    per-batch intent looks fine. Never conclude "some batches got through".
+
+### ⚠️ `net._http_response.created` is the REQUEST time, not the response time
+
+Do not time a batch with it. Request 233443 shows `created = 17:00:00.847` on a call that timed out
+55 seconds later, and request 233464 shows `created = 17:04:00.773` on a call whose merge did not
+land until `17:05:09`. The row simply carries the request's creation timestamp. To measure how long
+a batch really took, compare `cm_packet_refresh_log.fired_at` against the **domain** snapshot's
+`updated_at` — that is the only pair that brackets the actual server-side merge.
 
 ## Verifying a refresh — by state delta, never by return value
 
