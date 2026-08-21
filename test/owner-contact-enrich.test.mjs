@@ -433,11 +433,36 @@ describe('P164 — never mint the owner\'s own name as its decision-maker', () =
   it('blocks a contact whose every token is already in the owner name', () => {
     for (const [person, owner] of [
       ['Boyd Watterson', 'Boyd Watterson Asset Management, LLC'], // LCC's largest owner, $179.8M
-      ['Trammell Crow', 'Trammell Crow Co'],
-      ['Molasky Group', 'Molasky Group'],
+      ['Rem Management', 'Rem Management Holdings LLC'],
     ]) {
       assert.equal(isOwnerNameRestated(person, owner), true, `${person} @ ${owner} must be blocked`);
     }
+  });
+
+  it('⚠️ NEVER blocks an INDIVIDUAL owning in their own name', () => {
+    // The mis-classification that reached live data on 2026-08-21 and was
+    // reverted in full: 103 owners ($199.4M) are individuals whose contact name
+    // legitimately equals their owner name. Scott's doctrine is explicit that a
+    // person can BE the owner. Containment alone cannot see this; the owner
+    // having a FIRM SUFFIX is what distinguishes a restated company.
+    for (const [person, owner] of [
+      ['Alonso Cantu', 'Alonso Cantu'],
+      ['Ruth Malone', 'Ruth Malone'],
+      ['Thomas H. Yates', 'Thomas H. Yates'],
+      ['Peter Hansen', 'Peter Hansen LLC'],   // single-member LLC = that principal
+    ]) {
+      assert.equal(isOwnerNameRestated(person, owner), false, `${person} @ ${owner} must NOT be blocked`);
+    }
+  });
+
+  it('STATED LIMITATION: an owner with no firm suffix is not blocked (fails safe)', () => {
+    // "Sterling Bay" is a real developer, "Trammell Crow Co" reduces to the same
+    // two tokens as its restated contact. Both are structurally identical to a
+    // single-member LLC named after its principal, so they are NOT blocked.
+    // Missing a phantom costs one row a human rejects; blocking a real
+    // individual owner deletes a decision-maker on a live prospect.
+    assert.equal(isOwnerNameRestated('Sterling Bay', 'Sterling Bay'), false);
+    assert.equal(isOwnerNameRestated('Trammell Crow', 'Trammell Crow Co'), false);
   });
 
   it('⚠️ does NOT block a real principal at a founder-named firm', () => {

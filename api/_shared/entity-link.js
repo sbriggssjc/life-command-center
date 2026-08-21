@@ -570,11 +570,34 @@ function _ownerNameTokens(v) {
 }
 
 export function isOwnerNameRestated(personName, ownerName) {
+  // ⚠️ CORRECTION 2026-08-21, SAME DAY, AFTER A LIVE MIS-CLASSIFICATION.
+  // The first version of this guard tested ONLY token containment, and that
+  // swept up 103 owners ($199.4M) who are INDIVIDUALS OWNING IN THEIR OWN NAME —
+  // Alonso Cantu, Bashar Hamami, Ruth Malone, Praveen Gupta, Thomas H. Yates.
+  // For those, contact-name == owner-name is CORRECT, not a phantom. Scott's
+  // standing doctrine says so explicitly: "a person can be an owner in the LCC
+  // if they are the individual in control of the ownership of the LLC or SPE. We
+  // often have true companies and true contacts that are the same name and name
+  // of an individual." A clear batch built on the old rule was reverted in full.
+  //
+  // THE OWNER MUST LOOK LIKE AN ORGANISATION for containment to mean anything.
+  // "Boyd Watterson" inside "Boyd Watterson Asset Management, LLC" is the
+  // company restated; "Alonso Cantu" inside "Alonso Cantu" is the owner himself.
+  // Containment alone cannot tell those apart — the firm suffix can.
+  //
+  // Fails SAFE: an org without any firm-suffix word ("Sterling Bay") is NOT
+  // blocked. Missing a phantom costs one bad row a human can reject; blocking a
+  // real individual owner deletes a decision-maker on a live prospect.
+  if (!hasFirmSuffix(ownerName)) return false;
   const person = _ownerNameTokens(personName);
   const owner = new Set(_ownerNameTokens(ownerName));
   // Need real material on both sides; a one-token "person" is not evidence
   // either way and is handled by the other guards.
   if (person.length < 2 || owner.size < 2) return false;
+  // And the owner must carry something BEYOND the person's name — otherwise
+  // "Peter Hansen LLC" vs "Peter Hansen" is a single-member LLC whose principal
+  // is exactly that person, which is a real contact, not a phantom.
+  if (owner.size <= person.length) return false;
   return person.every((t) => owner.has(t));
 }
 
